@@ -6,7 +6,8 @@ use pest::{iterators::Pair, Span};
 use typed_index_collections::TiVec;
 
 use crate::ast::{
-    self, ident_from_pair, literal_from_pair, Expression, InnerExpression, Path, Rule,
+    self, ident_from_pair, Bindings, Expression, InnerExpression, Literal, Path, ProcMatchBlock,
+    ProcMatchCase, Rule,
 };
 
 #[derive(From, Into, Debug, Copy, Clone, PartialEq, Eq)]
@@ -43,10 +44,10 @@ pub enum Entry {
 }
 
 impl<'t> Library<'t> {
-    pub fn from_ast(lib: ast::Namespace<'t>) -> Self {
+    pub fn from_ast(lib: ast::Namespace<'t>) -> Result<Self, BuilderError<'t>> {
         let mut res = Self::default();
-        res.visit_ns(lib, None);
-        res
+        res.visit_ns(lib, None)?;
+        Ok(res)
     }
 
     pub fn root_namespace(&self) -> &Namespace {
@@ -57,7 +58,7 @@ impl<'t> Library<'t> {
         &mut self,
         ns: ast::Namespace<'t>,
         parent: Option<NamespaceIndex>,
-    ) -> NamespaceIndex {
+    ) -> Result<NamespaceIndex, BuilderError<'t>> {
         let ns_idx = self.namespaces.push_and_get_key(Namespace::default());
 
         if let Some(parent) = parent {
@@ -69,7 +70,7 @@ impl<'t> Library<'t> {
         for decl in ns.decls {
             match decl.value {
                 ast::DeclValue::Namespace(namespace) => {
-                    let subns = self.visit_ns(namespace, Some(ns_idx));
+                    let subns = self.visit_ns(namespace, Some(ns_idx))?;
                     self.namespaces[ns_idx]
                         .0
                         .push((decl.name, Entry::Namespace(subns)));
@@ -82,7 +83,14 @@ impl<'t> Library<'t> {
                     ));
                 }
                 ast::DeclValue::Proc(ast::Proc { args, body }) => {
-                    let sentence_idx = self.visit_proc(&decl.name, ns_idx, args, body);
+                    let sentence_idx = self.visit_proc(&decl.name, ns_idx, args, body)?;
+                    self.namespaces[ns_idx].0.push((
+                        decl.name,
+                        Entry::Value(Value::Pointer(Closure(vec![], sentence_idx))),
+                    ));
+                }
+                ast::DeclValue::MatchProc(ast::MatchProc { cases }) => {
+                    let sentence_idx = self.visit_match_proc(&decl.name, ns_idx, cases)?;
                     self.namespaces[ns_idx].0.push((
                         decl.name,
                         Entry::Value(Value::Pointer(Closure(vec![], sentence_idx))),
@@ -90,7 +98,7 @@ impl<'t> Library<'t> {
                 }
             }
         }
-        ns_idx
+        Ok(ns_idx)
     }
 
     fn visit_proc(
@@ -99,15 +107,84 @@ impl<'t> Library<'t> {
         ns_idx: NamespaceIndex,
         args: Pair<'t, Rule>,
         body: Pair<'t, Rule>,
-    ) -> SentenceIndex {
-        let mut names: VecDeque<Option<String>> = args
-            .into_inner()
-            .map(|p| ident_from_pair(p).as_str().to_owned())
+    ) -> Result<SentenceIndex, BuilderError<'t>> {
+        let bindings = Bindings::from(args);
+
+        let mut names: VecDeque<Option<String>> = bindings
+            .bindings
+            .into_iter()
+            .map(|p| match p {
+                ast::Binding::Ident(i) => Some(i.as_str().to_owned()),
+                ast::Binding::Literal(_) => todo!(),
+            })
             // .chain(["caller".to_owned()])
-            .map(Some)
             .collect();
         self.visit_proc_block_pair(name, ns_idx, names, body)
     }
+
+    fn visit_match_proc(
+        &mut self,
+        name: &str,
+        ns_idx: NamespaceIndex,
+        cases: Pair<'t, Rule>,
+    ) -> Result<SentenceIndex, BuilderError<'t>> {
+        let span = cases.as_span();
+        let mut builder = SentenceBuilder::new(Some(name.to_owned()), ns_idx, VecDeque::new());
+
+        assert_eq!(cases.as_rule(), Rule::proc_match_cases);
+        let cases = cases.into_inner().collect_vec();
+
+        let mut panic_builder =
+            SentenceBuilder::new(Some(name.to_owned()), ns_idx, VecDeque::new());
+        panic_builder.symbol(span, "panic");
+        let panic_idx = self.sentences.push_and_get_key(panic_builder.build());
+
+        let mut next_case = panic_idx;
+        for case in cases.into_iter().rev() {
+            let case_span = case.as_span();
+            let (bindings, body) = case.into_inner().collect_tuple().unwrap();
+
+            let bindings = Bindings::from(bindings);
+
+            let if_case_matches_names: VecDeque<Option<String>> = bindings
+                .bindings
+                .iter()
+                .map(|b| match b {
+                    ast::Binding::Literal(literal) => None,
+                    ast::Binding::Ident(i) => Some(i.as_str().to_owned()),
+                })
+                .collect();
+
+            let if_case_matches_idx =
+                self.visit_proc_block_pair(name, ns_idx, if_case_matches_names, body)?;
+
+            let mut case_builder =
+                SentenceBuilder::new(Some(name.to_owned()), ns_idx, VecDeque::new());
+
+            case_builder.literal(case_span, true.into());
+
+            for (idx, b) in bindings.bindings.into_iter().enumerate() {
+                match b {
+                    ast::Binding::Literal(literal) => {
+                        case_builder.cp_idx(case_span, idx + 1); // +1 for the "true"
+                        case_builder.literal(literal.span, literal.value);
+                        case_builder.builtin(case_span, Builtin::Eq);
+                        case_builder.builtin(case_span, Builtin::And);
+                    }
+                    ast::Binding::Ident(span) => continue,
+                }
+            }
+            case_builder.literal(
+                case_span,
+                Value::Pointer(Closure(vec![], if_case_matches_idx)),
+            );
+            case_builder.literal(case_span, Value::Pointer(Closure(vec![], next_case)));
+            case_builder.symbol(case_span, "if");
+            next_case = self.sentences.push_and_get_key(case_builder.build());
+        }
+
+        Ok(next_case)
+      }
 
     fn visit_proc_block_pair(
         &mut self,
@@ -115,7 +192,7 @@ impl<'t> Library<'t> {
         ns_idx: NamespaceIndex,
         mut names: VecDeque<Option<String>>,
         body: Pair<'t, Rule>,
-    ) -> SentenceIndex {
+    ) -> Result<SentenceIndex, BuilderError<'t>> {
         let (statements, endpoint) = body.into_inner().collect_tuple().unwrap();
 
         assert_eq!(statements.as_rule(), Rule::proc_statements);
@@ -130,7 +207,7 @@ impl<'t> Library<'t> {
         mut names: VecDeque<Option<String>>,
         mut statements: VecDeque<Pair<'t, Rule>>,
         endpoint: Pair<'t, Rule>,
-    ) -> SentenceIndex {
+    ) -> Result<SentenceIndex, BuilderError<'t>> {
         let Some(statement) = statements.pop_front() else {
             return self.visit_proc_endpoint(name, ns_idx, names, endpoint);
         };
@@ -140,36 +217,47 @@ impl<'t> Library<'t> {
         let span = statement.as_span();
         match statement.as_rule() {
             Rule::proc_let => {
-                let (let_names, expr) = statement.into_inner().collect_tuple().unwrap();
-                let let_names = let_names
-                    .into_inner()
-                    .map(|p| Some(ident_from_pair(p).as_str().to_owned()))
+                let (bindings, expr) = statement.into_inner().collect_tuple().unwrap();
+                let let_names = Bindings::from(bindings)
+                    .bindings
+                    .into_iter()
+                    .map(|p| match p {
+                        ast::Binding::Literal(literal) => {
+                            todo!("implement asserts in let bindings")
+                        }
+                        ast::Binding::Ident(span) => Some(span.as_str().to_owned()),
+                    })
                     .collect_vec();
 
                 let mut builder =
                     SentenceBuilder::new(Some(name.to_owned()), ns_idx, names.clone());
 
-                builder.proc_expr(expr);
+                let argc = builder.proc_expr(expr)?;
 
-                builder.sd_top(span);
-
-                let mut next_names = builder.names.clone();
-                next_names.pop_back();
+                let mut next_names: VecDeque<Option<String>> = builder
+                    .names
+                    .iter()
+                    .skip(argc + 1)
+                    .map(|n| n.clone())
+                    .collect();
                 next_names.extend(let_names);
 
-                let next = self.visit_proc_block(name, ns_idx, next_names, statements, endpoint);
-
+                let next = self.visit_proc_block(name, ns_idx, next_names, statements, endpoint)?;
                 builder.literal(span, Value::Pointer(Closure(vec![], next)));
-                while builder.names.len() > 2 {
+                // Stack: (unused) (args) fn next
+                while builder.names.len() > argc + 2 {
+                    builder.mv_idx(span, argc + 2);
+                    builder.mv_idx(span, 1);
                     builder.builtin(span, Builtin::Curry);
                 }
+
+                // Stack: (args) fn next
                 builder.mv_idx(span, 1);
-                builder.builtin(span, Builtin::Curry);
                 builder.literal(span, Value::Symbol("exec".to_owned()));
 
-                self.sentences.push_and_get_key(builder.build())
+                Ok(self.sentences.push_and_get_key(builder.build()))
             }
-            _ => unreachable!("Unexpected rule: {:?}", statement),
+            _ => Ok(unreachable!("Unexpected rule: {:?}", statement)),
         }
     }
 
@@ -179,7 +267,7 @@ impl<'t> Library<'t> {
         ns_idx: NamespaceIndex,
         names: VecDeque<Option<String>>,
         endpoint: Pair<'t, Rule>,
-    ) -> SentenceIndex {
+    ) -> Result<SentenceIndex, BuilderError<'t>> {
         assert_eq!(endpoint.as_rule(), Rule::proc_endpoint);
         let endpoint = endpoint.into_inner().exactly_one().unwrap();
 
@@ -190,14 +278,14 @@ impl<'t> Library<'t> {
                 let mut builder =
                     SentenceBuilder::new(Some(name.to_owned()), ns_idx, names.clone());
 
-                builder.proc_func_call(endpoint);
+                let argc = builder.proc_func_call(endpoint)?;
 
-                while builder.names.len() > 1 {
-                    builder.drop_idx(span, 1);
+                while builder.names.len() > argc + 1 {
+                    builder.drop_idx(span, argc + 1);
                 }
                 builder.literal(span, Value::Symbol("exec".to_owned()));
 
-                self.sentences.push_and_get_key(builder.build())
+                Ok(self.sentences.push_and_get_key(builder.build()))
             }
             Rule::proc_if => {
                 let span = endpoint.as_span();
@@ -213,91 +301,105 @@ impl<'t> Library<'t> {
                 case_names.pop_front();
 
                 let true_case =
-                    self.visit_proc_block_pair(name, ns_idx, case_names.clone(), true_case);
-                let false_case = self.visit_proc_block_pair(name, ns_idx, case_names, false_case);
+                    self.visit_proc_block_pair(name, ns_idx, case_names.clone(), true_case)?;
+                let false_case =
+                    self.visit_proc_block_pair(name, ns_idx, case_names, false_case)?;
 
                 builder.literal(span, Value::Pointer(Closure(vec![], true_case)));
                 builder.literal(span, Value::Pointer(Closure(vec![], false_case)));
                 builder.literal(span, Value::Symbol("if".to_owned()));
 
-                self.sentences.push_and_get_key(builder.build())
+                Ok(self.sentences.push_and_get_key(builder.build()))
             }
             Rule::proc_match_block => {
-                let span = endpoint.as_span();
-                let (expr, cases) = endpoint.into_inner().collect_tuple().unwrap();
-
-                let mut builder =
-                    SentenceBuilder::new(Some(name.to_owned()), ns_idx, names.clone());
-
-                builder.proc_expr(expr);
-                // Stack: (leftover names) to_call
-
-                builder.sd_top(span);
-                // Stack: to_call (leftover names)
-
-                let mut leftover_names = builder.names.clone();
-                leftover_names.pop_back();
-
-                assert_eq!(cases.as_rule(), Rule::proc_match_cases);
-                let cases = cases.into_inner().collect_vec();
-
+                self.visit_proc_match_block(name, ns_idx, names, endpoint.into())
+            }
+            Rule::proc_unreachable => {
                 let mut panic_builder =
                     SentenceBuilder::new(Some(name.to_owned()), ns_idx, VecDeque::new());
-                panic_builder.symbol(span, "panic");
-                let panic_idx = self.sentences.push_and_get_key(panic_builder.build());
-
-                let mut next_case = panic_idx;
-                for case in cases.into_iter().rev() {
-                    let case_span = case.as_span();
-                    let (discrim, bindings, body) = case.into_inner().collect_tuple().unwrap();
-
-                    let if_case_matches_names :VecDeque<Option<String>> =
-                        // Preserved names from before the call.
-                        leftover_names.iter().cloned()
-                        // Empty slot for the discriminator.
-                        .chain([None])
-                        // Then the bindings.
-                        .chain(
-                            bindings
-                            .into_inner()
-                            .map(|p| Some(ident_from_pair(p).as_str().to_owned()))
-                        ).collect();
-
-                    let if_case_matches_idx =
-                        self.visit_proc_block_pair(name, ns_idx, if_case_matches_names, body);
-
-                    let discrim = literal_from_pair(discrim);
-
-                    let mut case_builder =
-                        SentenceBuilder::new(Some(name.to_owned()), ns_idx, VecDeque::new());
-                    // Copy the first thing after the leftover names.
-                    case_builder.cp_idx(case_span, leftover_names.len());
-                    case_builder.literal(case_span, discrim);
-                    case_builder.builtin(case_span, Builtin::Eq);
-                    case_builder.literal(
-                        case_span,
-                        Value::Pointer(Closure(vec![], if_case_matches_idx)),
-                    );
-                    case_builder.literal(case_span, Value::Pointer(Closure(vec![], next_case)));
-                    case_builder.symbol(case_span, "if");
-                    next_case = self.sentences.push_and_get_key(case_builder.build());
-                }
-
-                builder.literal(span, Value::Pointer(Closure(vec![], next_case)));
-                // Stack: to_call (leftover names) match_beginning
-
-                while builder.names.len() > 2 {
-                    builder.builtin(span, Builtin::Curry);
-                }
-                // Stack: to_call curried_match_beginning
-                builder.mv_idx(span, 1);
-                builder.builtin(span, Builtin::Curry);
-                builder.symbol(span, "exec");
-
-                self.sentences.push_and_get_key(builder.build())
+                panic_builder.symbol(endpoint.as_span(), "panic");
+                Ok(self.sentences.push_and_get_key(panic_builder.build()))
             }
             _ => unreachable!("Unexpected rule: {:?}", endpoint),
         }
+    }
+
+    fn visit_proc_match_block(
+        &mut self,
+        name: &str,
+        ns_idx: NamespaceIndex,
+        names: VecDeque<Option<String>>,
+        block: ast::ProcMatchBlock<'t>,
+    ) -> Result<SentenceIndex, BuilderError<'t>> {
+        let mut builder = SentenceBuilder::new(Some(name.to_owned()), ns_idx, names.clone());
+
+        let argc = builder.proc_expr(block.expr)?;
+        // Stack: (leftover names) (args) to_call
+
+        let mut leftover_names: VecDeque<Option<String>> =
+            builder.names.iter().skip(argc + 1).cloned().collect();
+
+        let mut panic_builder =
+            SentenceBuilder::new(Some(name.to_owned()), ns_idx, VecDeque::new());
+        panic_builder.symbol(block.span, "panic");
+        let panic_idx = self.sentences.push_and_get_key(panic_builder.build());
+
+        let mut next_case = panic_idx;
+        for case in block.cases.into_iter().rev() {
+            let if_case_matches_names :VecDeque<Option<String>> =
+                // Preserved names from before the call.
+                leftover_names.iter().cloned()
+                // Then the bindings.
+                .chain(
+                    case.bindings.bindings
+                    .iter()
+                    .map(|b| match b{
+                        ast::Binding::Literal(literal) => None,
+                        ast::Binding::Ident(span) => Some(span.as_str().to_owned()),
+                    })
+                ).collect();
+
+            let if_case_matches_idx =
+                self.visit_proc_block_pair(name, ns_idx, if_case_matches_names, case.body)?;
+
+            let mut case_builder =
+                SentenceBuilder::new(Some(name.to_owned()), ns_idx, VecDeque::new());
+
+            case_builder.literal(case.span, true.into());
+
+            for (idx, b) in case.bindings.bindings.into_iter().enumerate() {
+                match b {
+                    ast::Binding::Literal(literal) => {
+                        case_builder.cp_idx(case.span, leftover_names.len() + idx + 1); // +1 for "true"
+                        case_builder.literal(literal.span, literal.value);
+                        case_builder.builtin(case.span, Builtin::Eq);
+                        case_builder.builtin(case.span, Builtin::And);
+                    }
+                    ast::Binding::Ident(span) => continue,
+                }
+            }
+            case_builder.literal(
+                case.span,
+                Value::Pointer(Closure(vec![], if_case_matches_idx)),
+            );
+            case_builder.literal(case.span, Value::Pointer(Closure(vec![], next_case)));
+            case_builder.symbol(case.span, "if");
+            next_case = self.sentences.push_and_get_key(case_builder.build());
+        }
+
+        builder.literal(block.span, Value::Pointer(Closure(vec![], next_case)));
+        // Stack: (leftovers) (args) to_call match_beginning
+
+        while builder.names.len() > argc + 2 {
+            builder.mv_idx(block.span, argc + 2);
+            builder.mv_idx(block.span, 1);
+            builder.builtin(block.span, Builtin::Curry);
+        }
+        // Stack: (args) to_call match_beginning
+        builder.mv_idx(block.span, 1);
+        builder.symbol(block.span, "exec");
+
+        Ok(self.sentences.push_and_get_key(builder.build()))
     }
 
     fn visit_code(
@@ -601,6 +703,12 @@ pub struct SentenceBuilder<'t> {
     pub words: Vec<Word<'t>>,
 }
 
+#[derive(thiserror::Error, Debug)]
+pub enum BuilderError<'t> {
+    #[error("Unknown reference at {span:?}: {name}")]
+    UnknownReference { span: Span<'t>, name: String },
+}
+
 impl<'t> SentenceBuilder<'t> {
     pub fn new(
         name: Option<String>,
@@ -635,14 +743,17 @@ impl<'t> SentenceBuilder<'t> {
         self.literal(span, Value::Symbol(symbol.to_owned()))
     }
 
-    pub fn mv(&mut self, span: Span<'t>, name: &str) {
+    pub fn mv(&mut self, span: Span<'t>, name: &str) -> Result<(), BuilderError<'t>> {
         let Some(idx) = self.names.iter().position(|n| match n {
             Some(n) => n.as_str() == name,
             None => false,
         }) else {
-            panic!("unknown reference: {:?}", name)
+            return Err(BuilderError::UnknownReference {
+                span,
+                name: name.to_owned(),
+            });
         };
-        self.mv_idx(span, idx)
+        Ok(self.mv_idx(span, idx))
     }
 
     pub fn mv_idx(&mut self, span: Span<'t>, idx: usize) {
@@ -657,14 +768,17 @@ impl<'t> SentenceBuilder<'t> {
         });
     }
 
-    pub fn cp(&mut self, span: Span<'t>, name: &str) {
+    pub fn cp(&mut self, span: Span<'t>, name: &str) -> Result<(), BuilderError<'t>> {
         let Some(idx) = self.names.iter().position(|n| match n {
             Some(n) => n.as_str() == name,
             None => false,
         }) else {
-            panic!("unknown reference: {:?}", name)
+            return Err(BuilderError::UnknownReference {
+                span,
+                name: name.to_owned(),
+            });
         };
-        self.cp_idx(span, idx)
+        Ok(self.cp_idx(span, idx))
     }
 
     pub fn cp_idx(&mut self, span: Span<'t>, idx: usize) {
@@ -777,27 +891,29 @@ impl<'t> SentenceBuilder<'t> {
         }
     }
 
-    fn proc_expr(&mut self, expr: Pair<'t, Rule>) {
+    fn proc_expr(&mut self, expr: Pair<'t, Rule>) -> Result<usize, BuilderError<'t>> {
         assert_eq!(expr.as_rule(), Rule::proc_expr);
         let expr = expr.into_inner().exactly_one().unwrap();
         match expr.as_rule() {
-            Rule::proc_func_call => {
-                self.proc_func_call(expr);
-            }
+            Rule::proc_func_call => self.proc_func_call(expr),
             _ => unreachable!("Unexpected rule: {:?}", expr),
         }
     }
 
-    fn proc_func_call(&mut self, func_call: Pair<'t, Rule>) {
+    fn proc_func_call(&mut self, func_call: Pair<'t, Rule>) -> Result<usize, BuilderError<'t>> {
         assert_eq!(func_call.as_rule(), Rule::proc_func_call);
         let (func, args) = func_call.into_inner().collect_tuple().unwrap();
-        let (func, func_copied) =  if let Rule::proc_func_name_copied = func.as_rule() {
-            ( ast::PathOrIdent::from(func.into_inner().exactly_one().unwrap()), true)
+        let (func, func_copied) = if let Rule::proc_func_name_copied = func.as_rule() {
+            (
+                ast::PathOrIdent::from(func.into_inner().exactly_one().unwrap()),
+                true,
+            )
         } else {
-           ( ast::PathOrIdent::from(func), false)
+            (ast::PathOrIdent::from(func), false)
         };
 
         let args = args.into_inner().collect_vec();
+        let argc = args.len();
 
         for arg in args.iter().rev() {
             match arg.as_rule() {
@@ -811,8 +927,8 @@ impl<'t> SentenceBuilder<'t> {
                     self.cp(arg, arg.as_str());
                 }
                 Rule::literal => {
-                    let lit = literal_from_pair(arg.clone());
-                    self.literal(arg.as_span(), lit);
+                    let lit = Literal::from(arg.clone());
+                    self.literal(lit.span, lit.value);
                 }
                 Rule::path => {
                     let path = Path::from(arg.clone());
@@ -823,14 +939,11 @@ impl<'t> SentenceBuilder<'t> {
         }
 
         match (func, func_copied) {
-            (ast::PathOrIdent::Path(p), _)=> self.path(p),
-            (ast::PathOrIdent::Ident(i), false) => self.mv(i, i.as_str()),
-            (ast::PathOrIdent::Ident(i), true) => self.cp(i, i.as_str()),
+            (ast::PathOrIdent::Path(p), _) => self.path(p),
+            (ast::PathOrIdent::Ident(i), false) => self.mv(i, i.as_str())?,
+            (ast::PathOrIdent::Ident(i), true) => self.cp(i, i.as_str())?,
         }
-
-        for arg in args.into_iter() {
-            self.builtin(arg.as_span(), Builtin::Curry);
-        }
+        Ok(argc)
     }
 }
 

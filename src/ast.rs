@@ -45,40 +45,90 @@ pub fn int_from_pair(p: pest::iterators::Pair<Rule>) -> usize {
     p.as_str().parse().unwrap()
 }
 
-pub fn literal_from_pair(p: pest::iterators::Pair<Rule>) -> Value {
-    assert_eq!(p.as_rule(), Rule::literal);
-    let literal = p.into_inner().exactly_one().unwrap();
-    match literal.as_rule() {
-        Rule::int => Value::Usize(int_from_pair(literal)),
-        Rule::bool => Value::Bool(literal.as_str().parse().unwrap()),
-        Rule::char_lit => {
-            let chr = literal.into_inner().exactly_one().unwrap();
-            assert_eq!(Rule::lit_char, chr.as_rule());
+#[derive(Debug, Clone)]
+pub struct Literal<'t> {
+    pub span: Span<'t>,
+    pub value: Value,
+}
 
-            let c = match chr.as_str() {
-                "\\n" => '\n',
-                c => c.chars().exactly_one().unwrap(),
-            };
+impl<'t> From<Pair<'t, Rule>> for Literal<'t> {
+    fn from(p: Pair<'t, Rule>) -> Self {
+        let span = p.as_span();
+        assert_eq!(p.as_rule(), Rule::literal);
+        let literal = p.into_inner().exactly_one().unwrap();
+        let value = match literal.as_rule() {
+            Rule::int => Value::Usize(int_from_pair(literal)),
+            Rule::bool => Value::Bool(literal.as_str().parse().unwrap()),
+            Rule::char_lit => {
+                let chr = literal.into_inner().exactly_one().unwrap();
+                assert_eq!(Rule::lit_char, chr.as_rule());
 
-            Value::Char(c)
-        }
+                let c = match chr.as_str() {
+                    "\\n" => '\n',
+                    c => c.chars().exactly_one().unwrap(),
+                };
 
-        Rule::symbol => {
-            let ident = literal.into_inner().exactly_one().unwrap();
-            match ident.as_rule() {
-                Rule::identifier => Value::Symbol(ident.as_str().to_owned()),
-                Rule::string => {
-                    let inner = ident.into_inner().exactly_one().unwrap();
-                    assert_eq!(inner.as_rule(), Rule::str_inner);
-
-                    Value::Symbol(inner.as_str().replace("\\n", "\n").replace("\\\"", "\""))
-                }
-                _ => unreachable!(),
+                Value::Char(c)
             }
-        }
 
-        Rule::nil => Value::Nil,
-        _ => unreachable!("{:?}", literal),
+            Rule::symbol => {
+                let ident = literal.into_inner().exactly_one().unwrap();
+                match ident.as_rule() {
+                    Rule::identifier => Value::Symbol(ident.as_str().to_owned()),
+                    Rule::string => {
+                        let inner = ident.into_inner().exactly_one().unwrap();
+                        assert_eq!(inner.as_rule(), Rule::str_inner);
+
+                        Value::Symbol(inner.as_str().replace("\\n", "\n").replace("\\\"", "\""))
+                    }
+                    _ => unreachable!(),
+                }
+            }
+
+            Rule::nil => Value::Nil,
+            _ => unreachable!("{:?}", literal),
+        };
+        Self { span, value }
+    }
+}
+
+pub struct ProcMatchBlock<'t> {
+    pub span: Span<'t>,
+    pub expr: Pair<'t, Rule>,
+    pub cases: Vec<ProcMatchCase<'t>>,
+}
+
+impl<'t> From<Pair<'t, Rule>> for ProcMatchBlock<'t> {
+    fn from(value: Pair<'t, Rule>) -> Self {
+        assert_eq!(Rule::proc_match_block, value.as_rule());
+
+        let span = value.as_span();
+        let (expr, cases) = value.into_inner().collect_tuple().unwrap();
+        Self {
+            span,
+            expr,
+            cases: cases.into_inner().map(|c| c.into()).collect(),
+        }
+    }
+}
+
+pub struct ProcMatchCase<'t> {
+    pub span: Span<'t>,
+    pub bindings: Bindings<'t>,
+    pub body: Pair<'t, Rule>,
+}
+
+impl<'t> From<Pair<'t, Rule>> for ProcMatchCase<'t> {
+    fn from(value: Pair<'t, Rule>) -> Self {
+        assert_eq!(Rule::proc_match_case, value.as_rule());
+        let span = value.as_span();
+        let (bindings, body) = value.into_inner().collect_tuple().unwrap();
+
+        Self {
+            span,
+            bindings: bindings.into(),
+            body,
+        }
     }
 }
 
@@ -121,6 +171,15 @@ impl<'t> Namespace<'t> {
                         value: DeclValue::Proc(Proc { args, body }),
                     })
                 }
+                Rule::match_proc_decl => {
+                    let (ident, cases) = decl.into_inner().collect_tuple().unwrap();
+                    assert_eq!(ident.as_rule(), Rule::identifier);
+
+                    res.decls.push(Decl {
+                        name: ident_from_pair(ident).as_str().to_owned(),
+                        value: DeclValue::MatchProc(MatchProc { cases }),
+                    })
+                }
                 _ => unreachable!(),
             }
         }
@@ -153,12 +212,18 @@ pub enum DeclValue<'t> {
     Namespace(Namespace<'t>),
     Code(Code<'t>),
     Proc(Proc<'t>),
+    MatchProc(MatchProc<'t>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Proc<'t> {
     pub args: Pair<'t, Rule>,
     pub body: Pair<'t, Rule>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MatchProc<'t> {
+    pub cases: Pair<'t, Rule>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -185,7 +250,7 @@ impl<'t> Expression<'t> {
         let span = p.as_span();
         let child = p.into_inner().exactly_one().unwrap();
         let inner = match child.as_rule() {
-            Rule::literal => InnerExpression::Literal(literal_from_pair(child)),
+            Rule::literal => InnerExpression::Literal(Literal::from(child).value),
             Rule::identifier => InnerExpression::Reference(child.as_str().to_owned()),
             Rule::delete => InnerExpression::Delete(
                 ident_from_pair(child.into_inner().exactly_one().unwrap())
@@ -241,6 +306,35 @@ impl<'t> From<Pair<'t, Rule>> for PathOrIdent<'t> {
     fn from(value: Pair<'t, Rule>) -> Self {
         match value.as_rule() {
             Rule::path => Self::Path(value.into()),
+            Rule::identifier => Self::Ident(value.as_span()),
+            _ => unreachable!("unexpected rule: {:?}", value),
+        }
+    }
+}
+
+pub struct Bindings<'t> {
+    pub span: Span<'t>,
+    pub bindings: Vec<Binding<'t>>,
+}
+
+impl<'t> From<Pair<'t, Rule>> for Bindings<'t> {
+    fn from(value: Pair<'t, Rule>) -> Self {
+        assert_eq!(value.as_rule(), Rule::proc_bindings);
+        Self {
+            span: value.as_span(),
+            bindings: value.into_inner().map(Binding::from).collect_vec(),
+        }
+    }
+}
+pub enum Binding<'t> {
+    Literal(Literal<'t>),
+    Ident(Span<'t>),
+}
+
+impl<'t> From<Pair<'t, Rule>> for Binding<'t> {
+    fn from(value: Pair<'t, Rule>) -> Self {
+        match value.as_rule() {
+            Rule::literal => Self::Literal(value.into()),
             Rule::identifier => Self::Ident(value.as_span()),
             _ => unreachable!("unexpected rule: {:?}", value),
         }
@@ -364,7 +458,7 @@ impl<'t> MatchCase<'t> {
         let (value, body) = p.into_inner().collect_tuple().unwrap();
 
         Self {
-            value: literal_from_pair(value),
+            value: Literal::from(value).value,
             body: Code::from_pair(body),
             span,
         }

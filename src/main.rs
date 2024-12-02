@@ -30,7 +30,13 @@ fn debug(file: PathBuf) -> anyhow::Result<()> {
 
     let ast = ast::Module::from_str(&code).unwrap();
 
-    let vm = Vm::new(ast.namespace);
+    let vm = match Vm::new(ast.namespace) {
+        Ok(vm) => vm,
+        Err(err) => {
+            println!("error: {}", err);
+            return Ok(());
+        }
+    };
 
     let debugger = debugger::Debugger::new(&code, vm);
 
@@ -44,30 +50,39 @@ fn debug(file: PathBuf) -> anyhow::Result<()> {
 
 struct IterReader<'a, 't> {
     vm: &'a mut Vm<'t>,
+    done: bool,
 }
 
 impl<'a, 't> Iterator for IterReader<'a, 't> {
     type Item = Result<Value, EvalError<'t>>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        if self.done {
+            return None;
+        }
         let mut res = match self.vm.run_to_trap() {
             Ok(res) => res,
-            Err(e) => return Some(Err(e)),
+            Err(e) => {
+                self.done = true;
+                return Some(Err(e));
+            }
         };
 
-        let Some(Value::Symbol(result)) = res.pop() else {
+        let Some(Value::Pointer(mut closure)) = self.vm.stack.pop() else {
+            panic!();
+        };
+
+        let Some(Value::Symbol(result)) = self.vm.stack.pop() else {
             panic!();
         };
 
         match result.as_str() {
             "yield" => {
-                let item = res.pop().unwrap();
-                let Some(Value::Pointer(mut closure)) = res.pop() else {
-                    panic!("bad value")
-                };
+                let item = self.vm.stack.pop().unwrap();
                 closure
                     .0
-                    .push(Value::Pointer(Closure(vec![], SentenceIndex::TRAP)));
+                    .insert(0, Value::Pointer(Closure(vec![], SentenceIndex::TRAP)));
+                closure.0.insert(0, Value::Symbol("next".to_owned()));
                 self.vm.jump_to(closure);
 
                 Some(Ok(item))
@@ -83,7 +98,13 @@ fn test(file: PathBuf) -> anyhow::Result<()> {
 
     let ast = ast::Module::from_str(&code).unwrap();
 
-    let mut vm = Vm::new(ast.namespace);
+    let mut vm = match Vm::new(ast.namespace) {
+        Ok(vm) => vm,
+        Err(err) => {
+            println!("error: {}", err);
+            return Ok(());
+        }
+    };
 
     let Some(Entry::Namespace(tests_ns)) = vm.lib.namespaces.first().unwrap().get("tests") else {
         panic!("no namespace named tests")
@@ -103,12 +124,27 @@ fn test(file: PathBuf) -> anyhow::Result<()> {
     let run = run.1;
 
     vm.jump_to(Closure(
-        vec![Value::Pointer(Closure(vec![], SentenceIndex::TRAP))],
+        vec![
+            Value::Symbol("next".to_owned()),
+            Value::Pointer(Closure(vec![], SentenceIndex::TRAP)),
+        ],
         enumerate,
     ));
 
-    for tc in (IterReader { vm: &mut vm }).collect_vec() {
-        let Value::Symbol(tc_name) = tc.unwrap() else {
+    for tc in (IterReader {
+        vm: &mut vm,
+        done: false,
+    })
+    .collect_vec()
+    {
+        let value = match tc {
+            Ok(value) => value,
+            Err(e) => {
+                println!("Error enumerating tests: {}", e);
+                return Ok(());
+            }
+        };
+        let Value::Symbol(tc_name) = value else {
             panic!()
         };
 
@@ -130,7 +166,7 @@ fn test(file: PathBuf) -> anyhow::Result<()> {
             }
         };
 
-        let Value::Symbol(result) = res.pop().unwrap() else {
+        let Value::Symbol(result) = vm.stack.pop().unwrap() else {
             panic!()
         };
 

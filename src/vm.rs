@@ -7,7 +7,10 @@ use typed_index_collections::TiSliceIndex;
 
 use crate::{
     ast,
-    flat::{Builtin, Closure, Entry, InnerWord, Library, Namespace2, SentenceIndex, Value, Word},
+    flat::{
+        BuilderError, Builtin, Closure, Entry, InnerWord, Library, Namespace2, SentenceIndex,
+        Value, Word,
+    },
 };
 
 #[derive(Debug)]
@@ -335,9 +338,9 @@ fn control_flow<'t>(lib: &Library<'t>, stack: &mut Stack) -> anyhow::Result<Clos
                 panic!("bad value")
             };
 
-            if !stack.is_empty() {
-                bail!("exec with non-empty stack: {:?}", stack)
-            }
+            // if !stack.is_empty() {
+            //     bail!("exec with non-empty stack: {:?}", stack)
+            // }
             Ok(next)
         }
         // "halt" => None,
@@ -358,13 +361,13 @@ pub struct ProgramCounter {
 }
 
 pub enum StepResult {
-    Trap(Vec<Value>),
+    Trap,
     Continue,
 }
 
 impl<'t> Vm<'t> {
-    pub fn new(ast: ast::Namespace<'t>) -> Self {
-        let lib = Library::from_ast(ast);
+    pub fn new(ast: ast::Namespace<'t>) -> Result<Self, BuilderError<'t>> {
+        let lib = Library::from_ast(ast)?;
 
         let &Entry::Value(Value::Pointer(Closure(_, main))) =
             lib.root_namespace().get("main").unwrap()
@@ -372,14 +375,14 @@ impl<'t> Vm<'t> {
             panic!("not code")
         };
 
-        Vm {
+        Ok(Vm {
             lib,
             pc: ProgramCounter {
                 sentence_idx: main,
                 word_idx: 0,
             },
             stack: Stack::default(),
-        }
+        })
     }
 
     pub fn current_word(&self) -> Option<&Word<'t>> {
@@ -396,11 +399,11 @@ impl<'t> Vm<'t> {
         self.pc.word_idx = 0;
     }
 
-    pub fn run_to_trap(&mut self) -> Result<Vec<Value>, EvalError<'t>> {
+    pub fn run_to_trap(&mut self) -> Result<(), EvalError<'t>> {
         loop {
             match self.step()? {
                 StepResult::Continue => {}
-                StepResult::Trap(t) => return Ok(t),
+                StepResult::Trap => return Ok(()),
             }
         }
     }
@@ -419,7 +422,10 @@ impl<'t> Vm<'t> {
             })?;
 
             if next.1 == SentenceIndex::TRAP {
-                Ok(StepResult::Trap(next.0))
+                for v in next.0 {
+                    self.stack.push(v);
+                }
+                Ok(StepResult::Trap)
             } else {
                 self.jump_to(next);
                 Ok(StepResult::Continue)

@@ -68,7 +68,7 @@ code_decl = { "let" ~ identifier ~ "=" ~ "{" ~ code ~ "}" ~ ";" }
 
 ns_decl = { "mod" ~ identifier ~ "{" ~ namespace ~ "}" }
 
-decl = _{ code_decl | ns_decl | proc_decl }
+decl = _{ code_decl | ns_decl | proc_decl | match_proc_decl }
 
 namespace = { decl* }
 
@@ -76,21 +76,18 @@ file = { SOI ~ namespace ~ EOI }
 
 // Proc syntax
 
-proc_decl = { "proc" ~ identifier ~ proc_args ~ "{" ~ proc_block ~ "}" }
-
-proc_args = {
-    "(" ~ ")"
-  | "(" ~ identifier ~ ("," ~ identifier)* ~ ")"
-}
+proc_decl       = { "proc" ~ identifier ~ proc_bindings ~ "{" ~ proc_block ~ "}" }
+match_proc_decl = { "match_proc" ~ identifier ~ "{" ~ proc_match_cases ~ "}" }
 
 proc_block      = { proc_statements ~ proc_endpoint }
 proc_statements = { proc_statement* }
 
 proc_statement = { proc_let }
 
-proc_let = { "let" ~ proc_args ~ "=" ~ proc_expr ~ ";" }
+proc_let = { "let" ~ proc_bindings ~ "=" ~ proc_expr ~ ";" }
 
-proc_endpoint = { proc_if | proc_match_block | proc_func_call }
+proc_endpoint    = { proc_if | proc_match_block | proc_func_call | proc_unreachable }
+proc_unreachable = { "" }
 
 proc_if = {
     "if" ~ identifier ~ "{" ~ proc_block ~ "}" ~ "else" ~ "{" ~ proc_block ~ "}"
@@ -117,8 +114,10 @@ proc_func_call_arg = _{
 proc_match_block = { "match" ~ proc_expr ~ "{" ~ proc_match_cases ~ "}" }
 
 proc_match_cases = { proc_match_case* }
-proc_match_case  = { "(" ~ literal ~ proc_match_bindings_tail ~ ")" ~ "=>" ~ "{" ~ proc_block ~ "}" }
+proc_match_case  = { proc_bindings ~ "=>" ~ "{" ~ proc_block ~ "}" }
 
-proc_match_bindings_tail = {
-    ("," ~ identifier)*
+proc_bindings =  {
+    "(" ~ ")"
+  | "(" ~ proc_binding ~ ("," ~ proc_binding)* ~ ")"
 }
+proc_binding  = _{ literal | identifier }
