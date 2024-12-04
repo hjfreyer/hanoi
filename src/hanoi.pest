@@ -2,6 +2,20 @@ WHITESPACE = _{ " " | "\n" }
 
 COMMENT = _{ "//" ~ (!NEWLINE ~ ANY)* }
 
+// FILE STRUCTURE
+
+file = { SOI ~ namespace ~ EOI }
+
+namespace = { decl* }
+
+// code_decl = { "let" ~ identifier ~ "=" ~ "{" ~ code ~ "}" ~ ";" }
+
+ns_decl = { "mod" ~ identifier ~ "{" ~ namespace ~ "}" }
+
+decl = _{ ns_decl | proc_decl }
+
+// END FILE STRUCTURE
+
 // LITERALS
 
 nil = { "nil" }
@@ -34,90 +48,87 @@ literal = { bool | int | char_lit | symbol | nil }
 
 // END LITERALS
 
+raw_statement = { "R" ~ "{" ~ raw_word* ~ "}" }
+raw_word      = { literal | builtin_func_call | builtin | this }
+
 builtin = { "#" ~ identifier }
 
-this = _{ "this" }
+this = { "this" }
 
-func_call = { "#" ~ identifier ~ "(" ~ (int | identifier) ~ ")" }
+builtin_func_call = { "#" ~ identifier ~ "(" ~ int ~ ")" }
 
-delete = { "^" ~ identifier }
+// delete = { "^" ~ identifier }
 
 copy = { "*" ~ identifier }
 
-expr = { path | literal | func_call | identifier | builtin | delete | copy }
+// expr = { path | literal | func_call | identifier | builtin | delete | copy }
 
 path = { this ~ ("." ~ identifier)* }
 
-sentence      = { sentence_body }
-sentence_body = { expr* }
+// sentence      = { sentence_body }
+// sentence_body = { expr* }
 
-and_then = { sentence ~ ";" ~ code }
+// and_then = { sentence ~ ";" ~ code }
 
-if_statement = { sentence ~ "if" ~ "{" ~ code ~ "}" ~ "else" ~ "{" ~ code ~ "}" }
+// if_statement = { sentence ~ "if" ~ "{" ~ code ~ "}" ~ "else" ~ "{" ~ code ~ "}" }
 
-bind = { "bind" ~ identifier ~ ";" ~ code }
+// bind = { "bind" ~ identifier ~ ";" ~ code }
 
-match_block = { "match" ~ "(" ~ int ~ ")" ~ "{" ~ match_cases ~ "}" ~ "else" ~ "{" ~ code ~ "}" }
+// match_block = { "match" ~ "(" ~ int ~ ")" ~ "{" ~ match_cases ~ "}" ~ "else" ~ "{" ~ code ~ "}" }
 
-match_cases = { match_case* }
-match_case  = { literal ~ "=>" ~ "{" ~ code ~ "}" }
+// match_cases = { match_case* }
+// match_case  = { literal ~ "=>" ~ "{" ~ code ~ "}" }
 
-code = { bind | and_then | if_statement | match_block | sentence }
+// code = { bind | and_then | if_statement | match_block | sentence }
 
-code_decl = { "let" ~ identifier ~ "=" ~ "{" ~ code ~ "}" ~ ";" }
-
-ns_decl = { "mod" ~ identifier ~ "{" ~ namespace ~ "}" }
-
-decl = _{ code_decl | ns_decl | proc_decl | match_proc_decl }
-
-namespace = { decl* }
-
-file = { SOI ~ namespace ~ EOI }
+// code_decl = { "let" ~ identifier ~ "=" ~ "{" ~ code ~ "}" ~ ";" }
 
 // Proc syntax
 
-proc_decl       = { "proc" ~ identifier ~ proc_bindings ~ "{" ~ proc_block ~ "}" }
-match_proc_decl = { "match_proc" ~ identifier ~ "{" ~ proc_match_cases ~ "}" }
+proc_decl          = { "proc" ~ identifier ~ proc_args_and_body }
+proc_args_and_body = { bindings ~ "{" ~ block ~ "}" }
 
-proc_block      = { proc_statements ~ proc_endpoint }
-proc_statements = { proc_statement* }
-
-proc_statement = { proc_let }
-
-proc_let = { "let" ~ proc_bindings ~ "=" ~ proc_expr ~ ";" }
-
-proc_endpoint    = { proc_if | proc_match_block | proc_func_call | proc_unreachable }
-proc_unreachable = { "" }
-
-proc_if = {
-    "if" ~ identifier ~ "{" ~ proc_block ~ "}" ~ "else" ~ "{" ~ proc_block ~ "}"
-}
-
-proc_expr = { literal | proc_func_call }
-
-proc_func_call        =  { proc_func_name ~ proc_func_call_args }
-proc_func_name        = _{ proc_func_name_copied | path | identifier }
-proc_func_name_copied =  { "(" ~ "*" ~ identifier ~ ")" }
-
-proc_func_call_args = {
+bindings =  {
     "(" ~ ")"
-  | "(" ~ proc_func_call_arg ~ ("," ~ proc_func_call_arg)* ~ ")"
+  | "(" ~ binding ~ ("," ~ binding)* ~ ")"
+}
+binding  = _{ literal | identifier }
+
+// match_decl = { "match_proc" ~ identifier ~ "{" ~ match_cases ~ "}" }
+
+block      = { statements ~ endpoint }
+statements = { statement* }
+
+statement = _{ let_statement }
+
+let_statement = { "let" ~ bindings ~ "=" ~ expr ~ ";" }
+
+endpoint    = _{ raw_statement | if_endpoint | match_block | func_call | unreachable }
+unreachable =  { "" }
+
+if_endpoint = {
+    "if" ~ identifier ~ "{" ~ block ~ "}" ~ "else" ~ "{" ~ block ~ "}"
 }
 
-proc_func_call_arg = _{
+expr = _{ literal | func_call }
+
+func_call        =  { func_name ~ func_call_args }
+func_name        = _{ func_name_copied | path | identifier }
+func_name_copied =  { "(" ~ "*" ~ identifier ~ ")" }
+
+func_call_args =  {
+    "(" ~ ")"
+  | "(" ~ func_call_arg ~ ("," ~ func_call_arg)* ~ ")"
+}
+func_call_arg  = _{
     literal
   | copy
   | path
   | identifier
 }
 
-proc_match_block = { "match" ~ proc_expr ~ "{" ~ proc_match_cases ~ "}" }
+match_block = { "match" ~ maybe_expr ~ "{" ~ match_cases ~ "}" }
+maybe_expr  = { expr? }
 
-proc_match_cases = { proc_match_case* }
-proc_match_case  = { proc_bindings ~ "=>" ~ "{" ~ proc_block ~ "}" }
-
-proc_bindings =  {
-    "(" ~ ")"
-  | "(" ~ proc_binding ~ ("," ~ proc_binding)* ~ ")"
-}
-proc_binding  = _{ literal | identifier }
+match_cases = { match_case* }
+match_case  = { bindings ~ "=>" ~ "{" ~ block ~ "}" }

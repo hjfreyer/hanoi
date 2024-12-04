@@ -166,6 +166,10 @@ fn test(file: PathBuf) -> anyhow::Result<()> {
             }
         };
 
+        let Value::Pointer(_) = vm.stack.pop().unwrap() else {
+            panic!()
+        };
+
         let Value::Symbol(result) = vm.stack.pop().unwrap() else {
             panic!()
         };

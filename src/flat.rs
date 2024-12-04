@@ -6,8 +6,8 @@ use pest::{iterators::Pair, Span};
 use typed_index_collections::TiVec;
 
 use crate::ast::{
-    self, ident_from_pair, Bindings, Expression, InnerExpression, Literal, Path, ProcMatchBlock,
-    ProcMatchCase, Rule,
+    self, ident_from_pair, Bindings, Identifier, Literal, Path, PathOrIdent, ProcMatchBlock,
+    ProcMatchCase, Rule, ValueExpression,
 };
 
 #[derive(From, Into, Debug, Copy, Clone, PartialEq, Eq)]
@@ -75,22 +75,15 @@ impl<'t> Library<'t> {
                         .0
                         .push((decl.name, Entry::Namespace(subns)));
                 }
-                ast::DeclValue::Code(code) => {
-                    let sentence_idx = self.visit_code(&decl.name, ns_idx, VecDeque::new(), code);
-                    self.namespaces[ns_idx].0.push((
-                        decl.name,
-                        Entry::Value(Value::Pointer(Closure(vec![], sentence_idx))),
-                    ));
-                }
-                ast::DeclValue::Proc(ast::Proc { args, body }) => {
-                    let sentence_idx = self.visit_proc(&decl.name, ns_idx, args, body)?;
-                    self.namespaces[ns_idx].0.push((
-                        decl.name,
-                        Entry::Value(Value::Pointer(Closure(vec![], sentence_idx))),
-                    ));
-                }
-                ast::DeclValue::MatchProc(ast::MatchProc { cases }) => {
-                    let sentence_idx = self.visit_match_proc(&decl.name, ns_idx, cases)?;
+                // ast::DeclValue::Code(code) => {
+                //     let sentence_idx = self.visit_code(&decl.name, ns_idx, VecDeque::new(), code);
+                //     self.namespaces[ns_idx].0.push((
+                //         decl.name,
+                //         Entry::Value(Value::Pointer(Closure(vec![], sentence_idx))),
+                //     ));
+                // }
+                ast::DeclValue::Proc(p) => {
+                    let sentence_idx = self.visit_block(&decl.name, ns_idx, VecDeque::new(), p)?;
                     self.namespaces[ns_idx].0.push((
                         decl.name,
                         Entry::Value(Value::Pointer(Closure(vec![], sentence_idx))),
@@ -101,568 +94,426 @@ impl<'t> Library<'t> {
         Ok(ns_idx)
     }
 
-    fn visit_proc(
+    fn visit_block(
         &mut self,
         name: &str,
         ns_idx: NamespaceIndex,
-        args: Pair<'t, Rule>,
-        body: Pair<'t, Rule>,
+        mut names: VecDeque<Option<String>>,
+        block: ast::Block<'t>,
     ) -> Result<SentenceIndex, BuilderError<'t>> {
-        let bindings = Bindings::from(args);
-
-        let mut names: VecDeque<Option<String>> = bindings
-            .bindings
-            .into_iter()
-            .map(|p| match p {
-                ast::Binding::Ident(i) => Some(i.as_str().to_owned()),
-                ast::Binding::Literal(_) => todo!(),
-            })
-            // .chain(["caller".to_owned()])
-            .collect();
-        self.visit_proc_block_pair(name, ns_idx, names, body)
-    }
-
-    fn visit_match_proc(
-        &mut self,
-        name: &str,
-        ns_idx: NamespaceIndex,
-        cases: Pair<'t, Rule>,
-    ) -> Result<SentenceIndex, BuilderError<'t>> {
-        let span = cases.as_span();
-        let mut builder = SentenceBuilder::new(Some(name.to_owned()), ns_idx, VecDeque::new());
-
-        assert_eq!(cases.as_rule(), Rule::proc_match_cases);
-        let cases = cases.into_inner().collect_vec();
-
-        let mut panic_builder =
-            SentenceBuilder::new(Some(name.to_owned()), ns_idx, VecDeque::new());
-        panic_builder.symbol(span, "panic");
-        let panic_idx = self.sentences.push_and_get_key(panic_builder.build());
-
-        let mut next_case = panic_idx;
-        for case in cases.into_iter().rev() {
-            let case_span = case.as_span();
-            let (bindings, body) = case.into_inner().collect_tuple().unwrap();
-
-            let bindings = Bindings::from(bindings);
-
-            let if_case_matches_names: VecDeque<Option<String>> = bindings
-                .bindings
-                .iter()
-                .map(|b| match b {
-                    ast::Binding::Literal(literal) => None,
-                    ast::Binding::Ident(i) => Some(i.as_str().to_owned()),
-                })
-                .collect();
-
-            let if_case_matches_idx =
-                self.visit_proc_block_pair(name, ns_idx, if_case_matches_names, body)?;
-
-            let mut case_builder =
-                SentenceBuilder::new(Some(name.to_owned()), ns_idx, VecDeque::new());
-
-            case_builder.literal(case_span, true.into());
-
-            for (idx, b) in bindings.bindings.into_iter().enumerate() {
-                match b {
-                    ast::Binding::Literal(literal) => {
-                        case_builder.cp_idx(case_span, idx + 1); // +1 for the "true"
-                        case_builder.literal(literal.span, literal.value);
-                        case_builder.builtin(case_span, Builtin::Eq);
-                        case_builder.builtin(case_span, Builtin::And);
-                    }
-                    ast::Binding::Ident(span) => continue,
-                }
+        match block {
+            ast::Block::Bind {
+                name: bind_name,
+                inner,
+            } => {
+                names.push_back(Some(bind_name.as_str().to_owned()));
+                self.visit_block(name, ns_idx, names, *inner)
             }
-            case_builder.literal(
-                case_span,
-                Value::Pointer(Closure(vec![], if_case_matches_idx)),
-            );
-            case_builder.literal(case_span, Value::Pointer(Closure(vec![], next_case)));
-            case_builder.symbol(case_span, "if");
-            next_case = self.sentences.push_and_get_key(case_builder.build());
-        }
+            ast::Block::Call { span, call, next } => {
+                let mut builder = SentenceBuilder::new(Some(name.to_owned()), ns_idx, names);
+                let argc = builder.func_call(call)?;
 
-        Ok(next_case)
-      }
+                let mut leftover_names: VecDeque<Option<String>> =
+                    builder.names.iter().skip(argc + 1).cloned().collect();
 
-    fn visit_proc_block_pair(
-        &mut self,
-        name: &str,
-        ns_idx: NamespaceIndex,
-        mut names: VecDeque<Option<String>>,
-        body: Pair<'t, Rule>,
-    ) -> Result<SentenceIndex, BuilderError<'t>> {
-        let (statements, endpoint) = body.into_inner().collect_tuple().unwrap();
+                let next = self.visit_block(name, ns_idx, leftover_names, *next)?;
 
-        assert_eq!(statements.as_rule(), Rule::proc_statements);
-        let statements = statements.into_inner().collect();
-        self.visit_proc_block(name, ns_idx, names, statements, endpoint)
-    }
+                builder.sentence_idx(span, next);
+                // Stack: (leftovers) (args) to_call next
 
-    fn visit_proc_block(
-        &mut self,
-        name: &str,
-        ns_idx: NamespaceIndex,
-        mut names: VecDeque<Option<String>>,
-        mut statements: VecDeque<Pair<'t, Rule>>,
-        endpoint: Pair<'t, Rule>,
-    ) -> Result<SentenceIndex, BuilderError<'t>> {
-        let Some(statement) = statements.pop_front() else {
-            return self.visit_proc_endpoint(name, ns_idx, names, endpoint);
-        };
-
-        assert_eq!(statement.as_rule(), Rule::proc_statement);
-        let statement = statement.into_inner().exactly_one().unwrap();
-        let span = statement.as_span();
-        match statement.as_rule() {
-            Rule::proc_let => {
-                let (bindings, expr) = statement.into_inner().collect_tuple().unwrap();
-                let let_names = Bindings::from(bindings)
-                    .bindings
-                    .into_iter()
-                    .map(|p| match p {
-                        ast::Binding::Literal(literal) => {
-                            todo!("implement asserts in let bindings")
-                        }
-                        ast::Binding::Ident(span) => Some(span.as_str().to_owned()),
-                    })
-                    .collect_vec();
-
-                let mut builder =
-                    SentenceBuilder::new(Some(name.to_owned()), ns_idx, names.clone());
-
-                let argc = builder.proc_expr(expr)?;
-
-                let mut next_names: VecDeque<Option<String>> = builder
-                    .names
-                    .iter()
-                    .skip(argc + 1)
-                    .map(|n| n.clone())
-                    .collect();
-                next_names.extend(let_names);
-
-                let next = self.visit_proc_block(name, ns_idx, next_names, statements, endpoint)?;
-                builder.literal(span, Value::Pointer(Closure(vec![], next)));
-                // Stack: (unused) (args) fn next
                 while builder.names.len() > argc + 2 {
                     builder.mv_idx(span, argc + 2);
                     builder.mv_idx(span, 1);
                     builder.builtin(span, Builtin::Curry);
                 }
-
-                // Stack: (args) fn next
+                // Stack: (args) to_call next
                 builder.mv_idx(span, 1);
-                builder.literal(span, Value::Symbol("exec".to_owned()));
+                builder.symbol(span, "exec");
 
                 Ok(self.sentences.push_and_get_key(builder.build()))
             }
-            _ => Ok(unreachable!("Unexpected rule: {:?}", statement)),
-        }
-    }
+            ast::Block::Raw { span, words } => {
+                let sentence = Sentence {
+                    name: Some(name.to_owned()),
+                    words: words
+                        .into_iter()
+                        .map(|w| self.convert_raw_word(ns_idx, w))
+                        .collect_vec(),
+                };
+                Ok(self.sentences.push_and_get_key(sentence))
+            }
+            ast::Block::AssertEq { literal, inner } => {
+                let next = self.visit_block(name, ns_idx, names.clone(), *inner)?;
+                let assert_idx = names.len();
+                names.push_back(None);
 
-    fn visit_proc_endpoint(
-        &mut self,
-        name: &str,
-        ns_idx: NamespaceIndex,
-        names: VecDeque<Option<String>>,
-        endpoint: Pair<'t, Rule>,
-    ) -> Result<SentenceIndex, BuilderError<'t>> {
-        assert_eq!(endpoint.as_rule(), Rule::proc_endpoint);
-        let endpoint = endpoint.into_inner().exactly_one().unwrap();
-
-        match endpoint.as_rule() {
-            Rule::proc_func_call => {
-                let span = endpoint.as_span();
-
-                let mut builder =
-                    SentenceBuilder::new(Some(name.to_owned()), ns_idx, names.clone());
-
-                let argc = builder.proc_func_call(endpoint)?;
-
-                while builder.names.len() > argc + 1 {
-                    builder.drop_idx(span, argc + 1);
-                }
-                builder.literal(span, Value::Symbol("exec".to_owned()));
-
+                let mut builder = SentenceBuilder::new(Some(name.to_owned()), ns_idx, names);
+                builder.mv_idx(literal.span, assert_idx);
+                builder.literal(literal.span, literal.value);
+                builder.builtin(literal.span, Builtin::AssertEq);
+                builder.sentence_idx(literal.span, next);
+                builder.symbol(literal.span, "exec");
                 Ok(self.sentences.push_and_get_key(builder.build()))
             }
-            Rule::proc_if => {
-                let span = endpoint.as_span();
-                let (cond, true_case, false_case) = endpoint.into_inner().collect_tuple().unwrap();
+            ast::Block::Match { span, cases, els } => {
+                todo!()
+                //            let els = if let Some(els) = els {
+                //             let mut panic_builder =   SentenceBuilder::new(Some(name.to_owned()), ns_idx, VecDeque::new());
+                //             panic_builder.symbol(span, "panic");
+                //             self.sentences.push_and_get_key(panic_builder.build())
+                //             } else {
+                //                 todo!()
+                //             };
 
-                let cond = ident_from_pair(cond);
+                //     let mut next_case = els;
 
-                let mut builder =
-                    SentenceBuilder::new(Some(name.to_owned()), ns_idx, names.clone());
-                builder.mv(cond, cond.as_str());
+                //     let if_case_matches_names: VecDeque<Option<String>> = bindings
+                //     .bindings
+                //     .iter()
+                //     .map(|b| match b {
+                //         ast::Binding::Literal(literal) => None,
+                //         ast::Binding::Ident(i) => Some(i.as_str().to_owned()),
+                //     })
+                //     .collect();
+                //     for case in cases.into_iter().rev() {
 
-                let mut case_names = builder.names.clone();
-                case_names.pop_front();
+                // //         let if_case_matches_idx =
+                // //             {
+                // //                 let this = &mut *self;
+                // //                 let mut names = if_case_matches_names;
+                // //                 let (statements, endpoint) = body.into_inner().collect_tuple().unwrap();
 
-                let true_case =
-                    self.visit_proc_block_pair(name, ns_idx, case_names.clone(), true_case)?;
-                let false_case =
-                    self.visit_proc_block_pair(name, ns_idx, case_names, false_case)?;
+                // //                 assert_eq!(statements.as_rule(), Rule::statements);
+                // //                 let statements = statements.into_inner().collect();
+                // //                 this.visit_block(name, ns_idx, names, statements, endpoint)
+                // //             }?;
 
-                builder.literal(span, Value::Pointer(Closure(vec![], true_case)));
-                builder.literal(span, Value::Pointer(Closure(vec![], false_case)));
-                builder.literal(span, Value::Symbol("if".to_owned()));
+                // //         let mut case_builder =
+                // //             SentenceBuilder::new(Some(name.to_owned()), ns_idx, VecDeque::new());
 
-                Ok(self.sentences.push_and_get_key(builder.build()))
+                // //         case_builder.literal(case_span, true.into());
+
+                // //         for (idx, b) in bindings.bindings.into_iter().enumerate() {
+                // //             match b {
+                // //                 ast::Binding::Literal(literal) => {
+                // //                     case_builder.cp_idx(case_span, idx + 1); // +1 for the "true"
+                // //                     case_builder.literal(literal.span, literal.value);
+                // //                     case_builder.builtin(case_span, Builtin::Eq);
+                // //                     case_builder.builtin(case_span, Builtin::And);
+                // //                 }
+                // //                 ast::Binding::Ident(span) => continue,
+                // //             }
+                // //         }
+                // //         case_builder.literal(
+                // //             case_span,
+                // //             Value::Pointer(Closure(vec![], if_case_matches_idx)),
+                // //         );
+                // //         case_builder.literal(case_span, Value::Pointer(Closure(vec![], next_case)));
+                // //         case_builder.symbol(case_span, "if");
+                // //         next_case = self.sentences.push_and_get_key(case_builder.build());
+                // //     }
+
+                // //     Ok(next_case)
+                //   }
             }
-            Rule::proc_match_block => {
-                self.visit_proc_match_block(name, ns_idx, names, endpoint.into())
-            }
-            Rule::proc_unreachable => {
+            ast::Block::Unreachable { span } => {
                 let mut panic_builder =
                     SentenceBuilder::new(Some(name.to_owned()), ns_idx, VecDeque::new());
-                panic_builder.symbol(endpoint.as_span(), "panic");
+                panic_builder.symbol(span, "panic");
                 Ok(self.sentences.push_and_get_key(panic_builder.build()))
             }
-            _ => unreachable!("Unexpected rule: {:?}", endpoint),
         }
+        // let mut names: VecDeque<Option<String>> = bindings
+        //     .bindings
+        //     .into_iter()
+        //     .map(|p| match p {
+        //         ast::Binding::Ident(i) => Some(i.as_str().to_owned()),
+        //         ast::Binding::Literal(_) => todo!(),
+        //     })
+        //     // .chain(["caller".to_owned()])
+        //     .collect();
+        // self.visit_block_pair(name, ns_idx, names, body)
     }
 
-    fn visit_proc_match_block(
-        &mut self,
-        name: &str,
-        ns_idx: NamespaceIndex,
-        names: VecDeque<Option<String>>,
-        block: ast::ProcMatchBlock<'t>,
-    ) -> Result<SentenceIndex, BuilderError<'t>> {
-        let mut builder = SentenceBuilder::new(Some(name.to_owned()), ns_idx, names.clone());
+    // fn visit_endpoint(
+    //     &mut self,
+    //     name: &str,
+    //     ns_idx: NamespaceIndex,
+    //     names: VecDeque<Option<String>>,
+    //     endpoint: Pair<'t, Rule>,
+    // ) -> Result<SentenceIndex, BuilderError<'t>> {
+    //     assert_eq!(endpoint.as_rule(), Rule::endpoint);
+    //     let endpoint = endpoint.into_inner().exactly_one().unwrap();
 
-        let argc = builder.proc_expr(block.expr)?;
-        // Stack: (leftover names) (args) to_call
+    //     match endpoint.as_rule() {
+    //         Rule::func_call => {
+    //             let span = endpoint.as_span();
 
-        let mut leftover_names: VecDeque<Option<String>> =
-            builder.names.iter().skip(argc + 1).cloned().collect();
+    //             let mut builder =
+    //                 SentenceBuilder::new(Some(name.to_owned()), ns_idx, names.clone());
 
-        let mut panic_builder =
-            SentenceBuilder::new(Some(name.to_owned()), ns_idx, VecDeque::new());
-        panic_builder.symbol(block.span, "panic");
-        let panic_idx = self.sentences.push_and_get_key(panic_builder.build());
+    //             let argc = builder.func_call(endpoint)?;
 
-        let mut next_case = panic_idx;
-        for case in block.cases.into_iter().rev() {
-            let if_case_matches_names :VecDeque<Option<String>> =
-                // Preserved names from before the call.
-                leftover_names.iter().cloned()
-                // Then the bindings.
-                .chain(
-                    case.bindings.bindings
-                    .iter()
-                    .map(|b| match b{
-                        ast::Binding::Literal(literal) => None,
-                        ast::Binding::Ident(span) => Some(span.as_str().to_owned()),
-                    })
-                ).collect();
+    //             while builder.names.len() > argc + 1 {
+    //                 builder.drop_idx(span, argc + 1);
+    //             }
+    //             builder.literal(span, Value::Symbol("exec".to_owned()));
 
-            let if_case_matches_idx =
-                self.visit_proc_block_pair(name, ns_idx, if_case_matches_names, case.body)?;
+    //             Ok(self.sentences.push_and_get_key(builder.build()))
+    //         }
+    //         Rule::if_endpoint => {
+    //             let span = endpoint.as_span();
+    //             let (cond, true_case, false_case) = endpoint.into_inner().collect_tuple().unwrap();
 
-            let mut case_builder =
-                SentenceBuilder::new(Some(name.to_owned()), ns_idx, VecDeque::new());
+    //             let cond = ident_from_pair(cond);
 
-            case_builder.literal(case.span, true.into());
+    //             let mut builder =
+    //                 SentenceBuilder::new(Some(name.to_owned()), ns_idx, names.clone());
+    //             builder.mv(cond, cond.as_str());
 
-            for (idx, b) in case.bindings.bindings.into_iter().enumerate() {
-                match b {
-                    ast::Binding::Literal(literal) => {
-                        case_builder.cp_idx(case.span, leftover_names.len() + idx + 1); // +1 for "true"
-                        case_builder.literal(literal.span, literal.value);
-                        case_builder.builtin(case.span, Builtin::Eq);
-                        case_builder.builtin(case.span, Builtin::And);
-                    }
-                    ast::Binding::Ident(span) => continue,
-                }
-            }
-            case_builder.literal(
-                case.span,
-                Value::Pointer(Closure(vec![], if_case_matches_idx)),
-            );
-            case_builder.literal(case.span, Value::Pointer(Closure(vec![], next_case)));
-            case_builder.symbol(case.span, "if");
-            next_case = self.sentences.push_and_get_key(case_builder.build());
-        }
+    //             let mut case_names = builder.names.clone();
+    //             case_names.pop_front();
 
-        builder.literal(block.span, Value::Pointer(Closure(vec![], next_case)));
-        // Stack: (leftovers) (args) to_call match_beginning
+    //             let true_case =
+    //                 {
+    //                     let this = &mut *self;
+    //                     let mut names = case_names.clone();
+    //                     let (statements, endpoint) = true_case.into_inner().collect_tuple().unwrap();
 
-        while builder.names.len() > argc + 2 {
-            builder.mv_idx(block.span, argc + 2);
-            builder.mv_idx(block.span, 1);
-            builder.builtin(block.span, Builtin::Curry);
-        }
-        // Stack: (args) to_call match_beginning
-        builder.mv_idx(block.span, 1);
-        builder.symbol(block.span, "exec");
+    //                     assert_eq!(statements.as_rule(), Rule::statements);
+    //                     let statements = statements.into_inner().collect();
+    //                     this.visit_block(name, ns_idx, names, statements, endpoint)
+    //                 }?;
+    //             let false_case =
+    //                 {
+    //                     let this = &mut *self;
+    //                     let mut names = case_names;
+    //                     let (statements, endpoint) = false_case.into_inner().collect_tuple().unwrap();
 
-        Ok(self.sentences.push_and_get_key(builder.build()))
-    }
+    //                     assert_eq!(statements.as_rule(), Rule::statements);
+    //                     let statements = statements.into_inner().collect();
+    //                     this.visit_block(name, ns_idx, names, statements, endpoint)
+    //                 }?;
 
-    fn visit_code(
-        &mut self,
-        name: &str,
-        ns_idx: NamespaceIndex,
-        names: VecDeque<Option<String>>,
-        code: ast::Code<'t>,
-    ) -> SentenceIndex {
-        match code {
-            ast::Code::Sentence(sentence) => self.visit_sentence(name, ns_idx, names, sentence),
-            ast::Code::AndThen(sentence, code) => {
-                let init = self.convert_sentence(name, ns_idx, names, sentence);
-                let and_then = self.visit_code(name, ns_idx, VecDeque::new(), *code);
+    //             builder.literal(span, Value::Pointer(Closure(vec![], true_case)));
+    //             builder.literal(span, Value::Pointer(Closure(vec![], false_case)));
+    //             builder.literal(span, Value::Symbol("if".to_owned()));
 
-                self.sentences.push_and_get_key(Sentence {
-                    name: init.name,
-                    words: std::iter::once(
-                        InnerWord::Push(Value::Pointer(Closure(vec![], and_then))).into(),
-                    )
-                    .chain(init.words.into_iter())
-                    .collect(),
-                })
-            }
-            ast::Code::If {
-                cond,
-                true_case,
-                false_case,
-            } => {
-                let cond = self.convert_sentence(name, ns_idx, names, cond);
-                let true_case = self.visit_code(name, ns_idx, VecDeque::new(), *true_case);
-                let false_case = self.visit_code(name, ns_idx, VecDeque::new(), *false_case);
+    //             Ok(self.sentences.push_and_get_key(builder.build()))
+    //         }
+    //         Rule::match_block => {
+    //             self.visit_match_block(name, ns_idx, names, endpoint.into())
+    //         }
+    //         Rule::unreachable => {
+    //             let mut panic_builder =
+    //                 SentenceBuilder::new(Some(name.to_owned()), ns_idx, VecDeque::new());
+    //             panic_builder.symbol(endpoint.as_span(), "panic");
+    //             Ok(self.sentences.push_and_get_key(panic_builder.build()))
+    //         }
+    //         _ => unreachable!("Unexpected rule: {:?}", endpoint),
+    //     }
+    // }
 
-                self.sentences.push_and_get_key(Sentence {
-                    name: cond.name,
-                    words: cond
-                        .words
-                        .into_iter()
-                        .chain([
-                            Value::Pointer(Closure(vec![], true_case)).into(),
-                            Value::Pointer(Closure(vec![], false_case)).into(),
-                            Value::Symbol("if".to_owned()).into(),
-                        ])
-                        .collect(),
-                })
-            }
-            ast::Code::Bind {
-                name: var_name,
-                inner,
-                span,
-            } => self.visit_code(
-                name,
-                ns_idx,
-                [Some(var_name.as_str().to_owned())]
-                    .into_iter()
-                    .chain(names)
-                    .collect(),
-                *inner,
-            ),
-            ast::Code::Match {
-                idx,
-                cases,
-                els,
-                span: _,
-            } => {
-                let mut next_case = self.visit_code(name, ns_idx, names.clone(), *els);
+    // fn visit_match_block(
+    //     &mut self,
+    //     name: &str,
+    //     ns_idx: NamespaceIndex,
+    //     names: VecDeque<Option<String>>,
+    //     block: ast::ProcMatchBlock<'t>,
+    // ) -> Result<SentenceIndex, BuilderError<'t>> {
+    //     let mut builder = SentenceBuilder::new(Some(name.to_owned()), ns_idx, names.clone());
 
-                for case in cases.into_iter().rev() {
-                    let body = self.visit_code(name, ns_idx, names.clone(), case.body);
-                    let cond = Sentence {
-                        name: Some(name.to_owned()),
-                        words: vec![
-                            InnerWord::Copy(idx).into(),
-                            case.value.into(),
-                            InnerWord::Builtin(Builtin::Eq).into(),
-                            Value::Pointer(Closure(vec![], body)).into(),
-                            Value::Pointer(Closure(vec![], next_case)).into(),
-                            Value::Symbol("if".to_owned()).into(),
-                        ],
-                    };
+    //     let argc = builder.expr(block.expr)?;
+    //     // Stack: (leftover names) (args) to_call
 
-                    next_case = self.sentences.push_and_get_key(cond);
-                }
-                next_case
-            }
-        }
-    }
+    //     let mut leftover_names: VecDeque<Option<String>> =
+    //         builder.names.iter().skip(argc + 1).cloned().collect();
 
-    fn visit_sentence(
-        &mut self,
-        name: &str,
-        ns_idx: NamespaceIndex,
-        names: VecDeque<Option<String>>,
-        sentence: ast::Sentence<'t>,
-    ) -> SentenceIndex {
-        let s = self.convert_sentence(name, ns_idx, names, sentence);
-        self.sentences.push_and_get_key(s)
-    }
+    //     let mut panic_builder =
+    //         SentenceBuilder::new(Some(name.to_owned()), ns_idx, VecDeque::new());
+    //     panic_builder.symbol(block.span, "panic");
+    //     let panic_idx = self.sentences.push_and_get_key(panic_builder.build());
 
-    fn convert_sentence(
-        &mut self,
-        name: &str,
-        ns_idx: NamespaceIndex,
-        mut names: VecDeque<Option<String>>,
-        sentence: ast::Sentence<'t>,
-    ) -> Sentence<'t> {
-        // let mut args: Option<VecDeque<Option<String>>> = sentence
-        // .args
-        // .map(|names| names.iter().rev().map(|s| Some(s.to_owned())).collect());
+    //     let mut next_case = panic_idx;
+    //     for case in block.cases.into_iter().rev() {
+    //         let if_case_matches_names :VecDeque<Option<String>> =
+    //             // Preserved names from before the call.
+    //             leftover_names.iter().cloned()
+    //             // Then the bindings.
+    //             .chain(
+    //                 case.bindings.bindings
+    //                 .iter()
+    //                 .map(|b| match b{
+    //                     ast::Binding::Literal(literal) => None,
+    //                     ast::Binding::Ident(span) => Some(span.as_str().to_owned()),
+    //                 })
+    //             ).collect();
 
-        // let mut names = match (args, names) {
-        //         (None, None) => None,
-        //         (Some(args), None) => Some(args),
-        //         (None, Some(names)) => Some(names),
-        //         (Some(args), Some(names)) => {
-        //             Some(args.into_iter().chain(names).collect())
-        //         }
-        //     };
-        let mut stash_names: Vec<Option<String>> = vec![];
+    //         let if_case_matches_idx =
+    //             {
+    //                 let this = &mut *self;
+    //                 let mut names = if_case_matches_names;
+    //                 let body = case.body;
+    //                 let (statements, endpoint) = body.into_inner().collect_tuple().unwrap();
 
-        let mut words = vec![];
-        for e in sentence.exprs {
-            for mut w in self.convert_expr(ns_idx, &mut names, e.into()) {
-                w.names = Some(names.clone());
-                match &w.inner {
-                    InnerWord::Push(_) | InnerWord::Copy(_) => names.push_front(None),
-                    InnerWord::Drop(idx) => {
-                        names.remove(*idx);
-                    }
-                    InnerWord::Move(idx) => {
-                        let moved = names.remove(*idx).unwrap();
-                        names.push_front(moved);
-                    }
-                    InnerWord::Send(idx) => {
-                        let moved = names.pop_front().unwrap();
-                        names.insert(*idx, moved);
-                    }
-                    InnerWord::Ref(idx) => names.push_front(None),
-                    InnerWord::Builtin(builtin) => match builtin {
-                        Builtin::Add
-                        | Builtin::Eq
-                        | Builtin::Curry
-                        | Builtin::Or
-                        | Builtin::And
-                        | Builtin::Get
-                        | Builtin::SymbolCharAt
-                        | Builtin::Cons => {
-                            names.pop_front();
-                            names.pop_front();
-                            names.push_front(None);
-                        }
-                        Builtin::NsEmpty => {
-                            names.push_front(None);
-                        }
-                        Builtin::NsGet => {
-                            let ns = names.pop_front().unwrap();
-                            names.pop_front();
-                            names.push_front(ns);
-                            names.push_front(None);
-                        }
-                        Builtin::NsInsert => {
-                            names.pop_front();
-                            names.pop_front();
-                            names.pop_front();
-                            names.push_front(None);
-                        }
-                        Builtin::NsRemove => {
-                            let ns = names.pop_front().unwrap();
-                            names.pop_front();
-                            names.push_front(ns);
-                            names.push_front(None);
-                        }
-                        Builtin::Not | Builtin::SymbolLen | Builtin::Deref => {
-                            names.pop_front();
-                            names.push_front(None);
-                        }
-                        Builtin::AssertEq => {
-                            names.pop_front();
-                            names.pop_front();
-                        }
-                        Builtin::Snoc => {
-                            names.pop_front();
-                            names.push_front(None);
-                            names.push_front(None);
-                        }
-                        Builtin::Stash => {
-                            stash_names.push(names.pop_front().unwrap());
-                        }
-                        Builtin::Unstash => {
-                            names.push_front(stash_names.pop().unwrap());
-                        }
-                    },
-                }
-                words.push(w)
-            }
-        }
-        assert_eq!(stash_names, vec![]);
-        Sentence {
-            name: Some(name.to_owned()),
-            words,
-        }
-    }
-    fn convert_expr(
-        &mut self,
-        ns_idx: NamespaceIndex,
-        names: &VecDeque<Option<String>>,
-        e: Expression<'t>,
-    ) -> Vec<Word<'t>> {
-        let mkword = |inner| Word {
-            inner,
-            span: Some(e.span),
-            names: None,
-        };
-        match e.inner {
-            InnerExpression::Path(segments) => segments
-                .iter()
-                .rev()
-                .map(|s| Word {
-                    inner: InnerWord::Push(Value::Symbol(s.as_str().to_owned())),
-                    names: None,
-                    span: Some(*s),
-                })
-                .chain([mkword(InnerWord::Push(Value::Namespace(ns_idx)))])
-                .chain(
-                    segments
+    //                 assert_eq!(statements.as_rule(), Rule::statements);
+    //                 let statements = statements.into_inner().collect();
+    //                 this.visit_block(name, ns_idx, names, statements, endpoint)
+    //             }?;
+
+    //         let mut case_builder =
+    //             SentenceBuilder::new(Some(name.to_owned()), ns_idx, VecDeque::new());
+
+    //         case_builder.literal(case.span, true.into());
+
+    //         for (idx, b) in case.bindings.bindings.into_iter().enumerate() {
+    //             match b {
+    //                 ast::Binding::Literal(literal) => {
+    //                     case_builder.cp_idx(case.span, leftover_names.len() + idx + 1); // +1 for "true"
+    //                     case_builder.literal(literal.span, literal.value);
+    //                     case_builder.builtin(case.span, Builtin::Eq);
+    //                     case_builder.builtin(case.span, Builtin::And);
+    //                 }
+    //                 ast::Binding::Ident(span) => continue,
+    //             }
+    //         }
+    //         case_builder.literal(
+    //             case.span,
+    //             Value::Pointer(Closure(vec![], if_case_matches_idx)),
+    //         );
+    //         case_builder.literal(case.span, Value::Pointer(Closure(vec![], next_case)));
+    //         case_builder.symbol(case.span, "if");
+    //         next_case = self.sentences.push_and_get_key(case_builder.build());
+    //     }
+
+    //     builder.literal(block.span, Value::Pointer(Closure(vec![], next_case)));
+    //     // Stack: (leftovers) (args) to_call match_beginning
+
+    //     while builder.names.len() > argc + 2 {
+    //         builder.mv_idx(block.span, argc + 2);
+    //         builder.mv_idx(block.span, 1);
+    //         builder.builtin(block.span, Builtin::Curry);
+    //     }
+    //     // Stack: (args) to_call match_beginning
+    //     builder.mv_idx(block.span, 1);
+    //     builder.symbol(block.span, "exec");
+
+    //     Ok(self.sentences.push_and_get_key(builder.build()))
+    // }
+
+    // fn visit_code(
+    //     &mut self,
+    //     name: &str,
+    //     ns_idx: NamespaceIndex,
+    //     names: VecDeque<Option<String>>,
+    //     code: ast::Code<'t>,
+    // ) -> SentenceIndex {
+    //     match code {
+    //         ast::Code::Sentence(sentence) => self.visit_sentence(name, ns_idx, names, sentence),
+    //         ast::Code::AndThen(sentence, code) => {
+    //             let init = self.convert_sentence(name, ns_idx, names, sentence);
+    //             let and_then = self.visit_code(name, ns_idx, VecDeque::new(), *code);
+
+    //             self.sentences.push_and_get_key(Sentence {
+    //                 name: init.name,
+    //                 words: std::iter::once(
+    //                     InnerWord::Push(Value::Pointer(Closure(vec![], and_then))).into(),
+    //                 )
+    //                 .chain(init.words.into_iter())
+    //                 .collect(),
+    //             })
+    //         }
+    //         ast::Code::If {
+    //             cond,
+    //             true_case,
+    //             false_case,
+    //         } => {
+    //             let cond = self.convert_sentence(name, ns_idx, names, cond);
+    //             let true_case = self.visit_code(name, ns_idx, VecDeque::new(), *true_case);
+    //             let false_case = self.visit_code(name, ns_idx, VecDeque::new(), *false_case);
+
+    //             self.sentences.push_and_get_key(Sentence {
+    //                 name: cond.name,
+    //                 words: cond
+    //                     .words
+    //                     .into_iter()
+    //                     .chain([
+    //                         Value::Pointer(Closure(vec![], true_case)).into(),
+    //                         Value::Pointer(Closure(vec![], false_case)).into(),
+    //                         Value::Symbol("if".to_owned()).into(),
+    //                     ])
+    //                     .collect(),
+    //             })
+    //         }
+    //         ast::Code::Bind {
+    //             name: var_name,
+    //             inner,
+    //             span,
+    //         } => self.visit_code(
+    //             name,
+    //             ns_idx,
+    //             [Some(var_name.as_str().to_owned())]
+    //                 .into_iter()
+    //                 .chain(names)
+    //                 .collect(),
+    //             *inner,
+    //         ),
+    //         ast::Code::Match {
+    //             idx,
+    //             cases,
+    //             els,
+    //             span: _,
+    //         } => {
+    //             let mut next_case = self.visit_code(name, ns_idx, names.clone(), *els);
+
+    //             for case in cases.into_iter().rev() {
+    //                 let body = self.visit_code(name, ns_idx, names.clone(), case.body);
+    //                 let cond = Sentence {
+    //                     name: Some(name.to_owned()),
+    //                     words: vec![
+    //                         InnerWord::Copy(idx).into(),
+    //                         case.value.into(),
+    //                         InnerWord::Builtin(Builtin::Eq).into(),
+    //                         Value::Pointer(Closure(vec![], body)).into(),
+    //                         Value::Pointer(Closure(vec![], next_case)).into(),
+    //                         Value::Symbol("if".to_owned()).into(),
+    //                     ],
+    //                 };
+
+    //                 next_case = self.sentences.push_and_get_key(cond);
+    //             }
+    //             next_case
+    //         }
+    //     }
+    // }
+
+    fn convert_raw_word(&self, ns_idx: NamespaceIndex, raw_word: ast::RawWord<'t>) -> Word<'t> {
+        Word {
+            span: Some(raw_word.span),
+            inner: match raw_word.inner {
+                ast::RawWordInner::Literal(v) => InnerWord::Push(v.value),
+
+                ast::RawWordInner::FunctionLike(f, idx) => match f.0.as_str() {
+                    "cp" => InnerWord::Copy(idx),
+                    "drop" => InnerWord::Drop(idx),
+                    "mv" => InnerWord::Move(idx),
+                    "sd" => InnerWord::Send(idx),
+                    "ref" => InnerWord::Ref(idx),
+                    _ => panic!("unknown reference: {:?}", f),
+                },
+                ast::RawWordInner::Builtin(name) => {
+                    if let Some(builtin) = Builtin::ALL
                         .iter()
-                        .map(|_| mkword(InnerWord::Builtin(Builtin::Get))),
-                )
-                .collect_vec(),
-            InnerExpression::Literal(v) => vec![mkword(InnerWord::Push(v))],
-            InnerExpression::FunctionLike(f, idx) => vec![mkword(match f.as_str() {
-                "cp" => InnerWord::Copy(idx),
-                "drop" => InnerWord::Drop(idx),
-                "mv" => InnerWord::Move(idx),
-                "sd" => InnerWord::Send(idx),
-                "ref" => InnerWord::Ref(idx),
-                _ => panic!("unknown reference: {}", f),
-            })],
-            InnerExpression::Reference(r) => {
-                let Some(idx) = names.iter().position(|n| n.as_ref() == Some(&r)) else {
-                    panic!("unknown reference: {}", r)
-                };
-                vec![mkword(InnerWord::Move(idx))]
-            }
-            InnerExpression::Delete(r) => {
-                let Some(idx) = names.iter().position(|n| n.as_ref() == Some(&r)) else {
-                    panic!("unknown reference: {}", r)
-                };
-                vec![mkword(InnerWord::Drop(idx))]
-            }
-            InnerExpression::Copy(r) => {
-                let Some(idx) = names.iter().position(|n| n.as_ref() == Some(&r)) else {
-                    panic!("unknown reference: {}", r)
-                };
-                vec![mkword(InnerWord::Copy(idx))]
-            }
-            InnerExpression::Builtin(name) => {
-                if let Some(builtin) = Builtin::ALL.iter().find(|builtin| builtin.name() == name) {
-                    vec![mkword(InnerWord::Builtin(*builtin))]
-                } else {
-                    panic!("unknown builtin: {}", name)
+                        .find(|builtin| builtin.name() == name.as_str())
+                    {
+                        InnerWord::Builtin(*builtin)
+                    } else {
+                        panic!("unknown builtin: {:?}", name)
+                    }
                 }
-            }
+                ast::RawWordInner::This => InnerWord::Push(Value::Namespace(ns_idx)),
+            },
+            names: None,
         }
     }
 }
@@ -739,21 +590,30 @@ impl<'t> SentenceBuilder<'t> {
         self.names.push_front(None);
     }
 
+    pub fn sentence_idx(&mut self, span: Span<'t>, sentence_idx: SentenceIndex) {
+        self.words.push(Word {
+            inner: InnerWord::Push(Value::Pointer(Closure(vec![], sentence_idx))),
+            span: Some(span),
+            names: Some(self.names.clone()),
+        });
+        self.names.push_front(None);
+    }
+
     pub fn symbol(&mut self, span: Span<'t>, symbol: &str) {
         self.literal(span, Value::Symbol(symbol.to_owned()))
     }
 
-    pub fn mv(&mut self, span: Span<'t>, name: &str) -> Result<(), BuilderError<'t>> {
+    pub fn mv(&mut self, ident: Identifier<'t>) -> Result<(), BuilderError<'t>> {
         let Some(idx) = self.names.iter().position(|n| match n {
-            Some(n) => n.as_str() == name,
+            Some(n) => n.as_str() == ident.0.as_str(),
             None => false,
         }) else {
             return Err(BuilderError::UnknownReference {
-                span,
-                name: name.to_owned(),
+                span: ident.0,
+                name: ident.0.as_str().to_owned(),
             });
         };
-        Ok(self.mv_idx(span, idx))
+        Ok(self.mv_idx(ident.0, idx))
     }
 
     pub fn mv_idx(&mut self, span: Span<'t>, idx: usize) {
@@ -891,59 +751,26 @@ impl<'t> SentenceBuilder<'t> {
         }
     }
 
-    fn proc_expr(&mut self, expr: Pair<'t, Rule>) -> Result<usize, BuilderError<'t>> {
-        assert_eq!(expr.as_rule(), Rule::proc_expr);
-        let expr = expr.into_inner().exactly_one().unwrap();
-        match expr.as_rule() {
-            Rule::proc_func_call => self.proc_func_call(expr),
-            _ => unreachable!("Unexpected rule: {:?}", expr),
-        }
-    }
+    fn func_call(&mut self, call: ast::Call<'t>) -> Result<usize, BuilderError<'t>> {
+        let argc = call.args.len();
 
-    fn proc_func_call(&mut self, func_call: Pair<'t, Rule>) -> Result<usize, BuilderError<'t>> {
-        assert_eq!(func_call.as_rule(), Rule::proc_func_call);
-        let (func, args) = func_call.into_inner().collect_tuple().unwrap();
-        let (func, func_copied) = if let Rule::proc_func_name_copied = func.as_rule() {
-            (
-                ast::PathOrIdent::from(func.into_inner().exactly_one().unwrap()),
-                true,
-            )
-        } else {
-            (ast::PathOrIdent::from(func), false)
-        };
-
-        let args = args.into_inner().collect_vec();
-        let argc = args.len();
-
-        for arg in args.iter().rev() {
-            match arg.as_rule() {
-                Rule::identifier => {
-                    let arg = ident_from_pair(arg.clone());
-                    self.mv(arg, arg.as_str());
-                }
-                Rule::copy => {
-                    let arg = arg.clone().into_inner().exactly_one().unwrap();
-                    let arg = ident_from_pair(arg);
-                    self.cp(arg, arg.as_str());
-                }
-                Rule::literal => {
-                    let lit = Literal::from(arg.clone());
-                    self.literal(lit.span, lit.value);
-                }
-                Rule::path => {
-                    let path = Path::from(arg.clone());
-                    self.path(path);
-                }
-                _ => unreachable!("Unexpected rule: {:?}", arg),
-            }
+        for arg in call.args.into_iter().rev() {
+            self.value_expr(arg);
         }
 
-        match (func, func_copied) {
-            (ast::PathOrIdent::Path(p), _) => self.path(p),
-            (ast::PathOrIdent::Ident(i), false) => self.mv(i, i.as_str())?,
-            (ast::PathOrIdent::Ident(i), true) => self.cp(i, i.as_str())?,
+        match call.func {
+            ast::PathOrIdent::Path(p) => self.path(p),
+            ast::PathOrIdent::Ident(i) => self.mv(i)?,
         }
         Ok(argc)
+    }
+
+    fn value_expr(&mut self, expr: ValueExpression<'t>) -> Result<(), BuilderError<'t>> {
+        match expr {
+            ValueExpression::Literal(literal) => Ok(self.literal(literal.span, literal.value)),
+            ValueExpression::Path(path) => Ok(self.path(path)),
+            ValueExpression::Identifier(identifier) => self.mv(identifier),
+        }
     }
 }
 
