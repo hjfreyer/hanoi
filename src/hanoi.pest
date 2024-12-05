@@ -63,7 +63,7 @@ copy = { "*" ~ identifier }
 
 // expr = { path | literal | func_call | identifier | builtin | delete | copy }
 
-path = { this ~ ("." ~ identifier)* }
+path = { "this" ~ ("." ~ identifier)* }
 
 // sentence      = { sentence_body }
 // sentence_body = { expr* }
@@ -103,14 +103,15 @@ statement = _{ let_statement }
 
 let_statement = { "let" ~ bindings ~ "=" ~ expr ~ ";" }
 
-endpoint    = _{ raw_statement | if_endpoint | match_block | func_call | unreachable }
+endpoint    = _{ become | raw_statement | if_endpoint | match_block | unreachable }
+become      =  { "become" ~ func_call }
 unreachable =  { "" }
 
 if_endpoint = {
-    "if" ~ identifier ~ "{" ~ block ~ "}" ~ "else" ~ "{" ~ block ~ "}"
+    "if" ~ expr ~ "{" ~ block ~ "}" ~ "else" ~ "{" ~ block ~ "}"
 }
 
-expr = _{ literal | func_call }
+expr = _{ func_call | value_expr }
 
 func_call        =  { func_name ~ func_call_args }
 func_name        = _{ func_name_copied | path | identifier }
@@ -118,9 +119,9 @@ func_name_copied =  { "(" ~ "*" ~ identifier ~ ")" }
 
 func_call_args =  {
     "(" ~ ")"
-  | "(" ~ func_call_arg ~ ("," ~ func_call_arg)* ~ ")"
+  | "(" ~ value_expr ~ ("," ~ value_expr)* ~ ")"
 }
-func_call_arg  = _{
+value_expr     = _{
     literal
   | copy
   | path

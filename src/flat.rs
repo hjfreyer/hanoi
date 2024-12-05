@@ -132,6 +132,19 @@ impl<'t> Library<'t> {
 
                 Ok(self.sentences.push_and_get_key(builder.build()))
             }
+            ast::Block::Become { span, call } => {
+                let mut builder = SentenceBuilder::new(Some(name.to_owned()), ns_idx, names);
+                let argc = builder.func_call(call)?;
+
+                // Stack: (leftovers) (args) to_call
+
+                while builder.names.len() > argc + 1 {
+                    builder.drop_idx(span, argc + 1);
+                }
+                builder.literal(span, Value::Symbol("exec".to_owned()));
+
+                Ok(self.sentences.push_and_get_key(builder.build()))
+            }
             ast::Block::Raw { span, words } => {
                 let sentence = Sentence {
                     name: Some(name.to_owned()),
@@ -153,6 +166,19 @@ impl<'t> Library<'t> {
                 builder.builtin(literal.span, Builtin::AssertEq);
                 builder.sentence_idx(literal.span, next);
                 builder.symbol(literal.span, "exec");
+                Ok(self.sentences.push_and_get_key(builder.build()))
+            }
+            ast::Block::If { span, true_case, false_case } => {
+                let mut subnames = names.clone();
+                subnames.pop_back();  // Drop the boolean.
+
+                let true_case = self.visit_block(name, ns_idx, subnames.clone(), *true_case)?;
+                let false_case = self.visit_block(name, ns_idx, subnames.clone(), *false_case)?;
+
+                let mut builder = SentenceBuilder::new(Some(name.to_owned()), ns_idx, names);
+                builder.sentence_idx(span, true_case);
+                builder.sentence_idx(span, false_case);
+                builder.symbol(span, "if");
                 Ok(self.sentences.push_and_get_key(builder.build()))
             }
             ast::Block::Match { span, cases, els } => {
@@ -628,17 +654,17 @@ impl<'t> SentenceBuilder<'t> {
         });
     }
 
-    pub fn cp(&mut self, span: Span<'t>, name: &str) -> Result<(), BuilderError<'t>> {
+    pub fn cp(&mut self, i: Identifier<'t>) -> Result<(), BuilderError<'t>> {
         let Some(idx) = self.names.iter().position(|n| match n {
-            Some(n) => n.as_str() == name,
+            Some(n) => n.as_str() == i.0.as_str(),
             None => false,
         }) else {
             return Err(BuilderError::UnknownReference {
-                span,
-                name: name.to_owned(),
+                span: i.0,
+                name: i.0.as_str().to_owned(),
             });
         };
-        Ok(self.cp_idx(span, idx))
+        Ok(self.cp_idx(i.0, idx))
     }
 
     pub fn cp_idx(&mut self, span: Span<'t>, idx: usize) {
@@ -770,6 +796,7 @@ impl<'t> SentenceBuilder<'t> {
             ValueExpression::Literal(literal) => Ok(self.literal(literal.span, literal.value)),
             ValueExpression::Path(path) => Ok(self.path(path)),
             ValueExpression::Identifier(identifier) => self.mv(identifier),
+            ValueExpression::Copy(identifier) => self.cp(identifier),
         }
     }
 }

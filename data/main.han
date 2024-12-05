@@ -1,11 +1,37 @@
 
 mod builtin {
+    proc symbol_len(caller, symbol) {
+        R{ @symbol_len this #get #mv(1) #symbol_len @ok #mv(2) @exec }
+    }
+
+//    let symbol_char_at = {
+//        bind caller;
+//        bind symbol;
+//        bind offset;
+//            symbol offset #symbol_char_at caller #curry @exec
+//    };
+//
+//    let eq = {
+//        bind caller;
+//        bind a;
+//        bind b;
+//        a b #eq caller #curry @exec
+//    };
+//
+//    let add = {
+//        bind a;
+//        bind b;
+//        bind caller;
+//            a b #add @ok this.add caller #curry #curry #curry @exec
+//    };
+
 
 }
 
 mod tests {
     proc enumerate(caller, @next) {
         let (caller, @next) = caller(@yield, @assert_true);
+        let (caller, @next) = caller(@yield, @symbol_len);
             // let (caller, @next) = caller(@yield, @symbol_iter);
             // let (caller, @next) = caller(@yield, @basic_csv);
             // let (caller, @next) = caller(@yield, @manually_drive_map);
@@ -14,6 +40,11 @@ mod tests {
 
     mod cases {
         proc assert_true(caller) {
+            let () = caller(@pass);
+        }
+
+        proc symbol_char_at(caller) {
+            let (_, @ok, 3) = this.super.super.builtin.symbol_len(@foo);
             let () = caller(@pass);
         }
 
@@ -121,69 +152,40 @@ mod tests {
     }
 }
 //
-//mod iter {
-    //let symbol_len = {
-        //bind caller;
-        //bind symbol;
-            //symbol #symbol_len caller #curry @exec
-    //};
+mod iter {
+    proc symbol_chars_inner(caller, symbol, offset) {
+        let (_, @ok, len) = this.super.builtin.symbol_len(*symbol);
+        let (_, @ok, are_eq) = this.super.builtin.eq(*offset, *len);
+        if are_eq {
+            let () = caller(@eos);
+        } else {
+            let (char) = this.symbol_char_at(*offset, *symbol);
+            let (caller) = caller(@yield, char);
+            let (next_offset) = this.add(offset, 1);
+            become this.symbol_chars_inner(next_offset, symbol, caller)
+        }
+    }
+
+    proc symbol_chars(caller, symbol) {
+        become this.symbol_chars_inner(caller, symbol, 0)
+    }
+
+    //proc map(caller, @next) {
+    //    match caller(@request, @iter, @next) {
+    //        (caller, @eos) => {
+    //            let () = caller(@eos);
 //
-    //let symbol_char_at = {
-        //bind caller;
-        //bind symbol;
-        //bind offset;
-            //symbol offset #symbol_char_at caller #curry @exec
-    //};
-//
-    //let eq = {
-        //bind caller;
-        //bind a;
-        //bind b;
-        //a b #eq caller #curry @exec
-    //};
-//
-    //let add = {
-        //bind a;
-        //bind b;
-        //bind caller;
-            //a b #add @ok this.add caller #curry #curry #curry @exec
-    //};
-//
-    //proc symbol_chars_inner(offset, symbol, caller) {
-        //let (len) = this.symbol_len(*symbol);
-        //let (are_eq) = this.eq(*offset, *len);
-        //if are_eq {
-            //caller(@eos)
-        //} else {
-            //let (char) = this.symbol_char_at(*offset, *symbol);
-            //let (caller) = caller(@yield, char);
-            //let (next_offset) = this.add(offset, 1);
-            //this.symbol_chars_inner(next_offset, symbol, caller)
-        //}
+    //        }
+    //        (caller, @yield, item) => {
+    //            match caller(@request, @fn, item) {
+    //                (caller, @ok, applied) => {
+    //                    let (caller) = caller(@yield, applied);
+    //                    this.map(caller)
+    //                }
+    //            }
+    //        }
+    //    }
     //}
-//
-    //proc symbol_chars(caller, symbol) {
-        //this.symbol_chars_inner(0, symbol, caller)
-    //}
-//
-    //match_proc map {
-        //(caller, @next) => {
-            //match caller(@request, @iter, @next) {
-                //(caller, @eos) => {
-                    //let () = caller(@eos);
-//
-                //}
-                //(caller, @yield, item) => {
-                    //match caller(@request, @fn, item) {
-                        //(caller, @ok, applied) => {
-                            //let (caller) = caller(@yield, applied);
-                            //this.map(caller)
-                        //}
-                    //}
-                //}
-//
-            //}
-        //}
 ////        match caller(@requestiter) {
 ////            (caller, @eos) => {
 ////                let () = caller(@eos);
@@ -204,7 +206,7 @@ mod tests {
         //let () = caller(@ok, res);
         //this.double()
     //}
-    
+
     //let bind_requestfn = {
         //bind fn;
         //bind inner;
@@ -236,7 +238,7 @@ mod tests {
             //}
         //}
     //}
-//}
+}
 
 
 proc main() {

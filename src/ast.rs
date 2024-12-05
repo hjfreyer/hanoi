@@ -45,7 +45,13 @@ impl<'t> From<Pair<'t, Rule>> for Identifier<'t> {
 }
 
 pub fn ident_from_pair<'t>(p: pest::iterators::Pair<'t, Rule>) -> Span<'t> {
-    assert_eq!(p.as_rule(), Rule::identifier);
+    assert_eq!(
+        p.as_rule(),
+        Rule::identifier,
+        "at {:?}, expected identifier, got {:?}",
+        p.as_span().start_pos().line_col(),
+        p
+    );
     p.as_span()
 }
 
@@ -245,6 +251,10 @@ pub enum Block<'t> {
         call: Call<'t>,
         next: Box<Block<'t>>,
     },
+    Become {
+        span: Span<'t>,
+        call: Call<'t>,
+    },
     // Statement {
     //     span: Span<'t>,
     //     statement: Statement<'t>,
@@ -262,6 +272,11 @@ pub enum Block<'t> {
         span: Span<'t>,
         cases: Vec<MatchCase<'t>>,
         els: Option<Box<Block<'t>>>,
+    },
+    If {
+        span: Span<'t>,
+        true_case: Box<Block<'t>>,
+        false_case: Box<Block<'t>>,
     },
     Raw {
         span: Span<'t>,
@@ -342,7 +357,28 @@ impl<'t> From<Pair<'t, Rule>> for Block<'t> {
                 span,
                 words: value.into_inner().map(RawWord::from).collect(),
             },
+            Rule::if_endpoint => {
+                let (expr, true_case,false_case) = value.into_inner().collect_tuple().unwrap();
+                let if_block = Block::If {
+                    span,
+                    true_case: Box::new(true_case.into()),
+                    false_case: Box::new(false_case.into()),
+                };
+
+                Block::Call {
+                    span: expr.as_span(),
+                    call: Call::from(expr),
+                    next: Box::new(if_block),
+                }
+            }
             Rule::unreachable => Block::Unreachable { span },
+            Rule::r#become => {
+                let func_call = value.into_inner().exactly_one().unwrap();
+                Block::Become {
+                    span,
+                    call: Call::from(func_call),
+                }
+            }
 
             _ => unreachable!("unexpected rule: {:?}", value),
         }
@@ -432,6 +468,7 @@ pub enum ValueExpression<'t> {
     Literal(Literal<'t>),
     Path(Path<'t>),
     Identifier(Identifier<'t>),
+    Copy(Identifier<'t>),
 }
 
 impl<'t> From<Pair<'t, Rule>> for ValueExpression<'t> {
@@ -441,6 +478,10 @@ impl<'t> From<Pair<'t, Rule>> for ValueExpression<'t> {
             Rule::literal => Self::Literal(value.into()),
             Rule::path => Self::Path(value.into()),
             Rule::identifier => Self::Identifier(value.into()),
+            Rule::copy => {
+                let ident = value.into_inner().exactly_one().unwrap();
+                Self::Copy(ident.into())
+            }
             _ => unreachable!("{:?}", value),
         }
     }
@@ -475,7 +516,7 @@ impl<'t> From<Pair<'t, Rule>> for RawWord<'t> {
                     inner.into_inner().exactly_one().unwrap(),
                 )),
             },
-            Rule::func_call => {
+            Rule::builtin_func_call => {
                 let (fname, farg) = inner.into_inner().collect_tuple().unwrap();
                 assert_eq!(farg.as_rule(), Rule::int);
                 Self {
