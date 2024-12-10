@@ -37,6 +37,11 @@ pub struct Namespace<'t> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Identifier<'t>(pub Span<'t>);
+impl <'t>Identifier<'t> {
+    pub(crate) fn as_str(&self) -> &'t str {
+        self.0.as_str()
+    }
+}
 
 impl<'t> From<Pair<'t, Rule>> for Identifier<'t> {
     fn from(value: Pair<'t, Rule>) -> Self {

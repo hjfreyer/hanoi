@@ -263,6 +263,35 @@ fn inner_eval(lib: &Library, stack: &mut Stack, w: &InnerWord) -> anyhow::Result
             Ok(())
         }
 
+        InnerWord::Builtin(Builtin::Lt) => {
+            let Some(Value::Usize(b)) = stack.pop() else {
+                bail!("bad value")
+            };
+            let Some(Value::Usize(a)) = stack.pop() else {
+                bail!("bad value")
+            };
+            stack.push(Value::Bool(a < b));
+            Ok(())
+        }
+
+        InnerWord::Builtin(Builtin::If) => {
+            let Some(b) = stack.pop() else {
+                bail!("bad value")
+            };
+            let Some(a) = stack.pop() else {
+                bail!("bad value")
+            };
+            let Some(Value::Bool(cond)) = stack.pop() else {
+                bail!("bad value")
+            };
+            if cond {
+                stack.push(a);
+            } else {
+                stack.push(b);
+            }
+            Ok(())
+        }
+
         InnerWord::Builtin(Builtin::Stash) => stack.stash(),
         InnerWord::Builtin(Builtin::Unstash) => stack.unstash(),
     }
@@ -417,18 +446,18 @@ impl<'t> Vm<'t> {
             Ok(StepResult::Continue)
         } else {
             let next = control_flow(&self.lib, &mut self.stack).map_err(|e| EvalError {
-                span: sentence.words.last().and_then(|w| w.span),
-                source: e,
+                    span: sentence.words.last().and_then(|w| w.span),
+                    source: e,
             })?;
-
-            if next.1 == SentenceIndex::TRAP {
-                for v in next.0 {
-                    self.stack.push(v);
-                }
-                Ok(StepResult::Trap)
-            } else {
-                self.jump_to(next);
-                Ok(StepResult::Continue)
+    
+                if next.1 == SentenceIndex::TRAP {
+                    for v in next.0 {
+                        self.stack.push(v);
+                    }
+                    Ok(StepResult::Trap)
+                } else {
+                    self.jump_to(next);
+                    Ok(StepResult::Continue)
             }
         }
     }
