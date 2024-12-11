@@ -446,18 +446,18 @@ impl<'t> Vm<'t> {
             Ok(StepResult::Continue)
         } else {
             let next = control_flow(&self.lib, &mut self.stack).map_err(|e| EvalError {
-                    span: sentence.words.last().and_then(|w| w.span),
-                    source: e,
+                span: sentence.words.last().and_then(|w| w.span),
+                source: e,
             })?;
-    
-                if next.1 == SentenceIndex::TRAP {
-                    for v in next.0 {
-                        self.stack.push(v);
-                    }
-                    Ok(StepResult::Trap)
-                } else {
-                    self.jump_to(next);
-                    Ok(StepResult::Continue)
+
+            if next.1 == SentenceIndex::TRAP {
+                for v in next.0 {
+                    self.stack.push(v);
+                }
+                Ok(StepResult::Trap)
+            } else {
+                self.jump_to(next);
+                Ok(StepResult::Continue)
             }
         }
     }

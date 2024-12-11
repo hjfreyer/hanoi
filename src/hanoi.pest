@@ -48,8 +48,21 @@ literal = { bool | int | char_lit | symbol | nil }
 
 // END LITERALS
 
-raw_statement = { "R" ~ "{" ~ raw_word* ~ "}" }
-raw_word      = { literal | builtin_func_call | builtin | this }
+raw_statement = { "R" ~ "{" ~ sentence ~ "}" }
+raw_word      = {
+    stack_bindings
+  | "{" ~ sentence ~ "}"
+  | value_expr
+  | builtin_func_call
+  | builtin
+}
+
+stack_bindings = {
+    "[" ~ "]"
+  | "[" ~ binding ~ ("," ~ binding)* ~ "]"
+}
+
+sentence = { raw_word* }
 
 builtin = { "#" ~ identifier }
 
@@ -121,7 +134,7 @@ func_call_args =  {
     "(" ~ ")"
   | "(" ~ value_expr ~ ("," ~ value_expr)* ~ ")"
 }
-value_expr     = _{
+value_expr     = {
     literal
   | copy
   | path

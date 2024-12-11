@@ -1,7 +1,17 @@
 
 mod builtin {
     proc symbol_len(caller, symbol) {
-        R{ @symbol_len this #get #mv(1) #symbol_len @ok #mv(2) @exec }
+        R{ 
+            [caller, symbol]
+            @symbol_len this #get symbol #symbol_len @ok caller @exec 
+        }
+    }
+
+    proc eq(caller, a, b) {
+        R{ 
+            [caller, a, b]
+            #eq caller @exec 
+        }
     }
 
 //    let symbol_char_at = {
@@ -155,8 +165,7 @@ mod tests {
 mod iter {
     proc symbol_chars_inner(caller, symbol, offset) {
         let (_, @ok, len) = this.super.builtin.symbol_len(*symbol);
-        let (_, @ok, are_eq) = this.super.builtin.eq(*offset, *len);
-        if are_eq {
+        if this.super.builtin.eq(*offset, *len) {
             let () = caller(@eos);
         } else {
             let (char) = this.symbol_char_at(*offset, *symbol);

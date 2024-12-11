@@ -37,7 +37,7 @@ pub struct Namespace<'t> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Identifier<'t>(pub Span<'t>);
-impl <'t>Identifier<'t> {
+impl<'t> Identifier<'t> {
     pub(crate) fn as_str(&self) -> &'t str {
         self.0.as_str()
     }
@@ -251,9 +251,9 @@ pub enum Block<'t> {
         name: Span<'t>,
         inner: Box<Block<'t>>,
     },
-    Call {
+    Expression {
         span: Span<'t>,
-        call: Call<'t>,
+        expr: Expression<'t>,
         next: Box<Block<'t>>,
     },
     Become {
@@ -283,10 +283,7 @@ pub enum Block<'t> {
         true_case: Box<Block<'t>>,
         false_case: Box<Block<'t>>,
     },
-    Raw {
-        span: Span<'t>,
-        words: Vec<RawWord<'t>>,
-    },
+    Raw(RawSentence<'t>),
     Unreachable {
         span: Span<'t>,
     },
@@ -346,9 +343,9 @@ impl<'t> From<Pair<'t, Rule>> for Block<'t> {
 
                             res = res.with_bindings(bindings.into());
 
-                            res = Block::Call {
+                            res = Block::Expression {
                                 span: statement_span,
-                                call: Call::from(expr),
+                                expr: Expression::from(expr),
                                 next: Box::new(res),
                             };
                         }
@@ -358,21 +355,18 @@ impl<'t> From<Pair<'t, Rule>> for Block<'t> {
 
                 res
             }
-            Rule::raw_statement => Block::Raw {
-                span,
-                words: value.into_inner().map(RawWord::from).collect(),
-            },
+            Rule::raw_statement => Block::Raw(value.into_inner().exactly_one().unwrap().into()),
             Rule::if_endpoint => {
-                let (expr, true_case,false_case) = value.into_inner().collect_tuple().unwrap();
+                let (expr, true_case, false_case) = value.into_inner().collect_tuple().unwrap();
                 let if_block = Block::If {
                     span,
                     true_case: Box::new(true_case.into()),
                     false_case: Box::new(false_case.into()),
                 };
 
-                Block::Call {
+                Block::Expression {
                     span: expr.as_span(),
-                    call: Call::from(expr),
+                    expr: Expression::from(expr),
                     next: Box::new(if_block),
                 }
             }
@@ -432,6 +426,22 @@ impl<'t> From<Pair<'t, Rule>> for Endpoint<'t> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Expression<'t> {
+    Call(Call<'t>),
+    Value(ValueExpression<'t>),
+}
+
+impl<'t> From<Pair<'t, Rule>> for Expression<'t> {
+    fn from(value: Pair<'t, Rule>) -> Self {
+        if let Rule::func_call = value.as_rule() {
+            Self::Call(value.into())
+        } else {
+            Self::Value(value.into())
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Call<'t> {
     pub span: Span<'t>,
     pub func: PathOrIdent<'t>,
@@ -478,6 +488,8 @@ pub enum ValueExpression<'t> {
 
 impl<'t> From<Pair<'t, Rule>> for ValueExpression<'t> {
     fn from(value: Pair<'t, Rule>) -> Self {
+        assert_eq!(value.as_rule(), Rule::value_expr);
+        let value = value.into_inner().exactly_one().unwrap();
         let span = value.as_span();
         match value.as_rule() {
             Rule::literal => Self::Literal(value.into()),
@@ -493,6 +505,20 @@ impl<'t> From<Pair<'t, Rule>> for ValueExpression<'t> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RawSentence<'t> {
+    pub span: Span<'t>,
+    pub words: Vec<RawWord<'t>>,
+}
+
+impl<'t> From<Pair<'t, Rule>> for RawSentence<'t> {
+    fn from(value: Pair<'t, Rule>) -> Self {
+        let span = value.as_span();
+        let words = value.into_inner().map(RawWord::from).collect();
+        Self { span, words }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RawWord<'t> {
     pub span: Span<'t>,
     pub inner: RawWordInner<'t>,
@@ -500,20 +526,22 @@ pub struct RawWord<'t> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RawWordInner<'t> {
-    Literal(Literal<'t>),
     Builtin(Span<'t>),
     FunctionLike(Identifier<'t>, usize),
-    This,
+    Sentence(RawSentence<'t>),
+    Expression(ValueExpression<'t>),
+    Bindings(Bindings<'t>),
 }
 
 impl<'t> From<Pair<'t, Rule>> for RawWord<'t> {
     fn from(value: Pair<'t, Rule>) -> Self {
+        assert_eq!(value.as_rule(), Rule::raw_word);
         let span = value.as_span();
         let inner = value.into_inner().exactly_one().unwrap();
         match inner.as_rule() {
-            Rule::literal => Self {
+            Rule::value_expr => Self {
                 span,
-                inner: RawWordInner::Literal(inner.into()),
+                inner: RawWordInner::Expression(inner.into()),
             },
             Rule::builtin => Self {
                 span,
@@ -529,9 +557,13 @@ impl<'t> From<Pair<'t, Rule>> for RawWord<'t> {
                     inner: RawWordInner::FunctionLike(fname.into(), int_from_pair(farg)),
                 }
             }
-            Rule::this => Self {
+            Rule::sentence => Self {
                 span,
-                inner: RawWordInner::This,
+                inner: RawWordInner::Sentence(inner.into()),
+            },
+            Rule::stack_bindings => Self {
+                span,
+                inner: RawWordInner::Bindings(inner.into()),
             },
             _ => unreachable!("{:?}", inner),
         }
@@ -577,7 +609,6 @@ pub struct Bindings<'t> {
 
 impl<'t> From<Pair<'t, Rule>> for Bindings<'t> {
     fn from(value: Pair<'t, Rule>) -> Self {
-        assert_eq!(value.as_rule(), Rule::bindings);
         Self {
             span: value.as_span(),
             bindings: value.into_inner().map(Binding::from).collect_vec(),

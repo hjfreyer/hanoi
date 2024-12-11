@@ -109,9 +109,9 @@ impl<'t> Library<'t> {
                 names.push_back(Some(bind_name.as_str().to_owned()));
                 self.visit_block(name, ns_idx, names, *inner)
             }
-            ast::Block::Call { span, call, next } => {
+            ast::Block::Expression { span, expr, next } => {
                 let mut builder = SentenceBuilder::new(Some(name.to_owned()), ns_idx, names);
-                let argc = builder.func_call(call)?;
+                let argc = builder.expr(expr)?;
 
                 let mut leftover_names: VecDeque<Option<String>> =
                     builder.names.iter().skip(argc + 1).cloned().collect();
@@ -145,16 +145,7 @@ impl<'t> Library<'t> {
 
                 Ok(self.sentences.push_and_get_key(builder.build()))
             }
-            ast::Block::Raw { span, words } => {
-                let sentence = Sentence {
-                    name: Some(name.to_owned()),
-                    words: words
-                        .into_iter()
-                        .map(|w| self.convert_raw_word(ns_idx, w))
-                        .collect_vec(),
-                };
-                Ok(self.sentences.push_and_get_key(sentence))
-            }
+            ast::Block::Raw(sentence) => self.visit_sentence(name, ns_idx, sentence),
             ast::Block::AssertEq { literal, inner } => {
                 let next = self.visit_block(name, ns_idx, names.clone(), *inner)?;
                 let assert_idx = names.len();
@@ -168,9 +159,13 @@ impl<'t> Library<'t> {
                 builder.symbol(literal.span, "exec");
                 Ok(self.sentences.push_and_get_key(builder.build()))
             }
-            ast::Block::If { span, true_case, false_case } => {
+            ast::Block::If {
+                span,
+                true_case,
+                false_case,
+            } => {
                 let mut subnames = names.clone();
-                subnames.pop_back();  // Drop the boolean.
+                subnames.pop_back(); // Drop the boolean.
 
                 let true_case = self.visit_block(name, ns_idx, subnames.clone(), *true_case)?;
                 let false_case = self.visit_block(name, ns_idx, subnames.clone(), *false_case)?;
@@ -513,33 +508,61 @@ impl<'t> Library<'t> {
     //     }
     // }
 
-    fn convert_raw_word(&self, ns_idx: NamespaceIndex, raw_word: ast::RawWord<'t>) -> Word<'t> {
-        Word {
-            span: Some(raw_word.span),
-            inner: match raw_word.inner {
-                ast::RawWordInner::Literal(v) => InnerWord::Push(v.value),
+    fn visit_sentence(
+        &mut self,
+        name: &str,
+        ns_idx: NamespaceIndex,
+        sentence: ast::RawSentence<'t>,
+    ) -> Result<SentenceIndex, BuilderError<'t>> {
+        let mut builder = SentenceBuilder::new(Some(name.to_owned()), ns_idx, VecDeque::new());
 
-                ast::RawWordInner::FunctionLike(f, idx) => match f.0.as_str() {
-                    "cp" => InnerWord::Copy(idx),
-                    "drop" => InnerWord::Drop(idx),
-                    "mv" => InnerWord::Move(idx),
-                    "sd" => InnerWord::Send(idx),
-                    "ref" => InnerWord::Ref(idx),
-                    _ => panic!("unknown reference: {:?}", f),
-                },
-                ast::RawWordInner::Builtin(name) => {
-                    if let Some(builtin) = Builtin::ALL
-                        .iter()
-                        .find(|builtin| builtin.name() == name.as_str())
-                    {
-                        InnerWord::Builtin(*builtin)
-                    } else {
-                        panic!("unknown builtin: {:?}", name)
-                    }
+        for word in sentence.words {
+            self.visit_raw_word(name, ns_idx, &mut builder, word)?;
+        }
+        Ok(self.sentences.push_and_get_key(builder.build()))
+    }
+
+    fn visit_raw_word(
+        &mut self,
+        name: &str,
+        ns_idx: NamespaceIndex,
+        builder: &mut SentenceBuilder<'t>,
+        raw_word: ast::RawWord<'t>,
+    ) -> Result<(), BuilderError<'t>> {
+        match raw_word.inner {
+            ast::RawWordInner::Expression(expr) => builder.value_expr(expr),
+            ast::RawWordInner::Bindings(b) => {
+                builder.bindings(b);
+                Ok(())
+            }
+            // ast::RawWordInner::Literal(v) => builder.literal(v.span, v.value),
+            ast::RawWordInner::FunctionLike(f, idx) => {
+                todo!()
+                //     match f.0.as_str() {
+                //     "cp" => InnerWord::Copy(idx),
+                //     "drop" => InnerWord::Drop(idx),
+                //     "mv" => InnerWord::Move(idx),
+                //     "sd" => InnerWord::Send(idx),
+                //     "ref" => InnerWord::Ref(idx),
+                //     _ => panic!("unknown reference: {:?}", f),
+                // },
+            }
+            ast::RawWordInner::Builtin(name) => {
+                if let Some(builtin) = Builtin::ALL
+                    .iter()
+                    .find(|builtin| builtin.name() == name.as_str())
+                {
+                    builder.builtin(raw_word.span, *builtin);
+                    Ok(())
+                } else {
+                    panic!("unknown builtin: {:?}", name)
                 }
-                ast::RawWordInner::This => InnerWord::Push(Value::Namespace(ns_idx)),
-            },
-            names: None,
+            }
+            ast::RawWordInner::Sentence(s) => {
+                let sentence_idx = self.visit_sentence(name, ns_idx, s)?;
+                builder.sentence_idx(raw_word.span, sentence_idx);
+                Ok(())
+            }
         }
     }
 }
@@ -552,7 +575,7 @@ pub struct Sentence<'t> {
 
 macro_rules! builtins {
     {
-        $(($ident:ident, $name:ident),)*
+        $(($ident:ident, $name:literal),)*
     } => {
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
         pub enum Builtin {
@@ -566,7 +589,7 @@ macro_rules! builtins {
 
             pub fn name(self) -> &'static str {
                 match self {
-                    $(Builtin::$ident => stringify!($name),)*
+                    $(Builtin::$ident => $name,)*
                 }
             }
         }
@@ -725,6 +748,7 @@ impl<'t> SentenceBuilder<'t> {
             Builtin::Add
             | Builtin::Eq
             | Builtin::Curry
+            | Builtin::Lt
             | Builtin::Or
             | Builtin::And
             | Builtin::Get
@@ -743,7 +767,7 @@ impl<'t> SentenceBuilder<'t> {
                 self.names.push_front(ns);
                 self.names.push_front(None);
             }
-            Builtin::NsInsert => {
+            Builtin::NsInsert | Builtin::If => {
                 self.names.pop_front();
                 self.names.pop_front();
                 self.names.pop_front();
@@ -777,6 +801,13 @@ impl<'t> SentenceBuilder<'t> {
         }
     }
 
+    fn expr(&mut self, expr: ast::Expression<'t>) -> Result<usize, BuilderError<'t>> {
+        let ast::Expression::Call(c) = expr else {
+            todo!()
+        };
+        self.func_call(c)
+    }
+
     fn func_call(&mut self, call: ast::Call<'t>) -> Result<usize, BuilderError<'t>> {
         let argc = call.args.len();
 
@@ -799,32 +830,48 @@ impl<'t> SentenceBuilder<'t> {
             ValueExpression::Copy(identifier) => self.cp(identifier),
         }
     }
+
+    fn bindings(&mut self, b: Bindings<'t>) {
+        self.names = b
+            .bindings
+            .into_iter()
+            .rev()
+            .map(|b| match b {
+                ast::Binding::Literal(literal) => None,
+                ast::Binding::Ident(span) => Some(span.as_str().to_owned()),
+            })
+            .collect();
+    }
 }
 
 builtins! {
-    (Add, add),
-    (Eq, eq),
-    (AssertEq, assert_eq),
-    (Curry, curry),
-    (Or, or),
-    (And, and),
-    (Not, not),
-    (Get, get),
-    (SymbolCharAt, symbol_char_at),
-    (SymbolLen, symbol_len),
+    (Add, "add"),
+    (Eq, "eq"),
+    (AssertEq, "assert_eq"),
+    (Curry, "curry"),
+    (Or, "or"),
+    (And, "and"),
+    (Not, "not"),
+    (Get, "get"),
+    (SymbolCharAt, "symbol_char_at"),
+    (SymbolLen, "symbol_len"),
 
-    (NsEmpty, ns_empty),
-    (NsInsert, ns_insert),
-    (NsGet, ns_get),
-    (NsRemove, ns_remove),
+    (Lt, "lt"),
 
-    (Cons, cons),
-    (Snoc, snoc),
+    (NsEmpty, "ns_empty"),
+    (NsInsert, "ns_insert"),
+    (NsGet, "ns_get"),
+    (NsRemove, "ns_remove"),
 
-    (Deref, deref),
+    (Cons, "cons"),
+    (Snoc, "snoc"),
 
-    (Stash, stash),
-    (Unstash, unstash),
+    (Deref, "deref"),
+
+    (Stash, "stash"),
+    (Unstash, "unstash"),
+
+    (If, "if"),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
