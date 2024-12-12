@@ -298,8 +298,9 @@ fn inner_eval(lib: &Library, stack: &mut Stack, w: &InnerWord) -> anyhow::Result
 }
 
 fn control_flow<'t>(lib: &Library<'t>, stack: &mut Stack) -> anyhow::Result<Closure> {
-    let Some(Value::Symbol(op)) = stack.pop() else {
-        panic!("bad value")
+    let op = match stack.pop() {
+        Some(Value::Symbol(op)) => op,
+        top => panic!("not a symbol: {:?}", top),
     };
     match op.as_str() {
         // "malloc" => {

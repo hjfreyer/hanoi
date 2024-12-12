@@ -312,6 +312,7 @@ impl<'t> Block<'t> {
                         inner: Box::new(self),
                     }
                 }
+                Binding::Drop(_) => todo!(),
             };
         }
         self
@@ -484,6 +485,11 @@ pub enum ValueExpression<'t> {
     Path(Path<'t>),
     Identifier(Identifier<'t>),
     Copy(Identifier<'t>),
+    Closure {
+        span: Span<'t>,
+        func: PathOrIdent<'t>,
+        args: Vec<ValueExpression<'t>>,
+    },
 }
 
 impl<'t> From<Pair<'t, Rule>> for ValueExpression<'t> {
@@ -498,6 +504,14 @@ impl<'t> From<Pair<'t, Rule>> for ValueExpression<'t> {
             Rule::copy => {
                 let ident = value.into_inner().exactly_one().unwrap();
                 Self::Copy(ident.into())
+            }
+            Rule::closure => {
+                let (func, args) = value.into_inner().collect_tuple().unwrap();
+                Self::Closure {
+                    span,
+                    func: func.into(),
+                    args: args.into_inner().map(ValueExpression::from).collect(),
+                }
             }
             _ => unreachable!("{:?}", value),
         }
@@ -620,6 +634,7 @@ impl<'t> From<Pair<'t, Rule>> for Bindings<'t> {
 pub enum Binding<'t> {
     Literal(Literal<'t>),
     Ident(Span<'t>),
+    Drop(Span<'t>),
 }
 
 impl<'t> From<Pair<'t, Rule>> for Binding<'t> {
@@ -627,6 +642,7 @@ impl<'t> From<Pair<'t, Rule>> for Binding<'t> {
         match value.as_rule() {
             Rule::literal => Self::Literal(value.into()),
             Rule::identifier => Self::Ident(value.as_span()),
+            Rule::drop_binding => Self::Drop(value.as_span()),
             _ => unreachable!("unexpected rule: {:?}", value),
         }
     }

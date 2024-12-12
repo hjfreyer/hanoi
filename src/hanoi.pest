@@ -105,7 +105,9 @@ bindings =  {
     "(" ~ ")"
   | "(" ~ binding ~ ("," ~ binding)* ~ ")"
 }
-binding  = _{ literal | identifier }
+binding  = _{ drop_binding | literal | identifier }
+
+drop_binding = { "^" }
 
 // match_decl = { "match_proc" ~ identifier ~ "{" ~ match_cases ~ "}" }
 
@@ -130,12 +132,18 @@ func_call        =  { func_name ~ func_call_args }
 func_name        = _{ func_name_copied | path | identifier }
 func_name_copied =  { "(" ~ "*" ~ identifier ~ ")" }
 
-func_call_args =  {
+func_call_args = {
     "(" ~ ")"
   | "(" ~ value_expr ~ ("," ~ value_expr)* ~ ")"
 }
-value_expr     = {
-    literal
+
+closure = {
+    func_name ~ "&" ~ func_call_args
+}
+
+value_expr = {
+    closure
+  | literal
   | copy
   | path
   | identifier

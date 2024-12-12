@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, usize};
+use std::{collections::VecDeque, fmt::Display, usize};
 
 use derive_more::derive::{From, Into};
 use itertools::Itertools;
@@ -141,7 +141,7 @@ impl<'t> Library<'t> {
                 while builder.names.len() > argc + 1 {
                     builder.drop_idx(span, argc + 1);
                 }
-                builder.literal(span, Value::Symbol("exec".to_owned()));
+                builder.literal_split(span, Value::Symbol("exec".to_owned()));
 
                 Ok(self.sentences.push_and_get_key(builder.build()))
             }
@@ -153,7 +153,7 @@ impl<'t> Library<'t> {
 
                 let mut builder = SentenceBuilder::new(Some(name.to_owned()), ns_idx, names);
                 builder.mv_idx(literal.span, assert_idx);
-                builder.literal(literal.span, literal.value);
+                builder.literal_split(literal.span, literal.value);
                 builder.builtin(literal.span, Builtin::AssertEq);
                 builder.sentence_idx(literal.span, next);
                 builder.symbol(literal.span, "exec");
@@ -603,10 +603,24 @@ pub struct SentenceBuilder<'t> {
     pub words: Vec<Word<'t>>,
 }
 
-#[derive(thiserror::Error, Debug)]
+#[derive(Debug)]
 pub enum BuilderError<'t> {
-    #[error("Unknown reference at {span:?}: {name}")]
+    // #[error("Unknown reference at {span:?}: {name}")]
     UnknownReference { span: Span<'t>, name: String },
+}
+
+impl<'t> Display for BuilderError<'t> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BuilderError::UnknownReference { span, name } => {
+                let (line, col) = span.start_pos().line_col();
+                write!(
+                    f,
+                    "At data/main.han:{line}:{col}: Unknown reference: {name}"
+                )
+            }
+        }
+    }
 }
 
 impl<'t> SentenceBuilder<'t> {
@@ -630,7 +644,11 @@ impl<'t> SentenceBuilder<'t> {
         }
     }
 
-    pub fn literal(&mut self, span: Span<'t>, value: Value) {
+    pub fn literal(&mut self, literal: Literal<'t>) {
+        self.literal_split(literal.span, literal.value)
+    }
+
+    pub fn literal_split(&mut self, span: Span<'t>, value: Value) {
         self.words.push(Word {
             inner: InnerWord::Push(value),
             span: Some(span),
@@ -649,7 +667,7 @@ impl<'t> SentenceBuilder<'t> {
     }
 
     pub fn symbol(&mut self, span: Span<'t>, symbol: &str) {
-        self.literal(span, Value::Symbol(symbol.to_owned()))
+        self.literal_split(span, Value::Symbol(symbol.to_owned()))
     }
 
     pub fn mv(&mut self, ident: Identifier<'t>) -> Result<(), BuilderError<'t>> {
@@ -729,10 +747,10 @@ impl<'t> SentenceBuilder<'t> {
     }
 
     pub fn path(&mut self, Path { span, segments }: Path<'t>) {
-        for segment in segments.iter() {
-            self.literal(*segment, Value::Symbol(segment.as_str().to_owned()));
+        for segment in segments.iter().rev() {
+            self.literal_split(*segment, Value::Symbol(segment.as_str().to_owned()));
         }
-        self.literal(span, Value::Namespace(self.ns_idx));
+        self.literal_split(span, Value::Namespace(self.ns_idx));
         for segment in segments {
             self.builtin(segment, Builtin::Get);
         }
@@ -824,23 +842,56 @@ impl<'t> SentenceBuilder<'t> {
 
     fn value_expr(&mut self, expr: ValueExpression<'t>) -> Result<(), BuilderError<'t>> {
         match expr {
-            ValueExpression::Literal(literal) => Ok(self.literal(literal.span, literal.value)),
+            ValueExpression::Literal(literal) => {
+                Ok(self.literal_split(literal.span, literal.value))
+            }
             ValueExpression::Path(path) => Ok(self.path(path)),
             ValueExpression::Identifier(identifier) => self.mv(identifier),
             ValueExpression::Copy(identifier) => self.cp(identifier),
+            ValueExpression::Closure { span, func, args } => {
+                let argc = args.len();
+                for arg in args.into_iter().rev() {
+                    self.value_expr(arg)?;
+                }
+                match func {
+                    ast::PathOrIdent::Path(p) => self.path(p),
+                    ast::PathOrIdent::Ident(i) => self.mv(i)?,
+                }
+                for _ in 0..argc {
+                    self.builtin(span, Builtin::Curry);
+                }
+                Ok(())
+            }
         }
     }
 
     fn bindings(&mut self, b: Bindings<'t>) {
         self.names = b
             .bindings
-            .into_iter()
+            .iter()
             .rev()
             .map(|b| match b {
-                ast::Binding::Literal(literal) => None,
+                ast::Binding::Literal(_) | ast::Binding::Drop(_) => None,
                 ast::Binding::Ident(span) => Some(span.as_str().to_owned()),
             })
             .collect();
+        let mut dropped = 0;
+        for (idx, binding) in b.bindings.into_iter().rev().enumerate() {
+            match binding {
+                ast::Binding::Literal(l) => {
+                    let span = l.span;
+                    self.mv_idx(span, idx - dropped);
+                    self.literal(l);
+                    self.builtin(span, Builtin::AssertEq);
+                    dropped += 1;
+                }
+                ast::Binding::Drop(span) => {
+                    self.drop_idx(span, idx - dropped);
+                    dropped += 1;
+                }
+                _ => (),
+            }
+        }
     }
 }
 
