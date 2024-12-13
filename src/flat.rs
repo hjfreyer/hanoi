@@ -159,21 +159,37 @@ impl<'t> Library<'t> {
                 builder.symbol(literal.span, "exec");
                 Ok(self.sentences.push_and_get_key(builder.build()))
             }
+            ast::Block::Drop { span, inner } => {
+                let next = self.visit_block(name, ns_idx, names.clone(), *inner)?;
+                let drop_idx = names.len();
+                names.push_back(None);
+
+                let mut builder = SentenceBuilder::new(Some(name.to_owned()), ns_idx, names);
+                builder.drop_idx(span, drop_idx);
+                builder.sentence_idx(span, next);
+                builder.symbol(span, "exec");
+                Ok(self.sentences.push_and_get_key(builder.build()))
+            }
             ast::Block::If {
                 span,
+                expr,
                 true_case,
                 false_case,
             } => {
-                let mut subnames = names.clone();
-                subnames.pop_back(); // Drop the boolean.
+                let mut builder =
+                    SentenceBuilder::new(Some(name.to_owned()), ns_idx, names.clone());
+                builder.value_expr(expr)?;
+
+                let mut subnames = builder.names.clone();
+                subnames.pop_front(); // Drop the boolean.
 
                 let true_case = self.visit_block(name, ns_idx, subnames.clone(), *true_case)?;
                 let false_case = self.visit_block(name, ns_idx, subnames.clone(), *false_case)?;
 
-                let mut builder = SentenceBuilder::new(Some(name.to_owned()), ns_idx, names);
                 builder.sentence_idx(span, true_case);
                 builder.sentence_idx(span, false_case);
-                builder.symbol(span, "if");
+                builder.builtin(span, Builtin::If);
+                builder.symbol(span, "exec");
                 Ok(self.sentences.push_and_get_key(builder.build()))
             }
             ast::Block::Match { span, cases, els } => {
@@ -830,7 +846,7 @@ impl<'t> SentenceBuilder<'t> {
         let argc = call.args.len();
 
         for arg in call.args.into_iter().rev() {
-            self.value_expr(arg);
+            self.value_expr(arg)?;
         }
 
         match call.func {

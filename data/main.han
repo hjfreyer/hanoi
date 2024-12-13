@@ -7,6 +7,13 @@ mod builtin {
         }
     }
 
+    proc symbol_char_at(caller, symbol, offset) {
+        R{ 
+            [offset, symbol, caller]
+            symbol offset #symbol_char_at @ok this.symbol_char_at caller @exec 
+        }
+    }
+
     proc eq(caller, a, b) {
         R{ 
             [b, a, caller]
@@ -35,7 +42,12 @@ mod builtin {
 //            a b #add @ok this.add caller #curry #curry #curry @exec
 //    };
 
-
+    proc add() {
+        R{
+            [a, b, caller]
+            a b #add @ok this.add caller @exec
+        }
+    }
 }
 
 mod tests {
@@ -93,11 +105,11 @@ mod tests {
         //};
 //
         proc symbol_iter(caller) {
-            let (_, @ok, iter) = this.super.super.iter.symbol_chars(@foo);
+            let (^, @ok, iter) = this.super.super.iter.symbol_chars(@foo);
             let (cont, @yield, 'f') = iter(@next);
             let (cont, @yield, 'o') = cont(@next);
             let (cont, @yield, 'o') = cont(@next);
-            let () = cont(@eos);
+            let (cont, @eos) = cont(@next);
             let () = caller(@pass);
         }
         //let symbol_iter = {
@@ -171,63 +183,17 @@ mod tests {
 }
 //
 mod iter {
-    proc symbol_chars_else(caller, symbol, offset) {
-        let (char) = this.symbol_char_at(*offset, *symbol);
-        let (caller) = caller(@yield, char);
-        let (next_offset) = this.add(offset, 1);
-        become this.symbol_chars_inner(next_offset, symbol, caller)
-    }
-
-
-    proc symbol_chars_inner() {
-        R {
-            [@next, caller, offset, symbol]
-            *symbol 
-            {
-                [caller, offset, symbol, len, @ok, ^]
-                *offset
-                *len
-                {
-                    [caller, offset, symbol, len, are_eq, @ok, ^]
-                    are_eq
-                    {
-                        {}
-                    }
-                    {
-                        [caller, offset, symbol, len]
-                        *symbol *offset #symbol_char_at
-                        @yield
-                        {
-                            {}
-                        }
-                        caller
-                        @exec
-                    }
-                    #if
-                    @exec
-                
-                }
-                this.super.builtin.eq
-                @exec
-            }
-            this.super.builtin.symbol_len
-            @exec
+    proc symbol_chars_inner(symbol, offset, caller, @next) {
+        let (^, @ok, len) = this.super.builtin.symbol_len(*symbol);
+        let (^, @ok, are_eq) = this.super.builtin.eq(*offset, len);
+        if are_eq {
+            let () = caller(@eos);
+        } else {
+            let (^, @ok, char) = this.super.builtin.symbol_char_at(*symbol, *offset);
+            let (^, @ok, offset) = this.super.builtin.add(offset, 1);
+            let () = caller(@yield, char);
+            become this.symbol_chars_inner(symbol, offset)
         }
-    }
-
-    
-    proc symbol_chars_inner2(caller, symbol, offset) {
-        let (_, @ok, len) = this.super.builtin.symbol_len(*symbol);
-        let (_, @ok, are_eq) = this.super.builtin.eq(*offset, *len);
-        R {
-            [are_eq, caller]
-            {}
-        }
-        //if are_eq {
-        //    let () = caller(@eos);
-        //} else {
-        //    become this.symbol_chars_else(caller, symbol, offset)
-       // }
     }
 
     proc symbol_chars(caller, symbol) {

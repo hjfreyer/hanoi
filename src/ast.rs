@@ -251,6 +251,10 @@ pub enum Block<'t> {
         name: Span<'t>,
         inner: Box<Block<'t>>,
     },
+    Drop {
+        span: Span<'t>,
+        inner: Box<Block<'t>>,
+    },
     Expression {
         span: Span<'t>,
         expr: Expression<'t>,
@@ -280,6 +284,7 @@ pub enum Block<'t> {
     },
     If {
         span: Span<'t>,
+        expr: ValueExpression<'t>,
         true_case: Box<Block<'t>>,
         false_case: Box<Block<'t>>,
     },
@@ -312,7 +317,12 @@ impl<'t> Block<'t> {
                         inner: Box::new(self),
                     }
                 }
-                Binding::Drop(_) => todo!(),
+                Binding::Drop(span) => {
+                    self = Self::Drop {
+                        span,
+                        inner: Box::new(self),
+                    }
+                }
             };
         }
         self
@@ -359,16 +369,11 @@ impl<'t> From<Pair<'t, Rule>> for Block<'t> {
             Rule::raw_statement => Block::Raw(value.into_inner().exactly_one().unwrap().into()),
             Rule::if_endpoint => {
                 let (expr, true_case, false_case) = value.into_inner().collect_tuple().unwrap();
-                let if_block = Block::If {
+                Block::If {
                     span,
+                    expr: expr.into(),
                     true_case: Box::new(true_case.into()),
                     false_case: Box::new(false_case.into()),
-                };
-
-                Block::Expression {
-                    span: expr.as_span(),
-                    expr: Expression::from(expr),
-                    next: Box::new(if_block),
                 }
             }
             Rule::unreachable => Block::Unreachable { span },

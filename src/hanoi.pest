@@ -123,7 +123,7 @@ become      =  { "become" ~ func_call }
 unreachable =  { "" }
 
 if_endpoint = {
-    "if" ~ expr ~ "{" ~ block ~ "}" ~ "else" ~ "{" ~ block ~ "}"
+    "if" ~ value_expr ~ "{" ~ block ~ "}" ~ "else" ~ "{" ~ block ~ "}"
 }
 
 expr = _{ func_call | value_expr }

@@ -46,6 +46,27 @@ impl<'t> Debugger<'t> {
         Ok(())
     }
 
+    fn next_line(&mut self) -> Result<(), EvalError<'t>> {
+        let current_line = self
+            .vm
+            .current_word()
+            .and_then(|w| w.span)
+            .map(|s| s.start_pos().line_col().0);
+
+        loop {
+            self.step();
+            if current_line
+                != self
+                    .vm
+                    .current_word()
+                    .and_then(|w| w.span)
+                    .map(|s| s.start_pos().line_col().0)
+            {
+                return Ok(());
+            }
+        }
+    }
+
     fn code(&self) -> Paragraph {
         let text = if let Some(Word {
             span: Some(span), ..
@@ -87,7 +108,7 @@ impl<'t> Debugger<'t> {
 
         let names_width = names
             .iter()
-            .filter_map(|n| n.as_ref().map(|s| s.len() + 3))
+            .filter_map(|n| n.as_ref().map(|s| s.len()))
             .max()
             .unwrap_or_default();
 
@@ -98,33 +119,28 @@ impl<'t> Debugger<'t> {
             .rev()
             .zip_longest(names.iter())
             .map(|v| {
-                let (v, name) = match v {
-                    itertools::EitherOrBoth::Both(v, name) => (v, name.as_ref()),
-                    itertools::EitherOrBoth::Left(v) => (v, None),
-                    itertools::EitherOrBoth::Right(_) => panic!(
-                        "name with no value?\nnames: {:?}\n stack: {:?}",
-                        names,
-                        self.vm.stack.iter().rev().collect_vec()
-                    ),
-                };
-                Row::new([
-                    if let Some(name) = name {
-                        format!("{} = ", name)
-                    } else {
-                        "".to_owned()
-                    },
-                    ValueView {
-                        lib: &self.vm.lib,
-                        value: v,
-                    }
-                    .to_string(),
-                ])
+                let (v, name) = v.left_and_right();
+                let v = v
+                    .map(|v| {
+                        ValueView {
+                            lib: &self.vm.lib,
+                            value: v,
+                        }
+                        .to_string()
+                    })
+                    .unwrap_or_else(|| "???".to_owned());
+                let name = name.and_then(|n| n.clone()).unwrap_or_default();
+                Row::new([name, " = ".to_owned(), v])
             })
             .collect();
         items.reverse();
         Table::new(
             items,
-            [Constraint::Length(names_width as u16), Constraint::Fill(1)],
+            [
+                Constraint::Length(names_width as u16),
+                Constraint::Length(3),
+                Constraint::Fill(1),
+            ],
         )
         .column_spacing(0)
         .highlight_style(Style::new().black().on_white())
@@ -173,6 +189,10 @@ pub fn run(mut terminal: DefaultTerminal, mut debugger: Debugger) -> std::io::Re
         if let event::Event::Key(key) = event::read()? {
             if key.kind == event::KeyEventKind::Press && key.code == event::KeyCode::Char('q') {
                 return Ok(());
+            }
+
+            if key.kind == event::KeyEventKind::Press && key.code == event::KeyCode::Char('n') {
+                debugger.next_line();
             }
 
             if key.kind == event::KeyEventKind::Press && key.code == event::KeyCode::Right {
