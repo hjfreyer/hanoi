@@ -10,14 +10,14 @@ use crate::ast::{
     ProcMatchCase, Rule, ValueExpression,
 };
 
-#[derive(From, Into, Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(From, Into, Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct SentenceIndex(usize);
 
 impl SentenceIndex {
     pub const TRAP: Self = SentenceIndex(usize::MAX);
 }
 
-#[derive(From, Into, Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(From, Into, Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct NamespaceIndex(usize);
 
 #[derive(Debug, Clone, Default)]
@@ -109,9 +109,13 @@ impl<'t> Library<'t> {
                 names.push_back(Some(bind_name.as_str().to_owned()));
                 self.visit_block(name, ns_idx, names, *inner)
             }
-            ast::Block::Expression { span, expr, next } => {
+            ast::Block::Expression {
+                span,
+                expr: ast::Expression::Call(call),
+                next,
+            } => {
                 let mut builder = SentenceBuilder::new(Some(name.to_owned()), ns_idx, names);
-                let argc = builder.expr(expr)?;
+                let argc = builder.func_call(call)?;
 
                 let mut leftover_names: VecDeque<Option<String>> =
                     builder.names.iter().skip(argc + 1).cloned().collect();
@@ -128,6 +132,32 @@ impl<'t> Library<'t> {
                 }
                 // Stack: (args) to_call next
                 builder.mv_idx(span, 1);
+                builder.symbol(span, "exec");
+
+                Ok(self.sentences.push_and_get_key(builder.build()))
+            }
+            ast::Block::Expression {
+                span,
+                expr: ast::Expression::Value(value_expr),
+                next,
+            } => {
+                let mut builder = SentenceBuilder::new(Some(name.to_owned()), ns_idx, names);
+                let argc = builder.value_expr(value_expr)?;
+
+                let mut leftover_names: VecDeque<Option<String>> =
+                    builder.names.iter().skip(1).cloned().collect();
+
+                let next = self.visit_block(name, ns_idx, leftover_names, *next)?;
+
+                builder.sentence_idx(span, next);
+                // Stack: (leftovers) value next
+
+                while builder.names.len() > 2 {
+                    builder.mv_idx(span, 2);
+                    builder.mv_idx(span, 1);
+                    builder.builtin(span, Builtin::Curry);
+                }
+                // Stack: value next
                 builder.symbol(span, "exec");
 
                 Ok(self.sentences.push_and_get_key(builder.build()))
@@ -193,65 +223,39 @@ impl<'t> Library<'t> {
                 Ok(self.sentences.push_and_get_key(builder.build()))
             }
             ast::Block::Match { span, cases, els } => {
-                todo!()
-                //            let els = if let Some(els) = els {
-                //             let mut panic_builder =   SentenceBuilder::new(Some(name.to_owned()), ns_idx, VecDeque::new());
-                //             panic_builder.symbol(span, "panic");
-                //             self.sentences.push_and_get_key(panic_builder.build())
-                //             } else {
-                //                 todo!()
-                //             };
+                let els = if let Some(els) = els {
+                    self.visit_block(name, ns_idx, names.clone(), *els)?
+                } else {
+                    let mut panic_builder =
+                        SentenceBuilder::new(Some(name.to_owned()), ns_idx, VecDeque::new());
+                    panic_builder.symbol(span, "panic");
+                    self.sentences.push_and_get_key(panic_builder.build())
+                };
 
-                //     let mut next_case = els;
+                let mut next_case = els;
 
-                //     let if_case_matches_names: VecDeque<Option<String>> = bindings
-                //     .bindings
-                //     .iter()
-                //     .map(|b| match b {
-                //         ast::Binding::Literal(literal) => None,
-                //         ast::Binding::Ident(i) => Some(i.as_str().to_owned()),
-                //     })
-                //     .collect();
-                //     for case in cases.into_iter().rev() {
+                let discrim_idx = names.len();
+                for case in cases.into_iter().rev() {
+                    let case_span = case.literal.span;
 
-                // //         let if_case_matches_idx =
-                // //             {
-                // //                 let this = &mut *self;
-                // //                 let mut names = if_case_matches_names;
-                // //                 let (statements, endpoint) = body.into_inner().collect_tuple().unwrap();
+                    let if_case_matches_idx =
+                        self.visit_block(name, ns_idx, names.clone(), case.body)?;
 
-                // //                 assert_eq!(statements.as_rule(), Rule::statements);
-                // //                 let statements = statements.into_inner().collect();
-                // //                 this.visit_block(name, ns_idx, names, statements, endpoint)
-                // //             }?;
+                    let mut case_builder =
+                        SentenceBuilder::new(Some(name.to_owned()), ns_idx, VecDeque::new());
+                    case_builder.cp_idx(case.literal.span, discrim_idx);
+                    case_builder.literal(case.literal);
+                    case_builder.builtin(case_span, Builtin::Eq);
 
-                // //         let mut case_builder =
-                // //             SentenceBuilder::new(Some(name.to_owned()), ns_idx, VecDeque::new());
+                    case_builder.sentence_idx(case_span, if_case_matches_idx);
+                    case_builder.sentence_idx(case_span, next_case);
+                    case_builder.builtin(case_span, Builtin::If);
 
-                // //         case_builder.literal(case_span, true.into());
+                    case_builder.symbol(case_span, "exec");
+                    next_case = self.sentences.push_and_get_key(case_builder.build());
+                }
 
-                // //         for (idx, b) in bindings.bindings.into_iter().enumerate() {
-                // //             match b {
-                // //                 ast::Binding::Literal(literal) => {
-                // //                     case_builder.cp_idx(case_span, idx + 1); // +1 for the "true"
-                // //                     case_builder.literal(literal.span, literal.value);
-                // //                     case_builder.builtin(case_span, Builtin::Eq);
-                // //                     case_builder.builtin(case_span, Builtin::And);
-                // //                 }
-                // //                 ast::Binding::Ident(span) => continue,
-                // //             }
-                // //         }
-                // //         case_builder.literal(
-                // //             case_span,
-                // //             Value::Pointer(Closure(vec![], if_case_matches_idx)),
-                // //         );
-                // //         case_builder.literal(case_span, Value::Pointer(Closure(vec![], next_case)));
-                // //         case_builder.symbol(case_span, "if");
-                // //         next_case = self.sentences.push_and_get_key(case_builder.build());
-                // //     }
-
-                // //     Ok(next_case)
-                //   }
+                Ok(next_case)
             }
             ast::Block::Unreachable { span } => {
                 let mut panic_builder =
@@ -835,13 +839,6 @@ impl<'t> SentenceBuilder<'t> {
         }
     }
 
-    fn expr(&mut self, expr: ast::Expression<'t>) -> Result<usize, BuilderError<'t>> {
-        let ast::Expression::Call(c) = expr else {
-            todo!()
-        };
-        self.func_call(c)
-    }
-
     fn func_call(&mut self, call: ast::Call<'t>) -> Result<usize, BuilderError<'t>> {
         let argc = call.args.len();
 
@@ -978,7 +975,7 @@ pub enum InnerWord {
     Builtin(Builtin),
 }
 
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug, Hash)]
 pub enum Value {
     Symbol(String),
     Usize(usize),
@@ -1010,10 +1007,10 @@ impl Value {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug, Hash)]
 pub struct Closure(pub Vec<Value>, pub SentenceIndex);
 
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug, Hash)]
 pub struct Namespace2 {
     pub items: Vec<(String, Value)>,
 }

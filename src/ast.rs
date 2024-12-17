@@ -1,4 +1,4 @@
-use itertools::Itertools;
+use itertools::{partition, Either, Itertools};
 use pest::{iterators::Pair, Parser, Span};
 use pest_derive::Parser;
 
@@ -65,7 +65,7 @@ pub fn int_from_pair(p: pest::iterators::Pair<Rule>) -> usize {
     p.as_str().parse().unwrap()
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Literal<'t> {
     pub span: Span<'t>,
     pub value: Value,
@@ -85,6 +85,7 @@ impl<'t> From<Pair<'t, Rule>> for Literal<'t> {
 
                 let c = match chr.as_str() {
                     "\\n" => '\n',
+                    "\\\\" => '\\',
                     c => c.chars().exactly_one().unwrap(),
                 };
 
@@ -301,6 +302,12 @@ pub struct MatchCase<'t> {
     pub body: Block<'t>,
 }
 
+fn parse_match_case(value: Pair<Rule>) -> (Bindings, Pair<Rule>) {
+    assert_eq!(Rule::match_case, value.as_rule());
+    let (bindings, body) = value.into_inner().collect_tuple().unwrap();
+    (bindings.into(), body)
+}
+
 impl<'t> Block<'t> {
     fn with_bindings(mut self, bindings: Bindings<'t>) -> Self {
         for arg in bindings.bindings.into_iter().rev() {
@@ -326,6 +333,53 @@ impl<'t> Block<'t> {
             };
         }
         self
+    }
+
+    fn with_match_bindings(span: Span<'t>, bindings: Vec<(Bindings<'t>, Pair<'t, Rule>)>) -> Self {
+        if bindings.len() == 1 {
+            let (b, p) = bindings.into_iter().exactly_one().unwrap();
+            return Block::with_bindings(p.into(), b);
+        }
+
+        let (literals, idents): (Vec<_>, Vec<_>) =
+            bindings.into_iter().partition_map(|(mut bs, p)| {
+                let first = bs.bindings.remove(0);
+
+                match first {
+                    Binding::Literal(literal) => Either::Left((literal, (bs, p))),
+                    Binding::Drop(_) => todo!(),
+                    Binding::Ident(ident) => {
+                        bs.bindings.insert(0, first);
+                        Either::Right((bs, p))
+                    }
+                }
+            });
+
+        let els = idents
+            .into_iter()
+            .at_most_one()
+            .expect("at most one var name");
+
+        let els = els.map(|(bindings, body)| Box::new(Block::with_bindings(body.into(), bindings)));
+
+        let cases = literals
+            .into_iter()
+            .into_group_map()
+            .into_iter()
+            .map(|(literal, rest)| {
+                let rec = Block::Drop {
+                    span,
+                    inner: Box::new(Self::with_match_bindings(span, rest)),
+                };
+                MatchCase {
+                    span,
+                    literal,
+                    body: rec,
+                }
+            })
+            .collect_vec();
+
+        Block::Match { span, cases, els }
     }
 }
 impl<'t> From<Pair<'t, Rule>> for Block<'t> {
@@ -375,6 +429,13 @@ impl<'t> From<Pair<'t, Rule>> for Block<'t> {
                     true_case: Box::new(true_case.into()),
                     false_case: Box::new(false_case.into()),
                 }
+            }
+
+            Rule::match_block => {
+                let cases: Vec<(Bindings<'t>, Pair<'t, Rule>)> =
+                    value.into_inner().map(parse_match_case).collect();
+
+                Block::with_match_bindings(span, cases)
             }
             Rule::unreachable => Block::Unreachable { span },
             Rule::r#become => {

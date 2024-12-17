@@ -181,7 +181,73 @@ mod tests {
         R{ @cases this #get #get @exec }
     }
 }
-//
+
+mod csv {
+    proc start(caller) {
+        let (caller) = caller(@req, @iter, @next);
+        match {
+            (@eos) =>  {
+                let () = caller(@eos);
+            }
+            (@yield, char) => {
+                let (caller) = caller(@startrow);
+                let (caller) = caller(@startfield);
+                become this.default_handle_char(caller, char)
+            }
+        }
+    }
+
+    proc default_handle_char(caller) {
+        match {
+            ('\n') => {
+                let (caller) = caller(@endfield);
+                let (caller) = caller(@endrow);
+                become this.start(caller)
+            }
+            ('"') => {
+                become this.quoted(caller)
+            }
+            ('\\') => {
+                become this.escaped(caller)
+            }
+            (char) => {
+                let (caller) = caller(@yield, char);
+                become this.non_quoted(caller)
+            }
+        }
+    }
+
+    proc non_quoted(caller) {
+        let (caller) = caller(@req, @iter, @next);
+        match {
+            (@eos) => {
+                let (caller) = caller(@endfield);
+                let (caller) = caller(@endrow);
+                let () = caller(@eos);
+            }
+            (@yield, char) => {
+                become this.default_handle_char(caller, char)
+            }
+        }
+    }
+
+    proc quoted(caller) {
+        let (caller) = caller(@req, @iter, @next);
+        match {
+            (@eos) => {
+                let () = caller(@err, @nonterminatedquote);
+            }
+            (@yield, '"') => {
+                become this.non_quoted(caller)
+            }
+            (@yield, char) => {
+                let (caller) = caller();
+                become this.default_handle_char(caller, char)
+            }
+        }
+    }
+}
+
 mod iter {
     proc symbol_chars_inner(symbol, offset, caller, @next) {
         let (^, @ok, len) = this.super.builtin.symbol_len(*symbol);
@@ -196,27 +262,28 @@ mod iter {
         }
     }
 
-    proc symbol_chars(caller, symbol) {
-        become caller(this.symbol_chars, @ok, this.symbol_chars_inner&(symbol, 0))
+    proc symbol_chars(symbol) {
+        become this.symbol_chars_inner(symbol, 0)
     }
 
-    //proc map(caller, @next) {
-    //    match caller(@request, @iter, @next) {
-    //        (caller, @eos) => {
-    //            let () = caller(@eos);
-//
-    //        }
-    //        (caller, @yield, item) => {
-    //            match caller(@request, @fn, item) {
-    //                (caller, @ok, applied) => {
-    //                    let (caller) = caller(@yield, applied);
-    //                    this.map(caller)
-    //                }
-    //            }
-    //        }
-    //    }
-    //}
-////        match caller(@requestiter) {
+    proc map(caller, @next) {
+        let (caller) = caller(@request, @iter, @next);
+        match {
+            (@eos) => {
+                let () = caller(@eos);
+            }
+            (@yield, item) => {
+                let (caller) = caller(@request, @fn, item);
+                match {
+                    (@ok, applied) => {
+                        let () = caller(@yield, applied);
+                        become this.map()
+                    }
+                }
+            }
+        }
+    }
+////      match caller(@requestiter) {
 ////            (caller, @eos) => {
 ////                let () = caller(@eos);
 ////            }
@@ -236,6 +303,27 @@ mod iter {
         //let () = caller(@ok, res);
         //this.double()
     //}
+
+    proc do_bind_iter(inner, symbol, iter, caller) {
+        let (inner) = inner();
+        match {
+            (@req, name) =>  {
+                let (^, @ok, are_eq) = this.super.builtin.eq(*name, *symbol);
+                if are_eq {
+                    let (iter) = iter();
+                    become this.do_bind_iter(inner, symbol, iter, caller)
+                } else {
+                    let (caller) = caller(@req, name);
+                    become this.do_bind_iter(inner, symbol, iter, caller)
+                }
+            }
+            (tag) => {
+                let (caller) = caller(tag);
+                become this.do_bind_iter(inner, symbol, iter, caller)
+                
+            }
+        }
+    }
 
     //let bind_requestfn = {
         //bind fn;
@@ -278,7 +366,22 @@ proc remove_exec() {
 
 
 proc main() {
-    let () = this.tests.cases.symbol_iter();
+    let (iter) = this.iter.symbol_chars&(@"foo,bar
+baz");
+    let (bound) = this.iter.do_bind_iter&(this.csv.start, @iter, iter);
+
+    let (bound, @startrow) = bound();
+    let (bound, @startfield) = bound();
+    let (bound, @yield, 'f') = bound();
+    let (bound, @yield, 'o') = bound();
+    let (bound, @yield, 'o') = bound();
+    let (bound, @endfield) = bound();
+    let (bound, @startfield) = bound();
+    let (bound, @yield, 'b') = bound();
+    let (bound, @yield, 'a') = bound();
+    let (bound, @yield, 'r') = bound();
+    let (bound, @endfield) = bound();
+    let (bound, @endrow) = bound();
 }
 
 

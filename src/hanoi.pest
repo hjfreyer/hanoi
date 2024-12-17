@@ -149,8 +149,8 @@ value_expr = {
   | identifier
 }
 
-match_block = { "match" ~ maybe_expr ~ "{" ~ match_cases ~ "}" }
+match_block = { "match" ~ "{" ~ match_cases ~ "}" }
 maybe_expr  = { expr? }
 
-match_cases = { match_case* }
+match_cases = _{ match_case* }
 match_case  = { bindings ~ "=>" ~ "{" ~ block ~ "}" }
