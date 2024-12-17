@@ -21,27 +21,6 @@ mod builtin {
         }
     }
 
-//    let symbol_char_at = {
-//        bind caller;
-//        bind symbol;
-//        bind offset;
-//            symbol offset #symbol_char_at caller #curry @exec
-//    };
-//
-//    let eq = {
-//        bind caller;
-//        bind a;
-//        bind b;
-//        a b #eq caller #curry @exec
-//    };
-//
-//    let add = {
-//        bind a;
-//        bind b;
-//        bind caller;
-//            a b #add @ok this.add caller #curry #curry #curry @exec
-//    };
-
     proc add() {
         R{
             [a, b, caller]
@@ -55,7 +34,7 @@ mod tests {
         let (caller, @next) = caller(@yield, @assert_true);
         let (caller, @next) = caller(@yield, @symbol_len);
         let (caller, @next) = caller(@yield, @symbol_iter);
-            // let (caller, @next) = caller(@yield, @basic_csv);
+        let (caller, @next) = caller(@yield, @basic_csv);
             // let (caller, @next) = caller(@yield, @manually_drive_map);
         let () = caller(@eos);        
     }
@@ -70,112 +49,46 @@ mod tests {
             let () = caller(@pass);
         }
 
-        //let basic_csv = {
-            //bind caller;
-            //bind next;
-                //caller next #curry
-                //@"h,e\n" 0 this.super.super.iter.symbol_chars #curry #curry
-                    //this.super.super.csv.parser #curry #curry @exec;
-            //bind cont;
-            //bind char;
-            //bind tag;
-            //bind caller;
-            //bind next;
-                //tag @fieldchar #assert_eq char 'h' #assert_eq caller next #curry cont #curry @exec;
-            //bind cont;
-            //bind tag;
-            //bind caller;
-            //bind next;
-                //tag @nextfield #assert_eq caller next #curry cont #curry @exec;
-            //bind cont;
-            //bind char;
-            //bind tag;
-            //bind caller;
-            //bind next;
-                //tag @fieldchar #assert_eq char 'e' #assert_eq caller next #curry cont #curry @exec;
-            //bind cont;
-            //bind tag;
-            //bind caller;
-            //bind next;
-                //tag @nextrow #assert_eq caller next #curry cont #curry @exec;
-            //bind tag;
-            //bind caller;
-                //tag @end #assert_eq
-                //@pass caller #curry @exec
-        //};
-//
+        proc basic_csv(caller) {
+            let (iter) = this.super.super.iter.symbol_chars&(@"foo,bar
+baz");
+            let (bound) = this.super.super.iter.do_bind_iter&(
+                this.super.super.csv.start, 
+                @iter, 
+                iter);
+
+            let (bound, @startrow) = bound();
+            let (bound, @startfield) = bound();
+            let (bound, @yield, 'f') = bound();
+            let (bound, @yield, 'o') = bound();
+            let (bound, @yield, 'o') = bound();
+            let (bound, @endfield) = bound();
+            let (bound, @startfield) = bound();
+            let (bound, @yield, 'b') = bound();
+            let (bound, @yield, 'a') = bound();
+            let (bound, @yield, 'r') = bound();
+            let (bound, @endfield) = bound();
+            let (bound, @endrow) = bound();
+            let (bound, @startrow) = bound();
+            let (bound, @startfield) = bound();
+            let (bound, @yield, 'b') = bound();
+            let (bound, @yield, 'a') = bound();
+            let (bound, @yield, 'z') = bound();
+            let (bound, @endfield) = bound();
+            let (bound, @endrow) = bound();
+            let (bound, @eos) = bound();
+            let () = caller(@pass);
+        }
+
         proc symbol_iter(caller) {
-            let (^, @ok, iter) = this.super.super.iter.symbol_chars(@foo);
+            let (iter) = this.super.super.iter.symbol_chars&(@foo);
             let (cont, @yield, 'f') = iter(@next);
             let (cont, @yield, 'o') = cont(@next);
             let (cont, @yield, 'o') = cont(@next);
             let (cont, @eos) = cont(@next);
             let () = caller(@pass);
         }
-        //let symbol_iter = {
-            //bind caller;
-            //bind next;
-                //caller next #curry @"foo" 0 this.super.super.iter.symbol_chars #curry #curry #curry @exec;
-            //bind char;
-            //bind tag;
-            //bind cont;
-            //bind caller;
-            //bind next;
-                //tag @yield #assert_eq char 'f' #assert_eq caller next #curry cont #curry @exec;
-            //bind cont;
-            //bind char;
-            //bind tag;
-            //bind caller;
-            //bind next;
-                //tag @yield #assert_eq char 'o' #assert_eq caller next #curry cont #curry @exec;
-            //bind cont;
-            //bind char;
-            //bind tag;
-            //bind caller;
-            //bind next;
-                //tag @yield #assert_eq char 'o' #assert_eq caller next #curry cont #curry @exec;
-            //bind tag;
-            //bind caller;
-                //tag @eos #assert_eq
-                //@pass caller #curry @exec
-        //};
-//
-        //let manually_drive_map = {
-            //bind caller;
-            //bind next;
-                //caller next #curry this.super.super.iter.map #curry @exec;
-            //bind cont;
-            //bind reqiter;
-            //bind caller;
-            //bind next;
-                //reqiter @requestiter #assert_eq
-                //caller next #curry 1 @yield cont #curry #curry #curry @exec;
-            //bind cont;
-            //bind one;
-            //bind reqfn;
-            //bind caller;
-            //bind next;
-                //reqfn @requestfn #assert_eq one 1 #assert_eq
-                //caller next #curry 2 @ok cont #curry #curry #curry @exec;
-            //bind cont;
-            //bind two;
-            //bind yld;
-            //bind caller;
-            //bind next;
-                //yld @yield #assert_eq two 2 #assert_eq
-                //caller next #curry cont #curry @exec;
-            //bind cont;
-            //bind req;
-            //bind caller;
-            //bind next;
-                //req @requestiter #assert_eq
-                //caller next #curry @eos cont #curry #curry @exec;
-            //bind eos;
-            //bind caller;
-                //eos @eos #assert_eq @pass caller #curry @exec
-        //};
     }
-//
 
     proc run(caller, case_name) {
         R{ @cases this #get #get @exec }
@@ -209,6 +122,11 @@ mod csv {
             }
             ('\\') => {
                 become this.escaped(caller)
+            }
+            (',') => {
+                let (caller) = caller(@endfield);
+                let (caller) = caller(@startfield);
+                become this.non_quoted(caller)               
             }
             (char) => {
                 let (caller) = caller(@yield, char);
@@ -283,26 +201,6 @@ mod iter {
             }
         }
     }
-////      match caller(@requestiter) {
-////            (caller, @eos) => {
-////                let () = caller(@eos);
-////            }
-////            (caller, @yield, item) => {
-////                match caller(@requestfn, item) {
-////                    (@ok, applied, caller) => {
-////                        let (caller) = caller(@yield, applied);
-////                        this.map(caller)
-////                    }
-////                }
-////            }
-////        }
-    //}
-//
-    //proc double(caller, x) {
-        //let (_, ok, res) = this.add(*x, x);
-        //let () = caller(@ok, res);
-        //this.double()
-    //}
 
     proc do_bind_iter(inner, symbol, iter, caller) {
         let (inner) = inner();
@@ -324,114 +222,8 @@ mod iter {
             }
         }
     }
-
-    //let bind_requestfn = {
-        //bind fn;
-        //bind inner;
-        //bind caller;
-            //fn inner this.do_bind_requestfn #curry #curry caller #curry @exec
-    //};
-//
-    //proc do_bind_requestfn(inner, fn, caller) {
-        //match inner() {
-            //(inner, @request, @fn, input) => {
-                //let (fn, caller, ok, applied) = this.do_bind_requestfn_call_fn(fn, caller, input);
-                //this.do_bind_requestfn(inner, fn, caller, ok, applied)
-            //}
-            //(inner) => {
-                //let (caller) = caller();
-                //this.do_bind_requestfn(inner, fn, caller)
-            //}
-        //}
-    //}
-//
-    //proc do_bind_requestfn_call_fn(metacaller, fn, caller) {
-        //match fn() {
-            //(fn, @ok, applied) => {
-                //metacaller(fn, caller, @ok, applied)
-            //}
-            //(fn) => {
-                //let (caller) = caller();
-                //this.do_bind_requestfn_call_fn(metacaller, fn, caller)
-            //}
-        //}
-    //}
 }
-
-proc remove_exec() {
-    R{
-
-    }
-}
-
 
 proc main() {
-    let (iter) = this.iter.symbol_chars&(@"foo,bar
-baz");
-    let (bound) = this.iter.do_bind_iter&(this.csv.start, @iter, iter);
-
-    let (bound, @startrow) = bound();
-    let (bound, @startfield) = bound();
-    let (bound, @yield, 'f') = bound();
-    let (bound, @yield, 'o') = bound();
-    let (bound, @yield, 'o') = bound();
-    let (bound, @endfield) = bound();
-    let (bound, @startfield) = bound();
-    let (bound, @yield, 'b') = bound();
-    let (bound, @yield, 'a') = bound();
-    let (bound, @yield, 'r') = bound();
-    let (bound, @endfield) = bound();
-    let (bound, @endrow) = bound();
+    let () = this.tests.cases.basic_csv();
 }
-
-
-//let main = {
-    //bind next;
-        //this.iter.double this.iter.map next this.iter.bind_requestfn #curry #curry #curry @exec;
-    //bind bound;
-    //bind next;
-        //@next next bound #curry #curry @exec;
-//  
-    //bind nxt;
-    //bind iter;
-    //bind req;
-    //bind cont;
-    //bind next;
-        //req @request #assert_eq iter @iter #assert_eq nxt @next #assert_eq
-        //1 @yield next cont @exec;
-//
-    //bind item;
-    //bind yield;
-    //bind continue;
-    //bind next;
-        //2 item #assert_eq yield @yield #assert_eq
-        //@next next continue @exec;
-//
-    //bind nxt;
-    //bind iter;
-    //bind req;
-    //bind cont;
-    //bind next;
-        //req @request #assert_eq iter @iter #assert_eq nxt @next #assert_eq
-        //5 @yield next cont @exec;
-//
-    //bind item;
-    //bind yield;
-    //bind continue;
-    //bind next;
-        //10 item #assert_eq yield @yield #assert_eq
-        //@next next continue @exec;
-//
-    //bind nxt;
-    //bind iter;
-    //bind req;
-    //bind cont;
-    //bind next;
-        //req @request #assert_eq iter @iter #assert_eq nxt @next #assert_eq
-        //@eos next cont @exec;
-//    
-    //bind eos;
-    //bind continue;
-    //bind next;
-        //eos @eos #assert_eq @pass
-//};
