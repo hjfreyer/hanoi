@@ -19,8 +19,7 @@ pub struct Loader {
 impl Loader {
     pub fn load(&mut self, name: &str) -> anyhow::Result<()> {
         if !self.cache.contains_key(name) {
-            let path = self.base.join(format!("{}.han", name));
-            let contents = std::fs::read_to_string(path)?;
+            let contents = std::fs::read_to_string(self.path(name))?;
             self.cache.insert(name.to_owned(), contents);
         }
         Ok(())
@@ -31,6 +30,10 @@ impl Loader {
             .get(name)
             .with_context(|| format!("module {} was not pre-loaded", name))
             .map(|s| s.as_str())
+    }
+
+    pub fn path(&self, name: &str) -> PathBuf {
+        self.base.join(format!("{}.han", name))
     }
 }
 

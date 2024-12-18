@@ -22,7 +22,7 @@ struct Args {
 #[derive(Subcommand, Debug)]
 enum Commands {
     Debug { base_dir: PathBuf, module: String },
-    Test  { base_dir: PathBuf, module: String },
+    Test { base_dir: PathBuf, module: String },
 }
 
 fn debug(base_dir: PathBuf, module: String) -> anyhow::Result<()> {

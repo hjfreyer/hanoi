@@ -8,8 +8,8 @@ use typed_index_collections::TiSliceIndex;
 use crate::{
     ast,
     flat::{
-        BuilderError, Builtin, Closure, Entry, InnerWord, Library, Namespace2, SentenceIndex,
-        Value, Word,
+        Builtin, Closure, Entry, InnerWord, Library, LoadError, Namespace2, SentenceIndex, Value,
+        Word,
     },
 };
 
@@ -396,7 +396,7 @@ pub enum StepResult {
 }
 
 impl<'t> Vm<'t> {
-    pub fn new(lib: Library<'t>) -> Result<Self, BuilderError> {
+    pub fn new(lib: Library<'t>) -> Result<Self, LoadError> {
         let &Entry::Value(Value::Pointer(Closure(_, main))) =
             lib.root_namespace().get("main").unwrap()
         else {
