@@ -419,6 +419,12 @@ impl<'t> Vm<'t> {
             .get(self.pc.word_idx)
     }
 
+    pub fn prev_word(&self) -> Option<&Word<'t>> {
+        self.lib.sentences[self.pc.sentence_idx]
+            .words
+            .get(self.pc.word_idx - 1)
+    }
+
     pub fn jump_to(&mut self, Closure(closure, sentence_idx): Closure) {
         for v in closure {
             self.stack.push(v);

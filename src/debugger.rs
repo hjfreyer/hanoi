@@ -9,12 +9,12 @@ use ratatui::{
 };
 
 use crate::{
+    ast,
     flat::{ValueView, Word},
     vm::{EvalError, StepResult, Vm},
 };
 
 pub struct Debugger<'t> {
-    code: &'t str,
     vm: Vm<'t>,
 
     code_scroll: u16,
@@ -50,6 +50,7 @@ impl<'t> Debugger<'t> {
         let current_line = self
             .vm
             .current_word()
+            .or_else(|| self.vm.prev_word())
             .and_then(|w| w.span)
             .map(|s| s.start_pos().line_col().0);
 
@@ -59,6 +60,7 @@ impl<'t> Debugger<'t> {
                 != self
                     .vm
                     .current_word()
+                    .or_else(|| self.vm.prev_word())
                     .and_then(|w| w.span)
                     .map(|s| s.start_pos().line_col().0)
             {
@@ -72,8 +74,9 @@ impl<'t> Debugger<'t> {
             span: Some(span), ..
         }) = self.vm.current_word()
         {
+            let code = span.get_input();
             let mut res = Text::raw("");
-            let mut iter = self.code[..span.start()].lines();
+            let mut iter = code[..span.start()].lines();
             res.push_span(iter.next().unwrap().on_green());
             while let Some(next) = iter.next() {
                 res.push_line(next);
@@ -83,15 +86,20 @@ impl<'t> Debugger<'t> {
             while let Some(next) = iter.next() {
                 res.push_line(next.on_green());
             }
-            let mut iter = self.code[span.end()..].lines();
+            let mut iter = code[span.end()..].lines();
             res.push_span(iter.next().unwrap());
             while let Some(next) = iter.next() {
                 res.push_line(next);
             }
 
             res
+        } else if let Some(Word {
+            span: Some(span), ..
+        }) = self.vm.prev_word()
+        {
+            Text::raw(span.get_input())
         } else {
-            Text::raw(self.code)
+            Text::raw("???")
         };
         Paragraph::new(text)
             .scroll((self.code_scroll, 0))
@@ -171,7 +179,6 @@ impl<'t> Debugger<'t> {
     pub fn new(code: &'t str, vm: crate::vm::Vm<'t>) -> Self {
         Self {
             code_scroll: 0,
-            code: &code,
             vm,
             stack_state: TableState::default(),
             error: None,

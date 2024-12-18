@@ -1021,25 +1021,6 @@ pub struct Word<'t> {
     pub names: Option<VecDeque<Option<String>>>,
 }
 
-impl<'t> From<InnerWord> for Word<'t> {
-    fn from(value: InnerWord) -> Self {
-        Self {
-            inner: value,
-            span: None,
-            names: None,
-        }
-    }
-}
-impl<'t> From<Value> for Word<'t> {
-    fn from(value: Value) -> Self {
-        Self {
-            inner: InnerWord::Push(value),
-            span: None,
-            names: None,
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InnerWord {
     Push(Value),
