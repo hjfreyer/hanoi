@@ -1,1 +1,1 @@
-cargo run -- test data/main.han
+cargo run -- test data/ main

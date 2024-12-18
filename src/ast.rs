@@ -1,3 +1,6 @@
+use std::{collections::HashMap, path::PathBuf};
+
+use anyhow::Context;
 use itertools::{partition, Either, Itertools};
 use pest::{iterators::Pair, Parser, Span};
 use pest_derive::Parser;
@@ -8,8 +11,32 @@ use crate::flat::Value;
 #[grammar = "hanoi.pest"]
 pub struct HanoiParser;
 
+pub struct Loader {
+    pub base: PathBuf,
+    pub cache: HashMap<String, String>,
+}
+
+impl Loader {
+    pub fn load(&mut self, name: &str) -> anyhow::Result<()> {
+        if !self.cache.contains_key(name) {
+            let path = self.base.join(format!("{}.han", name));
+            let contents = std::fs::read_to_string(path)?;
+            self.cache.insert(name.to_owned(), contents);
+        }
+        Ok(())
+    }
+
+    pub fn get(&self, name: &str) -> anyhow::Result<&str> {
+        self.cache
+            .get(name)
+            .with_context(|| format!("module {} was not pre-loaded", name))
+            .map(|s| s.as_str())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Module<'t> {
+    pub imports: Vec<Identifier<'t>>,
     pub namespace: Namespace<'t>,
 }
 
@@ -20,10 +47,11 @@ impl<'t> Module<'t> {
         let file = file.exactly_one().unwrap();
         assert_eq!(file.as_rule(), Rule::file);
 
-        let (ns, eoi) = file.into_inner().collect_tuple().unwrap();
+        let (header, ns, eoi) = file.into_inner().collect_tuple().unwrap();
         assert_eq!(eoi.as_rule(), Rule::EOI);
 
         Ok(Module {
+            imports: header.into_inner().map(Identifier::from).collect(),
             namespace: Namespace::from_pair(ns),
         })
     }

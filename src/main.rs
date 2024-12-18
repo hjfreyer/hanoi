@@ -21,16 +21,19 @@ struct Args {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    Debug { file: PathBuf },
-    Test { file: PathBuf },
+    Debug { base_dir: PathBuf, module: String },
+    Test  { base_dir: PathBuf, module: String },
 }
 
-fn debug(file: PathBuf) -> anyhow::Result<()> {
-    let code = std::fs::read_to_string(&file)?;
+fn debug(base_dir: PathBuf, module: String) -> anyhow::Result<()> {
+    let mut loader = ast::Loader {
+        base: base_dir,
+        cache: Default::default(),
+    };
 
-    let ast = ast::Module::from_str(&code).unwrap();
-
-    let vm = match Vm::new(ast.namespace) {
+    let lib = Library::load(&mut loader, &module)?;
+    let code = lib.code;
+    let vm = match Vm::new(lib) {
         Ok(vm) => vm,
         Err(err) => {
             println!("error: {}", err);
@@ -38,7 +41,7 @@ fn debug(file: PathBuf) -> anyhow::Result<()> {
         }
     };
 
-    let debugger = debugger::Debugger::new(&code, vm);
+    let debugger = debugger::Debugger::new(code, vm);
 
     let mut terminal = ratatui::init();
     terminal.clear()?;
@@ -93,12 +96,15 @@ impl<'a, 't> Iterator for IterReader<'a, 't> {
     }
 }
 
-fn test(file: PathBuf) -> anyhow::Result<()> {
-    let code = std::fs::read_to_string(&file)?;
+fn test(base_dir: PathBuf, module: String) -> anyhow::Result<()> {
+    let mut loader = ast::Loader {
+        base: base_dir,
+        cache: Default::default(),
+    };
 
-    let ast = ast::Module::from_str(&code).unwrap();
-
-    let mut vm = match Vm::new(ast.namespace) {
+    let lib = Library::load(&mut loader, &module)?;
+    let code = lib.code;
+    let mut vm = match Vm::new(lib) {
         Ok(vm) => vm,
         Err(err) => {
             println!("error: {}", err);
@@ -188,8 +194,8 @@ fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     match args.command {
-        Commands::Debug { file } => debug(file),
-        Commands::Test { file } => test(file),
+        Commands::Debug { base_dir, module } => debug(base_dir, module),
+        Commands::Test { base_dir, module } => test(base_dir, module),
     }
 }
 

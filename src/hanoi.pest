@@ -4,7 +4,11 @@ COMMENT = _{ "//" ~ (!NEWLINE ~ ANY)* }
 
 // FILE STRUCTURE
 
-file = { SOI ~ namespace ~ EOI }
+file = { SOI ~ header ~ namespace ~ EOI }
+
+header ={ ns_import* }
+
+ns_import = _{ "mod" ~ identifier ~ ";"}
 
 namespace = { decl* }
 

@@ -1,0 +1,28 @@
+
+proc symbol_len(caller, symbol) {
+    R{ 
+        [symbol, caller]
+        symbol #symbol_len @ok this.symbol_len caller @exec 
+    }
+}
+
+proc symbol_char_at(caller, symbol, offset) {
+    R{ 
+        [offset, symbol, caller]
+        symbol offset #symbol_char_at @ok this.symbol_char_at caller @exec 
+    }
+}
+
+proc eq(caller, a, b) {
+    R{ 
+        [b, a, caller]
+        a b #eq @ok this.eq caller @exec 
+    }
+}
+
+proc add() {
+    R{
+        [a, b, caller]
+        a b #add @ok this.add caller @exec
+    }
+}

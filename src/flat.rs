@@ -3,6 +3,7 @@ use std::{collections::VecDeque, fmt::Display, usize};
 use derive_more::derive::{From, Into};
 use itertools::Itertools;
 use pest::{iterators::Pair, Span};
+use thiserror::Error;
 use typed_index_collections::TiVec;
 
 use crate::ast::{
@@ -24,6 +25,9 @@ pub struct NamespaceIndex(usize);
 pub struct Library<'t> {
     pub namespaces: TiVec<NamespaceIndex, Namespace>,
     pub sentences: TiVec<SentenceIndex, Sentence<'t>>,
+
+    pub root_ns: Option<NamespaceIndex>,
+    pub code: &'t str,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -43,22 +47,82 @@ pub enum Entry {
     Namespace(NamespaceIndex),
 }
 
+#[derive(Debug, Error)]
+
+pub enum LoadError {
+    #[error("error reading file")]
+    IO(#[from] anyhow::Error),
+    #[error("error parsing file: {0}")]
+    Builder(BuilderError),
+}
+
 impl<'t> Library<'t> {
-    pub fn from_ast(lib: ast::Namespace<'t>) -> Result<Self, BuilderError<'t>> {
+    pub fn root_namespace(&self) -> &Namespace {
+        &self.namespaces[self.root_ns.unwrap()]
+    }
+
+    pub fn load(loader: &'t mut ast::Loader, name: &str) -> Result<Self, LoadError> {
+        Self::load_srcs(loader, name)?;
+
+        let mut res = Self {
+            namespaces: TiVec::new(),
+            sentences: TiVec::new(),
+            root_ns: None,
+            code: loader.get(name).unwrap(),
+        };
+        res.root_ns = Some(res.visit_module(loader, name, None)?);
+        Ok(res)
+    }
+
+    fn load_srcs(loader: &mut ast::Loader, name: &str) -> Result<(), LoadError> {
+        loader.load(name)?;
+        let contents = loader.get(name)?;
+
+        let module = ast::Module::from_str(contents)?;
+        let names = module
+            .imports
+            .into_iter()
+            .map(|i| i.as_str().to_owned())
+            .collect_vec();
+        for name in names {
+            Self::load_srcs(loader, &name)?
+        }
+        Ok(())
+    }
+
+    fn from_ns(lib: ast::Namespace<'t>) -> Result<Self, BuilderError> {
         let mut res = Self::default();
         res.visit_ns(lib, None)?;
         Ok(res)
     }
 
-    pub fn root_namespace(&self) -> &Namespace {
-        self.namespaces.first().unwrap()
+    fn visit_module(
+        &mut self,
+        loader: &'t ast::Loader,
+        name: &str,
+        parent: Option<NamespaceIndex>,
+    ) -> Result<NamespaceIndex, LoadError> {
+        let contents = loader.get(name)?;
+
+        let module = ast::Module::from_str(contents)?;
+        let mod_ns = self
+            .visit_ns(module.namespace, parent)
+            .map_err(LoadError::Builder)?;
+        for name in module.imports.into_iter() {
+            let submod = self.visit_module(loader, name.as_str(), Some(mod_ns))?;
+
+            self.namespaces[mod_ns]
+                .0
+                .push((name.as_str().to_owned(), Entry::Namespace(submod)));
+        }
+        Ok(mod_ns)
     }
 
     fn visit_ns(
         &mut self,
         ns: ast::Namespace<'t>,
         parent: Option<NamespaceIndex>,
-    ) -> Result<NamespaceIndex, BuilderError<'t>> {
+    ) -> Result<NamespaceIndex, BuilderError> {
         let ns_idx = self.namespaces.push_and_get_key(Namespace::default());
 
         if let Some(parent) = parent {
@@ -100,7 +164,7 @@ impl<'t> Library<'t> {
         ns_idx: NamespaceIndex,
         mut names: VecDeque<Option<String>>,
         block: ast::Block<'t>,
-    ) -> Result<SentenceIndex, BuilderError<'t>> {
+    ) -> Result<SentenceIndex, BuilderError> {
         match block {
             ast::Block::Bind {
                 name: bind_name,
@@ -282,7 +346,7 @@ impl<'t> Library<'t> {
     //     ns_idx: NamespaceIndex,
     //     names: VecDeque<Option<String>>,
     //     endpoint: Pair<'t, Rule>,
-    // ) -> Result<SentenceIndex, BuilderError<'t>> {
+    // ) -> Result<SentenceIndex, BuilderError> {
     //     assert_eq!(endpoint.as_rule(), Rule::endpoint);
     //     let endpoint = endpoint.into_inner().exactly_one().unwrap();
 
@@ -361,7 +425,7 @@ impl<'t> Library<'t> {
     //     ns_idx: NamespaceIndex,
     //     names: VecDeque<Option<String>>,
     //     block: ast::ProcMatchBlock<'t>,
-    // ) -> Result<SentenceIndex, BuilderError<'t>> {
+    // ) -> Result<SentenceIndex, BuilderError> {
     //     let mut builder = SentenceBuilder::new(Some(name.to_owned()), ns_idx, names.clone());
 
     //     let argc = builder.expr(block.expr)?;
@@ -533,7 +597,7 @@ impl<'t> Library<'t> {
         name: &str,
         ns_idx: NamespaceIndex,
         sentence: ast::RawSentence<'t>,
-    ) -> Result<SentenceIndex, BuilderError<'t>> {
+    ) -> Result<SentenceIndex, BuilderError> {
         let mut builder = SentenceBuilder::new(Some(name.to_owned()), ns_idx, VecDeque::new());
 
         for word in sentence.words {
@@ -548,7 +612,7 @@ impl<'t> Library<'t> {
         ns_idx: NamespaceIndex,
         builder: &mut SentenceBuilder<'t>,
         raw_word: ast::RawWord<'t>,
-    ) -> Result<(), BuilderError<'t>> {
+    ) -> Result<(), BuilderError> {
         match raw_word.inner {
             ast::RawWordInner::Expression(expr) => builder.value_expr(expr),
             ast::RawWordInner::Bindings(b) => {
@@ -624,16 +688,21 @@ pub struct SentenceBuilder<'t> {
 }
 
 #[derive(Debug)]
-pub enum BuilderError<'t> {
+pub enum BuilderError {
     // #[error("Unknown reference at {span:?}: {name}")]
-    UnknownReference { span: Span<'t>, name: String },
+    UnknownReference {
+        line_col: (usize, usize),
+        name: String,
+    },
 }
 
-impl<'t> Display for BuilderError<'t> {
+impl Display for BuilderError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            BuilderError::UnknownReference { span, name } => {
-                let (line, col) = span.start_pos().line_col();
+            BuilderError::UnknownReference {
+                line_col: (line, col),
+                name,
+            } => {
                 write!(
                     f,
                     "At data/main.han:{line}:{col}: Unknown reference: {name}"
@@ -690,13 +759,13 @@ impl<'t> SentenceBuilder<'t> {
         self.literal_split(span, Value::Symbol(symbol.to_owned()))
     }
 
-    pub fn mv(&mut self, ident: Identifier<'t>) -> Result<(), BuilderError<'t>> {
+    pub fn mv(&mut self, ident: Identifier<'t>) -> Result<(), BuilderError> {
         let Some(idx) = self.names.iter().position(|n| match n {
             Some(n) => n.as_str() == ident.0.as_str(),
             None => false,
         }) else {
             return Err(BuilderError::UnknownReference {
-                span: ident.0,
+                line_col: ident.0.start_pos().line_col(),
                 name: ident.0.as_str().to_owned(),
             });
         };
@@ -715,13 +784,13 @@ impl<'t> SentenceBuilder<'t> {
         });
     }
 
-    pub fn cp(&mut self, i: Identifier<'t>) -> Result<(), BuilderError<'t>> {
+    pub fn cp(&mut self, i: Identifier<'t>) -> Result<(), BuilderError> {
         let Some(idx) = self.names.iter().position(|n| match n {
             Some(n) => n.as_str() == i.0.as_str(),
             None => false,
         }) else {
             return Err(BuilderError::UnknownReference {
-                span: i.0,
+                line_col: i.0.start_pos().line_col(),
                 name: i.0.as_str().to_owned(),
             });
         };
@@ -839,7 +908,7 @@ impl<'t> SentenceBuilder<'t> {
         }
     }
 
-    fn func_call(&mut self, call: ast::Call<'t>) -> Result<usize, BuilderError<'t>> {
+    fn func_call(&mut self, call: ast::Call<'t>) -> Result<usize, BuilderError> {
         let argc = call.args.len();
 
         for arg in call.args.into_iter().rev() {
@@ -853,7 +922,7 @@ impl<'t> SentenceBuilder<'t> {
         Ok(argc)
     }
 
-    fn value_expr(&mut self, expr: ValueExpression<'t>) -> Result<(), BuilderError<'t>> {
+    fn value_expr(&mut self, expr: ValueExpression<'t>) -> Result<(), BuilderError> {
         match expr {
             ValueExpression::Literal(literal) => {
                 Ok(self.literal_split(literal.span, literal.value))

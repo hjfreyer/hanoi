@@ -396,9 +396,7 @@ pub enum StepResult {
 }
 
 impl<'t> Vm<'t> {
-    pub fn new(ast: ast::Namespace<'t>) -> Result<Self, BuilderError<'t>> {
-        let lib = Library::from_ast(ast)?;
-
+    pub fn new(lib: Library<'t>) -> Result<Self, BuilderError> {
         let &Entry::Value(Value::Pointer(Closure(_, main))) =
             lib.root_namespace().get("main").unwrap()
         else {
