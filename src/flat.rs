@@ -721,7 +721,7 @@ pub enum CompileError {
 }
 
 #[derive(Debug)]
-enum BuilderError<'t> {
+pub enum BuilderError<'t> {
     UnknownReference(Identifier<'t>),
 }
 
