@@ -20,6 +20,13 @@ proc eq(caller, a, b) {
     }
 }
 
+proc lt(caller, a, b) {
+    R{ 
+        [b, a, caller]
+        a b #lt caller @exec 
+    }
+}
+
 proc add() {
     R{
         [a, b, caller]

@@ -10,6 +10,7 @@ mod tests {
         let (caller, @next) = caller(@yield, @queue);
         let (caller, @next) = caller(@yield, @stack);
         let (caller, @next) = caller(@yield, @split);
+        let (caller, @next) = caller(@yield, @merge_sorted);
         let () = caller(@eos);        
     }
 
@@ -98,6 +99,34 @@ baz");
             let (bq, @yield, 'b') = bq(@next);
             let (bq, @yield, 'r') = bq(@next);
             let (bq, @eos) = bq(@next);
+            let () = caller(@pass);
+        }
+
+        proc merge_sorted(caller) {
+            let (a) = this.super.super.queue_empty;
+            let (a) = a(@push_back, 1);
+            let (a) = a(@push_back, 3);
+            let (a) = a(@push_back, 5);
+            let (a) = a(@push_back, 6);
+            let (b) = this.super.super.queue_empty;
+            let (b) = b(@push_back, 2);
+            let (b) = b(@push_back, 4);
+            let (b) = b(@push_back, 6);
+            let (b) = b(@push_back, 7);
+            let (b) = b(@push_back, 8);
+
+            let (m) = this.super.super.merge_sorted&(a, b);
+            let (m, @yield, 1) = m(@next);
+            let (m, @yield, 2) = m(@next);
+            let (m, @yield, 3) = m(@next);
+            let (m, @yield, 4) = m(@next);
+            let (m, @yield, 5) = m(@next);
+            let (m, @yield, 6) = m(@next);
+            let (m, @yield, 6) = m(@next);
+            let (m, @yield, 7) = m(@next);
+            let (m, @yield, 8) = m(@next);
+            let (m, @eos) = m(@next);
+
             let () = caller(@pass);
         }
     }
@@ -275,6 +304,11 @@ mod iter {
         }
     }
 
+    proc cons(head, tail, caller, @next) {
+        let (caller) = caller(@yield, head);
+        become tail(caller)
+    }
+
    // proc merge(caller) {
 //
    // }
@@ -368,8 +402,34 @@ proc list_snoc(caller, list) {
     }
 }
 
-proc list_sorted_merge(caller, a, b) {
-
+proc merge_sorted(a, b, caller, @next) {
+    let (a) = a(@next);
+    match {
+        (@eos) => {
+            become b(caller, @next)
+        }
+        (@yield, a_item) => {
+            let (b) = b(@next);
+            match {
+                (@eos) => {
+                    let (a) = this.iter.cons&(a_item, a);
+                    become a()
+                }
+                (@yield, b_item) => {
+                    let (lt) = this.builtin.lt(*a_item, *b_item);
+                    if lt {
+                        let (caller) = caller(@yield, a_item);
+                        let (b) = this.iter.cons&(b_item, b);
+                        become this.merge_sorted(a, b, caller)
+                    } else {
+                        let (caller) = caller(@yield, b_item);
+                        let (a) = this.iter.cons&(a_item, a);
+                        become this.merge_sorted(a, b, caller)
+                    }
+                }
+            }
+        }
+    }
 }
 
 
