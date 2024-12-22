@@ -7,7 +7,9 @@ mod tests {
         let (caller, @next) = caller(@yield, @symbol_len);
         let (caller, @next) = caller(@yield, @symbol_iter);
         let (caller, @next) = caller(@yield, @basic_csv);
-            // let (caller, @next) = caller(@yield, @manually_drive_map);
+        let (caller, @next) = caller(@yield, @queue);
+        let (caller, @next) = caller(@yield, @stack);
+        let (caller, @next) = caller(@yield, @split);
         let () = caller(@eos);        
     }
 
@@ -58,6 +60,44 @@ baz");
             let (cont, @yield, 'o') = cont(@next);
             let (cont, @yield, 'o') = cont(@next);
             let (cont, @eos) = cont(@next);
+            let () = caller(@pass);
+        }
+
+        proc queue(caller) {
+            let (q) = this.super.super.queue_empty;
+            let (q) = q(@push_back, @foo);
+            let (q) = q(@push_back, @bar);
+            let (q) = q(@push_back, @baz);
+            let (q, @yield, @foo) = q(@next);
+            let (q, @yield, @bar) = q(@next);
+            let (q, @yield, @baz) = q(@next);
+            let (q, @eos) = q(@next);
+            let () = caller(@pass);
+        }
+
+        proc stack(caller) {
+            let (q) = this.super.super.stack_empty;
+            let (q) = q(@push_front, @foo);
+            let (q) = q(@push_front, @bar);
+            let (q) = q(@push_front, @baz);
+            let (q, @yield, @baz) = q(@next);
+            let (q, @yield, @bar) = q(@next);
+            let (q, @yield, @foo) = q(@next);
+            let (q, @eos) = q(@next);
+            let () = caller(@pass);
+        }
+
+        proc split(caller) {
+            let (iter) = this.super.super.iter.symbol_chars&(@foobar);
+            let (^, @ok, aq, bq) = this.super.super.bind(this.super.super.iter.split, @iter, iter);
+            let (aq, @yield, 'f') = aq(@next);
+            let (aq, @yield, 'o') = aq(@next);
+            let (aq, @yield, 'a') = aq(@next);
+            let (aq, @eos) = aq(@next);
+            let (bq, @yield, 'o') = bq(@next);
+            let (bq, @yield, 'b') = bq(@next);
+            let (bq, @yield, 'r') = bq(@next);
+            let (bq, @eos) = bq(@next);
             let () = caller(@pass);
         }
     }
@@ -199,11 +239,11 @@ mod iter {
         let (caller) = caller(@req, @iter, @next);
         match {
             (@eos) => {
-                let () = caller(@ok, this.super.queue_empty, this.super.queue_empty);
+                let () = caller(@ok, this.super.stack_empty, this.super.stack_empty);
             }
             (@yield, a) => {
-                let (caller, ^, aq, bq) = this.until_ok(caller, this.split);
-                let (bq) = bq(@push_back, a);
+                let (caller, ^, @ok, aq, bq) = this.fwd_req(caller, this.split);
+                let (bq) = bq(@push_front, a);
                 let (caller) = caller(@ok, bq, aq);
             }
         }
@@ -218,6 +258,19 @@ mod iter {
             (tag) => {
                 let (up) = up(tag);
                 become this.until_ok(next, up, down)
+            }
+        }
+    }
+
+    proc fwd_req(next, up, down) {
+        let (down) = down();
+        match {
+            (@req) => {
+                let (up) = up(@req);
+                become this.fwd_req(next, up, down)
+            }
+            (tag) => {
+                become next(up, down, tag)
             }
         }
     }
@@ -253,6 +306,32 @@ proc queue_cons(head, tail, caller) {
             let (tail) = tail(@push_back, item);
             let (caller) = caller();
             become this.queue_cons(head, tail, caller)
+        }
+        (@next) => {
+            let (caller) = caller(@yield, head);
+            become tail(caller)
+        }
+    }
+}
+
+proc stack_empty(caller) {
+    match {
+        (@push_front, item) => {
+            let (caller) = caller();
+            become this.stack_cons(item, this.stack_empty, caller)
+        }
+        (@next) => {
+            let (caller) = caller(@eos);
+            become this.stack_empty(caller)
+        }
+    }
+}
+
+proc stack_cons(head, tail, caller) {
+    match {
+        (@push_front, item) => {
+            let (caller) = caller();
+            become this.stack_cons(item, this.stack_cons&(head, tail), caller)
         }
         (@next) => {
             let (caller) = caller(@yield, head);
@@ -316,14 +395,15 @@ proc bind(caller, inner, symbol, target) {
 
 
 proc main() {
-    let (iter) = this.iter.symbol_chars&(@foobar);
-    let (^, @ok, aq, bq) = this.bind(this.iter.split, @iter, iter);
-    let (aq, @yield, @f) = aq(@next);
-    let (aq, @yield, @o) = aq(@next);
-    let (aq, @yield, @a) = aq(@next);
-    let (aq, @eos) = aq(@next);
-    let (bq, @yield, @o) = bq(@next);
-    let (bq, @yield, @b) = bq(@next);
-    let (bq, @yield, @r) = bq(@next);
-    let (bq, @eos) = bq(@next);
+    let (x) = this.tests.cases.stack();
+    //let (iter) = this.iter.symbol_chars&(@foobar);
+    //let (^, @ok, aq, bq) = this.bind(this.iter.split, @iter, iter);
+    //let (aq, @yield, 'f') = aq(@next);
+    //let (aq, @yield, 'o') = aq(@next);
+    //let (aq, @yield, 'a') = aq(@next);
+    //let (aq, @eos) = aq(@next);
+    //let (bq, @yield, 'o') = bq(@next);
+    //let (bq, @yield, 'b') = bq(@next);
+    //let (bq, @yield, 'r') = bq(@next);
+    //let (bq, @eos) = bq(@next);
 }
