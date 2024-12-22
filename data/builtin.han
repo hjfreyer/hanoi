@@ -26,3 +26,16 @@ proc add() {
         a b #add @ok this.add caller @exec
     }
 }
+
+proc cons() {
+    R{
+        [b, a, caller]
+        a b #cons caller @exec
+    }
+}
+proc snoc() {
+    R{
+        [a, caller]
+        a #snoc caller @exec
+    }
+}

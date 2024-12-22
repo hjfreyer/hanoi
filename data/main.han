@@ -194,8 +194,136 @@ mod iter {
             }
         }
     }
+
+    proc split(caller) {
+        let (caller) = caller(@req, @iter, @next);
+        match {
+            (@eos) => {
+                let () = caller(@ok, this.super.queue_empty, this.super.queue_empty);
+            }
+            (@yield, a) => {
+                let (caller, ^, aq, bq) = this.until_ok(caller, this.split);
+                let (bq) = bq(@push_back, a);
+                let (caller) = caller(@ok, bq, aq);
+            }
+        }
+    }
+
+    proc until_ok(next, up, down) {
+        let (down) = down();
+        match {
+            (@ok) => {
+                become next(up, down)
+            }
+            (tag) => {
+                let (up) = up(tag);
+                become this.until_ok(next, up, down)
+            }
+        }
+    }
+
+   // proc merge(caller) {
+//
+   // }
+//
+   // proc mergesort(caller) {
+   //     let (evens, odds) =  split();
+   //     let (evens) = mergesort(evens);
+   //     let (odds) = mergesort(odds);
+   //     become merge(evens, odds)
+   // }
 }
 
+proc queue_empty(caller) {
+    match {
+        (@push_back, item) => {
+            let (caller) = caller();
+            become this.queue_cons(item, this.queue_empty, caller)
+        }
+        (@next) => {
+            let (caller) = caller(@eos);
+            become this.queue_empty(caller)
+        }
+    }
+}
+
+proc queue_cons(head, tail, caller) {
+    match {
+        (@push_back, item) => {
+            let (tail) = tail(@push_back, item);
+            let (caller) = caller();
+            become this.queue_cons(head, tail, caller)
+        }
+        (@next) => {
+            let (caller) = caller(@yield, head);
+            become tail(caller)
+        }
+    }
+}
+
+proc list_empty(caller) {
+    R{
+        [caller]
+        @nil caller @exec
+    }
+}
+
+
+proc list_append(caller, head, tail) {
+    R{
+        [tail, head, caller]
+        tail head #cons @cons #cons caller @exec
+    }
+}
+
+proc list_snoc(caller, list) {
+    let () = this.list_snoc(list);
+    match {
+        (@nil) => {
+            become caller(@nil)
+        }
+        (@cons, t) => {
+            let (h, t) = this.list_snoc(t);
+            become caller(@cons, h, t)
+        }
+    }
+}
+
+proc list_sorted_merge(caller, a, b) {
+
+}
+
+
+proc bind(caller, inner, symbol, target) {
+    let (inner) = inner();
+    match {
+        (@req, name) =>  {
+            let (^, @ok, are_eq) = this.builtin.eq(*name, *symbol);
+            if are_eq {
+                let (target) = target();
+                become this.bind(caller, inner, symbol, target )
+            } else {
+                let (caller) = caller(@req, name);
+                become this.bind(caller, inner, symbol, target)
+            }
+        }
+        (tag) => {
+            let (caller) = caller(tag);
+            become this.bind(caller, inner, symbol, target)
+        }
+    }
+}
+
+
 proc main() {
-    let () = this.tests.cases.basic_csv();
+    let (iter) = this.iter.symbol_chars&(@foobar);
+    let (^, @ok, aq, bq) = this.bind(this.iter.split, @iter, iter);
+    let (aq, @yield, @f) = aq(@next);
+    let (aq, @yield, @o) = aq(@next);
+    let (aq, @yield, @a) = aq(@next);
+    let (aq, @eos) = aq(@next);
+    let (bq, @yield, @o) = bq(@next);
+    let (bq, @yield, @b) = bq(@next);
+    let (bq, @yield, @r) = bq(@next);
+    let (bq, @eos) = bq(@next);
 }

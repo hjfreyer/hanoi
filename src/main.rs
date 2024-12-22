@@ -57,7 +57,7 @@ struct IterReader<'a, 't> {
 }
 
 impl<'a, 't> Iterator for IterReader<'a, 't> {
-    type Item = Result<Value, EvalError<'t>>;
+    type Item = Result<Value, EvalError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.done {

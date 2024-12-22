@@ -8,29 +8,29 @@ use typed_index_collections::TiSliceIndex;
 use crate::{
     ast,
     flat::{
-        Builtin, Closure, Entry, InnerWord, Library, LoadError, Namespace2, SentenceIndex, Value,
-        Word,
+        Builtin, Closure, Entry, InnerWord, Library, LoadError, Namespace2, SentenceIndex,
+        SourceLocation, Value, Word,
     },
 };
 
 #[derive(Debug)]
-pub struct EvalError<'t> {
-    pub span: Option<Span<'t>>,
-    pub source: anyhow::Error,
+pub struct EvalError {
+    pub location: Option<SourceLocation>,
+    pub inner: InnerEvalError,
 }
 
-impl<'t> std::fmt::Display for EvalError<'t> {
+impl<'t> std::fmt::Display for EvalError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if let Some(span) = &self.span {
-            let (line, col) = span.start_pos().line_col();
-            write!(f, "at {}:{}: ", line, col)?;
+        if let Some(location) = &self.location {
+            write!(f, "at {}: ", location)?;
         } else {
             write!(f, "at <unknown location>: ")?;
         }
-        write!(f, "{}", self.source)
+        write!(f, "{}", self.inner)
     }
 }
-impl<'t> std::error::Error for EvalError<'t> {}
+
+impl<'t> std::error::Error for EvalError {}
 
 macro_rules! eval_bail {
     ($span:expr, $fmt:expr) => {
@@ -42,10 +42,10 @@ macro_rules! eval_bail {
     };
 }
 
-fn eval<'t>(lib: &Library, stack: &mut Stack, w: &Word<'t>) -> Result<(), EvalError<'t>> {
+fn eval<'t>(lib: &Library, stack: &mut Stack, w: &Word<'t>) -> Result<(), EvalError> {
     inner_eval(lib, stack, &w.inner).map_err(|e| EvalError {
-        span: w.span,
-        source: e,
+        location: Some(w.location()),
+        inner: InnerEvalError::Other(e),
     })
 }
 
@@ -61,6 +61,8 @@ fn inner_eval(lib: &Library, stack: &mut Stack, w: &InnerWord) -> anyhow::Result
             stack.push(Value::Usize(a + b));
             Ok(())
         }
+        InnerWord::Tuple(idx) => todo!(),
+        InnerWord::Untuple(idx) => todo!(),
         InnerWord::Copy(idx) => stack.copy(*idx),
         InnerWord::Move(idx) => stack.mv(*idx),
         &InnerWord::Send(idx) => stack.sd(idx),
@@ -232,8 +234,8 @@ fn inner_eval(lib: &Library, stack: &mut Stack, w: &InnerWord) -> anyhow::Result
                 bail!("bad value")
             };
 
-            ensure!(cdr.is_small(), "bad cdr type: {:?}", cdr);
-            ensure!(car.is_small(), "bad car type: {:?}", car);
+            // ensure!(cdr.is_small(), "bad cdr type: {:?}", cdr);
+            // ensure!(car.is_small(), "bad car type: {:?}", car);
 
             stack.push(Value::Cons(Box::new(car), Box::new(cdr)));
             Ok(())
@@ -297,84 +299,40 @@ fn inner_eval(lib: &Library, stack: &mut Stack, w: &InnerWord) -> anyhow::Result
     }
 }
 
-fn control_flow<'t>(lib: &Library<'t>, stack: &mut Stack) -> anyhow::Result<Closure> {
+#[derive(Debug, thiserror::Error)]
+pub enum InnerEvalError {
+    #[error("Stack empty at end of sentence")]
+    EmptyStack,
+    #[error("Unexpected value used as control flow: {value:?}")]
+    UnexpectedControlFlow { value: Value },
+    #[error("Tried to exec non-closure value: {value:?}")]
+    ExecNonClosure { value: Value },
+    #[error("Tried to exec empty stack")]
+    ExecEmptyStack,
+
+    #[error("other error: {0}")]
+    Other(#[from] anyhow::Error),
+}
+
+fn control_flow<'t>(lib: &Library<'t>, stack: &mut Stack) -> Result<Closure, InnerEvalError> {
     let op = match stack.pop() {
         Some(Value::Symbol(op)) => op,
-        top => panic!("not a symbol: {:?}", top),
+        Some(value) => return Err(InnerEvalError::UnexpectedControlFlow { value }),
+        None => return Err(InnerEvalError::EmptyStack),
     };
     match op.as_str() {
-        // "malloc" => {
-        //     let Some(Value::Usize(size)) = pop() else {
-        //         panic!()
-        //     };
-        //     let next = stack.pop().unwrap().into_code(lib).unwrap();
-
-        //     let handle = Value::Handle(arena.buffers.len());
-
-        //     arena.buffers.push(Buffer { mem: vec![0; size] });
-
-        //     stack.push(handle);
-        //     Some(next.into_words())
-        // }
-        // "set_mem" => {
-        //     let Some(Value::Handle(handle)) = stack.pop() else {
-        //         panic!()
-        //     };
-        //     let Some(Value::Usize(offset)) = stack.pop() else {
-        //         panic!()
-        //     };
-        //     let Some(Value::Usize(value)) = stack.pop() else {
-        //         panic!()
-        //     };
-        //     let next = stack.pop().unwrap().into_code(lib).unwrap();
-
-        //     let buf = arena.buffers.get_mut(handle).unwrap();
-        //     buf.mem[offset] = value;
-
-        //     Some(next.into_words())
-        // }
-        // "get_mem" => {
-        //     let Some(Value::Handle(handle)) = stack.pop() else {
-        //         panic!()
-        //     };
-        //     let Some(Value::Usize(offset)) = stack.pop() else {
-        //         panic!()
-        //     };
-        //     let next = stack.pop().unwrap().into_code(lib).unwrap();
-
-        //     let buf = arena.buffers.get_mut(handle).unwrap();
-        //     stack.push(Value::Usize(buf.mem[offset]));
-
-        //     Some(next.into_words())
-        // }
-        "if" => {
-            let Some(Value::Pointer(false_case)) = stack.pop() else {
-                panic!("bad value")
-            };
-            let Some(Value::Pointer(true_case)) = stack.pop() else {
-                panic!("bad value")
-            };
-            let Some(Value::Bool(cond)) = stack.pop() else {
-                panic!()
-            };
-            if cond {
-                Ok(true_case)
-            } else {
-                Ok(false_case)
-            }
-        }
         "exec" => {
-            let Some(Value::Pointer(next)) = stack.pop() else {
-                panic!("bad value")
+            let next = match stack.pop() {
+                Some(Value::Pointer(next)) => next,
+                Some(value) => return Err(InnerEvalError::ExecNonClosure { value }),
+                None => return Err(InnerEvalError::ExecEmptyStack),
             };
 
-            // if !stack.is_empty() {
-            //     bail!("exec with non-empty stack: {:?}", stack)
-            // }
             Ok(next)
         }
-        // "halt" => None,
-        unk => panic!("unknown symbol: {}", unk),
+        unk => Err(InnerEvalError::UnexpectedControlFlow {
+            value: Value::Symbol(unk.to_owned()),
+        }),
     }
 }
 
@@ -433,7 +391,7 @@ impl<'t> Vm<'t> {
         self.pc.word_idx = 0;
     }
 
-    pub fn run_to_trap(&mut self) -> Result<(), EvalError<'t>> {
+    pub fn run_to_trap(&mut self) -> Result<(), EvalError> {
         loop {
             match self.step()? {
                 StepResult::Continue => {}
@@ -442,7 +400,7 @@ impl<'t> Vm<'t> {
         }
     }
 
-    pub fn step(&mut self) -> Result<StepResult, EvalError<'t>> {
+    pub fn step(&mut self) -> Result<StepResult, EvalError> {
         let sentence = &self.lib.sentences[self.pc.sentence_idx];
 
         if let Some(word) = sentence.words.get(self.pc.word_idx) {
@@ -450,9 +408,9 @@ impl<'t> Vm<'t> {
             self.pc.word_idx += 1;
             Ok(StepResult::Continue)
         } else {
-            let next = control_flow(&self.lib, &mut self.stack).map_err(|e| EvalError {
-                span: sentence.words.last().and_then(|w| w.span),
-                source: e,
+            let next = control_flow(&self.lib, &mut self.stack).map_err(|inner| EvalError {
+                location: sentence.words.last().map(|w| w.location()),
+                inner,
             })?;
 
             if next.1 == SentenceIndex::TRAP {
@@ -516,6 +474,15 @@ impl Stack {
 
     pub fn drop(&mut self, back_idx: usize) -> anyhow::Result<()> {
         self.inner.remove(self.back_idx(back_idx)?);
+        Ok(())
+    }
+
+    pub fn tuple(&mut self, back_idx: usize) -> anyhow::Result<()> {
+        let Some(v) = self.inner.iter().rev().nth(back_idx) else {
+            bail!("out of range: {}", back_idx)
+        };
+
+        self.push(v.clone());
         Ok(())
     }
 

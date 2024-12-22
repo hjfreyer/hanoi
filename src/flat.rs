@@ -61,7 +61,7 @@ impl<'t> Library<'t> {
         &self.namespaces[self.root_ns.unwrap()]
     }
 
-    pub fn load(loader: &'t mut ast::Loader, name: &str) -> Result<Self, LoadError> {
+    pub fn load(loader: &'t mut ast::Loader, name: &'t str) -> Result<Self, LoadError> {
         Self::load_srcs(loader, name)?;
 
         let mut res = Self {
@@ -90,23 +90,17 @@ impl<'t> Library<'t> {
         Ok(())
     }
 
-    fn from_ns(lib: ast::Namespace<'t>) -> Result<Self, BuilderError<'t>> {
-        let mut res = Self::default();
-        res.visit_ns(lib, None)?;
-        Ok(res)
-    }
-
     fn visit_module(
         &mut self,
         loader: &'t ast::Loader,
-        name: &str,
+        name: &'t str,
         parent: Option<NamespaceIndex>,
     ) -> Result<NamespaceIndex, LoadError> {
         let contents = loader.get(name)?;
 
         let module = ast::Module::from_str(contents)?;
         let mod_ns = self
-            .visit_ns(module.namespace, parent)
+            .visit_ns(name, module.namespace, parent)
             .map_err(|e| match e {
                 BuilderError::UnknownReference(i) => {
                     LoadError::Compile(CompileError::UnknownReference {
@@ -131,6 +125,7 @@ impl<'t> Library<'t> {
 
     fn visit_ns(
         &mut self,
+        modname: &'t str,
         ns: ast::Namespace<'t>,
         parent: Option<NamespaceIndex>,
     ) -> Result<NamespaceIndex, BuilderError<'t>> {
@@ -145,7 +140,7 @@ impl<'t> Library<'t> {
         for decl in ns.decls {
             match decl.value {
                 ast::DeclValue::Namespace(namespace) => {
-                    let subns = self.visit_ns(namespace, Some(ns_idx))?;
+                    let subns = self.visit_ns(modname, namespace, Some(ns_idx))?;
                     self.namespaces[ns_idx]
                         .0
                         .push((decl.name, Entry::Namespace(subns)));
@@ -158,7 +153,8 @@ impl<'t> Library<'t> {
                 //     ));
                 // }
                 ast::DeclValue::Proc(p) => {
-                    let sentence_idx = self.visit_block(&decl.name, ns_idx, VecDeque::new(), p)?;
+                    let sentence_idx =
+                        self.visit_block(modname, &decl.name, ns_idx, VecDeque::new(), p)?;
                     self.namespaces[ns_idx].0.push((
                         decl.name,
                         Entry::Value(Value::Pointer(Closure(vec![], sentence_idx))),
@@ -171,6 +167,7 @@ impl<'t> Library<'t> {
 
     fn visit_block(
         &mut self,
+        modname: &'t str,
         name: &str,
         ns_idx: NamespaceIndex,
         mut names: VecDeque<Option<String>>,
@@ -182,20 +179,21 @@ impl<'t> Library<'t> {
                 inner,
             } => {
                 names.push_back(Some(bind_name.as_str().to_owned()));
-                self.visit_block(name, ns_idx, names, *inner)
+                self.visit_block(modname, name, ns_idx, names, *inner)
             }
             ast::Block::Expression {
                 span,
                 expr: ast::Expression::Call(call),
                 next,
             } => {
-                let mut builder = SentenceBuilder::new(Some(name.to_owned()), ns_idx, names);
+                let mut builder =
+                    SentenceBuilder::new(modname, Some(name.to_owned()), ns_idx, names);
                 let argc = builder.func_call(call)?;
 
                 let mut leftover_names: VecDeque<Option<String>> =
                     builder.names.iter().skip(argc + 1).cloned().collect();
 
-                let next = self.visit_block(name, ns_idx, leftover_names, *next)?;
+                let next = self.visit_block(modname, name, ns_idx, leftover_names, *next)?;
 
                 builder.sentence_idx(span, next);
                 // Stack: (leftovers) (args) to_call next
@@ -216,13 +214,14 @@ impl<'t> Library<'t> {
                 expr: ast::Expression::Value(value_expr),
                 next,
             } => {
-                let mut builder = SentenceBuilder::new(Some(name.to_owned()), ns_idx, names);
+                let mut builder =
+                    SentenceBuilder::new(modname, Some(name.to_owned()), ns_idx, names);
                 let argc = builder.value_expr(value_expr)?;
 
                 let mut leftover_names: VecDeque<Option<String>> =
                     builder.names.iter().skip(1).cloned().collect();
 
-                let next = self.visit_block(name, ns_idx, leftover_names, *next)?;
+                let next = self.visit_block(modname, name, ns_idx, leftover_names, *next)?;
 
                 builder.sentence_idx(span, next);
                 // Stack: (leftovers) value next
@@ -238,7 +237,8 @@ impl<'t> Library<'t> {
                 Ok(self.sentences.push_and_get_key(builder.build()))
             }
             ast::Block::Become { span, call } => {
-                let mut builder = SentenceBuilder::new(Some(name.to_owned()), ns_idx, names);
+                let mut builder =
+                    SentenceBuilder::new(modname, Some(name.to_owned()), ns_idx, names);
                 let argc = builder.func_call(call)?;
 
                 // Stack: (leftovers) (args) to_call
@@ -250,13 +250,14 @@ impl<'t> Library<'t> {
 
                 Ok(self.sentences.push_and_get_key(builder.build()))
             }
-            ast::Block::Raw(sentence) => self.visit_sentence(name, ns_idx, sentence),
+            ast::Block::Raw(sentence) => self.visit_sentence(modname, name, ns_idx, sentence),
             ast::Block::AssertEq { literal, inner } => {
-                let next = self.visit_block(name, ns_idx, names.clone(), *inner)?;
+                let next = self.visit_block(modname, name, ns_idx, names.clone(), *inner)?;
                 let assert_idx = names.len();
                 names.push_back(None);
 
-                let mut builder = SentenceBuilder::new(Some(name.to_owned()), ns_idx, names);
+                let mut builder =
+                    SentenceBuilder::new(modname, Some(name.to_owned()), ns_idx, names);
                 builder.mv_idx(literal.span, assert_idx);
                 builder.literal_split(literal.span, literal.value);
                 builder.builtin(literal.span, Builtin::AssertEq);
@@ -265,11 +266,12 @@ impl<'t> Library<'t> {
                 Ok(self.sentences.push_and_get_key(builder.build()))
             }
             ast::Block::Drop { span, inner } => {
-                let next = self.visit_block(name, ns_idx, names.clone(), *inner)?;
+                let next = self.visit_block(modname, name, ns_idx, names.clone(), *inner)?;
                 let drop_idx = names.len();
                 names.push_back(None);
 
-                let mut builder = SentenceBuilder::new(Some(name.to_owned()), ns_idx, names);
+                let mut builder =
+                    SentenceBuilder::new(modname, Some(name.to_owned()), ns_idx, names);
                 builder.drop_idx(span, drop_idx);
                 builder.sentence_idx(span, next);
                 builder.symbol(span, "exec");
@@ -282,14 +284,16 @@ impl<'t> Library<'t> {
                 false_case,
             } => {
                 let mut builder =
-                    SentenceBuilder::new(Some(name.to_owned()), ns_idx, names.clone());
+                    SentenceBuilder::new(modname, Some(name.to_owned()), ns_idx, names.clone());
                 builder.value_expr(expr)?;
 
                 let mut subnames = builder.names.clone();
                 subnames.pop_front(); // Drop the boolean.
 
-                let true_case = self.visit_block(name, ns_idx, subnames.clone(), *true_case)?;
-                let false_case = self.visit_block(name, ns_idx, subnames.clone(), *false_case)?;
+                let true_case =
+                    self.visit_block(modname, name, ns_idx, subnames.clone(), *true_case)?;
+                let false_case =
+                    self.visit_block(modname, name, ns_idx, subnames.clone(), *false_case)?;
 
                 builder.sentence_idx(span, true_case);
                 builder.sentence_idx(span, false_case);
@@ -299,10 +303,14 @@ impl<'t> Library<'t> {
             }
             ast::Block::Match { span, cases, els } => {
                 let els = if let Some(els) = els {
-                    self.visit_block(name, ns_idx, names.clone(), *els)?
+                    self.visit_block(modname, name, ns_idx, names.clone(), *els)?
                 } else {
-                    let mut panic_builder =
-                        SentenceBuilder::new(Some(name.to_owned()), ns_idx, VecDeque::new());
+                    let mut panic_builder = SentenceBuilder::new(
+                        modname,
+                        Some(name.to_owned()),
+                        ns_idx,
+                        VecDeque::new(),
+                    );
                     panic_builder.symbol(span, "panic");
                     self.sentences.push_and_get_key(panic_builder.build())
                 };
@@ -314,10 +322,14 @@ impl<'t> Library<'t> {
                     let case_span = case.literal.span;
 
                     let if_case_matches_idx =
-                        self.visit_block(name, ns_idx, names.clone(), case.body)?;
+                        self.visit_block(modname, name, ns_idx, names.clone(), case.body)?;
 
-                    let mut case_builder =
-                        SentenceBuilder::new(Some(name.to_owned()), ns_idx, VecDeque::new());
+                    let mut case_builder = SentenceBuilder::new(
+                        modname,
+                        Some(name.to_owned()),
+                        ns_idx,
+                        VecDeque::new(),
+                    );
                     case_builder.cp_idx(case.literal.span, discrim_idx);
                     case_builder.literal(case.literal);
                     case_builder.builtin(case_span, Builtin::Eq);
@@ -334,7 +346,7 @@ impl<'t> Library<'t> {
             }
             ast::Block::Unreachable { span } => {
                 let mut panic_builder =
-                    SentenceBuilder::new(Some(name.to_owned()), ns_idx, VecDeque::new());
+                    SentenceBuilder::new(modname, Some(name.to_owned()), ns_idx, VecDeque::new());
                 panic_builder.symbol(span, "panic");
                 Ok(self.sentences.push_and_get_key(panic_builder.build()))
             }
@@ -366,7 +378,7 @@ impl<'t> Library<'t> {
     //             let span = endpoint.as_span();
 
     //             let mut builder =
-    //                 SentenceBuilder::new(Some(name.to_owned()), ns_idx, names.clone());
+    //                 SentenceBuilder::new(modname, Some(name.to_owned()), ns_idx, names.clone());
 
     //             let argc = builder.func_call(endpoint)?;
 
@@ -384,7 +396,7 @@ impl<'t> Library<'t> {
     //             let cond = ident_from_pair(cond);
 
     //             let mut builder =
-    //                 SentenceBuilder::new(Some(name.to_owned()), ns_idx, names.clone());
+    //                 SentenceBuilder::new(modname, Some(name.to_owned()), ns_idx, names.clone());
     //             builder.mv(cond, cond.as_str());
 
     //             let mut case_names = builder.names.clone();
@@ -422,7 +434,7 @@ impl<'t> Library<'t> {
     //         }
     //         Rule::unreachable => {
     //             let mut panic_builder =
-    //                 SentenceBuilder::new(Some(name.to_owned()), ns_idx, VecDeque::new());
+    //                 SentenceBuilder::new(modname, Some(name.to_owned()), ns_idx, VecDeque::new());
     //             panic_builder.symbol(endpoint.as_span(), "panic");
     //             Ok(self.sentences.push_and_get_key(panic_builder.build()))
     //         }
@@ -437,7 +449,7 @@ impl<'t> Library<'t> {
     //     names: VecDeque<Option<String>>,
     //     block: ast::ProcMatchBlock<'t>,
     // ) -> Result<SentenceIndex, BuilderError<'t>> {
-    //     let mut builder = SentenceBuilder::new(Some(name.to_owned()), ns_idx, names.clone());
+    //     let mut builder = SentenceBuilder::new(modname, Some(name.to_owned()), ns_idx, names.clone());
 
     //     let argc = builder.expr(block.expr)?;
     //     // Stack: (leftover names) (args) to_call
@@ -446,7 +458,7 @@ impl<'t> Library<'t> {
     //         builder.names.iter().skip(argc + 1).cloned().collect();
 
     //     let mut panic_builder =
-    //         SentenceBuilder::new(Some(name.to_owned()), ns_idx, VecDeque::new());
+    //         SentenceBuilder::new(modname, Some(name.to_owned()), ns_idx, VecDeque::new());
     //     panic_builder.symbol(block.span, "panic");
     //     let panic_idx = self.sentences.push_and_get_key(panic_builder.build());
 
@@ -478,7 +490,7 @@ impl<'t> Library<'t> {
     //             }?;
 
     //         let mut case_builder =
-    //             SentenceBuilder::new(Some(name.to_owned()), ns_idx, VecDeque::new());
+    //             SentenceBuilder::new(modname, Some(name.to_owned()), ns_idx, VecDeque::new());
 
     //         case_builder.literal(case.span, true.into());
 
@@ -605,20 +617,23 @@ impl<'t> Library<'t> {
 
     fn visit_sentence(
         &mut self,
+        modname: &'t str,
         name: &str,
         ns_idx: NamespaceIndex,
         sentence: ast::RawSentence<'t>,
     ) -> Result<SentenceIndex, BuilderError<'t>> {
-        let mut builder = SentenceBuilder::new(Some(name.to_owned()), ns_idx, VecDeque::new());
+        let mut builder =
+            SentenceBuilder::new(modname, Some(name.to_owned()), ns_idx, VecDeque::new());
 
         for word in sentence.words {
-            self.visit_raw_word(name, ns_idx, &mut builder, word)?;
+            self.visit_raw_word(modname, name, ns_idx, &mut builder, word)?;
         }
         Ok(self.sentences.push_and_get_key(builder.build()))
     }
 
     fn visit_raw_word(
         &mut self,
+        modname: &'t str,
         name: &str,
         ns_idx: NamespaceIndex,
         builder: &mut SentenceBuilder<'t>,
@@ -632,15 +647,16 @@ impl<'t> Library<'t> {
             }
             // ast::RawWordInner::Literal(v) => builder.literal(v.span, v.value),
             ast::RawWordInner::FunctionLike(f, idx) => {
-                todo!()
-                //     match f.0.as_str() {
-                //     "cp" => InnerWord::Copy(idx),
-                //     "drop" => InnerWord::Drop(idx),
-                //     "mv" => InnerWord::Move(idx),
-                //     "sd" => InnerWord::Send(idx),
-                //     "ref" => InnerWord::Ref(idx),
-                //     _ => panic!("unknown reference: {:?}", f),
-                // },
+                match f.0.as_str() {
+                    "tuple" => Ok(builder.tuple(raw_word.span, idx)),
+                    "untuple" => Ok(builder.untuple(raw_word.span, idx)),
+                    //     "cp" => InnerWord::Copy(idx),
+                    //     "drop" => InnerWord::Drop(idx),
+                    //     "mv" => InnerWord::Move(idx),
+                    //     "sd" => InnerWord::Send(idx),
+                    //     "ref" => InnerWord::Ref(idx),
+                    _ => panic!("unknown reference: {:?}", f),
+                }
             }
             ast::RawWordInner::Builtin(name) => {
                 if let Some(builtin) = Builtin::ALL
@@ -654,7 +670,7 @@ impl<'t> Library<'t> {
                 }
             }
             ast::RawWordInner::Sentence(s) => {
-                let sentence_idx = self.visit_sentence(name, ns_idx, s)?;
+                let sentence_idx = self.visit_sentence(modname, name, ns_idx, s)?;
                 builder.sentence_idx(raw_word.span, sentence_idx);
                 Ok(())
             }
@@ -692,6 +708,7 @@ macro_rules! builtins {
 }
 
 pub struct SentenceBuilder<'t> {
+    pub modname: &'t str,
     pub name: Option<String>,
     pub ns_idx: NamespaceIndex,
     pub names: VecDeque<Option<String>>,
@@ -727,11 +744,13 @@ pub enum BuilderError<'t> {
 
 impl<'t> SentenceBuilder<'t> {
     pub fn new(
+        modname: &'t str,
         name: Option<String>,
         ns_idx: NamespaceIndex,
         names: VecDeque<Option<String>>,
     ) -> Self {
         Self {
+            modname,
             name,
             ns_idx,
             names,
@@ -753,7 +772,8 @@ impl<'t> SentenceBuilder<'t> {
     pub fn literal_split(&mut self, span: Span<'t>, value: Value) {
         self.words.push(Word {
             inner: InnerWord::Push(value),
-            span: Some(span),
+            modname: self.modname,
+            span,
             names: Some(self.names.clone()),
         });
         self.names.push_front(None);
@@ -762,7 +782,8 @@ impl<'t> SentenceBuilder<'t> {
     pub fn sentence_idx(&mut self, span: Span<'t>, sentence_idx: SentenceIndex) {
         self.words.push(Word {
             inner: InnerWord::Push(Value::Pointer(Closure(vec![], sentence_idx))),
-            span: Some(span),
+            modname: self.modname,
+            span,
             names: Some(self.names.clone()),
         });
         self.names.push_front(None);
@@ -789,7 +810,8 @@ impl<'t> SentenceBuilder<'t> {
 
         self.words.push(Word {
             inner: InnerWord::Move(idx),
-            span: Some(span),
+            modname: self.modname,
+            span,
             names: Some(names),
         });
     }
@@ -810,7 +832,8 @@ impl<'t> SentenceBuilder<'t> {
 
         self.words.push(Word {
             inner: InnerWord::Copy(idx),
-            span: Some(span),
+            modname: self.modname,
+            span,
             names: Some(names),
         });
     }
@@ -823,7 +846,8 @@ impl<'t> SentenceBuilder<'t> {
 
         self.words.push(Word {
             inner: InnerWord::Send(idx),
-            span: Some(span),
+            modname: self.modname,
+            span,
             names: Some(names),
         });
     }
@@ -837,7 +861,8 @@ impl<'t> SentenceBuilder<'t> {
 
         self.words.push(Word {
             inner: InnerWord::Drop(idx),
-            span: Some(span),
+            modname: self.modname,
+            span,
             names: Some(names),
         });
     }
@@ -855,7 +880,8 @@ impl<'t> SentenceBuilder<'t> {
     pub fn builtin(&mut self, span: Span<'t>, builtin: Builtin) {
         self.words.push(Word {
             inner: InnerWord::Builtin(builtin),
-            span: Some(span),
+            modname: self.modname,
+            span: span,
             names: Some(self.names.clone()),
         });
         match builtin {
@@ -912,6 +938,32 @@ impl<'t> SentenceBuilder<'t> {
             Builtin::Unstash => {
                 todo!()
             }
+        }
+    }
+
+    pub fn tuple(&mut self, span: Span<'t>, size: usize) {
+        self.words.push(Word {
+            inner: InnerWord::Tuple(size),
+            modname: self.modname,
+            span: span,
+            names: Some(self.names.clone()),
+        });
+        for _ in 0..size {
+            self.names.pop_front().unwrap();
+        }
+        self.names.push_front(None);
+    }
+
+    pub fn untuple(&mut self, span: Span<'t>, size: usize) {
+        self.words.push(Word {
+            inner: InnerWord::Untuple(size),
+            modname: self.modname,
+            span: span,
+            names: Some(self.names.clone()),
+        });
+        self.names.pop_front();
+        for _ in 0..size {
+            self.names.push_front(None);
         }
     }
 
@@ -1017,8 +1069,19 @@ builtins! {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Word<'t> {
     pub inner: InnerWord,
-    pub span: Option<Span<'t>>,
+    pub modname: &'t str,
+    pub span: Span<'t>,
     pub names: Option<VecDeque<Option<String>>>,
+}
+impl<'t> Word<'t> {
+    pub(crate) fn location(&self) -> SourceLocation {
+        let (line, col) = self.span.start_pos().line_col();
+        SourceLocation {
+            file: self.modname.into(),
+            line,
+            col,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1030,6 +1093,8 @@ pub enum InnerWord {
     Send(usize),
     Ref(usize),
     Builtin(Builtin),
+    Tuple(usize),
+    Untuple(usize),
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Hash)]
@@ -1037,6 +1102,7 @@ pub enum Value {
     Symbol(String),
     Usize(usize),
     List(Vec<Value>),
+    Tuple(Vec<Value>),
     Pointer(Closure),
     Handle(usize),
     Bool(bool),
@@ -1046,22 +1112,6 @@ pub enum Value {
     Nil,
     Cons(Box<Value>, Box<Value>),
     Ref(usize),
-}
-
-impl Value {
-    pub fn is_small(&self) -> bool {
-        match self {
-            Value::Nil
-            | Value::Symbol(_)
-            | Value::Usize(_)
-            | Value::Char(_)
-            | Value::Bool(_)
-            | Value::Ref(_) => true,
-            Value::Namespace(namespace_index) => todo!(),
-            Value::Pointer(Closure(vec, _)) => true,
-            Value::List(_) | Value::Handle(_) | Value::Namespace2(_) | Value::Cons(_, _) => false,
-        }
-    }
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Hash)]
@@ -1099,6 +1149,17 @@ impl<'a, 't> std::fmt::Display for ValueView<'a, 't> {
                     lib: self.lib,
                     value: cdr
                 }
+            ),
+            Value::Tuple(values) => write!(
+                f,
+                "{}",
+                values
+                    .iter()
+                    .map(|v| ValueView {
+                        lib: self.lib,
+                        value: v
+                    })
+                    .join(", ")
             ),
             Value::Ref(arg0) => write!(f, "ref({})", arg0),
             Value::Char(arg0) => write!(f, "'{}'", arg0),

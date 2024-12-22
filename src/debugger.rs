@@ -19,23 +19,21 @@ pub struct Debugger<'t> {
 
     code_scroll: u16,
     stack_state: TableState,
-    error: Option<EvalError<'t>>,
+    error: Option<EvalError>,
 }
 
 impl<'t> Debugger<'t> {
-    fn step(&mut self) -> Result<(), EvalError<'t>> {
+    fn step(&mut self) {
         if self.error.is_some() {
-            return Ok(());
+            return;
         }
 
         match self.vm.step() {
             Ok(step) => {
                 if let StepResult::Continue = step {
                     if let Some(word) = self.vm.current_word() {
-                        if let Some(span) = &word.span {
-                            let (line, _) = span.start_pos().line_col();
-                            self.code_scroll = (line as u16).saturating_sub(10);
-                        }
+                        let (line, _) = word.span.start_pos().line_col();
+                        self.code_scroll = (line as u16).saturating_sub(10);
                     }
                 }
             }
@@ -43,37 +41,29 @@ impl<'t> Debugger<'t> {
                 self.error = Some(err);
             }
         }
-        Ok(())
     }
 
-    fn next_line(&mut self) -> Result<(), EvalError<'t>> {
+    fn next_line(&mut self) {
         let current_line = self
             .vm
             .current_word()
             .or_else(|| self.vm.prev_word())
-            .and_then(|w| w.span)
-            .map(|s| s.start_pos().line_col().0);
+            .map(|w| w.span.start_pos().line_col().0);
 
-        loop {
-            self.step();
-            if current_line
-                != self
+        while self.error.is_none()
+            && current_line
+                == self
                     .vm
                     .current_word()
                     .or_else(|| self.vm.prev_word())
-                    .and_then(|w| w.span)
-                    .map(|s| s.start_pos().line_col().0)
-            {
-                return Ok(());
-            }
+                    .map(|w| w.span.start_pos().line_col().0)
+        {
+            self.step()
         }
     }
 
     fn code(&self) -> Paragraph {
-        let text = if let Some(Word {
-            span: Some(span), ..
-        }) = self.vm.current_word()
-        {
+        let text = if let Some(Word { span, .. }) = self.vm.current_word() {
             let code = span.get_input();
             let mut res = Text::raw("");
             let mut iter = code[..span.start()].lines();
@@ -93,10 +83,7 @@ impl<'t> Debugger<'t> {
             }
 
             res
-        } else if let Some(Word {
-            span: Some(span), ..
-        }) = self.vm.prev_word()
-        {
+        } else if let Some(Word { span, .. }) = self.vm.prev_word() {
             Text::raw(span.get_input())
         } else {
             Text::raw("???")
@@ -154,25 +141,35 @@ impl<'t> Debugger<'t> {
         .highlight_style(Style::new().black().on_white())
     }
 
+    fn word_text(&self) -> Text {
+        let Some(word) = self.vm.current_word() else {
+            return Text::default();
+        };
+        Text::raw(format!("{:?}", word.inner)).red().on_dark_gray()
+    }
+
     fn error_text(&self) -> Text {
         let Some(err) = &self.error else {
             return Text::default();
         };
-        Text::raw(err.to_string()).red()
+        Text::raw(err.to_string()).red().on_dark_gray()
     }
 
     fn render_program(&mut self, frame: &mut ratatui::Frame) {
         let layout = Layout::horizontal(Constraint::from_percentages([50, 50])).split(frame.area());
 
+        let word_text = self.word_text();
         let err_text = self.error_text();
         let stack_layout = Layout::vertical([
-            Constraint::Fill(1),
+            Constraint::Percentage(100),
+            Constraint::Min(word_text.height() as u16),
             Constraint::Min(err_text.height() as u16),
         ])
         .split(layout[1]);
 
         frame.render_widget(self.code(), layout[0]);
-        frame.render_widget(err_text, stack_layout[1]);
+        frame.render_widget(word_text, stack_layout[1]);
+        frame.render_widget(err_text, stack_layout[2]);
         frame.render_stateful_widget(self.stack(), stack_layout[0], &mut self.stack_state);
     }
 
@@ -203,7 +200,7 @@ pub fn run(mut terminal: DefaultTerminal, mut debugger: Debugger) -> std::io::Re
             }
 
             if key.kind == event::KeyEventKind::Press && key.code == event::KeyCode::Right {
-                debugger.step().unwrap();
+                debugger.step();
             }
             if key.kind == event::KeyEventKind::Press && key.code == event::KeyCode::Up {
                 debugger.code_scroll = debugger.code_scroll.saturating_sub(1);
