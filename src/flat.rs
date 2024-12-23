@@ -1,4 +1,9 @@
-use std::{collections::VecDeque, fmt::Display, path::PathBuf, usize};
+use std::{
+    collections::VecDeque,
+    fmt::Display,
+    path::{Path, PathBuf},
+    usize,
+};
 
 use derive_more::derive::{From, Into};
 use itertools::Itertools;
@@ -7,7 +12,7 @@ use thiserror::Error;
 use typed_index_collections::TiVec;
 
 use crate::ast::{
-    self, ident_from_pair, Bindings, Identifier, Literal, Path, PathOrIdent, ProcMatchBlock,
+    self, ident_from_pair, Bindings, Identifier, Literal, PathOrIdent, ProcMatchBlock,
     ProcMatchCase, Rule, ValueExpression,
 };
 
@@ -49,10 +54,25 @@ pub enum Entry {
 
 #[derive(Debug, Error)]
 
-pub enum LoadError {
+pub struct LoadError {
+    pub path: PathBuf,
+    pub error: LoadErrorInner,
+}
+
+impl Display for LoadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "In file {}, error: {}", self.path.display(), self.error)
+    }
+}
+
+#[derive(Debug, Error)]
+
+pub enum LoadErrorInner {
     #[error("error reading file")]
     IO(#[from] anyhow::Error),
-    #[error("error parsing file: {0}")]
+    #[error("error parsing file:\n{0}")]
+    Parse(#[from] pest::error::Error<Rule>),
+    #[error("error compiling file: {0}")]
     Compile(CompileError),
 }
 
@@ -76,9 +96,15 @@ impl<'t> Library<'t> {
 
     fn load_srcs(loader: &mut ast::Loader, name: &str) -> Result<(), LoadError> {
         loader.load(name)?;
-        let contents = loader.get(name)?;
+        let contents = loader.get(name).unwrap();
 
-        let module = ast::Module::from_str(contents)?;
+        let module = ast::Module::from_str(contents).map_err(|e| {
+            let path = loader.path(name).clone();
+            LoadError {
+                error: LoadErrorInner::Parse(e.with_path(path.to_str().unwrap())),
+                path,
+            }
+        })?;
         let names = module
             .imports
             .into_iter()
@@ -96,22 +122,30 @@ impl<'t> Library<'t> {
         name: &'t str,
         parent: Option<NamespaceIndex>,
     ) -> Result<NamespaceIndex, LoadError> {
-        let contents = loader.get(name)?;
+        let contents = loader.get(name).unwrap();
+        let path = loader.path(name);
 
-        let module = ast::Module::from_str(contents)?;
+        let module = ast::Module::from_str(contents).map_err(|e| {
+            let path = loader.path(name).clone();
+            LoadError {
+                error: LoadErrorInner::Parse(e.with_path(path.to_str().unwrap())),
+                path,
+            }
+        })?;
         let mod_ns = self
-            .visit_ns(name, module.namespace, parent)
+            .visit_ns(&path, module.namespace, parent)
             .map_err(|e| match e {
-                BuilderError::UnknownReference(i) => {
-                    LoadError::Compile(CompileError::UnknownReference {
+                BuilderError::UnknownReference(i) => LoadError {
+                    path: loader.path(name).clone(),
+                    error: LoadErrorInner::Compile(CompileError::UnknownReference {
                         location: SourceLocation {
                             file: loader.path(name),
                             line: i.0.start_pos().line_col().0,
                             col: i.0.start_pos().line_col().1,
                         },
                         name: i.as_str().to_owned(),
-                    })
-                }
+                    }),
+                },
             })?;
         for name in module.imports.into_iter() {
             let submod = self.visit_module(loader, name.as_str(), Some(mod_ns))?;
@@ -125,7 +159,7 @@ impl<'t> Library<'t> {
 
     fn visit_ns(
         &mut self,
-        modname: &'t str,
+        modname: &Path,
         ns: ast::Namespace<'t>,
         parent: Option<NamespaceIndex>,
     ) -> Result<NamespaceIndex, BuilderError<'t>> {
@@ -167,7 +201,7 @@ impl<'t> Library<'t> {
 
     fn visit_block(
         &mut self,
-        modname: &'t str,
+        modname: &Path,
         name: &str,
         ns_idx: NamespaceIndex,
         mut names: VecDeque<Option<String>>,
@@ -617,7 +651,7 @@ impl<'t> Library<'t> {
 
     fn visit_sentence(
         &mut self,
-        modname: &'t str,
+        modname: &Path,
         name: &str,
         ns_idx: NamespaceIndex,
         sentence: ast::RawSentence<'t>,
@@ -633,7 +667,7 @@ impl<'t> Library<'t> {
 
     fn visit_raw_word(
         &mut self,
-        modname: &'t str,
+        modname: &Path,
         name: &str,
         ns_idx: NamespaceIndex,
         builder: &mut SentenceBuilder<'t>,
@@ -708,7 +742,7 @@ macro_rules! builtins {
 }
 
 pub struct SentenceBuilder<'t> {
-    pub modname: &'t str,
+    pub modname: PathBuf,
     pub name: Option<String>,
     pub ns_idx: NamespaceIndex,
     pub names: VecDeque<Option<String>>,
@@ -724,7 +758,12 @@ pub struct SourceLocation {
 
 impl Display for SourceLocation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!("{:?}:{}:{}", self.file, self.line, self.col))
+        f.write_fmt(format_args!(
+            "{}:{}:{}",
+            self.file.display(),
+            self.line,
+            self.col
+        ))
     }
 }
 
@@ -744,13 +783,13 @@ pub enum BuilderError<'t> {
 
 impl<'t> SentenceBuilder<'t> {
     pub fn new(
-        modname: &'t str,
+        modname: &Path,
         name: Option<String>,
         ns_idx: NamespaceIndex,
         names: VecDeque<Option<String>>,
     ) -> Self {
         Self {
-            modname,
+            modname: modname.to_owned(),
             name,
             ns_idx,
             names,
@@ -772,7 +811,7 @@ impl<'t> SentenceBuilder<'t> {
     pub fn literal_split(&mut self, span: Span<'t>, value: Value) {
         self.words.push(Word {
             inner: InnerWord::Push(value),
-            modname: self.modname,
+            modname: self.modname.clone(),
             span,
             names: Some(self.names.clone()),
         });
@@ -782,7 +821,7 @@ impl<'t> SentenceBuilder<'t> {
     pub fn sentence_idx(&mut self, span: Span<'t>, sentence_idx: SentenceIndex) {
         self.words.push(Word {
             inner: InnerWord::Push(Value::Pointer(Closure(vec![], sentence_idx))),
-            modname: self.modname,
+            modname: self.modname.clone(),
             span,
             names: Some(self.names.clone()),
         });
@@ -810,7 +849,7 @@ impl<'t> SentenceBuilder<'t> {
 
         self.words.push(Word {
             inner: InnerWord::Move(idx),
-            modname: self.modname,
+            modname: self.modname.clone(),
             span,
             names: Some(names),
         });
@@ -832,7 +871,7 @@ impl<'t> SentenceBuilder<'t> {
 
         self.words.push(Word {
             inner: InnerWord::Copy(idx),
-            modname: self.modname,
+            modname: self.modname.clone(),
             span,
             names: Some(names),
         });
@@ -846,7 +885,7 @@ impl<'t> SentenceBuilder<'t> {
 
         self.words.push(Word {
             inner: InnerWord::Send(idx),
-            modname: self.modname,
+            modname: self.modname.clone(),
             span,
             names: Some(names),
         });
@@ -861,13 +900,13 @@ impl<'t> SentenceBuilder<'t> {
 
         self.words.push(Word {
             inner: InnerWord::Drop(idx),
-            modname: self.modname,
+            modname: self.modname.clone(),
             span,
             names: Some(names),
         });
     }
 
-    pub fn path(&mut self, Path { span, segments }: Path<'t>) {
+    pub fn path(&mut self, ast::Path { span, segments }: ast::Path<'t>) {
         for segment in segments.iter().rev() {
             self.literal_split(*segment, Value::Symbol(segment.as_str().to_owned()));
         }
@@ -880,7 +919,7 @@ impl<'t> SentenceBuilder<'t> {
     pub fn builtin(&mut self, span: Span<'t>, builtin: Builtin) {
         self.words.push(Word {
             inner: InnerWord::Builtin(builtin),
-            modname: self.modname,
+            modname: self.modname.clone(),
             span: span,
             names: Some(self.names.clone()),
         });
@@ -944,7 +983,7 @@ impl<'t> SentenceBuilder<'t> {
     pub fn tuple(&mut self, span: Span<'t>, size: usize) {
         self.words.push(Word {
             inner: InnerWord::Tuple(size),
-            modname: self.modname,
+            modname: self.modname.clone(),
             span: span,
             names: Some(self.names.clone()),
         });
@@ -957,7 +996,7 @@ impl<'t> SentenceBuilder<'t> {
     pub fn untuple(&mut self, span: Span<'t>, size: usize) {
         self.words.push(Word {
             inner: InnerWord::Untuple(size),
-            modname: self.modname,
+            modname: self.modname.clone(),
             span: span,
             names: Some(self.names.clone()),
         });
@@ -1069,7 +1108,7 @@ builtins! {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Word<'t> {
     pub inner: InnerWord,
-    pub modname: &'t str,
+    pub modname: PathBuf,
     pub span: Span<'t>,
     pub names: Option<VecDeque<Option<String>>>,
 }
@@ -1077,7 +1116,7 @@ impl<'t> Word<'t> {
     pub(crate) fn location(&self) -> SourceLocation {
         let (line, col) = self.span.start_pos().line_col();
         SourceLocation {
-            file: self.modname.into(),
+            file: self.modname.clone(),
             line,
             col,
         }

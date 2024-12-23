@@ -5,7 +5,7 @@ use itertools::{partition, Either, Itertools};
 use pest::{iterators::Pair, Parser, Span};
 use pest_derive::Parser;
 
-use crate::flat::Value;
+use crate::flat::{LoadError, LoadErrorInner, Value};
 
 #[derive(Parser)]
 #[grammar = "hanoi.pest"]
@@ -17,9 +17,12 @@ pub struct Loader {
 }
 
 impl Loader {
-    pub fn load(&mut self, name: &str) -> anyhow::Result<()> {
+    pub fn load(&mut self, name: &str) -> Result<(), LoadError> {
         if !self.cache.contains_key(name) {
-            let contents = std::fs::read_to_string(self.path(name))?;
+            let contents = std::fs::read_to_string(self.path(name)).map_err(|e| LoadError {
+                path: self.path(name).to_owned(),
+                error: LoadErrorInner::IO(e.into()),
+            })?;
             self.cache.insert(name.to_owned(), contents);
         }
         Ok(())
@@ -44,7 +47,7 @@ pub struct Module<'t> {
 }
 
 impl<'t> Module<'t> {
-    pub fn from_str(text: &'t str) -> anyhow::Result<Self> {
+    pub fn from_str(text: &'t str) -> Result<Self, pest::error::Error<Rule>> {
         let file = HanoiParser::parse(Rule::file, text)?;
 
         let file = file.exactly_one().unwrap();
