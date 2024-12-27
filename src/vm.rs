@@ -32,31 +32,31 @@ impl<'t> std::fmt::Display for EvalError {
 
 impl<'t> std::error::Error for EvalError {}
 
-macro_rules! eval_bail {
-    ($span:expr, $fmt:expr) => {
-       return Err(EvalError { span: $span, source: anyhow::anyhow!($fmt) })
+macro_rules! ebail {
+    ($fmt:expr) => {
+       return Err(InnerEvalError::Other(anyhow::anyhow!($fmt)))
     };
 
-    ($span:expr, $fmt:expr, $($arg:tt)*) => {
-        return Err(EvalError { span: $span, source: anyhow::anyhow!($fmt, $($arg)*) })
+    ($fmt:expr, $($arg:tt)*) => {
+        return Err(InnerEvalError::Other(anyhow::anyhow!($fmt, $($arg)*)))
     };
 }
 
 fn eval<'t>(lib: &Library, stack: &mut Stack, w: &Word<'t>) -> Result<(), EvalError> {
-    inner_eval(lib, stack, &w.inner).map_err(|e| EvalError {
+    inner_eval(lib, stack, &w.inner).map_err(|inner| EvalError {
         location: Some(w.location()),
-        inner: InnerEvalError::Other(e),
+        inner,
     })
 }
 
-fn inner_eval(lib: &Library, stack: &mut Stack, w: &InnerWord) -> anyhow::Result<()> {
+fn inner_eval(lib: &Library, stack: &mut Stack, w: &InnerWord) -> Result<(), InnerEvalError> {
     match w {
         InnerWord::Builtin(Builtin::Add) => {
             let Some(Value::Usize(a)) = stack.pop() else {
-                bail!("bad value")
+                ebail!("bad value")
             };
             let Some(Value::Usize(b)) = stack.pop() else {
-                bail!("bad value")
+                ebail!("bad value")
             };
             stack.push(Value::Usize(a + b));
             Ok(())
@@ -73,32 +73,32 @@ fn inner_eval(lib: &Library, stack: &mut Stack, w: &InnerWord) -> anyhow::Result
         }
         InnerWord::Builtin(Builtin::Eq) => {
             let Some(a) = stack.pop() else {
-                bail!("bad value")
+                ebail!("bad value")
             };
             let Some(b) = stack.pop() else {
-                bail!("bad value")
+                ebail!("bad value")
             };
             stack.push(Value::Bool(a == b));
             Ok(())
         }
         InnerWord::Builtin(Builtin::AssertEq) => {
             let Some(a) = stack.pop() else {
-                bail!("bad value")
+                ebail!("bad value")
             };
             let Some(b) = stack.pop() else {
-                bail!("bad value")
+                ebail!("bad value")
             };
             if a != b {
-                bail!("assertion failed: {:?} != {:?}", a, b)
+                ebail!("assertion failed: {:?} != {:?}", a, b)
             }
             Ok(())
         }
         InnerWord::Builtin(Builtin::Curry) => {
             let Some(Value::Pointer(Closure(mut closure, code))) = stack.pop() else {
-                bail!("bad value")
+                ebail!("bad value")
             };
             let Some(val) = stack.pop() else {
-                bail!("bad value")
+                ebail!("bad value")
             };
             closure.insert(0, val);
             stack.push(Value::Pointer(Closure(closure, code)));
@@ -106,27 +106,27 @@ fn inner_eval(lib: &Library, stack: &mut Stack, w: &InnerWord) -> anyhow::Result
         }
         InnerWord::Builtin(Builtin::And) => {
             let Some(Value::Bool(a)) = stack.pop() else {
-                bail!("bad value")
+                ebail!("bad value")
             };
             let Some(Value::Bool(b)) = stack.pop() else {
-                bail!("bad value")
+                ebail!("bad value")
             };
             stack.push(Value::Bool(a && b));
             Ok(())
         }
         InnerWord::Builtin(Builtin::Or) => {
             let Some(Value::Bool(a)) = stack.pop() else {
-                bail!("bad value")
+                ebail!("bad value")
             };
             let Some(Value::Bool(b)) = stack.pop() else {
-                bail!("bad value")
+                ebail!("bad value")
             };
             stack.push(Value::Bool(a || b));
             Ok(())
         }
         InnerWord::Builtin(Builtin::Not) => {
             let Some(Value::Bool(a)) = stack.pop() else {
-                bail!("bad value")
+                ebail!("bad value")
             };
             stack.push(Value::Bool(!a));
             Ok(())
@@ -135,13 +135,13 @@ fn inner_eval(lib: &Library, stack: &mut Stack, w: &InnerWord) -> anyhow::Result
             let ns_idx = match stack.pop() {
                 Some(Value::Namespace(ns_idx)) => ns_idx,
                 other => {
-                    bail!("attempted to get from non-namespace: {:?}", other)
+                    ebail!("attempted to get from non-namespace: {:?}", other)
                 }
             };
             let name = match stack.pop() {
                 Some(Value::Symbol(name)) => name,
                 other => {
-                    bail!(
+                    ebail!(
                         "attempted to index into namespace with non-symbol: {:?}",
                         other
                     )
@@ -150,7 +150,7 @@ fn inner_eval(lib: &Library, stack: &mut Stack, w: &InnerWord) -> anyhow::Result
             let ns = &lib.namespaces[ns_idx];
 
             let Some(entry) = ns.get(&name) else {
-                bail!("unknown symbol: {}", name)
+                ebail!("unknown symbol: {}", name)
             };
 
             stack.push(match entry {
@@ -161,10 +161,10 @@ fn inner_eval(lib: &Library, stack: &mut Stack, w: &InnerWord) -> anyhow::Result
         }
         InnerWord::Builtin(Builtin::SymbolCharAt) => {
             let Some(Value::Usize(idx)) = stack.pop() else {
-                bail!("bad value")
+                ebail!("bad value")
             };
             let Some(Value::Symbol(sym)) = stack.pop() else {
-                bail!("bad value")
+                ebail!("bad value")
             };
 
             stack.push(sym.chars().nth(idx).unwrap().into());
@@ -172,7 +172,7 @@ fn inner_eval(lib: &Library, stack: &mut Stack, w: &InnerWord) -> anyhow::Result
         }
         InnerWord::Builtin(Builtin::SymbolLen) => {
             let Some(Value::Symbol(sym)) = stack.pop() else {
-                bail!("bad value")
+                ebail!("bad value")
             };
 
             stack.push(sym.chars().count().into());
@@ -184,13 +184,13 @@ fn inner_eval(lib: &Library, stack: &mut Stack, w: &InnerWord) -> anyhow::Result
         }
         InnerWord::Builtin(Builtin::NsInsert) => {
             let Some(val) = stack.pop() else {
-                bail!("bad value")
+                ebail!("bad value")
             };
             let Some(Value::Symbol(symbol)) = stack.pop() else {
-                bail!("bad value")
+                ebail!("bad value")
             };
             let Some(Value::Namespace2(mut ns)) = stack.pop() else {
-                bail!("bad value")
+                ebail!("bad value")
             };
             assert!(!ns.items.iter().any(|(k, v)| *k == symbol));
             ns.items.push((symbol, val));
@@ -200,10 +200,10 @@ fn inner_eval(lib: &Library, stack: &mut Stack, w: &InnerWord) -> anyhow::Result
         }
         InnerWord::Builtin(Builtin::NsRemove) => {
             let Some(Value::Symbol(symbol)) = stack.pop() else {
-                bail!("bad value")
+                ebail!("bad value")
             };
             let Some(Value::Namespace2(mut ns)) = stack.pop() else {
-                bail!("bad value")
+                ebail!("bad value")
             };
             let pos = ns.items.iter().position(|(k, v)| *k == symbol).unwrap();
             let (_, val) = ns.items.remove(pos);
@@ -214,10 +214,10 @@ fn inner_eval(lib: &Library, stack: &mut Stack, w: &InnerWord) -> anyhow::Result
         }
         InnerWord::Builtin(Builtin::NsGet) => {
             let Some(Value::Symbol(symbol)) = stack.pop() else {
-                bail!("bad value")
+                ebail!("bad value")
             };
             let Some(Value::Namespace2(ns)) = stack.pop() else {
-                bail!("bad value")
+                ebail!("bad value")
             };
             let pos = ns.items.iter().position(|(k, v)| *k == symbol).unwrap();
             let (_, val) = ns.items[pos].clone();
@@ -228,10 +228,10 @@ fn inner_eval(lib: &Library, stack: &mut Stack, w: &InnerWord) -> anyhow::Result
         }
         InnerWord::Builtin(Builtin::Cons) => {
             let Some(cdr) = stack.pop() else {
-                bail!("bad value")
+                ebail!("bad value")
             };
             let Some(car) = stack.pop() else {
-                bail!("bad value")
+                ebail!("bad value")
             };
 
             // ensure!(cdr.is_small(), "bad cdr type: {:?}", cdr);
@@ -242,7 +242,7 @@ fn inner_eval(lib: &Library, stack: &mut Stack, w: &InnerWord) -> anyhow::Result
         }
         InnerWord::Builtin(Builtin::Snoc) => {
             let Some(Value::Cons(car, cdr)) = stack.pop() else {
-                bail!("bad value")
+                ebail!("bad value")
             };
             stack.push(*car);
             stack.push(*cdr);
@@ -255,10 +255,10 @@ fn inner_eval(lib: &Library, stack: &mut Stack, w: &InnerWord) -> anyhow::Result
         }
         InnerWord::Builtin(Builtin::Deref) => {
             let Some(Value::Ref(idx)) = stack.pop() else {
-                bail!("bad value")
+                ebail!("bad value")
             };
             let Some(value) = stack.inner.get(idx) else {
-                bail!("undefined ref")
+                ebail!("undefined ref")
             };
 
             stack.push(value.clone());
@@ -267,10 +267,10 @@ fn inner_eval(lib: &Library, stack: &mut Stack, w: &InnerWord) -> anyhow::Result
 
         InnerWord::Builtin(Builtin::Lt) => {
             let Some(Value::Usize(b)) = stack.pop() else {
-                bail!("bad value")
+                ebail!("lt can only compare ints")
             };
             let Some(Value::Usize(a)) = stack.pop() else {
-                bail!("bad value")
+                ebail!("lt can only compare ints")
             };
             stack.push(Value::Bool(a < b));
             Ok(())
@@ -278,13 +278,13 @@ fn inner_eval(lib: &Library, stack: &mut Stack, w: &InnerWord) -> anyhow::Result
 
         InnerWord::Builtin(Builtin::If) => {
             let Some(b) = stack.pop() else {
-                bail!("bad value")
+                ebail!("bad value")
             };
             let Some(a) = stack.pop() else {
-                bail!("bad value")
+                ebail!("bad value")
             };
             let Some(Value::Bool(cond)) = stack.pop() else {
-                bail!("bad value")
+                ebail!("bad value")
             };
             if cond {
                 stack.push(a);
@@ -445,41 +445,41 @@ impl Stack {
         self.inner.is_empty()
     }
 
-    pub fn copy(&mut self, back_idx: usize) -> anyhow::Result<()> {
+    pub fn copy(&mut self, back_idx: usize) -> Result<(), InnerEvalError> {
         let Some(v) = self.inner.iter().rev().nth(back_idx) else {
-            bail!("out of range: {}", back_idx)
+            ebail!("out of range: {}", back_idx)
         };
 
         self.push(v.clone());
         Ok(())
     }
 
-    pub fn mv(&mut self, back_idx: usize) -> anyhow::Result<()> {
+    pub fn mv(&mut self, back_idx: usize) -> Result<(), InnerEvalError> {
         let val = self.inner.remove(self.back_idx(back_idx)?);
         self.inner.push(val);
         Ok(())
     }
 
-    pub fn sd(&mut self, back_idx: usize) -> anyhow::Result<()> {
+    pub fn sd(&mut self, back_idx: usize) -> Result<(), InnerEvalError> {
         let new_idx = self.back_idx(back_idx)?;
         let Some(val) = self.inner.pop() else {
-            bail!("bad value")
+            ebail!("bad value")
         };
         if self.inner.len() < new_idx {
-            bail!("bad value")
+            ebail!("bad value")
         }
         self.inner.insert(new_idx, val);
         Ok(())
     }
 
-    pub fn drop(&mut self, back_idx: usize) -> anyhow::Result<()> {
+    pub fn drop(&mut self, back_idx: usize) -> Result<(), InnerEvalError> {
         self.inner.remove(self.back_idx(back_idx)?);
         Ok(())
     }
 
-    pub fn tuple(&mut self, back_idx: usize) -> anyhow::Result<()> {
+    pub fn tuple(&mut self, back_idx: usize) -> Result<(), InnerEvalError> {
         let Some(v) = self.inner.iter().rev().nth(back_idx) else {
-            bail!("out of range: {}", back_idx)
+            ebail!("out of range: {}", back_idx)
         };
 
         self.push(v.clone());
@@ -501,15 +501,22 @@ impl Stack {
         self.inner.len()
     }
 
-    pub fn stash(&mut self) -> anyhow::Result<()> {
+    pub fn stash(&mut self) -> Result<(), InnerEvalError> {
         self.stash
             .push(self.inner.pop().context("stashed from empty stack")?);
         Ok(())
     }
 
-    pub fn unstash(&mut self) -> anyhow::Result<()> {
+    pub fn unstash(&mut self) -> Result<(), InnerEvalError> {
         self.inner
             .push(self.stash.pop().context("unstashed from empty stash")?);
         Ok(())
+    }
+
+    pub fn get(&self, idx: usize) -> Option<&Value> {
+        let Ok(idx) = self.back_idx(idx) else {
+            return None;
+        };
+        self.inner.get(idx)
     }
 }

@@ -10,7 +10,7 @@ use ratatui::{
 
 use crate::{
     ast,
-    flat::{ValueView, Word},
+    flat::{Closure, Value, ValueView, Word},
     vm::{EvalError, StepResult, Vm},
 };
 
@@ -59,6 +59,25 @@ impl<'t> Debugger<'t> {
                     .map(|w| w.span.start_pos().line_col().0)
         {
             self.step()
+        }
+    }
+
+    fn jump_over(&mut self) {
+        self.finish_sentence();
+
+        let return_address = self.vm.stack.get(2).expect("no return address?");
+        let &Value::Pointer(Closure(_, sidx)) = return_address else {
+            panic!("return address not a closure?")
+        };
+
+        while self.error.is_none() && self.vm.pc.sentence_idx != sidx {
+            self.step()
+        }
+    }
+
+    fn finish_sentence(&mut self) {
+        while self.error.is_none() && self.vm.current_word().is_some() {
+            self.step();
         }
     }
 
@@ -195,8 +214,12 @@ pub fn run(mut terminal: DefaultTerminal, mut debugger: Debugger) -> std::io::Re
                 return Ok(());
             }
 
-            if key.kind == event::KeyEventKind::Press && key.code == event::KeyCode::Char('n') {
+            if key.kind == event::KeyEventKind::Press && key.code == event::KeyCode::Char('s') {
                 debugger.next_line();
+            }
+
+            if key.kind == event::KeyEventKind::Press && key.code == event::KeyCode::Char('n') {
+                debugger.jump_over();
             }
 
             if key.kind == event::KeyEventKind::Press && key.code == event::KeyCode::Right {
