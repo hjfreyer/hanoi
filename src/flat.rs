@@ -353,7 +353,7 @@ impl<'t> Library<'t> {
 
                 let discrim_idx = names.len();
                 for case in cases.into_iter().rev() {
-                    let case_span = case.literal.span;
+                    let case_span = case.span;
 
                     let if_case_matches_idx =
                         self.visit_block(modname, name, ns_idx, names.clone(), case.body)?;
@@ -364,8 +364,8 @@ impl<'t> Library<'t> {
                         ns_idx,
                         VecDeque::new(),
                     );
-                    case_builder.cp_idx(case.literal.span, discrim_idx);
-                    case_builder.literal(case.literal);
+                    case_builder.cp_idx(case.span, discrim_idx);
+                    case_builder.literal_split(case.span, case.value);
                     case_builder.builtin(case_span, Builtin::Eq);
 
                     case_builder.sentence_idx(case_span, if_case_matches_idx);
@@ -927,6 +927,7 @@ impl<'t> SentenceBuilder<'t> {
             Builtin::Add
             | Builtin::Eq
             | Builtin::Curry
+            | Builtin::Prod
             | Builtin::Lt
             | Builtin::Or
             | Builtin::And
@@ -1077,6 +1078,7 @@ impl<'t> SentenceBuilder<'t> {
 
 builtins! {
     (Add, "add"),
+    (Prod, "prod"),
     (Eq, "eq"),
     (AssertEq, "assert_eq"),
     (Curry, "curry"),

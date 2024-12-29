@@ -1,7 +1,7 @@
 use std::{
     any,
     collections::VecDeque,
-    io::{stdin, ErrorKind, Read},
+    io::{stdin, stdout, ErrorKind, Read, Write},
     os::fd::FromRawFd,
     str::from_utf8,
 };
@@ -65,6 +65,16 @@ fn inner_eval(lib: &Library, stack: &mut Stack, w: &InnerWord) -> Result<(), Inn
                 ebail!("bad value")
             };
             stack.push(Value::Usize(a + b));
+            Ok(())
+        }
+        InnerWord::Builtin(Builtin::Prod) => {
+            let Some(Value::Usize(a)) = stack.pop() else {
+                ebail!("bad value")
+            };
+            let Some(Value::Usize(b)) = stack.pop() else {
+                ebail!("bad value")
+            };
+            stack.push(Value::Usize(a * b));
             Ok(())
         }
         InnerWord::Tuple(idx) => todo!(),
@@ -323,8 +333,10 @@ pub enum InnerEvalError {
 pub struct Vm<'t> {
     pub lib: Library<'t>,
     pub pc: Option<ProgramCounter>,
-    pub last_pc: Option<ProgramCounter>,
     pub stack: Stack,
+
+    pub stdin: Box<dyn Read>,
+    pub stdout: Box<dyn Write>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -349,9 +361,20 @@ impl<'t> Vm<'t> {
         Ok(Vm {
             lib,
             pc: None,
-            last_pc: None,
             stack: Stack::default(),
+            stdin: Box::new(stdin()),
+            stdout: Box::new(stdout()),
         })
+    }
+
+    pub fn with_stdin(mut self, stdin: impl Read + 'static) -> Self {
+        self.stdin = Box::new(stdin);
+        self
+    }
+
+    pub fn with_stdout(mut self, stdout: impl Write + 'static) -> Self {
+        self.stdout = Box::new(stdout);
+        self
     }
 
     pub fn current_word(&self) -> Option<&Word<'t>> {
@@ -462,6 +485,11 @@ impl<'t> Vm<'t> {
             ebail!("symbol not specified")
         };
 
+        if symbol == "err" {
+            println!("Error: {:?}", self.stack.pop());
+            return Ok(StepResult::Exit);
+        }
+
         if symbol != "req" {
             ebail!("must be req")
         }
@@ -475,7 +503,7 @@ impl<'t> Vm<'t> {
                 let Some(Value::Char(c)) = self.stack.pop() else {
                     ebail!("char not specified")
                 };
-                print!("{}", c);
+                write!(self.stdout, "{}", c);
                 self.stack
                     .push(Value::Pointer(Closure(vec![], SentenceIndex::TRAP)));
                 self.jump_to(caller);
@@ -483,7 +511,7 @@ impl<'t> Vm<'t> {
             }
             "stdin" => {
                 let mut buf = [0; 1];
-                match stdin().read_exact(&mut buf) {
+                match self.stdin.read_exact(&mut buf) {
                     Ok(()) => {
                         let nextchar = char::from_u32(buf[0] as u32).unwrap();
 
@@ -502,6 +530,16 @@ impl<'t> Vm<'t> {
                     Err(e) => panic!("unexpected io fail: {}", e),
                 }
 
+                Ok(StepResult::Continue)
+            }
+            "print" => {
+                let Some(v) = self.stack.pop() else {
+                    ebail!("value not specified")
+                };
+                write!(self.stdout, "{:?}\n", v);
+                self.stack
+                    .push(Value::Pointer(Closure(vec![], SentenceIndex::TRAP)));
+                self.jump_to(caller);
                 Ok(StepResult::Continue)
             }
             "halt" => Ok(StepResult::Exit),

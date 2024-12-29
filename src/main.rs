@@ -21,9 +21,20 @@ struct Args {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    Run { base_dir: PathBuf, module: String },
-    Debug { base_dir: PathBuf, module: String },
-    Test { base_dir: PathBuf, module: String },
+    Run {
+        base_dir: PathBuf,
+        module: String,
+    },
+    Debug {
+        base_dir: PathBuf,
+        module: String,
+        #[arg(long)]
+        stdin: Option<PathBuf>,
+    },
+    Test {
+        base_dir: PathBuf,
+        module: String,
+    },
 }
 
 fn run(base_dir: PathBuf, module: String) -> anyhow::Result<()> {
@@ -57,7 +68,7 @@ fn run(base_dir: PathBuf, module: String) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn debug(base_dir: PathBuf, module: String) -> anyhow::Result<()> {
+fn debug(base_dir: PathBuf, module: String, stdin: Option<PathBuf>) -> anyhow::Result<()> {
     let mut loader = ast::Loader {
         base: base_dir,
         cache: Default::default(),
@@ -77,6 +88,11 @@ fn debug(base_dir: PathBuf, module: String) -> anyhow::Result<()> {
             return Ok(());
         }
     };
+
+    if let Some(stdin_path) = stdin {
+        let stdin = std::fs::File::open(stdin_path)?;
+        vm = vm.with_stdin(Box::new(stdin));
+    }
 
     vm.stack
         .push(Value::Pointer(Closure(vec![], SentenceIndex::TRAP)));
@@ -237,7 +253,11 @@ fn main() -> anyhow::Result<()> {
 
     match args.command {
         Commands::Run { base_dir, module } => run(base_dir, module),
-        Commands::Debug { base_dir, module } => debug(base_dir, module),
+        Commands::Debug {
+            base_dir,
+            module,
+            stdin,
+        } => debug(base_dir, module, stdin),
         Commands::Test { base_dir, module } => test(base_dir, module),
     }
 }

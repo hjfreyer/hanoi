@@ -332,7 +332,7 @@ pub enum Block<'t> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MatchCase<'t> {
     pub span: Span<'t>,
-    pub literal: Literal<'t>,
+    pub value: Value,
     pub body: Block<'t>,
 }
 
@@ -380,7 +380,7 @@ impl<'t> Block<'t> {
                 let first = bs.bindings.remove(0);
 
                 match first {
-                    Binding::Literal(literal) => Either::Left((literal, (bs, p))),
+                    Binding::Literal(literal) => Either::Left((literal.value, (bs, p))),
                     Binding::Drop(_) => todo!(),
                     Binding::Ident(ident) => {
                         bs.bindings.insert(0, first);
@@ -400,14 +400,14 @@ impl<'t> Block<'t> {
             .into_iter()
             .into_group_map()
             .into_iter()
-            .map(|(literal, rest)| {
+            .map(|(value, rest)| {
                 let rec = Block::Drop {
                     span,
                     inner: Box::new(Self::with_match_bindings(span, rest)),
                 };
                 MatchCase {
                     span,
-                    literal,
+                    value,
                     body: rec,
                 }
             })

@@ -379,7 +379,8 @@ mod iter {
     }
 
     proc split(caller, iter) {
-        let (^, @ok, aq, bq) = this.super.bind(this.split_builder&(this.super.queue_empty, this.super.queue_empty), @iter, iter);
+        let (split) = this.super.bind(this.split_builder&(this.super.queue_empty, this.super.queue_empty), @iter, iter);
+        let (^, @ok, aq, bq) = split();
 
         become caller(aq, bq)
     }
@@ -605,24 +606,48 @@ proc list_snoc(caller, list) {
 }
 
 
-proc bind(caller, inner, symbol, target) {
+// proc bind(caller, inner, symbol, target) {
+//     let (inner) = inner();
+//     match {
+//         (@req, name) =>  {
+//             let (^, @ok, are_eq) = this.builtin.eq(*name, *symbol);
+//             if are_eq {
+//                 let (target) = target();
+//                 become this.bind(caller, inner, symbol, target )
+//             } else {
+//                 let (caller) = caller(@req, name);
+//                 become this.bind(caller, inner, symbol, target)
+//             }
+//         }
+//         (tag) => {
+//             let (caller) = caller(tag);
+//             become this.bind(caller, inner, symbol, target)
+//         }
+//     }
+// }
+
+proc bind_impl(inner, symbol, target, caller) {
     let (inner) = inner();
     match {
         (@req, name) =>  {
             let (^, @ok, are_eq) = this.builtin.eq(*name, *symbol);
             if are_eq {
-                let (target) = target();
-                become this.bind(caller, inner, symbol, target )
+                let (caller, target) = this.fwd_req(caller, target);
+                become this.bind_impl(inner, symbol, target, caller)
             } else {
                 let (caller) = caller(@req, name);
-                become this.bind(caller, inner, symbol, target)
+                become this.bind_impl(inner, symbol, target, caller)
             }
         }
         (tag) => {
             let (caller) = caller(tag);
-            become this.bind(caller, inner, symbol, target)
+            become this.bind_impl(inner, symbol, target, caller)
         }
     }
+}
+
+proc bind(caller, inner, symbol, target) {
+    become caller(this.bind_impl&(inner, symbol, target))
 }
 
 proc echo(caller) {
@@ -638,11 +663,143 @@ proc echo(caller) {
     }
 }
 
-proc main(caller) {
-    let (caller, ^, @ok) = this.fwd_req(caller, this.echo);
-    
-    let () = caller(@req, @halt);
+mod ssv {
+    proc impl_start(caller, @next) {
+        become this.impl_newline(caller)
+    }
 
+    proc impl_newline(caller) {
+        let (caller) = caller(@req, @source, @next);
+        match {
+            (@eos) => {
+                let () = caller(@eos);
+            }
+            (@yield, ' ') => {
+                let () = caller(@err, @unexpected_space);
+            }
+            (@yield, char) => {
+                let (caller, @next) = caller(@start);
+                let (caller, @next) = caller(@start);
+                let (caller, @next) = caller(@yield, char);
+                
+                become this.impl_infield(caller)
+            }
+        }
+    }
+
+    proc impl_infield(caller) {
+        let (caller) = caller(@req, @source, @next);
+        match {
+            (@eos) => {
+                let () = caller(@err, @unexpected_eos);
+            }
+            (@yield, ' ') => {
+                let (caller, @next) = caller(@end);
+                become this.impl_inspace(caller)
+            } 
+            (@yield, '\n') => {
+                let (caller, @next) = caller(@end);
+                let (caller, @next) = caller(@end);
+                become this.impl_newline(caller)
+            } 
+            (@yield, char) => {
+                let (caller, @next) = caller(@yield, char);
+                become this.impl_infield(caller)
+            }
+        }
+    }
+
+    proc impl_inspace(caller) {
+        let (caller) = caller(@req, @source, @next);
+        match {
+            (@eos) => {
+                let () = caller(@err, @unexpected_eos);
+            }
+            (@yield, '\n') => {
+                let () = caller(@err, @unexpected_eol);
+            }
+            (@yield, ' ') => {
+                become this.impl_inspace(caller)
+            }
+            (@yield, char) => {
+                let (caller, @next) = caller(@start);
+                let (caller, @next) = caller(@yield, char);
+                become this.impl_infield(caller)
+            }
+        }
+    }
+}
+
+proc stdin_chars(caller, @next) {
+    let (caller) = caller(@req, @stdin);
+    match {
+        (@ok, char) => {
+            let (caller) = caller(@yield, char);
+            become this.stdin_chars(caller)
+        }
+        (@eof) => {
+            let () = caller(@eos);
+        }
+    }
+}
+
+proc devnull_sink(caller) {
+    match {
+        (@yield, ^) => {
+            let (caller) = caller(@ok);
+            become this.devnull_sink(caller)
+        }
+        (@start) => {
+            let (caller) = caller(@ok);
+            become this.devnull_sink(caller)
+        }
+        (@end) => {
+            let (caller) = caller(@ok);
+            become this.devnull_sink(caller)
+        }
+    }
+}
+
+proc dump(caller) {
+    let (caller) = caller(@req, @iter, @next);
+    match {
+        (@eos) => {
+            let () = caller(@ok);
+        }
+        (@start) => {
+            let (caller) = caller(@req, @print, @start);
+            become this.dump(caller)
+        }
+        (@end) => {
+            let (caller) = caller(@req, @print, @end);
+            become this.dump(caller)
+        }
+        (@yield, item) => {
+            let (caller) = caller(@req, @print, item);
+            become this.dump(caller)
+        }
+    }
+}
+
+proc parseint(caller) {
+    let (caller, @start) = caller(@req, @iter, @next);
+
+}
+
+proc parseint_loop(acc, caller) {
+
+}
+
+
+proc main(caller) {
+    let (ssv) = this.bind(this.ssv.impl_start, @source, this.stdin_chars);
+    let (ssv) = this.bind(ssv, @sink, this.devnull_sink);
+
+    let (ssv) = this.bind(this.dump, @iter, ssv);
+
+    let (caller, ^, @ok) = this.fwd_req(caller, ssv);
+
+    let () = caller(@req, @halt);
 
     //    let (x) = this.tests.cases.split();
     //let (iter) = this.iter.symbol_chars&(@foobar);

@@ -34,6 +34,13 @@ proc add() {
     }
 }
 
+proc prod() {
+    R{
+        [a, b, caller]
+        a b #prod caller @exec
+    }
+}
+
 proc cons() {
     R{
         [b, a, caller]
