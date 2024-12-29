@@ -8,7 +8,7 @@ mod vm;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use flat::{Builtin, Closure, Entry, InnerWord, Library, SentenceIndex, Value};
+use flat::{Builtin, Closure, Entry, InnerWord, Library, SentenceBuilder, SentenceIndex, Value};
 use itertools::Itertools;
 use vm::{EvalError, ProgramCounter, Vm};
 
@@ -21,8 +21,40 @@ struct Args {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
+    Run { base_dir: PathBuf, module: String },
     Debug { base_dir: PathBuf, module: String },
     Test { base_dir: PathBuf, module: String },
+}
+
+fn run(base_dir: PathBuf, module: String) -> anyhow::Result<()> {
+    let mut loader = ast::Loader {
+        base: base_dir,
+        cache: Default::default(),
+    };
+
+    let mut lib = Library::load(&mut loader, &module)?;
+    let &Entry::Value(Value::Pointer(Closure(_, main))) = lib.root_namespace().get("main").unwrap()
+    else {
+        panic!("not code")
+    };
+
+    let code = lib.code;
+    let mut vm = match Vm::new(lib) {
+        Ok(vm) => vm,
+        Err(err) => {
+            println!("error: {}", err);
+            return Ok(());
+        }
+    };
+
+    vm.stack
+        .push(Value::Pointer(Closure(vec![], SentenceIndex::TRAP)));
+    vm.stack.push(Value::Pointer(Closure(vec![], main)));
+    vm.stack.push(Value::Symbol("exec".to_owned()));
+
+    vm.run()?;
+
+    Ok(())
 }
 
 fn debug(base_dir: PathBuf, module: String) -> anyhow::Result<()> {
@@ -31,15 +63,25 @@ fn debug(base_dir: PathBuf, module: String) -> anyhow::Result<()> {
         cache: Default::default(),
     };
 
-    let lib = Library::load(&mut loader, &module)?;
+    let mut lib = Library::load(&mut loader, &module)?;
+    let &Entry::Value(Value::Pointer(Closure(_, main))) = lib.root_namespace().get("main").unwrap()
+    else {
+        panic!("not code")
+    };
+
     let code = lib.code;
-    let vm = match Vm::new(lib) {
+    let mut vm = match Vm::new(lib) {
         Ok(vm) => vm,
         Err(err) => {
             println!("error: {}", err);
             return Ok(());
         }
     };
+
+    vm.stack
+        .push(Value::Pointer(Closure(vec![], SentenceIndex::TRAP)));
+    vm.stack.push(Value::Pointer(Closure(vec![], main)));
+    vm.stack.push(Value::Symbol("exec".to_owned()));
 
     let debugger = debugger::Debugger::new(code, vm);
 
@@ -194,6 +236,7 @@ fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     match args.command {
+        Commands::Run { base_dir, module } => run(base_dir, module),
         Commands::Debug { base_dir, module } => debug(base_dir, module),
         Commands::Test { base_dir, module } => test(base_dir, module),
     }

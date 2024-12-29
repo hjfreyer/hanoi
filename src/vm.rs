@@ -1,4 +1,10 @@
-use std::{any, collections::VecDeque};
+use std::{
+    any,
+    collections::VecDeque,
+    io::{stdin, ErrorKind, Read},
+    os::fd::FromRawFd,
+    str::from_utf8,
+};
 
 use anyhow::{bail, ensure, Context};
 use pest::Span;
@@ -314,31 +320,10 @@ pub enum InnerEvalError {
     Other(#[from] anyhow::Error),
 }
 
-fn control_flow<'t>(lib: &Library<'t>, stack: &mut Stack) -> Result<Closure, InnerEvalError> {
-    let op = match stack.pop() {
-        Some(Value::Symbol(op)) => op,
-        Some(value) => return Err(InnerEvalError::UnexpectedControlFlow { value }),
-        None => return Err(InnerEvalError::EmptyStack),
-    };
-    match op.as_str() {
-        "exec" => {
-            let next = match stack.pop() {
-                Some(Value::Pointer(next)) => next,
-                Some(value) => return Err(InnerEvalError::ExecNonClosure { value }),
-                None => return Err(InnerEvalError::ExecEmptyStack),
-            };
-
-            Ok(next)
-        }
-        unk => Err(InnerEvalError::UnexpectedControlFlow {
-            value: Value::Symbol(unk.to_owned()),
-        }),
-    }
-}
-
 pub struct Vm<'t> {
     pub lib: Library<'t>,
-    pub pc: ProgramCounter,
+    pub pc: Option<ProgramCounter>,
+    pub last_pc: Option<ProgramCounter>,
     pub stack: Stack,
 }
 
@@ -349,7 +334,7 @@ pub struct ProgramCounter {
 }
 
 pub enum StepResult {
-    Trap,
+    Exit,
     Continue,
 }
 
@@ -363,66 +348,172 @@ impl<'t> Vm<'t> {
 
         Ok(Vm {
             lib,
-            pc: ProgramCounter {
-                sentence_idx: main,
-                word_idx: 0,
-            },
+            pc: None,
+            last_pc: None,
             stack: Stack::default(),
         })
     }
 
     pub fn current_word(&self) -> Option<&Word<'t>> {
-        self.lib.sentences[self.pc.sentence_idx]
-            .words
-            .get(self.pc.word_idx)
-    }
-
-    pub fn prev_word(&self) -> Option<&Word<'t>> {
-        self.lib.sentences[self.pc.sentence_idx]
-            .words
-            .get(self.pc.word_idx - 1)
+        let pc = self.pc?;
+        if pc.sentence_idx == SentenceIndex::TRAP {
+            return None;
+        }
+        Some(&self.lib.sentences[pc.sentence_idx].words[pc.word_idx])
     }
 
     pub fn jump_to(&mut self, Closure(closure, sentence_idx): Closure) {
         for v in closure {
             self.stack.push(v);
         }
-        self.pc.sentence_idx = sentence_idx;
-        self.pc.word_idx = 0;
+        self.pc = Some(ProgramCounter {
+            sentence_idx,
+            word_idx: 0,
+        });
     }
 
     pub fn run_to_trap(&mut self) -> Result<(), EvalError> {
-        loop {
-            match self.step()? {
-                StepResult::Continue => {}
-                StepResult::Trap => return Ok(()),
+        while self.pc.map(|pc| pc.sentence_idx) != Some(SentenceIndex::TRAP) {
+            self.step()?;
+        }
+        Ok(())
+    }
+
+    pub fn step(&mut self) -> Result<StepResult, EvalError> {
+        if self.pc.map(|pc| pc.sentence_idx) == Some(SentenceIndex::TRAP) {
+            return self.trap();
+        }
+
+        if let Some(pc) = &mut self.pc {
+            let word = &self.lib.sentences[pc.sentence_idx].words[pc.word_idx];
+            eval(&self.lib, &mut self.stack, &word)?;
+            if pc.word_idx < self.lib.sentences[pc.sentence_idx].words.len() - 1 {
+                pc.word_idx += 1;
+            } else {
+                self.pc = None;
+            }
+            Ok(StepResult::Continue)
+        } else {
+            let op = match self.stack.pop() {
+                Some(Value::Symbol(op)) => op,
+                Some(value) => {
+                    return Err(EvalError {
+                        location: None,
+                        inner: InnerEvalError::UnexpectedControlFlow { value },
+                    })
+                }
+                None => {
+                    return Err(EvalError {
+                        location: None,
+                        inner: InnerEvalError::EmptyStack,
+                    })
+                }
+            };
+            if op != "exec" {
+                return Err(EvalError {
+                    location: None,
+                    inner: InnerEvalError::UnexpectedControlFlow {
+                        value: Value::Symbol(op),
+                    },
+                });
+            }
+
+            let next = match self.stack.pop() {
+                Some(Value::Pointer(next)) => next,
+                Some(value) => {
+                    return Err(EvalError {
+                        location: None,
+                        inner: InnerEvalError::ExecNonClosure { value },
+                    })
+                }
+                None => {
+                    return Err(EvalError {
+                        location: None,
+                        inner: InnerEvalError::ExecEmptyStack,
+                    })
+                }
+            };
+
+            for v in next.0 {
+                self.stack.push(v);
+            }
+
+            self.pc = Some(ProgramCounter {
+                sentence_idx: next.1,
+                word_idx: 0,
+            });
+            Ok(StepResult::Continue)
+        }
+    }
+
+    pub fn trap(&mut self) -> Result<StepResult, EvalError> {
+        self.trap_inner().map_err(|inner| EvalError {
+            location: None,
+            inner,
+        })
+    }
+
+    fn trap_inner(&mut self) -> Result<StepResult, InnerEvalError> {
+        let Some(Value::Pointer(caller)) = self.stack.pop() else {
+            ebail!("caller not specified")
+        };
+
+        let Some(Value::Symbol(symbol)) = self.stack.pop() else {
+            ebail!("symbol not specified")
+        };
+
+        if symbol != "req" {
+            ebail!("must be req")
+        }
+
+        let Some(Value::Symbol(method)) = self.stack.pop() else {
+            ebail!("method not specified")
+        };
+
+        match method.as_str() {
+            "stdout" => {
+                let Some(Value::Char(c)) = self.stack.pop() else {
+                    ebail!("char not specified")
+                };
+                print!("{}", c);
+                self.stack
+                    .push(Value::Pointer(Closure(vec![], SentenceIndex::TRAP)));
+                self.jump_to(caller);
+                Ok(StepResult::Continue)
+            }
+            "stdin" => {
+                let mut buf = [0; 1];
+                match stdin().read_exact(&mut buf) {
+                    Ok(()) => {
+                        let nextchar = char::from_u32(buf[0] as u32).unwrap();
+
+                        self.stack.push(Value::Char(nextchar));
+                        self.stack.push(Value::Symbol("ok".to_owned()));
+                        self.stack
+                            .push(Value::Pointer(Closure(vec![], SentenceIndex::TRAP)));
+                        self.jump_to(caller);
+                    }
+                    Err(e) if e.kind() == ErrorKind::UnexpectedEof => {
+                        self.stack.push(Value::Symbol("eof".to_owned()));
+                        self.stack
+                            .push(Value::Pointer(Closure(vec![], SentenceIndex::TRAP)));
+                        self.jump_to(caller);
+                    }
+                    Err(e) => panic!("unexpected io fail: {}", e),
+                }
+
+                Ok(StepResult::Continue)
+            }
+            "halt" => Ok(StepResult::Exit),
+            req => {
+                ebail!("unknown method: {}", req)
             }
         }
     }
 
-    pub fn step(&mut self) -> Result<StepResult, EvalError> {
-        let sentence = &self.lib.sentences[self.pc.sentence_idx];
-
-        if let Some(word) = sentence.words.get(self.pc.word_idx) {
-            eval(&self.lib, &mut self.stack, &word)?;
-            self.pc.word_idx += 1;
-            Ok(StepResult::Continue)
-        } else {
-            let next = control_flow(&self.lib, &mut self.stack).map_err(|inner| EvalError {
-                location: sentence.words.last().map(|w| w.location()),
-                inner,
-            })?;
-
-            if next.1 == SentenceIndex::TRAP {
-                for v in next.0 {
-                    self.stack.push(v);
-                }
-                Ok(StepResult::Trap)
-            } else {
-                self.jump_to(next);
-                Ok(StepResult::Continue)
-            }
-        }
+    pub fn run(&mut self) -> Result<(), EvalError> {
+        while let StepResult::Continue = self.step()? {}
+        Ok(())
     }
 }
 

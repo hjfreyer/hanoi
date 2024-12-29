@@ -625,10 +625,26 @@ proc bind(caller, inner, symbol, target) {
     }
 }
 
+proc echo(caller) {
+    let (caller) = caller(@req, @stdin);
+    match {
+        (@ok, char) => {
+            let (caller) = caller(@req, @stdout, char);
+            become this.echo(caller)
+        }
+        (@eof) => {
+            let () = caller(@ok);
+        }
+    }
+}
 
-proc main() {
+proc main(caller) {
+    let (caller, ^, @ok) = this.fwd_req(caller, this.echo);
     
-    let (x) = this.tests.cases.split();
+    let () = caller(@req, @halt);
+
+
+    //    let (x) = this.tests.cases.split();
     //let (iter) = this.iter.symbol_chars&(@foobar);
     //let (^, @ok, aq, bq) = this.bind(this.iter.split, @iter, iter);
     //let (aq, @yield, 'f') = aq(@next);

@@ -17,6 +17,7 @@ use crate::{
 pub struct Debugger<'t> {
     vm: Vm<'t>,
 
+    highlight_span: Option<pest::Span<'t>>,
     code_scroll: u16,
     stack_state: TableState,
     error: Option<EvalError>,
@@ -30,11 +31,10 @@ impl<'t> Debugger<'t> {
 
         match self.vm.step() {
             Ok(step) => {
-                if let StepResult::Continue = step {
-                    if let Some(word) = self.vm.current_word() {
-                        let (line, _) = word.span.start_pos().line_col();
-                        self.code_scroll = (line as u16).saturating_sub(10);
-                    }
+                if let Some(word) = self.vm.current_word() {
+                    self.highlight_span = Some(word.span);
+                    let (line, _) = word.span.start_pos().line_col();
+                    self.code_scroll = (line as u16).saturating_sub(10);
                 }
             }
             Err(err) => {
@@ -44,19 +44,25 @@ impl<'t> Debugger<'t> {
     }
 
     fn next_line(&mut self) {
+        while self.error.is_none() && self.highlight_span.is_none() {
+            self.step()
+        }
+        if self.error.is_some() {
+            return;
+        }
+
         let current_line = self
-            .vm
-            .current_word()
-            .or_else(|| self.vm.prev_word())
-            .map(|w| w.span.start_pos().line_col().0);
+            .highlight_span
+            .expect("ran until current word was some")
+            .start_pos()
+            .line_col()
+            .0;
 
         while self.error.is_none()
-            && current_line
-                == self
-                    .vm
-                    .current_word()
-                    .or_else(|| self.vm.prev_word())
-                    .map(|w| w.span.start_pos().line_col().0)
+            && self
+                .highlight_span
+                .map(|span| span.start_pos().line_col().0 == current_line)
+                .unwrap_or(true)
         {
             self.step()
         }
@@ -64,13 +70,16 @@ impl<'t> Debugger<'t> {
 
     fn jump_over(&mut self) {
         self.finish_sentence();
+        if self.error.is_some() {
+            return;
+        }
 
         let return_address = self.vm.stack.get(2).expect("no return address?");
         let &Value::Pointer(Closure(_, sidx)) = return_address else {
             panic!("return address not a closure?")
         };
 
-        while self.error.is_none() && self.vm.pc.sentence_idx != sidx {
+        while self.error.is_none() && self.vm.pc.map(|pc| pc.sentence_idx) != Some(sidx) {
             self.step()
         }
     }
@@ -82,7 +91,7 @@ impl<'t> Debugger<'t> {
     }
 
     fn code(&self) -> Paragraph {
-        let text = if let Some(Word { span, .. }) = self.vm.current_word() {
+        let text = if let Some(span) = self.highlight_span {
             let code = span.get_input();
             let mut res = Text::raw("");
             let mut iter = code[..span.start()].lines();
@@ -102,8 +111,6 @@ impl<'t> Debugger<'t> {
             }
 
             res
-        } else if let Some(Word { span, .. }) = self.vm.prev_word() {
-            Text::raw(span.get_input())
         } else {
             Text::raw("???")
         };
@@ -193,11 +200,13 @@ impl<'t> Debugger<'t> {
     }
 
     pub fn new(code: &'t str, vm: crate::vm::Vm<'t>) -> Self {
+        let highlight_span = vm.current_word().map(|w| w.span);
         Self {
             code_scroll: 0,
             vm,
             stack_state: TableState::default(),
             error: None,
+            highlight_span,
         }
     }
 }

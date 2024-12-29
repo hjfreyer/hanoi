@@ -1,1 +1,1 @@
-cargo run -- debug data/ main
+cargo run -- run data/ main
