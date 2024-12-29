@@ -70,8 +70,6 @@ sentence = { raw_word* }
 
 builtin = { "#" ~ identifier }
 
-this = { "this" }
-
 builtin_func_call = { "#" ~ identifier ~ "(" ~ int ~ ")" }
 
 // delete = { "^" ~ identifier }
@@ -154,7 +152,6 @@ value_expr = {
 }
 
 match_block = { "match" ~ "{" ~ match_cases ~ "}" }
-maybe_expr  = { expr? }
 
 match_cases = _{ match_case* }
 match_case  = { bindings ~ "=>" ~ "{" ~ block ~ "}" }
