@@ -57,7 +57,18 @@ fn run(base_dir: PathBuf, module: String) -> anyhow::Result<()> {
         main,
     ));
 
-    vm.run()?;
+    
+    let mut res = match vm.run() {
+        Ok(res) => res,
+        Err(e) => {
+            eprintln!("Error: {}\n", e);
+            eprintln!("Stack:");
+            for v in vm.stack.iter() {
+                eprintln!("  {:?}", v)
+            }
+            exit(1);
+        }
+    };
 
     Ok(())
 }

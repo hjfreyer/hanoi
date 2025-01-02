@@ -3,11 +3,13 @@ mod builtin;
 mod io;
 mod ssv;
 mod iter;
+mod str;
 
 mod tests {
     proc enumerate(caller, @next) {
-        let (caller, @next) = caller(@yield, @basic_csv);
-        // let (caller, @next) = caller(@yield, @parseint);
+//        let (caller, @next) = caller(@yield, @basic_csv);
+        let (caller, @next) = caller(@yield, @parseint_list_of_str);
+        let (caller, @next) = caller(@yield, @parseint_list_of_list_of_str);
         let () = caller(@eos);        
     }
 
@@ -43,6 +45,68 @@ baz");
             let () = caller(@pass);
         }
 
+        proc parseint_list_of_str(caller) {
+            let (p) = this.super.super.parseint_list_of_str;
+
+            let (p, @req, @iter, @next) = p(@next);
+            let (p, @req, @iter, @next) = p(@start);
+            let (p, @req, @iter, @next) = p(@yield, '1');
+            let (p, @req, @iter, @next) = p(@yield, '2');
+            let (p, @req, @iter, @next) = p(@yield, '3');
+            let (p, @resp, @yield, 123) = p(@eos);
+            let (p, @req, @iter, @next) = p(@next);
+            let (p, @req, @iter, @next) = p(@start);
+            let (p, @req, @iter, @next) = p(@yield, '4');
+            let (p, @req, @iter, @next) = p(@yield, '5');
+            let (p, @req, @iter, @next) = p(@yield, '6');
+            let (p, @resp, @yield, 456) = p(@eos);
+            let (p, @req, @iter, @next) = p(@next);
+            let (p, @resp, @eos) = p(@eos);
+            
+            let () = caller(@pass);
+        }
+
+        proc parseint_list_of_list_of_str(caller) {
+            let (p) = this.super.super.parseint_list_of_list_of_str;
+
+            let (p, @req, @iter, @next) = p(@next);
+            let (p, @resp, @start) = p(@start);
+
+            let (p, @req, @iter, @next) = p(@next);
+            let (p, @req, @iter, @next) = p(@start);
+            let (p, @req, @iter, @next) = p(@yield, '1');
+            let (p, @req, @iter, @next) = p(@yield, '2');
+            let (p, @req, @iter, @next) = p(@yield, '3');
+            let (p, @resp, @yield, 123) = p(@eos);
+
+            let (p, @req, @iter, @next) = p(@next);
+            let (p, @req, @iter, @next) = p(@start);
+            let (p, @req, @iter, @next) = p(@yield, '4');
+            let (p, @req, @iter, @next) = p(@yield, '5');
+            let (p, @req, @iter, @next) = p(@yield, '6');
+            let (p, @resp, @yield, 456) = p(@eos);
+            
+            let (p, @req, @iter, @next) = p(@next);
+            let (p, @resp, @eos) = p(@eos);
+
+            let (p, @req, @iter, @next) = p(@next);
+            let (p, @resp, @start) = p(@start);
+
+            let (p, @req, @iter, @next) = p(@next);
+            let (p, @req, @iter, @next) = p(@start);
+            let (p, @req, @iter, @next) = p(@yield, '1');
+            let (p, @req, @iter, @next) = p(@yield, '2');
+            let (p, @req, @iter, @next) = p(@yield, '3');
+            let (p, @resp, @yield, 123) = p(@eos);
+            
+            let (p, @req, @iter, @next) = p(@next);
+            let (p, @resp, @eos) = p(@eos);
+
+            let (p, @req, @iter, @next) = p(@next);
+            let (p, @resp, @eos) = p(@eos);
+            
+            let () = caller(@pass);
+        }
     }
 
     proc run(caller, case_name) {
@@ -121,29 +185,80 @@ mod csv {
     }
 }
 
-proc dump(caller) {
+proc dump(caller, @get) {
     let (caller) = caller(@req, @iter, @next);
     match {
         (@eos) => {
-            let () = caller(@resp, @ok);
+            let (caller) = caller(@req, @print, @eos);
+            become this.dump(caller, @get)
         }
         (@start) => {
             let (caller) = caller(@req, @print, @start);
-            become this.dump(caller)
+            become this.dump(caller, @get)
         }
         (@end) => {
             let (caller) = caller(@req, @print, @end);
-            become this.dump(caller)
+            become this.dump(caller, @get)
         }
         (@yield, item) => {
             let (caller) = caller(@req, @print, item);
-            become this.dump(caller)
+            become this.dump(caller, @get)
+        }
+    }
+}
+
+proc parseint_list_of_str(caller, @next) {
+    let (caller) = caller(@req, @iter, @next);
+    match {
+        (@start) => {
+            let (p) = this.str.parseint();
+            let (caller, ^, @ok, num) = this.builtin.fwd_req(caller, p, @get);
+            let (caller, @next) = caller(@resp, @yield, num);
+            become this.parseint_list_of_str(caller, @next)
+        }
+        (@eos) => {
+            let () = caller(@resp, @eos);
+        }
+    }
+}
+
+proc parseint_list_of_list_of_str(caller, @next) {
+    let (caller) = caller(@req, @iter, @next);
+    match {
+        (@start) => {
+            let (caller, @next) = caller(@resp, @start);
+            let (p) = this.parseint_list_of_str;
+            let (caller, ^, @eos) = this.fwd_yields(caller, p, @next);
+            let (caller, @next) = caller(@resp, @eos);
+            become this.parseint_list_of_list_of_str(caller, @next)
+        }
+        (@eos) => {
+            let () = caller(@resp, @eos);
+        }
+    }
+}
+
+proc fwd_yields(next, up, down) {
+    let (down) = down();
+    match {
+        (@req) => {
+            let (up) = up(@req);
+            become this.fwd_yields(next, up, down)
+        }
+        (@resp, @yield) => {
+            let (up) = up(@resp, @yield);
+            become this.fwd_yields(next, up, down)
+        }
+        (@resp, other) => {
+            become next(up, down, other)
         }
     }
 }
 
 proc main(caller) {
-//    let (ssv) = this.bind(this.ssv.impl_start, @source, this.io.stdin_chars);
+    let (ssv) = this.builtin.bind(this.ssv.impl_start, @source, this.io.stdin_chars);
+
+    let (ints) = this.builtin.bind(this.parseint_list_of_list_of_str, @iter, ssv);
 //    
 //    let (caller, ssv, @start) = this.fwd_req(caller, ssv, @next);
 //
@@ -156,13 +271,13 @@ proc main(caller) {
 //    let () = mapped(@next);
 
 //
-    //let (ssv) = this.bind(this.dump, @iter, ssv);
+    let (ssv) = this.builtin.bind(this.dump, @iter, ints);
 //
-    //let (caller, ^, @ok) = this.fwd_req(caller, ssv);
+    let (caller, ^, @eos) = this.builtin.fwd_req(caller, ssv, @get);
 //
     ///let () = caller(@req, @halt);
 
-    let () = this.tests.cases.mergesort_full();
+    //let () = this.tests.cases.mergesort_full();
     //let (iter) = this.iter.symbol_chars&(@foobar);
     //let (^, @ok, aq, bq) = this.bind(this.iter.split, @iter, iter);
     //let (aq, @yield, 'f') = aq(@next);

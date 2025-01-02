@@ -30,25 +30,25 @@ baz   qux
             let (p, @resp, @yield, 'f') = p(@next);
             let (p, @resp, @yield, 'o') = p(@next);
             let (p, @resp, @yield, 'o') = p(@next);
-            let (p, @resp, @end) = p(@next);
+            let (p, @resp, @eos) = p(@next);
             let (p, @resp, @start) = p(@next);
             let (p, @resp, @yield, 'b') = p(@next);
             let (p, @resp, @yield, 'a') = p(@next);
             let (p, @resp, @yield, 'r') = p(@next);
-            let (p, @resp, @end) = p(@next);
-            let (p, @resp, @end) = p(@next);
+            let (p, @resp, @eos) = p(@next);
+            let (p, @resp, @eos) = p(@next);
             let (p, @resp, @start) = p(@next);
             let (p, @resp, @start) = p(@next);
             let (p, @resp, @yield, 'b') = p(@next);
             let (p, @resp, @yield, 'a') = p(@next);
             let (p, @resp, @yield, 'z') = p(@next);
-            let (p, @resp, @end) = p(@next);
+            let (p, @resp, @eos) = p(@next);
             let (p, @resp, @start) = p(@next);
             let (p, @resp, @yield, 'q') = p(@next);
             let (p, @resp, @yield, 'u') = p(@next);
             let (p, @resp, @yield, 'x') = p(@next);
-            let (p, @resp, @end) = p(@next);
-            let (p, @resp, @end) = p(@next);
+            let (p, @resp, @eos) = p(@next);
+            let (p, @resp, @eos) = p(@next);
             let (p, @resp, @eos) = p(@next);
 
             let () = caller(@pass);
@@ -65,10 +65,10 @@ proc parser(caller) {
 }
 
 proc impl_start(caller, @next) {
-    become this.impl_newline(caller)
+    become this.impl_newline(caller, @next)
 }
 
-proc impl_newline(caller) {
+proc impl_newline(caller, @next) {
     let (caller) = caller(@req, @source, @next);
     match {
         (@eos) => {
@@ -82,34 +82,34 @@ proc impl_newline(caller) {
             let (caller, @next) = caller(@resp, @start);
             let (caller, @next) = caller(@resp, @yield, char);
             
-            become this.impl_infield(caller)
+            become this.impl_infield(caller, @next)
         }
     }
 }
 
-proc impl_infield(caller) {
+proc impl_infield(caller, @next) {
     let (caller) = caller(@req, @source, @next);
     match {
         (@eos) => {
             let () = caller(@resp, @err, @unexpected_eos);
         }
         (@yield, ' ') => {
-            let (caller, @next) = caller(@resp, @end);
-            become this.impl_inspace(caller)
+            let (caller, @next) = caller(@resp, @eos);
+            become this.impl_inspace(caller, @next)
         } 
         (@yield, '\n') => {
-            let (caller, @next) = caller(@resp, @end);
-            let (caller, @next) = caller(@resp, @end);
-            become this.impl_newline(caller)
+            let (caller, @next) = caller(@resp, @eos);
+            let (caller, @next) = caller(@resp, @eos);
+            become this.impl_newline(caller, @next)
         } 
         (@yield, char) => {
             let (caller, @next) = caller(@resp, @yield, char);
-            become this.impl_infield(caller)
+            become this.impl_infield(caller, @next)
         }
     }
 }
 
-proc impl_inspace(caller) {
+proc impl_inspace(caller, @next) {
     let (caller) = caller(@req, @source, @next);
     match {
         (@eos) => {
@@ -119,12 +119,12 @@ proc impl_inspace(caller) {
             let () = caller(@resp, @err, @unexpected_eol);
         }
         (@yield, ' ') => {
-            become this.impl_inspace(caller)
+            become this.impl_inspace(caller, @next)
         }
         (@yield, char) => {
             let (caller, @next) = caller(@resp, @start);
             let (caller, @next) = caller(@resp, @yield, char);
-            become this.impl_infield(caller)
+            become this.impl_infield(caller, @next)
         }
     }
 }
