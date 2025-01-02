@@ -1,0 +1,74 @@
+
+proc new(caller) {
+    become caller(this.list_empty)
+}
+
+proc list_empty(caller) {
+    match {
+        (@push_front, item) => {
+            let (caller) = caller(@resp);
+            become this.list_cons(item, this.list_empty, caller)
+        }
+        (@push_back, item) => {
+            let (caller) = caller(@resp);
+            become this.list_cons(item, this.list_empty, caller)
+        }
+        (@next) => {
+            let (caller) = caller(@resp, @eos);
+            become this.list_empty(caller)
+        }
+        (@is_empty) => {
+            let (caller) = caller(@resp, true);
+            become this.list_empty(caller)
+        }
+    }
+}
+
+proc list_cons(head, tail, caller) {
+    match {
+        (@push_front, item) => {
+            let (caller) = caller(@resp);
+            let (tail) = this.list_cons&(head, tail);
+            become this.list_cons(item, tail, caller)
+        }
+        (@push_back, item) => {
+            let (tail, @resp) = tail(@push_back, item);
+            let (caller) = caller(@resp);
+            become this.list_cons(head, tail, caller)
+        }
+        (@next) => {
+            let (caller) = caller(@resp, @yield, head);
+            become tail(caller)
+        }
+        (@is_empty) => {
+            let (caller) = caller(@resp, false);
+            become this.list_cons(caller)
+        }
+    }
+}
+
+
+mod tests {
+    proc enumerate(caller, @next) {
+        let (caller, @next) = caller(@yield, @basic);
+        let () = caller(@eos);        
+    }
+
+    mod cases {
+        proc basic(caller) {
+            let (q) = this.super.super.new();
+            let (q, @resp) = q(@push_back, @foo);
+            let (q, @resp) = q(@push_back, @bar);
+            let (q, @resp) = q(@push_back, @baz);
+            let (q, @resp, @yield, @foo) = q(@next);
+            let (q, @resp, @yield, @bar) = q(@next);
+            let (q, @resp, @yield, @baz) = q(@next);
+            let (q, @resp, @eos) = q(@next);
+            let () = caller(@pass);
+        }
+    }
+
+    proc run(caller, case_name) {
+        R{ @cases this #get #get @exec }
+    }
+}

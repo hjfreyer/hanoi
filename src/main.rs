@@ -5,7 +5,7 @@ mod debugger;
 mod flat;
 mod vm;
 
-use std::path::PathBuf;
+use std::{path::PathBuf, process::exit};
 
 use clap::{Parser, Subcommand};
 use flat::{Builtin, Closure, Entry, InnerWord, Library, SentenceBuilder, SentenceIndex, Value};
@@ -211,7 +211,7 @@ fn test(base_dir: PathBuf, module: String) -> anyhow::Result<()> {
                 for v in vm.stack.iter() {
                     eprintln!("  {:?}", v)
                 }
-                return Ok(());
+                exit(1);
             }
         };
 
@@ -225,7 +225,10 @@ fn test(base_dir: PathBuf, module: String) -> anyhow::Result<()> {
 
         match result.as_str() {
             "pass" => println!("PASS!"),
-            "fail" => println!("FAIL!"),
+            "fail" => {
+                println!("FAIL!");
+                exit(1);
+            }
             _ => panic!(),
         }
     }
