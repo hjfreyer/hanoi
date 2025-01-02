@@ -43,15 +43,6 @@ baz");
             let () = caller(@pass);
         }
 
-        proc parseint(caller) {
-            let (parseint) = this.super.super.parseint();
-            let (parseint) = parseint(@push, '6');
-            let (parseint) = parseint(@push, '7');
-            let (parseint) = parseint(@push, '2');
-            let (@ok, 672) = parseint(@finish);
-
-            let () = caller(@pass);
-        }
     }
 
     proc run(caller, case_name) {
@@ -147,26 +138,6 @@ proc dump(caller) {
         (@yield, item) => {
             let (caller) = caller(@req, @print, item);
             become this.dump(caller)
-        }
-    }
-}
-
-proc parseint(caller) {
-    become caller(this.parseint_loop&(0))
-}
-
-proc parseint_loop(acc, caller) {
-    match {
-        (@push, char) => {
-            let (ord) = this.builtin.ord(char);
-            let (digit) = this.builtin.sub(ord, 48);
-            let (acc) = this.builtin.prod(acc, 10);
-            let (^, @ok, acc) = this.builtin.add(acc, digit);
-            let (caller) = caller(@resp);
-            become this.parseint_loop(acc, caller)
-        }
-        (@finish) => {
-            become caller(@resp, @ok, acc)
         }
     }
 }

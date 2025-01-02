@@ -1,0 +1,47 @@
+
+mod builtin;
+mod iter;
+
+mod tests {
+    proc enumerate(caller, @next) {
+        let (caller, @next) = caller(@yield, @parseint);
+        let () = caller(@eos);
+    }
+
+    mod cases {
+        proc parseint(caller) {
+            let (parseint) = this.super.super.parseint();
+            let (parseint, @req, @iter, @next) = parseint(@get);
+            let (parseint, @req, @iter, @next) = parseint(@yield, '6');
+            let (parseint, @req, @iter, @next) = parseint(@yield, '7');
+            let (parseint, @req, @iter, @next) = parseint(@yield, '2');
+            let (parseint, @resp, @ok, 672) = parseint(@eos);
+
+            let () = caller(@pass);
+        }
+    }
+
+    proc run(caller, case_name) {
+        R{ @cases this #get #get @exec }
+    }
+}
+
+proc parseint(caller) {
+    become caller(this.parseint_loop&(0))
+}
+
+proc parseint_loop(acc, caller, @get) {
+    let (caller) = caller(@req, @iter, @next);
+    match {
+        (@yield, char) => {
+            let (ord) = this.builtin.ord(char);
+            let (digit) = this.builtin.sub(ord, 48);
+            let (acc) = this.builtin.prod(acc, 10);
+            let (^, @ok, acc) = this.builtin.add(acc, digit);
+            become this.parseint_loop(acc, caller, @get)
+        }
+        (@eos) => {
+            let () = caller(@resp, @ok, acc);
+        }
+    }
+}
