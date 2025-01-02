@@ -1,6 +1,8 @@
 set -e
+cargo build --release
 
-cargo run -- test data/ list
-cargo run -- test data/ iter
-cargo run -- test data/ ssv
-cargo run -- test data/ main
+BIN=target/release/hanoi
+$BIN test data/ list
+$BIN test data/ iter
+$BIN test data/ ssv
+$BIN test data/ main
