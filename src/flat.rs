@@ -931,6 +931,7 @@ impl<'t> SentenceBuilder<'t> {
             | Builtin::Lt
             | Builtin::Or
             | Builtin::And
+            | Builtin::Sub
             | Builtin::Get
             | Builtin::SymbolCharAt
             | Builtin::Cons => {
@@ -959,7 +960,7 @@ impl<'t> SentenceBuilder<'t> {
                 self.names.push_front(ns);
                 self.names.push_front(None);
             }
-            Builtin::Not | Builtin::SymbolLen | Builtin::Deref => {
+            Builtin::Not | Builtin::SymbolLen | Builtin::Deref | Builtin::Ord => {
                 self.names.pop_front();
                 self.names.push_front(None);
             }
@@ -1078,6 +1079,7 @@ impl<'t> SentenceBuilder<'t> {
 
 builtins! {
     (Add, "add"),
+    (Sub, "sub"),
     (Prod, "prod"),
     (Eq, "eq"),
     (AssertEq, "assert_eq"),
@@ -1105,6 +1107,8 @@ builtins! {
     (Unstash, "unstash"),
 
     (If, "if"),
+
+    (Ord, "ord"),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

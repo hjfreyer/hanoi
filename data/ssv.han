@@ -1,0 +1,67 @@
+
+mod builtin;
+
+proc impl_start(caller, @next) {
+    become this.impl_newline(caller)
+}
+
+proc impl_newline(caller) {
+    let (caller) = caller(@req, @source, @next);
+    match {
+        (@eos) => {
+            let () = caller(@eos);
+        }
+        (@yield, ' ') => {
+            let () = caller(@err, @unexpected_space);
+        }
+        (@yield, char) => {
+            let (caller, @next) = caller(@start);
+            let (caller, @next) = caller(@start);
+            let (caller, @next) = caller(@yield, char);
+            
+            become this.impl_infield(caller)
+        }
+    }
+}
+
+proc impl_infield(caller) {
+    let (caller) = caller(@req, @source, @next);
+    match {
+        (@eos) => {
+            let () = caller(@err, @unexpected_eos);
+        }
+        (@yield, ' ') => {
+            let (caller, @next) = caller(@end);
+            become this.impl_inspace(caller)
+        } 
+        (@yield, '\n') => {
+            let (caller, @next) = caller(@end);
+            let (caller, @next) = caller(@end);
+            become this.impl_newline(caller)
+        } 
+        (@yield, char) => {
+            let (caller, @next) = caller(@yield, char);
+            become this.impl_infield(caller)
+        }
+    }
+}
+
+proc impl_inspace(caller) {
+    let (caller) = caller(@req, @source, @next);
+    match {
+        (@eos) => {
+            let () = caller(@err, @unexpected_eos);
+        }
+        (@yield, '\n') => {
+            let () = caller(@err, @unexpected_eol);
+        }
+        (@yield, ' ') => {
+            become this.impl_inspace(caller)
+        }
+        (@yield, char) => {
+            let (caller, @next) = caller(@start);
+            let (caller, @next) = caller(@yield, char);
+            become this.impl_infield(caller)
+        }
+    }
+}

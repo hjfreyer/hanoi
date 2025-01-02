@@ -50,18 +50,12 @@ fn run(base_dir: PathBuf, module: String) -> anyhow::Result<()> {
     };
 
     let code = lib.code;
-    let mut vm = match Vm::new(lib) {
-        Ok(vm) => vm,
-        Err(err) => {
-            println!("error: {}", err);
-            return Ok(());
-        }
-    };
+    let mut vm = Vm::new(lib, main);
 
-    vm.stack
-        .push(Value::Pointer(Closure(vec![], SentenceIndex::TRAP)));
-    vm.stack.push(Value::Pointer(Closure(vec![], main)));
-    vm.stack.push(Value::Symbol("exec".to_owned()));
+    vm.jump_to(Closure(
+        vec![Value::Pointer(Closure(vec![], SentenceIndex::TRAP))],
+        main,
+    ));
 
     vm.run()?;
 
@@ -81,23 +75,17 @@ fn debug(base_dir: PathBuf, module: String, stdin: Option<PathBuf>) -> anyhow::R
     };
 
     let code = lib.code;
-    let mut vm = match Vm::new(lib) {
-        Ok(vm) => vm,
-        Err(err) => {
-            println!("error: {}", err);
-            return Ok(());
-        }
-    };
+    let mut vm = Vm::new(lib, main);
 
     if let Some(stdin_path) = stdin {
         let stdin = std::fs::File::open(stdin_path)?;
         vm = vm.with_stdin(Box::new(stdin));
     }
 
-    vm.stack
-        .push(Value::Pointer(Closure(vec![], SentenceIndex::TRAP)));
-    vm.stack.push(Value::Pointer(Closure(vec![], main)));
-    vm.stack.push(Value::Symbol("exec".to_owned()));
+    vm.jump_to(Closure(
+        vec![Value::Pointer(Closure(vec![], SentenceIndex::TRAP))],
+        main,
+    ));
 
     let debugger = debugger::Debugger::new(code, vm);
 
@@ -162,31 +150,24 @@ fn test(base_dir: PathBuf, module: String) -> anyhow::Result<()> {
 
     let lib = Library::load(&mut loader, &module)?;
     let code = lib.code;
-    let mut vm = match Vm::new(lib) {
-        Ok(vm) => vm,
-        Err(err) => {
-            println!("error: {}", err);
-            return Ok(());
-        }
-    };
 
-    let Some(Entry::Namespace(tests_ns)) = vm.lib.namespaces.first().unwrap().get("tests") else {
+    let Some(Entry::Namespace(tests_ns)) = lib.namespaces.first().unwrap().get("tests") else {
         panic!("no namespace named tests")
     };
-    let Some(Entry::Value(Value::Pointer(enumerate))) =
-        vm.lib.namespaces[*tests_ns].get("enumerate")
+    let Some(Entry::Value(Value::Pointer(enumerate))) = lib.namespaces[*tests_ns].get("enumerate")
     else {
         panic!("no procedure named enumerate")
     };
     assert_eq!(enumerate.0, vec![]);
     let enumerate = enumerate.1;
 
-    let Some(Entry::Value(Value::Pointer(run))) = vm.lib.namespaces[*tests_ns].get("run") else {
+    let Some(Entry::Value(Value::Pointer(run))) = lib.namespaces[*tests_ns].get("run") else {
         panic!("no procedure named run")
     };
     assert_eq!(run.0, vec![]);
     let run = run.1;
 
+    let mut vm = Vm::new(lib, enumerate);
     vm.jump_to(Closure(
         vec![
             Value::Symbol("next".to_owned()),
@@ -225,7 +206,11 @@ fn test(base_dir: PathBuf, module: String) -> anyhow::Result<()> {
         let mut res = match vm.run_to_trap() {
             Ok(res) => res,
             Err(e) => {
-                eprintln!("Error while running test {}: {}", tc_name, e);
+                eprintln!("Error while running test {}: {}\n", tc_name, e);
+                eprintln!("Stack:");
+                for v in vm.stack.iter() {
+                    eprintln!("  {:?}", v)
+                }
                 return Ok(());
             }
         };

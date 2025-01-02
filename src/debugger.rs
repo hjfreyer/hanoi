@@ -1,4 +1,4 @@
-use itertools::Itertools;
+use itertools::{Itertools, Position};
 use ratatui::{
     crossterm::event,
     layout::{Constraint, Layout},
@@ -74,18 +74,20 @@ impl<'t> Debugger<'t> {
             return;
         }
 
-        let return_address = self.vm.stack.get(2).expect("no return address?");
+        let return_address = self.vm.stack.get(1).expect("no return address?");
         let &Value::Pointer(Closure(_, sidx)) = return_address else {
             panic!("return address not a closure?")
         };
 
-        while self.error.is_none() && self.vm.pc.map(|pc| pc.sentence_idx) != Some(sidx) {
+        while self.error.is_none() && self.vm.pc.sentence_idx != sidx {
             self.step()
         }
     }
 
     fn finish_sentence(&mut self) {
-        while self.error.is_none() && self.vm.current_word().is_some() {
+        while self.error.is_none()
+            && self.vm.pc.word_idx != self.vm.lib.sentences[self.vm.pc.sentence_idx].words.len() - 1
+        {
             self.step();
         }
     }
@@ -94,22 +96,23 @@ impl<'t> Debugger<'t> {
         let text = if let Some(span) = self.highlight_span {
             let code = span.get_input();
             let mut res = Text::raw("");
-            let mut iter = code[..span.start()].lines();
-            res.push_span(iter.next().unwrap().on_green());
-            while let Some(next) = iter.next() {
-                res.push_line(next);
+            for (pos, line) in code[..span.start()].lines().with_position() {
+                res.push_line(line);
             }
-            let mut iter = span.as_str().lines();
-            res.push_span(iter.next().unwrap().on_green());
-            while let Some(next) = iter.next() {
-                res.push_line(next.on_green());
+            for (pos, line) in span.as_str().lines().with_position() {
+                if pos == Position::First || pos == Position::Only {
+                    res.push_span(line.on_green());
+                } else {
+                    res.push_line(line.on_green());
+                }
             }
-            let mut iter = code[span.end()..].lines();
-            res.push_span(iter.next().unwrap());
-            while let Some(next) = iter.next() {
-                res.push_line(next);
+            for (pos, line) in code[span.end()..].lines().with_position() {
+                if pos == Position::First || pos == Position::Only {
+                    res.push_span(line);
+                } else {
+                    res.push_line(line);
+                }
             }
-
             res
         } else {
             Text::raw("???")

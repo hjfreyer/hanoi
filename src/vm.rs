@@ -67,6 +67,16 @@ fn inner_eval(lib: &Library, stack: &mut Stack, w: &InnerWord) -> Result<(), Inn
             stack.push(Value::Usize(a + b));
             Ok(())
         }
+        InnerWord::Builtin(Builtin::Sub) => {
+            let Some(Value::Usize(b)) = stack.pop() else {
+                ebail!("bad value")
+            };
+            let Some(Value::Usize(a)) = stack.pop() else {
+                ebail!("bad value")
+            };
+            stack.push(Value::Usize(a - b));
+            Ok(())
+        }
         InnerWord::Builtin(Builtin::Prod) => {
             let Some(Value::Usize(a)) = stack.pop() else {
                 ebail!("bad value")
@@ -75,6 +85,14 @@ fn inner_eval(lib: &Library, stack: &mut Stack, w: &InnerWord) -> Result<(), Inn
                 ebail!("bad value")
             };
             stack.push(Value::Usize(a * b));
+            Ok(())
+        }
+
+        InnerWord::Builtin(Builtin::Ord) => {
+            let Some(Value::Char(c)) = stack.pop() else {
+                ebail!("bad value")
+            };
+            stack.push(Value::Usize(c as usize));
             Ok(())
         }
         InnerWord::Tuple(idx) => todo!(),
@@ -332,7 +350,7 @@ pub enum InnerEvalError {
 
 pub struct Vm<'t> {
     pub lib: Library<'t>,
-    pub pc: Option<ProgramCounter>,
+    pub pc: ProgramCounter,
     pub stack: Stack,
 
     pub stdin: Box<dyn Read>,
@@ -351,20 +369,17 @@ pub enum StepResult {
 }
 
 impl<'t> Vm<'t> {
-    pub fn new(lib: Library<'t>) -> Result<Self, LoadError> {
-        let &Entry::Value(Value::Pointer(Closure(_, main))) =
-            lib.root_namespace().get("main").unwrap()
-        else {
-            panic!("not code")
-        };
-
-        Ok(Vm {
+    pub fn new(lib: Library<'t>, sentence_idx: SentenceIndex) -> Self {
+        Vm {
             lib,
-            pc: None,
+            pc: ProgramCounter {
+                sentence_idx,
+                word_idx: 0,
+            },
             stack: Stack::default(),
             stdin: Box::new(stdin()),
             stdout: Box::new(stdout()),
-        })
+        }
     }
 
     pub fn with_stdin(mut self, stdin: impl Read + 'static) -> Self {
@@ -378,63 +393,59 @@ impl<'t> Vm<'t> {
     }
 
     pub fn current_word(&self) -> Option<&Word<'t>> {
-        let pc = self.pc?;
-        if pc.sentence_idx == SentenceIndex::TRAP {
+        if self.pc.sentence_idx == SentenceIndex::TRAP {
             return None;
         }
-        Some(&self.lib.sentences[pc.sentence_idx].words[pc.word_idx])
+        Some(&self.lib.sentences[self.pc.sentence_idx].words[self.pc.word_idx])
     }
 
     pub fn jump_to(&mut self, Closure(closure, sentence_idx): Closure) {
         for v in closure {
             self.stack.push(v);
         }
-        self.pc = Some(ProgramCounter {
+        self.pc = ProgramCounter {
             sentence_idx,
             word_idx: 0,
-        });
+        };
     }
 
     pub fn run_to_trap(&mut self) -> Result<(), EvalError> {
-        while self.pc.map(|pc| pc.sentence_idx) != Some(SentenceIndex::TRAP) {
+        while self.pc.sentence_idx != SentenceIndex::TRAP {
             self.step()?;
         }
         Ok(())
     }
 
     pub fn step(&mut self) -> Result<StepResult, EvalError> {
-        if self.pc.map(|pc| pc.sentence_idx) == Some(SentenceIndex::TRAP) {
+        if self.pc.sentence_idx == SentenceIndex::TRAP {
             return self.trap();
         }
 
-        if let Some(pc) = &mut self.pc {
-            let word = &self.lib.sentences[pc.sentence_idx].words[pc.word_idx];
-            eval(&self.lib, &mut self.stack, &word)?;
-            if pc.word_idx < self.lib.sentences[pc.sentence_idx].words.len() - 1 {
-                pc.word_idx += 1;
-            } else {
-                self.pc = None;
-            }
-            Ok(StepResult::Continue)
+        let pc = &mut self.pc;
+        let word = &self.lib.sentences[pc.sentence_idx].words[pc.word_idx];
+        eval(&self.lib, &mut self.stack, &word)?;
+        let location = word.location();
+        if pc.word_idx < self.lib.sentences[pc.sentence_idx].words.len() - 1 {
+            pc.word_idx += 1;
         } else {
             let op = match self.stack.pop() {
                 Some(Value::Symbol(op)) => op,
                 Some(value) => {
                     return Err(EvalError {
-                        location: None,
+                        location: Some(location),
                         inner: InnerEvalError::UnexpectedControlFlow { value },
                     })
                 }
                 None => {
                     return Err(EvalError {
-                        location: None,
+                        location: Some(location),
                         inner: InnerEvalError::EmptyStack,
                     })
                 }
             };
             if op != "exec" {
                 return Err(EvalError {
-                    location: None,
+                    location: Some(location),
                     inner: InnerEvalError::UnexpectedControlFlow {
                         value: Value::Symbol(op),
                     },
@@ -445,13 +456,13 @@ impl<'t> Vm<'t> {
                 Some(Value::Pointer(next)) => next,
                 Some(value) => {
                     return Err(EvalError {
-                        location: None,
+                        location: Some(location),
                         inner: InnerEvalError::ExecNonClosure { value },
                     })
                 }
                 None => {
                     return Err(EvalError {
-                        location: None,
+                        location: Some(location),
                         inner: InnerEvalError::ExecEmptyStack,
                     })
                 }
@@ -461,12 +472,12 @@ impl<'t> Vm<'t> {
                 self.stack.push(v);
             }
 
-            self.pc = Some(ProgramCounter {
+            self.pc = ProgramCounter {
                 sentence_idx: next.1,
                 word_idx: 0,
-            });
-            Ok(StepResult::Continue)
+            };
         }
+        Ok(StepResult::Continue)
     }
 
     pub fn trap(&mut self) -> Result<StepResult, EvalError> {

@@ -1,0 +1,13 @@
+
+proc stdin_chars(caller, @next) {
+    let (caller) = caller(@req, @stdin);
+    match {
+        (@ok, char) => {
+            let (caller) = caller(@resp, @yield, char);
+            become this.stdin_chars(caller)
+        }
+        (@eof) => {
+            let () = caller(@resp, @eos);
+        }
+    }
+}
