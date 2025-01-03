@@ -50,7 +50,7 @@ proc list_cons(head, tail, caller) {
         }
         (@is_empty) => {
             let (caller) = caller(@resp, false);
-            become this.list_cons(caller)
+            become this.list_cons(head, tail, caller)
         }
     }
 }
