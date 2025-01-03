@@ -15,8 +15,8 @@ proc once(caller, item) {
 }
 
 proc once_impl(item, caller, @next) {
-    let (caller, @next) = caller(@yield, item);
-    let () = caller(@eos);
+    let (caller, @next) = caller(@resp, @yield, item);
+    let () = caller(@resp, @eos);
 }
 
 proc proxy(caller) {
@@ -125,21 +125,6 @@ proc split_impl(aq, bq, caller, @get) {
         (@yield, item) => {
             let (aq, @resp) = aq(@push_back, item);
             become this.split_impl(bq, aq, caller, @get)
-        }
-    }
-}
-
-proc split_part2(aq, bq, caller, @req) {
-    match {
-        (@a, @next) => {
-            let (aq, @resp) = aq(@next);
-            let (caller) = caller(@resp);
-            become this.split_part2(aq, bq, caller)
-        }
-        (@b, @next) => {
-            let (bq, @resp) = bq(@next);
-            let (caller) = caller(@resp);
-            become this.split_part2(aq, bq, caller)
         }
     }
 }
@@ -256,7 +241,9 @@ proc mergesort(caller, @next) {
             let (caller, ^, aq, bq) = this.builtin.fwd_req(caller, split, @get);
 
             let (aq, @resp) = aq(@push_front, item1);
+            let (^, @resp, aq) = aq(@into_iter);
             let (bq, @resp) = bq(@push_front, item2);
+            let (^, @resp, bq) = bq(@into_iter);
 
             let (aq) = this.builtin.bind(this.mergesort, @iter, aq);
             let (bq) = this.builtin.bind(this.mergesort, @iter, bq);
@@ -480,6 +467,8 @@ mod tests {
             let (s, @req, @iter, @next) = s(@yield, 'a');
             let (s, @req, @iter, @next) = s(@yield, 'r');
             let (s, @resp, aq, bq) = s(@eos);
+            let (^, @resp, aq) = aq(@into_iter);
+            let (^, @resp, bq) = bq(@into_iter);
     
             let (aq, @resp, @yield, 'f') = aq(@next);
             let (aq, @resp, @yield, 'o') = aq(@next);
@@ -499,12 +488,14 @@ mod tests {
             let (a, @resp) = a(@push_back, 3);
             let (a, @resp) = a(@push_back, 5);
             let (a, @resp) = a(@push_back, 6);
+            let (^, @resp, a) = a(@into_iter);
             let (b) = this.super.super.list.new();
             let (b, @resp) = b(@push_back, 2);
             let (b, @resp) = b(@push_back, 4);
             let (b, @resp) = b(@push_back, 6);
             let (b, @resp) = b(@push_back, 7);
             let (b, @resp) = b(@push_back, 8);
+            let (^, @resp, b) = b(@into_iter);
 
             let (m) = this.super.super.builtin.bind(this.super.super.merge_sorted, @a, a);
             let (m) = this.super.super.builtin.bind(m, @b, b);
@@ -534,6 +525,7 @@ mod tests {
             let (a, @resp) = a(@push_back, 5); 
             let (a, @resp) = a(@push_back, 3); 
             let (a, @resp) = a(@push_back, 1);
+            let (^, @resp, a) = a(@into_iter);
             become caller(a)
         }
 
@@ -546,8 +538,7 @@ mod tests {
         }
 
         proc mergesort_singleton(caller) {
-            let (q) = this.super.super.list.new();
-            let (q, @resp) = q(@push_back, @foo);
+            let (q) = this.super.super.once(@foo);
 
             let (a) = this.super.super.builtin.bind(this.super.super.mergesort, @iter, q);
             let (a, @resp, @yield, @foo) = a(@next);
@@ -560,6 +551,7 @@ mod tests {
             let (q) = this.super.super.list.new();
             let (q, @resp) = q(@push_back, 2);
             let (q, @resp) = q(@push_back, 1);
+            let (^, @resp, q) = q(@into_iter);
           
             let (a) = this.super.super.builtin.bind(this.super.super.mergesort, @iter, q);
             let (a, @resp, @yield, 1) = a(@next);
