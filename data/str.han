@@ -37,7 +37,7 @@ proc parseint_loop(acc, caller, @get) {
             let (ord) = this.builtin.ord(char);
             let (digit) = this.builtin.sub(ord, 48);
             let (acc) = this.builtin.prod(acc, 10);
-            let (^, @ok, acc) = this.builtin.add(acc, digit);
+            let (acc) = this.builtin.add(acc, digit);
             become this.parseint_loop(acc, caller, @get)
         }
         (@eos) => {

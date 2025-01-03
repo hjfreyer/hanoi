@@ -30,7 +30,7 @@ proc lt(caller, a, b) {
 proc add() {
     R{
         [a, b, caller]
-        a b #add @ok this.add caller @exec
+        a b #add caller @exec
     }
 }
 

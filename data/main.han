@@ -395,14 +395,133 @@ proc take_first_row(caller, fronts, rests, list_of_lists) {
     }
 }
 
-proc main(caller) {
-    let () = this.tests.cases.transpose2_single_row();
+proc abs_diff(caller, a, b) {
+    let (lt) = this.builtin.lt(*a, *b);
+    if lt {
+        let (diff) = this.builtin.sub(b, a);
+        become caller(diff)
+    } else {
+        let (diff) = this.builtin.sub(a, b);
+        become caller(diff)
+    }
 
-    //let (ssv) = this.builtin.bind(this.ssv.impl_start, @source, this.io.stdin_chars);
+}
+
+proc iter_abs_diff(caller, @next) {
+    let (caller) = caller(@req, @a, @next);
+    match {
+        (@eos) => {
+            let () = caller(@resp, @eos);
+        }
+        (@yield, a) => {
+            let (caller, @yield, b) = caller(@req, @b, @next);
+            let (d) = this.abs_diff(a, b);
+            let (caller, @next) = caller(@resp, @yield, d);
+            become this.iter_abs_diff(caller, @next)
+        }
+    }    
+}
+
+proc reduce_sum(caller) {
+    become caller(this.reduce_sum_impl&(0))
+}
+
+proc reduce_sum_impl(acc, caller, @get) {
+    let (caller) = caller(@req, @iter, @next);
+    match {
+        (@eos) => {
+            let () = caller(@resp, acc);
+        }
+        (@yield, item) => {
+            let (acc) = this.builtin.add(acc, item);
+            become this.reduce_sum_impl(acc, caller, @get)
+        }
+    }   
+}
+
+proc mat2dtolists(caller) {
+    let (list) = this.list.new();
+    become caller(this.mat2dtolists_impl&(list))
+}
+
+proc mat2dtolists_impl(list, caller, @get) {
+    let (caller) = caller(@req, @iter, @next);
+    match {
+        (@start) => {
+            let (collector) = this.iter_to_list();
+            let (caller, ^, row) = this.builtin.fwd_req(caller, collector, @get);
+            let (list, @resp) = list(@push_back, row);
+            become this.mat2dtolists_impl(list, caller, @get)
+        }
+        (@eos) => {
+            let () = caller(@resp, list);
+        }
+    }
+}
+
+proc iter_to_list(caller) {
+    let (list) = this.list.new();
+    become caller(this.iter_to_list_impl&(list))
+}
+
+proc iter_to_list_impl(list, caller, @get) {
+    let (caller) = caller(@req, @iter, @next);
+    match {
+        (@eos) => {
+            let () = caller(@resp, list);
+        }
+        (@yield, item) => {
+            let (list, @resp) = list(@push_back, item);
+            become this.iter_to_list_impl(list, caller, @get)
+        }
+    }
+}
+
+proc solve_the_thing(caller, @get) {
+    let (ssv) = this.ssv.parser();
+    let (numerical) = this.builtin.bind(this.parseint_list_of_list_of_str, @iter, ssv);
+    let (as_lists) = this.mat2dtolists();
+    let (as_lists) = this.builtin.bind(as_lists, @iter, numerical);
+    let (caller, ^, as_lists) = this.builtin.fwd_req(caller, as_lists, @get);
+    let (transposed) = this.transpose2(as_lists);
+
+    let (as_lists) = this.mat2dtolists();
+    let (as_lists) = this.builtin.bind(as_lists, @iter, transposed);
+    let (^, @resp, as_lists) = as_lists(@get);
+
+    let (as_lists, @resp, @some, a) = as_lists(@pop_front);
+    let (as_lists, @resp, @some, b) = as_lists(@pop_front);
+    let (as_lists, @resp, @none) = as_lists(@pop_front);
+
+    let (^, @resp, a) = a(@into_iter);
+    let (^, @resp, b) = b(@into_iter);
+
+    let (a_sorted) = this.builtin.bind(this.iter.mergesort, @iter, a);
+    let (b_sorted) = this.builtin.bind(this.iter.mergesort, @iter, b);
+
+    let (diffs) = this.iter_abs_diff;
+    let (diffs) = this.builtin.bind(diffs, @a, a_sorted);
+    let (diffs) = this.builtin.bind(diffs, @b, b_sorted);
+
+    let (sum) = this.reduce_sum();
+    let (sum) = this.builtin.bind(sum, @iter, diffs);
+    let (caller, ^, sum) = this.builtin.fwd_req(caller, sum, @get);
+
+    let () = caller(@resp, sum);
+}
+
+proc main(caller) {
+    //let () = this.tests.cases.transpose2_single_row();
+
+    let (sol) = this.builtin.bind(this.solve_the_thing, @source, this.io.stdin_chars);
+    let (caller, sol, num) = this.builtin.fwd_req(caller, sol, @get);
+    
+    let (caller) = caller(@req, @print, num);
+
 
     //let (ints) = this.builtin.bind(this.parseint_list_of_list_of_str, @iter, ssv);
 //    
-//    let (caller, ssv, @start) = this.fwd_req(caller, ssv, @next);
+//    
 //
 //    let (mapped) = this.bind(this.iter.multi_map, @iter, ssv);
 //
@@ -417,7 +536,7 @@ proc main(caller) {
 //
     //let (caller, ^, @eos) = this.builtin.fwd_req(caller, ssv, @get);
 //
-    ///let () = caller(@req, @halt);
+    let () = caller(@req, @halt);
 
     //let () = this.tests.cases.mergesort_full();
     //let (iter) = this.iter.symbol_chars&(@foobar);

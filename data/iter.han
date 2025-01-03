@@ -32,7 +32,7 @@ proc symbol_chars_inner(symbol, offset, caller, @next) {
         let () = caller(@resp, @eos);
     } else {
         let (^, @ok, char) = this.builtin.symbol_char_at(*symbol, *offset);
-        let (^, @ok, offset) = this.builtin.add(offset, 1);
+        let (offset) = this.builtin.add(offset, 1);
         let () = caller(@resp, @yield, char);
         become this.symbol_chars_inner(symbol, offset)
     }
