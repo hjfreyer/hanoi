@@ -367,7 +367,7 @@ proc transpose2_impl(list, caller, @next) {
     } else {
         let (caller, @next) = caller(@resp, @start);
         let (^, @resp, fronts) = fronts(@into_iter);
-        let (caller, ^, @eos) = this.fwd_yields(caller, fronts);
+        let (caller, ^, @eos) = this.fwd_yields(caller, fronts, @next);
         let (caller, @next) = caller(@resp, @eos);
         become this.transpose2_impl(rests, caller, @next)
     }

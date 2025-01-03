@@ -55,7 +55,7 @@ proc list_cons(head, tail, caller) {
     }
 }
 
-proc list_into_iter(list, caller) {
+proc list_into_iter(list, caller, @next) {
     let (list, @resp) = list(@pop_front);
     match {
         (@none) => {
