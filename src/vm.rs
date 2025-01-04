@@ -441,7 +441,6 @@ impl<'t> Vm<'t> {
         let pc = &mut self.pc;
         let word = &self.lib.sentences[pc.sentence_idx].words[pc.word_idx];
         eval(&self.lib, &mut self.stack, &word)?;
-        let location = word.location();
         if pc.word_idx < self.lib.sentences[pc.sentence_idx].words.len() - 1 {
             pc.word_idx += 1;
         } else {
@@ -449,20 +448,20 @@ impl<'t> Vm<'t> {
                 Some(Value::Symbol(op)) => op,
                 Some(value) => {
                     return Err(EvalError {
-                        location: Some(location),
+                        location: Some(word.location()),
                         inner: InnerEvalError::UnexpectedControlFlow { value },
                     })
                 }
                 None => {
                     return Err(EvalError {
-                        location: Some(location),
+                        location: Some(word.location()),
                         inner: InnerEvalError::EmptyStack,
                     })
                 }
             };
             if op != "exec" {
                 return Err(EvalError {
-                    location: Some(location),
+                    location: Some(word.location()),
                     inner: InnerEvalError::UnexpectedControlFlow {
                         value: Value::Symbol(op),
                     },
@@ -473,13 +472,13 @@ impl<'t> Vm<'t> {
                 Some(Value::Pointer(next)) => next,
                 Some(value) => {
                     return Err(EvalError {
-                        location: Some(location),
+                        location: Some(word.location()),
                         inner: InnerEvalError::ExecNonClosure { value },
                     })
                 }
                 None => {
                     return Err(EvalError {
-                        location: Some(location),
+                        location: Some(word.location()),
                         inner: InnerEvalError::ExecEmptyStack,
                     })
                 }
