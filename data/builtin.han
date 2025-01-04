@@ -146,3 +146,55 @@ proc compose_impl(f, g, caller) {
         }
     }
 }
+
+proc container_builder(caller) {
+    become caller(this.container_builder_impl&(this.container_inner_empty))
+}
+
+proc container_inner_empty(caller) {}
+
+proc container_inner_cons(name, value, tail, caller, req_name) {
+    let (^, @ok, are_eq) = this.eq(*req_name, *name);
+    if are_eq {
+        let (value) = value();
+        let () = caller();
+        become this.container_inner_cons(name, value, tail)
+    } else {
+        let (tail) = tail(req_name);
+        let () = caller();
+        become this.container_inner_cons(name, value, tail)
+    }        
+}
+
+proc container_builder_impl(inner, caller) {
+    match {
+        (@bind, name, value) => {
+            let (cons) = this.container_inner_cons&(name, value, inner);
+            let () = caller();
+            become this.container_builder_impl(cons)
+        }
+        (@build) => {
+            become caller(inner)
+        }
+    }
+}
+
+mod tests {
+    proc enumerate(caller, @next) {
+        // let (caller, @next) = caller(@yield, @container);
+        let () = caller(@eos);        
+    }
+
+    mod cases {
+        proc container(caller) {
+            //let (c) = this.super.super.container_new();
+            //let (c) = c(@bind, @foo, @bar);
+            //let (c) = c(@foo);
+            //let () = caller(@pass);
+        }
+    }
+
+    proc run(caller, case_name) {
+        R{ @cases this #get #get @exec }
+    }
+}

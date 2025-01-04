@@ -496,22 +496,26 @@ proc solve_the_thing(caller, @get) {
     let (^, @resp, a) = a(@into_iter);
     let (^, @resp, b) = b(@into_iter);
 
-    let (a_sorted) = this.builtin.bind(this.iter.mergesort, @iter, a);
-    let (b_sorted) = this.builtin.bind(this.iter.mergesort, @iter, b);
+    let (a_sorted) = this.builtin.compose(a, this.iter.mergesort);
+    let (b_sorted) = this.builtin.compose(b, this.iter.mergesort);
+
+    let (c) = this.builtin.container_builder();
+    let (c) = c(@bind, @a, a_sorted);
+    let (c) = c(@bind, @b, b_sorted);
+    let (c) = c(@build);
 
     let (diffs) = this.iter_abs_diff;
-    let (diffs) = this.builtin.bind(diffs, @a, a_sorted);
-    let (diffs) = this.builtin.bind(diffs, @b, b_sorted);
+    let (diffs) = this.builtin.compose(c, diffs);
 
     let (sum) = this.reduce_sum();
-    let (sum) = this.builtin.bind(sum, @iter, diffs);
+    let (sum) = this.builtin.compose(diffs, sum);
     let (caller, ^, sum) = this.builtin.fwd_req(caller, sum, @get);
 
     let () = caller(@resp, sum);
 }
 
 proc main(caller) {
-    //let () = this.tests.cases.transpose2_single_row();
+    //let () = this.iter.tests.cases.merge_sorted();
 
     let (sol) = this.builtin.compose(this.io.stdin_chars, this.solve_the_thing);
     let (caller, sol, num) = this.builtin.fwd_req(caller, sol, @get);
