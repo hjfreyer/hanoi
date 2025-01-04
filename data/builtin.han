@@ -128,3 +128,21 @@ proc fwd_req(next, up, down) {
         }
     }
 }
+
+proc compose(caller, f, g) {
+    become caller(this.compose_impl&(f, g))
+}
+
+proc compose_impl(f, g, caller) {
+    let (g) = g();
+    match {
+        (@req) => {
+            let (caller, f) = this.fwd_req(caller, f);
+            become this.compose_impl(f, g, caller)
+        }
+        (@resp) => {
+            let (caller) = caller(@resp);
+            become this.compose_impl(f, g, caller)
+        }
+    }
+}

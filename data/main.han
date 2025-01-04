@@ -53,19 +53,19 @@ baz");
         proc parseint_list_of_str(caller) {
             let (p) = this.super.super.parseint_list_of_str;
 
-            let (p, @req, @iter, @next) = p(@next);
-            let (p, @req, @iter, @next) = p(@start);
-            let (p, @req, @iter, @next) = p(@yield, '1');
-            let (p, @req, @iter, @next) = p(@yield, '2');
-            let (p, @req, @iter, @next) = p(@yield, '3');
+            let (p, @req, @next) = p(@next);
+            let (p, @req, @next) = p(@start);
+            let (p, @req, @next) = p(@yield, '1');
+            let (p, @req, @next) = p(@yield, '2');
+            let (p, @req, @next) = p(@yield, '3');
             let (p, @resp, @yield, 123) = p(@eos);
-            let (p, @req, @iter, @next) = p(@next);
-            let (p, @req, @iter, @next) = p(@start);
-            let (p, @req, @iter, @next) = p(@yield, '4');
-            let (p, @req, @iter, @next) = p(@yield, '5');
-            let (p, @req, @iter, @next) = p(@yield, '6');
+            let (p, @req, @next) = p(@next);
+            let (p, @req, @next) = p(@start);
+            let (p, @req, @next) = p(@yield, '4');
+            let (p, @req, @next) = p(@yield, '5');
+            let (p, @req, @next) = p(@yield, '6');
             let (p, @resp, @yield, 456) = p(@eos);
-            let (p, @req, @iter, @next) = p(@next);
+            let (p, @req, @next) = p(@next);
             let (p, @resp, @eos) = p(@eos);
             
             let () = caller(@pass);
@@ -74,40 +74,40 @@ baz");
         proc parseint_list_of_list_of_str(caller) {
             let (p) = this.super.super.parseint_list_of_list_of_str;
 
-            let (p, @req, @iter, @next) = p(@next);
+            let (p, @req, @next) = p(@next);
             let (p, @resp, @start) = p(@start);
 
-            let (p, @req, @iter, @next) = p(@next);
-            let (p, @req, @iter, @next) = p(@start);
-            let (p, @req, @iter, @next) = p(@yield, '1');
-            let (p, @req, @iter, @next) = p(@yield, '2');
-            let (p, @req, @iter, @next) = p(@yield, '3');
+            let (p, @req, @next) = p(@next);
+            let (p, @req, @next) = p(@start);
+            let (p, @req, @next) = p(@yield, '1');
+            let (p, @req, @next) = p(@yield, '2');
+            let (p, @req, @next) = p(@yield, '3');
             let (p, @resp, @yield, 123) = p(@eos);
 
-            let (p, @req, @iter, @next) = p(@next);
-            let (p, @req, @iter, @next) = p(@start);
-            let (p, @req, @iter, @next) = p(@yield, '4');
-            let (p, @req, @iter, @next) = p(@yield, '5');
-            let (p, @req, @iter, @next) = p(@yield, '6');
+            let (p, @req, @next) = p(@next);
+            let (p, @req, @next) = p(@start);
+            let (p, @req, @next) = p(@yield, '4');
+            let (p, @req, @next) = p(@yield, '5');
+            let (p, @req, @next) = p(@yield, '6');
             let (p, @resp, @yield, 456) = p(@eos);
             
-            let (p, @req, @iter, @next) = p(@next);
+            let (p, @req, @next) = p(@next);
             let (p, @resp, @eos) = p(@eos);
 
-            let (p, @req, @iter, @next) = p(@next);
+            let (p, @req, @next) = p(@next);
             let (p, @resp, @start) = p(@start);
 
-            let (p, @req, @iter, @next) = p(@next);
-            let (p, @req, @iter, @next) = p(@start);
-            let (p, @req, @iter, @next) = p(@yield, '1');
-            let (p, @req, @iter, @next) = p(@yield, '2');
-            let (p, @req, @iter, @next) = p(@yield, '3');
+            let (p, @req, @next) = p(@next);
+            let (p, @req, @next) = p(@start);
+            let (p, @req, @next) = p(@yield, '1');
+            let (p, @req, @next) = p(@yield, '2');
+            let (p, @req, @next) = p(@yield, '3');
             let (p, @resp, @yield, 123) = p(@eos);
             
-            let (p, @req, @iter, @next) = p(@next);
+            let (p, @req, @next) = p(@next);
             let (p, @resp, @eos) = p(@eos);
 
-            let (p, @req, @iter, @next) = p(@next);
+            let (p, @req, @next) = p(@next);
             let (p, @resp, @eos) = p(@eos);
             
             let () = caller(@pass);
@@ -214,7 +214,7 @@ baz");
 
 mod csv {
     proc start(caller, @next) {
-        let (caller) = caller(@req, @iter, @next);
+        let (caller) = caller(@req, @next);
         match {
             (@eos) =>  {
                 let () = caller(@resp, @eos);
@@ -253,7 +253,7 @@ mod csv {
     }
 
     proc non_quoted(caller) {
-        let (caller) = caller(@req, @iter, @next);
+        let (caller) = caller(@req, @next);
         match {
             (@eos) => {
                 let (caller, @next) = caller(@resp, @endfield);
@@ -267,7 +267,7 @@ mod csv {
     }
 
     proc quoted(caller) {
-        let (caller) = caller(@req, @iter, @next);
+        let (caller) = caller(@req, @next);
         match {
             (@eos) => {
                 let () = caller(@resp, @err, @nonterminatedquote);
@@ -284,7 +284,7 @@ mod csv {
 }
 
 proc dump(caller, @get) {
-    let (caller) = caller(@req, @iter, @next);
+    let (caller) = caller(@req, @next);
     match {
         (@eos) => {
             let (caller) = caller(@req, @print, @eos);
@@ -306,7 +306,7 @@ proc dump(caller, @get) {
 }
 
 proc parseint_list_of_str(caller, @next) {
-    let (caller) = caller(@req, @iter, @next);
+    let (caller) = caller(@req, @next);
     match {
         (@start) => {
             let (p) = this.str.parseint();
@@ -321,7 +321,7 @@ proc parseint_list_of_str(caller, @next) {
 }
 
 proc parseint_list_of_list_of_str(caller, @next) {
-    let (caller) = caller(@req, @iter, @next);
+    let (caller) = caller(@req, @next);
     match {
         (@start) => {
             let (caller, @next) = caller(@resp, @start);
@@ -427,7 +427,7 @@ proc reduce_sum(caller) {
 }
 
 proc reduce_sum_impl(acc, caller, @get) {
-    let (caller) = caller(@req, @iter, @next);
+    let (caller) = caller(@req, @next);
     match {
         (@eos) => {
             let () = caller(@resp, acc);
@@ -445,7 +445,7 @@ proc mat2dtolists(caller) {
 }
 
 proc mat2dtolists_impl(list, caller, @get) {
-    let (caller) = caller(@req, @iter, @next);
+    let (caller) = caller(@req, @next);
     match {
         (@start) => {
             let (collector) = this.iter_to_list();
@@ -465,7 +465,7 @@ proc iter_to_list(caller) {
 }
 
 proc iter_to_list_impl(list, caller, @get) {
-    let (caller) = caller(@req, @iter, @next);
+    let (caller) = caller(@req, @next);
     match {
         (@eos) => {
             let () = caller(@resp, list);
@@ -479,14 +479,14 @@ proc iter_to_list_impl(list, caller, @get) {
 
 proc solve_the_thing(caller, @get) {
     let (ssv) = this.ssv.parser();
-    let (numerical) = this.builtin.bind(this.parseint_list_of_list_of_str, @iter, ssv);
+    let (numerical) = this.builtin.compose(ssv, this.parseint_list_of_list_of_str);
     let (as_lists) = this.mat2dtolists();
-    let (as_lists) = this.builtin.bind(as_lists, @iter, numerical);
+    let (as_lists) = this.builtin.compose(numerical, as_lists);
     let (caller, ^, as_lists) = this.builtin.fwd_req(caller, as_lists, @get);
     let (transposed) = this.transpose2(as_lists);
 
     let (as_lists) = this.mat2dtolists();
-    let (as_lists) = this.builtin.bind(as_lists, @iter, transposed);
+    let (as_lists) = this.builtin.compose(transposed, as_lists);
     let (^, @resp, as_lists) = as_lists(@get);
 
     let (as_lists, @resp, @some, a) = as_lists(@pop_front);
@@ -513,7 +513,7 @@ proc solve_the_thing(caller, @get) {
 proc main(caller) {
     //let () = this.tests.cases.transpose2_single_row();
 
-    let (sol) = this.builtin.bind(this.solve_the_thing, @source, this.io.stdin_chars);
+    let (sol) = this.builtin.compose(this.io.stdin_chars, this.solve_the_thing);
     let (caller, sol, num) = this.builtin.fwd_req(caller, sol, @get);
     
     let (caller) = caller(@req, @print, num);

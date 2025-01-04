@@ -12,7 +12,7 @@ mod tests {
     mod cases {
         proc empty_string(caller) {
             let (p) = this.super.super.parser();
-            let (p, @req, @source, @next) = p(@next);
+            let (p, @req, @next) = p(@next);
             let (p, @resp, @eos) = p(@eos);
 
             let () = caller(@pass);
@@ -24,7 +24,7 @@ baz   qux
 ");
 
             let (p) = this.super.super.parser();
-            let (p) = this.super.super.builtin.bind(p, @source, input);
+            let (p) = this.super.super.builtin.compose(input, p);
             let (p, @resp, @start) = p(@next);
             let (p, @resp, @start) = p(@next);
             let (p, @resp, @yield, 'f') = p(@next);
@@ -69,7 +69,7 @@ proc impl_start(caller, @next) {
 }
 
 proc impl_newline(caller, @next) {
-    let (caller) = caller(@req, @source, @next);
+    let (caller) = caller(@req, @next);
     match {
         (@eos) => {
             let () = caller(@resp, @eos);
@@ -88,7 +88,7 @@ proc impl_newline(caller, @next) {
 }
 
 proc impl_infield(caller, @next) {
-    let (caller) = caller(@req, @source, @next);
+    let (caller) = caller(@req, @next);
     match {
         (@eos) => {
             let () = caller(@resp, @err, @unexpected_eos);
@@ -110,7 +110,7 @@ proc impl_infield(caller, @next) {
 }
 
 proc impl_inspace(caller, @next) {
-    let (caller) = caller(@req, @source, @next);
+    let (caller) = caller(@req, @next);
     match {
         (@eos) => {
             let () = caller(@resp, @err, @unexpected_eos);
