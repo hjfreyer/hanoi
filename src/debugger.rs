@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 use itertools::{Itertools, Position};
 use ratatui::{
     crossterm::event,
@@ -11,17 +13,20 @@ use ratatui::{
 use crate::{
     ast,
     flat::{Closure, Value, ValueView, Word},
-    vm::{EvalError, StepResult, Vm},
+    vm::{EvalError, StepResult, Vm, VmState},
 };
 
 pub struct Debugger<'t> {
     vm: Vm<'t>,
+    history: VecDeque<VmState>,
 
     highlight_span: Option<pest::Span<'t>>,
     code_scroll: u16,
     stack_state: TableState,
     error: Option<EvalError>,
 }
+
+const HISTORY_WINDOW: usize = 500;
 
 impl<'t> Debugger<'t> {
     fn step(&mut self) {
@@ -31,16 +36,30 @@ impl<'t> Debugger<'t> {
 
         match self.vm.step() {
             Ok(step) => {
-                if let Some(word) = self.vm.current_word() {
-                    self.highlight_span = Some(word.span);
-                    let (line, _) = word.span.start_pos().line_col();
-                    self.code_scroll = (line as u16).saturating_sub(10);
+                if HISTORY_WINDOW < self.history.len() {
+                    self.history.pop_front();
                 }
+                self.history.push_back(self.vm.save_state());
+                self.update_code();
             }
             Err(err) => {
                 self.error = Some(err);
             }
         }
+    }
+
+    fn update_code(&mut self) {
+        if let Some(word) = self.vm.current_word() {
+            self.highlight_span = Some(word.span);
+            let (line, _) = word.span.start_pos().line_col();
+            self.code_scroll = (line as u16).saturating_sub(10);
+        }
+    }
+
+    pub fn step_back(&mut self) {
+        self.vm.restore_state(self.history.pop_back().unwrap());
+        self.error = None;
+        self.update_code();
     }
 
     fn next_line(&mut self) {
@@ -203,14 +222,17 @@ impl<'t> Debugger<'t> {
     }
 
     pub fn new(code: &'t str, vm: crate::vm::Vm<'t>) -> Self {
-        let highlight_span = vm.current_word().map(|w| w.span);
-        Self {
-            code_scroll: 0,
+        let mut res = Self {
             vm,
+            history: VecDeque::new(),
             stack_state: TableState::default(),
             error: None,
-            highlight_span,
-        }
+
+            code_scroll: 0,
+            highlight_span: None,
+        };
+        res.update_code();
+        res
     }
 }
 
@@ -234,6 +256,9 @@ pub fn run(mut terminal: DefaultTerminal, mut debugger: Debugger) -> std::io::Re
                 debugger.jump_over();
             }
 
+            if key.kind == event::KeyEventKind::Press && key.code == event::KeyCode::Left {
+                debugger.step_back();
+            }
             if key.kind == event::KeyEventKind::Press && key.code == event::KeyCode::Right {
                 debugger.step();
             }

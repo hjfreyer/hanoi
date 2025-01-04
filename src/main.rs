@@ -57,7 +57,6 @@ fn run(base_dir: PathBuf, module: String) -> anyhow::Result<()> {
         main,
     ));
 
-    
     let mut res = match vm.run() {
         Ok(res) => res,
         Err(e) => {

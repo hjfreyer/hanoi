@@ -357,6 +357,11 @@ pub struct Vm<'t> {
     pub stdout: Box<dyn Write>,
 }
 
+pub struct VmState {
+    pub pc: ProgramCounter,
+    pub stack: Stack,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProgramCounter {
     pub sentence_idx: SentenceIndex,
@@ -380,6 +385,18 @@ impl<'t> Vm<'t> {
             stdin: Box::new(stdin()),
             stdout: Box::new(stdout()),
         }
+    }
+
+    pub fn save_state(&self) -> VmState {
+        VmState {
+            pc: self.pc,
+            stack: self.stack.clone(),
+        }
+    }
+
+    pub fn restore_state(&mut self, state: VmState) {
+        self.pc = state.pc;
+        self.stack = state.stack;
     }
 
     pub fn with_stdin(mut self, stdin: impl Read + 'static) -> Self {
@@ -566,7 +583,7 @@ impl<'t> Vm<'t> {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Stack {
     inner: Vec<Value>,
     stash: Vec<Value>,
