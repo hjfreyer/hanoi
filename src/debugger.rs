@@ -88,6 +88,12 @@ impl<'t> Debugger<'t> {
     }
 
     fn jump_over(&mut self) {
+        let current_line = self
+            .highlight_span
+            .expect("ran until current word was some")
+            .start_pos()
+            .line_col()
+            .0;
         self.finish_sentence();
         if self.error.is_some() {
             return;
@@ -99,6 +105,14 @@ impl<'t> Debugger<'t> {
         };
 
         while self.error.is_none() && self.vm.pc.sentence_idx != sidx {
+            self.step()
+        }
+        while self.error.is_none()
+            && self
+                .highlight_span
+                .map(|span| span.start_pos().line_col().0 == current_line)
+                .unwrap_or(true)
+        {
             self.step()
         }
     }
