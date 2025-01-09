@@ -9,12 +9,6 @@ mod str;
 mod tests {
     proc enumerate(caller, @next) {
 //        let (caller, @next) = caller(@yield, @basic_csv);
-        let (caller, @next) = caller(@yield, @parseint_list_of_str);
-        let (caller, @next) = caller(@yield, @parseint_list_of_list_of_str);
-        let (caller, @next) = caller(@yield, @transpose2_empty);
-        let (caller, @next) = caller(@yield, @transpose2_single_row);
-        let (caller, @next) = caller(@yield, @transpose2_single_col);
-        let (caller, @next) = caller(@yield, @transpose2_full);
         let () = caller(@eos);        
     }
 
@@ -27,184 +21,29 @@ baz");
                 @iter, 
                 iter);
 
-            let (bound, @resp, @startrow) = bound(@next);
-            let (bound, @resp, @startfield) = bound(@next);
-            let (bound, @resp, @yield, 'f') = bound(@next);
-            let (bound, @resp, @yield, 'o') = bound(@next);
-            let (bound, @resp, @yield, 'o') = bound(@next);
-            let (bound, @resp, @endfield) = bound(@next);
-            let (bound, @resp, @startfield) = bound(@next);
-            let (bound, @resp, @yield, 'b') = bound(@next);
-            let (bound, @resp, @yield, 'a') = bound(@next);
-            let (bound, @resp, @yield, 'r') = bound(@next);
-            let (bound, @resp, @endfield) = bound(@next);
-            let (bound, @resp, @endrow) = bound(@next);
-            let (bound, @resp, @startrow) = bound(@next);
-            let (bound, @resp, @startfield) = bound(@next);
-            let (bound, @resp, @yield, 'b') = bound(@next);
-            let (bound, @resp, @yield, 'a') = bound(@next);
-            let (bound, @resp, @yield, 'z') = bound(@next);
-            let (bound, @resp, @endfield) = bound(@next);
-            let (bound, @resp, @endrow) = bound(@next);
-            let (bound, @resp, @eos) = bound(@next);
+            let (@resp, bound, @startrow) = bound(@next);
+            let (@resp, bound, @startfield) = bound(@next);
+            let (@resp, bound, @yield, 'f') = bound(@next);
+            let (@resp, bound, @yield, 'o') = bound(@next);
+            let (@resp, bound, @yield, 'o') = bound(@next);
+            let (@resp, bound, @endfield) = bound(@next);
+            let (@resp, bound, @startfield) = bound(@next);
+            let (@resp, bound, @yield, 'b') = bound(@next);
+            let (@resp, bound, @yield, 'a') = bound(@next);
+            let (@resp, bound, @yield, 'r') = bound(@next);
+            let (@resp, bound, @endfield) = bound(@next);
+            let (@resp, bound, @endrow) = bound(@next);
+            let (@resp, bound, @startrow) = bound(@next);
+            let (@resp, bound, @startfield) = bound(@next);
+            let (@resp, bound, @yield, 'b') = bound(@next);
+            let (@resp, bound, @yield, 'a') = bound(@next);
+            let (@resp, bound, @yield, 'z') = bound(@next);
+            let (@resp, bound, @endfield) = bound(@next);
+            let (@resp, bound, @endrow) = bound(@next);
+            let (@resp, bound, @eos) = bound(@next);
             let () = caller(@pass);
         }
 
-        proc parseint_list_of_str(caller) {
-            let (p) = this.super.super.parseint_list_of_str;
-
-            let (p, @req, @next) = p(@next);
-            let (p, @req, @next) = p(@start);
-            let (p, @req, @next) = p(@yield, '1');
-            let (p, @req, @next) = p(@yield, '2');
-            let (p, @req, @next) = p(@yield, '3');
-            let (p, @resp, @yield, 123) = p(@eos);
-            let (p, @req, @next) = p(@next);
-            let (p, @req, @next) = p(@start);
-            let (p, @req, @next) = p(@yield, '4');
-            let (p, @req, @next) = p(@yield, '5');
-            let (p, @req, @next) = p(@yield, '6');
-            let (p, @resp, @yield, 456) = p(@eos);
-            let (p, @req, @next) = p(@next);
-            let (p, @resp, @eos) = p(@eos);
-            
-            let () = caller(@pass);
-        }
-
-        proc parseint_list_of_list_of_str(caller) {
-            let (p) = this.super.super.parseint_list_of_list_of_str;
-
-            let (p, @req, @next) = p(@next);
-            let (p, @resp, @start) = p(@start);
-
-            let (p, @req, @next) = p(@next);
-            let (p, @req, @next) = p(@start);
-            let (p, @req, @next) = p(@yield, '1');
-            let (p, @req, @next) = p(@yield, '2');
-            let (p, @req, @next) = p(@yield, '3');
-            let (p, @resp, @yield, 123) = p(@eos);
-
-            let (p, @req, @next) = p(@next);
-            let (p, @req, @next) = p(@start);
-            let (p, @req, @next) = p(@yield, '4');
-            let (p, @req, @next) = p(@yield, '5');
-            let (p, @req, @next) = p(@yield, '6');
-            let (p, @resp, @yield, 456) = p(@eos);
-            
-            let (p, @req, @next) = p(@next);
-            let (p, @resp, @eos) = p(@eos);
-
-            let (p, @req, @next) = p(@next);
-            let (p, @resp, @start) = p(@start);
-
-            let (p, @req, @next) = p(@next);
-            let (p, @req, @next) = p(@start);
-            let (p, @req, @next) = p(@yield, '1');
-            let (p, @req, @next) = p(@yield, '2');
-            let (p, @req, @next) = p(@yield, '3');
-            let (p, @resp, @yield, 123) = p(@eos);
-            
-            let (p, @req, @next) = p(@next);
-            let (p, @resp, @eos) = p(@eos);
-
-            let (p, @req, @next) = p(@next);
-            let (p, @resp, @eos) = p(@eos);
-            
-            let () = caller(@pass);
-        }
-        
-        proc transpose2_empty(caller) {
-            let (list) = this.super.super.list.new();
-
-            let (t) = this.super.super.transpose2(list);
-            let (t, @resp, @eos) = t(@next);
-
-            let () = caller(@pass);
-        }
-
-        proc transpose2_single_row(caller) {
-            let (row) = this.super.super.list.new();
-            let (row, @resp) = row(@push_back, @foo);
-            let (row, @resp) = row(@push_back, @bar);
-            let (row, @resp) = row(@push_back, @baz);
-
-            let (list) = this.super.super.list.new();
-            let (list, @resp) = list(@push_back, row);
-
-            let (t) = this.super.super.transpose2(list);
-            let (t, @resp, @start) = t(@next);
-            let (t, @resp, @yield, @foo) = t(@next);
-            let (t, @resp, @eos) = t(@next);
-            let (t, @resp, @start) = t(@next);
-            let (t, @resp, @yield, @bar) = t(@next);
-            let (t, @resp, @eos) = t(@next);
-            let (t, @resp, @start) = t(@next);
-            let (t, @resp, @yield, @baz) = t(@next);
-            let (t, @resp, @eos) = t(@next);
-            let (t, @resp, @eos) = t(@next);
-            
-            let () = caller(@pass);
-        }
-
-        proc transpose2_single_col(caller) {
-            let (list) = this.super.super.list.new();
-
-            let (row) = this.super.super.list.new();
-            let (row, @resp) = row(@push_back, @foo);
-            let (list, @resp) = list(@push_back, row);
-            
-            let (row) = this.super.super.list.new();
-            let (row, @resp) = row(@push_back, @bar);
-            let (list, @resp) = list(@push_back, row);
-            
-            let (row) = this.super.super.list.new();
-            let (row, @resp) = row(@push_back, @baz);
-            let (list, @resp) = list(@push_back, row);
-
-            let (t) = this.super.super.transpose2(list);
-            let (t, @resp, @start) = t(@next);
-            let (t, @resp, @yield, @foo) = t(@next);
-            let (t, @resp, @yield, @bar) = t(@next);
-            let (t, @resp, @yield, @baz) = t(@next);
-            let (t, @resp, @eos) = t(@next);
-            let (t, @resp, @eos) = t(@next);
-            
-            let () = caller(@pass);
-        }
-
-        proc transpose2_full(caller) {
-            let (list) = this.super.super.list.new();
-
-            let (row) = this.super.super.list.new();
-            let (row, @resp) = row(@push_back, @foo);
-            let (row, @resp) = row(@push_back, @bar);
-            let (list, @resp) = list(@push_back, row);
-            
-            let (row) = this.super.super.list.new();
-            let (row, @resp) = row(@push_back, @baz);
-            let (row, @resp) = row(@push_back, @qux);
-            let (list, @resp) = list(@push_back, row);
-            
-            let (row) = this.super.super.list.new();
-            let (row, @resp) = row(@push_back, 1);
-            let (row, @resp) = row(@push_back, 2);
-            let (list, @resp) = list(@push_back, row);
-
-            let (t) = this.super.super.transpose2(list);
-            let (t, @resp, @start) = t(@next);
-            let (t, @resp, @yield, @foo) = t(@next);
-            let (t, @resp, @yield, @baz) = t(@next);
-            let (t, @resp, @yield, 1) = t(@next);
-            let (t, @resp, @eos) = t(@next);
-            let (t, @resp, @start) = t(@next);
-            let (t, @resp, @yield, @bar) = t(@next);
-            let (t, @resp, @yield, @qux) = t(@next);
-            let (t, @resp, @yield, 2) = t(@next);
-            let (t, @resp, @eos) = t(@next);
-            let (t, @resp, @eos) = t(@next);
-            
-            let () = caller(@pass);
-        }
     }
 
     proc run(caller, case_name) {
@@ -214,14 +53,14 @@ baz");
 
 mod csv {
     proc start(caller, @next) {
-        let (caller) = caller(@req, @next);
+        let (caller) = req caller(@next);
         match {
             (@eos) =>  {
-                let () = caller(@resp, @eos);
+                let () = resp caller(@eos);
             }
             (@yield, char) => {
-                let (caller, @next) = caller(@resp, @startrow);
-                let (caller) = caller(@resp, @startfield);
+                let (caller, @next) = resp caller(@startrow);
+                let (caller) = resp caller(@startfield);
                 become this.default_handle_char(caller, char)
             }
         }
@@ -230,8 +69,8 @@ mod csv {
     proc default_handle_char(caller) {
         match {
             ('\n') => {
-                let (caller, @next) = caller(@resp, @endfield);
-                let () = caller(@resp, @endrow);
+                let (caller, @next) = resp caller(@endfield);
+                let () = resp caller(@endrow);
                 become this.start()
             }
             ('"') => {
@@ -241,24 +80,24 @@ mod csv {
                 become this.escaped(caller)
             }
             (',') => {
-                let (caller, @next) = caller(@resp, @endfield);
-                let () = caller(@resp, @startfield);
+                let (caller, @next) = resp caller(@endfield);
+                let () = resp caller(@startfield);
                 become this.non_quoted()               
             }
             (char) => {
-                let () = caller(@resp, @yield, char);
+                let () = resp caller(@yield, char);
                 become this.non_quoted()
             }
         }
     }
 
     proc non_quoted(caller) {
-        let (caller) = caller(@req, @next);
+        let (caller) = req caller(@next);
         match {
             (@eos) => {
-                let (caller, @next) = caller(@resp, @endfield);
-                let (caller, @next) = caller(@resp, @endrow);
-                let () = caller(@resp, @eos);
+                let (caller, @next) = resp caller(@endfield);
+                let (caller, @next) = resp caller(@endrow);
+                let () = resp caller(@eos);
             }
             (@yield, char) => {
                 become this.default_handle_char(caller, char)
@@ -267,16 +106,16 @@ mod csv {
     }
 
     proc quoted(caller) {
-        let (caller) = caller(@req, @next);
+        let (caller) = req caller(@next);
         match {
             (@eos) => {
-                let () = caller(@resp, @err, @nonterminatedquote);
+                let () = resp caller(@err, @nonterminatedquote);
             }
             (@yield, '"') => {
                 become this.non_quoted(caller)
             }
             (@yield, char) => {
-                let (caller, @next) = caller(@resp);
+                let (caller, @next) = resp caller();
                 become this.default_handle_char(caller, char)
             }
         }
@@ -284,244 +123,35 @@ mod csv {
 }
 
 proc dump(caller, @get) {
-    let (caller) = caller(@req, @next);
+    let (caller) = req caller(@next);
     match {
         (@eos) => {
-            let (caller) = caller(@req, @print, @eos);
+            let (caller) = req caller(@print, @eos);
             become this.dump(caller, @get)
         }
         (@start) => {
-            let (caller) = caller(@req, @print, @start);
+            let (caller) = req caller(@print, @start);
             become this.dump(caller, @get)
         }
         (@end) => {
-            let (caller) = caller(@req, @print, @end);
+            let (caller) = req caller(@print, @end);
             become this.dump(caller, @get)
         }
         (@yield, item) => {
-            let (caller) = caller(@req, @print, item);
+            let (caller) = req caller(@print, item);
             become this.dump(caller, @get)
         }
     }
 }
 
-proc parseint_list_of_str(caller, @next) {
-    let (caller) = caller(@req, @next);
-    match {
-        (@start) => {
-            let (p) = this.str.parseint();
-            let (caller, ^, @ok, num) = this.builtin.fwd_req(caller, p, @get);
-            let (caller, @next) = caller(@resp, @yield, num);
-            become this.parseint_list_of_str(caller, @next)
-        }
-        (@eos) => {
-            let () = caller(@resp, @eos);
-        }
-    }
-}
-
-proc parseint_list_of_list_of_str(caller, @next) {
-    let (caller) = caller(@req, @next);
-    match {
-        (@start) => {
-            let (caller, @next) = caller(@resp, @start);
-            let (p) = this.parseint_list_of_str;
-            let (caller, ^, @eos) = this.fwd_yields(caller, p, @next);
-            let (caller, @next) = caller(@resp, @eos);
-            become this.parseint_list_of_list_of_str(caller, @next)
-        }
-        (@eos) => {
-            let () = caller(@resp, @eos);
-        }
-    }
-}
-
-proc fwd_yields(next, up, down) {
-    let (down) = down();
-    match {
-        (@req) => {
-            let (up) = up(@req);
-            become this.fwd_yields(next, up, down)
-        }
-        (@resp, @yield) => {
-            let (up) = up(@resp, @yield);
-            become this.fwd_yields(next, up, down)
-        }
-        (@resp, other) => {
-            become next(up, down, other)
-        }
-    }
-}
-
-proc transpose2(caller, list) {
-    become caller(this.transpose2_impl&(list))
-}
-
-proc transpose2_impl(list, caller, @next) {
-    let (fronts) = this.list.new();
-    let (rests) = this.list.new();
-    let (fronts, rests) = this.take_first_row(fronts, rests, list);
-    let (fronts, @resp, is_empty) = fronts(@is_empty);
-    if is_empty {
-        let () = caller(@resp, @eos);
-    } else {
-        let (caller, @next) = caller(@resp, @start);
-        let (^, @resp, fronts) = fronts(@into_iter);
-        let (caller, ^, @eos) = this.fwd_yields(caller, fronts, @next);
-        let (caller, @next) = caller(@resp, @eos);
-        become this.transpose2_impl(rests, caller, @next)
-    }
-}
-
-proc take_first_row(caller, fronts, rests, list_of_lists) {
-    let (list_of_lists, @resp) = list_of_lists(@pop_front);
-    match {
-        (@none) => {
-            become caller(fronts, rests)
-        }
-        (@some, next_list) => {
-            let (next_list, @resp) = next_list(@pop_front);
-            match {
-                (@none) => {
-                    become this.take_first_row(caller, fronts, rests, list_of_lists)
-                }
-                (@some, item) => {
-                    let (fronts, @resp) = fronts(@push_back, item);
-                    let (rests, @resp) = rests(@push_back, next_list);
-                    become this.take_first_row(caller, fronts, rests, list_of_lists)
-                }
-            }
-        }
-    }
-}
-
-proc abs_diff(caller, a, b) {
-    let (lt) = this.builtin.lt(*a, *b);
-    if lt {
-        let (diff) = this.builtin.sub(b, a);
-        become caller(diff)
-    } else {
-        let (diff) = this.builtin.sub(a, b);
-        become caller(diff)
-    }
-
-}
-
-proc iter_abs_diff(caller, @next) {
-    let (caller) = caller(@req, @a, @next);
-    match {
-        (@eos) => {
-            let () = caller(@resp, @eos);
-        }
-        (@yield, a) => {
-            let (caller, @yield, b) = caller(@req, @b, @next);
-            let (d) = this.abs_diff(a, b);
-            let (caller, @next) = caller(@resp, @yield, d);
-            become this.iter_abs_diff(caller, @next)
-        }
-    }    
-}
-
-proc reduce_sum(caller) {
-    become caller(this.reduce_sum_impl&(0))
-}
-
-proc reduce_sum_impl(acc, caller, @get) {
-    let (caller) = caller(@req, @next);
-    match {
-        (@eos) => {
-            let () = caller(@resp, acc);
-        }
-        (@yield, item) => {
-            let (acc) = this.builtin.add(acc, item);
-            become this.reduce_sum_impl(acc, caller, @get)
-        }
-    }   
-}
-
-proc mat2dtolists(caller) {
-    let (list) = this.list.new();
-    become caller(this.mat2dtolists_impl&(list))
-}
-
-proc mat2dtolists_impl(list, caller, @get) {
-    let (caller) = caller(@req, @next);
-    match {
-        (@start) => {
-            let (collector) = this.iter_to_list();
-            let (caller, ^, row) = this.builtin.fwd_req(caller, collector, @get);
-            let (list, @resp) = list(@push_back, row);
-            become this.mat2dtolists_impl(list, caller, @get)
-        }
-        (@eos) => {
-            let () = caller(@resp, list);
-        }
-    }
-}
-
-proc iter_to_list(caller) {
-    let (list) = this.list.new();
-    become caller(this.iter_to_list_impl&(list))
-}
-
-proc iter_to_list_impl(list, caller, @get) {
-    let (caller) = caller(@req, @next);
-    match {
-        (@eos) => {
-            let () = caller(@resp, list);
-        }
-        (@yield, item) => {
-            let (list, @resp) = list(@push_back, item);
-            become this.iter_to_list_impl(list, caller, @get)
-        }
-    }
-}
-
-proc solve_the_thing(caller, @get) {
-    let (ssv) = this.ssv.parser();
-    let (numerical) = this.builtin.compose(ssv, this.parseint_list_of_list_of_str);
-    let (as_lists) = this.mat2dtolists();
-    let (as_lists) = this.builtin.compose(numerical, as_lists);
-    let (caller, ^, as_lists) = this.builtin.fwd_req(caller, as_lists, @get);
-    let (transposed) = this.transpose2(as_lists);
-
-    let (as_lists) = this.mat2dtolists();
-    let (as_lists) = this.builtin.compose(transposed, as_lists);
-    let (^, @resp, as_lists) = as_lists(@get);
-
-    let (as_lists, @resp, @some, a) = as_lists(@pop_front);
-    let (as_lists, @resp, @some, b) = as_lists(@pop_front);
-    let (as_lists, @resp, @none) = as_lists(@pop_front);
-
-    let (^, @resp, a) = a(@into_iter);
-    let (^, @resp, b) = b(@into_iter);
-
-    let (a_sorted) = this.builtin.compose(a, this.iter.mergesort);
-    let (b_sorted) = this.builtin.compose(b, this.iter.mergesort);
-
-    let (c) = this.builtin.container_builder();
-    let (c) = c(@bind, @a, a_sorted);
-    let (c) = c(@bind, @b, b_sorted);
-    let (c) = c(@build);
-
-    let (diffs) = this.iter_abs_diff;
-    let (diffs) = this.builtin.compose(c, diffs);
-
-    let (sum) = this.reduce_sum();
-    let (sum) = this.builtin.compose(diffs, sum);
-    let (caller, ^, sum) = this.builtin.fwd_req(caller, sum, @get);
-
-    let () = caller(@resp, sum);
-}
 
 proc main(caller) {
-    //let () = this.iter.tests.cases.merge_sorted();
+    let () = this.iter.tests.cases.mergesort_two();
 
     let (sol) = this.builtin.compose(this.io.stdin_chars, this.solve_the_thing);
     let (caller, sol, num) = this.builtin.fwd_req(caller, sol, @get);
     
-    let (caller) = caller(@req, @print, num);
-
+    let (caller) = req caller(@print, num);
 
     //let (ints) = this.builtin.bind(this.parseint_list_of_list_of_str, @iter, ssv);
 //    
@@ -540,7 +170,7 @@ proc main(caller) {
 //
     //let (caller, ^, @eos) = this.builtin.fwd_req(caller, ssv, @get);
 //
-    let () = caller(@req, @halt);
+    let () = req caller(@halt);
 
     //let () = this.tests.cases.mergesort_full();
     //let (iter) = this.iter.symbol_chars&(@foobar);

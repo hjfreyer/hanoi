@@ -77,12 +77,12 @@ proc bind_impl(inner, symbol, target, caller) {
                 let (caller, target) = this.fwd_req(caller, target);
                 become this.bind_impl(inner, symbol, target, caller)
             } else {
-                let (caller) = caller(@req, name);
+                let (caller) = req caller(name);
                 become this.bind_impl(inner, symbol, target, caller)
             }
         }
         (@resp) => {
-            let (caller) = caller(@resp);
+            let (caller) = resp caller();
             become this.bind_impl(inner, symbol, target, caller)
         }
     }
@@ -101,12 +101,12 @@ proc bind2_impl(inner, inner_symbol, target, target_symbol, caller) {
                 let (caller, target) = this.fwd_req(caller, target, @req, *target_symbol);
                 become this.bind2_impl(inner, inner_symbol, target, target_symbol, caller)
             } else {
-                let (caller) = caller(@req, name);
+                let (caller) = req caller(name);
                 become this.bind2_impl(inner, inner_symbol, target, target_symbol, caller)
             }
         }
         (@resp) => {
-            let (caller) = caller(@resp);
+            let (caller) = resp caller();
             become this.bind2_impl(inner, inner_symbol, target, target_symbol, caller)
         }
     }
@@ -117,14 +117,50 @@ proc bind2(caller, inner, inner_symbol, target, target_symbol) {
 }
 
 proc fwd_req(next, up, down) {
+    let () = down();
+    match {
+        (@req, down) => {
+            let (up) = req up();
+            become this.fwd_req(next, up, down)
+        }
+        (@resp, down) => {
+            become next(@resp, up, down)
+        }
+        (@end) => {
+            become next(@end, up)
+        }
+    }
+}
+
+proc fwd_once(next, up, down) {
     let (down) = down();
     match {
         (@req) => {
             let (up) = up(@req);
-            become this.fwd_req(next, up, down)
+            become this.fwd_once(next, up, down)
         }
         (@resp) => {
-            become next(up, down)
+            become next(up, down, @resp)
+        }
+        (@end) => {
+            become next(up, down, @resp)
+        }
+    }
+}
+
+proc fwd_all(next, up, down) {
+    let () = down();
+    match {
+        (@req, down) => {
+            let (up) = req up();
+            become this.fwd_all(next, up, down)
+        }
+        (@resp, down) => {
+            let (up) = resp up();
+            become this.fwd_all(next, up, down)
+        }
+        (@end) => {
+            become next(up)
         }
     }
 }
@@ -134,18 +170,62 @@ proc compose(caller, f, g) {
 }
 
 proc compose_impl(f, g, caller) {
-    let (g) = g();
+    let () = g();
     match {
-        (@req) => {
-            let (caller, f) = this.fwd_req(caller, f);
-            become this.compose_impl(f, g, caller)
+        (@req, g) => {
+            let () = this.fwd_req(caller, f);
+            match {
+                (@resp, caller, f) => {
+                    become this.compose_impl(f, g, caller)
+                }
+                (@end, caller) => {
+                    // This is maybe dodgy
+                    become g(caller)
+                }
+            }
         }
-        (@resp) => {
-            let (caller) = caller(@resp);
+        (@resp, g) => {
+            let (caller) = resp caller();
             become this.compose_impl(f, g, caller)
         }
     }
 }
+
+proc mk_pair(caller, a, b) {
+    become caller(this.mk_pair_impl&(a, b))
+}
+
+proc mk_pair_impl(a, b, caller) {
+    match {
+        (@a) => {
+            let () = a();
+            match {
+                (@resp, a) => {
+                    let () = resp caller();
+                    become this.mk_pair_impl(a, b)
+                }
+                (@end) => {
+                    let () = resp caller();
+                    become this.mk_pair_impl(0, b)
+                }
+            }
+        } 
+        (@b) => {
+            let () = b();
+            match {
+                (@resp, b) => {
+                    let () = resp caller();
+                    become this.mk_pair_impl(a, b)
+                }
+                (@end) => {
+                    let () = resp caller();
+                    become this.mk_pair_impl(a, 0)
+                }
+            }
+        }
+    }
+}
+
 
 proc container_builder(caller) {
     become caller(this.container_builder_impl&(this.container_inner_empty))

@@ -11,11 +11,11 @@ mod tests {
     mod cases {
         proc parseint(caller) {
             let (parseint) = this.super.super.parseint();
-            let (parseint, @req, @next) = parseint(@get);
-            let (parseint, @req, @next) = parseint(@yield, '6');
-            let (parseint, @req, @next) = parseint(@yield, '7');
-            let (parseint, @req, @next) = parseint(@yield, '2');
-            let (parseint, @resp, @ok, 672) = parseint(@eos);
+            let (@req, parseint, @next) = parseint(@get);
+            let (@req, parseint, @next) = parseint(@yield, '6');
+            let (@req, parseint, @next) = parseint(@yield, '7');
+            let (@req, parseint, @next) = parseint(@yield, '2');
+            let (@resp, parseint, @ok, 672) = parseint(@eos);
 
             let () = caller(@pass);
         }
@@ -31,7 +31,7 @@ proc parseint(caller) {
 }
 
 proc parseint_loop(acc, caller, @get) {
-    let (caller) = caller(@req, @next);
+    let (caller) = req caller(@next);
     match {
         (@yield, char) => {
             let (ord) = this.builtin.ord(char);
@@ -41,7 +41,7 @@ proc parseint_loop(acc, caller, @get) {
             become this.parseint_loop(acc, caller, @get)
         }
         (@eos) => {
-            let () = caller(@resp, @ok, acc);
+            let () = resp caller(@ok, acc);
         }
     }
 }

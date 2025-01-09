@@ -6,9 +6,9 @@ COMMENT = _{ "//" ~ (!NEWLINE ~ ANY)* }
 
 file = { SOI ~ header ~ namespace ~ EOI }
 
-header ={ ns_import* }
+header = { ns_import* }
 
-ns_import = _{ "mod" ~ identifier ~ ";"}
+ns_import = _{ "mod" ~ identifier ~ ";" }
 
 namespace = { decl* }
 
@@ -128,9 +128,13 @@ if_endpoint = {
     "if" ~ value_expr ~ "{" ~ block ~ "}" ~ "else" ~ "{" ~ block ~ "}"
 }
 
-expr = _{ func_call | value_expr }
+expr = _{ request_call | response_call | func_call | value_expr }
 
-func_call        =  { func_name ~ func_call_args }
+request_call  = { "req" ~ func_call_inner }
+response_call = { "resp" ~ func_call_inner }
+
+func_call        =  { func_call_inner }
+func_call_inner  = _{ func_name ~ func_call_args }
 func_name        = _{ func_name_copied | path | identifier }
 func_name_copied =  { "(" ~ "*" ~ identifier ~ ")" }
 
@@ -154,4 +158,4 @@ value_expr = {
 match_block = { "match" ~ "{" ~ match_cases ~ "}" }
 
 match_cases = _{ match_case* }
-match_case  = { bindings ~ "=>" ~ "{" ~ block ~ "}" }
+match_case  =  { bindings ~ "=>" ~ "{" ~ block ~ "}" }

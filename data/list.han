@@ -6,23 +6,23 @@ proc new(caller) {
 proc list_empty(caller) {
     match {
         (@push_front, item) => {
-            let (caller) = caller(@resp);
+            let (caller) = resp caller();
             become this.list_cons(item, this.list_empty, caller)
         }
         (@push_back, item) => {
-            let (caller) = caller(@resp);
+            let (caller) = resp caller();
             become this.list_cons(item, this.list_empty, caller)
         }
         (@pop_front) => {
-            let (caller) = caller(@resp, @none);
+            let (caller) = resp caller(@none);
             become this.list_empty(caller)
         }
         (@into_iter) => {
             let (empty) = this.new();
-            let () = caller(@resp, this.list_into_iter&(empty));
+            become caller(@end, this.list_into_iter&(empty))
         }
         (@is_empty) => {
-            let (caller) = caller(@resp, true);
+            let (caller) = resp caller(true);
             become this.list_empty(caller)
         }
     }
@@ -31,39 +31,38 @@ proc list_empty(caller) {
 proc list_cons(head, tail, caller) {
     match {
         (@push_front, item) => {
-            let (caller) = caller(@resp);
+            let (caller) = resp caller();
             let (tail) = this.list_cons&(head, tail);
             become this.list_cons(item, tail, caller)
         }
         (@push_back, item) => {
-            let (tail, @resp) = tail(@push_back, item);
-            let (caller) = caller(@resp);
+            let (@resp, tail) = tail(@push_back, item);
+            let (caller) = resp caller();
             become this.list_cons(head, tail, caller)
         }
         (@pop_front) => {
-            let (caller) = caller(@resp, @some, head);
+            let (caller) = resp caller(@some, head);
             become tail(caller)
         }
         (@into_iter) => {
             let (self) = this.list_cons&(head, tail);
-            let () = caller(@resp, this.list_into_iter&(self));
+            become caller(@end, this.list_into_iter&(self))
         }
         (@is_empty) => {
-            let (caller) = caller(@resp, false);
+            let (caller) = resp caller(false);
             become this.list_cons(head, tail, caller)
         }
     }
 }
 
 proc list_into_iter(list, caller, @next) {
-    let (list, @resp) = list(@pop_front);
+    let (@resp, list) = list(@pop_front);
     match {
         (@none) => {
-            let (caller) = caller(@resp, @eos);
-            become this.list_into_iter(list, caller)
+            become caller(@end, @eos)
         }
         (@some, item) => {
-            let (caller) = caller(@resp, @yield, item);
+            let (caller) = resp caller(@yield, item);
             become this.list_into_iter(list, caller)
         }
     }
@@ -79,26 +78,26 @@ mod tests {
     mod cases {
         proc basic(caller) {
             let (q) = this.super.super.new();
-            let (q, @resp) = q(@push_back, @foo);
-            let (q, @resp) = q(@push_back, @bar);
-            let (q, @resp) = q(@push_back, @baz);
-            let (q, @resp, @some, @foo) = q(@pop_front);
-            let (q, @resp, @some, @bar) = q(@pop_front);
-            let (q, @resp, @some, @baz) = q(@pop_front);
-            let (q, @resp, @none) = q(@pop_front);
+            let (@resp, q) = q(@push_back, @foo);
+            let (@resp, q) = q(@push_back, @bar);
+            let (@resp, q) = q(@push_back, @baz);
+            let (@resp, q, @some, @foo) = q(@pop_front);
+            let (@resp, q, @some, @bar) = q(@pop_front);
+            let (@resp, q, @some, @baz) = q(@pop_front);
+            let (@resp, q, @none) = q(@pop_front);
             let () = caller(@pass);
         }
 
         proc iter(caller) {
             let (q) = this.super.super.new();
-            let (q, @resp) = q(@push_back, @foo);
-            let (q, @resp) = q(@push_back, @bar);
-            let (q, @resp) = q(@push_back, @baz);
-            let (^, @resp, i) = q(@into_iter);
-            let (i, @resp, @yield, @foo) = i(@next);
-            let (i, @resp, @yield, @bar) = i(@next);
-            let (i, @resp, @yield, @baz) = i(@next);
-            let (i, @resp, @eos) = i(@next);
+            let (@resp, q) = q(@push_back, @foo);
+            let (@resp, q) = q(@push_back, @bar);
+            let (@resp, q) = q(@push_back, @baz);
+            let (@end, i) = q(@into_iter);
+            let (@resp, i, @yield, @foo) = i(@next);
+            let (@resp, i, @yield, @bar) = i(@next);
+            let (@resp, i, @yield, @baz) = i(@next);
+            let (@end, @eos) = i(@next);
             let () = caller(@pass);
         }
     }

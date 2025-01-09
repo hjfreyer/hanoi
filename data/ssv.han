@@ -12,8 +12,8 @@ mod tests {
     mod cases {
         proc empty_string(caller) {
             let (p) = this.super.super.parser();
-            let (p, @req, @next) = p(@next);
-            let (p, @resp, @eos) = p(@eos);
+            let (@req, p, @next) = p(@next);
+            let (@end, @eos) = p(@eos);
 
             let () = caller(@pass);
         }
@@ -25,31 +25,31 @@ baz   qux
 
             let (p) = this.super.super.parser();
             let (p) = this.super.super.builtin.compose(input, p);
-            let (p, @resp, @start) = p(@next);
-            let (p, @resp, @start) = p(@next);
-            let (p, @resp, @yield, 'f') = p(@next);
-            let (p, @resp, @yield, 'o') = p(@next);
-            let (p, @resp, @yield, 'o') = p(@next);
-            let (p, @resp, @eos) = p(@next);
-            let (p, @resp, @start) = p(@next);
-            let (p, @resp, @yield, 'b') = p(@next);
-            let (p, @resp, @yield, 'a') = p(@next);
-            let (p, @resp, @yield, 'r') = p(@next);
-            let (p, @resp, @eos) = p(@next);
-            let (p, @resp, @eos) = p(@next);
-            let (p, @resp, @start) = p(@next);
-            let (p, @resp, @start) = p(@next);
-            let (p, @resp, @yield, 'b') = p(@next);
-            let (p, @resp, @yield, 'a') = p(@next);
-            let (p, @resp, @yield, 'z') = p(@next);
-            let (p, @resp, @eos) = p(@next);
-            let (p, @resp, @start) = p(@next);
-            let (p, @resp, @yield, 'q') = p(@next);
-            let (p, @resp, @yield, 'u') = p(@next);
-            let (p, @resp, @yield, 'x') = p(@next);
-            let (p, @resp, @eos) = p(@next);
-            let (p, @resp, @eos) = p(@next);
-            let (p, @resp, @eos) = p(@next);
+            let (@resp, p, @start) = p(@next);
+            let (@resp, p, @start) = p(@next);
+            let (@resp, p, @yield, 'f') = p(@next);
+            let (@resp, p, @yield, 'o') = p(@next);
+            let (@resp, p, @yield, 'o') = p(@next);
+            let (@resp, p, @eos) = p(@next);
+            let (@resp, p, @start) = p(@next);
+            let (@resp, p, @yield, 'b') = p(@next);
+            let (@resp, p, @yield, 'a') = p(@next);
+            let (@resp, p, @yield, 'r') = p(@next);
+            let (@resp, p, @eos) = p(@next);
+            let (@resp, p, @eos) = p(@next);
+            let (@resp, p, @start) = p(@next);
+            let (@resp, p, @start) = p(@next);
+            let (@resp, p, @yield, 'b') = p(@next);
+            let (@resp, p, @yield, 'a') = p(@next);
+            let (@resp, p, @yield, 'z') = p(@next);
+            let (@resp, p, @eos) = p(@next);
+            let (@resp, p, @start) = p(@next);
+            let (@resp, p, @yield, 'q') = p(@next);
+            let (@resp, p, @yield, 'u') = p(@next);
+            let (@resp, p, @yield, 'x') = p(@next);
+            let (@resp, p, @eos) = p(@next);
+            let (@resp, p, @eos) = p(@next);
+            let (@end, @eos) = p(@next);
 
             let () = caller(@pass);
         }
@@ -69,18 +69,18 @@ proc impl_start(caller, @next) {
 }
 
 proc impl_newline(caller, @next) {
-    let (caller) = caller(@req, @next);
+    let (caller) = req caller(@next);
     match {
         (@eos) => {
-            let () = caller(@resp, @eos);
+            become caller(@end, @eos)
         }
         (@yield, ' ') => {
-            let () = caller(@resp, @err, @unexpected_space);
+            let () = resp caller(@err, @unexpected_space);
         }
         (@yield, char) => {
-            let (caller, @next) = caller(@resp, @start);
-            let (caller, @next) = caller(@resp, @start);
-            let (caller, @next) = caller(@resp, @yield, char);
+            let (caller, @next) = resp caller(@start);
+            let (caller, @next) = resp caller(@start);
+            let (caller, @next) = resp caller(@yield, char);
             
             become this.impl_infield(caller, @next)
         }
@@ -88,42 +88,42 @@ proc impl_newline(caller, @next) {
 }
 
 proc impl_infield(caller, @next) {
-    let (caller) = caller(@req, @next);
+    let (caller) = req caller(@next);
     match {
         (@eos) => {
-            let () = caller(@resp, @err, @unexpected_eos);
+            let () = resp caller(@err, @unexpected_eos);
         }
         (@yield, ' ') => {
-            let (caller, @next) = caller(@resp, @eos);
+            let (caller, @next) = resp caller(@eos);
             become this.impl_inspace(caller, @next)
         } 
         (@yield, '\n') => {
-            let (caller, @next) = caller(@resp, @eos);
-            let (caller, @next) = caller(@resp, @eos);
+            let (caller, @next) = resp caller(@eos);
+            let (caller, @next) = resp caller(@eos);
             become this.impl_newline(caller, @next)
         } 
         (@yield, char) => {
-            let (caller, @next) = caller(@resp, @yield, char);
+            let (caller, @next) = resp caller(@yield, char);
             become this.impl_infield(caller, @next)
         }
     }
 }
 
 proc impl_inspace(caller, @next) {
-    let (caller) = caller(@req, @next);
+    let (caller) = req caller(@next);
     match {
         (@eos) => {
-            let () = caller(@resp, @err, @unexpected_eos);
+            let () = resp caller(@err, @unexpected_eos);
         }
         (@yield, '\n') => {
-            let () = caller(@resp, @err, @unexpected_eol);
+            let () = resp caller(@err, @unexpected_eol);
         }
         (@yield, ' ') => {
             become this.impl_inspace(caller, @next)
         }
         (@yield, char) => {
-            let (caller, @next) = caller(@resp, @start);
-            let (caller, @next) = caller(@resp, @yield, char);
+            let (caller, @next) = resp caller(@start);
+            let (caller, @next) = resp caller(@yield, char);
             become this.impl_infield(caller, @next)
         }
     }

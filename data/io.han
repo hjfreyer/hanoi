@@ -1,13 +1,13 @@
 
 proc stdin_chars(caller, @next) {
-    let (caller) = caller(@req, @stdin);
+    let (caller) = req caller(@stdin);
     match {
         (@ok, char) => {
-            let (caller) = caller(@resp, @yield, char);
+            let (caller) = resp caller(@yield, char);
             become this.stdin_chars(caller)
         }
         (@eof) => {
-            let () = caller(@resp, @eos);
+            let () = resp caller(@eos);
         }
     }
 }

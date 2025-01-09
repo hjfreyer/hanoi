@@ -532,18 +532,25 @@ pub enum Expression<'t> {
     Value(ValueExpression<'t>),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CallKind {
+    Standard,
+    Request,
+    Response,
+}
+
 impl<'t> From<Pair<'t, Rule>> for Expression<'t> {
     fn from(value: Pair<'t, Rule>) -> Self {
-        if let Rule::func_call = value.as_rule() {
-            Self::Call(value.into())
-        } else {
-            Self::Value(value.into())
+        match value.as_rule() {
+            Rule::func_call | Rule::request_call | Rule::response_call => Self::Call(value.into()),
+            _ => Self::Value(value.into()),
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Call<'t> {
+    pub kind: CallKind,
     pub span: Span<'t>,
     pub func: PathOrIdent<'t>,
     pub args: Vec<ValueExpression<'t>>,
@@ -552,30 +559,32 @@ pub struct Call<'t> {
 impl<'t> From<Pair<'t, Rule>> for Call<'t> {
     fn from(value: Pair<'t, Rule>) -> Self {
         let span = value.as_span();
-        match value.as_rule() {
-            Rule::func_call => {
-                let (func, args) = value.into_inner().collect_tuple().unwrap();
-                Self {
-                    span,
-                    func: func.into(),
-                    args: args.into_inner().map(ValueExpression::from).collect(),
-                }
-            }
-
-            // assert_eq!(value.as_rule(), Rule::statement);
-            // let inner = value.into_inner().exactly_one().unwrap();
-            // match inner.as_rule() {
-            //     Rule::let_statement => {
-            //         let (bindings, expr) = inner.into_inner().collect_tuple().unwrap();
-            //         Statement::Bind {
-            //             name: ident_from_pair(bindings.into_inner().exactly_one().unwrap()),
-            //             inner: Box::new(Statement::Other(expr)),
-            //         }
-            //     }
-            //     _ => Statement::Other(inner),
-            // }
+        let kind = match value.as_rule() {
+            Rule::func_call => CallKind::Standard,
+            Rule::request_call => CallKind::Request,
+            Rule::response_call => CallKind::Response,
             _ => unreachable!("{:?}", value),
+        };
+        let (func, args) = value.into_inner().collect_tuple().unwrap();
+        Self {
+            kind,
+            span,
+            func: func.into(),
+            args: args.into_inner().map(ValueExpression::from).collect(),
         }
+
+        // assert_eq!(value.as_rule(), Rule::statement);
+        // let inner = value.into_inner().exactly_one().unwrap();
+        // match inner.as_rule() {
+        //     Rule::let_statement => {
+        //         let (bindings, expr) = inner.into_inner().collect_tuple().unwrap();
+        //         Statement::Bind {
+        //             name: ident_from_pair(bindings.into_inner().exactly_one().unwrap()),
+        //             inner: Box::new(Statement::Other(expr)),
+        //         }
+        //     }
+        //     _ => Statement::Other(inner),
+        // }
     }
 }
 

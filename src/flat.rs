@@ -222,6 +222,7 @@ impl<'t> Library<'t> {
             } => {
                 let mut builder =
                     SentenceBuilder::new(modname, Some(name.to_owned()), ns_idx, names);
+                let kind = call.kind;
                 let argc = builder.func_call(call)?;
 
                 let mut leftover_names: VecDeque<Option<String>> =
@@ -239,6 +240,19 @@ impl<'t> Library<'t> {
                 }
                 // Stack: (args) to_call next
                 builder.mv_idx(span, 1);
+                // Stack: (args) next to_call
+
+                match kind {
+                    ast::CallKind::Standard => {}
+                    ast::CallKind::Request => {
+                        builder.symbol(span, "req");
+                        builder.mv_idx(span, 1);
+                    }
+                    ast::CallKind::Response => {
+                        builder.symbol(span, "resp");
+                        builder.mv_idx(span, 1);
+                    }
+                }
                 builder.symbol(span, "exec");
 
                 Ok(self.sentences.push_and_get_key(builder.build()))
