@@ -1,1 +1,1 @@
-cargo run --release -- run data/ main "$@"
+cargo run --release -- run data/ "$@"

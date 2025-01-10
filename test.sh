@@ -8,3 +8,4 @@ $BIN test data/ iter
 $BIN test data/ ssv
 $BIN test data/ str
 $BIN test data/ main
+$BIN test data/ adv1p1
