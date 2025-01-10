@@ -5,7 +5,6 @@ mod ssv;
 mod iter;
 mod list;
 mod str;
-mod multi_iter;
 
 mod tests {
     proc enumerate(caller, @next) {
@@ -27,69 +26,26 @@ proc parseint_factory(caller) {
 }
         
 proc multi_parseint_factory(caller) {            
-    let (p) = this.multi_iter.multi_iter_map(this.parseint_factory);
-    let (c) = this.multi_iter.multi_iter_to_iter();
+    let (p) = this.multi_iter_map(this.parseint_factory);
+    let (c) = this.multi_iter_to_iter();
     let (p) = this.builtin.compose(p, c);
 
     let () = caller(p);
     become this.multi_parseint_factory()
 }
 
-proc abs_diff(caller, a, b) {
-    let (lt) = this.builtin.lt(*a, *b);
-    if lt {
-        let (diff) = this.builtin.sub(b, a);
-        become caller(diff)
-    } else {
-        let (diff) = this.builtin.sub(a, b);
-        become caller(diff)
-    }
-}
-
-proc iter_abs_diff(caller, @next) {
-    let (caller) = req caller(@a, @next);
-    match {
-        (@eos) => {
-            let () = resp caller(@eos);
-        }
-        (@yield, a) => {
-            let (caller, @yield, b) = req caller(@b, @next);
-            let (d) = this.abs_diff(a, b);
-            let (caller, @next) = resp caller(@yield, d);
-            become this.iter_abs_diff(caller, @next)
-        }
-    }    
-}
-
-proc reduce_sum(caller) {
-    become caller(this.reduce_sum_impl&(0))
-}
-
-proc reduce_sum_impl(acc, caller, @get) {
-    let (caller) = req caller(@next);
-    match {
-        (@eos) => {
-            become caller(@end, acc)
-        }
-        (@yield, item) => {
-            let (acc) = this.builtin.add(acc, item);
-            become this.reduce_sum_impl(acc, caller, @get)
-        }
-    }   
-}
-
 proc solve_the_thing(caller, @get) {
     let (ssv) = this.ssv.parser();
 
-    let (p) = this.multi_iter.multi_iter_map(this.multi_parseint_factory);
+    let (p) = this.multi_iter_map(this.multi_parseint_factory);
 
     let (numerical) = this.builtin.compose(ssv, p);
-    let (as_lists) = this.multi_iter.mat2dtolists();
+    let (as_lists) = this.mat2dtolists();
     let (as_lists) = this.builtin.compose(numerical, as_lists);
     let (caller, as_lists) = this.builtin.fwd_all(caller, as_lists, @get);
-    let (transposed) = this.multi_iter.transpose2(as_lists);
+    let (transposed) = this.transpose2(as_lists);
 
-    let (as_lists) = this.multi_iter.mat2dtolists();
+    let (as_lists) = this.mat2dtolists();
     let (as_lists) = this.builtin.compose(transposed, as_lists);
     let (@end, as_lists) = as_lists(@get);
 
