@@ -188,6 +188,9 @@ proc compose_impl(f, g, caller) {
             let (caller) = resp caller();
             become this.compose_impl(f, g, caller)
         }
+        (@end) => {
+            become caller(@end)
+        }
     }
 }
 

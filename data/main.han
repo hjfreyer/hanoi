@@ -5,6 +5,7 @@ mod ssv;
 mod iter;
 mod list;
 mod str;
+mod adv1p1;
 
 mod tests {
     proc enumerate(caller, @next) {
@@ -146,7 +147,7 @@ proc dump(caller, @get) {
 
 
 proc main(caller) {
-    let () = this.iter.tests.cases.mergesort_two();
+    let () = this.adv1p1.tests.cases.parseint_list_of_list_of_str();
 
     let (sol) = this.builtin.compose(this.io.stdin_chars, this.solve_the_thing);
     let (caller, sol, num) = this.builtin.fwd_req(caller, sol, @get);

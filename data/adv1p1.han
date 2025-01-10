@@ -21,7 +21,9 @@ mod tests {
 
     mod cases {
         proc parseint_list_of_str(caller) {
-            let (p) = this.super.super.parseint_list_of_str;
+            let (p) = this.super.super.multi_iter_map(this.super.super.parseint_factory);
+            let (c) = this.super.super.multi_iter_to_iter();
+            let (p) = this.super.super.builtin.compose(p, c);
 
             let (@req, p, @next) = p(@next);
             let (@req, p, @next) = p(@start);
@@ -36,13 +38,13 @@ mod tests {
             let (@req, p, @next) = p(@yield, '6');
             let (@resp, p, @yield, 456) = p(@eos);
             let (@req, p, @next) = p(@next);
-            let (@resp, p, @eos) = p(@eos);
+            let (@end, @eos) = p(@eos);
             
             let () = caller(@pass);
         }
 
         proc parseint_list_of_list_of_str(caller) {
-            let (p) = this.super.super.parseint_list_of_list_of_str;
+            let (p) = this.super.super.multi_iter_map(this.super.super.multi_parseint_factory);
 
             let (@req, p, @next) = p(@next);
             let (@resp, p, @start) = p(@start);
@@ -78,7 +80,7 @@ mod tests {
             let (@resp, p, @eos) = p(@eos);
 
             let (@req, p, @next) = p(@next);
-            let (@resp, p, @eos) = p(@eos);
+            let (@end, @eos) = p(@eos);
             
             let () = caller(@pass);
         }
@@ -175,15 +177,9 @@ mod tests {
             
             let () = caller(@pass);
         }
-
-        proc parseint_factory(caller) {
-            let (p) = this.super.super.str.parseint2();
-            let () = caller(p);
-            become this.parseint_factory()
-        }
                 
         proc multi_iter_map_empty(caller) {
-            let (m) = this.super.super.multi_iter_map(this.parseint_factory);
+            let (m) = this.super.super.multi_iter_map(this.super.super.parseint_factory);
 
             let (@req, m, @next) = m(@next);
             let (@end, @eos) = m(@eos);
@@ -191,7 +187,7 @@ mod tests {
         }    
     
         proc multi_iter_map_full(caller) {
-            let (m) = this.super.super.multi_iter_map(this.parseint_factory);
+            let (m) = this.super.super.multi_iter_map(this.super.super.parseint_factory);
 
             let (@req, m, @next) = m(@next);
             let (@resp, m, @start) = m(@start);
@@ -236,6 +232,40 @@ proc iter_to_sink(next, up, sink) {
     }
 }
 
+proc parseint_factory(caller) {
+    let (p) = this.str.parseint();
+    let () = caller(p);
+    become this.parseint_factory()
+}
+        
+proc multi_parseint_factory(caller) {            
+    let (p) = this.multi_iter_map(this.parseint_factory);
+    let (c) = this.multi_iter_to_iter();
+    let (p) = this.builtin.compose(p, c);
+
+    let () = caller(p);
+    become this.multi_parseint_factory()
+}
+
+proc multi_iter_to_iter(caller) {
+    become caller(this.multi_iter_to_iter_impl&())
+}
+
+proc multi_iter_to_iter_impl(caller, @next) {
+    let (caller) = req caller(@next);
+    match {
+        (@start) => {
+            let (caller, @ok, value) = req caller(@get);
+            let (caller, @next) = resp caller(@yield, value);
+            become this.multi_iter_to_iter_impl(caller, @next)
+        }
+        (@eos) => {
+            become caller(@end, @eos)
+        }
+    }
+}
+
+
 
 // Input     Output
 // @next <-- @next
@@ -254,80 +284,9 @@ proc multi_iter_map_impl(constructor, caller, @next) {
         (@start) => {
             let (caller) = resp caller(@start);
             let (constructor, fn) = constructor();
-            let (caller) = this.fwd_to_end(caller, fn);
+            let (caller) = this.builtin.fwd_all(caller, fn);
             let (caller) = resp caller();  // Forward the last message.
             become this.multi_iter_map_impl(constructor, caller)
-        }
-    }
-}
-
-proc fwd_to_end(next, up, down) {
-    let () = down();
-    match {
-        (@req, down) => {
-            let (up) = req up();
-            become this.fwd_to_end(next, up, down)
-        }
-        (@resp, down) => {
-            let (up) = resp up();
-            become this.fwd_to_end(next, up, down)
-        }
-        (@end) => {
-            become next(up)
-        }
-    }
-}
-
-proc sum_iter(acc, caller, @get) {
-    let (caller) = caller&(@req);
-    let (caller) = caller(@next);
-}
-
-proc parseint_list_of_str(caller, @next) {
-    let (caller) = req caller(@next);
-    match {
-        (@start) => {
-            let (p) = this.str.parseint_sink();
-            let (caller, @ok, num) = this.iter_to_sink(caller, p);
-            //let (caller, ^, @ok, num) = this.builtin.fwd_req(caller, p, @get);
-            let (caller, @next) = resp caller(@yield, num);
-            become this.parseint_list_of_str(caller, @next)
-        }
-        (@eos) => {
-            let () = resp caller(@eos);
-        }
-    }
-}
-
-proc parseint_list_of_list_of_str(caller, @next) {
-    let (caller) = req caller(@next);
-    match {
-        (@start) => {
-            let (caller, @next) = resp caller(@start);
-            let (p) = this.parseint_list_of_str;
-            let (caller, ^, @eos) = this.fwd_yields(caller, p, @next);
-            let (caller, @next) = resp caller(@eos);
-            become this.parseint_list_of_list_of_str(caller, @next)
-        }
-        (@eos) => {
-            let () = resp caller(@eos);
-        }
-    }
-}
-
-proc fwd_yields(next, up, down) {
-    let (down) = down();
-    match {
-        (@req) => {
-            let (up) = up(@req);
-            become this.fwd_yields(next, up, down)
-        }
-        (@resp, @yield) => {
-            let (up) = up(@resp, @yield);
-            become this.fwd_yields(next, up, down)
-        }
-        (@resp, other) => {
-            become next(up, down, other)
         }
     }
 }
@@ -345,8 +304,8 @@ proc transpose2_impl(list, caller, @next) {
         let () = resp caller(@eos);
     } else {
         let (caller, @next) = resp caller(@start);
-        let (^@resp, , fronts) = fronts(@into_iter);
-        let (caller, ^, @eos) = this.fwd_yields(caller, fronts, @next);
+        let (@end, fronts) = fronts(@into_iter);
+        let (caller, @eos) = this.builtin.fwd_all(caller, fronts, @next);
         let (caller, @next) = resp caller(@eos);
         become this.transpose2_impl(rests, caller, @next)
     }
@@ -409,7 +368,7 @@ proc reduce_sum_impl(acc, caller, @get) {
     let (caller) = req caller(@next);
     match {
         (@eos) => {
-            let () = resp caller(acc);
+            become caller(@end, acc)
         }
         (@yield, item) => {
             let (acc) = this.builtin.add(acc, item);
@@ -428,12 +387,12 @@ proc mat2dtolists_impl(list, caller, @get) {
     match {
         (@start) => {
             let (collector) = this.iter_to_list();
-            let (caller, ^, row) = this.builtin.fwd_req(caller, collector, @get);
+            let (caller, row) = this.builtin.fwd_all(caller, collector, @get);
             let (@resp, list) = list(@push_back, row);
             become this.mat2dtolists_impl(list, caller, @get)
         }
         (@eos) => {
-            let () = resp caller(list);
+            become caller(@end, list)
         }
     }
 }
@@ -447,7 +406,7 @@ proc iter_to_list_impl(list, caller, @get) {
     let (caller) = req caller(@next);
     match {
         (@eos) => {
-            let () = resp caller(list);
+            become caller(@end, list)
         }
         (@yield, item) => {
             let (@resp, list) = list(@push_back, item);
@@ -458,46 +417,49 @@ proc iter_to_list_impl(list, caller, @get) {
 
 proc solve_the_thing(caller, @get) {
     let (ssv) = this.ssv.parser();
-    let (numerical) = this.builtin.compose(ssv, this.parseint_list_of_list_of_str);
+
+    let (p) = this.multi_iter_map(this.multi_parseint_factory);
+
+    let (numerical) = this.builtin.compose(ssv, p);
     let (as_lists) = this.mat2dtolists();
     let (as_lists) = this.builtin.compose(numerical, as_lists);
-    let (caller, ^, as_lists) = this.builtin.fwd_req(caller, as_lists, @get);
+    let (caller, as_lists) = this.builtin.fwd_all(caller, as_lists, @get);
     let (transposed) = this.transpose2(as_lists);
 
     let (as_lists) = this.mat2dtolists();
     let (as_lists) = this.builtin.compose(transposed, as_lists);
-    let (^@resp, , as_lists) = as_lists(@get);
+    let (@end, as_lists) = as_lists(@get);
 
     let (@resp, as_lists, @some, a) = as_lists(@pop_front);
     let (@resp, as_lists, @some, b) = as_lists(@pop_front);
     let (@resp, as_lists, @none) = as_lists(@pop_front);
 
-    let (^@resp, , a) = a(@into_iter);
-    let (^@resp, , b) = b(@into_iter);
+    let (@end, a) = a(@into_iter);
+    let (@end, b) = b(@into_iter);
 
     let (a_sorted) = this.builtin.compose(a, this.iter.mergesort);
     let (b_sorted) = this.builtin.compose(b, this.iter.mergesort);
 
-    let (c) = this.builtin.container_builder();
-    let (c) = c(@bind, @a, a_sorted);
-    let (c) = c(@bind, @b, b_sorted);
-    let (c) = c(@build);
+    let (c) = this.builtin.mk_pair(a_sorted, b_sorted);
+
+ //   let (c) = this.builtin.container_builder();
+ //   let (c) = c(@bind, @a, a_sorted);
+ //   let (c) = c(@bind, @b, b_sorted);
+ //   let (c) = c(@build);
 
     let (diffs) = this.iter_abs_diff;
     let (diffs) = this.builtin.compose(c, diffs);
 
     let (sum) = this.reduce_sum();
     let (sum) = this.builtin.compose(diffs, sum);
-    let (caller, ^, sum) = this.builtin.fwd_req(caller, sum, @get);
+    let (@end, sum) = sum(@get);
 
-    let () = resp caller(sum);
+    become caller(@end, sum)
 }
 
 proc main(caller) {
-    let () = this.tests.cases.multi_iter_map_empty();
-
     let (sol) = this.builtin.compose(this.io.stdin_chars, this.solve_the_thing);
-    let (caller, sol, num) = this.builtin.fwd_req(caller, sol, @get);
+    let (caller, num) = this.builtin.fwd_all(caller, sol, @get);
     
     let (caller) = req caller(@print, num);
 

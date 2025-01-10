@@ -15,7 +15,7 @@ mod tests {
             let (@req, parseint, @next) = parseint(@yield, '6');
             let (@req, parseint, @next) = parseint(@yield, '7');
             let (@req, parseint, @next) = parseint(@yield, '2');
-            let (@resp, parseint, @ok, 672) = parseint(@eos);
+            let (@end, @ok, 672) = parseint(@eos);
 
             let () = caller(@pass);
         }
@@ -41,7 +41,7 @@ proc parseint_loop(acc, caller, @get) {
             become this.parseint_loop(acc, caller, @get)
         }
         (@eos) => {
-            let () = resp caller(@ok, acc);
+            become caller(@end, @ok, acc)
         }
     }
 }

@@ -504,14 +504,10 @@ impl<'t> Vm<'t> {
     }
 
     fn trap_inner(&mut self) -> Result<StepResult, InnerEvalError> {
-        let Some(Value::Pointer(caller)) = self.stack.pop() else {
-            ebail!("caller not specified")
-        };
-
         let Some(Value::Symbol(symbol)) = self.stack.pop() else {
             ebail!("symbol not specified")
         };
-
+        
         if symbol == "err" {
             println!("Error: {:?}", self.stack.pop());
             return Ok(StepResult::Exit);
@@ -520,6 +516,10 @@ impl<'t> Vm<'t> {
         if symbol != "req" {
             ebail!("must be req")
         }
+        let Some(Value::Pointer(caller)) = self.stack.pop() else {
+            ebail!("caller not specified")
+        };
+
 
         let Some(Value::Symbol(method)) = self.stack.pop() else {
             ebail!("method not specified")
