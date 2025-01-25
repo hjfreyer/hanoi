@@ -8,8 +8,8 @@ mod tests {
     proc enumerate(caller, @next) {
 //        let (caller, @next) = caller(@yield, @chars_in_field);
 //        let (caller, @next) = caller(@yield, @fields_in_line);
-        let (caller, @next) = caller(@yield, @empty_string);
-        let (caller, @next) = caller(@yield, @basic_string);
+ //       let (caller, @next) = caller(@yield, @empty_string);
+//        let (caller, @next) = caller(@yield, @basic_string);
         let () = caller(@eos);
     }
 

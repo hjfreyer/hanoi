@@ -176,7 +176,7 @@ proc main(caller) {
 
     //let () = this.tests.cases.mergesort_full();
     //let (iter) = this.iter.symbol_chars&(@foobar);
-    //let (^, @ok, aq, bq) = this.bind(this.iter.split, @iter, iter);
+    //let (aq, bq) = this.bind(this.iter.split, @iter, iter);
     //let (aq, @yield, 'f') = aq(@next);
     //let (aq, @yield, 'o') = aq(@next);
     //let (aq, @yield, 'a') = aq(@next);

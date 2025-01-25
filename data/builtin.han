@@ -2,21 +2,21 @@
 proc symbol_len(caller, symbol) {
     R{ 
         [symbol, caller]
-        symbol #symbol_len @ok this.symbol_len caller @exec 
+        symbol #symbol_len caller @exec 
     }
 }
 
 proc symbol_char_at(caller, symbol, offset) {
     R{ 
         [offset, symbol, caller]
-        symbol offset #symbol_char_at @ok this.symbol_char_at caller @exec 
+        symbol offset #symbol_char_at caller @exec 
     }
 }
 
 proc eq(caller, a, b) {
     R{ 
         [b, a, caller]
-        a b #eq @ok this.eq caller @exec 
+        a b #eq caller @exec 
     }
 }
 
@@ -72,7 +72,7 @@ proc bind_impl(inner, symbol, target, caller) {
     let (inner) = inner();
     match {
         (@req, name) =>  {
-            let (^, @ok, are_eq) = this.eq(*name, *symbol);
+            let (are_eq) = this.eq(*name, *symbol);
             if are_eq {
                 let (caller, target) = this.fwd_req(caller, target);
                 become this.bind_impl(inner, symbol, target, caller)
@@ -96,7 +96,7 @@ proc bind2_impl(inner, inner_symbol, target, target_symbol, caller) {
     let (inner) = inner();
     match {
         (@req, name) =>  {
-            let (^, @ok, are_eq) = this.eq(*name, *inner_symbol);
+            let (are_eq) = this.eq(*name, *inner_symbol);
             if are_eq {
                 let (caller, target) = this.fwd_req(caller, target, @req, *target_symbol);
                 become this.bind2_impl(inner, inner_symbol, target, target_symbol, caller)
@@ -238,7 +238,7 @@ proc container_builder(caller) {
 proc container_inner_empty(caller) {}
 
 proc container_inner_cons(name, value, tail, caller, req_name) {
-    let (^, @ok, are_eq) = this.eq(*req_name, *name);
+    let (are_eq) = this.eq(*req_name, *name);
     if are_eq {
         let (value) = value();
         let () = caller();

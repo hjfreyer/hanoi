@@ -86,6 +86,24 @@ bar
     }
 }
 
+
+proc symbol_chars_inner(symbol, offset, caller, @next) {
+    let (len) = this.builtin.symbol_len(*symbol);
+    let (are_eq) = this.builtin.eq(*offset, len);
+    if are_eq {
+        become caller(@end, @eos)
+    } else {
+        let (char) = this.builtin.symbol_char_at(*symbol, *offset);
+        let (offset) = this.builtin.add(offset, 1);
+        let () = resp caller(@yield, char);
+        become this.symbol_chars_inner(symbol, offset)
+    }
+}
+
+proc symbol_chars(caller, symbol) {
+    become caller(this.symbol_chars_inner&(symbol, 0))
+}
+
 proc str_to_str2_start(caller, @next) {
     let (caller) = req caller(@next);
     match {

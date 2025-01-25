@@ -26,12 +26,12 @@ proc proxy(caller) {
 }
 
 proc symbol_chars_inner(symbol, offset, caller, @next) {
-    let (^, @ok, len) = this.builtin.symbol_len(*symbol);
-    let (^, @ok, are_eq) = this.builtin.eq(*offset, len);
+    let (len) = this.builtin.symbol_len(*symbol);
+    let (are_eq) = this.builtin.eq(*offset, len);
     if are_eq {
         become caller(@end, @eos)
     } else {
-        let (^, @ok, char) = this.builtin.symbol_char_at(*symbol, *offset);
+        let (char) = this.builtin.symbol_char_at(*symbol, *offset);
         let (offset) = this.builtin.add(offset, 1);
         let () = resp caller(@yield, char);
         become this.symbol_chars_inner(symbol, offset)
@@ -93,7 +93,7 @@ proc do_bind_iter(inner, symbol, iter, caller) {
     let (inner) = inner();
     match {
         (@req, name) =>  {
-            let (^, @ok, are_eq) = this.builtin.eq(*name, *symbol);
+            let (are_eq) = this.builtin.eq(*name, *symbol);
             if are_eq {
                 let (iter) = iter();
                 become this.do_bind_iter(inner, symbol, iter, caller)
@@ -500,7 +500,7 @@ mod tests {
 
     mod cases {
         proc symbol_len(caller) {
-            let (_, @ok, 3) = this.super.super.builtin.symbol_len(@foo);
+            let (3) = this.super.super.builtin.symbol_len(@foo);
             let () = caller(@pass);
         }
 
