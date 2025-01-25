@@ -5,6 +5,9 @@ mod iter;
 mod tests {
     proc enumerate(caller, @next) {
         let (caller, @next) = caller(@yield, @parseint);
+        let (caller, @next) = caller(@yield, @str2);
+        let (caller, @next) = caller(@yield, @split_lines_empty);
+        let (caller, @next) = caller(@yield, @split_lines);
         let () = caller(@eos);
     }
 
@@ -19,6 +22,63 @@ mod tests {
 
             let () = caller(@pass);
         }
+
+        proc str2(caller) {
+            let (input) = this.super.super.iter.symbol_chars(@foo);
+            let (u) = this.super.super.builtin.compose(input, this.super.super.str_to_str2_start);
+
+            let (@resp, u, @start) = u(@next);
+            let (@resp, u, 'f') = u(@req, @copy);
+            let (@resp, u, @start) = u(@next);
+            let (@resp, u, 'o') = u(@req, @copy);
+            let (@resp, u, @start) = u(@next);
+            let (@end, @eos) = u(@next);
+            
+            let () = caller(@pass);
+        }
+
+        proc split_lines_empty(caller) {
+            let (input) = this.super.super.iter.empty();
+            let (sl) = this.super.super.split_lines();
+            let (u) = this.super.super.builtin.compose(input, sl);
+            let (@resp, u, @start) = u(@next);
+            let (@resp, u, @eos) = u(@req, @next);
+            let (@end, @eos) = u(@next);
+            
+            let () = caller(@pass);
+        }
+
+        proc split_lines(caller) {
+            let (input) = this.super.super.iter.symbol_chars(@"foo
+bar
+");
+            let (input) = this.super.super.builtin.compose(input, this.super.super.str_to_str2_start);
+            let (sl) = this.super.super.split_lines();
+            let (u) = this.super.super.builtin.compose(input, sl);
+            let (@resp, u, @start) = u(@next);
+            let (@resp, u, @start) = u(@req, @next);
+            let (@resp, u, 'f') = u(@req, @req, @copy);
+            let (@resp, u, @start) = u(@req, @next);
+            let (@resp, u, 'o') = u(@req, @req, @copy);
+            let (@resp, u, @start) = u(@req, @next);
+            let (@resp, u, 'o') = u(@req, @req, @copy);
+            let (@resp, u, @eos) = u(@req, @next);
+
+            let (@resp, u, @start) = u(@next);
+            let (@resp, u, @start) = u(@req, @next);
+            let (@resp, u, 'b') = u(@req, @req, @copy);
+            let (@resp, u, @start) = u(@req, @next);
+            let (@resp, u, 'a') = u(@req, @req, @copy);
+            let (@resp, u, @start) = u(@req, @next);
+            let (@resp, u, 'r') = u(@req, @req, @copy);
+            let (@resp, u, @eos) = u(@req, @next);
+
+            let (@resp, u, @start) = u(@next);
+            let (@resp, u, @eos) = u(@req, @next);
+            let (@end, @eos) = u(@next);
+            
+            let () = caller(@pass);
+        }
     }
 
     proc run(caller, case_name) {
@@ -26,6 +86,88 @@ mod tests {
     }
 }
 
+proc str_to_str2_start(caller, @next) {
+    let (caller) = req caller(@next);
+    match {
+        (@eos) => {
+            become caller(@end, @eos)
+        }
+        (@yield, char) => {
+            let () = resp caller(@start);
+            become this.str_to_str2_loop(char)
+        }
+    }
+}
+
+proc str_to_str2_loop(char, caller) {
+    match {
+        (@next) => {
+            let (caller) = req caller(@next);
+            match {
+                (@eos) => {
+                    become caller(@end, @eos)
+                }
+                (@yield, newchar) => {
+                    let () = resp caller(@start);
+                    become this.str_to_str2_loop(newchar)
+                }
+            }
+        }
+        (@req, @copy) => {
+            let () = resp caller(*char);
+            become this.str_to_str2_loop(char)
+        } 
+    }
+}
+
+proc str_to_str2_loop(char, caller) {
+    match {
+        (@next) => {
+            let (caller) = req caller(@next);
+            match {
+                (@eos) => {
+                    become caller(@end, @eos)
+                }
+                (@yield, newchar) => {
+                    let () = resp caller(@start);
+                    become this.str_to_str2_loop(newchar)
+                }
+            }
+        }
+        (@req, @copy) => {
+            let () = resp caller(*char);
+            become this.str_to_str2_loop(char)
+        } 
+    }
+}
+
+proc split_lines(caller) {
+    let (c) = this.builtin.compose(this.add_line_delimiters, this.iter.split);
+    become caller(c)
+}
+
+proc add_line_delimiters(caller, @next) {
+    let (caller) = req caller(@next);
+    match {
+        (@eos) => {
+            become caller(@end, @eos)
+        }
+        (@start) => {
+            let (caller) = req caller(@req, @copy);
+            match {
+                ('\n') => {
+                    let () = resp caller(@delimiter);
+                    become this.add_line_delimiters()
+                }
+                (other) => {
+                    let (caller) = resp caller(@non_delimiter);
+                    let () = this.builtin.proxy_req(caller);
+                    become this.add_line_delimiters()
+                }
+            }
+        }
+    }
+}
 proc parseint(caller) {
     become caller(this.parseint_loop&(0))
 }

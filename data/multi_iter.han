@@ -15,9 +15,40 @@ proc multi_iter_map_impl(constructor, caller, @next) {
         (@start) => {
             let (caller) = resp caller(@start);
             let (constructor, fn) = constructor();
-            let (caller) = this.builtin.fwd_all(caller, fn);
-            let (caller) = resp caller();  // Forward the last message.
+            let (caller) = this.multi_iter_map_within(caller, fn);
             become this.multi_iter_map_impl(constructor, caller)
+        }
+    }
+}
+// @next  <-- @next
+// @start --> @start
+// @req @foo  <--  fn @get   <-- @req @get
+
+proc multi_iter_map_within(next, up, fn) {
+    match {
+        (@next) => {
+            become next(up, @next)
+        }
+        (@req) => {
+            become this.multi_iter_map_call_fn(next, up, fn)
+        }
+    }
+}
+
+proc multi_iter_map_call_fn(next, up, fn) {
+    let () = fn();
+    match {
+        (@req, fn) => {
+            let (up) = req up(@req);
+            become this.multi_iter_map_call_fn(next, up, fn)
+        }
+        (@resp, fn) => {
+            let (up) = resp up();
+            become this.multi_iter_map_within(next, up, fn)
+        }
+        (@end) => {
+            let (up) = resp up();  // Forward last response
+            become next(up)
         }
     }
 }
@@ -73,7 +104,7 @@ proc multi_iter_to_iter_impl(caller, @next) {
     let (caller) = req caller(@next);
     match {
         (@start) => {
-            let (caller, @ok, value) = req caller(@get);
+            let (caller, @ok, value) = req caller(@req, @get);
             let (caller, @next) = resp caller(@yield, value);
             become this.multi_iter_to_iter_impl(caller, @next)
         }
@@ -94,7 +125,7 @@ proc mat2dtolists_impl(list, caller, @get) {
     match {
         (@start) => {
             let (collector) = this.iter_to_list();
-            let (caller, row) = this.builtin.fwd_all(caller, collector, @get);
+            let (caller, row) = this.with_leading_req(caller, collector, @get);
             let (@resp, list) = list(@push_back, row);
             become this.mat2dtolists_impl(list, caller, @get)
         }
@@ -104,7 +135,23 @@ proc mat2dtolists_impl(list, caller, @get) {
     }
 }
 
-
+proc with_leading_req(next, up, down) {
+    let () = down();
+    match {
+        (@req, down) => {
+            let (up) = req up(@req);
+            become this.with_leading_req(next, up, down)
+        }
+        (@resp, down) => {
+            let (up) = resp up();
+            become this.with_leading_req(next, up, down)
+        }
+        (@end) => {
+            let (up) = resp up();
+            become next(up)
+        }
+    }
+}
 
 proc iter_to_list(caller) {
     let (list) = this.list.new();
@@ -128,33 +175,57 @@ proc iter_to_list_impl(list, caller, @get) {
 mod tests {
     proc enumerate(caller, @next) {
         let (caller, @next) = caller(@yield, @parseint_list_of_str);
+        let (caller, @next) = caller(@yield, @parseint_list_of_str_to_iter);
         let (caller, @next) = caller(@yield, @parseint_list_of_list_of_str);
         let (caller, @next) = caller(@yield, @transpose2_empty);
         let (caller, @next) = caller(@yield, @transpose2_single_row);
         let (caller, @next) = caller(@yield, @transpose2_single_col);
         let (caller, @next) = caller(@yield, @transpose2_full);
         let (caller, @next) = caller(@yield, @multi_iter_map_empty);
-        let (caller, @next) = caller(@yield, @multi_iter_map_full);
         let () = caller(@eos);        
     }
 
     mod cases {
         proc parseint_list_of_str(caller) {
             let (p) = this.super.super.multi_iter_map(this.parseint_factory);
+
+            let (@req, p, @next) = p(@next);
+            let (@resp, p, @start) = p(@start);
+
+            let (@req, p, @req, @next) = p(@req, @get);
+            let (@req, p, @req, @next) = p(@yield, '1');
+            let (@req, p, @req, @next) = p(@yield, '2');
+            let (@req, p, @req, @next) = p(@yield, '3');
+            let (@resp, p, @ok, 123) = p(@eos);
+            let (@req, p, @next) = p(@next);
+            let (@resp, p, @start) = p(@start);
+            let (@req, p, @req, @next) = p(@req, @get);
+            let (@req, p, @req, @next) = p(@yield, '4');
+            let (@req, p, @req, @next) = p(@yield, '5');
+            let (@req, p, @req, @next) = p(@yield, '6');
+            let (@resp, p, @ok, 456) = p(@eos);
+            let (@req, p, @next) = p(@next);
+            let (@end, @eos) = p(@eos);
+            
+            let () = caller(@pass);
+        }
+
+        proc parseint_list_of_str_to_iter(caller) {
+            let (p) = this.super.super.multi_iter_map(this.parseint_factory);
             let (c) = this.super.super.multi_iter_to_iter();
             let (p) = this.super.super.builtin.compose(p, c);
 
             let (@req, p, @next) = p(@next);
-            let (@req, p, @next) = p(@start);
-            let (@req, p, @next) = p(@yield, '1');
-            let (@req, p, @next) = p(@yield, '2');
-            let (@req, p, @next) = p(@yield, '3');
+            let (@req, p, @req, @next) = p(@start);
+            let (@req, p, @req, @next) = p(@yield, '1');
+            let (@req, p, @req, @next) = p(@yield, '2');
+            let (@req, p, @req, @next) = p(@yield, '3');
             let (@resp, p, @yield, 123) = p(@eos);
             let (@req, p, @next) = p(@next);
-            let (@req, p, @next) = p(@start);
-            let (@req, p, @next) = p(@yield, '4');
-            let (@req, p, @next) = p(@yield, '5');
-            let (@req, p, @next) = p(@yield, '6');
+            let (@req, p, @req, @next) = p(@start);
+            let (@req, p, @req, @next) = p(@yield, '4');
+            let (@req, p, @req, @next) = p(@yield, '5');
+            let (@req, p, @req, @next) = p(@yield, '6');
             let (@resp, p, @yield, 456) = p(@eos);
             let (@req, p, @next) = p(@next);
             let (@end, @eos) = p(@eos);
@@ -168,34 +239,39 @@ mod tests {
             let (@req, p, @next) = p(@next);
             let (@resp, p, @start) = p(@start);
 
-            let (@req, p, @next) = p(@next);
-            let (@req, p, @next) = p(@start);
-            let (@req, p, @next) = p(@yield, '1');
-            let (@req, p, @next) = p(@yield, '2');
-            let (@req, p, @next) = p(@yield, '3');
+            let (@req, p, @req, @next) = p(@req, @next);
+            let (@req, p, @req, @req, @next) = p(@start);
+            let (@req, p, @req, @req, @next) = p(@yield, '1');
+            let (@req, p, @req, @req, @next) = p(@yield, '2');
+            let (@req, p, @req, @req, @next) = p(@yield, '3');
             let (@resp, p, @yield, 123) = p(@eos);
 
-            let (@req, p, @next) = p(@next);
-            let (@req, p, @next) = p(@start);
-            let (@req, p, @next) = p(@yield, '4');
-            let (@req, p, @next) = p(@yield, '5');
-            let (@req, p, @next) = p(@yield, '6');
+
+            let (@req, p, @req, @next) = p(@req, @next);
+            let (@req, p, @req, @req, @next) = p(@start);
+            let (@req, p, @req, @req, @next) = p(@yield, '4');
+            let (@req, p, @req, @req, @next) = p(@yield, '5');
+            let (@req, p, @req, @req, @next) = p(@yield, '6');
             let (@resp, p, @yield, 456) = p(@eos);
             
-            let (@req, p, @next) = p(@next);
+            let (@req, p, @req,  @next) = p(@req, @next);
             let (@resp, p, @eos) = p(@eos);
 
+            // Skip one entirely.
             let (@req, p, @next) = p(@next);
             let (@resp, p, @start) = p(@start);
 
             let (@req, p, @next) = p(@next);
-            let (@req, p, @next) = p(@start);
-            let (@req, p, @next) = p(@yield, '1');
-            let (@req, p, @next) = p(@yield, '2');
-            let (@req, p, @next) = p(@yield, '3');
+            let (@resp, p, @start) = p(@start);
+            
+            let (@req, p, @req, @next) = p(@req, @next);
+            let (@req, p, @req, @req, @next) = p(@start);
+            let (@req, p, @req, @req, @next) = p(@yield, '1');
+            let (@req, p, @req, @req, @next) = p(@yield, '2');
+            let (@req, p, @req, @req, @next) = p(@yield, '3');
             let (@resp, p, @yield, 123) = p(@eos);
             
-            let (@req, p, @next) = p(@next);
+            let (@req, p, @req, @next) = p(@req, @next);
             let (@resp, p, @eos) = p(@eos);
 
             let (@req, p, @next) = p(@next);
@@ -319,28 +395,6 @@ mod tests {
 
             let (@req, m, @next) = m(@next);
             let (@end, @eos) = m(@eos);
-            let () = caller(@pass);
-        }    
-    
-        proc multi_iter_map_full(caller) {
-            let (m) = this.super.super.multi_iter_map(this.parseint_factory);
-
-            let (@req, m, @next) = m(@next);
-            let (@resp, m, @start) = m(@start);
-            let (@req, m, @next) = m(@get);
-            let (@req, m, @next) = m(@yield, '6');
-            let (@req, m, @next) = m(@yield, '4');
-            let (@req, m, @next) = m(@yield, '5');
-            let (@resp, m, @ok, 645) = m(@eos);
-            let (@req, m, @next) = m(@next);
-            let (@resp, m, @start) = m(@start);
-            let (@req, m, @next) = m(@get);
-            let (@req, m, @next) = m(@yield, '1');
-            let (@req, m, @next) = m(@yield, '2');
-            let (@resp, m, @ok, 12) = m(@eos);
-            let (@req, m, @next) = m(@next);
-            let (@end, @eos) = m(@eos);
-
             let () = caller(@pass);
         }
     }

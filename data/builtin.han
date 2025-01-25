@@ -133,17 +133,18 @@ proc fwd_req(next, up, down) {
 }
 
 proc fwd_once(next, up, down) {
-    let (down) = down();
+    let () = down();
     match {
-        (@req) => {
-            let (up) = up(@req);
+        (@req, down) => {
+            let (up) = req up();
             become this.fwd_once(next, up, down)
         }
-        (@resp) => {
-            become next(up, down, @resp)
+        (@resp, down) => {
+            let (up) = resp up();
+            become next(@resp, up, down)
         }
         (@end) => {
-            become next(up, down, @resp)
+            become next(@end, up)
         }
     }
 }
@@ -258,6 +259,19 @@ proc container_builder_impl(inner, caller) {
         }
         (@build) => {
             become caller(inner)
+        }
+    }
+}
+
+proc proxy_req(next, caller) {
+    match {
+        (@req) => {
+            let (caller) = req caller(@req);
+            let () = resp caller();
+            become this.proxy_req(next)
+        }
+        (other) => {
+            become next(caller, other)
         }
     }
 }

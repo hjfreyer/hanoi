@@ -110,13 +110,13 @@ proc do_bind_iter(inner, symbol, iter, caller) {
     }
 }
 
-proc split(caller) {
+proc alternate(caller) {
     let (l1) = this.list.new();
     let (l2) = this.list.new();
-    become caller(this.split_impl&(l1, l2))
+    become caller(this.alternate_impl&(l1, l2))
 }
 
-proc split_impl(aq, bq, caller, @get) {
+proc alternate_impl(aq, bq, caller, @get) {
     let (caller) = req caller(@next);
     match {
         (@eos) => {
@@ -124,7 +124,7 @@ proc split_impl(aq, bq, caller, @get) {
         }
         (@yield, item) => {
             let (@resp, aq) = aq(@push_back, item);
-            become this.split_impl(bq, aq, caller, @get)
+            become this.alternate_impl(bq, aq, caller, @get)
         }
     }
 }
@@ -237,8 +237,8 @@ proc mergesort(caller, @next) {
             become caller(@end, @eos)
         }
         (@many, item1, item2) => {
-            let (split) = this.split();
-            let (caller, aq, bq) = this.builtin.fwd_all(caller, split, @get);
+            let (alternate) = this.alternate();
+            let (caller, aq, bq) = this.builtin.fwd_all(caller, alternate, @get);
 
             let (@resp, aq) = aq(@push_front, item1);
             let (@end, aq) = aq(@into_iter);
@@ -256,24 +256,119 @@ proc mergesort(caller, @next) {
     }
 }
 
-// proc mergesort_both(split, ma, mb, caller, @req) {
+proc peeking(caller) {
+    become caller(this.peeking_start)
+}
+
+proc peeking_start(caller) {
+    let (caller) = req caller(@next);
+    match {
+        (@yield, val) => {
+            become this.peeking_impl(@some, val, caller)
+        }
+        (@eos) => {
+            become this.peeking_impl(@none, caller)
+        }
+    }
+}
+
+// nextval: maybe
+// caller
+// request
+proc peeking_impl() {
+    match {
+        (@none, caller) => {
+            match {
+                (@peek) => {
+                    let () = resp caller(@none);
+                    become this.peeking_impl(@none)
+                }
+                (@next) => {
+                    become caller(@end, @eos)
+                }
+            }
+        }
+        (@some, val, caller) => {
+            match {
+                (@peek) => {
+                    let () = resp caller(@some, *val);
+                    become this.peeking_impl(@some, val)
+                }
+                (@next) => {
+                    let (caller) = req caller(@next);
+                    match {
+                        (@yield, newval) => {
+                            let () = resp caller(@yield, val);
+                            become this.peeking_impl(@some, newval)
+                        }
+                        (@eos) => {
+                            let () = resp caller(@yield, val);
+                            become this.peeking_impl(@none)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+proc split(caller, @next) {
+    let () = resp caller(@start);
+    become this.split_loop()
+}
+
+proc split_loop(caller, @req, @next) {
+    let (caller) = req caller(@next);
+    match {
+        (@eos) => {
+            let (caller, @next) = resp caller(@eos);
+            become caller(@end, @eos)
+        }
+        (@delimiter) => {
+            let (caller, @next) = resp caller(@eos);
+            let () = resp caller(@start);
+            become this.split_loop()
+        }        
+        (@non_delimiter) => {
+            let (caller) = resp caller(@start);  // Start of char.
+
+            let () = this.split_char_proxy(caller);
+            become this.split_loop()
+        }
+    }
+}
+
+proc split_char_proxy(next, caller) {
+    match {
+        (@req, @req) => {
+            let (caller) = req caller(@req);
+            let () = resp caller();
+            become this.split_char_proxy(next)
+        }
+        (@req, @next) => {
+            become next(caller, @req, @next)
+        }
+    }
+}
+
+// proc mergesort_both(alternate, ma, mb, caller, @req) {
 //     match {
 //         (@a, @next) => {
 //             let (ma) = ma(@next);
 //             match {
 //                 (@resp) => {
 //                     let () = resp caller();
-//                     become mergesort_both(split, ma, mb)
+//                     become mergesort_both(alternate, ma, mb)
 //                 }
 //                 (@req, @next) => {
-//                     let (caller, split) = this.builtin.fwd_req(caller, split, @next);
+//                     let (caller, alternate) = this.builtin.fwd_req(caller, alternate, @next);
 //                     let (ma) = ma();
-//                     become mergesort_both(split, ma, mb)
+//                     become mergesort_both(alternate, ma, mb)
 //                 }
 //                 (@req, other) => {
 //                     let (caller) = req caller(other);
 //                     let (ma) = ma();
-//                     become mergesort_both(split, ma, mb)
+//                     become mergesort_both(alternate, ma, mb)
 //                 }
 //             }
 //         }
@@ -282,17 +377,17 @@ proc mergesort(caller, @next) {
 //             match {
 //                 (@resp) => {
 //                     let () = resp caller();
-//                     become mergesort_both(split, ma, mb)
+//                     become mergesort_both(alternate, ma, mb)
 //                 }
 //                 (@req, @next) => {
-//                     let (caller, split) = this.builtin.fwd_req(caller, split, @next);
+//                     let (caller, alternate) = this.builtin.fwd_req(caller, alternate, @next);
 //                     let (mb) = mb();
-//                     become mergesort_both(split, ma, mb)
+//                     become mergesort_both(alternate, ma, mb)
 //                 }
 //                 (@req, other) => {
 //                     let (caller) = req caller(other);
 //                     let (mb) = mb();
-//                     become mergesort_both(split, ma, mb)
+//                     become mergesort_both(alternate, ma, mb)
 //                 }
 //             }
 //         }
@@ -388,9 +483,12 @@ proc none_one_many(caller) {
 
 mod tests {
     proc enumerate(caller, @next) {
+        let (caller, @next) = caller(@yield, @split_empty);
         let (caller, @next) = caller(@yield, @symbol_len);
         let (caller, @next) = caller(@yield, @symbol_iter);
-        let (caller, @next) = caller(@yield, @split);
+        let (caller, @next) = caller(@yield, @peeking_empty);
+        let (caller, @next) = caller(@yield, @peeking_some);
+        let (caller, @next) = caller(@yield, @alternate);
         let (caller, @next) = caller(@yield, @merge_sorted);
         let (caller, @next) = caller(@yield, @mergesort_empty);
         let (caller, @next) = caller(@yield, @mergesort_singleton);
@@ -412,6 +510,37 @@ mod tests {
             let (@resp, iter, @yield, 'o') = iter(@next);
             let (@resp, iter, @yield, 'o') = iter(@next);
             let (@end, @eos) = iter(@next);
+            let () = caller(@pass);
+        }
+
+        proc peeking_empty(caller) {
+            let (i) = this.super.super.empty();
+            let (p) = this.super.super.peeking();
+            let (p) = this.super.super.builtin.compose(i, p);
+
+            let (@resp, p, @none) = p(@peek);
+            let (@resp, p, @none) = p(@peek);
+            let (@end, @eos) = p(@next);
+            let () = caller(@pass);
+        }
+
+        proc peeking_some(caller) {
+            let (i) = this.super.super.symbol_chars(@fox);
+            let (p) = this.super.super.peeking();
+            let (p) = this.super.super.builtin.compose(i, p);
+
+            let (@resp, p, @some, 'f') = p(@peek);
+            let (@resp, p, @some, 'f') = p(@peek);            
+            let (@resp, p, @yield, 'f') = p(@next);            
+            let (@resp, p, @some, 'o') = p(@peek);
+            let (@resp, p, @some, 'o') = p(@peek);            
+            let (@resp, p, @yield, 'o') = p(@next);            
+            let (@resp, p, @some, 'x') = p(@peek);
+            let (@resp, p, @some, 'x') = p(@peek);            
+            let (@resp, p, @yield, 'x') = p(@next);            
+            let (@resp, p, @none) = p(@peek);
+            let (@resp, p, @none) = p(@peek);
+            let (@end, @eos) = p(@next);
             let () = caller(@pass);
         }
 
@@ -439,8 +568,8 @@ mod tests {
             let () = caller(@pass);
         }
 
-        proc split(caller) {
-            let (s) = this.super.super.split();
+        proc alternate(caller) {
+            let (s) = this.super.super.alternate();
             let (@req, s, @next) = s(@get);
             let (@req, s, @next) = s(@yield, 'f');
             let (@req, s, @next) = s(@yield, 'o');
@@ -462,6 +591,72 @@ mod tests {
             let (@end, @eos) = bq(@next);
 
             let () = caller(@pass);
+        }
+
+        proc split_empty(caller) {
+            let (s) = this.super.super.split;
+            let (@resp, s, @start) = s(@next);
+            let (@req, s, @next) = s(@req, @next);
+            let (@resp, s, @eos) = s(@eos);
+            let (@end, @eos) = s(@next);
+            let () = caller(@pass);
+        }
+
+        proc split_full(caller) {
+            let (s) = this.super.super.split;
+            let (@resp, s, @start) = s(@next);
+            let (@req, s, @next) = s(@req, @next);
+            let (@resp, s, @start) = s(@non_delimiter);
+            let (@req, s, @req, @foo) = s(@req, @req, @foo);
+            let (@resp, s, @bar) = s(@bar);
+            let (@req, s, @next) = s(@req, @next);
+            let (@resp, s, @eos) = s(@delimiter);
+            let (@resp, s, @start) = s(@next);
+            let (@req, s, @next) = s(@req, @next);
+            let (@resp, s, @start) = s(@non_delimiter);
+            let (@req, s, @req, @baz) = s(@req, @req, @baz);
+            let (@resp, s, @qux) = s(@qux);
+            let (@req, s, @next) = s(@req, @next);
+            let (@resp, s, @eos) = s(@eos);
+            let (@end, @eos) = s(@next);
+
+            let () = caller(@pass);
+        }
+
+        proc str_line_delimiter(caller, @next) {
+            let (caller) = req caller(@next);
+            match {
+                (@eos) => {
+                    become caller(@end, @eos)
+                }
+                (@start) => {
+                    let (caller) = req caller(@req, @copy);
+                    match {
+                        ('\n') => {
+                            let () = resp caller(@delimiter);
+                            become this.str_line_delimiter()
+                        }
+                        (char) => {
+                            let () = resp caller(@non_delimiter);
+                            let () = this.thingy_proxy();
+                            become this.str_line_delimiter()
+                        }
+                    }
+                }
+            }
+        }
+        
+        proc thingy_proxy(next, caller) {
+            match {
+                (@req) => {
+                    let (caller) = req caller();
+                    let () = resp caller();
+                    become this.thingy_proxy()
+                }
+                (other) => {
+                    become next(caller, other)
+                }
+            }
         }
 
         proc merge_sorted(caller) {

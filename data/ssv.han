@@ -1,19 +1,89 @@
 
 mod builtin;
 mod iter;
+mod multi_iter;
+mod str;
 
 mod tests {
     proc enumerate(caller, @next) {
+//        let (caller, @next) = caller(@yield, @chars_in_field);
+//        let (caller, @next) = caller(@yield, @fields_in_line);
         let (caller, @next) = caller(@yield, @empty_string);
         let (caller, @next) = caller(@yield, @basic_string);
         let () = caller(@eos);
     }
 
     mod cases {
+
+        proc chars_in_field(caller) {
+            let (input) = this.super.super.iter.symbol_chars(@"foo   bar
+baz   qux
+");
+            let (p) = this.super.super.iter.peeking();
+            let (input) = this.super.super.builtin.compose(input, p);
+            let (p) = this.super.super.builtin.compose(input, this.super.super.chars_in_field);
+
+            let (@resp, p, @yield, 'f') = p(@next);
+            let (@resp, p, @yield, 'o') = p(@next);
+            let (@resp, p, @yield, 'o') = p(@next);
+            let (@end, @eos) = p(@next);
+
+            let () = caller(@pass);
+        }
+
+        proc fields_in_line(caller) {
+            let (input) = this.super.super.iter.symbol_chars(@"foo   bar
+baz   qux
+");
+            let (p) = this.super.super.iter.peeking();
+            let (input) = this.super.super.builtin.compose(input, p);
+            let (p) = this.super.super.builtin.compose(input, this.super.super.fields_in_line_init);
+
+            let (@resp, p, @start) = p(@next);
+            let (@resp, p, @yield, 'f') = p(@req, @next);
+            let (@resp, p, @yield, 'o') = p(@req, @next);
+            let (@resp, p, @start) = p(@next);
+            let (@resp, p, @yield, 'b') = p(@req, @next);
+            let (@resp, p, @yield, 'a') = p(@req, @next);
+            let (@resp, p, @yield, 'r') = p(@req, @next);
+            let (@resp, p, @eos) = p(@req, @next);
+            let (@end, @eos) = p(@next);
+
+            let () = caller(@pass);
+        }
+
+        proc lines_in_doc(caller) {
+            let (input) = this.super.super.iter.symbol_chars(@"foo   bar
+baz   qux
+");
+            let (p) = this.super.super.iter.peeking();
+            let (input) = this.super.super.builtin.compose(input, p);
+            let (p) = this.super.super.builtin.compose(input, this.super.super.fields_in_line_init);
+
+            let (@resp, p, @start) = p(@next);
+            let (@resp, p, @yield, 'f') = p(@req, @next);
+            let (@resp, p, @yield, 'o') = p(@req, @next);
+            let (@resp, p, @start) = p(@next);
+            let (@resp, p, @yield, 'b') = p(@req, @next);
+            let (@resp, p, @yield, 'a') = p(@req, @next);
+            let (@resp, p, @yield, 'r') = p(@req, @next);
+            let (@resp, p, @eos) = p(@req, @next);
+            let (@end, @eos) = p(@next);
+
+            let () = caller(@pass);
+        }
+
         proc empty_string(caller) {
             let (p) = this.super.super.parser();
-            let (@req, p, @next) = p(@next);
-            let (@end, @eos) = p(@eos);
+            let (@resp, p, @start) = p(@next);
+            let (@resp, p, @start) = p(@req, @next);
+            let (@req, p, @next) = p(@req, @req, @next);
+            let (@resp, p, @eos) = p(@eos);
+
+
+
+            let (@resp, p, @next) = p(@req, @next);
+            let (@end, @eos) = p(@next);
 
             let () = caller(@pass);
         }
@@ -26,10 +96,10 @@ baz   qux
             let (p) = this.super.super.parser();
             let (p) = this.super.super.builtin.compose(input, p);
             let (@resp, p, @start) = p(@next);
-            let (@resp, p, @start) = p(@next);
-            let (@resp, p, @yield, 'f') = p(@next);
-            let (@resp, p, @yield, 'o') = p(@next);
-            let (@resp, p, @yield, 'o') = p(@next);
+            let (@resp, p, @start) = p(@req, @next);
+            let (@resp, p, @yield, 'f') = p(@req, @req, @next);
+            let (@resp, p, @yield, 'o') = p(@req, @req, @next);
+            let (@resp, p, @yield, 'o') = p(@req, @req, @next);
             let (@resp, p, @eos) = p(@next);
             let (@resp, p, @start) = p(@next);
             let (@resp, p, @yield, 'b') = p(@next);
@@ -61,7 +131,170 @@ baz   qux
 }
 
 proc parser(caller) {
-    become caller(this.impl_start)
+    let (s) = this.str.split_lines();
+    let (m) = this.multi_iter.multi_iter_map(this.split_by_space_constructor);
+
+    let (res) = this.builtin.compose(s, m);
+    become caller(res)
+}
+
+proc split_by_space_constructor(caller) {
+    let (res) = this.builtin.compose(this.space_delimiters, this.iter.split);
+    let () = caller(res);
+    become this.split_by_space_constructor()
+}
+
+proc space_delimiters(caller, @next) {
+    let (caller) = this.skip_whitespace(caller, @no_ws);
+    match {
+        (@eos, @ws) => {
+            let (caller, @next) = resp caller(@delimiter);
+            become caller(@end, @eos)
+        }
+        (@eos, @no_ws) => {
+            become caller(@end, @eos)
+        }
+        (@ws) => {
+            let () = resp caller(@delimiter);
+            become this.space_delimiters()
+        }
+        (@no_ws) => {
+            let () = resp caller(@non_delimiter);
+            let () = this.builtin.proxy_req();
+            become this.space_delimiters()
+        }
+    }
+}
+
+proc skip_whitespace(next, caller, result) {
+    let (caller) = req caller(@next);
+    match {
+        (@eos) => {
+            become next(@eos, result)
+        }
+        (@start) => {
+            let (caller) = req caller(@req, @copy);
+            match {
+                (' ') => {
+                    become this.skip_whitespace(next, caller, @ws)
+                }
+                (other) => {
+                    become next(result)
+                }
+            }
+        }
+    }
+}
+
+proc skip_to_newline(caller, char) {
+    let () = char;
+    match {
+        ('\n') => {
+            become caller(@end, @yield, '\n')
+        }
+        (char) => {
+            let (caller) = req caller(@next);
+            match {
+                (@eos) => {
+                    become caller(@end, @eos)
+                }
+                (char) => {
+                    become this.skip_to_newline(caller, char)
+                }
+            }
+        }
+    }
+}
+
+
+proc fields_in_line_init(caller, @next) {
+    let (caller) = req caller(@peek);
+    match {
+        (@none) => {
+            become caller(@end, @eos)
+        }
+        (@some, '\n') => {
+            become caller(@end, @eos)
+        }
+        (@some, char) => {
+            let () = resp caller(@start);
+            become this.fields_in_line()
+        }
+    }
+}
+proc fields_in_line(caller) {
+    match {
+        (@next) => {
+            let (caller) = req caller(@peek);
+            match {
+                (@none) => {
+                    become caller(@end, @eos)
+                }
+                (@some, '\n') => {
+                    become caller(@end, @eos)
+                }
+                (@some, ' ') => {
+                    let (@end, caller) = this.builtin.fwd_req(caller, this.skip_whitespace);
+                    let (caller) = resp caller(@start);
+                    become this.fields_in_line(caller)
+                }
+                (@some, char) => {
+                    let (caller, @yield, ^) = req caller(@next);
+                    become this.fields_in_line(caller, @next)
+                }
+            }
+        }
+        (@req, @next) => {
+            let () = this.builtin.fwd_req(caller, this.chars_in_field, @next);
+            match {
+                (@resp, caller, ^) => {
+                    let () = resp caller();
+                    become this.fields_in_line()
+                }
+                (@end, caller) => {
+                    let () = resp caller();
+                    become this.fields_in_line()
+                }
+            }
+        }
+    }
+}
+
+proc skip_whitespace(caller) {
+    let (caller) = req caller(@peek);
+    match {
+        (@none) => {
+            become caller(@end)
+        }
+        (@some, ' ') => {
+            let (caller, @yield, ^) = req caller(@next);
+            become this.skip_whitespace(caller)
+        }
+        (@some, char) => {
+            become caller(@end)
+        }
+    }
+}
+
+
+proc chars_in_field(caller, @next) {
+    let (caller) = req caller(@peek);
+    match {
+        (@none) => {
+            become caller(@end, @eos)
+        }
+        (@some, ' ') => {
+            become caller(@end, @eos)
+        }
+        (@some, '\n') => {
+            become caller(@end, @eos)
+        }
+        (@some, char) => {
+            let (caller, @yield, ^) = req caller(@next);
+            let () = resp caller(@yield, char);
+            become this.chars_in_field()
+        }
+    }
 }
 
 proc impl_start(caller, @next) {
