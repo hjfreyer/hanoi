@@ -148,7 +148,7 @@ proc dump(caller, @get) {
 
 
 proc main(caller) {
-    let () = this.ssv.tests.cases.empty_string();
+    let () = this.ssv.tests.cases.basic_string();
 
     let (sol) = this.builtin.compose(this.io.stdin_chars, this.solve_the_thing);
     let (caller, sol, num) = this.builtin.fwd_req(caller, sol, @get);

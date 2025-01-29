@@ -39,10 +39,10 @@ mod tests {
 
         proc split_lines_empty(caller) {
             let (input) = this.super.super.iter.empty();
-            let (sl) = this.super.super.split_lines();
-            let (u) = this.super.super.builtin.compose(input, sl);
-            let (@resp, u, @start) = u(@next);
-            let (@resp, u, @eos) = u(@req, @next);
+            let (u) = this.super.super.split_lines(input);
+            let (@resp, u, @yield, line1) = u(@next);
+            let (@end, @eos) = line1(@next);
+
             let (@end, @eos) = u(@next);
             
             let () = caller(@pass);
@@ -52,30 +52,24 @@ mod tests {
             let (input) = this.super.super.iter.symbol_chars(@"foo
 bar
 ");
-            let (input) = this.super.super.builtin.compose(input, this.super.super.str_to_str2_start);
-            let (sl) = this.super.super.split_lines();
-            let (u) = this.super.super.builtin.compose(input, sl);
-            let (@resp, u, @start) = u(@next);
-            let (@resp, u, @start) = u(@req, @next);
-            let (@resp, u, 'f') = u(@req, @req, @copy);
-            let (@resp, u, @start) = u(@req, @next);
-            let (@resp, u, 'o') = u(@req, @req, @copy);
-            let (@resp, u, @start) = u(@req, @next);
-            let (@resp, u, 'o') = u(@req, @req, @copy);
-            let (@resp, u, @eos) = u(@req, @next);
+            let (u) = this.super.super.split_lines(input);
+            let (@resp, u, @yield, line1) = u(@next);
+            let (@resp, line1, @yield, 'f') = line1(@next);
+            let (@resp, line1, @yield, 'o') = line1(@next);
+            let (@resp, line1, @yield, 'o') = line1(@next);
+            let (@end, @eos) = line1(@next);
 
-            let (@resp, u, @start) = u(@next);
-            let (@resp, u, @start) = u(@req, @next);
-            let (@resp, u, 'b') = u(@req, @req, @copy);
-            let (@resp, u, @start) = u(@req, @next);
-            let (@resp, u, 'a') = u(@req, @req, @copy);
-            let (@resp, u, @start) = u(@req, @next);
-            let (@resp, u, 'r') = u(@req, @req, @copy);
-            let (@resp, u, @eos) = u(@req, @next);
-
-            let (@resp, u, @start) = u(@next);
-            let (@resp, u, @eos) = u(@req, @next);
+            let (@resp, u, @yield, line2) = u(@next);
+            let (@resp, u, @yield, line3) = u(@next);
             let (@end, @eos) = u(@next);
+
+            let (@resp, line2, @yield, 'b') = line2(@next);
+            let (@resp, line2, @yield, 'a') = line2(@next);
+
+            let (@end, @eos) = line3(@next);
+
+            let (@resp, line2, @yield, 'r') = line2(@next);
+            let (@end, @eos) = line2(@next);
             
             let () = caller(@pass);
         }
@@ -85,7 +79,6 @@ bar
         R{ @cases this #get #get @exec }
     }
 }
-
 
 proc symbol_chars_inner(symbol, offset, caller, @next) {
     let (len) = this.builtin.symbol_len(*symbol);
@@ -159,28 +152,28 @@ proc str_to_str2_loop(char, caller) {
     }
 }
 
-proc split_lines(caller) {
-    let (c) = this.builtin.compose(this.add_line_delimiters, this.iter.split);
-    become caller(c)
+proc split_lines(caller, str_iter) {
+    let (delim) = this.add_line_delimiters&(str_iter);
+    let (split) = this.iter.split&(delim);
+    become caller(split)
 }
 
-proc add_line_delimiters(caller, @next) {
-    let (caller) = req caller(@next);
+
+proc add_line_delimiters(str_iter, caller, @next) {
+    let (caller) = this.builtin.fwd_req(caller, str_iter, @next);
     match {
-        (@eos) => {
+        (@end, @eos) => {
             become caller(@end, @eos)
         }
-        (@start) => {
-            let (caller) = req caller(@req, @copy);
+        (@resp, str_iter) => {
             match {
-                ('\n') => {
-                    let () = resp caller(@delimiter);
-                    become this.add_line_delimiters()
+                (@yield, '\n') => {
+                    let () = resp caller(@yield, @delimiter);
+                    become this.add_line_delimiters(str_iter)
                 }
-                (other) => {
-                    let (caller) = resp caller(@non_delimiter);
-                    let () = this.builtin.proxy_req(caller);
-                    become this.add_line_delimiters()
+                (@yield, other) => {
+                    let () = resp caller(@yield, @non_delimiter, other);
+                    become this.add_line_delimiters(str_iter)
                 }
             }
         }

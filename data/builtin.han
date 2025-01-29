@@ -124,10 +124,10 @@ proc fwd_req(next, up, down) {
             become this.fwd_req(next, up, down)
         }
         (@resp, down) => {
-            become next(@resp, up, down)
+            become next(up, @resp, down)
         }
         (@end) => {
-            become next(@end, up)
+            become next(up, @end)
         }
     }
 }
@@ -174,12 +174,12 @@ proc compose_impl(f, g, caller) {
     let () = g();
     match {
         (@req, g) => {
-            let () = this.fwd_req(caller, f);
+            let (caller) = this.fwd_req(caller, f);
             match {
-                (@resp, caller, f) => {
+                (@resp, f) => {
                     become this.compose_impl(f, g, caller)
                 }
-                (@end, caller) => {
+                (@end) => {
                     // This is maybe dodgy
                     become g(caller)
                 }

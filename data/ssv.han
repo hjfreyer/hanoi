@@ -8,8 +8,8 @@ mod tests {
     proc enumerate(caller, @next) {
 //        let (caller, @next) = caller(@yield, @chars_in_field);
 //        let (caller, @next) = caller(@yield, @fields_in_line);
- //       let (caller, @next) = caller(@yield, @empty_string);
-//        let (caller, @next) = caller(@yield, @basic_string);
+        let (caller, @next) = caller(@yield, @empty_string);
+        let (caller, @next) = caller(@yield, @basic_string);
         let () = caller(@eos);
     }
 
@@ -74,15 +74,13 @@ baz   qux
         }
 
         proc empty_string(caller) {
-            let (p) = this.super.super.parser();
-            let (@resp, p, @start) = p(@next);
-            let (@resp, p, @start) = p(@req, @next);
-            let (@req, p, @next) = p(@req, @req, @next);
-            let (@resp, p, @eos) = p(@eos);
+            let (input) = this.super.super.iter.symbol_chars(@"");
 
-
-
-            let (@resp, p, @next) = p(@req, @next);
+            let (p) = this.super.super.parser(input);
+            let (@resp, p, @yield, l1) = p(@next);
+            let (@resp, l1, @yield, f1) = l1(@next);
+            let (@end, @eos) = f1(@next);
+            let (@end, @eos) = l1(@next);
             let (@end, @eos) = p(@next);
 
             let () = caller(@pass);
@@ -93,33 +91,46 @@ baz   qux
 baz   qux
 ");
 
-            let (p) = this.super.super.parser();
-            let (p) = this.super.super.builtin.compose(input, p);
-            let (@resp, p, @start) = p(@next);
-            let (@resp, p, @start) = p(@req, @next);
-            let (@resp, p, @yield, 'f') = p(@req, @req, @next);
-            let (@resp, p, @yield, 'o') = p(@req, @req, @next);
-            let (@resp, p, @yield, 'o') = p(@req, @req, @next);
-            let (@resp, p, @eos) = p(@next);
-            let (@resp, p, @start) = p(@next);
-            let (@resp, p, @yield, 'b') = p(@next);
-            let (@resp, p, @yield, 'a') = p(@next);
-            let (@resp, p, @yield, 'r') = p(@next);
-            let (@resp, p, @eos) = p(@next);
-            let (@resp, p, @eos) = p(@next);
-            let (@resp, p, @start) = p(@next);
-            let (@resp, p, @start) = p(@next);
-            let (@resp, p, @yield, 'b') = p(@next);
-            let (@resp, p, @yield, 'a') = p(@next);
-            let (@resp, p, @yield, 'z') = p(@next);
-            let (@resp, p, @eos) = p(@next);
-            let (@resp, p, @start) = p(@next);
-            let (@resp, p, @yield, 'q') = p(@next);
-            let (@resp, p, @yield, 'u') = p(@next);
-            let (@resp, p, @yield, 'x') = p(@next);
-            let (@resp, p, @eos) = p(@next);
-            let (@resp, p, @eos) = p(@next);
+            let (p) = this.super.super.parser(input);
+            let (@resp, p, @yield, r1) = p(@next);
+            let (@resp, p, @yield, r2) = p(@next);
+            let (@resp, p, @yield, r3) = p(@next);
             let (@end, @eos) = p(@next);
+
+            let (@resp, r1, @yield, f1) = r1(@next);
+            let (@resp, f1, @yield, 'f') = f1(@next);
+            let (@resp, f1, @yield, 'o') = f1(@next);
+            let (@resp, f1, @yield, 'o') = f1(@next);
+            let (@end, @eos) = f1(@next);
+
+            let (@resp, r1, @yield, f2) = r1(@next);
+            let (@resp, f2, @yield, 'b') = f2(@next);
+            let (@resp, f2, @yield, 'a') = f2(@next);
+            let (@resp, f2, @yield, 'r') = f2(@next);
+            let (@end, @eos) = f2(@next);
+            
+            let (@end, @eos) = r1(@next);
+
+
+
+
+            let (@resp, r2, @yield, f1) = r2(@next);
+            let (@resp, f1, @yield, 'b') = f1(@next);
+            let (@resp, f1, @yield, 'a') = f1(@next);
+            let (@resp, f1, @yield, 'z') = f1(@next);
+            let (@end, @eos) = f1(@next);
+
+            let (@resp, r2, @yield, f2) = r2(@next);
+            let (@resp, f2, @yield, 'q') = f2(@next);
+            let (@resp, f2, @yield, 'u') = f2(@next);
+            let (@resp, f2, @yield, 'x') = f2(@next);
+            let (@end, @eos) = f2(@next);
+
+            let (@end, @eos) = r2(@next);
+
+            let (@resp, r3, @yield, f1) = r3(@next);
+            let (@end, @eos) = f1(@next);
+            let (@end, @eos) = r3(@next);
 
             let () = caller(@pass);
         }
@@ -130,56 +141,53 @@ baz   qux
     }
 }
 
-proc parser(caller) {
-    let (s) = this.str.split_lines();
-    let (m) = this.multi_iter.multi_iter_map(this.split_by_space_constructor);
-
-    let (res) = this.builtin.compose(s, m);
-    become caller(res)
+proc parser(caller, iter) {
+    let (s) = this.str.split_lines(iter);
+    let (m) = this.iter.map(s, this.split_by_space_constructor);
+    become caller(m)
 }
 
-proc split_by_space_constructor(caller) {
-    let (res) = this.builtin.compose(this.space_delimiters, this.iter.split);
-    let () = caller(res);
+proc split_by_space_constructor(caller, iter) {
+    let (delim) = this.space_delimiters&(iter, false);
+    let (res) = this.iter.split&(delim);
+    let () = resp caller(res);
     become this.split_by_space_constructor()
 }
 
-proc space_delimiters(caller, @next) {
-    let (caller) = this.skip_whitespace(caller, @no_ws);
+proc space_delimiters(iter, in_ws, caller, @next) {
+    let (caller) = this.builtin.fwd_req(caller, iter, @next);
     match {
-        (@eos, @ws) => {
-            let (caller, @next) = resp caller(@delimiter);
-            become caller(@end, @eos)
-        }
-        (@eos, @no_ws) => {
-            become caller(@end, @eos)
-        }
-        (@ws) => {
-            let () = resp caller(@delimiter);
-            become this.space_delimiters()
-        }
-        (@no_ws) => {
-            let () = resp caller(@non_delimiter);
-            let () = this.builtin.proxy_req();
-            become this.space_delimiters()
-        }
-    }
-}
-
-proc skip_whitespace(next, caller, result) {
-    let (caller) = req caller(@next);
-    match {
-        (@eos) => {
-            become next(@eos, result)
-        }
-        (@start) => {
-            let (caller) = req caller(@req, @copy);
+        (@end, @eos) => {
+            let () = in_ws;
             match {
-                (' ') => {
-                    become this.skip_whitespace(next, caller, @ws)
+                (true) => {
+                    let (caller, @next) = resp caller(@yield, @delimiter);
+                    become caller(@end, @eos)
                 }
-                (other) => {
-                    become next(result)
+                (false) => {
+                    become caller(@end, @eos)
+
+                }
+            }
+        }
+        (@resp, iter) => {
+            match {
+                (@yield, ' ') => {
+                    become this.space_delimiters(iter, true, caller, @next)
+                }
+                (@yield, other) => {
+                    let () = in_ws;
+                    match {
+                        (true) => {
+                            let (caller, @next) = resp caller(@yield, @delimiter);
+                            let () = resp caller(@yield, @non_delimiter, other);
+                            become this.space_delimiters(iter, false)
+                        }
+                        (false) => {
+                            let () = resp caller(@yield, @non_delimiter, other);
+                            become this.space_delimiters(iter, false)
+                        }
+                    }
                 }
             }
         }

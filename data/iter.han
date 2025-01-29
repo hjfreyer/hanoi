@@ -42,20 +42,20 @@ proc symbol_chars(caller, symbol) {
     become caller(this.symbol_chars_inner&(symbol, 0))
 }
 
-proc map(caller, @next) {
-    let (caller) = req caller(@next);
+proc map(caller, iter, fn) {
+    become caller(this.map_impl&(iter, fn))
+}
+
+proc map_impl(iter, fn, caller, @next) {
+    let (caller) = this.builtin.fwd_req(caller, iter, @next);
     match {
-        (@eos) => {
-            let () = caller(@eos);
+        (@end, @eos) => {
+            become caller(@end, @eos)
         }
-        (@yield, item) => {
-            let (caller) = req caller(@fn, item);
-            match {
-                (@ok, applied) => {
-                    let () = caller(@yield, applied);
-                    become this.map()
-                }
-            }
+        (@resp, iter, @yield, item) => {
+            let (caller, @resp, fn, mapped) = this.builtin.fwd_req(caller, fn, item);
+            let () = resp caller(@yield, mapped);
+            become this.map_impl(iter, fn)
         }
     }
 }
@@ -312,44 +312,51 @@ proc peeking_impl() {
     }
 }
 
-proc split(caller, @next) {
-    let () = resp caller(@start);
-    become this.split_loop()
+proc split(iter, caller, @next) {
+    let () = resp caller(@yield, this.split2_row_starting_with&(*iter));
+    become this.split2_loop(iter)
 }
 
-proc split_loop(caller, @req, @next) {
-    let (caller) = req caller(@next);
+proc split2_row_starting_with(iter, caller, @next) {
+    let (caller) = this.builtin.fwd_req(caller, iter, @next);
     match {
-        (@eos) => {
-            let (caller, @next) = resp caller(@eos);
+        (@resp, iter) => {
+            match {
+                (@yield, @delimiter) => {
+                    become caller(@end, @eos)
+                }
+                (@yield, @non_delimiter, item) => {
+                    let () = resp caller(@yield, item);
+                    become this.split2_row_starting_with(iter)
+                }
+            }
+        }
+        (@end, @eos) => {
             become caller(@end, @eos)
         }
-        (@delimiter) => {
-            let (caller, @next) = resp caller(@eos);
-            let () = resp caller(@start);
-            become this.split_loop()
-        }        
-        (@non_delimiter) => {
-            let (caller) = resp caller(@start);  // Start of char.
-
-            let () = this.split_char_proxy(caller);
-            become this.split_loop()
-        }
     }
 }
 
-proc split_char_proxy(next, caller) {
+proc split2_loop(iter, caller, @next) {
+    let (caller) = this.builtin.fwd_req(caller, iter, @next);
     match {
-        (@req, @req) => {
-            let (caller) = req caller(@req);
-            let () = resp caller();
-            become this.split_char_proxy(next)
+        (@resp, iter) => {
+            match {
+                (@yield, @delimiter) => {
+                    let () = resp caller(@yield, this.split2_row_starting_with&(*iter));
+                    become this.split2_loop(iter)
+                }
+                (@yield, @non_delimiter, item) => {
+                    become this.split2_loop(iter, caller, @next)
+                }
+            }
         }
-        (@req, @next) => {
-            become next(caller, @req, @next)
+        (@end, @eos) => {
+            become caller(@end, @eos)
         }
     }
 }
+
 
 // proc mergesort_both(alternate, ma, mb, caller, @req) {
 //     match {
@@ -483,7 +490,7 @@ proc none_one_many(caller) {
 
 mod tests {
     proc enumerate(caller, @next) {
-        let (caller, @next) = caller(@yield, @split_empty);
+        let (caller, @next) = caller(@yield, @split2_empty);
         let (caller, @next) = caller(@yield, @symbol_len);
         let (caller, @next) = caller(@yield, @symbol_iter);
         let (caller, @next) = caller(@yield, @peeking_empty);
@@ -499,6 +506,54 @@ mod tests {
     }
 
     mod cases {
+
+        proc symbol_ctx(sym, caller) {
+            let () = caller(*sym);
+            become this.symbol_ctx(sym)
+        }
+
+        
+        proc symbol_iter2(offset, caller, ctx, @next) {
+            let (ctx, sym) = ctx();
+            let (len) = this.builtin.symbol_len(*sym);
+            let (are_eq) = this.builtin.eq(*offset, len);
+            if are_eq {
+                become caller(@end, ctx, @eos)
+            }  else {
+                let (char) = this.builtin.symbol_char_at(*sym, *offset);
+                let (caller, ctx, @next) = resp caller(ctx, @yield, char);
+                let (offset) = this.builtin.add(offset, 1);
+                become this.symbol_iter2(offset, caller, ctx, @next)
+            }
+        }
+
+        proc test_iter(caller, @next) {
+            let (caller) = req caller(@testiternext);
+            match {
+                (@delim) => {
+                    let () = resp caller(@yield, @delimiter);
+                    become this.test_iter()
+                }
+                (@non, item) => {
+                    let () = resp caller(@yield, @non_delimiter, item);
+                    become this.test_iter()
+                }
+                (@eos) => {
+                    become caller(@end, @eos)
+                }
+            }
+        }
+
+        proc split2_empty(caller) {
+            let (s) = this.super.super.split&(this.test_iter);
+            let (@resp, s, @yield, part1) = s(@next);
+            let (@req, s, @testiternext) = s(@next);
+            let (@end, @eos) = s(@eos);
+            //let (@end, @eos) = s(@next);
+            let () = caller(@pass);
+        }
+
+
         proc symbol_len(caller) {
             let (3) = this.super.super.builtin.symbol_len(@foo);
             let () = caller(@pass);
@@ -590,15 +645,6 @@ mod tests {
             let (@resp, bq, @yield, 'r') = bq(@next);
             let (@end, @eos) = bq(@next);
 
-            let () = caller(@pass);
-        }
-
-        proc split_empty(caller) {
-            let (s) = this.super.super.split;
-            let (@resp, s, @start) = s(@next);
-            let (@req, s, @next) = s(@req, @next);
-            let (@resp, s, @eos) = s(@eos);
-            let (@end, @eos) = s(@next);
             let () = caller(@pass);
         }
 
