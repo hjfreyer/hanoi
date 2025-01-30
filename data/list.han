@@ -1,3 +1,4 @@
+mod builtin;
 
 proc new(caller) {
     become caller(this.list_empty)
@@ -68,10 +69,24 @@ proc list_into_iter(list, caller, @next) {
     }
 }
 
+proc from_iter(caller, iter) {
+    let (caller) = this.builtin.fwd_req(caller, iter, @next);
+    match {
+        (@end, @eos) => {
+            become caller(this.list_empty)
+        }
+        (@resp, iter, @yield, item) => {
+            let (tail) = this.from_iter(iter);
+            become caller(this.list_cons&(item, tail))
+        }
+    }
+}
+
 mod tests {
     proc enumerate(caller, @next) {
         let (caller, @next) = caller(@yield, @basic);
         let (caller, @next) = caller(@yield, @iter);
+        let (caller, @next) = caller(@yield, @from_into_iter);
         let () = caller(@eos);        
     }
 
@@ -94,6 +109,23 @@ mod tests {
             let (@resp, q) = q(@push_back, @bar);
             let (@resp, q) = q(@push_back, @baz);
             let (@end, i) = q(@into_iter);
+            let (@resp, i, @yield, @foo) = i(@next);
+            let (@resp, i, @yield, @bar) = i(@next);
+            let (@resp, i, @yield, @baz) = i(@next);
+            let (@end, @eos) = i(@next);
+            let () = caller(@pass);
+        }
+
+        proc from_into_iter(caller) {
+            let (q) = this.super.super.new();
+            let (@resp, q) = q(@push_back, @foo);
+            let (@resp, q) = q(@push_back, @bar);
+            let (@resp, q) = q(@push_back, @baz);
+            let (@end, i) = q(@into_iter);
+
+            let (q) = this.super.super.from_iter(i);
+            let (@end, i) = q(@into_iter);
+
             let (@resp, i, @yield, @foo) = i(@next);
             let (@resp, i, @yield, @bar) = i(@next);
             let (@resp, i, @yield, @baz) = i(@next);

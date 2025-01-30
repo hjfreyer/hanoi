@@ -13,12 +13,8 @@ mod tests {
 
     mod cases {
         proc parseint(caller) {
-            let (parseint) = this.super.super.parseint();
-            let (@req, parseint, @next) = parseint(@get);
-            let (@req, parseint, @next) = parseint(@yield, '6');
-            let (@req, parseint, @next) = parseint(@yield, '7');
-            let (@req, parseint, @next) = parseint(@yield, '2');
-            let (@end, @ok, 672) = parseint(@eos);
+            let (input) = this.super.super.iter.symbol_chars(@"672");
+            let (@end, 672) = this.super.super.parseint(input);
 
             let () = caller(@pass);
         }
@@ -179,22 +175,22 @@ proc add_line_delimiters(str_iter, caller, @next) {
         }
     }
 }
-proc parseint(caller) {
-    become caller(this.parseint_loop&(0))
+proc parseint(caller, iter) {
+    become this.parseint_loop(iter, 0, caller)
 }
 
-proc parseint_loop(acc, caller, @get) {
-    let (caller) = req caller(@next);
+proc parseint_loop(iter, acc, caller) {
+    let (caller) = this.builtin.fwd_req(caller, iter, @next);
     match {
-        (@yield, char) => {
+        (@resp, iter, @yield, char) => {
             let (ord) = this.builtin.ord(char);
             let (digit) = this.builtin.sub(ord, 48);
             let (acc) = this.builtin.prod(acc, 10);
             let (acc) = this.builtin.add(acc, digit);
-            become this.parseint_loop(acc, caller, @get)
+            become this.parseint_loop(iter, acc, caller)
         }
-        (@eos) => {
-            become caller(@end, @ok, acc)
+        (@end, @eos) => {
+            become caller(@end, acc)
         }
     }
 }

@@ -20,18 +20,15 @@ mod tests {
     }
 }
 
-proc parseint_factory(caller) {
-    let (p) = this.str.parseint();
-    let () = caller(p);
+proc parseint_factory(caller, iter) {
+    let () = resp caller(this.str.parseint&(iter));
     become this.parseint_factory()
 }
         
-proc multi_parseint_factory(caller) {            
-    let (p) = this.multi_iter.multi_iter_map(this.parseint_factory);
-    let (c) = this.multi_iter.multi_iter_to_iter();
-    let (p) = this.builtin.compose(p, c);
-
-    let () = caller(p);
+proc multi_parseint_factory(caller, iter) {       
+    let (parsed) = this.iter.map(iter, this.parseint_factory);
+    let (res) = this.list.from_iter(parsed);
+    let () = resp caller(res);
     become this.multi_parseint_factory()
 }
 
@@ -78,15 +75,12 @@ proc reduce_sum_impl(acc, caller, @get) {
     }   
 }
 
-proc solve_the_thing(caller, @get) {
-    let (ssv) = this.ssv.parser();
+proc solve_the_thing(caller, iter) {
+    let (ssv) = this.ssv.parser(iter);
 
-    let (p) = this.multi_iter.multi_iter_map(this.multi_parseint_factory);
+    let (numerical) = this.iter.map(ssv, this.multi_parseint_factory);
 
-    let (numerical) = this.builtin.compose(ssv, p);
-    let (as_lists) = this.multi_iter.mat2dtolists();
-    let (as_lists) = this.builtin.compose(numerical, as_lists);
-    let (caller, as_lists) = this.builtin.fwd_all(caller, as_lists, @get);
+    let (as_lists) = this.list.from_iter(numerical);
     let (transposed) = this.multi_iter.transpose2(as_lists);
 
     let (as_lists) = this.multi_iter.mat2dtolists();
@@ -121,8 +115,7 @@ proc solve_the_thing(caller, @get) {
 }
 
 proc main(caller) {
-    let (sol) = this.builtin.compose(this.io.stdin_chars, this.solve_the_thing);
-    let (caller, num) = this.builtin.fwd_all(caller, sol, @get);
+    let (caller, num) = this.builtin.fwd_req(caller, this.solve_the_thing, this.io.stdin_chars);
     
     let (caller) = req caller(@print, num);
 
