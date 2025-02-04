@@ -68,6 +68,48 @@ proc snoc() {
     }
 }
 
+proc tuple0() {
+    R{
+        [caller]
+        #tuple(0) caller @exec
+    }
+}
+
+proc untuple0() {
+    R{
+        [t, caller]
+        t #untuple(0) caller @exec
+    }
+}
+
+proc tuple1(a) {
+    R{
+        [a, caller]
+        a #tuple(1) caller @exec
+    }
+}
+
+proc untuple1(caller, t) {
+    R{
+        [t, caller]
+        t #untuple(1) caller @exec
+    }
+}
+
+proc tuple2(caller, a, b) {
+    R{
+        [b, a, caller]
+        b a #tuple(2) caller @exec
+    }
+}
+
+proc untuple2() {
+    R{
+        [t, caller]
+        t #untuple(2) caller @exec
+    }
+}
+
 proc bind_impl(inner, symbol, target, caller) {
     let (inner) = inner();
     match {
@@ -278,16 +320,22 @@ proc proxy_req(next, caller) {
 
 mod tests {
     proc enumerate(caller, @next) {
-        // let (caller, @next) = caller(@yield, @container);
+        let (caller, @next) = caller(@yield, @tuples);
         let () = caller(@eos);        
     }
 
     mod cases {
-        proc container(caller) {
-            //let (c) = this.super.super.container_new();
-            //let (c) = c(@bind, @foo, @bar);
-            //let (c) = c(@foo);
-            //let () = caller(@pass);
+        proc tuples(caller) {
+            let (t) = this.super.super.tuple0();
+            let () = this.super.super.untuple0(t);
+
+            let (t) = this.super.super.tuple1(42);
+            let (42) = this.super.super.untuple1(t);
+
+            let (t) = this.super.super.tuple2(4, 5);
+            let (4, 5) = this.super.super.untuple2(t);
+
+            let () = caller(@pass);
         }
     }
 

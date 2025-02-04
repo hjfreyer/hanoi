@@ -95,8 +95,12 @@ fn inner_eval(lib: &Library, stack: &mut Stack, w: &InnerWord) -> Result<(), Inn
             stack.push(Value::Usize(c as usize));
             Ok(())
         }
-        InnerWord::Tuple(idx) => todo!(),
-        InnerWord::Untuple(idx) => todo!(),
+        InnerWord::Tuple(idx) => {
+            stack.tuple(*idx)
+        },
+        InnerWord::Untuple(idx) => {
+            stack.untuple(*idx)
+        },
         InnerWord::Copy(idx) => stack.copy(*idx),
         InnerWord::Move(idx) => stack.mv(*idx),
         &InnerWord::Send(idx) => stack.sd(idx),
@@ -633,12 +637,20 @@ impl Stack {
         Ok(())
     }
 
-    pub fn tuple(&mut self, back_idx: usize) -> Result<(), InnerEvalError> {
-        let Some(v) = self.inner.iter().rev().nth(back_idx) else {
-            ebail!("out of range: {}", back_idx)
-        };
+    pub fn tuple(&mut self, size: usize) -> Result<(), InnerEvalError> {
+        let vals = self.inner.split_off(self.inner.len() - size);
+        self.push(Value::Tuple(vals));
+        Ok(())
+    }
 
-        self.push(v.clone());
+    pub fn untuple(&mut self, size: usize) -> Result<(), InnerEvalError> {
+        let Some(Value::Tuple(val)) = self.inner.pop() else {
+            ebail!("bad value")
+        };
+        if val.len() != size {
+            ebail!("wrong size")
+        }
+        self.inner.extend(val);
         Ok(())
     }
 
