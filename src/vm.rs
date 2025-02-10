@@ -7,28 +7,28 @@ use std::{
 };
 
 use anyhow::{bail, ensure, Context};
-use pest::Span;
 use thiserror::Error;
 use typed_index_collections::TiSliceIndex;
 
 use crate::{
     ast,
     flat::{
-        Builtin, Closure, Entry, InnerWord, Library, LoadError, Namespace2, SentenceIndex,
-        SourceLocation, Value, Word,
+        Builtin, Closure, Entry, InnerWord, Library, LoadError, Namespace2, SentenceIndex, Value,
+        Word,
     },
+    source::{self, Span},
 };
 
 #[derive(Debug)]
 pub struct EvalError {
-    pub location: Option<SourceLocation>,
+    pub location: Option<Span>,
     pub inner: InnerEvalError,
 }
 
 impl<'t> std::fmt::Display for EvalError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Some(location) = &self.location {
-            write!(f, "at {}: ", location)?;
+            write!(f, "at {:?}: ", location)?;
         } else {
             write!(f, "at <unknown location>: ")?;
         }
@@ -48,14 +48,23 @@ macro_rules! ebail {
     };
 }
 
-fn eval<'t>(lib: &Library, stack: &mut Stack, w: &Word<'t>) -> Result<(), EvalError> {
+pub enum EvalResult {
+    Continue,
+    Call(SentenceIndex),
+}
+
+fn eval<'t>(lib: &Library, stack: &mut Stack, w: &Word) -> Result<EvalResult, EvalError> {
     inner_eval(lib, stack, &w.inner).map_err(|inner| EvalError {
-        location: Some(w.location()),
+        location: Some(w.span),
         inner,
     })
 }
 
-fn inner_eval(lib: &Library, stack: &mut Stack, w: &InnerWord) -> Result<(), InnerEvalError> {
+fn inner_eval(
+    lib: &Library,
+    stack: &mut Stack,
+    w: &InnerWord,
+) -> Result<EvalResult, InnerEvalError> {
     match w {
         InnerWord::Builtin(Builtin::Add) => {
             let Some(Value::Usize(a)) = stack.pop() else {
@@ -65,7 +74,7 @@ fn inner_eval(lib: &Library, stack: &mut Stack, w: &InnerWord) -> Result<(), Inn
                 ebail!("bad value")
             };
             stack.push(Value::Usize(a + b));
-            Ok(())
+            Ok(EvalResult::Continue)
         }
         InnerWord::Builtin(Builtin::Sub) => {
             let Some(Value::Usize(b)) = stack.pop() else {
@@ -75,7 +84,7 @@ fn inner_eval(lib: &Library, stack: &mut Stack, w: &InnerWord) -> Result<(), Inn
                 ebail!("bad value")
             };
             stack.push(Value::Usize(a - b));
-            Ok(())
+            Ok(EvalResult::Continue)
         }
         InnerWord::Builtin(Builtin::Prod) => {
             let Some(Value::Usize(a)) = stack.pop() else {
@@ -85,7 +94,7 @@ fn inner_eval(lib: &Library, stack: &mut Stack, w: &InnerWord) -> Result<(), Inn
                 ebail!("bad value")
             };
             stack.push(Value::Usize(a * b));
-            Ok(())
+            Ok(EvalResult::Continue)
         }
 
         InnerWord::Builtin(Builtin::Ord) => {
@@ -93,22 +102,37 @@ fn inner_eval(lib: &Library, stack: &mut Stack, w: &InnerWord) -> Result<(), Inn
                 ebail!("bad value")
             };
             stack.push(Value::Usize(c as usize));
-            Ok(())
+            Ok(EvalResult::Continue)
         }
         InnerWord::Tuple(idx) => {
-            stack.tuple(*idx)
-        },
+            stack.tuple(*idx)?;
+            Ok(EvalResult::Continue)
+        }
         InnerWord::Untuple(idx) => {
-            stack.untuple(*idx)
-        },
-        InnerWord::Copy(idx) => stack.copy(*idx),
-        InnerWord::Move(idx) => stack.mv(*idx),
-        &InnerWord::Send(idx) => stack.sd(idx),
-        &InnerWord::Drop(idx) => stack.drop(idx),
+            stack.untuple(*idx)?;
+            Ok(EvalResult::Continue)
+        }
+        InnerWord::Copy(idx) => {
+            stack.copy(*idx);
+            Ok(EvalResult::Continue)
+        }
+        InnerWord::Move(idx) => {
+            stack.mv(*idx);
+            Ok(EvalResult::Continue)
+        }
+        &InnerWord::Send(idx) => {
+            stack.sd(idx);
+            Ok(EvalResult::Continue)
+        }
+        &InnerWord::Drop(idx) => {
+            stack.drop(idx);
+            Ok(EvalResult::Continue)
+        }
         InnerWord::Push(v) => {
             stack.push(v.clone());
-            Ok(())
+            Ok(EvalResult::Continue)
         }
+        InnerWord::Call(sentence_idx) => Ok(EvalResult::Call(*sentence_idx)),
         InnerWord::Builtin(Builtin::Eq) => {
             let Some(a) = stack.pop() else {
                 ebail!("bad value")
@@ -117,7 +141,7 @@ fn inner_eval(lib: &Library, stack: &mut Stack, w: &InnerWord) -> Result<(), Inn
                 ebail!("bad value")
             };
             stack.push(Value::Bool(a == b));
-            Ok(())
+            Ok(EvalResult::Continue)
         }
         InnerWord::Builtin(Builtin::AssertEq) => {
             let Some(a) = stack.pop() else {
@@ -129,7 +153,7 @@ fn inner_eval(lib: &Library, stack: &mut Stack, w: &InnerWord) -> Result<(), Inn
             if a != b {
                 ebail!("assertion failed: {:?} != {:?}", a, b)
             }
-            Ok(())
+            Ok(EvalResult::Continue)
         }
         InnerWord::Builtin(Builtin::Curry) => {
             let Some(Value::Pointer(Closure(mut closure, code))) = stack.pop() else {
@@ -140,7 +164,7 @@ fn inner_eval(lib: &Library, stack: &mut Stack, w: &InnerWord) -> Result<(), Inn
             };
             closure.insert(0, val);
             stack.push(Value::Pointer(Closure(closure, code)));
-            Ok(())
+            Ok(EvalResult::Continue)
         }
         InnerWord::Builtin(Builtin::And) => {
             let Some(Value::Bool(a)) = stack.pop() else {
@@ -150,7 +174,7 @@ fn inner_eval(lib: &Library, stack: &mut Stack, w: &InnerWord) -> Result<(), Inn
                 ebail!("bad value")
             };
             stack.push(Value::Bool(a && b));
-            Ok(())
+            Ok(EvalResult::Continue)
         }
         InnerWord::Builtin(Builtin::Or) => {
             let Some(Value::Bool(a)) = stack.pop() else {
@@ -160,14 +184,14 @@ fn inner_eval(lib: &Library, stack: &mut Stack, w: &InnerWord) -> Result<(), Inn
                 ebail!("bad value")
             };
             stack.push(Value::Bool(a || b));
-            Ok(())
+            Ok(EvalResult::Continue)
         }
         InnerWord::Builtin(Builtin::Not) => {
             let Some(Value::Bool(a)) = stack.pop() else {
                 ebail!("bad value")
             };
             stack.push(Value::Bool(!a));
-            Ok(())
+            Ok(EvalResult::Continue)
         }
         InnerWord::Builtin(Builtin::Get) => {
             let ns_idx = match stack.pop() {
@@ -195,7 +219,7 @@ fn inner_eval(lib: &Library, stack: &mut Stack, w: &InnerWord) -> Result<(), Inn
                 crate::flat::Entry::Value(v) => v.clone(),
                 crate::flat::Entry::Namespace(ns) => Value::Namespace(*ns),
             });
-            Ok(())
+            Ok(EvalResult::Continue)
         }
         InnerWord::Builtin(Builtin::SymbolCharAt) => {
             let Some(Value::Usize(idx)) = stack.pop() else {
@@ -206,7 +230,7 @@ fn inner_eval(lib: &Library, stack: &mut Stack, w: &InnerWord) -> Result<(), Inn
             };
 
             stack.push(sym.chars().nth(idx).unwrap().into());
-            Ok(())
+            Ok(EvalResult::Continue)
         }
         InnerWord::Builtin(Builtin::SymbolLen) => {
             let Some(Value::Symbol(sym)) = stack.pop() else {
@@ -214,11 +238,11 @@ fn inner_eval(lib: &Library, stack: &mut Stack, w: &InnerWord) -> Result<(), Inn
             };
 
             stack.push(sym.chars().count().into());
-            Ok(())
+            Ok(EvalResult::Continue)
         }
         InnerWord::Builtin(Builtin::NsEmpty) => {
             stack.push(Value::Namespace2(Namespace2 { items: vec![] }));
-            Ok(())
+            Ok(EvalResult::Continue)
         }
         InnerWord::Builtin(Builtin::NsInsert) => {
             let Some(val) = stack.pop() else {
@@ -234,7 +258,7 @@ fn inner_eval(lib: &Library, stack: &mut Stack, w: &InnerWord) -> Result<(), Inn
             ns.items.push((symbol, val));
 
             stack.push(Value::Namespace2(ns));
-            Ok(())
+            Ok(EvalResult::Continue)
         }
         InnerWord::Builtin(Builtin::NsRemove) => {
             let Some(Value::Symbol(symbol)) = stack.pop() else {
@@ -248,7 +272,7 @@ fn inner_eval(lib: &Library, stack: &mut Stack, w: &InnerWord) -> Result<(), Inn
 
             stack.push(Value::Namespace2(ns));
             stack.push(val);
-            Ok(())
+            Ok(EvalResult::Continue)
         }
         InnerWord::Builtin(Builtin::NsGet) => {
             let Some(Value::Symbol(symbol)) = stack.pop() else {
@@ -262,7 +286,7 @@ fn inner_eval(lib: &Library, stack: &mut Stack, w: &InnerWord) -> Result<(), Inn
 
             stack.push(Value::Namespace2(ns));
             stack.push(val);
-            Ok(())
+            Ok(EvalResult::Continue)
         }
         InnerWord::Builtin(Builtin::Cons) => {
             let Some(cdr) = stack.pop() else {
@@ -276,7 +300,7 @@ fn inner_eval(lib: &Library, stack: &mut Stack, w: &InnerWord) -> Result<(), Inn
             // ensure!(car.is_small(), "bad car type: {:?}", car);
 
             stack.push(Value::Cons(Box::new(car), Box::new(cdr)));
-            Ok(())
+            Ok(EvalResult::Continue)
         }
         InnerWord::Builtin(Builtin::Snoc) => {
             let Some(Value::Cons(car, cdr)) = stack.pop() else {
@@ -284,12 +308,12 @@ fn inner_eval(lib: &Library, stack: &mut Stack, w: &InnerWord) -> Result<(), Inn
             };
             stack.push(*car);
             stack.push(*cdr);
-            Ok(())
+            Ok(EvalResult::Continue)
         }
 
         InnerWord::Ref(idx) => {
             stack.push(Value::Ref(stack.back_idx(*idx)?));
-            Ok(())
+            Ok(EvalResult::Continue)
         }
         InnerWord::Builtin(Builtin::Deref) => {
             let Some(Value::Ref(idx)) = stack.pop() else {
@@ -300,7 +324,7 @@ fn inner_eval(lib: &Library, stack: &mut Stack, w: &InnerWord) -> Result<(), Inn
             };
 
             stack.push(value.clone());
-            Ok(())
+            Ok(EvalResult::Continue)
         }
 
         InnerWord::Builtin(Builtin::Lt) => {
@@ -311,7 +335,7 @@ fn inner_eval(lib: &Library, stack: &mut Stack, w: &InnerWord) -> Result<(), Inn
                 ebail!("lt can only compare ints")
             };
             stack.push(Value::Bool(a < b));
-            Ok(())
+            Ok(EvalResult::Continue)
         }
 
         InnerWord::Builtin(Builtin::If) => {
@@ -329,11 +353,8 @@ fn inner_eval(lib: &Library, stack: &mut Stack, w: &InnerWord) -> Result<(), Inn
             } else {
                 stack.push(b);
             }
-            Ok(())
+            Ok(EvalResult::Continue)
         }
-
-        InnerWord::Builtin(Builtin::Stash) => stack.stash(),
-        InnerWord::Builtin(Builtin::Unstash) => stack.unstash(),
     }
 }
 
@@ -352,9 +373,9 @@ pub enum InnerEvalError {
     Other(#[from] anyhow::Error),
 }
 
-pub struct Vm<'t> {
-    pub lib: Library<'t>,
-    pub pc: ProgramCounter,
+pub struct Vm {
+    pub lib: Library,
+    pub call_stack: Vec<ProgramCounter>,
     pub stack: Stack,
 
     pub stdin: Box<dyn Read>,
@@ -362,7 +383,7 @@ pub struct Vm<'t> {
 }
 
 pub struct VmState {
-    pub pc: ProgramCounter,
+    pub call_stack: Vec<ProgramCounter>,
     pub stack: Stack,
 }
 
@@ -377,14 +398,11 @@ pub enum StepResult {
     Continue,
 }
 
-impl<'t> Vm<'t> {
-    pub fn new(lib: Library<'t>, sentence_idx: SentenceIndex) -> Self {
+impl Vm {
+    pub fn new(lib: Library) -> Self {
         Vm {
             lib,
-            pc: ProgramCounter {
-                sentence_idx,
-                word_idx: 0,
-            },
+            call_stack: vec![],
             stack: Stack::default(),
             stdin: Box::new(stdin()),
             stdout: Box::new(stdout()),
@@ -393,13 +411,13 @@ impl<'t> Vm<'t> {
 
     pub fn save_state(&self) -> VmState {
         VmState {
-            pc: self.pc,
+            call_stack: self.call_stack.clone(),
             stack: self.stack.clone(),
         }
     }
 
     pub fn restore_state(&mut self, state: VmState) {
-        self.pc = state.pc;
+        self.call_stack = state.call_stack;
         self.stack = state.stack;
     }
 
@@ -413,90 +431,104 @@ impl<'t> Vm<'t> {
         self
     }
 
-    pub fn current_word(&self) -> Option<&Word<'t>> {
-        if self.pc.sentence_idx == SentenceIndex::TRAP {
+    pub fn current_word(&self) -> Option<&Word> {
+        let Some(pc) = self.call_stack.last() else {
             return None;
-        }
-        Some(&self.lib.sentences[self.pc.sentence_idx].words[self.pc.word_idx])
-    }
-
-    pub fn jump_to(&mut self, Closure(closure, sentence_idx): Closure) {
-        for v in closure {
-            self.stack.push(v);
-        }
-        self.pc = ProgramCounter {
-            sentence_idx,
-            word_idx: 0,
         };
+        Some(&self.lib.sentences[pc.sentence_idx].words[pc.word_idx])
     }
 
-    pub fn run_to_trap(&mut self) -> Result<(), EvalError> {
-        while self.pc.sentence_idx != SentenceIndex::TRAP {
-            self.step()?;
-        }
-        Ok(())
-    }
+    // pub fn jump_to(&mut self, Closure(closure, sentence_idx): Closure) {
+    //     for v in closure {
+    //         self.stack.push(v);
+    //     }
+    //     self.call_stack = ProgramCounter {
+    //         sentence_idx,
+    //         word_idx: 0,
+    //     };
+    // }
+
+    // pub fn run_to_trap(&mut self) -> Result<(), EvalError> {
+    //     while self.call_stack.sentence_idx != SentenceIndex::TRAP {
+    //         self.step()?;
+    //     }
+    //     Ok(())
+    // }
 
     pub fn step(&mut self) -> Result<StepResult, EvalError> {
-        if self.pc.sentence_idx == SentenceIndex::TRAP {
-            return self.trap();
-        }
-
-        let pc = &mut self.pc;
-        let word = &self.lib.sentences[pc.sentence_idx].words[pc.word_idx];
-        eval(&self.lib, &mut self.stack, &word)?;
-        if pc.word_idx < self.lib.sentences[pc.sentence_idx].words.len() - 1 {
-            pc.word_idx += 1;
-        } else {
-            let op = match self.stack.pop() {
-                Some(Value::Symbol(op)) => op,
-                Some(value) => {
-                    return Err(EvalError {
-                        location: Some(word.location()),
-                        inner: InnerEvalError::UnexpectedControlFlow { value },
-                    })
-                }
-                None => {
-                    return Err(EvalError {
-                        location: Some(word.location()),
-                        inner: InnerEvalError::EmptyStack,
-                    })
-                }
+        let pc = loop {
+            let Some(pc) = self.call_stack.last_mut() else {
+                return self.trap();
             };
-            if op != "exec" {
-                return Err(EvalError {
-                    location: Some(word.location()),
-                    inner: InnerEvalError::UnexpectedControlFlow {
-                        value: Value::Symbol(op),
-                    },
+            break pc;
+        };
+        let word = &self.lib.sentences[pc.sentence_idx].words[pc.word_idx];
+        let res = eval(&self.lib, &mut self.stack, &word)?;
+        pc.word_idx += 1;
+        if pc.word_idx == self.lib.sentences[pc.sentence_idx].words.len() {
+            self.call_stack.pop();
+        }
+        match res {
+            EvalResult::Call(sentence_idx) => {
+                self.call_stack.push(ProgramCounter {
+                    sentence_idx,
+                    word_idx: 0,
                 });
             }
-
-            let next = match self.stack.pop() {
-                Some(Value::Pointer(next)) => next,
-                Some(value) => {
-                    return Err(EvalError {
-                        location: Some(word.location()),
-                        inner: InnerEvalError::ExecNonClosure { value },
-                    })
-                }
-                None => {
-                    return Err(EvalError {
-                        location: Some(word.location()),
-                        inner: InnerEvalError::ExecEmptyStack,
-                    })
-                }
-            };
-
-            for v in next.0 {
-                self.stack.push(v);
-            }
-
-            self.pc = ProgramCounter {
-                sentence_idx: next.1,
-                word_idx: 0,
-            };
+            EvalResult::Continue => {}
         }
+        // if pc.word_idx < self.lib.sentences[pc.sentence_idx].words.len() - 1 {
+        //     pc.word_idx += 1;
+        // } else {
+        //     let op = match self.stack.pop() {
+        //         Some(Value::Symbol(op)) => op,
+        //         Some(value) => {
+        //             return Err(EvalError {
+        //                 location: Some(word.location()),
+        //                 inner: InnerEvalError::UnexpectedControlFlow { value },
+        //             })
+        //         }
+        //         None => {
+        //             return Err(EvalError {
+        //                 location: Some(word.location()),
+        //                 inner: InnerEvalError::EmptyStack,
+        //             })
+        //         }
+        //     };
+        //     if op != "exec" {
+        //         return Err(EvalError {
+        //             location: Some(word.location()),
+        //             inner: InnerEvalError::UnexpectedControlFlow {
+        //                 value: Value::Symbol(op),
+        //             },
+        //         });
+        //     }
+
+        //     let next = match self.stack.pop() {
+        //         Some(Value::Pointer(next)) => next,
+        //         Some(value) => {
+        //             return Err(EvalError {
+        //                 location: Some(word.location()),
+        //                 inner: InnerEvalError::ExecNonClosure { value },
+        //             })
+        //         }
+        //         None => {
+        //             return Err(EvalError {
+        //                 location: Some(word.location()),
+        //                 inner: InnerEvalError::ExecEmptyStack,
+        //             })
+        //         }
+        //     };
+
+        //     for v in next.0 {
+        //         self.stack.push(v);
+        //     }
+
+        //     self.call_stack = ProgramCounter {
+        //         sentence_idx: next.1,
+        //         word_idx: 0,
+        //     };
+        // }
         Ok(StepResult::Continue)
     }
 
@@ -511,7 +543,7 @@ impl<'t> Vm<'t> {
         let Some(Value::Symbol(symbol)) = self.stack.pop() else {
             ebail!("symbol not specified")
         };
-        
+
         if symbol == "err" {
             println!("Error: {:?}", self.stack.pop());
             return Ok(StepResult::Exit);
@@ -523,7 +555,6 @@ impl<'t> Vm<'t> {
         let Some(Value::Pointer(caller)) = self.stack.pop() else {
             ebail!("caller not specified")
         };
-
 
         let Some(Value::Symbol(method)) = self.stack.pop() else {
             ebail!("method not specified")
@@ -537,7 +568,7 @@ impl<'t> Vm<'t> {
                 write!(self.stdout, "{}", c);
                 self.stack
                     .push(Value::Pointer(Closure(vec![], SentenceIndex::TRAP)));
-                self.jump_to(caller);
+                self.load_main();
                 Ok(StepResult::Continue)
             }
             "stdin" => {
@@ -550,13 +581,13 @@ impl<'t> Vm<'t> {
                         self.stack.push(Value::Symbol("ok".to_owned()));
                         self.stack
                             .push(Value::Pointer(Closure(vec![], SentenceIndex::TRAP)));
-                        self.jump_to(caller);
+                        self.load_main();
                     }
                     Err(e) if e.kind() == ErrorKind::UnexpectedEof => {
                         self.stack.push(Value::Symbol("eof".to_owned()));
                         self.stack
                             .push(Value::Pointer(Closure(vec![], SentenceIndex::TRAP)));
-                        self.jump_to(caller);
+                        self.load_main();
                     }
                     Err(e) => panic!("unexpected io fail: {}", e),
                 }
@@ -570,7 +601,7 @@ impl<'t> Vm<'t> {
                 write!(self.stdout, "{:?}\n", v);
                 self.stack
                     .push(Value::Pointer(Closure(vec![], SentenceIndex::TRAP)));
-                self.jump_to(caller);
+                self.load_main();
                 Ok(StepResult::Continue)
             }
             "halt" => Ok(StepResult::Exit),
@@ -584,12 +615,20 @@ impl<'t> Vm<'t> {
         while let StepResult::Continue = self.step()? {}
         Ok(())
     }
+
+    pub fn load_main(&mut self) {
+        assert!(self.call_stack.is_empty());
+        let main = self.lib.main().unwrap();
+        self.call_stack = vec![ProgramCounter {
+            sentence_idx: main,
+            word_idx: 0,
+        }]
+    }
 }
 
 #[derive(Debug, Default, Clone)]
 pub struct Stack {
     inner: Vec<Value>,
-    stash: Vec<Value>,
 }
 
 impl Stack {
@@ -667,18 +706,6 @@ impl Stack {
 
     pub fn len(&self) -> usize {
         self.inner.len()
-    }
-
-    pub fn stash(&mut self) -> Result<(), InnerEvalError> {
-        self.stash
-            .push(self.inner.pop().context("stashed from empty stack")?);
-        Ok(())
-    }
-
-    pub fn unstash(&mut self) -> Result<(), InnerEvalError> {
-        self.inner
-            .push(self.stash.pop().context("unstashed from empty stash")?);
-        Ok(())
     }
 
     pub fn get(&self, idx: usize) -> Option<&Value> {

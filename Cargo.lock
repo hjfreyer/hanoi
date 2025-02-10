@@ -268,6 +268,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "from-pest"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c0f2dbe0e5bcfc1f8a135e14cbca3dd14e0c5696f34c2a1c7c9d729c01e9ae88"
+dependencies = [
+ "log",
+ "pest",
+ "void",
+]
+
+[[package]]
 name = "generic-array"
 version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -284,8 +295,10 @@ dependencies = [
  "anyhow",
  "clap",
  "derive_more",
- "itertools",
+ "from-pest",
+ "itertools 0.13.0",
  "pest",
+ "pest-ast",
  "pest_derive",
  "ratatui",
  "thiserror",
@@ -329,6 +342,15 @@ name = "is_terminal_polyfill"
 version = "1.70.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7943c866cc5cd64cbc25b2e01621d07fa8eb2a1a23160ee81ce38704e97b8ecf"
+
+[[package]]
+name = "itertools"
+version = "0.10.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b0fd2260e829bddf4cb6ea802289de2f86d6a7a690192fbe91b3f46e0f2c8473"
+dependencies = [
+ "either",
+]
 
 [[package]]
 name = "itertools"
@@ -448,6 +470,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "pest-ast"
+version = "0.3.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ca1f0a53a45cfbdcd93e8982d9ead828a022762b1d890f1571f2a72e64277381"
+dependencies = [
+ "itertools 0.10.5",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "pest_derive"
 version = "2.7.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -510,7 +544,7 @@ dependencies = [
  "compact_str",
  "crossterm",
  "instability",
- "itertools",
+ "itertools 0.13.0",
  "lru",
  "paste",
  "strum",
@@ -708,7 +742,7 @@ version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b3644627a5af5fa321c95b9b235a72fd24cd29c648c2c379431e6628655627bf"
 dependencies = [
- "itertools",
+ "itertools 0.13.0",
  "unicode-segmentation",
  "unicode-width",
 ]
@@ -730,6 +764,12 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
+
+[[package]]
+name = "void"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a02e4885ed3bc0f2de90ea6dd45ebcbb66dacffe03547fadbb0eeae2770887d"
 
 [[package]]
 name = "wasi"

@@ -1,15 +1,20 @@
 #![allow(unused)]
 
 mod ast;
+mod compiler;
 mod debugger;
 mod flat;
+mod ir;
+mod rawast;
+mod source;
 mod vm;
 
 use std::{path::PathBuf, process::exit};
 
 use clap::{Parser, Subcommand};
-use flat::{Builtin, Closure, Entry, InnerWord, Library, SentenceBuilder, SentenceIndex, Value};
+use flat::{Builtin, Closure, Entry, InnerWord, Library, SentenceIndex, Value};
 use itertools::Itertools;
+
 use vm::{EvalError, ProgramCounter, Vm};
 
 #[derive(Parser, Debug)]
@@ -37,25 +42,34 @@ enum Commands {
     },
 }
 
+fn compile_library(
+    base_dir: PathBuf,
+    module: String,
+) -> anyhow::Result<(source::Sources, Library)> {
+    use from_pest::FromPest;
+    use pest::Parser;
+
+    let loader = source::Loader { base_dir };
+    let mut sources = source::Sources::default();
+
+    let file_idx = loader.load(format!("{}.han", module).parse().unwrap(), &mut sources)?;
+
+    let mut parse_tree =
+        rawast::HanoiParser::parse(rawast::Rule::file, &sources.files[file_idx].source)?;
+    let file = rawast::File::from_pest(&mut parse_tree).expect("infallible");
+
+    let mut ir = ir::Crate::default();
+    ir.add_file(ir::QualifiedName(vec![]), file_idx, file);
+
+    let lib = compiler::compile(&sources, ir)?;
+    Ok((sources, lib))
+}
+
 fn run(base_dir: PathBuf, module: String) -> anyhow::Result<()> {
-    let mut loader = ast::Loader {
-        base: base_dir,
-        cache: Default::default(),
-    };
+    let (sources, lib) = compile_library(base_dir, module)?;
+    let mut vm = Vm::new(lib);
 
-    let mut lib = Library::load(&mut loader, &module)?;
-    let &Entry::Value(Value::Pointer(Closure(_, main))) = lib.root_namespace().get("main").unwrap()
-    else {
-        panic!("not code")
-    };
-
-    let code = lib.code;
-    let mut vm = Vm::new(lib, main);
-
-    vm.jump_to(Closure(
-        vec![Value::Pointer(Closure(vec![], SentenceIndex::TRAP))],
-        main,
-    ));
+    vm.load_main();
 
     let mut res = match vm.run() {
         Ok(res) => res,
@@ -73,31 +87,17 @@ fn run(base_dir: PathBuf, module: String) -> anyhow::Result<()> {
 }
 
 fn debug(base_dir: PathBuf, module: String, stdin: Option<PathBuf>) -> anyhow::Result<()> {
-    let mut loader = ast::Loader {
-        base: base_dir,
-        cache: Default::default(),
-    };
-
-    let mut lib = Library::load(&mut loader, &module)?;
-    let &Entry::Value(Value::Pointer(Closure(_, main))) = lib.root_namespace().get("main").unwrap()
-    else {
-        panic!("not code")
-    };
-
-    let code = lib.code;
-    let mut vm = Vm::new(lib, main);
+    let (sources, lib) = compile_library(base_dir, module)?;
+    let mut vm = Vm::new(lib);
 
     if let Some(stdin_path) = stdin {
         let stdin = std::fs::File::open(stdin_path)?;
         vm = vm.with_stdin(Box::new(stdin));
     }
 
-    vm.jump_to(Closure(
-        vec![Value::Pointer(Closure(vec![], SentenceIndex::TRAP))],
-        main,
-    ));
+    vm.load_main();
 
-    let debugger = debugger::Debugger::new(code, vm);
+    let debugger = debugger::Debugger::new(sources, vm);
 
     let mut terminal = ratatui::init();
     terminal.clear()?;
@@ -107,143 +107,145 @@ fn debug(base_dir: PathBuf, module: String, stdin: Option<PathBuf>) -> anyhow::R
     Ok(())
 }
 
-struct IterReader<'a, 't> {
-    vm: &'a mut Vm<'t>,
+struct IterReader<'a> {
+    vm: &'a mut Vm,
     done: bool,
 }
 
-impl<'a, 't> Iterator for IterReader<'a, 't> {
+impl<'a> Iterator for IterReader<'a> {
     type Item = Result<Value, EvalError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.done {
             return None;
         }
-        let mut res = match self.vm.run_to_trap() {
-            Ok(res) => res,
-            Err(e) => {
-                self.done = true;
-                return Some(Err(e));
-            }
-        };
+        todo!();
+        // let mut res = match self.vm.run_to_trap() {
+        //     Ok(res) => res,
+        //     Err(e) => {
+        //         self.done = true;
+        //         return Some(Err(e));
+        //     }
+        // };
 
-        let Some(Value::Pointer(mut closure)) = self.vm.stack.pop() else {
-            panic!();
-        };
+        // let Some(Value::Pointer(mut closure)) = self.vm.stack.pop() else {
+        //     panic!();
+        // };
 
-        let Some(Value::Symbol(result)) = self.vm.stack.pop() else {
-            panic!();
-        };
+        // let Some(Value::Symbol(result)) = self.vm.stack.pop() else {
+        //     panic!();
+        // };
 
-        match result.as_str() {
-            "yield" => {
-                let item = self.vm.stack.pop().unwrap();
-                closure
-                    .0
-                    .insert(0, Value::Pointer(Closure(vec![], SentenceIndex::TRAP)));
-                closure.0.insert(0, Value::Symbol("next".to_owned()));
-                self.vm.jump_to(closure);
+        // match result.as_str() {
+        //     "yield" => {
+        //         let item = self.vm.stack.pop().unwrap();
+        //         closure
+        //             .0
+        //             .insert(0, Value::Pointer(Closure(vec![], SentenceIndex::TRAP)));
+        //         closure.0.insert(0, Value::Symbol("next".to_owned()));
+        //         self.vm.jump_to(closure);
 
-                Some(Ok(item))
-            }
-            "eos" => None,
-            _ => panic!(),
-        }
+        //         Some(Ok(item))
+        //     }
+        //     "eos" => None,
+        //     _ => panic!(),
+        // }
     }
 }
 
 fn test(base_dir: PathBuf, module: String) -> anyhow::Result<()> {
-    let mut loader = ast::Loader {
-        base: base_dir,
-        cache: Default::default(),
-    };
+    todo!()
+    // let mut loader = ast::Loader {
+    //     base: base_dir,
+    //     cache: Default::default(),
+    // };
 
-    let lib = Library::load(&mut loader, &module)?;
-    let code = lib.code;
+    // let lib = Library::load(&mut loader, &module)?;
+    // let code = lib.code;
 
-    let Some(Entry::Namespace(tests_ns)) = lib.namespaces.first().unwrap().get("tests") else {
-        panic!("no namespace named tests")
-    };
-    let Some(Entry::Value(Value::Pointer(enumerate))) = lib.namespaces[*tests_ns].get("enumerate")
-    else {
-        panic!("no procedure named enumerate")
-    };
-    assert_eq!(enumerate.0, vec![]);
-    let enumerate = enumerate.1;
+    // let Some(Entry::Namespace(tests_ns)) = lib.namespaces.first().unwrap().get("tests") else {
+    //     panic!("no namespace named tests")
+    // };
+    // let Some(Entry::Value(Value::Pointer(enumerate))) = lib.namespaces[*tests_ns].get("enumerate")
+    // else {
+    //     panic!("no procedure named enumerate")
+    // };
+    // assert_eq!(enumerate.0, vec![]);
+    // let enumerate = enumerate.1;
 
-    let Some(Entry::Value(Value::Pointer(run))) = lib.namespaces[*tests_ns].get("run") else {
-        panic!("no procedure named run")
-    };
-    assert_eq!(run.0, vec![]);
-    let run = run.1;
+    // let Some(Entry::Value(Value::Pointer(run))) = lib.namespaces[*tests_ns].get("run") else {
+    //     panic!("no procedure named run")
+    // };
+    // assert_eq!(run.0, vec![]);
+    // let run = run.1;
 
-    let mut vm = Vm::new(lib, enumerate);
-    vm.jump_to(Closure(
-        vec![
-            Value::Symbol("next".to_owned()),
-            Value::Pointer(Closure(vec![], SentenceIndex::TRAP)),
-        ],
-        enumerate,
-    ));
+    // let mut vm = Vm::new(lib, enumerate);
+    // vm.jump_to(Closure(
+    //     vec![
+    //         Value::Symbol("next".to_owned()),
+    //         Value::Pointer(Closure(vec![], SentenceIndex::TRAP)),
+    //     ],
+    //     enumerate,
+    // ));
 
-    for tc in (IterReader {
-        vm: &mut vm,
-        done: false,
-    })
-    .collect_vec()
-    {
-        let value = match tc {
-            Ok(value) => value,
-            Err(e) => {
-                println!("Error enumerating tests: {}", e);
-                return Ok(());
-            }
-        };
-        let Value::Symbol(tc_name) = value else {
-            panic!()
-        };
+    // for tc in (IterReader {
+    //     vm: &mut vm,
+    //     done: false,
+    // })
+    // .collect_vec()
+    // {
+    //     let value = match tc {
+    //         Ok(value) => value,
+    //         Err(e) => {
+    //             println!("Error enumerating tests: {}", e);
+    //             return Ok(());
+    //         }
+    //     };
+    //     let Value::Symbol(tc_name) = value else {
+    //         panic!()
+    //     };
 
-        println!("Running test: {}", tc_name);
+    //     println!("Running test: {}", tc_name);
 
-        vm.jump_to(Closure(
-            vec![
-                Value::Pointer(Closure(vec![], SentenceIndex::TRAP)),
-                Value::Symbol(tc_name.clone()),
-            ],
-            run,
-        ));
+    //     vm.jump_to(Closure(
+    //         vec![
+    //             Value::Pointer(Closure(vec![], SentenceIndex::TRAP)),
+    //             Value::Symbol(tc_name.clone()),
+    //         ],
+    //         run,
+    //     ));
 
-        let mut res = match vm.run_to_trap() {
-            Ok(res) => res,
-            Err(e) => {
-                eprintln!("Error while running test {}: {}\n", tc_name, e);
-                eprintln!("Stack:");
-                for v in vm.stack.iter() {
-                    eprintln!("  {:?}", v)
-                }
-                exit(1);
-            }
-        };
+    //     let mut res = match vm.run_to_trap() {
+    //         Ok(res) => res,
+    //         Err(e) => {
+    //             eprintln!("Error while running test {}: {}\n", tc_name, e);
+    //             eprintln!("Stack:");
+    //             for v in vm.stack.iter() {
+    //                 eprintln!("  {:?}", v)
+    //             }
+    //             exit(1);
+    //         }
+    //     };
 
-        let Value::Pointer(_) = vm.stack.pop().unwrap() else {
-            panic!()
-        };
+    //     let Value::Pointer(_) = vm.stack.pop().unwrap() else {
+    //         panic!()
+    //     };
 
-        let Value::Symbol(result) = vm.stack.pop().unwrap() else {
-            panic!()
-        };
+    //     let Value::Symbol(result) = vm.stack.pop().unwrap() else {
+    //         panic!()
+    //     };
 
-        match result.as_str() {
-            "pass" => println!("PASS!"),
-            "fail" => {
-                println!("FAIL!");
-                exit(1);
-            }
-            _ => panic!(),
-        }
-    }
+    //     match result.as_str() {
+    //         "pass" => println!("PASS!"),
+    //         "fail" => {
+    //             println!("FAIL!");
+    //             exit(1);
+    //         }
+    //         _ => panic!(),
+    //     }
+    // }
 
-    Ok(())
+    // Ok(())
 }
 
 fn main() -> anyhow::Result<()> {

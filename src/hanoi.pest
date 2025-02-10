@@ -4,9 +4,9 @@ COMMENT = _{ "//" ~ (!NEWLINE ~ ANY)* }
 
 // FILE STRUCTURE
 
-file = { SOI ~ header ~ namespace ~ EOI }
+file = { SOI ~ header ~ decl* ~ EOI }
 
-header = { ns_import* }
+header = _{ ns_import* }
 
 ns_import = _{ "mod" ~ identifier ~ ";" }
 
@@ -16,7 +16,8 @@ namespace = { decl* }
 
 ns_decl = { "mod" ~ identifier ~ "{" ~ namespace ~ "}" }
 
-decl = _{ ns_decl | proc_decl }
+decl = { sentence_decl }
+// { ns_decl | proc_decl }
 
 // END FILE STRUCTURE
 
@@ -54,11 +55,12 @@ literal = { bool | int | char_lit | symbol | nil }
 
 raw_statement = { "R" ~ "{" ~ sentence ~ "}" }
 raw_word      = {
-    stack_bindings
-  | "{" ~ sentence ~ "}"
-  | value_expr
-  | builtin_func_call
-  | builtin
+  //   stack_bindings
+  // | "{" ~ sentence ~ "}"
+  // | value_expr
+  // | builtin_func_call
+  builtin
+| literal
 }
 
 stack_bindings = {
@@ -68,7 +70,12 @@ stack_bindings = {
 
 sentence = { raw_word* }
 
-builtin = { "#" ~ identifier }
+builtin = { "#" ~ identifier ~ builtin_args? }
+
+builtin_args = _{
+    "(" ~ builtin_arg ~ ("," ~ builtin_arg)* ~ ")"
+}
+builtin_arg  = { label | int }
 
 builtin_func_call = { "#" ~ identifier ~ "(" ~ int ~ ")" }
 
@@ -159,3 +166,11 @@ match_block = { "match" ~ "{" ~ match_cases ~ "}" }
 
 match_cases = _{ match_case* }
 match_case  =  { bindings ~ "=>" ~ "{" ~ block ~ "}" }
+
+label = { "'" ~ identifier }
+
+// New stuff
+
+sentence_decl = {
+    "sentence" ~ label ~ "{" ~ sentence ~ "}"
+}

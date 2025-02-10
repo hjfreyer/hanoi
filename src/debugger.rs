@@ -13,14 +13,16 @@ use ratatui::{
 use crate::{
     ast,
     flat::{Closure, Value, ValueView, Word},
+    source::{self, Span},
     vm::{EvalError, StepResult, Vm, VmState},
 };
 
-pub struct Debugger<'t> {
-    vm: Vm<'t>,
+pub struct Debugger {
+    sources: source::Sources,
+    vm: Vm,
     history: VecDeque<VmState>,
 
-    highlight_span: Option<pest::Span<'t>>,
+    highlight_span: Option<source::FileSpan>,
     code_scroll: u16,
     stack_state: TableState,
     error: Option<EvalError>,
@@ -28,7 +30,7 @@ pub struct Debugger<'t> {
 
 const HISTORY_WINDOW: usize = 500;
 
-impl<'t> Debugger<'t> {
+impl Debugger {
     fn step(&mut self) {
         if self.error.is_some() {
             return;
@@ -50,9 +52,16 @@ impl<'t> Debugger<'t> {
 
     fn update_code(&mut self) {
         if let Some(word) = self.vm.current_word() {
-            self.highlight_span = Some(word.span);
-            let (line, _) = word.span.start_pos().line_col();
-            self.code_scroll = (line as u16).saturating_sub(10);
+            match word.span {
+                Span::Generated(_) => {
+                    self.highlight_span = None;
+                }
+                Span::File(file_span) => {
+                    self.highlight_span = Some(file_span);
+                    let (line, _) = file_span.as_pest(&self.sources).start_pos().line_col();
+                    self.code_scroll = (line as u16).saturating_sub(10);
+                }
+            }
         }
     }
 
@@ -73,60 +82,60 @@ impl<'t> Debugger<'t> {
         let current_line = self
             .highlight_span
             .expect("ran until current word was some")
-            .start_pos()
-            .line_col()
-            .0;
+            .location(&self.sources)
+            .line;
 
         while self.error.is_none()
             && self
                 .highlight_span
-                .map(|span| span.start_pos().line_col().0 == current_line)
+                .map(|span| span.as_pest(&self.sources).start_pos().line_col().0 == current_line)
                 .unwrap_or(true)
         {
             self.step()
         }
     }
 
-    fn jump_over(&mut self) {
-        let current_line = self
-            .highlight_span
-            .expect("ran until current word was some")
-            .start_pos()
-            .line_col()
-            .0;
-        self.finish_sentence();
-        if self.error.is_some() {
-            return;
-        }
+    // fn jump_over(&mut self) {
+    //     let current_line = self
+    //         .highlight_span
+    //         .expect("ran until current word was some")
+    //         .start_pos()
+    //         .line_col()
+    //         .0;
+    //     self.finish_sentence();
+    //     if self.error.is_some() {
+    //         return;
+    //     }
 
-        let return_address = self.vm.stack.get(1).expect("no return address?");
-        let &Value::Pointer(Closure(_, sidx)) = return_address else {
-            panic!("return address not a closure?")
-        };
+    //     let return_address = self.vm.stack.get(1).expect("no return address?");
+    //     let &Value::Pointer(Closure(_, sidx)) = return_address else {
+    //         panic!("return address not a closure?")
+    //     };
 
-        while self.error.is_none() && self.vm.pc.sentence_idx != sidx {
-            self.step()
-        }
-        while self.error.is_none()
-            && self
-                .highlight_span
-                .map(|span| span.start_pos().line_col().0 == current_line)
-                .unwrap_or(true)
-        {
-            self.step()
-        }
-    }
+    //     while self.error.is_none() && self.vm.call_stack.sentence_idx != sidx {
+    //         self.step()
+    //     }
+    //     while self.error.is_none()
+    //         && self
+    //             .highlight_span
+    //             .map(|span| span.start_pos().line_col().0 == current_line)
+    //             .unwrap_or(true)
+    //     {
+    //         self.step()
+    //     }
+    // }
 
-    fn finish_sentence(&mut self) {
-        while self.error.is_none()
-            && self.vm.pc.word_idx != self.vm.lib.sentences[self.vm.pc.sentence_idx].words.len() - 1
-        {
-            self.step();
-        }
-    }
+    // fn finish_sentence(&mut self) {
+    //     while self.error.is_none()
+    //         && self.vm.call_stack.word_idx != self.vm.lib.sentences[self.vm.call_stack.sentence_idx].words.len() - 1
+    //     {
+    //         self.step();
+    //     }
+    // }
 
     fn code(&self) -> Paragraph {
         let text = if let Some(span) = self.highlight_span {
+            let span = span.as_pest(&self.sources);
             let code = span.get_input();
             let mut res = Text::raw("");
             for (pos, line) in code[..span.start()].lines().with_position() {
@@ -180,7 +189,7 @@ impl<'t> Debugger<'t> {
                 let v = v
                     .map(|v| {
                         ValueView {
-                            lib: &self.vm.lib,
+                            sources: &self.sources,
                             value: v,
                         }
                         .to_string()
@@ -235,8 +244,9 @@ impl<'t> Debugger<'t> {
         frame.render_stateful_widget(self.stack(), stack_layout[0], &mut self.stack_state);
     }
 
-    pub fn new(code: &'t str, vm: crate::vm::Vm<'t>) -> Self {
+    pub fn new(sources: source::Sources, vm: crate::vm::Vm) -> Self {
         let mut res = Self {
+            sources,
             vm,
             history: VecDeque::new(),
             stack_state: TableState::default(),
@@ -267,7 +277,8 @@ pub fn run(mut terminal: DefaultTerminal, mut debugger: Debugger) -> std::io::Re
             }
 
             if key.kind == event::KeyEventKind::Press && key.code == event::KeyCode::Char('n') {
-                debugger.jump_over();
+                // debugger.jump_over();
+                todo!()
             }
 
             if key.kind == event::KeyEventKind::Press && key.code == event::KeyCode::Left {

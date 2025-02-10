@@ -1,5 +1,5 @@
 use std::{
-    collections::VecDeque,
+    collections::{BTreeMap, VecDeque},
     fmt::Display,
     path::{Path, PathBuf},
     usize,
@@ -7,14 +7,20 @@ use std::{
 
 use derive_more::derive::{From, Into};
 use itertools::Itertools;
-use pest::{iterators::Pair, Span};
+use pest::iterators::Pair;
 use thiserror::Error;
 use typed_index_collections::TiVec;
 
-use crate::ast::{
-    self, ident_from_pair, Bindings, Identifier, Literal, PathOrIdent, ProcMatchBlock,
-    ProcMatchCase, Rule, ValueExpression,
+use crate::{
+    ir::{self, QualifiedName},
+    rawast,
+    source::{self, Span},
 };
+
+// use crate::ast::{
+//     self, ident_from_pair, Bindings, Identifier, Literal, PathOrIdent, ProcMatchBlock,
+//     ProcMatchCase, Rule, ValueExpression,
+// };
 
 #[derive(From, Into, Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct SentenceIndex(usize);
@@ -27,12 +33,11 @@ impl SentenceIndex {
 pub struct NamespaceIndex(usize);
 
 #[derive(Debug, Clone, Default)]
-pub struct Library<'t> {
+pub struct Library {
     pub namespaces: TiVec<NamespaceIndex, Namespace>,
-    pub sentences: TiVec<SentenceIndex, Sentence<'t>>,
+    pub sentences: TiVec<SentenceIndex, Sentence>,
 
-    pub root_ns: Option<NamespaceIndex>,
-    pub code: &'t str,
+    pub sentence_index: BTreeMap<Vec<String>, SentenceIndex>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -70,346 +75,352 @@ impl Display for LoadError {
 pub enum LoadErrorInner {
     #[error("error reading file")]
     IO(#[from] anyhow::Error),
+    #[error("duplicate path")]
+    DuplicatePath,
     #[error("error parsing file:\n{0}")]
-    Parse(#[from] pest::error::Error<Rule>),
+    Parse(#[from] pest::error::Error<rawast::Rule>),
     #[error("error compiling file: {0}")]
     Compile(CompileError),
 }
 
-impl<'t> Library<'t> {
-    pub fn root_namespace(&self) -> &Namespace {
-        &self.namespaces[self.root_ns.unwrap()]
+impl Library {
+    // pub fn root_namespace(&self) -> &Namespace {
+    //     &self.namespaces[self.root_ns.unwrap()]
+    // }
+
+    pub fn main(&self) -> Option<SentenceIndex> {
+        self.sentence_index.get(&vec!["main".to_owned()]).cloned()
     }
 
-    pub fn load(loader: &'t mut ast::Loader, name: &'t str) -> Result<Self, LoadError> {
-        Self::load_srcs(loader, name)?;
+    // pub fn load(loader: &'t mut ast::Loader, name: &'t str) -> Result<Self, LoadError> {
+    //     Self::load_srcs(loader, name)?;
 
-        let mut res = Self {
-            namespaces: TiVec::new(),
-            sentences: TiVec::new(),
-            root_ns: None,
-            code: loader.get(name).unwrap(),
-        };
-        res.root_ns = Some(res.visit_module(loader, name, None)?);
-        Ok(res)
-    }
+    //     let mut res = Self {
+    //         namespaces: TiVec::new(),
+    //         sentences: TiVec::new(),
+    //         root_ns: None,
+    //         code: loader.get(name).unwrap(),
+    //     };
+    //     res.root_ns = Some(res.visit_module(loader, name, None)?);
+    //     Ok(res)
+    // }
 
-    fn load_srcs(loader: &mut ast::Loader, name: &str) -> Result<(), LoadError> {
-        loader.load(name)?;
-        let contents = loader.get(name).unwrap();
+    // fn load_srcs(loader: &mut ast::Loader, name: &str) -> Result<(), LoadError> {
+    //     loader.load(name)?;
+    //     let contents = loader.get(name).unwrap();
 
-        let module = ast::Module::from_str(contents).map_err(|e| {
-            let path = loader.path(name).clone();
-            LoadError {
-                error: LoadErrorInner::Parse(e.with_path(path.to_str().unwrap())),
-                path,
-            }
-        })?;
-        let names = module
-            .imports
-            .into_iter()
-            .map(|i| i.as_str().to_owned())
-            .collect_vec();
-        for name in names {
-            Self::load_srcs(loader, &name)?
-        }
-        Ok(())
-    }
+    //     let module = ast::Module::from_str(contents).map_err(|e| {
+    //         let path = loader.path(name).clone();
+    //         LoadError {
+    //             error: LoadErrorInner::Parse(e.with_path(path.to_str().unwrap())),
+    //             path,
+    //         }
+    //     })?;
+    //     let names = module
+    //         .imports
+    //         .into_iter()
+    //         .map(|i| i.as_str().to_owned())
+    //         .collect_vec();
+    //     for name in names {
+    //         Self::load_srcs(loader, &name)?
+    //     }
+    //     Ok(())
+    // }
 
-    fn visit_module(
-        &mut self,
-        loader: &'t ast::Loader,
-        name: &'t str,
-        parent: Option<NamespaceIndex>,
-    ) -> Result<NamespaceIndex, LoadError> {
-        let contents = loader.get(name).unwrap();
-        let path = loader.path(name);
+    // fn visit_module(
+    //     &mut self,
+    //     loader: &'t ast::Loader,
+    //     name: &'t str,
+    //     parent: Option<NamespaceIndex>,
+    // ) -> Result<NamespaceIndex, LoadError> {
+    //     let contents = loader.get(name).unwrap();
+    //     let path = loader.path(name);
 
-        let module = ast::Module::from_str(contents).map_err(|e| {
-            let path = loader.path(name).clone();
-            LoadError {
-                error: LoadErrorInner::Parse(e.with_path(path.to_str().unwrap())),
-                path,
-            }
-        })?;
-        let mod_ns = self
-            .visit_ns(&path, module.namespace, parent)
-            .map_err(|e| match e {
-                BuilderError::UnknownReference(i) => LoadError {
-                    path: loader.path(name).clone(),
-                    error: LoadErrorInner::Compile(CompileError::UnknownReference {
-                        location: SourceLocation {
-                            file: loader.path(name),
-                            line: i.0.start_pos().line_col().0,
-                            col: i.0.start_pos().line_col().1,
-                        },
-                        name: i.as_str().to_owned(),
-                    }),
-                },
-            })?;
-        for name in module.imports.into_iter() {
-            let submod = self.visit_module(loader, name.as_str(), Some(mod_ns))?;
+    //     let module = ast::Module::from_str(contents).map_err(|e| {
+    //         let path = loader.path(name).clone();
+    //         LoadError {
+    //             error: LoadErrorInner::Parse(e.with_path(path.to_str().unwrap())),
+    //             path,
+    //         }
+    //     })?;
+    //     let mod_ns = self
+    //         .visit_ns(&path, module.namespace, parent)
+    //         .map_err(|e| match e {
+    //             BuilderError::UnknownReference(i) => LoadError {
+    //                 path: loader.path(name).clone(),
+    //                 error: LoadErrorInner::Compile(CompileError::UnknownReference {
+    //                     location: SourceLocation {
+    //                         file: loader.path(name),
+    //                         line: i.0.start_pos().line_col().0,
+    //                         col: i.0.start_pos().line_col().1,
+    //                     },
+    //                     name: i.as_str().to_owned(),
+    //                 }),
+    //             },
+    //         })?;
+    //     for name in module.imports.into_iter() {
+    //         let submod = self.visit_module(loader, name.as_str(), Some(mod_ns))?;
 
-            self.namespaces[mod_ns]
-                .0
-                .push((name.as_str().to_owned(), Entry::Namespace(submod)));
-        }
-        Ok(mod_ns)
-    }
+    //         self.namespaces[mod_ns]
+    //             .0
+    //             .push((name.as_str().to_owned(), Entry::Namespace(submod)));
+    //     }
+    //     Ok(mod_ns)
+    // }
 
-    fn visit_ns(
-        &mut self,
-        modname: &Path,
-        ns: ast::Namespace<'t>,
-        parent: Option<NamespaceIndex>,
-    ) -> Result<NamespaceIndex, BuilderError<'t>> {
-        let ns_idx = self.namespaces.push_and_get_key(Namespace::default());
+    // fn visit_ns(
+    //     &mut self,
+    //     modname: &Path,
+    //     ns: ast::Namespace<'t>,
+    //     parent: Option<NamespaceIndex>,
+    // ) -> Result<NamespaceIndex, BuilderError<'t>> {
+    //     let ns_idx = self.namespaces.push_and_get_key(Namespace::default());
 
-        if let Some(parent) = parent {
-            self.namespaces[ns_idx]
-                .0
-                .push(("super".to_owned(), Entry::Namespace(parent)));
-        }
+    //     if let Some(parent) = parent {
+    //         self.namespaces[ns_idx]
+    //             .0
+    //             .push(("super".to_owned(), Entry::Namespace(parent)));
+    //     }
 
-        for decl in ns.decls {
-            match decl.value {
-                ast::DeclValue::Namespace(namespace) => {
-                    let subns = self.visit_ns(modname, namespace, Some(ns_idx))?;
-                    self.namespaces[ns_idx]
-                        .0
-                        .push((decl.name, Entry::Namespace(subns)));
-                }
-                // ast::DeclValue::Code(code) => {
-                //     let sentence_idx = self.visit_code(&decl.name, ns_idx, VecDeque::new(), code);
-                //     self.namespaces[ns_idx].0.push((
-                //         decl.name,
-                //         Entry::Value(Value::Pointer(Closure(vec![], sentence_idx))),
-                //     ));
-                // }
-                ast::DeclValue::Proc(p) => {
-                    let sentence_idx =
-                        self.visit_block(modname, &decl.name, ns_idx, VecDeque::new(), p)?;
-                    self.namespaces[ns_idx].0.push((
-                        decl.name,
-                        Entry::Value(Value::Pointer(Closure(vec![], sentence_idx))),
-                    ));
-                }
-            }
-        }
-        Ok(ns_idx)
-    }
+    //     for decl in ns.decls {
+    //         match decl.value {
+    //             ast::DeclValue::Namespace(namespace) => {
+    //                 let subns = self.visit_ns(modname, namespace, Some(ns_idx))?;
+    //                 self.namespaces[ns_idx]
+    //                     .0
+    //                     .push((decl.name, Entry::Namespace(subns)));
+    //             }
+    //             // ast::DeclValue::Code(code) => {
+    //             //     let sentence_idx = self.visit_code(&decl.name, ns_idx, VecDeque::new(), code);
+    //             //     self.namespaces[ns_idx].0.push((
+    //             //         decl.name,
+    //             //         Entry::Value(Value::Pointer(Closure(vec![], sentence_idx))),
+    //             //     ));
+    //             // }
+    //             ast::DeclValue::Proc(p) => {
+    //                 let sentence_idx =
+    //                     self.visit_block(modname, &decl.name, ns_idx, VecDeque::new(), p)?;
+    //                 self.namespaces[ns_idx].0.push((
+    //                     decl.name,
+    //                     Entry::Value(Value::Pointer(Closure(vec![], sentence_idx))),
+    //                 ));
+    //             }
+    //         }
+    //     }
+    //     Ok(ns_idx)
+    // }
 
-    fn visit_block(
-        &mut self,
-        modname: &Path,
-        name: &str,
-        ns_idx: NamespaceIndex,
-        mut names: VecDeque<Option<String>>,
-        block: ast::Block<'t>,
-    ) -> Result<SentenceIndex, BuilderError<'t>> {
-        match block {
-            ast::Block::Bind {
-                name: bind_name,
-                inner,
-            } => {
-                names.push_back(Some(bind_name.as_str().to_owned()));
-                self.visit_block(modname, name, ns_idx, names, *inner)
-            }
-            ast::Block::Expression {
-                span,
-                expr: ast::Expression::Call(call),
-                next,
-            } => {
-                let mut builder =
-                    SentenceBuilder::new(modname, Some(name.to_owned()), ns_idx, names);
-                let kind = call.kind;
-                let argc = builder.func_call(call)?;
+    // fn visit_block(
+    //     &mut self,
+    //     modname: &Path,
+    //     name: &str,
+    //     ns_idx: NamespaceIndex,
+    //     mut names: VecDeque<Option<String>>,
+    //     block: ast::Block<'t>,
+    // ) -> Result<SentenceIndex, BuilderError<'t>> {
+    //     match block {
+    //         ast::Block::Bind {
+    //             name: bind_name,
+    //             inner,
+    //         } => {
+    //             names.push_back(Some(bind_name.as_str().to_owned()));
+    //             self.visit_block(modname, name, ns_idx, names, *inner)
+    //         }
+    //         ast::Block::Expression {
+    //             span,
+    //             expr: ast::Expression::Call(call),
+    //             next,
+    //         } => {
+    //             let mut builder =
+    //                 SentenceBuilder::new(modname, Some(name.to_owned()), ns_idx, names);
+    //             let kind = call.kind;
+    //             let argc = builder.func_call(call)?;
 
-                let mut leftover_names: VecDeque<Option<String>> =
-                    builder.names.iter().skip(argc + 1).cloned().collect();
+    //             let mut leftover_names: VecDeque<Option<String>> =
+    //                 builder.names.iter().skip(argc + 1).cloned().collect();
 
-                let next = self.visit_block(modname, name, ns_idx, leftover_names, *next)?;
+    //             let next = self.visit_block(modname, name, ns_idx, leftover_names, *next)?;
 
-                builder.sentence_idx(span, next);
-                // Stack: (leftovers) (args) to_call next
+    //             builder.sentence_idx(span, next);
+    //             // Stack: (leftovers) (args) to_call next
 
-                while builder.names.len() > argc + 2 {
-                    builder.mv_idx(span, argc + 2);
-                    builder.mv_idx(span, 1);
-                    builder.builtin(span, Builtin::Curry);
-                }
-                // Stack: (args) to_call next
-                builder.mv_idx(span, 1);
-                // Stack: (args) next to_call
+    //             while builder.names.len() > argc + 2 {
+    //                 builder.mv_idx(span, argc + 2);
+    //                 builder.mv_idx(span, 1);
+    //                 builder.builtin(span, Builtin::Curry);
+    //             }
+    //             // Stack: (args) to_call next
+    //             builder.mv_idx(span, 1);
+    //             // Stack: (args) next to_call
 
-                match kind {
-                    ast::CallKind::Standard => {}
-                    ast::CallKind::Request => {
-                        builder.symbol(span, "req");
-                        builder.mv_idx(span, 1);
-                    }
-                    ast::CallKind::Response => {
-                        builder.symbol(span, "resp");
-                        builder.mv_idx(span, 1);
-                    }
-                }
-                builder.symbol(span, "exec");
+    //             match kind {
+    //                 ast::CallKind::Standard => {}
+    //                 ast::CallKind::Request => {
+    //                     builder.symbol(span, "req");
+    //                     builder.mv_idx(span, 1);
+    //                 }
+    //                 ast::CallKind::Response => {
+    //                     builder.symbol(span, "resp");
+    //                     builder.mv_idx(span, 1);
+    //                 }
+    //             }
+    //             builder.symbol(span, "exec");
 
-                Ok(self.sentences.push_and_get_key(builder.build()))
-            }
-            ast::Block::Expression {
-                span,
-                expr: ast::Expression::Value(value_expr),
-                next,
-            } => {
-                let mut builder =
-                    SentenceBuilder::new(modname, Some(name.to_owned()), ns_idx, names);
-                let argc = builder.value_expr(value_expr)?;
+    //             Ok(self.sentences.push_and_get_key(builder.build()))
+    //         }
+    //         ast::Block::Expression {
+    //             span,
+    //             expr: ast::Expression::Value(value_expr),
+    //             next,
+    //         } => {
+    //             let mut builder =
+    //                 SentenceBuilder::new(modname, Some(name.to_owned()), ns_idx, names);
+    //             let argc = builder.value_expr(value_expr)?;
 
-                let mut leftover_names: VecDeque<Option<String>> =
-                    builder.names.iter().skip(1).cloned().collect();
+    //             let mut leftover_names: VecDeque<Option<String>> =
+    //                 builder.names.iter().skip(1).cloned().collect();
 
-                let next = self.visit_block(modname, name, ns_idx, leftover_names, *next)?;
+    //             let next = self.visit_block(modname, name, ns_idx, leftover_names, *next)?;
 
-                builder.sentence_idx(span, next);
-                // Stack: (leftovers) value next
+    //             builder.sentence_idx(span, next);
+    //             // Stack: (leftovers) value next
 
-                while builder.names.len() > 2 {
-                    builder.mv_idx(span, 2);
-                    builder.mv_idx(span, 1);
-                    builder.builtin(span, Builtin::Curry);
-                }
-                // Stack: value next
-                builder.symbol(span, "exec");
+    //             while builder.names.len() > 2 {
+    //                 builder.mv_idx(span, 2);
+    //                 builder.mv_idx(span, 1);
+    //                 builder.builtin(span, Builtin::Curry);
+    //             }
+    //             // Stack: value next
+    //             builder.symbol(span, "exec");
 
-                Ok(self.sentences.push_and_get_key(builder.build()))
-            }
-            ast::Block::Become { span, call } => {
-                let mut builder =
-                    SentenceBuilder::new(modname, Some(name.to_owned()), ns_idx, names);
-                let argc = builder.func_call(call)?;
+    //             Ok(self.sentences.push_and_get_key(builder.build()))
+    //         }
+    //         ast::Block::Become { span, call } => {
+    //             let mut builder =
+    //                 SentenceBuilder::new(modname, Some(name.to_owned()), ns_idx, names);
+    //             let argc = builder.func_call(call)?;
 
-                // Stack: (leftovers) (args) to_call
+    //             // Stack: (leftovers) (args) to_call
 
-                while builder.names.len() > argc + 1 {
-                    builder.drop_idx(span, argc + 1);
-                }
-                builder.literal_split(span, Value::Symbol("exec".to_owned()));
+    //             while builder.names.len() > argc + 1 {
+    //                 builder.drop_idx(span, argc + 1);
+    //             }
+    //             builder.literal_split(span, Value::Symbol("exec".to_owned()));
 
-                Ok(self.sentences.push_and_get_key(builder.build()))
-            }
-            ast::Block::Raw(sentence) => self.visit_sentence(modname, name, ns_idx, sentence),
-            ast::Block::AssertEq { literal, inner } => {
-                let next = self.visit_block(modname, name, ns_idx, names.clone(), *inner)?;
-                let assert_idx = names.len();
-                names.push_back(None);
+    //             Ok(self.sentences.push_and_get_key(builder.build()))
+    //         }
+    //         ast::Block::Raw(sentence) => self.visit_sentence(modname, name, ns_idx, sentence),
+    //         ast::Block::AssertEq { literal, inner } => {
+    //             let next = self.visit_block(modname, name, ns_idx, names.clone(), *inner)?;
+    //             let assert_idx = names.len();
+    //             names.push_back(None);
 
-                let mut builder =
-                    SentenceBuilder::new(modname, Some(name.to_owned()), ns_idx, names);
-                builder.mv_idx(literal.span, assert_idx);
-                builder.literal_split(literal.span, literal.value);
-                builder.builtin(literal.span, Builtin::AssertEq);
-                builder.sentence_idx(literal.span, next);
-                builder.symbol(literal.span, "exec");
-                Ok(self.sentences.push_and_get_key(builder.build()))
-            }
-            ast::Block::Drop { span, inner } => {
-                let next = self.visit_block(modname, name, ns_idx, names.clone(), *inner)?;
-                let drop_idx = names.len();
-                names.push_back(None);
+    //             let mut builder =
+    //                 SentenceBuilder::new(modname, Some(name.to_owned()), ns_idx, names);
+    //             builder.mv_idx(literal.span, assert_idx);
+    //             builder.literal_split(literal.span, literal.value);
+    //             builder.builtin(literal.span, Builtin::AssertEq);
+    //             builder.sentence_idx(literal.span, next);
+    //             builder.symbol(literal.span, "exec");
+    //             Ok(self.sentences.push_and_get_key(builder.build()))
+    //         }
+    //         ast::Block::Drop { span, inner } => {
+    //             let next = self.visit_block(modname, name, ns_idx, names.clone(), *inner)?;
+    //             let drop_idx = names.len();
+    //             names.push_back(None);
 
-                let mut builder =
-                    SentenceBuilder::new(modname, Some(name.to_owned()), ns_idx, names);
-                builder.drop_idx(span, drop_idx);
-                builder.sentence_idx(span, next);
-                builder.symbol(span, "exec");
-                Ok(self.sentences.push_and_get_key(builder.build()))
-            }
-            ast::Block::If {
-                span,
-                expr,
-                true_case,
-                false_case,
-            } => {
-                let mut builder =
-                    SentenceBuilder::new(modname, Some(name.to_owned()), ns_idx, names.clone());
-                builder.value_expr(expr)?;
+    //             let mut builder =
+    //                 SentenceBuilder::new(modname, Some(name.to_owned()), ns_idx, names);
+    //             builder.drop_idx(span, drop_idx);
+    //             builder.sentence_idx(span, next);
+    //             builder.symbol(span, "exec");
+    //             Ok(self.sentences.push_and_get_key(builder.build()))
+    //         }
+    //         ast::Block::If {
+    //             span,
+    //             expr,
+    //             true_case,
+    //             false_case,
+    //         } => {
+    //             let mut builder =
+    //                 SentenceBuilder::new(modname, Some(name.to_owned()), ns_idx, names.clone());
+    //             builder.value_expr(expr)?;
 
-                let mut subnames = builder.names.clone();
-                subnames.pop_front(); // Drop the boolean.
+    //             let mut subnames = builder.names.clone();
+    //             subnames.pop_front(); // Drop the boolean.
 
-                let true_case =
-                    self.visit_block(modname, name, ns_idx, subnames.clone(), *true_case)?;
-                let false_case =
-                    self.visit_block(modname, name, ns_idx, subnames.clone(), *false_case)?;
+    //             let true_case =
+    //                 self.visit_block(modname, name, ns_idx, subnames.clone(), *true_case)?;
+    //             let false_case =
+    //                 self.visit_block(modname, name, ns_idx, subnames.clone(), *false_case)?;
 
-                builder.sentence_idx(span, true_case);
-                builder.sentence_idx(span, false_case);
-                builder.builtin(span, Builtin::If);
-                builder.symbol(span, "exec");
-                Ok(self.sentences.push_and_get_key(builder.build()))
-            }
-            ast::Block::Match { span, cases, els } => {
-                let els = if let Some(els) = els {
-                    self.visit_block(modname, name, ns_idx, names.clone(), *els)?
-                } else {
-                    let mut panic_builder = SentenceBuilder::new(
-                        modname,
-                        Some(name.to_owned()),
-                        ns_idx,
-                        VecDeque::new(),
-                    );
-                    panic_builder.symbol(span, "panic");
-                    self.sentences.push_and_get_key(panic_builder.build())
-                };
+    //             builder.sentence_idx(span, true_case);
+    //             builder.sentence_idx(span, false_case);
+    //             builder.builtin(span, Builtin::If);
+    //             builder.symbol(span, "exec");
+    //             Ok(self.sentences.push_and_get_key(builder.build()))
+    //         }
+    //         ast::Block::Match { span, cases, els } => {
+    //             let els = if let Some(els) = els {
+    //                 self.visit_block(modname, name, ns_idx, names.clone(), *els)?
+    //             } else {
+    //                 let mut panic_builder = SentenceBuilder::new(
+    //                     modname,
+    //                     Some(name.to_owned()),
+    //                     ns_idx,
+    //                     VecDeque::new(),
+    //                 );
+    //                 panic_builder.symbol(span, "panic");
+    //                 self.sentences.push_and_get_key(panic_builder.build())
+    //             };
 
-                let mut next_case = els;
+    //             let mut next_case = els;
 
-                let discrim_idx = names.len();
-                for case in cases.into_iter().rev() {
-                    let case_span = case.span;
+    //             let discrim_idx = names.len();
+    //             for case in cases.into_iter().rev() {
+    //                 let case_span = case.span;
 
-                    let if_case_matches_idx =
-                        self.visit_block(modname, name, ns_idx, names.clone(), case.body)?;
+    //                 let if_case_matches_idx =
+    //                     self.visit_block(modname, name, ns_idx, names.clone(), case.body)?;
 
-                    let mut case_builder = SentenceBuilder::new(
-                        modname,
-                        Some(name.to_owned()),
-                        ns_idx,
-                        VecDeque::new(),
-                    );
-                    case_builder.cp_idx(case.span, discrim_idx);
-                    case_builder.literal_split(case.span, case.value);
-                    case_builder.builtin(case_span, Builtin::Eq);
+    //                 let mut case_builder = SentenceBuilder::new(
+    //                     modname,
+    //                     Some(name.to_owned()),
+    //                     ns_idx,
+    //                     VecDeque::new(),
+    //                 );
+    //                 case_builder.cp_idx(case.span, discrim_idx);
+    //                 case_builder.literal_split(case.span, case.value);
+    //                 case_builder.builtin(case_span, Builtin::Eq);
 
-                    case_builder.sentence_idx(case_span, if_case_matches_idx);
-                    case_builder.sentence_idx(case_span, next_case);
-                    case_builder.builtin(case_span, Builtin::If);
+    //                 case_builder.sentence_idx(case_span, if_case_matches_idx);
+    //                 case_builder.sentence_idx(case_span, next_case);
+    //                 case_builder.builtin(case_span, Builtin::If);
 
-                    case_builder.symbol(case_span, "exec");
-                    next_case = self.sentences.push_and_get_key(case_builder.build());
-                }
+    //                 case_builder.symbol(case_span, "exec");
+    //                 next_case = self.sentences.push_and_get_key(case_builder.build());
+    //             }
 
-                Ok(next_case)
-            }
-            ast::Block::Unreachable { span } => {
-                let mut panic_builder =
-                    SentenceBuilder::new(modname, Some(name.to_owned()), ns_idx, VecDeque::new());
-                panic_builder.symbol(span, "panic");
-                Ok(self.sentences.push_and_get_key(panic_builder.build()))
-            }
-        }
-        // let mut names: VecDeque<Option<String>> = bindings
-        //     .bindings
-        //     .into_iter()
-        //     .map(|p| match p {
-        //         ast::Binding::Ident(i) => Some(i.as_str().to_owned()),
-        //         ast::Binding::Literal(_) => todo!(),
-        //     })
-        //     // .chain(["caller".to_owned()])
-        //     .collect();
-        // self.visit_block_pair(name, ns_idx, names, body)
-    }
+    //             Ok(next_case)
+    //         }
+    //         ast::Block::Unreachable { span } => {
+    //             let mut panic_builder =
+    //                 SentenceBuilder::new(modname, Some(name.to_owned()), ns_idx, VecDeque::new());
+    //             panic_builder.symbol(span, "panic");
+    //             Ok(self.sentences.push_and_get_key(panic_builder.build()))
+    //         }
+    //     }
+    //     // let mut names: VecDeque<Option<String>> = bindings
+    //     //     .bindings
+    //     //     .into_iter()
+    //     //     .map(|p| match p {
+    //     //         ast::Binding::Ident(i) => Some(i.as_str().to_owned()),
+    //     //         ast::Binding::Literal(_) => todo!(),
+    //     //     })
+    //     //     // .chain(["caller".to_owned()])
+    //     //     .collect();
+    //     // self.visit_block_pair(name, ns_idx, names, body)
+    // }
 
     // fn visit_endpoint(
     //     &mut self,
@@ -663,73 +674,73 @@ impl<'t> Library<'t> {
     //     }
     // }
 
-    fn visit_sentence(
-        &mut self,
-        modname: &Path,
-        name: &str,
-        ns_idx: NamespaceIndex,
-        sentence: ast::RawSentence<'t>,
-    ) -> Result<SentenceIndex, BuilderError<'t>> {
-        let mut builder =
-            SentenceBuilder::new(modname, Some(name.to_owned()), ns_idx, VecDeque::new());
+    // fn visit_sentence(
+    //     &mut self,
+    //     modname: &Path,
+    //     name: &str,
+    //     ns_idx: NamespaceIndex,
+    //     sentence: ast::RawSentence<'t>,
+    // ) -> Result<SentenceIndex, BuilderError<'t>> {
+    //     let mut builder =
+    //         SentenceBuilder::new(modname, Some(name.to_owned()), ns_idx, VecDeque::new());
 
-        for word in sentence.words {
-            self.visit_raw_word(modname, name, ns_idx, &mut builder, word)?;
-        }
-        Ok(self.sentences.push_and_get_key(builder.build()))
-    }
+    //     for word in sentence.words {
+    //         self.visit_raw_word(modname, name, ns_idx, &mut builder, word)?;
+    //     }
+    //     Ok(self.sentences.push_and_get_key(builder.build()))
+    // }
 
-    fn visit_raw_word(
-        &mut self,
-        modname: &Path,
-        name: &str,
-        ns_idx: NamespaceIndex,
-        builder: &mut SentenceBuilder<'t>,
-        raw_word: ast::RawWord<'t>,
-    ) -> Result<(), BuilderError<'t>> {
-        match raw_word.inner {
-            ast::RawWordInner::Expression(expr) => builder.value_expr(expr),
-            ast::RawWordInner::Bindings(b) => {
-                builder.bindings(b);
-                Ok(())
-            }
-            // ast::RawWordInner::Literal(v) => builder.literal(v.span, v.value),
-            ast::RawWordInner::FunctionLike(f, idx) => {
-                match f.0.as_str() {
-                    "tuple" => Ok(builder.tuple(raw_word.span, idx)),
-                    "untuple" => Ok(builder.untuple(raw_word.span, idx)),
-                    //     "cp" => InnerWord::Copy(idx),
-                    //     "drop" => InnerWord::Drop(idx),
-                    //     "mv" => InnerWord::Move(idx),
-                    //     "sd" => InnerWord::Send(idx),
-                    //     "ref" => InnerWord::Ref(idx),
-                    _ => panic!("unknown reference: {:?}", f),
-                }
-            }
-            ast::RawWordInner::Builtin(name) => {
-                if let Some(builtin) = Builtin::ALL
-                    .iter()
-                    .find(|builtin| builtin.name() == name.as_str())
-                {
-                    builder.builtin(raw_word.span, *builtin);
-                    Ok(())
-                } else {
-                    panic!("unknown builtin: {:?}", name)
-                }
-            }
-            ast::RawWordInner::Sentence(s) => {
-                let sentence_idx = self.visit_sentence(modname, name, ns_idx, s)?;
-                builder.sentence_idx(raw_word.span, sentence_idx);
-                Ok(())
-            }
-        }
-    }
+    // fn visit_raw_word(
+    //     &mut self,
+    //     modname: &Path,
+    //     name: &str,
+    //     ns_idx: NamespaceIndex,
+    //     builder: &mut SentenceBuilder<'t>,
+    //     raw_word: ast::RawWord<'t>,
+    // ) -> Result<(), BuilderError<'t>> {
+    //     match raw_word.inner {
+    //         ast::RawWordInner::Expression(expr) => builder.value_expr(expr),
+    //         ast::RawWordInner::Bindings(b) => {
+    //             builder.bindings(b);
+    //             Ok(())
+    //         }
+    //         // ast::RawWordInner::Literal(v) => builder.literal(v.span, v.value),
+    //         ast::RawWordInner::FunctionLike(f, idx) => {
+    //             match f.0.as_str() {
+    //                 "tuple" => Ok(builder.tuple(raw_word.span, idx)),
+    //                 "untuple" => Ok(builder.untuple(raw_word.span, idx)),
+    //                 //     "cp" => InnerWord::Copy(idx),
+    //                 //     "drop" => InnerWord::Drop(idx),
+    //                 //     "mv" => InnerWord::Move(idx),
+    //                 //     "sd" => InnerWord::Send(idx),
+    //                 //     "ref" => InnerWord::Ref(idx),
+    //                 _ => panic!("unknown reference: {:?}", f),
+    //             }
+    //         }
+    //         ast::RawWordInner::Builtin(name) => {
+    //             if let Some(builtin) = Builtin::ALL
+    //                 .iter()
+    //                 .find(|builtin| builtin.name() == name.as_str())
+    //             {
+    //                 builder.builtin(raw_word.span, *builtin);
+    //                 Ok(())
+    //             } else {
+    //                 panic!("unknown builtin: {:?}", name)
+    //             }
+    //         }
+    //         ast::RawWordInner::Sentence(s) => {
+    //             let sentence_idx = self.visit_sentence(modname, name, ns_idx, s)?;
+    //             builder.sentence_idx(raw_word.span, sentence_idx);
+    //             Ok(())
+    //         }
+    //     }
+    // }
 }
 
 #[derive(Debug, Clone)]
-pub struct Sentence<'t> {
-    pub name: Option<String>,
-    pub words: Vec<Word<'t>>,
+pub struct Sentence {
+    // pub name: Option<String>,
+    pub words: Vec<Word>,
 }
 
 macro_rules! builtins {
@@ -755,340 +766,18 @@ macro_rules! builtins {
     };
 }
 
-pub struct SentenceBuilder<'t> {
-    pub modname: PathBuf,
-    pub name: Option<String>,
-    pub ns_idx: NamespaceIndex,
-    pub names: VecDeque<Option<String>>,
-    pub words: Vec<Word<'t>>,
-}
-
-#[derive(Debug, Clone)]
-pub struct SourceLocation {
-    pub file: PathBuf,
-    pub line: usize,
-    pub col: usize,
-}
-
-impl Display for SourceLocation {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!(
-            "{}:{}:{}",
-            self.file.display(),
-            self.line,
-            self.col
-        ))
-    }
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum CompileError {
     #[error("At {location}, unknown reference: {name}")]
     UnknownReference {
-        location: SourceLocation,
+        location: source::Location,
         name: String,
     },
 }
 
 #[derive(Debug)]
-pub enum BuilderError<'t> {
-    UnknownReference(Identifier<'t>),
-}
-
-impl<'t> SentenceBuilder<'t> {
-    pub fn new(
-        modname: &Path,
-        name: Option<String>,
-        ns_idx: NamespaceIndex,
-        names: VecDeque<Option<String>>,
-    ) -> Self {
-        Self {
-            modname: modname.to_owned(),
-            name,
-            ns_idx,
-            names,
-            words: vec![],
-        }
-    }
-
-    pub fn build(self) -> Sentence<'t> {
-        Sentence {
-            name: self.name,
-            words: self.words,
-        }
-    }
-
-    pub fn literal(&mut self, literal: Literal<'t>) {
-        self.literal_split(literal.span, literal.value)
-    }
-
-    pub fn literal_split(&mut self, span: Span<'t>, value: Value) {
-        self.words.push(Word {
-            inner: InnerWord::Push(value),
-            modname: self.modname.clone(),
-            span,
-            names: Some(self.names.clone()),
-        });
-        self.names.push_front(None);
-    }
-
-    pub fn sentence_idx(&mut self, span: Span<'t>, sentence_idx: SentenceIndex) {
-        self.words.push(Word {
-            inner: InnerWord::Push(Value::Pointer(Closure(vec![], sentence_idx))),
-            modname: self.modname.clone(),
-            span,
-            names: Some(self.names.clone()),
-        });
-        self.names.push_front(None);
-    }
-
-    pub fn symbol(&mut self, span: Span<'t>, symbol: &str) {
-        self.literal_split(span, Value::Symbol(symbol.to_owned()))
-    }
-
-    pub fn mv(&mut self, ident: Identifier<'t>) -> Result<(), BuilderError<'t>> {
-        let Some(idx) = self.names.iter().position(|n| match n {
-            Some(n) => n.as_str() == ident.0.as_str(),
-            None => false,
-        }) else {
-            return Err(BuilderError::UnknownReference(ident));
-        };
-        Ok(self.mv_idx(ident.0, idx))
-    }
-
-    pub fn mv_idx(&mut self, span: Span<'t>, idx: usize) {
-        let names = self.names.clone();
-        let declared = self.names.remove(idx).unwrap();
-        self.names.push_front(declared);
-
-        self.words.push(Word {
-            inner: InnerWord::Move(idx),
-            modname: self.modname.clone(),
-            span,
-            names: Some(names),
-        });
-    }
-
-    pub fn cp(&mut self, i: Identifier<'t>) -> Result<(), BuilderError<'t>> {
-        let Some(idx) = self.names.iter().position(|n| match n {
-            Some(n) => n.as_str() == i.0.as_str(),
-            None => false,
-        }) else {
-            return Err(BuilderError::UnknownReference(i));
-        };
-        Ok(self.cp_idx(i.0, idx))
-    }
-
-    pub fn cp_idx(&mut self, span: Span<'t>, idx: usize) {
-        let names = self.names.clone();
-        self.names.push_front(None);
-
-        self.words.push(Word {
-            inner: InnerWord::Copy(idx),
-            modname: self.modname.clone(),
-            span,
-            names: Some(names),
-        });
-    }
-
-    pub fn sd_idx(&mut self, span: Span<'t>, idx: usize) {
-        let names = self.names.clone();
-
-        let declared = self.names.pop_front().unwrap();
-        self.names.insert(idx, declared);
-
-        self.words.push(Word {
-            inner: InnerWord::Send(idx),
-            modname: self.modname.clone(),
-            span,
-            names: Some(names),
-        });
-    }
-    pub fn sd_top(&mut self, span: Span<'t>) {
-        self.sd_idx(span, self.names.len() - 1)
-    }
-
-    pub fn drop_idx(&mut self, span: Span<'t>, idx: usize) {
-        let names = self.names.clone();
-        let declared = self.names.remove(idx).unwrap();
-
-        self.words.push(Word {
-            inner: InnerWord::Drop(idx),
-            modname: self.modname.clone(),
-            span,
-            names: Some(names),
-        });
-    }
-
-    pub fn path(&mut self, ast::Path { span, segments }: ast::Path<'t>) {
-        for segment in segments.iter().rev() {
-            self.literal_split(*segment, Value::Symbol(segment.as_str().to_owned()));
-        }
-        self.literal_split(span, Value::Namespace(self.ns_idx));
-        for segment in segments {
-            self.builtin(segment, Builtin::Get);
-        }
-    }
-
-    pub fn builtin(&mut self, span: Span<'t>, builtin: Builtin) {
-        self.words.push(Word {
-            inner: InnerWord::Builtin(builtin),
-            modname: self.modname.clone(),
-            span: span,
-            names: Some(self.names.clone()),
-        });
-        match builtin {
-            Builtin::Add
-            | Builtin::Eq
-            | Builtin::Curry
-            | Builtin::Prod
-            | Builtin::Lt
-            | Builtin::Or
-            | Builtin::And
-            | Builtin::Sub
-            | Builtin::Get
-            | Builtin::SymbolCharAt
-            | Builtin::Cons => {
-                self.names.pop_front();
-                self.names.pop_front();
-                self.names.push_front(None);
-            }
-            Builtin::NsEmpty => {
-                self.names.push_front(None);
-            }
-            Builtin::NsGet => {
-                let ns = self.names.pop_front().unwrap();
-                self.names.pop_front();
-                self.names.push_front(ns);
-                self.names.push_front(None);
-            }
-            Builtin::NsInsert | Builtin::If => {
-                self.names.pop_front();
-                self.names.pop_front();
-                self.names.pop_front();
-                self.names.push_front(None);
-            }
-            Builtin::NsRemove => {
-                let ns = self.names.pop_front().unwrap();
-                self.names.pop_front();
-                self.names.push_front(ns);
-                self.names.push_front(None);
-            }
-            Builtin::Not | Builtin::SymbolLen | Builtin::Deref | Builtin::Ord => {
-                self.names.pop_front();
-                self.names.push_front(None);
-            }
-            Builtin::AssertEq => {
-                self.names.pop_front();
-                self.names.pop_front();
-            }
-            Builtin::Snoc => {
-                self.names.pop_front();
-                self.names.push_front(None);
-                self.names.push_front(None);
-            }
-            Builtin::Stash => {
-                todo!()
-            }
-            Builtin::Unstash => {
-                todo!()
-            }
-        }
-    }
-
-    pub fn tuple(&mut self, span: Span<'t>, size: usize) {
-        self.words.push(Word {
-            inner: InnerWord::Tuple(size),
-            modname: self.modname.clone(),
-            span: span,
-            names: Some(self.names.clone()),
-        });
-        for _ in 0..size {
-            self.names.pop_front().unwrap();
-        }
-        self.names.push_front(None);
-    }
-
-    pub fn untuple(&mut self, span: Span<'t>, size: usize) {
-        self.words.push(Word {
-            inner: InnerWord::Untuple(size),
-            modname: self.modname.clone(),
-            span: span,
-            names: Some(self.names.clone()),
-        });
-        self.names.pop_front();
-        for _ in 0..size {
-            self.names.push_front(None);
-        }
-    }
-
-    fn func_call(&mut self, call: ast::Call<'t>) -> Result<usize, BuilderError<'t>> {
-        let argc = call.args.len();
-
-        for arg in call.args.into_iter().rev() {
-            self.value_expr(arg)?;
-        }
-
-        match call.func {
-            ast::PathOrIdent::Path(p) => self.path(p),
-            ast::PathOrIdent::Ident(i) => self.mv(i)?,
-        }
-        Ok(argc)
-    }
-
-    fn value_expr(&mut self, expr: ValueExpression<'t>) -> Result<(), BuilderError<'t>> {
-        match expr {
-            ValueExpression::Literal(literal) => {
-                Ok(self.literal_split(literal.span, literal.value))
-            }
-            ValueExpression::Path(path) => Ok(self.path(path)),
-            ValueExpression::Identifier(identifier) => self.mv(identifier),
-            ValueExpression::Copy(identifier) => self.cp(identifier),
-            ValueExpression::Closure { span, func, args } => {
-                let argc = args.len();
-                for arg in args.into_iter().rev() {
-                    self.value_expr(arg)?;
-                }
-                match func {
-                    ast::PathOrIdent::Path(p) => self.path(p),
-                    ast::PathOrIdent::Ident(i) => self.mv(i)?,
-                }
-                for _ in 0..argc {
-                    self.builtin(span, Builtin::Curry);
-                }
-                Ok(())
-            }
-        }
-    }
-
-    fn bindings(&mut self, b: Bindings<'t>) {
-        self.names = b
-            .bindings
-            .iter()
-            .rev()
-            .map(|b| match b {
-                ast::Binding::Literal(_) | ast::Binding::Drop(_) => None,
-                ast::Binding::Ident(span) => Some(span.as_str().to_owned()),
-            })
-            .collect();
-        let mut dropped = 0;
-        for (idx, binding) in b.bindings.into_iter().rev().enumerate() {
-            match binding {
-                ast::Binding::Literal(l) => {
-                    let span = l.span;
-                    self.mv_idx(span, idx - dropped);
-                    self.literal(l);
-                    self.builtin(span, Builtin::AssertEq);
-                    dropped += 1;
-                }
-                ast::Binding::Drop(span) => {
-                    self.drop_idx(span, idx - dropped);
-                    dropped += 1;
-                }
-                _ => (),
-            }
-        }
-    }
+pub enum BuilderError {
+    UnknownReference(ir::Identifier),
 }
 
 builtins! {
@@ -1117,30 +806,17 @@ builtins! {
 
     (Deref, "deref"),
 
-    (Stash, "stash"),
-    (Unstash, "unstash"),
-
     (If, "if"),
 
     (Ord, "ord"),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Word<'t> {
+pub struct Word {
     pub inner: InnerWord,
-    pub modname: PathBuf,
-    pub span: Span<'t>,
+    // pub modname: PathBuf,
+    pub span: Span,
     pub names: Option<VecDeque<Option<String>>>,
-}
-impl<'t> Word<'t> {
-    pub(crate) fn location(&self) -> SourceLocation {
-        let (line, col) = self.span.start_pos().line_col();
-        SourceLocation {
-            file: self.modname.clone(),
-            line,
-            col,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1154,6 +830,7 @@ pub enum InnerWord {
     Builtin(Builtin),
     Tuple(usize),
     Untuple(usize),
+    Call(SentenceIndex),
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Hash)]
@@ -1181,12 +858,12 @@ pub struct Namespace2 {
     pub items: Vec<(String, Value)>,
 }
 
-pub struct ValueView<'a, 't> {
-    pub lib: &'a Library<'t>,
+pub struct ValueView<'a> {
+    pub sources: &'a source::Sources,
     pub value: &'a Value,
 }
 
-impl<'a, 't> std::fmt::Display for ValueView<'a, 't> {
+impl<'a> std::fmt::Display for ValueView<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.value {
             Value::Symbol(arg0) => write!(f, "@{}", arg0.replace("\n", "\\n")),
@@ -1201,11 +878,11 @@ impl<'a, 't> std::fmt::Display for ValueView<'a, 't> {
                 f,
                 "cons({}, {})",
                 ValueView {
-                    lib: self.lib,
+                    sources: self.sources,
                     value: car
                 },
                 ValueView {
-                    lib: self.lib,
+                    sources: self.sources,
                     value: cdr
                 }
             ),
@@ -1215,7 +892,7 @@ impl<'a, 't> std::fmt::Display for ValueView<'a, 't> {
                 values
                     .iter()
                     .map(|v| ValueView {
-                        lib: self.lib,
+                        sources: self.sources,
                         value: v
                     })
                     .join(", ")
@@ -1229,18 +906,18 @@ impl<'a, 't> std::fmt::Display for ValueView<'a, 't> {
                     values
                         .iter()
                         .map(|v| ValueView {
-                            lib: self.lib,
+                            sources: self.sources,
                             value: v
                         })
                         .join(", "),
                     if *ptr == SentenceIndex::TRAP {
                         "TRAP"
                     } else {
-                        if let Some(name) = &self.lib.sentences[*ptr].name {
-                            name
-                        } else {
-                            "UNKNOWN"
-                        }
+                        // if let Some(name) = &self.sources.sentences[*ptr].name {
+                        //     name
+                        // } else {
+                        "UNKNOWN"
+                        // }
                     },
                     ptr.0
                 )

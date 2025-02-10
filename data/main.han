@@ -1,161 +1,161 @@
 
-mod builtin;
-mod io;
-mod ssv;
-mod iter;
-mod list;
-mod str;
-mod adv1p1;
-mod multi_iter;
-
-mod tests {
-    proc enumerate(caller, @next) {
-//        let (caller, @next) = caller(@yield, @basic_csv);
-        let () = caller(@eos);        
-    }
-
-    mod cases {
-        proc basic_csv(caller) {
-            let (iter) = this.super.super.iter.symbol_chars(@"foo,bar
-baz");
-            let (bound) = this.super.super.builtin.bind(
-                this.super.super.csv.start, 
-                @iter, 
-                iter);
-
-            let (@resp, bound, @startrow) = bound(@next);
-            let (@resp, bound, @startfield) = bound(@next);
-            let (@resp, bound, @yield, 'f') = bound(@next);
-            let (@resp, bound, @yield, 'o') = bound(@next);
-            let (@resp, bound, @yield, 'o') = bound(@next);
-            let (@resp, bound, @endfield) = bound(@next);
-            let (@resp, bound, @startfield) = bound(@next);
-            let (@resp, bound, @yield, 'b') = bound(@next);
-            let (@resp, bound, @yield, 'a') = bound(@next);
-            let (@resp, bound, @yield, 'r') = bound(@next);
-            let (@resp, bound, @endfield) = bound(@next);
-            let (@resp, bound, @endrow) = bound(@next);
-            let (@resp, bound, @startrow) = bound(@next);
-            let (@resp, bound, @startfield) = bound(@next);
-            let (@resp, bound, @yield, 'b') = bound(@next);
-            let (@resp, bound, @yield, 'a') = bound(@next);
-            let (@resp, bound, @yield, 'z') = bound(@next);
-            let (@resp, bound, @endfield) = bound(@next);
-            let (@resp, bound, @endrow) = bound(@next);
-            let (@resp, bound, @eos) = bound(@next);
-            let () = caller(@pass);
-        }
-
-    }
-
-    proc run(caller, case_name) {
-        R{ @cases this #get #get @exec }
-    }
-}
-
-mod csv {
-    proc start(caller, @next) {
-        let (caller) = req caller(@next);
-        match {
-            (@eos) =>  {
-                let () = resp caller(@eos);
-            }
-            (@yield, char) => {
-                let (caller, @next) = resp caller(@startrow);
-                let (caller) = resp caller(@startfield);
-                become this.default_handle_char(caller, char)
-            }
-        }
-    }
-
-    proc default_handle_char(caller) {
-        match {
-            ('\n') => {
-                let (caller, @next) = resp caller(@endfield);
-                let () = resp caller(@endrow);
-                become this.start()
-            }
-            ('"') => {
-                become this.quoted(caller)
-            }
-            ('\\') => {
-                become this.escaped(caller)
-            }
-            (',') => {
-                let (caller, @next) = resp caller(@endfield);
-                let () = resp caller(@startfield);
-                become this.non_quoted()               
-            }
-            (char) => {
-                let () = resp caller(@yield, char);
-                become this.non_quoted()
-            }
-        }
-    }
-
-    proc non_quoted(caller) {
-        let (caller) = req caller(@next);
-        match {
-            (@eos) => {
-                let (caller, @next) = resp caller(@endfield);
-                let (caller, @next) = resp caller(@endrow);
-                let () = resp caller(@eos);
-            }
-            (@yield, char) => {
-                become this.default_handle_char(caller, char)
-            }
-        }
-    }
-
-    proc quoted(caller) {
-        let (caller) = req caller(@next);
-        match {
-            (@eos) => {
-                let () = resp caller(@err, @nonterminatedquote);
-            }
-            (@yield, '"') => {
-                become this.non_quoted(caller)
-            }
-            (@yield, char) => {
-                let (caller, @next) = resp caller();
-                become this.default_handle_char(caller, char)
-            }
-        }
-    }
-}
-
-proc dump(caller, @get) {
-    let (caller) = req caller(@next);
-    match {
-        (@eos) => {
-            let (caller) = req caller(@print, @eos);
-            become this.dump(caller, @get)
-        }
-        (@start) => {
-            let (caller) = req caller(@print, @start);
-            become this.dump(caller, @get)
-        }
-        (@end) => {
-            let (caller) = req caller(@print, @end);
-            become this.dump(caller, @get)
-        }
-        (@yield, item) => {
-            let (caller) = req caller(@print, item);
-            become this.dump(caller, @get)
-        }
-    }
-}
-
-
-proc main(caller) {
-    let () = this.ssv.tests.cases.basic_string();
-
-    let (sol) = this.builtin.compose(this.io.stdin_chars, this.solve_the_thing);
-    let (caller, sol, num) = this.builtin.fwd_req(caller, sol, @get);
-    
-    let (caller) = req caller(@print, num);
-
-    //let (ints) = this.builtin.bind(this.parseint_list_of_list_of_str, @iter, ssv);
+//mod builtin;
+//mod io;
+//mod ssv;
+//mod iter;
+//mod list;
+//mod str;
+//mod adv1p1;
+//mod multi_iter;
+//
+//mod tests {
+//    proc enumerate(caller, @next) {
+////        let (caller, @next) = caller(@yield, @basic_csv);
+//        let () = caller(@eos);        
+//    }
+//
+//    mod cases {
+//        proc basic_csv(caller) {
+//            let (iter) = this.super.super.iter.symbol_chars(@"foo,bar
+//baz");
+//            let (bound) = this.super.super.builtin.bind(
+//                this.super.super.csv.start, 
+//                @iter, 
+//                iter);
+//
+//            let (@resp, bound, @startrow) = bound(@next);
+//            let (@resp, bound, @startfield) = bound(@next);
+//            let (@resp, bound, @yield, 'f') = bound(@next);
+//            let (@resp, bound, @yield, 'o') = bound(@next);
+//            let (@resp, bound, @yield, 'o') = bound(@next);
+//            let (@resp, bound, @endfield) = bound(@next);
+//            let (@resp, bound, @startfield) = bound(@next);
+//            let (@resp, bound, @yield, 'b') = bound(@next);
+//            let (@resp, bound, @yield, 'a') = bound(@next);
+//            let (@resp, bound, @yield, 'r') = bound(@next);
+//            let (@resp, bound, @endfield) = bound(@next);
+//            let (@resp, bound, @endrow) = bound(@next);
+//            let (@resp, bound, @startrow) = bound(@next);
+//            let (@resp, bound, @startfield) = bound(@next);
+//            let (@resp, bound, @yield, 'b') = bound(@next);
+//            let (@resp, bound, @yield, 'a') = bound(@next);
+//            let (@resp, bound, @yield, 'z') = bound(@next);
+//            let (@resp, bound, @endfield) = bound(@next);
+//            let (@resp, bound, @endrow) = bound(@next);
+//            let (@resp, bound, @eos) = bound(@next);
+//            let () = caller(@pass);
+//        }
+//
+//    }
+//
+//    proc run(caller, case_name) {
+//        R{ @cases this #get #get @exec }
+//    }
+//}
+//
+//mod csv {
+//    proc start(caller, @next) {
+//        let (caller) = req caller(@next);
+//        match {
+//            (@eos) =>  {
+//                let () = resp caller(@eos);
+//            }
+//            (@yield, char) => {
+//                let (caller, @next) = resp caller(@startrow);
+//                let (caller) = resp caller(@startfield);
+//                become this.default_handle_char(caller, char)
+//            }
+//        }
+//    }
+//
+//    proc default_handle_char(caller) {
+//        match {
+//            ('\n') => {
+//                let (caller, @next) = resp caller(@endfield);
+//                let () = resp caller(@endrow);
+//                become this.start()
+//            }
+//            ('"') => {
+//                become this.quoted(caller)
+//            }
+//            ('\\') => {
+//                become this.escaped(caller)
+//            }
+//            (',') => {
+//                let (caller, @next) = resp caller(@endfield);
+//                let () = resp caller(@startfield);
+//                become this.non_quoted()               
+//            }
+//            (char) => {
+//                let () = resp caller(@yield, char);
+//                become this.non_quoted()
+//            }
+//        }
+//    }
+//
+//    proc non_quoted(caller) {
+//        let (caller) = req caller(@next);
+//        match {
+//            (@eos) => {
+//                let (caller, @next) = resp caller(@endfield);
+//                let (caller, @next) = resp caller(@endrow);
+//                let () = resp caller(@eos);
+//            }
+//            (@yield, char) => {
+//                become this.default_handle_char(caller, char)
+//            }
+//        }
+//    }
+//
+//    proc quoted(caller) {
+//        let (caller) = req caller(@next);
+//        match {
+//            (@eos) => {
+//                let () = resp caller(@err, @nonterminatedquote);
+//            }
+//            (@yield, '"') => {
+//                become this.non_quoted(caller)
+//            }
+//            (@yield, char) => {
+//                let (caller, @next) = resp caller();
+//                become this.default_handle_char(caller, char)
+//            }
+//        }
+//    }
+//}
+//
+//proc dump(caller, @get) {
+//    let (caller) = req caller(@next);
+//    match {
+//        (@eos) => {
+//            let (caller) = req caller(@print, @eos);
+//            become this.dump(caller, @get)
+//        }
+//        (@start) => {
+//            let (caller) = req caller(@print, @start);
+//            become this.dump(caller, @get)
+//        }
+//        (@end) => {
+//            let (caller) = req caller(@print, @end);
+//            become this.dump(caller, @get)
+//        }
+//        (@yield, item) => {
+//            let (caller) = req caller(@print, item);
+//            become this.dump(caller, @get)
+//        }
+//    }
+//}
+//
+//
+//proc main(caller) {
+//    let () = this.ssv.tests.cases.basic_string();
+//
+//    let (sol) = this.builtin.compose(this.io.stdin_chars, this.solve_the_thing);
+//    let (caller, sol, num) = this.builtin.fwd_req(caller, sol, @get);
+//    
+//    let (caller) = req caller(@print, num);
+//
+//    //let (ints) = this.builtin.bind(this.parseint_list_of_list_of_str, @iter, ssv);
 //    
 //    
 //
@@ -166,23 +166,27 @@ proc main(caller) {
 //    let (mapped) = this.bind(mapped, @reducer, parseint);
 //
 //    let () = mapped(@next);
+//
+////
+//   // let (ssv) = this.builtin.bind(this.dump, @iter, ints);
+////
+//    //let (caller, ^, @eos) = this.builtin.fwd_req(caller, ssv, @get);
+////
+//    let () = req caller(@halt);
+//
+//    //let () = this.tests.cases.mergesort_full();
+//    //let (iter) = this.iter.symbol_chars&(@foobar);
+//    //let (aq, bq) = this.bind(this.iter.split, @iter, iter);
+//    //let (aq, @yield, 'f') = aq(@next);
+//    //let (aq, @yield, 'o') = aq(@next);
+//    //let (aq, @yield, 'a') = aq(@next);
+//    //let (aq, @eos) = aq(@next);
+//    //let (bq, @yield, 'o') = bq(@next);
+//    //let (bq, @yield, 'b') = bq(@next);
+//    //let (bq, @yield, 'r') = bq(@next);
+//    //let (bq, @eos) = bq(@next);
+//}
 
-//
-   // let (ssv) = this.builtin.bind(this.dump, @iter, ints);
-//
-    //let (caller, ^, @eos) = this.builtin.fwd_req(caller, ssv, @get);
-//
-    let () = req caller(@halt);
-
-    //let () = this.tests.cases.mergesort_full();
-    //let (iter) = this.iter.symbol_chars&(@foobar);
-    //let (aq, bq) = this.bind(this.iter.split, @iter, iter);
-    //let (aq, @yield, 'f') = aq(@next);
-    //let (aq, @yield, 'o') = aq(@next);
-    //let (aq, @yield, 'a') = aq(@next);
-    //let (aq, @eos) = aq(@next);
-    //let (bq, @yield, 'o') = bq(@next);
-    //let (bq, @yield, 'b') = bq(@next);
-    //let (bq, @yield, 'r') = bq(@next);
-    //let (bq, @eos) = bq(@next);
+sentence 'main {
+    1 2 #add
 }
