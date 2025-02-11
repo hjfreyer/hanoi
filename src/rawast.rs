@@ -50,10 +50,19 @@ pub struct Builtin<'t> {
 }
 
 #[derive(Debug, FromPest)]
+#[pest_ast(rule(Rule::label_call))]
+pub struct LabelCall<'t> {
+    #[pest_ast(outer())]
+    pub span: pest::Span<'t>,
+    pub path: Vec<Identifier<'t>>,
+}
+
+#[derive(Debug, FromPest)]
 #[pest_ast(rule(Rule::raw_word))]
 pub enum Word<'t> {
     Builtin(Builtin<'t>),
     Literal(Literal<'t>),
+    LabelCall(LabelCall<'t>),
 }
 
 #[derive(Debug, FromPest)]

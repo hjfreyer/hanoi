@@ -61,6 +61,7 @@ raw_word      = {
   // | builtin_func_call
   builtin
 | literal
+| label_call
 }
 
 stack_bindings = {
@@ -168,6 +169,11 @@ match_cases = _{ match_case* }
 match_case  =  { bindings ~ "=>" ~ "{" ~ block ~ "}" }
 
 label = { "'" ~ identifier }
+
+label_call = {
+  "'" ~ identifier
+  | "'" ~ identifier ~ ( "::" ~ identifier)*
+}
 
 // New stuff
 

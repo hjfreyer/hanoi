@@ -187,6 +187,10 @@
 //    //let (bq, @eos) = bq(@next);
 //}
 
+sentence 'add_one {
+    1 #add
+}
+
 sentence 'main {
-    1 2 #add
+    2 'add_one 3 #assert_eq
 }

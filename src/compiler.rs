@@ -68,6 +68,7 @@ fn convert_sentence(
                 b.ir_builtin(builtin);
             }
             ir::Word::Literal(literal) => b.literal(literal),
+            ir::Word::LabelCall(l) => b.label_call(l),
         }
     }
 
@@ -295,6 +296,19 @@ impl<'a> SentenceBuilder<'a> {
                 self.names.push_front(None);
             }
         }
+    }
+
+    fn label_call(&mut self, l: ir::LabelCall) {
+        let sentence_key = l.path.to_strings(self.sources);
+        let sentence_idx = self
+            .sentence_index
+            .get(&sentence_key)
+            .expect("label not found");
+        self.words.push(flat::Word {
+            span: l.span,
+            inner: flat::InnerWord::Call(*sentence_idx),
+            names: Some(self.names.clone()),
+        });
     }
 
     // pub fn tuple(&mut self, span: Span<'t>, size: usize) {

@@ -5,7 +5,7 @@ use typed_index_collections::TiVec;
 use crate::{
     flat::SentenceIndex,
     rawast,
-    source::{FileIndex, Span},
+    source::{self, FileIndex, Span},
 };
 
 #[derive(Debug, Default)]
@@ -61,6 +61,13 @@ impl QualifiedName {
         res.0.push(label);
         res
     }
+
+    pub fn to_strings(&self, sources: &source::Sources) -> Vec<String> {
+        self.0
+            .iter()
+            .map(|s| s.0.as_str(sources).to_owned())
+            .collect()
+    }
 }
 
 #[derive(Debug)]
@@ -74,6 +81,7 @@ pub struct Sentence {
 pub enum Word {
     Builtin(Builtin),
     Literal(Literal),
+    LabelCall(LabelCall),
 }
 
 impl Word {
@@ -83,6 +91,33 @@ impl Word {
                 Word::Builtin(Builtin::from_ast(file_idx, name_prefix, builtin))
             }
             rawast::Word::Literal(literal) => Word::Literal(Literal::from_ast(file_idx, literal)),
+            rawast::Word::LabelCall(l) => {
+                Word::LabelCall(LabelCall::from_ast(file_idx, name_prefix, l))
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct LabelCall {
+    pub span: Span,
+    pub path: QualifiedName,
+}
+
+impl LabelCall {
+    pub fn from_ast(
+        file_idx: FileIndex,
+        name_prefix: &QualifiedName,
+        i: rawast::LabelCall,
+    ) -> Self {
+        Self {
+            span: Span::from_ast(file_idx, i.span),
+            path: name_prefix.join(QualifiedName(
+                i.path
+                    .into_iter()
+                    .map(|v| Identifier::from_ast(file_idx, v))
+                    .collect(),
+            )),
         }
     }
 }
