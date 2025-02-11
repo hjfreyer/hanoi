@@ -81,7 +81,7 @@ pub struct Sentence {
 pub enum Word {
     StackBindings(StackBindings),
     Builtin(Builtin),
-    Literal(Literal),
+    ValueExpression(ValueExpression),
     LabelCall(LabelCall),
 }
 
@@ -94,7 +94,9 @@ impl Word {
             rawast::Word::Builtin(builtin) => {
                 Word::Builtin(Builtin::from_ast(file_idx, name_prefix, builtin))
             }
-            rawast::Word::Literal(literal) => Word::Literal(Literal::from_ast(file_idx, literal)),
+            rawast::Word::ValueExpression(e) => {
+                Word::ValueExpression(ValueExpression::from_ast(file_idx, e))
+            }
             rawast::Word::LabelCall(l) => {
                 Word::LabelCall(LabelCall::from_ast(file_idx, name_prefix, l))
             }
@@ -268,6 +270,41 @@ impl Literal {
     pub fn span(&self) -> Span {
         match self {
             Literal::Int(int) => int.span,
+        }
+    }
+}
+#[derive(Debug, Clone)]
+pub struct Tuple {
+    pub span: Span,
+    pub values: Vec<ValueExpression>,
+}
+
+impl Tuple {
+    fn from_ast(file_idx: FileIndex, a: rawast::Tuple) -> Self {
+        Self {
+            span: Span::from_ast(file_idx, a.span),
+            values: a
+                .values
+                .into_iter()
+                .map(|a| ValueExpression::from_ast(file_idx, a))
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum ValueExpression {
+    Literal(Literal),
+    Tuple(Tuple),
+}
+
+impl ValueExpression {
+    fn from_ast(file_idx: FileIndex, a: rawast::ValueExpression) -> Self {
+        match a {
+            rawast::ValueExpression::Literal(literal) => {
+                Self::Literal(Literal::from_ast(file_idx, literal))
+            }
+            rawast::ValueExpression::Tuple(tuple) => Self::Tuple(Tuple::from_ast(file_idx, tuple)),
         }
     }
 }

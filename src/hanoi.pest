@@ -59,8 +59,8 @@ raw_word      = {
   // | value_expr
   // | builtin_func_call
 
+  | value_expr
   | builtin
-  | literal
   | label_call
 }
 
@@ -155,9 +155,15 @@ closure = {
     func_name ~ "&" ~ func_call_args
 }
 
+tuple_expr = {
+    "(" ~ ")"
+  | "(" ~ value_expr ~ ("," ~ value_expr) ~ ")"
+}
+
 value_expr = {
     closure
   | literal
+  | tuple_expr
   | copy
   | path
   | identifier

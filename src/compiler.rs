@@ -70,7 +70,7 @@ fn convert_sentence(
             ir::Word::Builtin(builtin) => {
                 b.ir_builtin(builtin);
             }
-            ir::Word::Literal(literal) => b.literal(literal),
+            ir::Word::ValueExpression(e) => b.value_expr(e)?,
             ir::Word::LabelCall(l) => b.label_call(l),
         }
     }
@@ -231,6 +231,7 @@ impl<'a> SentenceBuilder<'a> {
                 panic!("unknown builtin: {:?}", name)
             }
         } else {
+            todo!()
         }
         // match builtin.name.0.as_str(self.sources) {
         //     s =>
@@ -312,18 +313,17 @@ impl<'a> SentenceBuilder<'a> {
         });
     }
 
-    // pub fn tuple(&mut self, span: Span<'t>, size: usize) {
-    //     self.words.push(Word {
-    //         inner: InnerWord::Tuple(size),
-    //         modname: self.modname.clone(),
-    //         span: span,
-    //         names: Some(self.names.clone()),
-    //     });
-    //     for _ in 0..size {
-    //         self.names.pop_front().unwrap();
-    //     }
-    //     self.names.push_front(None);
-    // }
+    pub fn tuple(&mut self, span: Span, size: usize) {
+        self.words.push(flat::Word {
+            inner: flat::InnerWord::Tuple(size),
+            span: span,
+            names: Some(self.names.clone()),
+        });
+        for _ in 0..size {
+            self.names.pop_front().unwrap();
+        }
+        self.names.push_front(None);
+    }
 
     // pub fn untuple(&mut self, span: Span<'t>, size: usize) {
     //     self.words.push(Word {
@@ -352,30 +352,35 @@ impl<'a> SentenceBuilder<'a> {
     //     Ok(argc)
     // }
 
-    // fn value_expr(&mut self, expr: ValueExpression<'t>) -> Result<(), BuilderError<'t>> {
-    //     match expr {
-    //         ValueExpression::Literal(literal) => {
-    //             Ok(self.literal_split(literal.span, literal.value))
-    //         }
-    //         ValueExpression::Path(path) => Ok(self.path(path)),
-    //         ValueExpression::Identifier(identifier) => self.mv(identifier),
-    //         ValueExpression::Copy(identifier) => self.cp(identifier),
-    //         ValueExpression::Closure { span, func, args } => {
-    //             let argc = args.len();
-    //             for arg in args.into_iter().rev() {
-    //                 self.value_expr(arg)?;
-    //             }
-    //             match func {
-    //                 ast::PathOrIdent::Path(p) => self.path(p),
-    //                 ast::PathOrIdent::Ident(i) => self.mv(i)?,
-    //             }
-    //             for _ in 0..argc {
-    //                 self.builtin(span, Builtin::Curry);
-    //             }
-    //             Ok(())
-    //         }
-    //     }
-    // }
+    fn value_expr(&mut self, expr: ir::ValueExpression) -> Result<(), Error> {
+        match expr {
+            ir::ValueExpression::Literal(literal) => Ok(self.literal(literal)),
+            ir::ValueExpression::Tuple(tuple) => {
+                let num_values = tuple.values.len();
+                for v in tuple.values {
+                    self.value_expr(v)?;
+                }
+                self.tuple(tuple.span, num_values);
+                Ok(())
+            } // ValueExpression::Path(path) => Ok(self.path(path)),
+              // ValueExpression::Identifier(identifier) => self.mv(identifier),
+              // ValueExpression::Copy(identifier) => self.cp(identifier),
+              // ValueExpression::Closure { span, func, args } => {
+              //     let argc = args.len();
+              //     for arg in args.into_iter().rev() {
+              //         self.value_expr(arg)?;
+              //     }
+              //     match func {
+              //         ast::PathOrIdent::Path(p) => self.path(p),
+              //         ast::PathOrIdent::Ident(i) => self.mv(i)?,
+              //     }
+              //     for _ in 0..argc {
+              //         self.builtin(span, Builtin::Curry);
+              //     }
+              //     Ok(())
+              // }
+        }
+    }
 
     fn bindings(&mut self, b: StackBindings) {
         self.names = b

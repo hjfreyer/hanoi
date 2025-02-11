@@ -34,6 +34,14 @@ pub enum Literal<'t> {
 }
 
 #[derive(Debug, FromPest)]
+#[pest_ast(rule(Rule::tuple_expr))]
+pub struct Tuple<'t> {
+    #[pest_ast(outer())]
+    pub span: pest::Span<'t>,
+    pub values: Vec<ValueExpression<'t>>,
+}
+
+#[derive(Debug, FromPest)]
 #[pest_ast(rule(Rule::builtin_arg))]
 pub enum BuiltinArg<'t> {
     Int(Int<'t>),
@@ -81,11 +89,18 @@ pub struct DropBinding<'t> {
 }
 
 #[derive(Debug, FromPest)]
+#[pest_ast(rule(Rule::value_expr))]
+pub enum ValueExpression<'t> {
+    Literal(Literal<'t>),
+    Tuple(Tuple<'t>),
+}
+
+#[derive(Debug, FromPest)]
 #[pest_ast(rule(Rule::raw_word))]
 pub enum Word<'t> {
     StackBindings(StackBindings<'t>),
     Builtin(Builtin<'t>),
-    Literal(Literal<'t>),
+    ValueExpression(ValueExpression<'t>),
     LabelCall(LabelCall<'t>),
 }
 
