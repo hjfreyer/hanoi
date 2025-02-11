@@ -4,7 +4,7 @@ use itertools::Itertools;
 
 use crate::{
     flat::{self, SentenceIndex},
-    ir,
+    ir::{self, Binding, StackBindings},
     source::{self, Span},
 };
 
@@ -64,6 +64,9 @@ fn convert_sentence(
 
     for word in sentence.words {
         match word {
+            ir::Word::StackBindings(bindings) => {
+                b.bindings(bindings);
+            }
             ir::Word::Builtin(builtin) => {
                 b.ir_builtin(builtin);
             }
@@ -147,18 +150,17 @@ impl<'a> SentenceBuilder<'a> {
     //     Ok(self.mv_idx(ident.0, idx))
     // }
 
-    // pub fn mv_idx(&mut self, span: Span<'t>, idx: usize) {
-    //     let names = self.names.clone();
-    //     let declared = self.names.remove(idx).unwrap();
-    //     self.names.push_front(declared);
+    pub fn mv_idx(&mut self, span: Span, idx: usize) {
+        let names = self.names.clone();
+        let declared = self.names.remove(idx).unwrap();
+        self.names.push_front(declared);
 
-    //     self.words.push(Word {
-    //         inner: InnerWord::Move(idx),
-    //         modname: self.modname.clone(),
-    //         span,
-    //         names: Some(names),
-    //     });
-    // }
+        self.words.push(flat::Word {
+            inner: flat::InnerWord::Move(idx),
+            span,
+            names: Some(names),
+        });
+    }
 
     // pub fn cp(&mut self, i: Identifier<'t>) -> Result<(), BuilderError<'t>> {
     //     let Some(idx) = self.names.iter().position(|n| match n {
@@ -199,17 +201,16 @@ impl<'a> SentenceBuilder<'a> {
     //     self.sd_idx(span, self.names.len() - 1)
     // }
 
-    // pub fn drop_idx(&mut self, span: Span<'t>, idx: usize) {
-    //     let names = self.names.clone();
-    //     let declared = self.names.remove(idx).unwrap();
+    pub fn drop_idx(&mut self, span: Span, idx: usize) {
+        let names = self.names.clone();
+        let declared = self.names.remove(idx).unwrap();
 
-    //     self.words.push(Word {
-    //         inner: InnerWord::Drop(idx),
-    //         modname: self.modname.clone(),
-    //         span,
-    //         names: Some(names),
-    //     });
-    // }
+        self.words.push(flat::Word {
+            inner: flat::InnerWord::Drop(idx),
+            span,
+            names: Some(names),
+        });
+    }
 
     // pub fn path(&mut self, ast::Path { span, segments }: ast::Path<'t>) {
     //     for segment in segments.iter().rev() {
@@ -376,32 +377,32 @@ impl<'a> SentenceBuilder<'a> {
     //     }
     // }
 
-    // fn bindings(&mut self, b: Bindings<'t>) {
-    //     self.names = b
-    //         .bindings
-    //         .iter()
-    //         .rev()
-    //         .map(|b| match b {
-    //             ast::Binding::Literal(_) | ast::Binding::Drop(_) => None,
-    //             ast::Binding::Ident(span) => Some(span.as_str().to_owned()),
-    //         })
-    //         .collect();
-    //     let mut dropped = 0;
-    //     for (idx, binding) in b.bindings.into_iter().rev().enumerate() {
-    //         match binding {
-    //             ast::Binding::Literal(l) => {
-    //                 let span = l.span;
-    //                 self.mv_idx(span, idx - dropped);
-    //                 self.literal(l);
-    //                 self.builtin(span, Builtin::AssertEq);
-    //                 dropped += 1;
-    //             }
-    //             ast::Binding::Drop(span) => {
-    //                 self.drop_idx(span, idx - dropped);
-    //                 dropped += 1;
-    //             }
-    //             _ => (),
-    //         }
-    //     }
-    // }
+    fn bindings(&mut self, b: StackBindings) {
+        self.names = b
+            .bindings
+            .iter()
+            .rev()
+            .map(|b| match b {
+                Binding::Literal(_) | &Binding::Drop(_) => None,
+                Binding::Identifier(span) => Some(span.0.as_str(self.sources).to_owned()),
+            })
+            .collect();
+        let mut dropped = 0;
+        for (idx, binding) in b.bindings.into_iter().rev().enumerate() {
+            match binding {
+                Binding::Literal(l) => {
+                    let span = l.span();
+                    self.mv_idx(span, idx - dropped);
+                    self.literal(l);
+                    self.builtin(span, flat::Builtin::AssertEq);
+                    dropped += 1;
+                }
+                Binding::Drop(drop) => {
+                    self.drop_idx(drop.span, idx - dropped);
+                    dropped += 1;
+                }
+                _ => (),
+            }
+        }
+    }
 }

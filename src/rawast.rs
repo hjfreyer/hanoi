@@ -58,8 +58,32 @@ pub struct LabelCall<'t> {
 }
 
 #[derive(Debug, FromPest)]
+#[pest_ast(rule(Rule::stack_bindings))]
+pub struct StackBindings<'t> {
+    #[pest_ast(outer())]
+    pub span: pest::Span<'t>,
+    pub bindings: Vec<Binding<'t>>,
+}
+
+#[derive(Debug, FromPest)]
+#[pest_ast(rule(Rule::binding))]
+pub enum Binding<'t> {
+    DropBinding(DropBinding<'t>),
+    Literal(Literal<'t>),
+    Identifier(Identifier<'t>),
+}
+
+#[derive(Debug, FromPest)]
+#[pest_ast(rule(Rule::drop_binding))]
+pub struct DropBinding<'t> {
+    #[pest_ast(outer())]
+    pub span: pest::Span<'t>,
+}
+
+#[derive(Debug, FromPest)]
 #[pest_ast(rule(Rule::raw_word))]
 pub enum Word<'t> {
+    StackBindings(StackBindings<'t>),
     Builtin(Builtin<'t>),
     Literal(Literal<'t>),
     LabelCall(LabelCall<'t>),

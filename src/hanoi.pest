@@ -55,13 +55,13 @@ literal = { bool | int | char_lit | symbol | nil }
 
 raw_statement = { "R" ~ "{" ~ sentence ~ "}" }
 raw_word      = {
-  //   stack_bindings
-  // | "{" ~ sentence ~ "}"
+    stack_bindings // | "{" ~ sentence ~ "}"
   // | value_expr
   // | builtin_func_call
-  builtin
-| literal
-| label_call
+
+  | builtin
+  | literal
+  | label_call
 }
 
 stack_bindings = {
@@ -76,7 +76,7 @@ builtin = { "#" ~ identifier ~ builtin_args? }
 builtin_args = _{
     "(" ~ builtin_arg ~ ("," ~ builtin_arg)* ~ ")"
 }
-builtin_arg  = { label | int }
+builtin_arg  =  { label | int }
 
 builtin_func_call = { "#" ~ identifier ~ "(" ~ int ~ ")" }
 
@@ -111,11 +111,11 @@ path = { "this" ~ ("." ~ identifier)* }
 proc_decl          = { "proc" ~ identifier ~ proc_args_and_body }
 proc_args_and_body = { bindings ~ "{" ~ block ~ "}" }
 
-bindings =  {
+bindings = {
     "(" ~ ")"
   | "(" ~ binding ~ ("," ~ binding)* ~ ")"
 }
-binding  = _{ drop_binding | literal | identifier }
+binding  = { drop_binding | literal | identifier }
 
 drop_binding = { "^" }
 
@@ -171,8 +171,8 @@ match_case  =  { bindings ~ "=>" ~ "{" ~ block ~ "}" }
 label = { "'" ~ identifier }
 
 label_call = {
-  "'" ~ identifier
-  | "'" ~ identifier ~ ( "::" ~ identifier)*
+    "'" ~ identifier
+  | "'" ~ identifier ~ ("::" ~ identifier)*
 }
 
 // New stuff

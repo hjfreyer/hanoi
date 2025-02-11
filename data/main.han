@@ -188,6 +188,7 @@
 //}
 
 sentence 'add_one {
+    [val]
     1 #add
 }
 

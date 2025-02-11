@@ -79,6 +79,7 @@ pub struct Sentence {
 
 #[derive(Debug)]
 pub enum Word {
+    StackBindings(StackBindings),
     Builtin(Builtin),
     Literal(Literal),
     LabelCall(LabelCall),
@@ -87,6 +88,9 @@ pub enum Word {
 impl Word {
     fn from_ast(file_idx: FileIndex, name_prefix: &QualifiedName, w: rawast::Word<'_>) -> Self {
         match w {
+            rawast::Word::StackBindings(bindings) => {
+                Word::StackBindings(StackBindings::from_ast(file_idx, bindings))
+            }
             rawast::Word::Builtin(builtin) => {
                 Word::Builtin(Builtin::from_ast(file_idx, name_prefix, builtin))
             }
@@ -122,6 +126,60 @@ impl LabelCall {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct StackBindings {
+    pub span: Span,
+    pub bindings: Vec<Binding>,
+}
+
+impl StackBindings {
+    fn from_ast(file_idx: FileIndex, r: rawast::StackBindings<'_>) -> Self {
+        Self {
+            span: Span::from_ast(file_idx, r.span),
+            bindings: r
+                .bindings
+                .into_iter()
+                .map(|r| Binding::from_ast(file_idx, r))
+                .collect(),
+        }
+    }
+}
+#[derive(Debug, Clone)]
+pub enum Binding {
+    Drop(DropBinding),
+    Literal(Literal),
+    Identifier(Identifier),
+}
+
+impl Binding {
+    fn from_ast(file_idx: FileIndex, r: rawast::Binding<'_>) -> Self {
+        match r {
+            rawast::Binding::DropBinding(drop_binding) => {
+                Self::Drop(DropBinding::from_ast(file_idx, drop_binding))
+            }
+            rawast::Binding::Literal(literal) => {
+                Self::Literal(Literal::from_ast(file_idx, literal))
+            }
+            rawast::Binding::Identifier(identifier) => {
+                Self::Identifier(Identifier::from_ast(file_idx, identifier))
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct DropBinding {
+    pub span: Span,
+}
+
+impl DropBinding {
+    fn from_ast(file_idx: FileIndex, int: rawast::DropBinding<'_>) -> Self {
+        Self {
+            span: Span::from_ast(file_idx, int.span),
+        }
+    }
+}
+
 // #[derive(Debug)]
 // pub enum InnerWord {
 //     Builtin(Builtin),
@@ -136,7 +194,7 @@ impl LabelCall {
 //     // Untuple(usize),
 // }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Int {
     pub span: Span,
     pub value: usize,
@@ -195,7 +253,7 @@ impl Builtin {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Literal {
     Int(Int),
 }
@@ -204,6 +262,12 @@ impl Literal {
     fn from_ast(file_idx: FileIndex, literal: rawast::Literal<'_>) -> Self {
         match literal {
             rawast::Literal::Int(int) => Literal::Int(Int::from_ast(file_idx, int)),
+        }
+    }
+
+    pub fn span(&self) -> Span {
+        match self {
+            Literal::Int(int) => int.span,
         }
     }
 }
