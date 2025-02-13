@@ -14,11 +14,28 @@ pub enum Error {
     AlreadyDefined {
         location: source::Location,
         name: Vec<String>,
-    }, // #[error("At {location}, unknown reference: {name}")]
-       // UnknownReference {
-       //     location: source::Location,
-       //     name: String,
-       // },
+    },
+    #[error("At {location}, {name:?} not found")]
+    LabelNotFound {
+        location: source::Location,
+        name: Vec<String>,
+    },
+    #[error("At {location}, unknown builtin: {name}")]
+    UnknownBuiltin {
+        location: source::Location,
+        name: String,
+    },
+
+    #[error("At {location}, incorrect arguments for builtin {name}")]
+    IncorrectBuiltinArguments {
+        location: source::Location,
+        name: String,
+    },
+    // #[error("At {location}, unknown reference: {name}")]
+    // UnknownReference {
+    //     location: source::Location,
+    //     name: String,
+    // },
 }
 
 pub fn compile(sources: &source::Sources, ir: ir::Crate) -> Result<flat::Library, Error> {
@@ -71,7 +88,7 @@ fn convert_sentence(
                 b.ir_builtin(builtin);
             }
             ir::Word::ValueExpression(e) => b.value_expr(e)?,
-            ir::Word::LabelCall(l) => b.label_call(l),
+            ir::Word::LabelCall(l) => b.label_call(l)?,
         }
     }
 
@@ -222,20 +239,39 @@ impl<'a> SentenceBuilder<'a> {
     //     }
     // }
 
-    pub fn ir_builtin(&mut self, builtin: ir::Builtin) {
+    pub fn ir_builtin(&mut self, builtin: ir::Builtin) -> Result<(), Error> {
         let name = builtin.name.0.as_str(self.sources);
         if builtin.args.is_empty() {
             if let Some(b) = flat::Builtin::ALL.iter().find(|b| b.name() == name) {
-                self.builtin(builtin.span, *b)
+                self.builtin(builtin.span, *b);
+                Ok(())
             } else {
-                panic!("unknown builtin: {:?}", name)
+                Err(Error::UnknownBuiltin {
+                    location: builtin.span.location(self.sources).unwrap(),
+                    name: name.to_owned(),
+                })
             }
         } else {
-            todo!()
+            match name {
+                "untuple" => {
+                    let Ok(ir::BuiltinArg::Int(ir::Int { value: size, .. })) =
+                        builtin.args.into_iter().exactly_one()
+                    else {
+                        return Err(Error::IncorrectBuiltinArguments {
+                            location: builtin.span.location(self.sources).unwrap(),
+                            name: name.to_owned(),
+                        });
+                    };
+
+                    self.untuple(builtin.span, size);
+                    Ok(())
+                }
+                _ => Err(Error::UnknownBuiltin {
+                    location: builtin.span.location(self.sources).unwrap(),
+                    name: name.to_owned(),
+                }),
+            }
         }
-        // match builtin.name.0.as_str(self.sources) {
-        //     s =>
-        // }
     }
 
     pub fn builtin(&mut self, span: Span, builtin: flat::Builtin) {
@@ -300,17 +336,20 @@ impl<'a> SentenceBuilder<'a> {
         }
     }
 
-    fn label_call(&mut self, l: ir::LabelCall) {
+    fn label_call(&mut self, l: ir::LabelCall) -> Result<(), Error> {
         let sentence_key = l.path.to_strings(self.sources);
-        let sentence_idx = self
-            .sentence_index
-            .get(&sentence_key)
-            .expect("label not found");
+        let Some(sentence_idx) = self.sentence_index.get(&sentence_key) else {
+            return Err(Error::LabelNotFound {
+                location: l.span.location(self.sources).unwrap(),
+                name: sentence_key,
+            });
+        };
         self.words.push(flat::Word {
             span: l.span,
             inner: flat::InnerWord::Call(*sentence_idx),
             names: Some(self.names.clone()),
         });
+        Ok(())
     }
 
     pub fn tuple(&mut self, span: Span, size: usize) {
@@ -325,18 +364,17 @@ impl<'a> SentenceBuilder<'a> {
         self.names.push_front(None);
     }
 
-    // pub fn untuple(&mut self, span: Span<'t>, size: usize) {
-    //     self.words.push(Word {
-    //         inner: InnerWord::Untuple(size),
-    //         modname: self.modname.clone(),
-    //         span: span,
-    //         names: Some(self.names.clone()),
-    //     });
-    //     self.names.pop_front();
-    //     for _ in 0..size {
-    //         self.names.push_front(None);
-    //     }
-    // }
+    pub fn untuple(&mut self, span: Span, size: usize) {
+        self.words.push(flat::Word {
+            inner: flat::InnerWord::Untuple(size),
+            span: span,
+            names: Some(self.names.clone()),
+        });
+        self.names.pop_front();
+        for _ in 0..size {
+            self.names.push_front(None);
+        }
+    }
 
     // fn func_call(&mut self, call: ast::Call<'t>) -> Result<usize, BuilderError<'t>> {
     //     let argc = call.args.len();

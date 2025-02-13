@@ -76,7 +76,8 @@ pub struct StackBindings<'t> {
 #[derive(Debug, FromPest)]
 #[pest_ast(rule(Rule::binding))]
 pub enum Binding<'t> {
-    DropBinding(DropBinding<'t>),
+    Drop(DropBinding<'t>),
+    // Tuple(TupleBinding<'t>),
     Literal(Literal<'t>),
     Identifier(Identifier<'t>),
 }
@@ -87,6 +88,14 @@ pub struct DropBinding<'t> {
     #[pest_ast(outer())]
     pub span: pest::Span<'t>,
 }
+
+// #[derive(Debug, FromPest)]
+// #[pest_ast(rule(Rule::tuple_binding))]
+// pub struct TupleBinding<'t> {
+//     #[pest_ast(outer())]
+//     pub span: pest::Span<'t>,
+//     pub bindings: Vec<Binding<'t>>
+// }
 
 #[derive(Debug, FromPest)]
 #[pest_ast(rule(Rule::value_expr))]

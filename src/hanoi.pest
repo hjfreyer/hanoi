@@ -115,9 +115,13 @@ bindings = {
     "(" ~ ")"
   | "(" ~ binding ~ ("," ~ binding)* ~ ")"
 }
-binding  = { drop_binding | literal | identifier }
+binding  = { tuple_binding | drop_binding | literal | identifier }
 
 drop_binding = { "^" }
+tuple_binding = {
+  "(" ~ ")"
+  |"(" ~ binding ~ ("," ~ binding)* ~ ")"
+}
 
 // match_decl = { "match_proc" ~ identifier ~ "{" ~ match_cases ~ "}" }
 

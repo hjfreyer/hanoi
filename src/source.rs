@@ -67,14 +67,6 @@ pub enum Span {
 }
 
 impl Span {
-    pub fn from_ast(file_idx: FileIndex, span: pest::Span) -> Self {
-        Self::File(FileSpan {
-            file_idx,
-            start: span.start(),
-            end: span.end(),
-        })
-    }
-
     pub fn as_str(self, sources: &Sources) -> &str {
         match self {
             Self::File(file_span) => file_span.as_pest(sources).as_str(),
