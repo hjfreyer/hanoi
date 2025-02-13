@@ -1,3 +1,4 @@
+use from_pest::FromPest;
 use pest_ast::FromPest;
 use pest_derive::Parser;
 
@@ -27,11 +28,38 @@ pub struct Int<'t> {
     pub value: usize,
 }
 
+fn span_into_string_literal(span: pest::Span) -> String {
+    let str = span.as_str();
+    let str = &str[1..str.len() - 1];
+    str.replace("\\n", "\n").replace("\\\"", "\"")
+}
+#[derive(Debug, FromPest)]
+#[pest_ast(rule(Rule::string))]
+pub struct StringLiteral<'t> {
+    #[pest_ast(outer())]
+    pub span: pest::Span<'t>,
+
+    #[pest_ast(outer(with(span_into_string_literal)))]
+    pub value: String,
+}
+
+#[derive(Debug, FromPest)]
+#[pest_ast(rule(Rule::symbol))]
+pub enum Symbol<'t> {
+    Identifier(Identifier<'t>),
+    String(StringLiteral<'t>),
+}
+
 #[derive(Debug, FromPest)]
 #[pest_ast(rule(Rule::literal))]
 pub enum Literal<'t> {
     Int(Int<'t>),
+    Symbol(Symbol<'t>),
 }
+
+#[derive(Debug, FromPest)]
+#[pest_ast(rule(Rule::copy))]
+pub struct Copy<'t>(pub Identifier<'t>);
 
 #[derive(Debug, FromPest)]
 #[pest_ast(rule(Rule::tuple_expr))]
@@ -101,6 +129,7 @@ pub struct DropBinding<'t> {
 #[pest_ast(rule(Rule::value_expr))]
 pub enum ValueExpression<'t> {
     Literal(Literal<'t>),
+    Copy(Copy<'t>),
     Tuple(Tuple<'t>),
 }
 

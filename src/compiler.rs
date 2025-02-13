@@ -31,11 +31,11 @@ pub enum Error {
         location: source::Location,
         name: String,
     },
-    // #[error("At {location}, unknown reference: {name}")]
-    // UnknownReference {
-    //     location: source::Location,
-    //     name: String,
-    // },
+    #[error("At {location}, unknown reference: {name}")]
+    UnknownReference {
+        location: source::Location,
+        name: String,
+    },
 }
 
 pub fn compile(sources: &source::Sources, ir: ir::Crate) -> Result<flat::Library, Error> {
@@ -131,6 +131,9 @@ impl<'a> SentenceBuilder<'a> {
             ir::Literal::Int(ir::Int { span, value }) => {
                 self.push_value(span, flat::Value::Usize(value))
             }
+            ir::Literal::Symbol(ir::Symbol { span, value }) => {
+                self.push_value(span, flat::Value::Symbol(value))
+            }
         }
     }
 
@@ -179,27 +182,30 @@ impl<'a> SentenceBuilder<'a> {
         });
     }
 
-    // pub fn cp(&mut self, i: Identifier<'t>) -> Result<(), BuilderError<'t>> {
-    //     let Some(idx) = self.names.iter().position(|n| match n {
-    //         Some(n) => n.as_str() == i.0.as_str(),
-    //         None => false,
-    //     }) else {
-    //         return Err(BuilderError::UnknownReference(i));
-    //     };
-    //     Ok(self.cp_idx(i.0, idx))
-    // }
+    pub fn cp(&mut self, i: ir::Identifier) -> Result<(), Error> {
+        let name = i.0.as_str(&self.sources);
+        let Some(idx) = self.names.iter().position(|n| match n {
+            Some(n) => n.as_str() == name,
+            None => false,
+        }) else {
+            return Err(Error::UnknownReference {
+                location: i.0.location(self.sources).unwrap(),
+                name: name.to_owned(),
+            });
+        };
+        Ok(self.cp_idx(i.0, idx))
+    }
 
-    // pub fn cp_idx(&mut self, span: Span<'t>, idx: usize) {
-    //     let names = self.names.clone();
-    //     self.names.push_front(None);
+    pub fn cp_idx(&mut self, span: Span, idx: usize) {
+        let names = self.names.clone();
+        self.names.push_front(None);
 
-    //     self.words.push(Word {
-    //         inner: InnerWord::Copy(idx),
-    //         modname: self.modname.clone(),
-    //         span,
-    //         names: Some(names),
-    //     });
-    // }
+        self.words.push(flat::Word {
+            inner: flat::InnerWord::Copy(idx),
+            span,
+            names: Some(names),
+        });
+    }
 
     // pub fn sd_idx(&mut self, span: Span<'t>, idx: usize) {
     //     let names = self.names.clone();
@@ -401,22 +407,22 @@ impl<'a> SentenceBuilder<'a> {
                 self.tuple(tuple.span, num_values);
                 Ok(())
             } // ValueExpression::Path(path) => Ok(self.path(path)),
-              // ValueExpression::Identifier(identifier) => self.mv(identifier),
-              // ValueExpression::Copy(identifier) => self.cp(identifier),
-              // ValueExpression::Closure { span, func, args } => {
-              //     let argc = args.len();
-              //     for arg in args.into_iter().rev() {
-              //         self.value_expr(arg)?;
-              //     }
-              //     match func {
-              //         ast::PathOrIdent::Path(p) => self.path(p),
-              //         ast::PathOrIdent::Ident(i) => self.mv(i)?,
-              //     }
-              //     for _ in 0..argc {
-              //         self.builtin(span, Builtin::Curry);
-              //     }
-              //     Ok(())
-              // }
+            // ValueExpression::Identifier(identifier) => self.mv(identifier),
+            ir::ValueExpression::Copy(identifier) => self.cp(identifier),
+            // ValueExpression::Closure { span, func, args } => {
+            //     let argc = args.len();
+            //     for arg in args.into_iter().rev() {
+            //         self.value_expr(arg)?;
+            //     }
+            //     match func {
+            //         ast::PathOrIdent::Path(p) => self.path(p),
+            //         ast::PathOrIdent::Ident(i) => self.mv(i)?,
+            //     }
+            //     for _ in 0..argc {
+            //         self.builtin(span, Builtin::Curry);
+            //     }
+            //     Ok(())
+            // }
         }
     }
 

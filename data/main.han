@@ -187,15 +187,24 @@
 //    //let (bq, @eos) = bq(@next);
 //}
 
-sentence 'add_pair {
-    [t]
+sentence 'double {
+    [a]
+    *a #add
+}
+
+sentence 'map_start {
+    (@start, ())
+}
+
+sentence 'map {
     #untuple(2)
-    [a, b]
-    #add
+    [case, args]
+    
 }
 
 sentence 'main {
-    (3, (1, 2))
-    #untuple(2)
-    'add_pair 3 #assert_eq
+    'map_start
+    [map_closure]
+    'map
+    3 'double 6 #assert_eq
 }
