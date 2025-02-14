@@ -192,19 +192,95 @@ sentence 'double {
     *a #add
 }
 
+sentence 'map_alloc {
+    [iter, fn]
+    (@start, (iter, fn))
+}
+
 sentence 'map_start {
-    (@start, ())
+    [args, case, closure]
+    case @start #assert_eq
+    args (@next) #assert_eq
+    closure #untuple(2)
+    [iter, fn]
+    (@on_next, (fn)) (@req, iter, (@next))
+}
+
+sentence 'map_on_next {
+    [args, case, closure]
+    case @on_next #assert_eq
+
+    args #untuple(2)
+    [closure, tag, val]
+    tag @some #assert_eq
+    val #untuple(2)
+    [closure, iter, val]
+
+    closure #untuple(1)
+    [iter, val, fn]
+    (@on_apply, (iter)) (@req, fn, (val))
+}
+
+sentence 'map_on_apply {
+    [args, case, closure]
+    case @on_apply #assert_eq
+    args #untuple(2)
+    [closure, fn, mapped]
+    closure #untuple(1)
+    [fn, mapped, iter]
+    (@start, (iter, fn)) (@some, mapped)
+}
+
+sentence 'panic {
+    0 1 #assert_eq
 }
 
 sentence 'map {
-    #untuple(2)
-    [case, args]
-    
+    [closure, args]
+    closure #untuple(2)
+    [args, case, closure]
+    *case @start #eq #branch('map_start, 'map2)
+}
+
+
+sentence 'map2 {
+    [args, case, closure]
+    *case @on_next #eq #branch('map_on_next, 'map3)
+}
+
+sentence 'map3 {
+    [args, case, closure]
+    *case @on_apply #eq #branch('map_on_apply, 'panic)
+}
+
+sentence 'ints_alloc {
+    (@start, 0)
+}
+
+sentence 'ints_start {
+
+}
+
+sentence 'ints {
+    [closure, args]
+    closure #untuple(2)
+    [args, tag, start]
+    tag @start #assert_eq
+    args #untuple(1) @next #assert_eq
+    [start]
+    *start 1 #add
+    [start, next]
+    (@start, next) (@some, start)
 }
 
 sentence 'main {
-    'map_start
-    [map_closure]
-    'map
-    3 'double 6 #assert_eq
+    @myiter @double
+    'map_alloc
+    (@next) 'map (@req, @myiter, (@next)) #assert_eq
+    (@some, (@myiter, 1)) 'map (@req, @double, (1)) #assert_eq
+    (@double, 2) 'map (@some, 2) #assert_eq
+    
+    (@next) 'map (@req, @myiter, (@next)) #assert_eq
+    (@some, (@myiter, 2)) 'map (@req, @double, (2)) #assert_eq
+    (@double, 4) 'map (@some, 4) #assert_eq
 }

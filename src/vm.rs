@@ -133,6 +133,16 @@ fn inner_eval(
             Ok(EvalResult::Continue)
         }
         InnerWord::Call(sentence_idx) => Ok(EvalResult::Call(*sentence_idx)),
+        InnerWord::Branch(true_case, false_case) => {
+            let Some(Value::Bool(cond)) = stack.pop() else {
+                ebail!("bad value")
+            };
+            if cond {
+                Ok(EvalResult::Call(*true_case))
+            } else {
+                Ok(EvalResult::Call(*false_case))
+            }
+        }
         InnerWord::Builtin(Builtin::Eq) => {
             let Some(a) = stack.pop() else {
                 ebail!("bad value")

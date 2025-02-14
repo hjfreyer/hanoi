@@ -85,7 +85,7 @@ fn convert_sentence(
                 b.bindings(bindings);
             }
             ir::Word::Builtin(builtin) => {
-                b.ir_builtin(builtin);
+                b.ir_builtin(builtin)?;
             }
             ir::Word::ValueExpression(e) => b.value_expr(e)?,
             ir::Word::LabelCall(l) => b.label_call(l)?,
@@ -160,15 +160,19 @@ impl<'a> SentenceBuilder<'a> {
     //     self.literal_split(span, Value::Symbol(symbol.to_owned()))
     // }
 
-    // pub fn mv(&mut self, ident: Identifier<'t>) -> Result<(), BuilderError<'t>> {
-    //     let Some(idx) = self.names.iter().position(|n| match n {
-    //         Some(n) => n.as_str() == ident.0.as_str(),
-    //         None => false,
-    //     }) else {
-    //         return Err(BuilderError::UnknownReference(ident));
-    //     };
-    //     Ok(self.mv_idx(ident.0, idx))
-    // }
+    pub fn mv(&mut self, ident: ir::Identifier) -> Result<(), Error> {
+        let name = ident.0.as_str(self.sources);
+        let Some(idx) = self.names.iter().position(|n| match n {
+            Some(n) => n.as_str() == name,
+            None => false,
+        }) else {
+            return Err(Error::UnknownReference {
+                location: ident.0.location(self.sources).unwrap(),
+                name: name.to_owned(),
+            });
+        };
+        Ok(self.mv_idx(ident.0, idx))
+    }
 
     pub fn mv_idx(&mut self, span: Span, idx: usize) {
         let names = self.names.clone();
@@ -272,6 +276,28 @@ impl<'a> SentenceBuilder<'a> {
                     self.untuple(builtin.span, size);
                     Ok(())
                 }
+                "branch" => {
+                    let Some((ir::BuiltinArg::Label(true_case), ir::BuiltinArg::Label(false_case))) =
+                        builtin.args.into_iter().collect_tuple()
+                    else {
+                        return Err(Error::IncorrectBuiltinArguments {
+                            location: builtin.span.location(self.sources).unwrap(),
+                            name: name.to_owned(),
+                        });
+                    };
+
+                    let true_case = self.lookup_label(&true_case)?;
+                    let false_case = self.lookup_label(&false_case)?;
+
+                    let names = self.names.clone();
+                    self.names.pop_front();
+                    self.words.push(flat::Word {
+                        inner: flat::InnerWord::Branch(true_case, false_case),
+                        span: builtin.span,
+                        names: Some(names),
+                    });
+                    Ok(())
+                }
                 _ => Err(Error::UnknownBuiltin {
                     location: builtin.span.location(self.sources).unwrap(),
                     name: name.to_owned(),
@@ -342,20 +368,25 @@ impl<'a> SentenceBuilder<'a> {
         }
     }
 
-    fn label_call(&mut self, l: ir::LabelCall) -> Result<(), Error> {
-        let sentence_key = l.path.to_strings(self.sources);
-        let Some(sentence_idx) = self.sentence_index.get(&sentence_key) else {
-            return Err(Error::LabelNotFound {
-                location: l.span.location(self.sources).unwrap(),
-                name: sentence_key,
-            });
-        };
+    fn label_call(&mut self, l: ir::Label) -> Result<(), Error> {
+        let sentence_idx = self.lookup_label(&l)?;
         self.words.push(flat::Word {
             span: l.span,
-            inner: flat::InnerWord::Call(*sentence_idx),
+            inner: flat::InnerWord::Call(sentence_idx),
             names: Some(self.names.clone()),
         });
         Ok(())
+    }
+
+    fn lookup_label(&self, l: &ir::Label) -> Result<SentenceIndex, Error> {
+        let sentence_key = l.path.to_strings(self.sources);
+        self.sentence_index
+            .get(&sentence_key)
+            .ok_or_else(|| Error::LabelNotFound {
+                location: l.span.location(self.sources).unwrap(),
+                name: sentence_key,
+            })
+            .copied()
     }
 
     pub fn tuple(&mut self, span: Span, size: usize) {
@@ -407,7 +438,7 @@ impl<'a> SentenceBuilder<'a> {
                 self.tuple(tuple.span, num_values);
                 Ok(())
             } // ValueExpression::Path(path) => Ok(self.path(path)),
-            // ValueExpression::Identifier(identifier) => self.mv(identifier),
+            ir::ValueExpression::Move(identifier) => self.mv(identifier),
             ir::ValueExpression::Copy(identifier) => self.cp(identifier),
             // ValueExpression::Closure { span, func, args } => {
             //     let argc = args.len();

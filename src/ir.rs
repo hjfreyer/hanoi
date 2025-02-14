@@ -121,7 +121,7 @@ pub enum Word {
     StackBindings(StackBindings),
     Builtin(Builtin),
     ValueExpression(ValueExpression),
-    LabelCall(LabelCall),
+    LabelCall(Label),
 }
 
 impl<'t> From<WithContext<'t, rawast::Word<'t>>> for Word {
@@ -138,12 +138,12 @@ impl<'t> From<WithContext<'t, rawast::Word<'t>>> for Word {
 }
 
 #[derive(Debug, Clone)]
-pub struct LabelCall {
+pub struct Label {
     pub span: Span,
     pub path: QualifiedName,
 }
 
-impl<'t> From<WithContext<'t, rawast::LabelCall<'t>>> for LabelCall {
+impl<'t> From<WithContext<'t, rawast::LabelCall<'t>>> for Label {
     fn from(WithContext(a, c): WithContext<'t, rawast::LabelCall<'t>>) -> Self {
         Self {
             span: a.span.with_ctx(c).into(),
@@ -259,16 +259,14 @@ impl<'t> From<WithContext<'t, rawast::Symbol<'t>>> for Symbol {
 #[derive(Debug)]
 pub enum BuiltinArg {
     Int(Int),
-    Label(QualifiedName),
+    Label(Label),
 }
 
 impl<'t> From<WithContext<'t, rawast::BuiltinArg<'t>>> for BuiltinArg {
     fn from(WithContext(a, c): WithContext<'t, rawast::BuiltinArg<'t>>) -> Self {
         match a {
             rawast::BuiltinArg::Int(int) => BuiltinArg::Int(int.with_ctx(c).into()),
-            rawast::BuiltinArg::Label(label) => {
-                BuiltinArg::Label(c.name_prefix.append(label.0.with_ctx(c).into()))
-            }
+            rawast::BuiltinArg::Label(label) => BuiltinArg::Label(label.with_ctx(c).into()),
         }
     }
 }
@@ -330,6 +328,7 @@ impl<'t> From<WithContext<'t, rawast::Tuple<'t>>> for Tuple {
 pub enum ValueExpression {
     Literal(Literal),
     Copy(Identifier),
+    Move(Identifier),
     Tuple(Tuple),
 }
 
@@ -339,6 +338,7 @@ impl<'t> From<WithContext<'t, rawast::ValueExpression<'t>>> for ValueExpression 
             rawast::ValueExpression::Literal(literal) => {
                 ValueExpression::Literal(literal.with_ctx(c).into())
             }
+            rawast::ValueExpression::Move(a) => ValueExpression::Move(a.with_ctx(c).into()),
             rawast::ValueExpression::Copy(a) => ValueExpression::Copy(a.0.with_ctx(c).into()),
             rawast::ValueExpression::Tuple(tuple) => {
                 ValueExpression::Tuple(tuple.with_ctx(c).into())

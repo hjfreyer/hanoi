@@ -73,7 +73,7 @@ pub struct Tuple<'t> {
 #[pest_ast(rule(Rule::builtin_arg))]
 pub enum BuiltinArg<'t> {
     Int(Int<'t>),
-    Label(Label<'t>),
+    Label(LabelCall<'t>),
 }
 
 #[derive(Debug, FromPest)]
@@ -129,6 +129,7 @@ pub struct DropBinding<'t> {
 #[pest_ast(rule(Rule::value_expr))]
 pub enum ValueExpression<'t> {
     Literal(Literal<'t>),
+    Move(Identifier<'t>),
     Copy(Copy<'t>),
     Tuple(Tuple<'t>),
 }

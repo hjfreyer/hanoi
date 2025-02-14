@@ -76,7 +76,7 @@ builtin = { "#" ~ identifier ~ builtin_args? }
 builtin_args = _{
     "(" ~ builtin_arg ~ ("," ~ builtin_arg)* ~ ")"
 }
-builtin_arg  =  { label | int }
+builtin_arg  =  { label_call | int }
 
 builtin_func_call = { "#" ~ identifier ~ "(" ~ int ~ ")" }
 
@@ -161,7 +161,7 @@ closure = {
 
 tuple_expr = {
     "(" ~ ")"
-  | "(" ~ value_expr ~ ("," ~ value_expr) ~ ")"
+  | "(" ~ value_expr ~ ("," ~ value_expr)* ~ ")"
 }
 
 value_expr = {

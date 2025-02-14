@@ -831,6 +831,7 @@ pub enum InnerWord {
     Tuple(usize),
     Untuple(usize),
     Call(SentenceIndex),
+    Branch(SentenceIndex, SentenceIndex),
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Hash)]
@@ -888,7 +889,7 @@ impl<'a> std::fmt::Display for ValueView<'a> {
             ),
             Value::Tuple(values) => write!(
                 f,
-                "{}",
+                "({})",
                 values
                     .iter()
                     .map(|v| ValueView {
