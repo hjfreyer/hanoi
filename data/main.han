@@ -193,42 +193,31 @@ sentence 'double {
 }
 
 sentence 'map_alloc {
-    [iter, fn]
-    (@start, (iter, fn))
+    (@start, ())
 }
 
 sentence 'map_start {
-    [args, case, closure]
+    [args, case]
     case @start #assert_eq
     args (@next) #assert_eq
-    closure #untuple(2)
-    [iter, fn]
-    (@on_next, (fn)) (@req, iter, (@next))
+    (@on_next, ()) (@iter, (@next))
 }
 
 sentence 'map_on_next {
-    [args, case, closure]
+    [args, case]
     case @on_next #assert_eq
 
     args #untuple(2)
-    [closure, tag, val]
+    [tag, val]
     tag @some #assert_eq
-    val #untuple(2)
-    [closure, iter, val]
-
-    closure #untuple(1)
-    [iter, val, fn]
-    (@on_apply, (iter)) (@req, fn, (val))
+    [val]
+    (@on_apply, ()) (@fn, val)
 }
 
 sentence 'map_on_apply {
-    [args, case, closure]
+    [mapped, case]
     case @on_apply #assert_eq
-    args #untuple(2)
-    [closure, fn, mapped]
-    closure #untuple(1)
-    [fn, mapped, iter]
-    (@start, (iter, fn)) (@some, mapped)
+    (@start, ()) (@resp, (@some, mapped))
 }
 
 sentence 'panic {
@@ -239,17 +228,19 @@ sentence 'map {
     [closure, args]
     closure #untuple(2)
     [args, case, closure]
+    closure #untuple(0)
+    [args, case]
     *case @start #eq #branch('map_start, 'map2)
 }
 
 
 sentence 'map2 {
-    [args, case, closure]
+    [args, case]
     *case @on_next #eq #branch('map_on_next, 'map3)
 }
 
 sentence 'map3 {
-    [args, case, closure]
+    [args, case]
     *case @on_apply #eq #branch('map_on_apply, 'panic)
 }
 
@@ -273,14 +264,66 @@ sentence 'ints {
     (@start, next) (@some, start)
 }
 
-sentence 'main {
-    @myiter @double
+sentence 'double_iter_alloc {
     'map_alloc
-    (@next) 'map (@req, @myiter, (@next)) #assert_eq
-    (@some, (@myiter, 1)) 'map (@req, @double, (1)) #assert_eq
-    (@double, 2) 'map (@some, 2) #assert_eq
-    
-    (@next) 'map (@req, @myiter, (@next)) #assert_eq
-    (@some, (@myiter, 2)) 'map (@req, @double, (2)) #assert_eq
-    (@double, 4) 'map (@some, 4) #assert_eq
+    [map_closure]
+    (@start, map_closure)
+}
+
+sentence 'double_iter {
+    [closure, args]
+    closure #untuple(2)
+    [args, case, map_closure]
+    case @start #assert_eq
+    map_closure args 'map 'double_iter_map_response
+}
+
+sentence 'double_iter_map_response {
+    [map_closure, map_response]
+    #untuple(2)
+    [map_closure, map_tag, map_arg]
+    *map_tag @fn #eq #branch('double_iter_map_req_is_double, 'double_iter_map_response2)
+}
+
+sentence 'double_iter_map_response2 {
+    [map_closure, map_tag, map_arg]
+    *map_tag @iter #eq #branch('double_iter_map_req_is_iter, 'double_iter_map_req_is_resp)
+}
+
+sentence 'double_iter_map_req_is_double {
+    [map_closure, map_target, map_args]
+    map_target @fn #assert_eq
+    map_args 'double 
+    [map_closure, doubled]
+    map_closure doubled 'map 'double_iter_map_response
+}
+
+sentence 'double_iter_map_req_is_iter {
+    [map_closure, map_target, map_args]
+    map_target @iter #assert_eq
+    (@start, map_closure) (@iter, map_args)
+}
+
+sentence 'double_iter_map_req_is_resp {
+    [map_closure, map_target, map_args]
+    map_target @resp #assert_eq
+    (@start, map_closure) (@resp, map_args)
+}
+
+sentence 'main {
+    'double_iter_alloc
+    (@next) 'double_iter (@iter, (@next)) #assert_eq
+    (@some, 1) 'double_iter (@resp, (@some, 2)) #assert_eq
+
+    (@next) 'double_iter (@iter, (@next)) #assert_eq
+    (@some, 2) 'double_iter (@resp, (@some, 4)) #assert_eq
+
+//    'map_alloc
+//    (@next) 'map (@iter, (@next)) #assert_eq
+//    (@some, 1) 'map (@fn, 1) #assert_eq
+//    2 'map (@resp, (@some, 2)) #assert_eq
+//    
+//    (@next) 'map (@iter, (@next)) #assert_eq
+//    (@some, 2) 'map (@fn, 2) #assert_eq
+//    (@double, 4) 'map (@some, 4) #assert_eq
 }
