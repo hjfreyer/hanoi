@@ -13,7 +13,7 @@ use ratatui::{
 use crate::{
     ast,
     flat::{Closure, Value, ValueView, Word},
-    source::{self, Span},
+    source::{self, span_to_location, span_to_pest, Span},
     vm::{EvalError, StepResult, Vm, VmState},
 };
 
@@ -58,7 +58,9 @@ impl Debugger {
                 }
                 Span::File(file_span) => {
                     self.highlight_span = Some(file_span);
-                    let (line, _) = file_span.as_pest(&self.sources).start_pos().line_col();
+                    let (line, _) = span_to_pest(file_span, &self.sources)
+                        .start_pos()
+                        .line_col();
                     self.code_scroll = (line as u16).saturating_sub(10);
                 }
             }
@@ -79,16 +81,19 @@ impl Debugger {
             return;
         }
 
-        let current_line = self
-            .highlight_span
-            .expect("ran until current word was some")
-            .location(&self.sources)
-            .line;
+        let current_line = span_to_location(
+            self.highlight_span
+                .expect("ran until current word was some"),
+            &self.sources,
+        )
+        .line;
 
         while self.error.is_none()
             && self
                 .highlight_span
-                .map(|span| span.as_pest(&self.sources).start_pos().line_col().0 == current_line)
+                .map(|span| {
+                    span_to_pest(span, &self.sources).start_pos().line_col().0 == current_line
+                })
                 .unwrap_or(true)
         {
             self.step()
@@ -135,7 +140,7 @@ impl Debugger {
 
     fn code(&self) -> Paragraph {
         let text = if let Some(span) = self.highlight_span {
-            let span = span.as_pest(&self.sources);
+            let span = span_to_pest(span, &self.sources);
             let code = span.get_input();
             let mut res = Text::raw("");
             for (pos, line) in code[..span.start()].lines().with_position() {

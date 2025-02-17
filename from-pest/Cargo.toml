@@ -12,6 +12,7 @@ repository = "https://github.com/pest-parser/pest_deconstruct"
 void = "1.0"
 pest = "2.5"
 log = "0.4.6"
+derive_more = {version="1.0.0", features= ["from", "into"]}
 
 [dev-dependencies]
 pest_derive = "2.5"

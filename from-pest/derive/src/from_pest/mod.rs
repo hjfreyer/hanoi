@@ -102,6 +102,7 @@ pub(crate) fn derive(
             type FatalError = ::from_pest::Void;
 
             fn from_pest(
+                file_idx: ::from_pest::FileIndex,
                 pest: &mut ::from_pest::pest::iterators::Pairs<#from_pest_lifetime, #rule_enum>
             ) -> ::std::result::Result<Self, ::from_pest::ConversionError<::from_pest::Void>> {
                 #implementation

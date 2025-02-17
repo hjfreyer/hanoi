@@ -6,8 +6,8 @@ use std::{
 use derive_more::derive::{From, Into};
 use typed_index_collections::TiVec;
 
-#[derive(From, Into, Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub struct FileIndex(usize);
+pub use from_pest::FileIndex;
+pub use from_pest::FileSpan;
 
 #[derive(From, Into, Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct GeneratedIndex(usize);
@@ -69,7 +69,7 @@ pub enum Span {
 impl Span {
     pub fn as_str(self, sources: &Sources) -> &str {
         match self {
-            Self::File(file_span) => file_span.as_pest(sources).as_str(),
+            Self::File(file_span) => span_to_pest(file_span, sources).as_str(),
             Self::Generated(gen_idx) => &sources.generated[gen_idx],
         }
     }
@@ -86,39 +86,45 @@ impl Span {
 
     pub fn location(self, sources: &Sources) -> Option<Location> {
         match self {
-            Self::File(s) => Some(s.location(sources)),
+            Self::File(s) => Some(span_to_location(s, sources)),
             Self::Generated(_) => None,
         }
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct FileSpan {
-    pub file_idx: FileIndex,
-    pub start: usize,
-    pub end: usize,
+// impl FileSpan {
+//     pub fn from_ast(file_idx: FileIndex, span: pest::Span) -> Self {
+//         Self {
+//             file_idx,
+//             start: span.start(),
+//             end: span.end(),
+//         }
+//     }
+
+//     pub fn as_pest(self, sources: &Sources) -> pest::Span {
+//         pest::Span::new(&sources.files[self.file_idx].source, self.start, self.end).unwrap()
+//     }
+
+//     pub fn location(self, sources: &Sources) -> Location {
+//         let (line, col) = self.as_pest(sources).start_pos().line_col();
+//         Location {
+//             file: sources.files[self.file_idx].path.clone(),
+//             line,
+//             col,
+//         }
+//     }
+// }
+
+pub fn span_to_pest(span: FileSpan, sources: &Sources) -> pest::Span {
+    pest::Span::new(&sources.files[span.file_idx].source, span.start, span.end).unwrap()
 }
 
-impl FileSpan {
-    pub fn from_ast(file_idx: FileIndex, span: pest::Span) -> Self {
-        Self {
-            file_idx,
-            start: span.start(),
-            end: span.end(),
-        }
-    }
-
-    pub fn as_pest(self, sources: &Sources) -> pest::Span {
-        pest::Span::new(&sources.files[self.file_idx].source, self.start, self.end).unwrap()
-    }
-
-    pub fn location(self, sources: &Sources) -> Location {
-        let (line, col) = self.as_pest(sources).start_pos().line_col();
-        Location {
-            file: sources.files[self.file_idx].path.clone(),
-            line,
-            col,
-        }
+pub fn span_to_location(span: FileSpan, sources: &Sources) -> Location {
+    let (line, col) = span_to_pest(span, sources).start_pos().line_col();
+    Location {
+        file: sources.files[span.file_idx].path.clone(),
+        line,
+        col,
     }
 }
 

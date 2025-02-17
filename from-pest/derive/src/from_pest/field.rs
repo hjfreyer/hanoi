@@ -45,7 +45,9 @@ impl ConversionStrategy {
 
     fn apply(self, member: Member) -> TokenStream {
         let conversion = match self {
-            ConversionStrategy::FromPest => quote!(::from_pest::FromPest::from_pest(inner)?),
+            ConversionStrategy::FromPest => {
+                quote!(::from_pest::FromPest::from_pest(file_idx, inner)?)
+            }
             ConversionStrategy::Outer(span, mods) => with_mods(quote_spanned!(span=>span), mods),
             ConversionStrategy::Inner(span, mods, rule) => {
                 let pair = quote!(inner.next().ok_or(::from_pest::ConversionError::NoMatch)?);
@@ -98,7 +100,7 @@ impl ConversionStrategy {
 
 fn with_mods(stream: TokenStream, mods: Vec<Path>) -> TokenStream {
     mods.into_iter()
-        .fold(stream, |stream, path| quote!(#path(#stream)))
+        .fold(stream, |stream, path| quote!(#path(file_idx, #stream)))
 }
 
 pub fn enum_convert(name: &Path, variant: &Variant) -> Result<TokenStream> {

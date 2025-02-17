@@ -6,6 +6,7 @@ pub extern crate log;
 pub extern crate pest;
 extern crate void;
 
+use derive_more::derive::{From, Into};
 #[doc(inline)]
 pub use void::Void;
 
@@ -16,6 +17,16 @@ use {
     },
     std::marker::PhantomData,
 };
+
+#[derive(From, Into, Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub struct FileIndex(usize);
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct FileSpan {
+    pub file_idx: FileIndex,
+    pub start: usize,
+    pub end: usize,
+}
 
 /// An error that occurs during conversion.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
@@ -76,6 +87,7 @@ pub trait FromPest<'pest>: Sized {
     /// - `Err(ConversionError::Malformed)` => fatal error; node at head of the cursor but malformed
     /// - `Ok` => success; the cursor has been updated past this node
     fn from_pest(
+        file_idx: FileIndex,
         pest: &mut Pairs<'pest, Self::Rule>,
     ) -> Result<Self, ConversionError<Self::FatalError>>;
 }
@@ -84,8 +96,11 @@ pub trait FromPest<'pest>: Sized {
 impl<'pest, Rule: RuleType, T: FromPest<'pest, Rule = Rule>> FromPest<'pest> for PhantomData<T> {
     type Rule = Rule;
     type FatalError = T::FatalError;
-    fn from_pest(pest: &mut Pairs<'pest, Rule>) -> Result<Self, ConversionError<T::FatalError>> {
-        T::from_pest(pest).map(|_| PhantomData)
+    fn from_pest(
+        file_idx: FileIndex,
+        pest: &mut Pairs<'pest, Rule>,
+    ) -> Result<Self, ConversionError<T::FatalError>> {
+        T::from_pest(file_idx, pest).map(|_| PhantomData)
     }
 }
 
@@ -93,8 +108,11 @@ impl<'pest, Rule: RuleType, T: FromPest<'pest, Rule = Rule>> FromPest<'pest> for
 impl<'pest, Rule: RuleType, T: FromPest<'pest, Rule = Rule>> FromPest<'pest> for Box<T> {
     type Rule = Rule;
     type FatalError = T::FatalError;
-    fn from_pest(pest: &mut Pairs<'pest, Rule>) -> Result<Self, ConversionError<T::FatalError>> {
-        T::from_pest(pest).map(Box::new)
+    fn from_pest(
+        file_idx: FileIndex,
+        pest: &mut Pairs<'pest, Rule>,
+    ) -> Result<Self, ConversionError<T::FatalError>> {
+        T::from_pest(file_idx, pest).map(Box::new)
     }
 }
 
@@ -102,8 +120,11 @@ impl<'pest, Rule: RuleType, T: FromPest<'pest, Rule = Rule>> FromPest<'pest> for
 impl<'pest, Rule: RuleType, T: FromPest<'pest, Rule = Rule>> FromPest<'pest> for Option<T> {
     type Rule = Rule;
     type FatalError = T::FatalError;
-    fn from_pest(pest: &mut Pairs<'pest, Rule>) -> Result<Self, ConversionError<T::FatalError>> {
-        match T::from_pest(pest) {
+    fn from_pest(
+        file_idx: FileIndex,
+        pest: &mut Pairs<'pest, Rule>,
+    ) -> Result<Self, ConversionError<T::FatalError>> {
+        match T::from_pest(file_idx, pest) {
             Err(ConversionError::NoMatch) => Ok(None),
             result => result.map(Some),
         }
@@ -114,10 +135,13 @@ impl<'pest, Rule: RuleType, T: FromPest<'pest, Rule = Rule>> FromPest<'pest> for
 impl<'pest, Rule: RuleType, T: FromPest<'pest, Rule = Rule>> FromPest<'pest> for Vec<T> {
     type Rule = Rule;
     type FatalError = T::FatalError;
-    fn from_pest(pest: &mut Pairs<'pest, Rule>) -> Result<Self, ConversionError<T::FatalError>> {
+    fn from_pest(
+        file_idx: FileIndex,
+        pest: &mut Pairs<'pest, Rule>,
+    ) -> Result<Self, ConversionError<T::FatalError>> {
         let mut acc = vec![];
         loop {
-            match T::from_pest(pest) {
+            match T::from_pest(file_idx, pest) {
                 Ok(t) => acc.push(t),
                 Err(ConversionError::NoMatch) => break,
                 Err(error) => return Err(error),
@@ -131,7 +155,10 @@ impl<'pest, Rule: RuleType, T: FromPest<'pest, Rule = Rule>> FromPest<'pest> for
 impl<'pest, Rule: RuleType> FromPest<'pest> for Pair<'pest, Rule> {
     type Rule = Rule;
     type FatalError = Void;
-    fn from_pest(pest: &mut Pairs<'pest, Rule>) -> Result<Self, ConversionError<Void>> {
+    fn from_pest(
+        _file_idx: FileIndex,
+        pest: &mut Pairs<'pest, Rule>,
+    ) -> Result<Self, ConversionError<Void>> {
         pest.next().ok_or(ConversionError::NoMatch)
     }
 }
@@ -146,13 +173,13 @@ macro_rules! impl_for_tuple {
         {
             type Rule = Rule;
             type FatalError = FatalError;
-            fn from_pest(pest: &mut Pairs<'pest, Rule>)
+            fn from_pest(file_idx: FileIndex, pest: &mut Pairs<'pest, Rule>)
                 -> Result<Self, ConversionError<FatalError>>
             {
                 let mut clone = pest.clone();
                 let this = (
-                    $ty1::from_pest(&mut clone)?,
-                    $($ty::from_pest(&mut clone)?),*
+                    $ty1::from_pest(file_idx, &mut clone)?,
+                    $($ty::from_pest(file_idx, &mut clone)?),*
                 );
                 *pest = clone;
                 Ok(this)

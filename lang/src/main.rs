@@ -56,7 +56,7 @@ fn compile_library(
 
     let mut parse_tree =
         rawast::HanoiParser::parse(rawast::Rule::file, &sources.files[file_idx].source)?;
-    let file = rawast::File::from_pest(&mut parse_tree).expect("infallible");
+    let file = rawast::File::from_pest(file_idx, &mut parse_tree).expect("infallible");
 
     let mut ir = ir::Crate::default();
     ir.add_file(ir::QualifiedName(vec![]), file_idx, file);
