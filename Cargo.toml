@@ -3,6 +3,4 @@ resolver = "2"
 
 members = [
     "lang",
-    "from-pest",
-    "from-pest/derive"
 ]

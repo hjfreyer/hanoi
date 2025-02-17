@@ -270,17 +270,6 @@ dependencies = [
 [[package]]
 name = "from-pest"
 version = "0.3.3"
-dependencies = [
- "log",
- "pest",
- "pest-ast 0.3.5",
- "pest_derive",
- "void",
-]
-
-[[package]]
-name = "from-pest"
-version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c0f2dbe0e5bcfc1f8a135e14cbca3dd14e0c5696f34c2a1c7c9d729c01e9ae88"
 dependencies = [
@@ -306,10 +295,10 @@ dependencies = [
  "anyhow",
  "clap",
  "derive_more",
- "from-pest 0.3.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "from-pest",
  "itertools 0.13.0",
  "pest",
- "pest-ast 0.3.5 (registry+https://github.com/rust-lang/crates.io-index)",
+ "pest-ast",
  "pest_derive",
  "ratatui",
  "thiserror",
@@ -478,19 +467,6 @@ dependencies = [
  "memchr",
  "thiserror",
  "ucd-trie",
-]
-
-[[package]]
-name = "pest-ast"
-version = "0.3.5"
-dependencies = [
- "from-pest 0.3.3",
- "itertools 0.10.5",
- "pest",
- "pest_derive",
- "proc-macro2",
- "quote",
- "syn",
 ]
 
 [[package]]
