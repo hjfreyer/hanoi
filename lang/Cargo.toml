@@ -15,3 +15,4 @@ pest_derive = "2.7.13"
 ratatui = "0.28.1"
 thiserror = "1.0.65"
 typed-index-collections = "3.1.0"
+from-raw-ast = {path = "../from-raw-ast"}

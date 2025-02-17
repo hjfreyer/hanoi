@@ -7,6 +7,7 @@ use crate::{
     rawast,
     source::{self, FileIndex, Span},
 };
+use from_raw_ast::FromRawAst;
 
 #[derive(Debug, Default)]
 pub struct Crate {
@@ -28,12 +29,16 @@ impl Crate {
             match decl {
                 rawast::Decl::SentenceDecl(sentence_decl) => self.sentences.push(Sentence {
                     span: sentence_decl.span.with_ctx(ctx).into(),
-                    name: name_prefix.append(sentence_decl.label.0.with_ctx(ctx).into()),
-                    words: sentence_decl.sentence.words.with_ctx(ctx).into(),
+                    name: name_prefix.append(Identifier::from_raw_ast(ctx, sentence_decl.label.0)),
+                    words: FromRawAst::from_raw_ast(ctx, sentence_decl.sentence.words),
                 }),
             }
         }
     }
+}
+
+pub trait FromRawAst<'t, R> {
+    fn from_raw_ast(ctx: Context<'t>, r: R) -> Self;
 }
 
 #[derive(Clone, Copy)]
@@ -51,6 +56,17 @@ pub trait MakeWithContext<'t, T> {
 impl<'t, T> MakeWithContext<'t, T> for T {
     fn with_ctx(self, ctx: Context<'t>) -> WithContext<'t, T> {
         WithContext(self, ctx)
+    }
+}
+
+impl<'t, A, B> FromRawAst<'t, Vec<A>> for Vec<B>
+where
+    B: FromRawAst<'t, A>,
+{
+    fn from_raw_ast(ctx: Context<'t>, r: Vec<A>) -> Self {
+        r.into_iter()
+            .map(|a| FromRawAst::from_raw_ast(ctx, a))
+            .collect()
     }
 }
 
@@ -76,14 +92,28 @@ impl<'t> Into<Span> for WithContext<'t, pest::Span<'t>> {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct Identifier(pub Span);
-
-impl<'t> From<WithContext<'t, rawast::Identifier<'t>>> for Identifier {
-    fn from(value: WithContext<'t, rawast::Identifier<'t>>) -> Self {
-        Self(value.0 .0.with_ctx(value.1).into())
+impl<'t> FromRawAst<'t, pest::Span<'t>> for Span {
+    fn from_raw_ast(ctx: Context<'t>, r: pest::Span<'t>) -> Self {
+        Span::File(source::FileSpan {
+            file_idx: ctx.file_idx,
+            start: r.start(),
+            end: r.end(),
+        })
     }
 }
+
+impl<'t, X, T> FromRawAst<'t, X> for T
+where
+    T: From<WithContext<'t, X>>,
+{
+    fn from_raw_ast(ctx: Context<'t>, r: X) -> Self {
+        r.with_ctx(ctx).into()
+    }
+}
+
+#[derive(Debug, Clone, Copy, FromRawAst)]
+#[from_raw_ast(raw=rawast::Identifier)]
+pub struct Identifier(pub Span);
 
 #[derive(Debug, Clone)]
 pub struct QualifiedName(pub Vec<Identifier>);
@@ -116,25 +146,13 @@ pub struct Sentence {
     pub words: Vec<Word>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, FromRawAst)]
+#[from_raw_ast(raw = rawast::Word)]
 pub enum Word {
     StackBindings(StackBindings),
     Builtin(Builtin),
     ValueExpression(ValueExpression),
     LabelCall(Label),
-}
-
-impl<'t> From<WithContext<'t, rawast::Word<'t>>> for Word {
-    fn from(WithContext(w, c): WithContext<'t, rawast::Word<'t>>) -> Self {
-        match w {
-            rawast::Word::StackBindings(bindings) => {
-                Word::StackBindings(bindings.with_ctx(c).into())
-            }
-            rawast::Word::Builtin(builtin) => Word::Builtin(builtin.with_ctx(c).into()),
-            rawast::Word::ValueExpression(e) => Word::ValueExpression(e.with_ctx(c).into()),
-            rawast::Word::LabelCall(l) => Word::LabelCall(l.with_ctx(c).into()),
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -143,62 +161,37 @@ pub struct Label {
     pub path: QualifiedName,
 }
 
-impl<'t> From<WithContext<'t, rawast::LabelCall<'t>>> for Label {
-    fn from(WithContext(a, c): WithContext<'t, rawast::LabelCall<'t>>) -> Self {
+impl<'t> FromRawAst<'t, rawast::LabelCall<'t>> for Label {
+    fn from_raw_ast(ctx: Context<'t>, r: rawast::LabelCall<'t>) -> Self {
         Self {
-            span: a.span.with_ctx(c).into(),
-            path: c.name_prefix.join(QualifiedName(a.path.with_ctx(c).into())),
+            span: r.span.with_ctx(ctx).into(),
+            path: ctx
+                .name_prefix
+                .join(QualifiedName(FromRawAst::from_raw_ast(ctx, r.path))),
         }
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, FromRawAst)]
+#[from_raw_ast(raw=rawast::StackBindings)]
 pub struct StackBindings {
     pub span: Span,
     pub bindings: Vec<Binding>,
 }
 
-impl<'t> From<WithContext<'t, rawast::StackBindings<'t>>> for StackBindings {
-    fn from(WithContext(a, c): WithContext<'t, rawast::StackBindings<'t>>) -> Self {
-        Self {
-            span: a.span.with_ctx(c).into(),
-            bindings: a.bindings.with_ctx(c).into(),
-        }
-    }
-}
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, FromRawAst)]
+#[from_raw_ast(raw = rawast::Binding)]
 pub enum Binding {
     Drop(DropBinding),
     // Tuple(TupleBinding),
     Literal(Literal),
     Identifier(Identifier),
 }
-impl<'t> From<WithContext<'t, rawast::Binding<'t>>> for Binding {
-    fn from(WithContext(a, c): WithContext<'t, rawast::Binding<'t>>) -> Self {
-        match a {
-            rawast::Binding::Drop(drop_binding) => Self::Drop(drop_binding.with_ctx(c).into()),
-            // rawast::Binding::Tuple(b) => {
-            //     Self::Tuple(b.with_ctx(c).into())
-            // }
-            rawast::Binding::Literal(literal) => Self::Literal(literal.with_ctx(c).into()),
-            rawast::Binding::Identifier(identifier) => {
-                Self::Identifier(identifier.with_ctx(c).into())
-            }
-        }
-    }
-}
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, FromRawAst)]
+#[from_raw_ast(raw = rawast::DropBinding)]
 pub struct DropBinding {
     pub span: Span,
-}
-
-impl<'t> From<WithContext<'t, rawast::DropBinding<'t>>> for DropBinding {
-    fn from(WithContext(a, c): WithContext<'t, rawast::DropBinding<'t>>) -> Self {
-        Self {
-            span: a.span.with_ctx(c).into(),
-        }
-    }
 }
 
 // #[derive(Debug, Clone)]
@@ -256,49 +249,26 @@ impl<'t> From<WithContext<'t, rawast::Symbol<'t>>> for Symbol {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, FromRawAst)]
+#[from_raw_ast(raw = rawast::BuiltinArg)]
 pub enum BuiltinArg {
     Int(Int),
     Label(Label),
 }
 
-impl<'t> From<WithContext<'t, rawast::BuiltinArg<'t>>> for BuiltinArg {
-    fn from(WithContext(a, c): WithContext<'t, rawast::BuiltinArg<'t>>) -> Self {
-        match a {
-            rawast::BuiltinArg::Int(int) => BuiltinArg::Int(int.with_ctx(c).into()),
-            rawast::BuiltinArg::Label(label) => BuiltinArg::Label(label.with_ctx(c).into()),
-        }
-    }
-}
-
-#[derive(Debug)]
+#[derive(Debug, FromRawAst)]
+#[from_raw_ast(raw = rawast::Builtin)]
 pub struct Builtin {
     pub span: Span,
     pub name: Identifier,
     pub args: Vec<BuiltinArg>,
 }
-impl<'t> From<WithContext<'t, rawast::Builtin<'t>>> for Builtin {
-    fn from(WithContext(a, c): WithContext<'t, rawast::Builtin<'t>>) -> Self {
-        Self {
-            span: a.span.with_ctx(c).into(),
-            name: a.name.with_ctx(c).into(),
-            args: a.args.with_ctx(c).into(),
-        }
-    }
-}
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, FromRawAst)]
+#[from_raw_ast(raw = rawast::Literal)]
 pub enum Literal {
     Int(Int),
     Symbol(Symbol),
-}
-impl<'t> From<WithContext<'t, rawast::Literal<'t>>> for Literal {
-    fn from(WithContext(a, c): WithContext<'t, rawast::Literal<'t>>) -> Self {
-        match a {
-            rawast::Literal::Int(int) => Literal::Int(int.with_ctx(c).into()),
-            rawast::Literal::Symbol(a) => Literal::Symbol(a.with_ctx(c).into()),
-        }
-    }
 }
 
 impl Literal {
@@ -310,21 +280,15 @@ impl Literal {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, FromRawAst)]
+#[from_raw_ast(raw = rawast::Tuple)]
 pub struct Tuple {
     pub span: Span,
     pub values: Vec<ValueExpression>,
 }
-impl<'t> From<WithContext<'t, rawast::Tuple<'t>>> for Tuple {
-    fn from(WithContext(a, c): WithContext<'t, rawast::Tuple<'t>>) -> Self {
-        Self {
-            span: a.span.with_ctx(c).into(),
-            values: a.values.with_ctx(c).into(),
-        }
-    }
-}
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, FromRawAst)]
+#[from_raw_ast(raw = rawast::ValueExpression)]
 pub enum ValueExpression {
     Literal(Literal),
     Copy(Identifier),
@@ -332,17 +296,8 @@ pub enum ValueExpression {
     Tuple(Tuple),
 }
 
-impl<'t> From<WithContext<'t, rawast::ValueExpression<'t>>> for ValueExpression {
-    fn from(WithContext(a, c): WithContext<'t, rawast::ValueExpression<'t>>) -> Self {
-        match a {
-            rawast::ValueExpression::Literal(literal) => {
-                ValueExpression::Literal(literal.with_ctx(c).into())
-            }
-            rawast::ValueExpression::Move(a) => ValueExpression::Move(a.with_ctx(c).into()),
-            rawast::ValueExpression::Copy(a) => ValueExpression::Copy(a.0.with_ctx(c).into()),
-            rawast::ValueExpression::Tuple(tuple) => {
-                ValueExpression::Tuple(tuple.with_ctx(c).into())
-            }
-        }
+impl<'t> FromRawAst<'t, rawast::Copy<'t>> for Identifier {
+    fn from_raw_ast(ctx: Context<'t>, r: rawast::Copy<'t>) -> Self {
+        FromRawAst::from_raw_ast(ctx, r.0)
     }
 }
