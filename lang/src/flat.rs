@@ -777,7 +777,7 @@ pub enum CompileError {
 
 #[derive(Debug)]
 pub enum BuilderError {
-    UnknownReference(ir::Identifier),
+    UnknownReference(rawast::Identifier),
 }
 
 builtins! {

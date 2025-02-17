@@ -3,9 +3,7 @@ use std::collections::{BTreeMap, VecDeque};
 use itertools::Itertools;
 
 use crate::{
-    flat::{self, SentenceIndex},
-    ir::{self, Binding, StackBindings},
-    source::{self, Span},
+    flat::{self, SentenceIndex}, ir::{self, Binding, StackBindings}, rawast, source::{self, Span}
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -81,14 +79,14 @@ fn convert_sentence(
 
     for word in sentence.words {
         match word {
-            ir::Word::StackBindings(bindings) => {
+            rawast::Word::StackBindings(bindings) => {
                 b.bindings(bindings);
             }
-            ir::Word::Builtin(builtin) => {
+            rawast::Word::Builtin(builtin) => {
                 b.ir_builtin(builtin)?;
             }
-            ir::Word::ValueExpression(e) => b.value_expr(e)?,
-            ir::Word::LabelCall(l) => b.label_call(l)?,
+            rawast::Word::ValueExpression(e) => b.value_expr(e)?,
+            rawast::Word::LabelCall(l) => b.label_call(l)?,
         }
     }
 
@@ -126,12 +124,12 @@ impl<'a> SentenceBuilder<'a> {
     //     self.literal_split(literal.span, literal.value)
     // }
 
-    pub fn literal(&mut self, value: ir::Literal) {
+    pub fn literal(&mut self, value: rawast::Literal) {
         match value {
-            ir::Literal::Int(ir::Int { span, value }) => {
+            rawast::Literal::Int(rawast::Int { span, value }) => {
                 self.push_value(span, flat::Value::Usize(value))
             }
-            ir::Literal::Symbol(ir::Symbol { span, value }) => {
+            rawast::Literal::Symbol(rawast::Symbol { span, value }) => {
                 self.push_value(span, flat::Value::Symbol(value))
             }
         }
@@ -160,7 +158,7 @@ impl<'a> SentenceBuilder<'a> {
     //     self.literal_split(span, Value::Symbol(symbol.to_owned()))
     // }
 
-    pub fn mv(&mut self, ident: ir::Identifier) -> Result<(), Error> {
+    pub fn mv(&mut self, ident: rawast::Identifier) -> Result<(), Error> {
         let name = ident.0.as_str(self.sources);
         let Some(idx) = self.names.iter().position(|n| match n {
             Some(n) => n.as_str() == name,
@@ -186,7 +184,7 @@ impl<'a> SentenceBuilder<'a> {
         });
     }
 
-    pub fn cp(&mut self, i: ir::Identifier) -> Result<(), Error> {
+    pub fn cp(&mut self, i: rawast::Identifier) -> Result<(), Error> {
         let name = i.0.as_str(&self.sources);
         let Some(idx) = self.names.iter().position(|n| match n {
             Some(n) => n.as_str() == name,
@@ -249,7 +247,7 @@ impl<'a> SentenceBuilder<'a> {
     //     }
     // }
 
-    pub fn ir_builtin(&mut self, builtin: ir::Builtin) -> Result<(), Error> {
+    pub fn ir_builtin(&mut self, builtin: rawast::Builtin) -> Result<(), Error> {
         let name = builtin.name.0.as_str(self.sources);
         if builtin.args.is_empty() {
             if let Some(b) = flat::Builtin::ALL.iter().find(|b| b.name() == name) {
@@ -264,7 +262,7 @@ impl<'a> SentenceBuilder<'a> {
         } else {
             match name {
                 "untuple" => {
-                    let Ok(ir::BuiltinArg::Int(ir::Int { value: size, .. })) =
+                    let Ok(rawast::BuiltinArg::Int(rawast::Int { value: size, .. })) =
                         builtin.args.into_iter().exactly_one()
                     else {
                         return Err(Error::IncorrectBuiltinArguments {
@@ -277,7 +275,7 @@ impl<'a> SentenceBuilder<'a> {
                     Ok(())
                 }
                 "branch" => {
-                    let Some((ir::BuiltinArg::Label(true_case), ir::BuiltinArg::Label(false_case))) =
+                    let Some((rawast::BuiltinArg::Label(true_case), rawast::BuiltinArg::Label(false_case))) =
                         builtin.args.into_iter().collect_tuple()
                     else {
                         return Err(Error::IncorrectBuiltinArguments {
@@ -368,7 +366,7 @@ impl<'a> SentenceBuilder<'a> {
         }
     }
 
-    fn label_call(&mut self, l: ir::Label) -> Result<(), Error> {
+    fn label_call(&mut self, l: rawast::LabelCall) -> Result<(), Error> {
         let sentence_idx = self.lookup_label(&l)?;
         self.words.push(flat::Word {
             span: l.span,
@@ -378,7 +376,7 @@ impl<'a> SentenceBuilder<'a> {
         Ok(())
     }
 
-    fn lookup_label(&self, l: &ir::Label) -> Result<SentenceIndex, Error> {
+    fn lookup_label(&self, l: &rawast::LabelCall) -> Result<SentenceIndex, Error> {
         let sentence_key = l.path.to_strings(self.sources);
         self.sentence_index
             .get(&sentence_key)

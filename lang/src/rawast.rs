@@ -23,7 +23,7 @@ fn pest_span_into_span(file_idx: FileIndex, span: pest::Span) -> Span {
         end: span.end(),
     })
 }
-#[derive(Debug, FromPest)]
+#[derive(Debug, FromPest, Clone)]
 #[pest_ast(rule(Rule::identifier))]
 pub struct Identifier(#[pest_ast(outer(with(pest_span_into_span)))] pub Span);
 
