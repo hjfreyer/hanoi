@@ -1,0 +1,152 @@
+
+
+protocol iter<T>
+  type Iter;
+  next: Iter -> (@yield, Iter, T) | (@eos)
+
+protocol map<A, B>
+  next: map<A, B> -> (@iter, map_wants_iter<A, B>)
+
+protocol map_wants_iter<A, B>
+  give_some: map_wants_iter<A, B>, A -> (@fn, map_wants_fn<A, B>, A) 
+  give_none: map_wants_iter<A, B> -> (@eos)
+
+protocol map_wants_fn<A, B>
+  give_applied: (map_wants_fn<A, B>, B) -> (@yield, B)
+
+protocol iter_transformer<A, B>
+  type Iter;
+  type Waiting;
+  next: (Iter) -> (@iter, Waiting)
+  give_some: (Waiting, A) -> (@yield, Iter, B)
+  give_none: (Waiting) -> (@eos)
+
+ints:
+  new: () -> usize;
+
+impl iter<usize> for ints:
+  type Iter = usize;
+  next: usize -> (@yield, iter_start<usize>, T) | (@eos)
+
+iter : (@next) -> (@yield, (iter, t)) | (@eos)
+
+map: (@next) -> (@iter, (map_wants_iter, @next))
+map_wants_iter: (@yield, )
+
+// NFA: (state, action) -> [](state, effect)
+
+// map<A, B>: 
+//   map_result = (end, @eos)
+//              | (init, @yield, b)
+//              | (want_iter, @iter)
+//              | (want_fn, (@fn, A))
+//
+//   (init, (@next))          -> map_result
+//   (want_iter, (@eos))      -> map_result
+//   (want_iter, (@yield, A)) -> map_result
+//   (want_fn, (B))           -> map_result
+
+
+// iter_transformer<A, B>: 
+//   result = (end, @eos)
+//          | (init, @yield, b)
+//          | (want_iter, @iter)
+//
+//   (init, (@next))          -> result
+//   (want_iter, (@eos))      -> result
+//   (want_iter, (@yield, A)) -> result
+
+
+// iter<A>: 
+//
+//   (init, (@next))          -> (@yield, init, (A))
+//                             | (@eos, end, ())
+
+
+// iter_transformer2<A, B>: 
+//
+//   (init, (@next))          -> (@iter, want_iter, (@next))
+//   (want_iter, (@eos))      -> (@eos, end, ())
+//   (want_iter, (@yield, (A))) -> (@yield, init, (B))
+
+// compose(f: iter<A>, g: iter_transformer2<A, B>):
+//
+//   (init x init, @next)     -> (@iter, init x want_iter, (@next)) 
+//                            -> ()
+
+
+map<eos: (), yield : T, iter : (@some, val), fn>(@next) {
+    let x = iter(@next);
+    match x {
+        (@none, ()) => resp(@none, ()),
+        (@some, val) => {
+            let mapped = fn(val);
+            self(resp(@some, mapped))
+        }
+    }
+}
+
+// Version with events as method names:
+
+impl <A, B, F: iter<A>, G: iter_transformer2<A, B>> iter<B>.init.next for compose(f: F.init_state, g: G.init_state) (state) {
+    let (f_state, g_state) = state;
+    let (@iter, g_state : G.want_iter_state, args) = G.init.next(g_state);
+    match F.init.next(f_state) {
+        (@yield, f_state, arga) => {
+            let (@yield, g_state : G.init_state, argb) = G.want_iter.yield(g_state, arga);
+            (@yield, compose(f_state, g_state), argb)
+        }
+        (@eos, f_state, ()) => {
+            let (@eos, g_state : G.end_state, ()) = G.want_iter.eos(g_state, ());
+            (@eos, compose(f_state, g_state), ())
+        }
+    }
+}
+
+// Version with events as arguments:
+
+impl <A, B, F: iter<A>, G: iter_transformer2<A, B>> iter<B>.init for compose(f: F.init_state, g: G.init_state) (state, @next) {
+    let (f_state, g_state) = state;
+    let (@iter, g_state : G.want_iter_state, args) = G.init(g_state, @next);
+
+    let (f_action, f_state, args) = F.init(f_state, args);
+    let (g_action, g_state, args) = G.want_iter(f_action, g_state, args);
+    (g_action, compose(f_state, g_state), args)
+}
+
+// Version with events and states as arguments:
+
+impl <A, B, F: iter<A>, G: iter_transformer2<A, B>> iter<B> for compose<F, G>(@init, (f_data, g_data), @next, ()) {
+    let (@want_iter, g_data, @next, ()) = G(@init, g_data, @next, ());
+
+    let (f_state, f_data, f_action, args) = F(@init, f_data, @next, ());
+    let (g_state, g_data, g_action, args) = G(@want_iter, g_data, f_action, args);
+    (g_state, (f_data, g_data), g_action, args)
+}
+
+
+// Maximally terse:
+
+impl <A, B, F: iter<A>, G: iter_transformer2<A, B>> iter<B> for compose<F, G>(state, (f_data, g_data), action, ()) {
+    match G(state, g_data, action, ()) {
+        (@want_iter, g_data, @next, ()) => {
+            let (f_state, f_data, f_action, args) = F(@init, f_data, @next, ());
+            compose<F, G>(@want_iter, (f_data, g_data), f_action, args)
+        }
+        (g_state, g_data, g_action, args) => {
+            (g_state, (f_data, g_data), g_action, args)
+        }
+    }
+}
+
+
+// Version combining state and data and rearranging arguments:
+
+
+impl <A, B, F: iter<A>, G: iter_transformer2<A, B>> iter<B> for compose<F, G>(@next, (f_state, g_state), ()) {
+    let (@want_iter, g_data, @next, ()) = G(@next, g_state, ());
+
+    let (f_state, f_data, f_action, args) = F(@init, f_data, @next, ());
+    let (g_state, g_data, g_action, args) = G(@want_iter, g_data, f_action, args);
+    (g_state, (f_data, g_data), g_action, args)
+}
