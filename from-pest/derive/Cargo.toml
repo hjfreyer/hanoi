@@ -1,0 +1,28 @@
+[package]
+name = "pest-ast"
+version = "0.3.5"
+edition = "2021"
+authors = ["cad97 <cad97@cad97.com>"]
+description = "Derive to convert from pest parse tree to typed syntax tree"
+license = "MIT/Apache-2.0"
+readme = "./README.md"
+repository = "https://github.com/pest-parser/pest_deconstruct"
+
+[lib]
+name = "pest_ast"
+proc-macro = true
+
+[dependencies]
+syn = { version = "2", features = ["extra-traits"] }
+quote = "1"
+proc-macro2 = "1"
+itertools = "0.10"
+
+[dev-dependencies]
+from-pest = { version = "0.3", path = ".." }
+pest = "2.5"
+pest_derive = "2.5"
+
+[features]
+default = ["trace"]
+trace = []
