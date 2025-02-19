@@ -39,7 +39,7 @@ fn do_fields(fields: darling::ast::Fields<MyField>) -> proc_macro2::TokenStream 
         let initializers: proc_macro2::TokenStream = fields
             .into_iter()
             .enumerate()
-            .map(|(idx, f)| {
+            .map(|(idx, _f)| {
                 let idx = syn::Index::from(idx);
                 quote! {
                     FromRawAst::from_raw_ast(ctx, r.#idx),
