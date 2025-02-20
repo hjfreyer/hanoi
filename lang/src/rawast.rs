@@ -86,7 +86,7 @@ pub struct Builtin<'t> {
 }
 
 #[derive(Debug, FromPest)]
-#[pest_ast(rule(Rule::label_call))]
+#[pest_ast(rule(Rule::qualified_label))]
 pub struct LabelCall<'t> {
     #[pest_ast(outer())]
     pub span: pest::Span<'t>,
@@ -140,7 +140,6 @@ pub enum Word<'t> {
     StackBindings(StackBindings<'t>),
     Builtin(Builtin<'t>),
     ValueExpression(ValueExpression<'t>),
-    LabelCall(LabelCall<'t>),
 }
 
 #[derive(Debug, FromPest)]
@@ -154,7 +153,7 @@ pub struct Sentence<'t> {
 pub struct SentenceDecl<'t> {
     #[pest_ast(outer())]
     pub span: pest::Span<'t>,
-    pub label: Label<'t>,
+    pub name: Identifier<'t>,
     pub sentence: Sentence<'t>,
 }
 
@@ -162,13 +161,27 @@ pub struct SentenceDecl<'t> {
 #[pest_ast(rule(Rule::decl))]
 pub enum Decl<'t> {
     SentenceDecl(SentenceDecl<'t>),
+    Namespace(NamespaceDecl<'t>),
 }
 
 #[derive(Debug, FromPest)]
 #[pest_ast(rule(Rule::file))]
 pub struct File<'t> {
-    pub decl: Vec<Decl<'t>>,
+    pub ns: Namespace<'t>,
     eoi: EOI,
+}
+
+#[derive(Debug, FromPest)]
+#[pest_ast(rule(Rule::ns_decl))]
+pub struct NamespaceDecl<'t> {
+    pub name: Identifier<'t>,
+    pub ns: Namespace<'t>,
+}
+
+#[derive(Debug, FromPest)]
+#[pest_ast(rule(Rule::namespace))]
+pub struct Namespace<'t> {
+    pub decl: Vec<Decl<'t>>,
 }
 
 #[derive(Debug, FromPest)]

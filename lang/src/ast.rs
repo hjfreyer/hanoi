@@ -672,14 +672,14 @@ impl<'t> From<Pair<'t, Rule>> for RawWord<'t> {
                     inner.into_inner().exactly_one().unwrap(),
                 )),
             },
-            Rule::builtin_func_call => {
-                let (fname, farg) = inner.into_inner().collect_tuple().unwrap();
-                assert_eq!(farg.as_rule(), Rule::int);
-                Self {
-                    span,
-                    inner: RawWordInner::FunctionLike(fname.into(), int_from_pair(farg)),
-                }
-            }
+            // Rule::builtin_func_call => {
+            //     let (fname, farg) = inner.into_inner().collect_tuple().unwrap();
+            //     assert_eq!(farg.as_rule(), Rule::int);
+            //     Self {
+            //         span,
+            //         inner: RawWordInner::FunctionLike(fname.into(), int_from_pair(farg)),
+            //     }
+            // }
             Rule::sentence => Self {
                 span,
                 inner: RawWordInner::Sentence(inner.into()),

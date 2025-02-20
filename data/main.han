@@ -187,23 +187,23 @@
 //    //let (bq, @eos) = bq(@next);
 //}
 
-sentence 'double {
+sentence double {
     [a]
     *a #add
 }
 
-sentence 'map_alloc {
+sentence map_alloc {
     (@start, ())
 }
 
-sentence 'map_start {
+sentence map_start {
     [args, case]
     case @start #assert_eq
     args (@next) #assert_eq
     (@on_next, ()) (@iter, (@next))
 }
 
-sentence 'map_on_next {
+sentence map_on_next {
     [args, case]
     case @on_next #assert_eq
 
@@ -214,17 +214,17 @@ sentence 'map_on_next {
     (@on_apply, ()) (@fn, val)
 }
 
-sentence 'map_on_apply {
+sentence map_on_apply {
     [mapped, case]
     case @on_apply #assert_eq
     (@start, ()) (@resp, (@some, mapped))
 }
 
-sentence 'panic {
+sentence panic {
     0 1 #assert_eq
 }
 
-sentence 'map {
+sentence map {
     [closure, args]
     closure #untuple(2)
     [args, case, closure]
@@ -234,25 +234,25 @@ sentence 'map {
 }
 
 
-sentence 'map2 {
+sentence map2 {
     [args, case]
     *case @on_next #eq #branch('map_on_next, 'map3)
 }
 
-sentence 'map3 {
+sentence map3 {
     [args, case]
     *case @on_apply #eq #branch('map_on_apply, 'panic)
 }
 
-sentence 'ints_alloc {
+sentence ints_alloc {
     (@start, 0)
 }
 
-sentence 'ints_start {
+sentence ints_start {
 
 }
 
-sentence 'ints {
+sentence ints {
     [closure, args]
     closure #untuple(2)
     [args, tag, start]
@@ -264,66 +264,79 @@ sentence 'ints {
     (@start, next) (@some, start)
 }
 
-sentence 'double_iter_alloc {
-    'map_alloc
+sentence double_iter_alloc {
+    #call('map_alloc)
     [map_closure]
     (@start, map_closure)
 }
 
-sentence 'double_iter {
+sentence double_iter {
     [closure, args]
     closure #untuple(2)
     [args, case, map_closure]
     case @start #assert_eq
-    map_closure args 'map 'double_iter_map_response
+    map_closure args #call('map) #call('double_iter_map_response)
 }
 
-sentence 'double_iter_map_response {
+sentence double_iter_map_response {
     [map_closure, map_response]
     #untuple(2)
     [map_closure, map_tag, map_arg]
     *map_tag @fn #eq #branch('double_iter_map_req_is_double, 'double_iter_map_response2)
 }
 
-sentence 'double_iter_map_response2 {
+sentence double_iter_map_response2 {
     [map_closure, map_tag, map_arg]
     *map_tag @iter #eq #branch('double_iter_map_req_is_iter, 'double_iter_map_req_is_resp)
 }
 
-sentence 'double_iter_map_req_is_double {
+sentence double_iter_map_req_is_double {
     [map_closure, map_target, map_args]
     map_target @fn #assert_eq
-    map_args 'double 
+    map_args #call('double) 
     [map_closure, doubled]
-    map_closure doubled 'map 'double_iter_map_response
+    map_closure doubled #call('map) #call('double_iter_map_response)
 }
 
-sentence 'double_iter_map_req_is_iter {
+sentence double_iter_map_req_is_iter {
     [map_closure, map_target, map_args]
     map_target @iter #assert_eq
     (@start, map_closure) (@iter, map_args)
 }
 
-sentence 'double_iter_map_req_is_resp {
+sentence double_iter_map_req_is_resp {
     [map_closure, map_target, map_args]
     map_target @resp #assert_eq
     (@start, map_closure) (@resp, map_args)
 }
 
-sentence 'main {
-    'double_iter_alloc
-    (@next) 'double_iter (@iter, (@next)) #assert_eq
-    (@some, 1) 'double_iter (@resp, (@some, 2)) #assert_eq
+mod map {
+    sentence blah {
+        #call('wut)
+    }
 
-    (@next) 'double_iter (@iter, (@next)) #assert_eq
-    (@some, 2) 'double_iter (@resp, (@some, 4)) #assert_eq
+    sentence wut {
+        #call('super::double_iter_map_req_is_resp)
+        0 1
+    }
+}
 
-//    'map_alloc
-//    (@next) 'map (@iter, (@next)) #assert_eq
-//    (@some, 1) 'map (@fn, 1) #assert_eq
-//    2 'map (@resp, (@some, 2)) #assert_eq
+
+sentence main {
+    #call('map::blah)
+    #call('double_iter_alloc)
+    (@next) #call('double_iter) (@iter, (@next)) #assert_eq
+    (@some, 1) #call('double_iter) (@resp, (@some, 2)) #assert_eq
+
+    (@next) #call('double_iter) (@iter, (@next)) #assert_eq
+    (@some, 2) #call('double_iter) (@resp, (@some, 4)) #assert_eq
+
+//    #call('map_alloc)
+//    (@next) #call('map) (@iter, (@next)) #assert_eq
+//    (@some, 1) #call('map) (@fn, 1) #assert_eq
+//    2 #call('map) (@resp, (@some, 2)) #assert_eq
 //    
-//    (@next) 'map (@iter, (@next)) #assert_eq
-//    (@some, 2) 'map (@fn, 2) #assert_eq
-//    (@double, 4) 'map (@some, 4) #assert_eq
+//    (@next) #call('map) (@iter, (@next)) #assert_eq
+//    (@some, 2) #call('map) (@fn, 2) #assert_eq
+//    (@double, 4) #call('map) (@some, 4) #assert_eq
 }

@@ -4,7 +4,7 @@ use typed_index_collections::TiVec;
 
 use crate::{
     flat::SentenceIndex,
-    rawast,
+    rawast::{self, NamespaceDecl},
     source::{self, FileIndex, Span},
 };
 use from_raw_ast::FromRawAst;
@@ -21,7 +21,16 @@ impl Crate {
         file_idx: FileIndex,
         file: rawast::File,
     ) {
-        for decl in file.decl {
+        self.visit_namespace(file_idx, &name_prefix, file.ns);
+    }
+
+    fn visit_namespace(
+        &mut self,
+        file_idx: FileIndex,
+        name_prefix: &QualifiedName,
+        ns: rawast::Namespace,
+    ) {
+        for decl in ns.decl {
             let ctx = Context {
                 file_idx,
                 name_prefix: &name_prefix,
@@ -29,9 +38,14 @@ impl Crate {
             match decl {
                 rawast::Decl::SentenceDecl(sentence_decl) => self.sentences.push(Sentence {
                     span: sentence_decl.span.with_ctx(ctx).into(),
-                    name: name_prefix.append(Identifier::from_raw_ast(ctx, sentence_decl.label.0)),
+                    name: name_prefix.append(Identifier::from_raw_ast(ctx, sentence_decl.name)),
                     words: FromRawAst::from_raw_ast(ctx, sentence_decl.sentence.words),
                 }),
+                rawast::Decl::Namespace(NamespaceDecl { name, ns }) => {
+                    let name = FromRawAst::from_raw_ast(ctx, name);
+                    let name_prefix = name_prefix.append(name);
+                    self.visit_namespace(file_idx, &name_prefix, ns);
+                }
             }
         }
     }
@@ -152,7 +166,6 @@ pub enum Word {
     StackBindings(StackBindings),
     Builtin(Builtin),
     ValueExpression(ValueExpression),
-    LabelCall(Label),
 }
 
 #[derive(Debug, Clone)]

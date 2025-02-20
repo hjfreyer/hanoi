@@ -4,7 +4,7 @@ use itertools::Itertools;
 
 use crate::{
     flat::{self, SentenceIndex},
-    ir::{self, Binding, StackBindings},
+    ir::{self, Binding, QualifiedName, StackBindings},
     source::{self, Span},
 };
 
@@ -88,7 +88,6 @@ fn convert_sentence(
                 b.ir_builtin(builtin)?;
             }
             ir::Word::ValueExpression(e) => b.value_expr(e)?,
-            ir::Word::LabelCall(l) => b.label_call(l)?,
         }
     }
 
@@ -298,6 +297,19 @@ impl<'a> SentenceBuilder<'a> {
                     });
                     Ok(())
                 }
+                "call" => {
+                    let Ok(ir::BuiltinArg::Label(label)) =
+                        builtin.args.into_iter().exactly_one()
+                    else {
+                        return Err(Error::IncorrectBuiltinArguments {
+                            location: builtin.span.location(self.sources).unwrap(),
+                            name: name.to_owned(),
+                        });
+                    };
+
+                    self.label_call(label)?;
+                    Ok(())
+                }
                 _ => Err(Error::UnknownBuiltin {
                     location: builtin.span.location(self.sources).unwrap(),
                     name: name.to_owned(),
@@ -378,8 +390,18 @@ impl<'a> SentenceBuilder<'a> {
         Ok(())
     }
 
+    fn normalize_path(&self, mut path: QualifiedName)-> Vec<String> {
+        loop {
+            let Some(super_idx) = path.0.iter().position(|n| n.0.as_str(&self.sources) == "super") else {
+                return path.to_strings(self.sources);
+            };
+            path.0.remove(super_idx -1);
+            path.0.remove(super_idx -1);
+        }
+    }
+
     fn lookup_label(&self, l: &ir::Label) -> Result<SentenceIndex, Error> {
-        let sentence_key = l.path.to_strings(self.sources);
+        let sentence_key = self.normalize_path(l.path.clone());
         self.sentence_index
             .get(&sentence_key)
             .ok_or_else(|| Error::LabelNotFound {

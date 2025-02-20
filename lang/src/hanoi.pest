@@ -4,7 +4,7 @@ COMMENT = _{ "//" ~ (!NEWLINE ~ ANY)* }
 
 // FILE STRUCTURE
 
-file = { SOI ~ header ~ decl* ~ EOI }
+file = { SOI ~ header ~ namespace ~ EOI }
 
 header = _{ ns_import* }
 
@@ -16,7 +16,7 @@ namespace = { decl* }
 
 ns_decl = { "mod" ~ identifier ~ "{" ~ namespace ~ "}" }
 
-decl = { sentence_decl }
+decl = { sentence_decl | ns_decl }
 // { ns_decl | proc_decl }
 
 // END FILE STRUCTURE
@@ -61,7 +61,6 @@ raw_word      = {
 
   | value_expr
   | builtin
-  | label_call
 }
 
 stack_bindings = {
@@ -76,9 +75,7 @@ builtin = { "#" ~ identifier ~ builtin_args? }
 builtin_args = _{
     "(" ~ builtin_arg ~ ("," ~ builtin_arg)* ~ ")"
 }
-builtin_arg  =  { label_call | int }
-
-builtin_func_call = { "#" ~ identifier ~ "(" ~ int ~ ")" }
+builtin_arg  =  { qualified_label | int }
 
 // delete = { "^" ~ identifier }
 
@@ -181,15 +178,14 @@ match_case  =  { bindings ~ "=>" ~ "{" ~ block ~ "}" }
 
 label = { "'" ~ identifier }
 
-label_call = {
-    "'" ~ identifier
-  | "'" ~ identifier ~ ("::" ~ identifier)*
+qualified_label = {
+    "'" ~ identifier ~ ("::" ~ identifier)*
 }
 
 // New stuff
 
 sentence_decl = {
-    "sentence" ~ label ~ "{" ~ sentence ~ "}"
+    "sentence" ~ identifier ~ "{" ~ sentence ~ "}"
 }
 
 
