@@ -4,7 +4,7 @@ use typed_index_collections::TiVec;
 
 use crate::{
     flat::SentenceIndex,
-    rawast::{self, NamespaceDecl},
+    ast::{self, NamespaceDecl},
     source::{self, FileIndex, Span},
 };
 use from_raw_ast::FromRawAst;
@@ -19,7 +19,7 @@ impl Crate {
         &mut self,
         name_prefix: QualifiedName,
         file_idx: FileIndex,
-        file: rawast::File,
+        file: ast::File,
     ) {
         self.visit_namespace(file_idx, &name_prefix, file.ns);
     }
@@ -28,7 +28,7 @@ impl Crate {
         &mut self,
         file_idx: FileIndex,
         name_prefix: &QualifiedName,
-        ns: rawast::Namespace,
+        ns: ast::Namespace,
     ) {
         for decl in ns.decl {
             let ctx = Context {
@@ -36,12 +36,12 @@ impl Crate {
                 name_prefix: &name_prefix,
             };
             match decl {
-                rawast::Decl::SentenceDecl(sentence_decl) => self.sentences.push(Sentence {
+                ast::Decl::SentenceDecl(sentence_decl) => self.sentences.push(Sentence {
                     span: sentence_decl.span.with_ctx(ctx).into(),
                     name: name_prefix.append(Identifier::from_raw_ast(ctx, sentence_decl.name)),
                     words: FromRawAst::from_raw_ast(ctx, sentence_decl.sentence.words),
                 }),
-                rawast::Decl::Namespace(NamespaceDecl { name, ns }) => {
+                ast::Decl::Namespace(NamespaceDecl { name, ns }) => {
                     let name = FromRawAst::from_raw_ast(ctx, name);
                     let name_prefix = name_prefix.append(name);
                     self.visit_namespace(file_idx, &name_prefix, ns);
@@ -126,7 +126,7 @@ where
 }
 
 #[derive(Debug, Clone, Copy, FromRawAst)]
-#[from_raw_ast(raw=rawast::Identifier)]
+#[from_raw_ast(raw=ast::Identifier)]
 pub struct Identifier(pub Span);
 
 #[derive(Debug, Clone)]
@@ -161,7 +161,7 @@ pub struct Sentence {
 }
 
 #[derive(Debug, FromRawAst)]
-#[from_raw_ast(raw = rawast::Word)]
+#[from_raw_ast(raw = ast::Word)]
 pub enum Word {
     StackBindings(StackBindings),
     Builtin(Builtin),
@@ -174,8 +174,8 @@ pub struct Label {
     pub path: QualifiedName,
 }
 
-impl<'t> FromRawAst<'t, rawast::LabelCall<'t>> for Label {
-    fn from_raw_ast(ctx: Context<'t>, r: rawast::LabelCall<'t>) -> Self {
+impl<'t> FromRawAst<'t, ast::LabelCall<'t>> for Label {
+    fn from_raw_ast(ctx: Context<'t>, r: ast::LabelCall<'t>) -> Self {
         Self {
             span: r.span.with_ctx(ctx).into(),
             path: ctx
@@ -186,14 +186,14 @@ impl<'t> FromRawAst<'t, rawast::LabelCall<'t>> for Label {
 }
 
 #[derive(Debug, Clone, FromRawAst)]
-#[from_raw_ast(raw=rawast::StackBindings)]
+#[from_raw_ast(raw=ast::StackBindings)]
 pub struct StackBindings {
     pub span: Span,
     pub bindings: Vec<Binding>,
 }
 
 #[derive(Debug, Clone, FromRawAst)]
-#[from_raw_ast(raw = rawast::Binding)]
+#[from_raw_ast(raw = ast::Binding)]
 pub enum Binding {
     Drop(DropBinding),
     // Tuple(TupleBinding),
@@ -202,7 +202,7 @@ pub enum Binding {
 }
 
 #[derive(Debug, Clone, FromRawAst)]
-#[from_raw_ast(raw = rawast::DropBinding)]
+#[from_raw_ast(raw = ast::DropBinding)]
 pub struct DropBinding {
     pub span: Span,
 }
@@ -232,8 +232,8 @@ pub struct Int {
     pub value: usize,
 }
 
-impl<'t> From<WithContext<'t, rawast::Int<'t>>> for Int {
-    fn from(WithContext(a, c): WithContext<'t, rawast::Int<'t>>) -> Self {
+impl<'t> From<WithContext<'t, ast::Int<'t>>> for Int {
+    fn from(WithContext(a, c): WithContext<'t, ast::Int<'t>>) -> Self {
         Self {
             span: a.span.with_ctx(c).into(),
             value: a.value,
@@ -247,14 +247,14 @@ pub struct Symbol {
     pub value: String,
 }
 
-impl<'t> From<WithContext<'t, rawast::Symbol<'t>>> for Symbol {
-    fn from(WithContext(a, c): WithContext<'t, rawast::Symbol<'t>>) -> Self {
+impl<'t> From<WithContext<'t, ast::Symbol<'t>>> for Symbol {
+    fn from(WithContext(a, c): WithContext<'t, ast::Symbol<'t>>) -> Self {
         match a {
-            rawast::Symbol::Identifier(a) => Self {
+            ast::Symbol::Identifier(a) => Self {
                 span: a.0.with_ctx(c).into(),
                 value: a.0.as_str().to_owned(),
             },
-            rawast::Symbol::String(a) => Self {
+            ast::Symbol::String(a) => Self {
                 span: a.span.with_ctx(c).into(),
                 value: a.value,
             },
@@ -263,14 +263,14 @@ impl<'t> From<WithContext<'t, rawast::Symbol<'t>>> for Symbol {
 }
 
 #[derive(Debug, FromRawAst)]
-#[from_raw_ast(raw = rawast::BuiltinArg)]
+#[from_raw_ast(raw = ast::BuiltinArg)]
 pub enum BuiltinArg {
     Int(Int),
     Label(Label),
 }
 
 #[derive(Debug, FromRawAst)]
-#[from_raw_ast(raw = rawast::Builtin)]
+#[from_raw_ast(raw = ast::Builtin)]
 pub struct Builtin {
     pub span: Span,
     pub name: Identifier,
@@ -278,7 +278,7 @@ pub struct Builtin {
 }
 
 #[derive(Debug, Clone, FromRawAst)]
-#[from_raw_ast(raw = rawast::Literal)]
+#[from_raw_ast(raw = ast::Literal)]
 pub enum Literal {
     Int(Int),
     Symbol(Symbol),
@@ -294,14 +294,14 @@ impl Literal {
 }
 
 #[derive(Debug, Clone, FromRawAst)]
-#[from_raw_ast(raw = rawast::Tuple)]
+#[from_raw_ast(raw = ast::Tuple)]
 pub struct Tuple {
     pub span: Span,
     pub values: Vec<ValueExpression>,
 }
 
 #[derive(Debug, Clone, FromRawAst)]
-#[from_raw_ast(raw = rawast::ValueExpression)]
+#[from_raw_ast(raw = ast::ValueExpression)]
 pub enum ValueExpression {
     Literal(Literal),
     Copy(Identifier),
@@ -309,8 +309,8 @@ pub enum ValueExpression {
     Tuple(Tuple),
 }
 
-impl<'t> FromRawAst<'t, rawast::Copy<'t>> for Identifier {
-    fn from_raw_ast(ctx: Context<'t>, r: rawast::Copy<'t>) -> Self {
+impl<'t> FromRawAst<'t, ast::Copy<'t>> for Identifier {
+    fn from_raw_ast(ctx: Context<'t>, r: ast::Copy<'t>) -> Self {
         FromRawAst::from_raw_ast(ctx, r.0)
     }
 }

@@ -13,7 +13,7 @@ use typed_index_collections::TiVec;
 
 use crate::{
     ir::{self, QualifiedName},
-    rawast,
+    ast,
     source::{self, Span},
 };
 
@@ -78,7 +78,7 @@ pub enum LoadErrorInner {
     #[error("duplicate path")]
     DuplicatePath,
     #[error("error parsing file:\n{0}")]
-    Parse(#[from] pest::error::Error<rawast::Rule>),
+    Parse(#[from] pest::error::Error<ast::Rule>),
     #[error("error compiling file: {0}")]
     Compile(CompileError),
 }

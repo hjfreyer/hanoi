@@ -11,7 +11,6 @@ use ratatui::{
 };
 
 use crate::{
-    ast,
     flat::{Closure, Value, ValueView, Word},
     source::{self, Span},
     vm::{EvalError, StepResult, Vm, VmState},

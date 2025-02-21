@@ -11,7 +11,6 @@ use thiserror::Error;
 use typed_index_collections::TiSliceIndex;
 
 use crate::{
-    ast,
     flat::{
         Builtin, Closure, Entry, InnerWord, Library, LoadError, Namespace2, SentenceIndex, Value,
         Word,

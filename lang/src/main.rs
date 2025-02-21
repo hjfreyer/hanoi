@@ -1,11 +1,10 @@
 #![allow(unused)]
 
-mod ast;
 mod compiler;
 mod debugger;
 mod flat;
 mod ir;
-mod rawast;
+mod ast;
 mod source;
 mod vm;
 
@@ -55,8 +54,8 @@ fn compile_library(
     let file_idx = loader.load(format!("{}.han", module).parse().unwrap(), &mut sources)?;
 
     let mut parse_tree =
-        rawast::HanoiParser::parse(rawast::Rule::file, &sources.files[file_idx].source)?;
-    let file = rawast::File::from_pest(&mut parse_tree).expect("infallible");
+        ast::HanoiParser::parse(ast::Rule::file, &sources.files[file_idx].source)?;
+    let file = ast::File::from_pest(&mut parse_tree).expect("infallible");
 
     let mut ir = ir::Crate::default();
     ir.add_file(ir::QualifiedName(vec![]), file_idx, file);
