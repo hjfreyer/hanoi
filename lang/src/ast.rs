@@ -14,9 +14,9 @@ fn span_into_str(span: pest::Span) -> &str {
 #[pest_ast(rule(Rule::identifier))]
 pub struct Identifier<'t>(#[pest_ast(outer())] pub pest::Span<'t>);
 
-#[derive(Debug, FromPest)]
-#[pest_ast(rule(Rule::label))]
-pub struct Label<'t>(pub Identifier<'t>);
+// #[derive(Debug, FromPest)]
+// #[pest_ast(rule(Rule::label))]
+// pub struct Label<'t>(pub Identifier<'t>);
 
 #[derive(Debug, FromPest)]
 #[pest_ast(rule(Rule::int))]
@@ -105,7 +105,7 @@ pub struct StackBindings<'t> {
 #[pest_ast(rule(Rule::binding))]
 pub enum Binding<'t> {
     Drop(DropBinding<'t>),
-    // Tuple(TupleBinding<'t>),
+    Tuple(TupleBinding<'t>),
     Literal(Literal<'t>),
     Identifier(Identifier<'t>),
 }
@@ -117,13 +117,13 @@ pub struct DropBinding<'t> {
     pub span: pest::Span<'t>,
 }
 
-// #[derive(Debug, FromPest)]
-// #[pest_ast(rule(Rule::tuple_binding))]
-// pub struct TupleBinding<'t> {
-//     #[pest_ast(outer())]
-//     pub span: pest::Span<'t>,
-//     pub bindings: Vec<Binding<'t>>
-// }
+#[derive(Debug, FromPest)]
+#[pest_ast(rule(Rule::tuple_binding))]
+pub struct TupleBinding<'t> {
+    #[pest_ast(outer())]
+    pub span: pest::Span<'t>,
+    pub bindings: Vec<Binding<'t>>
+}
 
 #[derive(Debug, FromPest)]
 #[pest_ast(rule(Rule::value_expr))]
@@ -162,6 +162,7 @@ pub struct SentenceDecl<'t> {
 pub enum Decl<'t> {
     SentenceDecl(SentenceDecl<'t>),
     Namespace(NamespaceDecl<'t>),
+    Proc(ProcDecl<'t>),
 }
 
 #[derive(Debug, FromPest)]
@@ -182,6 +183,20 @@ pub struct NamespaceDecl<'t> {
 #[pest_ast(rule(Rule::namespace))]
 pub struct Namespace<'t> {
     pub decl: Vec<Decl<'t>>,
+}
+
+#[derive(Debug, FromPest)]
+#[pest_ast(rule(Rule::proc_decl))]
+pub struct ProcDecl<'t> {
+    pub binding: Binding<'t>,
+    pub name: Identifier<'t>,
+    pub expression: Expression<'t>,
+}
+
+#[derive(Debug, FromPest)]
+#[pest_ast(rule(Rule::expr))]
+pub enum Expression<'t> {
+    Raw(Sentence<'t>)
 }
 
 #[derive(Debug, FromPest)]

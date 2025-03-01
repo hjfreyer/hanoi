@@ -37,7 +37,7 @@ pub struct Library {
     pub namespaces: TiVec<NamespaceIndex, Namespace>,
     pub sentences: TiVec<SentenceIndex, Sentence>,
 
-    pub sentence_index: BTreeMap<Vec<String>, SentenceIndex>,
+    pub exports: BTreeMap<String, SentenceIndex>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -89,7 +89,7 @@ impl Library {
     // }
 
     pub fn main(&self) -> Option<SentenceIndex> {
-        self.sentence_index.get(&vec!["main".to_owned()]).cloned()
+        self.exports.get("main").cloned()
     }
 
     // pub fn load(loader: &'t mut ast::Loader, name: &'t str) -> Result<Self, LoadError> {
@@ -739,7 +739,7 @@ impl Library {
 
 #[derive(Debug, Clone)]
 pub struct Sentence {
-    // pub name: Option<String>,
+    pub name: QualifiedName,
     pub words: Vec<Word>,
 }
 

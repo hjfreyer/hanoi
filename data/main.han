@@ -272,6 +272,25 @@ mod map {
         *case @start #eq #branch('map_start, 'map2)
     }
 
+    sentence main {
+        [closure, args]
+        let (case, ()) = closure;
+        case match {
+            @start => {
+                let (@next) = args;
+                (@on_next, ()) (@iter, (@next))
+            }
+            @on_next => {
+                let (@some, val) = args;
+                (@on_apply, ()) (@fn, val)
+            }
+            @on_apply => {
+                let (mapped) = args;
+                (@start, ()) (@resp, (@some, mapped))
+            }
+        }
+    }
+
     sentence map2 {
         [args, case]
         *case @on_next #eq #branch('map_on_next, 'map3)

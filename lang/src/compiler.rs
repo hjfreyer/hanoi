@@ -4,7 +4,7 @@ use itertools::Itertools;
 
 use crate::{
     flat::{self, SentenceIndex},
-    ir::{self, Binding, QualifiedName, StackBindings},
+    ir::{self, Binding, NameRef, QualifiedName, QualifiedNameRef, StackBindings},
     source::{self, Span},
 };
 
@@ -13,12 +13,12 @@ pub enum Error {
     #[error("At {location}, {name:?} already defined")]
     AlreadyDefined {
         location: source::Location,
-        name: Vec<String>,
+        name: String,
     },
-    #[error("At {location}, {name:?} not found")]
+    #[error("At {location}, {name} not found")]
     LabelNotFound {
         location: source::Location,
-        name: Vec<String>,
+        name: String,
     },
     #[error("At {location}, unknown builtin: {name}")]
     UnknownBuiltin {
@@ -41,22 +41,20 @@ pub enum Error {
 pub fn compile(sources: &source::Sources, ir: ir::Crate) -> Result<flat::Library, Error> {
     let mut res = flat::Library::default();
 
+    let mut index = BTreeMap::new();
+
+
     // Build index of sentence names.
     for (sentence_idx, sentence) in ir.sentences.iter_enumerated() {
         let name = sentence
-            .name
-            .0
-            .iter()
-            .map(|i| i.0.as_str(sources).to_owned())
-            .collect_vec();
-        if res
-            .sentence_index
+            .name.as_ref(sources);
+        if index
             .insert(name.clone(), sentence_idx)
             .is_some()
         {
             return Err(Error::AlreadyDefined {
                 location: sentence.span.location(sources).unwrap(),
-                name,
+                name:name.to_string(),
             });
         }
     }
@@ -64,20 +62,27 @@ pub fn compile(sources: &source::Sources, ir: ir::Crate) -> Result<flat::Library
     let sentences: Result<Vec<flat::Sentence>, Error> = ir
         .sentences
         .into_iter()
-        .map(|s| convert_sentence(sources, &res.sentence_index, s))
+        .map(|s| convert_sentence(sources, &index, s))
         .collect();
 
     res.sentences = sentences?.into_iter().collect();
+
+    for (sidx, s) in res.sentences.iter_enumerated() {
+        if let Ok(n) = s.name.0.iter().exactly_one() {
+            if let Some(str) = n.as_str(sources) {
+            res.exports.insert(str.to_owned(), sidx);
+                    }        }
+    }
 
     Ok(res)
 }
 
 fn convert_sentence(
     sources: &source::Sources,
-    sentence_index: &BTreeMap<Vec<String>, SentenceIndex>,
+    sentence_index: &BTreeMap<QualifiedNameRef<'_>,  SentenceIndex>,
     sentence: ir::Sentence,
 ) -> Result<flat::Sentence, Error> {
-    let mut b = SentenceBuilder::new(sources, sentence_index);
+    let mut b = SentenceBuilder::new(sources, sentence_index, sentence.name);
 
     for word in sentence.words {
         match word {
@@ -95,8 +100,9 @@ fn convert_sentence(
 }
 
 pub struct SentenceBuilder<'a> {
+    pub name: QualifiedName,
     pub sources: &'a source::Sources,
-    pub sentence_index: &'a BTreeMap<Vec<String>, SentenceIndex>,
+    pub sentence_index: &'a BTreeMap<QualifiedNameRef<'a>, SentenceIndex>,
     pub names: VecDeque<Option<String>>,
     pub words: Vec<flat::Word>,
 }
@@ -104,9 +110,11 @@ pub struct SentenceBuilder<'a> {
 impl<'a> SentenceBuilder<'a> {
     pub fn new(
         sources: &'a source::Sources,
-        sentence_index: &'a BTreeMap<Vec<String>, SentenceIndex>,
+        sentence_index: &'a BTreeMap<QualifiedNameRef<'a>, SentenceIndex>,
+        name: QualifiedName,
     ) -> Self {
         Self {
+            name, 
             sources,
             sentence_index,
             names: VecDeque::new(),
@@ -116,7 +124,7 @@ impl<'a> SentenceBuilder<'a> {
 
     pub fn build(self) -> flat::Sentence {
         flat::Sentence {
-            // name: self.name,
+            name: self.name,
             words: self.words,
         }
     }
@@ -390,10 +398,10 @@ impl<'a> SentenceBuilder<'a> {
         Ok(())
     }
 
-    fn normalize_path(&self, mut path: QualifiedName)-> Vec<String> {
+    fn normalize_path(&self, mut path: QualifiedName)-> QualifiedNameRef<'a> {
         loop {
-            let Some(super_idx) = path.0.iter().position(|n| n.0.as_str(&self.sources) == "super") else {
-                return path.to_strings(self.sources);
+            let Some(super_idx) = path.0.iter().position(|n| n.as_ref(&self.sources) == NameRef::User("super")) else {
+                return path.as_ref(self.sources);
             };
             path.0.remove(super_idx -1);
             path.0.remove(super_idx -1);
@@ -406,7 +414,7 @@ impl<'a> SentenceBuilder<'a> {
             .get(&sentence_key)
             .ok_or_else(|| Error::LabelNotFound {
                 location: l.span.location(self.sources).unwrap(),
-                name: sentence_key,
+                name: sentence_key.to_string(),
             })
             .copied()
     }
@@ -487,7 +495,8 @@ impl<'a> SentenceBuilder<'a> {
             .map(|b| match b {
                 Binding::Literal(_) | &Binding::Drop(_) => None,
                 Binding::Identifier(span) => Some(span.0.as_str(self.sources).to_owned()),
-            })
+                Binding::Tuple(tuple_binding) => todo!(),
+                            })
             .collect();
         let mut dropped = 0;
         for (idx, binding) in b.bindings.into_iter().rev().enumerate() {
@@ -503,8 +512,9 @@ impl<'a> SentenceBuilder<'a> {
                     self.drop_idx(drop.span, idx - dropped);
                     dropped += 1;
                 }
-                _ => (),
-            }
+Binding::Identifier(_)=> todo!(),
+Binding::Tuple(_) => todo!(),
+}
         }
     }
 }
