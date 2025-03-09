@@ -15,12 +15,12 @@ use crate::{
         Builtin, Closure, Entry, InnerWord, Library, LoadError, Namespace2, SentenceIndex, Value,
         Word,
     },
-    source::{self, Span},
+    source::{self, FileSpan, Span},
 };
 
 #[derive(Debug)]
 pub struct EvalError {
-    pub location: Option<Span>,
+    pub location: Option<FileSpan>,
     pub inner: InnerEvalError,
 }
 

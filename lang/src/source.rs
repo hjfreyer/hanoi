@@ -100,6 +100,10 @@ pub struct FileSpan {
 }
 
 impl FileSpan {
+    pub fn as_str(self, sources: &Sources) -> &str {
+        self.as_pest(sources).as_str()
+    }
+
     pub fn from_ast(file_idx: FileIndex, span: pest::Span) -> Self {
         Self {
             file_idx,

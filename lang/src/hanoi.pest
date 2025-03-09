@@ -10,7 +10,11 @@ header = _{ ns_import* }
 
 ns_import = _{ "mod" ~ identifier ~ ";" }
 
-decl = { sentence_decl | ns_decl | proc_decl }
+decl = {
+    sentence_decl
+  | ns_decl
+  | proc_decl
+}
 
 // NAMESPACES
 
@@ -50,13 +54,12 @@ literal = { bool | int | char_lit | symbol | nil }
 // VALUES
 
 value_expr = {
-  //   closure
-  // | 
-  literal
-  | tuple_expr
-  // | match_expr
+    // closure
+    // |
+    literal
+  | tuple_expr // | match_expr
+
   | copy
-  | path
   | identifier
 }
 
@@ -86,8 +89,7 @@ sentence_decl = {
 sentence = { raw_word* }
 
 raw_word = {
-    stack_bindings
-  | value_expr
+    literal
   | builtin
 }
 
@@ -110,19 +112,18 @@ tuple_binding = {
 
 // PROC
 
-proc_decl          = { "proc" ~ binding ~ identifier ~ "=>" ~ expr }
-expr = {
-  "R{" ~ sentence ~ "}"
+proc_decl = { "proc" ~ binding ~ identifier ~ "=>" ~ expr }
+expr      = {
+    literal
 }
 
 // OTHER
-
 
 // delete = { "^" ~ identifier }
 
 // expr = { path | literal | func_call | identifier | builtin | delete | copy }
 
-path = { "this" ~ ("." ~ identifier)* }
+// path = { "this" ~ ("." ~ identifier)* }
 
 // sentence      = { sentence_body }
 // sentence_body = { expr* }
@@ -144,7 +145,6 @@ path = { "this" ~ ("." ~ identifier)* }
 
 // Proc syntax
 
-
 // match_decl = { "match_proc" ~ identifier ~ "{" ~ match_cases ~ "}" }
 
 // block      = { statements ~ endpoint }
@@ -159,7 +159,7 @@ path = { "this" ~ ("." ~ identifier)* }
 // unreachable =  { "" }
 
 // if_endpoint = {
-//     "if" ~ value_expr ~ "{" ~ block ~ "}" ~ "else" ~ "{" ~ block ~ "}"
+// "if" ~ value_expr ~ "{" ~ block ~ "}" ~ "else" ~ "{" ~ block ~ "}"
 // }
 
 // expr = _{ request_call | response_call | func_call | value_expr }
@@ -173,12 +173,12 @@ path = { "this" ~ ("." ~ identifier)* }
 // func_name_copied =  { "(" ~ "*" ~ identifier ~ ")" }
 
 // func_call_args = {
-//     "(" ~ ")"
-//   | "(" ~ value_expr ~ ("," ~ value_expr)* ~ ")"
+// "(" ~ ")"
+// | "(" ~ value_expr ~ ("," ~ value_expr)* ~ ")"
 // }
 
 // closure = {
-//     func_name ~ "&" ~ func_call_args
+// func_name ~ "&" ~ func_call_args
 // }
 
 // match_block = { "match" ~ "{" ~ match_cases ~ "}" }

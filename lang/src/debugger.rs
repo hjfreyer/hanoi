@@ -51,16 +51,9 @@ impl Debugger {
 
     fn update_code(&mut self) {
         if let Some(word) = self.vm.current_word() {
-            match word.span {
-                Span::Generated(_) => {
-                    self.highlight_span = None;
-                }
-                Span::File(file_span) => {
-                    self.highlight_span = Some(file_span);
-                    let (line, _) = file_span.as_pest(&self.sources).start_pos().line_col();
-                    self.code_scroll = (line as u16).saturating_sub(10);
-                }
-            }
+            self.highlight_span = Some(word.span);
+            let (line, _) = word.span.as_pest(&self.sources).start_pos().line_col();
+            self.code_scroll = (line as u16).saturating_sub(10);
         }
     }
 

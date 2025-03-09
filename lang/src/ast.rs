@@ -66,14 +66,14 @@ pub struct Copy<'t>(pub Identifier<'t>);
 pub struct Tuple<'t> {
     #[pest_ast(outer())]
     pub span: pest::Span<'t>,
-    pub values: Vec<ValueExpression<'t>>,
+    pub values: Vec<Sentence<'t>>,
 }
 
 #[derive(Debug, FromPest)]
 #[pest_ast(rule(Rule::builtin_arg))]
 pub enum BuiltinArg<'t> {
     Int(Int<'t>),
-    Label(LabelCall<'t>),
+    Label(QualifiedLabel<'t>),
 }
 
 #[derive(Debug, FromPest)]
@@ -87,7 +87,7 @@ pub struct Builtin<'t> {
 
 #[derive(Debug, FromPest)]
 #[pest_ast(rule(Rule::qualified_label))]
-pub struct LabelCall<'t> {
+pub struct QualifiedLabel<'t> {
     #[pest_ast(outer())]
     pub span: pest::Span<'t>,
     pub path: Vec<Identifier<'t>>,
@@ -122,29 +122,30 @@ pub struct DropBinding<'t> {
 pub struct TupleBinding<'t> {
     #[pest_ast(outer())]
     pub span: pest::Span<'t>,
-    pub bindings: Vec<Binding<'t>>
+    pub bindings: Vec<Binding<'t>>,
 }
 
-#[derive(Debug, FromPest)]
-#[pest_ast(rule(Rule::value_expr))]
-pub enum ValueExpression<'t> {
-    Literal(Literal<'t>),
-    Move(Identifier<'t>),
-    Copy(Copy<'t>),
-    Tuple(Tuple<'t>),
-}
+// #[derive(Debug, FromPest)]
+// #[pest_ast(rule(Rule::expr))]
+// pub enum ValueExpression<'t> {
+//     Literal(Literal<'t>),
+//     Move(Identifier<'t>),
+//     Copy(Copy<'t>),
+//     Tuple(Tuple<'t>),
+// }
 
 #[derive(Debug, FromPest)]
 #[pest_ast(rule(Rule::raw_word))]
 pub enum Word<'t> {
-    StackBindings(StackBindings<'t>),
     Builtin(Builtin<'t>),
-    ValueExpression(ValueExpression<'t>),
+    Literal(Literal<'t>),
 }
 
 #[derive(Debug, FromPest)]
 #[pest_ast(rule(Rule::sentence))]
 pub struct Sentence<'t> {
+    #[pest_ast(outer())]
+    pub span: pest::Span<'t>,
     pub words: Vec<Word<'t>>,
 }
 
@@ -188,6 +189,8 @@ pub struct Namespace<'t> {
 #[derive(Debug, FromPest)]
 #[pest_ast(rule(Rule::proc_decl))]
 pub struct ProcDecl<'t> {
+    #[pest_ast(outer())]
+    pub span: pest::Span<'t>,
     pub binding: Binding<'t>,
     pub name: Identifier<'t>,
     pub expression: Expression<'t>,
@@ -196,7 +199,7 @@ pub struct ProcDecl<'t> {
 #[derive(Debug, FromPest)]
 #[pest_ast(rule(Rule::expr))]
 pub enum Expression<'t> {
-    Raw(Sentence<'t>)
+    Literal(Literal<'t>),
 }
 
 #[derive(Debug, FromPest)]

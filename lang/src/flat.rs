@@ -12,9 +12,9 @@ use thiserror::Error;
 use typed_index_collections::TiVec;
 
 use crate::{
-    ir::{self, QualifiedName},
     ast,
-    source::{self, Span},
+    compiler::{self, QualifiedName},
+    source::{self, FileSpan, Span},
 };
 
 // use crate::ast::{
@@ -739,7 +739,7 @@ impl Library {
 
 #[derive(Debug, Clone)]
 pub struct Sentence {
-    pub name: QualifiedName,
+    // pub name: QualifiedName,
     pub words: Vec<Word>,
 }
 
@@ -753,7 +753,7 @@ macro_rules! builtins {
         }
 
         impl Builtin {
-            pub const ALL: &[Builtin] = &[
+            pub const ALL: &'static [Builtin] = &[
                 $(Builtin::$ident,)*
             ];
 
@@ -777,7 +777,7 @@ pub enum CompileError {
 
 #[derive(Debug)]
 pub enum BuilderError {
-    UnknownReference(ir::Identifier),
+    UnknownReference(compiler::Identifier),
 }
 
 builtins! {
@@ -815,7 +815,7 @@ builtins! {
 pub struct Word {
     pub inner: InnerWord,
     // pub modname: PathBuf,
-    pub span: Span,
+    pub span: FileSpan,
     pub names: Option<VecDeque<Option<String>>>,
 }
 
