@@ -4,7 +4,7 @@ use itertools::Itertools;
 use typed_index_collections::TiVec;
 
 use crate::{
-    compiler::{self, NameRef, QualifiedName, QualifiedNameRef},
+    compiler::{self, Name, NameRef, QualifiedName, QualifiedNameRef},
     flat::{self, SentenceIndex},
     source::{self, FileSpan, Span},
 };
@@ -151,7 +151,10 @@ impl<'t> Compiler<'t> {
             names: Some(
                 word.names
                     .into_iter()
-                    .map(|s: Option<FileSpan>| s.map(|x| x.as_str(self.sources).to_owned()))
+                    .map(|s: Name| match s {
+                        Name::User(file_span) => Some(file_span.as_str(self.sources).to_owned()),
+                        Name::Generated(_) => None,
+                    })
                     .collect(),
             ),
         })

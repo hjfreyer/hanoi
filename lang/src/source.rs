@@ -100,7 +100,6 @@ pub struct FileSpan {
 }
 
 impl FileSpan {
-
     pub fn as_str(self, sources: &Sources) -> &str {
         self.as_pest(sources).as_str()
     }

@@ -102,7 +102,7 @@ impl<'t> Compiler<'t> {
             base: name,
             count: 0,
         };
-        let mut locals = VecDeque::new();
+        let mut locals = Locals::default();
         self.visit_expr(file_idx, name_prefix, &mut names, &mut locals, expression)?;
         Ok(())
     }
@@ -112,7 +112,7 @@ impl<'t> Compiler<'t> {
         file_idx: FileIndex,
         name_prefix: &QualifiedName,
         name_sequence: &mut NameSequence,
-        locals: &mut VecDeque<Option<FileSpan>>,
+        locals: &mut Locals,
         expression: ast::Expression,
     ) -> Result<QualifiedName, linker::Error> {
         match expression {
@@ -180,7 +180,7 @@ impl<'t> Compiler<'t> {
                 Ok(Word {
                     span: builtin.span.into_ir(self.sources, file_idx),
                     inner: self.convert_builtin(file_idx, builtin)?,
-                    names: VecDeque::new(),
+                    names: vec![],
                 })
                 // Word::Builtin(FromRawAst::from_raw_ast(ctx, builtin))},
             }
@@ -281,11 +281,32 @@ impl<'t> Compiler<'t> {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct Locals {
+    num_generated: usize,
+    stack: Vec<Name>,
+}
+
+impl Locals {
+    fn pop(&mut self) {
+        self.stack.pop().unwrap();
+    }
+
+    fn names(&self) -> Vec<Name> {
+        self.stack.clone()
+    }
+
+    fn push_unnamed(&mut self) {
+        self.stack.push(Name::Generated(self.num_generated));
+        self.num_generated += 1
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Word {
     pub span: FileSpan,
     pub inner: InnerWord,
-    pub names: VecDeque<Option<FileSpan>>,
+    pub names: Vec<Name>,
 }
 
 impl Word {}
@@ -700,7 +721,7 @@ pub struct SentenceBuilder<'a> {
     pub span: FileSpan,
     pub name: QualifiedName,
     pub sources: &'a source::Sources,
-    pub names: VecDeque<Option<FileSpan>>,
+    pub names: Locals,
     pub words: Vec<Word>,
 }
 
@@ -709,7 +730,7 @@ impl<'a> SentenceBuilder<'a> {
         span: FileSpan,
         sources: &'a source::Sources,
         name: QualifiedName,
-        names: VecDeque<Option<FileSpan>>,
+        names: Locals,
     ) -> Self {
         Self {
             span,
@@ -753,9 +774,9 @@ impl<'a> SentenceBuilder<'a> {
         self.words.push(Word {
             span,
             inner: InnerWord::Push(value),
-            names: self.names.clone(),
+            names: self.names.names(),
         });
-        self.names.push_front(None);
+        self.names.push_unnamed();
     }
 
     // pub fn mv(&mut self, ident: ir::Identifier) -> Result<(), Error> {
@@ -773,7 +794,7 @@ impl<'a> SentenceBuilder<'a> {
     // }
 
     // pub fn mv_idx(&mut self, span: FileSpan, idx: usize) {
-    //     let names = self.names.clone();
+    //     let names = self.names.names();
     //     let declared = self.names.remove(idx).unwrap();
     //     self.names.push_front(declared);
 
@@ -799,8 +820,8 @@ impl<'a> SentenceBuilder<'a> {
     // }
 
     // pub fn cp_idx(&mut self, span: FileSpan, idx: usize) {
-    //     let names = self.names.clone();
-    //     self.names.push_front(None);
+    //     let names = self.names.names();
+    //     self.names.push_unnamed();
 
     //     self.words.push(flat::Word {
     //         inner: flat::InnerWord::Copy(idx),
@@ -810,9 +831,9 @@ impl<'a> SentenceBuilder<'a> {
     // }
 
     // // pub fn sd_idx(&mut self, span: FileSpan<'t>, idx: usize) {
-    // //     let names = self.names.clone();
+    // //     let names = self.names.names();
 
-    // //     let declared = self.names.pop_front().unwrap();
+    // //     let declared = self.names.pop();
     // //     self.names.insert(idx, declared);
 
     // //     self.words.push(Word {
@@ -827,7 +848,7 @@ impl<'a> SentenceBuilder<'a> {
     // // }
 
     // pub fn drop_idx(&mut self, span: FileSpan, idx: usize) {
-    //     let names = self.names.clone();
+    //     let names = self.names.names();
     //     let declared = self.names.remove(idx).unwrap();
 
     //     self.words.push(flat::Word {
@@ -887,8 +908,8 @@ impl<'a> SentenceBuilder<'a> {
     //                 let true_case = self.lookup_label(&true_case)?;
     //                 let false_case = self.lookup_label(&false_case)?;
 
-    //                 let names = self.names.clone();
-    //                 self.names.pop_front();
+    //                 let names = self.names.names();
+    //                 self.names.pop();
     //                 self.words.push(flat::Word {
     //                     inner: flat::InnerWord::Branch(true_case, false_case),
     //                     span: builtin.span,
@@ -920,7 +941,7 @@ impl<'a> SentenceBuilder<'a> {
     //     self.words.push(flat::Word {
     //         span,
     //         inner: flat::InnerWord::Builtin(builtin),
-    //         names: Some(self.names.clone()),
+    //         names: Some(self.names.names()),
     //     });
     //     match builtin {
     //         flat::Builtin::Add
@@ -934,46 +955,46 @@ impl<'a> SentenceBuilder<'a> {
     //         | flat::Builtin::Get
     //         | flat::Builtin::SymbolCharAt
     //         | flat::Builtin::Cons => {
-    //             self.names.pop_front();
-    //             self.names.pop_front();
-    //             self.names.push_front(None);
+    //             self.names.pop();
+    //             self.names.pop();
+    //             self.names.push_unnamed();
     //         }
     //         flat::Builtin::NsEmpty => {
-    //             self.names.push_front(None);
+    //             self.names.push_unnamed();
     //         }
     //         flat::Builtin::NsGet => {
-    //             let ns = self.names.pop_front().unwrap();
-    //             self.names.pop_front();
+    //             let ns = self.names.pop();
+    //             self.names.pop();
     //             self.names.push_front(ns);
-    //             self.names.push_front(None);
+    //             self.names.push_unnamed();
     //         }
     //         flat::Builtin::NsInsert | flat::Builtin::If => {
-    //             self.names.pop_front();
-    //             self.names.pop_front();
-    //             self.names.pop_front();
-    //             self.names.push_front(None);
+    //             self.names.pop();
+    //             self.names.pop();
+    //             self.names.pop();
+    //             self.names.push_unnamed();
     //         }
     //         flat::Builtin::NsRemove => {
-    //             let ns = self.names.pop_front().unwrap();
-    //             self.names.pop_front();
+    //             let ns = self.names.pop();
+    //             self.names.pop();
     //             self.names.push_front(ns);
-    //             self.names.push_front(None);
+    //             self.names.push_unnamed();
     //         }
     //         flat::Builtin::Not
     //         | flat::Builtin::SymbolLen
     //         | flat::Builtin::Deref
     //         | flat::Builtin::Ord => {
-    //             self.names.pop_front();
-    //             self.names.push_front(None);
+    //             self.names.pop();
+    //             self.names.push_unnamed();
     //         }
     //         flat::Builtin::AssertEq => {
-    //             self.names.pop_front();
-    //             self.names.pop_front();
+    //             self.names.pop();
+    //             self.names.pop();
     //         }
     //         flat::Builtin::Snoc => {
-    //             self.names.pop_front();
-    //             self.names.push_front(None);
-    //             self.names.push_front(None);
+    //             self.names.pop();
+    //             self.names.push_unnamed();
+    //             self.names.push_unnamed();
     //         }
     //     }
     // }
@@ -982,7 +1003,7 @@ impl<'a> SentenceBuilder<'a> {
         self.words.push(Word {
             span,
             inner: InnerWord::Call(name),
-            names: self.names.clone(),
+            names: self.names.names(),
         });
         Ok(())
     }
@@ -1016,23 +1037,23 @@ impl<'a> SentenceBuilder<'a> {
         self.words.push(Word {
             inner: InnerWord::Tuple(size),
             span: span,
-            names: self.names.clone(),
+            names: self.names.names(),
         });
         for _ in 0..size {
-            self.names.pop_front().unwrap();
+            self.names.pop();
         }
-        self.names.push_front(None);
+        self.names.push_unnamed();
     }
 
     // pub fn untuple(&mut self, span: FileSpan, size: usize) {
     //     self.words.push(flat::Word {
     //         inner: flat::InnerWord::Untuple(size),
     //         span: span,
-    //         names: Some(self.names.clone()),
+    //         names: Some(self.names.names()),
     //     });
-    //     self.names.pop_front();
+    //     self.names.pop();
     //     for _ in 0..size {
-    //         self.names.push_front(None);
+    //         self.names.push_unnamed();
     //     }
     // }
 
