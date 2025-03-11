@@ -4,8 +4,8 @@ use itertools::Itertools;
 use typed_index_collections::TiVec;
 
 use crate::{
-    flat::{self, SentenceIndex},
     compiler::{self, NameRef, QualifiedName, QualifiedNameRef},
+    flat::{self, SentenceIndex},
     source::{self, FileSpan, Span},
 };
 
@@ -63,7 +63,6 @@ impl<'t> Compiler<'t> {
 
         // Build index of sentence names.
         for (sentence_idx, sentence) in ir.sentences.iter_enumerated() {
-            dbg!(&sentence.name);
             let name = sentence.name.as_ref(self.sources);
             if self.index.insert(name.clone(), sentence_idx).is_some() {
                 // return Err(Error::AlreadyDefined {
@@ -72,7 +71,7 @@ impl<'t> Compiler<'t> {
                 // });
                 panic!()
             }
-            if let Ok(n) = name.0.iter().exactly_one() {
+            if let Some((n, compiler::NameRef::Generated(0))) = name.0.iter().collect_tuple() {
                 if let Some(str) = n.as_str() {
                     res.exports.insert(str.to_owned(), sentence_idx);
                 }

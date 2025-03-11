@@ -8,8 +8,8 @@ use typed_index_collections::TiVec;
 
 use crate::{
     ast::{self, NamespaceDecl},
-    linker::{self, Error},
     flat::{self, SentenceIndex},
+    linker::{self, Error},
     source::{self, FileIndex, FileSpan, Sources},
 };
 use from_raw_ast::FromRawAst;
@@ -98,39 +98,56 @@ impl<'t> Compiler<'t> {
         name: QualifiedName,
         expression: ast::Expression,
     ) -> Result<(), linker::Error> {
-        let mut next_name = 1;
-        match expression {
-            ast::Expression::Literal(literal) => {
-                let expr_name = self.visit_literal(file_idx, &name, &mut next_name, literal);
-
-                self.res.sentences.push(Sentence {
-                    name,
-                    words: vec![Word {
-                        span,
-                        inner: InnerWord::Call(expr_name),
-                        names: VecDeque::new(),
-                    }],
-                });
-            } // ast::Expression::Raw(sentence) => {
-              //     // self.visit_sentence(file_idx, sentence)?;
-              // }
-        }
+        let mut names = NameSequence {
+            base: name,
+            count: 0,
+        };
+        let mut locals = VecDeque::new();
+        self.visit_expr(file_idx, name_prefix, &mut names, &mut locals, expression)?;
         Ok(())
     }
 
-    fn visit_literal(
+    fn visit_expr(
         &mut self,
         file_idx: FileIndex,
         name_prefix: &QualifiedName,
-        next_name: &mut usize,
-        literal: ast::Literal,
-    ) -> QualifiedName {
-        let name = name_prefix.append(Name::Generated(*next_name));
-        *next_name += 1;
-        let mut b = SentenceBuilder::new(self.sources, file_idx, name.clone(), VecDeque::new());
-        b.literal(literal);
-        self.res.sentences.push(b.build());
-        name
+        name_sequence: &mut NameSequence,
+        locals: &mut VecDeque<Option<FileSpan>>,
+        expression: ast::Expression,
+    ) -> Result<QualifiedName, linker::Error> {
+        match expression {
+            ast::Expression::Literal(literal) => {
+                let name = name_sequence.next();
+                let mut b = SentenceBuilder::new(
+                    literal.span(file_idx),
+                    self.sources,
+                    name.clone(),
+                    locals.clone(),
+                );
+                b.literal(literal);
+                *locals = b.names.clone();
+                self.res.sentences.push(b.build());
+                Ok(name)
+            }
+            ast::Expression::Tuple(t) => {
+                let span = t.span(file_idx);
+                let name = name_sequence.next();
+
+                let mut b = SentenceBuilder::new(span, self.sources, name.clone(), locals.clone());
+                let size = t.values.len();
+                for v in t.values {
+                    let span = v.span(file_idx);
+                    let tc = self.visit_expr(file_idx, name_prefix, name_sequence, locals, v)?;
+                    b.fully_qualified_call(span, tc)?;
+                    b.names = locals.clone();
+                }
+                b.tuple(span, size);
+                *locals = b.names.clone();
+                self.res.sentences.push(b.build());
+
+                Ok(name)
+            }
+        }
     }
 
     fn visit_sentence(
@@ -500,6 +517,19 @@ pub struct Sentence {
     pub words: Vec<Word>,
 }
 
+struct NameSequence {
+    base: QualifiedName,
+    count: usize,
+}
+
+impl NameSequence {
+    fn next(&mut self) -> QualifiedName {
+        let res = self.base.append(Name::Generated(self.count));
+        self.count += 1;
+        res
+    }
+}
+
 // #[derive(Debug, Clone)]
 // pub struct Label {
 //     pub span: FileSpan,
@@ -667,8 +697,7 @@ pub struct Symbol {
 // }
 
 pub struct SentenceBuilder<'a> {
-    // pub span: FileSpan,
-    pub file_idx: FileIndex,
+    pub span: FileSpan,
     pub name: QualifiedName,
     pub sources: &'a source::Sources,
     pub names: VecDeque<Option<FileSpan>>,
@@ -677,15 +706,13 @@ pub struct SentenceBuilder<'a> {
 
 impl<'a> SentenceBuilder<'a> {
     pub fn new(
-        // span: FileSpan,
+        span: FileSpan,
         sources: &'a source::Sources,
-        file_idx: FileIndex,
         name: QualifiedName,
         names: VecDeque<Option<FileSpan>>,
     ) -> Self {
         Self {
-            file_idx,
-            // span,
+            span,
             name,
             sources,
             names,
@@ -706,20 +733,18 @@ impl<'a> SentenceBuilder<'a> {
     // }
 
     pub fn literal(&mut self, value: ast::Literal) {
+        let span = value.span(self.span.file_idx);
         match value {
-            ast::Literal::Int(ast::Int { span, value }) => self.push_value(
-                span.into_ir(self.sources, self.file_idx),
-                flat::Value::Usize(value),
-            ),
+            ast::Literal::Int(ast::Int { span: _, value }) => {
+                self.push_value(span, flat::Value::Usize(value))
+            }
             ast::Literal::Symbol(sym) => match sym {
-                ast::Symbol::Identifier(identifier) => self.push_value(
-                    identifier.0.into_ir(self.sources, self.file_idx),
-                    flat::Value::Symbol(identifier.0.as_str().to_owned()),
-                ),
-                ast::Symbol::String(string_literal) => self.push_value(
-                    string_literal.span.into_ir(self.sources, self.file_idx),
-                    flat::Value::Symbol(string_literal.value),
-                ),
+                ast::Symbol::Identifier(identifier) => {
+                    self.push_value(span, flat::Value::Symbol(identifier.0.as_str().to_owned()))
+                }
+                ast::Symbol::String(string_literal) => {
+                    self.push_value(span, flat::Value::Symbol(string_literal.value))
+                }
             },
         }
     }
@@ -953,15 +978,14 @@ impl<'a> SentenceBuilder<'a> {
     //     }
     // }
 
-    // fn label_call(&mut self, l: ir::Label) -> Result<(), Error> {
-    //     let sentence_idx = self.lookup_label(&l)?;
-    //     self.words.push(flat::Word {
-    //         span: l.span,
-    //         inner: flat::InnerWord::Call(sentence_idx),
-    //         names: Some(self.names.clone()),
-    //     });
-    //     Ok(())
-    // }
+    fn fully_qualified_call(&mut self, span: FileSpan, name: QualifiedName) -> Result<(), Error> {
+        self.words.push(Word {
+            span,
+            inner: InnerWord::Call(name),
+            names: self.names.clone(),
+        });
+        Ok(())
+    }
 
     // fn normalize_path(&self, mut path: QualifiedName) -> QualifiedNameRef<'a> {
     //     loop {
@@ -988,18 +1012,17 @@ impl<'a> SentenceBuilder<'a> {
     //         .copied()
     // }
 
-    // pub fn tuple(&mut self, span: FileSpan, size: usize) {
-    //     self.words.push(flat::Word {
-    //         inner: flat::InnerWord::Tuple(size),
-    //         span: span,
-    //         names: Some(self.names.clone()),
-    //     });
-    //     dbg!(span.location(&self.sources));
-    //     for _ in 0..size {
-    //         self.names.pop_front().unwrap();
-    //     }
-    //     self.names.push_front(None);
-    // }
+    pub fn tuple(&mut self, span: FileSpan, size: usize) {
+        self.words.push(Word {
+            inner: InnerWord::Tuple(size),
+            span: span,
+            names: self.names.clone(),
+        });
+        for _ in 0..size {
+            self.names.pop_front().unwrap();
+        }
+        self.names.push_front(None);
+    }
 
     // pub fn untuple(&mut self, span: FileSpan, size: usize) {
     //     self.words.push(flat::Word {

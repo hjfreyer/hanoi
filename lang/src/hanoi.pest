@@ -67,7 +67,7 @@ copy = { "*" ~ identifier }
 
 tuple_expr = {
     "(" ~ ")"
-  | "(" ~ value_expr ~ ("," ~ value_expr)* ~ ")"
+  | "(" ~ expr ~ ("," ~ expr)* ~ ")"
 }
 
 builtin = { "#" ~ identifier ~ builtin_args? }
@@ -115,6 +115,9 @@ tuple_binding = {
 proc_decl = { "proc" ~ binding ~ identifier ~ "=>" ~ expr }
 expr      = {
     literal
+    | tuple_expr 
+    // | copy
+    // | identifier
 }
 
 // OTHER

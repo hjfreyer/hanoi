@@ -1,10 +1,10 @@
 #![allow(unused)]
 
 mod ast;
-mod linker;
+mod compiler;
 mod debugger;
 mod flat;
-mod compiler;
+mod linker;
 mod source;
 mod vm;
 

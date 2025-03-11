@@ -2,6 +2,8 @@ use from_pest::FromPest;
 use pest_ast::FromPest;
 use pest_derive::Parser;
 
+use crate::source::{self, FileIndex, FileSpan};
+
 #[derive(Parser)]
 #[grammar = "hanoi.pest"]
 pub struct HanoiParser;
@@ -13,6 +15,11 @@ fn span_into_str(span: pest::Span) -> &str {
 #[derive(Debug, FromPest)]
 #[pest_ast(rule(Rule::identifier))]
 pub struct Identifier<'t>(#[pest_ast(outer())] pub pest::Span<'t>);
+impl<'t> Identifier<'t> {
+    pub fn span(&self, file_idx: FileIndex) -> FileSpan {
+        FileSpan::from_ast(file_idx, self.0)
+    }
+}
 
 // #[derive(Debug, FromPest)]
 // #[pest_ast(rule(Rule::label))]
@@ -26,6 +33,12 @@ pub struct Int<'t> {
 
     #[pest_ast(outer(with(span_into_str), with(str::parse), with(Result::unwrap)))]
     pub value: usize,
+}
+
+impl<'t> Int<'t> {
+    pub fn span(&self, file_idx: FileIndex) -> FileSpan {
+        FileSpan::from_ast(file_idx, self.span)
+    }
 }
 
 fn span_into_string_literal(span: pest::Span) -> String {
@@ -43,11 +56,25 @@ pub struct StringLiteral<'t> {
     pub value: String,
 }
 
+impl<'t> StringLiteral<'t> {
+    pub fn span(&self, file_idx: FileIndex) -> FileSpan {
+        FileSpan::from_ast(file_idx, self.span)
+    }
+}
+
 #[derive(Debug, FromPest)]
 #[pest_ast(rule(Rule::symbol))]
 pub enum Symbol<'t> {
     Identifier(Identifier<'t>),
     String(StringLiteral<'t>),
+}
+impl<'t> Symbol<'t> {
+    pub fn span(&self, file_idx: FileIndex) -> FileSpan {
+        match self {
+            Symbol::Identifier(identifier) => identifier.span(file_idx),
+            Symbol::String(string_literal) => string_literal.span(file_idx),
+        }
+    }
 }
 
 #[derive(Debug, FromPest)]
@@ -55,6 +82,15 @@ pub enum Symbol<'t> {
 pub enum Literal<'t> {
     Int(Int<'t>),
     Symbol(Symbol<'t>),
+}
+
+impl<'t> Literal<'t> {
+    pub fn span(&self, file_idx: FileIndex) -> FileSpan {
+        match self {
+            Literal::Int(int) => int.span(file_idx),
+            Literal::Symbol(symbol) => symbol.span(file_idx),
+        }
+    }
 }
 
 #[derive(Debug, FromPest)]
@@ -66,7 +102,13 @@ pub struct Copy<'t>(pub Identifier<'t>);
 pub struct Tuple<'t> {
     #[pest_ast(outer())]
     pub span: pest::Span<'t>,
-    pub values: Vec<Sentence<'t>>,
+    pub values: Vec<Expression<'t>>,
+}
+
+impl<'t> Tuple<'t> {
+    pub fn span(&self, file_idx: FileIndex) -> FileSpan {
+        FileSpan::from_ast(file_idx, self.span)
+    }
 }
 
 #[derive(Debug, FromPest)]
@@ -200,6 +242,16 @@ pub struct ProcDecl<'t> {
 #[pest_ast(rule(Rule::expr))]
 pub enum Expression<'t> {
     Literal(Literal<'t>),
+    Tuple(Tuple<'t>),
+}
+
+impl<'t> Expression<'t> {
+    pub fn span(&self, file_idx: FileIndex) -> source::FileSpan {
+        match self {
+            Expression::Literal(literal) => literal.span(file_idx),
+            Expression::Tuple(tuple) => tuple.span(file_idx),
+        }
+    }
 }
 
 #[derive(Debug, FromPest)]
