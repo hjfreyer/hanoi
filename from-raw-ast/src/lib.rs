@@ -17,8 +17,7 @@ struct MyTraitOpts {
     ident: syn::Ident,
     // attrs: Vec<syn::Attribute>,
     // a: syn::Path,
-    raw: syn::Path,
-
+    // raw: syn::Path,
     data: darling::ast::Data<MyVariant, MyField>,
 }
 
@@ -29,49 +28,55 @@ struct MyVariant {
     fields: darling::ast::Fields<MyField>,
 }
 #[derive(Debug, FromField)]
-// #[darling(attributes(lorem))]
+#[darling(attributes(spanner))]
 struct MyField {
     ident: Option<syn::Ident>,
+    // #[darling(default)]
+    // span: bool,
 }
 
-fn do_fields(fields: darling::ast::Fields<MyField>) -> proc_macro2::TokenStream {
-    if fields.is_tuple() {
-        let initializers: proc_macro2::TokenStream = fields
-            .into_iter()
-            .enumerate()
-            .map(|(idx, _f)| {
-                let idx = syn::Index::from(idx);
-                quote! {
-                    FromRawAst::from_raw_ast(ctx, r.#idx),
-                }
-            })
-            .collect();
+// fn do_fields(fields: darling::ast::Fields<MyField>) -> proc_macro2::TokenStream {
+//     if fields.is_tuple() {
+//         let initializers: proc_macro2::TokenStream = fields
+//             .into_iter()
+//             .enumerate()
+//             .map(|(idx, _f)| {
+//                 let idx = syn::Index::from(idx);
+//                 quote! {
+//                     FromRawAst::from_raw_ast(ctx, r.#idx),
+//                 }
+//             })
+//             .collect();
 
-        quote! {
-            (#initializers)
-        }
-    } else {
-        let initializers: proc_macro2::TokenStream = fields
-            .into_iter()
-            .map(|f| {
-                let name = f.ident.unwrap();
-                quote! {
-                    #name: FromRawAst::from_raw_ast(ctx, r.#name),
-                }
-            })
-            .collect();
+//         quote! {
+//             (#initializers)
+//         }
+//     } else {
+//         let initializers: proc_macro2::TokenStream = fields
+//             .into_iter()
+//             .find(|f| f.)
+//             .map(|f| {
+//                 let name = f.ident.unwrap();
+//                 quote! {
+//                     #name: FromRawAst::from_raw_ast(ctx, r.#name),
+//                 }
+//             })
+//             .collect();
 
-        quote! {
-            {#initializers}
-        }
-    }
-}
+//         quote! {
+//             {#initializers}
+//         }
+//     }
+// }
 
-#[proc_macro_derive(FromRawAst, attributes(from_raw_ast))]
+#[proc_macro_derive(Spanner, attributes(spanner))]
 pub fn derive_answer_fn(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
-    let MyTraitOpts { ident, raw, data } = MyTraitOpts::from_derive_input(&input).unwrap();
+    let MyTraitOpts {
+        ident, //raw,
+        data,
+    } = MyTraitOpts::from_derive_input(&input).unwrap();
 
     let implementation: proc_macro2::TokenStream = match data {
         darling::ast::Data::Enum(variants) => {
@@ -82,7 +87,7 @@ pub fn derive_answer_fn(input: TokenStream) -> TokenStream {
 
                     if v.fields.is_newtype() {
                         quote! {
-                            #raw::#name(r) => Self::#name(FromRawAst::from_raw_ast(ctx, r)),
+                            Self::#name(r) => Spanner::span(r, file_idx),
                         }
                     } else {
                         todo!()
@@ -90,22 +95,29 @@ pub fn derive_answer_fn(input: TokenStream) -> TokenStream {
                 })
                 .collect();
             quote! {
-                match r {
+                match self {
                     #variants
                 }
             }
         }
         darling::ast::Data::Struct(fields) => {
-            let fields = do_fields(fields);
-            quote! {
-                Self #fields
+            if fields.is_newtype() {
+                quote! {
+                    crate::source::FileSpan::from_ast(file_idx, self.0)
+                }
+            } else {
+                let field = fields.into_iter().next().unwrap();
+                let name = field.ident;
+                quote! {
+                    crate::source::FileSpan::from_ast(file_idx, self.#name)
+                }
             }
         }
     };
 
     quote! {
-        impl <'t> FromRawAst<'t, #raw<'t>> for #ident {
-            fn from_raw_ast(ctx: Context<'t>, r : #raw<'t>) -> Self {
+        impl <'t> Spanner for #ident<'t> {
+            fn span(&self, file_idx: FileIndex) -> crate::source::FileSpan {
                 #implementation
             }
         }

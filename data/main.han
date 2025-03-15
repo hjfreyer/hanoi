@@ -342,8 +342,10 @@ sentence double {
 //}
 
 
-proc () main =>
+proc () main => {
+    let x = 4;
     ((@some, 0), @all)
+}
     //#call('double_iter_alloc)
     //(@next) #call('double_iter) (@iter, (@next)) #assert_eq
     //(@some, 1) #call('double_iter) (@resp, (@some, 2)) #assert_eq

@@ -1,4 +1,5 @@
 use from_pest::FromPest;
+use from_raw_ast::Spanner;
 use pest_ast::FromPest;
 use pest_derive::Parser;
 
@@ -12,13 +13,21 @@ fn span_into_str(span: pest::Span) -> &str {
     span.as_str()
 }
 
-#[derive(Debug, FromPest)]
+#[derive(Debug, FromPest, Spanner)]
 #[pest_ast(rule(Rule::identifier))]
-pub struct Identifier<'t>(#[pest_ast(outer())] pub pest::Span<'t>);
+pub struct Identifier<'t>(
+    #[spanner]
+    #[pest_ast(outer())]
+    pub pest::Span<'t>,
+);
 impl<'t> Identifier<'t> {
     pub fn span(&self, file_idx: FileIndex) -> FileSpan {
         FileSpan::from_ast(file_idx, self.0)
     }
+}
+
+pub trait Spanner {
+    fn span(&self, file_idx: FileIndex) -> FileSpan;
 }
 
 // #[derive(Debug, FromPest)]
@@ -46,9 +55,10 @@ fn span_into_string_literal(span: pest::Span) -> String {
     let str = &str[1..str.len() - 1];
     str.replace("\\n", "\n").replace("\\\"", "\"")
 }
-#[derive(Debug, FromPest)]
+#[derive(Debug, FromPest, Spanner)]
 #[pest_ast(rule(Rule::string))]
 pub struct StringLiteral<'t> {
+    #[spanner]
     #[pest_ast(outer())]
     pub span: pest::Span<'t>,
 
@@ -56,26 +66,27 @@ pub struct StringLiteral<'t> {
     pub value: String,
 }
 
-impl<'t> StringLiteral<'t> {
-    pub fn span(&self, file_idx: FileIndex) -> FileSpan {
-        FileSpan::from_ast(file_idx, self.span)
-    }
-}
+// impl<'t> StringLiteral<'t> {
+//     pub fn span(&self, file_idx: FileIndex) -> FileSpan {
+//         FileSpan::from_ast(file_idx, self.span)
+//     }
+// }
 
-#[derive(Debug, FromPest)]
+#[derive(Debug, FromPest, Spanner)]
 #[pest_ast(rule(Rule::symbol))]
 pub enum Symbol<'t> {
     Identifier(Identifier<'t>),
     String(StringLiteral<'t>),
 }
-impl<'t> Symbol<'t> {
-    pub fn span(&self, file_idx: FileIndex) -> FileSpan {
-        match self {
-            Symbol::Identifier(identifier) => identifier.span(file_idx),
-            Symbol::String(string_literal) => string_literal.span(file_idx),
-        }
-    }
-}
+
+// impl<'t> Symbol<'t> {
+//     pub fn span(&self, file_idx: FileIndex) -> FileSpan {
+//         match self {
+//             Symbol::Identifier(identifier) => identifier.span(file_idx),
+//             Symbol::String(string_literal) => string_literal.span(file_idx),
+//         }
+//     }
+// }
 
 #[derive(Debug, FromPest)]
 #[pest_ast(rule(Rule::literal))]
@@ -243,6 +254,7 @@ pub struct ProcDecl<'t> {
 pub enum Expression<'t> {
     Literal(Literal<'t>),
     Tuple(Tuple<'t>),
+    Block(Block<'t>),
 }
 
 impl<'t> Expression<'t> {
@@ -250,8 +262,34 @@ impl<'t> Expression<'t> {
         match self {
             Expression::Literal(literal) => literal.span(file_idx),
             Expression::Tuple(tuple) => tuple.span(file_idx),
+            Expression::Block(block) => todo!(),
         }
     }
+}
+
+#[derive(Debug, FromPest)]
+#[pest_ast(rule(Rule::block))]
+pub struct Block<'t> {
+    #[pest_ast(outer())]
+    pub span: pest::Span<'t>,
+    pub statements: Vec<Statement<'t>>,
+    pub expression: Box<Expression<'t>>,
+}
+
+#[derive(Debug, FromPest)]
+#[pest_ast(rule(Rule::statement))]
+pub enum Statement<'t> {
+    Let(LetStatement<'t>),
+}
+
+#[derive(Debug, FromPest)]
+#[pest_ast(rule(Rule::let_statement))]
+
+pub struct LetStatement<'t> {
+    #[pest_ast(outer())]
+    pub span: pest::Span<'t>,
+    pub binding: Binding<'t>,
+    pub rhs: Expression<'t>,
 }
 
 #[derive(Debug, FromPest)]

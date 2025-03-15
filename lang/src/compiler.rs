@@ -12,7 +12,6 @@ use crate::{
     linker::{self, Error},
     source::{self, FileIndex, FileSpan, Sources},
 };
-use from_raw_ast::FromRawAst;
 
 #[derive(Debug, Default)]
 pub struct Crate {
@@ -23,6 +22,11 @@ pub struct Compiler<'t> {
     sources: &'t Sources,
     res: Crate,
 }
+
+// pub enum Phrase<'t> {
+//     Expression(ast::Expression<'t>),
+//     Binding(ast::Binding<'t>),
+// }
 
 impl<'t> Compiler<'t> {
     pub fn new(sources: &'t Sources) -> Self {
@@ -146,6 +150,18 @@ impl<'t> Compiler<'t> {
                 self.res.sentences.push(b.build());
 
                 Ok(name)
+            }
+            ast::Expression::Block(mut block) => {
+                if !block.statements.is_empty() {
+                    let ast::Statement::Let(l) = block.statements.remove(0);
+                    let subexpr = self.visit_expr(file_idx, name_prefix, name_sequence, locals, l.rhs);
+
+                    l.rhs
+                } else {
+                    self.visit_expr(file_idx, name_prefix, name_sequence, locals, *block.expression)
+                }
+                // if let Some(statement) = 
+                // block.
             }
         }
     }
@@ -284,7 +300,8 @@ impl<'t> Compiler<'t> {
 #[derive(Debug, Clone, Default)]
 pub struct Locals {
     num_generated: usize,
-    stack: Vec<Name>,
+    scope: usize,
+    stack: Vec<(usize, Name)>,
 }
 
 impl Locals {
@@ -293,12 +310,16 @@ impl Locals {
     }
 
     fn names(&self) -> Vec<Name> {
-        self.stack.clone()
+        self.stack.iter().cloned().map(|(scope, name)|name).collect()
     }
 
     fn push_unnamed(&mut self) {
-        self.stack.push(Name::Generated(self.num_generated));
+        self.stack.push((self.scope, Name::Generated(self.num_generated)));
         self.num_generated += 1
+    }
+
+    fn push_scope(&mut self) {
+        self.scope += 1
     }
 }
 
