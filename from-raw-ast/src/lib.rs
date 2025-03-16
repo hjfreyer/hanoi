@@ -87,7 +87,7 @@ pub fn derive_answer_fn(input: TokenStream) -> TokenStream {
 
                     if v.fields.is_newtype() {
                         quote! {
-                            Self::#name(r) => Spanner::span(r, file_idx),
+                            Self::#name(r) => Spanner::pest_span(r),
                         }
                     } else {
                         todo!()
@@ -103,21 +103,21 @@ pub fn derive_answer_fn(input: TokenStream) -> TokenStream {
         darling::ast::Data::Struct(fields) => {
             if fields.is_newtype() {
                 quote! {
-                    crate::source::FileSpan::from_ast(file_idx, self.0)
+                    self.0
                 }
             } else {
                 let field = fields.into_iter().next().unwrap();
                 let name = field.ident;
                 quote! {
-                    crate::source::FileSpan::from_ast(file_idx, self.#name)
+                    self.#name
                 }
             }
         }
     };
 
     quote! {
-        impl <'t> Spanner for #ident<'t> {
-            fn span(&self, file_idx: FileIndex) -> crate::source::FileSpan {
+        impl <'t> Spanner<'t> for #ident<'t> {
+            fn pest_span(&self) -> pest::Span<'t> {
                 #implementation
             }
         }

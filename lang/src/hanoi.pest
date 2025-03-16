@@ -113,24 +113,25 @@ tuple_binding = {
 // PROC
 
 proc_decl = { "proc" ~ binding ~ identifier ~ "=>" ~ expr }
-expr      = {
+expr      = { arg_expr ~ (qualified_label*) }
+
+arg_expr = {
     literal
-    | tuple_expr
-    | block 
-    // | copy
-    // | identifier
+  | tuple_expr
+  | block // | copy
+  | identifier
 }
 
 block = {
-  "{" ~ statement* ~ expr ~ "}"
+    "{" ~ statement* ~ expr ~ "}"
 }
 
 statement = {
-  let_statement
+    let_statement
 }
 
 let_statement = {
-  "let" ~ binding ~ "=" ~ expr ~ ";"
+    "let" ~ binding ~ "=" ~ expr ~ ";"
 }
 
 // OTHER

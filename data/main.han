@@ -341,10 +341,20 @@ sentence double {
 //    }
 //}
 
+sentence add {
+    #untuple(2) #add
+}
 
-proc () main => {
+proc (a, b) swap => {
+    (b, a)
+}
+
+proc () main_impl => {
     let x = 4;
-    ((@some, 0), @all)
+    let y = 5;
+    let z = 6;
+    let a = ((x, y) 'add, z) 'add;
+    ()
 }
     //#call('double_iter_alloc)
     //(@next) #call('double_iter) (@iter, (@next)) #assert_eq
@@ -361,3 +371,8 @@ proc () main => {
 //    (@next) #call('map) (@iter, (@next)) #assert_eq
 //    (@some, 2) #call('map) (@fn, 2) #assert_eq
 //    (@double, 4) #call('map) (@some, 4) #assert_eq
+
+sentence main {
+    #tuple(0) #call('main_impl)
+}
+

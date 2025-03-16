@@ -3,6 +3,7 @@ use std::{
     fmt::write,
 };
 
+use crate::ast::Spanner;
 use itertools::Itertools;
 use typed_index_collections::TiVec;
 
@@ -64,7 +65,9 @@ impl<'t> Compiler<'t> {
                 ast::Decl::SentenceDecl(sentence_decl) => {
                     self.visit_sentence(
                         file_idx,
-                        name_prefix.append(sentence_decl.name.into_ir(self.sources, file_idx)),
+                        name_prefix
+                            .append(sentence_decl.name.into_ir(self.sources, file_idx))
+                            .append(Name::Generated(0)),
                         sentence_decl.sentence,
                     )?;
                 }
@@ -106,8 +109,21 @@ impl<'t> Compiler<'t> {
             base: name,
             count: 0,
         };
+        let name = names.next();
         let mut locals = Locals::default();
-        self.visit_expr(file_idx, name_prefix, &mut names, &mut locals, expression)?;
+        locals.push_unnamed();
+
+        let mut b = SentenceBuilder::new(span, self.sources, name.clone(), locals.clone());
+        b.binding(binding);
+        self.visit_expr(
+            file_idx,
+            name_prefix,
+            &mut b,
+            Expression::from_ast(expression),
+        )?;
+        b.cleanup(span);
+
+        self.res.sentences.push(b.build());
         Ok(())
     }
 
@@ -115,53 +131,51 @@ impl<'t> Compiler<'t> {
         &mut self,
         file_idx: FileIndex,
         name_prefix: &QualifiedName,
-        name_sequence: &mut NameSequence,
-        locals: &mut Locals,
-        expression: ast::Expression,
-    ) -> Result<QualifiedName, linker::Error> {
-        match expression {
-            ast::Expression::Literal(literal) => {
-                let name = name_sequence.next();
-                let mut b = SentenceBuilder::new(
-                    literal.span(file_idx),
-                    self.sources,
-                    name.clone(),
-                    locals.clone(),
-                );
-                b.literal(literal);
-                *locals = b.names.clone();
-                self.res.sentences.push(b.build());
-                Ok(name)
-            }
-            ast::Expression::Tuple(t) => {
-                let span = t.span(file_idx);
-                let name = name_sequence.next();
+        // name_sequence: &mut NameSequence,
+        // locals: &mut Locals,
+        b: &mut SentenceBuilder<'t>,
+        expression: Expression,
+    ) -> Result<(), linker::Error> {
+        let span = expression.span(file_idx);
 
-                let mut b = SentenceBuilder::new(span, self.sources, name.clone(), locals.clone());
-                let size = t.values.len();
-                for v in t.values {
-                    let span = v.span(file_idx);
-                    let tc = self.visit_expr(file_idx, name_prefix, name_sequence, locals, v)?;
-                    b.fully_qualified_call(span, tc)?;
-                    b.names = locals.clone();
+        match expression {
+            Expression::Literal(literal) => {
+                b.literal(literal);
+                Ok(())
+            }
+            Expression::Identifier(identifier) => {
+                b.mv_ident(identifier);
+                Ok(())
+            }
+            Expression::Tuple { values, .. } => {
+                let size = values.len();
+                for v in values {
+                    self.visit_expr(file_idx, name_prefix, b, v)?;                    
                 }
                 b.tuple(span, size);
-                *locals = b.names.clone();
-                self.res.sentences.push(b.build());
 
-                Ok(name)
+                Ok(())
             }
-            ast::Expression::Block(mut block) => {
-                if !block.statements.is_empty() {
-                    let ast::Statement::Let(l) = block.statements.remove(0);
-                    let subexpr = self.visit_expr(file_idx, name_prefix, name_sequence, locals, l.rhs);
+            Expression::LetBlock {
+                span: _,
+                binding,
+                rhs,
+                inner,
+            } => {
+                self.visit_expr(file_idx, name_prefix, b, *rhs)?;
+                b.binding(binding);
+                self.visit_expr(file_idx, name_prefix, b, *inner)?;
+                Ok(())
+            }
+            Expression::Call { span, label, arg } => {
+                let span = span.into_ir(self.sources, file_idx);
 
-                    l.rhs
-                } else {
-                    self.visit_expr(file_idx, name_prefix, name_sequence, locals, *block.expression)
-                }
-                // if let Some(statement) = 
-                // block.
+                let tc = self.visit_expr(file_idx, name_prefix, b, *arg)?;
+
+                let qualified = name_prefix
+                    .join(label.into_ir(self.sources, file_idx))
+                    .append(Name::Generated(0));
+                b.fully_qualified_call(span, qualified)
             }
         }
     }
@@ -172,7 +186,7 @@ impl<'t> Compiler<'t> {
         name: QualifiedName,
         sentence: ast::Sentence,
     ) -> Result<(), linker::Error> {
-        let mut next_name = 1;
+        let span = sentence.span(file_idx);
         let words: Result<Vec<Word>, Error> = sentence
             .words
             .into_iter()
@@ -180,7 +194,7 @@ impl<'t> Compiler<'t> {
             .collect();
 
         self.res.sentences.push(Sentence {
-            // span: sentence.span.into_ir(self.sources, file_idx),
+            span,
             name: name.clone(),
             words: words?,
         });
@@ -244,21 +258,22 @@ impl<'t> Compiler<'t> {
                 "tuple" => self.convert_single_int_builtin(InnerWord::Tuple, file_idx, builtin),
                 "untuple" => self.convert_single_int_builtin(InnerWord::Untuple, file_idx, builtin),
                 "branch" => {
-                    let Some((
-                        ast::BuiltinArg::Label(true_case),
-                        ast::BuiltinArg::Label(false_case),
-                    )) = builtin.args.into_iter().collect_tuple()
-                    else {
-                        return Err(Error::IncorrectBuiltinArguments {
-                            location: builtin.span.into_ir(self.sources, file_idx),
-                            name: name.to_owned(),
-                        });
-                    };
+                    todo!()
+                    // let Some((
+                    //     ast::BuiltinArg::Label(true_case),
+                    //     ast::BuiltinArg::Label(false_case),
+                    // )) = builtin.args.into_iter().collect_tuple()
+                    // else {
+                    //     return Err(Error::IncorrectBuiltinArguments {
+                    //         location: builtin.span.into_ir(self.sources, file_idx),
+                    //         name: name.to_owned(),
+                    //     });
+                    // };
 
-                    Ok(InnerWord::Branch(
-                        true_case.into_ir(self.sources, file_idx),
-                        false_case.into_ir(self.sources, file_idx),
-                    ))
+                    // Ok(InnerWord::Branch(
+                    //     true_case.into_ir(self.sources, file_idx),
+                    //     false_case.into_ir(self.sources, file_idx),
+                    // ))
                 }
                 "call" => {
                     let Ok(ast::BuiltinArg::Label(label)) = builtin.args.into_iter().exactly_one()
@@ -269,7 +284,11 @@ impl<'t> Compiler<'t> {
                         });
                     };
 
-                    Ok(InnerWord::Call(label.into_ir(self.sources, file_idx)))
+                    Ok(InnerWord::Call(
+                        label
+                            .into_ir(self.sources, file_idx)
+                            .append(Name::Generated(0)),
+                    ))
                 }
                 _ => Err(Error::UnknownBuiltin {
                     location: builtin.span.into_ir(self.sources, file_idx),
@@ -310,17 +329,150 @@ impl Locals {
     }
 
     fn names(&self) -> Vec<Name> {
-        self.stack.iter().cloned().map(|(scope, name)|name).collect()
+        self.stack
+            .iter()
+            .cloned()
+            .map(|(scope, name)| name)
+            .rev()
+            .collect()
     }
 
-    fn push_unnamed(&mut self) {
-        self.stack.push((self.scope, Name::Generated(self.num_generated)));
-        self.num_generated += 1
+    fn len(&self) -> usize {
+        self.stack.len()
     }
 
-    fn push_scope(&mut self) {
-        self.scope += 1
+    fn push_unnamed(&mut self) -> Name {
+        let name = Name::Generated(self.num_generated);
+        self.stack.push((self.scope, name));
+        self.num_generated += 1;
+        name
     }
+
+    fn push_scope(&mut self) -> usize {
+        self.scope += 1;
+        self.scope
+    }
+
+    fn collapse_scope(&mut self) {
+        assert!(!self.stack.iter().any(|(s, n)| *s == self.scope - 1));
+        for (s, n) in self.stack.iter_mut() {
+            if *s == self.scope {
+                *s -= 1;
+            }
+        }
+        self.scope -= 1
+    }
+
+    fn push_named(&mut self, name: FileSpan) {
+        self.stack.push((self.scope, Name::User(name)))
+    }
+
+    fn prev_scope(&self) -> Vec<Name> {
+        self.stack
+            .iter()
+            .filter_map(|(s, n)| {
+                if *s == self.scope - 1 {
+                    Some(n.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    fn remove(&mut self, idx: usize) {
+        self.stack.remove(self.stack.len() - idx - 1);
+    }
+
+    fn find(&self, sources: &Sources, name: &Name) -> Option<usize> {
+        let pos = self
+            .stack
+            .iter()
+            .position(|(s, n)| n.as_ref(sources) == name.as_ref(sources))?;
+        Some(self.stack.len() - pos - 1)
+    }
+}
+
+pub enum Expression<'t> {
+    Literal(ast::Literal<'t>),
+    Identifier(ast::Identifier<'t>),
+    LetBlock {
+        span: pest::Span<'t>,
+        binding: ast::Binding<'t>,
+        rhs: Box<Expression<'t>>,
+        inner: Box<Expression<'t>>,
+    },
+    Tuple {
+        span: pest::Span<'t>,
+        values: Vec<Expression<'t>>,
+    },
+    Call {
+        span: pest::Span<'t>,
+        arg: Box<Expression<'t>>,
+        label: ast::QualifiedLabel<'t>,
+    },
+}
+
+impl<'t> Expression<'t> {
+    pub fn from_ast(mut a: ast::Expression<'t>) -> Self {
+        if let Some(label) = a.calls.pop() {
+            Self::Call {
+                span: a.span,
+                label,
+                arg: Box::new(Self::from_ast(a)),
+            }
+        } else {
+            Self::from_ast_arg(a.arg)
+        }
+    }
+
+    fn from_ast_arg(a: ast::ArgExpression<'t>) -> Self {
+        match a {
+            ast::ArgExpression::Literal(literal) => Self::Literal(literal),
+            ast::ArgExpression::Tuple(tuple) => Self::Tuple {
+                span: tuple.span,
+                values: tuple.values.into_iter().map(Expression::from_ast).collect(),
+            },
+            ast::ArgExpression::Block(mut block) => {
+                if block.statements.is_empty() {
+                    Self::from_ast(*block.expression)
+                } else {
+                    let ast::Statement::Let(s) = block.statements.remove(0);
+                    Self::LetBlock {
+                        span: block.span,
+                        binding: s.binding,
+                        rhs: Box::new(Self::from_ast(s.rhs)),
+                        inner: Box::new(Self::from_ast_arg(ast::ArgExpression::Block(block))),
+                    }
+                }
+            }
+            ast::ArgExpression::Identifier(identifier) => Self::Identifier(identifier),
+        }
+    }
+}
+
+impl<'t> Spanner<'t> for Expression<'t> {
+    fn pest_span(&self) -> pest::Span<'t> {
+        match self {
+            Expression::Literal(literal) => literal.pest_span(),
+            Expression::Identifier(i) => i.pest_span(),
+            Expression::LetBlock {
+                span,
+                binding,
+                rhs,
+                inner,
+            } => *span,
+            Expression::Tuple { span, values } => *span,
+            Expression::Call { span, arg, label } => *span,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Sentence {
+    pub span: FileSpan,
+    pub name: QualifiedName,
+    pub words: Vec<Word>,
 }
 
 #[derive(Debug, Clone)]
@@ -342,7 +494,7 @@ pub enum InnerWord {
     Tuple(usize),
     Untuple(usize),
     Call(QualifiedName),
-    Branch(QualifiedName, QualifiedName),
+    Branch(Vec<Word>, Vec<Word>),
 }
 
 pub trait FromRawAst<'t, R> {
@@ -552,13 +704,6 @@ impl<'t> IntoIr<'t, QualifiedName> for ast::QualifiedLabel<'_> {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct Sentence {
-    // pub span: FileSpan,
-    pub name: QualifiedName,
-    pub words: Vec<Word>,
-}
-
 struct NameSequence {
     base: QualifiedName,
     count: usize,
@@ -764,7 +909,7 @@ impl<'a> SentenceBuilder<'a> {
 
     pub fn build(self) -> Sentence {
         Sentence {
-            // span: self.span,
+            span: self.span,
             name: self.name,
             words: self.words,
         }
@@ -800,31 +945,36 @@ impl<'a> SentenceBuilder<'a> {
         self.names.push_unnamed();
     }
 
-    // pub fn mv(&mut self, ident: ir::Identifier) -> Result<(), Error> {
-    //     let name = ident.0.as_str(self.sources);
-    //     let Some(idx) = self.names.iter().position(|n| match n {
-    //         Some(n) => n.as_str() == name,
-    //         None => false,
-    //     }) else {
-    //         return Err(Error::UnknownReference {
-    //             location: ident.0.location(self.sources).unwrap(),
-    //             name: name.to_owned(),
-    //         });
-    //     };
-    //     Ok(self.mv_idx(ident.0, idx))
-    // }
+    pub fn mv(&mut self, span: FileSpan, name: &Name) -> Result<(), Error> {
+        let Some(idx) = self.names.find(self.sources, name) else {
+            return Err(Error::UnknownReference {
+                location: span.location(self.sources),
+                name: name
+                    .as_ref(self.sources)
+                    .as_str()
+                    .unwrap_or("<unnamed>")
+                    .to_owned(),
+            });
+        };
+        Ok(self.mv_idx(span, idx))
+    }
 
-    // pub fn mv_idx(&mut self, span: FileSpan, idx: usize) {
-    //     let names = self.names.names();
-    //     let declared = self.names.remove(idx).unwrap();
-    //     self.names.push_front(declared);
+    pub fn mv_ident(&mut self, ident: ast::Identifier) -> Result<(), Error> {
+        let span = ident.span(self.span.file_idx);
+        self.mv(span, &Name::User(span))
+    }
 
-    //     self.words.push(flat::Word {
-    //         inner: flat::InnerWord::Move(idx),
-    //         span,
-    //         names: Some(names),
-    //     });
-    // }
+    pub fn mv_idx(&mut self, span: FileSpan, idx: usize) {
+        let names = self.names.names();
+        let declared = self.names.remove(idx);
+        self.names.push_unnamed();
+
+        self.words.push(Word {
+            inner: InnerWord::Move(idx),
+            span,
+            names,
+        });
+    }
 
     // pub fn cp(&mut self, i: ir::Identifier) -> Result<(), Error> {
     //     let name = i.0.as_str(&self.sources);
@@ -868,16 +1018,24 @@ impl<'a> SentenceBuilder<'a> {
     // //     self.sd_idx(span, self.names.len() - 1)
     // // }
 
-    // pub fn drop_idx(&mut self, span: FileSpan, idx: usize) {
-    //     let names = self.names.names();
-    //     let declared = self.names.remove(idx).unwrap();
+    pub fn drop(&mut self, span: FileSpan, name: Name) {
+        let idx = self
+            .names
+            .find(self.sources, &name)
+            .expect(&format!("Unknown name: {:?}", name));
+        self.drop_idx(span, idx);
+    }
 
-    //     self.words.push(flat::Word {
-    //         inner: flat::InnerWord::Drop(idx),
-    //         span,
-    //         names: Some(names),
-    //     });
-    // }
+    pub fn drop_idx(&mut self, span: FileSpan, idx: usize) {
+        let names = self.names.names();
+        let declared = self.names.remove(idx);
+
+        self.words.push(Word {
+            inner: InnerWord::Drop(idx),
+            span,
+            names,
+        });
+    }
 
     // // pub fn path(&mut self, ast::Path { span, segments }: ast::Path<'t>) {
     // //     for segment in segments.iter().rev() {
@@ -1026,6 +1184,8 @@ impl<'a> SentenceBuilder<'a> {
             inner: InnerWord::Call(name),
             names: self.names.names(),
         });
+        self.names.pop();
+        self.names.push_unnamed();
         Ok(())
     }
 
@@ -1066,17 +1226,15 @@ impl<'a> SentenceBuilder<'a> {
         self.names.push_unnamed();
     }
 
-    // pub fn untuple(&mut self, span: FileSpan, size: usize) {
-    //     self.words.push(flat::Word {
-    //         inner: flat::InnerWord::Untuple(size),
-    //         span: span,
-    //         names: Some(self.names.names()),
-    //     });
-    //     self.names.pop();
-    //     for _ in 0..size {
-    //         self.names.push_unnamed();
-    //     }
-    // }
+    pub fn untuple(&mut self, span: FileSpan, size: usize) -> Vec<Name> {
+        self.words.push(Word {
+            inner: InnerWord::Untuple(size),
+            span: span,
+            names: self.names.names(),
+        });
+        self.names.pop();
+        (0..size).map(|_| self.names.push_unnamed()).collect()
+    }
 
     // // fn func_call(&mut self, call: ast::Call<'t>) -> Result<usize, BuilderError<'t>> {
     // //     let argc = call.args.len();
@@ -1122,34 +1280,57 @@ impl<'a> SentenceBuilder<'a> {
     // //     }
     // // }
 
-    // fn bindings(&mut self, b: StackBindings) {
-    //     self.names = b
-    //         .bindings
-    //         .iter()
-    //         .rev()
-    //         .map(|b| match b {
-    //             Binding::Literal(_) | &Binding::Drop(_) => None,
-    //             Binding::Identifier(span) => Some(span.0.as_str(self.sources).to_owned()),
-    //             Binding::Tuple(tuple_binding) => todo!(),
-    //         })
-    //         .collect();
-    //     let mut dropped = 0;
-    //     for (idx, binding) in b.bindings.into_iter().rev().enumerate() {
-    //         match binding {
-    //             Binding::Literal(l) => {
-    //                 let span = l.span();
-    //                 self.mv_idx(span, idx - dropped);
-    //                 self.literal(l);
-    //                 self.builtin(span, flat::Builtin::AssertEq);
-    //                 dropped += 1;
-    //             }
-    //             Binding::Drop(drop) => {
-    //                 self.drop_idx(drop.span, idx - dropped);
-    //                 dropped += 1;
-    //             }
-    //             Binding::Identifier(_) => {},
-    //             Binding::Tuple(_) => {},
-    //         }
-    //     }
-    // }
+    fn binding(&mut self, b: ast::Binding) {
+        let span = b.span(self.span.file_idx);
+        match b {
+            ast::Binding::Literal(l) => todo!(),
+            ast::Binding::Drop(drop_binding) => todo!(),
+            ast::Binding::Tuple(tuple_binding) => {
+                let names = self.untuple(span, tuple_binding.bindings.len());
+                for (name, binding) in names.into_iter().zip_eq(tuple_binding.bindings) {
+                    self.mv(span, &name);
+                    self.binding(binding);
+                }
+            }
+            ast::Binding::Identifier(identifier) => {
+                self.names.pop();
+                self.names.push_named(span);
+            }
+        }
+
+        // self.names = b
+        //     .bindings
+        //     .iter()
+        //     .rev()
+        //     .map(|b| match b {
+        //         Binding::Literal(_) | &Binding::Drop(_) => None,
+        //         Binding::Identifier(span) => Some(span.0.as_str(self.sources).to_owned()),
+        //         Binding::Tuple(tuple_binding) => todo!(),
+        //     })
+        //     .collect();
+        // let mut dropped = 0;
+        // for (idx, binding) in b.bindings.into_iter().rev().enumerate() {
+        //     match binding {
+        //         Binding::Literal(l) => {
+        //             let span = l.span();
+        //             self.mv_idx(span, idx - dropped);
+        //             self.literal(l);
+        //             self.builtin(span, flat::Builtin::AssertEq);
+        //             dropped += 1;
+        //         }
+        //         Binding::Drop(drop) => {
+        //             self.drop_idx(drop.span, idx - dropped);
+        //             dropped += 1;
+        //         }
+        //         Binding::Identifier(_) => {},
+        //         Binding::Tuple(_) => {},
+        //     }
+        // }
+    }
+
+    fn cleanup(&mut self, span: FileSpan) {
+        while self.names.len() > 1 {
+            self.drop_idx(span, 1);
+        }
+    }
 }
