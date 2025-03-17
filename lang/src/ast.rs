@@ -34,6 +34,12 @@ pub trait Spanner<'t> {
     }
 }
 
+impl<'t> Spanner<'t> for pest::Span<'t> {
+    fn pest_span(&self) -> pest::Span<'t> {
+        *self
+    }
+}
+
 // #[derive(Debug, FromPest)]
 // #[pest_ast(rule(Rule::label))]
 // pub struct Label<'t>(pub Identifier<'t>);
@@ -78,7 +84,7 @@ pub enum Literal<'t> {
     Symbol(Symbol<'t>),
 }
 
-#[derive(Debug, FromPest)]
+#[derive(Debug, FromPest, Spanner)]
 #[pest_ast(rule(Rule::copy))]
 pub struct Copy<'t>(pub Identifier<'t>);
 
@@ -235,6 +241,7 @@ pub enum ArgExpression<'t> {
     Tuple(Tuple<'t>),
     Block(Block<'t>),
     Identifier(Identifier<'t>),
+    Copy(Copy<'t>),
 }
 
 #[derive(Debug, FromPest, Spanner)]

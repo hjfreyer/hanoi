@@ -103,7 +103,7 @@ pub fn derive_answer_fn(input: TokenStream) -> TokenStream {
         darling::ast::Data::Struct(fields) => {
             if fields.is_newtype() {
                 quote! {
-                    self.0
+                    self.0.pest_span()
                 }
             } else {
                 let field = fields.into_iter().next().unwrap();

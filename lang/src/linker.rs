@@ -65,11 +65,10 @@ impl<'t> Compiler<'t> {
         for (sentence_idx, sentence) in ir.sentences.iter_enumerated() {
             let name = sentence.name.as_ref(self.sources);
             if self.index.insert(name.clone(), sentence_idx).is_some() {
-                // return Err(Error::AlreadyDefined {
-                //     location: sentence.span.location(self.sources).unwrap(),
-                //     name: name.to_string(),
-                // });
-                panic!()
+                return Err(Error::AlreadyDefined {
+                    location: sentence.span.location(self.sources),
+                    name: name.to_string(),
+                });
             }
             if let Some((n, compiler::NameRef::Generated(0))) = name.0.iter().collect_tuple() {
                 if let Some(str) = n.as_str() {
@@ -136,10 +135,12 @@ impl<'t> Compiler<'t> {
             compiler::InnerWord::Tuple(idx) => flat::InnerWord::Tuple(idx),
             compiler::InnerWord::Untuple(idx) => flat::InnerWord::Untuple(idx),
             compiler::InnerWord::Call(qualified_name) => {
-                let idx = self
-                    .index
-                    .get(&qualified_name.as_ref(&self.sources))
-                    .unwrap();
+                let Some(idx) = self.index.get(&qualified_name.as_ref(&self.sources)) else {
+                    return Err(Error::LabelNotFound {
+                        location: word.span.location(self.sources),
+                        name: qualified_name.as_ref(&self.sources).to_string(),
+                    });
+                };
                 flat::InnerWord::Call(*idx)
             }
             compiler::InnerWord::Branch(qualified_name, qualified_name1) => todo!(),

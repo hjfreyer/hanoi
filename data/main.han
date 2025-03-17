@@ -187,10 +187,6 @@
 //    //let (bq, @eos) = bq(@next);
 //}
 
-sentence double {
-    #cp(0) #add
-}
-
 //sentence ints_alloc {
 //    @start 0 #tuple(2)
 //}
@@ -345,11 +341,46 @@ sentence add {
     #untuple(2) #add
 }
 
+proc x double => {
+    (*x, x) 'add
+}
+
+mod ints {
+    proc () alloc => {
+        (@start, 0)
+    }
+
+    proc ((@start, s), @next) main => {
+        let res = (@some, *s);
+        ((@start, (s, 1) 'super::add), res)
+    }
+}
+
+
+//sentence ints {
+//    // [closure, args]
+//    #untuple(1) @next #assert_eq
+//    // [closure]
+//    #untuple(2)
+//    // [tag, start]
+//    #mv(1) @start #assert_eq
+//    // [start]
+//    #cp(0) 1 #add
+//    // [start, next]
+//    @start #mv(1) #tuple(2) 
+//    // [start, new_closure]
+//    @some #mv(2) #tuple(2) #tuple(2)
+//}
+
 proc (a, b) swap => {
     (b, a)
 }
 
 proc () main_impl => {
+    let i = () 'ints::alloc;
+    let (i, (@some, 0)) = (i, @next) 'ints::main;
+    let (i, (@some, 1)) = (i, @next) 'ints::main;
+
     let x = 4;
     let y = 5;
     let z = 6;

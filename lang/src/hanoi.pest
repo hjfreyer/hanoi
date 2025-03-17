@@ -118,7 +118,8 @@ expr      = { arg_expr ~ (qualified_label*) }
 arg_expr = {
     literal
   | tuple_expr
-  | block // | copy
+  | block 
+  | copy
   | identifier
 }
 

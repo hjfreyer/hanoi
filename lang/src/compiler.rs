@@ -144,13 +144,17 @@ impl<'t> Compiler<'t> {
                 Ok(())
             }
             Expression::Identifier(identifier) => {
-                b.mv_ident(identifier);
+                b.mv_ident(identifier)?;
+                Ok(())
+            }
+            Expression::Copy(identifier) => {
+                b.cp_ident(identifier)?;
                 Ok(())
             }
             Expression::Tuple { values, .. } => {
                 let size = values.len();
                 for v in values {
-                    self.visit_expr(file_idx, name_prefix, b, v)?;                    
+                    self.visit_expr(file_idx, name_prefix, b, v)?;
                 }
                 b.tuple(span, size);
 
@@ -393,9 +397,11 @@ impl Locals {
     }
 }
 
+#[derive(Debug)]
 pub enum Expression<'t> {
     Literal(ast::Literal<'t>),
     Identifier(ast::Identifier<'t>),
+    Copy(ast::Identifier<'t>),
     LetBlock {
         span: pest::Span<'t>,
         binding: ast::Binding<'t>,
@@ -447,6 +453,7 @@ impl<'t> Expression<'t> {
                 }
             }
             ast::ArgExpression::Identifier(identifier) => Self::Identifier(identifier),
+            ast::ArgExpression::Copy(copy) => Self::Copy(copy.0),
         }
     }
 }
@@ -456,6 +463,7 @@ impl<'t> Spanner<'t> for Expression<'t> {
         match self {
             Expression::Literal(literal) => literal.pest_span(),
             Expression::Identifier(i) => i.pest_span(),
+            Expression::Copy(i) => i.pest_span(),
             Expression::LetBlock {
                 span,
                 binding,
@@ -976,30 +984,34 @@ impl<'a> SentenceBuilder<'a> {
         });
     }
 
-    // pub fn cp(&mut self, i: ir::Identifier) -> Result<(), Error> {
-    //     let name = i.0.as_str(&self.sources);
-    //     let Some(idx) = self.names.iter().position(|n| match n {
-    //         Some(n) => n.as_str() == name,
-    //         None => false,
-    //     }) else {
-    //         return Err(Error::UnknownReference {
-    //             location: i.0.location(self.sources).unwrap(),
-    //             name: name.to_owned(),
-    //         });
-    //     };
-    //     Ok(self.cp_idx(i.0, idx))
-    // }
+    pub fn cp(&mut self, span: FileSpan, name: &Name) -> Result<(), Error> {
+        let Some(idx) = self.names.find(self.sources, name) else {
+            return Err(Error::UnknownReference {
+                location: span.location(self.sources),
+                name: name
+                    .as_ref(self.sources)
+                    .as_str()
+                    .unwrap_or("<unnamed>")
+                    .to_owned(),
+            });
+        };
+        Ok(self.cp_idx(span, idx))
+    }
 
-    // pub fn cp_idx(&mut self, span: FileSpan, idx: usize) {
-    //     let names = self.names.names();
-    //     self.names.push_unnamed();
+    pub fn cp_ident(&mut self, ident: ast::Identifier) -> Result<(), Error> {
+        let span = ident.span(self.span.file_idx);
+        self.cp(span, &Name::User(span))
+    }
 
-    //     self.words.push(flat::Word {
-    //         inner: flat::InnerWord::Copy(idx),
-    //         span,
-    //         names: Some(names),
-    //     });
-    // }
+    pub fn cp_idx(&mut self, span: FileSpan, idx: usize) {
+        let names = self.names.names();
+        self.words.push(Word {
+            inner: InnerWord::Copy(idx),
+            span,
+            names,
+        });
+        self.names.push_unnamed();
+    }
 
     // // pub fn sd_idx(&mut self, span: FileSpan<'t>, idx: usize) {
     // //     let names = self.names.names();
@@ -1011,7 +1023,7 @@ impl<'a> SentenceBuilder<'a> {
     // //         inner: InnerWord::Send(idx),
     // //         modname: self.modname.clone(),
     // //         span,
-    // //         names: Some(names),
+    // //         names,
     // //     });
     // // }
     // // pub fn sd_top(&mut self, span: FileSpan<'t>) {
@@ -1089,10 +1101,10 @@ impl<'a> SentenceBuilder<'a> {
 
     //                 let names = self.names.names();
     //                 self.names.pop();
-    //                 self.words.push(flat::Word {
-    //                     inner: flat::InnerWord::Branch(true_case, false_case),
+    //                 self.words.push(Word {
+    //                     inner: InnerWord::Branch(true_case, false_case),
     //                     span: builtin.span,
-    //                     names: Some(names),
+    //                     names,
     //                 });
     //                 Ok(())
     //             }
@@ -1117,9 +1129,9 @@ impl<'a> SentenceBuilder<'a> {
     // }
 
     // pub fn builtin(&mut self, span: FileSpan, builtin: flat::Builtin) {
-    //     self.words.push(flat::Word {
+    //     self.words.push(Word {
     //         span,
-    //         inner: flat::InnerWord::Builtin(builtin),
+    //         inner: InnerWord::Builtin(builtin),
     //         names: Some(self.names.names()),
     //     });
     //     match builtin {
@@ -1181,7 +1193,7 @@ impl<'a> SentenceBuilder<'a> {
     fn fully_qualified_call(&mut self, span: FileSpan, name: QualifiedName) -> Result<(), Error> {
         self.words.push(Word {
             span,
-            inner: InnerWord::Call(name),
+            inner: InnerWord::Call(self.normalize_path(name)),
             names: self.names.names(),
         });
         self.names.pop();
@@ -1189,19 +1201,19 @@ impl<'a> SentenceBuilder<'a> {
         Ok(())
     }
 
-    // fn normalize_path(&self, mut path: QualifiedName) -> QualifiedNameRef<'a> {
-    //     loop {
-    //         let Some(super_idx) = path
-    //             .0
-    //             .iter()
-    //             .position(|n| n.as_ref(&self.sources) == NameRef::User("super"))
-    //         else {
-    //             return path.as_ref(self.sources);
-    //         };
-    //         path.0.remove(super_idx - 1);
-    //         path.0.remove(super_idx - 1);
-    //     }
-    // }
+    fn normalize_path(&self, mut path: QualifiedName) -> QualifiedName {
+        loop {
+            let Some(super_idx) = path
+                .0
+                .iter()
+                .position(|n| n.as_ref(&self.sources) == NameRef::User("super"))
+            else {
+                return path;
+            };
+            path.0.remove(super_idx - 1);
+            path.0.remove(super_idx - 1);
+        }
+    }
 
     // fn lookup_label(&self, l: &ir::Label) -> Result<SentenceIndex, Error> {
     //     let sentence_key = self.normalize_path(l.path.clone());
@@ -1280,10 +1292,23 @@ impl<'a> SentenceBuilder<'a> {
     // //     }
     // // }
 
+    fn assert_eq(&mut self, span: FileSpan) {
+        self.words.push(Word {
+            span,
+            inner: InnerWord::Builtin(flat::Builtin::AssertEq),
+            names: self.names.names(),
+        });
+        self.names.pop();
+        self.names.pop();
+    }
+
     fn binding(&mut self, b: ast::Binding) {
         let span = b.span(self.span.file_idx);
         match b {
-            ast::Binding::Literal(l) => todo!(),
+            ast::Binding::Literal(l) => {
+                self.literal(l);
+                self.assert_eq(span);
+            }
             ast::Binding::Drop(drop_binding) => todo!(),
             ast::Binding::Tuple(tuple_binding) => {
                 let names = self.untuple(span, tuple_binding.bindings.len());
