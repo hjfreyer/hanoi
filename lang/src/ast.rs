@@ -113,20 +113,12 @@ pub struct Builtin<'t> {
     pub args: Vec<BuiltinArg<'t>>,
 }
 
-#[derive(Debug, FromPest)]
+#[derive(Debug, FromPest, Spanner)]
 #[pest_ast(rule(Rule::qualified_label))]
 pub struct QualifiedLabel<'t> {
     #[pest_ast(outer())]
     pub span: pest::Span<'t>,
     pub path: Vec<Identifier<'t>>,
-}
-
-#[derive(Debug, FromPest)]
-#[pest_ast(rule(Rule::stack_bindings))]
-pub struct StackBindings<'t> {
-    #[pest_ast(outer())]
-    pub span: pest::Span<'t>,
-    pub bindings: Vec<Binding<'t>>,
 }
 
 #[derive(Debug, FromPest, Spanner)]
@@ -230,18 +222,26 @@ pub struct Expression<'t> {
     #[pest_ast(outer())]
     pub span: pest::Span<'t>,
 
-    pub arg: ArgExpression<'t>,
-    pub calls: Vec<QualifiedLabel<'t>>,
+    pub root: RootExpression<'t>,
+    pub transformers: Vec<Transformer<'t>>,
 }
 
 #[derive(Debug, FromPest, Spanner)]
-#[pest_ast(rule(Rule::arg_expr))]
-pub enum ArgExpression<'t> {
+#[pest_ast(rule(Rule::root_expr))]
+pub enum RootExpression<'t> {
     Literal(Literal<'t>),
     Tuple(Tuple<'t>),
     Block(Block<'t>),
     Identifier(Identifier<'t>),
     Copy(Copy<'t>),
+}
+
+#[derive(Debug, FromPest, Spanner)]
+#[pest_ast(rule(Rule::transformer))]
+pub enum Transformer<'t> {
+    Call(QualifiedLabel<'t>),
+    Match(Match<'t>),
+    If(If<'t>),
 }
 
 #[derive(Debug, FromPest, Spanner)]
@@ -264,6 +264,35 @@ pub enum Statement<'t> {
 #[pest_ast(rule(Rule::let_statement))]
 
 pub struct LetStatement<'t> {
+    #[pest_ast(outer())]
+    pub span: pest::Span<'t>,
+    pub binding: Binding<'t>,
+    pub rhs: Expression<'t>,
+}
+
+#[derive(Debug, FromPest, Spanner)]
+#[pest_ast(rule(Rule::if_expr))]
+
+pub struct If<'t> {
+    #[pest_ast(outer())]
+    pub span: pest::Span<'t>,
+    pub true_case: Box<Expression<'t>>,
+    pub false_case: Box<Expression<'t>>,
+}
+
+#[derive(Debug, FromPest, Spanner)]
+#[pest_ast(rule(Rule::match_expr))]
+
+pub struct Match<'t> {
+    #[pest_ast(outer())]
+    pub span: pest::Span<'t>,
+    pub cases: Vec<MatchCase<'t>>,
+}
+
+#[derive(Debug, FromPest, Spanner)]
+#[pest_ast(rule(Rule::match_case))]
+
+pub struct MatchCase<'t> {
     #[pest_ast(outer())]
     pub span: pest::Span<'t>,
     pub binding: Binding<'t>,

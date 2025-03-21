@@ -781,6 +781,8 @@ pub enum BuilderError {
 }
 
 builtins! {
+    (Panic, "panic"),
+
     (Add, "add"),
     (Sub, "sub"),
     (Prod, "prod"),

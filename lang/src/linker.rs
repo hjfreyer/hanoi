@@ -143,7 +143,9 @@ impl<'t> Compiler<'t> {
                 };
                 flat::InnerWord::Call(*idx)
             }
-            compiler::InnerWord::Branch(qualified_name, qualified_name1) => todo!(),
+            compiler::InnerWord::Branch(true_case, false_case) => {
+                todo!()
+            }
         };
 
         Ok(flat::Word {

@@ -181,6 +181,66 @@ impl<'t> Compiler<'t> {
                     .append(Name::Generated(0));
                 b.fully_qualified_call(span, qualified)
             }
+            Expression::Match { span, cases } => todo!(),
+            //     let span = span.into_ir(self.sources, file_idx);
+
+            //     let mut false_case = vec![Word{span, names:vec![], inner: InnerWord::Builtin(flat::Builtin::Panic)}];
+
+            //     for case in cases.into_iter().rev() {
+
+            //     }
+
+            //     let mut true_case = SentenceBuilder::new(
+            //         span.into_ir(self.sources, file_idx),
+            //         self.sources,
+            //         names.next(),
+            //         locals.clone(),
+            //     );
+            //     let mut false_case = SentenceBuilder::new(
+            //         span.into_ir(self.sources, file_idx),
+            //         self.sources,
+            //         names.next(),
+            //         locals.clone(),
+            //     );
+            //     for case in cases {
+            //         true_case.binding(case.binding);
+            //         self.visit_expr(file_idx, name_prefix, &mut true_case, case.rhs)?;
+            //     }
+            //     b.words.push(Word {
+            //         span: span.into_ir(self.sources, file_idx),
+            //         inner: InnerWord::Branch(true_case.words, false_case.words),
+            //         names: b.names.names(),
+            //     });
+            //     b.names.pop();
+            //     b.names.push_unnamed();
+            //     Ok(())
+            // }
+            Expression::If {
+                span,
+                cond,
+                true_case,
+                false_case,
+            } => {
+                let span = span.into_ir(self.sources, file_idx);
+
+                self.visit_expr(file_idx, name_prefix, b, *cond)?;
+
+                b.names.pop();
+
+                let mut true_case_b =
+                    SentenceBuilder::new(span, self.sources, b.name.clone(), b.names.clone());
+                self.visit_expr(file_idx, name_prefix, &mut true_case_b, *true_case)?;
+                let mut false_case_b =
+                    SentenceBuilder::new(span, self.sources, b.name.clone(), b.names.clone());
+                self.visit_expr(file_idx, name_prefix, &mut false_case_b, *false_case)?;
+                b.words.push(Word {
+                    span,
+                    inner: InnerWord::Branch(true_case_b.words, false_case_b.words),
+                    names: b.names.names(),
+                });
+                b.names.push_unnamed();
+                Ok(())
+            }
         }
     }
 
@@ -417,29 +477,45 @@ pub enum Expression<'t> {
         arg: Box<Expression<'t>>,
         label: ast::QualifiedLabel<'t>,
     },
+    Match {
+        span: pest::Span<'t>,
+        cases: Vec<MatchCase<'t>>,
+    },
+    If {
+        span: pest::Span<'t>,
+        cond: Box<Expression<'t>>,
+        true_case: Box<Expression<'t>>,
+        false_case: Box<Expression<'t>>,
+    },
 }
 
 impl<'t> Expression<'t> {
     pub fn from_ast(mut a: ast::Expression<'t>) -> Self {
-        if let Some(label) = a.calls.pop() {
-            Self::Call {
+        match a.transformers.pop() {
+            Some(ast::Transformer::Call(label)) => Self::Call {
                 span: a.span,
                 label,
                 arg: Box::new(Self::from_ast(a)),
-            }
-        } else {
-            Self::from_ast_arg(a.arg)
+            },
+            Some(ast::Transformer::Match(m)) => todo!(),
+            Some(ast::Transformer::If(if_)) => Self::If {
+                span: if_.span,
+                cond: Box::new(Self::from_ast(a)),
+                true_case: Box::new(Expression::from_ast(*if_.true_case)),
+                false_case: Box::new(Expression::from_ast(*if_.false_case)),
+            },
+            None => Self::from_ast_root(a.root),
         }
     }
 
-    fn from_ast_arg(a: ast::ArgExpression<'t>) -> Self {
+    fn from_ast_root(a: ast::RootExpression<'t>) -> Self {
         match a {
-            ast::ArgExpression::Literal(literal) => Self::Literal(literal),
-            ast::ArgExpression::Tuple(tuple) => Self::Tuple {
+            ast::RootExpression::Literal(literal) => Self::Literal(literal),
+            ast::RootExpression::Tuple(tuple) => Self::Tuple {
                 span: tuple.span,
                 values: tuple.values.into_iter().map(Expression::from_ast).collect(),
             },
-            ast::ArgExpression::Block(mut block) => {
+            ast::RootExpression::Block(mut block) => {
                 if block.statements.is_empty() {
                     Self::from_ast(*block.expression)
                 } else {
@@ -448,12 +524,25 @@ impl<'t> Expression<'t> {
                         span: block.span,
                         binding: s.binding,
                         rhs: Box::new(Self::from_ast(s.rhs)),
-                        inner: Box::new(Self::from_ast_arg(ast::ArgExpression::Block(block))),
+                        inner: Box::new(Self::from_ast_root(ast::RootExpression::Block(block))),
                     }
                 }
             }
-            ast::ArgExpression::Identifier(identifier) => Self::Identifier(identifier),
-            ast::ArgExpression::Copy(copy) => Self::Copy(copy.0),
+            ast::RootExpression::Identifier(identifier) => Self::Identifier(identifier),
+            ast::RootExpression::Copy(copy) => Self::Copy(copy.0),
+            // ast::ArgExpression::Match(match_) => Self::Match{                span: match_.span,
+            //     cases: match_.cases.into_iter().map(|c| MatchCase {
+            //         span: c.span,
+            //         binding: c.binding,
+            //         rhs: Expression::from_ast(c.rhs),
+            //     }).collect(),
+            // },
+            // ast::ArgExpression::If(if_) => Self::If{
+            //     span: if_.span,
+            //     cond: Box::new(Expression::from_ast(*if_.cond)),
+            //     true_case: Box::new(Expression::from_ast(*if_.true_case)),
+            //     false_case: Box::new(Expression::from_ast(*if_.false_case)),
+            // },
         }
     }
 }
@@ -472,8 +561,17 @@ impl<'t> Spanner<'t> for Expression<'t> {
             } => *span,
             Expression::Tuple { span, values } => *span,
             Expression::Call { span, arg, label } => *span,
+            Expression::Match { span, cases } => *span,
+            Expression::If { span, .. } => *span,
         }
     }
+}
+
+#[derive(Debug)]
+pub struct MatchCase<'t> {
+    pub span: pest::Span<'t>,
+    pub binding: ast::Binding<'t>,
+    pub rhs: Expression<'t>,
 }
 
 #[derive(Debug, Clone)]

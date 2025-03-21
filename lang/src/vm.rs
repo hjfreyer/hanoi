@@ -65,6 +65,9 @@ fn inner_eval(
     w: &InnerWord,
 ) -> Result<EvalResult, InnerEvalError> {
     match w {
+        InnerWord::Builtin(Builtin::Panic) => {
+            ebail!("explicit panic")
+        }
         InnerWord::Builtin(Builtin::Add) => {
             let Some(Value::Usize(a)) = stack.pop() else {
                 ebail!("bad value")

@@ -53,16 +53,6 @@ literal = { bool | int | char_lit | symbol | nil }
 
 // VALUES
 
-value_expr = {
-    // closure
-    // |
-    literal
-  | tuple_expr // | match_expr
-
-  | copy
-  | identifier
-}
-
 copy = { "*" ~ identifier }
 
 tuple_expr = {
@@ -93,15 +83,8 @@ raw_word = {
   | builtin
 }
 
-stack_bindings = {
-    "[" ~ "]"
-  | "[" ~ binding ~ ("," ~ binding)* ~ "]"
-}
+// PROC
 
-bindings = {
-    "(" ~ ")"
-  | "(" ~ binding ~ ("," ~ binding)* ~ ")"
-}
 binding  = { tuple_binding | drop_binding | literal | identifier }
 
 drop_binding  = { "^" }
@@ -110,13 +93,11 @@ tuple_binding = {
   | "(" ~ binding ~ ("," ~ binding)* ~ ")"
 }
 
-// PROC
-
 proc_decl = { "proc" ~ binding ~ identifier ~ "=>" ~ expr }
-expr      = { arg_expr ~ (qualified_label*) }
+expr      = { root_expr ~ transformer* }
 
-arg_expr = {
-    literal
+root_expr = {
+  literal
   | tuple_expr
   | block 
   | copy
@@ -134,6 +115,18 @@ statement = {
 let_statement = {
     "let" ~ binding ~ "=" ~ expr ~ ";"
 }
+
+transformer = {
+  if_expr
+  | qualified_label
+}
+
+if_expr = { "if" ~ expr ~ "else" ~ expr }
+
+match_expr = { "match" ~ "{" ~ match_case* ~ "}" }
+
+match_case = { binding ~ "=>" ~ expr ~ "," }
+
 
 // OTHER
 
@@ -205,7 +198,3 @@ let_statement = {
 // match_case  =  { bindings ~ "=>" ~ "{" ~ block ~ "}" }
 
 // // New stuff
-
-// match_expr = { "match" ~ value_expr ~ "{" ~ match_expr_case* ~ "}" }
-
-// match_expr_case = { bindings ~ "=>" ~ "{" ~ block ~ "}" }

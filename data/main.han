@@ -341,9 +341,67 @@ sentence add {
     #untuple(2) #add
 }
 
+sentence eq {
+    #untuple(2) #eq
+}
+
 proc x double => {
     (*x, x) 'add
 }
+
+mod map {
+    proc () alloc => (@start, ())
+
+
+}
+
+//sentence double_iter_alloc {
+//    #call('map::alloc)
+//    [map_closure]
+//    (@start, map_closure)
+//}
+//
+//sentence double_iter {
+//    [closure, args]
+//    closure #untuple(2)
+//    [args, case, map_closure]
+//    case @start #assert_eq
+//    map_closure args #call('map::main) #call('double_iter_map_response)
+//}
+//
+//sentence double_iter_map_response {
+//    [map_closure, map_response]
+//    #untuple(2)
+//    [map_closure, map_tag, map_arg]
+//    *map_tag @fn #eq #branch('double_iter_map_req_is_double, 'double_iter_map_response2)
+//}
+//
+//sentence double_iter_map_response2 {
+//    [map_closure, map_tag, map_arg]
+//    *map_tag @iter #eq #branch('double_iter_map_req_is_iter, 'double_iter_map_req_is_resp)
+//}
+//
+//sentence double_iter_map_req_is_double {
+//    [map_closure, map_target, map_args]
+//    map_target @fn #assert_eq
+//    map_args #call('double) 
+//    [map_closure, doubled]
+//    map_closure doubled #call('map::main) #call('double_iter_map_response)
+//}
+//
+//sentence double_iter_map_req_is_iter {
+//    [map_closure, map_target, map_args]
+//    map_target @iter #assert_eq
+//    (@start, map_closure) (@iter, map_args)
+//}
+//
+//sentence double_iter_map_req_is_resp {
+//    [map_closure, map_target, map_args]
+//    map_target @resp #assert_eq
+//    (@start, map_closure) (@resp, map_args)
+//}
+
+
 
 mod ints {
     proc () alloc => {
@@ -376,6 +434,8 @@ proc (a, b) swap => {
     (b, a)
 }
 
+
+
 proc () main_impl => {
     let i = () 'ints::alloc;
     let (i, (@some, 0)) = (i, @next) 'ints::main;
@@ -383,9 +443,11 @@ proc () main_impl => {
 
     let x = 4;
     let y = 5;
-    let z = 6;
-    let a = ((x, y) 'add, z) 'add;
-    ()
+    (x, y) 'eq if {
+        ()
+    } else {
+        ()
+    }
 }
     //#call('double_iter_alloc)
     //(@next) #call('double_iter) (@iter, (@next)) #assert_eq
