@@ -437,12 +437,15 @@ proc (a, b) swap => {
 
 
 proc () main_impl => {
-    let i = () 'ints::alloc;
-    let (i, (@some, 0)) = (i, @next) 'ints::main;
-    let (i, (@some, 1)) = (i, @next) 'ints::main;
+   // let i = () 'ints::alloc;
+   // let (i, (@some, 0)) = (i, @next) 'ints::main;
+   // let (i, (@some, 1)) = (i, @next) 'ints::main;
 
-    let x = 4;
     let y = 5;
+    let x = {
+        let z = 6;
+        z
+    };
     (x, y) 'eq if {
         ()
     } else {

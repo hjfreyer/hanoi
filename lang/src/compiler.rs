@@ -136,112 +136,117 @@ impl<'t> Compiler<'t> {
         b: &mut SentenceBuilder<'t>,
         expression: Expression,
     ) -> Result<(), linker::Error> {
-        let span = expression.span(file_idx);
+        let (words, locals) =
+            expression.compilation(file_idx, self.sources, name_prefix, b.names.clone())?;
+        b.names = locals;
+        b.words.extend(words);
+        Ok(())
+        // let span = expression.span(file_idx);
 
-        match expression {
-            Expression::Literal(literal) => {
-                b.literal(literal);
-                Ok(())
-            }
-            Expression::Identifier(identifier) => {
-                b.mv_ident(identifier)?;
-                Ok(())
-            }
-            Expression::Copy(identifier) => {
-                b.cp_ident(identifier)?;
-                Ok(())
-            }
-            Expression::Tuple { values, .. } => {
-                let size = values.len();
-                for v in values {
-                    self.visit_expr(file_idx, name_prefix, b, v)?;
-                }
-                b.tuple(span, size);
+        // match expression {
+        //     Expression::Literal(literal) => {
+        //         b.literal(literal);
+        //         Ok(())
+        //     }
+        //     Expression::Identifier(identifier) => {
+        //         b.mv_ident(identifier)?;
+        //         Ok(())
+        //     }
+        //     Expression::Copy(identifier) => {
+        //         b.cp_ident(identifier)?;
+        //         Ok(())
+        //     }
+        //     Expression::Tuple { values, .. } => {
+        //         let size = values.len();
+        //         for v in values {
+        //             self.visit_expr(file_idx, name_prefix, b, v)?;
+        //         }
+        //         b.tuple(span, size);
 
-                Ok(())
-            }
-            Expression::LetBlock {
-                span: _,
-                binding,
-                rhs,
-                inner,
-            } => {
-                self.visit_expr(file_idx, name_prefix, b, *rhs)?;
-                b.binding(binding);
-                self.visit_expr(file_idx, name_prefix, b, *inner)?;
-                Ok(())
-            }
-            Expression::Call { span, label, arg } => {
-                let span = span.into_ir(self.sources, file_idx);
+        //         Ok(())
+        //     }
+        //     Expression::LetBlock {
+        //         span: _,
+        //         binding,
+        //         rhs,
+        //         inner,
+        //     } => {
+        //         self.visit_expr(file_idx, name_prefix, b, *rhs)?;
+        //         b.binding(binding);
+        //         self.visit_expr(file_idx, name_prefix, b, *inner)?;
+        //         Ok(())
+        //     }
+        //     Expression::Call { span, label, arg } => {
+        //         let span = span.into_ir(self.sources, file_idx);
 
-                let tc = self.visit_expr(file_idx, name_prefix, b, *arg)?;
+        //         let tc = self.visit_expr(file_idx, name_prefix, b, *arg)?;
 
-                let qualified = name_prefix
-                    .join(label.into_ir(self.sources, file_idx))
-                    .append(Name::Generated(0));
-                b.fully_qualified_call(span, qualified)
-            }
-            Expression::Match { span, cases } => todo!(),
-            //     let span = span.into_ir(self.sources, file_idx);
+        //         let qualified = name_prefix
+        //             .join(label.into_ir(self.sources, file_idx))
+        //             .append(Name::Generated(0));
+        //         b.fully_qualified_call(span, qualified)
+        //     }
+        //     Expression::Match { span, cases } => todo!(),
+        //     //     let span = span.into_ir(self.sources, file_idx);
 
-            //     let mut false_case = vec![Word{span, names:vec![], inner: InnerWord::Builtin(flat::Builtin::Panic)}];
+        //     //     let mut false_case = vec![Word{span, names:vec![], inner: InnerWord::Builtin(flat::Builtin::Panic)}];
 
-            //     for case in cases.into_iter().rev() {
+        //     //     for case in cases.into_iter().rev() {
 
-            //     }
+        //     //     }
 
-            //     let mut true_case = SentenceBuilder::new(
-            //         span.into_ir(self.sources, file_idx),
-            //         self.sources,
-            //         names.next(),
-            //         locals.clone(),
-            //     );
-            //     let mut false_case = SentenceBuilder::new(
-            //         span.into_ir(self.sources, file_idx),
-            //         self.sources,
-            //         names.next(),
-            //         locals.clone(),
-            //     );
-            //     for case in cases {
-            //         true_case.binding(case.binding);
-            //         self.visit_expr(file_idx, name_prefix, &mut true_case, case.rhs)?;
-            //     }
-            //     b.words.push(Word {
-            //         span: span.into_ir(self.sources, file_idx),
-            //         inner: InnerWord::Branch(true_case.words, false_case.words),
-            //         names: b.names.names(),
-            //     });
-            //     b.names.pop();
-            //     b.names.push_unnamed();
-            //     Ok(())
-            // }
-            Expression::If {
-                span,
-                cond,
-                true_case,
-                false_case,
-            } => {
-                let span = span.into_ir(self.sources, file_idx);
+        //     //     let mut true_case = SentenceBuilder::new(
+        //     //         span.into_ir(self.sources, file_idx),
+        //     //         self.sources,
+        //     //         names.next(),
+        //     //         locals.clone(),
+        //     //     );
+        //     //     let mut false_case = SentenceBuilder::new(
+        //     //         span.into_ir(self.sources, file_idx),
+        //     //         self.sources,
+        //     //         names.next(),
+        //     //         locals.clone(),
+        //     //     );
+        //     //     for case in cases {
+        //     //         true_case.binding(case.binding);
+        //     //         self.visit_expr(file_idx, name_prefix, &mut true_case, case.rhs)?;
+        //     //     }
+        //     //     b.words.push(Word {
+        //     //         span: span.into_ir(self.sources, file_idx),
+        //     //         inner: InnerWord::Branch(true_case.words, false_case.words),
+        //     //         names: b.names.names(),
+        //     //     });
+        //     //     b.names.pop();
+        //     //     b.names.push_unnamed();
+        //     //     Ok(())
+        //     // }
+        //     Expression::If {
+        //         span,
+        //         cond,
+        //         true_case,
+        //         false_case,
+        //     } => {
+        //         let span = span.into_ir(self.sources, file_idx);
 
-                self.visit_expr(file_idx, name_prefix, b, *cond)?;
+        //         self.visit_expr(file_idx, name_prefix, b, *cond)?;
 
-                b.names.pop();
+        //         b.names.pop();
 
-                let mut true_case_b =
-                    SentenceBuilder::new(span, self.sources, b.name.clone(), b.names.clone());
-                self.visit_expr(file_idx, name_prefix, &mut true_case_b, *true_case)?;
-                let mut false_case_b =
-                    SentenceBuilder::new(span, self.sources, b.name.clone(), b.names.clone());
-                self.visit_expr(file_idx, name_prefix, &mut false_case_b, *false_case)?;
-                b.words.push(Word {
-                    span,
-                    inner: InnerWord::Branch(true_case_b.words, false_case_b.words),
-                    names: b.names.names(),
-                });
-                b.names.push_unnamed();
-                Ok(())
-            }
-        }
+        //         let mut true_case_b =
+        //             SentenceBuilder::new(span, self.sources, b.name.clone(), b.names.clone());
+        //         self.visit_expr(file_idx, name_prefix, &mut true_case_b, *true_case)?;
+        //         let mut false_case_b =
+        //             SentenceBuilder::new(span, self.sources, b.name.clone(), b.names.clone());
+        //         self.visit_expr(file_idx, name_prefix, &mut false_case_b, *false_case)?;
+        //         b.words.push(Word {
+        //             span,
+        //             inner: InnerWord::Branch(true_case_b.words, false_case_b.words),
+        //             names: b.names.names(),
+        //         });
+        //         b.names.push_unnamed();
+        //         Ok(())
+        //     }
+        // }
     }
 
     fn visit_sentence(
@@ -380,7 +385,7 @@ impl<'t> Compiler<'t> {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Locals {
     num_generated: usize,
     scope: usize,
@@ -388,8 +393,9 @@ pub struct Locals {
 }
 
 impl Locals {
-    fn pop(&mut self) {
-        self.stack.pop().unwrap();
+    fn pop(&mut self) -> Name {
+        let (_, name) = self.stack.pop().unwrap();
+        name
     }
 
     fn names(&self) -> Vec<Name> {
@@ -429,6 +435,20 @@ impl Locals {
 
     fn push_named(&mut self, name: FileSpan) {
         self.stack.push((self.scope, Name::User(name)))
+    }
+
+    fn check_consumed(&mut self, sources: &Sources, name: FileSpan) -> Result<(), Error> {
+        if self.stack.iter().any(|(_, n)| match n {
+            Name::Generated(_) => false,
+            Name::User(n) => *n == name,
+        }) {
+            Err(Error::UnusedVariable {
+                location: name.location(sources),
+                name: name.as_str(sources).to_owned(),
+            })
+        } else {
+            Ok(())
+        }
     }
 
     fn prev_scope(&self) -> Vec<Name> {
@@ -543,6 +563,180 @@ impl<'t> Expression<'t> {
             //     true_case: Box::new(Expression::from_ast(*if_.true_case)),
             //     false_case: Box::new(Expression::from_ast(*if_.false_case)),
             // },
+        }
+    }
+
+    fn compilation(
+        self,
+        file_idx: FileIndex,
+        sources: &Sources,
+        name_prefix: &QualifiedName,
+        mut locals: Locals,
+    ) -> Result<(Vec<Word>, Locals), Error> {
+        match self {
+            Expression::Literal(literal) => {
+                let span = literal.span(file_idx);
+                let value = literal_to_value(literal);
+                let word = Word {
+                    span,
+                    inner: InnerWord::Push(value),
+                    names: locals.names(),
+                };
+                locals.push_unnamed();
+                Ok((vec![word], locals))
+            }
+            Expression::Identifier(id) => {
+                let span = id.span(file_idx);
+                let name = id.into_ir(sources, file_idx);
+                let Some(idx) = locals.find(sources, &name) else {
+                    return Err(Error::UnknownReference {
+                        location: span.location(sources),
+                        name: name
+                            .as_ref(sources)
+                            .as_str()
+                            .unwrap_or("<unnamed>")
+                            .to_owned(),
+                    });
+                };
+                let names: Vec<Name> = locals.names();
+                let declared = locals.remove(idx);
+                locals.push_unnamed();
+
+                Ok((
+                    vec![Word {
+                        inner: InnerWord::Move(idx),
+                        span,
+                        names,
+                    }],
+                    locals,
+                ))
+            }
+            Expression::Copy(id) => {
+                let span = id.span(file_idx);
+                let name = id.into_ir(sources, file_idx);
+                let Some(idx) = locals.find(sources, &name) else {
+                    return Err(Error::UnknownReference {
+                        location: span.location(sources),
+                        name: name
+                            .as_ref(sources)
+                            .as_str()
+                            .unwrap_or("<unnamed>")
+                            .to_owned(),
+                    });
+                };
+                let names = locals.names();
+                locals.push_unnamed();
+
+                Ok((
+                    vec![Word {
+                        inner: InnerWord::Copy(idx),
+                        span,
+                        names,
+                    }],
+                    locals,
+                ))
+            }
+            Expression::LetBlock {
+                span,
+                binding,
+                rhs,
+                inner,
+            } => {
+                let mut words = vec![];
+                (words, locals) = rhs.compilation(file_idx, sources, name_prefix, locals)?;
+
+                let ast::Binding::Identifier(name) = binding else {
+                    todo!()
+                };
+                locals.pop();
+                locals.push_named(name.span(file_idx));
+
+                let (w, l) = inner.compilation(file_idx, sources, name_prefix, locals)?;
+                words.extend(w);
+                locals = l;
+                locals.check_consumed(sources, name.span(file_idx))?;
+                Ok((words, locals))
+            }
+            Expression::Tuple { span, values } => {
+                let span = span.span(file_idx);
+
+                let len = values.len();
+                let mut words = vec![];
+
+                for v in values {
+                    let (w, l) = v.compilation(file_idx, sources, name_prefix, locals)?;
+                    words.extend(w);
+                    locals = l;
+                }
+                words.push(Word {
+                    span,
+                    inner: InnerWord::Tuple(len),
+                    names: locals.names(),
+                });
+                for _ in 0..len {
+                    let Name::Generated(_) = locals.pop() else {
+                        panic!("tried to tuple a named variable?")
+                    };
+                }
+                locals.push_unnamed();
+                Ok((words, locals))
+            }
+            Expression::Call { span, arg, label } => {
+                let span = span.into_ir(sources, file_idx);
+                let mut words = vec![];
+                (words, locals) = arg.compilation(file_idx, sources, name_prefix, locals)?;
+
+                let qualified = name_prefix
+                    .join(label.into_ir(sources, file_idx))
+                    .append(Name::Generated(0));
+
+                words.push(Word {
+                    span,
+                    inner: InnerWord::Call(normalize_path(sources, qualified)),
+                    names: locals.names(),
+                });
+                locals.pop();
+                locals.push_unnamed();
+
+                Ok((words, locals))
+            }
+            Expression::Match { span, cases } => todo!(),
+            Expression::If {
+                span,
+                cond,
+                true_case,
+                false_case,
+            } => {
+                let span = span.span(file_idx);
+                let mut words = vec![];
+                (words, locals) = cond.compilation(file_idx, sources, name_prefix, locals)?;
+
+                locals.pop();
+
+                let names = locals.names();
+
+                let (true_words, true_locals) =
+                    true_case.compilation(file_idx, sources, name_prefix, locals.clone())?;
+                let (false_words, false_locals) =
+                    false_case.compilation(file_idx, sources, name_prefix, locals)?;
+
+                if true_locals != false_locals {
+                    return Err(Error::BranchContractsDisagree {
+                        location: span.location(sources),
+                    });
+                }
+                //         self.visit_expr(file_idx, name_prefix, &mut true_case_b, *)?;
+                //         let mut false_case_b =
+                //             SentenceBuilder::new(span, self.sources, b.name.clone(), b.names.clone());
+                //         self.visit_expr(file_idx, name_prefix, &mut false_case_b, *false_case)?;
+                words.push(Word {
+                    span,
+                    inner: InnerWord::Branch(true_words, false_words),
+                    names,
+                });
+                //         b.names.push_unnamed();
+                Ok((words, true_locals))
+            }
         }
     }
 }
@@ -704,7 +898,7 @@ where
 #[derive(Debug, Clone, Copy)]
 pub struct Identifier(pub FileSpan);
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Name {
     User(FileSpan),
     Generated(usize),
@@ -988,6 +1182,32 @@ pub struct Symbol {
 //     Move(Identifier),
 //     Tuple(Tuple),
 // }
+
+fn literal_to_value(literal: ast::Literal) -> flat::Value {
+    match literal {
+        ast::Literal::Int(ast::Int { span: _, value }) => flat::Value::Usize(value),
+        ast::Literal::Symbol(sym) => match sym {
+            ast::Symbol::Identifier(identifier) => {
+                flat::Value::Symbol(identifier.0.as_str().to_owned())
+            }
+            ast::Symbol::String(string_literal) => flat::Value::Symbol(string_literal.value),
+        },
+    }
+}
+
+fn normalize_path(sources: &Sources, mut path: QualifiedName) -> QualifiedName {
+    loop {
+        let Some(super_idx) = path
+            .0
+            .iter()
+            .position(|n| n.as_ref(sources) == NameRef::User("super"))
+        else {
+            return path;
+        };
+        path.0.remove(super_idx - 1);
+        path.0.remove(super_idx - 1);
+    }
+}
 
 pub struct SentenceBuilder<'a> {
     pub span: FileSpan,

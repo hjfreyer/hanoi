@@ -37,6 +37,13 @@ pub enum Error {
         location: source::Location,
         name: String,
     },
+    #[error("At {location}, unused variable: {name}")]
+    UnusedVariable {
+        location: source::Location,
+        name: String,
+    },
+    #[error("At {location}, branch contracts disagree")]
+    BranchContractsDisagree { location: source::Location },
 }
 
 pub fn compile(sources: &source::Sources, ir: compiler::Crate) -> Result<flat::Library, Error> {
