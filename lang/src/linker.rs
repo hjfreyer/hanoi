@@ -151,7 +151,15 @@ impl<'t> Compiler<'t> {
                 flat::InnerWord::Call(*idx)
             }
             compiler::InnerWord::Branch(true_case, false_case) => {
-                todo!()
+                let true_idx = self
+                    .index
+                    .get(&true_case.as_ref(&self.sources))
+                    .expect("generated names should always exist");
+                let false_idx = self
+                    .index
+                    .get(&false_case.as_ref(&self.sources))
+                    .expect("generated names should always exist");
+                flat::InnerWord::Branch(*true_idx, *false_idx)
             }
         };
 
