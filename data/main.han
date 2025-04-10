@@ -446,11 +446,11 @@ proc () main_impl => {
         let z = 6;
         z
     };
-    (x, y) 'eq if {
-        ()
-    } else {
-        ()
-    }
+    (x, y) 'eq //if {
+    //    ()
+    //} else {
+    //    ()
+    //}
 }
     //#call('double_iter_alloc)
     //(@next) #call('double_iter) (@iter, (@next)) #assert_eq

@@ -6,7 +6,7 @@ use std::{
 use derive_more::derive::{From, Into};
 use typed_index_collections::TiVec;
 
-#[derive(From, Into, Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(From, Into, Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct FileIndex(usize);
 
 #[derive(From, Into, Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -92,7 +92,7 @@ impl Span {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct FileSpan {
     pub file_idx: FileIndex,
     pub start: usize,

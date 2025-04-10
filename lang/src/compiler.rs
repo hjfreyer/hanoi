@@ -105,148 +105,26 @@ impl<'t> Compiler<'t> {
         name: QualifiedName,
         expression: ast::Expression,
     ) -> Result<(), linker::Error> {
+        let expression = Expression::from_ast(expression);
+        let span = expression.span(file_idx);
+        let mut locals = Locals::default();
+        locals.push_unnamed();
+
+        let (mut words, locals) = compile_binding(file_idx, self.sources, binding, locals)?;
+
+        let (inner_words, locals) =
+            expression.compilation(file_idx, self.sources, name_prefix, locals)?;
+
+        words.extend(inner_words);
+
+        let sentence = RecursiveSentence { span, words };
+
         let mut names = NameSequence {
             base: name,
             count: 0,
         };
-        let name = names.next();
-        let mut locals = Locals::default();
-        locals.push_unnamed();
-
-        let mut b = SentenceBuilder::new(span, self.sources, name.clone(), locals.clone());
-        b.binding(binding);
-        self.visit_expr(
-            file_idx,
-            name_prefix,
-            &mut b,
-            Expression::from_ast(expression),
-        )?;
-        b.cleanup(span);
-
-        self.res.sentences.push(b.build());
+        self.visit_recursive_sentence(&mut names, sentence);
         Ok(())
-    }
-
-    fn visit_expr(
-        &mut self,
-        file_idx: FileIndex,
-        name_prefix: &QualifiedName,
-        // name_sequence: &mut NameSequence,
-        // locals: &mut Locals,
-        b: &mut SentenceBuilder<'t>,
-        expression: Expression,
-    ) -> Result<(), linker::Error> {
-        let (words, locals) =
-            expression.compilation(file_idx, self.sources, name_prefix, b.names.clone())?;
-        b.names = locals;
-        b.words.extend(words);
-        Ok(())
-        // let span = expression.span(file_idx);
-
-        // match expression {
-        //     Expression::Literal(literal) => {
-        //         b.literal(literal);
-        //         Ok(())
-        //     }
-        //     Expression::Identifier(identifier) => {
-        //         b.mv_ident(identifier)?;
-        //         Ok(())
-        //     }
-        //     Expression::Copy(identifier) => {
-        //         b.cp_ident(identifier)?;
-        //         Ok(())
-        //     }
-        //     Expression::Tuple { values, .. } => {
-        //         let size = values.len();
-        //         for v in values {
-        //             self.visit_expr(file_idx, name_prefix, b, v)?;
-        //         }
-        //         b.tuple(span, size);
-
-        //         Ok(())
-        //     }
-        //     Expression::LetBlock {
-        //         span: _,
-        //         binding,
-        //         rhs,
-        //         inner,
-        //     } => {
-        //         self.visit_expr(file_idx, name_prefix, b, *rhs)?;
-        //         b.binding(binding);
-        //         self.visit_expr(file_idx, name_prefix, b, *inner)?;
-        //         Ok(())
-        //     }
-        //     Expression::Call { span, label, arg } => {
-        //         let span = span.into_ir(self.sources, file_idx);
-
-        //         let tc = self.visit_expr(file_idx, name_prefix, b, *arg)?;
-
-        //         let qualified = name_prefix
-        //             .join(label.into_ir(self.sources, file_idx))
-        //             .append(Name::Generated(0));
-        //         b.fully_qualified_call(span, qualified)
-        //     }
-        //     Expression::Match { span, cases } => todo!(),
-        //     //     let span = span.into_ir(self.sources, file_idx);
-
-        //     //     let mut false_case = vec![Word{span, names:vec![], inner: InnerWord::Builtin(flat::Builtin::Panic)}];
-
-        //     //     for case in cases.into_iter().rev() {
-
-        //     //     }
-
-        //     //     let mut true_case = SentenceBuilder::new(
-        //     //         span.into_ir(self.sources, file_idx),
-        //     //         self.sources,
-        //     //         names.next(),
-        //     //         locals.clone(),
-        //     //     );
-        //     //     let mut false_case = SentenceBuilder::new(
-        //     //         span.into_ir(self.sources, file_idx),
-        //     //         self.sources,
-        //     //         names.next(),
-        //     //         locals.clone(),
-        //     //     );
-        //     //     for case in cases {
-        //     //         true_case.binding(case.binding);
-        //     //         self.visit_expr(file_idx, name_prefix, &mut true_case, case.rhs)?;
-        //     //     }
-        //     //     b.words.push(Word {
-        //     //         span: span.into_ir(self.sources, file_idx),
-        //     //         inner: InnerWord::Branch(true_case.words, false_case.words),
-        //     //         names: b.names.names(),
-        //     //     });
-        //     //     b.names.pop();
-        //     //     b.names.push_unnamed();
-        //     //     Ok(())
-        //     // }
-        //     Expression::If {
-        //         span,
-        //         cond,
-        //         true_case,
-        //         false_case,
-        //     } => {
-        //         let span = span.into_ir(self.sources, file_idx);
-
-        //         self.visit_expr(file_idx, name_prefix, b, *cond)?;
-
-        //         b.names.pop();
-
-        //         let mut true_case_b =
-        //             SentenceBuilder::new(span, self.sources, b.name.clone(), b.names.clone());
-        //         self.visit_expr(file_idx, name_prefix, &mut true_case_b, *true_case)?;
-        //         let mut false_case_b =
-        //             SentenceBuilder::new(span, self.sources, b.name.clone(), b.names.clone());
-        //         self.visit_expr(file_idx, name_prefix, &mut false_case_b, *false_case)?;
-        //         b.words.push(Word {
-        //             span,
-        //             inner: InnerWord::Branch(true_case_b.words, false_case_b.words),
-        //             names: b.names.names(),
-        //         });
-        //         b.names.push_unnamed();
-        //         Ok(())
-        //     }
-        // }
     }
 
     fn visit_sentence(
@@ -304,11 +182,11 @@ impl<'t> Compiler<'t> {
         }
     }
 
-    fn convert_builtin(
+    fn convert_builtin<BranchRepr>(
         &self,
         file_idx: FileIndex,
         builtin: ast::Builtin,
-    ) -> Result<InnerWord, linker::Error> {
+    ) -> Result<InnerWord<BranchRepr>, linker::Error> {
         let name = builtin.name.0.as_str();
         if builtin.args.is_empty() {
             if let Some(b) = flat::Builtin::ALL.iter().find(|b| b.name() == name) {
@@ -367,12 +245,12 @@ impl<'t> Compiler<'t> {
         }
     }
 
-    fn convert_single_int_builtin(
+    fn convert_single_int_builtin<BranchRepr>(
         &self,
-        f: impl FnOnce(usize) -> InnerWord,
+        f: impl FnOnce(usize) -> InnerWord<BranchRepr>,
         file_idx: FileIndex,
         builtin: ast::Builtin,
-    ) -> Result<InnerWord, Error> {
+    ) -> Result<InnerWord<BranchRepr>, Error> {
         let Ok(ast::BuiltinArg::Int(ast::Int { value: size, .. })) =
             builtin.args.into_iter().exactly_one()
         else {
@@ -383,6 +261,174 @@ impl<'t> Compiler<'t> {
         };
         Ok(f(size))
     }
+
+    fn visit_recursive_sentence(
+        &mut self,
+        names: &mut NameSequence,
+        sentence: RecursiveSentence,
+    ) -> QualifiedName {
+        let res = names.next();
+        let words = sentence
+            .words
+            .into_iter()
+            .map(|w| self.visit_recursive_word(names, w))
+            .collect();
+        self.res.sentences.push(Sentence {
+            span: sentence.span,
+            name: res.clone(),
+            words,
+        });
+        res
+    }
+
+    fn visit_recursive_word(&mut self, names: &mut NameSequence, word: RecursiveWord) -> Word {
+        let new_inner = match word.inner {
+            InnerWord::Push(value) => InnerWord::Push(value),
+            InnerWord::Builtin(builtin) => InnerWord::Builtin(builtin),
+            InnerWord::Copy(idx) => InnerWord::Copy(idx),
+            InnerWord::Drop(idx) => InnerWord::Drop(idx),
+            InnerWord::Move(idx) => InnerWord::Move(idx),
+            InnerWord::Tuple(idx) => InnerWord::Tuple(idx),
+            InnerWord::Untuple(idx) => InnerWord::Untuple(idx),
+            InnerWord::Call(qualified_name) => InnerWord::Call(qualified_name),
+            InnerWord::Branch(true_case, false_case) => InnerWord::Branch(
+                self.visit_recursive_sentence(names, true_case),
+                self.visit_recursive_sentence(names, false_case),
+            ),
+        };
+
+        Word {
+            span: word.span,
+            inner: new_inner,
+            names: word.names,
+        }
+    }
+}
+
+fn compile_binding(
+    file_idx: FileIndex,
+    sources: &Sources,
+    b: ast::Binding,
+    mut locals: Locals,
+) -> Result<(Vec<RecursiveWord>, Locals), Error> {
+    let span = b.span(file_idx);
+    match b {
+        ast::Binding::Literal(l) => {
+            let mut words = vec![];
+            compile_literal(file_idx, l, &mut words, &mut locals);
+
+            words.push(RecursiveWord {
+                span,
+                inner: InnerWord::Builtin(flat::Builtin::AssertEq),
+                names: locals.names(),
+            });
+            locals.pop();
+            locals.pop();
+
+            Ok((words, locals))
+        }
+        ast::Binding::Drop(drop_binding) => todo!(),
+        ast::Binding::Tuple(tuple_binding) => {
+            let mut words = vec![RecursiveWord {
+                inner: InnerWord::Untuple(tuple_binding.bindings.len()),
+                span: span,
+                names: locals.names(),
+            }];
+            locals.pop();
+            let tmp_names: Vec<Name> = (0..tuple_binding.bindings.len())
+                .map(|_| locals.push_unnamed())
+                .collect();
+
+            // let names = self.untuple(span, tuple_binding.bindings.len());
+            for (name, binding) in tmp_names.into_iter().zip_eq(tuple_binding.bindings) {
+                let (more_words, more_locals) = compile_mv(sources, span, &name, locals)?;
+                words.extend(more_words);
+                locals = more_locals;
+                let (more_words, more_locals) =
+                    compile_binding(file_idx, sources, binding, locals)?;
+                words.extend(more_words);
+                locals = more_locals;
+            }
+            Ok((words, locals))
+        }
+        ast::Binding::Identifier(identifier) => {
+            locals.pop();
+            locals.push_named(span);
+            Ok((vec![], locals))
+        }
+    }
+}
+
+fn compile_mv(
+    sources: &Sources,
+    span: FileSpan,
+    name: &Name,
+    mut locals: Locals,
+) -> Result<(Vec<RecursiveWord>, Locals), Error> {
+    let Some(idx) = locals.find(sources, name) else {
+        return Err(Error::UnknownReference {
+            location: span.location(sources),
+            name: name
+                .as_ref(sources)
+                .as_str()
+                .unwrap_or("<unnamed>")
+                .to_owned(),
+        });
+    };
+    let names = locals.names();
+    let declared = locals.remove(idx);
+    locals.push_unnamed();
+
+    Ok((
+        vec![RecursiveWord {
+            inner: InnerWord::Move(idx),
+            span,
+            names,
+        }],
+        locals,
+    ))
+}
+
+fn compile_literal(
+    file_idx: FileIndex,
+    value: ast::Literal,
+    words: &mut Vec<RecursiveWord>,
+    locals: &mut Locals,
+) {
+    let span = value.span(file_idx);
+    match value {
+        ast::Literal::Int(ast::Int { span: _, value }) => {
+            compile_value(span, flat::Value::Usize(value), words, locals)
+        }
+        ast::Literal::Symbol(sym) => match sym {
+            ast::Symbol::Identifier(identifier) => compile_value(
+                span,
+                flat::Value::Symbol(identifier.0.as_str().to_owned()),
+                words,
+                locals,
+            ),
+            ast::Symbol::String(string_literal) => compile_value(
+                span,
+                flat::Value::Symbol(string_literal.value),
+                words,
+                locals,
+            ),
+        },
+    }
+}
+
+fn compile_value(
+    span: FileSpan,
+    value: flat::Value,
+    words: &mut Vec<RecursiveWord>,
+    locals: &mut Locals,
+) {
+    words.push(RecursiveWord {
+        span,
+        inner: InnerWord::Push(value),
+        names: locals.names(),
+    });
+    locals.push_unnamed();
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -572,12 +618,12 @@ impl<'t> Expression<'t> {
         sources: &Sources,
         name_prefix: &QualifiedName,
         mut locals: Locals,
-    ) -> Result<(Vec<Word>, Locals), Error> {
+    ) -> Result<(Vec<RecursiveWord>, Locals), Error> {
         match self {
             Expression::Literal(literal) => {
                 let span = literal.span(file_idx);
                 let value = literal_to_value(literal);
-                let word = Word {
+                let word = RecursiveWord {
                     span,
                     inner: InnerWord::Push(value),
                     names: locals.names(),
@@ -603,7 +649,7 @@ impl<'t> Expression<'t> {
                 locals.push_unnamed();
 
                 Ok((
-                    vec![Word {
+                    vec![RecursiveWord {
                         inner: InnerWord::Move(idx),
                         span,
                         names,
@@ -628,7 +674,7 @@ impl<'t> Expression<'t> {
                 locals.push_unnamed();
 
                 Ok((
-                    vec![Word {
+                    vec![RecursiveWord {
                         inner: InnerWord::Copy(idx),
                         span,
                         names,
@@ -668,7 +714,7 @@ impl<'t> Expression<'t> {
                     words.extend(w);
                     locals = l;
                 }
-                words.push(Word {
+                words.push(RecursiveWord {
                     span,
                     inner: InnerWord::Tuple(len),
                     names: locals.names(),
@@ -690,7 +736,7 @@ impl<'t> Expression<'t> {
                     .join(label.into_ir(sources, file_idx))
                     .append(Name::Generated(0));
 
-                words.push(Word {
+                words.push(RecursiveWord {
                     span,
                     inner: InnerWord::Call(normalize_path(sources, qualified)),
                     names: locals.names(),
@@ -715,8 +761,12 @@ impl<'t> Expression<'t> {
 
                 let names = locals.names();
 
+                let true_span = true_case.span(file_idx);
                 let (true_words, true_locals) =
                     true_case.compilation(file_idx, sources, name_prefix, locals.clone())?;
+
+                let false_span = false_case.span(file_idx);
+
                 let (false_words, false_locals) =
                     false_case.compilation(file_idx, sources, name_prefix, locals)?;
 
@@ -725,11 +775,21 @@ impl<'t> Expression<'t> {
                         location: span.location(sources),
                     });
                 }
+
+                let true_words = RecursiveSentence {
+                    span: true_span,
+                    words: true_words,
+                };
+                let false_words = RecursiveSentence {
+                    span: false_span,
+                    words: false_words,
+                };
+
                 //         self.visit_expr(file_idx, name_prefix, &mut true_case_b, *)?;
                 //         let mut false_case_b =
                 //             SentenceBuilder::new(span, self.sources, b.name.clone(), b.names.clone());
                 //         self.visit_expr(file_idx, name_prefix, &mut false_case_b, *false_case)?;
-                words.push(Word {
+                words.push(RecursiveWord {
                     span,
                     inner: InnerWord::Branch(true_words, false_words),
                     names,
@@ -778,14 +838,25 @@ pub struct Sentence {
 #[derive(Debug, Clone)]
 pub struct Word {
     pub span: FileSpan,
-    pub inner: InnerWord,
+    pub inner: InnerWord<QualifiedName>,
     pub names: Vec<Name>,
 }
 
-impl Word {}
+#[derive(Debug, Clone)]
+pub struct RecursiveSentence {
+    pub span: FileSpan,
+    pub words: Vec<RecursiveWord>,
+}
 
 #[derive(Debug, Clone)]
-pub enum InnerWord {
+pub struct RecursiveWord {
+    pub span: FileSpan,
+    pub inner: InnerWord<RecursiveSentence>,
+    pub names: Vec<Name>,
+}
+
+#[derive(Debug, Clone)]
+pub enum InnerWord<BranchRepr> {
     Push(flat::Value),
     Builtin(flat::Builtin),
     Copy(usize),
@@ -794,7 +865,7 @@ pub enum InnerWord {
     Tuple(usize),
     Untuple(usize),
     Call(QualifiedName),
-    Branch(Vec<Word>, Vec<Word>),
+    Branch(BranchRepr, BranchRepr),
 }
 
 pub trait FromRawAst<'t, R> {
@@ -898,7 +969,7 @@ where
 #[derive(Debug, Clone, Copy)]
 pub struct Identifier(pub FileSpan);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Name {
     User(FileSpan),
     Generated(usize),
@@ -947,7 +1018,7 @@ impl<'t> IntoIr<'t, Name> for ast::Identifier<'t> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct QualifiedName(pub Vec<Name>);
 
 impl QualifiedName {
