@@ -110,10 +110,21 @@ impl<'t> Compiler<'t> {
         let mut locals = Locals::default();
         locals.push_unnamed();
 
-        let (mut words, locals) = compile_binding(file_idx, self.sources, binding, locals)?;
+        let mut words = vec![];
+        let () = compile_binding(file_idx, self.sources, binding, &mut words, &mut locals)?;
 
         let (inner_words, locals) =
             expression.compilation(file_idx, self.sources, name_prefix, locals)?;
+
+        if locals.len() != 1 {
+            let Name::User(name) = locals.names()[1] else {
+                panic!("unused generated name?")
+            };
+            return Err(Error::UnusedVariable {
+                location: name.location(self.sources),
+                name: name.as_str(self.sources).to_owned(),
+            });
+        }
 
         words.extend(inner_words);
 
@@ -309,14 +320,13 @@ fn compile_binding(
     file_idx: FileIndex,
     sources: &Sources,
     b: ast::Binding,
-    mut locals: Locals,
-) -> Result<(Vec<RecursiveWord>, Locals), Error> {
+    words: &mut Vec<RecursiveWord>,
+    locals: &mut Locals,
+) -> Result<(), Error> {
     let span = b.span(file_idx);
     match b {
         ast::Binding::Literal(l) => {
-            let mut words = vec![];
-            compile_literal(file_idx, l, &mut words, &mut locals);
-
+            compile_literal(file_idx, l, words, locals);
             words.push(RecursiveWord {
                 span,
                 inner: InnerWord::Builtin(flat::Builtin::AssertEq),
@@ -325,15 +335,23 @@ fn compile_binding(
             locals.pop();
             locals.pop();
 
-            Ok((words, locals))
+            Ok(())
         }
-        ast::Binding::Drop(drop_binding) => todo!(),
+        ast::Binding::Drop(drop_binding) => {
+            words.push(RecursiveWord {
+                inner: InnerWord::Drop(0),
+                span: span,
+                names: locals.names(),
+            });
+            locals.pop();
+            Ok(())
+        }
         ast::Binding::Tuple(tuple_binding) => {
-            let mut words = vec![RecursiveWord {
+            words.push(RecursiveWord {
                 inner: InnerWord::Untuple(tuple_binding.bindings.len()),
                 span: span,
                 names: locals.names(),
-            }];
+            });
             locals.pop();
             let tmp_names: Vec<Name> = (0..tuple_binding.bindings.len())
                 .map(|_| locals.push_unnamed())
@@ -341,20 +359,17 @@ fn compile_binding(
 
             // let names = self.untuple(span, tuple_binding.bindings.len());
             for (name, binding) in tmp_names.into_iter().zip_eq(tuple_binding.bindings) {
-                let (more_words, more_locals) = compile_mv(sources, span, &name, locals)?;
+                let (more_words, more_locals) = compile_mv(sources, span, &name, locals.clone())?;
                 words.extend(more_words);
-                locals = more_locals;
-                let (more_words, more_locals) =
-                    compile_binding(file_idx, sources, binding, locals)?;
-                words.extend(more_words);
-                locals = more_locals;
+                *locals = more_locals;
+                let () = compile_binding(file_idx, sources, binding, words, locals)?;
             }
-            Ok((words, locals))
+            Ok(())
         }
         ast::Binding::Identifier(identifier) => {
             locals.pop();
             locals.push_named(span);
-            Ok((vec![], locals))
+            Ok(())
         }
     }
 }
@@ -691,16 +706,16 @@ impl<'t> Expression<'t> {
                 let mut words = vec![];
                 (words, locals) = rhs.compilation(file_idx, sources, name_prefix, locals)?;
 
-                let ast::Binding::Identifier(name) = binding else {
-                    todo!()
-                };
-                locals.pop();
-                locals.push_named(name.span(file_idx));
+                let () = compile_binding(file_idx, sources, binding, &mut words, &mut locals)?;
+                // locals.pop();
+                // locals.push_named(name.span(file_idx));
 
                 let (w, l) = inner.compilation(file_idx, sources, name_prefix, locals)?;
                 words.extend(w);
                 locals = l;
-                locals.check_consumed(sources, name.span(file_idx))?;
+                // locals.check_consumed(sources, name.span(file_idx))?;
+
+                // TODO: Check scope leakage?
                 Ok((words, locals))
             }
             Expression::Tuple { span, values } => {

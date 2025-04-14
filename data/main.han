@@ -409,6 +409,7 @@ mod ints {
     }
 
     proc ((@start, s), @next) main => {
+        let ^ = 3;
         let res = (@some, *s);
         ((@start, (s, 1) 'super::add), res)
     }
@@ -437,20 +438,13 @@ proc (a, b) swap => {
 
 
 proc () main_impl => {
-   // let i = () 'ints::alloc;
-   // let (i, (@some, 0)) = (i, @next) 'ints::main;
-   // let (i, (@some, 1)) = (i, @next) 'ints::main;
-
-    let y = 5;
-    let x = {
-        let z = 6;
-        z
+    let i = () 'ints::alloc;
+    let (i, (@some, 0)) = {
+        let z= 4;
+        (i, @next) 'ints::main
     };
-    (x, y) 'eq if {
-        ()
-    } else {
-        ()
-    }
+    let (^, (@some, 1)) = (i, @next) 'ints::main;
+    z
 }
     //#call('double_iter_alloc)
     //(@next) #call('double_iter) (@iter, (@next)) #assert_eq
