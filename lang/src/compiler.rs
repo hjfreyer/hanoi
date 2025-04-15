@@ -536,6 +536,24 @@ impl Locals {
             .position(|(s, n)| n.as_ref(sources) == name.as_ref(sources))?;
         Some(self.stack.len() - pos - 1)
     }
+
+    fn compare(&self, sources: &Sources, other: &Self) -> bool {
+        if self.stack.len() != other.stack.len() {
+            return false;
+        }
+        for ((_, n1), (_, n2)) in self.stack.iter().zip_eq(other.stack.iter()) {
+            match (n1, n2) {
+                (Name::Generated(_), Name::Generated(_)) => continue,
+                (Name::User(n1), Name::User(n2)) => {
+                    if n1.as_str(sources) != n2.as_str(sources) {
+                        return false;
+                    }
+                }
+                _ => return false,
+            }
+        }
+        true
+    }
 }
 
 #[derive(Debug)]
@@ -785,7 +803,7 @@ impl<'t> Expression<'t> {
                 let (false_words, false_locals) =
                     false_case.compilation(file_idx, sources, name_prefix, locals)?;
 
-                if true_locals != false_locals {
+                if !true_locals.compare(sources, &false_locals) {
                     return Err(Error::BranchContractsDisagree {
                         location: span.location(sources),
                     });
