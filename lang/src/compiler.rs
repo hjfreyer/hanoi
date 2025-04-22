@@ -1722,7 +1722,6 @@ mod builder {
             }
             ast::Binding::Tuple(tuple_binding) => {
                 let names = untuple(ctx, span, tuple_binding.bindings.len(), out);
-                dbg!(&names.iter().map(|n| n.as_ref(ctx.sources)).collect_vec());
 
                 let mut true_case: Box<dyn FnOnce(&mut Output) -> Result<(), Error>> =
                     Box::new(|out: &mut Output| {
@@ -1747,7 +1746,6 @@ mod builder {
                             true_case,
                             span,
                             move |out| {
-                                dbg!(&out.locals.display(ctx.sources), &consumed_copy);
                                 push_value(span, flat::Value::Bool(false), out);
                                 for n in consumed_copy.iter() {
                                     drop(ctx, span, n.clone(), out)
