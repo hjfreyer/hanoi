@@ -118,6 +118,7 @@ let_statement = {
 
 transformer = {
   if_expr
+  | match_expr
   | qualified_label
 }
 

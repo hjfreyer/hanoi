@@ -14,7 +14,7 @@ fn span_into_str(span: pest::Span) -> &str {
     span.as_str()
 }
 
-#[derive(Debug, FromPest, Spanner)]
+#[derive(Debug, FromPest, Spanner, Clone)]
 #[pest_ast(rule(Rule::identifier))]
 pub struct Identifier<'t>(
     #[spanner]
@@ -44,7 +44,7 @@ impl<'t> Spanner<'t> for pest::Span<'t> {
 // #[pest_ast(rule(Rule::label))]
 // pub struct Label<'t>(pub Identifier<'t>);
 
-#[derive(Debug, FromPest, Spanner)]
+#[derive(Debug, FromPest, Spanner, Clone)]
 #[pest_ast(rule(Rule::int))]
 pub struct Int<'t> {
     #[pest_ast(outer())]
@@ -59,7 +59,7 @@ fn span_into_string_literal(span: pest::Span) -> String {
     let str = &str[1..str.len() - 1];
     str.replace("\\n", "\n").replace("\\\"", "\"")
 }
-#[derive(Debug, FromPest, Spanner)]
+#[derive(Debug, FromPest, Spanner, Clone)]
 #[pest_ast(rule(Rule::string))]
 pub struct StringLiteral<'t> {
     #[spanner]
@@ -70,14 +70,14 @@ pub struct StringLiteral<'t> {
     pub value: String,
 }
 
-#[derive(Debug, FromPest, Spanner)]
+#[derive(Debug, FromPest, Spanner, Clone)]
 #[pest_ast(rule(Rule::symbol))]
 pub enum Symbol<'t> {
     Identifier(Identifier<'t>),
     String(StringLiteral<'t>),
 }
 
-#[derive(Debug, FromPest, Spanner)]
+#[derive(Debug, FromPest, Spanner, Clone)]
 #[pest_ast(rule(Rule::literal))]
 pub enum Literal<'t> {
     Int(Int<'t>),

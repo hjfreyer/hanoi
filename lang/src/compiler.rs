@@ -1,11 +1,11 @@
 use std::{
     collections::{BTreeMap, VecDeque},
-    fmt::write,
+    fmt::{write, Write},
 };
 
 use crate::ast::Spanner;
 use builder::{FileContext, Output};
-use itertools::Itertools;
+use itertools::{Itertools, Position};
 use typed_index_collections::TiVec;
 
 use crate::{
@@ -323,8 +323,9 @@ impl<'t> Compiler<'t> {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct Locals {
+    terminal: bool,
     num_generated: usize,
     scope: usize,
     stack: Vec<(usize, Name)>,
@@ -332,11 +333,14 @@ pub struct Locals {
 
 impl Locals {
     fn pop(&mut self) -> Name {
+        assert!(!self.terminal);
         let (_, name) = self.stack.pop().unwrap();
         name
     }
 
     fn names(&self) -> Vec<Name> {
+        assert!(!self.terminal);
+
         self.stack
             .iter()
             .cloned()
@@ -346,10 +350,12 @@ impl Locals {
     }
 
     fn len(&self) -> usize {
+        assert!(!self.terminal);
         self.stack.len()
     }
 
     fn push_unnamed(&mut self) -> Name {
+        assert!(!self.terminal);
         let name = Name::Generated(self.num_generated);
         self.stack.push((self.scope, name));
         self.num_generated += 1;
@@ -357,11 +363,13 @@ impl Locals {
     }
 
     fn push_scope(&mut self) -> usize {
+        assert!(!self.terminal);
         self.scope += 1;
         self.scope
     }
 
     fn collapse_scope(&mut self) {
+        assert!(!self.terminal);
         assert!(!self.stack.iter().any(|(s, n)| *s == self.scope - 1));
         for (s, n) in self.stack.iter_mut() {
             if *s == self.scope {
@@ -372,10 +380,12 @@ impl Locals {
     }
 
     fn push_named(&mut self, name: FileSpan) {
+        assert!(!self.terminal);
         self.stack.push((self.scope, Name::User(name)))
     }
 
     fn check_consumed(&mut self, sources: &Sources, name: FileSpan) -> Result<(), Error> {
+        assert!(!self.terminal);
         if self.stack.iter().any(|(_, n)| match n {
             Name::Generated(_) => false,
             Name::User(n) => *n == name,
@@ -390,6 +400,7 @@ impl Locals {
     }
 
     fn prev_scope(&self) -> Vec<Name> {
+        assert!(!self.terminal);
         self.stack
             .iter()
             .filter_map(|(s, n)| {
@@ -403,10 +414,12 @@ impl Locals {
     }
 
     fn remove(&mut self, idx: usize) {
+        assert!(!self.terminal);
         self.stack.remove(self.stack.len() - idx - 1);
     }
 
-    fn find(&self, sources: &Sources, name: &Name) -> Option<usize> {
+    fn find(&self, sources: &Sources, name: Name) -> Option<usize> {
+        assert!(!self.terminal);
         let pos = self
             .stack
             .iter()
@@ -415,6 +428,10 @@ impl Locals {
     }
 
     fn compare(&self, sources: &Sources, other: &Self) -> bool {
+        if self.terminal || other.terminal {
+            return true;
+        }
+
         if self.stack.len() != other.stack.len() {
             return false;
         }
@@ -430,6 +447,38 @@ impl Locals {
             }
         }
         true
+    }
+
+    fn display<'a>(&'a self, sources: &'a source::Sources) -> LocalsDisplay<'a> {
+        LocalsDisplay {
+            sources,
+            locals: self,
+        }
+    }
+}
+
+struct LocalsDisplay<'t> {
+    sources: &'t Sources,
+    locals: &'t Locals,
+}
+
+impl<'t> std::fmt::Debug for LocalsDisplay<'t> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.locals.terminal {
+            f.debug_struct("Locals").field("terminal", &true).finish()
+        } else {
+            f.debug_struct("Locals")
+                .field(
+                    "stack",
+                    &self
+                        .locals
+                        .stack
+                        .iter()
+                        .map(|(_, n)| n.as_ref(self.sources))
+                        .collect_vec(),
+                )
+                .finish()
+        }
     }
 }
 
@@ -453,10 +502,10 @@ pub enum Expression<'t> {
         arg: Box<Expression<'t>>,
         label: ast::QualifiedLabel<'t>,
     },
-    Matches {
+    Match {
         span: pest::Span<'t>,
-        binding: ast::Binding<'t>,
         arg: Box<Expression<'t>>,
+        cases: Vec<MatchCase<'t>>,
     },
     If {
         span: pest::Span<'t>,
@@ -464,6 +513,13 @@ pub enum Expression<'t> {
         true_case: Box<Expression<'t>>,
         false_case: Box<Expression<'t>>,
     },
+}
+
+#[derive(Debug)]
+pub struct MatchCase<'t> {
+    span: pest::Span<'t>,
+    binding: ast::Binding<'t>,
+    rhs: Expression<'t>,
 }
 
 impl<'t> Expression<'t> {
@@ -474,7 +530,19 @@ impl<'t> Expression<'t> {
                 label,
                 arg: Box::new(Self::from_ast(a)),
             },
-            Some(ast::Transformer::Match(m)) => todo!(),
+            Some(ast::Transformer::Match(m)) => Self::Match {
+                span: m.span,
+                arg: Box::new(Self::from_ast(a)),
+                cases: m
+                    .cases
+                    .into_iter()
+                    .map(|c| MatchCase {
+                        span: c.span,
+                        binding: c.binding,
+                        rhs: Expression::from_ast(c.rhs),
+                    })
+                    .collect(),
+            },
             Some(ast::Transformer::If(if_)) => Self::If {
                 span: if_.span,
                 cond: Box::new(Self::from_ast(a)),
@@ -507,19 +575,6 @@ impl<'t> Expression<'t> {
             }
             ast::RootExpression::Identifier(identifier) => Self::Identifier(identifier),
             ast::RootExpression::Copy(copy) => Self::Copy(copy.0),
-            // ast::ArgExpression::Match(match_) => Self::Match{                span: match_.span,
-            //     cases: match_.cases.into_iter().map(|c| MatchCase {
-            //         span: c.span,
-            //         binding: c.binding,
-            //         rhs: Expression::from_ast(c.rhs),
-            //     }).collect(),
-            // },
-            // ast::ArgExpression::If(if_) => Self::If{
-            //     span: if_.span,
-            //     cond: Box::new(Expression::from_ast(*if_.cond)),
-            //     true_case: Box::new(Expression::from_ast(*if_.true_case)),
-            //     false_case: Box::new(Expression::from_ast(*if_.false_case)),
-            // },
         }
     }
 
@@ -578,8 +633,37 @@ impl<'t> Expression<'t> {
 
                 Ok(())
             }
-            Expression::Matches { span, binding, arg } => todo!(),
-            // Expression::Match { } => todo!(),
+            Expression::Match { span, arg, cases } => {
+                let span = span.span(ctx.file_idx);
+                let () = arg.compilation(ctx, name_prefix, out)?;
+
+                let mut else_case_out: Box<dyn FnOnce(&mut Output) -> Result<(), Error>> =
+                    Box::new(|out: &mut Output| {
+                        let () = builder::unreachable(span, out);
+                        Ok(())
+                    });
+
+                for (pos, case) in cases.into_iter().rev().with_position() {
+                    else_case_out = Box::new(move |out| {
+                        let span = case.span.span(ctx.file_idx);
+                        builder::cp_idx(ctx, span, 0, out);
+                        let () = builder::matches(ctx, &case.binding, out)?;
+                        builder::conditional(
+                            ctx,
+                            span,
+                            span,
+                            move |out| {
+                                builder::binding(ctx, case.binding, out)?;
+                                case.rhs.compilation(ctx, name_prefix, out)
+                            },
+                            span,
+                            else_case_out,
+                            out,
+                        )
+                    });
+                }
+                else_case_out(out)
+            }
             Expression::If {
                 span,
                 cond,
@@ -587,50 +671,20 @@ impl<'t> Expression<'t> {
                 false_case,
             } => {
                 let span = span.span(ctx.file_idx);
+                let true_span = true_case.span(ctx.file_idx);
+                let false_span = false_case.span(ctx.file_idx);
+
                 let () = cond.compilation(ctx, name_prefix, out)?;
 
-                out.locals.pop();
-
-                let names = out.locals.names();
-
-                let mut true_out = Output {
-                    words: vec![],
-                    locals: out.locals.clone(),
-                };
-
-                let true_span = true_case.span(ctx.file_idx);
-                let () = true_case.compilation(ctx, name_prefix, &mut true_out)?;
-
-                let mut false_out = Output {
-                    words: vec![],
-                    locals: out.locals.clone(),
-                };
-                let false_span = false_case.span(ctx.file_idx);
-                let () = false_case.compilation(ctx, name_prefix, &mut false_out)?;
-
-                if !true_out.locals.compare(ctx.sources, &false_out.locals) {
-                    return Err(Error::BranchContractsDisagree {
-                        location: span.location(ctx.sources),
-                    });
-                }
-                out.locals = true_out.locals;
-
-                let true_words = RecursiveSentence {
-                    span: true_span,
-                    words: true_out.words,
-                };
-                let false_words = RecursiveSentence {
-                    span: false_span,
-                    words: false_out.words,
-                };
-
-                out.words.push(RecursiveWord {
+                builder::conditional(
+                    ctx,
                     span,
-                    inner: InnerWord::Branch(true_words, false_words),
-                    names,
-                });
-                //         b.names.push_unnamed();
-                Ok(())
+                    true_span,
+                    |out| true_case.compilation(ctx, name_prefix, out),
+                    false_span,
+                    |out| false_case.compilation(ctx, name_prefix, out),
+                    out,
+                )
             }
         }
     }
@@ -650,17 +704,10 @@ impl<'t> Spanner<'t> for Expression<'t> {
             } => *span,
             Expression::Tuple { span, values } => *span,
             Expression::Call { span, arg, label } => *span,
-            Expression::Matches { span, .. } => *span,
+            Expression::Match { span, .. } => *span,
             Expression::If { span, .. } => *span,
         }
     }
-}
-
-#[derive(Debug)]
-pub struct MatchCase<'t> {
-    pub span: pest::Span<'t>,
-    pub binding: ast::Binding<'t>,
-    pub rhs: Expression<'t>,
 }
 
 #[derive(Debug, Clone)]
@@ -826,10 +873,19 @@ impl Name {
     }
 }
 
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum NameRef<'t> {
     User(&'t str),
     Generated(usize),
+}
+
+impl<'t> std::fmt::Debug for NameRef<'t> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::User(arg0) => f.write_str(arg0),
+            Self::Generated(arg0) => write!(f, "${}", arg0),
+        }
+    }
 }
 
 impl<'t> NameRef<'t> {
@@ -1245,7 +1301,7 @@ mod builder {
     fn mv(
         FileContext { sources, file_idx }: FileContext,
         span: FileSpan,
-        name: &Name,
+        name: Name,
         out: &mut Output,
     ) -> Result<(), Error> {
         let Some(idx) = out.locals.find(sources, name) else {
@@ -1268,7 +1324,7 @@ mod builder {
         out: &mut Output,
     ) -> Result<(), Error> {
         let span = ident.span(ctx.file_idx);
-        mv(ctx, span, &Name::User(span), out)
+        mv(ctx, span, Name::User(span), out)
     }
 
     pub fn mv_idx(span: FileSpan, idx: usize, Output { locals, words }: &mut Output) {
@@ -1283,12 +1339,7 @@ mod builder {
         });
     }
 
-    pub fn cp(
-        ctx: FileContext,
-        span: FileSpan,
-        name: &Name,
-        out: &mut Output,
-    ) -> Result<(), Error> {
+    pub fn cp(ctx: FileContext, span: FileSpan, name: Name, out: &mut Output) -> Result<(), Error> {
         let Some(idx) = out.locals.find(ctx.sources, name) else {
             return Err(Error::UnknownReference {
                 location: span.location(ctx.sources),
@@ -1308,7 +1359,7 @@ mod builder {
         out: &mut Output,
     ) -> Result<(), Error> {
         let span = ident.span(ctx.file_idx);
-        cp(ctx, span, &Name::User(span), out)
+        cp(ctx, span, Name::User(span), out)
     }
 
     pub fn cp_idx(ctx: FileContext, span: FileSpan, idx: usize, out: &mut Output) {
@@ -1341,7 +1392,7 @@ mod builder {
     pub fn drop(ctx: FileContext, span: FileSpan, name: Name, out: &mut Output) {
         let idx = out
             .locals
-            .find(ctx.sources, &name)
+            .find(ctx.sources, name)
             .expect(&format!("Unknown name: {:?}", name));
         drop_idx(ctx, span, idx, out);
     }
@@ -1603,6 +1654,16 @@ mod builder {
     // //     }
     // // }
 
+    fn eq(span: FileSpan, out: &mut Output) {
+        out.words.push(RecursiveWord {
+            span,
+            inner: InnerWord::Builtin(flat::Builtin::Eq),
+            names: out.locals.names(),
+        });
+        out.locals.pop();
+        out.locals.pop();
+        out.locals.push_unnamed();
+    }
     fn assert_eq(span: FileSpan, out: &mut Output) {
         out.words.push(RecursiveWord {
             span,
@@ -1634,7 +1695,7 @@ mod builder {
                 let tmp_names = untuple(ctx, span, tuple_binding.bindings.len(), out);
 
                 for (name, b) in tmp_names.into_iter().zip_eq(tuple_binding.bindings) {
-                    let () = builder::mv(ctx, span, &name, out)?;
+                    let () = builder::mv(ctx, span, name, out)?;
                     let () = binding(ctx, b, out)?;
                 }
                 Ok(())
@@ -1645,5 +1706,128 @@ mod builder {
                 Ok(())
             }
         }
+    }
+
+    pub fn matches(
+        ctx: FileContext,
+        binding: &ast::Binding,
+        out: &mut Output,
+    ) -> Result<(), Error> {
+        let span = binding.span(ctx.file_idx);
+        match binding {
+            ast::Binding::Drop(_) | ast::Binding::Identifier(_) => {
+                drop_idx(ctx, span, 0, out);
+                push_value(span, flat::Value::Bool(true), out);
+                Ok(())
+            }
+            ast::Binding::Tuple(tuple_binding) => {
+                let names = untuple(ctx, span, tuple_binding.bindings.len(), out);
+                dbg!(&names.iter().map(|n| n.as_ref(ctx.sources)).collect_vec());
+
+                let mut true_case: Box<dyn FnOnce(&mut Output) -> Result<(), Error>> =
+                    Box::new(|out: &mut Output| {
+                        push_value(span, flat::Value::Bool(true), out);
+                        Ok(())
+                    });
+                let mut true_case_consumes: Vec<Name> = vec![];
+                for (name, binding) in names
+                    .iter()
+                    .rev()
+                    .zip_eq(tuple_binding.bindings.iter().rev())
+                {
+                    let consumed_copy = true_case_consumes.clone();
+                    true_case = Box::new(|out: &mut Output| {
+                        let span = binding.span(ctx.file_idx);
+                        mv(ctx, span, *name, out)?;
+                        let () = matches(ctx, binding, out)?;
+                        conditional(
+                            ctx,
+                            span,
+                            span,
+                            true_case,
+                            span,
+                            move |out| {
+                                dbg!(&out.locals.display(ctx.sources), &consumed_copy);
+                                push_value(span, flat::Value::Bool(false), out);
+                                for n in consumed_copy.iter() {
+                                    drop(ctx, span, n.clone(), out)
+                                }
+                                Ok(())
+                            },
+                            out,
+                        )
+                    });
+                    true_case_consumes.push(name.clone());
+                }
+                true_case(out)
+            }
+            ast::Binding::Literal(l) => {
+                literal(ctx, l.clone(), out);
+                eq(span, out);
+                Ok(())
+            }
+        }
+    }
+
+    pub fn conditional(
+        ctx: FileContext,
+        span: FileSpan,
+        true_span: FileSpan,
+        true_case: impl FnOnce(&mut Output) -> Result<(), Error>,
+        false_span: FileSpan,
+        false_case: impl FnOnce(&mut Output) -> Result<(), Error>,
+        out: &mut Output,
+    ) -> Result<(), Error> {
+        out.locals.pop();
+
+        let names = out.locals.names();
+
+        let mut true_out = Output {
+            words: vec![],
+            locals: out.locals.clone(),
+        };
+        let () = true_case(&mut true_out)?;
+
+        let mut false_out = Output {
+            words: vec![],
+            locals: out.locals.clone(),
+        };
+        let () = false_case(&mut false_out)?;
+
+        if !true_out.locals.compare(ctx.sources, &false_out.locals) {
+            return Err(Error::BranchContractsDisagree {
+                location: span.location(ctx.sources),
+            });
+        }
+        if true_out.locals.terminal {
+            out.locals = false_out.locals;
+        } else {
+            out.locals = true_out.locals;
+        }
+
+        let true_words = RecursiveSentence {
+            span: true_span,
+            words: true_out.words,
+        };
+        let false_words = RecursiveSentence {
+            span: false_span,
+            words: false_out.words,
+        };
+
+        out.words.push(RecursiveWord {
+            span,
+            inner: InnerWord::Branch(true_words, false_words),
+            names,
+        });
+        Ok(())
+    }
+
+    pub fn unreachable(span: FileSpan, out: &mut Output) {
+        out.words.push(RecursiveWord {
+            span,
+            inner: InnerWord::Builtin(flat::Builtin::Panic),
+            names: out.locals.names(),
+        });
+        out.locals.terminal = true;
     }
 }

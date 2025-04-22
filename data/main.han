@@ -352,25 +352,22 @@ proc x double => {
 mod map {
     proc () alloc => (@start, ())
 
-    proc ((state, closure), args) main => {
-        (*state, @start) 'super::eq if {
-            let (@start, (), (@next, ())) = (state, closure, args);
-            ((@iter_get, ()), (@iter, (@next, ())))
-        } else (*state, @iter_get) 'super::eq if {
-            let (@iter_get, (), (iter_res_tag, iter_res_arg)) = (state, closure, args);
-            (*iter_res_tag, @some) 'super::eq if { 
-                let (@some, val) = (iter_res_tag, iter_res_arg);
-                ((@apply, ()), (@fn, (@apply, val)))
-            } else (*iter_res_tag, @none) 'super::eq if {
-                let (@none, ()) = (iter_res_tag, iter_res_arg);
-                ((@done, ()), (@none, ()))
-            } else {
-                let (@some, ()) = (iter_res_tag, iter_res_arg);
-                ()
-            }
-        } else {
-            let (^, (), ()) = (state, closure, args);
-            ()
+    proc (closure, args) main => {
+        closure match {
+            (@start, ()) => {
+                let (@next, ()) = args;
+                ((@iter_get, ()), (@iter, (@next, ())))
+            },
+            (@iter_get, ()) => {
+                args match {
+                    (@some, val) => {
+                        ((@apply, ()), (@fn, (@apply, val)))
+                    },
+                    (@none, ()) => {
+                        ((@done, ()), (@none, ()))
+                    },
+                }
+            },
         }
     }
 }
