@@ -353,21 +353,13 @@ mod map {
     proc () alloc => (@start, ())
 
     proc (closure, args) main => {
-        closure match {
-            (@start, ()) => {
-                let (@next, ()) = args;
+        (closure, args) match {
+            ((@start, ()), (@next, ())) => {
                 ((@iter_get, ()), (@iter, (@next, ())))
             },
-            (@iter_get, ()) => {
-                args match {
-                    (@some, val) => {
-                        ((@apply, ()), (@fn, (@apply, val)))
-                    },
-                    (@none, ()) => {
-                        ((@done, ()), (@none, ()))
-                    },
-                }
-            },
+            ((@iter_get, ()), (@some, val)) => ((@apply, ()), (@fn, (@apply, val))),
+            ((@iter_get, ()), (@none, ())) => ((@done, ()), (@res, (@none, ()))),
+            ((@apply, ()), val) => ((@start, ()), (@res, (@some, val))),
         }
     }
 }
@@ -458,7 +450,14 @@ proc () main_impl => {
     // let i = () 'ints::alloc;
     let m = () 'map::alloc;
     let (m, (@iter, (@next, ()))) = (m, (@next, ())) 'map::main;
-    let (^, (@fn, (@apply, 3))) = (m, (@some, 3)) 'map::main;
+    let (m, (@fn, (@apply, 3))) = (m, (@some, 3)) 'map::main;
+    let (m, (@res, (@some, 6))) = (m, 6) 'map::main;
+    let (m, (@iter, (@next, ()))) = (m, (@next, ())) 'map::main;
+    let (m, (@fn, (@apply, 7))) = (m, (@some, 7)) 'map::main;
+    let (m, (@res, (@some, 14))) = (m, 14) 'map::main;
+    let (m, (@iter, (@next, ()))) = (m, (@next, ())) 'map::main;
+    let (^, (@res, (@none, ()))) = (m, (@none, ())) 'map::main;
+
 
     ()
 }
