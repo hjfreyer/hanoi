@@ -17,6 +17,17 @@ use crate::{
     source::{self, FileSpan, Span},
 };
 
+macro_rules! tuple {
+    [$($x:expr),* $(,)?] => {flat::Value::Tuple(vec![$($x),*])};
+}
+macro_rules! symbol {
+    ($x:expr) => {
+        flat::Value::Symbol($x.to_owned())
+    };
+}
+macro_rules! tagged {
+    ($tag:ident {$($x:expr),* $(,)?}) => {tuple![symbol!(stringify!($tag)), tuple![$($x),*]]};
+}
 // use crate::ast::{
 //     self, ident_from_pair, Bindings, Identifier, Literal, PathOrIdent, ProcMatchBlock,
 //     ProcMatchCase, Rule, ValueExpression,
@@ -88,8 +99,8 @@ impl Library {
     //     &self.namespaces[self.root_ns.unwrap()]
     // }
 
-    pub fn main(&self) -> Option<SentenceIndex> {
-        self.exports.get("main").cloned()
+    pub fn export(&self, label: &str) -> Option<SentenceIndex> {
+        self.exports.get(label).cloned()
     }
 
     // pub fn load(loader: &'t mut ast::Loader, name: &'t str) -> Result<Self, LoadError> {

@@ -15,13 +15,22 @@ use crate::{
         Builtin, Closure, Entry, InnerWord, Library, LoadError, Namespace2, SentenceIndex, Value,
         Word,
     },
-    source::{self, FileSpan, Span},
+    source::{self, FileSpan, Sources, Span},
 };
 
 #[derive(Debug)]
 pub struct EvalError {
     pub location: Option<FileSpan>,
     pub inner: InnerEvalError,
+}
+
+impl EvalError {
+    pub fn into_user(self, sources: &source::Sources) -> UserEvalError {
+        UserEvalError {
+            location: self.location.map(|s| s.location(sources)),
+            inner: self.inner,
+        }
+    }
 }
 
 impl<'t> std::fmt::Display for EvalError {
@@ -36,6 +45,25 @@ impl<'t> std::fmt::Display for EvalError {
 }
 
 impl<'t> std::error::Error for EvalError {}
+
+#[derive(Debug)]
+pub struct UserEvalError {
+    pub location: Option<source::Location>,
+    pub inner: InnerEvalError,
+}
+
+impl<'t> std::fmt::Display for UserEvalError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(location) = &self.location {
+            write!(f, "at {}: ", location)?;
+        } else {
+            write!(f, "at <unknown location>: ")?;
+        }
+        write!(f, "{}", self.inner)
+    }
+}
+
+impl<'t> std::error::Error for UserEvalError {}
 
 macro_rules! ebail {
     ($fmt:expr) => {
@@ -470,7 +498,7 @@ impl Vm {
     pub fn step(&mut self) -> Result<StepResult, EvalError> {
         let pc = loop {
             let Some(pc) = self.call_stack.last_mut() else {
-                return self.trap();
+                return Ok(StepResult::Exit);
             };
             break pc;
         };
@@ -544,97 +572,101 @@ impl Vm {
         Ok(StepResult::Continue)
     }
 
-    pub fn trap(&mut self) -> Result<StepResult, EvalError> {
-        self.trap_inner().map_err(|inner| EvalError {
-            location: None,
-            inner,
-        })
-    }
+    // pub fn trap(&mut self) -> Result<StepResult, EvalError> {
+    //     self.trap_inner().map_err(|inner| EvalError {
+    //         location: None,
+    //         inner,
+    //     })
+    // }
 
-    fn trap_inner(&mut self) -> Result<StepResult, InnerEvalError> {
-        let Some(Value::Symbol(symbol)) = self.stack.pop() else {
-            ebail!("symbol not specified")
-        };
+    // fn trap_inner(&mut self) -> Result<StepResult, InnerEvalError> {
+    //     let Some(Value::Symbol(symbol)) = self.stack.pop() else {
+    //         ebail!("symbol not specified")
+    //     };
 
-        if symbol == "err" {
-            println!("Error: {:?}", self.stack.pop());
-            return Ok(StepResult::Exit);
-        }
+    //     if symbol == "err" {
+    //         println!("Error: {:?}", self.stack.pop());
+    //         return Ok(StepResult::Exit);
+    //     }
 
-        if symbol != "req" {
-            ebail!("must be req")
-        }
-        let Some(Value::Pointer(caller)) = self.stack.pop() else {
-            ebail!("caller not specified")
-        };
+    //     if symbol != "req" {
+    //         ebail!("must be req")
+    //     }
+    //     let Some(Value::Pointer(caller)) = self.stack.pop() else {
+    //         ebail!("caller not specified")
+    //     };
 
-        let Some(Value::Symbol(method)) = self.stack.pop() else {
-            ebail!("method not specified")
-        };
+    //     let Some(Value::Symbol(method)) = self.stack.pop() else {
+    //         ebail!("method not specified")
+    //     };
 
-        match method.as_str() {
-            "stdout" => {
-                let Some(Value::Char(c)) = self.stack.pop() else {
-                    ebail!("char not specified")
-                };
-                write!(self.stdout, "{}", c);
-                self.stack
-                    .push(Value::Pointer(Closure(vec![], SentenceIndex::TRAP)));
-                self.load_main();
-                Ok(StepResult::Continue)
-            }
-            "stdin" => {
-                let mut buf = [0; 1];
-                match self.stdin.read_exact(&mut buf) {
-                    Ok(()) => {
-                        let nextchar = char::from_u32(buf[0] as u32).unwrap();
+    //     match method.as_str() {
+    //         "stdout" => {
+    //             let Some(Value::Char(c)) = self.stack.pop() else {
+    //                 ebail!("char not specified")
+    //             };
+    //             write!(self.stdout, "{}", c);
+    //             self.stack
+    //                 .push(Value::Pointer(Closure(vec![], SentenceIndex::TRAP)));
+    //             self.load_main();
+    //             Ok(StepResult::Continue)
+    //         }
+    //         "stdin" => {
+    //             let mut buf = [0; 1];
+    //             match self.stdin.read_exact(&mut buf) {
+    //                 Ok(()) => {
+    //                     let nextchar = char::from_u32(buf[0] as u32).unwrap();
 
-                        self.stack.push(Value::Char(nextchar));
-                        self.stack.push(Value::Symbol("ok".to_owned()));
-                        self.stack
-                            .push(Value::Pointer(Closure(vec![], SentenceIndex::TRAP)));
-                        self.load_main();
-                    }
-                    Err(e) if e.kind() == ErrorKind::UnexpectedEof => {
-                        self.stack.push(Value::Symbol("eof".to_owned()));
-                        self.stack
-                            .push(Value::Pointer(Closure(vec![], SentenceIndex::TRAP)));
-                        self.load_main();
-                    }
-                    Err(e) => panic!("unexpected io fail: {}", e),
-                }
+    //                     self.stack.push(Value::Char(nextchar));
+    //                     self.stack.push(Value::Symbol("ok".to_owned()));
+    //                     self.stack
+    //                         .push(Value::Pointer(Closure(vec![], SentenceIndex::TRAP)));
+    //                     self.load_main();
+    //                 }
+    //                 Err(e) if e.kind() == ErrorKind::UnexpectedEof => {
+    //                     self.stack.push(Value::Symbol("eof".to_owned()));
+    //                     self.stack
+    //                         .push(Value::Pointer(Closure(vec![], SentenceIndex::TRAP)));
+    //                     self.load_main();
+    //                 }
+    //                 Err(e) => panic!("unexpected io fail: {}", e),
+    //             }
 
-                Ok(StepResult::Continue)
-            }
-            "print" => {
-                let Some(v) = self.stack.pop() else {
-                    ebail!("value not specified")
-                };
-                write!(self.stdout, "{:?}\n", v);
-                self.stack
-                    .push(Value::Pointer(Closure(vec![], SentenceIndex::TRAP)));
-                self.load_main();
-                Ok(StepResult::Continue)
-            }
-            "halt" => Ok(StepResult::Exit),
-            req => {
-                ebail!("unknown method: {}", req)
-            }
-        }
-    }
+    //             Ok(StepResult::Continue)
+    //         }
+    //         "print" => {
+    //             let Some(v) = self.stack.pop() else {
+    //                 ebail!("value not specified")
+    //             };
+    //             write!(self.stdout, "{:?}\n", v);
+    //             self.stack
+    //                 .push(Value::Pointer(Closure(vec![], SentenceIndex::TRAP)));
+    //             self.load_main();
+    //             Ok(StepResult::Continue)
+    //         }
+    //         "halt" => Ok(StepResult::Exit),
+    //         req => {
+    //             ebail!("unknown method: {}", req)
+    //         }
+    //     }
+    // }
 
     pub fn run(&mut self) -> Result<(), EvalError> {
         while let StepResult::Continue = self.step()? {}
         Ok(())
     }
 
-    pub fn load_main(&mut self) {
+    pub fn load_label(&mut self, label: &str) {
         assert!(self.call_stack.is_empty());
-        let main = self.lib.main().unwrap();
+        let main = self.lib.export(label).unwrap();
         self.call_stack = vec![ProgramCounter {
             sentence_idx: main,
             word_idx: 0,
         }]
+    }
+
+    pub fn push_value(&mut self, value: Value) {
+        self.stack.push(value)
     }
 }
 

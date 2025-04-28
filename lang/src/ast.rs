@@ -96,6 +96,15 @@ pub struct Tuple<'t> {
     pub values: Vec<Expression<'t>>,
 }
 
+#[derive(Debug, FromPest, Spanner)]
+#[pest_ast(rule(Rule::tagged_expr))]
+pub struct Tagged<'t> {
+    #[pest_ast(outer())]
+    pub span: pest::Span<'t>,
+    pub tag: Identifier<'t>,
+    pub values: Vec<Expression<'t>>,
+}
+
 #[derive(Debug, FromPest)]
 #[pest_ast(rule(Rule::builtin_arg))]
 pub enum BuiltinArg<'t> {
@@ -121,27 +130,37 @@ pub struct QualifiedLabel<'t> {
     pub path: Vec<Identifier<'t>>,
 }
 
-#[derive(Debug, FromPest, Spanner)]
+#[derive(Debug, FromPest, Spanner, Clone)]
 #[pest_ast(rule(Rule::binding))]
 pub enum Binding<'t> {
     Drop(DropBinding<'t>),
     Tuple(TupleBinding<'t>),
+    Tagged(TaggedBinding<'t>),
     Literal(Literal<'t>),
     Identifier(Identifier<'t>),
 }
 
-#[derive(Debug, FromPest, Spanner)]
+#[derive(Debug, FromPest, Spanner, Clone)]
 #[pest_ast(rule(Rule::drop_binding))]
 pub struct DropBinding<'t> {
     #[pest_ast(outer())]
     pub span: pest::Span<'t>,
 }
 
-#[derive(Debug, FromPest, Spanner)]
+#[derive(Debug, FromPest, Spanner, Clone)]
 #[pest_ast(rule(Rule::tuple_binding))]
 pub struct TupleBinding<'t> {
     #[pest_ast(outer())]
     pub span: pest::Span<'t>,
+    pub bindings: Vec<Binding<'t>>,
+}
+
+#[derive(Debug, FromPest, Spanner, Clone)]
+#[pest_ast(rule(Rule::tagged_binding))]
+pub struct TaggedBinding<'t> {
+    #[pest_ast(outer())]
+    pub span: pest::Span<'t>,
+    pub tag: Identifier<'t>,
     pub bindings: Vec<Binding<'t>>,
 }
 
@@ -231,6 +250,7 @@ pub struct Expression<'t> {
 pub enum RootExpression<'t> {
     Literal(Literal<'t>),
     Tuple(Tuple<'t>),
+    Tagged(Tagged<'t>),
     Block(Block<'t>),
     Identifier(Identifier<'t>),
     Copy(Copy<'t>),

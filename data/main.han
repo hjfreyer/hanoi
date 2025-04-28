@@ -8,7 +8,48 @@
 //mod adv1p1;
 //mod multi_iter;
 //
-//mod tests {
+
+
+
+sentence test {
+    #call('tests::main)
+}
+
+mod tests {
+    proc args main => args match {
+        (#nil{}, #enumerate{}) => (#nil{}, #a{}),
+        (#a{}, #next{}) => (#b{}, #some{@map_empty}),
+        (#b{}, #next{}) => (#c{}, #some{@map_blah}),
+        (#c{}, #next{}) => (#d{}, #none{}),
+
+        (#nil{}, #run{@map_empty}) => () 'cases::map_empty,
+        (#nil{}, #run{@map_blah}) => () 'cases::map_blah,
+    }
+
+    mod cases {
+        proc () map_empty => {
+            ()
+        }
+        proc () map_blah => {
+            ()
+        }
+
+    }
+
+
+    mod enumerate {
+        proc () init => {
+            @a
+        }
+
+        proc (closure, args) main => {
+            let (@next, ()) = args;
+            closure match {
+                @a => (@b, (@res, (@some, @map_empty))),
+            }
+        }
+    }
+
 //    proc enumerate(caller, @next) {
 ////        let (caller, @next) = caller(@yield, @basic_csv);
 //        let () = caller(@eos);        
@@ -51,7 +92,7 @@
 //    proc run(caller, case_name) {
 //        R{ @cases this #get #get @exec }
 //    }
-//}
+}
 //
 //mod csv {
 //    proc start(caller, @next) {
@@ -444,38 +485,23 @@ proc (a, b) swap => {
     (b, a)
 }
 
-
-
 proc () main_impl => {
-    // let i = () 'ints::alloc;
-    let m = () 'map::alloc;
-    let (m, (@iter, (@next, ()))) = (m, (@next, ())) 'map::main;
-    let (m, (@fn, (@apply, 3))) = (m, (@some, 3)) 'map::main;
-    let (m, (@res, (@some, 6))) = (m, 6) 'map::main;
-    let (m, (@iter, (@next, ()))) = (m, (@next, ())) 'map::main;
-    let (m, (@fn, (@apply, 7))) = (m, (@some, 7)) 'map::main;
-    let (m, (@res, (@some, 14))) = (m, 14) 'map::main;
-    let (m, (@iter, (@next, ()))) = (m, (@next, ())) 'map::main;
-    let (^, (@res, (@none, ()))) = (m, (@none, ())) 'map::main;
+    // let m = () 'map::alloc;
+    // let (m, (@iter, (@next, ()))) = (m, (@next, ())) 'map::main;
+    // let (m, (@fn, (@apply, 3))) = (m, (@some, 3)) 'map::main;
+    // let (m, (@res, (@some, 6))) = (m, 6) 'map::main;
+    // let (m, (@iter, (@next, ()))) = (m, (@next, ())) 'map::main;
+    // let (m, (@fn, (@apply, 7))) = (m, (@some, 7)) 'map::main;
+    // let (m, (@res, (@some, 14))) = (m, 14) 'map::main;
+    // let (m, (@iter, (@next, ()))) = (m, (@next, ())) 'map::main;
+    // let (^, (@res, (@none, ()))) = (m, (@none, ())) 'map::main;
 
+    let ((@nil, ()), test_iter) = ((@nil, ()), (@enumerate, ())) 'tests::main;
+    let (test_iter, (@some, @map_empty)) = (test_iter, (@next, ())) 'tests::main;
+    let ^ = test_iter;
 
     ()
 }
-    //#call('double_iter_alloc)
-    //(@next) #call('double_iter) (@iter, (@next)) #assert_eq
-    //(@some, 1) #call('double_iter) (@resp, (@some, 2)) #assert_eq
-//
-    //(@next) #call('double_iter) (@iter, (@next)) #assert_eq
-    //(@some, 2) #call('double_iter) (@resp, (@some, 4)) #assert_eq
-
-//    #call('map_alloc)
-//    (@next) #call('map) (@iter, (@next)) #assert_eq
-//    (@some, 1) #call('map) (@fn, 1) #assert_eq
-//    2 #call('map) (@resp, (@some, 2)) #assert_eq
-//    
-//    (@next) #call('map) (@iter, (@next)) #assert_eq
-//    (@some, 2) #call('map) (@fn, 2) #assert_eq
-//    (@double, 4) #call('map) (@some, 4) #assert_eq
 
 sentence main {
     #tuple(0) #call('main_impl)

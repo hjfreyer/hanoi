@@ -560,6 +560,24 @@ impl<'t> Expression<'t> {
                 span: tuple.span,
                 values: tuple.values.into_iter().map(Expression::from_ast).collect(),
             },
+            ast::RootExpression::Tagged(tagged) => {
+                let values = vec![
+                    Self::Literal(ast::Literal::Symbol(ast::Symbol::Identifier(tagged.tag))),
+                    Self::Tuple {
+                        span: tagged.span,
+                        values: tagged
+                            .values
+                            .into_iter()
+                            .map(Expression::from_ast)
+                            .collect(),
+                    },
+                ];
+
+                Self::Tuple {
+                    span: tagged.span,
+                    values,
+                }
+            }
             ast::RootExpression::Block(mut block) => {
                 if block.statements.is_empty() {
                     Self::from_ast(*block.expression)
@@ -1700,6 +1718,10 @@ mod builder {
                 }
                 Ok(())
             }
+            ast::Binding::Tagged(tagged_binding) => {
+                let tuple = tagged_to_tuple(tagged_binding.clone());
+                binding(ctx, ast::Binding::Tuple(tuple), out)
+            }
             ast::Binding::Identifier(identifier) => {
                 out.locals.pop();
                 out.locals.push_named(span);
@@ -1759,11 +1781,31 @@ mod builder {
                 }
                 true_case(out)
             }
+            ast::Binding::Tagged(tagged_binding) => {
+                let tuple = tagged_to_tuple(tagged_binding.clone());
+                matches(ctx, &ast::Binding::Tuple(tuple), out)
+            }
             ast::Binding::Literal(l) => {
                 literal(ctx, l.clone(), out);
                 eq(span, out);
                 Ok(())
             }
+        }
+    }
+
+    fn tagged_to_tuple(tagged_binding: ast::TaggedBinding) -> ast::TupleBinding {
+        let inner_binding = ast::TupleBinding {
+            span: tagged_binding.span,
+            bindings: tagged_binding.bindings.clone(),
+        };
+        ast::TupleBinding {
+            span: tagged_binding.span,
+            bindings: vec![
+                ast::Binding::Literal(ast::Literal::Symbol(ast::Symbol::Identifier(
+                    tagged_binding.tag.clone(),
+                ))),
+                ast::Binding::Tuple(inner_binding),
+            ],
         }
     }
 

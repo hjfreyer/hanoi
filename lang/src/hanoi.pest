@@ -60,6 +60,11 @@ tuple_expr = {
   | "(" ~ expr ~ ("," ~ expr)* ~ ")"
 }
 
+tagged_expr = {
+    "#" ~ identifier ~ "{" ~ "}"
+  | "#" ~ identifier ~ "{" ~ expr ~ ("," ~ expr)* ~ "}"
+}
+
 builtin = { "#" ~ identifier ~ builtin_args? }
 
 builtin_args = _{
@@ -85,7 +90,7 @@ raw_word = {
 
 // PROC
 
-binding  = { tuple_binding | drop_binding | literal | identifier }
+binding = { tuple_binding | tagged_binding | drop_binding | literal | identifier }
 
 drop_binding  = { "^" }
 tuple_binding = {
@@ -93,13 +98,19 @@ tuple_binding = {
   | "(" ~ binding ~ ("," ~ binding)* ~ ")"
 }
 
+tagged_binding = {
+    "#" ~ identifier ~ "{" ~ "}"
+  | "#" ~ identifier ~ "{" ~ binding ~ ("," ~ binding)* ~ "}"
+}
+
 proc_decl = { "proc" ~ binding ~ identifier ~ "=>" ~ expr }
 expr      = { root_expr ~ transformer* }
 
 root_expr = {
-  literal
+    literal
   | tuple_expr
-  | block 
+  | tagged_expr
+  | block
   | copy
   | identifier
 }
@@ -117,7 +128,7 @@ let_statement = {
 }
 
 transformer = {
-  if_expr
+    if_expr
   | match_expr
   | qualified_label
 }
@@ -127,7 +138,6 @@ if_expr = { "if" ~ expr ~ "else" ~ expr }
 match_expr = { "match" ~ "{" ~ match_case* ~ "}" }
 
 match_case = { binding ~ "=>" ~ expr ~ "," }
-
 
 // OTHER
 

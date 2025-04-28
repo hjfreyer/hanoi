@@ -3,6 +3,7 @@
 mod ast;
 mod compiler;
 mod debugger;
+#[macro_use]
 mod flat;
 mod linker;
 mod source;
@@ -67,12 +68,12 @@ fn run(base_dir: PathBuf, module: String) -> anyhow::Result<()> {
     let (sources, lib) = compile_library(base_dir, module)?;
     let mut vm = Vm::new(lib);
 
-    vm.load_main();
+    vm.load_label("main");
 
     let mut res = match vm.run() {
         Ok(res) => res,
         Err(e) => {
-            eprintln!("Error: {}\n", e);
+            eprintln!("Error: {}\n", e.into_user(&sources));
             eprintln!("Stack:");
             for v in vm.stack.iter() {
                 eprintln!("  {:?}", v)
@@ -93,7 +94,7 @@ fn debug(base_dir: PathBuf, module: String, stdin: Option<PathBuf>) -> anyhow::R
         vm = vm.with_stdin(Box::new(stdin));
     }
 
-    vm.load_main();
+    vm.load_label("main");
 
     let debugger = debugger::Debugger::new(sources, vm);
 
@@ -107,6 +108,8 @@ fn debug(base_dir: PathBuf, module: String, stdin: Option<PathBuf>) -> anyhow::R
 
 struct IterReader<'a> {
     vm: &'a mut Vm,
+    label: &'a str,
+    iter_value: Option<Value>,
     done: bool,
 }
 
@@ -117,133 +120,88 @@ impl<'a> Iterator for IterReader<'a> {
         if self.done {
             return None;
         }
-        todo!();
-        // let mut res = match self.vm.run_to_trap() {
-        //     Ok(res) => res,
-        //     Err(e) => {
-        //         self.done = true;
-        //         return Some(Err(e));
-        //     }
-        // };
 
-        // let Some(Value::Pointer(mut closure)) = self.vm.stack.pop() else {
-        //     panic!();
-        // };
+        self.vm
+            .push_value(tuple![self.iter_value.take().unwrap(), tagged![next {}]]);
+        self.vm.load_label(self.label);
+        let mut res = match self.vm.run() {
+            Ok(res) => res,
+            Err(e) => {
+                self.done = true;
+                return Some(Err(e));
+            }
+        };
 
-        // let Some(Value::Symbol(result)) = self.vm.stack.pop() else {
-        //     panic!();
-        // };
+        let Some(Value::Tuple(mut t)) = self.vm.stack.pop() else {
+            panic!()
+        };
+        let Value::Tuple(mut item) = t.pop().unwrap() else {
+            panic!()
+        };
+        let iter = t.pop().unwrap();
+        assert!(t.is_empty());
 
-        // match result.as_str() {
-        //     "yield" => {
-        //         let item = self.vm.stack.pop().unwrap();
-        //         closure
-        //             .0
-        //             .insert(0, Value::Pointer(Closure(vec![], SentenceIndex::TRAP)));
-        //         closure.0.insert(0, Value::Symbol("next".to_owned()));
-        //         self.vm.jump_to(closure);
+        self.iter_value = Some(iter);
 
-        //         Some(Ok(item))
-        //     }
-        //     "eos" => None,
-        //     _ => panic!(),
-        // }
+        let arg = item.pop().unwrap();
+        let Some(Value::Symbol(tag)) = item.pop() else {
+            panic!()
+        };
+        assert!(t.is_empty());
+
+        match tag.as_str() {
+            "none" => None,
+            "some" => {
+                let Value::Tuple(t) = arg else { panic!() };
+                Some(Ok(t.into_iter().exactly_one().unwrap()))
+            }
+            _ => panic!(),
+        }
     }
 }
 
 fn test(base_dir: PathBuf, module: String) -> anyhow::Result<()> {
-    todo!()
-    // let mut loader = ast::Loader {
-    //     base: base_dir,
-    //     cache: Default::default(),
-    // };
+    let (sources, lib) = compile_library(base_dir, module)?;
+    let mut vm = Vm::new(lib);
 
-    // let lib = Library::load(&mut loader, &module)?;
-    // let code = lib.code;
+    vm.push_value(tuple![tagged![nil {}], tagged![enumerate {}]]);
+    vm.load_label("test");
+    vm.run()?;
 
-    // let Some(Entry::Namespace(tests_ns)) = lib.namespaces.first().unwrap().get("tests") else {
-    //     panic!("no namespace named tests")
-    // };
-    // let Some(Entry::Value(Value::Pointer(enumerate))) = lib.namespaces[*tests_ns].get("enumerate")
-    // else {
-    //     panic!("no procedure named enumerate")
-    // };
-    // assert_eq!(enumerate.0, vec![]);
-    // let enumerate = enumerate.1;
+    let Some(Value::Tuple(mut t)) = vm.stack.pop() else {
+        panic!()
+    };
+    let iter = t.pop().unwrap();
 
-    // let Some(Entry::Value(Value::Pointer(run))) = lib.namespaces[*tests_ns].get("run") else {
-    //     panic!("no procedure named run")
-    // };
-    // assert_eq!(run.0, vec![]);
-    // let run = run.1;
+    let iter = IterReader {
+        vm: &mut vm,
+        label: "test",
+        iter_value: Some(iter),
+        done: false,
+    };
 
-    // let mut vm = Vm::new(lib, enumerate);
-    // vm.jump_to(Closure(
-    //     vec![
-    //         Value::Symbol("next".to_owned()),
-    //         Value::Pointer(Closure(vec![], SentenceIndex::TRAP)),
-    //     ],
-    //     enumerate,
-    // ));
+    let cases = iter.collect::<Result<Vec<Value>, EvalError>>()?;
 
-    // for tc in (IterReader {
-    //     vm: &mut vm,
-    //     done: false,
-    // })
-    // .collect_vec()
-    // {
-    //     let value = match tc {
-    //         Ok(value) => value,
-    //         Err(e) => {
-    //             println!("Error enumerating tests: {}", e);
-    //             return Ok(());
-    //         }
-    //     };
-    //     let Value::Symbol(tc_name) = value else {
-    //         panic!()
-    //     };
+    for tc in cases {
+        let Value::Symbol(tc_name) = &tc else {
+            panic!()
+        };
 
-    //     println!("Running test: {}", tc_name);
+        println!("Running test: {}", tc_name);
 
-    //     vm.jump_to(Closure(
-    //         vec![
-    //             Value::Pointer(Closure(vec![], SentenceIndex::TRAP)),
-    //             Value::Symbol(tc_name.clone()),
-    //         ],
-    //         run,
-    //     ));
+        vm.push_value(tuple![tagged![nil {}], tagged![run { tc }]]);
+        vm.load_label("test");
+        vm.run()?;
 
-    //     let mut res = match vm.run_to_trap() {
-    //         Ok(res) => res,
-    //         Err(e) => {
-    //             eprintln!("Error while running test {}: {}\n", tc_name, e);
-    //             eprintln!("Stack:");
-    //             for v in vm.stack.iter() {
-    //                 eprintln!("  {:?}", v)
-    //             }
-    //             exit(1);
-    //         }
-    //     };
+        let Value::Tuple(t) = vm.stack.pop().unwrap() else {
+            panic!()
+        };
+        assert!(t.is_empty());
+        println!("PASS!");
+    }
+    assert!(vm.stack.is_empty());
 
-    //     let Value::Pointer(_) = vm.stack.pop().unwrap() else {
-    //         panic!()
-    //     };
-
-    //     let Value::Symbol(result) = vm.stack.pop().unwrap() else {
-    //         panic!()
-    //     };
-
-    //     match result.as_str() {
-    //         "pass" => println!("PASS!"),
-    //         "fail" => {
-    //             println!("FAIL!");
-    //             exit(1);
-    //         }
-    //         _ => panic!(),
-    //     }
-    // }
-
-    // Ok(())
+    Ok(())
 }
 
 fn main() -> anyhow::Result<()> {

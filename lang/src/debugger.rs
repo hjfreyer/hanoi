@@ -25,24 +25,26 @@ pub struct Debugger {
     code_scroll: u16,
     stack_state: TableState,
     error: Option<EvalError>,
+    halted: bool,
 }
 
 const HISTORY_WINDOW: usize = 500;
 
 impl Debugger {
     fn step(&mut self) {
-        if self.error.is_some() {
+        if self.error.is_some() || self.halted {
             return;
         }
 
         match self.vm.step() {
-            Ok(step) => {
+            Ok(StepResult::Continue) => {
                 if HISTORY_WINDOW < self.history.len() {
                     self.history.pop_front();
                 }
                 self.history.push_back(self.vm.save_state());
                 self.update_code();
             }
+            Ok(StepResult::Exit) => self.halted = true,
             Err(err) => {
                 self.error = Some(err);
             }
@@ -60,14 +62,15 @@ impl Debugger {
     pub fn step_back(&mut self) {
         self.vm.restore_state(self.history.pop_back().unwrap());
         self.error = None;
+        self.halted = false;
         self.update_code();
     }
 
     fn next_line(&mut self) {
-        while self.error.is_none() && self.highlight_span.is_none() {
+        while self.error.is_none() && !self.halted && self.highlight_span.is_none() {
             self.step()
         }
-        if self.error.is_some() {
+        if self.error.is_some() || self.halted {
             return;
         }
 
@@ -78,6 +81,7 @@ impl Debugger {
             .line;
 
         while self.error.is_none()
+            && !self.halted
             && self
                 .highlight_span
                 .map(|span| span.as_pest(&self.sources).start_pos().line_col().0 == current_line)
@@ -243,6 +247,7 @@ impl Debugger {
             history: VecDeque::new(),
             stack_state: TableState::default(),
             error: None,
+            halted: false,
 
             code_scroll: 0,
             highlight_span: None,
