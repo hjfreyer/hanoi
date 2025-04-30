@@ -208,6 +208,7 @@ pub enum Decl<'t> {
 #[derive(Debug, FromPest)]
 #[pest_ast(rule(Rule::file))]
 pub struct File<'t> {
+    pub imports: Vec<Identifier<'t>>,
     pub ns: Namespace<'t>,
     eoi: EOI,
 }
