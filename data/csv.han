@@ -1,0 +1,116 @@
+
+//
+//mod csv {
+//    proc start(caller, @next) {
+//        let (caller) = req caller(@next);
+//        match {
+//            (@eos) =>  {
+//                let () = resp caller(@eos);
+//            }
+//            (@yield, char) => {
+//                let (caller, @next) = resp caller(@startrow);
+//                let (caller) = resp caller(@startfield);
+//                become this.default_handle_char(caller, char)
+//            }
+//        }
+//    }
+//
+//    proc default_handle_char(caller) {
+//        match {
+//            ('\n') => {
+//                let (caller, @next) = resp caller(@endfield);
+//                let () = resp caller(@endrow);
+//                become this.start()
+//            }
+//            ('"') => {
+//                become this.quoted(caller)
+//            }
+//            ('\\') => {
+//                become this.escaped(caller)
+//            }
+//            (',') => {
+//                let (caller, @next) = resp caller(@endfield);
+//                let () = resp caller(@startfield);
+//                become this.non_quoted()               
+//            }
+//            (char) => {
+//                let () = resp caller(@yield, char);
+//                become this.non_quoted()
+//            }
+//        }
+//    }
+//
+//    proc non_quoted(caller) {
+//        let (caller) = req caller(@next);
+//        match {
+//            (@eos) => {
+//                let (caller, @next) = resp caller(@endfield);
+//                let (caller, @next) = resp caller(@endrow);
+//                let () = resp caller(@eos);
+//            }
+//            (@yield, char) => {
+//                become this.default_handle_char(caller, char)
+//            }
+//        }
+//    }
+//
+//    proc quoted(caller) {
+//        let (caller) = req caller(@next);
+//        match {
+//            (@eos) => {
+//                let () = resp caller(@err, @nonterminatedquote);
+//            }
+//            (@yield, '"') => {
+//                become this.non_quoted(caller)
+//            }
+//            (@yield, char) => {
+//                let (caller, @next) = resp caller();
+//                become this.default_handle_char(caller, char)
+//            }
+//        }
+//    }
+//}
+//
+
+//    proc enumerate(caller, @next) {
+////        let (caller, @next) = caller(@yield, @basic_csv);
+//        let () = caller(@eos);        
+//    }
+//
+//    mod cases {
+//        proc basic_csv(caller) {
+//            let (iter) = this.super.super.iter.symbol_chars(@"foo,bar
+//baz");
+//            let (bound) = this.super.super.builtin.bind(
+//                this.super.super.csv.start, 
+//                @iter, 
+//                iter);
+//
+//            let (@resp, bound, @startrow) = bound(@next);
+//            let (@resp, bound, @startfield) = bound(@next);
+//            let (@resp, bound, @yield, 'f') = bound(@next);
+//            let (@resp, bound, @yield, 'o') = bound(@next);
+//            let (@resp, bound, @yield, 'o') = bound(@next);
+//            let (@resp, bound, @endfield) = bound(@next);
+//            let (@resp, bound, @startfield) = bound(@next);
+//            let (@resp, bound, @yield, 'b') = bound(@next);
+//            let (@resp, bound, @yield, 'a') = bound(@next);
+//            let (@resp, bound, @yield, 'r') = bound(@next);
+//            let (@resp, bound, @endfield) = bound(@next);
+//            let (@resp, bound, @endrow) = bound(@next);
+//            let (@resp, bound, @startrow) = bound(@next);
+//            let (@resp, bound, @startfield) = bound(@next);
+//            let (@resp, bound, @yield, 'b') = bound(@next);
+//            let (@resp, bound, @yield, 'a') = bound(@next);
+//            let (@resp, bound, @yield, 'z') = bound(@next);
+//            let (@resp, bound, @endfield) = bound(@next);
+//            let (@resp, bound, @endrow) = bound(@next);
+//            let (@resp, bound, @eos) = bound(@next);
+//            let () = caller(@pass);
+//        }
+//
+//    }
+//
+//    proc run(caller, case_name) {
+//        R{ @cases this #get #get @exec }
+//    }
