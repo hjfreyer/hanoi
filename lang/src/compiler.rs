@@ -1163,18 +1163,6 @@ pub struct Symbol {
 //     Tuple(Tuple),
 // }
 
-fn literal_to_value(literal: ast::Literal) -> flat::Value {
-    match literal {
-        ast::Literal::Int(ast::Int { span: _, value }) => flat::Value::Usize(value),
-        ast::Literal::Symbol(sym) => match sym {
-            ast::Symbol::Identifier(identifier) => {
-                flat::Value::Symbol(identifier.0.as_str().to_owned())
-            }
-            ast::Symbol::String(string_literal) => flat::Value::Symbol(string_literal.value),
-        },
-    }
-}
-
 fn normalize_path(sources: &Sources, mut path: QualifiedName) -> QualifiedName {
     loop {
         let Some(super_idx) = path
@@ -1293,6 +1281,9 @@ mod builder {
         match value {
             ast::Literal::Int(ast::Int { span: _, value }) => {
                 push_value(span, flat::Value::Usize(value), output)
+            }
+            ast::Literal::Char(ast::Char { span: _, value }) => {
+                push_value(span, flat::Value::Char(value), output)
             }
             ast::Literal::Symbol(sym) => match sym {
                 ast::Symbol::Identifier(identifier) => push_value(

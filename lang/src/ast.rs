@@ -14,6 +14,12 @@ fn span_into_str(span: pest::Span) -> &str {
     span.as_str()
 }
 
+fn span_into_char(span: pest::Span) -> char {
+    let s = span.as_str();
+    assert_eq!(s.len(), 3);
+    s.chars().nth(1).unwrap()
+}
+
 #[derive(Debug, FromPest, Spanner, Clone)]
 #[pest_ast(rule(Rule::identifier))]
 pub struct Identifier<'t>(
@@ -54,6 +60,16 @@ pub struct Int<'t> {
     pub value: usize,
 }
 
+#[derive(Debug, FromPest, Spanner, Clone)]
+#[pest_ast(rule(Rule::char_lit))]
+pub struct Char<'t> {
+    #[pest_ast(outer())]
+    pub span: pest::Span<'t>,
+
+    #[pest_ast(outer(with(span_into_char)))]
+    pub value: char,
+}
+
 fn span_into_string_literal(span: pest::Span) -> String {
     let str = span.as_str();
     let str = &str[1..str.len() - 1];
@@ -81,6 +97,7 @@ pub enum Symbol<'t> {
 #[pest_ast(rule(Rule::literal))]
 pub enum Literal<'t> {
     Int(Int<'t>),
+    Char(Char<'t>),
     Symbol(Symbol<'t>),
 }
 

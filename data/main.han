@@ -16,34 +16,61 @@ sentence test {
 mod tests {
     proc args main => args match {
         (#nil{}, #enumerate{}) => (#nil{}, #a{}),
-        (#a{}, #next{}) => (#b{}, #some{@map_empty}),
-        (#b{}, #next{}) => (#c{}, #some{@map_blah}),
+        (#a{}, #next{}) => (#b{}, #some{@parse_empty}),
+        (#b{}, #next{}) => (#c{}, #some{@parse_some}),
         (#c{}, #next{}) => (#d{}, #none{}),
 
-        (#nil{}, #run{@map_empty}) => () 'cases::map_empty,
-        (#nil{}, #run{@map_blah}) => () 'cases::map_blah,
+        (#nil{}, #run{@parse_empty}) => () 'cases::parse_empty,
+        (#nil{}, #run{@parse_some}) => () 'cases::parse_some,
     }
 
     mod cases {
-        proc () map_empty => {
+        proc () parse_empty => {
+            let (p, #req{#next{}}) = (#nil{}, #parse{}) 'super::super::parseint;
+            let (^, #resp{0}) = (p, #none{}) 'super::super::parseint;
             ()
         }
-        proc () map_blah => {
+
+        proc () parse_some => {
+            let (p, #req{#next{}}) = (#nil{}, #parse{}) 'super::super::parseint;
+            let (p, #req{#next{}}) = (p, #some{'6'}) 'super::super::parseint;
+            let (p, #req{#next{}}) = (p, #some{'7'}) 'super::super::parseint;
+            let (p, #req{#next{}}) = (p, #some{'2'}) 'super::super::parseint;
+            let (^, #resp{672}) = (p, #none{}) 'super::super::parseint;
             ()
         }
     }
+}
 
-    mod enumerate {
-        proc () init => {
-            @a
-        }
+sentence ord {
+    #ord
+}
 
-        proc (closure, args) main => {
-            let (@next, ()) = args;
-            closure match {
-                @a => (@b, (@res, (@some, @map_empty))),
+sentence prod {
+    #untuple(2) #prod
+}
+
+sentence sub {
+    #untuple(2) #sub
+}
+
+
+proc (self, method) parseint => {
+    self match {
+        #nil{} => {
+            let #parse{} = method;
+            (#await_next{0}, #req{#next{}})
+        },
+        #await_next{acc} => {
+            method match {
+                #none{} => (#done{}, #resp{acc}),
+                #some{c} => {
+                    let digit = (c 'ord, 48) 'sub;
+                    let acc = ((10, acc) 'prod, digit) 'add;
+                    (#await_next{acc}, #req{#next{}})
+                },
             }
-        }
+        },
     }
 }
 
@@ -83,7 +110,7 @@ proc () main_impl => {
     // let (^, (@res, (@none, ()))) = (m, (@none, ())) 'map::main;
 
     let ((@nil, ()), test_iter) = ((@nil, ()), (@enumerate, ())) 'tests::main;
-    let (test_iter, (@some, @map_empty)) = (test_iter, (@next, ())) 'tests::main;
+    let (test_iter, (@some, @parse_empty)) = (test_iter, (@next, ())) 'tests::main;
     let ^ = test_iter;
 
     ()
