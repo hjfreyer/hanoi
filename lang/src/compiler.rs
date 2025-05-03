@@ -1285,6 +1285,9 @@ mod builder {
             ast::Literal::Char(ast::Char { span: _, value }) => {
                 push_value(span, flat::Value::Char(value), output)
             }
+            ast::Literal::Bool(ast::Bool { span: _, value }) => {
+                push_value(span, flat::Value::Bool(value), output)
+            }
             ast::Literal::Symbol(sym) => match sym {
                 ast::Symbol::Identifier(identifier) => push_value(
                     span,

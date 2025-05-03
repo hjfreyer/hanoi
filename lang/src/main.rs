@@ -164,44 +164,53 @@ fn test(base_dir: PathBuf, module: String) -> anyhow::Result<()> {
     let (sources, lib) = compile_library(base_dir, module)?;
     let mut vm = Vm::new(lib);
 
-    vm.push_value(tuple![tagged![nil {}], tagged![enumerate {}]]);
-    vm.load_label("test");
-    vm.run()?;
-
-    let Some(Value::Tuple(mut t)) = vm.stack.pop() else {
-        panic!()
-    };
-    let iter = t.pop().unwrap();
-
-    let iter = IterReader {
-        vm: &mut vm,
-        label: "test",
-        iter_value: Some(iter),
-        done: false,
-    };
-
-    let cases = iter.collect::<Result<Vec<Value>, EvalError>>()?;
-
-    for tc in cases {
-        let Value::Symbol(tc_name) = &tc else {
-            panic!()
-        };
-
-        println!("Running test: {}", tc_name);
-
-        vm.push_value(tuple![tagged![nil {}], tagged![run { tc }]]);
+    fn run(vm: &mut Vm) -> Result<(), vm::EvalError> {
+        vm.push_value(tuple![tagged![nil {}], tagged![enumerate {}]]);
         vm.load_label("test");
         vm.run()?;
 
-        let Value::Tuple(t) = vm.stack.pop().unwrap() else {
+        let Some(Value::Tuple(mut t)) = vm.stack.pop() else {
             panic!()
         };
-        assert!(t.is_empty());
-        println!("PASS!");
-    }
-    assert!(vm.stack.is_empty());
+        let iter = t.pop().unwrap();
 
-    Ok(())
+        let iter = IterReader {
+            vm: vm,
+            label: "test",
+            iter_value: Some(iter),
+            done: false,
+        };
+
+        let cases = iter.collect::<Result<Vec<Value>, EvalError>>()?;
+
+        for tc in cases {
+            let Value::Symbol(tc_name) = &tc else {
+                panic!()
+            };
+
+            println!("Running test: {}", tc_name);
+
+            vm.push_value(tuple![tagged![nil {}], tagged![run { tc }]]);
+            vm.load_label("test");
+            vm.run()?;
+
+            let Value::Tuple(t) = vm.stack.pop().unwrap() else {
+                panic!()
+            };
+            assert!(t.is_empty());
+            println!("PASS!");
+        }
+        assert!(vm.stack.is_empty());
+
+        Ok(())
+    }
+    match run(&mut vm) {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            eprintln!("Error: {}", e.into_user(&sources));
+            exit(1);
+        }
+    }
 }
 
 fn main() -> anyhow::Result<()> {

@@ -61,6 +61,16 @@ pub struct Int<'t> {
 }
 
 #[derive(Debug, FromPest, Spanner, Clone)]
+#[pest_ast(rule(Rule::bool))]
+pub struct Bool<'t> {
+    #[pest_ast(outer())]
+    pub span: pest::Span<'t>,
+
+    #[pest_ast(outer(with(span_into_str), with(str::parse), with(Result::unwrap)))]
+    pub value: bool,
+}
+
+#[derive(Debug, FromPest, Spanner, Clone)]
 #[pest_ast(rule(Rule::char_lit))]
 pub struct Char<'t> {
     #[pest_ast(outer())]
@@ -98,6 +108,7 @@ pub enum Symbol<'t> {
 pub enum Literal<'t> {
     Int(Int<'t>),
     Char(Char<'t>),
+    Bool(Bool<'t>),
     Symbol(Symbol<'t>),
 }
 

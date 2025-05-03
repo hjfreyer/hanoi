@@ -18,10 +18,29 @@ mod tests {
         (#nil{}, #enumerate{}) => (#nil{}, #a{}),
         (#a{}, #next{}) => (#b{}, #some{@parse_empty}),
         (#b{}, #next{}) => (#c{}, #some{@parse_some}),
-        (#c{}, #next{}) => (#d{}, #none{}),
+        (#c{}, #next{}) => (#d{}, #some{@split}),
+        (#d{}, #next{}) => (#e{}, #none{}),
 
         (#nil{}, #run{@parse_empty}) => () 'cases::parse_empty,
         (#nil{}, #run{@parse_some}) => () 'cases::parse_some,
+        (#nil{}, #run{@split}) => {
+            let #resp{s, #some{}} = (#start{@i}, #next{}) 'super::split_iter;
+            let #req{s, @iter, (@i, #next{})} = (s, #item{#next{}}) 'super::split_iter;
+            let #resp{s, #some{}} = (s, #reply{@i, #non_delim{}}) 'super::split_iter;
+            let #req{s, @iter, (@i, #item{@query})} = (s, #item{#item{@query}}) 'super::split_iter;
+            let #resp{s, @answer} = (s, #reply{@i, @answer}) 'super::split_iter;
+
+            let #req{s, @iter, (@i, #next{})} = (s, #item{#next{}}) 'super::split_iter;
+            let #resp{s, #some{}} = (s, #reply{@i, #delim{}}) 'super::split_iter;
+            let #resp{s, #none{}} = (s, #item{#next{}}) 'super::split_iter;
+            let #resp{s, #some{}} = (s, #next{}) 'super::split_iter;
+            let #req{s, @iter, (@i, #next{})} = (s, #item{#next{}}) 'super::split_iter;
+            let #resp{s, #none{}} = (s, #reply{@i, #none{}}) 'super::split_iter;
+            let #resp{s, #none{}} = (s, #next{}) 'super::split_iter;
+
+            let ^ = s;
+            ()
+        },
     }
 
     mod cases {
@@ -95,6 +114,95 @@ mod ints {
         let ^ = 3;
         let res = (@some, *s);
         ((@start, (s, 1) 'super::add), res)
+    }
+}
+
+proc method map_iter => {
+    method match {
+        #next{#start{iter, fn}} => {
+            #req{#get_next{fn}, @iter, #next{iter}}
+        },
+        #reply{#get_next{fn}, message} => message match {
+            #some{iter, item} => #req{#apply_fn{iter}, @fn, (fn, item)},
+            #none{iter} => #resp{#none{#done{iter, fn}}},
+        },
+        #reply{#apply_fn{iter}, (fn, result)} => #resp{#some{#start{iter, fn}, result}},
+    }
+}
+
+proc (self, method) map_ref_iter => {
+    self match {
+        #start{iter, fn_factory} => {
+            let #next{} = method;
+            #req{#get_next{fn_factory}, @iter, (iter, #next{})}
+        },
+        #get_next{fn_factory} => {
+            let #reply{iter, message} = method;
+            message match {
+                #some{} => #req{#get_mapper{iter}, @fn_factory, (fn_factory, ())},
+                #none{} => #resp{#done{iter, fn_factory}, #none{}},
+            }
+        },
+        #get_mapper{iter} => {
+            let #reply{fn_factory, fn} = method;
+            #resp{#idle{iter, fn_factory, fn}, #some{}}
+        },
+        #idle{iter, fn_factory, fn} => {
+            method match {
+                #item{msg} => #req{#fwd_fn{iter, fn_factory}, @fn, (fn, msg)},
+                #next{} => {
+                    let ^ = fn;
+                    #req{#get_next{fn_factory}, @iter, (iter, #next{})}
+                },
+            }
+        },
+        #fwd_fn{iter, fn_factory} => {
+            let #reply{fn, message} = method;
+            #resp{#idle{iter, fn_factory, fn}, message}
+        },
+    }
+}
+
+proc (self, method) split_iter => {
+    self match {
+        #start{iter} => {
+            let #next{} = method;
+            #resp{#in_field{iter}, #some{}}
+        },
+        #in_field{iter} => {
+            let #item{#next{}} = method;
+            #req{#in_field_get_next{}, @iter, (iter, #next{})}
+        },
+        #in_field_get_next{} => {
+            let #reply{iter, message} = method;
+            message match {
+                #non_delim{} => #resp{#knowing{false, iter}, #some{}},
+                #delim{} =>  #resp{#knowing{true, iter}, #some{}},
+                #none{} => #resp{#in_field_done{iter}, #none{}},
+            }
+        },
+        #knowing{is_delim, iter} => {
+            method match {
+                #item{#item{msg}} => #req{#knowing_fwd{is_delim}, @iter, (iter, #item{msg})},
+                #item{#next{}} => is_delim if {
+                    #resp{#start{iter}, #none{}}
+                } else {
+                    #req{#in_field_get_next{}, @iter, (iter, #next{})}
+                },
+            }
+        },
+        #knowing_fwd{is_delim} => {
+            let #reply{iter, message} = method;
+            #resp{#knowing{is_delim, iter}, message}
+        },
+        #field_end{iter} => {
+            let #next{} = method;
+            #req{#in_field_get_next{}, @iter, (iter, #next{})}
+        },
+        #in_field_done{iter} => {
+            let #next{} = method;
+            #resp{#done{iter}, #none{}}
+        },
     }
 }
 
