@@ -120,6 +120,10 @@ impl<'t> Compiler<'t> {
         let expression = Expression::from_ast(expression);
         let span = expression.span(file_idx);
 
+        let symbol_table = SymbolTable {
+            prefix: name_prefix.clone(),
+        };
+
         let mut out = Output {
             words: vec![],
             locals: Locals::default(),
@@ -131,7 +135,7 @@ impl<'t> Compiler<'t> {
         };
         let () = builder::binding(ctx, binding, &mut out)?;
 
-        let () = expression.compilation(ctx, name_prefix, &mut out)?;
+        let () = expression.compilation(ctx, &symbol_table, &mut out)?;
 
         if out.locals.len() != 1 {
             let Name::User(name) = out.locals.names()[1] else {
@@ -610,7 +614,7 @@ impl<'t> Expression<'t> {
     fn compilation(
         self,
         ctx: FileContext,
-        name_prefix: &QualifiedName,
+        symbol_table: &SymbolTable,
         out: &mut Output,
     ) -> Result<(), Error> {
         match self {
@@ -626,11 +630,11 @@ impl<'t> Expression<'t> {
                 rhs,
                 inner,
             } => {
-                let () = rhs.compilation(ctx, name_prefix, out)?;
+                let () = rhs.compilation(ctx, symbol_table, out)?;
 
                 let () = builder::binding(ctx, binding, out)?;
 
-                let () = inner.compilation(ctx, name_prefix, out)?;
+                let () = inner.compilation(ctx, symbol_table, out)?;
                 // TODO: Check scope leakage?
                 Ok(())
             }
@@ -639,22 +643,21 @@ impl<'t> Expression<'t> {
 
                 let len = values.len();
                 for v in values {
-                    let () = v.compilation(ctx, name_prefix, out)?;
+                    let () = v.compilation(ctx, symbol_table, out)?;
                 }
                 builder::tuple(ctx, span, len, out);
                 Ok(())
             }
             Expression::Call { span, arg, label } => {
                 let span = span.into_ir(ctx.sources, ctx.file_idx);
-                let () = arg.compilation(ctx, name_prefix, out)?;
+                let () = arg.compilation(ctx, symbol_table, out)?;
 
-                let qualified = name_prefix
-                    .join(label.into_ir(ctx.sources, ctx.file_idx))
-                    .append(Name::Generated(0));
+                let qualified =
+                    symbol_table.resolve(ctx.sources, label.into_ir(ctx.sources, ctx.file_idx));
 
                 out.words.push(RecursiveWord {
                     span,
-                    inner: InnerWord::Call(normalize_path(ctx.sources, qualified)),
+                    inner: InnerWord::Call(qualified),
                     names: out.locals.names(),
                 });
                 out.locals.pop();
@@ -664,7 +667,7 @@ impl<'t> Expression<'t> {
             }
             Expression::Match { span, arg, cases } => {
                 let span = span.span(ctx.file_idx);
-                let () = arg.compilation(ctx, name_prefix, out)?;
+                let () = arg.compilation(ctx, symbol_table, out)?;
 
                 let mut else_case_out: Box<dyn FnOnce(&mut Output) -> Result<(), Error>> =
                     Box::new(|out: &mut Output| {
@@ -683,7 +686,7 @@ impl<'t> Expression<'t> {
                             span,
                             move |out| {
                                 builder::binding(ctx, case.binding, out)?;
-                                case.rhs.compilation(ctx, name_prefix, out)
+                                case.rhs.compilation(ctx, symbol_table, out)
                             },
                             span,
                             else_case_out,
@@ -703,15 +706,15 @@ impl<'t> Expression<'t> {
                 let true_span = true_case.span(ctx.file_idx);
                 let false_span = false_case.span(ctx.file_idx);
 
-                let () = cond.compilation(ctx, name_prefix, out)?;
+                let () = cond.compilation(ctx, symbol_table, out)?;
 
                 builder::conditional(
                     ctx,
                     span,
                     true_span,
-                    |out| true_case.compilation(ctx, name_prefix, out),
+                    |out| true_case.compilation(ctx, symbol_table, out),
                     false_span,
-                    |out| false_case.compilation(ctx, name_prefix, out),
+                    |out| false_case.compilation(ctx, symbol_table, out),
                     out,
                 )
             }
@@ -736,6 +739,37 @@ impl<'t> Spanner<'t> for Expression<'t> {
             Expression::Match { span, .. } => *span,
             Expression::If { span, .. } => *span,
         }
+    }
+}
+
+struct SymbolTable {
+    prefix: QualifiedName,
+}
+
+impl SymbolTable {
+    pub fn resolve(&self, sources: &Sources, name: QualifiedName) -> QualifiedName {
+        let mut path = self.prefix.join(name);
+        let path = loop {
+            let Some(super_idx) = path
+                .0
+                .iter()
+                .position(|n| n.as_ref(sources) == NameRef::User("super"))
+            else {
+                break path;
+            };
+            path.0.remove(super_idx - 1);
+            path.0.remove(super_idx - 1);
+        };
+        let path = if let Some(crate_idx) = path
+            .0
+            .iter()
+            .position(|n| n.as_ref(sources) == NameRef::User("crate"))
+        {
+            QualifiedName(path.0.iter().skip(crate_idx + 1).cloned().collect())
+        } else {
+            path
+        };
+        path.append(Name::Generated(0))
     }
 }
 
@@ -1173,29 +1207,6 @@ pub struct Symbol {
 //     Move(Identifier),
 //     Tuple(Tuple),
 // }
-
-fn normalize_path(sources: &Sources, mut path: QualifiedName) -> QualifiedName {
-    let path = loop {
-        let Some(super_idx) = path
-            .0
-            .iter()
-            .position(|n| n.as_ref(sources) == NameRef::User("super"))
-        else {
-            break path;
-        };
-        path.0.remove(super_idx - 1);
-        path.0.remove(super_idx - 1);
-    };
-    if let Some(crate_idx) = path
-        .0
-        .iter()
-        .position(|n| n.as_ref(sources) == NameRef::User("crate"))
-    {
-        QualifiedName(path.0.iter().skip(crate_idx + 1).cloned().collect())
-    } else {
-        path
-    }
-}
 
 mod builder {
     use super::*;
