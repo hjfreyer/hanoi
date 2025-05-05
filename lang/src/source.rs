@@ -1,10 +1,18 @@
 use std::{
+    collections::BTreeMap,
     fmt::Display,
     path::{Path, PathBuf},
 };
 
 use derive_more::derive::{From, Into};
+use itertools::Itertools;
 use typed_index_collections::TiVec;
+
+use crate::{
+    ast,
+    compiler::{Name, QualifiedName},
+    flat::{LoadError, LoadErrorInner},
+};
 
 #[derive(From, Into, Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct FileIndex(usize);
@@ -19,10 +27,24 @@ pub struct Loader {
 impl Loader {
     pub fn load(
         &self,
-        path: PathBuf,
+        mod_name: QualifiedName,
         sources: &mut Sources,
     ) -> Result<FileIndex, crate::flat::LoadError> {
-        if sources.files.iter().any(|f| f.path == path) {
+        let path = if mod_name.0.is_empty() {
+            "mod.han".to_owned()
+        } else {
+            format!(
+                "{}.han",
+                mod_name
+                    .0
+                    .iter()
+                    .map(|name| name.as_str(sources).unwrap())
+                    .join("/")
+            )
+        };
+        let path = path.parse().unwrap();
+
+        if sources.files.iter().any(|f| f.mod_name == mod_name) {
             return Err(crate::flat::LoadError {
                 path,
                 error: crate::flat::LoadErrorInner::DuplicatePath,
@@ -37,6 +59,7 @@ impl Loader {
 
         Ok(sources.files.push_and_get_key(File {
             path,
+            mod_name,
             source: contents,
         }))
     }
@@ -49,14 +72,38 @@ pub struct Sources {
 }
 
 impl Sources {
+    pub fn fully_load(loader: &Loader) -> Result<Self, crate::flat::LoadError> {
+        let mut sources = Self::default();
+        let mut queue = vec![QualifiedName(vec![])];
+
+        while let Some(mod_name) = queue.pop() {
+            let file_idx = loader.load(mod_name.clone(), &mut sources)?;
+            let path = sources.files[file_idx].path.clone();
+
+            let parsed =
+                ast::File::from_source(&sources.files.last().unwrap().source).map_err(|e| {
+                    LoadError {
+                        path,
+                        error: LoadErrorInner::Parse(e),
+                    }
+                })?;
+
+            for import in parsed.imports {
+                queue.push(mod_name.append(Name::User(import.span(file_idx))));
+            }
+        }
+
+        Ok(sources)
+    }
     // pub fn pest_span(&self, span: Span) -> pest::Span {
     //     pest::Span::new(self.files[span.file_idx].source.as_str(), span.start, span.end).unwrap()
     // }
 }
 
-#[derive(Default, Debug)]
+#[derive(Debug)]
 pub struct File {
     pub path: PathBuf,
+    pub mod_name: QualifiedName,
     pub source: String,
 }
 

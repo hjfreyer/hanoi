@@ -15,6 +15,7 @@ use clap::{Parser, Subcommand};
 use flat::{Builtin, Closure, Entry, InnerWord, Library, SentenceIndex, Value};
 use itertools::Itertools;
 
+use source::FileIndex;
 use vm::{EvalError, ProgramCounter, Vm};
 
 #[derive(Parser, Debug)]
@@ -28,44 +29,29 @@ struct Args {
 enum Commands {
     Run {
         base_dir: PathBuf,
-        module: String,
     },
     Debug {
         base_dir: PathBuf,
-        module: String,
         #[arg(long)]
         stdin: Option<PathBuf>,
     },
     Test {
         base_dir: PathBuf,
-        module: String,
     },
 }
 
-fn compile_library(
-    base_dir: PathBuf,
-    module: String,
-) -> anyhow::Result<(source::Sources, Library)> {
-    use from_pest::FromPest;
-    use pest::Parser;
-
+fn compile_library(base_dir: PathBuf) -> anyhow::Result<(source::Sources, Library)> {
     let loader = source::Loader { base_dir };
-    let mut sources = source::Sources::default();
+    let sources = source::Sources::fully_load(&loader)?;
 
-    let file_idx = loader.load(format!("{}.han", module).parse().unwrap(), &mut sources)?;
+    let crt = compiler::Crate::from_sources(&sources)?;
 
-    let mut parse_tree = ast::HanoiParser::parse(ast::Rule::file, &sources.files[file_idx].source)?;
-    let file = ast::File::from_pest(&mut parse_tree).expect("infallible");
-
-    let mut ir = compiler::Compiler::new(&sources);
-    ir.add_file(compiler::QualifiedName(vec![]), file_idx, file)?;
-
-    let lib = linker::compile(&sources, ir.build())?;
+    let lib = linker::compile(&sources, crt)?;
     Ok((sources, lib))
 }
 
-fn run(base_dir: PathBuf, module: String) -> anyhow::Result<()> {
-    let (sources, lib) = compile_library(base_dir, module)?;
+fn run(base_dir: PathBuf) -> anyhow::Result<()> {
+    let (sources, lib) = compile_library(base_dir)?;
     let mut vm = Vm::new(lib);
 
     vm.load_label("main");
@@ -85,8 +71,8 @@ fn run(base_dir: PathBuf, module: String) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn debug(base_dir: PathBuf, module: String, stdin: Option<PathBuf>) -> anyhow::Result<()> {
-    let (sources, lib) = compile_library(base_dir, module)?;
+fn debug(base_dir: PathBuf, stdin: Option<PathBuf>) -> anyhow::Result<()> {
+    let (sources, lib) = compile_library(base_dir)?;
     let mut vm = Vm::new(lib);
 
     if let Some(stdin_path) = stdin {
@@ -160,8 +146,8 @@ impl<'a> Iterator for IterReader<'a> {
     }
 }
 
-fn test(base_dir: PathBuf, module: String) -> anyhow::Result<()> {
-    let (sources, lib) = compile_library(base_dir, module)?;
+fn test(base_dir: PathBuf) -> anyhow::Result<()> {
+    let (sources, lib) = compile_library(base_dir)?;
     let mut vm = Vm::new(lib);
 
     fn run(vm: &mut Vm) -> Result<(), vm::EvalError> {
@@ -217,13 +203,9 @@ fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     match args.command {
-        Commands::Run { base_dir, module } => run(base_dir, module),
-        Commands::Debug {
-            base_dir,
-            module,
-            stdin,
-        } => debug(base_dir, module, stdin),
-        Commands::Test { base_dir, module } => test(base_dir, module),
+        Commands::Run { base_dir } => run(base_dir),
+        Commands::Debug { base_dir, stdin } => debug(base_dir, stdin),
+        Commands::Test { base_dir } => test(base_dir),
     }
 }
 

@@ -9,10 +9,6 @@
 //mod multi_iter;
 //
 
-sentence test {
-    #call('tests::main)
-}
-
 mod tests {
     proc args main => args match {
         (#nil{}, #enumerate{}) => (#nil{}, #a{}),
@@ -85,24 +81,12 @@ proc (self, method) parseint => {
                 #none{} => (#done{}, #resp{acc}),
                 #some{c} => {
                     let digit = (c 'ord, 48) 'sub;
-                    let acc = ((10, acc) 'prod, digit) 'add;
+                    let acc = ((10, acc) 'prod, digit) 'crate::builtin::add;
                     (#await_next{acc}, #req{#next{}})
                 },
             }
         },
     }
-}
-
-sentence add {
-    #untuple(2) #add
-}
-
-sentence eq {
-    #untuple(2) #eq
-}
-
-proc x double => {
-    (*x, x) 'add
 }
 
 mod ints {
@@ -113,7 +97,7 @@ mod ints {
     proc ((@start, s), @next) main => {
         let ^ = 3;
         let res = (@some, *s);
-        ((@start, (s, 1) 'super::add), res)
+        ((@start, (s, 1) 'crate::builtin::add), res)
     }
 }
 
@@ -223,8 +207,3 @@ proc () main_impl => {
 
     ()
 }
-
-sentence main {
-    #tuple(0) #call('main_impl)
-}
-

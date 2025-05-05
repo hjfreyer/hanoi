@@ -1,6 +1,7 @@
 use clap::Arg;
 use from_pest::FromPest;
 use from_raw_ast::Spanner;
+use pest::Parser;
 use pest_ast::FromPest;
 use pest_derive::Parser;
 
@@ -239,6 +240,13 @@ pub struct File<'t> {
     pub imports: Vec<Identifier<'t>>,
     pub ns: Namespace<'t>,
     eoi: EOI,
+}
+
+impl<'t> File<'t> {
+    pub fn from_source(file: &'t str) -> Result<Self, pest::error::Error<Rule>> {
+        let mut parse_tree = HanoiParser::parse(Rule::file, &file)?;
+        Ok(File::from_pest(&mut parse_tree).expect("infallible"))
+    }
 }
 
 #[derive(Debug, FromPest)]

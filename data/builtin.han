@@ -1,345 +1,355 @@
 
-proc symbol_len(caller, symbol) {
-    R{ 
-        [symbol, caller]
-        symbol #symbol_len caller @exec 
-    }
+
+sentence add {
+    #untuple(2) #add
 }
 
-proc symbol_char_at(caller, symbol, offset) {
-    R{ 
-        [offset, symbol, caller]
-        symbol offset #symbol_char_at caller @exec 
-    }
-}
-
-proc eq(caller, a, b) {
-    R{ 
-        [b, a, caller]
-        a b #eq caller @exec 
-    }
-}
-
-proc lt(caller, a, b) {
-    R{ 
-        [b, a, caller]
-        a b #lt caller @exec 
-    }
-}
-
-proc add() {
-    R{
-        [a, b, caller]
-        a b #add caller @exec
-    }
-}
-
-proc sub() {
-    R{
-        [b, a, caller]
-        a b #sub caller @exec
-    }
-}
-
-proc prod() {
-    R{
-        [a, b, caller]
-        a b #prod caller @exec
-    }
-}
-
-proc ord() {
-    R{
-        [a, caller]
-        a #ord caller @exec
-    }
-}
-
-proc cons() {
-    R{
-        [b, a, caller]
-        a b #cons caller @exec
-    }
-}
-proc snoc() {
-    R{
-        [a, caller]
-        a #snoc caller @exec
-    }
-}
-
-proc tuple0() {
-    R{
-        [caller]
-        #tuple(0) caller @exec
-    }
-}
-
-proc untuple0() {
-    R{
-        [t, caller]
-        t #untuple(0) caller @exec
-    }
-}
-
-proc tuple1(a) {
-    R{
-        [a, caller]
-        a #tuple(1) caller @exec
-    }
-}
-
-proc untuple1(caller, t) {
-    R{
-        [t, caller]
-        t #untuple(1) caller @exec
-    }
-}
-
-proc tuple2(caller, a, b) {
-    R{
-        [b, a, caller]
-        b a #tuple(2) caller @exec
-    }
-}
-
-proc untuple2() {
-    R{
-        [t, caller]
-        t #untuple(2) caller @exec
-    }
-}
-
-proc bind_impl(inner, symbol, target, caller) {
-    let (inner) = inner();
-    match {
-        (@req, name) =>  {
-            let (are_eq) = this.eq(*name, *symbol);
-            if are_eq {
-                let (caller, target) = this.fwd_req(caller, target);
-                become this.bind_impl(inner, symbol, target, caller)
-            } else {
-                let (caller) = req caller(name);
-                become this.bind_impl(inner, symbol, target, caller)
-            }
-        }
-        (@resp) => {
-            let (caller) = resp caller();
-            become this.bind_impl(inner, symbol, target, caller)
-        }
-    }
-}
-
-proc bind(caller, inner, symbol, target) {
-    become caller(this.bind_impl&(inner, symbol, target))
-}
-
-proc bind2_impl(inner, inner_symbol, target, target_symbol, caller) {
-    let (inner) = inner();
-    match {
-        (@req, name) =>  {
-            let (are_eq) = this.eq(*name, *inner_symbol);
-            if are_eq {
-                let (caller, target) = this.fwd_req(caller, target, @req, *target_symbol);
-                become this.bind2_impl(inner, inner_symbol, target, target_symbol, caller)
-            } else {
-                let (caller) = req caller(name);
-                become this.bind2_impl(inner, inner_symbol, target, target_symbol, caller)
-            }
-        }
-        (@resp) => {
-            let (caller) = resp caller();
-            become this.bind2_impl(inner, inner_symbol, target, target_symbol, caller)
-        }
-    }
-}
-
-proc bind2(caller, inner, inner_symbol, target, target_symbol) {
-    become caller(this.bind_impl2&(inner, inner_symbol, target, target_symbol))
-}
-
-proc fwd_req(next, up, down) {
-    let () = down();
-    match {
-        (@req, down) => {
-            let (up) = req up();
-            become this.fwd_req(next, up, down)
-        }
-        (@resp, down) => {
-            become next(up, @resp, down)
-        }
-        (@end) => {
-            become next(up, @end)
-        }
-    }
-}
-
-proc fwd_once(next, up, down) {
-    let () = down();
-    match {
-        (@req, down) => {
-            let (up) = req up();
-            become this.fwd_once(next, up, down)
-        }
-        (@resp, down) => {
-            let (up) = resp up();
-            become next(@resp, up, down)
-        }
-        (@end) => {
-            become next(@end, up)
-        }
-    }
-}
-
-proc fwd_all(next, up, down) {
-    let () = down();
-    match {
-        (@req, down) => {
-            let (up) = req up();
-            become this.fwd_all(next, up, down)
-        }
-        (@resp, down) => {
-            let (up) = resp up();
-            become this.fwd_all(next, up, down)
-        }
-        (@end) => {
-            become next(up)
-        }
-    }
-}
-
-proc compose(caller, f, g) {
-    become caller(this.compose_impl&(f, g))
-}
-
-proc compose_impl(f, g, caller) {
-    let () = g();
-    match {
-        (@req, g) => {
-            let (caller) = this.fwd_req(caller, f);
-            match {
-                (@resp, f) => {
-                    become this.compose_impl(f, g, caller)
-                }
-                (@end) => {
-                    // This is maybe dodgy
-                    become g(caller)
-                }
-            }
-        }
-        (@resp, g) => {
-            let (caller) = resp caller();
-            become this.compose_impl(f, g, caller)
-        }
-        (@end) => {
-            become caller(@end)
-        }
-    }
-}
-
-proc mk_pair(caller, a, b) {
-    become caller(this.mk_pair_impl&(a, b))
-}
-
-proc mk_pair_impl(a, b, caller) {
-    match {
-        (@a) => {
-            let () = a();
-            match {
-                (@resp, a) => {
-                    let () = resp caller();
-                    become this.mk_pair_impl(a, b)
-                }
-                (@end) => {
-                    let () = resp caller();
-                    become this.mk_pair_impl(0, b)
-                }
-            }
-        } 
-        (@b) => {
-            let () = b();
-            match {
-                (@resp, b) => {
-                    let () = resp caller();
-                    become this.mk_pair_impl(a, b)
-                }
-                (@end) => {
-                    let () = resp caller();
-                    become this.mk_pair_impl(a, 0)
-                }
-            }
-        }
-    }
+sentence eq {
+    #untuple(2) #eq
 }
 
 
-proc container_builder(caller) {
-    become caller(this.container_builder_impl&(this.container_inner_empty))
-}
+// proc symbol_len(caller, symbol) {
+//     R{ 
+//         [symbol, caller]
+//         symbol #symbol_len caller @exec 
+//     }
+// }
 
-proc container_inner_empty(caller) {}
+// proc symbol_char_at(caller, symbol, offset) {
+//     R{ 
+//         [offset, symbol, caller]
+//         symbol offset #symbol_char_at caller @exec 
+//     }
+// }
 
-proc container_inner_cons(name, value, tail, caller, req_name) {
-    let (are_eq) = this.eq(*req_name, *name);
-    if are_eq {
-        let (value) = value();
-        let () = caller();
-        become this.container_inner_cons(name, value, tail)
-    } else {
-        let (tail) = tail(req_name);
-        let () = caller();
-        become this.container_inner_cons(name, value, tail)
-    }        
-}
+// proc eq(caller, a, b) {
+//     R{ 
+//         [b, a, caller]
+//         a b #eq caller @exec 
+//     }
+// }
 
-proc container_builder_impl(inner, caller) {
-    match {
-        (@bind, name, value) => {
-            let (cons) = this.container_inner_cons&(name, value, inner);
-            let () = caller();
-            become this.container_builder_impl(cons)
-        }
-        (@build) => {
-            become caller(inner)
-        }
-    }
-}
+// proc lt(caller, a, b) {
+//     R{ 
+//         [b, a, caller]
+//         a b #lt caller @exec 
+//     }
+// }
 
-proc proxy_req(next, caller) {
-    match {
-        (@req) => {
-            let (caller) = req caller(@req);
-            let () = resp caller();
-            become this.proxy_req(next)
-        }
-        (other) => {
-            become next(caller, other)
-        }
-    }
-}
+// proc add() {
+//     R{
+//         [a, b, caller]
+//         a b #add caller @exec
+//     }
+// }
 
-mod tests {
-    proc enumerate(caller, @next) {
-        let (caller, @next) = caller(@yield, @tuples);
-        let () = caller(@eos);        
-    }
+// proc sub() {
+//     R{
+//         [b, a, caller]
+//         a b #sub caller @exec
+//     }
+// }
 
-    mod cases {
-        proc tuples(caller) {
-            let (t) = this.super.super.tuple0();
-            let () = this.super.super.untuple0(t);
+// proc prod() {
+//     R{
+//         [a, b, caller]
+//         a b #prod caller @exec
+//     }
+// }
 
-            let (t) = this.super.super.tuple1(42);
-            let (42) = this.super.super.untuple1(t);
+// proc ord() {
+//     R{
+//         [a, caller]
+//         a #ord caller @exec
+//     }
+// }
 
-            let (t) = this.super.super.tuple2(4, 5);
-            let (4, 5) = this.super.super.untuple2(t);
+// proc cons() {
+//     R{
+//         [b, a, caller]
+//         a b #cons caller @exec
+//     }
+// }
+// proc snoc() {
+//     R{
+//         [a, caller]
+//         a #snoc caller @exec
+//     }
+// }
 
-            let () = caller(@pass);
-        }
-    }
+// proc tuple0() {
+//     R{
+//         [caller]
+//         #tuple(0) caller @exec
+//     }
+// }
 
-    proc run(caller, case_name) {
-        R{ @cases this #get #get @exec }
-    }
-}
+// proc untuple0() {
+//     R{
+//         [t, caller]
+//         t #untuple(0) caller @exec
+//     }
+// }
+
+// proc tuple1(a) {
+//     R{
+//         [a, caller]
+//         a #tuple(1) caller @exec
+//     }
+// }
+
+// proc untuple1(caller, t) {
+//     R{
+//         [t, caller]
+//         t #untuple(1) caller @exec
+//     }
+// }
+
+// proc tuple2(caller, a, b) {
+//     R{
+//         [b, a, caller]
+//         b a #tuple(2) caller @exec
+//     }
+// }
+
+// proc untuple2() {
+//     R{
+//         [t, caller]
+//         t #untuple(2) caller @exec
+//     }
+// }
+
+// proc bind_impl(inner, symbol, target, caller) {
+//     let (inner) = inner();
+//     match {
+//         (@req, name) =>  {
+//             let (are_eq) = this.eq(*name, *symbol);
+//             if are_eq {
+//                 let (caller, target) = this.fwd_req(caller, target);
+//                 become this.bind_impl(inner, symbol, target, caller)
+//             } else {
+//                 let (caller) = req caller(name);
+//                 become this.bind_impl(inner, symbol, target, caller)
+//             }
+//         }
+//         (@resp) => {
+//             let (caller) = resp caller();
+//             become this.bind_impl(inner, symbol, target, caller)
+//         }
+//     }
+// }
+
+// proc bind(caller, inner, symbol, target) {
+//     become caller(this.bind_impl&(inner, symbol, target))
+// }
+
+// proc bind2_impl(inner, inner_symbol, target, target_symbol, caller) {
+//     let (inner) = inner();
+//     match {
+//         (@req, name) =>  {
+//             let (are_eq) = this.eq(*name, *inner_symbol);
+//             if are_eq {
+//                 let (caller, target) = this.fwd_req(caller, target, @req, *target_symbol);
+//                 become this.bind2_impl(inner, inner_symbol, target, target_symbol, caller)
+//             } else {
+//                 let (caller) = req caller(name);
+//                 become this.bind2_impl(inner, inner_symbol, target, target_symbol, caller)
+//             }
+//         }
+//         (@resp) => {
+//             let (caller) = resp caller();
+//             become this.bind2_impl(inner, inner_symbol, target, target_symbol, caller)
+//         }
+//     }
+// }
+
+// proc bind2(caller, inner, inner_symbol, target, target_symbol) {
+//     become caller(this.bind_impl2&(inner, inner_symbol, target, target_symbol))
+// }
+
+// proc fwd_req(next, up, down) {
+//     let () = down();
+//     match {
+//         (@req, down) => {
+//             let (up) = req up();
+//             become this.fwd_req(next, up, down)
+//         }
+//         (@resp, down) => {
+//             become next(up, @resp, down)
+//         }
+//         (@end) => {
+//             become next(up, @end)
+//         }
+//     }
+// }
+
+// proc fwd_once(next, up, down) {
+//     let () = down();
+//     match {
+//         (@req, down) => {
+//             let (up) = req up();
+//             become this.fwd_once(next, up, down)
+//         }
+//         (@resp, down) => {
+//             let (up) = resp up();
+//             become next(@resp, up, down)
+//         }
+//         (@end) => {
+//             become next(@end, up)
+//         }
+//     }
+// }
+
+// proc fwd_all(next, up, down) {
+//     let () = down();
+//     match {
+//         (@req, down) => {
+//             let (up) = req up();
+//             become this.fwd_all(next, up, down)
+//         }
+//         (@resp, down) => {
+//             let (up) = resp up();
+//             become this.fwd_all(next, up, down)
+//         }
+//         (@end) => {
+//             become next(up)
+//         }
+//     }
+// }
+
+// proc compose(caller, f, g) {
+//     become caller(this.compose_impl&(f, g))
+// }
+
+// proc compose_impl(f, g, caller) {
+//     let () = g();
+//     match {
+//         (@req, g) => {
+//             let (caller) = this.fwd_req(caller, f);
+//             match {
+//                 (@resp, f) => {
+//                     become this.compose_impl(f, g, caller)
+//                 }
+//                 (@end) => {
+//                     // This is maybe dodgy
+//                     become g(caller)
+//                 }
+//             }
+//         }
+//         (@resp, g) => {
+//             let (caller) = resp caller();
+//             become this.compose_impl(f, g, caller)
+//         }
+//         (@end) => {
+//             become caller(@end)
+//         }
+//     }
+// }
+
+// proc mk_pair(caller, a, b) {
+//     become caller(this.mk_pair_impl&(a, b))
+// }
+
+// proc mk_pair_impl(a, b, caller) {
+//     match {
+//         (@a) => {
+//             let () = a();
+//             match {
+//                 (@resp, a) => {
+//                     let () = resp caller();
+//                     become this.mk_pair_impl(a, b)
+//                 }
+//                 (@end) => {
+//                     let () = resp caller();
+//                     become this.mk_pair_impl(0, b)
+//                 }
+//             }
+//         } 
+//         (@b) => {
+//             let () = b();
+//             match {
+//                 (@resp, b) => {
+//                     let () = resp caller();
+//                     become this.mk_pair_impl(a, b)
+//                 }
+//                 (@end) => {
+//                     let () = resp caller();
+//                     become this.mk_pair_impl(a, 0)
+//                 }
+//             }
+//         }
+//     }
+// }
+
+
+// proc container_builder(caller) {
+//     become caller(this.container_builder_impl&(this.container_inner_empty))
+// }
+
+// proc container_inner_empty(caller) {}
+
+// proc container_inner_cons(name, value, tail, caller, req_name) {
+//     let (are_eq) = this.eq(*req_name, *name);
+//     if are_eq {
+//         let (value) = value();
+//         let () = caller();
+//         become this.container_inner_cons(name, value, tail)
+//     } else {
+//         let (tail) = tail(req_name);
+//         let () = caller();
+//         become this.container_inner_cons(name, value, tail)
+//     }        
+// }
+
+// proc container_builder_impl(inner, caller) {
+//     match {
+//         (@bind, name, value) => {
+//             let (cons) = this.container_inner_cons&(name, value, inner);
+//             let () = caller();
+//             become this.container_builder_impl(cons)
+//         }
+//         (@build) => {
+//             become caller(inner)
+//         }
+//     }
+// }
+
+// proc proxy_req(next, caller) {
+//     match {
+//         (@req) => {
+//             let (caller) = req caller(@req);
+//             let () = resp caller();
+//             become this.proxy_req(next)
+//         }
+//         (other) => {
+//             become next(caller, other)
+//         }
+//     }
+// }
+
+// mod tests {
+//     proc enumerate(caller, @next) {
+//         let (caller, @next) = caller(@yield, @tuples);
+//         let () = caller(@eos);        
+//     }
+
+//     mod cases {
+//         proc tuples(caller) {
+//             let (t) = this.super.super.tuple0();
+//             let () = this.super.super.untuple0(t);
+
+//             let (t) = this.super.super.tuple1(42);
+//             let (42) = this.super.super.untuple1(t);
+
+//             let (t) = this.super.super.tuple2(4, 5);
+//             let (4, 5) = this.super.super.untuple2(t);
+
+//             let () = caller(@pass);
+//         }
+//     }
+
+//     proc run(caller, case_name) {
+//         R{ @cases this #get #get @exec }
+//     }
+// }

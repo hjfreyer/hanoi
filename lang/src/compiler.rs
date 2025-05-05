@@ -20,6 +20,17 @@ pub struct Crate {
     pub sentences: TiVec<SentenceIndex, Sentence>,
 }
 
+impl Crate {
+    pub fn from_sources(sources: &Sources) -> Result<Self, linker::Error> {
+        let mut compiler = Compiler::new(sources);
+        for (file_idx, file) in sources.files.iter_enumerated() {
+            let parsed_file = ast::File::from_source(&file.source).unwrap();
+            compiler.add_file(file.mod_name.clone(), file_idx, parsed_file)?;
+        }
+        Ok(compiler.build())
+    }
+}
+
 pub struct Compiler<'t> {
     sources: &'t Sources,
     res: Crate,
@@ -1164,16 +1175,25 @@ pub struct Symbol {
 // }
 
 fn normalize_path(sources: &Sources, mut path: QualifiedName) -> QualifiedName {
-    loop {
+    let path = loop {
         let Some(super_idx) = path
             .0
             .iter()
             .position(|n| n.as_ref(sources) == NameRef::User("super"))
         else {
-            return path;
+            break path;
         };
         path.0.remove(super_idx - 1);
         path.0.remove(super_idx - 1);
+    };
+    if let Some(crate_idx) = path
+        .0
+        .iter()
+        .position(|n| n.as_ref(sources) == NameRef::User("crate"))
+    {
+        QualifiedName(path.0.iter().skip(crate_idx + 1).cloned().collect())
+    } else {
+        path
     }
 }
 
