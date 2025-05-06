@@ -235,6 +235,14 @@ pub enum Decl<'t> {
 }
 
 #[derive(Debug, FromPest)]
+#[pest_ast(rule(Rule::r#use))]
+pub struct Use<'t> {
+    #[pest_ast(outer())]
+    pub span: pest::Span<'t>,
+    pub path: QualifiedLabel<'t>,
+}
+
+#[derive(Debug, FromPest)]
 #[pest_ast(rule(Rule::file))]
 pub struct File<'t> {
     pub imports: Vec<Identifier<'t>>,
@@ -259,6 +267,7 @@ pub struct NamespaceDecl<'t> {
 #[derive(Debug, FromPest)]
 #[pest_ast(rule(Rule::namespace))]
 pub struct Namespace<'t> {
+    pub uses: Vec<Use<'t>>,
     pub decl: Vec<Decl<'t>>,
 }
 

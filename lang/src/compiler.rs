@@ -68,6 +68,18 @@ impl<'t> Compiler<'t> {
         name_prefix: &QualifiedName,
         ns: ast::Namespace,
     ) -> Result<(), linker::Error> {
+        let mut symbol_table = SymbolTable {
+            prefix: name_prefix.clone(),
+            uses: BTreeMap::new(),
+        };
+        for r#use in ns.uses {
+            let path = r#use.path.into_ir(self.sources, file_idx);
+
+            symbol_table
+                .uses
+                .insert(path.0.last().unwrap().as_str(self.sources).unwrap(), path);
+        }
+
         for decl in ns.decl {
             let ctx = Context {
                 file_idx,
@@ -98,6 +110,7 @@ impl<'t> Compiler<'t> {
                         span.into_ir(self.sources, file_idx),
                         file_idx,
                         &name_prefix,
+                        &symbol_table,
                         binding,
                         name,
                         expression,
@@ -113,16 +126,13 @@ impl<'t> Compiler<'t> {
         span: FileSpan,
         file_idx: FileIndex,
         name_prefix: &QualifiedName,
+        symbol_table: &SymbolTable,
         binding: ast::Binding,
         name: QualifiedName,
         expression: ast::Expression,
     ) -> Result<(), linker::Error> {
         let expression = Expression::from_ast(expression);
         let span = expression.span(file_idx);
-
-        let symbol_table = SymbolTable {
-            prefix: name_prefix.clone(),
-        };
 
         let mut out = Output {
             words: vec![],
@@ -135,7 +145,7 @@ impl<'t> Compiler<'t> {
         };
         let () = builder::binding(ctx, binding, &mut out)?;
 
-        let () = expression.compilation(ctx, &symbol_table, &mut out)?;
+        let () = expression.compilation(ctx, symbol_table, &mut out)?;
 
         if out.locals.len() != 1 {
             let Name::User(name) = out.locals.names()[1] else {
@@ -742,13 +752,22 @@ impl<'t> Spanner<'t> for Expression<'t> {
     }
 }
 
-struct SymbolTable {
+struct SymbolTable<'t> {
     prefix: QualifiedName,
+    uses: BTreeMap<&'t str, QualifiedName>,
 }
 
-impl SymbolTable {
+impl<'t> SymbolTable<'t> {
     pub fn resolve(&self, sources: &Sources, name: QualifiedName) -> QualifiedName {
-        let mut path = self.prefix.join(name);
+        let mut path = if let Some(resolved) = self
+            .uses
+            .get(name.0.first().unwrap().as_ref(sources).as_str().unwrap())
+        {
+            resolved.join(QualifiedName(name.0.into_iter().skip(1).collect()))
+        } else {
+            self.prefix.join(name)
+        };
+
         let path = loop {
             let Some(super_idx) = path
                 .0

@@ -19,7 +19,9 @@ decl = {
 // NAMESPACES
 
 ns_decl   = { "mod" ~ identifier ~ "{" ~ namespace ~ "}" }
-namespace = { decl* }
+namespace = { use* ~ decl* }
+
+use = { "use" ~ qualified_label ~ ";" }
 
 // LITERALS
 

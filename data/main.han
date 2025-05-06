@@ -1,4 +1,6 @@
 
+use 'crate::builtin;
+
 //mod builtin;
 //mod io;
 //mod ssv;
@@ -81,7 +83,7 @@ proc (self, method) parseint => {
                 #none{} => (#done{}, #resp{acc}),
                 #some{c} => {
                     let digit = (c 'ord, 48) 'sub;
-                    let acc = ((10, acc) 'prod, digit) 'crate::builtin::add;
+                    let acc = ((10, acc) 'prod, digit) 'builtin::add;
                     (#await_next{acc}, #req{#next{}})
                 },
             }
