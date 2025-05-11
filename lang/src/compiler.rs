@@ -1881,6 +1881,18 @@ mod builder {
         if !true_out.locals.compare(ctx.sources, &false_out.locals) {
             return Err(Error::BranchContractsDisagree {
                 location: span.location(ctx.sources),
+                locals1: true_out
+                    .locals
+                    .names()
+                    .into_iter()
+                    .map(|n| format!("{:?}", n.as_ref(ctx.sources)))
+                    .collect(),
+                locals2: false_out
+                    .locals
+                    .names()
+                    .into_iter()
+                    .map(|n| format!("{:?}", n.as_ref(ctx.sources)))
+                    .collect(),
             });
         }
         if true_out.locals.terminal {

@@ -1,5 +1,6 @@
 mod main;
 mod builtin;
+mod vec;
 
 
 sentence main {
@@ -8,5 +9,5 @@ sentence main {
 
 
 sentence test {
-    #call('main::tests::main)
+    #call('vec::tests::main)
 }

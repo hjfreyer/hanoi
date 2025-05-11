@@ -1,0 +1,73 @@
+use 'crate::builtin::add;
+
+proc method vec => {
+    method match {
+        #new{capacity} => {
+            #req{#await_malloc{*capacity}, #alloc{#malloc{capacity}}}
+        },
+        #reply{#await_malloc{capacity}, array} => {
+            #resp{(0, capacity, array)}
+        },
+        #push{self, item} => {
+            let (size, capacity, array) = self;
+            #req{#await_push_memset{*size, capacity}, #memset{array, size, item}}
+        },
+        #size{self} => {
+            let (size, capacity, array) = self;
+            #resp{((*size, capacity, array), size)}
+        },
+        #reply{#await_push_memset{size, capacity}, #ok{array}} => {
+            #resp{(size, capacity, array)}
+        },
+    }
+}
+
+mod tests {
+    proc args main => args match {
+        (#nil{}, #enumerate{}) => (#nil{}, #a{}),
+        (#a{}, #next{}) => (#b{}, #some{@new}),
+        (#b{}, #next{}) => (#e{}, #none{}),
+
+        (#nil{}, #run{@new}) => {
+            let #req{t, #stall{}} = #run{} 'test_new;
+            let #req{t, #stall{}} = #reply{t, #cont{}} 'test_new;
+            let #req{t, #alloc{#malloc{8}}} = #reply{t, #cont{}} 'test_new;
+            let #req{t, #stall{}} = #reply{t, @handle} 'test_new;
+            
+            let #req{t, #stall{}} = #reply{t, #cont{}} 'test_new;
+            let #req{t, #stall{}} = #reply{t, #cont{}} 'test_new;
+            let #resp{()} = #reply{t, #cont{}} 'test_new;
+            // let #req{t, #stall{}} = #reply{t, #cont{}} 'test_new;
+            // let #req{t, #alloc{#malloc{8}}} = #reply{t, #cont{}} 'test_new;
+            // let #req{t, #stall{}} = #reply{t, #cont{}} 'test_new;
+            // let ^=t;
+            ()
+        },
+    }
+
+    proc method test_new => {
+        method match {
+            #run{} => #req{#call_unbound{#run{}}, #stall{}},
+            #reply{#call_unbound{req}, #cont{}} => req 'test_new_unbound match {
+                #resp{resp} => #resp{resp},
+                #req{s, #vec{req}} => #req{#call_vec{s, req}, #stall{}},
+            },
+            #reply{#call_vec{s, req}, #cont{}} => req 'super::vec match {
+                #resp{resp} => #req{#call_unbound{#reply{s, resp}}, #stall{}},
+                #req{v, req} => #req{#call_vec_reply{s, v}, req},
+            },
+            #reply{#call_vec_reply{s, v}, reply} => #reply{v, reply} 'super::vec match {
+                #resp{resp} => #req{#call_unbound{#reply{s, resp}}, #stall{}},
+                #req{v, req} => #req{#call_vec_reply{s, v}, req},
+            },
+        }
+    }
+
+    proc method test_new_unbound => {
+        method match {
+            #run{} => #req{#on_new{}, #vec{#new{8}}},
+            #reply{#on_new{}, v} => #req{#on_size{}, #vec{#size{v}}},
+            #reply{#on_size{}, (^, 0)} => #resp{()},
+        }
+    }
+}

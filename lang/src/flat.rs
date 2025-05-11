@@ -864,6 +864,47 @@ pub enum Value {
     Ref(usize),
 }
 
+impl Value {
+    pub fn r#type(&self) -> ValueType {
+        match self {
+            Value::Symbol(_) => ValueType::Symbol,
+            Value::Usize(_) => ValueType::Usize,
+            Value::List(_) => todo!(),
+            Value::Tuple(_) => ValueType::Tuple,
+            Value::Pointer(_) => todo!(),
+            Value::Handle(_) => todo!(),
+            Value::Bool(_) => ValueType::Bool,
+            Value::Char(_) => ValueType::Char,
+            Value::Namespace(_) => todo!(),
+            Value::Namespace2(_) => todo!(),
+            Value::Nil => todo!(),
+            Value::Cons(_, _) => todo!(),
+            Value::Ref(_) => todo!(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub enum ValueType {
+    Symbol,
+    Usize,
+    Tuple,
+    Bool,
+    Char,
+}
+
+impl std::fmt::Display for ValueType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ValueType::Symbol => write!(f, "symbol"),
+            ValueType::Usize => write!(f, "usize"),
+            ValueType::Tuple => write!(f, "tuple"),
+            ValueType::Bool => write!(f, "bool"),
+            ValueType::Char => write!(f, "char"),
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Debug, Hash)]
 pub struct Closure(pub Vec<Value>, pub SentenceIndex);
 
@@ -900,17 +941,42 @@ impl<'a> std::fmt::Display for ValueView<'a> {
                     value: cdr
                 }
             ),
-            Value::Tuple(values) => write!(
-                f,
-                "({})",
-                values
-                    .iter()
-                    .map(|v| ValueView {
-                        sources: self.sources,
-                        value: v
-                    })
-                    .join(", ")
-            ),
+            Value::Tuple(values) => {
+                if values.len() == 2
+                    && values[0].r#type() == ValueType::Symbol
+                    && values[1].r#type() == ValueType::Tuple
+                {
+                    let Value::Symbol(symbol) = &values[0] else {
+                        panic!()
+                    };
+                    let Value::Tuple(args) = &values[1] else {
+                        panic!()
+                    };
+                    write!(
+                        f,
+                        "#{}{{{}}}",
+                        symbol,
+                        args.iter()
+                            .map(|v| ValueView {
+                                sources: self.sources,
+                                value: v
+                            })
+                            .join(", ")
+                    )
+                } else {
+                    write!(
+                        f,
+                        "({})",
+                        values
+                            .iter()
+                            .map(|v| ValueView {
+                                sources: self.sources,
+                                value: v
+                            })
+                            .join(", ")
+                    )
+                }
+            }
             Value::Ref(arg0) => write!(f, "ref({})", arg0),
             Value::Char(arg0) => write!(f, "'{}'", arg0),
             Value::Pointer(Closure(values, ptr)) => {

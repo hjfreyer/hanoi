@@ -42,8 +42,14 @@ pub enum Error {
         location: source::Location,
         name: String,
     },
-    #[error("At {location}, branch contracts disagree")]
-    BranchContractsDisagree { location: source::Location },
+    #[error(
+        "At {location}, branch contracts disagree. branch1: {locals1:?}, branch2: {locals2:?}"
+    )]
+    BranchContractsDisagree {
+        location: source::Location,
+        locals1: Vec<String>,
+        locals2: Vec<String>,
+    },
 }
 
 pub fn compile(sources: &source::Sources, ir: compiler::Crate) -> Result<flat::Library, Error> {
