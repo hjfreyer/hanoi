@@ -1,7 +1,7 @@
 
 //
 //mod csv {
-//    proc start(caller, @next) {
+//    fn start(caller, @next) {
 //        let (caller) = req caller(@next);
 //        match {
 //            (@eos) =>  {
@@ -15,7 +15,7 @@
 //        }
 //    }
 //
-//    proc default_handle_char(caller) {
+//    fn default_handle_char(caller) {
 //        match {
 //            ('\n') => {
 //                let (caller, @next) = resp caller(@endfield);
@@ -40,7 +40,7 @@
 //        }
 //    }
 //
-//    proc non_quoted(caller) {
+//    fn non_quoted(caller) {
 //        let (caller) = req caller(@next);
 //        match {
 //            (@eos) => {
@@ -54,7 +54,7 @@
 //        }
 //    }
 //
-//    proc quoted(caller) {
+//    fn quoted(caller) {
 //        let (caller) = req caller(@next);
 //        match {
 //            (@eos) => {
@@ -72,13 +72,13 @@
 //}
 //
 
-//    proc enumerate(caller, @next) {
+//    fn enumerate(caller, @next) {
 ////        let (caller, @next) = caller(@yield, @basic_csv);
 //        let () = caller(@eos);        
 //    }
 //
 //    mod cases {
-//        proc basic_csv(caller) {
+//        fn basic_csv(caller) {
 //            let (iter) = this.super.super.iter.symbol_chars(@"foo,bar
 //baz");
 //            let (bound) = this.super.super.builtin.bind(
@@ -111,6 +111,6 @@
 //
 //    }
 //
-//    proc run(caller, case_name) {
+//    fn run(caller, case_name) {
 //        R{ @cases this #get #get @exec }
 //    }

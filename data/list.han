@@ -1,10 +1,10 @@
 mod builtin;
 
-proc new(caller) {
+fn new(caller) {
     become caller(this.list_empty)
 }
 
-proc list_empty(caller) {
+fn list_empty(caller) {
     match {
         (@push_front, item) => {
             let (caller) = resp caller();
@@ -29,7 +29,7 @@ proc list_empty(caller) {
     }
 }
 
-proc list_cons(head, tail, caller) {
+fn list_cons(head, tail, caller) {
     match {
         (@push_front, item) => {
             let (caller) = resp caller();
@@ -56,7 +56,7 @@ proc list_cons(head, tail, caller) {
     }
 }
 
-proc list_into_iter(list, caller, @next) {
+fn list_into_iter(list, caller, @next) {
     let (@resp, list) = list(@pop_front);
     match {
         (@none) => {
@@ -69,7 +69,7 @@ proc list_into_iter(list, caller, @next) {
     }
 }
 
-proc from_iter(caller, iter) {
+fn from_iter(caller, iter) {
     let (caller) = this.builtin.fwd_req(caller, iter, @next);
     match {
         (@end, @eos) => {
@@ -83,7 +83,7 @@ proc from_iter(caller, iter) {
 }
 
 mod tests {
-    proc enumerate(caller, @next) {
+    fn enumerate(caller, @next) {
         let (caller, @next) = caller(@yield, @basic);
         let (caller, @next) = caller(@yield, @iter);
         let (caller, @next) = caller(@yield, @from_into_iter);
@@ -91,7 +91,7 @@ mod tests {
     }
 
     mod cases {
-        proc basic(caller) {
+        fn basic(caller) {
             let (q) = this.super.super.new();
             let (@resp, q) = q(@push_back, @foo);
             let (@resp, q) = q(@push_back, @bar);
@@ -103,7 +103,7 @@ mod tests {
             let () = caller(@pass);
         }
 
-        proc iter(caller) {
+        fn iter(caller) {
             let (q) = this.super.super.new();
             let (@resp, q) = q(@push_back, @foo);
             let (@resp, q) = q(@push_back, @bar);
@@ -116,7 +116,7 @@ mod tests {
             let () = caller(@pass);
         }
 
-        proc from_into_iter(caller) {
+        fn from_into_iter(caller) {
             let (q) = this.super.super.new();
             let (@resp, q) = q(@push_back, @foo);
             let (@resp, q) = q(@push_back, @bar);
@@ -134,7 +134,7 @@ mod tests {
         }
     }
 
-    proc run(caller, case_name) {
+    fn run(caller, case_name) {
         R{ @cases this #get #get @exec }
     }
 }

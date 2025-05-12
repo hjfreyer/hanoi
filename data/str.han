@@ -3,7 +3,7 @@ mod builtin;
 mod iter;
 
 mod tests {
-    proc enumerate(caller, @next) {
+    fn enumerate(caller, @next) {
         let (caller, @next) = caller(@yield, @parseint);
         let (caller, @next) = caller(@yield, @str2);
         let (caller, @next) = caller(@yield, @split_lines_empty);
@@ -12,14 +12,14 @@ mod tests {
     }
 
     mod cases {
-        proc parseint(caller) {
+        fn parseint(caller) {
             let (input) = this.super.super.iter.symbol_chars(@"672");
             let (@end, 672) = this.super.super.parseint(input);
 
             let () = caller(@pass);
         }
 
-        proc str2(caller) {
+        fn str2(caller) {
             let (input) = this.super.super.iter.symbol_chars(@foo);
             let (u) = this.super.super.builtin.compose(input, this.super.super.str_to_str2_start);
 
@@ -33,7 +33,7 @@ mod tests {
             let () = caller(@pass);
         }
 
-        proc split_lines_empty(caller) {
+        fn split_lines_empty(caller) {
             let (input) = this.super.super.iter.empty();
             let (u) = this.super.super.split_lines(input);
             let (@resp, u, @yield, line1) = u(@next);
@@ -44,7 +44,7 @@ mod tests {
             let () = caller(@pass);
         }
 
-        proc split_lines(caller) {
+        fn split_lines(caller) {
             let (input) = this.super.super.iter.symbol_chars(@"foo
 bar
 ");
@@ -71,12 +71,12 @@ bar
         }
     }
 
-    proc run(caller, case_name) {
+    fn run(caller, case_name) {
         R{ @cases this #get #get @exec }
     }
 }
 
-proc symbol_chars_inner(symbol, offset, caller, @next) {
+fn symbol_chars_inner(symbol, offset, caller, @next) {
     let (len) = this.builtin.symbol_len(*symbol);
     let (are_eq) = this.builtin.eq(*offset, len);
     if are_eq {
@@ -89,11 +89,11 @@ proc symbol_chars_inner(symbol, offset, caller, @next) {
     }
 }
 
-proc symbol_chars(caller, symbol) {
+fn symbol_chars(caller, symbol) {
     become caller(this.symbol_chars_inner&(symbol, 0))
 }
 
-proc str_to_str2_start(caller, @next) {
+fn str_to_str2_start(caller, @next) {
     let (caller) = req caller(@next);
     match {
         (@eos) => {
@@ -106,7 +106,7 @@ proc str_to_str2_start(caller, @next) {
     }
 }
 
-proc str_to_str2_loop(char, caller) {
+fn str_to_str2_loop(char, caller) {
     match {
         (@next) => {
             let (caller) = req caller(@next);
@@ -127,7 +127,7 @@ proc str_to_str2_loop(char, caller) {
     }
 }
 
-proc str_to_str2_loop(char, caller) {
+fn str_to_str2_loop(char, caller) {
     match {
         (@next) => {
             let (caller) = req caller(@next);
@@ -148,14 +148,14 @@ proc str_to_str2_loop(char, caller) {
     }
 }
 
-proc split_lines(caller, str_iter) {
+fn split_lines(caller, str_iter) {
     let (delim) = this.add_line_delimiters&(str_iter);
     let (split) = this.iter.split&(delim);
     become caller(split)
 }
 
 
-proc add_line_delimiters(str_iter, caller, @next) {
+fn add_line_delimiters(str_iter, caller, @next) {
     let (caller) = this.builtin.fwd_req(caller, str_iter, @next);
     match {
         (@end, @eos) => {
@@ -175,11 +175,11 @@ proc add_line_delimiters(str_iter, caller, @next) {
         }
     }
 }
-proc parseint(caller, iter) {
+fn parseint(caller, iter) {
     become this.parseint_loop(iter, 0, caller)
 }
 
-proc parseint_loop(iter, acc, caller) {
+fn parseint_loop(iter, acc, caller) {
     let (caller) = this.builtin.fwd_req(caller, iter, @next);
     match {
         (@resp, iter, @yield, char) => {

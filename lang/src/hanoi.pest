@@ -13,7 +13,7 @@ ns_import = _{ "mod" ~ identifier ~ ";" }
 decl = {
     sentence_decl
   | ns_decl
-  | proc_decl
+  | fn_decl
 }
 
 // NAMESPACES
@@ -90,7 +90,7 @@ raw_word = {
   | builtin
 }
 
-// PROC
+// FN
 
 binding = { tuple_binding | tagged_binding | drop_binding | literal | identifier }
 
@@ -105,7 +105,7 @@ tagged_binding = {
   | "#" ~ identifier ~ "{" ~ binding ~ ("," ~ binding)* ~ "}"
 }
 
-proc_decl = { "proc" ~ binding ~ identifier ~ "=>" ~ expr }
+fn_decl = { "fn" ~ binding ~ identifier ~ "=>" ~ expr }
 expr      = { root_expr ~ transformer* }
 
 root_expr = {
@@ -167,9 +167,9 @@ match_case = { binding ~ "=>" ~ expr ~ "," }
 
 // code_decl = { "let" ~ identifier ~ "=" ~ "{" ~ code ~ "}" ~ ";" }
 
-// Proc syntax
+// Fn syntax
 
-// match_decl = { "match_proc" ~ identifier ~ "{" ~ match_cases ~ "}" }
+// match_decl = { "match_fn" ~ identifier ~ "{" ~ match_cases ~ "}" }
 
 // block      = { statements ~ endpoint }
 // statements = { statement* }

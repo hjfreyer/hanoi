@@ -1,5 +1,5 @@
 
-proc stdin_chars(caller, @next) {
+fn stdin_chars(caller, @next) {
     let (caller) = req caller(@stdin);
     match {
         (@ok, char) => {

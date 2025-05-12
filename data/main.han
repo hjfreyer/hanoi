@@ -12,7 +12,7 @@ use 'crate::builtin;
 //
 
 mod tests {
-    proc args main => args match {
+    fn args main => args match {
         (#nil{}, #enumerate{}) => (#nil{}, #a{}),
         (#a{}, #next{}) => (#b{}, #some{@parse_empty}),
         (#b{}, #next{}) => (#c{}, #some{@parse_some}),
@@ -42,13 +42,13 @@ mod tests {
     }
 
     mod cases {
-        proc () parse_empty => {
+        fn () parse_empty => {
             let (p, #req{#next{}}) = (#nil{}, #parse{}) 'super::super::parseint;
             let (^, #resp{0}) = (p, #none{}) 'super::super::parseint;
             ()
         }
 
-        proc () parse_some => {
+        fn () parse_some => {
             let (p, #req{#next{}}) = (#nil{}, #parse{}) 'super::super::parseint;
             let (p, #req{#next{}}) = (p, #some{'6'}) 'super::super::parseint;
             let (p, #req{#next{}}) = (p, #some{'7'}) 'super::super::parseint;
@@ -72,7 +72,7 @@ sentence sub {
 }
 
 
-proc (self, method) parseint => {
+fn (self, method) parseint => {
     self match {
         #nil{} => {
             let #parse{} = method;
@@ -92,18 +92,18 @@ proc (self, method) parseint => {
 }
 
 mod ints {
-    proc () alloc => {
+    fn () alloc => {
         (@start, 0)
     }
 
-    proc ((@start, s), @next) main => {
+    fn ((@start, s), @next) main => {
         let ^ = 3;
         let res = (@some, *s);
         ((@start, (s, 1) 'crate::builtin::add), res)
     }
 }
 
-proc method map_iter => {
+fn method map_iter => {
     method match {
         #next{#start{iter, fn}} => {
             #req{#get_next{fn}, @iter, #next{iter}}
@@ -116,7 +116,7 @@ proc method map_iter => {
     }
 }
 
-proc (self, method) map_ref_iter => {
+fn (self, method) map_ref_iter => {
     self match {
         #start{iter, fn_factory} => {
             let #next{} = method;
@@ -149,7 +149,7 @@ proc (self, method) map_ref_iter => {
     }
 }
 
-proc (self, method) split_iter => {
+fn (self, method) split_iter => {
     self match {
         #start{iter} => {
             let #next{} = method;
@@ -192,7 +192,7 @@ proc (self, method) split_iter => {
     }
 }
 
-proc () main_impl => {
+fn () main_impl => {
     // let m = () 'map::alloc;
     // let (m, (@iter, (@next, ()))) = (m, (@next, ())) 'map::main;
     // let (m, (@fn, (@apply, 3))) = (m, (@some, 3)) 'map::main;

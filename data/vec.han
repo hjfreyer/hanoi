@@ -1,6 +1,6 @@
 use 'crate::builtin::add;
 
-proc method vec => {
+fn method vec => {
     method match {
         #new{capacity} => {
             #req{#await_malloc{*capacity}, #alloc{#malloc{capacity}}}
@@ -23,7 +23,7 @@ proc method vec => {
 }
 
 mod tests {
-    proc args main => args match {
+    fn args main => args match {
         (#nil{}, #enumerate{}) => (#nil{}, #a{}),
         (#a{}, #next{}) => (#b{}, #some{@new}),
         (#b{}, #next{}) => (#e{}, #none{}),
@@ -45,7 +45,52 @@ mod tests {
         },
     }
 
-    proc method test_new => {
+    // mach () main => {
+    //     #stall{} yield 'foo
+    // }
+
+    // fn (state, args) main => match state {
+    //     (0, ()) => {#req{(1, ()), #stall{}}}
+    //     (1, ()) => args 'foo,
+    // }
+
+    // mach () sum => {
+    //     0 loop acc {
+    //         #iter{#next{}} yield match {
+    //             #some{} => {
+    //                 let val = #item{#clone{}} yield;
+    //                 (val, acc) 'builtin::add continue;
+    //             },
+    //             #none{} => acc break,
+    //         }
+    //     }
+    // }
+
+    // mach () sum => {
+    //     0 loop_start: acc {
+    //         #iter{#next{}} yield match {
+    //             #some{} => {
+    //                 let val = #item{#clone{}} yield;
+    //                 (val, acc) 'builtin::add goto<loop_start>;
+    //             },
+    //             #none{} => acc goto<loop_end>,
+    //         }
+    //     }
+    //     loop_end:
+    // }
+
+    // fn (state, args) sum => match {
+    //     (0, ()) => { args bind<()> 0 #req{(1, stack), #stall{}}},
+    //     (1, stack) => args bind<#cont{}> stack save<acc> #req{(2, stack), #iter{#next{}}}},
+    //     (2, stack) => stack bind<acc> args match {
+    //         #some{} => #req{(3, stack), #item{#clone{}}},
+    //         #none{} => #req{(4, acc), #stall{}},
+    //     }
+    //     (3, stack) => stack bind<acc> args bind<val> (val, acc) 'builtin::add #req{(1, (-)), #stall{}},
+    //     (4, acc) => args bind<#cont{}> #resp{acc} 
+    // }
+
+    fn method test_new => {
         method match {
             #run{} => #req{#call_unbound{#run{}}, #stall{}},
             #reply{#call_unbound{req}, #cont{}} => req 'test_new_unbound match {
@@ -63,7 +108,7 @@ mod tests {
         }
     }
 
-    proc method test_new_unbound => {
+    fn method test_new_unbound => {
         method match {
             #run{} => #req{#on_new{}, #vec{#new{8}}},
             #reply{#on_new{}, v} => #req{#on_size{}, #vec{#size{v}}},

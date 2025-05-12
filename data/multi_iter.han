@@ -2,11 +2,11 @@ mod builtin;
 mod str;
 mod list;
 
-proc multi_iter_map(caller, constructor) {
+fn multi_iter_map(caller, constructor) {
     become caller(this.multi_iter_map_impl&(constructor))
 }
 
-proc multi_iter_map_impl(constructor, caller, @next) {
+fn multi_iter_map_impl(constructor, caller, @next) {
     let (caller) = req caller(@next);
     match {
         (@eos) => {
@@ -24,7 +24,7 @@ proc multi_iter_map_impl(constructor, caller, @next) {
 // @start --> @start
 // @req @foo  <--  fn @get   <-- @req @get
 
-proc multi_iter_map_within(next, up, fn) {
+fn multi_iter_map_within(next, up, fn) {
     match {
         (@next) => {
             become next(up, @next)
@@ -35,7 +35,7 @@ proc multi_iter_map_within(next, up, fn) {
     }
 }
 
-proc multi_iter_map_call_fn(next, up, fn) {
+fn multi_iter_map_call_fn(next, up, fn) {
     let () = fn();
     match {
         (@req, fn) => {
@@ -53,11 +53,11 @@ proc multi_iter_map_call_fn(next, up, fn) {
     }
 }
 
-proc transpose2(caller, list) {
+fn transpose2(caller, list) {
     become caller(this.transpose2_impl&(list))
 }
 
-proc transpose2_impl(list, caller, @next) {
+fn transpose2_impl(list, caller, @next) {
     let (fronts) = this.list.new();
     let (rests) = this.list.new();
     let (fronts, rests) = this.take_first_row(fronts, rests, list);
@@ -73,7 +73,7 @@ proc transpose2_impl(list, caller, @next) {
     }
 }
 
-proc take_first_row(caller, fronts, rests, list_of_lists) {
+fn take_first_row(caller, fronts, rests, list_of_lists) {
     let (@resp, list_of_lists) = list_of_lists(@pop_front);
     match {
         (@none) => {
@@ -96,11 +96,11 @@ proc take_first_row(caller, fronts, rests, list_of_lists) {
 }
 
 
-proc multi_iter_to_iter(caller) {
+fn multi_iter_to_iter(caller) {
     become caller(this.multi_iter_to_iter_impl&())
 }
 
-proc multi_iter_to_iter_impl(caller, @next) {
+fn multi_iter_to_iter_impl(caller, @next) {
     let (caller) = req caller(@next);
     match {
         (@start) => {
@@ -115,12 +115,12 @@ proc multi_iter_to_iter_impl(caller, @next) {
 }
 
 
-proc mat2dtolists(caller) {
+fn mat2dtolists(caller) {
     let (list) = this.list.new();
     become caller(this.mat2dtolists_impl&(list))
 }
 
-proc mat2dtolists_impl(list, caller, @get) {
+fn mat2dtolists_impl(list, caller, @get) {
     let (caller) = req caller(@next);
     match {
         (@start) => {
@@ -135,7 +135,7 @@ proc mat2dtolists_impl(list, caller, @get) {
     }
 }
 
-proc with_leading_req(next, up, down) {
+fn with_leading_req(next, up, down) {
     let () = down();
     match {
         (@req, down) => {
@@ -153,12 +153,12 @@ proc with_leading_req(next, up, down) {
     }
 }
 
-proc iter_to_list(caller) {
+fn iter_to_list(caller) {
     let (list) = this.list.new();
     become caller(this.iter_to_list_impl&(list))
 }
 
-proc iter_to_list_impl(list, caller, @get) {
+fn iter_to_list_impl(list, caller, @get) {
     let (caller) = req caller(@next);
     match {
         (@eos) => {
@@ -173,7 +173,7 @@ proc iter_to_list_impl(list, caller, @get) {
 
 
 mod tests {
-    proc enumerate(caller, @next) {
+    fn enumerate(caller, @next) {
         let (caller, @next) = caller(@yield, @parseint_list_of_str);
         let (caller, @next) = caller(@yield, @parseint_list_of_str_to_iter);
         let (caller, @next) = caller(@yield, @parseint_list_of_list_of_str);
@@ -186,7 +186,7 @@ mod tests {
     }
 
     mod cases {
-        proc parseint_list_of_str(caller) {
+        fn parseint_list_of_str(caller) {
             let (p) = this.super.super.multi_iter_map(this.parseint_factory);
 
             let (@req, p, @next) = p(@next);
@@ -210,7 +210,7 @@ mod tests {
             let () = caller(@pass);
         }
 
-        proc parseint_list_of_str_to_iter(caller) {
+        fn parseint_list_of_str_to_iter(caller) {
             let (p) = this.super.super.multi_iter_map(this.parseint_factory);
             let (c) = this.super.super.multi_iter_to_iter();
             let (p) = this.super.super.builtin.compose(p, c);
@@ -233,7 +233,7 @@ mod tests {
             let () = caller(@pass);
         }
 
-        proc parseint_list_of_list_of_str(caller) {
+        fn parseint_list_of_list_of_str(caller) {
             let (p) = this.super.super.multi_iter_map(this.multi_parseint_factory);
 
             let (@req, p, @next) = p(@next);
@@ -281,13 +281,13 @@ mod tests {
         }
         
 
-        proc parseint_factory(caller) {
+        fn parseint_factory(caller) {
             let (p) = this.super.super.str.parseint();
             let () = caller(p);
             become this.parseint_factory()
         }
                 
-        proc multi_parseint_factory(caller) {            
+        fn multi_parseint_factory(caller) {            
             let (p) = this.super.super.multi_iter_map(this.parseint_factory);
             let (c) = this.super.super.multi_iter_to_iter();
             let (p) = this.super.super.builtin.compose(p, c);
@@ -297,7 +297,7 @@ mod tests {
         }
 
 
-        proc transpose2_empty(caller) {
+        fn transpose2_empty(caller) {
             let (list) = this.super.super.list.new();
 
             let (t) = this.super.super.transpose2(list);
@@ -306,7 +306,7 @@ mod tests {
             let () = caller(@pass);
         }
 
-        proc transpose2_single_row(caller) {
+        fn transpose2_single_row(caller) {
             let (row) = this.super.super.list.new();
             let (@resp, row) = row(@push_back, @foo);
             let (@resp, row) = row(@push_back, @bar);
@@ -330,7 +330,7 @@ mod tests {
             let () = caller(@pass);
         }
 
-        proc transpose2_single_col(caller) {
+        fn transpose2_single_col(caller) {
             let (list) = this.super.super.list.new();
 
             let (row) = this.super.super.list.new();
@@ -356,7 +356,7 @@ mod tests {
             let () = caller(@pass);
         }
 
-        proc transpose2_full(caller) {
+        fn transpose2_full(caller) {
             let (list) = this.super.super.list.new();
 
             let (row) = this.super.super.list.new();
@@ -390,7 +390,7 @@ mod tests {
             let () = caller(@pass);
         }
                 
-        proc multi_iter_map_empty(caller) {
+        fn multi_iter_map_empty(caller) {
             let (m) = this.super.super.multi_iter_map(this.parseint_factory);
 
             let (@req, m, @next) = m(@next);
@@ -399,7 +399,7 @@ mod tests {
         }
     }
 
-    proc run(caller, case_name) {
+    fn run(caller, case_name) {
         R{ @cases this #get #get @exec }
     }
 }

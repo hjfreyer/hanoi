@@ -7,25 +7,25 @@ mod list;
 mod str;
 
 mod tests {
-    proc enumerate(caller, @next) {
+    fn enumerate(caller, @next) {
         let () = caller(@eos);        
     }
 
     mod cases {
     }
 
-    proc run(caller, case_name) {
+    fn run(caller, case_name) {
         R{ @cases this #get #get @exec }
     }
 }
 
-proc parseint_factory(caller) {
+fn parseint_factory(caller) {
     let (p) = this.str.parseint();
     let () = caller(p);
     become this.parseint_factory()
 }
         
-proc multi_parseint_factory(caller) {            
+fn multi_parseint_factory(caller) {            
     let (p) = this.multi_iter_map(this.parseint_factory);
     let (c) = this.multi_iter_to_iter();
     let (p) = this.builtin.compose(p, c);
@@ -34,7 +34,7 @@ proc multi_parseint_factory(caller) {
     become this.multi_parseint_factory()
 }
 
-proc solve_the_thing(caller, @get) {
+fn solve_the_thing(caller, @get) {
     let (ssv) = this.ssv.parser();
 
     let (p) = this.multi_iter_map(this.multi_parseint_factory);
@@ -76,7 +76,7 @@ proc solve_the_thing(caller, @get) {
     become caller(@end, sum)
 }
 
-proc main(caller) {
+fn main(caller) {
     let (sol) = this.builtin.compose(this.io.stdin_chars, this.solve_the_thing);
     let (caller, num) = this.builtin.fwd_all(caller, sol, @get);
     

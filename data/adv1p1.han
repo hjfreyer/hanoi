@@ -8,31 +8,31 @@ mod str;
 mod multi_iter;
 
 mod tests {
-    proc enumerate(caller, @next) {
+    fn enumerate(caller, @next) {
         let () = caller(@eos);        
     }
 
     mod cases {
     }
 
-    proc run(caller, case_name) {
+    fn run(caller, case_name) {
         R{ @cases this #get #get @exec }
     }
 }
 
-proc parseint_factory(caller, iter) {
+fn parseint_factory(caller, iter) {
     let () = resp caller(this.str.parseint&(iter));
     become this.parseint_factory()
 }
         
-proc multi_parseint_factory(caller, iter) {       
+fn multi_parseint_factory(caller, iter) {       
     let (parsed) = this.iter.map(iter, this.parseint_factory);
     let (res) = this.list.from_iter(parsed);
     let () = resp caller(res);
     become this.multi_parseint_factory()
 }
 
-proc abs_diff(caller, a, b) {
+fn abs_diff(caller, a, b) {
     let (lt) = this.builtin.lt(*a, *b);
     if lt {
         let (diff) = this.builtin.sub(b, a);
@@ -43,7 +43,7 @@ proc abs_diff(caller, a, b) {
     }
 }
 
-proc iter_abs_diff(caller, @next) {
+fn iter_abs_diff(caller, @next) {
     let (caller) = req caller(@a, @next);
     match {
         (@eos) => {
@@ -58,11 +58,11 @@ proc iter_abs_diff(caller, @next) {
     }    
 }
 
-proc reduce_sum(caller) {
+fn reduce_sum(caller) {
     become caller(this.reduce_sum_impl&(0))
 }
 
-proc reduce_sum_impl(acc, caller, @get) {
+fn reduce_sum_impl(acc, caller, @get) {
     let (caller) = req caller(@next);
     match {
         (@eos) => {
@@ -75,7 +75,7 @@ proc reduce_sum_impl(acc, caller, @get) {
     }   
 }
 
-proc solve_the_thing(caller, iter) {
+fn solve_the_thing(caller, iter) {
     let (ssv) = this.ssv.parser(iter);
 
     let (numerical) = this.iter.map(ssv, this.multi_parseint_factory);
@@ -114,7 +114,7 @@ proc solve_the_thing(caller, iter) {
     become caller(@end, sum)
 }
 
-proc main(caller) {
+fn main(caller) {
     let (caller, num) = this.builtin.fwd_req(caller, this.solve_the_thing, this.io.stdin_chars);
     
     let (caller) = req caller(@print, num);

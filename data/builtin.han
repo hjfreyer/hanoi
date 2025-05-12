@@ -9,118 +9,118 @@ sentence eq {
 }
 
 
-// proc symbol_len(caller, symbol) {
+// fn symbol_len(caller, symbol) {
 //     R{ 
 //         [symbol, caller]
 //         symbol #symbol_len caller @exec 
 //     }
 // }
 
-// proc symbol_char_at(caller, symbol, offset) {
+// fn symbol_char_at(caller, symbol, offset) {
 //     R{ 
 //         [offset, symbol, caller]
 //         symbol offset #symbol_char_at caller @exec 
 //     }
 // }
 
-// proc eq(caller, a, b) {
+// fn eq(caller, a, b) {
 //     R{ 
 //         [b, a, caller]
 //         a b #eq caller @exec 
 //     }
 // }
 
-// proc lt(caller, a, b) {
+// fn lt(caller, a, b) {
 //     R{ 
 //         [b, a, caller]
 //         a b #lt caller @exec 
 //     }
 // }
 
-// proc add() {
+// fn add() {
 //     R{
 //         [a, b, caller]
 //         a b #add caller @exec
 //     }
 // }
 
-// proc sub() {
+// fn sub() {
 //     R{
 //         [b, a, caller]
 //         a b #sub caller @exec
 //     }
 // }
 
-// proc prod() {
+// fn prod() {
 //     R{
 //         [a, b, caller]
 //         a b #prod caller @exec
 //     }
 // }
 
-// proc ord() {
+// fn ord() {
 //     R{
 //         [a, caller]
 //         a #ord caller @exec
 //     }
 // }
 
-// proc cons() {
+// fn cons() {
 //     R{
 //         [b, a, caller]
 //         a b #cons caller @exec
 //     }
 // }
-// proc snoc() {
+// fn snoc() {
 //     R{
 //         [a, caller]
 //         a #snoc caller @exec
 //     }
 // }
 
-// proc tuple0() {
+// fn tuple0() {
 //     R{
 //         [caller]
 //         #tuple(0) caller @exec
 //     }
 // }
 
-// proc untuple0() {
+// fn untuple0() {
 //     R{
 //         [t, caller]
 //         t #untuple(0) caller @exec
 //     }
 // }
 
-// proc tuple1(a) {
+// fn tuple1(a) {
 //     R{
 //         [a, caller]
 //         a #tuple(1) caller @exec
 //     }
 // }
 
-// proc untuple1(caller, t) {
+// fn untuple1(caller, t) {
 //     R{
 //         [t, caller]
 //         t #untuple(1) caller @exec
 //     }
 // }
 
-// proc tuple2(caller, a, b) {
+// fn tuple2(caller, a, b) {
 //     R{
 //         [b, a, caller]
 //         b a #tuple(2) caller @exec
 //     }
 // }
 
-// proc untuple2() {
+// fn untuple2() {
 //     R{
 //         [t, caller]
 //         t #untuple(2) caller @exec
 //     }
 // }
 
-// proc bind_impl(inner, symbol, target, caller) {
+// fn bind_impl(inner, symbol, target, caller) {
 //     let (inner) = inner();
 //     match {
 //         (@req, name) =>  {
@@ -140,11 +140,11 @@ sentence eq {
 //     }
 // }
 
-// proc bind(caller, inner, symbol, target) {
+// fn bind(caller, inner, symbol, target) {
 //     become caller(this.bind_impl&(inner, symbol, target))
 // }
 
-// proc bind2_impl(inner, inner_symbol, target, target_symbol, caller) {
+// fn bind2_impl(inner, inner_symbol, target, target_symbol, caller) {
 //     let (inner) = inner();
 //     match {
 //         (@req, name) =>  {
@@ -164,11 +164,11 @@ sentence eq {
 //     }
 // }
 
-// proc bind2(caller, inner, inner_symbol, target, target_symbol) {
+// fn bind2(caller, inner, inner_symbol, target, target_symbol) {
 //     become caller(this.bind_impl2&(inner, inner_symbol, target, target_symbol))
 // }
 
-// proc fwd_req(next, up, down) {
+// fn fwd_req(next, up, down) {
 //     let () = down();
 //     match {
 //         (@req, down) => {
@@ -184,7 +184,7 @@ sentence eq {
 //     }
 // }
 
-// proc fwd_once(next, up, down) {
+// fn fwd_once(next, up, down) {
 //     let () = down();
 //     match {
 //         (@req, down) => {
@@ -201,7 +201,7 @@ sentence eq {
 //     }
 // }
 
-// proc fwd_all(next, up, down) {
+// fn fwd_all(next, up, down) {
 //     let () = down();
 //     match {
 //         (@req, down) => {
@@ -218,11 +218,11 @@ sentence eq {
 //     }
 // }
 
-// proc compose(caller, f, g) {
+// fn compose(caller, f, g) {
 //     become caller(this.compose_impl&(f, g))
 // }
 
-// proc compose_impl(f, g, caller) {
+// fn compose_impl(f, g, caller) {
 //     let () = g();
 //     match {
 //         (@req, g) => {
@@ -247,11 +247,11 @@ sentence eq {
 //     }
 // }
 
-// proc mk_pair(caller, a, b) {
+// fn mk_pair(caller, a, b) {
 //     become caller(this.mk_pair_impl&(a, b))
 // }
 
-// proc mk_pair_impl(a, b, caller) {
+// fn mk_pair_impl(a, b, caller) {
 //     match {
 //         (@a) => {
 //             let () = a();
@@ -283,13 +283,13 @@ sentence eq {
 // }
 
 
-// proc container_builder(caller) {
+// fn container_builder(caller) {
 //     become caller(this.container_builder_impl&(this.container_inner_empty))
 // }
 
-// proc container_inner_empty(caller) {}
+// fn container_inner_empty(caller) {}
 
-// proc container_inner_cons(name, value, tail, caller, req_name) {
+// fn container_inner_cons(name, value, tail, caller, req_name) {
 //     let (are_eq) = this.eq(*req_name, *name);
 //     if are_eq {
 //         let (value) = value();
@@ -302,7 +302,7 @@ sentence eq {
 //     }        
 // }
 
-// proc container_builder_impl(inner, caller) {
+// fn container_builder_impl(inner, caller) {
 //     match {
 //         (@bind, name, value) => {
 //             let (cons) = this.container_inner_cons&(name, value, inner);
@@ -315,7 +315,7 @@ sentence eq {
 //     }
 // }
 
-// proc proxy_req(next, caller) {
+// fn proxy_req(next, caller) {
 //     match {
 //         (@req) => {
 //             let (caller) = req caller(@req);
@@ -329,13 +329,13 @@ sentence eq {
 // }
 
 // mod tests {
-//     proc enumerate(caller, @next) {
+//     fn enumerate(caller, @next) {
 //         let (caller, @next) = caller(@yield, @tuples);
 //         let () = caller(@eos);        
 //     }
 
 //     mod cases {
-//         proc tuples(caller) {
+//         fn tuples(caller) {
 //             let (t) = this.super.super.tuple0();
 //             let () = this.super.super.untuple0(t);
 
@@ -349,7 +349,7 @@ sentence eq {
 //         }
 //     }
 
-//     proc run(caller, case_name) {
+//     fn run(caller, case_name) {
 //         R{ @cases this #get #get @exec }
 //     }
 // }

@@ -99,14 +99,14 @@ impl<'t> Compiler<'t> {
                     let name_prefix = name_prefix.append(name.into_ir(self.sources, file_idx));
                     self.visit_namespace(file_idx, &name_prefix, ns)?;
                 }
-                ast::Decl::Proc(ast::ProcDecl {
+                ast::Decl::Fn(ast::FnDecl {
                     span,
                     binding,
                     name,
                     expression,
                 }) => {
                     let name = name_prefix.append(name.into_ir(self.sources, file_idx));
-                    self.visit_proc(
+                    self.visit_fn(
                         span.into_ir(self.sources, file_idx),
                         file_idx,
                         &name_prefix,
@@ -121,7 +121,7 @@ impl<'t> Compiler<'t> {
         Ok(())
     }
 
-    fn visit_proc(
+    fn visit_fn(
         &mut self,
         span: FileSpan,
         file_idx: FileIndex,
@@ -1210,8 +1210,8 @@ pub struct Symbol {
 // }
 
 // #[derive(Debug, Clone)]
-// #[from_raw_ast(raw = ast::ProcDecl)]
-// pub struct ProcDecl {
+// #[from_raw_ast(raw = ast::FnDecl)]
+// pub struct FnDecl {
 //     pub span: FileSpan,
 //     pub binding: Binding,
 //     pub name: Identifier,

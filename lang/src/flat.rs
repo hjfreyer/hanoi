@@ -29,8 +29,8 @@ macro_rules! tagged {
     ($tag:ident {$($x:expr),* $(,)?}) => {tuple![symbol!(stringify!($tag)), tuple![$($x),*]]};
 }
 // use crate::ast::{
-//     self, ident_from_pair, Bindings, Identifier, Literal, PathOrIdent, ProcMatchBlock,
-//     ProcMatchCase, Rule, ValueExpression,
+//     self, ident_from_pair, Bindings, Identifier, Literal, PathOrIdent, FnMatchBlock,
+//     FnMatchCase, Rule, ValueExpression,
 // };
 
 #[derive(From, Into, Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -208,7 +208,7 @@ impl Library {
     //             //         Entry::Value(Value::Pointer(Closure(vec![], sentence_idx))),
     //             //     ));
     //             // }
-    //             ast::DeclValue::Proc(p) => {
+    //             ast::DeclValue::Fn(p) => {
     //                 let sentence_idx =
     //                     self.visit_block(modname, &decl.name, ns_idx, VecDeque::new(), p)?;
     //                 self.namespaces[ns_idx].0.push((
@@ -517,7 +517,7 @@ impl Library {
     //     name: &str,
     //     ns_idx: NamespaceIndex,
     //     names: VecDeque<Option<String>>,
-    //     block: ast::ProcMatchBlock<'t>,
+    //     block: ast::FnMatchBlock<'t>,
     // ) -> Result<SentenceIndex, BuilderError<'t>> {
     //     let mut builder = SentenceBuilder::new(modname, Some(name.to_owned()), ns_idx, names.clone());
 

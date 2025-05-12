@@ -231,7 +231,7 @@ pub struct SentenceDecl<'t> {
 pub enum Decl<'t> {
     SentenceDecl(SentenceDecl<'t>),
     Namespace(NamespaceDecl<'t>),
-    Proc(ProcDecl<'t>),
+    Fn(FnDecl<'t>),
 }
 
 #[derive(Debug, FromPest)]
@@ -272,8 +272,8 @@ pub struct Namespace<'t> {
 }
 
 #[derive(Debug, FromPest)]
-#[pest_ast(rule(Rule::proc_decl))]
-pub struct ProcDecl<'t> {
+#[pest_ast(rule(Rule::fn_decl))]
+pub struct FnDecl<'t> {
     #[pest_ast(outer())]
     pub span: pest::Span<'t>,
     pub binding: Binding<'t>,

@@ -5,7 +5,7 @@ mod multi_iter;
 mod str;
 
 mod tests {
-    proc enumerate(caller, @next) {
+    fn enumerate(caller, @next) {
 //        let (caller, @next) = caller(@yield, @chars_in_field);
 //        let (caller, @next) = caller(@yield, @fields_in_line);
         let (caller, @next) = caller(@yield, @empty_string);
@@ -15,7 +15,7 @@ mod tests {
 
     mod cases {
 
-        proc chars_in_field(caller) {
+        fn chars_in_field(caller) {
             let (input) = this.super.super.iter.symbol_chars(@"foo   bar
 baz   qux
 ");
@@ -31,7 +31,7 @@ baz   qux
             let () = caller(@pass);
         }
 
-        proc fields_in_line(caller) {
+        fn fields_in_line(caller) {
             let (input) = this.super.super.iter.symbol_chars(@"foo   bar
 baz   qux
 ");
@@ -52,7 +52,7 @@ baz   qux
             let () = caller(@pass);
         }
 
-        proc lines_in_doc(caller) {
+        fn lines_in_doc(caller) {
             let (input) = this.super.super.iter.symbol_chars(@"foo   bar
 baz   qux
 ");
@@ -73,7 +73,7 @@ baz   qux
             let () = caller(@pass);
         }
 
-        proc empty_string(caller) {
+        fn empty_string(caller) {
             let (input) = this.super.super.iter.symbol_chars(@"");
 
             let (p) = this.super.super.parser(input);
@@ -86,7 +86,7 @@ baz   qux
             let () = caller(@pass);
         }
 
-        proc basic_string(caller) {
+        fn basic_string(caller) {
             let (input) = this.super.super.iter.symbol_chars(@"foo   bar
 baz   qux
 ");
@@ -136,25 +136,25 @@ baz   qux
         }
     }
 
-    proc run(caller, case_name) {
+    fn run(caller, case_name) {
         R{ @cases this #get #get @exec }
     }
 }
 
-proc parser(caller, iter) {
+fn parser(caller, iter) {
     let (s) = this.str.split_lines(iter);
     let (m) = this.iter.map(s, this.split_by_space_constructor);
     become caller(m)
 }
 
-proc split_by_space_constructor(caller, iter) {
+fn split_by_space_constructor(caller, iter) {
     let (delim) = this.space_delimiters&(iter, false);
     let (res) = this.iter.split&(delim);
     let () = resp caller(res);
     become this.split_by_space_constructor()
 }
 
-proc space_delimiters(iter, in_ws, caller, @next) {
+fn space_delimiters(iter, in_ws, caller, @next) {
     let (caller) = this.builtin.fwd_req(caller, iter, @next);
     match {
         (@end, @eos) => {
@@ -194,7 +194,7 @@ proc space_delimiters(iter, in_ws, caller, @next) {
     }
 }
 
-proc skip_to_newline(caller, char) {
+fn skip_to_newline(caller, char) {
     let () = char;
     match {
         ('\n') => {
@@ -215,7 +215,7 @@ proc skip_to_newline(caller, char) {
 }
 
 
-proc fields_in_line_init(caller, @next) {
+fn fields_in_line_init(caller, @next) {
     let (caller) = req caller(@peek);
     match {
         (@none) => {
@@ -230,7 +230,7 @@ proc fields_in_line_init(caller, @next) {
         }
     }
 }
-proc fields_in_line(caller) {
+fn fields_in_line(caller) {
     match {
         (@next) => {
             let (caller) = req caller(@peek);
@@ -268,7 +268,7 @@ proc fields_in_line(caller) {
     }
 }
 
-proc skip_whitespace(caller) {
+fn skip_whitespace(caller) {
     let (caller) = req caller(@peek);
     match {
         (@none) => {
@@ -285,7 +285,7 @@ proc skip_whitespace(caller) {
 }
 
 
-proc chars_in_field(caller, @next) {
+fn chars_in_field(caller, @next) {
     let (caller) = req caller(@peek);
     match {
         (@none) => {
@@ -305,11 +305,11 @@ proc chars_in_field(caller, @next) {
     }
 }
 
-proc impl_start(caller, @next) {
+fn impl_start(caller, @next) {
     become this.impl_newline(caller, @next)
 }
 
-proc impl_newline(caller, @next) {
+fn impl_newline(caller, @next) {
     let (caller) = req caller(@next);
     match {
         (@eos) => {
@@ -328,7 +328,7 @@ proc impl_newline(caller, @next) {
     }
 }
 
-proc impl_infield(caller, @next) {
+fn impl_infield(caller, @next) {
     let (caller) = req caller(@next);
     match {
         (@eos) => {
@@ -350,7 +350,7 @@ proc impl_infield(caller, @next) {
     }
 }
 
-proc impl_inspace(caller, @next) {
+fn impl_inspace(caller, @next) {
     let (caller) = req caller(@next);
     match {
         (@eos) => {
