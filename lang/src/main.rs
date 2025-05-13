@@ -12,11 +12,10 @@ mod vm;
 use std::{path::PathBuf, process::exit};
 
 use clap::{Parser, Subcommand};
-use flat::{Builtin, Closure, Entry, InnerWord, Library, SentenceIndex, Value};
+use flat::{Library, Value};
 use itertools::Itertools;
 
-use source::FileIndex;
-use vm::{EvalError, ProgramCounter, Vm};
+use vm::{EvalError, Vm};
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -56,7 +55,7 @@ fn run(base_dir: PathBuf) -> anyhow::Result<()> {
 
     vm.load_label("main");
 
-    let mut res = match vm.run() {
+    match vm.run() {
         Ok(res) => res,
         Err(e) => {
             eprintln!("Error: {}\n", e.into_user(&sources));
@@ -110,7 +109,7 @@ impl<'a> Iterator for IterReader<'a> {
         self.vm
             .push_value(tuple![self.iter_value.take().unwrap(), tagged![next {}]]);
         self.vm.load_label(self.label);
-        let mut res = match self.vm.run() {
+        match self.vm.run() {
             Ok(res) => res,
             Err(e) => {
                 self.done = true;
@@ -211,8 +210,6 @@ fn main() -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-
-    use super::*;
 
     // #[test]
     // fn basic_assert() {

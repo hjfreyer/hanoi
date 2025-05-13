@@ -1,20 +1,18 @@
 use std::{
     collections::{BTreeMap, VecDeque},
     fmt::Display,
-    path::{Path, PathBuf},
+    path::PathBuf,
     usize,
 };
 
 use derive_more::derive::{From, Into};
 use itertools::Itertools;
-use pest::iterators::Pair;
 use thiserror::Error;
 use typed_index_collections::TiVec;
 
 use crate::{
     ast,
-    compiler::{self, QualifiedName},
-    source::{self, FileSpan, Span},
+    source::{self, FileSpan},
 };
 
 macro_rules! tuple {
@@ -45,27 +43,9 @@ pub struct NamespaceIndex(usize);
 
 #[derive(Debug, Clone, Default)]
 pub struct Library {
-    pub namespaces: TiVec<NamespaceIndex, Namespace>,
     pub sentences: TiVec<SentenceIndex, Sentence>,
 
     pub exports: BTreeMap<String, SentenceIndex>,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct Namespace(pub Vec<(String, Entry)>);
-
-impl Namespace {
-    pub fn get(&self, name: &str) -> Option<&Entry> {
-        self.0
-            .iter()
-            .find_map(|(k, v)| if k == name { Some(v) } else { None })
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum Entry {
-    Value(Value),
-    Namespace(NamespaceIndex),
 }
 
 #[derive(Debug, Error)]
@@ -90,8 +70,6 @@ pub enum LoadErrorInner {
     DuplicatePath,
     #[error("error parsing file:\n{0}")]
     Parse(#[from] pest::error::Error<ast::Rule>),
-    #[error("error compiling file: {0}")]
-    Compile(CompileError),
 }
 
 impl Library {
@@ -777,20 +755,6 @@ macro_rules! builtins {
     };
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum CompileError {
-    #[error("At {location}, unknown reference: {name}")]
-    UnknownReference {
-        location: source::Location,
-        name: String,
-    },
-}
-
-#[derive(Debug)]
-pub enum BuilderError {
-    UnknownReference(compiler::Identifier),
-}
-
 builtins! {
     (Panic, "panic"),
 
@@ -799,25 +763,13 @@ builtins! {
     (Prod, "prod"),
     (Eq, "eq"),
     (AssertEq, "assert_eq"),
-    (Curry, "curry"),
     (Or, "or"),
     (And, "and"),
     (Not, "not"),
-    (Get, "get"),
     (SymbolCharAt, "symbol_char_at"),
     (SymbolLen, "symbol_len"),
 
     (Lt, "lt"),
-
-    (NsEmpty, "ns_empty"),
-    (NsInsert, "ns_insert"),
-    (NsGet, "ns_get"),
-    (NsRemove, "ns_remove"),
-
-    (Cons, "cons"),
-    (Snoc, "snoc"),
-
-    (Deref, "deref"),
 
     (If, "if"),
 
@@ -838,8 +790,7 @@ pub enum InnerWord {
     Copy(usize),
     Drop(usize),
     Move(usize),
-    Send(usize),
-    Ref(usize),
+    _Send(usize),
     Builtin(Builtin),
     Tuple(usize),
     Untuple(usize),
@@ -851,17 +802,9 @@ pub enum InnerWord {
 pub enum Value {
     Symbol(String),
     Usize(usize),
-    List(Vec<Value>),
     Tuple(Vec<Value>),
-    Pointer(Closure),
-    Handle(usize),
     Bool(bool),
     Char(char),
-    Namespace(NamespaceIndex),
-    Namespace2(Namespace2),
-    Nil,
-    Cons(Box<Value>, Box<Value>),
-    Ref(usize),
 }
 
 impl Value {
@@ -869,17 +812,9 @@ impl Value {
         match self {
             Value::Symbol(_) => ValueType::Symbol,
             Value::Usize(_) => ValueType::Usize,
-            Value::List(_) => todo!(),
             Value::Tuple(_) => ValueType::Tuple,
-            Value::Pointer(_) => todo!(),
-            Value::Handle(_) => todo!(),
             Value::Bool(_) => ValueType::Bool,
             Value::Char(_) => ValueType::Char,
-            Value::Namespace(_) => todo!(),
-            Value::Namespace2(_) => todo!(),
-            Value::Nil => todo!(),
-            Value::Cons(_, _) => todo!(),
-            Value::Ref(_) => todo!(),
         }
     }
 }
@@ -923,24 +858,7 @@ impl<'a> std::fmt::Display for ValueView<'a> {
         match self.value {
             Value::Symbol(arg0) => write!(f, "@{}", arg0.replace("\n", "\\n")),
             Value::Usize(arg0) => write!(f, "{}", arg0),
-            Value::List(arg0) => todo!(),
-            Value::Handle(arg0) => todo!(),
-            Value::Namespace(arg0) => write!(f, "ns({})", arg0.0),
-            Value::Namespace2(arg0) => write!(f, "ns(TODO)"),
             Value::Bool(arg0) => write!(f, "{}", arg0),
-            Value::Nil => write!(f, "nil"),
-            Value::Cons(car, cdr) => write!(
-                f,
-                "cons({}, {})",
-                ValueView {
-                    sources: self.sources,
-                    value: car
-                },
-                ValueView {
-                    sources: self.sources,
-                    value: cdr
-                }
-            ),
             Value::Tuple(values) => {
                 if values.len() == 2
                     && values[0].r#type() == ValueType::Symbol
@@ -977,31 +895,7 @@ impl<'a> std::fmt::Display for ValueView<'a> {
                     )
                 }
             }
-            Value::Ref(arg0) => write!(f, "ref({})", arg0),
             Value::Char(arg0) => write!(f, "'{}'", arg0),
-            Value::Pointer(Closure(values, ptr)) => {
-                write!(
-                    f,
-                    "[{}]{}#{}",
-                    values
-                        .iter()
-                        .map(|v| ValueView {
-                            sources: self.sources,
-                            value: v
-                        })
-                        .join(", "),
-                    if *ptr == SentenceIndex::TRAP {
-                        "TRAP"
-                    } else {
-                        // if let Some(name) = &self.sources.sentences[*ptr].name {
-                        //     name
-                        // } else {
-                        "UNKNOWN"
-                        // }
-                    },
-                    ptr.0
-                )
-            }
         }
     }
 }
@@ -1021,95 +915,6 @@ impl From<bool> for Value {
 impl From<char> for Value {
     fn from(value: char) -> Self {
         Self::Char(value)
-    }
-}
-
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub enum Judgement {
-    Eq(usize, usize),
-    OutExact(usize, Value),
-}
-
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub struct Type {
-    pub arity_in: usize,
-    pub arity_out: usize,
-    pub judgements: Vec<Judgement>,
-}
-
-impl Type {
-    const NULL: Self = Type {
-        arity_in: 0,
-        arity_out: 0,
-        judgements: vec![],
-    };
-
-    fn pad(&self) -> Self {
-        Type {
-            arity_in: self.arity_in + 1,
-            arity_out: self.arity_out + 1,
-            judgements: self
-                .judgements
-                .iter()
-                .cloned()
-                .chain(std::iter::once(Judgement::Eq(
-                    self.arity_in,
-                    self.arity_out,
-                )))
-                .collect(),
-        }
-    }
-
-    pub fn compose(mut self, mut other: Self) -> Self {
-        while self.arity_out < other.arity_in {
-            self = self.pad()
-        }
-        while other.arity_in < self.arity_out {
-            other = other.pad()
-        }
-
-        let mut res: Vec<Judgement> = vec![];
-        for j1 in self.judgements {
-            match j1 {
-                Judgement::Eq(i1, o1) => {
-                    for j2 in other.judgements.iter() {
-                        match j2 {
-                            Judgement::Eq(i2, o2) => {
-                                if o1 == *i2 {
-                                    res.push(Judgement::Eq(i1, *o2));
-                                }
-                            }
-                            Judgement::OutExact(_, _) => {}
-                        }
-                    }
-                }
-                Judgement::OutExact(o1, value) => {
-                    for j2 in other.judgements.iter() {
-                        match j2 {
-                            Judgement::Eq(i2, o2) => {
-                                if o1 == *i2 {
-                                    res.push(Judgement::OutExact(*o2, value.clone()));
-                                }
-                            }
-                            Judgement::OutExact(_, _) => {}
-                        }
-                    }
-                }
-            }
-        }
-
-        for j2 in other.judgements {
-            match j2 {
-                Judgement::Eq(i2, o2) => {}
-                Judgement::OutExact(o, value) => res.push(Judgement::OutExact(o, value)),
-            }
-        }
-
-        Type {
-            arity_in: self.arity_in,
-            arity_out: other.arity_out,
-            judgements: res,
-        }
     }
 }
 

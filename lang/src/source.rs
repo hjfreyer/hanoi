@@ -1,8 +1,4 @@
-use std::{
-    collections::BTreeMap,
-    fmt::Display,
-    path::{Path, PathBuf},
-};
+use std::{fmt::Display, path::PathBuf};
 
 use derive_more::derive::{From, Into};
 use itertools::Itertools;
@@ -68,7 +64,6 @@ impl Loader {
 #[derive(Default, Debug)]
 pub struct Sources {
     pub files: TiVec<FileIndex, File>,
-    pub generated: TiVec<GeneratedIndex, String>,
 }
 
 impl Sources {
@@ -105,38 +100,6 @@ pub struct File {
     pub path: PathBuf,
     pub mod_name: QualifiedName,
     pub source: String,
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum Span {
-    Generated(GeneratedIndex),
-    File(FileSpan),
-}
-
-impl Span {
-    pub fn as_str(self, sources: &Sources) -> &str {
-        match self {
-            Self::File(file_span) => file_span.as_pest(sources).as_str(),
-            Self::Generated(gen_idx) => &sources.generated[gen_idx],
-        }
-    }
-
-    // pub fn as_pest(self, sources: &Sources) -> Option<pest::Span> {
-    //     match self {
-    //         Self::File { file_idx, start, end } => {
-    //             Some(pest::Span::new(&sources.files[file_idx].source, start, end).unwrap())
-    //         }
-    //         Self::Generated(_) =>
-    //             None
-    //                 }
-    // }
-
-    pub fn location(self, sources: &Sources) -> Option<Location> {
-        match self {
-            Self::File(s) => Some(s.location(sources)),
-            Self::Generated(_) => None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

@@ -1,11 +1,10 @@
-use clap::Arg;
 use from_pest::FromPest;
 use from_raw_ast::Spanner;
 use pest::Parser;
 use pest_ast::FromPest;
 use pest_derive::Parser;
 
-use crate::source::{self, FileIndex, FileSpan};
+use crate::source::{FileIndex, FileSpan};
 
 #[derive(Parser)]
 #[grammar = "hanoi.pest"]
@@ -139,7 +138,6 @@ pub struct Tagged<'t> {
 pub enum BuiltinArg<'t> {
     Int(Int<'t>),
     Label(QualifiedLabel<'t>),
-    Sentence(Sentence<'t>),
 }
 
 #[derive(Debug, FromPest)]
@@ -221,7 +219,7 @@ pub struct Sentence<'t> {
 #[pest_ast(rule(Rule::sentence_decl))]
 pub struct SentenceDecl<'t> {
     #[pest_ast(outer())]
-    pub span: pest::Span<'t>,
+    pub _span: pest::Span<'t>,
     pub name: Identifier<'t>,
     pub sentence: Sentence<'t>,
 }
@@ -238,7 +236,7 @@ pub enum Decl<'t> {
 #[pest_ast(rule(Rule::r#use))]
 pub struct Use<'t> {
     #[pest_ast(outer())]
-    pub span: pest::Span<'t>,
+    pub _span: pest::Span<'t>,
     pub path: QualifiedLabel<'t>,
 }
 
@@ -247,7 +245,7 @@ pub struct Use<'t> {
 pub struct File<'t> {
     pub imports: Vec<Identifier<'t>>,
     pub ns: Namespace<'t>,
-    eoi: EOI,
+    _eoi: EOI,
 }
 
 impl<'t> File<'t> {
@@ -275,7 +273,7 @@ pub struct Namespace<'t> {
 #[pest_ast(rule(Rule::fn_decl))]
 pub struct FnDecl<'t> {
     #[pest_ast(outer())]
-    pub span: pest::Span<'t>,
+    pub _span: pest::Span<'t>,
     pub binding: Binding<'t>,
     pub name: Identifier<'t>,
     pub expression: Expression<'t>,
@@ -331,7 +329,7 @@ pub enum Statement<'t> {
 
 pub struct LetStatement<'t> {
     #[pest_ast(outer())]
-    pub span: pest::Span<'t>,
+    pub _span: pest::Span<'t>,
     pub binding: Binding<'t>,
     pub rhs: Expression<'t>,
 }

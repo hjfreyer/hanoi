@@ -1,21 +1,10 @@
-use std::{
-    any,
-    collections::VecDeque,
-    io::{stdin, stdout, ErrorKind, Read, Write},
-    os::fd::FromRawFd,
-    str::from_utf8,
-};
+use std::io::{stdin, stdout, Read, Write};
 
-use anyhow::{anyhow, bail, ensure, Context};
-use thiserror::Error;
-use typed_index_collections::TiSliceIndex;
+use anyhow::{anyhow, Context};
 
 use crate::{
-    flat::{
-        Builtin, Closure, Entry, InnerWord, Library, LoadError, Namespace2, SentenceIndex, Value,
-        ValueType, Word,
-    },
-    source::{self, FileSpan, Sources, Span},
+    flat::{Builtin, InnerWord, Library, SentenceIndex, Value, ValueType, Word},
+    source::{self, FileSpan},
 };
 
 #[derive(Debug)]
@@ -80,8 +69,8 @@ pub enum EvalResult {
     Call(SentenceIndex),
 }
 
-fn eval<'t>(lib: &Library, stack: &mut Stack, w: &Word) -> Result<EvalResult, EvalError> {
-    inner_eval(lib, stack, &w.inner).map_err(|inner| EvalError {
+fn eval<'t>(stack: &mut Stack, w: &Word) -> Result<EvalResult, EvalError> {
+    inner_eval(stack, &w.inner).map_err(|inner| EvalError {
         location: Some(w.span),
         inner,
     })
@@ -179,14 +168,10 @@ where
     }
 }
 
-fn inner_eval(
-    lib: &Library,
-    stack: &mut Stack,
-    w: &InnerWord,
-) -> Result<EvalResult, InnerEvalError> {
+fn inner_eval(stack: &mut Stack, w: &InnerWord) -> Result<EvalResult, InnerEvalError> {
     match w {
         InnerWord::Builtin(b) => {
-            eval_builtin(lib, stack, *b).map_err(|e| InnerEvalError::BuiltinError {
+            eval_builtin(stack, *b).map_err(|e| InnerEvalError::BuiltinError {
                 builtin: *b,
                 source: e,
             })
@@ -200,19 +185,19 @@ fn inner_eval(
             Ok(EvalResult::Continue)
         }
         InnerWord::Copy(idx) => {
-            stack.copy(*idx);
+            stack.copy(*idx)?;
             Ok(EvalResult::Continue)
         }
         InnerWord::Move(idx) => {
-            stack.mv(*idx);
+            stack.mv(*idx)?;
             Ok(EvalResult::Continue)
         }
-        &InnerWord::Send(idx) => {
-            stack.sd(idx);
+        &InnerWord::_Send(idx) => {
+            stack.sd(idx)?;
             Ok(EvalResult::Continue)
         }
         &InnerWord::Drop(idx) => {
-            stack.drop(idx);
+            stack.drop(idx)?;
             Ok(EvalResult::Continue)
         }
         InnerWord::Push(v) => {
@@ -235,14 +220,10 @@ fn inner_eval(
                 Ok(EvalResult::Call(*false_case))
             }
         }
-        InnerWord::Ref(idx) => {
-            stack.push(Value::Ref(stack.back_idx(*idx)?));
-            Ok(EvalResult::Continue)
-        }
     }
 }
 
-fn eval_builtin(lib: &Library, stack: &mut Stack, b: Builtin) -> Result<EvalResult, BuiltinError> {
+fn eval_builtin(stack: &mut Stack, b: Builtin) -> Result<EvalResult, BuiltinError> {
     match b {
         Builtin::Panic => {
             if stack.is_empty() {
@@ -297,7 +278,6 @@ fn eval_builtin(lib: &Library, stack: &mut Stack, b: Builtin) -> Result<EvalResu
                 Ok(EvalResult::Continue)
             }
         }
-        Builtin::Curry => todo!(),
         Builtin::And => {
             stack.check_size(2)?;
             let a: bool = stack.pop().unwrap().at_index(1)?;
@@ -318,7 +298,6 @@ fn eval_builtin(lib: &Library, stack: &mut Stack, b: Builtin) -> Result<EvalResu
             stack.push(Value::Bool(!a));
             Ok(EvalResult::Continue)
         }
-        Builtin::Get => todo!(),
         Builtin::SymbolCharAt => {
             stack.check_size(2)?;
             let idx: usize = stack.pop().unwrap().at_index(1)?;
@@ -332,27 +311,6 @@ fn eval_builtin(lib: &Library, stack: &mut Stack, b: Builtin) -> Result<EvalResu
             stack.push(sym.chars().count().into());
             Ok(EvalResult::Continue)
         }
-        Builtin::NsEmpty => {
-            stack.push(Value::Namespace2(Namespace2 { items: vec![] }));
-            Ok(EvalResult::Continue)
-        }
-        Builtin::NsInsert => todo!(),
-        Builtin::NsRemove => todo!(),
-        Builtin::NsGet => todo!(),
-        Builtin::Cons => {
-            stack.check_size(2)?;
-
-            let cdr = stack.pop().unwrap();
-            let car = stack.pop().unwrap();
-            // ensure!(cdr.is_small(), "bad cdr type: {:?}", cdr);
-            // ensure!(car.is_small(), "bad car type: {:?}", car);
-
-            stack.push(Value::Cons(Box::new(car), Box::new(cdr)));
-            Ok(EvalResult::Continue)
-        }
-        Builtin::Snoc => todo!(),
-        Builtin::Deref => todo!(),
-
         Builtin::Lt => {
             stack.check_size(2)?;
             let b: usize = stack.pop().unwrap().at_index(1)?;
@@ -380,12 +338,6 @@ fn eval_builtin(lib: &Library, stack: &mut Stack, b: Builtin) -> Result<EvalResu
 pub enum InnerEvalError {
     #[error("Stack empty at end of sentence")]
     EmptyStack,
-    #[error("Unexpected value used as control flow: {value:?}")]
-    UnexpectedControlFlow { value: Value },
-    #[error("Tried to exec non-closure value: {value:?}")]
-    ExecNonClosure { value: Value },
-    #[error("Tried to exec empty stack")]
-    ExecEmptyStack,
 
     #[error("branch condition must be a boolean: {source:?}")]
     InvalidBranchCondition { source: ConversionError },
@@ -474,7 +426,7 @@ impl Vm {
         self
     }
 
-    pub fn with_stdout(mut self, stdout: impl Write + 'static) -> Self {
+    pub fn _with_stdout(mut self, stdout: impl Write + 'static) -> Self {
         self.stdout = Box::new(stdout);
         self
     }
@@ -511,7 +463,7 @@ impl Vm {
             break pc;
         };
         let word = &self.lib.sentences[pc.sentence_idx].words[pc.word_idx];
-        let res = eval(&self.lib, &mut self.stack, &word)?;
+        let res = eval(&mut self.stack, &word)?;
         pc.word_idx += 1;
         if pc.word_idx == self.lib.sentences[pc.sentence_idx].words.len() {
             self.call_stack.pop();

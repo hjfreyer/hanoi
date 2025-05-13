@@ -1,12 +1,12 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 
 use itertools::Itertools;
 use typed_index_collections::TiVec;
 
 use crate::{
-    compiler::{self, Name, NameRef, QualifiedName, QualifiedNameRef},
+    compiler::{self, Name, QualifiedNameRef},
     flat::{self, SentenceIndex},
-    source::{self, FileSpan, Span},
+    source::{self},
 };
 
 #[derive(Debug, thiserror::Error)]

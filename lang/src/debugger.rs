@@ -11,8 +11,8 @@ use ratatui::{
 };
 
 use crate::{
-    flat::{Closure, Value, ValueView, Word},
-    source::{self, Span},
+    flat::ValueView,
+    source::{self},
     vm::{EvalError, StepResult, Vm, VmState},
 };
 
@@ -134,7 +134,7 @@ impl Debugger {
             let span = span.as_pest(&self.sources);
             let code = span.get_input();
             let mut res = Text::raw("");
-            for (pos, line) in code[..span.start()].lines().with_position() {
+            for line in code[..span.start()].lines() {
                 res.push_line(line);
             }
             for (pos, line) in span.as_str().lines().with_position() {
