@@ -796,6 +796,7 @@ pub enum InnerWord {
     Untuple(usize),
     Call(SentenceIndex),
     Branch(SentenceIndex, SentenceIndex),
+    JumpTable(Vec<SentenceIndex>),
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Hash)]

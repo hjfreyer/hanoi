@@ -220,6 +220,24 @@ fn inner_eval(stack: &mut Stack, w: &InnerWord) -> Result<EvalResult, InnerEvalE
                 Ok(EvalResult::Call(*false_case))
             }
         }
+        InnerWord::JumpTable(targets) => {
+            stack
+                .check_size(1)
+                .map_err(|_| InnerEvalError::EmptyStack)?;
+            let cond: usize = stack
+                .pop()
+                .unwrap()
+                .try_into()
+                .map_err(|e| InnerEvalError::JumpTableInvalidIndex { source: e })?;
+            if cond >= targets.len() {
+                Err(InnerEvalError::JumpTableIndexOutOfBounds {
+                    index: cond,
+                    size: targets.len(),
+                })
+            } else {
+                Ok(EvalResult::Call(targets[cond]))
+            }
+        }
     }
 }
 
@@ -341,6 +359,12 @@ pub enum InnerEvalError {
 
     #[error("branch condition must be a boolean: {source:?}")]
     InvalidBranchCondition { source: ConversionError },
+
+    #[error("jump table index must be a usize: {source:?}")]
+    JumpTableInvalidIndex { source: ConversionError },
+
+    #[error("jump table index out of bounds. size: {size}; index: {index}")]
+    JumpTableIndexOutOfBounds { index: usize, size: usize },
 
     #[error("in builtin {builtin:?}, {source}")]
     BuiltinError {
