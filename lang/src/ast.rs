@@ -4,7 +4,7 @@ use pest::Parser;
 use pest_ast::FromPest;
 use pest_derive::Parser;
 
-use crate::source::{FileIndex, FileSpan};
+use crate::{flat, source::{FileIndex, FileSpan}};
 
 #[derive(Parser)]
 #[grammar = "hanoi.pest"]
@@ -110,6 +110,29 @@ pub enum Literal<'t> {
     Char(Char<'t>),
     Bool(Bool<'t>),
     Symbol(Symbol<'t>),
+}
+
+impl Literal<'_> {
+    pub fn into_value(self) -> flat::Value{
+          match self {
+            Literal::Int(Int { span: _, value }) => {
+                flat::Value::Usize(value)
+            }
+            Literal::Char(Char { span: _, value }) => {
+                flat::Value::Char(value)
+            }
+            Literal::Bool(Bool { span: _, value }) => {
+                flat::Value::Bool(value)
+            }
+            Literal::Symbol(sym) => match sym {
+                Symbol::Identifier(identifier) => 
+                    flat::Value::Symbol(identifier.0.as_str().to_owned()),
+                Symbol::String(string_literal) => {
+                    flat::Value::Symbol(string_literal.value)
+                }
+            },
+        }
+    }
 }
 
 #[derive(Debug, FromPest, Spanner)]

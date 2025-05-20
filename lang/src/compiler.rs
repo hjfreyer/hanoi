@@ -962,27 +962,7 @@ mod builder {
 
     pub fn literal(ctx: FileContext, value: ast::Literal, output: &mut Output) {
         let span = value.span(ctx.file_idx);
-        match value {
-            ast::Literal::Int(ast::Int { span: _, value }) => {
-                push_value(span, flat::Value::Usize(value), output)
-            }
-            ast::Literal::Char(ast::Char { span: _, value }) => {
-                push_value(span, flat::Value::Char(value), output)
-            }
-            ast::Literal::Bool(ast::Bool { span: _, value }) => {
-                push_value(span, flat::Value::Bool(value), output)
-            }
-            ast::Literal::Symbol(sym) => match sym {
-                ast::Symbol::Identifier(identifier) => push_value(
-                    span,
-                    flat::Value::Symbol(identifier.0.as_str().to_owned()),
-                    output,
-                ),
-                ast::Symbol::String(string_literal) => {
-                    push_value(span, flat::Value::Symbol(string_literal.value), output)
-                }
-            },
-        }
+        push_value(span, value.into_value(), output)
     }
 
     pub fn push_value(span: FileSpan, value: flat::Value, output: &mut Output) {
