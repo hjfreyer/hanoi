@@ -29,7 +29,7 @@ mod tests {
         (#b{}, #next{}) => (#e{}, #none{}),
 
         (#nil{}, #run{@new}) => {
-            let #req{t, #stall{}} = #run{} 'test_new;
+            let #req{t, #stall{}} = #run{} fn x => {x 'test_new};
             let #req{t, #stall{}} = #reply{t, #cont{}} 'test_new;
             let #req{t, #alloc{#malloc{8}}} = #reply{t, #cont{}} 'test_new;
             let #req{t, #stall{}} = #reply{t, @handle} 'test_new;
@@ -49,6 +49,84 @@ mod tests {
     //     #stall{} yield 'foo
     // }
 
+    // fn args sum => args match {
+    //     #call{} => #req{#start{0}, #stall{}},
+    //     #reply{#start{acc}, #cont{}} => #req{#iter_reply{acc}, #iter{#next{}}},
+    //     #reply{#iter_reply{acc}, reply} => reply match {
+    //         #some{} => #req{#iter_clone{acc}, #iter{#item{#clone{}}}},
+    //         #none{} => #resp{acc},
+    //     },
+    //     #reply{#iter_clone{acc}, num} => #req{#start{(acc, num) 'crate::builtin::add}, #stall{}},
+    // }
+
+    // fn args and_then<A, B> => args match {
+    //     #call{args} => {
+    //         #call{args} A match {
+    //             #req{state, msg} => #req{#a{state}, msg},
+    //             #resp{a} => #call{a} B match {
+    //                 #req{state, msg} => #req{#b{state}, msg},
+    //                 #resp{val} => #resp{val},
+    //             },
+    //         }
+    //     },
+    //     #reply{#a{state}, msg} => #reply{state, msg} A match {
+    //         #req{state, msg} => #req{#a{state}, msg},
+    //         #resp{a} => #call{a} B match {
+    //             #req{state, msg} => #req{#b{state}, msg},
+    //             #resp{val} => #resp{val},
+    //         },
+    //     },
+    //     #reply{#b{state}, msg} => #reply{state, msg} B match {
+    //         #req{state, msg} => #req{#b{state}, msg},
+    //         #resp{val} => #resp{val},
+    //     },
+    // }
+
+    // fn args loop<B> => args match {
+    //     #call{init} => #call{init} B match {
+    //         #req{state, msg} => #req{#body{state}, msg},
+    //         #resp{#continue{args}} => #req{#continue{args}, #stall{}},
+    //         #resp{#break{result}} => #resp{result},
+    //     },
+    //     #reply{#body{state}, msg} => #reply{state, msg} B match {
+    //         #req{state, msg} => #req{#body{state}, msg},
+    //         #resp{#continue{args}} => #req{#continue{args}, #stall{}},
+    //         #resp{#break{result}} => #resp{result},
+    //     },
+    //     #reply{#continue{args}, #cont{}} => #call{args} B match {
+    //         #req{state, msg} => #req{#body{state}, msg},
+    //         #resp{#continue{args}} => #req{#continue{args}, #stall{}},
+    //         #resp{#break{result}} => #resp{result},
+    //     },
+    // }
+
+    // proc foo {
+    //     delegate<cond> 
+    //     if x else y
+    // }
+    
+    // proc () sum {
+    //     (0, 0) 'sum_loop match {
+    //         #req{}
+    //     }
+    // }
+
+    // proc sum_loop {
+    //     0: acc => #req{(1, acc), #iter{#next{}}},
+    //     1: (acc, res) => res match {
+    //         #some{} => (0, acc) sum_loop_some match {
+                
+    //         },
+    //         #none{} => #resp{#break{acc}},
+    //     },
+    //     2: (acc, #cont{}) => {
+    //         #req{(3, acc), #item{#clone{}}},
+    //     }
+    // }
+
+    // proc sum_loop_some {
+    //     0: acc => 
+    // }
     // fn (state, args) main => match state {
     //     (0, ()) => {#req{(1, ()), #stall{}}}
     //     (1, ()) => args 'foo,

@@ -54,7 +54,7 @@ impl<'t> Compiler<'t> {
         &mut self,
         name_prefix: QualifiedName,
         file_idx: FileIndex,
-        file: ast::File,
+        file: ast::File<'t>,
     ) -> Result<(), linker::Error> {
         self.visit_namespace(file_idx, &name_prefix, file.ns)
     }
@@ -63,7 +63,7 @@ impl<'t> Compiler<'t> {
         &mut self,
         file_idx: FileIndex,
         name_prefix: &QualifiedName,
-        ns: ast::Namespace,
+        ns: ast::Namespace<'t>,
     ) -> Result<(), linker::Error> {
         let mut symbol_table = SymbolTable {
             prefix: name_prefix.clone(),
@@ -93,13 +93,13 @@ impl<'t> Compiler<'t> {
                     self.visit_namespace(file_idx, &name_prefix, ns)?;
                 }
                 ast::Decl::Fn(ast::FnDecl {
-                    _span,
+                    span,
                     binding,
                     name,
                     expression,
                 }) => {
                     let name = name_prefix.append(name.into_ir(self.sources, file_idx));
-                    self.visit_fn(file_idx, &symbol_table, binding, name, expression)?;
+                    self.visit_fn(span, file_idx, &symbol_table, binding, name, expression)?;
                 }
             }
         }
@@ -108,42 +108,24 @@ impl<'t> Compiler<'t> {
 
     fn visit_fn(
         &mut self,
+        span: pest::Span<'t>,
         file_idx: FileIndex,
         symbol_table: &SymbolTable,
         binding: ast::Binding,
         name: QualifiedName,
         expression: ast::Expression,
     ) -> Result<(), linker::Error> {
-        let expression = Expression::from_ast(expression);
-        let span = expression.span(file_idx);
-
-        let mut out = Output {
-            words: vec![],
-            locals: Locals::default(),
-        };
-        out.locals.push_unnamed();
         let ctx = FileContext {
             file_idx,
             sources: self.sources,
         };
-        let () = builder::binding(ctx, binding, &mut out)?;
-
-        let () = expression.compilation(ctx, symbol_table, &mut out)?;
-
-        if out.locals.len() != 1 {
-            let Name::User(name) = out.locals.names()[1] else {
-                panic!("unused generated name?")
-            };
-            return Err(Error::UnusedVariable {
-                location: name.location(self.sources),
-                name: name.as_str(self.sources).to_owned(),
-            });
-        }
-
-        let sentence = RecursiveSentence {
+        let anon = AnonFn {
             span,
-            words: out.words,
+            binding,
+            body: Box::new(Expression::from_ast(expression)),
         };
+
+        let sentence = anon.compilation(ctx, symbol_table)?;
 
         let mut names = NameSequence {
             base: name,
@@ -317,6 +299,10 @@ impl<'t> Compiler<'t> {
             InnerWord::Tuple(idx) => InnerWord::Tuple(idx),
             InnerWord::Untuple(idx) => InnerWord::Untuple(idx),
             InnerWord::Call(qualified_name) => InnerWord::Call(qualified_name),
+            InnerWord::InlineCall(sentence) => {
+                let name = self.visit_recursive_sentence(names, sentence);
+                InnerWord::InlineCall(name)
+            }
             InnerWord::Branch(true_case, false_case) => InnerWord::Branch(
                 self.visit_recursive_sentence(names, true_case),
                 self.visit_recursive_sentence(names, false_case),
@@ -508,7 +494,7 @@ pub enum Expression<'t> {
     Call {
         span: pest::Span<'t>,
         arg: Box<Expression<'t>>,
-        label: ast::QualifiedLabel<'t>,
+        into_fn: IntoFn<'t>,
     },
     Match {
         span: pest::Span<'t>,
@@ -533,9 +519,16 @@ pub struct MatchCase<'t> {
 impl<'t> Expression<'t> {
     pub fn from_ast(mut a: ast::Expression<'t>) -> Self {
         match a.transformers.pop() {
-            Some(ast::Transformer::Call(label)) => Self::Call {
+            Some(ast::Transformer::Call(into_fn)) => Self::Call {
                 span: a.span,
-                label,
+                into_fn: match into_fn {
+                    ast::IntoFn::QualifiedLabel(label) => IntoFn::QualifiedLabel(label),
+                    ast::IntoFn::AnonFn(anon_fn) => IntoFn::AnonFn(AnonFn {
+                        span: anon_fn.span,
+                        binding: anon_fn.binding,
+                        body: Box::new(Self::from_ast(*anon_fn.body)),
+                    }),
+                },
                 arg: Box::new(Self::from_ast(a)),
             },
             Some(ast::Transformer::Match(m)) => Self::Match {
@@ -641,18 +634,30 @@ impl<'t> Expression<'t> {
                 builder::tuple(ctx, span, len, out);
                 Ok(())
             }
-            Expression::Call { span, arg, label } => {
+            Expression::Call { span, arg, into_fn } => {
                 let span = span.into_ir(ctx.sources, ctx.file_idx);
                 let () = arg.compilation(ctx, symbol_table, out)?;
 
-                let qualified =
-                    symbol_table.resolve(ctx.sources, label.into_ir(ctx.sources, ctx.file_idx));
+                match into_fn {
+                    IntoFn::QualifiedLabel(label) => {
+                        let qualified = symbol_table
+                            .resolve(ctx.sources, label.into_ir(ctx.sources, ctx.file_idx));
+                        out.words.push(RecursiveWord {
+                            span,
+                            inner: InnerWord::Call(qualified),
+                            names: out.locals.names(),
+                        });
+                    }
+                    IntoFn::AnonFn(anon_fn) => {
+                        let sentence = anon_fn.compilation(ctx, symbol_table)?;
+                        out.words.push(RecursiveWord {
+                            span,
+                            inner: InnerWord::InlineCall(sentence),
+                            names: out.locals.names(),
+                        });
+                    }
+                }
 
-                out.words.push(RecursiveWord {
-                    span,
-                    inner: InnerWord::Call(qualified),
-                    names: out.locals.names(),
-                });
                 out.locals.pop();
                 out.locals.push_unnamed();
 
@@ -727,6 +732,59 @@ impl<'t> Spanner<'t> for Expression<'t> {
             Expression::Match { span, .. } => *span,
             Expression::If { span, .. } => *span,
         }
+    }
+}
+
+#[derive(Debug)]
+pub enum IntoFn<'t> {
+    QualifiedLabel(ast::QualifiedLabel<'t>),
+    AnonFn(AnonFn<'t>),
+}
+
+#[derive(Debug)]
+pub struct AnonFn<'t> {
+    pub span: pest::Span<'t>,
+    pub binding: ast::Binding<'t>,
+    pub body: Box<Expression<'t>>,
+}
+
+impl<'t> Spanner<'t> for AnonFn<'t> {
+    fn pest_span(&self) -> pest::Span<'t> {
+        self.span
+    }
+}
+
+impl<'t> AnonFn<'t> {
+    fn compilation(
+        self,
+        ctx: FileContext,
+        symbol_table: &SymbolTable,
+    ) -> Result<RecursiveSentence, Error> {
+        let span = self.span(ctx.file_idx);
+
+        let mut out = Output {
+            words: vec![],
+            locals: Locals::default(),
+        };
+        out.locals.push_unnamed();
+        let () = builder::binding(ctx, self.binding, &mut out)?;
+
+        let () = self.body.compilation(ctx, symbol_table, &mut out)?;
+
+        if out.locals.len() != 1 {
+            let Name::User(name) = out.locals.names()[1] else {
+                panic!("unused generated name?")
+            };
+            return Err(Error::UnusedVariable {
+                location: name.location(ctx.sources),
+                name: name.as_str(ctx.sources).to_owned(),
+            });
+        }
+
+        Ok(RecursiveSentence {
+            span,
+            words: out.words,
+        })
     }
 }
 
@@ -807,6 +865,7 @@ pub enum InnerWord<BranchRepr> {
     Tuple(usize),
     Untuple(usize),
     Call(QualifiedName),
+    InlineCall(BranchRepr),
     Branch(BranchRepr, BranchRepr),
 }
 

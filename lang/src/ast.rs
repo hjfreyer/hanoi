@@ -4,7 +4,10 @@ use pest::Parser;
 use pest_ast::FromPest;
 use pest_derive::Parser;
 
-use crate::{flat, source::{FileIndex, FileSpan}};
+use crate::{
+    flat,
+    source::{FileIndex, FileSpan},
+};
 
 #[derive(Parser)]
 #[grammar = "hanoi.pest"]
@@ -113,23 +116,16 @@ pub enum Literal<'t> {
 }
 
 impl Literal<'_> {
-    pub fn into_value(self) -> flat::Value{
-          match self {
-            Literal::Int(Int { span: _, value }) => {
-                flat::Value::Usize(value)
-            }
-            Literal::Char(Char { span: _, value }) => {
-                flat::Value::Char(value)
-            }
-            Literal::Bool(Bool { span: _, value }) => {
-                flat::Value::Bool(value)
-            }
+    pub fn into_value(self) -> flat::Value {
+        match self {
+            Literal::Int(Int { span: _, value }) => flat::Value::Usize(value),
+            Literal::Char(Char { span: _, value }) => flat::Value::Char(value),
+            Literal::Bool(Bool { span: _, value }) => flat::Value::Bool(value),
             Literal::Symbol(sym) => match sym {
-                Symbol::Identifier(identifier) => 
-                    flat::Value::Symbol(identifier.0.as_str().to_owned()),
-                Symbol::String(string_literal) => {
-                    flat::Value::Symbol(string_literal.value)
+                Symbol::Identifier(identifier) => {
+                    flat::Value::Symbol(identifier.0.as_str().to_owned())
                 }
+                Symbol::String(string_literal) => flat::Value::Symbol(string_literal.value),
             },
         }
     }
@@ -296,7 +292,7 @@ pub struct Namespace<'t> {
 #[pest_ast(rule(Rule::fn_decl))]
 pub struct FnDecl<'t> {
     #[pest_ast(outer())]
-    pub _span: pest::Span<'t>,
+    pub span: pest::Span<'t>,
     pub binding: Binding<'t>,
     pub name: Identifier<'t>,
     pub expression: Expression<'t>,
@@ -326,9 +322,25 @@ pub enum RootExpression<'t> {
 #[derive(Debug, FromPest, Spanner)]
 #[pest_ast(rule(Rule::transformer))]
 pub enum Transformer<'t> {
-    Call(QualifiedLabel<'t>),
+    Call(IntoFn<'t>),
     Match(Match<'t>),
     If(If<'t>),
+}
+
+#[derive(Debug, FromPest, Spanner)]
+#[pest_ast(rule(Rule::into_fn))]
+pub enum IntoFn<'t> {
+    QualifiedLabel(QualifiedLabel<'t>),
+    AnonFn(AnonFn<'t>),
+}
+
+#[derive(Debug, FromPest, Spanner)]
+#[pest_ast(rule(Rule::anon_fn))]
+pub struct AnonFn<'t> {
+    #[pest_ast(outer())]
+    pub span: pest::Span<'t>,
+    pub binding: Binding<'t>,
+    pub body: Box<Expression<'t>>,
 }
 
 #[derive(Debug, FromPest, Spanner)]
