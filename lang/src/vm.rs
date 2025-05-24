@@ -260,8 +260,8 @@ fn eval_builtin(stack: &mut Stack, b: Builtin) -> Result<EvalResult, BuiltinErro
         }
         Builtin::Sub => {
             stack.check_size(2)?;
-            let a: usize = stack.pop().unwrap().at_index(1)?;
-            let b: usize = stack.pop().unwrap().at_index(0)?;
+            let b: usize = stack.pop().unwrap().at_index(1)?;
+            let a: usize = stack.pop().unwrap().at_index(0)?;
             stack.push(Value::Usize(a - b));
             Ok(EvalResult::Continue)
         }

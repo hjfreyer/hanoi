@@ -206,6 +206,6 @@ fn () main_impl => {
     // let ((@nil, ()), test_iter) = ((@nil, ()), (@enumerate, ())) 'tests::main;
     // let (test_iter, (@some, @parse_empty)) = (test_iter, (@next, ())) 'tests::main;
     // let ^ = test_iter;
-    (#nil{}, #run{@new})'crate::vec::tests::main
+    (#nil{}, #run{@parse_some}) 'tests::main
     // ()
 }

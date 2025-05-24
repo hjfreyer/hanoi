@@ -9,5 +9,5 @@ sentence main {
 
 
 sentence test {
-    #call('vec::tests::main)
+    #call('main::tests::main)
 }
