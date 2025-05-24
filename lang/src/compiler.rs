@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use crate::ast::Spanner;
 use builder::{FileContext, Output};
+use from_raw_ast::Spanner;
 use itertools::Itertools;
 use typed_index_collections::TiVec;
 
@@ -307,6 +308,12 @@ impl<'t> Compiler<'t> {
                 self.visit_recursive_sentence(names, true_case),
                 self.visit_recursive_sentence(names, false_case),
             ),
+            InnerWord::JumpTable(jump_table) => InnerWord::JumpTable(
+                jump_table
+                    .into_iter()
+                    .map(|sentence| self.visit_recursive_sentence(names, sentence))
+                    .collect(),
+            ),
         };
 
         Word {
@@ -494,6 +501,11 @@ pub enum Expression<'t> {
     Call {
         span: pest::Span<'t>,
         arg: Box<Expression<'t>>,
+        label: ast::QualifiedLabel<'t>,
+    },
+    InlineCall {
+        span: pest::Span<'t>,
+        arg: Box<Expression<'t>>,
         into_fn: IntoFn<'t>,
     },
     Match {
@@ -519,16 +531,14 @@ pub struct MatchCase<'t> {
 impl<'t> Expression<'t> {
     pub fn from_ast(mut a: ast::Expression<'t>) -> Self {
         match a.transformers.pop() {
-            Some(ast::Transformer::Call(into_fn)) => Self::Call {
+            Some(ast::Transformer::Call(label)) => Self::Call {
                 span: a.span,
-                into_fn: match into_fn {
-                    ast::IntoFn::QualifiedLabel(label) => IntoFn::QualifiedLabel(label),
-                    ast::IntoFn::AnonFn(anon_fn) => IntoFn::AnonFn(AnonFn {
-                        span: anon_fn.span,
-                        binding: anon_fn.binding,
-                        body: Box::new(Self::from_ast(*anon_fn.body)),
-                    }),
-                },
+                label,
+                arg: Box::new(Self::from_ast(a)),
+            },
+            Some(ast::Transformer::InlineCall(into_fn)) => Self::InlineCall {
+                span: a.span,
+                into_fn: IntoFn::from_ast(into_fn),
                 arg: Box::new(Self::from_ast(a)),
             },
             Some(ast::Transformer::Match(m)) => Self::Match {
@@ -563,7 +573,6 @@ impl<'t> Expression<'t> {
             },
             ast::RootExpression::Tagged(tagged) => {
                 let values = vec![
-                    Self::Literal(ast::Literal::Symbol(ast::Symbol::Identifier(tagged.tag))),
                     Self::Tuple {
                         span: tagged.span,
                         values: tagged
@@ -572,6 +581,7 @@ impl<'t> Expression<'t> {
                             .map(Expression::from_ast)
                             .collect(),
                     },
+                    Self::Literal(ast::Literal::Symbol(ast::Symbol::Identifier(tagged.tag))),
                 ];
 
                 Self::Tuple {
@@ -634,30 +644,33 @@ impl<'t> Expression<'t> {
                 builder::tuple(ctx, span, len, out);
                 Ok(())
             }
-            Expression::Call { span, arg, into_fn } => {
+            Expression::Call { span, arg, label } => {
                 let span = span.into_ir(ctx.sources, ctx.file_idx);
                 let () = arg.compilation(ctx, symbol_table, out)?;
 
-                match into_fn {
-                    IntoFn::QualifiedLabel(label) => {
-                        let qualified = symbol_table
-                            .resolve(ctx.sources, label.into_ir(ctx.sources, ctx.file_idx));
-                        out.words.push(RecursiveWord {
-                            span,
-                            inner: InnerWord::Call(qualified),
-                            names: out.locals.names(),
-                        });
-                    }
-                    IntoFn::AnonFn(anon_fn) => {
-                        let sentence = anon_fn.compilation(ctx, symbol_table)?;
-                        out.words.push(RecursiveWord {
-                            span,
-                            inner: InnerWord::InlineCall(sentence),
-                            names: out.locals.names(),
-                        });
-                    }
-                }
+                let qualified =
+                    symbol_table.resolve(ctx.sources, label.into_ir(ctx.sources, ctx.file_idx));
+                out.words.push(RecursiveWord {
+                    span,
+                    inner: InnerWord::Call(qualified),
+                    names: out.locals.names(),
+                });
 
+                out.locals.pop();
+                out.locals.push_unnamed();
+
+                Ok(())
+            }
+            Expression::InlineCall { span, arg, into_fn } => {
+                let span = span.into_ir(ctx.sources, ctx.file_idx);
+                let () = arg.compilation(ctx, symbol_table, out)?;
+
+                let sentence = into_fn.compilation(ctx, symbol_table)?;
+                out.words.push(RecursiveWord {
+                    span,
+                    inner: InnerWord::InlineCall(sentence),
+                    names: out.locals.names(),
+                });
                 out.locals.pop();
                 out.locals.push_unnamed();
 
@@ -729,6 +742,7 @@ impl<'t> Spanner<'t> for Expression<'t> {
             Expression::LetBlock { span, .. } => *span,
             Expression::Tuple { span, .. } => *span,
             Expression::Call { span, .. } => *span,
+            Expression::InlineCall { span, .. } => *span,
             Expression::Match { span, .. } => *span,
             Expression::If { span, .. } => *span,
         }
@@ -737,21 +751,51 @@ impl<'t> Spanner<'t> for Expression<'t> {
 
 #[derive(Debug)]
 pub enum IntoFn<'t> {
-    QualifiedLabel(ast::QualifiedLabel<'t>),
     AnonFn(AnonFn<'t>),
+    AndThen(AndThenFn<'t>),
 }
 
-#[derive(Debug)]
+impl<'t> IntoFn<'t> {
+    pub fn from_ast(into_fn: ast::IntoFn<'t>) -> Self {
+        match into_fn {
+            ast::IntoFn::QualifiedLabel(label) => unreachable!(),
+            ast::IntoFn::AnonFn(anon_fn) => IntoFn::AnonFn(AnonFn {
+                span: anon_fn.span,
+                binding: anon_fn.binding,
+                body: Box::new(Expression::from_ast(*anon_fn.body)),
+            }),
+            ast::IntoFn::AndThen(ast::AndThenFn {
+                span,
+                first,
+                second,
+            }) => IntoFn::AndThen(AndThenFn {
+                span,
+                first: Box::new(IntoFn::from_ast(*first)),
+                second: Box::new(IntoFn::from_ast(*second)),
+            }),
+            ast::IntoFn::Loop(loop_fn) => todo!(),
+            ast::IntoFn::Do(do_fn) => todo!(),
+            ast::IntoFn::If(if_fn) => todo!(),
+        }
+    }
+
+    fn compilation(
+        self,
+        ctx: FileContext,
+        symbol_table: &SymbolTable,
+    ) -> Result<RecursiveSentence, Error> {
+        match self {
+            IntoFn::AnonFn(anon_fn) => anon_fn.compilation(ctx, symbol_table),
+            IntoFn::AndThen(and_then_fn) => and_then_fn.compilation(ctx, symbol_table),
+        }
+    }
+}
+
+#[derive(Debug, Spanner)]
 pub struct AnonFn<'t> {
     pub span: pest::Span<'t>,
     pub binding: ast::Binding<'t>,
     pub body: Box<Expression<'t>>,
-}
-
-impl<'t> Spanner<'t> for AnonFn<'t> {
-    fn pest_span(&self) -> pest::Span<'t> {
-        self.span
-    }
 }
 
 impl<'t> AnonFn<'t> {
@@ -760,7 +804,7 @@ impl<'t> AnonFn<'t> {
         ctx: FileContext,
         symbol_table: &SymbolTable,
     ) -> Result<RecursiveSentence, Error> {
-        let span = self.span(ctx.file_idx);
+        let span: FileSpan = self.span(ctx.file_idx);
 
         let mut out = Output {
             words: vec![],
@@ -785,6 +829,179 @@ impl<'t> AnonFn<'t> {
             span,
             words: out.words,
         })
+    }
+}
+
+#[derive(Debug, Spanner)]
+pub struct AndThenFn<'t> {
+    pub span: pest::Span<'t>,
+    pub first: Box<IntoFn<'t>>,
+    pub second: Box<IntoFn<'t>>,
+}
+
+// fn args and_then<A, B> => args match {
+//     #call{args} => {
+//         #call{args} A match {
+//             #req{state, msg} => #req{#a{state}, msg},
+//             #resp{a} => #call{a} B match {
+//                 #req{state, msg} => #req{#b{state}, msg},
+//                 #resp{val} => #resp{val},
+//             },
+//         }
+//     },
+//     #reply{#a{state}, msg} => #reply{state, msg} A match {
+//         #req{state, msg} => #req{#a{state}, msg},
+//         #resp{a} => #call{a} B match {
+//             #req{state, msg} => #req{#b{state}, msg},
+//             #resp{val} => #resp{val},
+//         },
+//     },
+//     #reply{#b{state}, msg} => #reply{state, msg} B match {
+//         #req{state, msg} => #req{#b{state}, msg},
+//         #resp{val} => #resp{val},
+//     },
+// }
+impl<'t> AndThenFn<'t> {
+    fn compilation(
+        self,
+        ctx: FileContext,
+        symbol_table: &SymbolTable,
+    ) -> Result<RecursiveSentence, Error> {
+        let span = self.span(ctx.file_idx);
+
+        let call_b_if_req = RecursiveSentence::single_span(
+            span,
+            vec![
+                // Stack: (state, msg) @req
+                InnerWord::Push(flat::Value::Symbol("req".to_owned())),
+                InnerWord::Builtin(flat::Builtin::AssertEq),
+                InnerWord::Untuple(2),
+                // Stack: state msg
+                InnerWord::Move(1),
+                InnerWord::Push(flat::Value::Usize(1)),
+                InnerWord::Tuple(2),
+                // Stack: msg (state, 1)
+                InnerWord::Move(1),
+                InnerWord::Tuple(2),
+                InnerWord::Push(flat::Value::Symbol("req".to_owned())),
+                InnerWord::Tuple(2),
+            ],
+        );
+        let call_b_if_resp = RecursiveSentence::single_span(
+            span,
+            vec![
+                InnerWord::Copy(0),
+                InnerWord::Push(flat::Value::Symbol("resp".to_owned())),
+                InnerWord::Builtin(flat::Builtin::AssertEq),
+                // Stack: val @resp
+                InnerWord::Tuple(2),
+            ],
+        );
+
+        let call_b = RecursiveSentence::single_span(
+            span,
+            vec![
+                InnerWord::InlineCall(self.second.compilation(ctx, symbol_table)?),
+                // Stack: (?, @req|@resp)
+                InnerWord::Untuple(2),
+                InnerWord::Copy(0),
+                InnerWord::Push(flat::Value::Symbol("req".to_owned())),
+                InnerWord::Builtin(flat::Builtin::Eq),
+                InnerWord::Branch(call_b_if_req, call_b_if_resp),
+            ],
+        );
+
+        let call_a_if_req = RecursiveSentence::single_span(
+            span,
+            vec![
+                // Stack: (state, msg) @req
+                InnerWord::Push(flat::Value::Symbol("req".to_owned())),
+                InnerWord::Builtin(flat::Builtin::AssertEq),
+                InnerWord::Untuple(2),
+                // Stack: state msg
+                InnerWord::Move(1),
+                InnerWord::Push(flat::Value::Usize(0)),
+                InnerWord::Tuple(2),
+                // Stack: msg (state, 0)
+                InnerWord::Move(1),
+                InnerWord::Tuple(2),
+                InnerWord::Push(flat::Value::Symbol("req".to_owned())),
+                InnerWord::Tuple(2),
+            ],
+        );
+        let call_a_if_resp = RecursiveSentence::single_span(
+            span,
+            vec![
+                // Stack: val @resp
+                InnerWord::Push(flat::Value::Symbol("resp".to_owned())),
+                InnerWord::Builtin(flat::Builtin::AssertEq),
+                // Stack: val @resp
+                InnerWord::Push(flat::Value::Symbol("call".to_owned())),
+                InnerWord::Tuple(2),
+                InnerWord::InlineCall(call_b.clone()),
+            ],
+        );
+
+        let call_a = RecursiveSentence::single_span(
+            span,
+            vec![
+                InnerWord::InlineCall(self.first.compilation(ctx, symbol_table)?),
+                // Stack: (?, @req|@resp)
+                InnerWord::Untuple(2),
+                InnerWord::Copy(0),
+                InnerWord::Push(flat::Value::Symbol("req".to_owned())),
+                InnerWord::Builtin(flat::Builtin::Eq),
+                InnerWord::Branch(call_a_if_req, call_a_if_resp),
+            ],
+        );
+
+        let if_call = RecursiveSentence::single_span(
+            span,
+            vec![
+                // Stack: args @call
+                InnerWord::Push(flat::Value::Symbol("call".to_owned())),
+                InnerWord::Builtin(flat::Builtin::AssertEq),
+                InnerWord::Push(flat::Value::Symbol("call".to_owned())),
+                InnerWord::Tuple(2),
+                InnerWord::InlineCall(call_a.clone()),
+            ],
+        );
+
+        let if_reply = RecursiveSentence::single_span(
+            span,
+            vec![
+                // Stack: ((state, case), msg) @reply
+                InnerWord::Push(flat::Value::Symbol("reply".to_owned())),
+                InnerWord::Builtin(flat::Builtin::AssertEq),
+                // Stack: ((state, case), msg)
+                InnerWord::Untuple(2),
+                InnerWord::Move(1),
+                InnerWord::Untuple(2),
+                // Stack: msg state case
+                InnerWord::Move(2),
+                InnerWord::Move(2),
+                InnerWord::Move(1),
+                // Stack: case state msg
+                InnerWord::Tuple(2),
+                InnerWord::Push(flat::Value::Symbol("reply".to_owned())),
+                InnerWord::Tuple(2),
+                InnerWord::Move(1),
+                // Stack: (state, msg) case
+                InnerWord::JumpTable(vec![call_a, call_b]),
+            ],
+        );
+
+        Ok(RecursiveSentence::single_span(
+            span,
+            vec![
+                // Stack: (?, @call|@reply)
+                InnerWord::Untuple(2),
+                InnerWord::Copy(0),
+                InnerWord::Push(flat::Value::Symbol("call".to_owned())),
+                InnerWord::Builtin(flat::Builtin::Eq),
+                InnerWord::Branch(if_call, if_reply),
+            ],
+        ))
     }
 }
 
@@ -848,6 +1065,25 @@ pub struct RecursiveSentence {
     pub words: Vec<RecursiveWord>,
 }
 
+impl RecursiveSentence {
+    fn single_span(
+        span: FileSpan,
+        words: impl IntoIterator<Item = InnerWord<RecursiveSentence>>,
+    ) -> Self {
+        Self {
+            span,
+            words: words
+                .into_iter()
+                .map(|inner| RecursiveWord {
+                    span,
+                    inner,
+                    names: vec![],
+                })
+                .collect(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct RecursiveWord {
     pub span: FileSpan,
@@ -867,6 +1103,7 @@ pub enum InnerWord<BranchRepr> {
     Call(QualifiedName),
     InlineCall(BranchRepr),
     Branch(BranchRepr, BranchRepr),
+    JumpTable(Vec<BranchRepr>),
 }
 
 pub trait IntoIr<'t, I> {
@@ -1208,7 +1445,13 @@ mod builder {
             ast::Binding::Tuple(tuple_binding) => {
                 let tmp_names = untuple(ctx, span, tuple_binding.bindings.len(), out);
 
-                for (name, b) in tmp_names.into_iter().zip_eq(tuple_binding.bindings) {
+                for (name, b) in tmp_names
+                    .into_iter()
+                    .zip_eq(tuple_binding.bindings)
+                    .collect_vec()
+                    .into_iter()
+                    .rev()
+                {
                     let () = builder::mv(ctx, span, name, out)?;
                     let () = binding(ctx, b, out)?;
                 }
@@ -1251,6 +1494,9 @@ mod builder {
                     .iter()
                     .rev()
                     .zip_eq(tuple_binding.bindings.iter().rev())
+                    .collect_vec()
+                    .into_iter()
+                    .rev()
                 {
                     let consumed_copy = true_case_consumes.clone();
                     true_case = Box::new(|out: &mut Output| {
@@ -1297,10 +1543,10 @@ mod builder {
         ast::TupleBinding {
             span: tagged_binding.span,
             bindings: vec![
+                ast::Binding::Tuple(inner_binding),
                 ast::Binding::Literal(ast::Literal::Symbol(ast::Symbol::Identifier(
                     tagged_binding.tag.clone(),
                 ))),
-                ast::Binding::Tuple(inner_binding),
             ],
         }
     }

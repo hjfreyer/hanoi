@@ -103,6 +103,46 @@ mod ints {
     }
 }
 
+// fn args iter_sum => {
+//     args c#and_then
+//         c#do fn () => 0
+//     then
+//         c#loop
+//             c#and_then
+//                 fn args => args match {
+//                     #start{acc} => #req{acc, #iter{#next{}}},
+//                     #reply{acc, resp} => #resp{(acc, resp)},
+//                 }
+//             then
+//                 c#and_then
+//                     c#do fn (acc, resp) => (acc, (#some{}, resp) 'builtin::eq)
+//                 then
+//                     c#if
+//                         c#and_then
+//                             fn args => args match {
+//                                 #start{acc} => #req{acc, #iter{#item{#clone{}}}},
+//                                 #reply{acc, resp} => #resp{(acc, resp)},
+//                             }
+//                         then
+//                             c#do fn (acc, int) => #continue{(acc, int) 'builtin::add}
+//                     else
+//                         c#do fn acc => #break{acc}
+// }
+
+
+fn args and_then_test => {
+    args c#and_then
+        fn arg => arg match {
+            #call{()} => #req{42, #next{}},
+            #reply{42, #some{}} => #resp{55},
+        }
+    then
+        fn arg => arg match {
+            #call{55} => #req{56, #yetmore{}},
+            #reply{56, #another{}} => #resp{57},
+        }
+}
+
 fn method map_iter => {
     method match {
         #next{#start{iter, fn}} => {
@@ -193,6 +233,10 @@ fn (self, method) split_iter => {
 }
 
 fn () main_impl => {
+    let #req{m, #next{}} = #call{()} 'and_then_test;
+    let #req{m, #yetmore{}} = #reply{m, #some{}} 'and_then_test;
+    let #resp{57} = #reply{m, #another{}} 'and_then_test;
+
     // let m = () 'map::alloc;
     // let (m, (@iter, (@next, ()))) = (m, (@next, ())) 'map::main;
     // let (m, (@fn, (@apply, 3))) = (m, (@some, 3)) 'map::main;
@@ -205,7 +249,8 @@ fn () main_impl => {
 
     // let ((@nil, ()), test_iter) = ((@nil, ()), (@enumerate, ())) 'tests::main;
     // let (test_iter, (@some, @parse_empty)) = (test_iter, (@next, ())) 'tests::main;
-    // let ^ = test_iter;
-    (#nil{}, #run{@parse_some}) 'tests::main
-    // ()
+    // (#nil{}, #run{@parse_some}) 'tests::main
+
+
+    ()
 }

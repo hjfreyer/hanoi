@@ -24,7 +24,7 @@ macro_rules! symbol {
     };
 }
 macro_rules! tagged {
-    ($tag:ident {$($x:expr),* $(,)?}) => {tuple![symbol!(stringify!($tag)), tuple![$($x),*]]};
+    ($tag:ident {$($x:expr),* $(,)?}) => {tuple![tuple![$($x),*], symbol!(stringify!($tag))]};
 }
 // use crate::ast::{
 //     self, ident_from_pair, Bindings, Identifier, Literal, PathOrIdent, FnMatchBlock,
@@ -862,13 +862,13 @@ impl<'a> std::fmt::Display for ValueView<'a> {
             Value::Bool(arg0) => write!(f, "{}", arg0),
             Value::Tuple(values) => {
                 if values.len() == 2
-                    && values[0].r#type() == ValueType::Symbol
-                    && values[1].r#type() == ValueType::Tuple
+                    && values[0].r#type() == ValueType::Tuple
+                    && values[1].r#type() == ValueType::Symbol
                 {
-                    let Value::Symbol(symbol) = &values[0] else {
+                    let Value::Tuple(args) = &values[0] else {
                         panic!()
                     };
-                    let Value::Tuple(args) = &values[1] else {
+                    let Value::Symbol(symbol) = &values[1] else {
                         panic!()
                     };
                     write!(

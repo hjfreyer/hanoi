@@ -174,6 +174,18 @@ impl<'t> Compiler<'t> {
                     .expect("generated names should always exist");
                 flat::InnerWord::Branch(*true_idx, *false_idx)
             }
+            compiler::InnerWord::JumpTable(table) => {
+                let indices = table
+                    .iter()
+                    .map(|name| {
+                        self.index
+                            .get(&name.as_ref(self.sources))
+                            .copied()
+                            .expect("generated names should always exist")
+                    })
+                    .collect();
+                flat::InnerWord::JumpTable(indices)
+            }
         };
 
         Ok(flat::Word {

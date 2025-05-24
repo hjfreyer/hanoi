@@ -120,10 +120,10 @@ impl<'a> Iterator for IterReader<'a> {
         let Some(Value::Tuple(mut t)) = self.vm.stack.pop() else {
             panic!()
         };
+        let iter = t.pop().unwrap();
         let Value::Tuple(mut item) = t.pop().unwrap() else {
             panic!()
         };
-        let iter = t.pop().unwrap();
         assert!(t.is_empty());
 
         self.iter_value = Some(iter);
