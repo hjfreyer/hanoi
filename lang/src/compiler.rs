@@ -6,9 +6,11 @@ use from_raw_ast::Spanner;
 use itertools::Itertools;
 use typed_index_collections::TiVec;
 
+use crate::flat;
+use crate::flat::symbol;
 use crate::{
     ast::{self, NamespaceDecl},
-    flat::{self, SentenceIndex},
+    flat::SentenceIndex,
     linker::{self, Error},
     source::{self, FileIndex, FileSpan, Sources},
 };
@@ -753,6 +755,7 @@ impl<'t> Spanner<'t> for Expression<'t> {
 pub enum IntoFn<'t> {
     AnonFn(AnonFn<'t>),
     AndThen(AndThenFn<'t>),
+    Await(AwaitFn<'t>),
 }
 
 impl<'t> IntoFn<'t> {
@@ -773,6 +776,11 @@ impl<'t> IntoFn<'t> {
                 first: Box::new(IntoFn::from_ast(*first)),
                 second: Box::new(IntoFn::from_ast(*second)),
             }),
+            ast::IntoFn::Await(ast::AwaitFn { span, first, second }) => IntoFn::Await(AwaitFn {
+                span,
+                first: Box::new(IntoFn::from_ast(*first)),
+                second: Box::new(IntoFn::from_ast(*second)),
+            }),
             ast::IntoFn::Loop(loop_fn) => todo!(),
             ast::IntoFn::Do(do_fn) => todo!(),
             ast::IntoFn::If(if_fn) => todo!(),
@@ -787,6 +795,7 @@ impl<'t> IntoFn<'t> {
         match self {
             IntoFn::AnonFn(anon_fn) => anon_fn.compilation(ctx, symbol_table),
             IntoFn::AndThen(and_then_fn) => and_then_fn.compilation(ctx, symbol_table),
+            IntoFn::Await(await_fn) => await_fn.compilation(ctx, symbol_table),
         }
     }
 }
@@ -839,6 +848,43 @@ pub struct AndThenFn<'t> {
     pub second: Box<IntoFn<'t>>,
 }
 
+macro_rules! word {
+    (push(@ $sym:ident)) => {
+        InnerWord::Push(flat::Value::Symbol(stringify!($sym).to_owned()))
+    };
+    (push($val:expr)) => {
+        InnerWord::Push(flat::Value::from($val))
+    };
+    (tuple($val:expr)) => {
+        InnerWord::Tuple($val)
+    };
+    (untuple($val:expr)) => {
+        InnerWord::Untuple($val)
+    };
+    (mv($val:expr)) => {
+        InnerWord::Move($val)
+    };
+    (cp($val:expr)) => {
+        InnerWord::Copy($val)
+    };
+    (inline_call($call:expr)) => {
+        InnerWord::InlineCall($call)
+    };
+    (branch($true_case:expr, $false_case:expr)) => {
+        InnerWord::Branch($true_case, $false_case)
+    };
+    (jump_table($cases:expr)) => {
+        InnerWord::JumpTable($cases)
+    };
+    ($tag:ident) => {
+        InnerWord::Builtin(flat::Builtin::$tag)
+    };
+}
+
+macro_rules! sentence {
+    [$($tag:ident$(($($args:tt)*))?,)*] => {vec![$(word!($tag$(($($args)*))?),)*]};
+}
+
 // fn args and_then<A, B> => args match {
 //     #call{args} => {
 //         #call{args} A match {
@@ -871,20 +917,15 @@ impl<'t> AndThenFn<'t> {
 
         let call_b_if_req = RecursiveSentence::single_span(
             span,
-            vec![
+            sentence![
                 // Stack: (state, msg) @req
-                InnerWord::Push(flat::Value::Symbol("req".to_owned())),
-                InnerWord::Builtin(flat::Builtin::AssertEq),
-                InnerWord::Untuple(2),
+                push(@req), AssertEq, untuple(2),
+
                 // Stack: state msg
-                InnerWord::Move(1),
-                InnerWord::Push(flat::Value::Usize(1)),
-                InnerWord::Tuple(2),
+                mv(1), push(1), tuple(2),
+
                 // Stack: msg (state, 1)
-                InnerWord::Move(1),
-                InnerWord::Tuple(2),
-                InnerWord::Push(flat::Value::Symbol("req".to_owned())),
-                InnerWord::Tuple(2),
+                mv(1), tuple(2), push(@req), tuple(2),
             ],
         );
         let call_b_if_resp = RecursiveSentence::single_span(
@@ -1000,6 +1041,139 @@ impl<'t> AndThenFn<'t> {
                 InnerWord::Push(flat::Value::Symbol("call".to_owned())),
                 InnerWord::Builtin(flat::Builtin::Eq),
                 InnerWord::Branch(if_call, if_reply),
+            ],
+        ))
+    }
+}
+
+#[derive(Debug, Spanner)]
+pub struct AwaitFn<'t> {
+    pub span: pest::Span<'t>,
+    pub first: Box<IntoFn<'t>>,
+    pub second: Box<IntoFn<'t>>,
+}
+
+impl<'t> AwaitFn<'t> {
+    // fn await<A, B> = match {
+    //     #call{args} => {
+    //       let (state, msg) = #call{args} A;
+    //       #req{(state, 0), msg}
+    //     },
+    //     #reply{(state, 0), msg)} => #call{state, msg} B match {
+    //       #req{state, msg} => #req{(state, 1), msg},
+    //       #resp{msg} => #resp{msg},
+    //     }
+    //     #reply{(state, 1), msg)} => #reply{state, msg} B match {
+    //       #req{state, msg} => #req{(state, 1), msg},
+    //       #resp{msg} => #resp{msg},
+    //     }
+    //   }
+    fn compilation(
+        self,
+        ctx: FileContext,
+        symbol_table: &SymbolTable,
+    ) -> Result<RecursiveSentence, Error> {
+        let span = self.span(ctx.file_idx);
+
+        let call_b_if_req = RecursiveSentence::single_span(
+            span,
+            sentence![
+                // Stack: (state, msg) @req
+                push(@req), AssertEq, untuple(2),
+
+                // Stack: state msg
+                mv(1), push(1), tuple(2),
+
+                // Stack: msg (state, 1)
+                mv(1), tuple(2), push(@req), tuple(2),
+
+                // Stack: #req{(state, 1), msg}
+            ],
+        );
+        let call_b_if_resp = RecursiveSentence::single_span(
+            span,
+            sentence![
+                cp(0), push(@resp), AssertEq,
+                // Stack: val @resp
+                tuple(2),
+            ],
+        );
+
+        let call_b = RecursiveSentence::single_span(
+            span,
+            sentence![
+                inline_call(self.second.compilation(ctx, symbol_table)?),
+                // Stack: (?, @req|@resp)
+                untuple(2),
+                cp(0),
+                push(@req),
+                Eq,
+                branch(call_b_if_req, call_b_if_resp),
+            ],
+        );
+        let call_a = RecursiveSentence::single_span(
+            span,
+            sentence![
+                inline_call(self.first.compilation(ctx, symbol_table)?),
+                // Stack: (state, msg)
+                untuple(2),
+
+                // Stack: state msg
+                mv(1), push(0), tuple(2),
+                // Stack: msg (state, 0)
+                mv(1), tuple(2), push(@req), tuple(2),
+                // Stack: #req{(state, 0), msg}
+            ],
+        );
+
+        let if_call = RecursiveSentence::single_span(
+            span,
+            sentence![
+                // Stack: args @call
+                push(@call), AssertEq, inline_call(call_a),
+            ],
+        );
+
+        let first_reply = RecursiveSentence::single_span(
+            span,
+            sentence![
+                // Stack: msg state
+                mv(1), tuple(2), push(@call), tuple(2),
+                // Stack: #call{state, msg}
+                inline_call(call_b.clone()),
+            ],
+        );
+        let subsequent_reply = RecursiveSentence::single_span(
+            span,
+            sentence![
+                // Stack: msg state
+                mv(1), tuple(2), push(@reply), tuple(2),
+                // Stack: #reply{state, msg}
+                inline_call(call_b),
+            ],
+        );
+
+        let if_reply = RecursiveSentence::single_span(
+            span,
+            sentence![
+                // Stack: ((state, case), msg) @reply
+                push(@reply), AssertEq,
+                // Stack: ((state, case), msg)
+                untuple(2), mv(1), untuple(2),
+                // Stack: msg state case
+                jump_table(vec![first_reply, subsequent_reply]),
+            ],
+        );
+
+        Ok(RecursiveSentence::single_span(
+            span,
+            sentence![
+                untuple(2),
+                // Stack: (?, @call|@reply)
+                cp(0),
+                push(@call),
+                Eq,
+                branch(if_call, if_reply),
             ],
         ))
     }

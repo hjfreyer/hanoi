@@ -145,6 +145,7 @@ match_case = { binding ~ "=>" ~ expr ~ "," }
 into_fn = {
   anon_fn
   | and_then_fn
+  | await_fn
   | do_fn
   | loop_fn
   | if_fn
@@ -156,6 +157,10 @@ anon_fn = {
 
 and_then_fn = {
   "c#and_then" ~ into_fn ~ "then" ~ into_fn
+}
+
+await_fn = {
+  "c#await" ~ into_fn ~ "then" ~ into_fn
 }
 
 do_fn = {

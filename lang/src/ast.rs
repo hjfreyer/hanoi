@@ -334,6 +334,7 @@ pub enum IntoFn<'t> {
     QualifiedLabel(QualifiedLabel<'t>),
     AnonFn(AnonFn<'t>),
     AndThen(AndThenFn<'t>),
+    Await(AwaitFn<'t>),
     Loop(LoopFn<'t>),
     Do(DoFn<'t>),
     If(IfFn<'t>),
@@ -351,6 +352,15 @@ pub struct AnonFn<'t> {
 #[derive(Debug, FromPest, Spanner)]
 #[pest_ast(rule(Rule::and_then_fn))]
 pub struct AndThenFn<'t> {
+    #[pest_ast(outer())]
+    pub span: pest::Span<'t>,
+    pub first: Box<IntoFn<'t>>,
+    pub second: Box<IntoFn<'t>>,
+}
+
+#[derive(Debug, FromPest, Spanner)]
+#[pest_ast(rule(Rule::await_fn))]
+pub struct AwaitFn<'t> {
     #[pest_ast(outer())]
     pub span: pest::Span<'t>,
     pub first: Box<IntoFn<'t>>,
