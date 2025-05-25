@@ -27,9 +27,9 @@ macro_rules! tagged {
     ($tag:ident {$($x:expr),* $(,)?}) => {tuple![tuple![$($x),*], symbol!(stringify!($tag))]};
 }
 
-pub(crate) use tuple;
 pub(crate) use symbol;
 pub(crate) use tagged;
+pub(crate) use tuple;
 
 // use crate::ast::{
 //     self, ident_from_pair, Bindings, Identifier, Literal, PathOrIdent, FnMatchBlock,

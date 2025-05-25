@@ -1103,7 +1103,6 @@ impl<'t> AwaitFn<'t> {
     }
 }
 
-
 #[derive(Debug, Spanner)]
 pub struct DoFn<'t> {
     pub span: pest::Span<'t>,
@@ -1113,7 +1112,7 @@ pub struct DoFn<'t> {
 impl<'t> DoFn<'t> {
     // fn args do<T> => {
     //   let #call{args} = args;
-    //   #resp{args T} 
+    //   #resp{args T}
     // }
     fn compilation(
         self,
