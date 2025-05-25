@@ -758,6 +758,7 @@ pub enum IntoFn<'t> {
     Await(AwaitFn<'t>),
     Do(DoFn<'t>),
     Loop(LoopFn<'t>),
+    If(IfFn<'t>),
 }
 impl<'t> IntoFn<'t> {
     pub fn from_ast(into_fn: ast::IntoFn<'t>) -> Self {
@@ -789,7 +790,15 @@ impl<'t> IntoFn<'t> {
                 span,
                 body: Box::new(IntoFn::from_ast(*body)),
             }),
-            ast::IntoFn::If(if_fn) => todo!(),
+            ast::IntoFn::If(ast::IfFn {
+                span,
+                true_case,
+                false_case,
+            }) => IntoFn::If(IfFn {
+                span,
+                true_case: Box::new(IntoFn::from_ast(*true_case)),
+                false_case: Box::new(IntoFn::from_ast(*false_case)),
+            }),
         }
     }
 
@@ -804,6 +813,7 @@ impl<'t> IntoFn<'t> {
             IntoFn::Await(await_fn) => await_fn.compilation(ctx, symbol_table),
             IntoFn::Do(do_fn) => do_fn.compilation(ctx, symbol_table),
             IntoFn::Loop(loop_fn) => loop_fn.compilation(ctx, symbol_table),
+            IntoFn::If(if_fn) => if_fn.compilation(ctx, symbol_table),
         }
     }
 }
@@ -1059,10 +1069,7 @@ pub struct AwaitFn<'t> {
 
 impl<'t> AwaitFn<'t> {
     // fn await<T> = match {
-    //     #call{args} => {
-    //       let (state, msg) = #call{args} T;
-    //       #req{state, msg}
-    //     },
+    //     #call{args} => args T
     //     #reply{state, msg} => #resp{state, msg},
     //   }
     fn compilation(
@@ -1077,8 +1084,6 @@ impl<'t> AwaitFn<'t> {
                 // Stack: (args) @call
                 push(@call), AssertEq, untuple(1),
                 inline_call(self.body.compilation(ctx, symbol_table)?),
-                // Stack: (state, msg)
-                push(@req), tuple(2),
             ],
         );
 
@@ -1262,6 +1267,152 @@ impl<'t> LoopFn<'t> {
                     if_reply_to_req,
                     if_reply_to_stall,
                 ]),
+            ],
+        );
+
+        Ok(RecursiveSentence::single_span(
+            span,
+            sentence![
+                // Stack: (?, @call|@reply)
+                untuple(2),
+                cp(0),
+                push(@call),
+                Eq,
+                branch(if_call, if_reply),
+            ],
+        ))
+    }
+}
+
+#[derive(Debug, Spanner)]
+pub struct IfFn<'t> {
+    pub span: pest::Span<'t>,
+    pub true_case: Box<IntoFn<'t>>,
+    pub false_case: Box<IntoFn<'t>>,
+}
+
+impl<'t> IfFn<'t> {
+    // fn if<T, F> => match {
+    //   #call{(arg, cond)} => cond if {
+    //     arg T match {
+    //         #req{state, msg} => #req{(state, true), msg},
+    //         #resp{msg} => #resp{msg},
+    //     }
+    //   } else {
+    //     arg F match {
+    //         #req{state, msg} => #req{(state, false), msg},
+    //         #resp{msg} => #resp{msg},
+    //     }
+    //   }
+    //   #reply{(state, true), msg} => #reply{state, msg} T ...,
+    //   #reply{(state, false), msg} => #reply{state, msg} F ...,
+    // }
+    fn compilation(
+        self,
+        ctx: FileContext,
+        symbol_table: &SymbolTable,
+    ) -> Result<RecursiveSentence, Error> {
+        let span = self.span(ctx.file_idx);
+
+        fn call_if_req(span: FileSpan, cond: bool) -> RecursiveSentence {
+            RecursiveSentence::single_span(
+                span,
+                sentence![
+                    // Stack: (state, msg) @req
+                    push(@req), AssertEq, untuple(2),
+                    // Stack: state msg
+                    mv(1), push(cond), tuple(2),
+                    // Stack: msg (state, cond)
+                    mv(1), tuple(2),
+                    // Stack: ((state, cond), msg)
+                    push(@req), tuple(2),
+                    // Stack: #req{(state, cond), msg}
+                ],
+            )
+        }
+        let call_either_if_resp = RecursiveSentence::single_span(
+            span,
+            sentence![
+                // Stack: (val) @resp
+                push(@resp), AssertEq,
+                // Stack: (val)
+                push(@resp), tuple(2),
+            ],
+        );
+
+        let call_true = RecursiveSentence::single_span(
+            span,
+            sentence![
+                // Stack: args
+                inline_call(self.true_case.compilation(ctx, symbol_table)?),
+                untuple(2),
+                // Stack: ? @req|@resp
+                cp(0), push(@req), Eq,
+                branch(call_if_req(span, true), call_either_if_resp.clone()),
+            ],
+        );
+
+        let call_false = RecursiveSentence::single_span(
+            span,
+            sentence![
+                // Stack: args
+                inline_call(self.false_case.compilation(ctx, symbol_table)?),
+                untuple(2),
+                // Stack: ? @req|@resp
+                cp(0), push(@req), Eq,
+                branch(call_if_req(span, false), call_either_if_resp),
+            ],
+        );
+
+        let if_reply_and_true = RecursiveSentence::single_span(
+            span,
+            sentence![
+                // Stack: msg state
+                mv(1), tuple(2), push(@reply), tuple(2),
+                // Stack: #reply{state, msg}
+                inline_call(call_true.clone()),
+            ],
+        );
+
+        let if_reply_and_false = RecursiveSentence::single_span(
+            span,
+            sentence![
+                // Stack: msg state
+                mv(1), tuple(2), push(@reply), tuple(2),
+                // Stack: #reply{state, msg}
+                inline_call(call_false.clone()),
+            ],
+        );
+
+        let if_reply = RecursiveSentence::single_span(
+            span,
+            sentence![
+                // Stack: ((state, cond), msg) @reply
+                push(@reply), AssertEq, untuple(2),
+                // Stack: (state, cond) msg
+                mv(1), untuple(2),
+                // Stack: msg state cond
+                branch(
+                    if_reply_and_true,
+                    if_reply_and_false
+                ),
+            ],
+        );
+
+        let if_call = RecursiveSentence::single_span(
+            span,
+            sentence![
+                // Stack: (arg, cond) @call
+                push(@call), AssertEq, untuple(1), untuple(2), mv(1),
+
+                // Stack: cond arg
+                tuple(1), push(@call), tuple(2), mv(1),
+
+                // Stack: #call{arg} cond
+                branch(
+                    call_true,
+                    call_false
+                ),
             ],
         );
 

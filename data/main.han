@@ -103,36 +103,26 @@ mod ints {
     }
 }
 
-// fn args iter_sum => {
-//     args c#and_then
-//         c#do fn () => 0
-//     then
-//         c#loop c#and_then
-//             c#await fn acc => (acc, #iter{#next{}})
-//         then
-//             c#await fn (acc, reply) => match reply {
-//                 #some{item} => (acc, #item{item}),
-//             }
-
-//                 fn args => args match {
-//                     #start{acc} => #req{acc, #iter{#next{}}},
-//                     #reply{acc, resp} => #resp{(acc, resp)},
-//                 }
-//             then
-//                 c#and_then
-//                     c#do fn (acc, resp) => (acc, (#some{}, resp) 'builtin::eq)
-//                 then
-//                     c#if
-//                         c#and_then
-//                             fn args => args match {
-//                                 #start{acc} => #req{acc, #iter{#item{#clone{}}}},
-//                                 #reply{acc, resp} => #resp{(acc, resp)},
-//                             }
-//                         then
-//                             c#do fn (acc, int) => #continue{(acc, int) 'builtin::add}
-//                     else
-//                         c#do fn acc => #break{acc}
-// }
+fn args iter_sum => {
+    args c#and_then
+        c#do fn () => 0
+    then
+        c#loop c#and_then
+            c#await fn acc => #req{acc, #iter{#next{}}}
+        then c#and_then
+            c#await fn (acc, reply) => reply match {
+                #some{} => #resp{(acc, true)},
+                #none{} => #resp{(acc, false)},
+            }
+        then
+            c#if 
+                c#and_then
+                    c#await fn acc => #req{acc, #iter{#item{#clone{}}}}
+                then
+                    c#do fn (acc, item) => #continue{(acc, item) 'builtin::add}
+            else 
+                c#do fn acc => #break{acc}
+}
 
 
 fn args and_then_test => {
@@ -247,9 +237,17 @@ fn (self, method) split_iter => {
 }
 
 fn () main_impl => {
-    let #req{m, #next{}} = #call{()} 'await_test;
-    let #req{m, #another{}} = #reply{m, #some{}} 'await_test;
-    let #resp{57} = #reply{m, #yetmore{}} 'await_test;
+    let #req{m, #iter{#next{}}} = #call{()} 'iter_sum;
+    let #req{m, #iter{#item{#clone{}}}} = #reply{m, #some{}} 'iter_sum;
+    let #req{m, #stall{}} = #reply{m, 4} 'iter_sum;
+    let #req{m, #iter{#next{}}} = #reply{m, #continue{}} 'iter_sum;
+    let #req{m, #iter{#item{#clone{}}}} = #reply{m, #some{}} 'iter_sum;
+    let #req{m, #stall{}} = #reply{m, 8} 'iter_sum;
+    let #req{m, #iter{#next{}}} = #reply{m, #continue{}} 'iter_sum;
+    let #resp{12} = #reply{m, #none{}} 'iter_sum;
+
+    // let #req{m, #another{}} = #reply{m, #some{}} 'await_test;
+    // let #resp{57} = #reply{m, #yetmore{}} 'await_test;
     // let #req{m, #yetmore{}} = #reply{m, #some{}} 'and_then_test;
     // let #resp{57} = #reply{m, #another{}} 'and_then_test;
 
@@ -266,6 +264,6 @@ fn () main_impl => {
     // let ((@nil, ()), test_iter) = ((@nil, ()), (@enumerate, ())) 'tests::main;
     // let (test_iter, (@some, @parse_empty)) = (test_iter, (@next, ())) 'tests::main;
     // (#nil{}, #run{@parse_some}) 'tests::main
-
+    // let ^ = m;
     ()
 }
