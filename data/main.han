@@ -149,7 +149,7 @@ fn args await_test => {
     then c#and_then
         c#await fn (42, #some{}) => (55, #another{})
     then
-        fn #call{55, #yetmore{}} => #resp{57}
+        c#do fn (55, #yetmore{}) => 57
 }
 
 fn method map_iter => {
@@ -244,7 +244,7 @@ fn (self, method) split_iter => {
 fn () main_impl => {
     let #req{m, #next{}} = #call{} 'await_test;
     let #req{m, #another{}} = #reply{m, #some{}} 'await_test;
-    let #resp{57} = #reply{m, #yetmore{}} 'await_test;
+    let (57, @resp) = #reply{m, #yetmore{}} 'await_test;
     // let #req{m, #yetmore{}} = #reply{m, #some{}} 'and_then_test;
     // let #resp{57} = #reply{m, #another{}} 'and_then_test;
 

@@ -756,8 +756,8 @@ pub enum IntoFn<'t> {
     AnonFn(AnonFn<'t>),
     AndThen(AndThenFn<'t>),
     Await(AwaitFn<'t>),
+    Do(DoFn<'t>),
 }
-
 impl<'t> IntoFn<'t> {
     pub fn from_ast(into_fn: ast::IntoFn<'t>) -> Self {
         match into_fn {
@@ -780,8 +780,11 @@ impl<'t> IntoFn<'t> {
                 span,
                 body: Box::new(IntoFn::from_ast(*body)),
             }),
+            ast::IntoFn::Do(do_fn) => IntoFn::Do(DoFn {
+                span: do_fn.span,
+                body: Box::new(IntoFn::from_ast(*do_fn.body)),
+            }),
             ast::IntoFn::Loop(loop_fn) => todo!(),
-            ast::IntoFn::Do(do_fn) => todo!(),
             ast::IntoFn::If(if_fn) => todo!(),
         }
     }
@@ -795,6 +798,7 @@ impl<'t> IntoFn<'t> {
             IntoFn::AnonFn(anon_fn) => anon_fn.compilation(ctx, symbol_table),
             IntoFn::AndThen(and_then_fn) => and_then_fn.compilation(ctx, symbol_table),
             IntoFn::Await(await_fn) => await_fn.compilation(ctx, symbol_table),
+            IntoFn::Do(do_fn) => do_fn.compilation(ctx, symbol_table),
         }
     }
 }
@@ -1094,6 +1098,38 @@ impl<'t> AwaitFn<'t> {
                 push(@call),
                 Eq,
                 branch(if_call, if_reply),
+            ],
+        ))
+    }
+}
+
+
+#[derive(Debug, Spanner)]
+pub struct DoFn<'t> {
+    pub span: pest::Span<'t>,
+    pub body: Box<IntoFn<'t>>,
+}
+
+impl<'t> DoFn<'t> {
+    // fn args do<T> => {
+    //   let #call{args} = args;
+    //   #resp{args T} 
+    // }
+    fn compilation(
+        self,
+        ctx: FileContext,
+        symbol_table: &SymbolTable,
+    ) -> Result<RecursiveSentence, Error> {
+        let span = self.span(ctx.file_idx);
+        Ok(RecursiveSentence::single_span(
+            span,
+            sentence![
+                // Stack: #call{args}
+                untuple(2), push(@call), AssertEq,
+                // Stack: args
+                inline_call(self.body.compilation(ctx, symbol_table)?),
+                // Stack: resp
+                push(@resp), tuple(2),
             ],
         ))
     }
