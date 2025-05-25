@@ -6,8 +6,8 @@ use from_raw_ast::Spanner;
 use itertools::Itertools;
 use typed_index_collections::TiVec;
 
-use crate::flat;
 use crate::flat::symbol;
+use crate::flat::{self, tagged};
 use crate::{
     ast::{self, NamespaceDecl},
     flat::SentenceIndex,
@@ -757,6 +757,7 @@ pub enum IntoFn<'t> {
     AndThen(AndThenFn<'t>),
     Await(AwaitFn<'t>),
     Do(DoFn<'t>),
+    Loop(LoopFn<'t>),
 }
 impl<'t> IntoFn<'t> {
     pub fn from_ast(into_fn: ast::IntoFn<'t>) -> Self {
@@ -784,7 +785,10 @@ impl<'t> IntoFn<'t> {
                 span: do_fn.span,
                 body: Box::new(IntoFn::from_ast(*do_fn.body)),
             }),
-            ast::IntoFn::Loop(loop_fn) => todo!(),
+            ast::IntoFn::Loop(ast::LoopFn { span, body }) => IntoFn::Loop(LoopFn {
+                span,
+                body: Box::new(IntoFn::from_ast(*body)),
+            }),
             ast::IntoFn::If(if_fn) => todo!(),
         }
     }
@@ -799,6 +803,7 @@ impl<'t> IntoFn<'t> {
             IntoFn::AndThen(and_then_fn) => and_then_fn.compilation(ctx, symbol_table),
             IntoFn::Await(await_fn) => await_fn.compilation(ctx, symbol_table),
             IntoFn::Do(do_fn) => do_fn.compilation(ctx, symbol_table),
+            IntoFn::Loop(loop_fn) => loop_fn.compilation(ctx, symbol_table),
         }
     }
 }
@@ -933,25 +938,24 @@ impl<'t> AndThenFn<'t> {
         );
         let call_b_if_resp = RecursiveSentence::single_span(
             span,
-            vec![
-                InnerWord::Copy(0),
-                InnerWord::Push(flat::Value::Symbol("resp".to_owned())),
-                InnerWord::Builtin(flat::Builtin::AssertEq),
-                // Stack: val @resp
-                InnerWord::Tuple(2),
+            sentence![
+                // Stack: (val) @resp
+                push(@resp), AssertEq,
+                // Stack: (val)
+                push(@resp), tuple(2),
             ],
         );
 
         let call_b = RecursiveSentence::single_span(
             span,
-            vec![
-                InnerWord::InlineCall(self.second.compilation(ctx, symbol_table)?),
+            sentence![
+                inline_call(self.second.compilation(ctx, symbol_table)?),
+                untuple(2),
                 // Stack: (?, @req|@resp)
-                InnerWord::Untuple(2),
-                InnerWord::Copy(0),
-                InnerWord::Push(flat::Value::Symbol("req".to_owned())),
-                InnerWord::Builtin(flat::Builtin::Eq),
-                InnerWord::Branch(call_b_if_req, call_b_if_resp),
+                cp(0),
+                push(@req),
+                Eq,
+                branch(call_b_if_req, call_b_if_resp),
             ],
         );
 
@@ -975,14 +979,12 @@ impl<'t> AndThenFn<'t> {
         );
         let call_a_if_resp = RecursiveSentence::single_span(
             span,
-            vec![
-                // Stack: val @resp
-                InnerWord::Push(flat::Value::Symbol("resp".to_owned())),
-                InnerWord::Builtin(flat::Builtin::AssertEq),
-                // Stack: val @resp
-                InnerWord::Push(flat::Value::Symbol("call".to_owned())),
-                InnerWord::Tuple(2),
-                InnerWord::InlineCall(call_b.clone()),
+            sentence![
+                // Stack: (val) @resp
+                push(@resp), AssertEq,
+                // Stack: (val)
+                push(@call), tuple(2),
+                inline_call(call_b.clone()),
             ],
         );
 
@@ -1072,8 +1074,9 @@ impl<'t> AwaitFn<'t> {
         let if_call = RecursiveSentence::single_span(
             span,
             sentence![
-                // Stack: args @call
-                push(@call), AssertEq, inline_call(self.body.compilation(ctx, symbol_table)?),
+                // Stack: (args) @call
+                push(@call), AssertEq, untuple(1),
+                inline_call(self.body.compilation(ctx, symbol_table)?),
                 // Stack: (state, msg)
                 push(@req), tuple(2),
             ],
@@ -1085,7 +1088,7 @@ impl<'t> AwaitFn<'t> {
                 // Stack: (state, msg) @reply
                 push(@reply), AssertEq,
                 // Stack: (state, msg)
-                push(@resp), tuple(2),
+                tuple(1), push(@resp), tuple(2),
             ],
         );
 
@@ -1125,10 +1128,152 @@ impl<'t> DoFn<'t> {
             sentence![
                 // Stack: #call{args}
                 untuple(2), push(@call), AssertEq,
-                // Stack: args
-                inline_call(self.body.compilation(ctx, symbol_table)?),
+                // Stack: (args)
+                untuple(1), inline_call(self.body.compilation(ctx, symbol_table)?),
                 // Stack: resp
+                tuple(1), push(@resp), tuple(2),
+            ],
+        ))
+    }
+}
+
+#[derive(Debug, Spanner)]
+pub struct LoopFn<'t> {
+    pub span: pest::Span<'t>,
+    pub body: Box<IntoFn<'t>>,
+}
+impl<'t> LoopFn<'t> {
+    // fn loop<T> => match {
+    //   #call{args} => #call{args} T {
+    //     #req{state, msg} => #req{(state, 0), msg},
+    //     #resp{#break{val}} => #resp{val},
+    //     #resp{#continue{state}} => #req{(state, 1), #stall{}},
+    //   }
+    //   #reply{(state, 0), msg} => #reply{state, msg} T ...
+    //   #reply{(state, 1), #continue{}} => #call{state} T ...
+    // }
+    fn compilation(
+        self,
+        ctx: FileContext,
+        symbol_table: &SymbolTable,
+    ) -> Result<RecursiveSentence, Error> {
+        let span = self.span(ctx.file_idx);
+
+        let call_body_if_req = RecursiveSentence::single_span(
+            span,
+            sentence![
+                // Stack: (state, msg) @req
+                push(@req), AssertEq, untuple(2),
+                // Stack: state msg
+                mv(1), push(0), tuple(2),
+                // Stack: msg (state, 0)
+                mv(1), tuple(2),
+                // Stack: ((state, 0), msg)
+                push(@req), tuple(2),
+            ],
+        );
+        let call_body_if_resp_break = RecursiveSentence::single_span(
+            span,
+            sentence![
+                // Stack: (val) @break
+                push(@break), AssertEq,
+                // Stack: (val)
                 push(@resp), tuple(2),
+            ],
+        );
+        let call_body_if_resp_continue = RecursiveSentence::single_span(
+            span,
+            sentence![
+                // Stack: (state) @continue
+                push(@continue), AssertEq, untuple(1),
+                // Stack: state
+                push(1), tuple(2),
+                push(tagged![stall{}]),
+                // Stack: (state, 1) #stall{}
+                tuple(2), push(@req), tuple(2),
+                // Stack: #req{(state, 1) #stall{}}
+            ],
+        );
+
+        let call_body_if_resp = RecursiveSentence::single_span(
+            span,
+            sentence![
+                // Stack: ((?, @break|@continue)) @resp
+                push(@resp), AssertEq, untuple(1), untuple(2),
+                // Stack: ? @break|@continue
+                cp(0), push(@break), Eq, branch(
+                    call_body_if_resp_break,
+                    call_body_if_resp_continue
+                ),
+            ],
+        );
+        let call_body = RecursiveSentence::single_span(
+            span,
+            sentence![
+                inline_call(self.body.compilation(ctx, symbol_table)?),
+                // Stack: (?, @req|@resp)
+                untuple(2),
+                cp(0),
+                push(@req),
+                Eq,
+                branch(call_body_if_req, call_body_if_resp),
+            ],
+        );
+
+        let if_call = RecursiveSentence::single_span(
+            span,
+            sentence![
+                // Stack: (args) @call
+                cp(0), push(@call), AssertEq, tuple(2),
+                inline_call(call_body.clone()),
+            ],
+        );
+        let if_reply_to_req = RecursiveSentence::single_span(
+            span,
+            sentence![
+                // Stack: msg state
+                mv(1), tuple(2), push(@reply), tuple(2),
+                // Stack: #reply{state, msg}
+                inline_call(call_body.clone()),
+            ],
+        );
+
+        let if_reply_to_stall = RecursiveSentence::single_span(
+            span,
+            sentence![
+                // Stack: #continue{} state
+                mv(1), push(tagged![continue{}]), AssertEq,
+                // state
+                tuple(1), push(@call), tuple(2),
+                // Stack: #call{state}
+                inline_call(call_body),
+            ],
+        );
+
+        let if_reply = RecursiveSentence::single_span(
+            span,
+            sentence![
+                // Stack: ((state, case), msg) @reply
+                push(@reply), AssertEq, untuple(2),
+                // Stack: (state, case) msg
+                mv(1), untuple(2),
+                // Stack: msg state case
+                jump_table(vec![
+                    if_reply_to_req,
+                    if_reply_to_stall,
+                ]),
+            ],
+        );
+
+        Ok(RecursiveSentence::single_span(
+            span,
+            sentence![
+                // Stack: (?, @call|@reply)
+                untuple(2),
+                cp(0),
+                push(@call),
+                Eq,
+                branch(if_call, if_reply),
             ],
         ))
     }

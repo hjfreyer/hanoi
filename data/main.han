@@ -107,8 +107,13 @@ mod ints {
 //     args c#and_then
 //         c#do fn () => 0
 //     then
-//         c#loop
-//             c#and_then
+//         c#loop c#and_then
+//             c#await fn acc => (acc, #iter{#next{}})
+//         then
+//             c#await fn (acc, reply) => match reply {
+//                 #some{item} => (acc, #item{item}),
+//             }
+
 //                 fn args => args match {
 //                     #start{acc} => #req{acc, #iter{#next{}}},
 //                     #reply{acc, resp} => #resp{(acc, resp)},
@@ -242,9 +247,9 @@ fn (self, method) split_iter => {
 }
 
 fn () main_impl => {
-    let #req{m, #next{}} = #call{} 'await_test;
+    let #req{m, #next{}} = #call{()} 'await_test;
     let #req{m, #another{}} = #reply{m, #some{}} 'await_test;
-    let (57, @resp) = #reply{m, #yetmore{}} 'await_test;
+    let #resp{57} = #reply{m, #yetmore{}} 'await_test;
     // let #req{m, #yetmore{}} = #reply{m, #some{}} 'and_then_test;
     // let #resp{57} = #reply{m, #another{}} 'and_then_test;
 

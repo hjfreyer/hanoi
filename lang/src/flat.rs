@@ -24,7 +24,7 @@ macro_rules! symbol {
     };
 }
 macro_rules! tagged {
-    ($tag:ident {$($x:expr),* $(,)?}) => {tuple![tuple![$($x),*], symbol!(stringify!($tag))]};
+    ($tag:ident {$($x:expr),* $(,)?}) => {crate::flat::tuple![crate::flat::tuple![$($x),*], symbol!(stringify!($tag))]};
 }
 
 pub(crate) use symbol;
