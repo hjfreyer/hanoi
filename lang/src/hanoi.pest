@@ -160,7 +160,7 @@ and_then_fn = {
 }
 
 await_fn = {
-  "c#await" ~ into_fn ~ "then" ~ into_fn
+  "c#await" ~ into_fn
 }
 
 do_fn = {

@@ -363,8 +363,7 @@ pub struct AndThenFn<'t> {
 pub struct AwaitFn<'t> {
     #[pest_ast(outer())]
     pub span: pest::Span<'t>,
-    pub first: Box<IntoFn<'t>>,
-    pub second: Box<IntoFn<'t>>,
+    pub body: Box<IntoFn<'t>>,
 }
 
 #[derive(Debug, FromPest, Spanner)]

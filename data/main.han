@@ -144,10 +144,10 @@ fn args and_then_test => {
 }
 
 fn args await_test => {
-    args c#await
-        fn () => (42, #next{})
-    then c#await
-        fn (42, #some{}) => (55, #another{})
+    args c#and_then
+        c#await fn () => (42, #next{})
+    then c#and_then
+        c#await fn (42, #some{}) => (55, #another{})
     then
         fn #call{55, #yetmore{}} => #resp{57}
 }
