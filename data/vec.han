@@ -56,7 +56,7 @@ fn args grow => {
             #req{(size, new_capcity, new_array), #alloc{#free{old_array}}}
         }
     then
-        c#do fn (self, #ok{}) => self
+        c#do fn (self, ()) => self
 }
 
 fn args push => {

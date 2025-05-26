@@ -367,6 +367,11 @@ fn eval_builtin(stack: &mut Stack, b: Builtin) -> Result<EvalResult, BuiltinErro
             stack.push(Value::Array(vec![None; size]));
             Ok(EvalResult::Continue)
         }
+        Builtin::ArrayFree => {
+            stack.check_size(1)?;
+            let _: Vec<Option<Value>> = stack.pop().unwrap().at_index(0)?;
+            Ok(EvalResult::Continue)
+        }
         Builtin::ArraySet => {
             stack.check_size(3)?;
             let value = stack.pop().unwrap();

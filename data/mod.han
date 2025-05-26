@@ -17,6 +17,10 @@ mod array {
         // Stack: size
         #array_create
     }
+    sentence destroy {
+        // Stack: array
+        #array_free #tuple(0)
+    }
     sentence set {
         // Stack: (array, index, item)
         #untuple(3) #array_set

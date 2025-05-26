@@ -246,9 +246,9 @@ fn () main_impl => {
     let #req{v, #alloc{#malloc{2}}} = #call{(v, 5)} 'crate::vec::push;
     let #req{v, #stall{}} = #reply{v, 2 'crate::array::new} 'crate::vec::push;
     let #req{v, #alloc{#free{old}}} = #reply{v, #continue{}} 'crate::vec::push;
-    let #resp{v} = #reply{v, #ok{}} 'crate::vec::push;
+    let () = old 'crate::array::destroy;
+    let #resp{v} = #reply{v, ()} 'crate::vec::push;
     
-    let ^ = old;
     let ^ = v;
 
     // let #req{m, #iter{#next{}}} = #call{()} 'iter_sum;

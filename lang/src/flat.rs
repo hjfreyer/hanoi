@@ -781,6 +781,7 @@ builtins! {
     (Ord, "ord"),
 
     (ArrayCreate, "array_create"),
+    (ArrayFree, "array_free"),
     (ArrayGet, "array_get"),
     (ArraySet, "array_set"),
 }
