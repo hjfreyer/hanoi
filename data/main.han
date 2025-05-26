@@ -237,14 +237,28 @@ fn (self, method) split_iter => {
 }
 
 fn () main_impl => {
-    let #req{m, #iter{#next{}}} = #call{()} 'iter_sum;
-    let #req{m, #iter{#item{#clone{}}}} = #reply{m, #some{}} 'iter_sum;
-    let #req{m, #stall{}} = #reply{m, 4} 'iter_sum;
-    let #req{m, #iter{#next{}}} = #reply{m, #continue{}} 'iter_sum;
-    let #req{m, #iter{#item{#clone{}}}} = #reply{m, #some{}} 'iter_sum;
-    let #req{m, #stall{}} = #reply{m, 8} 'iter_sum;
-    let #req{m, #iter{#next{}}} = #reply{m, #continue{}} 'iter_sum;
-    let #resp{12} = #reply{m, #none{}} 'iter_sum;
+    let #req{v, #alloc{#malloc{1}}} = #call{1} 'crate::vec::new;
+    let array = 1 'crate::array::new;
+    let #resp{v} = #reply{v, array} 'crate::vec::new;
+
+    let #resp{v} = #call{(v, 3)} 'crate::vec::push;
+
+    let #req{v, #alloc{#malloc{2}}} = #call{(v, 5)} 'crate::vec::push;
+    let #req{v, #stall{}} = #reply{v, 2 'crate::array::new} 'crate::vec::push;
+    let #req{v, #alloc{#free{old}}} = #reply{v, #continue{}} 'crate::vec::push;
+    let #resp{v} = #reply{v, #ok{}} 'crate::vec::push;
+    
+    let ^ = old;
+    let ^ = v;
+
+    // let #req{m, #iter{#next{}}} = #call{()} 'iter_sum;
+    // let #req{m, #iter{#item{#clone{}}}} = #reply{m, #some{}} 'iter_sum;
+    // let #req{m, #stall{}} = #reply{m, 4} 'iter_sum;
+    // let #req{m, #iter{#next{}}} = #reply{m, #continue{}} 'iter_sum;
+    // let #req{m, #iter{#item{#clone{}}}} = #reply{m, #some{}} 'iter_sum;
+    // let #req{m, #stall{}} = #reply{m, 8} 'iter_sum;
+    // let #req{m, #iter{#next{}}} = #reply{m, #continue{}} 'iter_sum;
+    // let #resp{12} = #reply{m, #none{}} 'iter_sum;
 
     // let #req{m, #another{}} = #reply{m, #some{}} 'await_test;
     // let #resp{57} = #reply{m, #yetmore{}} 'await_test;

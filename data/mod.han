@@ -11,3 +11,18 @@ sentence main {
 sentence test {
     #call('main::tests::main)
 }
+
+mod array {
+    sentence new {
+        // Stack: size
+        #array_create
+    }
+    sentence set {
+        // Stack: (array, index, item)
+        #untuple(3) #array_set
+    }
+    sentence get {
+        // Stack: (array, index)
+        #untuple(2) #array_get #tuple(2)
+    }
+}

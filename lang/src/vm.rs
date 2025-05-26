@@ -147,6 +147,18 @@ impl TryInto<Vec<Value>> for Value {
         }
     }
 }
+impl TryInto<Vec<Option<Value>>> for Value {
+    type Error = ConversionError;
+    fn try_into(self) -> Result<Vec<Option<Value>>, Self::Error> {
+        match self {
+            Value::Array(b) => Ok(b),
+            _ => Err(ConversionError {
+                value: self,
+                r#type: ValueType::Array,
+            }),
+        }
+    }
+}
 trait BuiltinArgumentResult<T>: Sized {
     fn into_result(self) -> Result<T, ConversionError>;
 
@@ -349,6 +361,46 @@ fn eval_builtin(stack: &mut Stack, b: Builtin) -> Result<EvalResult, BuiltinErro
             }
             Ok(EvalResult::Continue)
         }
+        Builtin::ArrayCreate => {
+            stack.check_size(1)?;
+            let size: usize = stack.pop().unwrap().at_index(0)?;
+            stack.push(Value::Array(vec![None; size]));
+            Ok(EvalResult::Continue)
+        }
+        Builtin::ArraySet => {
+            stack.check_size(3)?;
+            let value = stack.pop().unwrap();
+            let idx: usize = stack.pop().unwrap().at_index(1)?;
+            let mut arr: Vec<Option<Value>> = stack.pop().unwrap().at_index(0)?;
+            if idx >= arr.len() {
+                Err(BuiltinError::IndexOutOfBounds {
+                    index: idx,
+                    size: arr.len(),
+                })
+            } else {
+                arr[idx] = Some(value);
+                stack.push(Value::Array(arr));
+                Ok(EvalResult::Continue)
+            }
+        }
+        Builtin::ArrayGet => {
+            stack.check_size(2)?;
+            let idx: usize = stack.pop().unwrap().at_index(1)?;
+            let mut arr: Vec<Option<Value>> = stack.pop().unwrap().at_index(0)?;
+            if idx >= arr.len() {
+                Err(BuiltinError::IndexOutOfBounds {
+                    index: idx,
+                    size: arr.len(),
+                })
+            } else {
+                let Some(value) = std::mem::take(&mut arr[idx]) else {
+                    return Err(BuiltinError::UninitializedArrayElement { index: idx });
+                };
+                stack.push(Value::Array(arr));
+                stack.push(value);
+                Ok(EvalResult::Continue)
+            }
+        }
     }
 }
 
@@ -395,6 +447,12 @@ pub enum BuiltinError {
 
     #[error("Explicit panic: {0:?}")]
     ExplicitPanic(Value),
+
+    #[error("Array index out of bounds: {index}, size: {size}")]
+    IndexOutOfBounds { index: usize, size: usize },
+
+    #[error("Array element uninitialized: {index}")]
+    UninitializedArrayElement { index: usize },
 }
 
 pub struct Vm {

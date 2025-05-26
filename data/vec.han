@@ -1,4 +1,6 @@
 use 'crate::builtin::add;
+use 'crate::builtin::eq;
+use 'crate::array;
 
 fn method vec => {
     method match {
@@ -20,6 +22,69 @@ fn method vec => {
             #resp{(size, capacity, array)}
         },
     }
+}
+
+
+fn args new => {
+    args c#and_then
+        c#await fn capacity => #req{*capacity, #alloc{#malloc{capacity}}}
+    then
+        c#do fn (capacity, array) => (0, capacity, array)
+}
+
+fn args grow => {
+    args c#and_then
+        c#await fn (size, capacity, array) => {
+            let new_capacity = (*capacity, *capacity) 'add;
+            #req{(size, capacity, array, *new_capacity), #alloc{#malloc{new_capacity}}}
+        }
+    then c#and_then
+        c#do fn ((size, old_capacity, old_array, new_capacity), new_array) => (0, size, old_capacity, old_array, new_capacity, new_array)
+    then c#and_then 
+        c#loop c#do fn (idx, size, old_capacity, old_array, new_capacity, new_array) => {
+            (*idx, *size) 'eq if {
+                let ^ = (idx, old_capacity);
+                #break{(old_array, size, new_capacity, new_array)}
+            } else {
+                let (old_array, item) = (old_array, *idx) 'array::get;
+                let new_array = (new_array, *idx, item) 'array::set;
+                #continue{((idx, 1) 'add, size, old_capacity, old_array, new_capacity, new_array)}
+            }
+        }
+    then c#and_then
+        c#await fn (old_array, size, new_capcity, new_array) => {
+            #req{(size, new_capcity, new_array), #alloc{#free{old_array}}}
+        }
+    then
+        c#do fn (self, #ok{}) => self
+}
+
+fn args push => {
+    args c#and_then
+        c#do fn ((size, capacity, array), item) => {
+            let full = (*size, *capacity) 'eq;
+            (((size, capacity, array), item), full)
+        }
+    then c#and_then
+        c#if 
+            fn args => args match {
+                #call{(self, item)} => #call{self} 'grow match {
+                    #req{state, msg} => #req{(item, state), msg},
+                    #resp{value} => #resp{(item, value)},
+                },
+                #reply{(item, state), msg} => #reply{state, msg} 'grow match {
+                    #req{state, msg} => #req{(item, state), msg},
+                    #resp{value} => #resp{(item, value)},
+                },
+            }
+        else
+            c#do fn (self, item) => (item, self)
+    then
+        c#do fn (item, (size, capacity, array)) => {
+            let array = (array, *size, item) 'array::set;
+            let size = (size, 1) 'add;
+            (size, capacity, array)
+        }
 }
 
 mod tests {

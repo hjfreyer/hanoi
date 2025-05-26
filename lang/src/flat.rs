@@ -779,6 +779,10 @@ builtins! {
     (If, "if"),
 
     (Ord, "ord"),
+
+    (ArrayCreate, "array_create"),
+    (ArrayGet, "array_get"),
+    (ArraySet, "array_set"),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -811,6 +815,7 @@ pub enum Value {
     Tuple(Vec<Value>),
     Bool(bool),
     Char(char),
+    Array(Vec<Option<Value>>),
 }
 
 impl Value {
@@ -821,6 +826,7 @@ impl Value {
             Value::Tuple(_) => ValueType::Tuple,
             Value::Bool(_) => ValueType::Bool,
             Value::Char(_) => ValueType::Char,
+            Value::Array(_) => ValueType::Array,
         }
     }
 }
@@ -832,6 +838,7 @@ pub enum ValueType {
     Tuple,
     Bool,
     Char,
+    Array,
 }
 
 impl std::fmt::Display for ValueType {
@@ -842,6 +849,7 @@ impl std::fmt::Display for ValueType {
             ValueType::Tuple => write!(f, "tuple"),
             ValueType::Bool => write!(f, "bool"),
             ValueType::Char => write!(f, "char"),
+            ValueType::Array => write!(f, "array"),
         }
     }
 }
@@ -902,6 +910,24 @@ impl<'a> std::fmt::Display for ValueView<'a> {
                 }
             }
             Value::Char(arg0) => write!(f, "'{}'", arg0),
+            Value::Array(elements) => {
+                write!(
+                    f,
+                    "[{}]",
+                    elements
+                        .iter()
+                        .map(|v| if let Some(v) = v {
+                            ValueView {
+                                sources: self.sources,
+                                value: v,
+                            }
+                            .to_string()
+                        } else {
+                            "None".to_string()
+                        })
+                        .join(", ")
+                )
+            }
         }
     }
 }
