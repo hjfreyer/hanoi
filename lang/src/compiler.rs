@@ -1152,10 +1152,10 @@ impl<'t> LoopFn<'t> {
     //   #call{args} => #call{args} T {
     //     #req{state, msg} => #req{(state, 0), msg},
     //     #resp{#break{val}} => #resp{val},
-    //     #resp{#continue{state}} => #req{(state, 1), #stall{}},
+    //     #resp{#continue{state}} => #req{((), 1), #stall{state}},
     //   }
     //   #reply{(state, 0), msg} => #reply{state, msg} T ...
-    //   #reply{(state, 1), #continue{}} => #call{state} T ...
+    //   #reply{((), 1), state} => #call{state} T ...
     // }
     fn compilation(
         self,
@@ -1192,11 +1192,12 @@ impl<'t> LoopFn<'t> {
                 // Stack: (state) @continue
                 push(@continue), AssertEq, untuple(1),
                 // Stack: state
-                push(1), tuple(2),
-                push(tagged![stall{}]),
-                // Stack: (state, 1) #stall{}
+                tuple(1), push(@stall), tuple(2),
+                // Stack: #stall{state}
+                tuple(0), push(1), tuple(2), mv(1),
+                // Stack: ((), 1) #stall{state}
                 tuple(2), push(@req), tuple(2),
-                // Stack: #req{(state, 1) #stall{}}
+                // Stack: #req{((), 1), #stall{state}}
             ],
         );
 
@@ -1246,8 +1247,8 @@ impl<'t> LoopFn<'t> {
         let if_reply_to_stall = RecursiveSentence::single_span(
             span,
             sentence![
-                // Stack: #continue{} state
-                mv(1), push(tagged![continue{}]), AssertEq,
+                // Stack: state ()
+                untuple(0),
                 // state
                 tuple(1), push(@call), tuple(2),
                 // Stack: #call{state}
@@ -1258,11 +1259,11 @@ impl<'t> LoopFn<'t> {
         let if_reply = RecursiveSentence::single_span(
             span,
             sentence![
-                // Stack: ((state, case), msg) @reply
+                // Stack: ((?, case), msg) @reply
                 push(@reply), AssertEq, untuple(2),
-                // Stack: (state, case) msg
+                // Stack: (?, case) msg
                 mv(1), untuple(2),
-                // Stack: msg state case
+                // Stack: msg ? case
                 jump_table(vec![
                     if_reply_to_req,
                     if_reply_to_stall,
