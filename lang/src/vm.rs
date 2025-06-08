@@ -1,9 +1,11 @@
 use std::io::{stdin, stdout, Read, Write};
 
 use anyhow::{anyhow, Context};
+use itertools::Itertools;
 
 use crate::{
-    flat::{Builtin, InnerWord, Library, SentenceIndex, Value, ValueType, Word},
+    flat::{self, Builtin, InnerWord, Library, SentenceIndex, Value, ValueType, Word},
+    runtime::{self, Runtime},
     source::{self, FileSpan},
 };
 
@@ -432,6 +434,9 @@ pub enum InnerEvalError {
     #[error("Attempted to untuple a non-tuple: {value:?}")]
     UntupleNonTuple { value: Value },
 
+    #[error("runtime error: {0}")]
+    Runtime(#[from] runtime::Error),
+
     #[error("other error: {0}")]
     Other(#[from] anyhow::Error),
 }
@@ -465,6 +470,9 @@ pub struct Vm {
     pub call_stack: Vec<ProgramCounter>,
     pub stack: Stack,
 
+    pub runtime: Runtime,
+    pub main_symbol: SentenceIndex,
+
     pub stdin: Box<dyn Read>,
     pub stdout: Box<dyn Write>,
 }
@@ -486,11 +494,13 @@ pub enum StepResult {
 }
 
 impl Vm {
-    pub fn new(lib: Library) -> Self {
+    pub fn new(lib: Library, runtime: Runtime, main_symbol: SentenceIndex) -> Self {
         Vm {
             lib,
             call_stack: vec![],
             stack: Stack::default(),
+            main_symbol,
+            runtime,
             stdin: Box::new(stdin()),
             stdout: Box::new(stdout()),
         }
@@ -542,7 +552,43 @@ impl Vm {
     //     Ok(())
     // }
 
-    pub fn step(&mut self) -> Result<StepResult, EvalError> {
+    pub fn step(&mut self) -> Result<Option<flat::Value>, EvalError> {
+        if self.call_stack.is_empty() {
+            self.call_stack = vec![ProgramCounter {
+                sentence_idx: self.main_symbol,
+                word_idx: 0,
+            }]
+        }
+        match self.inner_step()? {
+            StepResult::Continue => Ok(None),
+            StepResult::Exit => {
+                let result = self.stack.pop().expect("nothing on stack");
+                let (tag, args) = result.into_tagged().expect("Should be tagged");
+                match tag.as_str() {
+                    "resp" => {
+                        let ret = args
+                            .into_iter()
+                            .exactly_one()
+                            .expect("resp only has one argument");
+                        Ok(Some(ret))
+                    }
+                    "req" => {
+                        let (state, msg) =
+                            args.into_iter().collect_tuple().expect("req has two args");
+                        let reply = self.runtime.handle_request(msg).map_err(|e| EvalError {
+                            location: None,
+                            inner: e.into(),
+                        })?;
+                        self.stack.push(tagged![reply { state, reply }]);
+                        Ok(None)
+                    }
+                    _ => panic!("unknown tag: {}", tag),
+                }
+            }
+        }
+    }
+
+    fn inner_step(&mut self) -> Result<StepResult, EvalError> {
         let pc = loop {
             let Some(pc) = self.call_stack.last_mut() else {
                 return Ok(StepResult::Exit);
@@ -699,18 +745,18 @@ impl Vm {
     // }
 
     pub fn run(&mut self) -> Result<(), EvalError> {
-        while let StepResult::Continue = self.step()? {}
+        while let None = self.step()? {}
         Ok(())
     }
 
-    pub fn load_label(&mut self, label: &str) {
-        assert!(self.call_stack.is_empty());
-        let main = self.lib.export(label).unwrap();
-        self.call_stack = vec![ProgramCounter {
-            sentence_idx: main,
-            word_idx: 0,
-        }]
-    }
+    // pub fn load_label(&mut self, label: &str) {
+    //     assert!(self.call_stack.is_empty());
+    //     let main = self.lib.export(label).unwrap();
+    //     self.call_stack = vec![ProgramCounter {
+    //         sentence_idx: main,
+    //         word_idx: 0,
+    //     }]
+    // }
 
     pub fn push_value(&mut self, value: Value) {
         self.stack.push(value)

@@ -37,14 +37,14 @@ impl Debugger {
         }
 
         match self.vm.step() {
-            Ok(StepResult::Continue) => {
+            Ok(None) => {
                 if HISTORY_WINDOW < self.history.len() {
                     self.history.pop_front();
                 }
                 self.history.push_back(self.vm.save_state());
                 self.update_code();
             }
-            Ok(StepResult::Exit) => self.halted = true,
+            Ok(Some(_)) => self.halted = true,
             Err(err) => {
                 self.error = Some(err);
             }

@@ -6,6 +6,7 @@ mod debugger;
 #[macro_use]
 mod flat;
 mod linker;
+mod runtime;
 mod source;
 mod vm;
 
@@ -15,6 +16,7 @@ use clap::{Parser, Subcommand};
 use flat::{Library, Value};
 use itertools::Itertools;
 
+use runtime::Runtime;
 use vm::{EvalError, Vm};
 
 #[derive(Parser, Debug)]
@@ -51,9 +53,8 @@ fn compile_library(base_dir: PathBuf) -> anyhow::Result<(source::Sources, Librar
 
 fn run(base_dir: PathBuf) -> anyhow::Result<()> {
     let (sources, lib) = compile_library(base_dir)?;
-    let mut vm = Vm::new(lib);
-
-    vm.load_label("main");
+    let main_symbol = lib.export("main").unwrap();
+    let mut vm = Vm::new(lib, Runtime {}, main_symbol);
 
     match vm.run() {
         Ok(res) => res,
@@ -72,7 +73,8 @@ fn run(base_dir: PathBuf) -> anyhow::Result<()> {
 
 fn debug(base_dir: PathBuf, stdin: Option<PathBuf>) -> anyhow::Result<()> {
     let (sources, lib) = compile_library(base_dir)?;
-    let mut vm = Vm::new(lib);
+    let main_symbol = lib.export("main").unwrap();
+    let mut vm = Vm::new(lib, Runtime {}, main_symbol);
 
     if let Some(stdin_path) = stdin {
         let stdin = std::fs::File::open(stdin_path)?;
@@ -147,7 +149,8 @@ impl<'a> Iterator for IterReader<'a> {
 
 fn test(base_dir: PathBuf) -> anyhow::Result<()> {
     let (sources, lib) = compile_library(base_dir)?;
-    let mut vm = Vm::new(lib);
+    let main_symbol = lib.export("test").unwrap();
+    let mut vm = Vm::new(lib, Runtime {}, main_symbol);
 
     fn run(vm: &mut Vm) -> Result<(), vm::EvalError> {
         vm.push_value(tuple![tagged![nil {}], tagged![enumerate {}]]);

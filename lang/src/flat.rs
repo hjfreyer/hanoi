@@ -830,6 +830,22 @@ impl Value {
             Value::Array(_) => ValueType::Array,
         }
     }
+
+    pub fn into_tagged(self) -> Option<(String, Vec<Value>)> {
+        let Value::Tuple(mut values) = self else {
+            return None;
+        };
+        if values.len() != 2 {
+            return None;
+        }
+        let Value::Symbol(tag) = values.pop().unwrap() else {
+            return None;
+        };
+        let Value::Tuple(args) = values.pop().unwrap() else {
+            return None;
+        };
+        Some((tag, args))
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
