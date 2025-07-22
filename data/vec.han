@@ -2,6 +2,111 @@ use 'crate::builtin::add;
 use 'crate::builtin::eq;
 use 'crate::array;
 
+mod new {
+    fn capacity init => #start{capacity}
+
+    fn (state, msg) advance => state match {
+        #start{capacity} => {
+            let () = msg;
+            (#await_malloc{*capacity}, #alloc{#malloc{capacity}})
+        },
+        #await_malloc{capacity} => {
+            let array = msg;
+            (#end{}, #res{(0, capacity, array)})
+        },
+    }
+}
+
+mod push {
+    use 'crate::builtin::add;
+    use 'crate::builtin::eq;
+    use 'crate::array;
+
+    fn (vec, item) init => #start{vec, item}
+
+    fn (state, msg) advance => state match {
+        #start{(size, capacity, array), item} => {
+            let () = msg;
+            (*size, *capacity) 'eq if {
+                let grow = ((size, *capacity, array), (*capacity, capacity) 'add) 'super::grow::init;
+                (#poll_grow{grow, item}, #stall{})
+            } else {
+                let array = (array, *size, item) 'array::set;
+                let size = (size, 1) 'add;
+                (#end{}, #res{(size, capacity, array)})
+            }
+        },
+        #poll_grow{grow, item} => {
+            (grow, msg) 'super::grow::advance match {
+                (^, #res{(size, capacity, array)}) => {
+                    let array = (array, *size, item) 'array::set;
+                    let size = (size, 1) 'add;
+                    (#end{}, #res{(size, capacity, array)})
+                },
+                (grow, msg) => (#poll_grow{grow, item}, msg),
+            }
+        },
+    }
+}
+
+mod grow {
+    use 'crate::builtin::lt;
+
+    fn (vec, new_capacity) init => #start{vec, new_capacity}
+
+    fn (state, msg) advance => state match {
+        #start{(size, capacity, array), new_capacity} => {
+            let () = msg;
+            (*capacity, *new_capacity) 'lt if {
+                (#await_malloc{(size, capacity, array), *new_capacity}, #alloc{#malloc{new_capacity}})
+            } else {
+                let ^ = new_capacity;
+                (#end{}, #res{(size, capacity, array)})
+            }
+        },
+        #await_malloc{(size, capacity, array), new_capacity} => {
+            let new_array = msg;
+            let memcpy = (array, new_array, *size) 'super::memcpy::init;
+            (#poll_memcpy{memcpy, size, capacity, new_capacity}, #stall{})
+        },
+        #poll_memcpy{memcpy, size, capacity, new_capacity} => {
+            let () = msg;
+            (memcpy, ()) 'super::memcpy::advance match {
+                (memcpy, #stall{}) => (#poll_memcpy{memcpy, size, capacity, new_capacity}, #stall{}),
+                (^, #res{src, dst}) => {
+                    let ^ = capacity;
+                    (#await_free{(size, new_capacity, dst)}, #alloc{#free{src}})
+                },
+            }
+        },
+        #await_free{vec} => {
+            let () = msg;
+            (#end{}, #res{vec})
+        },
+    }
+}
+
+mod memcpy {
+    use 'crate::builtin::add;
+    use 'crate::builtin::lt;
+    use 'crate::array;
+
+
+    fn (src, dst, len) init => #start{src, dst, 0, len}
+
+    fn (#start{src, dst, offset, len}, ()) advance => { 
+        (*offset, *len) 'lt if {
+            let (src, item) = (src, *offset) 'array::get;
+            let dst = (dst, *offset, item) 'array::set;
+            (#start{src, dst, (offset, 1) 'add, len}, #stall{})
+        } else {
+            let ^ = (offset, len);
+            (#end{}, #res{src, dst})
+        }
+    }
+}
+
+
 fn method vec => {
     method match {
         #new{capacity} => {

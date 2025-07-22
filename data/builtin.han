@@ -8,6 +8,10 @@ sentence eq {
     #untuple(2) #eq
 }
 
+sentence lt {
+    #untuple(2) #lt
+}
+
 
 // fn symbol_len(caller, symbol) {
 //     R{ 

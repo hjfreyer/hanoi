@@ -248,12 +248,31 @@ mod alloc {
     }
 }
 
+mod malloc {
+    fn (allocator, size) init => #start{allocator, size}
+
+    fn (#start{allocator, size}, ()) =>  (allocator, size 'crate::array::new)
+}
+
 fn args allocator => args match {
     (self, #malloc{size}) => (self, size) 'alloc::malloc,
     (self, #free{array}) => (self, array) 'alloc::free,
 }
 
-fn (alloc, args) bound_vec_new => args 'crate::vec::new match {
+mod alloc_bound_vec_new {
+    fn (allocator, op) init => #start{allocator, op}
+
+    fn (self, msg) advance => self match {
+        #start{allocator, op} = (op, msg) 'crate::vec::new::advance match {
+            (op, #alloc{#malloc{size}}) => {
+                let malloc_op = (allocator, size) 'super::malloc::init;
+                (#poll_malloc{op, malloc_op}, #stall{})
+            }
+        }
+    }
+
+}
+fn (allocator, op) bound_op => args 'crate::vec::new match {
     #resp{msg} => (alloc, #resp{msg}),
     #req{state, #alloc{msg}} => {
         let (alloc, res) = (alloc, msg) 'allocator;
@@ -276,31 +295,54 @@ fn (alloc, args) bound_vec_push => args 'crate::vec::push match {
 }
 
 fn () main_impl => {
-    let alloc = () 'alloc::new;
+    let vn = 1 'crate::vec::new::init;
 
-    let (alloc, #req{v, #stall{res}}) = (alloc, #call{1}) 'bound_vec_new;
-    let (alloc, #resp{v}) = (alloc, #reply{v, res}) 'bound_vec_new;
+    let (vn, #alloc{#malloc{1}}) = (vn, ()) 'crate::vec::new::advance;
+    let array = 1 'crate::array::new;
+    let (^, #res{vec}) = (vn, array) 'crate::vec::new::advance;
 
-    // let #req{v, #alloc{#malloc{1}}} = #call{1} 'crate::vec::new;
-    // let array = 1 'crate::array::new;
-    // let #resp{v} = #reply{v, array} 'crate::vec::new;
+    let vp = (vec, 4) 'crate::vec::push::init;
+    let (^, #res{vec}) = (vp, ()) 'crate::vec::push::advance;
 
-    let (alloc, #resp{v}) = (alloc, #call{(v, 3)}) 'bound_vec_push;
+    let vp = (vec, 8) 'crate::vec::push::init;
+    let (vp, #stall{}) = (vp, ()) 'crate::vec::push::advance;
+    let (vp, #alloc{#malloc{2}}) = (vp, ()) 'crate::vec::push::advance;
+    let (vp, #stall{}) = (vp, 2 'crate::array::new) 'crate::vec::push::advance;
+    let (vp, #stall{}) = (vp, ()) 'crate::vec::push::advance;
+    let (vp, #alloc{#free{array}}) = (vp, ()) 'crate::vec::push::advance;
+    let () = array 'crate::array::destroy;
+    let (^, #res{vec}) = (vp, ()) 'crate::vec::push::advance;
 
-    let (alloc, #req{v, #stall{res}}) = (alloc, #call{(v, 5)}) 'bound_vec_push;
-    let (alloc, #req{v, #stall{res}}) = (alloc, #reply{v, res}) 'bound_vec_push;
-    let (alloc, #req{v, #stall{res}}) = (alloc, #reply{v, res}) 'bound_vec_push;
-    let (alloc, #resp{v}) = (alloc, #reply{v, res}) 'bound_vec_push;
 
 
-    // let #req{v, #alloc{#malloc{2}}} = #call{(v, 5)} 'crate::vec::push;
-    // let #req{v, #stall{}} = #reply{v, 2 'crate::array::new} 'crate::vec::push;
-    // let #req{v, #alloc{#free{old}}} = #reply{v, #continue{}} 'crate::vec::push;
-    // let () = old 'crate::array::destroy;
-    // let #resp{v} = #reply{v, ()} 'crate::vec::push;
+
+    let ^ = vec;
+
+    // let alloc = () 'alloc::new;
+
+    // let (alloc, #req{v, #stall{res}}) = (alloc, #call{1}) 'bound_vec_new;
+    // let (alloc, #resp{v}) = (alloc, #reply{v, res}) 'bound_vec_new;
+
+    // // let #req{v, #alloc{#malloc{1}}} = #call{1} 'crate::vec::new;
+    // // let array = 1 'crate::array::new;
+    // // let #resp{v} = #reply{v, array} 'crate::vec::new;
+
+    // let (alloc, #resp{v}) = (alloc, #call{(v, 3)}) 'bound_vec_push;
+
+    // let (alloc, #req{v, #stall{res}}) = (alloc, #call{(v, 5)}) 'bound_vec_push;
+    // let (alloc, #req{v, #stall{res}}) = (alloc, #reply{v, res}) 'bound_vec_push;
+    // let (alloc, #req{v, #stall{res}}) = (alloc, #reply{v, res}) 'bound_vec_push;
+    // let (alloc, #resp{v}) = (alloc, #reply{v, res}) 'bound_vec_push;
+
+
+    // // let #req{v, #alloc{#malloc{2}}} = #call{(v, 5)} 'crate::vec::push;
+    // // let #req{v, #stall{}} = #reply{v, 2 'crate::array::new} 'crate::vec::push;
+    // // let #req{v, #alloc{#free{old}}} = #reply{v, #continue{}} 'crate::vec::push;
+    // // let () = old 'crate::array::destroy;
+    // // let #resp{v} = #reply{v, ()} 'crate::vec::push;
     
-    let ^ = alloc;
-    let ^ = v;
+    // let ^ = alloc;
+    // let ^ = v;
 
     // let #req{m, #iter{#next{}}} = #call{()} 'iter_sum;
     // let #req{m, #iter{#item{#clone{}}}} = #reply{m, #some{}} 'iter_sum;

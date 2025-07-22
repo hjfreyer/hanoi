@@ -81,7 +81,7 @@ fn debug(base_dir: PathBuf, stdin: Option<PathBuf>) -> anyhow::Result<()> {
         vm = vm.with_stdin(Box::new(stdin));
     }
 
-    vm.load_label("main");
+    // vm.load_label("main");
 
     let debugger = debugger::Debugger::new(sources, vm);
 
@@ -110,7 +110,7 @@ impl<'a> Iterator for IterReader<'a> {
 
         self.vm
             .push_value(tuple![self.iter_value.take().unwrap(), tagged![next {}]]);
-        self.vm.load_label(self.label);
+        // self.vm.load_label(self.label);
         match self.vm.run() {
             Ok(res) => res,
             Err(e) => {
@@ -154,7 +154,7 @@ fn test(base_dir: PathBuf) -> anyhow::Result<()> {
 
     fn run(vm: &mut Vm) -> Result<(), vm::EvalError> {
         vm.push_value(tuple![tagged![nil {}], tagged![enumerate {}]]);
-        vm.load_label("test");
+        // vm.load_label("test");
         vm.run()?;
 
         let Some(Value::Tuple(mut t)) = vm.stack.pop() else {
@@ -179,7 +179,7 @@ fn test(base_dir: PathBuf) -> anyhow::Result<()> {
             println!("Running test: {}", tc_name);
 
             vm.push_value(tuple![tagged![nil {}], tagged![run { tc }]]);
-            vm.load_label("test");
+            // vm.load_label("test");
             vm.run()?;
 
             let Value::Tuple(t) = vm.stack.pop().unwrap() else {
