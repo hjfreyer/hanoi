@@ -24,7 +24,7 @@ macro_rules! symbol {
     };
 }
 macro_rules! tagged {
-    ($tag:ident {$($x:expr),* $(,)?}) => {crate::flat::tuple![crate::flat::tuple![$($x),*], symbol!(stringify!($tag))]};
+    ($tag:ident {$($x:expr),* $(,)?}) => {crate::flat::tuple![symbol!(stringify!($tag)), crate::flat::tuple![$($x),*]]};
 }
 
 pub(crate) use symbol;
@@ -838,10 +838,10 @@ impl Value {
         if values.len() != 2 {
             return None;
         }
-        let Value::Symbol(tag) = values.pop().unwrap() else {
+        let Value::Tuple(args) = values.pop().unwrap() else {
             return None;
         };
-        let Value::Tuple(args) = values.pop().unwrap() else {
+        let Value::Symbol(tag) = values.pop().unwrap() else {
             return None;
         };
         Some((tag, args))
@@ -892,13 +892,13 @@ impl<'a> std::fmt::Display for ValueView<'a> {
             Value::Bool(arg0) => write!(f, "{}", arg0),
             Value::Tuple(values) => {
                 if values.len() == 2
-                    && values[0].r#type() == ValueType::Tuple
-                    && values[1].r#type() == ValueType::Symbol
+                && values[0].r#type() == ValueType::Symbol
+                && values[1].r#type() == ValueType::Tuple
                 {
-                    let Value::Tuple(args) = &values[0] else {
+                    let Value::Symbol(symbol) = &values[0] else {
                         panic!()
                     };
-                    let Value::Symbol(symbol) = &values[1] else {
+                    let Value::Tuple(args) = &values[1] else {
                         panic!()
                     };
                     write!(

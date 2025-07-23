@@ -575,6 +575,7 @@ impl<'t> Expression<'t> {
             },
             ast::RootExpression::Tagged(tagged) => {
                 let values = vec![
+                    Self::Literal(ast::Literal::Symbol(ast::Symbol::Identifier(tagged.tag))),
                     Self::Tuple {
                         span: tagged.span,
                         values: tagged
@@ -583,7 +584,6 @@ impl<'t> Expression<'t> {
                             .map(Expression::from_ast)
                             .collect(),
                     },
-                    Self::Literal(ast::Literal::Symbol(ast::Symbol::Identifier(tagged.tag))),
                 ];
 
                 Self::Tuple {
@@ -1918,8 +1918,7 @@ mod builder {
                 let mut true_case_consumes: Vec<Name> = vec![];
                 for (name, binding) in names
                     .iter()
-                    .rev()
-                    .zip_eq(tuple_binding.bindings.iter().rev())
+                    .zip_eq(tuple_binding.bindings.iter())
                     .collect_vec()
                     .into_iter()
                     .rev()
@@ -1969,10 +1968,10 @@ mod builder {
         ast::TupleBinding {
             span: tagged_binding.span,
             bindings: vec![
-                ast::Binding::Tuple(inner_binding),
                 ast::Binding::Literal(ast::Literal::Symbol(ast::Symbol::Identifier(
                     tagged_binding.tag.clone(),
                 ))),
+                ast::Binding::Tuple(inner_binding),
             ],
         }
     }
