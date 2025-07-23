@@ -62,7 +62,7 @@ fn (state, msg) grow => (state, msg) match {
         (memcpy, msg) 'memcpy match {
             (^, #res{}, (src, dst)) => {
                 let ^ = capacity;
-                (#await_free{(size, new_capacity, dst)}, #alloc{#free{src}})
+                (#await_free{(size, new_capacity, dst)}, #alloc{}, #free{src})
             },
             (memcpy, other, msg) => (#reply_memcpy{memcpy, size, capacity, new_capacity}, other, msg),
         }

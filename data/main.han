@@ -308,14 +308,25 @@ fn () main_impl => {
     let (vp, #alloc{}, #malloc{2}) = (vp, ()) 'crate::vec::push;
     let (vp, #stall{}, ()) = (vp, 2 'crate::array::new) 'crate::vec::push;
     let (vp, #stall{}, ()) = (vp, ()) 'crate::vec::push;
-    // let (vp, #alloc{#free{array}}) = (vp, ()) 'crate::vec::push::advance;
-    // let () = array 'crate::array::destroy;
-    // let (^, #res{vec}) = (vp, ()) 'crate::vec::push::advance;
+    let (vp, #stall{}, ()) = (vp, ()) 'crate::vec::push;
+    let (vp, #stall{}, ()) = (vp, ()) 'crate::vec::push;
+    let (vp, #stall{}, ()) = (vp, ()) 'crate::vec::push;
+    let (vp, #stall{}, ()) = (vp, ()) 'crate::vec::push;
+    let (vp, #stall{}, ()) = (vp, ()) 'crate::vec::push;
+    let (vp, #stall{}, ()) = (vp, ()) 'crate::vec::push;
+    let (vp, #stall{}, ()) = (vp, ()) 'crate::vec::push;
+    let (vp, #stall{}, ()) = (vp, ()) 'crate::vec::push;
+    let (vp, #stall{}, ()) = (vp, ()) 'crate::vec::push;
+    let (vp, #alloc{}, #free{array}) = (vp, ()) 'crate::vec::push;
+    let () = array 'crate::array::destroy;
+    let (vp, #stall{}, ()) = (vp, ()) 'crate::vec::push;
+    let (vp, #res{}, vec) = (vp, ()) 'crate::vec::push;
 
 
 
 
-    let ^ = (vp);
+    let ^ = (vp, vec);
+    let 0 = 1;
 
     // let alloc = () 'alloc::new;
 
