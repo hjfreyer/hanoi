@@ -552,25 +552,35 @@ impl Vm {
     //     Ok(())
     // }
 
+    pub fn init(&mut self) {
+        self.stack.push(tuple![tagged![start {}], tuple![]]);
+        self.call_stack = vec![ProgramCounter {
+            sentence_idx: self.main_symbol,
+            word_idx: 0,
+        }]
+    }
+
     pub fn step(&mut self) -> Result<Option<flat::Value>, EvalError> {
-        if self.call_stack.is_empty() {
-            self.call_stack = vec![ProgramCounter {
-                sentence_idx: self.main_symbol,
-                word_idx: 0,
-            }]
-        }
         match self.inner_step()? {
             StepResult::Continue => Ok(None),
             StepResult::Exit => {
-                let result = self.stack.pop().expect("nothing on stack");
-                let (tag, args) = result.into_tagged().expect("Should be tagged");
+                let Value::Tuple(result) = self.stack.pop().expect("nothing on stack") else {
+                    panic!("not a tuple")
+                };
+                let (state, dest, msg) = result
+                    .into_iter()
+                    .collect_tuple()
+                    .expect("Must return triple");
+
+                let (tag, args) = dest.into_tagged().expect("Should be tagged");
                 match tag.as_str() {
-                    "resp" => {
-                        let ret = args
-                            .into_iter()
-                            .exactly_one()
-                            .expect("resp only has one argument");
-                        Ok(Some(ret))
+                    "stall" => {
+                        self.stack.push(tuple![state, tuple![]]);
+                        self.call_stack = vec![ProgramCounter {
+                            sentence_idx: self.main_symbol,
+                            word_idx: 0,
+                        }];
+                        Ok(None)
                     }
                     "req" => {
                         let (state, msg) =

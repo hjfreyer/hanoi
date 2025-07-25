@@ -18,30 +18,30 @@ fn (state, msg) push => state match {
     #start{} => {
         let ((size, capacity, array), item) = msg;
         (*size, *capacity) 'eq if {
-            (#poll_grow{#start{}, ((size, *capacity, array), (*capacity, capacity) 'add), item}, #stall{}, ())
+            (#start{}, ((size, *capacity, array), (*capacity, capacity) 'add), item) 'poll_grow_helper
         } else {
             let array = (array, *size, item) 'array::set;
             let size = (size, 1) 'add;
             (#end{}, #res{}, (size, capacity, array))
         }
     },
-    #poll_grow{grow, submsg, item} => {
-        let () = msg;
-        let (grow, dst, msg) = (grow, submsg) 'grow;
-        dst match {
-            #res{} => {
-                let ^ = grow;
-                let (size, capacity, array) = msg;
-                let array = (array, *size, item) 'array::set;
-                let size = (size, 1) 'add;
-                (#end{}, #res{}, (size, capacity, array))
-            },
-            other => (#send_grow{grow, item}, other, msg),
-        }
-    },
     #send_grow{grow, item} => {
-        (#poll_grow{grow, msg, item}, #stall{}, ())
+        (grow, msg, item) 'poll_grow_helper
     },
+}
+
+fn (grow, submsg, item) poll_grow_helper => {
+    let (grow, dst, msg) = (grow, submsg) 'grow;
+    dst match {
+        #res{} => {
+            let ^ = grow;
+            let (size, capacity, array) = msg;
+            let array = (array, *size, item) 'array::set;
+            let size = (size, 1) 'add;
+            (#end{}, #res{}, (size, capacity, array))
+        },
+        other => (#send_grow{grow, item}, other, msg),
+    }
 }
 
 fn (state, msg) grow => (state, msg) match {
@@ -54,41 +54,42 @@ fn (state, msg) grow => (state, msg) match {
         }
     },
     (#await_malloc{(size, capacity, array), new_capacity}, new_array) => {
-        let memcpy = #start{};
-        // let (memcpy, dest, msg) = (memcpy, ) 'memcpy;
-        (#poll_memcpy{memcpy, (array, new_array, *size), size, capacity, new_capacity}, #stall{}, ())
-    },
-    (#poll_memcpy{memcpy, msg, size, capacity, new_capacity}, ()) => {
-        (memcpy, msg) 'memcpy match {
-            (^, #res{}, (src, dst)) => {
-                let ^ = capacity;
-                (#await_free{(size, new_capacity, dst)}, #alloc{}, #free{src})
-            },
-            (memcpy, other, msg) => (#reply_memcpy{memcpy, size, capacity, new_capacity}, other, msg),
-        }
+        (#start{}, (array, new_array, *size), size, capacity, new_capacity) 'poll_memcpy_helper
     },
     (#reply_memcpy{memcpy, size, capacity, new_capacity}, msg) => {
-        (#poll_memcpy{memcpy, msg, size, capacity, new_capacity}, #stall{}, ())
+        (memcpy, msg, size, capacity, new_capacity) 'poll_memcpy_helper
     },
     (#await_free{vec}, ()) => {
         (#end{}, #res{}, vec)
     },
 }
 
+fn (memcpy, msg, size, capacity, new_capacity) poll_memcpy_helper => {
+    (memcpy, msg) 'memcpy match {
+        (^, #res{}, (src, dst)) => {
+            let ^ = capacity;
+            (#await_free{(size, new_capacity, dst)}, #alloc{}, #free{src})
+        },
+        (memcpy, other, msg) => (#reply_memcpy{memcpy, size, capacity, new_capacity}, other, msg),
+    }
+}
+
 fn (state, msg) memcpy => (state, msg) match {
     (#start{}, (src, dst, len)) => { 
-        (#cp{src, dst, 0, len}, #stall{}, ())
+        (src, dst, 0, len) 'memcpy_helper
     },
     (#cp{src, dst, offset, len}, ()) => { 
-        (*offset, *len) 'lt if {
-            let (src, item) = (src, *offset) 'array::get;
-            let dst = (dst, *offset, item) 'array::set;
-            (#cp{src, dst, (offset, 1) 'add, len}, #stall{}, ())
-        } else {
-            let ^ = (offset, len);
-            (#end{}, #res{}, (src, dst))
-        }
+        (src, dst, offset, len) 'memcpy_helper
     },
+}
+
+fn (src, dst, offset, len) memcpy_helper => (*offset, *len) 'lt if {
+    let (src, item) = (src, *offset) 'array::get;
+    let dst = (dst, *offset, item) 'array::set;
+    (#cp{src, dst, (offset, 1) 'add, len}, #stall{}, ())
+} else {
+    let ^ = (offset, len);
+    (#end{}, #res{}, (src, dst))
 }
 
 

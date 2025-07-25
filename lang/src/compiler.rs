@@ -172,24 +172,28 @@ impl<'t> Compiler<'t> {
                 })
                 // Word::Builtin(FromRawAst::from_raw_ast(ctx, builtin))},
             }
-            ast::Word::Literal(_literal) => todo!(), //Word::Literal(FromRawAst::from_raw_ast(ctx, literal)),
-                                                     // ast::Word::Move(identifier) => Word::Move(FromRawAst::from_raw_ast(ctx, identifier)),
-                                                     // ast::Word::Copy(copy) => Word::Copy(FromRawAst::from_raw_ast(ctx, copy)),
-                                                     // ast::Word::Tuple(tuple) => Word::Tuple(Tuple {
-                                                     //     span: tuple.span.into_ir(ctx),
-                                                     //     values: tuple
-                                                     //         .values
-                                                     //         .into_iter()
-                                                     //         .map(|o| {
-                                                     //             let name_prefix = name_prefix.append(Name::Generated(*next_name));
-                                                     //             *next_name += 1;
-                                                     //             Label {
-                                                     //                 span: o.span.into_ir(ctx),
-                                                     //                 path: self.visit_sentence(ctx, &name_prefix, o),
-                                                     //             }
-                                                     //         })
-                                                     //         .collect(),
-                                                     // }),
+            ast::Word::Literal(literal) => Ok(Word {
+                span: literal.span(file_idx),
+                inner: InnerWord::Push(literal.into_value()),
+                names: vec![],
+            }), //Word::Literal(FromRawAst::from_raw_ast(ctx, literal)),
+                // ast::Word::Move(identifier) => Word::Move(FromRawAst::from_raw_ast(ctx, identifier)),
+                // ast::Word::Copy(copy) => Word::Copy(FromRawAst::from_raw_ast(ctx, copy)),
+                // ast::Word::Tuple(tuple) => Word::Tuple(Tuple {
+                //     span: tuple.span.into_ir(ctx),
+                //     values: tuple
+                //         .values
+                //         .into_iter()
+                //         .map(|o| {
+                //             let name_prefix = name_prefix.append(Name::Generated(*next_name));
+                //             *next_name += 1;
+                //             Label {
+                //                 span: o.span.into_ir(ctx),
+                //                 path: self.visit_sentence(ctx, &name_prefix, o),
+                //             }
+                //         })
+                //         .collect(),
+                // }),
         }
     }
 

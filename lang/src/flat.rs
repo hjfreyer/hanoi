@@ -892,8 +892,8 @@ impl<'a> std::fmt::Display for ValueView<'a> {
             Value::Bool(arg0) => write!(f, "{}", arg0),
             Value::Tuple(values) => {
                 if values.len() == 2
-                && values[0].r#type() == ValueType::Symbol
-                && values[1].r#type() == ValueType::Tuple
+                    && values[0].r#type() == ValueType::Symbol
+                    && values[1].r#type() == ValueType::Tuple
                 {
                     let Value::Symbol(symbol) = &values[0] else {
                         panic!()
