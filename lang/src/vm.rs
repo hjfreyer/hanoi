@@ -553,7 +553,7 @@ impl Vm {
     // }
 
     pub fn init(&mut self) {
-        self.stack.push(tuple![tagged![start {}], tuple![]]);
+        self.stack.push(tuple![tagged![start {}], tagged![in {}], tuple![]]);
         self.call_stack = vec![ProgramCounter {
             sentence_idx: self.main_symbol,
             word_idx: 0,
@@ -575,7 +575,7 @@ impl Vm {
                 let (tag, args) = dest.into_tagged().expect("Should be tagged");
                 match tag.as_str() {
                     "stall" => {
-                        self.stack.push(tuple![state, tuple![]]);
+                        self.stack.push(tuple![state, tagged![stall {}], tuple![]]);
                         self.call_stack = vec![ProgramCounter {
                             sentence_idx: self.main_symbol,
                             word_idx: 0,
