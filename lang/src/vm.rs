@@ -553,7 +553,7 @@ impl Vm {
     // }
 
     pub fn init(&mut self) {
-        self.stack.push(tuple![tagged![start {}], tagged![in {}], tuple![]]);
+        self.stack.push(tuple![tagged![start {}], tagged![in {}]]);
         self.call_stack = vec![ProgramCounter {
             sentence_idx: self.main_symbol,
             word_idx: 0,
@@ -567,15 +567,15 @@ impl Vm {
                 let Value::Tuple(result) = self.stack.pop().expect("nothing on stack") else {
                     panic!("not a tuple")
                 };
-                let (state, dest, msg) = result
+                let (state, msg) = result
                     .into_iter()
                     .collect_tuple()
-                    .expect("Must return triple");
+                    .expect("Must return pair");
 
-                let (tag, args) = dest.into_tagged().expect("Should be tagged");
+                let (tag, args) = msg.into_tagged().expect("Should be tagged");
                 match tag.as_str() {
-                    "stall" => {
-                        self.stack.push(tuple![state, tagged![stall {}], tuple![]]);
+                    "pass" => {
+                        self.stack.push(tuple![state, tagged![pass {}]]);
                         self.call_stack = vec![ProgramCounter {
                             sentence_idx: self.main_symbol,
                             word_idx: 0,
