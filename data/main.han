@@ -376,13 +376,13 @@ fn (state, (new_msg, (alloc_req_msg, alloc_resp_msg))) bound_new_helper => {
 
 fn (#start{}, (#in{()}, #pass{})) output_one => (#end{}, (#out{1}, #pass{}))
 
-fn args first_two_lines => args match {
-    ((state1, state2, (io2, alloc2)), (io1, alloc1)) => {
-        let (state1, msg1) = (state1, msg1) 'output_one;
-        let (state2, msg2) = (state2, msg2) 'crate::vec::new;
-        (#first{#start{}}, )
-    },
-}
+//fn args first_two_lines => args match {
+//    ((state1, state2, (io2, alloc2)), (io1, alloc1)) => {
+//        let (state1, msg1) = (state1, msg1) 'output_one;
+//        let (state2, msg2) = (state2, msg2) 'crate::vec::new;
+//        (#first{#start{}}, )
+//    },
+//}
 
 
 fn args main_impl => args match {

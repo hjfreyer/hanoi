@@ -76,6 +76,7 @@ impl Crate {
 // 'add     [?, ?]
 // tuple(2) [?]
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Transformer<'t> {
     Literal(ast::Literal<'t>),
     Move(ast::Identifier<'t>),
@@ -108,10 +109,9 @@ pub enum Transformer<'t> {
         span: pest::Span<'t>,
         children: Vec<Transformer<'t>>,
     },
-    Builtin {
-        span: pest::Span<'t>,
-        builtin: flat::Builtin,
-    },
+    AssertEq(pest::Span<'t>),
+    Panic(pest::Span<'t>),
+    Eq(pest::Span<'t>),
 }
 
 impl<'t> Transformer<'t> {
@@ -201,10 +201,7 @@ impl<'t> Transformer<'t> {
                             span,
                             children: vec![
                                 Transformer::Literal(literal),
-                                Transformer::Builtin {
-                                    span,
-                                    builtin: flat::Builtin::AssertEq,
-                                },
+                                Transformer::AssertEq(span),
                             ],
                         },
                         -1,
@@ -250,10 +247,7 @@ impl<'t> Transformer<'t> {
             ast::Transformer::Call(call) => Self::Call(call),
             ast::Transformer::InlineCall(inline_call) => todo!(),
             ast::Transformer::Match(match_expression) => {
-                let mut else_case = Self::Builtin {
-                    span: match_expression.span,
-                    builtin: flat::Builtin::Panic,
-                };
+                let mut else_case = Self::Panic(match_expression.span);
 
                 for case in match_expression.cases.into_iter().rev() {
                     else_case = Self::Composition {
@@ -357,10 +351,7 @@ impl<'t> Transformer<'t> {
                 span,
                 children: vec![
                     Self::Literal(l.clone()),
-                    Self::Builtin {
-                        span,
-                        builtin: flat::Builtin::AssertEq,
-                    },
+                    Self::Eq(span),
                 ],
             },
         }
@@ -529,10 +520,26 @@ impl<'t> Transformer<'t> {
                 }
                 Ok(RecursiveSentence::single_span(span, words))
             }
-            Transformer::Builtin { span, builtin } => {
+            Transformer::AssertEq(span) => {
                 let span: FileSpan = span.into_ir(ctx.sources, ctx.file_idx);
-                Ok(RecursiveSentence::single_span(span, vec![InnerWord::Builtin(builtin)]))
+                locals.pop();
+                locals.pop();
+                Ok(RecursiveSentence::single_span(span, vec![InnerWord::Builtin(flat::Builtin::AssertEq)]))
             }
+            Transformer::Panic(span) => {
+                let span: FileSpan = span.into_ir(ctx.sources, ctx.file_idx);
+                locals.terminal = true;
+                Ok(RecursiveSentence::single_span(span, vec![InnerWord::Builtin(flat::Builtin::Panic)]))
+            }
+            Transformer::Eq(span) => {
+                let span: FileSpan = span.into_ir(ctx.sources, ctx.file_idx);
+                locals.pop();
+                locals.pop();
+                locals.push_unnamed();
+                Ok(RecursiveSentence::single_span(span, vec![InnerWord::Builtin(flat::Builtin::Eq)]))
+            }
+
+            
         }
     }
 }
@@ -632,6 +639,7 @@ impl<'t> Compiler<'t> {
         let transformer = Transformer::from_anon_fn(anon);
 
         let mut locals = Locals::default();
+        locals.push_unnamed();
         let sentence = transformer.into_recursive_sentence(ctx, &mut locals)?;
 
         let mut names = NameSequence {
@@ -1441,7 +1449,7 @@ impl<'t> AndThenFn<'t> {
                 // Stack: (val) @resp
                 push(@resp), AssertEq,
                 // Stack: (val)
-                push(@call), tuple(2),
+                push(@resp), tuple(2),
                 inline_call(call_b.clone()),
             ],
         );
@@ -2490,5 +2498,125 @@ mod builder {
             names: out.locals.names(),
         });
         out.locals.terminal = true;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::HanoiParser;
+    use pest::Parser;
+    use from_pest::FromPest;
+
+    #[test]
+    fn test_fn_decl_to_transformer() {
+        // Test function: fn args new => args match { ... }
+        let fn_decl_str = "fn args new => args match {
+            (state, (#pass{}, #pass{})) => (state, (#pass{}, #pass{})),
+            (#start{}, (#in{capacity}, #pass{})) => {
+                (#await_malloc{*capacity}, (#pass{}, #malloc{capacity}))
+            },
+            (#await_malloc{capacity},(#pass{}, #out{array})) => {
+                (#end{}, (#out{(0, capacity, array)}, #pass{}))
+            },
+        }";
+
+        // Parse the function declaration
+        let mut pairs = HanoiParser::parse(crate::ast::Rule::fn_decl, fn_decl_str)
+            .expect("Failed to parse function declaration");
+        
+        let fn_decl = ast::FnDecl::from_pest(&mut pairs)
+            .expect("Failed to convert pest pairs to FnDecl");
+
+        // Clone the binding for later use in assertions
+        let binding_clone = fn_decl.binding.clone();
+
+        // Create an AnonFn from the FnDecl
+        let anon_fn = ast::AnonFn {
+            span: fn_decl.span,
+            binding: fn_decl.binding,
+            body: Box::new(fn_decl.expression),
+        };
+
+        // Convert to Transformer
+        let transformer = Transformer::from_anon_fn(anon_fn);
+
+        // Assert the transformer structure using equality checks
+        match transformer {
+            Transformer::Composition { span, children } => {
+                // Should have 2 children: binding and expression
+                assert_eq!(children.len(), 2);
+                
+                // First child should be the binding transformer for 'args'
+                match &binding_clone {
+                    ast::Binding::Identifier(identifier) => {
+                        assert_eq!(&children[0], &Transformer::Binding(identifier.clone()));
+                    }
+                    _ => panic!("Expected Identifier binding"),
+                }
+                
+                // Second child should be the expression transformer (match expression)
+                match &children[1] {
+                    Transformer::Composition { children: expr_children, .. } => {
+                        // The match expression should have transformers for each case
+                        assert!(!expr_children.is_empty());
+                    }
+                    _ => panic!("Expected Composition transformer for match expression"),
+                }
+            }
+            _ => panic!("Expected Composition transformer for function declaration"),
+        }
+    }
+
+    #[test]
+    fn test_simple_fn_decl_to_transformer() {
+        // Test a simpler function: fn x add => (x, 1) 'add
+        let fn_decl_str = "fn x add => (x, 1) 'add";
+
+        // Parse the function declaration
+        let mut pairs = HanoiParser::parse(crate::ast::Rule::fn_decl, fn_decl_str)
+            .expect("Failed to parse simple function declaration");
+        
+        let fn_decl = ast::FnDecl::from_pest(&mut pairs)
+            .expect("Failed to convert pest pairs to FnDecl");
+
+        // Clone the binding for later use in assertions
+        let binding_clone = fn_decl.binding.clone();
+
+        // Create an AnonFn from the FnDecl
+        let anon_fn = ast::AnonFn {
+            span: fn_decl.span,
+            binding: fn_decl.binding,
+            body: Box::new(fn_decl.expression),
+        };
+
+        // Convert to Transformer
+        let transformer = Transformer::from_anon_fn(anon_fn);
+
+        // Assert the transformer structure using equality checks
+        match transformer {
+            Transformer::Composition { span, children } => {
+                // Should have 2 children: binding and expression
+                assert_eq!(children.len(), 2);
+                
+                // First child should be the binding transformer for 'x'
+                match &binding_clone {
+                    ast::Binding::Identifier(identifier) => {
+                        assert_eq!(&children[0], &Transformer::Binding(identifier.clone()));
+                    }
+                    _ => panic!("Expected Identifier binding"),
+                }
+                
+                // Second child should be the expression transformer
+                match &children[1] {
+                    Transformer::Composition { children: expr_children, .. } => {
+                        // Should have transformers for the tuple and call
+                        assert!(!expr_children.is_empty());
+                    }
+                    _ => panic!("Expected Composition transformer for expression"),
+                }
+            }
+            _ => panic!("Expected Composition transformer for function declaration"),
+        }
     }
 }

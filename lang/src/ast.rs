@@ -23,7 +23,7 @@ fn span_into_char(span: pest::Span) -> char {
     s.chars().nth(1).unwrap()
 }
 
-#[derive(Debug, FromPest, Spanner, Clone)]
+#[derive(Debug, FromPest, Spanner, Clone, PartialEq, Eq)]
 #[pest_ast(rule(Rule::identifier))]
 pub struct Identifier<'t>(
     #[spanner]
@@ -49,7 +49,7 @@ impl<'t> Spanner<'t> for pest::Span<'t> {
     }
 }
 
-#[derive(Debug, FromPest, Spanner, Clone)]
+#[derive(Debug, FromPest, Spanner, Clone, PartialEq, Eq)]
 #[pest_ast(rule(Rule::int))]
 pub struct Int<'t> {
     #[pest_ast(outer())]
@@ -59,7 +59,7 @@ pub struct Int<'t> {
     pub value: usize,
 }
 
-#[derive(Debug, FromPest, Spanner, Clone)]
+#[derive(Debug, FromPest, Spanner, Clone, PartialEq, Eq)]
 #[pest_ast(rule(Rule::bool))]
 pub struct Bool<'t> {
     #[pest_ast(outer())]
@@ -69,7 +69,7 @@ pub struct Bool<'t> {
     pub value: bool,
 }
 
-#[derive(Debug, FromPest, Spanner, Clone)]
+#[derive(Debug, FromPest, Spanner, Clone, PartialEq, Eq)]
 #[pest_ast(rule(Rule::char_lit))]
 pub struct Char<'t> {
     #[pest_ast(outer())]
@@ -84,7 +84,7 @@ fn span_into_string_literal(span: pest::Span) -> String {
     let str = &str[1..str.len() - 1];
     str.replace("\\n", "\n").replace("\\\"", "\"")
 }
-#[derive(Debug, FromPest, Spanner, Clone)]
+#[derive(Debug, FromPest, Spanner, Clone, PartialEq, Eq)]
 #[pest_ast(rule(Rule::string))]
 pub struct StringLiteral<'t> {
     #[spanner]
@@ -95,14 +95,14 @@ pub struct StringLiteral<'t> {
     pub value: String,
 }
 
-#[derive(Debug, FromPest, Spanner, Clone)]
+#[derive(Debug, FromPest, Spanner, Clone, PartialEq, Eq)]
 #[pest_ast(rule(Rule::symbol))]
 pub enum Symbol<'t> {
     Identifier(Identifier<'t>),
     String(StringLiteral<'t>),
 }
 
-#[derive(Debug, FromPest, Spanner, Clone)]
+#[derive(Debug, FromPest, Spanner, Clone, PartialEq, Eq)]
 #[pest_ast(rule(Rule::literal))]
 pub enum Literal<'t> {
     Int(Int<'t>),
@@ -164,7 +164,7 @@ pub struct Builtin<'t> {
     pub args: Vec<BuiltinArg<'t>>,
 }
 
-#[derive(Debug, FromPest, Spanner)]
+#[derive(Debug, FromPest, Spanner, Clone, PartialEq, Eq)]
 #[pest_ast(rule(Rule::qualified_label))]
 pub struct QualifiedLabel<'t> {
     #[pest_ast(outer())]
@@ -172,7 +172,7 @@ pub struct QualifiedLabel<'t> {
     pub path: Vec<Identifier<'t>>,
 }
 
-#[derive(Debug, FromPest, Spanner, Clone)]
+#[derive(Debug, FromPest, Spanner, Clone, PartialEq, Eq)]
 #[pest_ast(rule(Rule::binding))]
 pub enum Binding<'t> {
     Drop(DropBinding<'t>),
@@ -182,14 +182,14 @@ pub enum Binding<'t> {
     Identifier(Identifier<'t>),
 }
 
-#[derive(Debug, FromPest, Spanner, Clone)]
+#[derive(Debug, FromPest, Spanner, Clone, PartialEq, Eq)]
 #[pest_ast(rule(Rule::drop_binding))]
 pub struct DropBinding<'t> {
     #[pest_ast(outer())]
     pub span: pest::Span<'t>,
 }
 
-#[derive(Debug, FromPest, Spanner, Clone)]
+#[derive(Debug, FromPest, Spanner, Clone, PartialEq, Eq)]
 #[pest_ast(rule(Rule::tuple_binding))]
 pub struct TupleBinding<'t> {
     #[pest_ast(outer())]
@@ -197,7 +197,7 @@ pub struct TupleBinding<'t> {
     pub bindings: Vec<Binding<'t>>,
 }
 
-#[derive(Debug, FromPest, Spanner, Clone)]
+#[derive(Debug, FromPest, Spanner, Clone, PartialEq, Eq)]
 #[pest_ast(rule(Rule::tagged_binding))]
 pub struct TaggedBinding<'t> {
     #[pest_ast(outer())]
