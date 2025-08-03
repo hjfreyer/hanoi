@@ -36,11 +36,6 @@ pub struct Compiler<'t> {
     res: Crate,
 }
 
-// pub enum Phrase<'t> {
-//     Expression(ast::Expression<'t>),
-//     Binding(ast::Binding<'t>),
-// }
-
 impl<'t> Compiler<'t> {
     pub fn new(sources: &'t Sources) -> Self {
         Self {
@@ -161,39 +156,16 @@ impl<'t> Compiler<'t> {
 
     fn visit_word(&mut self, file_idx: FileIndex, op: ast::Word) -> Result<Word, Error> {
         match op {
-            // ast::Word::StackBindings(stack_bindings) => {
-            //     Word::StackBindings(FromRawAst::from_raw_ast(ctx, stack_bindings.into()))
-            // }
-            ast::Word::Builtin(builtin) => {
-                Ok(Word {
-                    span: builtin.span.into_ir(self.sources, file_idx),
-                    inner: self.convert_builtin(file_idx, builtin)?,
-                    names: vec![],
-                })
-                // Word::Builtin(FromRawAst::from_raw_ast(ctx, builtin))},
-            }
+            ast::Word::Builtin(builtin) => Ok(Word {
+                span: builtin.span.into_ir(self.sources, file_idx),
+                inner: self.convert_builtin(file_idx, builtin)?,
+                names: vec![],
+            }),
             ast::Word::Literal(literal) => Ok(Word {
                 span: literal.span(file_idx),
                 inner: InnerWord::Push(literal.into_value()),
                 names: vec![],
-            }), //Word::Literal(FromRawAst::from_raw_ast(ctx, literal)),
-                // ast::Word::Move(identifier) => Word::Move(FromRawAst::from_raw_ast(ctx, identifier)),
-                // ast::Word::Copy(copy) => Word::Copy(FromRawAst::from_raw_ast(ctx, copy)),
-                // ast::Word::Tuple(tuple) => Word::Tuple(Tuple {
-                //     span: tuple.span.into_ir(ctx),
-                //     values: tuple
-                //         .values
-                //         .into_iter()
-                //         .map(|o| {
-                //             let name_prefix = name_prefix.append(Name::Generated(*next_name));
-                //             *next_name += 1;
-                //             Label {
-                //                 span: o.span.into_ir(ctx),
-                //                 path: self.visit_sentence(ctx, &name_prefix, o),
-                //             }
-                //         })
-                //         .collect(),
-                // }),
+            }),
         }
     }
 
@@ -221,21 +193,6 @@ impl<'t> Compiler<'t> {
                 "untuple" => self.convert_single_int_builtin(InnerWord::Untuple, file_idx, builtin),
                 "branch" => {
                     todo!()
-                    // let Some((
-                    //     ast::BuiltinArg::Label(true_case),
-                    //     ast::BuiltinArg::Label(false_case),
-                    // )) = builtin.args.into_iter().collect_tuple()
-                    // else {
-                    //     return Err(Error::IncorrectBuiltinArguments {
-                    //         location: builtin.span.into_ir(self.sources, file_idx),
-                    //         name: name.to_owned(),
-                    //     });
-                    // };
-
-                    // Ok(InnerWord::Branch(
-                    //     true_case.into_ir(self.sources, file_idx),
-                    //     false_case.into_ir(self.sources, file_idx),
-                    // ))
                 }
                 "call" => {
                     let Ok(ast::BuiltinArg::Label(label)) = builtin.args.into_iter().exactly_one()
@@ -907,28 +864,6 @@ macro_rules! sentence {
     [$($tag:ident$(($($args:tt)*))?,)*] => {vec![$(word!($tag$(($($args)*))?),)*]};
 }
 
-// fn args and_then<A, B> => args match {
-//     #call{args} => {
-//         #call{args} A match {
-//             #req{state, msg} => #req{#a{state}, msg},
-//             #resp{a} => #call{a} B match {
-//                 #req{state, msg} => #req{#b{state}, msg},
-//                 #resp{val} => #resp{val},
-//             },
-//         }
-//     },
-//     #reply{#a{state}, msg} => #reply{state, msg} A match {
-//         #req{state, msg} => #req{#a{state}, msg},
-//         #resp{a} => #call{a} B match {
-//             #req{state, msg} => #req{#b{state}, msg},
-//             #resp{val} => #resp{val},
-//         },
-//     },
-//     #reply{#b{state}, msg} => #reply{state, msg} B match {
-//         #req{state, msg} => #req{#b{state}, msg},
-//         #resp{val} => #resp{val},
-//     },
-// }
 impl<'t> AndThenFn<'t> {
     fn compilation(
         self,
@@ -1596,12 +1531,6 @@ impl<'t> NameRef<'t> {
         }
     }
 }
-
-// impl<'t> FromRawAst<'t, ast::Identifier<'t>> for Name {
-//     fn from_raw_ast(ctx: Context<'t>, r: ast::Identifier<'t>) -> Self {
-//         Name::User(Identifier::from_raw_ast(ctx, r))
-//     }
-// }
 
 impl<'t> IntoIr<'t, Name> for ast::Identifier<'t> {
     fn into_ir(self, sources: &'t Sources, file_idx: FileIndex) -> Name {

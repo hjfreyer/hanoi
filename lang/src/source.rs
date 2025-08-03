@@ -90,9 +90,6 @@ impl Sources {
 
         Ok(sources)
     }
-    // pub fn pest_span(&self, span: Span) -> pest::Span {
-    //     pest::Span::new(self.files[span.file_idx].source.as_str(), span.start, span.end).unwrap()
-    // }
 }
 
 #[derive(Debug)]

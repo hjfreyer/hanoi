@@ -49,10 +49,6 @@ impl<'t> Spanner<'t> for pest::Span<'t> {
     }
 }
 
-// #[derive(Debug, FromPest)]
-// #[pest_ast(rule(Rule::label))]
-// pub struct Label<'t>(pub Identifier<'t>);
-
 #[derive(Debug, FromPest, Spanner, Clone)]
 #[pest_ast(rule(Rule::int))]
 pub struct Int<'t> {
@@ -209,15 +205,6 @@ pub struct TaggedBinding<'t> {
     pub tag: Identifier<'t>,
     pub bindings: Vec<Binding<'t>>,
 }
-
-// #[derive(Debug, FromPest)]
-// #[pest_ast(rule(Rule::expr))]
-// pub enum ValueExpression<'t> {
-//     Literal(Literal<'t>),
-//     Move(Identifier<'t>),
-//     Copy(Copy<'t>),
-//     Tuple(Tuple<'t>),
-// }
 
 #[derive(Debug, FromPest)]
 #[pest_ast(rule(Rule::raw_word))]

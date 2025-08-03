@@ -104,30 +104,6 @@ impl<'t> Compiler<'t> {
     }
 
     fn convert_sentence(&mut self, sentence: compiler::Sentence) -> Result<flat::Sentence, Error> {
-        // let mut b = SentenceBuilder::new(self.sources, &self.index, sentence.name);
-
-        // for word in sentence.words {
-        //     match word {
-        //         // ir::Word::StackBindings(bindings) => {
-        //         //     b.bindings(bindings);
-        //         // }
-        //         ir::Word::Builtin(builtin) => {
-        //             b.ir_builtin(builtin)?;
-        //         }
-        //         ir::Word::Literal(literal) => b.literal(literal),
-        //         // ir::Word::Tuple(tuple) => {
-        //         //     let num_values = tuple.values.len();
-        //         //     for v in tuple.values {
-        //         //         b.label_call(v)?
-        //         //     }
-        //         //     b.tuple(tuple.span, num_values);
-        //         // }
-        //         // ValueExpression::Path(path) => Ok(b.path(path)),
-        //         // ir::Word::Move(identifier) => b.mv(identifier)?,
-        //         // ir::Word::Copy(identifier) => b.cp(identifier)?,
-        //     }
-        // }
-
         let words: Result<Vec<flat::Word>, Error> = sentence
             .words
             .into_iter()
@@ -135,7 +111,6 @@ impl<'t> Compiler<'t> {
             .collect();
 
         Ok(flat::Sentence { words: words? })
-        // Ok(b.build())
     }
 
     fn convert_word(&mut self, word: compiler::Word) -> Result<flat::Word, Error> {
