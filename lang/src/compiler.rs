@@ -31,6 +31,233 @@ impl Crate {
     }
 }
 
+//
+// x => {
+//   let (y, (a, b), c) = 3 'pairup;
+//   (*x + 1, {
+//       let z = x;
+//       z
+//     } + true if { y + 1 } else { let ^ = y; 0 })
+// }
+
+// x=> 3 y=> ((*x, 1) 'add, ({x z=> z}, true if { y + 1 } else { y ^=> 0 }) 'add)
+
+// x=> 3 y=> *x 1 tuple(2) 'add x z=> z true if { y 1 tuple(2) 'add } else { y ^=> 0 } tuple(2) 'add tuple(2)
+
+// []
+// x=> [x]
+// 3   [x, ?]
+// 'pairup  [x, ?]
+// untuple(3) [x, t0, t1, t2]
+// t0       [x, t1, t2, ?]
+// y=>      [x, t1, t2, y]
+// t1       [x, t2, y, ?]
+// untuple(2) [x, t2, y, t3, t4]
+// t3
+// a=>      [x, t2, y, t3]
+// y=>      [x, y]
+// *x       [x, y, ?]
+// 1        [x, y, ?, ?]
+// tuple(2) [x, y, ?]
+// 'add     [x, y, ?]
+// x        [y, ?, ?]
+// z=>      [y, ?, z]
+// z=>      [y, ?, ?]
+// true     [y, ?, ?, ?]
+// if
+//   - y    [?, ?, ?]
+//     1    [?, ?, ?, ?]
+//     tuple(2) [?, ?, ?]
+//     'add [?, ?, ?]
+//   - y    [?, ?, ?]
+//     ^=>  [?, ?]
+//     0    [?, ?, ?]
+// tuple(2) [?, ?]
+// 'add     [?, ?]
+// tuple(2) [?]
+
+pub enum Transformer<'t> {
+    Literal(ast::Literal<'t>),
+    Move(ast::Identifier<'t>),
+    MoveIdx(usize),
+    Copy(ast::Identifier<'t>),
+    Drop(pest::Span<'t>),
+    Call(ast::QualifiedLabel<'t>),
+    Binding(ast::Identifier<'t>),
+    Tuple {
+        span: pest::Span<'t>,
+        size: usize,
+    },
+    Untuple {
+        span: pest::Span<'t>,
+        size: usize,
+    },
+    Branch {
+        span: pest::Span<'t>,
+        true_case: Box<Transformer<'t>>,
+        false_case: Box<Transformer<'t>>,
+    },
+    Composition {
+        span: pest::Span<'t>,
+        children: Vec<Transformer<'t>>,
+    },
+    AssertEq(pest::Span<'t>),
+}
+
+impl<'t> Transformer<'t> {
+    pub fn from_root(root: ast::RootExpression<'t>) -> Self {
+        match root {
+            ast::RootExpression::Literal(literal) => Self::Literal(literal),
+            ast::RootExpression::Identifier(identifier) => Self::Move(identifier),
+            ast::RootExpression::Copy(copy) => Self::Copy(copy.0),
+            ast::RootExpression::Tuple(tuple) => Self::from_tuple(tuple),
+            ast::RootExpression::Tagged(tagged) => Self::Composition {
+                span: tagged.span,
+                children: vec![
+                    Self::Literal(ast::Literal::Symbol(ast::Symbol::Identifier(tagged.tag))),
+                    Self::from_tuple(ast::Tuple {
+                        span: tagged.span,
+                        values: tagged.values,
+                    }),
+                ],
+            },
+            ast::RootExpression::Block(block) => Self::Composition {
+                span: block.span,
+                children: vec![
+                    Self::Composition {
+                        span: block.span,
+                        children: block
+                            .statements
+                            .into_iter()
+                            .map(Self::from_statement)
+                            .collect(),
+                    },
+                    Self::from_expression(*block.expression),
+                ],
+            },
+        }
+    }
+
+    pub fn from_statement(statement: ast::Statement<'t>) -> Self {
+        match statement {
+            ast::Statement::Let(let_statement) => Self::Composition {
+                span: let_statement._span,
+                children: vec![
+                    Self::from_expression(let_statement.rhs),
+                    Self::from_binding(let_statement.binding),
+                ],
+            },
+        }
+    }
+
+    pub fn from_binding(binding: ast::Binding<'t>) -> Self {
+        fn from_tuple<'t>(
+            span: pest::Span<'t>,
+            bindings: Vec<ast::Binding<'t>>,
+        ) -> (Transformer<'t>, i32) {
+            let mut children = vec![Transformer::Untuple {
+                span,
+                size: bindings.len(),
+            }];
+            let mut stack_size = bindings.len() as i32;
+            for binding in bindings {
+                children.push(Transformer::MoveIdx(stack_size as usize - 1));
+                let (transformer, pushed) = helper(binding);
+                children.push(transformer);
+                stack_size += pushed;
+            }
+            (Transformer::Composition { span, children }, stack_size - 1)
+        }
+
+        fn helper<'t>(binding: ast::Binding<'t>) -> (Transformer<'t>, i32) {
+            match binding {
+                ast::Binding::Identifier(identifier) => (Transformer::Binding(identifier), 0),
+                ast::Binding::Drop(drop) => (Transformer::Drop(drop.span), -1),
+                ast::Binding::Tuple(tuple) => from_tuple(tuple.span, tuple.bindings),
+                ast::Binding::Literal(literal) => {
+                    let span = literal.pest_span();
+                    (
+                        Transformer::Composition {
+                            span,
+                            children: vec![
+                                Transformer::Literal(literal),
+                                Transformer::AssertEq(span),
+                            ],
+                        },
+                        -1,
+                    )
+                }
+                ast::Binding::Tagged(tagged) => from_tuple(
+                    tagged.span,
+                    vec![
+                        ast::Binding::Literal(ast::Literal::Symbol(ast::Symbol::Identifier(
+                            tagged.tag,
+                        ))),
+                        ast::Binding::Tuple(ast::TupleBinding {
+                            span: tagged.span,
+                            bindings: tagged.bindings,
+                        }),
+                    ],
+                ),
+            }
+        }
+        let (transformer, _) = helper(binding);
+        transformer
+    }
+
+    pub fn from_expression(expression: ast::Expression<'t>) -> Self {
+        Self::Composition {
+            span: expression.span,
+            children: vec![
+                Self::from_root(expression.root),
+                Self::Composition {
+                    span: expression.span,
+                    children: expression
+                        .transformers
+                        .into_iter()
+                        .map(Self::from_transformer)
+                        .collect(),
+                },
+            ],
+        }
+    }
+
+    pub fn from_transformer(transformer: ast::Transformer<'t>) -> Self {
+        match transformer {
+            ast::Transformer::Call(call) => Self::Call(call),
+            ast::Transformer::InlineCall(inline_call) => todo!(),
+            ast::Transformer::Match(match_expression) => todo!(),
+            ast::Transformer::If(if_expression) => Self::Branch {
+                span: if_expression.span,
+                true_case: Box::new(Self::from_expression(*if_expression.true_case)),
+                false_case: Box::new(Self::from_expression(*if_expression.false_case)),
+            },
+        }
+    }
+
+    pub fn from_tuple(tuple: ast::Tuple<'t>) -> Self {
+        let size = tuple.values.len();
+        let children = tuple
+            .values
+            .into_iter()
+            .map(Self::from_expression)
+            .collect::<Vec<_>>();
+        Self::Composition {
+            span: tuple.span,
+            children: vec![
+                Self::Composition {
+                    span: tuple.span,
+                    children,
+                },
+                Self::Tuple {
+                    span: tuple.span,
+                    size,
+                },
+            ],
+        }
+    }
+}
+
 pub struct Compiler<'t> {
     sources: &'t Sources,
     res: Crate,
