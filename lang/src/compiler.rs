@@ -79,8 +79,15 @@ impl Crate {
 pub enum Transformer<'t> {
     Literal(ast::Literal<'t>),
     Move(ast::Identifier<'t>),
-    MoveIdx(usize),
+    MoveIdx {
+        span: pest::Span<'t>,
+        idx: usize,
+    },
     Copy(ast::Identifier<'t>),
+    CopyIdx {
+        span: pest::Span<'t>,
+        idx: usize,
+    },
     Drop(pest::Span<'t>),
     Call(ast::QualifiedLabel<'t>),
     Binding(ast::Identifier<'t>),
@@ -101,7 +108,10 @@ pub enum Transformer<'t> {
         span: pest::Span<'t>,
         children: Vec<Transformer<'t>>,
     },
-    AssertEq(pest::Span<'t>),
+    Builtin {
+        span: pest::Span<'t>,
+        builtin: flat::Builtin,
+    },
 }
 
 impl<'t> Transformer<'t> {
@@ -161,7 +171,10 @@ impl<'t> Transformer<'t> {
             }];
             let mut stack_size = bindings.len() as i32;
             for binding in bindings {
-                children.push(Transformer::MoveIdx(stack_size as usize - 1));
+                children.push(Transformer::MoveIdx {
+                    span: binding.pest_span(),
+                    idx: stack_size as usize - 1,
+                });
                 let (transformer, pushed) = helper(binding);
                 children.push(transformer);
                 stack_size += pushed;
@@ -181,7 +194,10 @@ impl<'t> Transformer<'t> {
                             span,
                             children: vec![
                                 Transformer::Literal(literal),
-                                Transformer::AssertEq(span),
+                                Transformer::Builtin {
+                                    span,
+                                    builtin: flat::Builtin::AssertEq,
+                                },
                             ],
                         },
                         -1,
@@ -226,7 +242,31 @@ impl<'t> Transformer<'t> {
         match transformer {
             ast::Transformer::Call(call) => Self::Call(call),
             ast::Transformer::InlineCall(inline_call) => todo!(),
-            ast::Transformer::Match(match_expression) => todo!(),
+            ast::Transformer::Match(match_expression) => {
+                let mut else_case = Self::Builtin {
+                    span: match_expression.span,
+                    builtin: flat::Builtin::Panic,
+                };
+
+                for case in match_expression.cases.into_iter().rev() {
+                    else_case = Self::Composition {
+                        span: case.span,
+                        children: vec![
+                            Self::CopyIdx {
+                                span: case.span,
+                                idx: 0,
+                            },
+                            Self::transformer_for_matching(&case.binding),
+                            Self::Branch {
+                                span: case.span,
+                                true_case: Box::new(Self::from_expression(case.rhs)),
+                                false_case: Box::new(else_case),
+                            },
+                        ],
+                    };
+                }
+                else_case
+            }
             ast::Transformer::If(if_expression) => Self::Branch {
                 span: if_expression.span,
                 true_case: Box::new(Self::from_expression(*if_expression.true_case)),
@@ -254,6 +294,68 @@ impl<'t> Transformer<'t> {
                     size,
                 },
             ],
+        }
+    }
+
+    pub fn transformer_for_matching(binding: &ast::Binding<'t>) -> Self {
+        let span = binding.pest_span();
+        match binding {
+            ast::Binding::Drop(_) | ast::Binding::Identifier(_) => Self::Composition {
+                span,
+                children: vec![
+                    Self::Drop(span),
+                    Self::Literal(ast::Literal::Bool(ast::Bool { span, value: true })),
+                ],
+            },
+            ast::Binding::Tuple(tuple_binding) => {
+                let size = tuple_binding.bindings.len();
+
+                let mut true_case =
+                    Self::Literal(ast::Literal::Bool(ast::Bool { span, value: true }));
+                for (i, binding) in tuple_binding.bindings.iter().enumerate().rev() {
+                    let mut children = vec![];
+                    let top = size - i - 1;
+                    children.push(Self::MoveIdx{span, idx: top});
+                    children.push(Self::transformer_for_matching(binding));
+
+                    let mut false_case_children = vec![];
+                    for i in 0..top {
+                        false_case_children.push(Self::Drop(span));
+                    }
+                    false_case_children.push(Self::Literal(ast::Literal::Bool(ast::Bool {
+                        span,
+                        value: false,
+                    })));
+
+                    children.push(Self::Branch {
+                        span,
+                        true_case: Box::new(true_case),
+                        false_case: Box::new(Self::Composition {
+                            span: span,
+                            children: false_case_children,
+                        }),
+                    });
+
+                    true_case = Self::Composition { span, children };
+                }
+                Self::Composition {
+                    span,
+                    children: vec![Self::Untuple { span, size }, true_case],
+                }
+            }
+            ast::Binding::Tagged(tagged_binding) => Self::transformer_for_matching(
+                &ast::Binding::Tuple(builder::tagged_to_tuple(tagged_binding.clone())),
+            ),
+            ast::Binding::Literal(l) => Self::Composition {
+                span,
+                children: vec![
+                    Self::Literal(l.clone()),
+                    Self::Builtin {
+                        span,
+                        builtin: flat::Builtin::AssertEq,
+                    },
+                ],
+            },
         }
     }
 }
@@ -2120,7 +2222,7 @@ mod builder {
         }
     }
 
-    fn tagged_to_tuple(tagged_binding: ast::TaggedBinding) -> ast::TupleBinding {
+    pub fn tagged_to_tuple(tagged_binding: ast::TaggedBinding) -> ast::TupleBinding {
         let inner_binding = ast::TupleBinding {
             span: tagged_binding.span,
             bindings: tagged_binding.bindings.clone(),
