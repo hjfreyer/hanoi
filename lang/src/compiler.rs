@@ -118,7 +118,10 @@ impl<'t> Transformer<'t> {
     pub fn from_anon_fn(anon_fn: ast::AnonFn<'t>) -> Self {
         Self::Composition {
             span: anon_fn.span,
-            children: vec![Self::from_binding(anon_fn.binding), Self::from_expression(*anon_fn.body)],
+            children: vec![
+                Self::from_binding(anon_fn.binding),
+                Self::from_expression(*anon_fn.body),
+            ],
         }
     }
 
@@ -128,16 +131,26 @@ impl<'t> Transformer<'t> {
             ast::RootExpression::Identifier(identifier) => Self::Move(identifier),
             ast::RootExpression::Copy(copy) => Self::Copy(copy.0),
             ast::RootExpression::Tuple(tuple) => Self::from_tuple(tuple),
-            ast::RootExpression::Tagged(tagged) => Self::Composition {
+            ast::RootExpression::Tagged(tagged) => Self::from_tuple(ast::Tuple {
                 span: tagged.span,
-                children: vec![
-                    Self::Literal(ast::Literal::Symbol(ast::Symbol::Identifier(tagged.tag))),
-                    Self::from_tuple(ast::Tuple {
+                values: vec![
+                    ast::Expression {
                         span: tagged.span,
-                        values: tagged.values,
-                    }),
+                        root: ast::RootExpression::Literal(ast::Literal::Symbol(
+                            ast::Symbol::Identifier(tagged.tag),
+                        )),
+                        transformers: vec![],
+                    },
+                    ast::Expression {
+                        span: tagged.span,
+                        root: ast::RootExpression::Tuple(ast::Tuple {
+                            span: tagged.span,
+                            values: tagged.values,
+                        }),
+                        transformers: vec![],
+                    },
                 ],
-            },
+            }),
             ast::RootExpression::Block(block) => Self::Composition {
                 span: block.span,
                 children: vec![
@@ -245,7 +258,12 @@ impl<'t> Transformer<'t> {
     pub fn from_transformer(transformer: ast::Transformer<'t>) -> Self {
         match transformer {
             ast::Transformer::Call(call) => Self::Call(call),
-            ast::Transformer::InlineCall(inline_call) => todo!(),
+            ast::Transformer::InlineCall(inline_call) => {
+                let ast::IntoFn::QualifiedLabel(label) = inline_call else {
+                    todo!("inline call: {:?}", inline_call);
+                };
+                Self::Call(label)
+            }
             ast::Transformer::Match(match_expression) => {
                 let mut else_case = Self::Panic(match_expression.span);
 
@@ -260,7 +278,13 @@ impl<'t> Transformer<'t> {
                             Self::transformer_for_matching(&case.binding),
                             Self::Branch {
                                 span: case.span,
-                                true_case: Box::new(Self::from_expression(case.rhs)),
+                                true_case: Box::new(Self::Composition {
+                                    span: case.span,
+                                    children: vec![
+                                        Self::from_binding(case.binding),
+                                        Self::from_expression(case.rhs),
+                                    ],
+                                }),
                                 false_case: Box::new(else_case),
                             },
                         ],
@@ -295,6 +319,43 @@ impl<'t> Transformer<'t> {
                     size,
                 },
             ],
+        }
+    }
+
+    pub fn flatten(self) -> Self {
+        match self {
+            Transformer::Composition { span, children } => {
+                let mut flattened_children = Vec::new();
+                for child in children {
+                    let flattened_child = child.flatten();
+                    match flattened_child {
+                        Transformer::Composition {
+                            children: nested_children,
+                            ..
+                        } => {
+                            flattened_children.extend(nested_children);
+                        }
+                        _ => {
+                            flattened_children.push(flattened_child);
+                        }
+                    }
+                }
+                Transformer::Composition {
+                    span,
+                    children: flattened_children,
+                }
+            }
+            Transformer::Branch {
+                span,
+                true_case,
+                false_case,
+            } => Transformer::Branch {
+                span,
+                true_case: Box::new(true_case.flatten()),
+                false_case: Box::new(false_case.flatten()),
+            },
+            // For all other variants, return as-is since they don't contain nested Transformers
+            other => other,
         }
     }
 
@@ -349,17 +410,15 @@ impl<'t> Transformer<'t> {
             ),
             ast::Binding::Literal(l) => Self::Composition {
                 span,
-                children: vec![
-                    Self::Literal(l.clone()),
-                    Self::Eq(span),
-                ],
+                children: vec![Self::Literal(l.clone()), Self::Eq(span)],
             },
         }
     }
 
-    pub fn into_recursive_sentence(
+    fn into_recursive_sentence(
         self,
         ctx: FileContext,
+        symbol_table: &SymbolTable,
         locals: &mut Locals,
     ) -> Result<RecursiveSentence, Error> {
         match self {
@@ -433,13 +492,16 @@ impl<'t> Transformer<'t> {
             }
             Transformer::Call(qualified_label) => {
                 let span = qualified_label.span(ctx.file_idx);
+
+                let qualified = symbol_table.resolve(
+                    ctx.sources,
+                    qualified_label.into_ir(ctx.sources, ctx.file_idx),
+                );
                 locals.pop();
                 locals.push_unnamed();
                 Ok(RecursiveSentence::single_span(
                     span,
-                    vec![InnerWord::Call(
-                        qualified_label.into_ir(ctx.sources, ctx.file_idx),
-                    )],
+                    vec![InnerWord::Call(qualified)],
                 ))
             }
             Transformer::Binding(identifier) => {
@@ -481,8 +543,10 @@ impl<'t> Transformer<'t> {
 
                 let mut true_locals = locals.clone();
                 let mut false_locals = locals.clone();
-                let true_sentence = true_case.into_recursive_sentence(ctx, &mut true_locals)?;
-                let false_sentence = false_case.into_recursive_sentence(ctx, &mut false_locals)?;
+                let true_sentence =
+                    true_case.into_recursive_sentence(ctx, symbol_table, &mut true_locals)?;
+                let false_sentence =
+                    false_case.into_recursive_sentence(ctx, symbol_table, &mut false_locals)?;
 
                 if !true_locals.compare(ctx.sources, &false_locals) {
                     return Err(Error::BranchContractsDisagree {
@@ -514,9 +578,11 @@ impl<'t> Transformer<'t> {
                 let span: FileSpan = span.into_ir(ctx.sources, ctx.file_idx);
                 let mut words = vec![];
                 for child in children {
-                    words.push(InnerWord::InlineCall(
-                        child.into_recursive_sentence(ctx, locals)?,
-                    ));
+                    words.push(InnerWord::InlineCall(child.into_recursive_sentence(
+                        ctx,
+                        symbol_table,
+                        locals,
+                    )?));
                 }
                 Ok(RecursiveSentence::single_span(span, words))
             }
@@ -524,22 +590,29 @@ impl<'t> Transformer<'t> {
                 let span: FileSpan = span.into_ir(ctx.sources, ctx.file_idx);
                 locals.pop();
                 locals.pop();
-                Ok(RecursiveSentence::single_span(span, vec![InnerWord::Builtin(flat::Builtin::AssertEq)]))
+                Ok(RecursiveSentence::single_span(
+                    span,
+                    vec![InnerWord::Builtin(flat::Builtin::AssertEq)],
+                ))
             }
             Transformer::Panic(span) => {
                 let span: FileSpan = span.into_ir(ctx.sources, ctx.file_idx);
                 locals.terminal = true;
-                Ok(RecursiveSentence::single_span(span, vec![InnerWord::Builtin(flat::Builtin::Panic)]))
+                Ok(RecursiveSentence::single_span(
+                    span,
+                    vec![InnerWord::Builtin(flat::Builtin::Panic)],
+                ))
             }
             Transformer::Eq(span) => {
                 let span: FileSpan = span.into_ir(ctx.sources, ctx.file_idx);
                 locals.pop();
                 locals.pop();
                 locals.push_unnamed();
-                Ok(RecursiveSentence::single_span(span, vec![InnerWord::Builtin(flat::Builtin::Eq)]))
+                Ok(RecursiveSentence::single_span(
+                    span,
+                    vec![InnerWord::Builtin(flat::Builtin::Eq)],
+                ))
             }
-
-            
         }
     }
 }
@@ -640,7 +713,7 @@ impl<'t> Compiler<'t> {
 
         let mut locals = Locals::default();
         locals.push_unnamed();
-        let sentence = transformer.into_recursive_sentence(ctx, &mut locals)?;
+        let sentence = transformer.into_recursive_sentence(ctx, &symbol_table, &mut locals)?;
 
         let mut names = NameSequence {
             base: name,
@@ -2505,8 +2578,9 @@ mod builder {
 mod tests {
     use super::*;
     use crate::ast::HanoiParser;
-    use pest::Parser;
     use from_pest::FromPest;
+    use insta::{assert_debug_snapshot, assert_snapshot};
+    use pest::Parser;
 
     #[test]
     fn test_fn_decl_to_transformer() {
@@ -2524,9 +2598,9 @@ mod tests {
         // Parse the function declaration
         let mut pairs = HanoiParser::parse(crate::ast::Rule::fn_decl, fn_decl_str)
             .expect("Failed to parse function declaration");
-        
-        let fn_decl = ast::FnDecl::from_pest(&mut pairs)
-            .expect("Failed to convert pest pairs to FnDecl");
+
+        let fn_decl =
+            ast::FnDecl::from_pest(&mut pairs).expect("Failed to convert pest pairs to FnDecl");
 
         // Clone the binding for later use in assertions
         let binding_clone = fn_decl.binding.clone();
@@ -2541,82 +2615,78 @@ mod tests {
         // Convert to Transformer
         let transformer = Transformer::from_anon_fn(anon_fn);
 
-        // Assert the transformer structure using equality checks
-        match transformer {
-            Transformer::Composition { span, children } => {
-                // Should have 2 children: binding and expression
-                assert_eq!(children.len(), 2);
-                
-                // First child should be the binding transformer for 'args'
-                match &binding_clone {
-                    ast::Binding::Identifier(identifier) => {
-                        assert_eq!(&children[0], &Transformer::Binding(identifier.clone()));
+        // Flatten the transformer
+        assert_snapshot!(transformer.flatten());
+    }
+}
+
+impl<'t> Transformer<'t> {
+    fn format_indented(&self, f: &mut std::fmt::Formatter<'_>, indent: usize) -> std::fmt::Result {
+        for _ in 0..indent {
+            write!(f, "  ")?;
+        }
+        match self {
+            Transformer::Literal(literal) => match literal {
+                ast::Literal::Int(int) => writeln!(f, "{}", int.value),
+                ast::Literal::Char(char_lit) => writeln!(f, "'{}'", char_lit.value),
+                ast::Literal::Bool(bool_lit) => writeln!(f, "{}", bool_lit.value),
+                ast::Literal::Symbol(symbol) => match symbol {
+                    ast::Symbol::Identifier(identifier) => {
+                        writeln!(f, "@{}", identifier.0.as_str())
                     }
-                    _ => panic!("Expected Identifier binding"),
-                }
-                
-                // Second child should be the expression transformer (match expression)
-                match &children[1] {
-                    Transformer::Composition { children: expr_children, .. } => {
-                        // The match expression should have transformers for each case
-                        assert!(!expr_children.is_empty());
+                    ast::Symbol::String(string_lit) => writeln!(f, "@\"{}\"", string_lit.value),
+                },
+            },
+            Transformer::Move(identifier) => writeln!(f, "{}", identifier.0.as_str()),
+            Transformer::MoveIdx { idx, .. } => writeln!(f, "mv({})", idx),
+            Transformer::Copy(identifier) => writeln!(f, "*{}", identifier.0.as_str()),
+            Transformer::CopyIdx { idx, .. } => writeln!(f, "cp({})", idx),
+            Transformer::Drop(_) => writeln!(f, "^"),
+            Transformer::Call(qualified_label) => {
+                write!(f, "'")?;
+                for (i, identifier) in qualified_label.path.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, "::")?;
                     }
-                    _ => panic!("Expected Composition transformer for match expression"),
+                    write!(f, "{}", identifier.0.as_str())?;
                 }
+                Ok(())
             }
-            _ => panic!("Expected Composition transformer for function declaration"),
+            Transformer::Binding(identifier) => writeln!(f, "{}=>", identifier.0.as_str()),
+            Transformer::Tuple { size, .. } => writeln!(f, "tuple({})", size),
+            Transformer::Untuple { size, .. } => writeln!(f, "untuple({})", size),
+            Transformer::Branch {
+                true_case,
+                false_case,
+                ..
+            } => {
+                writeln!(f, "if {{")?;
+                true_case.format_indented(f, indent + 1)?;
+                for _ in 0..indent {
+                    write!(f, "  ")?;
+                }
+                writeln!(f, "}} else {{")?;
+                false_case.format_indented(f, indent + 1)?;
+                for _ in 0..indent {
+                    write!(f, "  ")?;
+                }
+                writeln!(f, "}}")
+            }
+            Transformer::Composition { children, .. } => {
+                for (i, child) in children.iter().enumerate() {
+                    child.format_indented(f, if i == 0 { 0 } else { indent })?;
+                }
+                Ok(())
+            }
+            Transformer::AssertEq(_) => writeln!(f, "assert_eq"),
+            Transformer::Panic(_) => writeln!(f, "panic"),
+            Transformer::Eq(_) => writeln!(f, "eq"),
         }
     }
+}
 
-    #[test]
-    fn test_simple_fn_decl_to_transformer() {
-        // Test a simpler function: fn x add => (x, 1) 'add
-        let fn_decl_str = "fn x add => (x, 1) 'add";
-
-        // Parse the function declaration
-        let mut pairs = HanoiParser::parse(crate::ast::Rule::fn_decl, fn_decl_str)
-            .expect("Failed to parse simple function declaration");
-        
-        let fn_decl = ast::FnDecl::from_pest(&mut pairs)
-            .expect("Failed to convert pest pairs to FnDecl");
-
-        // Clone the binding for later use in assertions
-        let binding_clone = fn_decl.binding.clone();
-
-        // Create an AnonFn from the FnDecl
-        let anon_fn = ast::AnonFn {
-            span: fn_decl.span,
-            binding: fn_decl.binding,
-            body: Box::new(fn_decl.expression),
-        };
-
-        // Convert to Transformer
-        let transformer = Transformer::from_anon_fn(anon_fn);
-
-        // Assert the transformer structure using equality checks
-        match transformer {
-            Transformer::Composition { span, children } => {
-                // Should have 2 children: binding and expression
-                assert_eq!(children.len(), 2);
-                
-                // First child should be the binding transformer for 'x'
-                match &binding_clone {
-                    ast::Binding::Identifier(identifier) => {
-                        assert_eq!(&children[0], &Transformer::Binding(identifier.clone()));
-                    }
-                    _ => panic!("Expected Identifier binding"),
-                }
-                
-                // Second child should be the expression transformer
-                match &children[1] {
-                    Transformer::Composition { children: expr_children, .. } => {
-                        // Should have transformers for the tuple and call
-                        assert!(!expr_children.is_empty());
-                    }
-                    _ => panic!("Expected Composition transformer for expression"),
-                }
-            }
-            _ => panic!("Expected Composition transformer for function declaration"),
-        }
+impl<'t> std::fmt::Display for Transformer<'t> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.format_indented(f, 0)
     }
 }

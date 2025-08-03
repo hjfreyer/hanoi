@@ -1,0 +1,366 @@
+---
+source: lang/src/compiler.rs
+expression: transformer.flatten()
+---
+args=>
+args
+cp(0)
+untuple(2)
+mv(1)
+^
+true
+if {
+  mv(0)
+  untuple(2)
+  mv(1)
+  untuple(2)
+  mv(1)
+  @pass
+  eq
+  if {
+    mv(0)
+    untuple(0)
+    true
+    if {
+      true
+    } else {
+      false
+    }
+  } else {
+    ^
+    false
+  }
+  if {
+    mv(0)
+    untuple(2)
+    mv(1)
+    @pass
+    eq
+    if {
+      mv(0)
+      untuple(0)
+      true
+      if {
+        true
+      } else {
+        false
+      }
+    } else {
+      ^
+      false
+    }
+    if {
+      true
+    } else {
+      false
+    }
+  } else {
+    ^
+    false
+  }
+  if {
+    true
+  } else {
+    false
+  }
+} else {
+  ^
+  false
+}
+if {
+  untuple(2)
+  mv(1)
+  state=>
+  mv(1)
+  untuple(2)
+  mv(1)
+  untuple(2)
+  mv(1)
+  @pass
+  assert_eq
+  mv(0)
+  untuple(0)
+  mv(0)
+  untuple(2)
+  mv(1)
+  @pass
+  assert_eq
+  mv(0)
+  untuple(0)
+  state
+  @pass
+  tuple(0)
+  tuple(2)
+  @pass
+  tuple(0)
+  tuple(2)
+  tuple(2)
+  tuple(2)
+} else {
+  cp(0)
+  untuple(2)
+  mv(1)
+  untuple(2)
+  mv(1)
+  @start
+  eq
+  if {
+    mv(0)
+    untuple(0)
+    true
+    if {
+      true
+    } else {
+      false
+    }
+  } else {
+    ^
+    false
+  }
+  if {
+    mv(0)
+    untuple(2)
+    mv(1)
+    untuple(2)
+    mv(1)
+    @in
+    eq
+    if {
+      mv(0)
+      untuple(1)
+      mv(0)
+      ^
+      true
+      if {
+        true
+      } else {
+        false
+      }
+      if {
+        true
+      } else {
+        false
+      }
+    } else {
+      ^
+      false
+    }
+    if {
+      mv(0)
+      untuple(2)
+      mv(1)
+      @pass
+      eq
+      if {
+        mv(0)
+        untuple(0)
+        true
+        if {
+          true
+        } else {
+          false
+        }
+      } else {
+        ^
+        false
+      }
+      if {
+        true
+      } else {
+        false
+      }
+    } else {
+      ^
+      false
+    }
+    if {
+      true
+    } else {
+      false
+    }
+  } else {
+    ^
+    false
+  }
+  if {
+    untuple(2)
+    mv(1)
+    untuple(2)
+    mv(1)
+    @start
+    assert_eq
+    mv(0)
+    untuple(0)
+    mv(0)
+    untuple(2)
+    mv(1)
+    untuple(2)
+    mv(1)
+    @in
+    assert_eq
+    mv(0)
+    untuple(1)
+    mv(0)
+    capacity=>
+    mv(1)
+    untuple(2)
+    mv(1)
+    @pass
+    assert_eq
+    mv(0)
+    untuple(0)
+    @await_malloc
+    *capacity
+    tuple(1)
+    tuple(2)
+    @pass
+    tuple(0)
+    tuple(2)
+    @malloc
+    capacity
+    tuple(1)
+    tuple(2)
+    tuple(2)
+    tuple(2)
+  } else {
+    cp(0)
+    untuple(2)
+    mv(1)
+    untuple(2)
+    mv(1)
+    @await_malloc
+    eq
+    if {
+      mv(0)
+      untuple(1)
+      mv(0)
+      ^
+      true
+      if {
+        true
+      } else {
+        false
+      }
+      if {
+        true
+      } else {
+        false
+      }
+    } else {
+      ^
+      false
+    }
+    if {
+      mv(0)
+      untuple(2)
+      mv(1)
+      untuple(2)
+      mv(1)
+      @pass
+      eq
+      if {
+        mv(0)
+        untuple(0)
+        true
+        if {
+          true
+        } else {
+          false
+        }
+      } else {
+        ^
+        false
+      }
+      if {
+        mv(0)
+        untuple(2)
+        mv(1)
+        @out
+        eq
+        if {
+          mv(0)
+          untuple(1)
+          mv(0)
+          ^
+          true
+          if {
+            true
+          } else {
+            false
+          }
+          if {
+            true
+          } else {
+            false
+          }
+        } else {
+          ^
+          false
+        }
+        if {
+          true
+        } else {
+          false
+        }
+      } else {
+        ^
+        false
+      }
+      if {
+        true
+      } else {
+        false
+      }
+    } else {
+      ^
+      false
+    }
+    if {
+      untuple(2)
+      mv(1)
+      untuple(2)
+      mv(1)
+      @await_malloc
+      assert_eq
+      mv(0)
+      untuple(1)
+      mv(0)
+      capacity=>
+      mv(1)
+      untuple(2)
+      mv(1)
+      untuple(2)
+      mv(1)
+      @pass
+      assert_eq
+      mv(0)
+      untuple(0)
+      mv(0)
+      untuple(2)
+      mv(1)
+      @out
+      assert_eq
+      mv(0)
+      untuple(1)
+      mv(0)
+      array=>
+      @end
+      tuple(0)
+      tuple(2)
+      @out
+      0
+      capacity
+      array
+      tuple(3)
+      tuple(1)
+      tuple(2)
+      @pass
+      tuple(0)
+      tuple(2)
+      tuple(2)
+      tuple(2)
+    } else {
+      panic
+    }
+  }
+}

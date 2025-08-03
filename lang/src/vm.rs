@@ -613,10 +613,12 @@ impl Vm {
         }
         match res {
             EvalResult::Call(sentence_idx) => {
-                self.call_stack.push(ProgramCounter {
-                    sentence_idx,
-                    word_idx: 0,
-                });
+                if !self.lib.sentences[sentence_idx].words.is_empty() {
+                    self.call_stack.push(ProgramCounter {
+                        sentence_idx,
+                        word_idx: 0,
+                    });
+                }
             }
             EvalResult::Continue => {}
         }

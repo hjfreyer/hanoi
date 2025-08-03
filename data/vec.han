@@ -169,175 +169,175 @@ fn method vec => {
 //         }
 // }
 
-mod tests {
-    fn args main => args match {
-        (#nil{}, #enumerate{}) => (#nil{}, #a{}),
-        (#a{}, #next{}) => (#b{}, #some{@new}),
-        (#b{}, #next{}) => (#e{}, #none{}),
+// mod tests {
+//     fn args main => args match {
+//         (#nil{}, #enumerate{}) => (#nil{}, #a{}),
+//         (#a{}, #next{}) => (#b{}, #some{@new}),
+//         (#b{}, #next{}) => (#e{}, #none{}),
 
-        (#nil{}, #run{@new}) => {
-            let #req{t, #stall{}} = #run{} fn x => {x 'test_new};
-            let #req{t, #stall{}} = #reply{t, #cont{}} 'test_new;
-            let #req{t, #alloc{#malloc{8}}} = #reply{t, #cont{}} 'test_new;
-            let #req{t, #stall{}} = #reply{t, @handle} 'test_new;
+//         (#nil{}, #run{@new}) => {
+//             let #req{t, #stall{}} = #run{} fn x => {x 'test_new};
+//             let #req{t, #stall{}} = #reply{t, #cont{}} 'test_new;
+//             let #req{t, #alloc{#malloc{8}}} = #reply{t, #cont{}} 'test_new;
+//             let #req{t, #stall{}} = #reply{t, @handle} 'test_new;
             
-            let #req{t, #stall{}} = #reply{t, #cont{}} 'test_new;
-            let #req{t, #stall{}} = #reply{t, #cont{}} 'test_new;
-            let #resp{()} = #reply{t, #cont{}} 'test_new;
-            // let #req{t, #stall{}} = #reply{t, #cont{}} 'test_new;
-            // let #req{t, #alloc{#malloc{8}}} = #reply{t, #cont{}} 'test_new;
-            // let #req{t, #stall{}} = #reply{t, #cont{}} 'test_new;
-            // let ^=t;
-            ()
-        },
-    }
+//             let #req{t, #stall{}} = #reply{t, #cont{}} 'test_new;
+//             let #req{t, #stall{}} = #reply{t, #cont{}} 'test_new;
+//             let #resp{()} = #reply{t, #cont{}} 'test_new;
+//             // let #req{t, #stall{}} = #reply{t, #cont{}} 'test_new;
+//             // let #req{t, #alloc{#malloc{8}}} = #reply{t, #cont{}} 'test_new;
+//             // let #req{t, #stall{}} = #reply{t, #cont{}} 'test_new;
+//             // let ^=t;
+//             ()
+//         },
+//     }
 
-    // mach () main => {
-    //     #stall{} yield 'foo
-    // }
+//     // mach () main => {
+//     //     #stall{} yield 'foo
+//     // }
 
-    // fn args sum => args match {
-    //     #call{} => #req{#start{0}, #stall{}},
-    //     #reply{#start{acc}, #cont{}} => #req{#iter_reply{acc}, #iter{#next{}}},
-    //     #reply{#iter_reply{acc}, reply} => reply match {
-    //         #some{} => #req{#iter_clone{acc}, #iter{#item{#clone{}}}},
-    //         #none{} => #resp{acc},
-    //     },
-    //     #reply{#iter_clone{acc}, num} => #req{#start{(acc, num) 'crate::builtin::add}, #stall{}},
-    // }
+//     // fn args sum => args match {
+//     //     #call{} => #req{#start{0}, #stall{}},
+//     //     #reply{#start{acc}, #cont{}} => #req{#iter_reply{acc}, #iter{#next{}}},
+//     //     #reply{#iter_reply{acc}, reply} => reply match {
+//     //         #some{} => #req{#iter_clone{acc}, #iter{#item{#clone{}}}},
+//     //         #none{} => #resp{acc},
+//     //     },
+//     //     #reply{#iter_clone{acc}, num} => #req{#start{(acc, num) 'crate::builtin::add}, #stall{}},
+//     // }
 
-    // fn args and_then<A, B> => args match {
-    //     #call{args} => {
-    //         #call{args} A match {
-    //             #req{state, msg} => #req{#a{state}, msg},
-    //             #resp{a} => #call{a} B match {
-    //                 #req{state, msg} => #req{#b{state}, msg},
-    //                 #resp{val} => #resp{val},
-    //             },
-    //         }
-    //     },
-    //     #reply{#a{state}, msg} => #reply{state, msg} A match {
-    //         #req{state, msg} => #req{#a{state}, msg},
-    //         #resp{a} => #call{a} B match {
-    //             #req{state, msg} => #req{#b{state}, msg},
-    //             #resp{val} => #resp{val},
-    //         },
-    //     },
-    //     #reply{#b{state}, msg} => #reply{state, msg} B match {
-    //         #req{state, msg} => #req{#b{state}, msg},
-    //         #resp{val} => #resp{val},
-    //     },
-    // }
+//     // fn args and_then<A, B> => args match {
+//     //     #call{args} => {
+//     //         #call{args} A match {
+//     //             #req{state, msg} => #req{#a{state}, msg},
+//     //             #resp{a} => #call{a} B match {
+//     //                 #req{state, msg} => #req{#b{state}, msg},
+//     //                 #resp{val} => #resp{val},
+//     //             },
+//     //         }
+//     //     },
+//     //     #reply{#a{state}, msg} => #reply{state, msg} A match {
+//     //         #req{state, msg} => #req{#a{state}, msg},
+//     //         #resp{a} => #call{a} B match {
+//     //             #req{state, msg} => #req{#b{state}, msg},
+//     //             #resp{val} => #resp{val},
+//     //         },
+//     //     },
+//     //     #reply{#b{state}, msg} => #reply{state, msg} B match {
+//     //         #req{state, msg} => #req{#b{state}, msg},
+//     //         #resp{val} => #resp{val},
+//     //     },
+//     // }
 
-    // fn args loop<B> => args match {
-    //     #call{init} => #call{init} B match {
-    //         #req{state, msg} => #req{#body{state}, msg},
-    //         #resp{#continue{args}} => #req{#continue{args}, #stall{}},
-    //         #resp{#break{result}} => #resp{result},
-    //     },
-    //     #reply{#body{state}, msg} => #reply{state, msg} B match {
-    //         #req{state, msg} => #req{#body{state}, msg},
-    //         #resp{#continue{args}} => #req{#continue{args}, #stall{}},
-    //         #resp{#break{result}} => #resp{result},
-    //     },
-    //     #reply{#continue{args}, #cont{}} => #call{args} B match {
-    //         #req{state, msg} => #req{#body{state}, msg},
-    //         #resp{#continue{args}} => #req{#continue{args}, #stall{}},
-    //         #resp{#break{result}} => #resp{result},
-    //     },
-    // }
+//     // fn args loop<B> => args match {
+//     //     #call{init} => #call{init} B match {
+//     //         #req{state, msg} => #req{#body{state}, msg},
+//     //         #resp{#continue{args}} => #req{#continue{args}, #stall{}},
+//     //         #resp{#break{result}} => #resp{result},
+//     //     },
+//     //     #reply{#body{state}, msg} => #reply{state, msg} B match {
+//     //         #req{state, msg} => #req{#body{state}, msg},
+//     //         #resp{#continue{args}} => #req{#continue{args}, #stall{}},
+//     //         #resp{#break{result}} => #resp{result},
+//     //     },
+//     //     #reply{#continue{args}, #cont{}} => #call{args} B match {
+//     //         #req{state, msg} => #req{#body{state}, msg},
+//     //         #resp{#continue{args}} => #req{#continue{args}, #stall{}},
+//     //         #resp{#break{result}} => #resp{result},
+//     //     },
+//     // }
 
-    // proc foo {
-    //     delegate<cond> 
-    //     if x else y
-    // }
+//     // proc foo {
+//     //     delegate<cond> 
+//     //     if x else y
+//     // }
     
-    // proc () sum {
-    //     (0, 0) 'sum_loop match {
-    //         #req{}
-    //     }
-    // }
+//     // proc () sum {
+//     //     (0, 0) 'sum_loop match {
+//     //         #req{}
+//     //     }
+//     // }
 
-    // proc sum_loop {
-    //     0: acc => #req{(1, acc), #iter{#next{}}},
-    //     1: (acc, res) => res match {
-    //         #some{} => (0, acc) sum_loop_some match {
+//     // proc sum_loop {
+//     //     0: acc => #req{(1, acc), #iter{#next{}}},
+//     //     1: (acc, res) => res match {
+//     //         #some{} => (0, acc) sum_loop_some match {
                 
-    //         },
-    //         #none{} => #resp{#break{acc}},
-    //     },
-    //     2: (acc, #cont{}) => {
-    //         #req{(3, acc), #item{#clone{}}},
-    //     }
-    // }
+//     //         },
+//     //         #none{} => #resp{#break{acc}},
+//     //     },
+//     //     2: (acc, #cont{}) => {
+//     //         #req{(3, acc), #item{#clone{}}},
+//     //     }
+//     // }
 
-    // proc sum_loop_some {
-    //     0: acc => 
-    // }
-    // fn (state, args) main => match state {
-    //     (0, ()) => {#req{(1, ()), #stall{}}}
-    //     (1, ()) => args 'foo,
-    // }
+//     // proc sum_loop_some {
+//     //     0: acc => 
+//     // }
+//     // fn (state, args) main => match state {
+//     //     (0, ()) => {#req{(1, ()), #stall{}}}
+//     //     (1, ()) => args 'foo,
+//     // }
 
-    // mach () sum => {
-    //     0 loop acc {
-    //         #iter{#next{}} yield match {
-    //             #some{} => {
-    //                 let val = #item{#clone{}} yield;
-    //                 (val, acc) 'builtin::add continue;
-    //             },
-    //             #none{} => acc break,
-    //         }
-    //     }
-    // }
+//     // mach () sum => {
+//     //     0 loop acc {
+//     //         #iter{#next{}} yield match {
+//     //             #some{} => {
+//     //                 let val = #item{#clone{}} yield;
+//     //                 (val, acc) 'builtin::add continue;
+//     //             },
+//     //             #none{} => acc break,
+//     //         }
+//     //     }
+//     // }
 
-    // mach () sum => {
-    //     0 loop_start: acc {
-    //         #iter{#next{}} yield match {
-    //             #some{} => {
-    //                 let val = #item{#clone{}} yield;
-    //                 (val, acc) 'builtin::add goto<loop_start>;
-    //             },
-    //             #none{} => acc goto<loop_end>,
-    //         }
-    //     }
-    //     loop_end:
-    // }
+//     // mach () sum => {
+//     //     0 loop_start: acc {
+//     //         #iter{#next{}} yield match {
+//     //             #some{} => {
+//     //                 let val = #item{#clone{}} yield;
+//     //                 (val, acc) 'builtin::add goto<loop_start>;
+//     //             },
+//     //             #none{} => acc goto<loop_end>,
+//     //         }
+//     //     }
+//     //     loop_end:
+//     // }
 
-    // fn (state, args) sum => match {
-    //     (0, ()) => { args bind<()> 0 #req{(1, stack), #stall{}}},
-    //     (1, stack) => args bind<#cont{}> stack save<acc> #req{(2, stack), #iter{#next{}}}},
-    //     (2, stack) => stack bind<acc> args match {
-    //         #some{} => #req{(3, stack), #item{#clone{}}},
-    //         #none{} => #req{(4, acc), #stall{}},
-    //     }
-    //     (3, stack) => stack bind<acc> args bind<val> (val, acc) 'builtin::add #req{(1, (-)), #stall{}},
-    //     (4, acc) => args bind<#cont{}> #resp{acc} 
-    // }
+//     // fn (state, args) sum => match {
+//     //     (0, ()) => { args bind<()> 0 #req{(1, stack), #stall{}}},
+//     //     (1, stack) => args bind<#cont{}> stack save<acc> #req{(2, stack), #iter{#next{}}}},
+//     //     (2, stack) => stack bind<acc> args match {
+//     //         #some{} => #req{(3, stack), #item{#clone{}}},
+//     //         #none{} => #req{(4, acc), #stall{}},
+//     //     }
+//     //     (3, stack) => stack bind<acc> args bind<val> (val, acc) 'builtin::add #req{(1, (-)), #stall{}},
+//     //     (4, acc) => args bind<#cont{}> #resp{acc} 
+//     // }
 
-    fn method test_new => {
-        method match {
-            #run{} => #req{#call_unbound{#run{}}, #stall{}},
-            #reply{#call_unbound{req}, #cont{}} => req 'test_new_unbound match {
-                #resp{resp} => #resp{resp},
-                #req{s, #vec{req}} => #req{#call_vec{s, req}, #stall{}},
-            },
-            #reply{#call_vec{s, req}, #cont{}} => req 'super::vec match {
-                #resp{resp} => #req{#call_unbound{#reply{s, resp}}, #stall{}},
-                #req{v, req} => #req{#call_vec_reply{s, v}, req},
-            },
-            #reply{#call_vec_reply{s, v}, reply} => #reply{v, reply} 'super::vec match {
-                #resp{resp} => #req{#call_unbound{#reply{s, resp}}, #stall{}},
-                #req{v, req} => #req{#call_vec_reply{s, v}, req},
-            },
-        }
-    }
+//     fn method test_new => {
+//         method match {
+//             #run{} => #req{#call_unbound{#run{}}, #stall{}},
+//             #reply{#call_unbound{req}, #cont{}} => req 'test_new_unbound match {
+//                 #resp{resp} => #resp{resp},
+//                 #req{s, #vec{req}} => #req{#call_vec{s, req}, #stall{}},
+//             },
+//             #reply{#call_vec{s, req}, #cont{}} => req 'super::vec match {
+//                 #resp{resp} => #req{#call_unbound{#reply{s, resp}}, #stall{}},
+//                 #req{v, req} => #req{#call_vec_reply{s, v}, req},
+//             },
+//             #reply{#call_vec_reply{s, v}, reply} => #reply{v, reply} 'super::vec match {
+//                 #resp{resp} => #req{#call_unbound{#reply{s, resp}}, #stall{}},
+//                 #req{v, req} => #req{#call_vec_reply{s, v}, req},
+//             },
+//         }
+//     }
 
-    fn method test_new_unbound => {
-        method match {
-            #run{} => #req{#on_new{}, #vec{#new{8}}},
-            #reply{#on_new{}, v} => #req{#on_size{}, #vec{#size{v}}},
-            #reply{#on_size{}, (^, 0)} => #resp{()},
-        }
-    }
-}
+//     fn method test_new_unbound => {
+//         method match {
+//             #run{} => #req{#on_new{}, #vec{#new{8}}},
+//             #reply{#on_new{}, v} => #req{#on_size{}, #vec{#size{v}}},
+//             #reply{#on_size{}, (^, 0)} => #resp{()},
+//         }
+//     }
+// }

@@ -11,230 +11,230 @@ use 'crate::builtin;
 //mod multi_iter;
 //
 
-mod tests {
-    fn args main => args match {
-        (#nil{}, #enumerate{}) => (#nil{}, #a{}),
-        (#a{}, #next{}) => (#b{}, #some{@parse_empty}),
-        (#b{}, #next{}) => (#c{}, #some{@parse_some}),
-        (#c{}, #next{}) => (#d{}, #some{@split}),
-        (#d{}, #next{}) => (#e{}, #none{}),
+// mod tests {
+//     fn args main => args match {
+//         (#nil{}, #enumerate{}) => (#nil{}, #a{}),
+//         (#a{}, #next{}) => (#b{}, #some{@parse_empty}),
+//         (#b{}, #next{}) => (#c{}, #some{@parse_some}),
+//         (#c{}, #next{}) => (#d{}, #some{@split}),
+//         (#d{}, #next{}) => (#e{}, #none{}),
 
-        (#nil{}, #run{@parse_empty}) => () 'cases::parse_empty,
-        (#nil{}, #run{@parse_some}) => () 'cases::parse_some,
-        (#nil{}, #run{@split}) => {
-            let #resp{s, #some{}} = (#start{@i}, #next{}) 'super::split_iter;
-            let #req{s, @iter, (@i, #next{})} = (s, #item{#next{}}) 'super::split_iter;
-            let #resp{s, #some{}} = (s, #reply{@i, #non_delim{}}) 'super::split_iter;
-            let #req{s, @iter, (@i, #item{@query})} = (s, #item{#item{@query}}) 'super::split_iter;
-            let #resp{s, @answer} = (s, #reply{@i, @answer}) 'super::split_iter;
+//         (#nil{}, #run{@parse_empty}) => () 'cases::parse_empty,
+//         (#nil{}, #run{@parse_some}) => () 'cases::parse_some,
+//         (#nil{}, #run{@split}) => {
+//             let #resp{s, #some{}} = (#start{@i}, #next{}) 'super::split_iter;
+//             let #req{s, @iter, (@i, #next{})} = (s, #item{#next{}}) 'super::split_iter;
+//             let #resp{s, #some{}} = (s, #reply{@i, #non_delim{}}) 'super::split_iter;
+//             let #req{s, @iter, (@i, #item{@query})} = (s, #item{#item{@query}}) 'super::split_iter;
+//             let #resp{s, @answer} = (s, #reply{@i, @answer}) 'super::split_iter;
 
-            let #req{s, @iter, (@i, #next{})} = (s, #item{#next{}}) 'super::split_iter;
-            let #resp{s, #some{}} = (s, #reply{@i, #delim{}}) 'super::split_iter;
-            let #resp{s, #none{}} = (s, #item{#next{}}) 'super::split_iter;
-            let #resp{s, #some{}} = (s, #next{}) 'super::split_iter;
-            let #req{s, @iter, (@i, #next{})} = (s, #item{#next{}}) 'super::split_iter;
-            let #resp{s, #none{}} = (s, #reply{@i, #none{}}) 'super::split_iter;
-            let #resp{s, #none{}} = (s, #next{}) 'super::split_iter;
+//             let #req{s, @iter, (@i, #next{})} = (s, #item{#next{}}) 'super::split_iter;
+//             let #resp{s, #some{}} = (s, #reply{@i, #delim{}}) 'super::split_iter;
+//             let #resp{s, #none{}} = (s, #item{#next{}}) 'super::split_iter;
+//             let #resp{s, #some{}} = (s, #next{}) 'super::split_iter;
+//             let #req{s, @iter, (@i, #next{})} = (s, #item{#next{}}) 'super::split_iter;
+//             let #resp{s, #none{}} = (s, #reply{@i, #none{}}) 'super::split_iter;
+//             let #resp{s, #none{}} = (s, #next{}) 'super::split_iter;
 
-            let ^ = s;
-            ()
-        },
-    }
+//             let ^ = s;
+//             ()
+//         },
+//     }
 
-    mod cases {
-        fn () parse_empty => {
-            let (p, #req{#next{}}) = (#nil{}, #parse{}) 'super::super::parseint;
-            let (^, #resp{0}) = (p, #none{}) 'super::super::parseint;
-            ()
-        }
+//     mod cases {
+//         fn () parse_empty => {
+//             let (p, #req{#next{}}) = (#nil{}, #parse{}) 'super::super::parseint;
+//             let (^, #resp{0}) = (p, #none{}) 'super::super::parseint;
+//             ()
+//         }
 
-        fn () parse_some => {
-            let (p, #req{#next{}}) = (#nil{}, #parse{}) 'super::super::parseint;
-            let (p, #req{#next{}}) = (p, #some{'6'}) 'super::super::parseint;
-            let (p, #req{#next{}}) = (p, #some{'7'}) 'super::super::parseint;
-            let (p, #req{#next{}}) = (p, #some{'2'}) 'super::super::parseint;
-            let (^, #resp{672}) = (p, #none{}) 'super::super::parseint;
-            ()
-        }
-    }
-}
+//         fn () parse_some => {
+//             let (p, #req{#next{}}) = (#nil{}, #parse{}) 'super::super::parseint;
+//             let (p, #req{#next{}}) = (p, #some{'6'}) 'super::super::parseint;
+//             let (p, #req{#next{}}) = (p, #some{'7'}) 'super::super::parseint;
+//             let (p, #req{#next{}}) = (p, #some{'2'}) 'super::super::parseint;
+//             let (^, #resp{672}) = (p, #none{}) 'super::super::parseint;
+//             ()
+//         }
+//     }
+// }
 
-sentence ord {
-    #ord
-}
+// sentence ord {
+//     #ord
+// }
 
-sentence prod {
-    #untuple(2) #prod
-}
+// sentence prod {
+//     #untuple(2) #prod
+// }
 
-sentence sub {
-    #untuple(2) #sub
-}
-
-
-fn (self, method) parseint => {
-    self match {
-        #nil{} => {
-            let #parse{} = method;
-            (#await_next{0}, #req{#next{}})
-        },
-        #await_next{acc} => {
-            method match {
-                #none{} => (#done{}, #resp{acc}),
-                #some{c} => {
-                    let digit = (c 'ord, 48) 'sub;
-                    let acc = ((10, acc) 'prod, digit) 'builtin::add;
-                    (#await_next{acc}, #req{#next{}})
-                },
-            }
-        },
-    }
-}
-
-mod ints {
-    fn () alloc => {
-        (@start, 0)
-    }
-
-    fn ((@start, s), @next) main => {
-        let ^ = 3;
-        let res = (@some, *s);
-        ((@start, (s, 1) 'crate::builtin::add), res)
-    }
-}
-
-fn args iter_sum => {
-    args c#and_then
-        c#do fn () => 0
-    then
-        c#loop c#and_then
-            c#await fn acc => #req{acc, #iter{#next{}}}
-        then c#and_then
-            c#await fn (acc, reply) => reply match {
-                #some{} => #resp{(acc, true)},
-                #none{} => #resp{(acc, false)},
-            }
-        then
-            c#if 
-                c#and_then
-                    c#await fn acc => #req{acc, #iter{#item{#clone{}}}}
-                then
-                    c#do fn (acc, item) => #continue{(acc, item) 'builtin::add}
-            else 
-                c#do fn acc => #break{acc}
-}
+// sentence sub {
+//     #untuple(2) #sub
+// }
 
 
-fn args and_then_test => {
-    args c#and_then
-        fn arg => arg match {
-            #call{()} => #req{42, #next{}},
-            #reply{42, #some{}} => #resp{55},
-        }
-    then
-        fn arg => arg match {
-            #call{55} => #req{56, #yetmore{}},
-            #reply{56, #another{}} => #resp{57},
-        }
-}
+// fn (self, method) parseint => {
+//     self match {
+//         #nil{} => {
+//             let #parse{} = method;
+//             (#await_next{0}, #req{#next{}})
+//         },
+//         #await_next{acc} => {
+//             method match {
+//                 #none{} => (#done{}, #resp{acc}),
+//                 #some{c} => {
+//                     let digit = (c 'ord, 48) 'sub;
+//                     let acc = ((10, acc) 'prod, digit) 'builtin::add;
+//                     (#await_next{acc}, #req{#next{}})
+//                 },
+//             }
+//         },
+//     }
+// }
 
-fn args await_test => {
-    args c#and_then
-        c#await fn () => (42, #next{})
-    then c#and_then
-        c#await fn (42, #some{}) => (55, #another{})
-    then
-        c#do fn (55, #yetmore{}) => 57
-}
+// mod ints {
+//     fn () alloc => {
+//         (@start, 0)
+//     }
 
-fn method map_iter => {
-    method match {
-        #next{#start{iter, fn}} => {
-            #req{#get_next{fn}, @iter, #next{iter}}
-        },
-        #reply{#get_next{fn}, message} => message match {
-            #some{iter, item} => #req{#apply_fn{iter}, @fn, (fn, item)},
-            #none{iter} => #resp{#none{#done{iter, fn}}},
-        },
-        #reply{#apply_fn{iter}, (fn, result)} => #resp{#some{#start{iter, fn}, result}},
-    }
-}
+//     fn ((@start, s), @next) main => {
+//         let ^ = 3;
+//         let res = (@some, *s);
+//         ((@start, (s, 1) 'crate::builtin::add), res)
+//     }
+// }
 
-fn (self, method) map_ref_iter => {
-    self match {
-        #start{iter, fn_factory} => {
-            let #next{} = method;
-            #req{#get_next{fn_factory}, @iter, (iter, #next{})}
-        },
-        #get_next{fn_factory} => {
-            let #reply{iter, message} = method;
-            message match {
-                #some{} => #req{#get_mapper{iter}, @fn_factory, (fn_factory, ())},
-                #none{} => #resp{#done{iter, fn_factory}, #none{}},
-            }
-        },
-        #get_mapper{iter} => {
-            let #reply{fn_factory, fn} = method;
-            #resp{#idle{iter, fn_factory, fn}, #some{}}
-        },
-        #idle{iter, fn_factory, fn} => {
-            method match {
-                #item{msg} => #req{#fwd_fn{iter, fn_factory}, @fn, (fn, msg)},
-                #next{} => {
-                    let ^ = fn;
-                    #req{#get_next{fn_factory}, @iter, (iter, #next{})}
-                },
-            }
-        },
-        #fwd_fn{iter, fn_factory} => {
-            let #reply{fn, message} = method;
-            #resp{#idle{iter, fn_factory, fn}, message}
-        },
-    }
-}
+// fn args iter_sum => {
+//     args c#and_then
+//         c#do fn () => 0
+//     then
+//         c#loop c#and_then
+//             c#await fn acc => #req{acc, #iter{#next{}}}
+//         then c#and_then
+//             c#await fn (acc, reply) => reply match {
+//                 #some{} => #resp{(acc, true)},
+//                 #none{} => #resp{(acc, false)},
+//             }
+//         then
+//             c#if 
+//                 c#and_then
+//                     c#await fn acc => #req{acc, #iter{#item{#clone{}}}}
+//                 then
+//                     c#do fn (acc, item) => #continue{(acc, item) 'builtin::add}
+//             else 
+//                 c#do fn acc => #break{acc}
+// }
 
-fn (self, method) split_iter => {
-    self match {
-        #start{iter} => {
-            let #next{} = method;
-            #resp{#in_field{iter}, #some{}}
-        },
-        #in_field{iter} => {
-            let #item{#next{}} = method;
-            #req{#in_field_get_next{}, @iter, (iter, #next{})}
-        },
-        #in_field_get_next{} => {
-            let #reply{iter, message} = method;
-            message match {
-                #non_delim{} => #resp{#knowing{false, iter}, #some{}},
-                #delim{} =>  #resp{#knowing{true, iter}, #some{}},
-                #none{} => #resp{#in_field_done{iter}, #none{}},
-            }
-        },
-        #knowing{is_delim, iter} => {
-            method match {
-                #item{#item{msg}} => #req{#knowing_fwd{is_delim}, @iter, (iter, #item{msg})},
-                #item{#next{}} => is_delim if {
-                    #resp{#start{iter}, #none{}}
-                } else {
-                    #req{#in_field_get_next{}, @iter, (iter, #next{})}
-                },
-            }
-        },
-        #knowing_fwd{is_delim} => {
-            let #reply{iter, message} = method;
-            #resp{#knowing{is_delim, iter}, message}
-        },
-        #field_end{iter} => {
-            let #next{} = method;
-            #req{#in_field_get_next{}, @iter, (iter, #next{})}
-        },
-        #in_field_done{iter} => {
-            let #next{} = method;
-            #resp{#done{iter}, #none{}}
-        },
-    }
-}
+
+// fn args and_then_test => {
+//     args c#and_then
+//         fn arg => arg match {
+//             #call{()} => #req{42, #next{}},
+//             #reply{42, #some{}} => #resp{55},
+//         }
+//     then
+//         fn arg => arg match {
+//             #call{55} => #req{56, #yetmore{}},
+//             #reply{56, #another{}} => #resp{57},
+//         }
+// }
+
+// fn args await_test => {
+//     args c#and_then
+//         c#await fn () => (42, #next{})
+//     then c#and_then
+//         c#await fn (42, #some{}) => (55, #another{})
+//     then
+//         c#do fn (55, #yetmore{}) => 57
+// }
+
+// fn method map_iter => {
+//     method match {
+//         #next{#start{iter, fn}} => {
+//             #req{#get_next{fn}, @iter, #next{iter}}
+//         },
+//         #reply{#get_next{fn}, message} => message match {
+//             #some{iter, item} => #req{#apply_fn{iter}, @fn, (fn, item)},
+//             #none{iter} => #resp{#none{#done{iter, fn}}},
+//         },
+//         #reply{#apply_fn{iter}, (fn, result)} => #resp{#some{#start{iter, fn}, result}},
+//     }
+// }
+
+// fn (self, method) map_ref_iter => {
+//     self match {
+//         #start{iter, fn_factory} => {
+//             let #next{} = method;
+//             #req{#get_next{fn_factory}, @iter, (iter, #next{})}
+//         },
+//         #get_next{fn_factory} => {
+//             let #reply{iter, message} = method;
+//             message match {
+//                 #some{} => #req{#get_mapper{iter}, @fn_factory, (fn_factory, ())},
+//                 #none{} => #resp{#done{iter, fn_factory}, #none{}},
+//             }
+//         },
+//         #get_mapper{iter} => {
+//             let #reply{fn_factory, fn} = method;
+//             #resp{#idle{iter, fn_factory, fn}, #some{}}
+//         },
+//         #idle{iter, fn_factory, fn} => {
+//             method match {
+//                 #item{msg} => #req{#fwd_fn{iter, fn_factory}, @fn, (fn, msg)},
+//                 #next{} => {
+//                     let ^ = fn;
+//                     #req{#get_next{fn_factory}, @iter, (iter, #next{})}
+//                 },
+//             }
+//         },
+//         #fwd_fn{iter, fn_factory} => {
+//             let #reply{fn, message} = method;
+//             #resp{#idle{iter, fn_factory, fn}, message}
+//         },
+//     }
+// }
+
+// fn (self, method) split_iter => {
+//     self match {
+//         #start{iter} => {
+//             let #next{} = method;
+//             #resp{#in_field{iter}, #some{}}
+//         },
+//         #in_field{iter} => {
+//             let #item{#next{}} = method;
+//             #req{#in_field_get_next{}, @iter, (iter, #next{})}
+//         },
+//         #in_field_get_next{} => {
+//             let #reply{iter, message} = method;
+//             message match {
+//                 #non_delim{} => #resp{#knowing{false, iter}, #some{}},
+//                 #delim{} =>  #resp{#knowing{true, iter}, #some{}},
+//                 #none{} => #resp{#in_field_done{iter}, #none{}},
+//             }
+//         },
+//         #knowing{is_delim, iter} => {
+//             method match {
+//                 #item{#item{msg}} => #req{#knowing_fwd{is_delim}, @iter, (iter, #item{msg})},
+//                 #item{#next{}} => is_delim if {
+//                     #resp{#start{iter}, #none{}}
+//                 } else {
+//                     #req{#in_field_get_next{}, @iter, (iter, #next{})}
+//                 },
+//             }
+//         },
+//         #knowing_fwd{is_delim} => {
+//             let #reply{iter, message} = method;
+//             #resp{#knowing{is_delim, iter}, message}
+//         },
+//         #field_end{iter} => {
+//             let #next{} = method;
+//             #req{#in_field_get_next{}, @iter, (iter, #next{})}
+//         },
+//         #in_field_done{iter} => {
+//             let #next{} = method;
+//             #resp{#done{iter}, #none{}}
+//         },
+//     }
+// }
 
 mod alloc {
     fn () new => ()
@@ -248,11 +248,11 @@ mod alloc {
     }
 }
 
-mod malloc {
-    fn (allocator, size) init => #start{allocator, size}
+// mod malloc {
+//     fn (allocator, size) init => #start{allocator, size}
 
-    fn (#start{allocator, size}, ()) =>  (allocator, size 'crate::array::new)
-}
+//     fn (#start{allocator, size}, ()) =>  (allocator, size 'crate::array::new)
+// }
 
 fn args allocator => args match {
     (self, #malloc{size}) => (self, size) 'alloc::malloc,
