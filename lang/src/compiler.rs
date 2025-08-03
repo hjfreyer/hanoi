@@ -115,6 +115,13 @@ pub enum Transformer<'t> {
 }
 
 impl<'t> Transformer<'t> {
+    pub fn from_anon_fn(anon_fn: ast::AnonFn<'t>) -> Self {
+        Self::Composition {
+            span: anon_fn.span,
+            children: vec![Self::from_binding(anon_fn.binding), Self::from_expression(*anon_fn.body)],
+        }
+    }
+
     pub fn from_root(root: ast::RootExpression<'t>) -> Self {
         match root {
             ast::RootExpression::Literal(literal) => Self::Literal(literal),
@@ -315,7 +322,7 @@ impl<'t> Transformer<'t> {
                 for (i, binding) in tuple_binding.bindings.iter().enumerate().rev() {
                     let mut children = vec![];
                     let top = size - i - 1;
-                    children.push(Self::MoveIdx{span, idx: top});
+                    children.push(Self::MoveIdx { span, idx: top });
                     children.push(Self::transformer_for_matching(binding));
 
                     let mut false_case_children = vec![];
@@ -356,6 +363,176 @@ impl<'t> Transformer<'t> {
                     },
                 ],
             },
+        }
+    }
+
+    pub fn into_recursive_sentence(
+        self,
+        ctx: FileContext,
+        locals: &mut Locals,
+    ) -> Result<RecursiveSentence, Error> {
+        match self {
+            Transformer::Literal(literal) => {
+                let span = literal.span(ctx.file_idx);
+                locals.push_unnamed();
+                Ok(RecursiveSentence::single_span(
+                    span,
+                    vec![InnerWord::Push(literal.into_value())],
+                ))
+            }
+            Transformer::Move(identifier) => {
+                let span = identifier.span(ctx.file_idx);
+                let Some(idx) = locals.find(
+                    ctx.sources,
+                    identifier.clone().into_ir(ctx.sources, ctx.file_idx),
+                ) else {
+                    return Err(Error::UnknownReference {
+                        location: span.location(ctx.sources),
+                        name: identifier.0.as_str().to_owned(),
+                    });
+                };
+                locals.remove(idx);
+                locals.push_unnamed();
+                Ok(RecursiveSentence::single_span(
+                    span,
+                    vec![InnerWord::Move(idx)],
+                ))
+            }
+            Transformer::MoveIdx { span, idx } => {
+                let span = span.into_ir(ctx.sources, ctx.file_idx);
+                locals.remove(idx);
+                locals.push_unnamed();
+                Ok(RecursiveSentence::single_span(
+                    span,
+                    vec![InnerWord::Move(idx)],
+                ))
+            }
+            Transformer::Copy(identifier) => {
+                let span = identifier.span(ctx.file_idx);
+                let Some(idx) = locals.find(
+                    ctx.sources,
+                    identifier.clone().into_ir(ctx.sources, ctx.file_idx),
+                ) else {
+                    return Err(Error::UnknownReference {
+                        location: span.location(ctx.sources),
+                        name: identifier.0.as_str().to_owned(),
+                    });
+                };
+                locals.push_unnamed();
+                Ok(RecursiveSentence::single_span(
+                    span,
+                    vec![InnerWord::Copy(idx)],
+                ))
+            }
+            Transformer::CopyIdx { span, idx } => {
+                let span = span.into_ir(ctx.sources, ctx.file_idx);
+                locals.push_unnamed();
+                Ok(RecursiveSentence::single_span(
+                    span,
+                    vec![InnerWord::Copy(idx)],
+                ))
+            }
+            Transformer::Drop(span) => {
+                let span = span.into_ir(ctx.sources, ctx.file_idx);
+                locals.pop();
+                Ok(RecursiveSentence::single_span(
+                    span,
+                    vec![InnerWord::Drop(0)],
+                ))
+            }
+            Transformer::Call(qualified_label) => {
+                let span = qualified_label.span(ctx.file_idx);
+                locals.pop();
+                locals.push_unnamed();
+                Ok(RecursiveSentence::single_span(
+                    span,
+                    vec![InnerWord::Call(
+                        qualified_label.into_ir(ctx.sources, ctx.file_idx),
+                    )],
+                ))
+            }
+            Transformer::Binding(identifier) => {
+                let span = identifier.span(ctx.file_idx);
+                locals.pop();
+                locals.push_named(identifier.span(ctx.file_idx));
+                Ok(RecursiveSentence::single_span(span, vec![]))
+            }
+            Transformer::Tuple { span, size } => {
+                let span = span.into_ir(ctx.sources, ctx.file_idx);
+                for _ in 0..size {
+                    locals.pop();
+                }
+                locals.push_unnamed();
+                Ok(RecursiveSentence::single_span(
+                    span,
+                    vec![InnerWord::Tuple(size)],
+                ))
+            }
+            Transformer::Untuple { span, size } => {
+                let span = span.into_ir(ctx.sources, ctx.file_idx);
+                locals.pop();
+                for _ in 0..size {
+                    locals.push_unnamed();
+                }
+                Ok(RecursiveSentence::single_span(
+                    span,
+                    vec![InnerWord::Untuple(size)],
+                ))
+            }
+            Transformer::Branch {
+                span,
+                true_case,
+                false_case,
+            } => {
+                let span: FileSpan = span.into_ir(ctx.sources, ctx.file_idx);
+
+                locals.pop();
+
+                let mut true_locals = locals.clone();
+                let mut false_locals = locals.clone();
+                let true_sentence = true_case.into_recursive_sentence(ctx, &mut true_locals)?;
+                let false_sentence = false_case.into_recursive_sentence(ctx, &mut false_locals)?;
+
+                if !true_locals.compare(ctx.sources, &false_locals) {
+                    return Err(Error::BranchContractsDisagree {
+                        location: span.location(ctx.sources),
+                        locals1: true_locals
+                            .names()
+                            .into_iter()
+                            .map(|n| format!("{:?}", n.as_ref(ctx.sources)))
+                            .collect(),
+                        locals2: false_locals
+                            .names()
+                            .into_iter()
+                            .map(|n| format!("{:?}", n.as_ref(ctx.sources)))
+                            .collect(),
+                    });
+                }
+                if true_locals.terminal {
+                    *locals = false_locals;
+                } else {
+                    *locals = true_locals;
+                }
+
+                Ok(RecursiveSentence::single_span(
+                    span,
+                    vec![InnerWord::Branch(true_sentence, false_sentence)],
+                ))
+            }
+            Transformer::Composition { span, children } => {
+                let span: FileSpan = span.into_ir(ctx.sources, ctx.file_idx);
+                let mut words = vec![];
+                for child in children {
+                    words.push(InnerWord::InlineCall(
+                        child.into_recursive_sentence(ctx, locals)?,
+                    ));
+                }
+                Ok(RecursiveSentence::single_span(span, words))
+            }
+            Transformer::Builtin { span, builtin } => {
+                let span: FileSpan = span.into_ir(ctx.sources, ctx.file_idx);
+                Ok(RecursiveSentence::single_span(span, vec![InnerWord::Builtin(builtin)]))
+            }
         }
     }
 }
@@ -446,13 +623,16 @@ impl<'t> Compiler<'t> {
             file_idx,
             sources: self.sources,
         };
-        let anon = AnonFn {
+        let anon = ast::AnonFn {
             span,
-            binding,
-            body: Box::new(Expression::from_ast(expression)),
+            binding: binding.clone(),
+            body: Box::new(expression),
         };
 
-        let sentence = anon.compilation(ctx, symbol_table)?;
+        let transformer = Transformer::from_anon_fn(anon);
+
+        let mut locals = Locals::default();
+        let sentence = transformer.into_recursive_sentence(ctx, &mut locals)?;
 
         let mut names = NameSequence {
             base: name,
