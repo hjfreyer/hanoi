@@ -307,19 +307,41 @@ fn args allocator => args match {
 //         (state, port, msg) 'bound_new_helper
 //     },
 // }
-// fn args bound_new_helper => args 'crate::vec::new match {
-//     (state, #alloc{}, #malloc{size}) => {
-//         let array = size 'crate::array::new;
-//         (#pass{state, #alloc{}, array}, #stall{}, ())
-//     },
-//     (state, #alloc{}, #free{array}) => {
-//         let () = array 'crate::array::destroy;
-//         (#pass{state, #alloc{}, ()}, #stall{}, ())
-//     },
-//     (state, port, msg) => {
-//         (#wrapped{state}, port, msg)
-//     },
-// }
+fn (state, msg) alloc => {
+    let #start{} = state;
+    msg match {
+        #malloc{size} => {
+            let array = size 'crate::array::new;
+            (#start{}, #out{array})
+        },
+        #free{array} => {
+            let () = array 'crate::array::destroy;
+            (#start{}, #out{})
+        },
+        #pass{} => (#start{}, #pass{}),
+    }
+}
+
+fn ((new_state, alloc_state), (new_msg, alloc_msg)) new_times_alloc => {
+    let (new_state, new_msg) = (new_state, new_msg) 'crate::vec::new;
+    let (alloc_state, alloc_msg) = (alloc_state, alloc_msg) 'alloc;
+    ((new_state, alloc_state), (new_msg, alloc_msg))
+}
+
+fn (state, (new_msg, (alloc_req_msg, alloc_resp_msg))) new_times_alloc_regroup => {
+    let (state, ((new_msg, alloc_req_msg), alloc_resp_msg)) = 
+        (state, ((new_msg, alloc_req_msg), alloc_resp_msg)) 'new_times_alloc;
+    (state, (new_msg, (alloc_req_msg, alloc_resp_msg)))
+}
+
+fn (state, new_msg) bound_new => state match {
+    #start{} => ((#start{}, #start{}), (new_msg, (#pass{}, #pass{}))) 'new_times_alloc_regroup 'bound_new_helper,
+    #continue{state, alloc_req_msg, alloc_resp_msg} => (state, (new_msg, (alloc_resp_msg, alloc_req_msg)))  'new_times_alloc_regroup 'bound_new_helper,
+}
+
+fn (state, (new_msg, (alloc_req_msg, alloc_resp_msg))) bound_new_helper => {
+    (#continue{state, alloc_req_msg, alloc_resp_msg}, new_msg)
+}
 
 // Main path:
 //   A -> #in{} -> B
@@ -352,18 +374,27 @@ fn args allocator => args match {
 //    | (#await_alloc{}, #alloc{}, msg)
 //   (#await_alloc{}, #alloc{}, msg) -> (#start{}, )
 
+fn (#start{}, (#in{()}, #pass{})) output_one => (#end{}, (#out{1}, #pass{}))
+
+fn args first_two_lines => args match {
+    ((state1, state2, (io2, alloc2)), (io1, alloc1)) => {
+        let (state1, msg1) = (state1, msg1) 'output_one;
+        let (state2, msg2) = (state2, msg2) 'crate::vec::new;
+        (#first{#start{}}, )
+    },
+}
+
+
 fn args main_impl => args match {
     (#start{}, #in{}) => {
-        (#handle_new1{(#start{}, (#in{1}, #pass{})) 'crate::vec::new}, #pass{})
+        (#handle_new1{(#start{}, #in{1}) 'bound_new}, #pass{})
     },
     (#handle_new1{new_res}, #pass{}) => new_res match {
-        (state, (#pass{}, #pass{})) => {
-            (#handle_new1{(state, (#pass{}, #pass{})) 'crate::vec::new}, #pass{})
+        (state, #pass{}) => {
+            (#handle_new1{(state, #pass{}) 'bound_new}, #pass{})
         },
-        (state, (#pass{}, #malloc{1})) => {
-            let array = 1 'crate::array::new;
-            let (#end{}, (#out{vec}, #pass{})) = (state, (#pass{}, #out{array})) 'crate::vec::new;
-
+        (state, #out{vec}) => {
+            let ^ = state;
             let (#end{}, (#out{vec}, #pass{})) = (#start{}, (#in{vec, 4}, #pass{})) 'crate::vec::push;
 
             (#handle_push1{(#start{}, (#in{vec, 8}, #pass{})) 'crate::vec::push}, #pass{})

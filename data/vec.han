@@ -4,6 +4,7 @@ use 'crate::builtin::eq;
 use 'crate::array;
 
 fn args new => args match {
+    (state, (#pass{}, #pass{})) => (state, (#pass{}, #pass{})),
     (#start{}, (#in{capacity}, #pass{})) => {
         (#await_malloc{*capacity}, (#pass{}, #malloc{capacity}))
     },
