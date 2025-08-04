@@ -14,6 +14,7 @@ decl = {
     sentence_decl
   | ns_decl
   | fn_decl
+  | def_decl
 }
 
 // NAMESPACES
@@ -105,8 +106,11 @@ tagged_binding = {
   | "#" ~ identifier ~ "{" ~ binding ~ ("," ~ binding)* ~ "}"
 }
 
+def_decl = { "def" ~ identifier ~ into_fn }
+
 fn_decl = { "fn" ~ binding ~ identifier ~ "=>" ~ expr }
 expr      = { root_expr ~ transformer* }
+
 
 root_expr = {
     literal
@@ -152,7 +156,7 @@ into_fn = {
 }
 
 anon_fn = {
-    "fn" ~ binding ~ "=>" ~ expr
+    "[" ~ "]" ~ binding ~ "=>" ~ expr
 }
 
 and_then_fn = {

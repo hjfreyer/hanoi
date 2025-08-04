@@ -236,6 +236,7 @@ pub enum Decl<'t> {
     SentenceDecl(SentenceDecl<'t>),
     Namespace(NamespaceDecl<'t>),
     Fn(FnDecl<'t>),
+    Def(DefDecl<'t>),
 }
 
 #[derive(Debug, FromPest)]
@@ -313,6 +314,15 @@ pub enum Transformer<'t> {
     InlineCall(IntoFn<'t>),
     Match(Match<'t>),
     If(If<'t>),
+}
+
+#[derive(Debug, FromPest)]
+#[pest_ast(rule(Rule::def_decl))]
+pub struct DefDecl<'t> {
+    #[pest_ast(outer())]
+    pub span: pest::Span<'t>,
+    pub name: Identifier<'t>,
+    pub into_fn: IntoFn<'t>,
 }
 
 #[derive(Debug, FromPest, Spanner)]

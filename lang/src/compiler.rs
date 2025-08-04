@@ -115,6 +115,20 @@ pub enum Transformer<'t> {
 }
 
 impl<'t> Transformer<'t> {
+    pub fn from_into_fn(into_fn: ast::IntoFn<'t>) -> Self {
+        match into_fn {
+            ast::IntoFn::QualifiedLabel(qualified_label) => {
+                Self::from_transformer(ast::Transformer::Call(qualified_label))
+            }
+            ast::IntoFn::AnonFn(anon_fn) => Self::from_anon_fn(anon_fn),
+            ast::IntoFn::AndThen(and_then_fn) => todo!(),
+            ast::IntoFn::Await(await_fn) => todo!(),
+            ast::IntoFn::Loop(loop_fn) => todo!(),
+            ast::IntoFn::Do(do_fn) => todo!(),
+            ast::IntoFn::If(if_fn) => todo!(),
+        }
+    }
+
     pub fn from_anon_fn(anon_fn: ast::AnonFn<'t>) -> Self {
         Self::Composition {
             span: anon_fn.span,
@@ -685,6 +699,14 @@ impl<'t> Compiler<'t> {
                     let name = name_prefix.append(name.into_ir(self.sources, file_idx));
                     self.visit_fn(span, file_idx, &symbol_table, binding, name, expression)?;
                 }
+                ast::Decl::Def(ast::DefDecl {
+                    span,
+                    name,
+                    into_fn,
+                }) => {
+                    let name = name_prefix.append(name.into_ir(self.sources, file_idx));
+                    self.visit_def(span, file_idx, &symbol_table, name, into_fn)?;
+                }
             }
         }
         Ok(())
@@ -710,6 +732,33 @@ impl<'t> Compiler<'t> {
         };
 
         let transformer = Transformer::from_anon_fn(anon);
+
+        let mut locals = Locals::default();
+        locals.push_unnamed();
+        let sentence = transformer.into_recursive_sentence(ctx, &symbol_table, &mut locals)?;
+
+        let mut names = NameSequence {
+            base: name,
+            count: 0,
+        };
+        self.visit_recursive_sentence(&mut names, sentence);
+        Ok(())
+    }
+
+    fn visit_def(
+        &mut self,
+        span: pest::Span<'t>,
+        file_idx: FileIndex,
+        symbol_table: &SymbolTable,
+        name: QualifiedName,
+        into_fn: ast::IntoFn<'t>,
+    ) -> Result<(), linker::Error> {
+        let ctx = FileContext {
+            file_idx,
+            sources: self.sources,
+        };
+
+        let transformer = Transformer::from_into_fn(into_fn);
 
         let mut locals = Locals::default();
         locals.push_unnamed();
