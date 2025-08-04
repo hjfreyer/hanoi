@@ -106,7 +106,7 @@ tagged_binding = {
   | "#" ~ identifier ~ "{" ~ binding ~ ("," ~ binding)* ~ "}"
 }
 
-def_decl = { "def" ~ identifier ~ into_fn }
+def_decl = { "def" ~ identifier ~ transformer }
 
 fn_decl = { "fn" ~ binding ~ identifier ~ "=>" ~ expr }
 expr      = { root_expr ~ transformer* }
@@ -156,7 +156,7 @@ into_fn = {
 }
 
 anon_fn = {
-    "[" ~ "]" ~ binding ~ "=>" ~ expr
+  binding ~ "=>" ~ expr
 }
 
 and_then_fn = {

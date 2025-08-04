@@ -272,12 +272,13 @@ impl<'t> Transformer<'t> {
     pub fn from_transformer(transformer: ast::Transformer<'t>) -> Self {
         match transformer {
             ast::Transformer::Call(call) => Self::Call(call),
-            ast::Transformer::InlineCall(inline_call) => {
-                let ast::IntoFn::QualifiedLabel(label) = inline_call else {
+            ast::Transformer::InlineCall(inline_call) => match inline_call {
+                ast::IntoFn::QualifiedLabel(label) => Self::Call(label),
+                ast::IntoFn::AnonFn(anon_fn) => Self::from_anon_fn(anon_fn),
+                _ => {
                     todo!("inline call: {:?}", inline_call);
-                };
-                Self::Call(label)
-            }
+                }
+            },
             ast::Transformer::Match(match_expression) => {
                 let mut else_case = Self::Panic(match_expression.span);
 
@@ -702,10 +703,10 @@ impl<'t> Compiler<'t> {
                 ast::Decl::Def(ast::DefDecl {
                     span,
                     name,
-                    into_fn,
+                    transformer,
                 }) => {
                     let name = name_prefix.append(name.into_ir(self.sources, file_idx));
-                    self.visit_def(span, file_idx, &symbol_table, name, into_fn)?;
+                    self.visit_def(span, file_idx, &symbol_table, name, transformer)?;
                 }
             }
         }
@@ -751,19 +752,30 @@ impl<'t> Compiler<'t> {
         file_idx: FileIndex,
         symbol_table: &SymbolTable,
         name: QualifiedName,
-        into_fn: ast::IntoFn<'t>,
+        into_fn: ast::Transformer<'t>,
     ) -> Result<(), linker::Error> {
         let ctx = FileContext {
             file_idx,
             sources: self.sources,
         };
 
-        let transformer = Transformer::from_into_fn(into_fn);
+        let transformer = Transformer::from_transformer(into_fn);
 
         let mut locals = Locals::default();
         locals.push_unnamed();
         let sentence = transformer.into_recursive_sentence(ctx, &symbol_table, &mut locals)?;
-
+        if locals.len() != 1 {
+            locals.pop();
+            match locals.pop() {
+                Name::User(file_span) => {
+                    return Err(linker::Error::UnusedVariable {
+                        location: file_span.location(self.sources),
+                        name: file_span.as_str(self.sources).to_owned(),
+                    })
+                }
+                Name::Generated(idx) => panic!("Leaked generated variable?? ${}", idx),
+            }
+        }
         let mut names = NameSequence {
             base: name,
             count: 0,

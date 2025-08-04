@@ -384,8 +384,7 @@ fn (#start{}, (#in{()}, #pass{})) output_one => (#end{}, (#out{1}, #pass{}))
 //    },
 //}
 
-
-def main_impl [] args => args match {
+def main_impl match {
     (#start{}, #in{}) => {
         (#handle_new1{(#start{}, #in{1}) 'bound_new}, #pass{})
     },

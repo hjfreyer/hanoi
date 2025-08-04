@@ -322,7 +322,7 @@ pub struct DefDecl<'t> {
     #[pest_ast(outer())]
     pub span: pest::Span<'t>,
     pub name: Identifier<'t>,
-    pub into_fn: IntoFn<'t>,
+    pub transformer: Transformer<'t>,
 }
 
 #[derive(Debug, FromPest, Spanner)]
