@@ -1,0 +1,47 @@
+use 'crate::builtin;
+
+mod example {
+    // Function to add two numbers
+    fn (a, b) add => {
+        let result = (a, b) #add;
+        result
+    }
+
+    // Function with pattern matching
+    fn (x) factorial => {
+        x match {
+            #nil{} => 1,
+            #some{n} => {
+                let prev = (n, 1) #sub;
+                let fact_prev = (prev) 'super::factorial;
+                (n, fact_prev) #prod
+            },
+        }
+    }
+
+    // Sentence definition
+    sentence hello {
+        #nil
+    }
+
+    // Function with conditional logic
+    fn (x) is_positive => {
+        (x, 0) #lt #not
+    }
+
+    // Symbol usage
+    let my_symbol = @example_symbol;
+    let string_symbol = @"example string symbol";
+
+    // Character literal
+    let char_a = 'a';
+    let char_escape = '\n';
+
+    // String with escape sequences
+    let message = "Hello\nWorld\tTabbed";
+
+    // Qualified label examples
+    let func1 = 'crate::builtin;
+    let func2 = 'super::split_iter;
+    let func3 = 'cases::parse_empty;
+}

@@ -1,0 +1,82 @@
+{
+  "name": "vscode-hanoi",
+  "displayName": "Hanoi Language Support",
+  "description": "Syntax highlighting and formatting for the Hanoi programming language",
+  "version": "0.1.0",
+  "engines": {
+    "vscode": "^1.74.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Formatters"
+  ],
+  "keywords": [
+    "hanoi",
+    "programming language",
+    "syntax highlighting",
+    "formatting"
+  ],
+  "activationEvents": [
+    "onLanguage:hanoi"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "hanoi",
+        "aliases": [
+          "Hanoi",
+          "hanoi"
+        ],
+        "extensions": [
+          ".han"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "hanoi",
+        "scopeName": "source.hanoi",
+        "path": "./syntaxes/hanoi.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "Hanoi",
+      "properties": {
+        "hanoi.format.enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable/disable Hanoi formatting"
+        },
+        "hanoi.format.indentSize": {
+          "type": "number",
+          "default": 4,
+          "description": "Number of spaces for indentation"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src --ext ts",
+    "test": "node ./out/test/runTest.js"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.74.0",
+    "@types/node": "16.x",
+    "@typescript-eslint/eslint-plugin": "^5.42.0",
+    "@typescript-eslint/parser": "^5.42.0",
+    "eslint": "^8.26.0",
+    "typescript": "^4.8.4"
+  },
+  "publisher": "hanoi-lang",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-username/vscode-hanoi.git"
+  },
+  "license": "MIT"
+} 

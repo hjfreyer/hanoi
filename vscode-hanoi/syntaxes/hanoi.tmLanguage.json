@@ -1,0 +1,186 @@
+{
+  "scopeName": "source.hanoi",
+  "fileTypes": ["han"],
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#qualified_labels"
+    },
+    {
+      "include": "#characters"
+    },
+    {
+      "include": "#numbers"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#operators"
+    },
+    {
+      "include": "#identifiers"
+    },
+    {
+      "include": "#symbols"
+    },
+    {
+      "include": "#builtins"
+    },
+    {
+      "include": "#functions"
+    },
+    {
+      "include": "#modules"
+    },
+    {
+      "include": "#sentences"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.hanoi",
+          "match": "//.*$"
+        },
+        {
+          "name": "comment.block.hanoi",
+          "begin": "/\\*",
+          "end": "\\*/"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.hanoi",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.hanoi",
+              "match": "\\\\[\"\\\\/bfnrt]"
+            },
+            {
+              "name": "constant.character.escape.unicode.hanoi",
+              "match": "\\\\u[0-9a-fA-F]{4}"
+            }
+          ]
+        }
+      ]
+    },
+    "characters": {
+      "patterns": [
+        {
+          "name": "constant.character.hanoi",
+          "match": "'([^']|\\\\['\\\\/bfnrt]|\\\\u[0-9a-fA-F]{4})'"
+        }
+      ]
+    },
+    "qualified_labels": {
+      "patterns": [
+        {
+          "name": "entity.name.function.qualified.hanoi",
+          "match": "'[a-zA-Z_][a-zA-Z0-9_]*(::[a-zA-Z_][a-zA-Z0-9_]*)*"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.integer.hanoi",
+          "match": "\\b[0-9]+\\b"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.hanoi",
+          "match": "\\b(if|else|match|let|fn|mod|use|sentence|nil|true|false)\\b"
+        },
+        {
+          "name": "keyword.operator.hanoi",
+          "match": "\\b(and_then|then|await|do|loop)\\b"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.hanoi",
+          "match": "=>|::|\\*|\\^|@|#|\\(|\\)|\\[|\\]|,|;|=|\\+|-|\\*|/|<|>|<=|>=|==|!="
+        }
+      ]
+    },
+    "identifiers": {
+      "patterns": [
+        {
+          "name": "variable.other.hanoi",
+          "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b"
+        }
+      ]
+    },
+    "symbols": {
+      "patterns": [
+        {
+          "name": "constant.other.symbol.hanoi",
+          "match": "@[a-zA-Z_][a-zA-Z0-9_]*"
+        },
+        {
+          "name": "constant.other.symbol.string.hanoi",
+          "begin": "@\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.hanoi",
+              "match": "\\\\[\"\\\\/bfnrt]"
+            },
+            {
+              "name": "constant.character.escape.unicode.hanoi",
+              "match": "\\\\u[0-9a-fA-F]{4}"
+            }
+          ]
+        }
+      ]
+    },
+    "builtins": {
+      "patterns": [
+        {
+          "name": "support.function.builtin.hanoi",
+          "match": "#[a-zA-Z_][a-zA-Z0-9_]*"
+        }
+      ]
+    },
+    "functions": {
+      "patterns": [
+        {
+          "name": "entity.name.function.hanoi",
+          "match": "\\bfn\\b"
+        }
+      ]
+    },
+    "modules": {
+      "patterns": [
+        {
+          "name": "keyword.control.module.hanoi",
+          "match": "\\bmod\\b"
+        }
+      ]
+    },
+    "sentences": {
+      "patterns": [
+        {
+          "name": "keyword.control.sentence.hanoi",
+          "match": "\\bsentence\\b"
+        }
+      ]
+    }
+  }
+} 
