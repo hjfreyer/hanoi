@@ -103,7 +103,7 @@
       "patterns": [
         {
           "name": "keyword.control.hanoi",
-          "match": "\\b(if|else|match|let|fn|mod|use|sentence|nil|true|false)\\b"
+          "match": "\\b(if|else|match|let|fn|def|mod|use|sentence|nil|true|false)\\b"
         },
         {
           "name": "keyword.operator.hanoi",
