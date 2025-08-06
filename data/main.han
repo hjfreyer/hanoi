@@ -334,14 +334,6 @@ fn (state, (new_msg, (alloc_req_msg, alloc_resp_msg))) new_times_alloc_regroup =
     (state, (new_msg, (alloc_req_msg, alloc_resp_msg)))
 }
 
-fn (state, new_msg) bound_new => state match {
-    #start{} => ((#start{}, #start{}), (new_msg, (#pass{}, #pass{}))) 'new_times_alloc_regroup 'bound_new_helper,
-    #continue{state, alloc_req_msg, alloc_resp_msg} => (state, (new_msg, (alloc_resp_msg, alloc_req_msg)))  'new_times_alloc_regroup 'bound_new_helper,
-}
-
-fn (state, (new_msg, (alloc_req_msg, alloc_resp_msg))) bound_new_helper => {
-    (#continue{state, alloc_req_msg, alloc_resp_msg}, new_msg)
-}
 
 // Main path:
 //   A -> #in{} -> B
@@ -384,48 +376,99 @@ fn (#start{}, (#in{()}, #pass{})) output_one => (#end{}, (#out{1}, #pass{}))
 //    },
 //}
 
+
+
+def parse_ambiguity match {
+    #end{val} => #end{val},
+    #cont{state, (alloc)} => alloc match {
+        #none{} => #cont{#reply{state, (#none{})}, ()}
+        #some{#malloc{size}} => {
+            let array = size 'crate::array::new;
+            #cont{#reply{state, (#some{array})}, ()}
+        },
+        #some{#free{array}} => {
+            let () = array 'crate::array::destroy;
+            #cont{#reply{state, (#some{()})}, ()}
+        },
+    },
+}
+
+def main_inner match {
+    #start{} => #start{} 'crate::vec::new 'main_inner1,
+    #cont{#poll_new{state}, deps} => #cont{state, deps} 'crate::vec::new 'main_inner1,
+    #cont{#poll_push1{state}, deps} => #cont{state, deps} 'crate::vec::push 'main_inner2,
+}
+
+def main_inner1 match {
+    #cont{state, deps} => #cont{#poll_new{state}, deps},
+    #end{vec} => #start{vec, 4} 'crate::vec::push 'main_inner2,
+}
+
+def main_inner2 match {
+    #cont{state, deps} => #cont{#poll_push2{state}, deps},
+    #end{vec} => #end{vec},
+}
+
+def bound_main match {
+    #start{} => #start{} 'main_inner 'bound_main_inner1,
+    #cont{#reply{state, deps}, ()} => #cont{state, deps} 'main_inner 'bound_main_inner1,
+}
+
+def bound_main_inner1 match {
+    #end{val} => #end{val},
+    #cont{state, (alloc)} => alloc match {
+        #none{} => #cont{#reply{state, (#none{})}, ()},
+        #some{#malloc{size}} => {
+            let array = size 'crate::array::new;
+            #cont{#reply{state, (#some{array})}, ()}
+        },
+        #some{#free{array}} => {
+            let () = array 'crate::array::destroy;
+            #cont{#reply{state, (#some{()})}, ()}
+        },
+    },
+}
+
 def main_impl match {
     (#start{}, #in{}) => {
-        (#handle_new1{(#start{}, #in{1}) 'bound_new}, #pass{})
+        (#handle_bound{#start{} 'bound_main}, #pass{})
     },
-    (#handle_new1{new_res}, #pass{}) => new_res match {
-        (state, #pass{}) => {
-            (#handle_new1{(state, #pass{}) 'bound_new}, #pass{})
-        },
-        (state, #out{vec}) => {
-            let ^ = state;
-            let (#end{}, (#out{vec}, #pass{})) = (#start{}, (#in{vec, 4}, #pass{})) 'crate::vec::push;
-
-            (#handle_push1{(#start{}, (#in{vec, 8}, #pass{})) 'crate::vec::push}, #pass{})
-        },
-    },
-    (#handle_push1{res}, #pass{}) => res match {
-        (state, (#pass{}, #pass{})) => {
-            (#handle_push1{(state, (#pass{}, #pass{})) 'crate::vec::push}, #pass{})
-        },
-        (state, (#pass{}, #malloc{2})) => {
-            let array = 2 'crate::array::new;
-            (#handle_push2{(state, (#pass{}, #out{array})) 'crate::vec::push}, #pass{})
-        },
-    },
-    (#handle_push2{res}, #pass{}) => res match {
-        (state, (#pass{}, #pass{})) => {
-            (#handle_push2{(state, (#pass{}, #pass{})) 'crate::vec::push}, #pass{})
-        },
-        (state, (#pass{}, #free{old})) => {
-            let () = old 'crate::array::destroy;
-            (#handle_push3{(state, (#pass{}, #out{})) 'crate::vec::push}, #pass{})
-        },
-    },
-    (#handle_push3{res}, #pass{}) => res match {
-        (state, (#pass{}, #pass{})) => {
-            (#handle_push3{(state, (#pass{}, #pass{})) 'crate::vec::push}, #pass{})
-        },
-        (#end{}, (#out{vec}, #pass{})) => {
+    (#handle_bound{bound_res}, #pass{}) => bound_res match {
+        #end{vec} => {
             let ^ = vec;
             ()
         },
+
+        #cont{state, ()} =>          (#handle_bound{#cont{state, ()} 'bound_main}, #pass{}),
     },
+    // (#handle_push1{res}, #pass{}) => res match {
+    //     (state, (#pass{}, #pass{})) => {
+    //         (#handle_push1{(state, (#pass{}, #pass{})) 'crate::vec::push}, #pass{})
+    //     },
+    //     (state, (#pass{}, #malloc{2})) => {
+    //         let array = 2 'crate::array::new;
+    //         (#handle_push2{(state, (#pass{}, #out{array})) 'crate::vec::push}, #pass{})
+    //     },
+    // },
+    // (#handle_push2{res}, #pass{}) => res match {
+    //     (state, (#pass{}, #pass{})) => {
+    //         (#handle_push2{(state, (#pass{}, #pass{})) 'crate::vec::push}, #pass{})
+    //     },
+    //     (state, (#pass{}, #free{old})) => {
+    //         let () = old 'crate::array::destroy;
+    //         (#handle_push3{(state, (#pass{}, #out{})) 'crate::vec::push}, #pass{})
+    //     },
+    // },
+    // (#handle_push3{res}, #pass{}) => res match {
+    //     (state, (#pass{}, #pass{})) => {
+    //         (#handle_push3{(state, (#pass{}, #pass{})) 'crate::vec::push}, #pass{})
+    //     },
+    //     (#end{}, (#out{vec}, #pass{})) => {
+    //         let ^ = vec;
+    //         ()
+    //     },
+    // },
+}
 
 
     // let #start{} = state;
@@ -506,4 +549,3 @@ def main_impl match {
     // (#nil{}, #run{@parse_some}) 'tests::main
     // let ^ = m;
     // ()
-}

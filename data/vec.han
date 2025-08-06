@@ -3,25 +3,36 @@ use 'crate::builtin::lt;
 use 'crate::builtin::eq;
 use 'crate::array;
 
-fn args new => args match {
-    (state, (#pass{}, #pass{})) => (state, (#pass{}, #pass{})),
-    (#start{}, (#in{capacity}, #pass{})) => {
-        (#await_malloc{*capacity}, (#pass{}, #malloc{capacity}))
-    },
-    (#await_malloc{capacity},(#pass{}, #out{array})) => {
-        (#end{}, (#out{(0, capacity, array)}, #pass{}))
-    },
+def malloc match {
+    #start{size} => #cont{#await_malloc{}, (#some{#malloc{size}})},
+    #cont{#await_malloc{}, (#some{array})} => #end{array},
+}
+
+// new := capacity | malloc | (0, capacity, -)
+
+def new_convert match {
+    #start{capacity, array} => #end{(0, capacity, array)},
+}
+
+def new_helper (capacity, state) => state match {
+    #cont{state, deps} => #cont{#poll_malloc{capacity, state}, deps},
+    #end{array} => #start{capacity, array} 'new_convert,
+}
+
+def new match {
+    #start{capacity} => (*capacity, #start{capacity} 'malloc) 'new_helper,
+    #cont{#poll_malloc{capacity, state}, deps} => (capacity, #cont{state, deps} 'malloc) 'new_helper,
 }
 
 fn (state, msg) push => state match {
     #start{} => {
-        let (#in{(size, capacity, array), item}, #pass{}) = msg;
+        let (#in{(size, capacity, array), item}, #none{}) = msg;
         (*size, *capacity) 'eq if {
-            (#start{}, (#in{(size, *capacity, array), (*capacity, capacity) 'add}, #pass{}), item) 'poll_grow_helper
+            (#start{}, (#in{(size, *capacity, array), (*capacity, capacity) 'add}, #none{}), item) 'poll_grow_helper
         } else {
             let array = (array, *size, item) 'array::set;
             let size = (size, 1) 'add;
-            (#end{}, (#out{(size, capacity, array)}, #pass{}))
+            (#end{}, (#out{(size, capacity, array)}, #none{}))
         }
     },
     #send_grow{grow, item} => {
@@ -32,34 +43,34 @@ fn (state, msg) push => state match {
 fn (grow, submsg, item) poll_grow_helper => {
     let (grow, reply) = (grow, submsg) 'grow;
     reply match {
-        (#out{vec}, #pass{}) => {
+        (#out{vec}, #none{}) => {
             let ^ = grow;
             let (size, capacity, array) = vec;
             let array = (array, *size, item) 'array::set;
             let size = (size, 1) 'add;
-            (#end{}, (#out{(size, capacity, array)}, #pass{}))
+            (#end{}, (#out{(size, capacity, array)}, #none{}))
         },
-        (#pass{}, alloc) => (#send_grow{grow, item}, (#pass{}, alloc)),
+        (#none{}, alloc) => (#send_grow{grow, item}, (#none{}, alloc)),
     }
 }
 
 fn (state, msg) grow => (state, msg) match {
-    (#start{}, (#in{(size, capacity, array), new_capacity}, #pass{})) => {
+    (#start{}, (#in{(size, capacity, array), new_capacity}, #none{})) => {
         (*capacity, *new_capacity) 'lt if {
-            (#await_malloc{(size, capacity, array), *new_capacity}, (#pass{}, #malloc{new_capacity}))
+            (#await_malloc{(size, capacity, array), *new_capacity}, (#none{}, #malloc{new_capacity}))
         } else {
             let ^ = new_capacity;
-            (#end{}, (#out{(size, capacity, array)}, #pass{}))
+            (#end{}, (#out{(size, capacity, array)}, #none{}))
         }
     },
-    (#await_malloc{(size, capacity, array), new_capacity}, (#pass{}, #out{new_array})) => {
+    (#await_malloc{(size, capacity, array), new_capacity}, (#none{}, #out{new_array})) => {
         (#start{}, #in{array, new_array, *size}, size, capacity, new_capacity) 'poll_memcpy_helper
     },
-    (#reply_memcpy{memcpy, size, capacity, new_capacity}, (#pass{}, #pass{})) => {
-        (memcpy, #pass{}, size, capacity, new_capacity) 'poll_memcpy_helper
+    (#reply_memcpy{memcpy, size, capacity, new_capacity}, (#none{}, #none{})) => {
+        (memcpy, #none{}, size, capacity, new_capacity) 'poll_memcpy_helper
     },
-    (#await_free{vec}, (#pass{}, #out{})) => {
-        (#end{}, (#out{vec}, #pass{}))
+    (#await_free{vec}, (#none{}, #out{})) => {
+        (#end{}, (#out{vec}, #none{}))
     },
 }
 
@@ -67,9 +78,9 @@ fn (memcpy, msg, size, capacity, new_capacity) poll_memcpy_helper => {
     (memcpy, msg) 'memcpy match {
         (^, #out{src, dst}) => {
             let ^ = capacity;
-            (#await_free{(size, new_capacity, dst)}, (#pass{}, #free{src}))
+            (#await_free{(size, new_capacity, dst)}, (#none{}, #free{src}))
         },
-        (memcpy, #pass{}) => (#reply_memcpy{memcpy, size, capacity, new_capacity}, (#pass{}, #pass{})),
+        (memcpy, #none{}) => (#reply_memcpy{memcpy, size, capacity, new_capacity}, (#none{}, #none{})),
     }
 }
 
@@ -77,7 +88,7 @@ fn (state, msg) memcpy => (state, msg) match {
     (#start{}, #in{src, dst, len}) => { 
         (src, dst, 0, len) 'memcpy_helper
     },
-    (#cp{src, dst, offset, len}, #pass{}) => { 
+    (#cp{src, dst, offset, len}, #none{}) => { 
         (src, dst, offset, len) 'memcpy_helper
     },
 }
@@ -85,7 +96,7 @@ fn (state, msg) memcpy => (state, msg) match {
 fn (src, dst, offset, len) memcpy_helper => (*offset, *len) 'lt if {
     let (src, item) = (src, *offset) 'array::get;
     let dst = (dst, *offset, item) 'array::set;
-    (#cp{src, dst, (offset, 1) 'add, len}, #pass{})
+    (#cp{src, dst, (offset, 1) 'add, len}, #none{})
 } else {
     let ^ = (offset, len);
     (#end{}, #out{src, dst})

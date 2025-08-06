@@ -764,7 +764,7 @@ impl<'t> Compiler<'t> {
         let mut locals = Locals::default();
         locals.push_unnamed();
         let sentence = transformer.into_recursive_sentence(ctx, &symbol_table, &mut locals)?;
-        if locals.len() != 1 {
+        if !locals.terminal && locals.len() != 1 {
             locals.pop();
             match locals.pop() {
                 Name::User(file_span) => {
@@ -2675,6 +2675,27 @@ mod tests {
 
         // Convert to Transformer
         let transformer = Transformer::from_anon_fn(anon_fn);
+
+        // Flatten the transformer
+        assert_snapshot!(transformer.flatten());
+    }
+
+    #[test]
+    fn test_ambiguous_parse_match() {
+        let fn_decl_str = "match {
+            #a{} => 1  // NO COMMA
+            #b{} => 2,
+       }";
+
+        // Parse the function declaration
+        let mut pairs = HanoiParser::parse(crate::ast::Rule::transformer, fn_decl_str)
+            .expect("Failed to parse function declaration");
+
+        let decl =
+            ast::Transformer::from_pest(&mut pairs).expect("Failed to convert pest pairs to Transformer");
+
+        // Convert to Transformer
+        let transformer = Transformer::from_transformer(decl);
 
         // Flatten the transformer
         assert_snapshot!(transformer.flatten());
