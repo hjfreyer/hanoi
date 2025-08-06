@@ -1,4 +1,7 @@
 {
 	"name": "Hanoi",
-	"image": "mcr.microsoft.com/devcontainers/rust:latest"
+	"image": "mcr.microsoft.com/devcontainers/rust:latest",
+	"features": {
+		"ghcr.io/devcontainers/features/node:1": {}
+	}
 }
