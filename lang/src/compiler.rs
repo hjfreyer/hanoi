@@ -440,10 +440,14 @@ impl<'t> Transformer<'t> {
             Transformer::Literal(literal) => {
                 let span = literal.span(ctx.file_idx);
                 locals.push_unnamed();
-                Ok(RecursiveSentence::single_span(
+                Ok(RecursiveSentence{
                     span,
-                    vec![InnerWord::Push(literal.into_value())],
-                ))
+                    words: vec![RecursiveWord{
+                        span,
+                        names: locals.names(),
+                     inner:   InnerWord::Push(literal.into_value())
+                    }],
+                })
             }
             Transformer::Move(identifier) => {
                 let span = identifier.span(ctx.file_idx);
@@ -2675,27 +2679,6 @@ mod tests {
 
         // Convert to Transformer
         let transformer = Transformer::from_anon_fn(anon_fn);
-
-        // Flatten the transformer
-        assert_snapshot!(transformer.flatten());
-    }
-
-    #[test]
-    fn test_ambiguous_parse_match() {
-        let fn_decl_str = "match {
-            #a{} => 1  // NO COMMA
-            #b{} => 2,
-       }";
-
-        // Parse the function declaration
-        let mut pairs = HanoiParser::parse(crate::ast::Rule::transformer, fn_decl_str)
-            .expect("Failed to parse function declaration");
-
-        let decl =
-            ast::Transformer::from_pest(&mut pairs).expect("Failed to convert pest pairs to Transformer");
-
-        // Convert to Transformer
-        let transformer = Transformer::from_transformer(decl);
 
         // Flatten the transformer
         assert_snapshot!(transformer.flatten());

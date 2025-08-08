@@ -376,32 +376,15 @@ fn (#start{}, (#in{()}, #pass{})) output_one => (#end{}, (#out{1}, #pass{}))
 //    },
 //}
 
-
-
-def parse_ambiguity match {
-    #end{val} => #end{val},
-    #cont{state, (alloc)} => alloc match {
-        #none{} => #cont{#reply{state, (#none{})}, ()}
-        #some{#malloc{size}} => {
-            let array = size 'crate::array::new;
-            #cont{#reply{state, (#some{array})}, ()}
-        },
-        #some{#free{array}} => {
-            let () = array 'crate::array::destroy;
-            #cont{#reply{state, (#some{()})}, ()}
-        },
-    },
-}
-
 def main_inner match {
-    #start{} => #start{} 'crate::vec::new 'main_inner1,
+    #start{()} => #start{1} 'crate::vec::new 'main_inner1,
     #cont{#poll_new{state}, deps} => #cont{state, deps} 'crate::vec::new 'main_inner1,
     #cont{#poll_push1{state}, deps} => #cont{state, deps} 'crate::vec::push 'main_inner2,
 }
 
 def main_inner1 match {
     #cont{state, deps} => #cont{#poll_new{state}, deps},
-    #end{vec} => #start{vec, 4} 'crate::vec::push 'main_inner2,
+    #end{vec} => #start{(vec, 4)} 'crate::vec::push 'main_inner2,
 }
 
 def main_inner2 match {
@@ -410,7 +393,7 @@ def main_inner2 match {
 }
 
 def bound_main match {
-    #start{} => #start{} 'main_inner 'bound_main_inner1,
+    #start{()} => #start{()} 'main_inner 'bound_main_inner1,
     #cont{#reply{state, deps}, ()} => #cont{state, deps} 'main_inner 'bound_main_inner1,
 }
 
@@ -431,7 +414,7 @@ def bound_main_inner1 match {
 
 def main_impl match {
     (#start{}, #in{}) => {
-        (#handle_bound{#start{} 'bound_main}, #pass{})
+        (#handle_bound{#start{()} 'bound_main}, #pass{})
     },
     (#handle_bound{bound_res}, #pass{}) => bound_res match {
         #end{vec} => {

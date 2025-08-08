@@ -156,7 +156,7 @@ into_fn = {
 }
 
 anon_fn = {
-  binding ~ "=>" ~ expr
+  "[" ~ binding ~ "=>" ~ expr ~ "]"
 }
 
 and_then_fn = {
