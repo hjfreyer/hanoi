@@ -330,11 +330,6 @@ pub struct DefDecl<'t> {
 pub enum IntoFn<'t> {
     QualifiedLabel(QualifiedLabel<'t>),
     AnonFn(AnonFn<'t>),
-    AndThen(AndThenFn<'t>),
-    Await(AwaitFn<'t>),
-    Loop(LoopFn<'t>),
-    Do(DoFn<'t>),
-    If(IfFn<'t>),
 }
 
 #[derive(Debug, FromPest, Spanner)]
@@ -344,48 +339,6 @@ pub struct AnonFn<'t> {
     pub span: pest::Span<'t>,
     pub binding: Binding<'t>,
     pub body: Box<Expression<'t>>,
-}
-
-#[derive(Debug, FromPest, Spanner)]
-#[pest_ast(rule(Rule::and_then_fn))]
-pub struct AndThenFn<'t> {
-    #[pest_ast(outer())]
-    pub span: pest::Span<'t>,
-    pub first: Box<IntoFn<'t>>,
-    pub second: Box<IntoFn<'t>>,
-}
-
-#[derive(Debug, FromPest, Spanner)]
-#[pest_ast(rule(Rule::await_fn))]
-pub struct AwaitFn<'t> {
-    #[pest_ast(outer())]
-    pub span: pest::Span<'t>,
-    pub body: Box<IntoFn<'t>>,
-}
-
-#[derive(Debug, FromPest, Spanner)]
-#[pest_ast(rule(Rule::loop_fn))]
-pub struct LoopFn<'t> {
-    #[pest_ast(outer())]
-    pub span: pest::Span<'t>,
-    pub body: Box<IntoFn<'t>>,
-}
-
-#[derive(Debug, FromPest, Spanner)]
-#[pest_ast(rule(Rule::do_fn))]
-pub struct DoFn<'t> {
-    #[pest_ast(outer())]
-    pub span: pest::Span<'t>,
-    pub body: Box<IntoFn<'t>>,
-}
-
-#[derive(Debug, FromPest, Spanner)]
-#[pest_ast(rule(Rule::if_fn))]
-pub struct IfFn<'t> {
-    #[pest_ast(outer())]
-    pub span: pest::Span<'t>,
-    pub true_case: Box<IntoFn<'t>>,
-    pub false_case: Box<IntoFn<'t>>,
 }
 
 #[derive(Debug, FromPest, Spanner)]

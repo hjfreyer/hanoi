@@ -13,7 +13,7 @@ use ratatui::{
 use crate::{
     flat::ValueView,
     source::{self},
-    vm::{EvalError, StepResult, Vm, VmState},
+    vm::{EvalError, Vm, VmState},
 };
 
 pub struct Debugger {

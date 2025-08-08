@@ -1,6 +1,6 @@
 use itertools::Itertools;
 
-use crate::{flat, vm::Vm};
+use crate::flat;
 
 pub struct Runtime {}
 
