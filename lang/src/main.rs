@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 mod ast;
 mod compiler;
 mod debugger;

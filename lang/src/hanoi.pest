@@ -137,7 +137,7 @@ transformer = {
     if_expr
   | match_expr
   | qualified_label
-  | into_fn
+  | anon_fn
 }
 
 if_expr = { "if" ~ expr ~ "else" ~ expr }
@@ -145,15 +145,6 @@ if_expr = { "if" ~ expr ~ "else" ~ expr }
 match_expr = { "match" ~ "{" ~ match_case* ~ "}" }
 
 match_case = { binding ~ "=>" ~ expr ~ "," }
-
-into_fn = {
-  anon_fn
-  // | and_then_fn
-  // | await_fn
-  // | do_fn
-  // | loop_fn
-  // | if_fn
-}
 
 anon_fn = {
   "[" ~ binding ~ "=>" ~ expr ~ "]"

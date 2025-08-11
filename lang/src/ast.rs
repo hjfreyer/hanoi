@@ -311,7 +311,7 @@ pub enum RootExpression<'t> {
 #[pest_ast(rule(Rule::transformer))]
 pub enum Transformer<'t> {
     Call(QualifiedLabel<'t>),
-    InlineCall(IntoFn<'t>),
+    InlineCall(AnonFn<'t>),
     Match(Match<'t>),
     If(If<'t>),
 }
@@ -323,13 +323,6 @@ pub struct DefDecl<'t> {
     pub span: pest::Span<'t>,
     pub name: Identifier<'t>,
     pub transformer: Transformer<'t>,
-}
-
-#[derive(Debug, FromPest, Spanner)]
-#[pest_ast(rule(Rule::into_fn))]
-pub enum IntoFn<'t> {
-    QualifiedLabel(QualifiedLabel<'t>),
-    AnonFn(AnonFn<'t>),
 }
 
 #[derive(Debug, FromPest, Spanner)]

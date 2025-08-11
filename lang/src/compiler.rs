@@ -256,10 +256,7 @@ impl<'t> Transformer<'t> {
     pub fn from_transformer(transformer: ast::Transformer<'t>) -> Self {
         match transformer {
             ast::Transformer::Call(call) => Self::Call(call),
-            ast::Transformer::InlineCall(inline_call) => match inline_call {
-                ast::IntoFn::QualifiedLabel(label) => Self::Call(label),
-                ast::IntoFn::AnonFn(anon_fn) => Self::from_anon_fn(anon_fn),
-            },
+            ast::Transformer::InlineCall(anon_fn) => Self::from_anon_fn(anon_fn),
             ast::Transformer::Match(match_expression) => {
                 let mut else_case = Self::Panic(match_expression.span);
 
