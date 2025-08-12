@@ -138,6 +138,8 @@ transformer = {
   | match_expr
   | qualified_label
   | anon_fn
+  | then_fn
+  | do_fn
 }
 
 if_expr = { "if" ~ expr ~ "else" ~ expr }
@@ -150,17 +152,17 @@ anon_fn = {
   "[" ~ binding ~ "=>" ~ expr ~ "]"
 }
 
-// and_then_fn = {
-//   "c#and_then" ~ into_fn ~ "then" ~ into_fn
-// }
+then_fn = {
+  "c#first" ~ transformer ~ ("c#then" ~ transformer)*
+}
 
 // await_fn = {
-//   "c#await" ~ into_fn
+//   "c#await" ~ transformer
 // }
 
-// do_fn = {
-//   "c#do" ~ into_fn
-// }
+do_fn = {
+  "c#do" ~ transformer
+}
 
 // loop_fn = {
 //   "c#loop" ~ into_fn

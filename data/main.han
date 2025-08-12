@@ -376,21 +376,23 @@ fn (#start{}, (#in{()}, #pass{})) output_one => (#end{}, (#out{1}, #pass{}))
 //    },
 //}
 
-def main_inner match {
-    #start{()} => #start{1} 'crate::vec::new 'main_inner1,
-    #cont{#poll_new{state}, deps} => #cont{state, deps} 'crate::vec::new 'main_inner1,
-    #cont{#poll_push1{state}, deps} => #cont{state, deps} 'crate::vec::push 'main_inner2,
-}
+def main_inner c#first c#do [() => 1] c#then 'crate::vec::new c#then c#do [vec => (vec, 4)] c#then 'crate::vec::push
 
-def main_inner1 match {
-    #cont{state, deps} => #cont{#poll_new{state}, deps},
-    #end{vec} => #start{(vec, 4)} 'crate::vec::push 'main_inner2,
-}
+// def main_inner match {
+//     #start{()} => #start{1} 'crate::vec::new 'main_inner1,
+//     #cont{#poll_new{state}, deps} => #cont{state, deps} 'crate::vec::new 'main_inner1,
+//     #cont{#poll_push1{state}, deps} => #cont{state, deps} 'crate::vec::push 'main_inner2,
+// }
 
-def main_inner2 match {
-    #cont{state, deps} => #cont{#poll_push2{state}, deps},
-    #end{vec} => #end{vec},
-}
+// def main_inner1 match {
+//     #cont{state, deps} => #cont{#poll_new{state}, deps},
+//     #end{vec} => #start{(vec, 4)} 'crate::vec::push 'main_inner2,
+// }
+
+// def main_inner2 match {
+//     #cont{state, deps} => #cont{#poll_push2{state}, deps},
+//     #end{vec} => #end{vec},
+// }
 
 def bound_main match {
     #start{()} => #start{()} 'main_inner 'bound_main_inner1,

@@ -314,6 +314,24 @@ pub enum Transformer<'t> {
     InlineCall(AnonFn<'t>),
     Match(Match<'t>),
     If(If<'t>),
+    Then(Then<'t>),
+    Do(Do<'t>),
+}
+
+#[derive(Debug, FromPest, Spanner)]
+#[pest_ast(rule(Rule::then_fn))]
+pub struct Then<'t> {
+    #[pest_ast(outer())]
+    pub span: pest::Span<'t>,
+    pub transformers: Vec<Transformer<'t>>,
+}
+
+#[derive(Debug, FromPest, Spanner)]
+#[pest_ast(rule(Rule::do_fn))]
+pub struct Do<'t> {
+    #[pest_ast(outer())]
+    pub span: pest::Span<'t>,
+    pub transformer: Box<Transformer<'t>>,
 }
 
 #[derive(Debug, FromPest)]

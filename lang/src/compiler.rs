@@ -77,6 +77,10 @@ impl Crate {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Transformer<'t> {
     Literal(ast::Literal<'t>),
+    Value {
+        span: pest::Span<'t>,
+        value: flat::Value,
+    },
     Move(ast::Identifier<'t>),
     MoveIdx {
         span: pest::Span<'t>,
@@ -289,6 +293,149 @@ impl<'t> Transformer<'t> {
                 span: if_expression.span,
                 true_case: Box::new(Self::from_expression(*if_expression.true_case)),
                 false_case: Box::new(Self::from_expression(*if_expression.false_case)),
+            },
+            ast::Transformer::Then(mut then) => {
+                let span = then.span;
+                if then.transformers.len() == 1 {
+                    Self::from_transformer(then.transformers.remove(0))
+                } else {
+                    let first = Self::from_transformer(then.transformers.remove(0));
+                    let rest = Self::Composition {
+                        span,
+                        children: vec![
+                            Self::from_transformer(ast::Transformer::Then(then)),
+                            Self::tag_tester(
+                                span,
+                                "end",
+                                1,
+                                Self::Composition {
+                                    span,
+                                    children: vec![
+                                        // result
+                                        Self::make_tag(span, "end", 1),
+                                    ],
+                                },
+                                Self::Composition {
+                                    span,
+                                    children: vec![
+                                        Self::tag_unwrapper(span, "cont", 2),
+                                        // rest_state args
+                                        Self::Value {
+                                            span,
+                                            value: flat::Value::Bool(true),
+                                        },
+                                        // rest_state args true
+                                        Self::MoveIdx { span, idx: 2 },
+                                        // args true rest_state
+                                        Self::Tuple { span, size: 2 },
+                                        // args (true, rest_state)
+                                        Self::MoveIdx { span, idx: 1 },
+                                        Self::make_tag(span, "cont", 2),
+                                        // #cont{(true, rest_state), args}
+                                    ],
+                                },
+                            ),
+                        ],
+                    };
+
+                    let first = Self::Composition {
+                        span,
+                        children: vec![
+                            first,
+                            Self::tag_tester(
+                                span,
+                                "end",
+                                1,
+                                Self::Composition {
+                                    span,
+                                    children: vec![
+                                        // result
+                                        Self::make_tag(span, "start", 1),
+                                        rest.clone(),
+                                    ],
+                                },
+                                Self::Composition {
+                                    span,
+                                    children: vec![
+                                        Self::tag_unwrapper(span, "cont", 2),
+                                        // first_state args
+                                        Self::Value {
+                                            span,
+                                            value: flat::Value::Bool(false),
+                                        },
+                                        // first_state args false
+                                        Self::MoveIdx { span, idx: 2 },
+                                        // args false first_state
+                                        Self::Tuple { span, size: 2 },
+                                        // args (false, first_state)
+                                        Self::MoveIdx { span, idx: 1 },
+                                        // (false, first_state) args
+                                        Self::make_tag(span, "cont", 2),
+                                        // #cont{(false, first_state), args}
+                                    ],
+                                },
+                            ),
+                        ],
+                    };
+
+                    Self::tag_tester(
+                        span,
+                        "start",
+                        1,
+                        Transformer::Composition {
+                            span,
+                            children: vec![
+                                // start_arg
+                                Self::make_tag(span, "start", 1),
+                                first.clone(),
+                            ],
+                        },
+                        Self::Composition {
+                            span,
+                            children: vec![
+                                Self::tag_unwrapper(span, "cont", 2),
+                                // (first/rest, inner_state) args
+                                Self::MoveIdx { span, idx: 1 },
+                                // args (first/rest, inner_state)
+                                Self::Untuple { span, size: 2 },
+                                // args first/rest inner_state
+                                Self::MoveIdx { span, idx: 1 },
+                                // args inner_state first/rest
+                                Self::Branch {
+                                    span,
+                                    false_case: Box::new(Self::Composition {
+                                        span,
+                                        children: vec![
+                                            // args inner_state
+                                            Self::MoveIdx { span, idx: 1 },
+                                            // inner_state args
+                                            Self::make_tag(span, "cont", 2),
+                                            first,
+                                        ],
+                                    }),
+                                    true_case: Box::new(Self::Composition {
+                                        span,
+                                        children: vec![
+                                            // args inner_state
+                                            Self::MoveIdx { span, idx: 1 },
+                                            // inner_state args
+                                            Self::make_tag(span, "cont", 2),
+                                            rest,
+                                        ],
+                                    }),
+                                },
+                            ],
+                        },
+                    )
+                }
+            }
+            ast::Transformer::Do(do_fn) => Self::Composition {
+                span: do_fn.span,
+                children: vec![
+                    Self::tag_unwrapper(do_fn.span, "start", 1),
+                    Self::from_transformer(*do_fn.transformer),
+                    Self::make_tag(do_fn.span, "end", 1),
+                ],
             },
         }
     }
@@ -611,6 +758,88 @@ impl<'t> Transformer<'t> {
                     vec![InnerWord::Builtin(flat::Builtin::Eq)],
                 ))
             }
+            Transformer::Value { span, value } => {
+                let span: FileSpan = span.into_ir(ctx.sources, ctx.file_idx);
+                locals.push_unnamed();
+                Ok(RecursiveSentence::single_span(
+                    span,
+                    vec![InnerWord::Push(value)],
+                ))
+            }
+        }
+    }
+
+    fn tag_tester(
+        span: pest::Span<'t>,
+        tag: &str,
+        size: usize,
+        true_case: Transformer<'t>,
+        false_case: Transformer<'t>,
+    ) -> Self {
+        Self::Composition {
+            span,
+            children: vec![
+                // (tag, args)
+                Self::Untuple { span, size: 2 },
+                // tag args
+                Self::CopyIdx { span, idx: 1 },
+                // tag args tag
+                Self::Value {
+                    span,
+                    value: flat::Value::Symbol(tag.to_owned()),
+                },
+                Self::Eq(span),
+                // tag args bool
+                Self::Branch {
+                    span,
+                    true_case: Box::new(Self::Composition {
+                        span,
+                        children: vec![
+                            Self::Tuple { span, size: 2 },
+                            Self::tag_unwrapper(span, tag, size),
+                            true_case,
+                        ],
+                    }),
+                    false_case: Box::new(Self::Composition {
+                        span,
+                        children: vec![Self::Tuple { span, size: 2 }, false_case],
+                    }),
+                },
+            ],
+        }
+    }
+
+    fn make_tag(span: pest::Span<'t>, tag: &str, size: usize) -> Self {
+        Self::Composition {
+            span,
+            children: vec![
+                Self::Tuple { span, size },
+                // args
+                Self::Value {
+                    span,
+                    value: flat::Value::Symbol(tag.to_owned()),
+                },
+                // args tag
+                Self::MoveIdx { span, idx: 1 },
+                // tag args
+                Self::Tuple { span, size: 2 },
+            ],
+        }
+    }
+
+    fn tag_unwrapper(span: pest::Span<'t>, tag: &str, size: usize) -> Self {
+        Self::Composition {
+            span,
+            children: vec![
+                Self::Untuple { span, size: 2 },
+                Self::MoveIdx { span, idx: 1 },
+                Self::Value {
+                    span,
+                    value: flat::Value::Symbol(tag.to_owned()),
+                },
+                Self::AssertEq(span),
+                Self::Untuple { span, size: size },
+            ],
         }
     }
 }
@@ -1985,6 +2214,7 @@ impl<'t> Transformer<'t> {
             Transformer::AssertEq(_) => writeln!(f, "assert_eq"),
             Transformer::Panic(_) => writeln!(f, "panic"),
             Transformer::Eq(_) => writeln!(f, "eq"),
+            Transformer::Value { value, .. } => writeln!(f, "{:?}", value),
         }
     }
 }
