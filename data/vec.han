@@ -27,14 +27,14 @@ def new match {
 def push match {
     #start{((size, capacity, array), item)} => {
         (*size, *capacity) 'eq if {
-            (#start{(size, *capacity, array), (*capacity, capacity) 'add}, item) 'poll_grow_helper
+            (#start{((size, *capacity, array), (*capacity, capacity) 'add)}, item) 'poll_grow_helper
         } else {
             let array = (array, *size, item) 'array::set;
             let size = (size, 1) 'add;
             #end{(size, capacity, array)}
         }
     },
-    #cont{#send_grow{grow, item}, deps} => (#cont{#send_grow{grow}, deps}, item) 'poll_grow_helper,
+    #cont{#send_grow{grow, item}, deps} => (#cont{grow, deps}, item) 'poll_grow_helper,
 }
 
 def poll_grow_helper [(grow, item) => grow 'grow match {

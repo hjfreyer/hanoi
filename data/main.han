@@ -376,7 +376,14 @@ fn (#start{}, (#in{()}, #pass{})) output_one => (#end{}, (#out{1}, #pass{}))
 //    },
 //}
 
-def main_inner c#first c#do [() => 1] c#then 'crate::vec::new c#then c#do [vec => (vec, 4)] c#then 'crate::vec::push
+def main_inner 
+    c#first c#do [() => 1] 
+    c#then 'crate::vec::new 
+    c#then c#do [vec => (vec, 4)] 
+    c#then 'crate::vec::push
+    c#then c#do [vec => (vec, 8)] 
+    c#then 'crate::vec::push
+
 
 // def main_inner match {
 //     #start{()} => #start{1} 'crate::vec::new 'main_inner1,
