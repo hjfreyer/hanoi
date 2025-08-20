@@ -55,6 +55,7 @@ fn run(base_dir: PathBuf) -> anyhow::Result<()> {
     let (sources, lib) = compile_library(base_dir)?;
     let main_symbol = lib.export("main").unwrap();
     let mut vm = Vm::new(lib, Runtime {}, main_symbol);
+    vm.init();
 
     match vm.run() {
         Ok(res) => res,

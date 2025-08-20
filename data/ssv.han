@@ -1,371 +1,414 @@
+use 'crate::str::symbol;
 
-mod builtin;
-mod iter;
-mod multi_iter;
-mod str;
+
+def get_next match {
+    #start{iter} => #cont{(), (#some{#next{iter}})},
+    #cont{(), (#some{resp})} => #end{resp},
+}
+
+def new c#do [symbol_iter => #unstarted{symbol_iter}]
+
+def next c#do match {
+    #unstarted{symbol_iter} => (#in_field{symbol_iter, #none{}}, true),
+    #at_space{iter} => (#in_field{iter, #none{}}, true),
+    #almost_finished{} => (#end{}, false),
+}
+
+def inner_next c#do match {
+    #in_field{iter, ^} => {
+        iter 'symbol::iter::next match {
+            (iter, #some{' '}) => (#at_space{iter}, false),
+            (iter, #some{c}) => (#in_field{iter, #some{c}}, true),
+            (^, #none{}) => (#almost_finished{}, false),
+        }
+    },
+}
+
+def inner_inner_clone c#do [#in_field{iter, #some{c}} => (#in_field{iter, #some{*c}}, c)]
+
 
 mod tests {
-    fn enumerate(caller, @next) {
-//        let (caller, @next) = caller(@yield, @chars_in_field);
-//        let (caller, @next) = caller(@yield, @fields_in_line);
-        let (caller, @next) = caller(@yield, @empty_string);
-        let (caller, @next) = caller(@yield, @basic_string);
-        let () = caller(@eos);
-    }
+    def run c#first 'test_empty_string
 
-    mod cases {
+    def test_empty_string 
+        c#first c#do [() => @""]
+        c#then 'crate::str::symbol::iter::new
+        c#then 'super::new
+        c#then 'super::next
+        c#then c#do [(iter, true) => iter]
+        c#then 'super::inner_next
+        c#then c#do [(iter, false) => iter]
+        c#then 'super::next
+        c#then c#do [(^, false) => ()]
+}
 
-        fn chars_in_field(caller) {
-            let (input) = this.super.super.iter.symbol_chars(@"foo   bar
-baz   qux
-");
-            let (p) = this.super.super.iter.peeking();
-            let (input) = this.super.super.builtin.compose(input, p);
-            let (p) = this.super.super.builtin.compose(input, this.super.super.chars_in_field);
+// mod builtin;
+// mod iter;
+// mod multi_iter;
+// mod str;
 
-            let (@resp, p, @yield, 'f') = p(@next);
-            let (@resp, p, @yield, 'o') = p(@next);
-            let (@resp, p, @yield, 'o') = p(@next);
-            let (@end, @eos) = p(@next);
+// mod tests {
+//     fn enumerate(caller, @next) {
+// //        let (caller, @next) = caller(@yield, @chars_in_field);
+// //        let (caller, @next) = caller(@yield, @fields_in_line);
+//         let (caller, @next) = caller(@yield, @empty_string);
+//         let (caller, @next) = caller(@yield, @basic_string);
+//         let () = caller(@eos);
+//     }
 
-            let () = caller(@pass);
-        }
+//     mod cases {
 
-        fn fields_in_line(caller) {
-            let (input) = this.super.super.iter.symbol_chars(@"foo   bar
-baz   qux
-");
-            let (p) = this.super.super.iter.peeking();
-            let (input) = this.super.super.builtin.compose(input, p);
-            let (p) = this.super.super.builtin.compose(input, this.super.super.fields_in_line_init);
+//         fn chars_in_field(caller) {
+//             let (input) = this.super.super.iter.symbol_chars(@"foo   bar
+// baz   qux
+// ");
+//             let (p) = this.super.super.iter.peeking();
+//             let (input) = this.super.super.builtin.compose(input, p);
+//             let (p) = this.super.super.builtin.compose(input, this.super.super.chars_in_field);
 
-            let (@resp, p, @start) = p(@next);
-            let (@resp, p, @yield, 'f') = p(@req, @next);
-            let (@resp, p, @yield, 'o') = p(@req, @next);
-            let (@resp, p, @start) = p(@next);
-            let (@resp, p, @yield, 'b') = p(@req, @next);
-            let (@resp, p, @yield, 'a') = p(@req, @next);
-            let (@resp, p, @yield, 'r') = p(@req, @next);
-            let (@resp, p, @eos) = p(@req, @next);
-            let (@end, @eos) = p(@next);
+//             let (@resp, p, @yield, 'f') = p(@next);
+//             let (@resp, p, @yield, 'o') = p(@next);
+//             let (@resp, p, @yield, 'o') = p(@next);
+//             let (@end, @eos) = p(@next);
 
-            let () = caller(@pass);
-        }
+//             let () = caller(@pass);
+//         }
 
-        fn lines_in_doc(caller) {
-            let (input) = this.super.super.iter.symbol_chars(@"foo   bar
-baz   qux
-");
-            let (p) = this.super.super.iter.peeking();
-            let (input) = this.super.super.builtin.compose(input, p);
-            let (p) = this.super.super.builtin.compose(input, this.super.super.fields_in_line_init);
+//         fn fields_in_line(caller) {
+//             let (input) = this.super.super.iter.symbol_chars(@"foo   bar
+// baz   qux
+// ");
+//             let (p) = this.super.super.iter.peeking();
+//             let (input) = this.super.super.builtin.compose(input, p);
+//             let (p) = this.super.super.builtin.compose(input, this.super.super.fields_in_line_init);
 
-            let (@resp, p, @start) = p(@next);
-            let (@resp, p, @yield, 'f') = p(@req, @next);
-            let (@resp, p, @yield, 'o') = p(@req, @next);
-            let (@resp, p, @start) = p(@next);
-            let (@resp, p, @yield, 'b') = p(@req, @next);
-            let (@resp, p, @yield, 'a') = p(@req, @next);
-            let (@resp, p, @yield, 'r') = p(@req, @next);
-            let (@resp, p, @eos) = p(@req, @next);
-            let (@end, @eos) = p(@next);
+//             let (@resp, p, @start) = p(@next);
+//             let (@resp, p, @yield, 'f') = p(@req, @next);
+//             let (@resp, p, @yield, 'o') = p(@req, @next);
+//             let (@resp, p, @start) = p(@next);
+//             let (@resp, p, @yield, 'b') = p(@req, @next);
+//             let (@resp, p, @yield, 'a') = p(@req, @next);
+//             let (@resp, p, @yield, 'r') = p(@req, @next);
+//             let (@resp, p, @eos) = p(@req, @next);
+//             let (@end, @eos) = p(@next);
 
-            let () = caller(@pass);
-        }
+//             let () = caller(@pass);
+//         }
 
-        fn empty_string(caller) {
-            let (input) = this.super.super.iter.symbol_chars(@"");
+//         fn lines_in_doc(caller) {
+//             let (input) = this.super.super.iter.symbol_chars(@"foo   bar
+// baz   qux
+// ");
+//             let (p) = this.super.super.iter.peeking();
+//             let (input) = this.super.super.builtin.compose(input, p);
+//             let (p) = this.super.super.builtin.compose(input, this.super.super.fields_in_line_init);
 
-            let (p) = this.super.super.parser(input);
-            let (@resp, p, @yield, l1) = p(@next);
-            let (@resp, l1, @yield, f1) = l1(@next);
-            let (@end, @eos) = f1(@next);
-            let (@end, @eos) = l1(@next);
-            let (@end, @eos) = p(@next);
+//             let (@resp, p, @start) = p(@next);
+//             let (@resp, p, @yield, 'f') = p(@req, @next);
+//             let (@resp, p, @yield, 'o') = p(@req, @next);
+//             let (@resp, p, @start) = p(@next);
+//             let (@resp, p, @yield, 'b') = p(@req, @next);
+//             let (@resp, p, @yield, 'a') = p(@req, @next);
+//             let (@resp, p, @yield, 'r') = p(@req, @next);
+//             let (@resp, p, @eos) = p(@req, @next);
+//             let (@end, @eos) = p(@next);
 
-            let () = caller(@pass);
-        }
+//             let () = caller(@pass);
+//         }
 
-        fn basic_string(caller) {
-            let (input) = this.super.super.iter.symbol_chars(@"foo   bar
-baz   qux
-");
+//         fn empty_string(caller) {
+//             let (input) = this.super.super.iter.symbol_chars(@"");
 
-            let (p) = this.super.super.parser(input);
-            let (@resp, p, @yield, r1) = p(@next);
-            let (@resp, p, @yield, r2) = p(@next);
-            let (@resp, p, @yield, r3) = p(@next);
-            let (@end, @eos) = p(@next);
+//             let (p) = this.super.super.parser(input);
+//             let (@resp, p, @yield, l1) = p(@next);
+//             let (@resp, l1, @yield, f1) = l1(@next);
+//             let (@end, @eos) = f1(@next);
+//             let (@end, @eos) = l1(@next);
+//             let (@end, @eos) = p(@next);
 
-            let (@resp, r1, @yield, f1) = r1(@next);
-            let (@resp, f1, @yield, 'f') = f1(@next);
-            let (@resp, f1, @yield, 'o') = f1(@next);
-            let (@resp, f1, @yield, 'o') = f1(@next);
-            let (@end, @eos) = f1(@next);
+//             let () = caller(@pass);
+//         }
 
-            let (@resp, r1, @yield, f2) = r1(@next);
-            let (@resp, f2, @yield, 'b') = f2(@next);
-            let (@resp, f2, @yield, 'a') = f2(@next);
-            let (@resp, f2, @yield, 'r') = f2(@next);
-            let (@end, @eos) = f2(@next);
+//         fn basic_string(caller) {
+//             let (input) = this.super.super.iter.symbol_chars(@"foo   bar
+// baz   qux
+// ");
+
+//             let (p) = this.super.super.parser(input);
+//             let (@resp, p, @yield, r1) = p(@next);
+//             let (@resp, p, @yield, r2) = p(@next);
+//             let (@resp, p, @yield, r3) = p(@next);
+//             let (@end, @eos) = p(@next);
+
+//             let (@resp, r1, @yield, f1) = r1(@next);
+//             let (@resp, f1, @yield, 'f') = f1(@next);
+//             let (@resp, f1, @yield, 'o') = f1(@next);
+//             let (@resp, f1, @yield, 'o') = f1(@next);
+//             let (@end, @eos) = f1(@next);
+
+//             let (@resp, r1, @yield, f2) = r1(@next);
+//             let (@resp, f2, @yield, 'b') = f2(@next);
+//             let (@resp, f2, @yield, 'a') = f2(@next);
+//             let (@resp, f2, @yield, 'r') = f2(@next);
+//             let (@end, @eos) = f2(@next);
             
-            let (@end, @eos) = r1(@next);
+//             let (@end, @eos) = r1(@next);
 
 
 
 
-            let (@resp, r2, @yield, f1) = r2(@next);
-            let (@resp, f1, @yield, 'b') = f1(@next);
-            let (@resp, f1, @yield, 'a') = f1(@next);
-            let (@resp, f1, @yield, 'z') = f1(@next);
-            let (@end, @eos) = f1(@next);
+//             let (@resp, r2, @yield, f1) = r2(@next);
+//             let (@resp, f1, @yield, 'b') = f1(@next);
+//             let (@resp, f1, @yield, 'a') = f1(@next);
+//             let (@resp, f1, @yield, 'z') = f1(@next);
+//             let (@end, @eos) = f1(@next);
 
-            let (@resp, r2, @yield, f2) = r2(@next);
-            let (@resp, f2, @yield, 'q') = f2(@next);
-            let (@resp, f2, @yield, 'u') = f2(@next);
-            let (@resp, f2, @yield, 'x') = f2(@next);
-            let (@end, @eos) = f2(@next);
+//             let (@resp, r2, @yield, f2) = r2(@next);
+//             let (@resp, f2, @yield, 'q') = f2(@next);
+//             let (@resp, f2, @yield, 'u') = f2(@next);
+//             let (@resp, f2, @yield, 'x') = f2(@next);
+//             let (@end, @eos) = f2(@next);
 
-            let (@end, @eos) = r2(@next);
+//             let (@end, @eos) = r2(@next);
 
-            let (@resp, r3, @yield, f1) = r3(@next);
-            let (@end, @eos) = f1(@next);
-            let (@end, @eos) = r3(@next);
+//             let (@resp, r3, @yield, f1) = r3(@next);
+//             let (@end, @eos) = f1(@next);
+//             let (@end, @eos) = r3(@next);
 
-            let () = caller(@pass);
-        }
-    }
+//             let () = caller(@pass);
+//         }
+//     }
 
-    fn run(caller, case_name) {
-        R{ @cases this #get #get @exec }
-    }
-}
+//     fn run(caller, case_name) {
+//         R{ @cases this #get #get @exec }
+//     }
+// }
 
-fn parser(caller, iter) {
-    let (s) = this.str.split_lines(iter);
-    let (m) = this.iter.map(s, this.split_by_space_constructor);
-    become caller(m)
-}
+// fn parser(caller, iter) {
+//     let (s) = this.str.split_lines(iter);
+//     let (m) = this.iter.map(s, this.split_by_space_constructor);
+//     become caller(m)
+// }
 
-fn split_by_space_constructor(caller, iter) {
-    let (delim) = this.space_delimiters&(iter, false);
-    let (res) = this.iter.split&(delim);
-    let () = resp caller(res);
-    become this.split_by_space_constructor()
-}
+// fn split_by_space_constructor(caller, iter) {
+//     let (delim) = this.space_delimiters&(iter, false);
+//     let (res) = this.iter.split&(delim);
+//     let () = resp caller(res);
+//     become this.split_by_space_constructor()
+// }
 
-fn space_delimiters(iter, in_ws, caller, @next) {
-    let (caller) = this.builtin.fwd_req(caller, iter, @next);
-    match {
-        (@end, @eos) => {
-            let () = in_ws;
-            match {
-                (true) => {
-                    let (caller, @next) = resp caller(@yield, @delimiter);
-                    become caller(@end, @eos)
-                }
-                (false) => {
-                    become caller(@end, @eos)
+// fn space_delimiters(iter, in_ws, caller, @next) {
+//     let (caller) = this.builtin.fwd_req(caller, iter, @next);
+//     match {
+//         (@end, @eos) => {
+//             let () = in_ws;
+//             match {
+//                 (true) => {
+//                     let (caller, @next) = resp caller(@yield, @delimiter);
+//                     become caller(@end, @eos)
+//                 }
+//                 (false) => {
+//                     become caller(@end, @eos)
 
-                }
-            }
-        }
-        (@resp, iter) => {
-            match {
-                (@yield, ' ') => {
-                    become this.space_delimiters(iter, true, caller, @next)
-                }
-                (@yield, other) => {
-                    let () = in_ws;
-                    match {
-                        (true) => {
-                            let (caller, @next) = resp caller(@yield, @delimiter);
-                            let () = resp caller(@yield, @non_delimiter, other);
-                            become this.space_delimiters(iter, false)
-                        }
-                        (false) => {
-                            let () = resp caller(@yield, @non_delimiter, other);
-                            become this.space_delimiters(iter, false)
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
+//                 }
+//             }
+//         }
+//         (@resp, iter) => {
+//             match {
+//                 (@yield, ' ') => {
+//                     become this.space_delimiters(iter, true, caller, @next)
+//                 }
+//                 (@yield, other) => {
+//                     let () = in_ws;
+//                     match {
+//                         (true) => {
+//                             let (caller, @next) = resp caller(@yield, @delimiter);
+//                             let () = resp caller(@yield, @non_delimiter, other);
+//                             become this.space_delimiters(iter, false)
+//                         }
+//                         (false) => {
+//                             let () = resp caller(@yield, @non_delimiter, other);
+//                             become this.space_delimiters(iter, false)
+//                         }
+//                     }
+//                 }
+//             }
+//         }
+//     }
+// }
 
-fn skip_to_newline(caller, char) {
-    let () = char;
-    match {
-        ('\n') => {
-            become caller(@end, @yield, '\n')
-        }
-        (char) => {
-            let (caller) = req caller(@next);
-            match {
-                (@eos) => {
-                    become caller(@end, @eos)
-                }
-                (char) => {
-                    become this.skip_to_newline(caller, char)
-                }
-            }
-        }
-    }
-}
-
-
-fn fields_in_line_init(caller, @next) {
-    let (caller) = req caller(@peek);
-    match {
-        (@none) => {
-            become caller(@end, @eos)
-        }
-        (@some, '\n') => {
-            become caller(@end, @eos)
-        }
-        (@some, char) => {
-            let () = resp caller(@start);
-            become this.fields_in_line()
-        }
-    }
-}
-fn fields_in_line(caller) {
-    match {
-        (@next) => {
-            let (caller) = req caller(@peek);
-            match {
-                (@none) => {
-                    become caller(@end, @eos)
-                }
-                (@some, '\n') => {
-                    become caller(@end, @eos)
-                }
-                (@some, ' ') => {
-                    let (@end, caller) = this.builtin.fwd_req(caller, this.skip_whitespace);
-                    let (caller) = resp caller(@start);
-                    become this.fields_in_line(caller)
-                }
-                (@some, char) => {
-                    let (caller, @yield, ^) = req caller(@next);
-                    become this.fields_in_line(caller, @next)
-                }
-            }
-        }
-        (@req, @next) => {
-            let () = this.builtin.fwd_req(caller, this.chars_in_field, @next);
-            match {
-                (@resp, caller, ^) => {
-                    let () = resp caller();
-                    become this.fields_in_line()
-                }
-                (@end, caller) => {
-                    let () = resp caller();
-                    become this.fields_in_line()
-                }
-            }
-        }
-    }
-}
-
-fn skip_whitespace(caller) {
-    let (caller) = req caller(@peek);
-    match {
-        (@none) => {
-            become caller(@end)
-        }
-        (@some, ' ') => {
-            let (caller, @yield, ^) = req caller(@next);
-            become this.skip_whitespace(caller)
-        }
-        (@some, char) => {
-            become caller(@end)
-        }
-    }
-}
+// fn skip_to_newline(caller, char) {
+//     let () = char;
+//     match {
+//         ('\n') => {
+//             become caller(@end, @yield, '\n')
+//         }
+//         (char) => {
+//             let (caller) = req caller(@next);
+//             match {
+//                 (@eos) => {
+//                     become caller(@end, @eos)
+//                 }
+//                 (char) => {
+//                     become this.skip_to_newline(caller, char)
+//                 }
+//             }
+//         }
+//     }
+// }
 
 
-fn chars_in_field(caller, @next) {
-    let (caller) = req caller(@peek);
-    match {
-        (@none) => {
-            become caller(@end, @eos)
-        }
-        (@some, ' ') => {
-            become caller(@end, @eos)
-        }
-        (@some, '\n') => {
-            become caller(@end, @eos)
-        }
-        (@some, char) => {
-            let (caller, @yield, ^) = req caller(@next);
-            let () = resp caller(@yield, char);
-            become this.chars_in_field()
-        }
-    }
-}
+// fn fields_in_line_init(caller, @next) {
+//     let (caller) = req caller(@peek);
+//     match {
+//         (@none) => {
+//             become caller(@end, @eos)
+//         }
+//         (@some, '\n') => {
+//             become caller(@end, @eos)
+//         }
+//         (@some, char) => {
+//             let () = resp caller(@start);
+//             become this.fields_in_line()
+//         }
+//     }
+// }
+// fn fields_in_line(caller) {
+//     match {
+//         (@next) => {
+//             let (caller) = req caller(@peek);
+//             match {
+//                 (@none) => {
+//                     become caller(@end, @eos)
+//                 }
+//                 (@some, '\n') => {
+//                     become caller(@end, @eos)
+//                 }
+//                 (@some, ' ') => {
+//                     let (@end, caller) = this.builtin.fwd_req(caller, this.skip_whitespace);
+//                     let (caller) = resp caller(@start);
+//                     become this.fields_in_line(caller)
+//                 }
+//                 (@some, char) => {
+//                     let (caller, @yield, ^) = req caller(@next);
+//                     become this.fields_in_line(caller, @next)
+//                 }
+//             }
+//         }
+//         (@req, @next) => {
+//             let () = this.builtin.fwd_req(caller, this.chars_in_field, @next);
+//             match {
+//                 (@resp, caller, ^) => {
+//                     let () = resp caller();
+//                     become this.fields_in_line()
+//                 }
+//                 (@end, caller) => {
+//                     let () = resp caller();
+//                     become this.fields_in_line()
+//                 }
+//             }
+//         }
+//     }
+// }
 
-fn impl_start(caller, @next) {
-    become this.impl_newline(caller, @next)
-}
+// fn skip_whitespace(caller) {
+//     let (caller) = req caller(@peek);
+//     match {
+//         (@none) => {
+//             become caller(@end)
+//         }
+//         (@some, ' ') => {
+//             let (caller, @yield, ^) = req caller(@next);
+//             become this.skip_whitespace(caller)
+//         }
+//         (@some, char) => {
+//             become caller(@end)
+//         }
+//     }
+// }
 
-fn impl_newline(caller, @next) {
-    let (caller) = req caller(@next);
-    match {
-        (@eos) => {
-            become caller(@end, @eos)
-        }
-        (@yield, ' ') => {
-            let () = resp caller(@err, @unexpected_space);
-        }
-        (@yield, char) => {
-            let (caller, @next) = resp caller(@start);
-            let (caller, @next) = resp caller(@start);
-            let (caller, @next) = resp caller(@yield, char);
+
+// fn chars_in_field(caller, @next) {
+//     let (caller) = req caller(@peek);
+//     match {
+//         (@none) => {
+//             become caller(@end, @eos)
+//         }
+//         (@some, ' ') => {
+//             become caller(@end, @eos)
+//         }
+//         (@some, '\n') => {
+//             become caller(@end, @eos)
+//         }
+//         (@some, char) => {
+//             let (caller, @yield, ^) = req caller(@next);
+//             let () = resp caller(@yield, char);
+//             become this.chars_in_field()
+//         }
+//     }
+// }
+
+// fn impl_start(caller, @next) {
+//     become this.impl_newline(caller, @next)
+// }
+
+// fn impl_newline(caller, @next) {
+//     let (caller) = req caller(@next);
+//     match {
+//         (@eos) => {
+//             become caller(@end, @eos)
+//         }
+//         (@yield, ' ') => {
+//             let () = resp caller(@err, @unexpected_space);
+//         }
+//         (@yield, char) => {
+//             let (caller, @next) = resp caller(@start);
+//             let (caller, @next) = resp caller(@start);
+//             let (caller, @next) = resp caller(@yield, char);
             
-            become this.impl_infield(caller, @next)
-        }
-    }
-}
+//             become this.impl_infield(caller, @next)
+//         }
+//     }
+// }
 
-fn impl_infield(caller, @next) {
-    let (caller) = req caller(@next);
-    match {
-        (@eos) => {
-            let () = resp caller(@err, @unexpected_eos);
-        }
-        (@yield, ' ') => {
-            let (caller, @next) = resp caller(@eos);
-            become this.impl_inspace(caller, @next)
-        } 
-        (@yield, '\n') => {
-            let (caller, @next) = resp caller(@eos);
-            let (caller, @next) = resp caller(@eos);
-            become this.impl_newline(caller, @next)
-        } 
-        (@yield, char) => {
-            let (caller, @next) = resp caller(@yield, char);
-            become this.impl_infield(caller, @next)
-        }
-    }
-}
+// fn impl_infield(caller, @next) {
+//     let (caller) = req caller(@next);
+//     match {
+//         (@eos) => {
+//             let () = resp caller(@err, @unexpected_eos);
+//         }
+//         (@yield, ' ') => {
+//             let (caller, @next) = resp caller(@eos);
+//             become this.impl_inspace(caller, @next)
+//         } 
+//         (@yield, '\n') => {
+//             let (caller, @next) = resp caller(@eos);
+//             let (caller, @next) = resp caller(@eos);
+//             become this.impl_newline(caller, @next)
+//         } 
+//         (@yield, char) => {
+//             let (caller, @next) = resp caller(@yield, char);
+//             become this.impl_infield(caller, @next)
+//         }
+//     }
+// }
 
-fn impl_inspace(caller, @next) {
-    let (caller) = req caller(@next);
-    match {
-        (@eos) => {
-            let () = resp caller(@err, @unexpected_eos);
-        }
-        (@yield, '\n') => {
-            let () = resp caller(@err, @unexpected_eol);
-        }
-        (@yield, ' ') => {
-            become this.impl_inspace(caller, @next)
-        }
-        (@yield, char) => {
-            let (caller, @next) = resp caller(@start);
-            let (caller, @next) = resp caller(@yield, char);
-            become this.impl_infield(caller, @next)
-        }
-    }
-}
+// fn impl_inspace(caller, @next) {
+//     let (caller) = req caller(@next);
+//     match {
+//         (@eos) => {
+//             let () = resp caller(@err, @unexpected_eos);
+//         }
+//         (@yield, '\n') => {
+//             let () = resp caller(@err, @unexpected_eol);
+//         }
+//         (@yield, ' ') => {
+//             become this.impl_inspace(caller, @next)
+//         }
+//         (@yield, char) => {
+//             let (caller, @next) = resp caller(@start);
+//             let (caller, @next) = resp caller(@yield, char);
+//             become this.impl_infield(caller, @next)
+//         }
+//     }
+// }

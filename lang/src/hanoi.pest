@@ -44,7 +44,7 @@ id_non_digit = _{ ASCII_ALPHA | "_" }
 
 symbol = { "@" ~ (identifier | string) }
 
-string    = ${ "\"" ~ str_inner ~ "\"" }
+string    = @{ "\"" ~ str_inner ~ "\"" }
 str_inner = @{ str_char* }
 str_char  =  {
     !("\"" | "\\") ~ ANY

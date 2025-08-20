@@ -27,4 +27,8 @@ impl Runtime {
             _ => Err(Error::InvalidValue),
         }
     }
+    
+    pub(crate) fn handle_exit(&self, status: usize) {
+        std::process::exit(status as i32)
+    }
 }

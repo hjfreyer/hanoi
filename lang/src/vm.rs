@@ -581,6 +581,12 @@ impl Vm {
                             word_idx: 0,
                         }];
                         Ok(None)
+                    }                    "exit" => {
+                        let Value::Usize(status) = args.into_iter().exactly_one().expect("must exit with a usize status code") else {
+                            panic!("return value must be a usize")
+                        };
+                        self.runtime.handle_exit(status);
+                        Ok(None)
                     }
                     "req" => {
                         let (state, msg) =

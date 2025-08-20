@@ -1,6 +1,8 @@
 mod main;
 mod builtin;
 mod vec;
+mod str;
+mod ssv;
 
 
 sentence main {

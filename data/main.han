@@ -421,46 +421,60 @@ def bound_main_inner1 match {
     },
 }
 
-def main_impl match {
-    (#start{}, #in{}) => {
-        (#handle_bound{#start{()} 'bound_main}, #pass{})
-    },
-    (#handle_bound{bound_res}, #pass{}) => bound_res match {
-        #end{vec} => {
-            let ^ = vec;
-            ()
-        },
+def test1 c#do [() => ()]
+def test2 c#do [() => {
+    let 1 = 2;
+    ()
+}]
 
-        #cont{state, ()} =>          (#handle_bound{#cont{state, ()} 'bound_main}, #pass{}),
+def tests 
+    c#first 'crate::ssv::tests::run
+
+def main_impl match {
+    (#start{}, #in{}) => #start{()} 'tests match {
+        #end{()} => (#end{}, #exit{0}),
     },
-    // (#handle_push1{res}, #pass{}) => res match {
-    //     (state, (#pass{}, #pass{})) => {
-    //         (#handle_push1{(state, (#pass{}, #pass{})) 'crate::vec::push}, #pass{})
-    //     },
-    //     (state, (#pass{}, #malloc{2})) => {
-    //         let array = 2 'crate::array::new;
-    //         (#handle_push2{(state, (#pass{}, #out{array})) 'crate::vec::push}, #pass{})
-    //     },
-    // },
-    // (#handle_push2{res}, #pass{}) => res match {
-    //     (state, (#pass{}, #pass{})) => {
-    //         (#handle_push2{(state, (#pass{}, #pass{})) 'crate::vec::push}, #pass{})
-    //     },
-    //     (state, (#pass{}, #free{old})) => {
-    //         let () = old 'crate::array::destroy;
-    //         (#handle_push3{(state, (#pass{}, #out{})) 'crate::vec::push}, #pass{})
-    //     },
-    // },
-    // (#handle_push3{res}, #pass{}) => res match {
-    //     (state, (#pass{}, #pass{})) => {
-    //         (#handle_push3{(state, (#pass{}, #pass{})) 'crate::vec::push}, #pass{})
-    //     },
-    //     (#end{}, (#out{vec}, #pass{})) => {
-    //         let ^ = vec;
-    //         ()
-    //     },
-    // },
 }
+// def main_impl match {
+//     (#start{}, #in{}) => {
+//         (#handle_bound{#start{()} 'bound_main}, #pass{})
+//     },
+//     (#handle_bound{bound_res}, #pass{}) => bound_res match {
+//         #end{vec} => {
+//             let ^ = vec;
+//             ()
+//         },
+
+//         #cont{state, ()} =>          (#handle_bound{#cont{state, ()} 'bound_main}, #pass{}),
+//     },
+//     // (#handle_push1{res}, #pass{}) => res match {
+//     //     (state, (#pass{}, #pass{})) => {
+//     //         (#handle_push1{(state, (#pass{}, #pass{})) 'crate::vec::push}, #pass{})
+//     //     },
+//     //     (state, (#pass{}, #malloc{2})) => {
+//     //         let array = 2 'crate::array::new;
+//     //         (#handle_push2{(state, (#pass{}, #out{array})) 'crate::vec::push}, #pass{})
+//     //     },
+//     // },
+//     // (#handle_push2{res}, #pass{}) => res match {
+//     //     (state, (#pass{}, #pass{})) => {
+//     //         (#handle_push2{(state, (#pass{}, #pass{})) 'crate::vec::push}, #pass{})
+//     //     },
+//     //     (state, (#pass{}, #free{old})) => {
+//     //         let () = old 'crate::array::destroy;
+//     //         (#handle_push3{(state, (#pass{}, #out{})) 'crate::vec::push}, #pass{})
+//     //     },
+//     // },
+//     // (#handle_push3{res}, #pass{}) => res match {
+//     //     (state, (#pass{}, #pass{})) => {
+//     //         (#handle_push3{(state, (#pass{}, #pass{})) 'crate::vec::push}, #pass{})
+//     //     },
+//     //     (#end{}, (#out{vec}, #pass{})) => {
+//     //         let ^ = vec;
+//     //         ()
+//     //     },
+//     // },
+// }
 
 
     // let #start{} = state;

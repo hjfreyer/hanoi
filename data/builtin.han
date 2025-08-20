@@ -12,20 +12,13 @@ sentence lt {
     #untuple(2) #lt
 }
 
+sentence symbol_len {
+    #symbol_len
+}
 
-// fn symbol_len(caller, symbol) {
-//     R{ 
-//         [symbol, caller]
-//         symbol #symbol_len caller @exec 
-//     }
-// }
-
-// fn symbol_char_at(caller, symbol, offset) {
-//     R{ 
-//         [offset, symbol, caller]
-//         symbol offset #symbol_char_at caller @exec 
-//     }
-// }
+sentence symbol_char_at {
+    #untuple(2) #symbol_char_at
+}
 
 // fn eq(caller, a, b) {
 //     R{ 
