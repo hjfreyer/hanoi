@@ -16,10 +16,10 @@ def next c#do match {
 
 def inner_next c#do match {
     #in_field{iter, ^} => {
-        iter 'symbol::iter::next match {
-            (iter, #some{' '}) => (#at_space{iter}, false),
-            (iter, #some{c}) => (#in_field{iter, #some{c}}, true),
-            (^, #none{}) => (#almost_finished{}, false),
+        #start{iter} 'symbol::iter::next match {
+            #end{(iter, #some{' '})} => (#at_space{iter}, false),
+            #end{(iter, #some{c})} => (#in_field{iter, #some{c}}, true),
+            #end{(^, #none{})} => (#almost_finished{}, false),
         }
     },
 }
@@ -40,6 +40,29 @@ mod tests {
         c#then c#do [(iter, false) => iter]
         c#then 'super::next
         c#then c#do [(^, false) => ()]
+
+    def single_field 
+        c#first c#do [() => @"foo"]
+        c#then 'crate::str::symbol::iter::new
+        c#then 'super::new
+        c#then 'super::next
+        c#then c#do [(iter, true) => iter]
+        c#then 'super::inner_next
+        c#then c#do [(iter, true) => iter]
+        c#then 'super::inner_inner_clone
+        c#then c#do [(iter, 'f') => iter]
+        c#then 'super::inner_next
+        // c#then c#do [(iter, true) => iter]
+        // c#then 'super::inner_inner_clone
+        // c#then c#do [(iter, 'o') => iter]
+        // c#then 'super::inner_next
+        // c#then c#do [(iter, true) => iter]
+        // c#then 'super::inner_inner_clone
+        // c#then c#do [(iter, 'o') => iter]
+        // c#then 'super::inner_next
+        // c#then c#do [(iter, false) => iter]
+        // c#then 'super::next
+        // c#then c#do [(^, false) => ()]
 }
 
 // mod builtin;

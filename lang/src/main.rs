@@ -6,6 +6,7 @@ mod debugger;
 #[macro_use]
 mod flat;
 mod linker;
+mod pen;
 mod runtime;
 mod source;
 mod vm;

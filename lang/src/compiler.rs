@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 
 use crate::ast::Spanner;
+use crate::pen::{Pen, PenRef, PennedBy};
 use builder::FileContext;
+use derive_more::derive::{From, Into};
 use itertools::Itertools;
 use typed_index_collections::TiVec;
 
@@ -74,6 +76,11 @@ impl Crate {
 // 'add     [?, ?]
 // tuple(2) [?]
 
+#[derive(Debug, From, Into, Clone, Copy, PartialEq, Eq)]
+pub struct TransformerRef(usize);
+
+impl<'t> PenRef<Transformer<'t>> for TransformerRef {}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Transformer<'t> {
     Literal(ast::Literal<'t>),
@@ -104,36 +111,47 @@ pub enum Transformer<'t> {
     },
     Branch {
         span: pest::Span<'t>,
-        true_case: Box<Transformer<'t>>,
-        false_case: Box<Transformer<'t>>,
+        true_case: TransformerRef,
+        false_case: TransformerRef,
     },
     Composition {
         span: pest::Span<'t>,
-        children: Vec<Transformer<'t>>,
+        children: Vec<TransformerRef>,
     },
     AssertEq(pest::Span<'t>),
     Panic(pest::Span<'t>),
     Eq(pest::Span<'t>),
 }
 
-impl<'t> Transformer<'t> {
-    pub fn from_anon_fn(anon_fn: ast::AnonFn<'t>) -> Self {
-        Self::Composition {
+impl<'t> PennedBy for Transformer<'t> {
+    type Ref = TransformerRef;
+}
+
+impl<'t> Transformer<'t> {}
+
+struct TransformerFactory<'a, 't>(&'a mut Pen<Transformer<'t>>);
+
+impl<'a, 't> TransformerFactory<'a, 't> {
+    pub fn from_anon_fn(&mut self, anon_fn: ast::AnonFn<'t>) -> TransformerRef {
+        Transformer::Composition {
             span: anon_fn.span,
             children: vec![
-                Self::from_binding(anon_fn.binding),
-                Self::from_expression(*anon_fn.body),
+                self.from_binding(anon_fn.binding),
+                self.from_expression(*anon_fn.body),
             ],
         }
+        .into_pen(self.0)
     }
 
-    pub fn from_root(root: ast::RootExpression<'t>) -> Self {
+    pub fn from_root(&mut self, root: ast::RootExpression<'t>) -> TransformerRef {
         match root {
-            ast::RootExpression::Literal(literal) => Self::Literal(literal),
-            ast::RootExpression::Identifier(identifier) => Self::Move(identifier),
-            ast::RootExpression::Copy(copy) => Self::Copy(copy.0),
-            ast::RootExpression::Tuple(tuple) => Self::from_tuple(tuple),
-            ast::RootExpression::Tagged(tagged) => Self::from_tuple(ast::Tuple {
+            ast::RootExpression::Literal(literal) => Transformer::Literal(literal).into_pen(self.0),
+            ast::RootExpression::Identifier(identifier) => {
+                Transformer::Move(identifier).into_pen(self.0)
+            }
+            ast::RootExpression::Copy(copy) => Transformer::Copy(copy.0).into_pen(self.0),
+            ast::RootExpression::Tuple(tuple) => self.from_tuple(tuple),
+            ast::RootExpression::Tagged(tagged) => self.from_tuple(ast::Tuple {
                 span: tagged.span,
                 values: vec![
                     ast::Expression {
@@ -153,76 +171,88 @@ impl<'t> Transformer<'t> {
                     },
                 ],
             }),
-            ast::RootExpression::Block(block) => Self::Composition {
+            ast::RootExpression::Block(block) => Transformer::Composition {
                 span: block.span,
                 children: vec![
-                    Self::Composition {
+                    Transformer::Composition {
                         span: block.span,
                         children: block
                             .statements
                             .into_iter()
-                            .map(Self::from_statement)
+                            .map(|s| self.from_statement(s))
                             .collect(),
-                    },
-                    Self::from_expression(*block.expression),
+                    }
+                    .into_pen(self.0),
+                    self.from_expression(*block.expression),
                 ],
-            },
+            }
+            .into_pen(self.0),
         }
     }
 
-    pub fn from_statement(statement: ast::Statement<'t>) -> Self {
+    pub fn from_statement(&mut self, statement: ast::Statement<'t>) -> TransformerRef {
         match statement {
-            ast::Statement::Let(let_statement) => Self::Composition {
+            ast::Statement::Let(let_statement) => Transformer::Composition {
                 span: let_statement._span,
                 children: vec![
-                    Self::from_expression(let_statement.rhs),
-                    Self::from_binding(let_statement.binding),
+                    self.from_expression(let_statement.rhs),
+                    self.from_binding(let_statement.binding),
                 ],
-            },
+            }
+            .into_pen(self.0),
         }
     }
 
-    pub fn from_binding(binding: ast::Binding<'t>) -> Self {
+    pub fn from_binding(&mut self, binding: ast::Binding<'t>) -> TransformerRef {
         fn from_tuple<'t>(
+            p: &mut Pen<Transformer<'t>>,
             span: pest::Span<'t>,
             bindings: Vec<ast::Binding<'t>>,
         ) -> (Transformer<'t>, i32) {
             let mut children = vec![Transformer::Untuple {
                 span,
                 size: bindings.len(),
-            }];
+            }
+            .into_pen(p)];
             let mut stack_size = bindings.len() as i32;
             for binding in bindings {
-                children.push(Transformer::MoveIdx {
-                    span: binding.pest_span(),
-                    idx: stack_size as usize - 1,
-                });
-                let (transformer, pushed) = helper(binding);
-                children.push(transformer);
+                children.push(
+                    Transformer::MoveIdx {
+                        span: binding.pest_span(),
+                        idx: stack_size as usize - 1,
+                    }
+                    .into_pen(p),
+                );
+                let (transformer, pushed) = helper(p, binding);
+                children.push(transformer.into_pen(p));
                 stack_size += pushed;
             }
             (Transformer::Composition { span, children }, stack_size - 1)
         }
 
-        fn helper<'t>(binding: ast::Binding<'t>) -> (Transformer<'t>, i32) {
+        fn helper<'t>(
+            p: &mut Pen<Transformer<'t>>,
+            binding: ast::Binding<'t>,
+        ) -> (Transformer<'t>, i32) {
             match binding {
                 ast::Binding::Identifier(identifier) => (Transformer::Binding(identifier), 0),
                 ast::Binding::Drop(drop) => (Transformer::Drop(drop.span), -1),
-                ast::Binding::Tuple(tuple) => from_tuple(tuple.span, tuple.bindings),
+                ast::Binding::Tuple(tuple) => from_tuple(p, tuple.span, tuple.bindings),
                 ast::Binding::Literal(literal) => {
                     let span = literal.pest_span();
                     (
                         Transformer::Composition {
                             span,
                             children: vec![
-                                Transformer::Literal(literal),
-                                Transformer::AssertEq(span),
+                                Transformer::Literal(literal).into_pen(p),
+                                Transformer::AssertEq(span).into_pen(p),
                             ],
                         },
                         -1,
                     )
                 }
                 ast::Binding::Tagged(tagged) => from_tuple(
+                    p,
                     tagged.span,
                     vec![
                         ast::Binding::Literal(ast::Literal::Symbol(ast::Symbol::Identifier(
@@ -236,239 +266,243 @@ impl<'t> Transformer<'t> {
                 ),
             }
         }
-        let (transformer, _) = helper(binding);
-        transformer
+        let (transformer, _) = helper(self.0, binding);
+        transformer.into_pen(self.0)
     }
 
-    pub fn from_expression(expression: ast::Expression<'t>) -> Self {
-        Self::Composition {
+    pub fn from_expression(&mut self, expression: ast::Expression<'t>) -> TransformerRef {
+        Transformer::Composition {
             span: expression.span,
             children: vec![
-                Self::from_root(expression.root),
-                Self::Composition {
+                self.from_root(expression.root),
+                Transformer::Composition {
                     span: expression.span,
                     children: expression
                         .transformers
                         .into_iter()
-                        .map(Self::from_transformer)
+                        .map(|t| self.from_transformer(t))
                         .collect(),
-                },
+                }
+                .into_pen(self.0),
             ],
         }
+        .into_pen(self.0)
     }
 
-    pub fn from_transformer(transformer: ast::Transformer<'t>) -> Self {
+    pub fn from_transformer(&mut self, transformer: ast::Transformer<'t>) -> TransformerRef {
         match transformer {
-            ast::Transformer::Call(call) => Self::Call(call),
-            ast::Transformer::InlineCall(anon_fn) => Self::from_anon_fn(anon_fn),
+            ast::Transformer::Call(call) => Transformer::Call(call).into_pen(self.0),
+            ast::Transformer::InlineCall(anon_fn) => self.from_anon_fn(anon_fn),
             ast::Transformer::Match(match_expression) => {
-                let mut else_case = Self::Panic(match_expression.span);
+                let mut else_case = Transformer::Panic(match_expression.span).into_pen(self.0);
 
                 for case in match_expression.cases.into_iter().rev() {
-                    else_case = Self::Composition {
+                    else_case = Transformer::Composition {
                         span: case.span,
                         children: vec![
-                            Self::CopyIdx {
+                            Transformer::CopyIdx {
                                 span: case.span,
                                 idx: 0,
-                            },
-                            Self::transformer_for_matching(&case.binding),
-                            Self::Branch {
+                            }
+                            .into_pen(self.0),
+                            self.transformer_for_matching(&case.binding),
+                            Transformer::Branch {
                                 span: case.span,
-                                true_case: Box::new(Self::Composition {
+                                true_case: Transformer::Composition {
                                     span: case.span,
                                     children: vec![
-                                        Self::from_binding(case.binding),
-                                        Self::from_expression(case.rhs),
+                                        self.from_binding(case.binding),
+                                        self.from_expression(case.rhs),
                                     ],
-                                }),
-                                false_case: Box::new(else_case),
-                            },
+                                }
+                                .into_pen(self.0),
+                                false_case: else_case,
+                            }
+                            .into_pen(self.0),
                         ],
-                    };
+                    }
+                    .into_pen(self.0);
                 }
                 else_case
             }
-            ast::Transformer::If(if_expression) => Self::Branch {
+            ast::Transformer::If(if_expression) => Transformer::Branch {
                 span: if_expression.span,
-                true_case: Box::new(Self::from_expression(*if_expression.true_case)),
-                false_case: Box::new(Self::from_expression(*if_expression.false_case)),
-            },
+                true_case: self.from_expression(*if_expression.true_case),
+                false_case: self.from_expression(*if_expression.false_case),
+            }
+            .into_pen(self.0),
             ast::Transformer::Then(mut then) => {
                 let span = then.span;
                 if then.transformers.len() == 1 {
-                    Self::from_transformer(then.transformers.remove(0))
+                    self.from_transformer(then.transformers.remove(0))
                 } else {
-                    let first = Self::from_transformer(then.transformers.remove(0));
-                    let rest = Self::Composition {
+                    let first = self.from_transformer(then.transformers.remove(0));
+                    let rest = Transformer::Composition {
+                        span,
+                        children: vec![self.from_transformer(ast::Transformer::Then(then)), {
+                            let end_case = Transformer::Composition {
+                                span,
+                                children: vec![
+                                    // result
+                                    self.make_tag(span, "end", 1),
+                                ],
+                            };
+                            let cont_case = Transformer::Composition {
+                                span,
+                                children: vec![
+                                    self.tag_unwrapper(span, "cont", 2),
+                                    // rest_state args
+                                    Transformer::Value {
+                                        span,
+                                        value: flat::Value::Bool(true),
+                                    }
+                                    .into_pen(self.0),
+                                    // rest_state args true
+                                    Transformer::MoveIdx { span, idx: 2 }.into_pen(self.0),
+                                    // args true rest_state
+                                    Transformer::Tuple { span, size: 2 }.into_pen(self.0),
+                                    // args (true, rest_state)
+                                    Transformer::MoveIdx { span, idx: 1 }.into_pen(self.0),
+                                    self.make_tag(span, "cont", 2),
+                                    // #cont{(true, rest_state), args}
+                                ],
+                            };
+                            self.tag_tester(span, "end", 1, end_case, cont_case)
+                        }],
+                    }
+                    .into_pen(self.0);
+
+                    let first = Transformer::Composition {
+                        span,
+                        children: vec![first, {
+                            let end_case = Transformer::Composition {
+                                span,
+                                children: vec![
+                                    // result
+                                    self.make_tag(span, "start", 1),
+                                    rest.clone(),
+                                ],
+                            };
+                            let cont_case = Transformer::Composition {
+                                span,
+                                children: vec![
+                                    self.tag_unwrapper(span, "cont", 2),
+                                    // first_state args
+                                    Transformer::Value {
+                                        span,
+                                        value: flat::Value::Bool(false),
+                                    }
+                                    .into_pen(self.0),
+                                    // first_state args false
+                                    Transformer::MoveIdx { span, idx: 2 }.into_pen(self.0),
+                                    // args false first_state
+                                    Transformer::Tuple { span, size: 2 }.into_pen(self.0),
+                                    // args (false, first_state)
+                                    Transformer::MoveIdx { span, idx: 1 }.into_pen(self.0),
+                                    // (false, first_state) args
+                                    self.make_tag(span, "cont", 2),
+                                    // #cont{(false, first_state), args}
+                                ],
+                            };
+                            self.tag_tester(span, "end", 1, end_case, cont_case)
+                        }],
+                    }
+                    .into_pen(self.0);
+
+                    let start_case = Transformer::Composition {
                         span,
                         children: vec![
-                            Self::from_transformer(ast::Transformer::Then(then)),
-                            Self::tag_tester(
-                                span,
-                                "end",
-                                1,
-                                Self::Composition {
-                                    span,
-                                    children: vec![
-                                        // result
-                                        Self::make_tag(span, "end", 1),
-                                    ],
-                                },
-                                Self::Composition {
-                                    span,
-                                    children: vec![
-                                        Self::tag_unwrapper(span, "cont", 2),
-                                        // rest_state args
-                                        Self::Value {
-                                            span,
-                                            value: flat::Value::Bool(true),
-                                        },
-                                        // rest_state args true
-                                        Self::MoveIdx { span, idx: 2 },
-                                        // args true rest_state
-                                        Self::Tuple { span, size: 2 },
-                                        // args (true, rest_state)
-                                        Self::MoveIdx { span, idx: 1 },
-                                        Self::make_tag(span, "cont", 2),
-                                        // #cont{(true, rest_state), args}
-                                    ],
-                                },
-                            ),
+                            // start_arg
+                            self.make_tag(span, "start", 1),
+                            first.clone(),
                         ],
                     };
-
-                    let first = Self::Composition {
+                    let cont_case = Transformer::Composition {
                         span,
                         children: vec![
-                            first,
-                            Self::tag_tester(
+                            self.tag_unwrapper(span, "cont", 2),
+                            // (first/rest, inner_state) args
+                            Transformer::MoveIdx { span, idx: 1 }.into_pen(self.0),
+                            // args (first/rest, inner_state)
+                            Transformer::Untuple { span, size: 2 }.into_pen(self.0),
+                            // args first/rest inner_state
+                            Transformer::MoveIdx { span, idx: 1 }.into_pen(self.0),
+                            // args inner_state first/rest
+                            Transformer::Branch {
                                 span,
-                                "end",
-                                1,
-                                Self::Composition {
+                                false_case: Transformer::Composition {
                                     span,
                                     children: vec![
-                                        // result
-                                        Self::make_tag(span, "start", 1),
-                                        rest.clone(),
+                                        // args inner_state
+                                        Transformer::MoveIdx { span, idx: 1 }.into_pen(self.0),
+                                        // inner_state args
+                                        self.make_tag(span, "cont", 2),
+                                        first,
                                     ],
-                                },
-                                Self::Composition {
+                                }
+                                .into_pen(self.0),
+                                true_case: Transformer::Composition {
                                     span,
                                     children: vec![
-                                        Self::tag_unwrapper(span, "cont", 2),
-                                        // first_state args
-                                        Self::Value {
-                                            span,
-                                            value: flat::Value::Bool(false),
-                                        },
-                                        // first_state args false
-                                        Self::MoveIdx { span, idx: 2 },
-                                        // args false first_state
-                                        Self::Tuple { span, size: 2 },
-                                        // args (false, first_state)
-                                        Self::MoveIdx { span, idx: 1 },
-                                        // (false, first_state) args
-                                        Self::make_tag(span, "cont", 2),
-                                        // #cont{(false, first_state), args}
+                                        // args inner_state
+                                        Transformer::MoveIdx { span, idx: 1 }.into_pen(self.0),
+                                        // inner_state args
+                                        self.make_tag(span, "cont", 2),
+                                        rest,
                                     ],
-                                },
-                            ),
+                                }
+                                .into_pen(self.0),
+                            }
+                            .into_pen(self.0),
                         ],
                     };
-
-                    Self::tag_tester(
-                        span,
-                        "start",
-                        1,
-                        Transformer::Composition {
-                            span,
-                            children: vec![
-                                // start_arg
-                                Self::make_tag(span, "start", 1),
-                                first.clone(),
-                            ],
-                        },
-                        Self::Composition {
-                            span,
-                            children: vec![
-                                Self::tag_unwrapper(span, "cont", 2),
-                                // (first/rest, inner_state) args
-                                Self::MoveIdx { span, idx: 1 },
-                                // args (first/rest, inner_state)
-                                Self::Untuple { span, size: 2 },
-                                // args first/rest inner_state
-                                Self::MoveIdx { span, idx: 1 },
-                                // args inner_state first/rest
-                                Self::Branch {
-                                    span,
-                                    false_case: Box::new(Self::Composition {
-                                        span,
-                                        children: vec![
-                                            // args inner_state
-                                            Self::MoveIdx { span, idx: 1 },
-                                            // inner_state args
-                                            Self::make_tag(span, "cont", 2),
-                                            first,
-                                        ],
-                                    }),
-                                    true_case: Box::new(Self::Composition {
-                                        span,
-                                        children: vec![
-                                            // args inner_state
-                                            Self::MoveIdx { span, idx: 1 },
-                                            // inner_state args
-                                            Self::make_tag(span, "cont", 2),
-                                            rest,
-                                        ],
-                                    }),
-                                },
-                            ],
-                        },
-                    )
+                    self.tag_tester(span, "start", 1, start_case, cont_case)
                 }
             }
-            ast::Transformer::Do(do_fn) => Self::Composition {
+            ast::Transformer::Do(do_fn) => Transformer::Composition {
                 span: do_fn.span,
                 children: vec![
-                    Self::tag_unwrapper(do_fn.span, "start", 1),
-                    Self::from_transformer(*do_fn.transformer),
-                    Self::make_tag(do_fn.span, "end", 1),
+                    self.tag_unwrapper(do_fn.span, "start", 1),
+                    self.from_transformer(*do_fn.transformer),
+                    self.make_tag(do_fn.span, "end", 1),
                 ],
-            },
+            }
+            .into_pen(self.0),
         }
     }
 
-    pub fn from_tuple(tuple: ast::Tuple<'t>) -> Self {
+    pub fn from_tuple(&mut self, tuple: ast::Tuple<'t>) -> TransformerRef {
         let size = tuple.values.len();
         let children = tuple
             .values
             .into_iter()
-            .map(Self::from_expression)
+            .map(|e| self.from_expression(e))
             .collect::<Vec<_>>();
-        Self::Composition {
+        Transformer::Composition {
             span: tuple.span,
             children: vec![
-                Self::Composition {
+                Transformer::Composition {
                     span: tuple.span,
                     children,
-                },
-                Self::Tuple {
+                }
+                .into_pen(self.0),
+                Transformer::Tuple {
                     span: tuple.span,
                     size,
-                },
+                }
+                .into_pen(self.0),
             ],
         }
+        .into_pen(self.0)
     }
 
     #[allow(unused)]
-    pub fn flatten(self) -> Self {
-        match self {
+    pub fn flatten(&mut self, r: TransformerRef) -> Transformer<'t> {
+        match r.get(self.0).clone() {
             Transformer::Composition { span, children } => {
                 let mut flattened_children = Vec::new();
                 for child in children {
-                    let flattened_child = child.flatten();
+                    let flattened_child = self.flatten(child);
                     match flattened_child {
                         Transformer::Composition {
                             children: nested_children,
@@ -477,7 +511,7 @@ impl<'t> Transformer<'t> {
                             flattened_children.extend(nested_children);
                         }
                         _ => {
-                            flattened_children.push(flattened_child);
+                            flattened_children.push(flattened_child.into_pen(self.0));
                         }
                     }
                 }
@@ -492,77 +526,93 @@ impl<'t> Transformer<'t> {
                 false_case,
             } => Transformer::Branch {
                 span,
-                true_case: Box::new(true_case.flatten()),
-                false_case: Box::new(false_case.flatten()),
+                true_case: self.flatten(true_case).into_pen(self.0),
+                false_case: self.flatten(false_case).into_pen(self.0),
             },
             // For all other variants, return as-is since they don't contain nested Transformers
-            other => other,
+            other => other.clone(),
         }
     }
 
-    pub fn transformer_for_matching(binding: &ast::Binding<'t>) -> Self {
+    pub fn transformer_for_matching(&mut self, binding: &ast::Binding<'t>) -> TransformerRef {
         let span = binding.pest_span();
         match binding {
-            ast::Binding::Drop(_) | ast::Binding::Identifier(_) => Self::Composition {
+            ast::Binding::Drop(_) | ast::Binding::Identifier(_) => Transformer::Composition {
                 span,
                 children: vec![
-                    Self::Drop(span),
-                    Self::Literal(ast::Literal::Bool(ast::Bool { span, value: true })),
+                    Transformer::Drop(span).into_pen(self.0),
+                    Transformer::Literal(ast::Literal::Bool(ast::Bool { span, value: true }))
+                        .into_pen(self.0),
                 ],
-            },
+            }
+            .into_pen(self.0),
             ast::Binding::Tuple(tuple_binding) => {
                 let size = tuple_binding.bindings.len();
 
                 let mut true_case =
-                    Self::Literal(ast::Literal::Bool(ast::Bool { span, value: true }));
+                    Transformer::Literal(ast::Literal::Bool(ast::Bool { span, value: true }))
+                        .into_pen(self.0);
                 for (i, binding) in tuple_binding.bindings.iter().enumerate().rev() {
                     let mut children = vec![];
                     let top = size - i - 1;
-                    children.push(Self::MoveIdx { span, idx: top });
-                    children.push(Self::transformer_for_matching(binding));
+                    children.push(Transformer::MoveIdx { span, idx: top }.into_pen(self.0));
+                    children.push(self.transformer_for_matching(binding));
 
                     let mut false_case_children = vec![];
                     for _ in 0..top {
-                        false_case_children.push(Self::Drop(span));
+                        false_case_children.push(Transformer::Drop(span).into_pen(self.0));
                     }
-                    false_case_children.push(Self::Literal(ast::Literal::Bool(ast::Bool {
-                        span,
-                        value: false,
-                    })));
+                    false_case_children.push(
+                        Transformer::Literal(ast::Literal::Bool(ast::Bool { span, value: false }))
+                            .into_pen(self.0),
+                    );
 
-                    children.push(Self::Branch {
-                        span,
-                        true_case: Box::new(true_case),
-                        false_case: Box::new(Self::Composition {
-                            span: span,
-                            children: false_case_children,
-                        }),
-                    });
+                    children.push(
+                        Transformer::Branch {
+                            span,
+                            true_case: true_case,
+                            false_case: Transformer::Composition {
+                                span: span,
+                                children: false_case_children,
+                            }
+                            .into_pen(self.0),
+                        }
+                        .into_pen(self.0),
+                    );
 
-                    true_case = Self::Composition { span, children };
+                    true_case = Transformer::Composition { span, children }.into_pen(self.0);
                 }
-                Self::Composition {
+                Transformer::Composition {
                     span,
-                    children: vec![Self::Untuple { span, size }, true_case],
+                    children: vec![
+                        Transformer::Untuple { span, size }.into_pen(self.0),
+                        true_case,
+                    ],
                 }
+                .into_pen(self.0)
             }
-            ast::Binding::Tagged(tagged_binding) => Self::transformer_for_matching(
+            ast::Binding::Tagged(tagged_binding) => self.transformer_for_matching(
                 &ast::Binding::Tuple(builder::tagged_to_tuple(tagged_binding.clone())),
             ),
-            ast::Binding::Literal(l) => Self::Composition {
+            ast::Binding::Literal(l) => Transformer::Composition {
                 span,
-                children: vec![Self::Literal(l.clone()), Self::Eq(span)],
-            },
+                children: vec![
+                    Transformer::Literal(l.clone()).into_pen(self.0),
+                    Transformer::Eq(span).into_pen(self.0),
+                ],
+            }
+            .into_pen(self.0),
         }
     }
 
     fn into_recursive_sentence(
-        self,
+        &mut self,
         ctx: FileContext,
         symbol_table: &SymbolTable,
         locals: &mut Locals,
+        root: TransformerRef,
     ) -> Result<RecursiveSentence, Error> {
-        match self {
+        match root.get(self.0).clone() {
             Transformer::Literal(literal) => {
                 let span = literal.span(ctx.file_idx);
                 locals.push_unnamed();
@@ -689,9 +739,9 @@ impl<'t> Transformer<'t> {
                 let mut true_locals = locals.clone();
                 let mut false_locals = locals.clone();
                 let true_sentence =
-                    true_case.into_recursive_sentence(ctx, symbol_table, &mut true_locals)?;
+                    self.into_recursive_sentence(ctx, symbol_table, &mut true_locals, true_case)?;
                 let false_sentence =
-                    false_case.into_recursive_sentence(ctx, symbol_table, &mut false_locals)?;
+                    self.into_recursive_sentence(ctx, symbol_table, &mut false_locals, false_case)?;
 
                 if !true_locals.compare(ctx.sources, &false_locals) {
                     return Err(Error::BranchContractsDisagree {
@@ -723,10 +773,11 @@ impl<'t> Transformer<'t> {
                 let span: FileSpan = span.into_ir(ctx.sources, ctx.file_idx);
                 let mut words = vec![];
                 for child in children {
-                    words.push(InnerWord::InlineCall(child.into_recursive_sentence(
+                    words.push(InnerWord::InlineCall(self.into_recursive_sentence(
                         ctx,
                         symbol_table,
                         locals,
+                        child,
                     )?));
                 }
                 Ok(RecursiveSentence::single_span(span, words))
@@ -770,77 +821,90 @@ impl<'t> Transformer<'t> {
     }
 
     fn tag_tester(
+        &mut self,
         span: pest::Span<'t>,
         tag: &str,
         size: usize,
         true_case: Transformer<'t>,
         false_case: Transformer<'t>,
-    ) -> Self {
-        Self::Composition {
+    ) -> TransformerRef {
+        Transformer::Composition {
             span,
             children: vec![
                 // (tag, args)
-                Self::Untuple { span, size: 2 },
+                Transformer::Untuple { span, size: 2 }.into_pen(self.0),
                 // tag args
-                Self::CopyIdx { span, idx: 1 },
+                Transformer::CopyIdx { span, idx: 1 }.into_pen(self.0),
                 // tag args tag
-                Self::Value {
+                Transformer::Value {
                     span,
                     value: flat::Value::Symbol(tag.to_owned()),
-                },
-                Self::Eq(span),
+                }
+                .into_pen(self.0),
+                Transformer::Eq(span).into_pen(self.0),
                 // tag args bool
-                Self::Branch {
+                Transformer::Branch {
                     span,
-                    true_case: Box::new(Self::Composition {
+                    true_case: Transformer::Composition {
                         span,
                         children: vec![
-                            Self::Tuple { span, size: 2 },
-                            Self::tag_unwrapper(span, tag, size),
-                            true_case,
+                            Transformer::Tuple { span, size: 2 }.into_pen(self.0),
+                            self.tag_unwrapper(span, tag, size),
+                            true_case.into_pen(self.0),
                         ],
-                    }),
-                    false_case: Box::new(Self::Composition {
+                    }
+                    .into_pen(self.0),
+                    false_case: Transformer::Composition {
                         span,
-                        children: vec![Self::Tuple { span, size: 2 }, false_case],
-                    }),
-                },
+                        children: vec![
+                            Transformer::Tuple { span, size: 2 }.into_pen(self.0),
+                            false_case.into_pen(self.0),
+                        ],
+                    }
+                    .into_pen(self.0),
+                }
+                .into_pen(self.0),
             ],
         }
+        .into_pen(self.0)
     }
 
-    fn make_tag(span: pest::Span<'t>, tag: &str, size: usize) -> Self {
-        Self::Composition {
+    fn make_tag(&mut self, span: pest::Span<'t>, tag: &str, size: usize) -> TransformerRef {
+        Transformer::Composition {
             span,
             children: vec![
-                Self::Tuple { span, size },
+                Transformer::Tuple { span, size }.into_pen(self.0),
                 // args
-                Self::Value {
+                Transformer::Value {
                     span,
                     value: flat::Value::Symbol(tag.to_owned()),
-                },
+                }
+                .into_pen(self.0),
                 // args tag
-                Self::MoveIdx { span, idx: 1 },
+                Transformer::MoveIdx { span, idx: 1 }.into_pen(self.0),
                 // tag args
-                Self::Tuple { span, size: 2 },
+                Transformer::Tuple { span, size: 2 }.into_pen(self.0),
             ],
         }
+        .into_pen(self.0)
     }
 
-    fn tag_unwrapper(span: pest::Span<'t>, tag: &str, size: usize) -> Self {
-        Self::Composition {
+    fn tag_unwrapper(&mut self, span: pest::Span<'t>, tag: &str, size: usize) -> TransformerRef {
+        Transformer::Composition {
             span,
             children: vec![
-                Self::Untuple { span, size: 2 },
-                Self::MoveIdx { span, idx: 1 },
-                Self::Value {
+                Transformer::Untuple { span, size: 2 }.into_pen(self.0),
+                Transformer::MoveIdx { span, idx: 1 }.into_pen(self.0),
+                Transformer::Value {
                     span,
                     value: flat::Value::Symbol(tag.to_owned()),
-                },
-                Self::AssertEq(span),
-                Self::Untuple { span, size: size },
+                }
+                .into_pen(self.0),
+                Transformer::AssertEq(span).into_pen(self.0),
+                Transformer::Untuple { span, size: size }.into_pen(self.0),
             ],
         }
+        .into_pen(self.0)
     }
 }
 
@@ -944,11 +1008,15 @@ impl<'t> Compiler<'t> {
             body: Box::new(expression),
         };
 
-        let transformer = Transformer::from_anon_fn(anon);
+        let mut pen = Pen::new();
+        let mut factory = TransformerFactory(&mut pen);
+
+        let transformer = factory.from_anon_fn(anon);
 
         let mut locals = Locals::default();
         locals.push_unnamed();
-        let sentence = transformer.into_recursive_sentence(ctx, &symbol_table, &mut locals)?;
+        let sentence =
+            factory.into_recursive_sentence(ctx, &symbol_table, &mut locals, transformer)?;
 
         let mut names = NameSequence {
             base: name,
@@ -970,12 +1038,15 @@ impl<'t> Compiler<'t> {
             file_idx,
             sources: self.sources,
         };
+        let mut pen = Pen::new();
+        let mut factory = TransformerFactory(&mut pen);
 
-        let transformer = Transformer::from_transformer(into_fn);
+        let transformer = factory.from_transformer(into_fn);
 
         let mut locals = Locals::default();
         locals.push_unnamed();
-        let sentence = transformer.into_recursive_sentence(ctx, &symbol_table, &mut locals)?;
+        let sentence =
+            factory.into_recursive_sentence(ctx, &symbol_table, &mut locals, transformer)?;
         if !locals.terminal && locals.len() != 1 {
             locals.pop();
             match locals.pop() {
@@ -2145,20 +2216,29 @@ mod tests {
             body: Box::new(fn_decl.expression),
         };
 
-        // Convert to Transformer
-        let transformer = Transformer::from_anon_fn(anon_fn);
+        let mut pen = Pen::new();
+        let mut factory = TransformerFactory(&mut pen);
 
+        // Convert to Transformer
+        let transformer = factory.from_anon_fn(anon_fn);
+
+        let flattened = factory.flatten(transformer).into_pen(&mut pen);
         // Flatten the transformer
-        assert_snapshot!(transformer.flatten());
+        assert_snapshot!(BoundTransformerRef(&mut pen, flattened));
     }
 }
 
-impl<'t> Transformer<'t> {
-    fn format_indented(&self, f: &mut std::fmt::Formatter<'_>, indent: usize) -> std::fmt::Result {
+impl TransformerRef {
+    fn format_indented<'t>(
+        &self,
+        pen: &Pen<Transformer<'t>>,
+        f: &mut std::fmt::Formatter<'_>,
+        indent: usize,
+    ) -> std::fmt::Result {
         for _ in 0..indent {
             write!(f, "  ")?;
         }
-        match self {
+        match self.get(pen) {
             Transformer::Literal(literal) => match literal {
                 ast::Literal::Int(int) => writeln!(f, "{}", int.value),
                 ast::Literal::Char(char_lit) => writeln!(f, "'{}'", char_lit.value),
@@ -2194,12 +2274,12 @@ impl<'t> Transformer<'t> {
                 ..
             } => {
                 writeln!(f, "if {{")?;
-                true_case.format_indented(f, indent + 1)?;
+                true_case.format_indented(pen, f, indent + 1)?;
                 for _ in 0..indent {
                     write!(f, "  ")?;
                 }
                 writeln!(f, "}} else {{")?;
-                false_case.format_indented(f, indent + 1)?;
+                false_case.format_indented(pen, f, indent + 1)?;
                 for _ in 0..indent {
                     write!(f, "  ")?;
                 }
@@ -2207,7 +2287,7 @@ impl<'t> Transformer<'t> {
             }
             Transformer::Composition { children, .. } => {
                 for (i, child) in children.iter().enumerate() {
-                    child.format_indented(f, if i == 0 { 0 } else { indent })?;
+                    child.format_indented(pen, f, if i == 0 { 0 } else { indent })?;
                 }
                 Ok(())
             }
@@ -2219,8 +2299,10 @@ impl<'t> Transformer<'t> {
     }
 }
 
-impl<'t> std::fmt::Display for Transformer<'t> {
+pub struct BoundTransformerRef<'a, 't>(&'a Pen<Transformer<'t>>, TransformerRef);
+
+impl<'a, 't> std::fmt::Display for BoundTransformerRef<'a, 't> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.format_indented(f, 0)
+        self.1.format_indented(self.0, f, 0)
     }
 }
