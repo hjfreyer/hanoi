@@ -560,221 +560,6 @@ impl<'a, 't> TransformerFactory<'a, 't> {
         }
     }
 
-    fn into_recursive_sentence(
-        &mut self,
-        ctx: FileContext,
-        symbol_table: &SymbolTable,
-        locals: &mut Locals,
-        root: TransformerRef,
-    ) -> Result<RecursiveSentence, Error> {
-        match root.get(self.0).clone() {
-            Transformer::Literal(literal) => {
-                let span = literal.span(ctx.file_idx);
-                locals.push_unnamed();
-                Ok(RecursiveSentence {
-                    span,
-                    words: vec![RecursiveWord {
-                        span,
-                        names: locals.names(),
-                        inner: InnerWord::Push(literal.into_value()),
-                    }],
-                })
-            }
-            Transformer::Move(identifier) => {
-                let span = identifier.span(ctx.file_idx);
-                let Some(idx) = locals.find(
-                    ctx.sources,
-                    identifier.clone().into_ir(ctx.sources, ctx.file_idx),
-                ) else {
-                    return Err(Error::UnknownReference {
-                        location: span.location(ctx.sources),
-                        name: identifier.0.as_str().to_owned(),
-                    });
-                };
-                locals.remove(idx);
-                locals.push_unnamed();
-                Ok(RecursiveSentence::single_span(
-                    span,
-                    vec![InnerWord::Move(idx)],
-                ))
-            }
-            Transformer::MoveIdx { span, idx } => {
-                let span = span.into_ir(ctx.sources, ctx.file_idx);
-                locals.remove(idx);
-                locals.push_unnamed();
-                Ok(RecursiveSentence::single_span(
-                    span,
-                    vec![InnerWord::Move(idx)],
-                ))
-            }
-            Transformer::Copy(identifier) => {
-                let span = identifier.span(ctx.file_idx);
-                let Some(idx) = locals.find(
-                    ctx.sources,
-                    identifier.clone().into_ir(ctx.sources, ctx.file_idx),
-                ) else {
-                    return Err(Error::UnknownReference {
-                        location: span.location(ctx.sources),
-                        name: identifier.0.as_str().to_owned(),
-                    });
-                };
-                locals.push_unnamed();
-                Ok(RecursiveSentence::single_span(
-                    span,
-                    vec![InnerWord::Copy(idx)],
-                ))
-            }
-            Transformer::CopyIdx { span, idx } => {
-                let span = span.into_ir(ctx.sources, ctx.file_idx);
-                locals.push_unnamed();
-                Ok(RecursiveSentence::single_span(
-                    span,
-                    vec![InnerWord::Copy(idx)],
-                ))
-            }
-            Transformer::Drop(span) => {
-                let span = span.into_ir(ctx.sources, ctx.file_idx);
-                locals.pop();
-                Ok(RecursiveSentence::single_span(
-                    span,
-                    vec![InnerWord::Drop(0)],
-                ))
-            }
-            Transformer::Call(qualified_label) => {
-                let span = qualified_label.span(ctx.file_idx);
-
-                let qualified = symbol_table.resolve(
-                    ctx.sources,
-                    qualified_label.into_ir(ctx.sources, ctx.file_idx),
-                );
-                locals.pop();
-                locals.push_unnamed();
-                Ok(RecursiveSentence::single_span(
-                    span,
-                    vec![InnerWord::Call(qualified)],
-                ))
-            }
-            Transformer::Binding(identifier) => {
-                let span = identifier.span(ctx.file_idx);
-                locals.pop();
-                locals.push_named(identifier.span(ctx.file_idx));
-                Ok(RecursiveSentence::single_span(span, vec![]))
-            }
-            Transformer::Tuple { span, size } => {
-                let span = span.into_ir(ctx.sources, ctx.file_idx);
-                for _ in 0..size {
-                    locals.pop();
-                }
-                locals.push_unnamed();
-                Ok(RecursiveSentence::single_span(
-                    span,
-                    vec![InnerWord::Tuple(size)],
-                ))
-            }
-            Transformer::Untuple { span, size } => {
-                let span = span.into_ir(ctx.sources, ctx.file_idx);
-                locals.pop();
-                for _ in 0..size {
-                    locals.push_unnamed();
-                }
-                Ok(RecursiveSentence::single_span(
-                    span,
-                    vec![InnerWord::Untuple(size)],
-                ))
-            }
-            Transformer::Branch {
-                span,
-                true_case,
-                false_case,
-            } => {
-                let span: FileSpan = span.into_ir(ctx.sources, ctx.file_idx);
-
-                locals.pop();
-
-                let mut true_locals = locals.clone();
-                let mut false_locals = locals.clone();
-                let true_sentence =
-                    self.into_recursive_sentence(ctx, symbol_table, &mut true_locals, true_case)?;
-                let false_sentence =
-                    self.into_recursive_sentence(ctx, symbol_table, &mut false_locals, false_case)?;
-
-                if !true_locals.compare(ctx.sources, &false_locals) {
-                    return Err(Error::BranchContractsDisagree {
-                        location: span.location(ctx.sources),
-                        locals1: true_locals
-                            .names()
-                            .into_iter()
-                            .map(|n| format!("{:?}", n.as_ref(ctx.sources)))
-                            .collect(),
-                        locals2: false_locals
-                            .names()
-                            .into_iter()
-                            .map(|n| format!("{:?}", n.as_ref(ctx.sources)))
-                            .collect(),
-                    });
-                }
-                if true_locals.terminal {
-                    *locals = false_locals;
-                } else {
-                    *locals = true_locals;
-                }
-
-                Ok(RecursiveSentence::single_span(
-                    span,
-                    vec![InnerWord::Branch(true_sentence, false_sentence)],
-                ))
-            }
-            Transformer::Composition { span, children } => {
-                let span: FileSpan = span.into_ir(ctx.sources, ctx.file_idx);
-                let mut words = vec![];
-                for child in children {
-                    words.push(InnerWord::InlineCall(self.into_recursive_sentence(
-                        ctx,
-                        symbol_table,
-                        locals,
-                        child,
-                    )?));
-                }
-                Ok(RecursiveSentence::single_span(span, words))
-            }
-            Transformer::AssertEq(span) => {
-                let span: FileSpan = span.into_ir(ctx.sources, ctx.file_idx);
-                locals.pop();
-                locals.pop();
-                Ok(RecursiveSentence::single_span(
-                    span,
-                    vec![InnerWord::Builtin(flat::Builtin::AssertEq)],
-                ))
-            }
-            Transformer::Panic(span) => {
-                let span: FileSpan = span.into_ir(ctx.sources, ctx.file_idx);
-                locals.terminal = true;
-                Ok(RecursiveSentence::single_span(
-                    span,
-                    vec![InnerWord::Builtin(flat::Builtin::Panic)],
-                ))
-            }
-            Transformer::Eq(span) => {
-                let span: FileSpan = span.into_ir(ctx.sources, ctx.file_idx);
-                locals.pop();
-                locals.pop();
-                locals.push_unnamed();
-                Ok(RecursiveSentence::single_span(
-                    span,
-                    vec![InnerWord::Builtin(flat::Builtin::Eq)],
-                ))
-            }
-            Transformer::Value { span, value } => {
-                let span: FileSpan = span.into_ir(ctx.sources, ctx.file_idx);
-                locals.push_unnamed();
-                Ok(RecursiveSentence::single_span(
-                    span,
-                    vec![InnerWord::Push(value)],
-                ))
-            }
-        }
-    }
-
     fn tag_tester(
         &mut self,
         span: pest::Span<'t>,
@@ -968,16 +753,29 @@ impl<'t> Compiler<'t> {
 
         let transformer = factory.from_anon_fn(anon);
 
+        let mut word_pen = Pen::new();
+        let mut word_factory = WordFactory(&mut word_pen);
+
         let mut locals = Locals::default();
         locals.push_unnamed();
-        let sentence =
-            factory.into_recursive_sentence(ctx, &symbol_table, &mut locals, transformer)?;
+        let sentence = word_factory.into_recursive_sentence(
+            &pen,
+            ctx,
+            &symbol_table,
+            &mut locals,
+            transformer,
+        )?;
 
         let mut names = NameSequence {
             base: name,
             count: 0,
         };
-        self.visit_recursive_sentence(&mut names, sentence);
+        self.visit_recursive_sentence(
+            &mut names,
+            &word_pen,
+            sentence.get(&word_pen).span,
+            vec![sentence],
+        );
         Ok(())
     }
 
@@ -998,10 +796,18 @@ impl<'t> Compiler<'t> {
 
         let transformer = factory.from_transformer(into_fn);
 
+        let mut word_pen = Pen::new();
+        let mut word_factory = WordFactory(&mut word_pen);
+
         let mut locals = Locals::default();
         locals.push_unnamed();
-        let sentence =
-            factory.into_recursive_sentence(ctx, &symbol_table, &mut locals, transformer)?;
+        let sentence = word_factory.into_recursive_sentence(
+            &pen,
+            ctx,
+            &symbol_table,
+            &mut locals,
+            transformer,
+        )?;
         if !locals.terminal && locals.len() != 1 {
             locals.pop();
             match locals.pop() {
@@ -1018,7 +824,12 @@ impl<'t> Compiler<'t> {
             base: name,
             count: 0,
         };
-        self.visit_recursive_sentence(&mut names, sentence);
+        self.visit_recursive_sentence(
+            &mut names,
+            &word_pen,
+            sentence.get(&word_pen).span,
+            vec![sentence],
+        );
         Ok(())
     }
 
@@ -1126,24 +937,31 @@ impl<'t> Compiler<'t> {
     fn visit_recursive_sentence(
         &mut self,
         names: &mut NameSequence,
-        sentence: RecursiveSentence,
+        pen: &Pen<RecursiveWord>,
+        span: FileSpan,
+        sentence: Vec<WordRef>,
     ) -> QualifiedName {
         let res = names.next();
         let words = sentence
-            .words
             .into_iter()
-            .map(|w| self.visit_recursive_word(names, w))
+            .map(|w| self.visit_recursive_word(pen, names, w))
             .collect();
         self.res.sentences.push(Sentence {
-            span: sentence.span,
+            span,
             name: res.clone(),
             words,
         });
         res
     }
 
-    fn visit_recursive_word(&mut self, names: &mut NameSequence, word: RecursiveWord) -> Word {
-        let new_inner = match word.inner {
+    fn visit_recursive_word(
+        &mut self,
+        pen: &Pen<RecursiveWord>,
+        names: &mut NameSequence,
+        word: WordRef,
+    ) -> Word {
+        let span = word.get(pen).span;
+        let new_inner = match word.get(pen).clone().inner {
             InnerWord::Push(value) => InnerWord::Push(value),
             InnerWord::Builtin(builtin) => InnerWord::Builtin(builtin),
             InnerWord::Copy(idx) => InnerWord::Copy(idx),
@@ -1152,26 +970,37 @@ impl<'t> Compiler<'t> {
             InnerWord::Tuple(idx) => InnerWord::Tuple(idx),
             InnerWord::Untuple(idx) => InnerWord::Untuple(idx),
             InnerWord::Call(qualified_name) => InnerWord::Call(qualified_name),
-            InnerWord::InlineCall(sentence) => {
-                let name = self.visit_recursive_sentence(names, sentence);
-                InnerWord::InlineCall(name)
+            InnerWord::Composition(children) => {
+                let name = self.visit_recursive_sentence(names, pen, span, children);
+                InnerWord::Call(name)
             }
-            InnerWord::Branch(true_case, false_case) => InnerWord::Branch(
-                self.visit_recursive_sentence(names, true_case),
-                self.visit_recursive_sentence(names, false_case),
-            ),
+            InnerWord::Branch(true_case, false_case) => {
+                let true_span = true_case.get(pen).span;
+                let false_span = false_case.get(pen).span;
+                InnerWord::Branch(
+                    self.visit_recursive_sentence(names, pen, true_span, vec![true_case]),
+                    self.visit_recursive_sentence(names, pen, false_span, vec![false_case]),
+                )
+            }
             InnerWord::JumpTable(jump_table) => InnerWord::JumpTable(
                 jump_table
                     .into_iter()
-                    .map(|sentence| self.visit_recursive_sentence(names, sentence))
+                    .map(|sentence| {
+                        self.visit_recursive_sentence(
+                            names,
+                            pen,
+                            sentence.get(pen).span,
+                            vec![sentence],
+                        )
+                    })
                     .collect(),
             ),
         };
 
         Word {
-            span: word.span,
+            span,
             inner: new_inner,
-            names: word.names,
+            names: word.get(pen).names.clone(),
         }
     }
 }
@@ -1427,35 +1256,228 @@ pub struct Word {
     pub names: Vec<Name>,
 }
 
-#[derive(Debug, Clone)]
-pub struct RecursiveSentence {
-    pub span: FileSpan,
-    pub words: Vec<RecursiveWord>,
-}
+struct WordFactory<'a>(&'a mut Pen<RecursiveWord>);
 
-impl RecursiveSentence {
+impl<'a> WordFactory<'a> {
     fn single_span(
+        &mut self,
         span: FileSpan,
-        words: impl IntoIterator<Item = InnerWord<RecursiveSentence>>,
-    ) -> Self {
-        Self {
+        words: impl IntoIterator<Item = InnerWord<WordRef>>,
+    ) -> WordRef {
+        RecursiveWord {
             span,
-            words: words
-                .into_iter()
-                .map(|inner| RecursiveWord {
+            inner: InnerWord::Composition(
+                words
+                    .into_iter()
+                    .map(|inner| {
+                        RecursiveWord {
+                            span,
+                            inner,
+                            names: vec![],
+                        }
+                        .into_pen(self.0)
+                    })
+                    .collect(),
+            ),
+            names: vec![],
+        }
+        .into_pen(self.0)
+    }
+
+    fn into_recursive_sentence<'t>(
+        &mut self,
+        p: &Pen<Transformer<'t>>,
+        ctx: FileContext,
+        symbol_table: &SymbolTable,
+        locals: &mut Locals,
+        root: TransformerRef,
+    ) -> Result<WordRef, Error> {
+        match root.get(p).clone() {
+            Transformer::Literal(literal) => {
+                let span = literal.span(ctx.file_idx);
+                locals.push_unnamed();
+                Ok(self.single_span(span, vec![InnerWord::Push(literal.into_value())]))
+            }
+            Transformer::Move(identifier) => {
+                let span = identifier.span(ctx.file_idx);
+                let Some(idx) = locals.find(
+                    ctx.sources,
+                    identifier.clone().into_ir(ctx.sources, ctx.file_idx),
+                ) else {
+                    return Err(Error::UnknownReference {
+                        location: span.location(ctx.sources),
+                        name: identifier.0.as_str().to_owned(),
+                    });
+                };
+                locals.remove(idx);
+                locals.push_unnamed();
+                Ok(self.single_span(span, vec![InnerWord::Move(idx)]))
+            }
+            Transformer::MoveIdx { span, idx } => {
+                let span = span.into_ir(ctx.sources, ctx.file_idx);
+                locals.remove(idx);
+                locals.push_unnamed();
+                Ok(self.single_span(span, vec![InnerWord::Move(idx)]))
+            }
+            Transformer::Copy(identifier) => {
+                let span = identifier.span(ctx.file_idx);
+                let Some(idx) = locals.find(
+                    ctx.sources,
+                    identifier.clone().into_ir(ctx.sources, ctx.file_idx),
+                ) else {
+                    return Err(Error::UnknownReference {
+                        location: span.location(ctx.sources),
+                        name: identifier.0.as_str().to_owned(),
+                    });
+                };
+                locals.push_unnamed();
+                Ok(self.single_span(span, vec![InnerWord::Copy(idx)]))
+            }
+            Transformer::CopyIdx { span, idx } => {
+                let span = span.into_ir(ctx.sources, ctx.file_idx);
+                locals.push_unnamed();
+                Ok(self.single_span(span, vec![InnerWord::Copy(idx)]))
+            }
+            Transformer::Drop(span) => {
+                let span = span.into_ir(ctx.sources, ctx.file_idx);
+                locals.pop();
+                Ok(self.single_span(span, vec![InnerWord::Drop(0)]))
+            }
+            Transformer::Call(qualified_label) => {
+                let span = qualified_label.span(ctx.file_idx);
+
+                let qualified = symbol_table.resolve(
+                    ctx.sources,
+                    qualified_label.into_ir(ctx.sources, ctx.file_idx),
+                );
+                locals.pop();
+                locals.push_unnamed();
+                Ok(self.single_span(span, vec![InnerWord::Call(qualified)]))
+            }
+            Transformer::Binding(identifier) => {
+                let span = identifier.span(ctx.file_idx);
+                locals.pop();
+                locals.push_named(identifier.span(ctx.file_idx));
+                Ok(self.single_span(span, vec![]))
+            }
+            Transformer::Tuple { span, size } => {
+                let span = span.into_ir(ctx.sources, ctx.file_idx);
+                for _ in 0..size {
+                    locals.pop();
+                }
+                locals.push_unnamed();
+                Ok(self.single_span(span, vec![InnerWord::Tuple(size)]))
+            }
+            Transformer::Untuple { span, size } => {
+                let span = span.into_ir(ctx.sources, ctx.file_idx);
+                locals.pop();
+                for _ in 0..size {
+                    locals.push_unnamed();
+                }
+                Ok(self.single_span(span, vec![InnerWord::Untuple(size)]))
+            }
+            Transformer::Branch {
+                span,
+                true_case,
+                false_case,
+            } => {
+                let span: FileSpan = span.into_ir(ctx.sources, ctx.file_idx);
+
+                locals.pop();
+
+                let mut true_locals = locals.clone();
+                let mut false_locals = locals.clone();
+                let true_sentence = self.into_recursive_sentence(
+                    p,
+                    ctx,
+                    symbol_table,
+                    &mut true_locals,
+                    true_case,
+                )?;
+                let false_sentence = self.into_recursive_sentence(
+                    p,
+                    ctx,
+                    symbol_table,
+                    &mut false_locals,
+                    false_case,
+                )?;
+
+                if !true_locals.compare(ctx.sources, &false_locals) {
+                    return Err(Error::BranchContractsDisagree {
+                        location: span.location(ctx.sources),
+                        locals1: true_locals
+                            .names()
+                            .into_iter()
+                            .map(|n| format!("{:?}", n.as_ref(ctx.sources)))
+                            .collect(),
+                        locals2: false_locals
+                            .names()
+                            .into_iter()
+                            .map(|n| format!("{:?}", n.as_ref(ctx.sources)))
+                            .collect(),
+                    });
+                }
+                if true_locals.terminal {
+                    *locals = false_locals;
+                } else {
+                    *locals = true_locals;
+                }
+
+                Ok(self.single_span(span, vec![InnerWord::Branch(true_sentence, false_sentence)]))
+            }
+            Transformer::Composition { span, children } => {
+                let span: FileSpan = span.into_ir(ctx.sources, ctx.file_idx);
+                let words: Result<Vec<WordRef>, Error> = children
+                    .into_iter()
+                    .map(|child| self.into_recursive_sentence(p, ctx, symbol_table, locals, child))
+                    .collect();
+                Ok(RecursiveWord {
                     span,
-                    inner,
                     names: vec![],
-                })
-                .collect(),
+                    inner: InnerWord::Composition(words?),
+                }
+                .into_pen(self.0))
+            }
+            Transformer::AssertEq(span) => {
+                let span: FileSpan = span.into_ir(ctx.sources, ctx.file_idx);
+                locals.pop();
+                locals.pop();
+                Ok(self.single_span(span, vec![InnerWord::Builtin(flat::Builtin::AssertEq)]))
+            }
+            Transformer::Panic(span) => {
+                let span: FileSpan = span.into_ir(ctx.sources, ctx.file_idx);
+                locals.terminal = true;
+                Ok(self.single_span(span, vec![InnerWord::Builtin(flat::Builtin::Panic)]))
+            }
+            Transformer::Eq(span) => {
+                let span: FileSpan = span.into_ir(ctx.sources, ctx.file_idx);
+                locals.pop();
+                locals.pop();
+                locals.push_unnamed();
+                Ok(self.single_span(span, vec![InnerWord::Builtin(flat::Builtin::Eq)]))
+            }
+            Transformer::Value { span, value } => {
+                let span: FileSpan = span.into_ir(ctx.sources, ctx.file_idx);
+                locals.push_unnamed();
+                Ok(self.single_span(span, vec![InnerWord::Push(value)]))
+            }
         }
     }
+}
+
+#[derive(Debug, From, Into, Clone, Copy, PartialEq, Eq)]
+pub struct WordRef(usize);
+
+impl PenRef<RecursiveWord> for WordRef {}
+
+impl PennedBy for RecursiveWord {
+    type Ref = WordRef;
 }
 
 #[derive(Debug, Clone)]
 pub struct RecursiveWord {
     pub span: FileSpan,
-    pub inner: InnerWord<RecursiveSentence>,
+    pub inner: InnerWord<WordRef>,
     pub names: Vec<Name>,
 }
 
@@ -1469,7 +1491,7 @@ pub enum InnerWord<BranchRepr> {
     Tuple(usize),
     Untuple(usize),
     Call(QualifiedName),
-    InlineCall(BranchRepr),
+    Composition(Vec<BranchRepr>),
     Branch(BranchRepr, BranchRepr),
     JumpTable(Vec<BranchRepr>),
 }

@@ -131,12 +131,8 @@ impl<'t> Compiler<'t> {
                 };
                 flat::InnerWord::Call(*idx)
             }
-            compiler::InnerWord::InlineCall(inline) => {
-                let idx = self
-                    .index
-                    .get(&inline.as_ref(&self.sources))
-                    .expect("generated names should always exist");
-                flat::InnerWord::Call(*idx)
+            compiler::InnerWord::Composition(inline) => {
+                panic!("These should have all been turned into sentences")
             }
             compiler::InnerWord::Branch(true_case, false_case) => {
                 let true_idx = self
