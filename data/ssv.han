@@ -30,6 +30,7 @@ def inner_inner_clone c#do [#in_field{iter, #some{c}} => (#in_field{iter, #some{
 mod tests {
     def run c#first 'test_empty_string
         c#then 'single_field
+        c#then 'double_field
 
     def test_empty_string 
         c#first c#do [() => @""]
@@ -63,6 +64,31 @@ mod tests {
         c#then 'super::inner_next
         c#then c#do [(iter, false) => iter]
         c#then 'super::next
+        c#then c#do [(^, false) => ()]
+    
+    def double_field 
+        c#first c#do [() => @"fo b"]
+        c#then 'crate::str::symbol::iter::new
+        c#then 'super::new
+        c#then 'super::next
+        c#then c#do [(iter, true) => iter]
+        c#then 'super::inner_next
+        c#then c#do [(iter, true) => iter]
+        c#then 'super::inner_inner_clone
+        c#then c#do [(iter, 'f') => iter]
+        c#then 'super::inner_next
+        c#then c#do [(iter, true) => iter]
+        c#then 'super::inner_inner_clone
+        c#then c#do [(iter, 'o') => iter]
+        c#then 'super::inner_next
+        c#then c#do [(iter, false) => iter]
+        c#then 'super::next
+        c#then c#do [(iter, true) => iter]
+        c#then 'super::inner_next
+        c#then c#do [(iter, true) => iter]
+        c#then 'super::inner_inner_clone
+        c#then c#do [(iter, 'b') => iter]
+        c#then 'super::inner_next
         c#then c#do [(^, false) => ()]
 }
 
