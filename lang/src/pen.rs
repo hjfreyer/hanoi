@@ -22,6 +22,14 @@ impl<Value> Pen<Value> {
     pub fn new() -> Self {
         Self(vec![])
     }
+
+    pub fn into_iter<Ref: PenRef<Value>>(self) -> impl Iterator<Item = (Ref, Value)> {
+        self.0
+            .into_iter()
+            .enumerate()
+            .filter_map(|(i, v)| v.map(|v| (Ref::from(i), v)))
+    }
+
     fn push<Ref: PenRef<Value>>(&mut self, v: Value) -> Ref {
         let idx = self.0.len();
         self.0.push(Some(v));

@@ -31,7 +31,7 @@ impl Crate {
     }
 }
 
-#[derive(Debug, From, Into, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, From, Into, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct TransformerRef(usize);
 
 impl<'t> PenRef<Transformer<'t>> for TransformerRef {}
@@ -335,7 +335,7 @@ impl<'a, 't> TransformerFactory<'a, 't> {
                                 children: vec![
                                     // result
                                     self.make_tag(span, "start", 1),
-                                    rest.clone(),
+                                    rest,
                                 ],
                             };
                             let cont_case = Transformer::Composition {
@@ -369,7 +369,7 @@ impl<'a, 't> TransformerFactory<'a, 't> {
                         children: vec![
                             // start_arg
                             self.make_tag(span, "start", 1),
-                            first.clone(),
+                            first,
                         ],
                     };
                     let cont_case = Transformer::Composition {
@@ -758,24 +758,40 @@ impl<'t> Compiler<'t> {
 
         let mut locals = Locals::default();
         locals.push_unnamed();
-        let sentence = word_factory.into_recursive_sentence(
-            &pen,
+        let mut already_visited = BTreeMap::new();
+        let sentence = word_factory.into_recursive_word(
+            &mut already_visited,
+            &mut pen,
             ctx,
             &symbol_table,
             &mut locals,
             transformer,
         )?;
+        let root_span = sentence.get(&word_pen).span;
 
         let mut names = NameSequence {
             base: name,
             count: 0,
         };
-        self.visit_recursive_sentence(
-            &mut names,
-            &word_pen,
-            sentence.get(&word_pen).span,
-            vec![sentence],
-        );
+        let reserved_first = names.next();
+        let mut already_visited = BTreeMap::new();
+        for (word_ref, word) in word_pen.into_iter() {
+            self.visit_recursive_word(&mut names, &mut already_visited, word_ref, word);
+        }
+        self.res.sentences.push(Sentence {
+            span: root_span,
+            name: reserved_first,
+            words: vec![Word {
+                span: root_span,
+                inner: InnerWord::Call(
+                    already_visited
+                        .get(&sentence)
+                        .expect(format!("should already be visited: {sentence:?}").as_str())
+                        .clone(),
+                ),
+                names: vec![],
+            }],
+        });
         Ok(())
     }
 
@@ -801,13 +817,16 @@ impl<'t> Compiler<'t> {
 
         let mut locals = Locals::default();
         locals.push_unnamed();
-        let sentence = word_factory.into_recursive_sentence(
-            &pen,
+        let mut already_visited = BTreeMap::new();
+        let sentence = word_factory.into_recursive_word(
+            &mut already_visited,
+            &mut pen,
             ctx,
             &symbol_table,
             &mut locals,
             transformer,
         )?;
+        let root_span = sentence.get(&word_pen).span;
         if !locals.terminal && locals.len() != 1 {
             locals.pop();
             match locals.pop() {
@@ -824,12 +843,25 @@ impl<'t> Compiler<'t> {
             base: name,
             count: 0,
         };
-        self.visit_recursive_sentence(
-            &mut names,
-            &word_pen,
-            sentence.get(&word_pen).span,
-            vec![sentence],
-        );
+        let reserved_first = names.next();
+        let mut already_visited = BTreeMap::new();
+        for (word_ref, word) in word_pen.into_iter() {
+            self.visit_recursive_word(&mut names, &mut already_visited, word_ref, word);
+        }
+        self.res.sentences.push(Sentence {
+            span: root_span,
+            name: reserved_first,
+            words: vec![Word {
+                span: root_span,
+                inner: InnerWord::Call(
+                    already_visited
+                        .get(&sentence)
+                        .expect(format!("should already be visited: {sentence:?}").as_str())
+                        .clone(),
+                ),
+                names: vec![],
+            }],
+        });
         Ok(())
     }
 
@@ -934,74 +966,110 @@ impl<'t> Compiler<'t> {
         Ok(f(size))
     }
 
-    fn visit_recursive_sentence(
+    fn visit_recursive_word(
         &mut self,
         names: &mut NameSequence,
-        pen: &Pen<RecursiveWord>,
-        span: FileSpan,
-        sentence: Vec<WordRef>,
-    ) -> QualifiedName {
+        already_visited: &mut BTreeMap<WordRef, QualifiedName>,
+        word_ref: WordRef,
+        word: RecursiveWord,
+    ) {
+        let span = word.span;
+        let words = match word.inner {
+            InnerWord::Push(value) => vec![Word {
+                span,
+                inner: InnerWord::Push(value),
+                names: word.names.clone(),
+            }],
+            InnerWord::Builtin(builtin) => vec![Word {
+                span,
+                inner: InnerWord::Builtin(builtin),
+                names: word.names.clone(),
+            }],
+            InnerWord::Copy(idx) => vec![Word {
+                span,
+                inner: InnerWord::Copy(idx),
+                names: word.names.clone(),
+            }],
+            InnerWord::Drop(idx) => vec![Word {
+                span,
+                inner: InnerWord::Drop(idx),
+                names: word.names.clone(),
+            }],
+            InnerWord::Move(idx) => vec![Word {
+                span,
+                inner: InnerWord::Move(idx),
+                names: word.names.clone(),
+            }],
+            InnerWord::Tuple(idx) => vec![Word {
+                span,
+                inner: InnerWord::Tuple(idx),
+                names: word.names.clone(),
+            }],
+            InnerWord::Untuple(idx) => vec![Word {
+                span,
+                inner: InnerWord::Untuple(idx),
+                names: word.names.clone(),
+            }],
+            InnerWord::Call(qualified_name) => vec![Word {
+                span,
+                inner: InnerWord::Call(qualified_name),
+                names: word.names.clone(),
+            }],
+            InnerWord::Composition(children) => children
+                .into_iter()
+                .map(|child| {
+                    let name = already_visited
+                        .get(&child)
+                        .expect(format!("should already be visited: {child:?}").as_str())
+                        .clone();
+                    Word {
+                        span,
+                        inner: InnerWord::Call(name),
+                        names: word.names.clone(),
+                    }
+                })
+                .collect(),
+            InnerWord::Branch(true_case, false_case) => {
+                let true_name = already_visited
+                    .get(&true_case)
+                    .expect(format!("should already be visited: {true_case:?}").as_str())
+                    .clone();
+                let false_name = already_visited
+                    .get(&false_case)
+                    .expect(format!("should already be visited: {false_case:?}").as_str())
+                    .clone();
+                vec![Word {
+                    span,
+                    inner: InnerWord::Branch(true_name, false_name),
+                    names: word.names.clone(),
+                }]
+            }
+            InnerWord::JumpTable(jump_table) => vec![Word {
+                span,
+                inner: InnerWord::JumpTable(
+                    jump_table
+                        .into_iter()
+                        .map(|sentence| {
+                            let name = already_visited
+                                .get(&sentence)
+                                .expect(format!("should already be visited: {sentence:?}").as_str())
+                                .clone();
+                            name
+                        })
+                        .collect(),
+                ),
+                names: word.names.clone(),
+            }],
+        };
+
         let res = names.next();
-        let words = sentence
-            .into_iter()
-            .map(|w| self.visit_recursive_word(pen, names, w))
-            .collect();
         self.res.sentences.push(Sentence {
             span,
             name: res.clone(),
             words,
         });
-        res
-    }
 
-    fn visit_recursive_word(
-        &mut self,
-        pen: &Pen<RecursiveWord>,
-        names: &mut NameSequence,
-        word: WordRef,
-    ) -> Word {
-        let span = word.get(pen).span;
-        let new_inner = match word.get(pen).clone().inner {
-            InnerWord::Push(value) => InnerWord::Push(value),
-            InnerWord::Builtin(builtin) => InnerWord::Builtin(builtin),
-            InnerWord::Copy(idx) => InnerWord::Copy(idx),
-            InnerWord::Drop(idx) => InnerWord::Drop(idx),
-            InnerWord::Move(idx) => InnerWord::Move(idx),
-            InnerWord::Tuple(idx) => InnerWord::Tuple(idx),
-            InnerWord::Untuple(idx) => InnerWord::Untuple(idx),
-            InnerWord::Call(qualified_name) => InnerWord::Call(qualified_name),
-            InnerWord::Composition(children) => {
-                let name = self.visit_recursive_sentence(names, pen, span, children);
-                InnerWord::Call(name)
-            }
-            InnerWord::Branch(true_case, false_case) => {
-                let true_span = true_case.get(pen).span;
-                let false_span = false_case.get(pen).span;
-                InnerWord::Branch(
-                    self.visit_recursive_sentence(names, pen, true_span, vec![true_case]),
-                    self.visit_recursive_sentence(names, pen, false_span, vec![false_case]),
-                )
-            }
-            InnerWord::JumpTable(jump_table) => InnerWord::JumpTable(
-                jump_table
-                    .into_iter()
-                    .map(|sentence| {
-                        self.visit_recursive_sentence(
-                            names,
-                            pen,
-                            sentence.get(pen).span,
-                            vec![sentence],
-                        )
-                    })
-                    .collect(),
-            ),
-        };
-
-        Word {
-            span,
-            inner: new_inner,
-            names: word.get(pen).names.clone(),
-        }
+        already_visited.insert(word_ref, res);
     }
 }
 
@@ -1284,19 +1352,72 @@ impl<'a> WordFactory<'a> {
         .into_pen(self.0)
     }
 
-    fn into_recursive_sentence<'t>(
+    fn into_recursive_word<'t>(
         &mut self,
-        p: &Pen<Transformer<'t>>,
+        already_visited: &mut BTreeMap<TransformerRef, (Locals, WordRef, Locals)>,
+        p: &mut Pen<Transformer<'t>>,
         ctx: FileContext,
         symbol_table: &SymbolTable,
         locals: &mut Locals,
-        root: TransformerRef,
+        root_ref: TransformerRef,
     ) -> Result<WordRef, Error> {
-        match root.get(p).clone() {
+        if let Some((prev_locals, prev_word, new_locals)) = already_visited.get(&root_ref) {
+            if !locals.compare(ctx.sources, new_locals) {
+                let span = prev_word.get(self.0).span;
+                return Err(Error::BranchContractsDisagree {
+                    location: span.location(ctx.sources),
+                    locals1: prev_locals
+                        .names()
+                        .into_iter()
+                        .map(|n| format!("{:?}", n.as_ref(ctx.sources)))
+                        .collect(),
+                    locals2: locals
+                        .names()
+                        .into_iter()
+                        .map(|n| format!("{:?}", n.as_ref(ctx.sources)))
+                        .collect(),
+                });
+            }
+            *locals = new_locals.clone();
+            return Ok(*prev_word);
+        }
+
+        let mut old_locals = locals.clone();
+        let root = root_ref.take(p);
+        let res = self
+            .into_recursive_word_helper(
+                already_visited,
+                p,
+                ctx,
+                symbol_table,
+                locals,
+                root_ref,
+                root,
+            )?
+            .into_pen(self.0);
+        already_visited.insert(root_ref, (old_locals, res, locals.clone()));
+        Ok(res)
+    }
+
+    fn into_recursive_word_helper<'t>(
+        &mut self,
+        already_visited: &mut BTreeMap<TransformerRef, (Locals, WordRef, Locals)>,
+        p: &mut Pen<Transformer<'t>>,
+        ctx: FileContext,
+        symbol_table: &SymbolTable,
+        locals: &mut Locals,
+        root_ref: TransformerRef,
+        root: Transformer<'t>,
+    ) -> Result<RecursiveWord, Error> {
+        match root {
             Transformer::Literal(literal) => {
                 let span = literal.span(ctx.file_idx);
                 locals.push_unnamed();
-                Ok(self.single_span(span, vec![InnerWord::Push(literal.into_value())]))
+                Ok(RecursiveWord {
+                    span,
+                    inner: InnerWord::Push(literal.into_value()),
+                    names: locals.names(),
+                })
             }
             Transformer::Move(identifier) => {
                 let span = identifier.span(ctx.file_idx);
@@ -1311,13 +1432,21 @@ impl<'a> WordFactory<'a> {
                 };
                 locals.remove(idx);
                 locals.push_unnamed();
-                Ok(self.single_span(span, vec![InnerWord::Move(idx)]))
+                Ok(RecursiveWord {
+                    span,
+                    inner: InnerWord::Move(idx),
+                    names: locals.names(),
+                })
             }
             Transformer::MoveIdx { span, idx } => {
                 let span = span.into_ir(ctx.sources, ctx.file_idx);
                 locals.remove(idx);
                 locals.push_unnamed();
-                Ok(self.single_span(span, vec![InnerWord::Move(idx)]))
+                Ok(RecursiveWord {
+                    span,
+                    inner: InnerWord::Move(idx),
+                    names: locals.names(),
+                })
             }
             Transformer::Copy(identifier) => {
                 let span = identifier.span(ctx.file_idx);
@@ -1331,17 +1460,29 @@ impl<'a> WordFactory<'a> {
                     });
                 };
                 locals.push_unnamed();
-                Ok(self.single_span(span, vec![InnerWord::Copy(idx)]))
+                Ok(RecursiveWord {
+                    span,
+                    inner: InnerWord::Copy(idx),
+                    names: locals.names(),
+                })
             }
             Transformer::CopyIdx { span, idx } => {
                 let span = span.into_ir(ctx.sources, ctx.file_idx);
                 locals.push_unnamed();
-                Ok(self.single_span(span, vec![InnerWord::Copy(idx)]))
+                Ok(RecursiveWord {
+                    span,
+                    inner: InnerWord::Copy(idx),
+                    names: locals.names(),
+                })
             }
             Transformer::Drop(span) => {
                 let span = span.into_ir(ctx.sources, ctx.file_idx);
                 locals.pop();
-                Ok(self.single_span(span, vec![InnerWord::Drop(0)]))
+                Ok(RecursiveWord {
+                    span,
+                    inner: InnerWord::Drop(0),
+                    names: locals.names(),
+                })
             }
             Transformer::Call(qualified_label) => {
                 let span = qualified_label.span(ctx.file_idx);
@@ -1352,13 +1493,21 @@ impl<'a> WordFactory<'a> {
                 );
                 locals.pop();
                 locals.push_unnamed();
-                Ok(self.single_span(span, vec![InnerWord::Call(qualified)]))
+                Ok(RecursiveWord {
+                    span,
+                    inner: InnerWord::Call(qualified),
+                    names: locals.names(),
+                })
             }
             Transformer::Binding(identifier) => {
                 let span = identifier.span(ctx.file_idx);
                 locals.pop();
                 locals.push_named(identifier.span(ctx.file_idx));
-                Ok(self.single_span(span, vec![]))
+                Ok(RecursiveWord {
+                    span,
+                    inner: InnerWord::Composition(vec![]),
+                    names: locals.names(),
+                })
             }
             Transformer::Tuple { span, size } => {
                 let span = span.into_ir(ctx.sources, ctx.file_idx);
@@ -1366,7 +1515,11 @@ impl<'a> WordFactory<'a> {
                     locals.pop();
                 }
                 locals.push_unnamed();
-                Ok(self.single_span(span, vec![InnerWord::Tuple(size)]))
+                Ok(RecursiveWord {
+                    span,
+                    inner: InnerWord::Tuple(size),
+                    names: locals.names(),
+                })
             }
             Transformer::Untuple { span, size } => {
                 let span = span.into_ir(ctx.sources, ctx.file_idx);
@@ -1374,7 +1527,11 @@ impl<'a> WordFactory<'a> {
                 for _ in 0..size {
                     locals.push_unnamed();
                 }
-                Ok(self.single_span(span, vec![InnerWord::Untuple(size)]))
+                Ok(RecursiveWord {
+                    span,
+                    inner: InnerWord::Untuple(size),
+                    names: locals.names(),
+                })
             }
             Transformer::Branch {
                 span,
@@ -1387,14 +1544,16 @@ impl<'a> WordFactory<'a> {
 
                 let mut true_locals = locals.clone();
                 let mut false_locals = locals.clone();
-                let true_sentence = self.into_recursive_sentence(
+                let true_sentence = self.into_recursive_word(
+                    already_visited,
                     p,
                     ctx,
                     symbol_table,
                     &mut true_locals,
                     true_case,
                 )?;
-                let false_sentence = self.into_recursive_sentence(
+                let false_sentence = self.into_recursive_word(
+                    already_visited,
                     p,
                     ctx,
                     symbol_table,
@@ -1423,49 +1582,77 @@ impl<'a> WordFactory<'a> {
                     *locals = true_locals;
                 }
 
-                Ok(self.single_span(span, vec![InnerWord::Branch(true_sentence, false_sentence)]))
+                Ok(RecursiveWord {
+                    span,
+                    inner: InnerWord::Branch(true_sentence, false_sentence),
+                    names: locals.names(),
+                })
             }
             Transformer::Composition { span, children } => {
                 let span: FileSpan = span.into_ir(ctx.sources, ctx.file_idx);
                 let words: Result<Vec<WordRef>, Error> = children
                     .into_iter()
-                    .map(|child| self.into_recursive_sentence(p, ctx, symbol_table, locals, child))
+                    .map(|child| {
+                        self.into_recursive_word(
+                            already_visited,
+                            p,
+                            ctx,
+                            symbol_table,
+                            locals,
+                            child,
+                        )
+                    })
                     .collect();
                 Ok(RecursiveWord {
                     span,
-                    names: vec![],
                     inner: InnerWord::Composition(words?),
-                }
-                .into_pen(self.0))
+                    names: locals.names(),
+                })
             }
             Transformer::AssertEq(span) => {
                 let span: FileSpan = span.into_ir(ctx.sources, ctx.file_idx);
                 locals.pop();
                 locals.pop();
-                Ok(self.single_span(span, vec![InnerWord::Builtin(flat::Builtin::AssertEq)]))
+                Ok(RecursiveWord {
+                    span,
+                    inner: InnerWord::Builtin(flat::Builtin::AssertEq),
+                    names: locals.names(),
+                })
             }
             Transformer::Panic(span) => {
                 let span: FileSpan = span.into_ir(ctx.sources, ctx.file_idx);
                 locals.terminal = true;
-                Ok(self.single_span(span, vec![InnerWord::Builtin(flat::Builtin::Panic)]))
+                Ok(RecursiveWord {
+                    span,
+                    inner: InnerWord::Builtin(flat::Builtin::Panic),
+                    names: vec![],
+                })
             }
             Transformer::Eq(span) => {
                 let span: FileSpan = span.into_ir(ctx.sources, ctx.file_idx);
                 locals.pop();
                 locals.pop();
                 locals.push_unnamed();
-                Ok(self.single_span(span, vec![InnerWord::Builtin(flat::Builtin::Eq)]))
+                Ok(RecursiveWord {
+                    span,
+                    inner: InnerWord::Builtin(flat::Builtin::Eq),
+                    names: locals.names(),
+                })
             }
             Transformer::Value { span, value } => {
                 let span: FileSpan = span.into_ir(ctx.sources, ctx.file_idx);
                 locals.push_unnamed();
-                Ok(self.single_span(span, vec![InnerWord::Push(value)]))
+                Ok(RecursiveWord {
+                    span,
+                    inner: InnerWord::Push(value),
+                    names: locals.names(),
+                })
             }
         }
     }
 }
 
-#[derive(Debug, From, Into, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, From, Into, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct WordRef(usize);
 
 impl PenRef<RecursiveWord> for WordRef {}
