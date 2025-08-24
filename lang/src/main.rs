@@ -48,7 +48,7 @@ fn compile_library(base_dir: PathBuf) -> anyhow::Result<(source::Sources, Librar
 
     let crt = compiler::Crate::from_sources(&sources)?;
 
-    let lib = linker::compile(&sources, crt)?;
+    let lib = linker::link(&sources, crt)?;
     Ok((sources, lib))
 }
 

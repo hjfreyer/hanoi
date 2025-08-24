@@ -52,24 +52,24 @@ pub enum Error {
     },
 }
 
-pub fn compile(sources: &source::Sources, ir: compiler::Crate) -> Result<flat::Library, Error> {
-    let mut c = Compiler {
+pub fn link(sources: &source::Sources, ir: compiler::Crate) -> Result<flat::Library, Error> {
+    let mut c = Linker {
         sources,
         index: BTreeMap::new(),
         sentences: TiVec::new(),
     };
 
-    c.compile(ir)
+    c.link(ir)
 }
 
-struct Compiler<'t> {
+struct Linker<'t> {
     sources: &'t source::Sources,
     index: BTreeMap<QualifiedNameRef<'t>, SentenceIndex>,
     sentences: TiVec<SentenceIndex, Option<flat::Sentence>>,
 }
 
-impl<'t> Compiler<'t> {
-    fn compile(&mut self, ir: compiler::Crate) -> Result<flat::Library, Error> {
+impl<'t> Linker<'t> {
+    fn link(&mut self, ir: compiler::Crate) -> Result<flat::Library, Error> {
         let mut res = flat::Library::default();
 
         // let mut index: BTreeMap<QualifiedNameRef<'_>, SentenceIndex> = BTreeMap::new();
