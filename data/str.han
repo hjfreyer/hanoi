@@ -13,5 +13,29 @@ mod symbol {
                 (#iter{symbol, offset}, #none{})
             }
         ]
+
+        // def _get_next match {
+        //     #start{iter} => #cont{(), #next{iter}},
+        //     #cont{(), resp} => #end{resp},
+        // }
+
+        // def stash1 match {
+        //     #start{(a, b)} => (a, #start{b}) 'stash1_help,
+        //     #cont{(a, b_state), b_resp} => (a, #cont{b_state, b_resp}) 'stash1_help,
+        // }
+        // def stash1_help [(a, b) => b '_get_next match {
+        //     #end{b} => #end{(a, b)},
+        //     #cont{b_state, b_req} => #cont{(a, b_state), b_req}
+        // }]
+
+        // def equals 
+        //     c#first c#do [(iter, symbol) => ((symbol, 0), iter)]
+        //     c#then 'stash1
+        //     c#then c#do [((symbol, offset), (iter, finished)) => finished if {
+
+        //     } else {
+                
+        //     }]
+        // }
     }
 }

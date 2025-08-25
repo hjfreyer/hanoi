@@ -1,11 +1,5 @@
 use 'crate::str::symbol;
 
-
-def get_next match {
-    #start{iter} => #cont{(), (#some{#next{iter}})},
-    #cont{(), (#some{resp})} => #end{resp},
-}
-
 def new c#do [symbol_iter => #unstarted{symbol_iter}]
 
 def next c#do match {
