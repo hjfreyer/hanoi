@@ -88,6 +88,12 @@ class Locals:
         assert not self.unreachable, "Unreachable locals"
         return self.__class__(self.names[:idx] + self.names[idx+1:])
 
+def merge_local_dicts(a : dict[str, Locals], b : dict[str, Locals]) -> dict[str, Locals]:
+    result : dict[str, Locals] = {}
+    for key in set(a.keys()) | set(b.keys()):
+        result[key] = a[key].merge(b[key])
+    return result
+
 class Machine(Protocol):
     def __call__(self, stack: "Stack") -> "Stack": ...
 
@@ -181,8 +187,44 @@ class ForLoop(MachineBuilder):
 
     @override
     def __call__(self, locals: Locals) -> tuple[dict[str, Locals], Machine]:
+        body_locals, body_machine = self.body(locals)
 
-        return self.machine(locals)
+        def run_body(stack: Stack) -> Stack:
+            stack = body_machine(stack)
+            stack, (action_tag, action_args) = stack.pop()
+            stack, inner_state = stack.pop()
+            if action_tag == 'break':
+                stack = stack.push(('end', ()))
+                stack = stack.push(('result', ()))
+                return stack
+            elif action_tag == 'loop':
+                stack = stack.push(('start', ()))
+                stack = stack.push(('continue', ()))
+                return stack
+            elif action_tag in ['continue', 'other']:
+                stack = stack.push(('body', inner_state))
+                stack = stack.push((action_tag, action_args))
+                return stack
+            else:
+                assert False, "Bad action: "+str(action_tag)
+
+        def run(stack: Stack) -> Stack:
+            stack, (state_tag, state_args) = stack.pop()
+            if state_tag == 'start':
+                stack = stack.push(('start', ()))
+                return run_body(stack)
+            elif state_tag == 'body':
+                inner_state = state_args
+                stack = stack.push(inner_state)
+                return run_body(stack)
+            else:
+                assert False, "Bad state: "+str(state_tag)
+
+        return {
+            'result': body_locals['break'],
+            'return': body_locals['return'],
+        }, run
+
 def for_loop(machine):
     def impl(state, msg):
         state_tag, state_args = state
@@ -316,10 +358,7 @@ class IfThenElse(MachineBuilder):
         then_locals, then_machine = self.then(locals)
         els_locals, els_machine = self.els(locals)
 
-        print("then: "+str(self.then))
-        print("els: "+str(self.els))
-        result_locals = then_locals['result'].merge(els_locals['result'])
-        return_locals = then_locals['return'].merge(els_locals['return'])
+        merged_locals = merge_local_dicts(then_locals, els_locals)
 
         def run_then(stack: Stack) -> Stack:
             stack = then_machine(stack)
@@ -357,7 +396,7 @@ class IfThenElse(MachineBuilder):
                 return run_els(stack)
             else:
                 assert False, "Bad state: "+str(state_tag)
-        return {'result': result_locals, 'return': return_locals}, run
+        return merged_locals, run
 
 
 
@@ -650,7 +689,7 @@ class BreakBuilder(MachineBuilder):
             stack = stack.push(('end', ()))
             stack = stack.push(('break', ()))
             return stack
-        return {'break': locals, 'return': Locals.make_unreachable(), 'result': Locals.make_unreachable()}, run
+        return {'break': locals, 'loop': Locals.make_unreachable(), 'return': Locals.make_unreachable(), 'result': Locals.make_unreachable()}, run
 
 Break = BreakBuilder()
 
@@ -664,7 +703,7 @@ class LoopBuilder(MachineBuilder):
             stack = stack.push(('end', ()))
             stack = stack.push(('loop', ()))
             return stack
-        return {'loop': locals, 'return': Locals.make_unreachable(), 'result': Locals.make_unreachable()}, run
+        return {'loop': locals, 'break': Locals.make_unreachable(), 'return': Locals.make_unreachable(), 'result': Locals.make_unreachable()}, run
 
 Loop = LoopBuilder()
 
@@ -810,7 +849,19 @@ string_iter_equals_body = seqn([
     )
 ])
 
-# string_iter_equals = seq(do(lambda str, iter: (str, 0, iter)), for_loop(string_iter_equals_body))
+string_iter_equals = compile_function(
+    seqn([
+        Bind(tuple_binding((
+            name_binding('str'),
+            name_binding('iter'),
+        ))),
+        Move('str'),
+        Push(0),
+        Move('iter'),
+        MakeTuple(3),
+        ForLoop(string_iter_equals_body),
+    ])
+)
 
 # @dot
 # def string_iter_next(str, offset):
@@ -939,48 +990,48 @@ class TestStringIterEquals(unittest.TestCase):
         assertTranscript(self, autopass(machine), transcript)
 
 
-#     def test_success(self):
-#         transcript = [
-#             (('foo', 'iter'), ('other', ('next', 'iter'))),
-#             (('iter', True), ('other', ('iter_clone', 'iter'))),
-#             (('iter', 'f'), ('other', ('next', 'iter'))),
-#             (('iter', True), ('other', ('iter_clone', 'iter'))),
-#             (('iter', 'o'), ('other', ('next', 'iter'))),
-#             (('iter', True), ('other', ('iter_clone', 'iter'))),
-#             (('iter', 'o'), ('other', ('next', 'iter'))),
-#             (('iter', False), ('result', True))
-#         ]
-#         assertTranscript(self, autopass(string_iter_equals), transcript)
+    def test_success(self):
+        transcript : list[tuple[Value, Value]] = [
+            (('foo', 'iter'), ('other', ('next', 'iter'))),
+            (('iter', True), ('other', ('iter_clone', 'iter'))),
+            (('iter', 'f'), ('other', ('next', 'iter'))),
+            (('iter', True), ('other', ('iter_clone', 'iter'))),
+            (('iter', 'o'), ('other', ('next', 'iter'))),
+            (('iter', True), ('other', ('iter_clone', 'iter'))),
+            (('iter', 'o'), ('other', ('next', 'iter'))),
+            (('iter', False), ('result', True))
+        ]
+        assertTranscript(self, autopass(string_iter_equals), transcript)
         
-#     def test_iter_shorter_than_string(self):
-#         transcript = [
-#             (('foo', 'iter'), ('other', ('next', 'iter'))),
-#             (('iter', True), ('other', ('iter_clone', 'iter'))),
-#             (('iter', 'f'), ('other', ('next', 'iter'))),
-#             (('iter', True), ('other', ('iter_clone', 'iter'))),
-#             (('iter', 'o'), ('other', ('next', 'iter'))),
-#             (('iter', False), ('result', False))
-#         ]
-#         assertTranscript(self, autopass(string_iter_equals), transcript)
+    def test_iter_shorter_than_string(self):
+        transcript = [
+            (('foo', 'iter'), ('other', ('next', 'iter'))),
+            (('iter', True), ('other', ('iter_clone', 'iter'))),
+            (('iter', 'f'), ('other', ('next', 'iter'))),
+            (('iter', True), ('other', ('iter_clone', 'iter'))),
+            (('iter', 'o'), ('other', ('next', 'iter'))),
+            (('iter', False), ('result', False))
+        ]
+        assertTranscript(self, autopass(string_iter_equals), transcript)
 
-#     def test_string_shorter_than_iter(self):
-#         transcript = [
-#             (('f', 'iter'), ('other', ('next', 'iter'))),
-#             (('iter', True), ('other', ('iter_clone', 'iter'))),
-#             (('iter', 'f'), ('other', ('next', 'iter'))),
-#             (('iter', True), ('result', False))
-#         ]
-#         assertTranscript(self, autopass(string_iter_equals), transcript)
+    def test_string_shorter_than_iter(self):
+        transcript = [
+            (('f', 'iter'), ('other', ('next', 'iter'))),
+            (('iter', True), ('other', ('iter_clone', 'iter'))),
+            (('iter', 'f'), ('other', ('next', 'iter'))),
+            (('iter', True), ('result', False))
+        ]
+        assertTranscript(self, autopass(string_iter_equals), transcript)
 
-#     def test_char_mismatch(self):
-#         transcript = [
-#             (('foo', 'iter'), ('other', ('next', 'iter'))),
-#             (('iter', True), ('other', ('iter_clone', 'iter'))),
-#             (('iter', 'f'), ('other', ('next', 'iter'))),
-#             (('iter', True), ('other', ('iter_clone', 'iter'))),
-#             (('iter', 'r'), ('result', False))
-#         ]
-#         assertTranscript(self, autopass(string_iter_equals), transcript)
+    def test_char_mismatch(self):
+        transcript = [
+            (('foo', 'iter'), ('other', ('next', 'iter'))),
+            (('iter', True), ('other', ('iter_clone', 'iter'))),
+            (('iter', 'f'), ('other', ('next', 'iter'))),
+            (('iter', True), ('other', ('iter_clone', 'iter'))),
+            (('iter', 'r'), ('result', False))
+        ]
+        assertTranscript(self, autopass(string_iter_equals), transcript)
 
 
 # def run_tests():
