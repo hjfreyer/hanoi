@@ -128,7 +128,7 @@ def transformer(f: Callable[[Value], Value]) -> MachineBuilder:
         @wraps(f)
         def run(stack: Stack) -> Stack:
             stack, state = stack.pop()
-            assert state == ('start', ()), "Bad state"
+            assert state == ('start', ()), "Bad state: "+str(state)
             stack, value = stack.pop()
             stack = stack.push(f(value))
             stack = stack.push(('end', ()))
@@ -225,34 +225,12 @@ class ForLoop(MachineBuilder):
             'return': body_locals['return'],
         }, run
 
-def for_loop(machine):
-    def impl(state, msg):
-        state_tag, state_args = state
-        if state_tag == 'start':
-            return (('run', ('start', ())), ('continue', msg))
-        elif state_tag == 'run':
-            inner_state = state_args
-            inner_state, (inner_msg_tag, inner_msg_args) = machine(inner_state, msg)
-            if inner_msg_tag == 'result':
-                inner_inner_msg_tag, inner_inner_msg_args = inner_msg_args
-                if inner_inner_msg_tag == 'continue':
-                    return (('run', ('start', ())), ('continue', inner_inner_msg_args))
-                elif inner_inner_msg_tag == 'break':
-                    return (('end', ()), ('result', inner_inner_msg_args))
-                else:
-                    assert False, "Bad message: "+str(inner_inner_msg_tag)
-            elif inner_msg_tag in ['continue', 'other']:
-                return (('run', inner_state), (inner_msg_tag, inner_msg_args))
-            else:
-                assert False, "Bad message: "+str(inner_msg_tag)
-        else:
-            assert False, "Bad state: "+str(state_tag)
-    return impl
-
 def autopass(machine : Machine) -> Machine:
     def impl(stack: Stack) -> Stack:
         while True:
+            print('AUTOPASS IN: ', stack)
             stack = machine(stack)
+            print('AUTOPASS OUT: ', stack)
             stack, (action_tag, action_args) = stack.pop()
             if action_tag == 'continue':
                 continue
@@ -608,7 +586,7 @@ class Call(MachineBuilder):
                 stack = stack.push(('end', ()))
                 stack = stack.push(('result', ()))
                 return stack
-            elif action_tag == 'other':
+            elif action_tag in ['other', 'continue']:
                 saved : list[Value] = []
                 stack, request = stack.pop()
                 for _ in range(len(locals.names) - 1):
@@ -616,7 +594,7 @@ class Call(MachineBuilder):
                     saved.append(value)
                 stack = stack.push(request)
                 stack = stack.push(('paused', (tuple(saved), inner_state)))
-                stack = stack.push(('other', ()))
+                stack = stack.push((action_tag, ()))
                 return stack
             else:
                 assert False, "Bad action: "+str(action_tag)
@@ -706,6 +684,60 @@ class LoopBuilder(MachineBuilder):
         return {'loop': locals, 'break': Locals.make_unreachable(), 'return': Locals.make_unreachable(), 'result': Locals.make_unreachable()}, run
 
 Loop = LoopBuilder()
+
+@dataclass
+class Handle(MachineBuilder):
+    machine : MachineBuilder
+    handler : MachineBuilder
+
+    @override
+    def __call__(self, locals: Locals) -> tuple[dict[str, Locals], Machine]:
+        machine_locals, machine = self.machine(locals)
+        handler_locals, handler = self.handler(Locals().push_unnamed())
+
+        def run_handler(stack: Stack) -> Stack:
+            stack = handler(stack)
+            stack, (action_tag, action_args) = stack.pop()
+            stack, handler_inner_state = stack.pop()
+            if action_tag == 'result':
+                stack, response = stack.pop()
+                stack, machine_inner_state = stack.pop()
+                stack = stack.push(response)
+                stack = stack.push(('inner', machine_inner_state))
+                stack = stack.push(('continue', ()))
+                return stack
+            else:
+                assert False, "Bad action: "+str(action_tag)
+
+        def run_machine(stack: Stack) -> Stack:
+            stack = machine(stack)
+            stack, (action_tag, action_args) = stack.pop()
+            stack, inner_state = stack.pop()
+            if action_tag in ['result', 'continue']:
+                stack = stack.push(('inner', inner_state))
+                stack = stack.push((action_tag, action_args))
+                return stack
+            elif action_tag == 'other':
+                stack, request = stack.pop()
+                stack = stack.push(inner_state)
+                stack = stack.push(request)
+                stack = stack.push(('start', ()))
+                return run_handler(stack)                
+            else:
+                assert False, "Bad action: "+str(action_tag)
+
+        def run(stack: Stack) -> Stack:
+            stack, (state_tag, state_args) = stack.pop()
+            if state_tag == 'start':
+                stack = stack.push(('start', ()))
+                return run_machine(stack)
+            elif state_tag == 'inner':
+                inner_state = state_args
+                stack = stack.push(inner_state)
+                return run_machine(stack)
+            else:
+                assert False, "Bad state: "+str(state_tag)
+        return Locals.simple(locals), run
 
 @compile_function
 @transformer
@@ -863,67 +895,77 @@ string_iter_equals = compile_function(
     ])
 )
 
-# @dot
-# def string_iter_next(str, offset):
-#     if len(str) == offset:
-#         return ('end', ()), ('result', False)
-#     else:
-#         return (str, offset + 1), ('result', True)
+@compile_function
+@transformer
+def string_iter_next(values):
+    tag, args = values
+    if tag == 'dead':
+        assert False, "Dead"
+    elif tag == 'unstarted':
+        s = args
+        if len(s) == 0:
+            return (('dead', ()), False)
+        else:
+            return (('live', (s, 0)), True)
+    elif tag == 'live':
+        s, offset = args
+        if len(s) == offset + 1:
+            return (('dead', ()), False)
+        else:
+            return (('live', (s, offset + 1)), True)
+    else:
+        assert False, "Bad tag: "+str(tag)
 
-# @dot
-# def string_iter_clone(str, offset):
-#     return (str, offset), ('result', str[offset])   
+@compile_function
+@transformer
+def string_iter_clone(value):
+    tag, args = value
+    if tag == 'dead':
+        assert False, "Dead"
+    elif tag == 'unstarted':
+        assert False, "Unstarted"
+    elif tag == 'live':
+        s, offset = args
+        return (('live', (s, offset)), s[offset])
+    else:
+        assert False, "Bad tag: "+str(tag)
 
-# def string_iter_equals_inverse_handler(state, msg):
-#     state_tag, state_args = state
-#     if state_tag == 'start':
-#         msg_tag, msg_args = msg
-#         if msg_tag == 'next':
-#             iter = msg_args
-#             return (('call_inner', (('start', ()), iter)), ('pass', ()))
-#         else:
-#             assert False, "Bad message"
-#     elif state_tag == 'call_inner':
-#         inner_state, inner_msg = state_args
-#         inner_state, (inner_msg_tag, inner_msg_args) = string_iter_equals(inner_state, inner_msg)
-
-
-# string_iter_equals_inverse_handler = seq(
-#     do(lambda tag, args: (tag == 'next', (tag, args))),
-#     if_then_else(
-        
-#         do(lambda str, iter: (str, 0, iter)),
-#         for_loop(string_iter_equals_body)
-#     )
-# )
-
-
-# def string_iter_equals_inverse(state, msg):
-#     state_tag, state_args = state
-#     if state_tag == 'start':
-#         str = msg
-#         iter = (str, 0)
-#         return ('call_inner', (('start', ()), (str, iter))), ('pass', ())
-#     elif state_tag == 'call_inner':
-#         inner_state, inner_msg = state_args
-#         inner_state, (inner_msg_tag, inner_msg_args) = string_iter_equals(inner_state, inner_msg)
-#         if inner_msg_tag == 'result':
-#             return (('end', ()), ('result', inner_msg_args))
-#         elif inner_msg_tag == 'next':
-
-#             return (('paused_inner', inner_state), inner_msg_args)
-#         else:
-#             assert False, "Bad message"
-#     elif state_tag == 'paused_inner':
-#         if inner_msg_tag == 'break':
-#             return (('end', ()), ('result', inner_msg_args))
-#         elif inner_msg_tag == 'continue':
-#             return (('call_inner', (inner_state, ('next', inner_msg_args))), ('pass', ()))
-#         elif inner_msg_tag == 'other':
-#             return (('paused_inner', inner_state), inner_msg_args)
-#         else:
-#     elif state_tag == 0:
-#         str, offset = state_args
+string_iter_equals_inverse = compile_function(
+    seqn([
+        Bind(name_binding('str')),
+        Copy('str'),
+        Push('unstarted'),
+        Move('str'),
+        MakeTuple(2),
+        MakeTuple(2),
+        Handle(
+            Call(string_iter_equals),
+            seqn([
+                Bind(tuple_binding((
+                    name_binding('operation'),
+                    name_binding('iter'),
+                ))),
+                Copy('operation'),
+                Push('next'),
+                MakeTuple(2),
+                Call(equals),
+                IfThenElse(
+                    seqn([
+                        Drop('operation'),
+                        Move('iter'),
+                        Call(string_iter_next),
+                    ]),
+                    seqn([
+                        Move('operation'),
+                        Bind(literal_binding('iter_clone')),
+                        Move('iter'),
+                        Call(string_iter_clone),
+                    ]),
+                ),
+            ]),
+        ),
+    ])
+)
 
 def assertTranscript(test : unittest.TestCase, machine : Machine, transcript : list[tuple[Value, Value]]):
     stack = Stack(())
@@ -932,10 +974,12 @@ def assertTranscript(test : unittest.TestCase, machine : Machine, transcript : l
         (input, expected_output) = transcript.pop(0)
         stack = stack.push(input)
         stack = stack.push(state)
+        print(stack)
         stack = machine(stack)
         stack, (action_tag, action_args) = stack.pop()
         stack, state = stack.pop()
         stack, actual_output = stack.pop()
+        test.assertEqual(stack.items, ())  # Actions shouldn't leave anything on the stack.
         test.assertEqual((action_tag, actual_output), expected_output)
 
 class TestSimple(unittest.TestCase):
@@ -967,6 +1011,47 @@ class TestSimple(unittest.TestCase):
             ('flarble', ('result', (42, 55, 'flarble'))),
         ]
         assertTranscript(self, autopass(fn), transcript)
+
+class TestStringIter(unittest.TestCase):
+    def test_next(self):
+        transcript : list[tuple[Value, Value]] = [
+            (('live', ('foo', 0)), ('result', (('live', ('foo', 1)), True))),
+        ]
+        assertTranscript(self, autopass(string_iter_next), transcript)
+
+        transcript = [
+            (('live', ('foo', 1)), ('result', (('live', ('foo', 2)), True))),
+        ]
+        assertTranscript(self, autopass(string_iter_next), transcript)
+
+        transcript = [
+            (('live', ('foo', 2)), ('result', (('live', ('foo', 3)), True))),
+        ]
+        assertTranscript(self, autopass(string_iter_next), transcript)
+
+        transcript = [
+            (('live', ('foo', 3)), ('result', (('dead', ()), False))),
+        ]
+        assertTranscript(self, autopass(string_iter_next), transcript)
+
+    def test_clone(self):
+        transcript : list[tuple[Value, Value]] = [
+            (('live', ('foo', 0)), ('result', (('live', ('foo', 0)), 'f'))),
+        ]
+        assertTranscript(self, autopass(string_iter_clone), transcript)
+
+        transcript = [
+            (('live', ('foo', 1)), ('result', (('live', ('foo', 1)), 'o'))),
+        ]
+        assertTranscript(self, autopass(string_iter_clone), transcript)
+
+
+        transcript = [
+            (('live', ('foo', 2)), ('result', (('live', ('foo', 2)), 'o'))),
+        ]
+        assertTranscript(self, autopass(string_iter_clone), transcript)
+
+
 
 class TestStringIterEquals(unittest.TestCase):
     def test_loop_body(self):
@@ -1033,7 +1118,11 @@ class TestStringIterEquals(unittest.TestCase):
         ]
         assertTranscript(self, autopass(string_iter_equals), transcript)
 
-
+    def test_inverse(self):
+        transcript : list[tuple[Value, Value]] = [
+            ('foo', ('result', True)),
+        ]
+        assertTranscript(self, autopass(string_iter_equals_inverse), transcript)
 # def run_tests():
 #     """Run all tests and return the test suite."""
 #     # Create test suite
