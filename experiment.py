@@ -25,6 +25,9 @@ class Stack:
     def move(self, idx: int) -> Self:
         return self.__class__((self.items[idx], ) + self.items[:idx] + self.items[idx+1:])
 
+    def copy(self, idx: int) -> Self:
+        return self.__class__((self.items[idx], ) + self.items)
+
     def __str__(self) -> str:
         return str(self.items)
 
@@ -167,12 +170,11 @@ def autopass(machine : Machine) -> Machine:
     def impl(stack: Stack) -> Stack:
         while True:
             stack = machine(stack)
-            stack, (state, (msg_tag, msg_args))= stack.pop()
-            if msg_tag == 'continue':
-                stack = stack.push((state, msg_args))
+            stack, (action_tag, action_args) = stack.pop()
+            if action_tag == 'continue':
                 continue
             else:
-                stack = stack.push((state, (msg_tag, msg_args)))
+                stack = stack.push((action_tag, action_args))
                 return stack
     return impl
 
@@ -188,29 +190,46 @@ class Compose(MachineBuilder):
 
         assert a_locals['return'].compatible_with(b_locals['return']), "A and B must have the same return: "+str(a_locals['return'])+" != "+str(b_locals['return'])
 
+        def run_b(stack: Stack) -> Stack:
+            stack = b_run(stack)
+            stack, action = stack.pop()
+            stack, state = stack.pop()
+            stack = stack.push(('run_b', state))
+            stack = stack.push(action)
+            return stack
+
+        def run_a(stack: Stack) -> Stack:
+            stack = a_run(stack)
+            stack, (action_tag, action_args) = stack.pop() # pyright: ignore[reportGeneralTypeIssues]
+            stack, inner_state = stack.pop()
+            if action_tag == 'result':
+                stack = stack.push(('start', ()))
+                return run_b(stack)
+            elif action_tag == 'return':
+                stack = stack.push(('end', ()))
+                stack = stack.push(('result', ()))
+                return stack
+            elif action_tag in ['continue', 'other']:
+                stack = stack.push(('run_a', inner_state))
+                stack = stack.push((action_tag, action_args))
+                return stack
+            else:
+                assert False, "Bad message: "+str(action_tag)
+
+
         def run(stack: Stack) -> Stack:
-            stack, ((state_tag, state_args), msg) = stack.pop()
+            stack, (state_tag, state_args) = stack.pop()
             if state_tag == 'start':
-                return stack.push((('run_a', ('start', ())), ('continue', msg)))
+                stack = stack.push(('start', ()))
+                return run_a(stack)
             elif state_tag == 'run_a':
                 inner_state = state_args
-                stack = stack.push((inner_state, msg))
-                stack = a_run(stack)
-                stack, (inner_state, (inner_msg_tag, inner_msg_args)) = stack.pop() # pyright: ignore[reportGeneralTypeIssues]
-                if inner_msg_tag == 'result':
-                    return stack.push((('run_b', ('start', ())), ('continue', inner_msg_args)))
-                elif inner_msg_tag == 'return':
-                    return stack.push((('end', ()), ('result', inner_msg_args)))
-                elif inner_msg_tag in ['continue', 'other']:
-                    return stack.push((('run_a', inner_state), (inner_msg_tag, inner_msg_args)))
-                else:
-                    assert False, "Bad message: "+str(inner_msg_tag)
+                stack = stack.push(inner_state)
+                return run_a(stack)
             elif state_tag == 'run_b':
                 inner_state = state_args
-                stack = stack.push((inner_state, msg))
-                stack = b_run(stack)
-                stack, (inner_state, inner_msg) = stack.pop() # pyright: ignore[reportGeneralTypeIssues]
-                return stack.push((('run_b', inner_state), inner_msg))
+                stack = stack.push(inner_state)
+                return run_b(stack)
             else:
                 assert False, "Bad state: "+str(state_tag)
 
@@ -294,13 +313,9 @@ def if_then_else(then, els):
 
 
 @dataclass
-class NameBinding(MachineBuilder):
+class NameBinding:
     kind : Literal['name']
     name: str
-
-    @override
-    def __call__(self, locals: Locals) -> tuple[dict[str, Locals], Machine]:
-        return Locals.simple(locals.pop_unnamed().push_named(self.name)), self.run
 
     def transform(self, locals: Locals) -> Locals:
         return locals.pop_unnamed().push_named(self.name)
@@ -312,13 +327,9 @@ class NameBinding(MachineBuilder):
         return True
 
 @dataclass
-class LiteralBinding(MachineBuilder):
+class LiteralBinding:
     kind : Literal['literal']
     value : Value
-
-    @override
-    def __call__(self, locals: Locals) -> tuple[dict[str, Locals], Machine]:
-        return Locals.simple(self.transform(locals)), self.run
 
     def transform(self, locals: Locals) -> Locals:
         return locals.pop_unnamed()
@@ -332,15 +343,9 @@ class LiteralBinding(MachineBuilder):
         return value == self.value
 
 @dataclass
-class TupleBinding(MachineBuilder):
+class TupleBinding:
     kind : Literal['tuple']
     values : tuple['Binding', ...]
-
-    @override
-    def __call__(self, locals: Locals) -> tuple[dict[str, Locals], Machine]:
-        def run(stack: Stack) -> Stack:
-            stack, (state, msg) = stack.pop()
-        return Locals.simple(self.transform(locals)), self.run
 
     def transform(self, locals: Locals) -> Locals:
         locals = locals.pop_unnamed()
@@ -378,12 +383,34 @@ def tuple_binding(values : tuple['Binding', ...]) -> TupleBinding:
 Binding = NameBinding | LiteralBinding | TupleBinding
 
 @dataclass
+class Bind(MachineBuilder):
+    binding : Binding
+
+    @override
+    def __call__(self, locals: Locals) -> tuple[dict[str, Locals], Machine]:
+        def run(stack: Stack) -> Stack:
+            stack, state = stack.pop()
+            assert state == ('start', ()), "Bad state"
+            stack = self.binding.run(stack)
+            stack = stack.push(('end', ()))
+            stack = stack.push(('result', ()))
+            return stack
+        return Locals.simple(self.binding.transform(locals)), run
+
+@dataclass
 class MoveIdx(MachineBuilder):
     idx : int
     
     @override
     def __call__(self, locals: Locals) -> tuple[dict[str, Locals], Machine]:
-        return Locals.simple(locals.move(self.idx)), lambda stack: stack.move(self.idx)
+        def run(stack: Stack) -> Stack:
+            stack, state = stack.pop()
+            assert state == ('start', ()), "Bad state"
+            stack = stack.move(self.idx)  # maybe wrong
+            stack = stack.push(('end', ()))
+            stack = stack.push(('result', ()))
+            return stack
+        return Locals.simple(locals.move(self.idx)), run
 
 @dataclass
 class Move(MachineBuilder):
@@ -395,12 +422,41 @@ class Move(MachineBuilder):
         return MoveIdx(index)(locals)
 
 @dataclass
+class CopyIdx(MachineBuilder):
+    idx : int
+    @override
+    def __call__(self, locals: Locals) -> tuple[dict[str, Locals], Machine]:
+        def run(stack: Stack) -> Stack:
+            stack, state = stack.pop()
+            assert state == ('start', ()), "Bad state"
+            stack = stack.copy(self.idx)
+            stack = stack.push(('end', ()))
+            stack = stack.push(('result', ()))
+            return stack
+        return Locals.simple(locals.push_unnamed()), run
+
+@dataclass
+class Copy(MachineBuilder):
+    name : str
+    @override
+    def __call__(self, locals: Locals) -> tuple[dict[str, Locals], Machine]:
+        index = locals.index(self.name)
+        return CopyIdx(index)(locals)
+
+@dataclass
 class Push(MachineBuilder):
     value : Value
 
     @override
     def __call__(self, locals: Locals) -> tuple[dict[str, Locals], Machine]:
-        return Locals.simple(locals.push_unnamed()), lambda stack: stack.push(self.value)
+        def run(stack: Stack) -> Stack:
+            stack, state = stack.pop()
+            assert state == ('start', ()), "Bad state"
+            stack = stack.push(self.value)
+            stack = stack.push(('end', ()))
+            stack = stack.push(('result', ()))
+            return stack
+        return Locals.simple(locals.push_unnamed()), run
 
 @dataclass
 class MakeTuple(MachineBuilder):
@@ -413,33 +469,113 @@ class MakeTuple(MachineBuilder):
         locals = locals.push_unnamed()
 
         def run(stack: Stack) -> Stack:
+            stack, state = stack.pop()
+            assert state == ('start', ()), "Bad state"
             values = []
             for _ in range(self.size):
                 stack, value = stack.pop()
                 values.append(value)
-            stack = stack.push(tuple(values))
+            stack = stack.push(tuple(reversed(values)))
+            stack = stack.push(('end', ()))
+            stack = stack.push(('result', ()))
             return stack
         return Locals.simple(locals), run
 
-simple_test = seqn([
-    tuple_binding(()),
+@dataclass
+class Call(MachineBuilder):
+    remote : Machine
+
+    @override
+    def __call__(self, locals: Locals) -> tuple[dict[str, Locals], Machine]:
+        def run_remote(stack: Stack) -> Stack:
+            stack = self.remote(stack)
+            stack, (action_tag, action_args) = stack.pop()
+            stack, inner_state = stack.pop()
+            if action_tag == 'result':
+                stack = stack.push(('end', ()))
+                stack = stack.push(('result', ()))
+                return stack
+            elif action_tag == 'other':
+                saved : list[Value] = []
+                stack, request = stack.pop()
+                for _ in range(len(locals.names) - 1):
+                    stack, value = stack.pop()
+                    saved.append(value)
+                stack = stack.push(request)
+                stack = stack.push(('paused', (tuple(saved), inner_state)))
+                stack = stack.push(('other', ()))
+                return stack
+            else:
+                assert False, "Bad action: "+str(action_tag)
+
+        def run(stack: Stack) -> Stack:
+            stack, (state_tag, state_args) = stack.pop()
+            if state_tag == 'start':
+                stack = stack.push(('start', ()))
+                return run_remote(stack)
+            elif state_tag == 'paused':
+                saved, inner_state = state_args
+                stack, response = stack.pop()
+                for value in reversed(saved):
+                    stack = stack.push(value)
+                stack = stack.push(response)
+                stack = stack.push(inner_state)
+                return run_remote(stack)
+            else:
+                assert False, "Bad state: "+str(state_tag)
+
+        return Locals.simple(locals), run
+
+def compile_function(builder : MachineBuilder) -> Machine:
+    locals = Locals(names=())
+    locals = locals.push_unnamed()
+    locals, machine = builder(locals)
+    assert locals['result'].names == (None,), "Expected "+str(locals['result'].names)+" to be "+str((None,))
+    return machine
+
+simple_test = compile_function(seqn([
+    Bind(tuple_binding(())),
     Push(1),
-    name_binding('x'),
+    Bind(name_binding('x')),
     Push(2),
-    name_binding('y'),
+    Bind(name_binding('y')),
+    Copy('x'),
     Move('x'),
     Move('y'),
-    MakeTuple(2),
-])
+    MakeTuple(3),
+]))
+
+@dataclass
+class OtherBuilder(MachineBuilder):
+    @override
+    def __call__(self, locals: Locals) -> tuple[dict[str, Locals], Machine]:
+        def run(stack: Stack) -> Stack:
+            stack, state = stack.pop()
+            if state == ('start', ()):
+                stack = stack.push(('awaiting', ()))
+                stack = stack.push(('other', ()))
+                return stack
+            elif state == ('awaiting', ()):
+                # The result is on the top of the stack.
+                stack = stack.push(('end', ()))
+                stack = stack.push(('result', ()))
+                return stack
+            else:
+                assert False, "Bad state"
+        return Locals.simple(locals), run
+
+Other = compile_function(OtherBuilder())
 
 # string_iter_equals_body = seqn([
-#     tuple_binding((
+#     Bind(tuple_binding((
 #         name_binding('str'),
 #         name_binding('offset'),
 #         name_binding('iter'),
-#     )),
-#     do(lambda str, offset, iter: ((str, 0), ('next', iter))),
-#     smuggle(other),
+#     ))),
+#     Push('next'),
+#     Move('iter'),
+#     MakeTuple(2),
+#     Call(other),
 #     do(lambda str_offset, iter_res: ((*str_offset, iter_res[0]), iter_res[1])),
 #     if_then_else(
 #         # If has next.
@@ -528,20 +664,44 @@ def assertTranscript(test : unittest.TestCase, machine : Machine, transcript : l
     stack = Stack(())
     state = ('start', ())
     while transcript:
-        (input, expected_output) = transcript.pop()
-        stack = stack.push((state, input))
+        (input, expected_output) = transcript.pop(0)
+        stack = stack.push(input)
+        stack = stack.push(state)
         stack = machine(stack)
-        stack, (state, actual_output) = stack.pop()
-        test.assertEqual(actual_output, expected_output)
+        stack, (action_tag, action_args) = stack.pop()
+        stack, state = stack.pop()
+        stack, actual_output = stack.pop()
+        test.assertEqual((action_tag, actual_output), expected_output)
 
 class TestSimple(unittest.TestCase):
     def test_simple(self):
-        transcript = [
-            ((), (1, 2)),
+        transcript : list[tuple[Value, Value]] = [
+            ((), ('result', (1, 1, 2))),
         ]
-        locals, machine = simple_test(Locals(names=(None,)))
-        assert locals['result'].names == (None,)
-        assertTranscript(self, autopass(machine), transcript)
+        assertTranscript(self, autopass(simple_test), transcript)
+
+    def test_other(self):
+        fn = compile_function(seqn([
+            Bind(tuple_binding(())),
+            Push(42),
+            Bind(name_binding('x')),
+            Push(55),
+            Bind(name_binding('y')),
+            Push('next'),
+            Push('iter'),
+            MakeTuple(2),
+            Call(Other),
+            Bind(name_binding('res')),
+            Move('x'),
+            Move('y'),
+            Move('res'),
+            MakeTuple(3),
+        ]))
+        transcript : list[tuple[Value, Value]] = [
+            ((), ('other', ('next', 'iter'))),
+            ('flarble', ('result', (42, 55, 'flarble'))),
+        ]
+        assertTranscript(self, autopass(fn), transcript)
 
 # class TestStringIterEquals(unittest.TestCase):
 #     def test_success(self):
