@@ -28,12 +28,15 @@ class Stack:
     def copy(self, idx: int) -> Self:
         return self.__class__((self.items[idx], ) + self.items)
 
+    def drop(self, idx: int) -> Self:
+        return self.__class__(self.items[:idx] + self.items[idx+1:])
+
     def __str__(self) -> str:
         return str(self.items)
 
 @dataclass
 class Locals:
-    names: tuple[str | None, ...]
+    names: tuple[str | None, ...] = ()
     unreachable: bool = False
 
     def push_named(self, name: str) -> Self:
@@ -81,20 +84,51 @@ class Locals:
         assert not self.unreachable, "Unreachable locals"
         return self.__class__((None, ) + self.names[:idx] + self.names[idx+1:])
 
+    def drop(self, idx: int) -> Self:
+        assert not self.unreachable, "Unreachable locals"
+        return self.__class__(self.names[:idx] + self.names[idx+1:])
+
 class Machine(Protocol):
     def __call__(self, stack: "Stack") -> "Stack": ...
 
 class MachineBuilder(Protocol):
     def __call__(self, locals: Locals) -> tuple[dict[str, Locals], Machine]: ...
 
+@dataclass
+class DropIdx(MachineBuilder):
+    idx : int
+
+    @override
+    def __call__(self, locals: Locals) -> tuple[dict[str, Locals], Machine]:
+        def run(stack: Stack) -> Stack:
+            stack, state = stack.pop()
+            assert state == ('start', ()), "Bad state: "+str(state)
+            stack = stack.drop(self.idx)
+            stack = stack.push(('end', ()))
+            stack = stack.push(('result', ()))
+            return stack
+        return Locals.simple(locals.drop(self.idx)), run
+
+@dataclass
+class Drop(MachineBuilder):
+    name : str
+
+    @override
+    def __call__(self, locals: Locals) -> tuple[dict[str, Locals], Machine]:
+        return DropIdx(locals.index(self.name))(locals)
 
 def transformer(f: Callable[[Value], Value]) -> MachineBuilder:
-    def compile(locals: Locals) -> tuple[Locals, Machine]:
+    def compile(locals: Locals) -> tuple[dict[str, Locals], Machine]:
         @wraps(f)
         def run(stack: Stack) -> Stack:
+            stack, state = stack.pop()
+            assert state == ('start', ()), "Bad state"
             stack, value = stack.pop()
-            return stack.push(f(value))
-        return locals.pop_unnamed().push_unnamed(), run
+            stack = stack.push(f(value))
+            stack = stack.push(('end', ()))
+            stack = stack.push(('result', ()))
+            return stack
+        return {'result': locals.pop_unnamed().push_unnamed(), 'return': Locals.make_unreachable()}, run
     return compile
     
 def smuggle(machine):
@@ -114,7 +148,6 @@ def smuggle(machine):
             else:
                 assert False, "Bad message"
     return impl
-
 
 
 # def bind(machine, handler):
@@ -142,6 +175,14 @@ def smuggle(machine):
 #             assert False, "Bad state"
 #     return impl
 
+@dataclass
+class ForLoop(MachineBuilder):
+    body : MachineBuilder
+
+    @override
+    def __call__(self, locals: Locals) -> tuple[dict[str, Locals], Machine]:
+
+        return self.machine(locals)
 def for_loop(machine):
     def impl(state, msg):
         state_tag, state_args = state
@@ -264,26 +305,59 @@ def other(state, msg):
     else:
         assert False, "Bad state"
 
-def if_then_else(then, els):
-    def impl(state, msg):
-        state_tag, state_args = state
-        if state_tag == 'start':
-            rest, cond = msg
-            if cond:
-                return ('call_then', ('start', ())), ('continue', rest)
+@dataclass
+class IfThenElse(MachineBuilder):
+    then : MachineBuilder
+    els : MachineBuilder
+
+    @override
+    def __call__(self, locals: Locals) -> tuple[dict[str, Locals], Machine]:
+        locals = locals.pop_unnamed()
+        then_locals, then_machine = self.then(locals)
+        els_locals, els_machine = self.els(locals)
+
+        print("then: "+str(self.then))
+        print("els: "+str(self.els))
+        result_locals = then_locals['result'].merge(els_locals['result'])
+        return_locals = then_locals['return'].merge(els_locals['return'])
+
+        def run_then(stack: Stack) -> Stack:
+            stack = then_machine(stack)
+            stack, action = stack.pop()
+            stack, inner_state = stack.pop()
+            stack = stack.push(('run_then', inner_state))
+            stack = stack.push(action)
+            return stack
+        
+        def run_els(stack: Stack) -> Stack:
+            stack = els_machine(stack)
+            stack, action = stack.pop()
+            stack, inner_state = stack.pop()
+            stack = stack.push(('run_else', inner_state))
+            stack = stack.push(action)
+            return stack
+
+        def run(stack: Stack) -> Stack:
+            stack, (state_tag, state_args) = stack.pop()
+            if state_tag == 'start':
+                stack, cond = stack.pop()
+                if cond:
+                    stack = stack.push(('start', ()))
+                    return run_then(stack)
+                else:
+                    stack = stack.push(('start', ()))
+                    return run_els(stack)
+            elif state_tag == 'run_then':
+                inner_state = state_args
+                stack = stack.push(inner_state)
+                return run_then(stack)
+            elif state_tag == 'run_else':
+                inner_state = state_args
+                stack = stack.push(inner_state)
+                return run_els(stack)
             else:
-                return ('call_els', ('start', ())), ('continue', rest)
-        elif state_tag == 'call_then':
-            inner_state = state_args
-            inner_state, inner_msg = then(inner_state, msg)
-            return ('call_then', inner_state), inner_msg
-        elif state_tag == 'call_els':
-            inner_state = state_args
-            inner_state, inner_msg = els(inner_state, msg)
-            return ('call_els', inner_state), inner_msg
-        else:
-            assert False, "Bad state: "+str(state_tag)
-    return impl
+                assert False, "Bad state: "+str(state_tag)
+        return {'result': result_locals, 'return': return_locals}, run
 
 
 
@@ -566,35 +640,175 @@ class OtherBuilder(MachineBuilder):
 
 Other = compile_function(OtherBuilder())
 
-# string_iter_equals_body = seqn([
-#     Bind(tuple_binding((
-#         name_binding('str'),
-#         name_binding('offset'),
-#         name_binding('iter'),
-#     ))),
-#     Push('next'),
-#     Move('iter'),
-#     MakeTuple(2),
-#     Call(other),
-#     do(lambda str_offset, iter_res: ((*str_offset, iter_res[0]), iter_res[1])),
-#     if_then_else(
-#         # If has next.
-#         seqn([
-#             do(lambda str, offset, iter: ((str, offset), ('iter_clone', iter))),
-#             smuggle(other),
-#             do(lambda str, offset, clone_res: (str, offset, *clone_res)),
-#             do(lambda str, offset, iter, char: ((str, offset, iter), str[offset] == char)),
-#             if_then_else(
-#                 # Chars equal.
-#                 do(lambda str, offset, iter: ('continue', (str, offset + 1, iter))),
-#                 # Chars not equal.
-#                 do(lambda str, offset, iter: ('break', False)),
-#             ),
-#         ]),
-#         # If no next.
-#         do(lambda str, offset, iter: ('break', False)),
-#     )
-# ])
+@dataclass
+class BreakBuilder(MachineBuilder):
+    @override
+    def __call__(self, locals: Locals) -> tuple[dict[str, Locals], Machine]:
+        def run(stack: Stack) -> Stack:
+            stack, state = stack.pop()
+            assert state == ('start', ()), "Bad state"
+            stack = stack.push(('end', ()))
+            stack = stack.push(('break', ()))
+            return stack
+        return {'break': locals, 'return': Locals.make_unreachable(), 'result': Locals.make_unreachable()}, run
+
+Break = BreakBuilder()
+
+@dataclass
+class LoopBuilder(MachineBuilder):
+    @override
+    def __call__(self, locals: Locals) -> tuple[dict[str, Locals], Machine]:
+        def run(stack: Stack) -> Stack:
+            stack, state = stack.pop()
+            assert state == ('start', ()), "Bad state"
+            stack = stack.push(('end', ()))
+            stack = stack.push(('loop', ()))
+            return stack
+        return {'loop': locals, 'return': Locals.make_unreachable(), 'result': Locals.make_unreachable()}, run
+
+Loop = LoopBuilder()
+
+@compile_function
+@transformer
+def string_char_at(value : Value) -> Value:
+    s:str
+    offset: int
+    s, offset = value  # pyright: ignore[reportAssignmentType, reportGeneralTypeIssues]
+    return s[offset]  # pyright: ignore[reportArgumentType]
+
+@compile_function
+@transformer
+def equals(value : Value) -> Value:
+    a, b = value  # pyright: ignore[reportGeneralTypeIssues]
+    return a == b
+
+@compile_function
+@transformer
+def str_len(value : Value) -> Value:
+    s:str
+    s = value  # pyright: ignore[reportAssignmentType, reportGeneralTypeIssues]
+    return len(s)
+
+
+@compile_function
+@transformer
+def bool_and(value : Value) -> Value:
+    a, b = value  # pyright: ignore[reportAssignmentType, reportGeneralTypeIssues]
+    return a and b
+
+@compile_function
+@transformer
+def bool_or(value : Value) -> Value:
+    a, b = value  # pyright: ignore[reportAssignmentType, reportGeneralTypeIssues]
+    return a or b
+
+
+@compile_function
+@transformer
+def bool_not(value : Value) -> Value:
+    a = value  # pyright: ignore[reportAssignmentType, reportGeneralTypeIssues]
+    return not a
+
+@compile_function
+@transformer
+def add(value : Value) -> Value:
+    a, b = value  # pyright: ignore[reportAssignmentType, reportGeneralTypeIssues]
+    return a + b # pyright: ignore[reportOperatorIssue]
+
+string_iter_equals_body = seqn([
+    Bind(tuple_binding((
+        name_binding('str'),
+        name_binding('offset'),
+        name_binding('iter'),
+    ))),
+    Push('next'),
+    Move('iter'),
+    MakeTuple(2),
+    Call(Other),
+    Bind(tuple_binding((
+        name_binding('iter'),
+        name_binding('iter_has_next'),
+    ))),
+    Copy('str'),
+    Call(str_len),
+    Copy('offset'),
+    MakeTuple(2),
+    Call(equals),
+    Bind(name_binding('str_done')),
+    Copy('str_done'),
+    Copy('iter_has_next'),
+    Call(bool_not),
+    MakeTuple(2),
+    Call(bool_and),
+    IfThenElse(
+        # Both are done.
+        seqn([
+            Drop('str_done'),
+            Drop('iter_has_next'),
+            Drop('str'),
+            Drop('offset'),
+            Drop('iter'),
+            Push(True),
+            Break,
+        ]),
+        seqn([
+            Move('str_done'),
+            Move('iter_has_next'),
+            Call(bool_not),
+            MakeTuple(2),
+            Call(bool_or),
+            IfThenElse(
+                # Only one is done.
+                seqn([
+                    Drop('str'),
+                    Drop('offset'),
+                    Drop('iter'),
+                    Push(False),
+                    Break,
+                ]),
+                # Both are not done.
+                seqn([
+                    Push('iter_clone'),
+                    Move('iter'),
+                    MakeTuple(2),
+                    Call(Other),
+                    Bind(tuple_binding((
+                        name_binding('iter'),
+                        name_binding('char'),
+                    ))),
+                    Copy('str'),
+                    Copy('offset'),
+                    MakeTuple(2),
+                    Call(string_char_at),
+                    Move('char'),
+                    MakeTuple(2),
+                    Call(equals),
+                    IfThenElse(
+                        # Chars equal.
+                        seqn([
+                            Move('str'),
+                            Move('offset'),
+                            Push(1),
+                            MakeTuple(2),
+                            Call(add),
+                            Move('iter'),
+                            MakeTuple(3),
+                            Loop,
+                        ]),
+                        # Chars not equal.
+                        seqn([
+                            Drop('str'),
+                            Drop('offset'),
+                            Drop('iter'),
+                            Push(False),
+                            Break,
+                        ]),
+                    )
+                ]),
+            )
+        ])
+    )
+])
 
 # string_iter_equals = seq(do(lambda str, iter: (str, 0, iter)), for_loop(string_iter_equals_body))
 
@@ -703,7 +917,28 @@ class TestSimple(unittest.TestCase):
         ]
         assertTranscript(self, autopass(fn), transcript)
 
-# class TestStringIterEquals(unittest.TestCase):
+class TestStringIterEquals(unittest.TestCase):
+    def test_loop_body(self):
+        transcript : list[tuple[Value, Value]] = [
+            (('foo', 0, 'iter'), ('other', ('next', 'iter'))),
+            (('iter', True), ('other', ('iter_clone', 'iter'))),
+            (('iter', 'f'), ('loop', ('foo', 1, 'iter'))),
+        ]
+
+        locals, machine = string_iter_equals_body(Locals().push_unnamed())
+        assertTranscript(self, autopass(machine), transcript)
+
+    def test_loop_body_break(self):
+        transcript  : list[tuple[Value, Value]]  = [
+            (('foo', 0, 'iter'), ('other', ('next', 'iter'))),
+            (('iter', True), ('other', ('iter_clone', 'iter'))),
+            (('iter', 'b'), ('break', False)),
+        ]
+       
+        locals, machine = string_iter_equals_body(Locals().push_unnamed())
+        assertTranscript(self, autopass(machine), transcript)
+
+
 #     def test_success(self):
 #         transcript = [
 #             (('foo', 'iter'), ('other', ('next', 'iter'))),
