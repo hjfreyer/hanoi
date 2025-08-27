@@ -4,13 +4,98 @@ Sample Python unittest module for experiment testing.
 This module demonstrates proper unittest structure and patterns.
 """
 
+from dataclasses import dataclass
+from functools import wraps
 import unittest
 import sys
-from typing import Tuple, Any, Optional
+from typing import Callable, Literal, Protocol, Tuple, Any, Optional, Self, override
+
+Value = str | int | float | bool | tuple['Value', ...]
+
+class Stack:
+    def __init__(self, items: tuple[Value, ...]):
+        self.items : tuple[Value, ...] = items
+
+    def push(self, item: Value) -> Self:
+        return self.__class__((item,) + self.items)
+    
+    def pop[T : Value](self) -> tuple[Self, T]:
+        return self.__class__(self.items[1:]), self.items[0] # pyright: ignore[reportReturnType]
+        
+    def move(self, idx: int) -> Self:
+        return self.__class__((self.items[idx], ) + self.items[:idx] + self.items[idx+1:])
+
+    def __str__(self) -> str:
+        return str(self.items)
+
+@dataclass
+class Locals:
+    names: tuple[str | None, ...]
+    unreachable: bool = False
+
+    def push_named(self, name: str) -> Self:
+        assert not self.unreachable, "Unreachable locals"
+        return self.__class__((name,) + self.names)
+    
+    def push_unnamed(self) -> Self:
+        assert not self.unreachable, "Unreachable locals"
+        return self.__class__((None,) + self.names)
+    
+    def pop_unnamed(self) -> Self:
+        assert not self.unreachable, "Unreachable locals"
+        assert self.names[0] is None, "Variable was named: "+self.names[0]
+        return self.__class__(self.names[1:])
+
+    @override
+    def __str__(self) -> str:
+        return str(self.names)
+
+    def compatible_with(self, other: Self) -> bool:
+        if self.unreachable or other.unreachable:
+            return True
+        return self.names == other.names
+
+    def merge(self, other: Self) -> Self:
+        assert self.compatible_with(other), "Must be compatible: "+str(self)+" != "+str(other)
+        if self.unreachable:
+            return other
+        return self
+
+    @staticmethod
+    def make_unreachable() -> "Locals":
+        return Locals(names=(), unreachable=True)
+
+    @staticmethod
+    def simple(locals : 'Locals') -> dict[str, 'Locals']:
+        return {'result':locals, 'return':Locals.make_unreachable()}
+
+    def index(self, name: str) -> int:
+        assert not self.unreachable, "Unreachable locals"
+        assert name in self.names, "Name not found: "+name
+        return self.names.index(name)
+
+    def move(self, idx: int) -> Self:
+        assert not self.unreachable, "Unreachable locals"
+        return self.__class__((None, ) + self.names[:idx] + self.names[idx+1:])
+
+class Machine(Protocol):
+    def __call__(self, stack: "Stack") -> "Stack": ...
+
+class MachineBuilder(Protocol):
+    def __call__(self, locals: Locals) -> tuple[dict[str, Locals], Machine]: ...
 
 
-
+def transformer(f: Callable[[Value], Value]) -> MachineBuilder:
+    def compile(locals: Locals) -> tuple[Locals, Machine]:
+        @wraps(f)
+        def run(stack: Stack) -> Stack:
+            stack, value = stack.pop()
+            return stack.push(f(value))
+        return locals.pop_unnamed().push_unnamed(), run
+    return compile
+    
 def smuggle(machine):
+    @wraps(machine)
     def impl(state, msg):
         state_tag, state_args = state
         if state_tag == 'start':
@@ -78,48 +163,73 @@ def for_loop(machine):
             assert False, "Bad state: "+str(state_tag)
     return impl
 
-def autopass(machine):
-    def impl(state, msg):
+def autopass(machine : Machine) -> Machine:
+    def impl(stack: Stack) -> Stack:
         while True:
-            state, (msg_tag, msg_args) = machine(state, msg)
+            stack = machine(stack)
+            stack, (state, (msg_tag, msg_args))= stack.pop()
             if msg_tag == 'continue':
-                msg = msg_args
+                stack = stack.push((state, msg_args))
                 continue
             else:
-                return state, (msg_tag, msg_args)
+                stack = stack.push((state, (msg_tag, msg_args)))
+                return stack
     return impl
 
-def seq(a, b):
-    def impl(state, msg):
-        state_tag, state_args = state
-        if state_tag == 'start':
-            return (('run_a', ('start', ())), ('continue', msg))
-        elif state_tag == 'run_a':
-            inner_state = state_args
-            inner_state, (inner_msg_tag, inner_msg_args) = a(inner_state, msg)
-            if inner_msg_tag == 'result':
-                return (('run_b', ('start', ())), ('continue', inner_msg_args))
-            elif inner_msg_tag == 'return':
-                return (('end', ()), ('result', inner_msg_args))
-            elif inner_msg_tag in ['continue', 'other']:
-                return (('run_a', inner_state), (inner_msg_tag, inner_msg_args))
+@dataclass
+class Compose(MachineBuilder):
+    a : MachineBuilder
+    b : MachineBuilder
+
+    @override
+    def __call__(self, locals: Locals) -> tuple[dict[str, Locals], Machine]:
+        a_locals, a_run = self.a(locals)
+        b_locals, b_run = self.b(a_locals['result'])
+
+        assert a_locals['return'].compatible_with(b_locals['return']), "A and B must have the same return: "+str(a_locals['return'])+" != "+str(b_locals['return'])
+
+        def run(stack: Stack) -> Stack:
+            stack, ((state_tag, state_args), msg) = stack.pop()
+            if state_tag == 'start':
+                return stack.push((('run_a', ('start', ())), ('continue', msg)))
+            elif state_tag == 'run_a':
+                inner_state = state_args
+                stack = stack.push((inner_state, msg))
+                stack = a_run(stack)
+                stack, (inner_state, (inner_msg_tag, inner_msg_args)) = stack.pop() # pyright: ignore[reportGeneralTypeIssues]
+                if inner_msg_tag == 'result':
+                    return stack.push((('run_b', ('start', ())), ('continue', inner_msg_args)))
+                elif inner_msg_tag == 'return':
+                    return stack.push((('end', ()), ('result', inner_msg_args)))
+                elif inner_msg_tag in ['continue', 'other']:
+                    return stack.push((('run_a', inner_state), (inner_msg_tag, inner_msg_args)))
+                else:
+                    assert False, "Bad message: "+str(inner_msg_tag)
+            elif state_tag == 'run_b':
+                inner_state = state_args
+                stack = stack.push((inner_state, msg))
+                stack = b_run(stack)
+                stack, (inner_state, inner_msg) = stack.pop() # pyright: ignore[reportGeneralTypeIssues]
+                return stack.push((('run_b', inner_state), inner_msg))
             else:
-                assert False, "Bad message: "+str(inner_msg_tag)
-        elif state_tag == 'run_b':
-            inner_state = state_args
-            inner_state, inner_msg = b(inner_state, msg)
-            return (('run_b', inner_state), inner_msg)
-        else:
-            assert False, "Bad state: "+str(state_tag)
-    return impl
+                assert False, "Bad state: "+str(state_tag)
 
-def seqn(machines):
-    result = machines.pop()
-    while machines:
-        result = seq(machines.pop(), result)
+        return b_locals, run
+
+
+def seqn(builders : list[MachineBuilder]) -> MachineBuilder:
+    result = builders.pop()
+    while builders:
+        result = Compose(builders.pop(), result)
     return result
 
 def do(fn):
+    def impl(state, msg):
+        assert state == ('start', ()), "Bad state"
+        return (('end', ()), ('result', fn(msg)))
+    return impl
+
+def dot(fn):
     def impl(state, msg):
         assert state == ('start', ()), "Bad state"
         return (('end', ()), ('result', fn(*msg)))
@@ -158,65 +268,210 @@ def if_then_else(then, els):
 
 
 
-def string_iter_equals_body(state, msg):
-    state_tag, state_args = state
-    if state_tag == 'start':
-        str, offset, iter = msg
-        return (0, (str, offset)), ('other', ('next', iter))
-    elif state_tag == 0:
-        str, offset = state_args
-        iter, has_next = msg
-        if len(str) == offset and not has_next:
-            return (('end', ()), ('break', True))
-        elif len(str) == offset or not has_next:
-            return (('end', ()), ('break', False))
-        else:
-            return ((1, (str, offset)), ('other', ('iter_clone', iter)))
-    elif state_tag == 1:
-        str, offset = state_args
-        iter, char = msg
-        if char == str[offset]:
-            return (('end', ()), ('continue', (str, offset + 1, iter)))
-        else:
-            return (('end', ()), ('break', False))
-    else:
-        assert False, "Bad state: "+str(state_tag)
+# def string_iter_equals_body(state, msg):
+#     state_tag, state_args = state
+#     if state_tag == 'start':
+#         str, offset, iter = msg
+#         return (0, (str, offset)), ('other', ('next', iter))
+#     elif state_tag == 0:
+#         str, offset = state_args
+#         iter, has_next = msg
+#         if len(str) == offset and not has_next:
+#             return (('end', ()), ('break', True))
+#         elif len(str) == offset or not has_next:
+#             return (('end', ()), ('break', False))
+#         else:
+#             return ((1, (str, offset)), ('other', ('iter_clone', iter)))
+#     elif state_tag == 1:
+#         str, offset = state_args
+#         iter, char = msg
+#         if char == str[offset]:
+#             return (('end', ()), ('continue', (str, offset + 1, iter)))
+#         else:
+#             return (('end', ()), ('break', False))
+#     else:
+#         assert False, "Bad state: "+str(state_tag)
 
-string_iter_equals_body = seqn([
-    do(lambda str, offset, iter: ((str, 0), ('next', iter))),
-    smuggle(other),
-    do(lambda str_offset, iter_res: ((*str_offset, iter_res[0]), iter_res[1])),
-    if_then_else(
-        # If has next.
-        seqn([
-            do(lambda str, offset, iter: ((str, offset), ('iter_clone', iter))),
-            smuggle(other),
-            do(lambda str, offset, clone_res: (str, offset, *clone_res)),
-            do(lambda str, offset, iter, char: ((str, offset, iter), str[offset] == char)),
-            if_then_else(
-                # Chars equal.
-                do(lambda str, offset, iter: ('continue', (str, offset + 1, iter))),
-                # Chars not equal.
-                do(lambda str, offset, iter: ('break', False)),
-            ),
-        ]),
-        # If no next.
-        do(lambda str, offset, iter: ('break', False)),
-    )
+
+@dataclass
+class NameBinding(MachineBuilder):
+    kind : Literal['name']
+    name: str
+
+    @override
+    def __call__(self, locals: Locals) -> tuple[dict[str, Locals], Machine]:
+        return Locals.simple(locals.pop_unnamed().push_named(self.name)), self.run
+
+    def transform(self, locals: Locals) -> Locals:
+        return locals.pop_unnamed().push_named(self.name)
+
+    def run(self, stack: Stack) -> Stack:
+        return stack
+
+    def test(self, value: Value) -> bool:
+        return True
+
+@dataclass
+class LiteralBinding(MachineBuilder):
+    kind : Literal['literal']
+    value : Value
+
+    @override
+    def __call__(self, locals: Locals) -> tuple[dict[str, Locals], Machine]:
+        return Locals.simple(self.transform(locals)), self.run
+
+    def transform(self, locals: Locals) -> Locals:
+        return locals.pop_unnamed()
+
+    def run(self, stack: Stack) -> Stack:
+        stack, value = stack.pop()
+        assert value == self.value, "Expected "+str(self.value)+", got "+str(value)
+        return stack
+
+    def test(self, value: Value) -> bool:
+        return value == self.value
+
+@dataclass
+class TupleBinding(MachineBuilder):
+    kind : Literal['tuple']
+    values : tuple['Binding', ...]
+
+    @override
+    def __call__(self, locals: Locals) -> tuple[dict[str, Locals], Machine]:
+        def run(stack: Stack) -> Stack:
+            stack, (state, msg) = stack.pop()
+        return Locals.simple(self.transform(locals)), self.run
+
+    def transform(self, locals: Locals) -> Locals:
+        locals = locals.pop_unnamed()
+        for binding in self.values:
+            locals = locals.push_unnamed()
+            locals = binding.transform(locals)
+        return locals
+
+    def run(self, stack: Stack) -> Stack:
+        stack, value = stack.pop()
+        assert isinstance(value, tuple), "Expected tuple, got "+str(value)
+        assert len(value) == len(self.values), "Expected "+str(len(self.values))+" values, got "+str(len(value))
+        for binding, value in zip(self.values, value):
+            stack = stack.push(value)
+            stack = binding.run(stack)
+        return stack
+
+    def test(self, value: Value) -> bool:
+        assert isinstance(value, tuple), "Expected tuple, got "+str(value)
+        assert len(value) == len(self.values), "Expected "+str(len(self.values))+" values, got "+str(len(value))
+        for binding, value in zip(self.values, value):
+            if not binding.test(value):
+                return False
+        return True
+
+def name_binding(name : str) -> NameBinding:
+    return NameBinding('name', name)
+
+def literal_binding(value : Value) -> LiteralBinding:
+    return LiteralBinding('literal', value)
+
+def tuple_binding(values : tuple['Binding', ...]) -> TupleBinding:
+    return TupleBinding('tuple', values)
+
+Binding = NameBinding | LiteralBinding | TupleBinding
+
+@dataclass
+class MoveIdx(MachineBuilder):
+    idx : int
+    
+    @override
+    def __call__(self, locals: Locals) -> tuple[dict[str, Locals], Machine]:
+        return Locals.simple(locals.move(self.idx)), lambda stack: stack.move(self.idx)
+
+@dataclass
+class Move(MachineBuilder):
+    name : str
+
+    @override
+    def __call__(self, locals: Locals) -> tuple[dict[str, Locals], Machine]:
+        index = locals.index(self.name)
+        return MoveIdx(index)(locals)
+
+@dataclass
+class Push(MachineBuilder):
+    value : Value
+
+    @override
+    def __call__(self, locals: Locals) -> tuple[dict[str, Locals], Machine]:
+        return Locals.simple(locals.push_unnamed()), lambda stack: stack.push(self.value)
+
+@dataclass
+class MakeTuple(MachineBuilder):
+    size : int
+
+    @override
+    def __call__(self, locals: Locals) -> tuple[dict[str, Locals], Machine]:
+        for _ in range(self.size):
+            locals = locals.pop_unnamed()
+        locals = locals.push_unnamed()
+
+        def run(stack: Stack) -> Stack:
+            values = []
+            for _ in range(self.size):
+                stack, value = stack.pop()
+                values.append(value)
+            stack = stack.push(tuple(values))
+            return stack
+        return Locals.simple(locals), run
+
+simple_test = seqn([
+    tuple_binding(()),
+    Push(1),
+    name_binding('x'),
+    Push(2),
+    name_binding('y'),
+    Move('x'),
+    Move('y'),
+    MakeTuple(2),
 ])
 
-string_iter_equals = seq(do(lambda str, iter: (str, 0, iter)), for_loop(string_iter_equals_body))
+# string_iter_equals_body = seqn([
+#     tuple_binding((
+#         name_binding('str'),
+#         name_binding('offset'),
+#         name_binding('iter'),
+#     )),
+#     do(lambda str, offset, iter: ((str, 0), ('next', iter))),
+#     smuggle(other),
+#     do(lambda str_offset, iter_res: ((*str_offset, iter_res[0]), iter_res[1])),
+#     if_then_else(
+#         # If has next.
+#         seqn([
+#             do(lambda str, offset, iter: ((str, offset), ('iter_clone', iter))),
+#             smuggle(other),
+#             do(lambda str, offset, clone_res: (str, offset, *clone_res)),
+#             do(lambda str, offset, iter, char: ((str, offset, iter), str[offset] == char)),
+#             if_then_else(
+#                 # Chars equal.
+#                 do(lambda str, offset, iter: ('continue', (str, offset + 1, iter))),
+#                 # Chars not equal.
+#                 do(lambda str, offset, iter: ('break', False)),
+#             ),
+#         ]),
+#         # If no next.
+#         do(lambda str, offset, iter: ('break', False)),
+#     )
+# ])
 
-@do
-def string_iter_next(str, offset):
-    if len(str) == offset:
-        return ('end', ()), ('result', False)
-    else:
-        return (str, offset + 1), ('result', True)
+# string_iter_equals = seq(do(lambda str, iter: (str, 0, iter)), for_loop(string_iter_equals_body))
 
-@do
-def string_iter_clone(str, offset):
-    return (str, offset), ('result', str[offset])   
+# @dot
+# def string_iter_next(str, offset):
+#     if len(str) == offset:
+#         return ('end', ()), ('result', False)
+#     else:
+#         return (str, offset + 1), ('result', True)
+
+# @dot
+# def string_iter_clone(str, offset):
+#     return (str, offset), ('result', str[offset])   
 
 # def string_iter_equals_inverse_handler(state, msg):
 #     state_tag, state_args = state
@@ -232,14 +487,14 @@ def string_iter_clone(str, offset):
 #         inner_state, (inner_msg_tag, inner_msg_args) = string_iter_equals(inner_state, inner_msg)
 
 
-string_iter_equals_inverse_handler = seq(
-    do(lambda tag, args: (tag == 'next', (tag, args))),
-    if_then_else(
+# string_iter_equals_inverse_handler = seq(
+#     do(lambda tag, args: (tag == 'next', (tag, args))),
+#     if_then_else(
         
-        do(lambda str, iter: (str, 0, iter)),
-        for_loop(string_iter_equals_body)
-    )
-)
+#         do(lambda str, iter: (str, 0, iter)),
+#         for_loop(string_iter_equals_body)
+#     )
+# )
 
 
 # def string_iter_equals_inverse(state, msg):
@@ -269,77 +524,94 @@ string_iter_equals_inverse_handler = seq(
 #     elif state_tag == 0:
 #         str, offset = state_args
 
-def assertTranscript(test, fn, transcript):
+def assertTranscript(test : unittest.TestCase, machine : Machine, transcript : list[tuple[Value, Value]]):
+    stack = Stack(())
     state = ('start', ())
     while transcript:
-        (input, expected_output) = transcript.pop(0)
-        state, actual_output = fn(state, input)
+        (input, expected_output) = transcript.pop()
+        stack = stack.push((state, input))
+        stack = machine(stack)
+        stack, (state, actual_output) = stack.pop()
         test.assertEqual(actual_output, expected_output)
 
-
-class TestStringIterEquals(unittest.TestCase):
-    def test_success(self):
+class TestSimple(unittest.TestCase):
+    def test_simple(self):
         transcript = [
-            (('foo', 'iter'), ('other', ('next', 'iter'))),
-            (('iter', True), ('other', ('iter_clone', 'iter'))),
-            (('iter', 'f'), ('other', ('next', 'iter'))),
-            (('iter', True), ('other', ('iter_clone', 'iter'))),
-            (('iter', 'o'), ('other', ('next', 'iter'))),
-            (('iter', True), ('other', ('iter_clone', 'iter'))),
-            (('iter', 'o'), ('other', ('next', 'iter'))),
-            (('iter', False), ('result', True))
+            ((), (1, 2)),
         ]
-        assertTranscript(self, autopass(string_iter_equals), transcript)
+        locals, machine = simple_test(Locals(names=(None,)))
+        assert locals['result'].names == (None,)
+        assertTranscript(self, autopass(machine), transcript)
+
+# class TestStringIterEquals(unittest.TestCase):
+#     def test_success(self):
+#         transcript = [
+#             (('foo', 'iter'), ('other', ('next', 'iter'))),
+#             (('iter', True), ('other', ('iter_clone', 'iter'))),
+#             (('iter', 'f'), ('other', ('next', 'iter'))),
+#             (('iter', True), ('other', ('iter_clone', 'iter'))),
+#             (('iter', 'o'), ('other', ('next', 'iter'))),
+#             (('iter', True), ('other', ('iter_clone', 'iter'))),
+#             (('iter', 'o'), ('other', ('next', 'iter'))),
+#             (('iter', False), ('result', True))
+#         ]
+#         assertTranscript(self, autopass(string_iter_equals), transcript)
         
-    def test_iter_shorter_than_string(self):
-        transcript = [
-            (('foo', 'iter'), ('other', ('next', 'iter'))),
-            (('iter', True), ('other', ('iter_clone', 'iter'))),
-            (('iter', 'f'), ('other', ('next', 'iter'))),
-            (('iter', True), ('other', ('iter_clone', 'iter'))),
-            (('iter', 'o'), ('other', ('next', 'iter'))),
-            (('iter', False), ('result', False))
-        ]
-        assertTranscript(self, autopass(string_iter_equals), transcript)
+#     def test_iter_shorter_than_string(self):
+#         transcript = [
+#             (('foo', 'iter'), ('other', ('next', 'iter'))),
+#             (('iter', True), ('other', ('iter_clone', 'iter'))),
+#             (('iter', 'f'), ('other', ('next', 'iter'))),
+#             (('iter', True), ('other', ('iter_clone', 'iter'))),
+#             (('iter', 'o'), ('other', ('next', 'iter'))),
+#             (('iter', False), ('result', False))
+#         ]
+#         assertTranscript(self, autopass(string_iter_equals), transcript)
 
-    def test_string_shorter_than_iter(self):
-        transcript = [
-            (('f', 'iter'), ('other', ('next', 'iter'))),
-            (('iter', True), ('other', ('iter_clone', 'iter'))),
-            (('iter', 'f'), ('other', ('next', 'iter'))),
-            (('iter', True), ('result', False))
-        ]
-        assertTranscript(self, autopass(string_iter_equals), transcript)
+#     def test_string_shorter_than_iter(self):
+#         transcript = [
+#             (('f', 'iter'), ('other', ('next', 'iter'))),
+#             (('iter', True), ('other', ('iter_clone', 'iter'))),
+#             (('iter', 'f'), ('other', ('next', 'iter'))),
+#             (('iter', True), ('result', False))
+#         ]
+#         assertTranscript(self, autopass(string_iter_equals), transcript)
 
-    def test_char_mismatch(self):
-        transcript = [
-            (('foo', 'iter'), ('other', ('next', 'iter'))),
-            (('iter', True), ('other', ('iter_clone', 'iter'))),
-            (('iter', 'f'), ('other', ('next', 'iter'))),
-            (('iter', True), ('other', ('iter_clone', 'iter'))),
-            (('iter', 'r'), ('result', False))
-        ]
-        assertTranscript(self, autopass(string_iter_equals), transcript)
+#     def test_char_mismatch(self):
+#         transcript = [
+#             (('foo', 'iter'), ('other', ('next', 'iter'))),
+#             (('iter', True), ('other', ('iter_clone', 'iter'))),
+#             (('iter', 'f'), ('other', ('next', 'iter'))),
+#             (('iter', True), ('other', ('iter_clone', 'iter'))),
+#             (('iter', 'r'), ('result', False))
+#         ]
+#         assertTranscript(self, autopass(string_iter_equals), transcript)
 
 
-def run_tests():
-    """Run all tests and return the test suite."""
-    # Create test suite
-    loader = unittest.TestLoader()
-    suite = unittest.TestSuite()
+# def run_tests():
+#     """Run all tests and return the test suite."""
+#     # Create test suite
+#     loader = unittest.TestLoader()
+#     suite = unittest.TestSuite()
     
-    # Add test cases to suite
-    suite.addTests(loader.loadTestsFromTestCase(TestStringIterEquals))
+#     # Add test cases to suite
+#     suite.addTests(loader.loadTestsFromTestCase(TestSimple))
+#     # suite.addTests(loader.loadTestsFromTestCase(TestStringIterEquals))
     
-    return suite
+#     return suite
 
 
+
+# if __name__ == '__main__':
+#     # Run tests with verbose output
+#     runner = unittest.TextTestRunner(verbosity=2)
+#     suite = run_tests()
+#     result = runner.run(suite)
+    
+#     # Exit with appropriate code
+#     sys.exit(not result.wasSuccessful())
 
 if __name__ == '__main__':
-    # Run tests with verbose output
-    runner = unittest.TextTestRunner(verbosity=2)
-    suite = run_tests()
-    result = runner.run(suite)
-    
-    # Exit with appropriate code
-    sys.exit(not result.wasSuccessful())
+    unittest.main()
+
+
