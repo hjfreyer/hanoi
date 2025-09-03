@@ -65,10 +65,13 @@ def str_iter_equals_body(state_tag: str, state_args: Any, msg: Any) -> Result:
     else:
         assert False, "Bad state: "+state_tag
 
+Machine = Callable[[str, Any, Any], Result]
+Handler = Callable[[Any, Any], Result]
+
 
 @dataclass
 class ForLoop:
-    body: Callable[[str, Any, Any], Result]
+    body: Machine
 
     def __call__(self, state_tag: str, state_args: Any, msg: Any) -> Result:
         def call_body(state_tag: str, state_args: Any, msg: Any) -> Result:
@@ -90,43 +93,63 @@ class ForLoop:
 
 
 @dataclass
-class Handler:
-    inner: Callable[[str, Any, Any], Result]
+class ImplHandler:
+    inner: Machine
 
     def __call__(self, state_tag: str, state_args: Any, msg: Any) -> Result:
+        def call_inner(state_tag:str, state_args:Any, msg:Any, caller_state_tag:str, caller_state_args:Any):
+            result = self.inner(state_tag, state_args, msg)
+            if result.action == 'continue':
+                return Result('continue', result.action_args, 'inner', (result.resume_state_tag, result.resume_state_args, caller_state_tag, caller_state_args))
+            elif result.action == 'result':
+                return Result('continue', result.action_args, 'inner', (result.resume_state_tag, result.resume_state_args, caller_state_tag, caller_state_args))
+
+        if state_tag == 'start':
+            caller_state = state_args
+            result = self.inner('start', (), msg)
+            return Result(result.action, result.action_args, 'and_then', (result.resume_state_tag, result.resume_state_args))
+        
         result = self.inner(state_tag, state_args, msg)
         if result.action == 'result':
             return Result('resume', result.action_args, result.resume_state_tag, result.resume_state_args)
         else:
             return result
 
+@dataclass
+class AndThen:
+    inner: Machine
+    def __call__(self, state_tag: str, state_args: Any, msg: Any) -> Result:
+        if state_tag == 'start':
+            result = self.inner('start', (), msg)
+            return Result(result.action, result.action_args, 'and_then', (result.resume_state_tag, result.resume_state_args))
+        elif state_tag == 'and_then':
+            inner_state_tag, inner_state_args = state_args
+            result = self.inner(inner_state_tag, inner_state_args, msg)
+            return Result(result.action, result.action_args, 'and_then', (result.resume_state_tag, result.resume_state_args))
+
 
 @dataclass
 class Bound:
-    inner: Callable[[str, Any, Any], Result]
-    handlers: dict[str, Callable[[str, Any, Any], Result]]
+    inner: Machine
+    handlers: dict[str, Machine]
 
     def __call__(self, state_tag: str, state_args: Any, msg: Any) -> Result:
-        def call_handler(handler_name: str, msg: Any, handler_state_tag: str, handler_state_args: Any, inner_state_tag: str, inner_state_args: Any) -> Result:
+        def call_handler(handler_name: str, msg: Any, handler_state_tag: str, handler_state_args: Any) -> Result:
+            print(handler_name, msg, handler_state_tag, handler_state_args)
             handler = self.handlers[handler_name]
-            handler_result = handler(
-                handler_state_tag, handler_state_args, msg)
-            if handler_result.action == 'resume':
-                return Result('continue', handler_result.action_args, 'inner', (inner_state_tag, inner_state_args))
-            else:
-                return Result(handler_result.action, handler_result.action_args, 'handler', (handler_name, handler_result.resume_state_tag, handler_result.resume_state_args, inner_state_tag, inner_state_args))
-
+            result = handler(handler_state_tag, handler_state_args, msg)
+            return Result(result.action, result.action_args, 'handler', (handler_name, result.resume_state_tag, result.resume_state_args))
         def call_inner(state_tag: str, state_args: Any, msg: Any) -> Result:
             inner_result = self.inner(state_tag, state_args, msg)
-            return call_handler(inner_result.action, inner_result.action_args, 'start', (), inner_result.resume_state_tag, inner_result.resume_state_args)
+            return call_handler(inner_result.action, inner_result.action_args, 'start', (inner_result.resume_state_tag, inner_result.resume_state_args))
         if state_tag == 'start':
             return call_inner('start', state_args, msg)
         elif state_tag == 'inner':
             inner_state_tag, inner_state_args = state_args
             return call_inner(inner_state_tag, inner_state_args, msg)
         elif state_tag == 'handler':
-            handler_name, handler_state_tag, handler_state_args, inner_state_tag, inner_state_args = state_args
-            return call_handler(handler_name, msg, handler_state_tag, handler_state_args, inner_state_tag, inner_state_args)
+            handler_name, handler_state_tag, handler_state_args = state_args
+            return call_handler(handler_name, msg, handler_state_tag, handler_state_args)
         else:
             assert False, "Bad state: "+state_tag
 
@@ -138,7 +161,7 @@ def str_iter_equals_preamble(state_tag: str, state_args: Any, msg: Any) -> Resul
 
 
 str_iter_equals = Bound(str_iter_equals_preamble, {
-    'result': ForLoop(str_iter_equals_body),
+    'result': AndThen(ForLoop(str_iter_equals_body)),
 })
 
 
@@ -148,14 +171,7 @@ def str_iter_equals_inverse_preamble(state_tag: str, state_args: Any, msg: Any) 
     return Result('result', (s, (s, -1)), 'end', None)
 
 
-string_iter_equals_inverse = Bound(str_iter_equals_inverse_preamble, {
-    'result': Bound(str_iter_equals, {
-        'iter_next': Handler(str_iter_next),
-        'iter_clone': Handler(str_iter_clone),
-    })})
-
-
-def transformer(f: Callable[[Any], Any]) -> Callable[[str, Any, Any], Result]:
+def transformer(f: Callable[[Any], Any]) -> Machine:
     @wraps(f)
     def run(state_tag: str, state_args: Any, msg: Any) -> Result:
         assert state_tag == 'start', "Bad state: "+state_tag
@@ -164,7 +180,7 @@ def transformer(f: Callable[[Any], Any]) -> Callable[[str, Any, Any], Result]:
     return run
 
 
-def single_state(f: Callable[[Any], tuple[str, Any]]) -> Callable[[str, Any, Any], Result]:
+def single_state(f: Callable[[Any], tuple[str, Any]]) -> Machine:
     @wraps(f)
     def run(state_tag: str, state_args: Any, msg: Any) -> Result:
         assert state_tag == 'start', "Bad state: "+state_tag
@@ -175,8 +191,8 @@ def single_state(f: Callable[[Any], tuple[str, Any]]) -> Callable[[str, Any, Any
 
 @dataclass
 class IfThenElse:
-    then: Callable[[str, Any, Any], Result]
-    els: Callable[[str, Any, Any], Result]
+    then: Machine
+    els: Machine
 
     def __call__(self, state_tag: str, state_args: Any, msg: Any) -> Result:
 
@@ -202,6 +218,89 @@ class IfThenElse:
             return call_els(inner_state_tag, inner_state_args, msg)
         else:
             assert False, "Bad state: "+state_tag
+
+
+@dataclass
+class PassThroughHandler:
+    handler_name: str
+
+    def __call__(self, state_tag: str, state_args: Any, msg: Any) -> Result:
+        if state_tag == 'start':
+            return Result(
+                self.handler_name,
+                msg,
+                'awaiting',
+                None
+            )
+        elif state_tag == 'awaiting':
+            return Result('resume', msg, 'end', None)
+        else:
+            assert False, "Bad state: "+state_tag
+
+
+@dataclass
+class OneWayHandler:
+    handler_name: str
+
+    def __call__(self, state_tag: str, state_args: Any, msg: Any) -> Result:
+        assert state_tag == 'start', "Bad state: "+state_tag
+        return Result(self.handler_name, msg, 'end', None)
+
+# f := Bound(g, {
+#        iter_next: RaiseWithCallback(h)
+#      }
+#  - f is called with "start"
+#    - f calls g with "start"
+#      - g raises "iter_next" (with g_state)
+#    - f becomes RaiseWithCallback(h) with g_state
+#    - RaiseWithCallback(h) raises "iter_next" (with "awaiting")
+#  - f is called with ("in iter_next", "awaiting") and iter_next_res
+#    - RaiseWithCallback(h) becomes h with "start" and iter_next_res
+
+
+
+# f := Bound(g, {
+#        iter_next: RaiseAndResume,
+#        result: OneWay(h)
+#      }
+#  - f is called with "start"
+#    - f calls g with "start"
+#      - g raises "iter_next" (with g_state)
+#    - f becomes RaiseAndResume with g_state
+#    - RaiseAndResume raises "iter_next" (with g_state)
+#  - f is called with ("in_iter_next", g_state) and iter_next_res
+#    - RaiseAndResume raises "continue" with ("inner", g_state) and iter_next_res
+#  - f is called with ("inner", g_state) and iter_next_res
+#    - f calls g with g_state and iter_next_res
+#      - g raises "result" with g_res
+#    - f becomes OneWay(h) with g_state and g_res
+#    - OneWay(h) calls h with "start" and g_res
+
+# f := Bound(g, {
+#        iter_next: ConcreteImpl,
+#        result: h
+#      }
+#  - f is called with "start"
+#    - f calls g with "start"
+#      - g raises "iter_next" (with g_state)
+#    - f calls ConcreteImpl
+#      - ConcreteImpl raises "result"
+#  - f is called with (f_state, g_state) and iter_next_res
+#    - f calls g with g_state and iter_next_res
+#      - g raises "result" with g_res
+#    - f becomes h with "start" and g_res
+
+string_iter_equals_inverse = Bound(str_iter_equals_inverse_preamble, {
+    'result': Bound(str_iter_equals, {
+        'iter_next': Impl(str_iter_next),
+        'iter_clone': AndThen(str_iter_clone),
+        'continue': PassThroughHandler('continue'),
+        'result': OneWayHandler('result')
+    })})
+
+@transformer
+def string_separated_values_new(iter: Any) -> Any:
+    return ('unstarted', iter)
 
 
 def string_separated_values_next(state_tag: str, state_args: Any, msg: Any) -> Result:
@@ -232,30 +331,10 @@ def string_separated_values_inner_next_preamble2(iter_and_bool: Any) -> tuple[st
         return ('result', (('unstarted', iter), False))
 
 
-@dataclass
-class PassThroughHandler:
-    handler_name: str
-
-    def __call__(self, state_tag: str, state_args: Any, msg: Any) -> Result:
-        if state_tag == 'start':
-            return Result(
-                self.handler_name,
-                msg,
-                'awaiting',
-                None
-            )
-        elif state_tag == 'awaiting':
-            return Result('resume', msg, 'end', None)
-        else:
-            assert False, "Bad state: "+state_tag
-
-
 string_separated_values_inner_next = Bound(
     string_separated_values_inner_next_preamble1,
     {
         'iter_next': PassThroughHandler('iter_next'),
-        # 'result':
-
     }
 )
 
@@ -265,8 +344,10 @@ def assertTranscript(test: unittest.TestCase, machine: Any, transcript: list[tup
     state_args = ()
     while transcript:
         (input, result_tag, result_args) = transcript.pop(0)
+        print(state_tag, state_args)
         result = machine(state_tag, state_args, input)
         while result.action == 'continue':
+            print(result)
             result = machine(result.resume_state_tag,
                              result.resume_state_args, result.action_args)
         test.assertEqual(result.action, result_tag)
@@ -340,6 +421,23 @@ class TestStringIterEquals(unittest.TestCase):
         ]
         assertTranscript(self, string_iter_equals_inverse, transcript)
 
+class TestStringSeparatedValues(unittest.TestCase):
+    def test_empty(self):
+        transcript: list[tuple[Any, str, Any]] = [
+            ('iter', 'result', ('unstarted', 'iter'))
+        ]
+        assertTranscript(self, string_separated_values_new, transcript)
+
+        transcript: list[tuple[Any, str, Any]] = [
+            (('unstarted', 'iter'), 'result', (('inner_unstarted', 'iter'), True))
+        ]
+        assertTranscript(self, string_separated_values_next, transcript)
+
+        transcript: list[tuple[Any, str, Any]] = [
+            (('inner_unstarted', 'iter'), 'iter_next', 'iter'),
+            (('iter', False), 'result', ('foo', False))
+        ]
+        assertTranscript(self, string_separated_values_inner_next, transcript)
 
 if __name__ == '__main__':
     unittest.main()
