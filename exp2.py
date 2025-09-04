@@ -11,18 +11,18 @@ class Result:
     resume_state: tuple[str, Any]
 
 
-def str_len(state_tag: str, state_args: Any, msg: Any) -> Result:
-    assert state_tag == 'start'
+def str_len(state: tuple[str, Any], msg: Any) -> Result:
+    assert state[0] == 'start'
     s = msg
     return Result('result', len(s), ('end', None))
 
 
-def str_iter_next(state_tag: str, state_args: Any, msg: Any) -> Result:
-    assert state_tag == 'start'
+def str_iter_next(state: tuple[str, Any], msg: Any) -> Result:
+    assert state[0] == 'start'
     s, offset = msg
     offset += 1
 
-    str_len_result = str_len('start', (), s)
+    str_len_result = str_len(('start', ()), s)
     assert str_len_result.action == 'result'
     strlen = str_len_result.action_args
 
@@ -32,18 +32,18 @@ def str_iter_next(state_tag: str, state_args: Any, msg: Any) -> Result:
         return Result('result', ((s, offset), True), ('end', None))
 
 
-def str_iter_clone(state_tag: str, state_args: Any, msg: Any) -> Result:
-    assert state_tag == 'start'
+def str_iter_clone(state: tuple[str, Any], msg: Any) -> Result:
+    assert state[0] == 'start'
     s, offset = msg
     return Result('result', (msg, s[offset]), ('end', None))
 
 
-def str_iter_equals_body(state_tag: str, state_args: Any, msg: Any) -> Result:
-    if state_tag == 'start':
+def str_iter_equals_body(state: tuple[str, Any], msg: Any) -> Result:
+    if state[0] == 'start':
         s, offset, iter = msg
         return Result('iter_next', iter, ('iter_next_cb', (s, offset)))
-    elif state_tag == 'iter_next_cb':
-        s, offset = state_args
+    elif state[0] == 'iter_next_cb':
+        s, offset = state[1]
         iter, iter_has_next = msg
         str_has_next = offset < len(s)
 
@@ -53,8 +53,8 @@ def str_iter_equals_body(state_tag: str, state_args: Any, msg: Any) -> Result:
             return Result('break', False, ('end', None))
         else:
             return Result('iter_clone', iter, ('iter_clone_cb', (s, offset)))
-    elif state_tag == 'iter_clone_cb':
-        s, offset = state_args
+    elif state[0] == 'iter_clone_cb':
+        s, offset = state[1]
         iter, iter_char = msg
         str_char = s[offset]
         if iter_char == str_char:
@@ -62,9 +62,9 @@ def str_iter_equals_body(state_tag: str, state_args: Any, msg: Any) -> Result:
         else:
             return Result('break', False, ('end', None))
     else:
-        assert False, "Bad state: "+state_tag
+        assert False, "Bad state: "+state[0]
 
-Machine = Callable[[str, Any, Any], Result]
+Machine = Callable[[tuple[str, Any], Any], Result]
 Handler = Callable[[Any, Any], Result]
 
 
@@ -72,9 +72,9 @@ Handler = Callable[[Any, Any], Result]
 class ForLoop:
     body: Machine
 
-    def __call__(self, state_tag: str, state_args: Any, msg: Any) -> Result:
-        def call_body(state_tag: str, state_args: Any, msg: Any) -> Result:
-            body_result = self.body(state_tag, state_args, msg)
+    def __call__(self, state: tuple[str, Any], msg: Any) -> Result:
+        def call_body(state: tuple[str, Any], msg: Any) -> Result:
+            body_result = self.body(state, msg)
             if body_result.action == 'next_loop':
                 return Result('continue', body_result.action_args, ('body', ('start', ())))
             elif body_result.action == 'break':
@@ -82,22 +82,22 @@ class ForLoop:
             else:
                 return Result(body_result.action, body_result.action_args, ('body', body_result.resume_state))
 
-        if state_tag == 'start':
-            return call_body('start', state_args, msg)
-        elif state_tag == 'body':
-            inner_state_tag, inner_state_args = state_args
-            return call_body(inner_state_tag, inner_state_args, msg)
+        if state[0] == 'start':
+            return call_body(('start', state[1]), msg)
+        elif state[0] == 'body':
+            inner_state_tag, inner_state_args = state[1]
+            return call_body((inner_state_tag, inner_state_args), msg)
         else:
-            assert False, "Bad state: "+state_tag
+            assert False, "Bad state: "+state[0]
 
 
 @dataclass
 class ImplHandler:
     inner: Machine
 
-    def __call__(self, state_tag: str, state_args: Any, msg: Any) -> Result:
-        handler_name, handler_state_args, caller_state = state_args
-        result = self.inner(state_tag, handler_state_args, msg)
+    def __call__(self, state: tuple[str, Any], msg: Any) -> Result:
+        handler_name, handler_state_args, caller_state = state[1]
+        result = self.inner((state[0], handler_state_args), msg)
         if result.action == 'result':
             return Result('continue', result.action_args, ('inner', caller_state))
         else:
@@ -108,16 +108,16 @@ class ImplHandler:
 class AndThen:
     inner: Machine
 
-    def __call__(self, state_tag: str, state_args: Any, msg: Any) -> Result:
-        handler_name, handler_state_args, caller_state = state_args
-        result = self.inner(state_tag, handler_state_args, msg)
+    def __call__(self, state: tuple[str, Any], msg: Any) -> Result:
+        handler_name, handler_state_args, caller_state = state[1]
+        result = self.inner((state[0], handler_state_args), msg)
         return Result(result.action, result.action_args, ('handler', (handler_name, result.resume_state, caller_state)))
 
 @dataclass
 class PassThroughHandler:
-    def __call__(self, state_tag: str, state_args: Any, msg: Any) -> Result:
-        assert state_tag == 'start', "Bad state: "+state_tag
-        handler_name, handler_state_args, caller_state = state_args
+    def __call__(self, state: tuple[str, Any], msg: Any) -> Result:
+        assert state[0] == 'start', "Bad state: "+state[0]
+        handler_name, handler_state_args, caller_state = state[1]
         return Result(handler_name, msg, ('inner', caller_state))
 
 
@@ -134,27 +134,27 @@ class Bound:
     inner: Machine
     handlers: dict[str, Machine]
 
-    def __call__(self, state_tag: str, state_args: Any, msg: Any) -> Result:
+    def __call__(self, state: tuple[str, Any], msg: Any) -> Result:
         def call_handler(handler_name: str, msg: Any, handler_state: tuple[str, Any], caller_state: tuple[str, Any]) -> Result:
             handler = self.handlers[handler_name]
-            return handler(handler_state[0], (handler_name, handler_state[1], caller_state), msg)
-        def call_inner(state_tag: str, state_args: Any, msg: Any) -> Result:
-            inner_result = self.inner(state_tag, state_args, msg)
+            return handler((handler_state[0], (handler_name, handler_state[1], caller_state)), msg)
+        def call_inner(state: tuple[str, Any], msg: Any) -> Result:
+            inner_result = self.inner(state, msg)
             return call_handler(inner_result.action, inner_result.action_args, ('start', ()), inner_result.resume_state)
-        if state_tag == 'start':
-            return call_inner('start', state_args, msg)
-        elif state_tag == 'inner':
-            inner_state_tag, inner_state_args = state_args
-            return call_inner(inner_state_tag, inner_state_args, msg)
-        elif state_tag == 'handler':
-            handler_name, handler_state, caller_state = state_args
+        if state[0] == 'start':
+            return call_inner(('start', state[1]), msg)
+        elif state[0] == 'inner':
+            inner_state_tag, inner_state_args = state[1]
+            return call_inner((inner_state_tag, inner_state_args), msg)
+        elif state[0] == 'handler':
+            handler_name, handler_state, caller_state = state[1]
             return call_handler(handler_name, msg, handler_state, caller_state)
         else:
-            assert False, "Bad state: "+state_tag
+            assert False, "Bad state: "+state[0]
 
 
-def str_iter_equals_preamble(state_tag: str, state_args: Any, msg: Any) -> Result:
-    assert state_tag == 'start', "Bad state: "+state_tag
+def str_iter_equals_preamble(state: tuple[str, Any], msg: Any) -> Result:
+    assert state[0] == 'start', "Bad state: "+state[0]
     s, iter = msg
     return Result('result', (s, 0, iter), ('end', None))
 
@@ -164,16 +164,16 @@ str_iter_equals = Bound(str_iter_equals_preamble, {
 })
 
 
-def str_iter_equals_inverse_preamble(state_tag: str, state_args: Any, msg: Any) -> Result:
-    assert state_tag == 'start', "Bad state: "+state_tag
+def str_iter_equals_inverse_preamble(state: tuple[str, Any], msg: Any) -> Result:
+    assert state[0] == 'start', "Bad state: "+state[0]
     s = msg
     return Result('result', (s, (s, -1)), ('end', None))
 
 
 def transformer(f: Callable[[Any], Any]) -> Machine:
     @wraps(f)
-    def run(state_tag: str, state_args: Any, msg: Any) -> Result:
-        assert state_tag == 'start', "Bad state: "+state_tag
+    def run(state: tuple[str, Any], msg: Any) -> Result:
+        assert state[0] == 'start', "Bad state: "+state[0]
         value = msg
         return Result('result', f(value), ('end', None))
     return run
@@ -181,8 +181,8 @@ def transformer(f: Callable[[Any], Any]) -> Machine:
 
 def single_state(f: Callable[[Any], tuple[str, Any]]) -> Machine:
     @wraps(f)
-    def run(state_tag: str, state_args: Any, msg: Any) -> Result:
-        assert state_tag == 'start', "Bad state: "+state_tag
+    def run(state: tuple[str, Any], msg: Any) -> Result:
+        assert state[0] == 'start', "Bad state: "+state[0]
         action, action_args = f(msg)
         return Result(action, action_args, ('end', None))
     return run
@@ -193,30 +193,30 @@ class IfThenElse:
     then: Machine
     els: Machine
 
-    def __call__(self, state_tag: str, state_args: Any, msg: Any) -> Result:
+    def __call__(self, state: tuple[str, Any], msg: Any) -> Result:
 
-        def call_then(state_tag: str, state_args: Any, msg: Any) -> Result:
-            result = self.then(state_tag, state_args, msg)
+        def call_then(state: tuple[str, Any], msg: Any) -> Result:
+            result = self.then(state, msg)
             return Result(result.action, result.action_args, ('then', result.resume_state))
 
-        def call_els(state_tag: str, state_args: Any, msg: Any) -> Result:
-            result = self.els(state_tag, state_args, msg)
+        def call_els(state: tuple[str, Any], msg: Any) -> Result:
+            result = self.els(state, msg)
             return Result(result.action, result.action_args, ('else', result.resume_state))
 
-        if state_tag == 'start':
+        if state[0] == 'start':
             (smuggled, cond) = msg
             if cond:
-                return call_then('start', state_args, smuggled)
+                return call_then(('start', state[1]), smuggled)
             else:
-                return call_els('start', state_args, smuggled)
-        elif state_tag == 'then':
-            inner_state_tag, inner_state_args = state_args
-            return call_then(inner_state_tag, inner_state_args, msg)
-        elif state_tag == 'else':
-            inner_state_tag, inner_state_args = state_args
-            return call_els(inner_state_tag, inner_state_args, msg)
+                return call_els(('start', state[1]), smuggled)
+        elif state[0] == 'then':
+            inner_state_tag, inner_state_args = state[1]
+            return call_then((inner_state_tag, inner_state_args), msg)
+        elif state[0] == 'else':
+            inner_state_tag, inner_state_args = state[1]
+            return call_els((inner_state_tag, inner_state_args), msg)
         else:
-            assert False, "Bad state: "+state_tag
+            assert False, "Bad state: "+state[0]
 
 # f := Bound(g, {
 #        iter_next: RaiseWithCallback(h)
@@ -275,8 +275,8 @@ def string_separated_values_new(iter: Any) -> Any:
     return ('unstarted', iter)
 
 
-def string_separated_values_next(state_tag: str, state_args: Any, msg: Any) -> Result:
-    assert state_tag == 'start', "Bad state: "+state_tag
+def string_separated_values_next(state: tuple[str, Any], msg: Any) -> Result:
+    assert state[0] == 'start', "Bad state: "+state[0]
     iter_state, iter_args = msg
     if iter_state == 'unstarted':
         inner_iter = iter_args
@@ -312,17 +312,15 @@ string_separated_values_inner_next = Bound(
 
 
 def assertTranscript(test: unittest.TestCase, machine: Any, transcript: list[tuple[Any, str, Any]]):
-    state_tag = 'start'
-    state_args = ()
+    state = ('start', ())
     while transcript:
         (input, result_tag, result_args) = transcript.pop(0)
-        result = machine(state_tag, state_args, input)
+        result = machine(state, input)
         while result.action == 'continue':
-            result = machine(result.resume_state[0], result.resume_state[1], result.action_args)
+            result = machine(result.resume_state, result.action_args)
         test.assertEqual(result.action, result_tag)
         test.assertEqual(result.action_args, result_args)
-        state_tag = result.resume_state[0]
-        state_args = result.resume_state[1]
+        state = result.resume_state
 
 
 class TestStringIter(unittest.TestCase):
