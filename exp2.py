@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from functools import wraps
-from typing import Any, Callable
+from typing import Any, Callable, Literal, Protocol
 import unittest
 
 
@@ -17,8 +17,25 @@ def str_len(state: tuple[str, Any], msg: Any) -> Result:
     return Result('result', len(s), ('end', None))
 
 
-def str_iter_next(state: tuple[str, Any], msg: Any) -> Result:
-    assert state[0] == 'start'
+
+def str_iter(state: tuple[str, Any], msg: Any) -> Result:
+    if state[0] == 'start':
+        s = msg
+        return Result('result', (), ('ready', (s, -1)))
+    elif state[0] == 'ready':
+        iter = state[1]
+        if msg[0] == 'next':
+            return str_iter_next(iter)
+        elif msg[0] == 'clone':
+            return str_iter_clone(iter)
+        else:
+            assert False, "Bad msg: "+str(msg)
+    else:
+        assert False, "Bad state: "+str(state)
+
+
+
+def str_iter_next(msg: Any) -> Result:
     s, offset = msg
     offset += 1
 
@@ -27,15 +44,14 @@ def str_iter_next(state: tuple[str, Any], msg: Any) -> Result:
     strlen = str_len_result.action_args
 
     if offset == strlen:
-        return Result('result', ((s, offset), False), ('end', None))
+        return Result('result', False, ('ready', (s, offset)))
     else:
-        return Result('result', ((s, offset), True), ('end', None))
+        return Result('result', True, ('ready', (s, offset)))
 
 
-def str_iter_clone(state: tuple[str, Any], msg: Any) -> Result:
-    assert state[0] == 'start'
+def str_iter_clone(msg: Any) -> Result:
     s, offset = msg
-    return Result('result', (msg, s[offset]), ('end', None))
+    return Result('result', (msg, s[offset]), ('ready', (s, offset + 1)))
 
 
 def str_iter_equals_body(state: tuple[str, Any], msg: Any) -> Result:
@@ -65,7 +81,6 @@ def str_iter_equals_body(state: tuple[str, Any], msg: Any) -> Result:
         assert False, "Bad state: "+state[0]
 
 Machine = Callable[[tuple[str, Any], Any], Result]
-Handler = Callable[[Any, Any], Result]
 
 
 @dataclass
@@ -90,35 +105,55 @@ class ForLoop:
         else:
             assert False, "Bad state: "+state[0]
 
+@dataclass
+class HandlerResume:
+    kind: Literal['resume']
+    handler_state: tuple[str, Any]
+    msg: Any
+
+@dataclass
+class HandlerContinue:
+    kind: Literal['continue']
+    action: str
+    msg: Any
+    handler_state: tuple[str, Any]
+
+
+class Handler(Protocol):
+    def handle(self, handler_name: str, handler_state: tuple[str, Any], msg: Any) -> HandlerResume | HandlerContinue:
+        ...
+
+
 
 @dataclass
 class ImplHandler:
     inner: Machine
 
-    def __call__(self, state: tuple[str, Any], msg: Any) -> Result:
-        handler_name, handler_state_args, caller_state = state[1]
-        result = self.inner((state[0], handler_state_args), msg)
+    def handle(self, handler_name: str, handler_state: tuple[str, Any], msg: Any) -> HandlerResume | HandlerContinue:
+        result = self.inner(handler_state, msg)
         if result.action == 'result':
-            return Result('continue', result.action_args, ('inner', caller_state))
+            return HandlerResume('resume', result.resume_state, result.action_args)
         else:
-            return Result(result.action, result.action_args, ('handler', (handler_name, result.resume_state, caller_state)))
+            return HandlerContinue('continue', result.action, result.action_args, result.resume_state)
 
 
 @dataclass
 class AndThen:
     inner: Machine
 
-    def __call__(self, state: tuple[str, Any], msg: Any) -> Result:
-        handler_name, handler_state_args, caller_state = state[1]
-        result = self.inner((state[0], handler_state_args), msg)
-        return Result(result.action, result.action_args, ('handler', (handler_name, result.resume_state, caller_state)))
+    def handle(self, handler_name: str, handler_state: tuple[str, Any], msg: Any) -> HandlerResume | HandlerContinue:
+        result = self.inner(handler_state, msg)
+        return HandlerContinue('continue', result.action, result.action_args, result.resume_state)
 
 @dataclass
 class PassThroughHandler:
-    def __call__(self, state: tuple[str, Any], msg: Any) -> Result:
-        assert state[0] == 'start', "Bad state: "+state[0]
-        handler_name, handler_state_args, caller_state = state[1]
-        return Result(handler_name, msg, ('inner', caller_state))
+    def handle(self, handler_name: str, handler_state: tuple[str, Any], msg: Any) -> HandlerResume | HandlerContinue:
+        if handler_state[0] == 'start':
+            return HandlerContinue('continue', handler_name, msg, ('awaiting', None))
+        elif handler_state[0] == 'awaiting':
+            return HandlerResume('resume', ('start', ()), msg)
+        else:
+            assert False, "Bad state: "+handler_state[0]
 
 
 # @dataclass
@@ -132,23 +167,31 @@ class PassThroughHandler:
 @dataclass
 class Bound:
     inner: Machine
-    handlers: dict[str, Machine]
+    handlers: dict[str, Handler]
 
     def __call__(self, state: tuple[str, Any], msg: Any) -> Result:
-        def call_handler(handler_name: str, msg: Any, handler_state: tuple[str, Any], caller_state: tuple[str, Any]) -> Result:
+        def call_handler(handler_name: str, msg: Any, inner_state: tuple[str, Any], handler_states: dict[str, tuple[str, Any]]) -> Result:
             handler = self.handlers[handler_name]
-            return handler((handler_state[0], (handler_name, handler_state[1], caller_state)), msg)
-        def call_inner(state: tuple[str, Any], msg: Any) -> Result:
-            inner_result = self.inner(state, msg)
-            return call_handler(inner_result.action, inner_result.action_args, ('start', ()), inner_result.resume_state)
+            handler_state = handler_states[handler_name]
+            handler_result = handler.handle(handler_name, handler_state, msg)
+            handler_states |= {handler_name: handler_result.handler_state}
+            if handler_result.kind == 'resume':
+                return Result('continue', handler_result.msg, ('inner', (inner_state, handler_states)))
+            elif handler_result.kind == 'continue':
+                return Result(handler_result.action, handler_result.msg, ('handler', (handler_name, inner_state, handler_states)))
+            else:
+                assert False, "Bad handler result: "+str(handler_result)
+        def call_inner(inner_state: tuple[str, Any], msg: Any, handler_states: dict[str, tuple[str, Any]]) -> Result:
+            inner_result = self.inner(inner_state, msg)
+            return call_handler(inner_result.action, inner_result.action_args, inner_result.resume_state, handler_states)
         if state[0] == 'start':
-            return call_inner(('start', state[1]), msg)
+            return call_inner(('start', state[1]), msg, {k: ('start', ()) for k in self.handlers})
         elif state[0] == 'inner':
-            inner_state_tag, inner_state_args = state[1]
-            return call_inner((inner_state_tag, inner_state_args), msg)
+            inner_state, handler_states = state[1]
+            return call_inner(inner_state, msg, handler_states)
         elif state[0] == 'handler':
-            handler_name, handler_state, caller_state = state[1]
-            return call_handler(handler_name, msg, handler_state, caller_state)
+            handler_name, inner_state, handler_states = state[1]
+            return call_handler(handler_name, msg, inner_state, handler_states)
         else:
             assert False, "Bad state: "+state[0]
 
@@ -310,6 +353,44 @@ string_separated_values_inner_next = Bound(
     }
 )
 
+def emit_twice(state: tuple[str, Any], msg: Any) -> Result:
+    if state[0] == 'start':
+        return Result('get_items', None, ('await_items', msg))
+    elif state[0] == 'await_items':
+        prev_msg = state[1]
+        return Result('continue', prev_msg, ('at', (-1, msg)))
+    elif state[0] == 'at':
+        at, items = state[1]
+        if msg[0] == 'next':
+            at += 1
+            return Result('result', at < 2, ('at', (at, items)))
+        elif msg[0] == 'clone':
+            return Result('result', items[at], state)
+        else:
+            assert False, "Bad msg: "+str(msg)
+    else:
+        assert False, "Bad state: "+str(state)
+
+def result_second(state: tuple[str, Any], msg: Any) -> Result:
+    if state[0] == 'start':
+        return Result('iter', ('next', None), ('wait1', None))
+    elif state[0] == 'wait1':
+        return Result('iter', ('next', None), ('wait2', None))
+    elif state[0] == 'wait2':
+        return Result('iter', ('clone', None), ('wait3', None))
+    elif state[0] == 'wait3':
+        return Result('result', msg, ('end', None))
+    else:
+        assert False, "Bad state: "+str(state)
+
+twice_test = Bound(result_second, {
+    'iter': ImplHandler(Bound(emit_twice, {
+        'get_items': ImplHandler(transformer(lambda x: ("foo", "bar"))),
+        'continue': PassThroughHandler(),
+        'result': PassThroughHandler(),
+    })),
+    'result': PassThroughHandler(),
+})
 
 def assertTranscript(test: unittest.TestCase, machine: Any, transcript: list[tuple[Any, str, Any]]):
     state = ('start', ())
@@ -323,12 +404,41 @@ def assertTranscript(test: unittest.TestCase, machine: Any, transcript: list[tup
         state = result.resume_state
 
 
+class TestMisc(unittest.TestCase):
+
+    def test_emit_twice(self):
+        transcript: list[tuple[Any, str, Any]] = [
+            (('next', None), 'get_items', None),
+            (('foo', 'bar'), 'result', True),
+            (('clone', None), 'result', 'foo'),
+            (('next', None), 'result', True),
+            (('clone', None), 'result', 'bar'),
+            (('next', None), 'result', False),
+        ]
+        assertTranscript(self, emit_twice, transcript)
+
+    def test_result_second(self):
+        transcript: list[tuple[Any, str, Any]] = [
+            (None, 'iter', ('next', None)),
+            (True, 'iter', ('next', None)),
+            (True, 'iter', ('clone', None)),
+            ('foo', 'result', 'foo'),
+        ]
+        assertTranscript(self, result_second, transcript)
+
+    def test_twice(self):
+        transcript: list[tuple[Any, str, Any]] = [
+            (None, 'result', 'bar'),
+        ]
+        assertTranscript(self, twice_test, transcript)
+
 class TestStringIter(unittest.TestCase):
     def test_next(self):
         transcript: list[tuple[Any, str, Any]] = [
-            (('foo', -1), 'result', (('foo', 0), True)),
+            ('foo', 'result', ()),
+            (('next', ()), 'result', True),
         ]
-        assertTranscript(self, str_iter_next, transcript)
+        assertTranscript(self, str_iter, transcript)
 
     def test_clone(self):
         transcript: list[tuple[Any, str, Any]] = [
