@@ -6,9 +6,7 @@ import typeguard
 
 from exp2 import *
 
-StrIterState = (
-    tuple[Literal["start"], tuple[()]] | tuple[Literal["ready"], tuple[str, int]]
-)
+StrIterState = tuple[Literal["start"]] | tuple[Literal["ready"], tuple[str, int]]
 
 
 @typeguard.typechecked
@@ -42,7 +40,7 @@ def str_iter_clone(s: str, offset: int) -> Result:
 def str_iter_equals_body(state: tuple[str, Any], msg: Any) -> Result:
     if state[0] == "start":
         s, offset = msg
-        return Result("iter", ("next", None), ("iter_next_cb", (s, offset)))
+        return Result("iter", ("next",), ("iter_next_cb", (s, offset)))
     elif state[0] == "iter_next_cb":
         s, offset = state[1]
         iter_has_next = msg
@@ -53,7 +51,7 @@ def str_iter_equals_body(state: tuple[str, Any], msg: Any) -> Result:
         elif not iter_has_next or not str_has_next:
             return Result("break", False, ("end", None))
         else:
-            return Result("iter", ("clone", None), ("iter_clone_cb", (s, offset)))
+            return Result("iter", ("clone",), ("iter_clone_cb", (s, offset)))
     elif state[0] == "iter_clone_cb":
         s, offset = state[1]
         iter_char = msg
@@ -81,7 +79,7 @@ str_iter_equals = Bound(
 
 
 def str_iter_equals_inverse_preamble(
-    state: tuple[Literal["start"], tuple[()]] | tuple[Literal["await_init"], str],
+    state: tuple[Literal["start"]] | tuple[Literal["await_init"], str],
     msg: Any,
 ) -> Result:
     if state[0] == "start":
@@ -180,11 +178,11 @@ def emit_twice(state: tuple[str, Any], msg: Any) -> Result:
 
 def result_second(state: tuple[str, Any], msg: Any) -> Result:
     if state[0] == "start":
-        return Result("iter", ("next", None), ("wait1", None))
+        return Result("iter", ("next",), ("wait1", None))
     elif state[0] == "wait1":
-        return Result("iter", ("next", None), ("wait2", None))
+        return Result("iter", ("next",), ("wait2", None))
     elif state[0] == "wait2":
-        return Result("iter", ("clone", None), ("wait3", None))
+        return Result("iter", ("clone",), ("wait3", None))
     elif state[0] == "wait3":
         return Result("result", msg, ("end", None))
     else:
@@ -212,7 +210,7 @@ twice_test = Bound(
 def assertTranscript(
     test: unittest.TestCase, machine: Any, transcript: list[tuple[Any, str, Any]]
 ):
-    state = ("start", ())
+    state = ("start",)
     while transcript:
         (input, result_tag, result_args) = transcript.pop(0)
         result = machine(state, input)
@@ -228,20 +226,20 @@ class TestMisc(unittest.TestCase):
 
     def test_emit_twice(self):
         transcript: list[tuple[Any, str, Any]] = [
-            (("next", None), "get_items", None),
+            (("next",), "get_items", None),
             (("foo", "bar"), "result", True),
-            (("clone", None), "result", "foo"),
-            (("next", None), "result", True),
-            (("clone", None), "result", "bar"),
-            (("next", None), "result", False),
+            (("clone",), "result", "foo"),
+            (("next",), "result", True),
+            (("clone",), "result", "bar"),
+            (("next",), "result", False),
         ]
         assertTranscript(self, emit_twice, transcript)
 
     def test_result_second(self):
         transcript: list[tuple[Any, str, Any]] = [
-            (None, "iter", ("next", None)),
-            (True, "iter", ("next", None)),
-            (True, "iter", ("clone", None)),
+            (None, "iter", ("next",)),
+            (True, "iter", ("next",)),
+            (True, "iter", ("clone",)),
             ("foo", "result", "foo"),
         ]
         assertTranscript(self, result_second, transcript)
@@ -257,15 +255,15 @@ class TestStringIter(unittest.TestCase):
     def test_next(self):
         transcript: list[tuple[Any, str, Any]] = [
             ("foo", "result", ()),
-            (("next", ()), "result", True),
+            (("next",), "result", True),
         ]
         assertTranscript(self, str_iter, transcript)
 
     def test_clone(self):
         transcript: list[tuple[Any, str, Any]] = [
             ("foo", "result", ()),
-            (("next", ()), "result", True),
-            (("clone", ()), "result", "f"),
+            (("next",), "result", True),
+            (("clone",), "result", "f"),
         ]
         assertTranscript(self, str_iter, transcript)
 
@@ -274,43 +272,43 @@ class TestStringIterEquals(unittest.TestCase):
 
     def test_success(self):
         transcript: list[tuple[Any, str, Any]] = [
-            ("foo", "iter", ("next", None)),
-            (True, "iter", ("clone", None)),
-            ("f", "iter", ("next", None)),
-            (True, "iter", ("clone", None)),
-            ("o", "iter", ("next", None)),
-            (True, "iter", ("clone", None)),
-            ("o", "iter", ("next", None)),
+            ("foo", "iter", ("next",)),
+            (True, "iter", ("clone",)),
+            ("f", "iter", ("next",)),
+            (True, "iter", ("clone",)),
+            ("o", "iter", ("next",)),
+            (True, "iter", ("clone",)),
+            ("o", "iter", ("next",)),
             (False, "result", True),
         ]
         assertTranscript(self, str_iter_equals, transcript)
 
     def test_iter_shorter_than_string(self):
         transcript: list[tuple[Any, str, Any]] = [
-            ("foo", "iter", ("next", None)),
-            (True, "iter", ("clone", None)),
-            ("f", "iter", ("next", None)),
-            (True, "iter", ("clone", None)),
-            ("o", "iter", ("next", None)),
+            ("foo", "iter", ("next",)),
+            (True, "iter", ("clone",)),
+            ("f", "iter", ("next",)),
+            (True, "iter", ("clone",)),
+            ("o", "iter", ("next",)),
             (False, "result", False),
         ]
         assertTranscript(self, str_iter_equals, transcript)
 
     def test_string_shorter_than_iter(self):
         transcript: list[tuple[Any, str, Any]] = [
-            ("f", "iter", ("next", None)),
-            (True, "iter", ("clone", None)),
-            ("f", "iter", ("next", None)),
+            ("f", "iter", ("next",)),
+            (True, "iter", ("clone",)),
+            ("f", "iter", ("next",)),
             (True, "result", False),
         ]
         assertTranscript(self, str_iter_equals, transcript)
 
     def test_char_mismatch(self):
         transcript: list[tuple[Any, str, Any]] = [
-            ("foo", "iter", ("next", None)),
-            (True, "iter", ("clone", None)),
-            ("f", "iter", ("next", None)),
-            (True, "iter", ("clone", None)),
+            ("foo", "iter", ("next",)),
+            (True, "iter", ("clone",)),
+            ("f", "iter", ("next",)),
+            (True, "iter", ("clone",)),
             ("r", "result", False),
         ]
         assertTranscript(self, str_iter_equals, transcript)
