@@ -113,9 +113,9 @@ class Bound:
                 assert False, "Bad handler result: "+str(handler_result)
         def call_inner(inner_state: tuple[str, Any], msg: Any, handler_states: dict[str, tuple[str, Any]]) -> Result:
             inner_result = self.inner(inner_state, msg)
-            return call_handler(inner_result.action, inner_result.action_args, inner_result.resume_state, handler_states)
+            return Result('continue', inner_result.action_args, ('handler', (inner_result.action, inner_result.resume_state, handler_states)))
         if state[0] == 'start':
-            return call_inner(('start', state[1]), msg, {k: ('start', ()) for k in self.handlers})
+            return Result('continue', msg, ('inner', (('start', state[1]), {k: ('start', ()) for k in self.handlers})))
         elif state[0] == 'inner':
             inner_state, handler_states = state[1]
             return call_inner(inner_state, msg, handler_states)

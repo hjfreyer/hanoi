@@ -82,15 +82,19 @@ def str_iter_equals_inverse_preamble(state: tuple[Literal['start'], tuple[()]] |
         s = state[1]
         return Result('result', s, ('end', None))
 
-
-string_iter_equals_inverse = Bound(str_iter_equals_inverse_preamble, {
+string_iter_equals_inverse = Bound(Bound(str_iter_equals_inverse_preamble, {
     'result': AndThen(Bound(str_iter_equals, {
         'continue': PassThroughHandler(),
         'iter': PassThroughHandler(),
-        'result': PassThroughHandler()
+        'result': PassThroughHandler(),
     })),
+    'iter': PassThroughHandler(),
+    'continue': PassThroughHandler(),
+}), {
     'iter': ImplHandler(str_iter),
-    })
+    'result': PassThroughHandler(),
+    'continue': PassThroughHandler(),
+})
 
 @transformer
 def string_separated_values_new(iter: Any) -> Any:
