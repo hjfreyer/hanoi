@@ -1,3 +1,13 @@
 {
-    "cursorpyright.analysis.typeCheckingMode": "standard"
+    "cursorpyright.analysis.typeCheckingMode": "standard",
+    "python.venvPath": ".",
+    "python.testing.unittestArgs": [
+        "-v",
+        "-s",
+        ".",
+        "-p",
+        "*_test.py"
+    ],
+    "python.testing.pytestEnabled": false,
+    "python.testing.unittestEnabled": true
 }

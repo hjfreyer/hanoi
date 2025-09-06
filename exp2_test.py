@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from functools import wraps
 from typing import Any, Callable, Literal, Protocol
 import unittest
-
+import typeguard
 
 @dataclass
 class Result:
@@ -10,48 +10,35 @@ class Result:
     action_args: Any
     resume_state: tuple[str, Any]
 
+StrIterState = tuple[Literal['start'], tuple[()]] | tuple[Literal['ready'], tuple[str, int]]
 
-def str_len(state: tuple[str, Any], msg: Any) -> Result:
-    assert state[0] == 'start'
-    s = msg
-    return Result('result', len(s), ('end', None))
-
-
-
-def str_iter(state: tuple[str, Any], msg: Any) -> Result:
+@typeguard.typechecked
+def str_iter(state: StrIterState, msg: Any) -> Result:
     if state[0] == 'start':
         s = msg
         return Result('result', (), ('ready', (s, -1)))
     elif state[0] == 'ready':
         iter = state[1]
         if msg[0] == 'next':
-            return str_iter_next(iter)
+            return str_iter_next(iter[0], iter[1])
         elif msg[0] == 'clone':
-            return str_iter_clone(iter)
+            return str_iter_clone(iter[0], iter[1])
         else:
             assert False, "Bad msg: "+str(msg)
-    else:
-        assert False, "Bad state: "+str(state)
 
 
 
-def str_iter_next(msg: Any) -> Result:
-    s, offset = msg
+def str_iter_next(s: str, offset: int) -> Result:
     offset += 1
 
-    str_len_result = str_len(('start', ()), s)
-    assert str_len_result.action == 'result'
-    strlen = str_len_result.action_args
-
-    if offset == strlen:
+    if offset == len(s):
         return Result('result', False, ('ready', (s, offset)))
     else:
         return Result('result', True, ('ready', (s, offset)))
 
 
-def str_iter_clone(msg: Any) -> Result:
-    s, offset = msg
-    return Result('result', s[offset], ('ready', msg))
+def str_iter_clone(s: str, offset: int) -> Result:
+    return Result('result', s[offset], ('ready', (s, offset)))
 
 
 def str_iter_equals_body(state: tuple[str, Any], msg: Any) -> Result:
