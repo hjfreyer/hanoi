@@ -91,11 +91,13 @@ class AndThen:
 
 @dataclass
 class PassThroughHandler:
+    rename: str | None = None
+
     def handle(
         self, handler_name: str, handler_state: Any, msg: Any
     ) -> HandlerResume | HandlerContinue:
         if handler_state[0] == "start":
-            return HandlerContinue("continue", handler_name, msg, ("awaiting", None))
+            return HandlerContinue("continue", self.rename or handler_name, msg, ("awaiting", None))
         elif handler_state[0] == "awaiting":
             return HandlerResume("resume", ("start",), msg)
         else:

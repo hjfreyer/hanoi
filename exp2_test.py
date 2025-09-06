@@ -2,14 +2,13 @@ from dataclasses import dataclass
 from functools import wraps
 from typing import Any, Callable, Literal, Protocol
 import unittest
-import typeguard
+from beartype import beartype
 
 from exp2 import *
 
 StrIterState = tuple[Literal["start"]] | tuple[Literal["ready"], tuple[str, int]]
 
 
-@typeguard.typechecked
 def str_iter(state: StrIterState, msg: Any) -> Result:
     if state[0] == "start":
         s = msg
@@ -112,47 +111,6 @@ string_iter_equals_inverse = Bound(
         "iter": ImplHandler(str_iter),
         "result": PassThroughHandler(),
         "continue": PassThroughHandler(),
-    },
-)
-
-
-@transformer
-def string_separated_values_new(iter: Any) -> Any:
-    return ("unstarted", iter)
-
-
-def string_separated_values_next(state: tuple[str, Any], msg: Any) -> Result:
-    assert state[0] == "start", "Bad state: " + state[0]
-    iter_state, iter_args = msg
-    if iter_state == "unstarted":
-        inner_iter = iter_args
-        return Result("result", (("inner_unstarted", inner_iter), True), ("end", None))
-    else:
-        assert False, "Bad iter state: " + iter_state
-
-
-@single_state
-def string_separated_values_inner_next_preamble1(iter: Any) -> tuple[str, Any]:
-    iter_tag, iter_args = iter
-    if iter_tag == "inner_unstarted":
-        return ("iter_next", iter_args)
-    else:
-        assert False, "Bad iter state: " + iter_tag
-
-
-@single_state
-def string_separated_values_inner_next_preamble2(iter_and_bool: Any) -> tuple[str, Any]:
-    iter, iter_has_next = iter_and_bool
-    if iter_has_next:
-        return ("iter_clone", iter)
-    else:
-        return ("result", (("unstarted", iter), False))
-
-
-string_separated_values_inner_next = Bound(
-    string_separated_values_inner_next_preamble1,
-    {
-        "iter_next": PassThroughHandler(),
     },
 )
 
@@ -318,12 +276,191 @@ class TestStringIterEquals(unittest.TestCase):
         assertTranscript(self, string_iter_equals_inverse, transcript)
 
 
-class TestStringSeparatedValues(unittest.TestCase):
-    # def test_empty(self):
-    #     # transcript1: list[tuple[Any, str, Any]] = [
-    #     #     ('iter', 'result', ('unstarted', 'iter'))
-    #     # ]
-    #     # assertTranscript(self, string_separated_values_new, transcript1)
+@beartype
+def char_iter(
+    state: (
+        tuple[Literal["start"]]
+        | tuple[Literal["await_next"]]
+        | tuple[Literal["await_clone"]]
+    ),
+    msg: Any,
+) -> Result:
+    if state[0] == "start":
+        assert msg == ("next",), "Bad msg: " + str(msg)
+        return Result("iter", ("next",), ("await_next",))
+    elif state[0] == "await_next":
+        if msg:
+            return Result("iter", ("clone",), ("await_clone",))
+        else:
+            return Result("result", ("none",), ("end",))
+    elif state[0] == "await_clone":
+        return Result("result", ("some", msg), ("start",))
+
+def char_iter_from_string_preamble(state: Any, msg: Any) -> Result:
+    if state[0] == "start":
+        return Result("str_iter", msg, ("await_init",))
+    elif state[0] == "await_init":
+        return Result("result", (), ("proxy_char_iter",))
+    elif state[0] == "proxy_char_iter":
+        return Result("char_iter", msg, ("await_char_iter",))
+    elif state[0] == "await_char_iter":
+        return Result("result", msg, ("proxy_char_iter",))
+    else:
+        assert False, "Bad state: " + str(state)
+
+
+char_iter_from_string = Bound(
+    Bound(
+        char_iter_from_string_preamble,
+        {
+            "result": PassThroughHandler(),
+            "continue": PassThroughHandler(),
+            "str_iter": PassThroughHandler(),
+            "char_iter": ImplHandler(
+                Bound(
+                    char_iter,
+                    {
+                        "result": PassThroughHandler(),
+                        "continue": PassThroughHandler(),
+                        "iter": PassThroughHandler("str_iter"),
+                    },
+                )
+            ),
+        },
+    ),
+    {
+        "result": PassThroughHandler(),
+        "continue": PassThroughHandler(),
+        "str_iter": ImplHandler(str_iter),
+    },
+)
+
+
+class TestCharIter(unittest.TestCase):
+    def test_from_string(self):
+        transcript: list[tuple[Any, str, Any]] = [
+            ("foo", "result", ()),
+            (("next",), "result", ("some", "f")),
+            (("next",), "result", ("some", "o")),
+            (("next",), "result", ("some", "o")),
+            (("next",), "result", ("none",)),
+        ]
+        assertTranscript(self, char_iter_from_string, transcript)
+
+
+type SSVState = (
+    tuple[Literal["start"]]
+    | tuple[Literal["field_start"]]
+    | tuple[Literal["await_next"]]
+    | tuple[Literal["in_field"], str]
+    | tuple[Literal["almost_finished"]]
+)
+
+
+@beartype
+def space_separated_values(state: SSVState, msg: Any) -> Result:
+    if state[0] == "start":
+        assert msg == ("next",), "Bad msg: " + str(msg)
+        return Result("result", True, ("field_start",))
+    elif state[0] == "field_start":
+        assert msg == ("inner_next",), "Bad msg: " + str(msg)
+        return Result("iter", ("next",), ("await_next",))
+    elif state[0] == "await_next":
+        if msg[0] == "some":
+            char = msg[1]
+            if char == " ":
+                return Result("result", False, ("start",))
+            else:
+                return Result("result", True, ("in_field", char))
+        elif msg[0] == "none":
+            return Result("result", False, ("almost_finished",))
+    elif state[0] == "in_field":
+        char = state[1]
+        if msg[0] == "inner_next":
+            return Result("iter", ("next",), ("await_next",))
+        elif msg[0] == "inner_clone":
+            return Result("result", char, state)
+        else:
+            assert False, "Bad msg: " + str(msg)
+    elif state[0] == "almost_finished":
+        assert msg[0] == "next", "Bad msg: " + str(msg)
+        return Result("result", False, ("end",))
+    assert False, "Bad state: " + str(state)
+
+
+def space_separated_values_for_string_impl(state: Any, msg: Any) -> Result:
+    if state[0] == "start":
+        return Result("iter", msg, ("await_init",))
+    elif state[0] == "await_init":
+        return Result("result", (), ("proxy",))
+    elif state[0] == "proxy":
+        return Result("ssv", msg, ("await_ssv",))
+    elif state[0] == "await_ssv":
+        return Result("result", msg, ("proxy",))
+    else:
+        assert False, "Bad state: " + str(state)
+
+
+space_separated_values_for_string = Bound(
+    Bound(
+        space_separated_values_for_string_impl,
+        {
+            "result": PassThroughHandler(),
+            "continue": PassThroughHandler(),
+            "iter": PassThroughHandler(),
+            "ssv": ImplHandler(space_separated_values),
+        },
+    ),
+    {
+        "result": PassThroughHandler(),
+        "continue": PassThroughHandler(),
+        "iter": ImplHandler(char_iter_from_string),
+    },
+)
+
+
+class TestSpaceSeparatedValues(unittest.TestCase):
+    def test_empty(self):
+        transcript: list[tuple[Any, str, Any]] = [
+            ("", "result", ()),
+            (("next",), "result", True),
+            (("inner_next",), "result", False),
+            # (("next",), "result", False),
+        ]
+        assertTranscript(self, space_separated_values_for_string, transcript)
+
+    def test_one_field(self):
+        transcript: list[tuple[Any, str, Any]] = [
+            ("foo", "result", ()),
+            (("next",), "result", True),
+            (("inner_next",), "result", True),
+            (("inner_clone",), "result", "f"),
+            (("inner_next",), "result", True),
+            (("inner_clone",), "result", "o"),
+            (("inner_next",), "result", True),
+            (("inner_next",), "result", False),
+            (("next",), "result", False),
+        ]
+        assertTranscript(self, space_separated_values_for_string, transcript)
+
+    def test_double_field(self):
+        transcript: list[tuple[Any, str, Any]] = [
+            ("foo b", "result", ()),
+            (("next",), "result", True),
+            (("inner_next",), "result", True),
+            (("inner_clone",), "result", "f"),
+            (("inner_next",), "result", True),
+            (("inner_clone",), "result", "o"),
+            (("inner_next",), "result", True),
+            (("inner_clone",), "result", "o"),
+            (("inner_next",), "result", False),
+            (("next",), "result", True),
+            (("inner_next",), "result", True),
+            (("inner_clone",), "result", "b"),
+            (("inner_next",), "result", False),
+            (("next",), "result", False),
+        ]
+        assertTranscript(self, space_separated_values_for_string, transcript)
 
     #     # transcript2: list[tuple[Any, str, Any]] = [
     #     #     (('unstarted', 'iter'), 'result', (('inner_unstarted', 'iter'), True))

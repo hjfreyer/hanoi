@@ -1,1 +1,1 @@
-typeguard
+beartype
