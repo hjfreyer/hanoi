@@ -1,30 +1,33 @@
-// Simple TypeScript experiments file
-export class Calculator {
-  add(a: number, b: number): number {
-    return a + b;
-  }
+import { assert } from "console";
 
-  subtract(a: number, b: number): number {
-    return a - b;
-  }
+export type Result<S> = {
+  action: string;
+  msg: any;
+  resume_state: S;
+};
 
-  multiply(a: number, b: number): number {
-    return a * b;
-  }
+export type Machine<S> = (state: S, msg: any) => Result<S>;
 
-  divide(a: number, b: number): number {
-    if (b === 0) {
-      throw new Error("Division by zero is not allowed");
-    }
-    return a / b;
-  }
-}
+export type HandlerResult<S> = {
+  kind: "resume";
+  msg: any;
+  handler_state: S;
+} | {
+  kind: "continue";
+  action: string;
+  msg: any;
+  handler_state: S;
+};
 
-export function greet(name: string): string {
-  return `Hello, ${name}!`;
-}
+export type Handler<S> = (handler_name: string, state: S, msg: any) => HandlerResult<S>;
 
-export function fibonacci(n: number): number {
-  if (n <= 1) return n;
-  return fibonacci(n - 1) + fibonacci(n - 2);
+export function transformer<S>(f: (msg: any) => any): Machine<["start"]> {
+  return (state, msg) => {
+    assert(state[0] === "start", "Bad state: " + state[0]);
+    return {
+      action: "result",
+      msg: f(msg),
+      resume_state: state,
+    };
+  };
 }
