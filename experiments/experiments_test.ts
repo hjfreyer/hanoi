@@ -1,7 +1,15 @@
 // Test file for experiments.ts
 import assert from 'assert';
-import { Machine, transformer } from './experiments';
+import { Machine, Result, transformer } from './experiments';
 
+function handleContinue<S>(machine: Machine<S>, state: S, input: any): [S, string, any] {
+  let result = machine(state, input);
+  while (result.action === 'continue') {
+    state = result.resume_state;
+    result = machine(state, result.msg);
+  }
+  return [result.resume_state, result.action, result.msg];
+}
 
 function assertTransforms(machine: Machine<any>, input: any): any {
   const result = machine(['start'], input);
@@ -11,11 +19,14 @@ function assertTransforms(machine: Machine<any>, input: any): any {
 
 function assertTranscript(machine: Machine<any>, transcript: [any, string, any][], state: any = null) {
   state = state || ['start'];
+  let i = 0;
   for (const [input, expected_action, expected_output] of transcript) {
-    const result = machine(state, input);
-    expect(result.action).toEqual(expected_action);
-    expect(result.msg).toEqual(expected_output);
-    state = result.resume_state;
+    console.log(`${i}: ${input} -> ${expected_action} ${expected_output}`);
+    const [new_state, result_action, result_output] = handleContinue(machine, state, input);
+    expect(result_action).toEqual(expected_action);
+    expect(result_output).toEqual(expected_output);
+    state = new_state;
+    i++;
   }
 }
 
@@ -70,5 +81,86 @@ describe('StrIter', () => {
       [['clone'], 'result', 'o'],
       [['next'], 'result', false],
     ], str_iter_state);
+  });
+});
+
+type StringIterEqualsState = ["start"] | ["await_next", string] | ["await_clone", string] | ["end"];
+
+
+function string_iter_equals(state: StringIterEqualsState, msg: any): Result<StringIterEqualsState> {
+  console.log(`string_iter_equals: ${state} ${msg}`);
+  if (state[0] === "start") {
+    const s = msg;
+    return {
+      action: "iter",
+      msg: ["next"],
+      resume_state: ["await_next", s],
+    };
+  }
+  if (state[0] === "await_next") {
+    const s = state[1];
+    const iter_has_next = msg;
+    const str_has_next = s.length > 0;
+    if (iter_has_next && str_has_next) {
+      return {
+        action: "iter",
+        msg: ["clone"],
+        resume_state: ["await_clone", s],
+      };
+    }
+    if (!iter_has_next && !str_has_next) {
+      return {
+        action: "result",
+        msg: true,
+        resume_state: ["end"],
+      };
+    }
+    // Otherwise: !iter_has_next || !str_has_next
+    return {
+      action: "result",
+      msg: false,
+      resume_state: ["end"],
+    };
+  }
+  if (state[0] === "await_clone") {
+    const s = state[1];
+    const iter_char = msg;
+    const str_char = s[0];
+    if (iter_char === str_char) {
+      return {
+        action: "continue",
+        msg: s.slice(1),
+        resume_state: ["start"],
+      };
+    } else {
+      return {
+        action: "result",
+        msg: false,
+        resume_state: ["end"],
+      };
+    }
+  }
+  assert(false, 'Bad state: ' + state[0]);
+}
+
+describe('StringIterEquals', () => {
+  test('should work with empty string', () => {
+    assertTranscript(string_iter_equals, [
+      ['', 'iter', ['next']],
+      [false, 'result', true],
+    ]);
+  });
+
+  test('should work with non-empty string', () => {
+    assertTranscript(string_iter_equals, [
+      ['foo', 'iter', ['next']],
+      [true, 'iter', ['clone']],
+      ['f', 'iter', ['next']],
+      [true, 'iter', ['clone']],
+      ['o', 'iter', ['next']],
+      [true, 'iter', ['clone']],
+      ['o', 'iter', ['next']],
+      [false, 'result', true],
+    ]);
   });
 });
