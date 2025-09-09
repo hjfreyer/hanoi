@@ -36,7 +36,18 @@ def str_iter_clone(s: str, offset: int) -> Result:
     return Result("result", s[offset], ("ready", (s, offset)))
 
 
-def str_iter_equals_body(state: tuple[str, Any], msg: Any) -> Result:
+StrIter = tuple[str, int]
+
+
+@beartype
+def str_iter_equals_body(
+    state: (
+        tuple[Literal["start"]]
+        | tuple[Literal["iter_next_cb"], StrIter]
+        | tuple[Literal["iter_clone_cb"], StrIter]
+    ),
+    msg: Any,
+) -> Result:
     if state[0] == "start":
         s, offset = msg
         return Result("iter", ("next",), ("iter_next_cb", (s, offset)))
@@ -166,9 +177,12 @@ twice_test = Bound(
 
 
 def assertTranscript(
-    test: unittest.TestCase, machine: Any, transcript: list[tuple[Any, str, Any]]
+    test: unittest.TestCase,
+    machine: Any,
+    transcript: list[tuple[Any, str, Any]],
+    init=("start",),
 ):
-    state = ("start",)
+    state = init
     while transcript:
         (input, result_tag, result_args) = transcript.pop(0)
         result = machine(state, input)
@@ -226,6 +240,139 @@ class TestStringIter(unittest.TestCase):
         assertTranscript(self, str_iter, transcript)
 
 
+@transformer
+def str_iter2_init(s: str) -> Any:
+    return (s, -1)
+
+
+@beartype
+def str_iter2(state: tuple[str, int], msg: Any) -> Result:
+    s, offset = state
+    if msg[0] == "next":
+        offset += 1
+        if offset == len(s):
+            return Result("result", False, (s, offset))
+        else:
+            return Result("result", True, (s, offset))
+    elif msg[0] == "clone":
+        return Result("result", s[offset], state)
+    else:
+        assert False, "Bad msg: " + str(msg)
+
+
+# (("start",), "foo") string_iter_equals_inverse2
+# ("foo", (("start",), "foo")) (id, str_iter2_init)
+# ("foo", iter:=("foo", -1)) string_iter_equals_inverse2_line2
+# (iter, (("start",), "foo")) str_iter_equals
+# - raises "iter"
+#   - (iter, ("iter", "next")) string_iter_equals_inverse2_line3_handler
+#     - (iter, "next") str_iter2
+#     - ()
+
+# def string_iter_equals_inverse2_1(state: Any, msg: Any) -> Result:
+
+
+@beartype
+def string_iter_equals_inverse2_bound(
+    state: (
+        tuple[Literal["start"], tuple[tuple[str, int], Any]]
+        | tuple[Literal["call_iter"], tuple[tuple[str, int], Any]]
+    ),
+    msg: Any,
+) -> Result:
+    if state[0] == "start":
+        (iter_state, str_iter_equals_state) = state[1]
+        result = str_iter_equals(str_iter_equals_state, msg)
+        if result.action == "iter":
+            return Result(
+                "continue", msg, ("call_iter", (iter_state, result.resume_state))
+            )
+        elif result.action == "result":
+            return Result("result", result.action_args, ("end",))
+        elif result.action == "continue":
+            return Result("continue", msg, ("start", (iter_state, result.resume_state)))
+        else:
+            assert False, "Bad result: " + str(result)
+    elif state[0] == "call_iter":
+        iter_state, iter_equals_resume_state = state[1]
+        result = str_iter2(iter_state, msg)
+        if result.action == "result":
+            return Result(
+                "result",
+                result.action_args,
+                ("start", (result.resume_state, iter_equals_resume_state)),
+            )
+        elif result.action == "continue":
+            return Result(
+                "continue",
+                msg,
+                ("call_iter", (result.resume_state, iter_equals_resume_state)),
+            )
+        else:
+            assert False, "Bad result: " + str(result)
+    else:
+        assert False, "Bad state: " + state[0]
+
+
+@dataclass
+class SeqHandler:
+    inner: Machine
+
+    def handle(
+        self, handler_name: str, handler_state: Any, msg: Any
+    ) -> HandlerResume | HandlerContinue:
+        assert handler_name == "result", "Bad handler name: " + handler_name
+        result = self.inner(handler_state, msg)
+        return HandlerContinue(
+            "continue", result.action, result.action_args, result.resume_state
+        )
+
+
+@dataclass
+class ResultHandler:
+    def handle(
+        self, handler_name: str, handler_state: Any, msg: Any
+    ) -> HandlerResume | HandlerContinue | HandlerResult:
+        assert handler_name == "result", "Bad handler name: " + handler_name
+        return HandlerResult("result", (handler_state, msg))
+
+
+@transformer
+@beartype
+def string_iter_equals_inverse2_line2(msg: tuple[str, StrIter]) -> Any:
+    return (msg[1], ("start",), msg[0])
+
+
+class ThingyHandler:
+    def handle(
+        self, handler_name: str, handler_state: Any, msg: Any
+    ) -> HandlerResume | HandlerContinue | HandlerResult:
+        print("ThingyHandler", handler_name, handler_state, msg)
+
+
+string_iter_equals_inverse2 = Bound(
+    Bound(
+        transformer(lambda s: (s, ("start",), s)),
+        {
+            "result": AndThen(Call(str_iter2_init, ResultHandler())),
+            "continue": PassThroughHandler(),
+        },
+    ),
+    {
+        "continue": PassThroughHandler(),
+        "result": AndThen(
+            Bound(
+                string_iter_equals_inverse2_line2,
+                {
+                    "result": AndThen(Call(str_iter_equals, ThingyHandler())),
+                    "continue": PassThroughHandler(),
+                },
+            )
+        ),
+    },
+)
+
+
 class TestStringIterEquals(unittest.TestCase):
 
     def test_success(self):
@@ -271,9 +418,9 @@ class TestStringIterEquals(unittest.TestCase):
         ]
         assertTranscript(self, str_iter_equals, transcript)
 
-    def test_inverse(self):
+    def test_inverse2_bound(self):
         transcript: list[tuple[Any, str, Any]] = [("foo", "result", True)]
-        assertTranscript(self, string_iter_equals_inverse, transcript)
+        assertTranscript(self, string_iter_equals_inverse2, transcript)
 
 
 @beartype
@@ -295,6 +442,7 @@ def char_iter(
             return Result("result", ("none",), ("end",))
     elif state[0] == "await_clone":
         return Result("result", ("some", msg), ("start",))
+
 
 def char_iter_from_string_preamble(state: Any, msg: Any) -> Result:
     if state[0] == "start":
@@ -334,6 +482,11 @@ char_iter_from_string = Bound(
         "str_iter": ImplHandler(str_iter),
     },
 )
+
+
+@transformer
+def char_iter_from_string2(s: str) -> Any:
+    return char_iter_from_string(("start",), s)
 
 
 class TestCharIter(unittest.TestCase):
@@ -388,92 +541,123 @@ def space_separated_values(state: SSVState, msg: Any) -> Result:
     assert False, "Bad state: " + str(state)
 
 
-def space_separated_values_for_string_impl(state: Any, msg: Any) -> Result:
-    if state[0] == "start":
-        return Result("iter", msg, ("await_init",))
-    elif state[0] == "await_init":
-        return Result("result", (), ("proxy",))
-    elif state[0] == "proxy":
-        return Result("ssv", msg, ("await_ssv",))
-    elif state[0] == "await_ssv":
-        return Result("result", msg, ("proxy",))
-    else:
-        assert False, "Bad state: " + str(state)
+@dataclass
+class Bundle:
+    machines: dict[str, Machine]
+
+    def __call__(self, state: Any, msg: Any) -> Result:
+        if state[0] == "start":
+            return Result(
+                "continue", msg, ("started", {k: ("start",) for k in self.machines})
+            )
+        elif state[0] == "started":
+            machine_states = state[1]
+            machine_name, machine_msg = msg
+            machine_state = machine_states[machine_name]
+            machine = self.machines[machine_name]
+            result = machine(machine_state, machine_msg)
+            machine_states |= {machine_name: result.resume_state}
+            return Result(
+                result.action, result.action_args, ("started", machine_states)
+            )
+        else:
+            assert False, "Bad state: " + str(state)
 
 
-space_separated_values_for_string = Bound(
-    Bound(
-        space_separated_values_for_string_impl,
-        {
-            "result": PassThroughHandler(),
-            "continue": PassThroughHandler(),
-            "iter": PassThroughHandler(),
-            "ssv": ImplHandler(space_separated_values),
-        },
-    ),
+space_separated_values_for_string_bundle = Bundle(
     {
-        "result": PassThroughHandler(),
-        "continue": PassThroughHandler(),
-        "iter": ImplHandler(char_iter_from_string),
-    },
+        "char_iter": char_iter_from_string,
+        "ssv": space_separated_values,
+    }
 )
 
 
-class TestSpaceSeparatedValues(unittest.TestCase):
-    def test_empty(self):
-        transcript: list[tuple[Any, str, Any]] = [
-            ("", "result", ()),
-            (("next",), "result", True),
-            (("inner_next",), "result", False),
-            # (("next",), "result", False),
-        ]
-        assertTranscript(self, space_separated_values_for_string, transcript)
+# def space_separated_values_for_string(state: Any, msg: Any) -> Result:
+#     if state[0] == "start":
+#         s = msg
+#         return space_separated_values_for_string_bundle(state, ("char_iter", s))
+#     elif state[0] == "started":
+#         ssv_state, iter_state = state[1]
+#         ssv_result = space_separated_values(ssv_state, msg)
+#         if ssv_result.action == "iter":
 
-    def test_one_field(self):
-        transcript: list[tuple[Any, str, Any]] = [
-            ("foo", "result", ()),
-            (("next",), "result", True),
-            (("inner_next",), "result", True),
-            (("inner_clone",), "result", "f"),
-            (("inner_next",), "result", True),
-            (("inner_clone",), "result", "o"),
-            (("inner_next",), "result", True),
-            (("inner_next",), "result", False),
-            (("next",), "result", False),
-        ]
-        assertTranscript(self, space_separated_values_for_string, transcript)
+#     else:
+#         assert False, "Bad state: " + str(state)
 
-    def test_double_field(self):
-        transcript: list[tuple[Any, str, Any]] = [
-            ("foo b", "result", ()),
-            (("next",), "result", True),
-            (("inner_next",), "result", True),
-            (("inner_clone",), "result", "f"),
-            (("inner_next",), "result", True),
-            (("inner_clone",), "result", "o"),
-            (("inner_next",), "result", True),
-            (("inner_clone",), "result", "o"),
-            (("inner_next",), "result", False),
-            (("next",), "result", True),
-            (("inner_next",), "result", True),
-            (("inner_clone",), "result", "b"),
-            (("inner_next",), "result", False),
-            (("next",), "result", False),
-        ]
-        assertTranscript(self, space_separated_values_for_string, transcript)
 
-    #     # transcript2: list[tuple[Any, str, Any]] = [
-    #     #     (('unstarted', 'iter'), 'result', (('inner_unstarted', 'iter'), True))
-    #     # ]
-    #     # assertTranscript(self, string_separated_values_next, transcript2)
+# space_separated_values_for_string = Bound(
+#     Bound(
+#         space_separated_values_for_string_impl,
+#         {
+#             "result": PassThroughHandler(),
+#             "continue": PassThroughHandler(),
+#             "iter": PassThroughHandler(),
+#             "ssv": ImplHandler(space_separated_values),
+#         },
+#     ),
+#     {
+#         "result": PassThroughHandler(),
+#         "continue": PassThroughHandler(),
+#         "iter": ImplHandler(char_iter_from_string),
+#     },
+# )
 
-    #     transcript3: list[tuple[Any, str, Any]] = [
-    #         (('inner_unstarted', 'iter'), 'iter_next', 'iter'),
-    #         (('iter', False), 'result', ('foo', False))
-    #     ]
-    #     assertTranscript(self, string_separated_values_inner_next, transcript3)
-    pass
 
+# class TestSpaceSeparatedValues(unittest.TestCase):
+#     def test_empty(self):
+#         transcript: list[tuple[Any, str, Any]] = [
+#             ("", "result", ()),
+#             (("next",), "result", True),
+#             (("inner_next",), "result", False),
+#             # (("next",), "result", False),
+#         ]
+#         assertTranscript(self, space_separated_values_for_string, transcript)
+
+#     def test_one_field(self):
+#         transcript: list[tuple[Any, str, Any]] = [
+#             ("foo", "result", ()),
+#             (("next",), "result", True),
+#             (("inner_next",), "result", True),
+#             (("inner_clone",), "result", "f"),
+#             (("inner_next",), "result", True),
+#             (("inner_clone",), "result", "o"),
+#             (("inner_next",), "result", True),
+#             (("inner_next",), "result", False),
+#             (("next",), "result", False),
+#         ]
+#         assertTranscript(self, space_separated_values_for_string, transcript)
+
+#     def test_double_field(self):
+#         transcript: list[tuple[Any, str, Any]] = [
+#             ("foo b", "result", ()),
+#             (("next",), "result", True),
+#             (("inner_next",), "result", True),
+#             (("inner_clone",), "result", "f"),
+#             (("inner_next",), "result", True),
+#             (("inner_clone",), "result", "o"),
+#             (("inner_next",), "result", True),
+#             (("inner_clone",), "result", "o"),
+#             (("inner_next",), "result", False),
+#             (("next",), "result", True),
+#             (("inner_next",), "result", True),
+#             (("inner_clone",), "result", "b"),
+#             (("inner_next",), "result", False),
+#             (("next",), "result", False),
+#         ]
+#         assertTranscript(self, space_separated_values_for_string, transcript)
+
+#     def test_empty_final_field(self):
+#         transcript: list[tuple[Any, str, Any]] = [
+#             ("f ", "result", ()),
+#             (("next",), "result", True),
+#             (("inner_next",), "result", True),
+#             (("inner_clone",), "result", "f"),
+#             (("inner_next",), "result", False),
+#             (("next",), "result", True),
+#             (("inner_next",), "result", False),
+#             (("next",), "result", False),
+#         ]
+#         assertTranscript(self, space_separated_values_for_string, transcript)
 
 if __name__ == "__main__":
     unittest.main()

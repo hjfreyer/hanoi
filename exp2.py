@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from functools import wraps
 from typing import Any, Callable, Literal, Protocol
+from beartype import beartype
 
 
 @dataclass
@@ -54,10 +55,16 @@ class HandlerContinue:
     handler_state: Any
 
 
+@dataclass
+class HandlerResult:
+    kind: Literal["result"]
+    msg: Any
+
+
 class Handler(Protocol):
     def handle(
         self, handler_name: str, handler_state: Any, msg: Any
-    ) -> HandlerResume | HandlerContinue: ...
+    ) -> HandlerResume | HandlerContinue | HandlerResult: ...
 
 
 @dataclass
@@ -97,7 +104,9 @@ class PassThroughHandler:
         self, handler_name: str, handler_state: Any, msg: Any
     ) -> HandlerResume | HandlerContinue:
         if handler_state[0] == "start":
-            return HandlerContinue("continue", self.rename or handler_name, msg, ("awaiting", None))
+            return HandlerContinue(
+                "continue", self.rename or handler_name, msg, ("awaiting", None)
+            )
         elif handler_state[0] == "awaiting":
             return HandlerResume("resume", ("start",), msg)
         else:
@@ -188,6 +197,84 @@ def transformer(f: Callable[[Any], Any]) -> Machine:
     return run
 
 
+@dataclass
+class HandlerResume2:
+    kind: Literal["resume"]
+    outer_state: Any
+    msg: Any
+
+
+@dataclass
+class HandlerContinue2:
+    kind: Literal["continue"]
+    action: str
+    msg: Any
+    outer_state: Any
+
+
+class Handler2(Protocol):
+    def handle(
+        self, handler_name: str, outer_state: Any, msg: Any
+    ) -> HandlerResume2 | HandlerContinue2: ...
+
+
+# @dataclass
+# class Bound2:
+#     inner: Machine
+#     handlers: dict[str, Handler]
+
+#     @beartype
+#     def __call__(self, state: tuple[Literal["inner"], BoundState]| tuple[Literal["handler"], str, BoundState], msg: Any) -> Result:
+#         if state[0] == "inner":
+#             inner_state, handler_states = state[1]
+#             inner_result = self.inner(inner_state, msg)
+#             return Result(
+#                 "continue",
+#                 inner_result.action_args,
+#                 (
+#                     "handler",
+#                     inner_result.action, (inner_result.resume_state, handler_states),
+#                 ),
+#             )
+#         elif state[0] == "handler":
+#             handler_name, (inner_state, handler_states) = state[1:]
+#             handler = self.handlers[handler_name]
+#             handler_state = handler_states[handler_name]
+#             handler_result = handler.handle(handler_name, handler_state, msg)
+#             handler_states |= {handler_name: handler_result.handler_state}
+#             if handler_result.kind == "resume":
+#                 return Result(
+#                     "continue",
+#                     handler_result.msg,
+#                     ("inner", (inner_state, handler_states)),
+#                 )
+#             elif handler_result.kind == "continue":
+#                 return Result(
+#                     handler_result.action,
+#                     handler_result.msg,
+#                     ("handler", (handler_name, inner_state, handler_states)),
+#                 )
+#             else:
+#                 assert False, "Bad handler result: " + str(handler_result)
+
+
+@dataclass
+class Smuggle:
+    inner: Machine
+
+    def __call__(self, state: Any, msg: Any) -> Result:
+        if state[0] == "start":
+            smuggle, (inner_state, inner_msg) = state[1]
+            result = self.inner(inner_state, inner_msg)
+            if result.action == "result":
+                return Result("result", (smuggle, result.action_args), ("end",))
+            else:
+                return Result("continue", (smuggle, result.action_args), ("start",))
+        else:
+            assert False, "Bad state: " + state[0]
+        return self.inner(state, msg)
+
+
 def single_state(f: Callable[[Any], Any]) -> Machine:
     @wraps(f)
     def run(state: Any, msg: Any) -> Result:
@@ -229,6 +316,53 @@ class IfThenElse:
         elif state[0] == "else":
             inner_state_tag, inner_state_args = state[1]
             return call_els((inner_state_tag, inner_state_args), msg)
+        else:
+            assert False, "Bad state: " + state[0]
+
+
+# Call: (outer_state, inner_state_init, msg)
+
+
+@dataclass
+class Call:
+    inner: Machine
+    handler: Handler
+
+    def __call__(self, state: Any, msg: Any) -> Result:
+        print("Call", state, msg)
+        if state[0] == "start":
+            outer_state, inner_state_init, msg = msg
+            return Result("continue", msg, ("inner", (outer_state, inner_state_init)))
+        elif state[0] == "inner":
+            outer_state, inner_state = state[1]
+            result = self.inner(inner_state, msg)
+            return Result(
+                "continue",
+                result.action_args,
+                ("handler", (result.action, outer_state, result.resume_state)),
+            )
+        elif state[0] == "handler":
+            handler_name, outer_state, inner_state = state[1]
+            handler_result = self.handler.handle(handler_name, outer_state, msg)
+            if handler_result.kind == "resume":
+                return Result(
+                    "continue",
+                    handler_result.msg,
+                    ("inner", (outer_state, inner_state)),
+                )
+            elif handler_result.kind == "continue":
+                return Result(
+                    handler_result.action,
+                    handler_result.msg,
+                    (
+                        "handler",
+                        (handler_name, handler_result.handler_state, inner_state),
+                    ),
+                )
+            elif handler_result.kind == "result":
+                return Result("result", handler_result.msg, ("end",))
+            else:
+                assert False, "Bad handler result: " + str(handler_result)
         else:
             assert False, "Bad state: " + state[0]
 
