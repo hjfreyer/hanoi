@@ -1,6 +1,6 @@
 // Test file for experiments.ts
 import assert from 'assert';
-import { andThen, call, HandlerResult, Machine, Result, sequence, smuggle, transformer } from './experiments';
+import { andThen, call, HandlerResult, Machine, Result, sequence, smuggle, Startable, transformer } from './experiments';
 
 function handleContinue<S>(machine: Machine<S>, state: S, input: any): [S, string, any] {
   let result = machine(state, input);
@@ -23,8 +23,7 @@ function assertTranscript(machine: Machine<any>, transcript: [any, string, any][
   for (const [input, expected_action, expected_output] of transcript) {
     console.log(`${i}: ${input} -> ${expected_action} ${expected_output}`);
     const [new_state, result_action, result_output] = handleContinue(machine, state, input);
-    expect(result_action).toEqual(expected_action);
-    expect(result_output).toEqual(expected_output);
+    expect([result_action, result_output]).toEqual([expected_action, expected_output]);
     state = new_state;
     i++;
   }
@@ -210,3 +209,101 @@ describe('StringIterEqualsInverse', () => {
     ]);
   });
 });
+
+type RaiseState = ["start"] | ["await_raise"] | ["end"];
+function raise(state: RaiseState, msg: any): Result<RaiseState> {
+  if (state[0] === "start") {
+    let [action, inner_msg] = msg;
+    return {
+      action: action,
+      msg: inner_msg,
+      resume_state: ["await_raise"],
+    };
+  }
+  if (state[0] === "await_raise") {
+    return {
+      action: "result",
+      msg: msg,
+      resume_state: ["end"],
+    };
+  }
+  throw Error('Bad state: ' + state[0]);
+}
+
+export type IfThenElseState<T, F> = ["start"] | ["then", Startable<T>] | ["else", Startable<F>];
+function if_then_else<T, F>(then: Machine<Startable<T>>, els: Machine<Startable<F>>): Machine<IfThenElseState<T, F>> {
+  return function if_then_else_impl(state: IfThenElseState<T, F>, msg: any): Result<IfThenElseState<T, F>> {
+    if (state[0] === "start") {
+      let [outer_state, cond] = msg;
+      if (cond) {
+        return {
+          action: "continue",
+          msg: outer_state,
+          resume_state: ["then", ["start"]],
+        };
+      } else {
+        return {
+          action: "continue",
+          msg: outer_state,
+          resume_state: ["else", ["start"]],
+        };
+      }
+    }
+    if (state[0] === "then") {
+      const result = then(state[1], msg);
+      return {
+        action: result.action,
+        msg: result.msg,
+        resume_state: ["then", result.resume_state],
+      }
+    }
+    if (state[0] === "else") {
+      const result = els(state[1], msg);
+      return {
+        action: result.action,
+        msg: result.msg,
+        resume_state: ["else", result.resume_state],
+      };
+    }
+    throw Error('Bad state: ' + state[0]);
+  };
+}
+
+const char_iter_from_str_iter = sequence([
+  // msg
+  transformer((msg: any) => {
+    if (msg[0] !== "next") {
+      throw Error("Bad msg: " + msg);
+    }
+    return ["iter", ["next"]];
+  }),
+  raise,
+  transformer((has_next: any) => [null, has_next]),
+  if_then_else(
+    sequence([
+      transformer((_: any) => ["iter", ["clone"]]),
+      raise,
+      transformer((char: any) => ["some", char]),
+    ]),
+    sequence([
+      transformer((_: any) => ["none"]),
+    ]),
+  )
+]);
+
+describe('CharIterFromStrIter', () => {
+  test('unbound with empty string', () => {
+    assertTranscript(char_iter_from_str_iter, [
+      [['next'], 'iter', ['next']],
+      [false, 'result', ['none']],
+    ]);
+  });
+  test('unbound with non-empty string', () => {
+    assertTranscript(char_iter_from_str_iter, [
+      [['next'], 'iter', ['next']],
+      [true, 'iter', ['clone']],
+      ['f', 'result', ['some', 'f']],
+    ]);
+  });
+});
+

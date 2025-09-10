@@ -113,7 +113,7 @@ export function smuggle<E, S>(inner: Machine<Startable<S>>): Machine<SmuggleStat
       if (result.action === "result") {
         return { action: "result", msg: [smuggle, result.msg], resume_state: ["end"] };
       }
-      return { action: "continue", msg: result.msg, resume_state: ["inner", smuggle, result.resume_state] };
+      return { action: result.action, msg: result.msg, resume_state: ["inner", smuggle, result.resume_state] };
     }
     throw Error("Bad state: " + state[0]);
   };
