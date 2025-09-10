@@ -56,20 +56,28 @@ export function andThen<F, G>(f: Machine<Startable<F>>, g: Machine<Startable<G>>
   };
 }
 
-export type CallState<I, O, H> = ["start"] | ["inner", I, O] | ["handler", I, Startable<H>] | ["end"];
+export function sequence(machines: Machine<any>[]): Machine<any> {
+  let result = machines[0]; 
+  for (const machine of machines.slice(1)) {
+    result = andThen(result, machine);
+  }
+  return result;
+}
 
-export function call<I, O, H>(f: Machine<I>, handler: Machine<Startable<H>>): Machine<CallState<I, Startable<O>, Startable<H>>> {
+export type CallState<I, O, H> = ["start"] | ["inner", Startable<I>, O] | ["handler", Startable<I>, Startable<H>] | ["end"];
+
+export function call<I, O, H>(f: Machine<Startable<I>>, handler: Machine<Startable<H>>): Machine<CallState<I, Startable<O>, Startable<H>>> {
   return (state: CallState<I, Startable<O>, Startable<H>>, msg: any): Result<CallState<I, Startable<O>, Startable<H>>> => {
     if (state[0] === "start") {
-      let [outer_state, inner_state, inner_msg] = msg;
-      return { action: "continue", msg: inner_msg, resume_state: ["inner", inner_state, outer_state] };
+      let [outer_state, inner_msg] = msg;
+      return { action: "continue", msg: inner_msg, resume_state: ["inner", ["start"], outer_state] };
     }
     if (state[0] === "inner") {
       let inner_state = state[1];
       let outer_state = state[2];
       const result = f(inner_state, msg);
       if (result.action === "result") {
-        return { action: "result", msg: [outer_state, result.resume_state, result.msg], resume_state: ["end"] };
+        return { action: "result", msg: [outer_state, result.msg], resume_state: ["end"] };
       }
       if (result.action === "continue") {
         return { action: "continue", msg: result.msg, resume_state: ["inner", result.resume_state, outer_state] };
@@ -85,6 +93,27 @@ export function call<I, O, H>(f: Machine<I>, handler: Machine<Startable<H>>): Ma
         return { action: "continue", msg: new_msg, resume_state: ["inner", inner_state, new_outer_state] };
       }
       return { action: handler_result.action, msg: handler_result.msg, resume_state: ["handler", inner_state, handler_result.resume_state] };
+    }
+    throw Error("Bad state: " + state[0]);
+  };
+}
+
+export type SmuggleState<E, S> = ["start"] | ["inner", E, Startable<S>] | ["end"];
+
+export function smuggle<E, S>(inner: Machine<Startable<S>>): Machine<SmuggleState<E, S>> {
+  return (state: SmuggleState<E, S>, msg: any): Result<SmuggleState<E, S>> => {
+    if (state[0] === "start") {
+      let [smuggle, inner_msg] = msg;
+      return { action: "continue", msg: inner_msg, resume_state: ["inner", smuggle, ["start"]] };
+    }
+    if (state[0] === "inner") {
+      let smuggle = state[1];
+      let inner_state = state[2];
+      const result = inner(inner_state, msg);
+      if (result.action === "result") {
+        return { action: "result", msg: [smuggle, result.msg], resume_state: ["end"] };
+      }
+      return { action: "continue", msg: result.msg, resume_state: ["inner", smuggle, result.resume_state] };
     }
     throw Error("Bad state: " + state[0]);
   };

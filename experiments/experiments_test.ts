@@ -1,6 +1,6 @@
 // Test file for experiments.ts
 import assert from 'assert';
-import { andThen, call, HandlerResult, Machine, Result, transformer } from './experiments';
+import { andThen, call, HandlerResult, Machine, Result, sequence, smuggle, transformer } from './experiments';
 
 function handleContinue<S>(machine: Machine<S>, state: S, input: any): [S, string, any] {
   let result = machine(state, input);
@@ -43,44 +43,31 @@ const str_iter_init = transformer((s: string) => [s, -1]);
 
 type StrIterState = [string, number];
 
-function str_iter([str, offset]: StrIterState, msg: ['next' | 'clone']): Result<StrIterState> {
+const str_iter = transformer(([[str, offset], msg]: [StrIterState, ['next' | 'clone']]): [StrIterState, boolean | string] => {
   if (msg[0] === 'next') {
     offset += 1;
-    return {
-      action: 'result',
-      msg: offset < str.length,
-      resume_state: [str, offset],
-    };
+    return [[str, offset], offset < str.length];
   }
   if (msg[0] === 'clone') {
-    return {
-      action: 'result',
-      msg: str[offset],
-      resume_state: [str, offset],
-    };
+    return [[str, offset], str[offset]];
   }
   throw Error('Bad msg: ' + msg[0]);
-}
+});
 
 describe('StrIter', () => {
   test('should work with empty string', () => {
     const str_iter_state = assertTransforms(str_iter_init, '');
     assertTranscript(str_iter, [
-      [['next'], 'result', false],
-    ], str_iter_state);
+      [[str_iter_state, ['next']], 'result', [['', 0], false]],
+    ]);
   });
 
   test('should work with non-empty string', () => {
-    const str_iter_state = assertTransforms(str_iter_init, 'foo');
-    assertTranscript(str_iter, [
-      [['next'], 'result', true],
-      [['clone'], 'result', 'f'],
-      [['next'], 'result', true],
-      [['clone'], 'result', 'o'],
-      [['next'], 'result', true],
-      [['clone'], 'result', 'o'],
-      [['next'], 'result', false],
-    ], str_iter_state);
+    let str_iter_state = assertTransforms(str_iter_init, 'foo');
+    let [s, has_next] = assertTransforms(str_iter, [str_iter_state, ['next']]);
+    expect(has_next).toEqual(true);
+    let [s2, char] = assertTransforms(str_iter, [s, ['clone']]);
+    expect(char).toEqual('f');
   });
 });
 
@@ -198,44 +185,25 @@ describe('StringIterEquals', () => {
   });
 });
 
-function passThroughHandler<S>(handler_name: string, state: S, msg: any): HandlerResult<S> {
-  return { kind: "continue", action: handler_name, msg: msg, handler_state: state };
-}
+const handler = andThen(
+  transformer(([action, iter_state, iter_msg]: [string, StrIterState, any]) =>
+    [iter_state, iter_msg]),
+  str_iter);
 
-function nullHandlerMachine(state: ["start"], msg: any): Result<["start"]> {
-  throw Error('Bad state: ' + state[0]);
-}
-
-type RandomHandlerState = ["start" | "end"] | ["iter", StrIterState];
-
-const string_iter_equals_inverse = andThen(andThen(andThen(andThen(
-  transformer((s: string) => [s, ["start"], s]),
-  call(str_iter_init, nullHandlerMachine)),
-  transformer(([s, constructor_state, iter_state]: [string, ["start"], StrIterState]) =>
-    [iter_state, ["start"], s])),
-  call(string_iter_equals, (s: RandomHandlerState, msg): Result<RandomHandlerState> => {
-    if (s[0] === "start") {
-      let [action, iter_state, iter_msg] = msg;
-      if (action !== "iter") {
-        throw Error('Bad action: ' + action);
-      }
-      return { action: "continue", msg: iter_msg, resume_state: ["iter", iter_state] };
-    }
-    if (s[0] === "iter") {
-      let iter_state = s[1];
-      const result = str_iter(iter_state, msg);
-      if (result.action === "result") {
-        return { action: "result", msg: [result.resume_state, result.msg], resume_state: ["end"] };
-      } else {
-        return { action: result.action, msg: result.msg, resume_state: ["iter", result.resume_state] };
-      }
-    }
-    throw Error('Bad state: ' + s[0]);
-  }
-  )), transformer(([iter_state, iter_equals_state, result]: [StrIterState, StringIterEqualsState, boolean]) => result));
-
+const string_iter_equals_inverse = sequence([
+  transformer((s: string) => [s, s]),
+  smuggle(str_iter_init),
+  transformer(([s, iter_state]: [string, StrIterState]) =>
+    [iter_state, s]),
+  call(string_iter_equals, handler),
+  transformer(([iter_state, result]: [StrIterState, StringIterEqualsState, boolean]) => result)]);
 
 describe('StringIterEqualsInverse', () => {
+  test('handler alone', () => {
+    assertTranscript(handler, [
+      [['iter', ['foo', -1], ['next']], 'result', [['foo', 0], true]],
+    ]);
+  });
   test('should work', () => {
     assertTranscript(string_iter_equals_inverse, [
       ['foo', 'result', true],
