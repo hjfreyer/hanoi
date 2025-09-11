@@ -118,3 +118,123 @@ export function smuggle<E, S>(inner: Machine<Startable<S>>): Machine<SmuggleStat
     throw Error("Bad state: " + state[0]);
   };
 }
+
+export type MatchCases<H> = {[K in keyof H]: Machine<Startable<H[K]>>};
+export type MatchState<H> = ["start"] | ["within", keyof H, Startable<H[keyof H]>];
+
+export function match<H>(cases: MatchCases<H>): Machine<MatchState<H>> {
+  return (state: MatchState<H>, msg: any): Result<MatchState<H>> => {
+    if (state[0] === "start") {
+      let [outer_state, selector] = msg;
+      return { action: "continue", msg: outer_state, resume_state: ["within", selector, ["start"]] };
+    }
+    if (state[0] === "within") {
+      let selector = state[1];
+      let inner_state = state[2];
+      const result = cases[selector](inner_state, msg);
+      return { action: result.action, msg: result.msg, resume_state: ["within", selector, result.resume_state] };
+    }
+    throw Error("Bad state: " + state[0]);
+  };
+}
+
+
+
+type RaiseState = ["start"] | ["await_raise"] | ["end"];
+export function raise(state: RaiseState, msg: any): Result<RaiseState> {
+  if (state[0] === "start") {
+    let [action, inner_msg] = msg;
+    return {
+      action: action,
+      msg: inner_msg,
+      resume_state: ["await_raise"],
+    };
+  }
+  if (state[0] === "await_raise") {
+    return {
+      action: "result",
+      msg: msg,
+      resume_state: ["end"],
+    };
+  }
+  throw Error('Bad state: ' + state[0]);
+}
+
+export type IfThenElseState<T, F> = ["start"] | ["then", Startable<T>] | ["else", Startable<F>];
+export function if_then_else<T, F>(then: Machine<Startable<T>>, els: Machine<Startable<F>>): Machine<IfThenElseState<T, F>> {
+  return function if_then_else_impl(state: IfThenElseState<T, F>, msg: any): Result<IfThenElseState<T, F>> {
+    if (state[0] === "start") {
+      let [outer_state, cond] = msg;
+      if (cond) {
+        return {
+          action: "continue",
+          msg: outer_state,
+          resume_state: ["then", ["start"]],
+        };
+      } else {
+        return {
+          action: "continue",
+          msg: outer_state,
+          resume_state: ["else", ["start"]],
+        };
+      }
+    }
+    if (state[0] === "then") {
+      const result = then(state[1], msg);
+      return {
+        action: result.action,
+        msg: result.msg,
+        resume_state: ["then", result.resume_state],
+      }
+    }
+    if (state[0] === "else") {
+      const result = els(state[1], msg);
+      return {
+        action: result.action,
+        msg: result.msg,
+        resume_state: ["else", result.resume_state],
+      };
+    }
+    throw Error('Bad state: ' + state[0]);
+  };
+}
+
+export type ClosureState<C, S> = ["start"] | ["ready", C] | ["inner", Startable<S>];
+export function closure<C, S>(inner: Machine<Startable<S>>): Machine<ClosureState<C, S>> {
+  return function (state: ClosureState<C, S>, msg: any): Result<ClosureState<C, S>> {
+    if (state[0] === "start") {
+      const closure = msg;
+      return {
+        action: "result",
+        msg: null,
+        resume_state: ["ready", closure],
+      };
+    }
+    if (state[0] === "ready") {
+      const closure = state[1];
+      return {
+        action: "continue",
+        msg: [closure, msg],
+        resume_state: ["inner", ["start"]],
+      }
+    }
+    if (state[0] === "inner") {
+      const inner_state = state[1];
+      const result = inner(inner_state, msg);
+      if (result.action === "result") {
+        const [new_closure, new_output] = result.msg;
+        return {
+          action: "result",
+          msg: new_output,
+          resume_state: ["ready", new_closure],
+        };
+      }
+      return {
+        action: result.action,
+        msg: result.msg,
+        resume_state: ["inner", result.resume_state],
+      };
+    }
+    throw Error('Bad state: ' + state[0]);
+  };
+}

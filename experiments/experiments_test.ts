@@ -1,6 +1,6 @@
 // Test file for experiments.ts
 import assert from 'assert';
-import { andThen, call, HandlerResult, Machine, Result, sequence, smuggle, Startable, transformer } from './experiments';
+import { andThen, call, closure, HandlerResult, if_then_else, Machine, match, raise, Result, sequence, smuggle, Startable, transformer } from './experiments';
 
 function handleContinue<S>(machine: Machine<S>, state: S, input: any): [S, string, any] {
   let result = machine(state, input);
@@ -210,65 +210,6 @@ describe('StringIterEqualsInverse', () => {
   });
 });
 
-type RaiseState = ["start"] | ["await_raise"] | ["end"];
-function raise(state: RaiseState, msg: any): Result<RaiseState> {
-  if (state[0] === "start") {
-    let [action, inner_msg] = msg;
-    return {
-      action: action,
-      msg: inner_msg,
-      resume_state: ["await_raise"],
-    };
-  }
-  if (state[0] === "await_raise") {
-    return {
-      action: "result",
-      msg: msg,
-      resume_state: ["end"],
-    };
-  }
-  throw Error('Bad state: ' + state[0]);
-}
-
-export type IfThenElseState<T, F> = ["start"] | ["then", Startable<T>] | ["else", Startable<F>];
-function if_then_else<T, F>(then: Machine<Startable<T>>, els: Machine<Startable<F>>): Machine<IfThenElseState<T, F>> {
-  return function if_then_else_impl(state: IfThenElseState<T, F>, msg: any): Result<IfThenElseState<T, F>> {
-    if (state[0] === "start") {
-      let [outer_state, cond] = msg;
-      if (cond) {
-        return {
-          action: "continue",
-          msg: outer_state,
-          resume_state: ["then", ["start"]],
-        };
-      } else {
-        return {
-          action: "continue",
-          msg: outer_state,
-          resume_state: ["else", ["start"]],
-        };
-      }
-    }
-    if (state[0] === "then") {
-      const result = then(state[1], msg);
-      return {
-        action: result.action,
-        msg: result.msg,
-        resume_state: ["then", result.resume_state],
-      }
-    }
-    if (state[0] === "else") {
-      const result = els(state[1], msg);
-      return {
-        action: result.action,
-        msg: result.msg,
-        resume_state: ["else", result.resume_state],
-      };
-    }
-    throw Error('Bad state: ' + state[0]);
-  };
-}
-
 const char_iter_from_str_iter = sequence([
   // msg
   transformer((msg: any) => {
@@ -307,3 +248,105 @@ describe('CharIterFromStrIter', () => {
   });
 });
 
+type SSVIterState = ["start"] | ["in_field", ["some", string] | ["none"]] | ["almost_finished"] | ["end"];
+
+const space_separated_value = sequence([
+  transformer(([state, msg]: [SSVIterState, any]) =>
+    [[state, msg], state[0]]
+  ),
+  match({
+    start:
+      transformer(([state, msg]: [SSVIterState, any]) => {
+        if (msg[0] !== "next") {
+          throw Error("Bad msg: " + msg);
+        }
+        return [["in_field", ["none"]], true];
+      }),
+    in_field: sequence([
+      transformer(([state, msg]: [SSVIterState, any]) =>
+        [state, msg[0]]
+      ),
+      match({
+        inner_next:
+          sequence([
+            transformer((state: SSVIterState) =>
+              ["iter", ["next"]]
+            ),
+            raise,
+            transformer((next_char: ["some", string] | ["none"]) => [next_char, next_char[0] === "some"]),
+            if_then_else(
+              sequence([
+                transformer(([_, char]: ["some", string]) => [char, char === " "]),
+                if_then_else(
+                  transformer((_: any) => [["start"], false]),
+                  transformer((char: string) => [["in_field", ["some", char]], true]),
+                ),
+              ]),
+              transformer(([_]: ["none"]) => [["almost_finished"], false]),
+            ),
+          ]),
+        inner_clone:
+          transformer((state: SSVIterState) => {
+            if (state[0] !== "in_field") {
+              throw Error("Bad state: " + state);
+            }
+            if (state[1][0] !== "some") {
+              throw Error("Bad state: " + state);
+            }
+            return [state, state[1][1]];
+          }),
+      }),
+    ]),
+    almost_finished:
+      transformer(([state, msg]: [SSVIterState, any]) => {
+        if (msg[0] !== "next") {
+          throw Error("Bad msg: " + msg);
+        }
+        return [["end"], false];
+      }),
+  }),
+]);
+
+
+describe('SpaceSeparatedValueAdvance', () => {
+  const closed = closure(space_separated_value);
+  test('empty string', () => {
+    assertTranscript(closed, [
+      [['start'], 'result', null],
+      [['next'], 'result', true],
+      [['inner_next'], 'iter', ['next']],
+      [['none'], 'result', false],
+      [['next'], 'result', false],
+    ]);
+  });
+  test('one field', () => {
+    assertTranscript(closed, [
+      [['start'], 'result', null],
+      [['next'], 'result', true],
+      [['inner_next'], 'iter', ['next']],
+      [['some', 'f'], 'result', true],
+      [['inner_clone'], 'result', 'f'],
+      [['inner_next'], 'iter', ['next']],
+      [['some', 'o'], 'result', true],
+      [['inner_next'], 'iter', ['next']],
+      [['none'], 'result', false],
+      [['next'], 'result', false],
+    ]);
+  });
+  test('double field', () => {
+    assertTranscript(closed, [
+      [['start'], 'result', null],
+      [['next'], 'result', true],
+      [['inner_next'], 'iter', ['next']],
+      [['some', 'f'], 'result', true],
+      [['inner_next'], 'iter', ['next']],
+      [['some', ' '], 'result', false],
+      [['next'], 'result', true],
+      [['inner_next'], 'iter', ['next']],
+      [['some', 'o'], 'result', true],
+      [['inner_next'], 'iter', ['next']],
+      [['none'], 'result', false],
+      [['next'], 'result', false],
+    ]);
+  });
+});
