@@ -11,30 +11,31 @@ function handleContinue<S>(machine: Machine<S>, state: S, input: any): [S, strin
   return [result.resume_state, result.action, result.msg];
 }
 
+class Transcript {
+  constructor(public machine: Machine<any>, public state: any = null) {
+    this.machine = machine;
+    this.state = state || ['start'];
+  }
+
+  assertNext(input: any, expected_action: string, expected_output: any) {
+    const [new_state, result_action, result_output] = handleContinue(this.machine, this.state, input);
+    expect([result_action, result_output]).toEqual([expected_action, expected_output]);
+    this.state = new_state;
+  }
+}
+
 function assertTransforms(machine: Machine<any>, input: any): any {
   const result = machine(['start'], input);
   expect(result.action).toEqual('result');
   return result.msg;
 }
 
-function assertTranscript(machine: Machine<any>, transcript: [any, string, any][], state: any = null) {
-  state = state || ['start'];
-  let i = 0;
-  for (const [input, expected_action, expected_output] of transcript) {
-    console.log(`${i}: ${input} -> ${expected_action} ${expected_output}`);
-    const [new_state, result_action, result_output] = handleContinue(machine, state, input);
-    expect([result_action, result_output]).toEqual([expected_action, expected_output]);
-    state = new_state;
-    i++;
-  }
-}
 
 describe('Transformer', () => {
   const machine = transformer(x => x + 1);
   test('should do the thing', () => {
-    assertTranscript(machine, [
-      [2, 'result', 3],
-    ]);
+    const transcript = new Transcript(machine);
+    transcript.assertNext(2, 'result', 3);
   });
 });
 
@@ -56,9 +57,8 @@ const str_iter = transformer(([[str, offset], msg]: [StrIterState, ['next' | 'cl
 describe('StrIter', () => {
   test('should work with empty string', () => {
     const str_iter_state = assertTransforms(str_iter_init, '');
-    assertTranscript(str_iter, [
-      [[str_iter_state, ['next']], 'result', [['', 0], false]],
-    ]);
+    const transcript = new Transcript(str_iter);
+    transcript.assertNext([str_iter_state, ['next']], 'result', [['', 0], false]);
   });
 
   test('should work with non-empty string', () => {
@@ -130,57 +130,52 @@ function string_iter_equals(state: StringIterEqualsState, msg: any): Result<Stri
 
 describe('StringIterEquals', () => {
   test('should work with empty string', () => {
-    assertTranscript(string_iter_equals, [
-      ['', 'iter', ['next']],
-      [false, 'result', true],
-    ]);
+    const transcript = new Transcript(string_iter_equals);
+    transcript.assertNext('', 'iter', ['next']);
+    transcript.assertNext(false, 'result', true);
   });
 
   test('should work with non-empty string', () => {
-    assertTranscript(string_iter_equals, [
-      ['foo', 'iter', ['next']],
-      [true, 'iter', ['clone']],
-      ['f', 'iter', ['next']],
-      [true, 'iter', ['clone']],
-      ['o', 'iter', ['next']],
-      [true, 'iter', ['clone']],
-      ['o', 'iter', ['next']],
-      [false, 'result', true],
-    ]);
+    const transcript = new Transcript(string_iter_equals);
+    transcript.assertNext('foo', 'iter', ['next']);
+    transcript.assertNext(true, 'iter', ['clone']);
+    transcript.assertNext('f', 'iter', ['next']);
+    transcript.assertNext(true, 'iter', ['clone']);
+    transcript.assertNext('o', 'iter', ['next']);
+    transcript.assertNext(true, 'iter', ['clone']);
+    transcript.assertNext('o', 'iter', ['next']);
+    transcript.assertNext(false, 'result', true);
   });
 
   test('should work with iter shorter than string', () => {
-    assertTranscript(string_iter_equals, [
-      ['foo', 'iter', ['next']],
-      [true, 'iter', ['clone']],
-      ['f', 'iter', ['next']],
-      [true, 'iter', ['clone']],
-      ['o', 'iter', ['next']],
-      [false, 'result', false],
-    ]);
+    const transcript = new Transcript(string_iter_equals);
+    transcript.assertNext('foo', 'iter', ['next']);
+    transcript.assertNext(true, 'iter', ['clone']);
+    transcript.assertNext('f', 'iter', ['next']);
+    transcript.assertNext(true, 'iter', ['clone']);
+    transcript.assertNext('o', 'iter', ['next']);
+    transcript.assertNext(false, 'result', false);
   });
 
   test('should work with string shorter than iter', () => {
-    assertTranscript(string_iter_equals, [
-      ['foo', 'iter', ['next']],
-      [true, 'iter', ['clone']],
-      ['f', 'iter', ['next']],
-      [true, 'iter', ['clone']],
-      ['o', 'iter', ['next']],
-      [true, 'iter', ['clone']],
-      ['o', 'iter', ['next']],
-      [true, 'result', false],
-    ]);
+    const transcript = new Transcript(string_iter_equals);
+    transcript.assertNext('foo', 'iter', ['next']);
+    transcript.assertNext(true, 'iter', ['clone']);
+    transcript.assertNext('f', 'iter', ['next']);
+    transcript.assertNext(true, 'iter', ['clone']);
+    transcript.assertNext('o', 'iter', ['next']);
+    transcript.assertNext(true, 'iter', ['clone']);
+    transcript.assertNext('o', 'iter', ['next']);
+    transcript.assertNext(true, 'result', false);
   });
 
   test('should work with char mismatch', () => {
-    assertTranscript(string_iter_equals, [
-      ['foo', 'iter', ['next']],
-      [true, 'iter', ['clone']],
-      ['f', 'iter', ['next']],
-      [true, 'iter', ['clone']],
-      ['r', 'result', false],
-    ]);
+    const transcript = new Transcript(string_iter_equals);
+    transcript.assertNext('foo', 'iter', ['next']);
+    transcript.assertNext(true, 'iter', ['clone']);
+    transcript.assertNext('f', 'iter', ['next']);
+    transcript.assertNext(true, 'iter', ['clone']);
+    transcript.assertNext('r', 'result', false);
   });
 });
 
@@ -199,14 +194,12 @@ const string_iter_equals_inverse = sequence([
 
 describe('StringIterEqualsInverse', () => {
   test('handler alone', () => {
-    assertTranscript(handler, [
-      [['iter', ['foo', -1], ['next']], 'result', [['foo', 0], true]],
-    ]);
+    const transcript = new Transcript(handler);
+    transcript.assertNext(['iter', ['foo', -1], ['next']], 'result', [['foo', 0], true]);
   });
   test('should work', () => {
-    assertTranscript(string_iter_equals_inverse, [
-      ['foo', 'result', true],
-    ]);
+    const transcript = new Transcript(string_iter_equals_inverse);
+    transcript.assertNext('foo', 'result', true);
   });
 });
 
@@ -234,17 +227,15 @@ const char_iter_from_str_iter = sequence([
 
 describe('CharIterFromStrIter', () => {
   test('unbound with empty string', () => {
-    assertTranscript(char_iter_from_str_iter, [
-      [['next'], 'iter', ['next']],
-      [false, 'result', ['none']],
-    ]);
+    const transcript = new Transcript(char_iter_from_str_iter);
+    transcript.assertNext(['next'], 'iter', ['next']);
+    transcript.assertNext(false, 'result', ['none']);
   });
   test('unbound with non-empty string', () => {
-    assertTranscript(char_iter_from_str_iter, [
-      [['next'], 'iter', ['next']],
-      [true, 'iter', ['clone']],
-      ['f', 'result', ['some', 'f']],
-    ]);
+    const transcript = new Transcript(char_iter_from_str_iter);
+    transcript.assertNext(['next'], 'iter', ['next']);
+    transcript.assertNext(true, 'iter', ['clone']);
+    transcript.assertNext('f', 'result', ['some', 'f']);
   });
 });
 
@@ -311,42 +302,39 @@ const space_separated_value = sequence([
 describe('SpaceSeparatedValueAdvance', () => {
   const closed = closure(space_separated_value);
   test('empty string', () => {
-    assertTranscript(closed, [
-      [['start'], 'result', null],
-      [['next'], 'result', true],
-      [['inner_next'], 'iter', ['next']],
-      [['none'], 'result', false],
-      [['next'], 'result', false],
-    ]);
+    const transcript = new Transcript(closed);
+    transcript.assertNext(['start'], 'result', null);
+    transcript.assertNext(['next'], 'result', true);
+    transcript.assertNext(['inner_next'], 'iter', ['next']);
+    transcript.assertNext(['none'], 'result', false);
+    transcript.assertNext(['next'], 'result', false);
   });
   test('one field', () => {
-    assertTranscript(closed, [
-      [['start'], 'result', null],
-      [['next'], 'result', true],
-      [['inner_next'], 'iter', ['next']],
-      [['some', 'f'], 'result', true],
-      [['inner_clone'], 'result', 'f'],
-      [['inner_next'], 'iter', ['next']],
-      [['some', 'o'], 'result', true],
-      [['inner_next'], 'iter', ['next']],
-      [['none'], 'result', false],
-      [['next'], 'result', false],
-    ]);
+    const transcript = new Transcript(closed);
+    transcript.assertNext(['start'], 'result', null);
+    transcript.assertNext(['next'], 'result', true);
+    transcript.assertNext(['inner_next'], 'iter', ['next']);
+    transcript.assertNext(['some', 'f'], 'result', true);
+    transcript.assertNext(['inner_clone'], 'result', 'f');
+    transcript.assertNext(['inner_next'], 'iter', ['next']);
+    transcript.assertNext(['some', 'o'], 'result', true);
+    transcript.assertNext(['inner_next'], 'iter', ['next']);
+    transcript.assertNext(['none'], 'result', false);
+    transcript.assertNext(['next'], 'result', false);
   });
   test('double field', () => {
-    assertTranscript(closed, [
-      [['start'], 'result', null],
-      [['next'], 'result', true],
-      [['inner_next'], 'iter', ['next']],
-      [['some', 'f'], 'result', true],
-      [['inner_next'], 'iter', ['next']],
-      [['some', ' '], 'result', false],
-      [['next'], 'result', true],
-      [['inner_next'], 'iter', ['next']],
-      [['some', 'o'], 'result', true],
-      [['inner_next'], 'iter', ['next']],
-      [['none'], 'result', false],
-      [['next'], 'result', false],
-    ]);
+    const transcript = new Transcript(closed);
+    transcript.assertNext(['start'], 'result', null);
+    transcript.assertNext(['next'], 'result', true);
+    transcript.assertNext(['inner_next'], 'iter', ['next']);
+    transcript.assertNext(['some', 'f'], 'result', true);
+    transcript.assertNext(['inner_next'], 'iter', ['next']);
+    transcript.assertNext(['some', ' '], 'result', false);
+    transcript.assertNext(['next'], 'result', true);
+    transcript.assertNext(['inner_next'], 'iter', ['next']);
+    transcript.assertNext(['some', 'o'], 'result', true);
+    transcript.assertNext(['inner_next'], 'iter', ['next']);
+    transcript.assertNext(['none'], 'result', false);
+    transcript.assertNext(['next'], 'result', false);
   });
 });
