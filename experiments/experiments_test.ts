@@ -239,6 +239,44 @@ describe('CharIterFromStrIter', () => {
   });
 });
 
+type CharIterFromStringState = [string, number];
+const char_iter_from_string_init = transformer((s: string) => [s, -1]);
+
+const char_iter_from_string = sequence([
+  transformer(([[s, offset], msg]: [CharIterFromStringState, any]) => {
+    if (msg[0] !== "next") {
+      throw Error("Bad msg: " + msg);
+    }
+    offset += 1;
+    if (offset < s.length) {
+      return [[s, offset], ["some", s[offset]]];
+    }
+    return [[s, offset], ["none"]];
+  }),
+]);
+
+describe('CharIterFromString', () => {
+  test('empty string', () => {
+    const iter = assertTransforms(char_iter_from_string_init, '');
+    expect(iter).toEqual(['', -1]);
+
+    const transcript = new Transcript(closure(char_iter_from_string));
+    transcript.assertNext(iter, 'result', null);
+    transcript.assertNext(['next'], 'result', ['none']);
+  });
+  test('non-empty string', () => {
+    const iter = assertTransforms(char_iter_from_string_init, 'foo');
+    expect(iter).toEqual(['foo', -1]);
+
+    const transcript = new Transcript(closure(char_iter_from_string));
+    transcript.assertNext(iter, 'result', null);
+    transcript.assertNext(['next'], 'result', ['some', 'f']);
+    transcript.assertNext(['next'], 'result', ['some', 'o']);
+    transcript.assertNext(['next'], 'result', ['some', 'o']);
+    transcript.assertNext(['next'], 'result', ['none']);
+  });
+});
+
 type SSVIterState = ["start"] | ["in_field"] | ["almost_finished"] | ["end"];
 
 const space_separated_value = sequence([
