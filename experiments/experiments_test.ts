@@ -1,6 +1,6 @@
 // Test file for experiments.ts
 import assert from 'assert';
-import { andThen, call, closure, HandlerResult, if_then_else, loop, Machine, match, raise, Result, sequence, smuggle, Startable, transformer } from './experiments';
+import { andThen, call, closure, handle, HandlerResult, if_then_else, loop, Machine, match, raise, Result, sequence, smuggle, Startable, transformer } from './experiments';
 
 function handleContinue<S>(machine: Machine<S>, state: S, input: any): [S, string, any] {
   let result = machine(state, input);
@@ -25,7 +25,10 @@ class Transcript {
 }
 
 function assertTransforms(machine: Machine<any>, input: any): any {
-  const result = machine(['start'], input);
+  let result = machine(['start'], input);
+  while (result.action === 'continue') {
+    result = machine(result.resume_state, result.msg);
+  }
   expect(result.action).toEqual('result');
   return result.msg;
 }
@@ -321,42 +324,56 @@ const space_separated_value = sequence([
   }),
 ]);
 
-describe('SpaceSeparatedValueAdvance', () => {
-  const closed = closure(space_separated_value);
+const space_separated_value_for_string_init = sequence([
+  char_iter_from_string_init,
+  transformer((iter_state: CharIterFromStringState) => [iter_state, ["start"]]),
+]);
+
+const space_separated_value_for_string = sequence([
+  transformer(([[char_iter_state, ssv_state], msg]: [[CharIterFromStringState, SSVIterState], any]) =>
+    [char_iter_state, [ssv_state, msg]]),
+  handle("iter", char_iter_from_string, space_separated_value),
+  transformer(([char_iter_state, [ssv_state, msg]]: [CharIterFromStringState, [SSVIterState, any]]) =>
+    [[char_iter_state, ssv_state], msg]),
+]);
+
+describe('SpaceSeparatedValue', () => {
+  const closed = closure(space_separated_value_for_string);
   test('empty string', () => {
     const transcript = new Transcript(closed);
-    transcript.assertNext(['start'], 'result', null);
+    transcript.assertNext(
+      assertTransforms(space_separated_value_for_string_init, ""),
+      'result', null);
     transcript.assertNext(['next'], 'result', true);
-    transcript.assertNext(['inner_next'], 'iter', ['next']);
-    transcript.assertNext(['none'], 'result', ['none']);
+    transcript.assertNext(['inner_next'], 'result', ['none']);
     transcript.assertNext(['next'], 'result', false);
   });
   test('one field', () => {
     const transcript = new Transcript(closed);
-    transcript.assertNext(['start'], 'result', null);
+    transcript.assertNext(
+      assertTransforms(space_separated_value_for_string_init, "foo"),
+      'result', null);
     transcript.assertNext(['next'], 'result', true);
-    transcript.assertNext(['inner_next'], 'iter', ['next']);
-    transcript.assertNext(['some', 'f'], 'result', ['some', 'f']);
-    transcript.assertNext(['inner_next'], 'iter', ['next']);
-    transcript.assertNext(['some', 'o'], 'result', ['some', 'o']);
-    transcript.assertNext(['inner_next'], 'iter', ['next']);
-    transcript.assertNext(['none'], 'result', ['none']);
+    transcript.assertNext(['inner_next'], 'result', ['some', 'f']);
+    transcript.assertNext(['inner_next'], 'result', ['some', 'o']);
+    transcript.assertNext(['inner_next'], 'result', ['some', 'o']);
+    transcript.assertNext(['inner_next'], 'result', ['none']);
     transcript.assertNext(['next'], 'result', false);
   });
 
   test('double field', () => {
     const transcript = new Transcript(closed);
-    transcript.assertNext(['start'], 'result', null);
+    transcript.assertNext(
+      assertTransforms(space_separated_value_for_string_init, "foo b"),
+      'result', null);
     transcript.assertNext(['next'], 'result', true);
-    transcript.assertNext(['inner_next'], 'iter', ['next']);
-    transcript.assertNext(['some', 'f'], 'result', ['some', 'f']);
-    transcript.assertNext(['inner_next'], 'iter', ['next']);
-    transcript.assertNext(['some', ' '], 'result', ['none']);
+    transcript.assertNext(['inner_next'], 'result', ['some', 'f']);
+    transcript.assertNext(['inner_next'], 'result', ['some', 'o']);
+    transcript.assertNext(['inner_next'], 'result', ['some', 'o']);
+    transcript.assertNext(['inner_next'], 'result', ['none']);
     transcript.assertNext(['next'], 'result', true);
-    transcript.assertNext(['inner_next'], 'iter', ['next']);
-    transcript.assertNext(['some', 'o'], 'result', ['some', 'o']);
-    transcript.assertNext(['inner_next'], 'iter', ['next']);
-    transcript.assertNext(['none'], 'result', ['none']);
+    transcript.assertNext(['inner_next'], 'result', ['some', 'b']);
+    transcript.assertNext(['inner_next'], 'result', ['none']);
     transcript.assertNext(['next'], 'result', false);
   });
 });
@@ -400,5 +417,23 @@ describe('ParseInt', () => {
     transcript.assertNext(['some', '2'], 'iter', ['next']);
     transcript.assertNext(['some', '3'], 'iter', ['next']);
     transcript.assertNext(['none'], 'result', 123);
+  });
+});
+
+const parse_int_from_string = sequence([
+  char_iter_from_string_init,
+  transformer((iter_state: CharIterFromStringState) => [iter_state, null]),
+  handle("iter", char_iter_from_string, parse_int),
+  transformer(([iter_state, result]: [CharIterFromStringState, number]) => result),
+]);
+
+describe('ParseIntFromString', () => {
+  test('empty string', () => {
+    const transcript = new Transcript(parse_int_from_string);
+    transcript.assertNext("", 'result', 0);
+  });
+  test('non-empty string', () => {
+    const transcript = new Transcript(parse_int_from_string);
+    transcript.assertNext("1234", 'result', 1234);
   });
 });

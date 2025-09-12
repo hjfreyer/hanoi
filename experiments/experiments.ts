@@ -131,6 +131,9 @@ export function match<H>(cases: MatchCases<H>): Machine<MatchState<H>> {
     if (state[0] === "within") {
       let selector = state[1];
       let inner_state = state[2];
+      if (!(selector in cases)) {
+        throw Error("Bad selector: " + String(selector));
+      }
       const result = cases[selector](inner_state, msg);
       return { action: result.action, msg: result.msg, resume_state: ["within", selector, result.resume_state] };
     }
@@ -258,6 +261,41 @@ export function loop<S>(inner: Machine<Startable<S>>): Machine<LoopState<S>> {
         throw Error('Bad inner action: ' + inner_action);
       }
       return { action: result.action, msg: result.msg, resume_state: ["inner", result.resume_state] };
+    }
+    throw Error('Bad state: ' + state[0]);
+  };
+}
+
+export type HandleState<H, A, I> = ["start"] | ["inner", A, Startable<I>] | ["handler", Startable<H>, A, Startable<I>] | ["end"];
+
+export function handle<H, A, I>(action: string, handler: Machine<Startable<H>>, inner: Machine<Startable<I>>): Machine<HandleState<H, A, I>> {
+  return (state: HandleState<H, A, I>, msg: any): Result<HandleState<H, A, I>> => {
+    if (state[0] === "start") {
+      const [handler_arg, inner_msg] = msg;
+      return { action: "continue", msg: inner_msg, resume_state: ["inner", handler_arg, ["start"]] };
+    }
+    if (state[0] === "inner") {
+      const handler_arg = state[1];
+      const inner_state = state[2];
+      const result = inner(inner_state, msg);
+      if (result.action === "result") {
+        return { action: "result", msg: [handler_arg, result.msg], resume_state: ["end"] };
+      }
+      if (result.action === action) {
+        return { action: "continue", msg: result.msg, resume_state: ["handler", ["start"], handler_arg, result.resume_state] };
+      }
+      return { action: result.action, msg: result.msg, resume_state: ["inner", handler_arg, result.resume_state] };
+    }
+    if (state[0] === "handler") {
+      const handler_state = state[1];
+      const handler_arg = state[2];
+      const inner_state = state[3];
+      const result = handler(handler_state, [handler_arg, msg]);
+      if (result.action === "result") {
+        const [new_handler_arg, new_msg] = result.msg;
+        return { action: "continue", msg: new_msg, resume_state: ["inner", new_handler_arg, inner_state] };
+      }
+      return { action: result.action, msg: result.msg, resume_state: ["handler", result.resume_state, handler_arg, inner_state] };
     }
     throw Error('Bad state: ' + state[0]);
   };
