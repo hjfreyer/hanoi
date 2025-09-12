@@ -239,7 +239,7 @@ describe('CharIterFromStrIter', () => {
   });
 });
 
-type SSVIterState = ["start"] | ["in_field", ["some", string] | ["none"]] | ["almost_finished"] | ["end"];
+type SSVIterState = ["start"] | ["in_field"] | ["almost_finished"] | ["end"];
 
 const space_separated_value = sequence([
   transformer(([state, msg]: [SSVIterState, any]) =>
@@ -254,39 +254,24 @@ const space_separated_value = sequence([
         return [["in_field", ["none"]], true];
       }),
     in_field: sequence([
-      transformer(([state, msg]: [SSVIterState, any]) =>
-        [state, msg[0]]
-      ),
-      match({
-        inner_next:
-          sequence([
-            transformer((state: SSVIterState) =>
-              ["iter", ["next"]]
-            ),
-            raise,
-            transformer((next_char: ["some", string] | ["none"]) => [next_char, next_char[0] === "some"]),
-            if_then_else(
-              sequence([
-                transformer(([_, char]: ["some", string]) => [char, char === " "]),
-                if_then_else(
-                  transformer((_: any) => [["start"], false]),
-                  transformer((char: string) => [["in_field", ["some", char]], true]),
-                ),
-              ]),
-              transformer(([_]: ["none"]) => [["almost_finished"], false]),
-            ),
-          ]),
-        inner_clone:
-          transformer((state: SSVIterState) => {
-            if (state[0] !== "in_field") {
-              throw Error("Bad state: " + state);
-            }
-            if (state[1][0] !== "some") {
-              throw Error("Bad state: " + state);
-            }
-            return [state, state[1][1]];
-          }),
+      transformer(([state, msg]: [SSVIterState, any]) => {
+        if (msg[0] !== "inner_next") {
+          throw Error("Bad msg: " + msg);
+        }
+        return ["iter", ["next"]];
       }),
+      raise,
+      transformer((next_char: ["some", string] | ["none"]) => [next_char, next_char[0] === "some"]),
+      if_then_else(
+        sequence([
+          transformer(([_, char]: ["some", string]) => [char, char === " "]),
+          if_then_else(
+            transformer((_: any) => [["start"], ["none"]]),
+            transformer((char: string) => [["in_field"], ["some", char]]),
+          ),
+        ]),
+        transformer(([_]: ["none"]) => [["almost_finished"], ["none"]]),
+      ),
     ]),
     almost_finished:
       transformer(([state, msg]: [SSVIterState, any]) => {
@@ -298,7 +283,6 @@ const space_separated_value = sequence([
   }),
 ]);
 
-
 describe('SpaceSeparatedValueAdvance', () => {
   const closed = closure(space_separated_value);
   test('empty string', () => {
@@ -306,7 +290,7 @@ describe('SpaceSeparatedValueAdvance', () => {
     transcript.assertNext(['start'], 'result', null);
     transcript.assertNext(['next'], 'result', true);
     transcript.assertNext(['inner_next'], 'iter', ['next']);
-    transcript.assertNext(['none'], 'result', false);
+    transcript.assertNext(['none'], 'result', ['none']);
     transcript.assertNext(['next'], 'result', false);
   });
   test('one field', () => {
@@ -314,27 +298,27 @@ describe('SpaceSeparatedValueAdvance', () => {
     transcript.assertNext(['start'], 'result', null);
     transcript.assertNext(['next'], 'result', true);
     transcript.assertNext(['inner_next'], 'iter', ['next']);
-    transcript.assertNext(['some', 'f'], 'result', true);
-    transcript.assertNext(['inner_clone'], 'result', 'f');
+    transcript.assertNext(['some', 'f'], 'result', ['some', 'f']);
     transcript.assertNext(['inner_next'], 'iter', ['next']);
-    transcript.assertNext(['some', 'o'], 'result', true);
+    transcript.assertNext(['some', 'o'], 'result', ['some', 'o']);
     transcript.assertNext(['inner_next'], 'iter', ['next']);
-    transcript.assertNext(['none'], 'result', false);
+    transcript.assertNext(['none'], 'result', ['none']);
     transcript.assertNext(['next'], 'result', false);
   });
+
   test('double field', () => {
     const transcript = new Transcript(closed);
     transcript.assertNext(['start'], 'result', null);
     transcript.assertNext(['next'], 'result', true);
     transcript.assertNext(['inner_next'], 'iter', ['next']);
-    transcript.assertNext(['some', 'f'], 'result', true);
+    transcript.assertNext(['some', 'f'], 'result', ['some', 'f']);
     transcript.assertNext(['inner_next'], 'iter', ['next']);
-    transcript.assertNext(['some', ' '], 'result', false);
+    transcript.assertNext(['some', ' '], 'result', ['none']);
     transcript.assertNext(['next'], 'result', true);
     transcript.assertNext(['inner_next'], 'iter', ['next']);
-    transcript.assertNext(['some', 'o'], 'result', true);
+    transcript.assertNext(['some', 'o'], 'result', ['some', 'o']);
     transcript.assertNext(['inner_next'], 'iter', ['next']);
-    transcript.assertNext(['none'], 'result', false);
+    transcript.assertNext(['none'], 'result', ['none']);
     transcript.assertNext(['next'], 'result', false);
   });
 });
