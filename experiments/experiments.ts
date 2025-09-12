@@ -57,7 +57,7 @@ export function andThen<F, G>(f: Machine<Startable<F>>, g: Machine<Startable<G>>
 }
 
 export function sequence(machines: Machine<any>[]): Machine<any> {
-  let result = machines[0]; 
+  let result = machines[0];
   for (const machine of machines.slice(1)) {
     result = andThen(result, machine);
   }
@@ -119,7 +119,7 @@ export function smuggle<E, S>(inner: Machine<Startable<S>>): Machine<SmuggleStat
   };
 }
 
-export type MatchCases<H> = {[K in keyof H]: Machine<Startable<H[K]>>};
+export type MatchCases<H> = { [K in keyof H]: Machine<Startable<H[K]>> };
 export type MatchState<H> = ["start"] | ["within", keyof H, Startable<H[keyof H]>];
 
 export function match<H>(cases: MatchCases<H>): Machine<MatchState<H>> {
@@ -234,6 +234,30 @@ export function closure<C, S>(inner: Machine<Startable<S>>): Machine<ClosureStat
         msg: result.msg,
         resume_state: ["inner", result.resume_state],
       };
+    }
+    throw Error('Bad state: ' + state[0]);
+  };
+}
+
+export type LoopState<S> = ["start"] | ["inner", Startable<S>] | ["end"];
+export function loop<S>(inner: Machine<Startable<S>>): Machine<LoopState<S>> {
+  return (state: LoopState<S>, msg: any): Result<LoopState<S>> => {
+    if (state[0] === "start") {
+      return { action: "continue", msg, resume_state: ["inner", ["start"]] };
+    }
+    if (state[0] === "inner") {
+      const result = inner(state[1], msg);
+      if (result.action === "result") {
+        const [inner_action, inner_msg] = result.msg;
+        if (inner_action === "break") {
+          return { action: "result", msg: inner_msg, resume_state: ["end"] };
+        }
+        if (inner_action === "continue") {
+          return { action: "continue", msg: inner_msg, resume_state: ["inner", ["start"]] };
+        }
+        throw Error('Bad inner action: ' + inner_action);
+      }
+      return { action: result.action, msg: result.msg, resume_state: ["inner", result.resume_state] };
     }
     throw Error('Bad state: ' + state[0]);
   };

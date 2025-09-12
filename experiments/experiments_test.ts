@@ -1,6 +1,6 @@
 // Test file for experiments.ts
 import assert from 'assert';
-import { andThen, call, closure, HandlerResult, if_then_else, Machine, match, raise, Result, sequence, smuggle, Startable, transformer } from './experiments';
+import { andThen, call, closure, HandlerResult, if_then_else, loop, Machine, match, raise, Result, sequence, smuggle, Startable, transformer } from './experiments';
 
 function handleContinue<S>(machine: Machine<S>, state: S, input: any): [S, string, any] {
   let result = machine(state, input);
@@ -320,5 +320,47 @@ describe('SpaceSeparatedValueAdvance', () => {
     transcript.assertNext(['inner_next'], 'iter', ['next']);
     transcript.assertNext(['none'], 'result', ['none']);
     transcript.assertNext(['next'], 'result', false);
+  });
+});
+
+const parse_int = sequence([
+  transformer((msg: null) => {
+    if (msg !== null) {
+      throw Error("Bad msg: " + msg);
+    }
+    return 0;
+  }),
+  loop(sequence([
+    transformer((acc: number) => {
+      return [acc, ["iter", ["next"]]];
+    }),
+    smuggle(raise),
+    transformer(([acc, msg]: [number, any]) => {
+      return [[acc, msg], msg[0] === "some"];
+    }),
+    if_then_else(
+      transformer(([acc, char]: [number, ["some", string]]) => {
+        return ["continue", acc * 10 + (char[1].charCodeAt(0) - '0'.charCodeAt(0))];
+      }),
+      transformer(([acc, char]: [number, ["none"]]) => {
+        return ["break", acc];
+      }),
+    ),
+  ]))
+]);
+
+describe('ParseInt', () => {
+  test('empty string', () => {
+    const transcript = new Transcript(parse_int);
+    transcript.assertNext(null, 'iter', ['next']);
+    transcript.assertNext(['none'], 'result', 0);
+  });
+  test('non-empty string', () => {
+    const transcript = new Transcript(parse_int);
+    transcript.assertNext(null, 'iter', ['next']);
+    transcript.assertNext(['some', '1'], 'iter', ['next']);
+    transcript.assertNext(['some', '2'], 'iter', ['next']);
+    transcript.assertNext(['some', '3'], 'iter', ['next']);
+    transcript.assertNext(['none'], 'result', 123);
   });
 });
