@@ -1,6 +1,5 @@
 // Test file for experiments.ts
-import assert from 'assert';
-import { andThen, andThenInit, closure, closure2, closureInit, ClosureState, Combinator, handle, handle2, handleInit, if_then_else, if_then_else2, if_then_else_null, loop, Machine, match, raise, raise2, Result, sequence, sequence2, sequenceInit, smuggle, smuggle2, smuggleInit, Startable, transformer, transformer2, transformerInit } from './experiments';
+import { andThen, closure, ClosureState, Combinator, handle, if_then_else_null, Machine, raise2, Result, sequence, smuggle, t } from './experiments';
 
 function handleContinue<S>(machine: Machine<S>, state: S, input: any): [S, string, any] {
   let result = machine(state, input);
@@ -50,20 +49,18 @@ function assertTransforms(machine: Machine<any>, input: any): any {
 
 
 describe('Transformer', () => {
-  const machine = transformer(x => x + 1);
+  const machine = t(x => x + 1);
   test('should do the thing', () => {
-    const transcript = new Transcript(machine, ['start']);
+    const transcript = new Transcript2(machine, null);
     transcript.assertNext(2, 'result', 3);
   });
 });
 
-function str_iter_init(s: string): ClosureState<StrIterState, ["start"]> {
-  return closureInit([s, -1], transformerInit(null));
-}
+const str_iter_init: Combinator<null, ["start"]> = t((s: string) => [s, -1]);
 
 type StrIterState = [string, number];
 
-const str_iter: Machine<ClosureState<StrIterState, ["start"]>> = closure(transformer(([[str, offset], msg]: [StrIterState, ['next' | 'clone']]): [StrIterState, boolean | string] => {
+const str_iter2: Combinator<StrIterState, ClosureState<StrIterState, ["start"]>> = closure(t(([[str, offset], msg]: [StrIterState, ['next' | 'clone']]): [StrIterState, boolean | string] => {
   if (msg[0] === 'next') {
     offset += 1;
     return [[str, offset], offset < str.length];
@@ -74,23 +71,15 @@ const str_iter: Machine<ClosureState<StrIterState, ["start"]>> = closure(transfo
   throw Error('Bad msg: ' + msg[0]);
 }));
 
-const str_iter2: Combinator<string, ClosureState<StrIterState, ["start"]>> = {
-  init(s: string): ClosureState<StrIterState, ["start"]> {
-    return str_iter_init(s);
-  },
-  run(state: ClosureState<StrIterState, ["start"]>, msg: any): Result<ClosureState<StrIterState, ["start"]>> {
-    return str_iter(state, msg);
-  }
-};
 
 describe('StrIter', () => {
   test('should work with empty string', () => {
-    const transcript = new Transcript(str_iter, str_iter_init(''));
+    const transcript = new Transcript2(str_iter2, ['', -1]);
     transcript.assertNext(['next'], 'result', false);
   });
 
   test('should work with non-empty string', () => {
-    const transcript = new Transcript(str_iter, str_iter_init('foo'));
+    const transcript = new Transcript2(str_iter2, ['foo', -1]);
 
     transcript.assertNext(['next'], 'result', true);
     transcript.assertNext(['clone'], 'result', 'f');
@@ -245,10 +234,6 @@ function unclosure2<S>(inner: Combinator<unknown, S>): Combinator<null, Unclosur
   };
 }
 
-const handler = andThen(
-  transformer(([action, iter_state, iter_msg]: [string, StrIterState, any]) =>
-    [iter_state, iter_msg]),
-  str_iter);
 
 
 // string_iter_equals_inverse := (s) =>
@@ -279,8 +264,11 @@ const handler = andThen(
 //   ]);
 // }
 
-const string_iter_equals_inverse = sequence2(transformer2((s: string) => [[s, null], s]),
-  unclosure2(handle2("iter", str_iter2, string_iter_equals2)),
+const string_iter_equals_inverse = sequence(
+  t((s: string) => [s, s]),
+  smuggle(str_iter_init),
+  t(([s, str_iter]) => [[str_iter, null], s]),
+  unclosure2(handle("iter", str_iter2, string_iter_equals2)),
 );
 
 describe('StringIterEqualsInverse', () => {
@@ -294,23 +282,23 @@ describe('StringIterEqualsInverse', () => {
   });
 });
 
-const char_iter_from_str_iter = sequence2(
+const char_iter_from_str_iter = sequence(
   // msg
-  transformer2((msg: any) => {
+  t((msg: any) => {
     if (msg[0] !== "next") {
       throw Error("Bad msg: " + msg);
     }
     return ["iter", ["next"]];
   }),
   raise2,
-  transformer2((has_next: any) => [null, has_next]),
+  t((has_next: any) => [null, has_next]),
   if_then_else_null(
-    sequence2(
-      transformer2((_: any) => ["iter", ["clone"]]),
+    sequence(
+      t((_: any) => ["iter", ["clone"]]),
       raise2,
-      transformer2((char: any) => ["some", char]),
+      t((char: any) => ["some", char]),
     ),
-    transformer2((_: any) => ["none"]),
+    t((_: any) => ["none"]),
   )
 );
 
@@ -330,10 +318,10 @@ describe('CharIterFromStrIter', () => {
 });
 
 type CharIterFromStringState = [string, number];
-const char_iter_from_string_init = transformer2((s: string) => [s, -1]);
+const char_iter_from_string_init = t((s: string) => [s, -1]);
 
-const char_iter_from_string = closure2(
-  transformer2(([[s, offset], msg]: [CharIterFromStringState, any]) => {
+const char_iter_from_string = closure(
+  t(([[s, offset], msg]: [CharIterFromStringState, any]) => {
     if (msg[0] !== "next") {
       throw Error("Bad msg: " + msg);
     }
@@ -351,7 +339,6 @@ describe('CharIterFromString', () => {
     expect(iter).toEqual(['', -1]);
 
     const transcript = new Transcript2(char_iter_from_string, iter);
-    // transcript.assertNext(iter, 'result', null);
     transcript.assertNext(['next'], 'result', ['none']);
   });
   test('non-empty string', () => {
