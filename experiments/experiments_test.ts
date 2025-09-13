@@ -10,20 +10,7 @@ function handleContinue<S>(machine: Machine<S>, state: S, input: any): [S, strin
   return [result.resume_state, result.action, result.msg];
 }
 
-class Transcript {
-  constructor(public machine: Machine<any>, public state: any = null) {
-    this.machine = machine;
-    this.state = state || ['start'];
-  }
-
-  assertNext(input: any, expected_action: string, expected_output: any) {
-    const [new_state, result_action, result_output] = handleContinue(this.machine, this.state, input);
-    expect([result_action, result_output]).toEqual([expected_action, expected_output]);
-    this.state = new_state;
-  }
-}
-
-class Transcript2<I, S> {
+class Transcript<I, S> {
   machine: Machine<S>;
   state: S;
   constructor(combinator: Combinator<I, S>, state: I) {
@@ -51,7 +38,7 @@ function assertTransforms(machine: Machine<any>, input: any): any {
 describe('Transformer', () => {
   const machine = t(x => x + 1);
   test('should do the thing', () => {
-    const transcript = new Transcript2(machine, null);
+    const transcript = new Transcript(machine, null);
     transcript.assertNext(2, 'result', 3);
   });
 });
@@ -74,12 +61,12 @@ const str_iter2: Combinator<StrIterState, ClosureState<StrIterState, ["start"]>>
 
 describe('StrIter', () => {
   test('should work with empty string', () => {
-    const transcript = new Transcript2(str_iter2, ['', -1]);
+    const transcript = new Transcript(str_iter2, ['', -1]);
     transcript.assertNext(['next'], 'result', false);
   });
 
   test('should work with non-empty string', () => {
-    const transcript = new Transcript2(str_iter2, ['foo', -1]);
+    const transcript = new Transcript(str_iter2, ['foo', -1]);
 
     transcript.assertNext(['next'], 'result', true);
     transcript.assertNext(['clone'], 'result', 'f');
@@ -163,13 +150,13 @@ const string_iter_equals2: Combinator<null, StringIterEqualsState> = {
 
 describe('StringIterEquals', () => {
   test('should work with empty string', () => {
-    const transcript = new Transcript2(string_iter_equals2, null);
+    const transcript = new Transcript(string_iter_equals2, null);
     transcript.assertNext('', 'iter', ['next']);
     transcript.assertNext(false, 'result', true);
   });
 
   test('should work with non-empty string', () => {
-    const transcript = new Transcript(string_iter_equals, string_iter_equals_init(null));
+    const transcript = new Transcript(string_iter_equals2, null);
     transcript.assertNext('foo', 'iter', ['next']);
     transcript.assertNext(true, 'iter', ['clone']);
     transcript.assertNext('f', 'iter', ['next']);
@@ -181,7 +168,7 @@ describe('StringIterEquals', () => {
   });
 
   test('should work with iter shorter than string', () => {
-    const transcript = new Transcript(string_iter_equals, string_iter_equals_init(null));
+    const transcript = new Transcript(string_iter_equals2, null);
     transcript.assertNext('foo', 'iter', ['next']);
     transcript.assertNext(true, 'iter', ['clone']);
     transcript.assertNext('f', 'iter', ['next']);
@@ -191,7 +178,7 @@ describe('StringIterEquals', () => {
   });
 
   test('should work with string shorter than iter', () => {
-    const transcript = new Transcript(string_iter_equals, string_iter_equals_init(null));
+    const transcript = new Transcript(string_iter_equals2, null);
     transcript.assertNext('foo', 'iter', ['next']);
     transcript.assertNext(true, 'iter', ['clone']);
     transcript.assertNext('f', 'iter', ['next']);
@@ -203,7 +190,7 @@ describe('StringIterEquals', () => {
   });
 
   test('should work with char mismatch', () => {
-    const transcript = new Transcript(string_iter_equals, string_iter_equals_init(null));
+    const transcript = new Transcript(string_iter_equals2, null);
     transcript.assertNext('foo', 'iter', ['next']);
     transcript.assertNext(true, 'iter', ['clone']);
     transcript.assertNext('f', 'iter', ['next']);
@@ -273,11 +260,11 @@ const string_iter_equals_inverse = sequence(
 
 describe('StringIterEqualsInverse', () => {
   test('should work with empty string', () => {
-    const transcript = new Transcript2(string_iter_equals_inverse, null);
+    const transcript = new Transcript(string_iter_equals_inverse, null);
     transcript.assertNext('', 'result', true);
   });
   test('should work with non-empty string', () => {
-    const transcript = new Transcript2(string_iter_equals_inverse, null);
+    const transcript = new Transcript(string_iter_equals_inverse, null);
     transcript.assertNext('foo', 'result', true);
   });
 });
@@ -305,12 +292,12 @@ const char_iter_from_str_iter = sequence(
 
 describe('CharIterFromStrIter', () => {
   test('unbound with empty string', () => {
-    const transcript = new Transcript2(char_iter_from_str_iter, null);
+    const transcript = new Transcript(char_iter_from_str_iter, null);
     transcript.assertNext(['next'], 'iter', ['next']);
     transcript.assertNext(false, 'result', ['none']);
   });
   test('unbound with non-empty string', () => {
-    const transcript = new Transcript2(char_iter_from_str_iter, null);
+    const transcript = new Transcript(char_iter_from_str_iter, null);
     transcript.assertNext(['next'], 'iter', ['next']);
     transcript.assertNext(true, 'iter', ['clone']);
     transcript.assertNext('f', 'result', ['some', 'f']);
@@ -338,14 +325,14 @@ describe('CharIterFromString', () => {
     const iter = assertTransforms(char_iter_from_string_init.run, '');
     expect(iter).toEqual(['', -1]);
 
-    const transcript = new Transcript2(char_iter_from_string, iter);
+    const transcript = new Transcript(char_iter_from_string, iter);
     transcript.assertNext(['next'], 'result', ['none']);
   });
   test('non-empty string', () => {
     const iter = assertTransforms(char_iter_from_string_init.run, 'foo');
     expect(iter).toEqual(['foo', -1]);
 
-    const transcript = new Transcript2(char_iter_from_string, iter);
+    const transcript = new Transcript(char_iter_from_string, iter);
     transcript.assertNext(['next'], 'result', ['some', 'f']);
     transcript.assertNext(['next'], 'result', ['some', 'o']);
     transcript.assertNext(['next'], 'result', ['some', 'o']);
