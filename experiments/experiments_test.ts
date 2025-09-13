@@ -1,6 +1,6 @@
 // Test file for experiments.ts
 import assert from 'assert';
-import { andThen, call, closure, handle, HandlerResult, if_then_else, loop, Machine, match, raise, Result, sequence, smuggle, Startable, transformer } from './experiments';
+import { andThen, call, closure, handle, if_then_else, loop, Machine, match, raise, Result, sequence, smuggle, Startable, transformer } from './experiments';
 
 function handleContinue<S>(machine: Machine<S>, state: S, input: any): [S, string, any] {
   let result = machine(state, input);
