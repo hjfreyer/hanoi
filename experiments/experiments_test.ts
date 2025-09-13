@@ -1,6 +1,6 @@
 // Test file for experiments.ts
 import assert from 'assert';
-import { andThen, call, closure, handle, if_then_else, loop, Machine, match, raise, Result, sequence, smuggle, Startable, transformer } from './experiments';
+import { andThen, closure, handle, if_then_else, loop, Machine, match, raise, Result, sequence, smuggle, Startable, transformer } from './experiments';
 
 function handleContinue<S>(machine: Machine<S>, state: S, input: any): [S, string, any] {
   let result = machine(state, input);
@@ -192,7 +192,7 @@ const string_iter_equals_inverse = sequence([
   smuggle(str_iter_init),
   transformer(([s, iter_state]: [string, StrIterState]) =>
     [iter_state, s]),
-  call(string_iter_equals, handler),
+  handle("iter", str_iter, string_iter_equals),
   transformer(([iter_state, result]: [StrIterState, StringIterEqualsState, boolean]) => result)]);
 
 describe('StringIterEqualsInverse', () => {

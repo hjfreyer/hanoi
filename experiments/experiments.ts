@@ -51,40 +51,6 @@ export function sequence(machines: Machine<any>[]): Machine<any> {
   return result;
 }
 
-export type CallState<I, O, H> = ["start"] | ["inner", Startable<I>, O] | ["handler", Startable<I>, Startable<H>] | ["end"];
-
-export function call<I, O, H>(f: Machine<Startable<I>>, handler: Machine<Startable<H>>): Machine<CallState<I, Startable<O>, Startable<H>>> {
-  return (state: CallState<I, Startable<O>, Startable<H>>, msg: any): Result<CallState<I, Startable<O>, Startable<H>>> => {
-    if (state[0] === "start") {
-      let [outer_state, inner_msg] = msg;
-      return { action: "continue", msg: inner_msg, resume_state: ["inner", ["start"], outer_state] };
-    }
-    if (state[0] === "inner") {
-      let inner_state = state[1];
-      let outer_state = state[2];
-      const result = f(inner_state, msg);
-      if (result.action === "result") {
-        return { action: "result", msg: [outer_state, result.msg], resume_state: ["end"] };
-      }
-      if (result.action === "continue") {
-        return { action: "continue", msg: result.msg, resume_state: ["inner", result.resume_state, outer_state] };
-      }
-      return { action: "continue", msg: [result.action, outer_state, result.msg], resume_state: ["handler", result.resume_state, ["start"]] };
-    }
-    if (state[0] === "handler") {
-      let inner_state = state[1];
-      let handler_state = state[2];
-      const handler_result = handler(handler_state, msg);
-      if (handler_result.action === "result") {
-        let [new_outer_state, new_msg] = handler_result.msg;
-        return { action: "continue", msg: new_msg, resume_state: ["inner", inner_state, new_outer_state] };
-      }
-      return { action: handler_result.action, msg: handler_result.msg, resume_state: ["handler", inner_state, handler_result.resume_state] };
-    }
-    throw Error("Bad state: " + state[0]);
-  };
-}
-
 export type SmuggleState<E, S> = ["start"] | ["inner", E, Startable<S>] | ["end"];
 
 export function smuggle<E, S>(inner: Machine<Startable<S>>): Machine<SmuggleState<E, S>> {
