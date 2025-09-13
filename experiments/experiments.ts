@@ -8,7 +8,27 @@ export type Result<S> = {
 
 export type Machine<S> = (state: S, msg: any) => Result<S>;
 
-export function transformer<S>(f: (msg: any) => any): Machine<["start"]> {
+export type Combinator<I, S> = {
+  init(arg: I): S;
+  run(state: S, msg: any): Result<S>;
+};
+
+export function transformer2(f: (msg: any) => any): Combinator<null, ["start"]> {
+  return {
+    init(_: null): ["start"] {
+      return transformerInit(null);
+    },
+    run(state: ["start"], msg: any): Result<["start"]> {
+      return transformer(f)(state, msg);
+    }
+  };
+}
+
+export function transformerInit(_: null): ["start"] {
+  return ["start"];
+}
+
+export function transformer(f: (msg: any) => any): Machine<["start"]> {
   return (state, msg) => {
     assert(state[0] === "start", "Bad state: " + state[0]);
     return {
@@ -19,56 +39,108 @@ export function transformer<S>(f: (msg: any) => any): Machine<["start"]> {
   };
 }
 
-export type AndThenState<F, G> = ["start"] | ["first", F] | ["second", G];
+export type AndThenState<F, G> = ["first", F, G] | ["second", G];
 
 export type Startable<T> = T | ["start"];
 
-export function andThen<F, G>(f: Machine<Startable<F>>, g: Machine<Startable<G>>): Machine<AndThenState<Startable<F>, Startable<G>>> {
-  return (state: AndThenState<Startable<F>, Startable<G>>, msg: any): Result<AndThenState<Startable<F>, Startable<G>>> => {
-    if (state[0] === "start") {
-      return { action: "continue", msg: msg, resume_state: ["first", ["start"]] };
-    }
+export function andThenInit<F, G>(f: F, g: G): AndThenState<F, G> {
+  return ["first", f, g];
+}
+
+export function andThen<F, G>(f: Machine<F>, g: Machine<G>): Machine<AndThenState<F, G>> {
+  return (state: AndThenState<F, G>, msg: any): Result<AndThenState<F, G>> => {
     if (state[0] === "first") {
-      const result = f(state[1], msg);
+      let f_state = state[1];
+      let g_state = state[2];
+      const result = f(f_state, msg);
       if (result.action === "result") {
-        return { action: "continue", msg: result.msg, resume_state: ["second", ["start"]] };
+        return { action: "continue", msg: result.msg, resume_state: ["second", g_state] };
       }
-      return { action: result.action, msg: result.msg, resume_state: ["first", result.resume_state] };
+      return { action: result.action, msg: result.msg, resume_state: ["first", result.resume_state, g_state] };
     }
     if (state[0] === "second") {
-      const result = g(state[1], msg);
+      let g_state = state[1];
+      const result = g(g_state, msg);
       return { action: result.action, msg: result.msg, resume_state: ["second", result.resume_state] };
     }
     throw Error("Bad state: " + state[0]);
   };
 }
 
-export function sequence(machines: Machine<any>[]): Machine<any> {
-  let result = machines[0];
-  for (const machine of machines.slice(1)) {
-    result = andThen(result, machine);
-  }
-  return result;
+
+export type SequenceState = [number, unknown[]];
+
+
+export function sequenceInit(inits: unknown[]): SequenceState {
+  return [0, inits];
 }
 
-export type SmuggleState<E, S> = ["start"] | ["inner", E, Startable<S>] | ["end"];
+export function sequence(machines: Machine<unknown>[]): Machine<SequenceState> {
+  return (state: SequenceState, msg: any): Result<SequenceState> => {
+    let index = state[0];
+    let states = state[1];
 
-export function smuggle<E, S>(inner: Machine<Startable<S>>): Machine<SmuggleState<E, S>> {
-  return (state: SmuggleState<E, S>, msg: any): Result<SmuggleState<E, S>> => {
-    if (state[0] === "start") {
-      let [smuggle, inner_msg] = msg;
-      return { action: "continue", msg: inner_msg, resume_state: ["inner", smuggle, ["start"]] };
+    const [current_state, ...states_rest] = states;
+    const result = machines[index](current_state, msg);
+    if (result.action === "result") {
+      index += 1;
+      if (index < machines.length) {
+        return { action: "continue", msg: result.msg, resume_state: [index, states_rest] };
+      } else {
+        return { action: "result", msg: result.msg, resume_state: [-1, []] };
+      }
+    }
+    return { action: result.action, msg: result.msg, resume_state: [index, [result.resume_state, ...states_rest]] };
+  };
+}
+
+export function sequence2<I>(first: Combinator<I, unknown>, ...rest: Combinator<null, unknown>[]) {
+  return {
+    init(arg: I): SequenceState {
+      return sequenceInit([first.init(arg), ...rest.map((c) => c.init(null))]);
+    },
+    run(state: SequenceState, msg: any): Result<SequenceState> {
+      return sequence([first.run, ...rest.map((c) => c.run)])(state, msg);
+    }
+  };
+}
+
+
+export type SmuggleState<S> = ["ready", S] | ["inner", unknown, S];
+
+export function smuggleInit<S>(inner: S): SmuggleState<S> {
+  return ["ready", inner];
+}
+
+
+export function smuggle<S>(inner: Machine<S>): Machine<SmuggleState<S>> {
+  return (state: SmuggleState<S>, msg: any): Result<SmuggleState<S>> => {
+    if (state[0] === "ready") {
+      const inner_state = state[1];
+      const [smuggle, inner_msg] = msg;
+      return { action: "continue", msg: inner_msg, resume_state: ["inner", smuggle, inner_state] };
     }
     if (state[0] === "inner") {
-      let smuggle = state[1];
-      let inner_state = state[2];
+      const smuggle = state[1];
+      const inner_state = state[2];
       const result = inner(inner_state, msg);
       if (result.action === "result") {
-        return { action: "result", msg: [smuggle, result.msg], resume_state: ["end"] };
+        return { action: "result", msg: [smuggle, result.msg], resume_state: ["ready", result.resume_state] };
       }
       return { action: result.action, msg: result.msg, resume_state: ["inner", smuggle, result.resume_state] };
     }
     throw Error("Bad state: " + state[0]);
+  };
+}
+
+export function smuggle2<I, S>(inner: Combinator<I, S>): Combinator<I, SmuggleState<S>> {
+  return {
+    init(arg: I): SmuggleState<S> {
+      return smuggleInit(inner.init(arg));
+    },
+    run(state: SmuggleState<S>, msg: any): Result<SmuggleState<S>> {
+      return smuggle(inner.run)(state, msg);
+    }
   };
 }
 
@@ -116,22 +188,33 @@ export function raise(state: RaiseState, msg: any): Result<RaiseState> {
   throw Error('Bad state: ' + state[0]);
 }
 
-export type IfThenElseState<T, F> = ["start"] | ["then", Startable<T>] | ["else", Startable<F>];
-export function if_then_else<T, F>(then: Machine<Startable<T>>, els: Machine<Startable<F>>): Machine<IfThenElseState<T, F>> {
+export const raise2: Combinator<null, RaiseState> = {
+  init(_: null): RaiseState {
+    return ["start"];
+  },
+  run(state: RaiseState, msg: any): Result<RaiseState> {
+    return raise(state, msg);
+  }
+};
+
+export type IfThenElseState<T, F> = ["start", T, F] | ["then", T] | ["else", F];
+export function if_then_else<T, F>(then: Machine<T>, els: Machine<F>): Machine<IfThenElseState<T, F>> {
   return function if_then_else_impl(state: IfThenElseState<T, F>, msg: any): Result<IfThenElseState<T, F>> {
     if (state[0] === "start") {
+      let then_state = state[1];
+      let els_state = state[2];
       let [outer_state, cond] = msg;
       if (cond) {
         return {
           action: "continue",
           msg: outer_state,
-          resume_state: ["then", ["start"]],
+          resume_state: ["then", then_state],
         };
       } else {
         return {
           action: "continue",
           msg: outer_state,
-          resume_state: ["else", ["start"]],
+          resume_state: ["else", els_state],
         };
       }
     }
@@ -155,23 +238,42 @@ export function if_then_else<T, F>(then: Machine<Startable<T>>, els: Machine<Sta
   };
 }
 
-export type ClosureState<C, S> = ["start"] | ["ready", C] | ["inner", Startable<S>];
-export function closure<C, S>(inner: Machine<Startable<S>>): Machine<ClosureState<C, S>> {
-  return function (state: ClosureState<C, S>, msg: any): Result<ClosureState<C, S>> {
-    if (state[0] === "start") {
-      const closure = msg;
-      return {
-        action: "result",
-        msg: null,
-        resume_state: ["ready", closure],
-      };
+export function if_then_else2<IT, T, IF, F>(then: Combinator<IT, T>, els: Combinator<IF, F>): Combinator<[IT, IF], IfThenElseState<T, F>> {
+  return {
+    init([arg_t, arg_f]: [IT, IF]): IfThenElseState<T, F> {
+      return ["start", then.init(arg_t), els.init(arg_f)];
+    },
+    run(state: IfThenElseState<T, F>, msg: any): Result<IfThenElseState<T, F>> {
+      return if_then_else(then.run, els.run)(state, msg);
     }
+  };
+}
+export function if_then_else_null<T, F>(then: Combinator<null, T>, els: Combinator<null, F>): Combinator<null, IfThenElseState<T, F>> {
+  return {
+    init(_: null): IfThenElseState<T, F> {
+      return ["start", then.init(null), els.init(null)];
+    },
+    run(state: IfThenElseState<T, F>, msg: any): Result<IfThenElseState<T, F>> {
+      return if_then_else(then.run, els.run)(state, msg);
+    }
+  };
+}
+
+export type ClosureState<C, S> = ["ready", C, S] | ["inner", S];
+
+export function closureInit<C, S>(closure: C, inner: S): ClosureState<C, S> {
+  return ["ready", closure, inner];
+}
+
+export function closure<C, S>(inner: Machine<S>): Machine<ClosureState<C, S>> {
+  return function (state: ClosureState<C, S>, msg: any): Result<ClosureState<C, S>> {
     if (state[0] === "ready") {
       const closure = state[1];
+      const inner_state = state[2];
       return {
         action: "continue",
         msg: [closure, msg],
-        resume_state: ["inner", ["start"]],
+        resume_state: ["inner", inner_state],
       }
     }
     if (state[0] === "inner") {
@@ -182,7 +284,7 @@ export function closure<C, S>(inner: Machine<Startable<S>>): Machine<ClosureStat
         return {
           action: "result",
           msg: new_output,
-          resume_state: ["ready", new_closure],
+          resume_state: ["ready", new_closure, result.resume_state],
         };
       }
       return {
@@ -192,6 +294,18 @@ export function closure<C, S>(inner: Machine<Startable<S>>): Machine<ClosureStat
       };
     }
     throw Error('Bad state: ' + state[0]);
+  };
+}
+
+export function closure2<C, S>(inner: Combinator<null, S>): Combinator<C, ClosureState<C, S>> {
+
+  return {
+    init(closure: C): ClosureState<C, S> {
+      return closureInit(closure, inner.init(null));
+    },
+    run(state: ClosureState<C, S>, msg: any): Result<ClosureState<C, S>> {
+      return closure<C, S>(inner.run)(state, msg);
+    }
   };
 }
 
@@ -219,37 +333,43 @@ export function loop<S>(inner: Machine<Startable<S>>): Machine<LoopState<S>> {
   };
 }
 
-export type HandleState<H, A, I> = ["start"] | ["inner", A, Startable<I>] | ["handler", Startable<H>, A, Startable<I>] | ["end"];
+export type HandleState<H, I> = ["inner", H, I] | ["handler", H, I] | ["end"];
 
-export function handle<H, A, I>(action: string, handler: Machine<Startable<H>>, inner: Machine<Startable<I>>): Machine<HandleState<H, A, I>> {
-  return (state: HandleState<H, A, I>, msg: any): Result<HandleState<H, A, I>> => {
-    if (state[0] === "start") {
-      const [handler_arg, inner_msg] = msg;
-      return { action: "continue", msg: inner_msg, resume_state: ["inner", handler_arg, ["start"]] };
-    }
+export function handleInit<H, I>(handler: H, inner: I): HandleState<H, I> {
+  return ["inner", handler, inner];
+}
+
+export function handle<H, I>(action: string, handler: Machine<H>, inner: Machine<I>): Machine<HandleState<H, I>> {
+  return (state: HandleState<H, I>, msg: any): Result<HandleState<H, I>> => {
     if (state[0] === "inner") {
-      const handler_arg = state[1];
+      const handler_state = state[1];
       const inner_state = state[2];
       const result = inner(inner_state, msg);
-      if (result.action === "result") {
-        return { action: "result", msg: [handler_arg, result.msg], resume_state: ["end"] };
-      }
       if (result.action === action) {
-        return { action: "continue", msg: result.msg, resume_state: ["handler", ["start"], handler_arg, result.resume_state] };
+        return { action: "continue", msg: result.msg, resume_state: ["handler", handler_state, result.resume_state] };
       }
-      return { action: result.action, msg: result.msg, resume_state: ["inner", handler_arg, result.resume_state] };
+      return { action: result.action, msg: result.msg, resume_state: ["inner", handler_state, result.resume_state] };
     }
     if (state[0] === "handler") {
       const handler_state = state[1];
-      const handler_arg = state[2];
-      const inner_state = state[3];
-      const result = handler(handler_state, [handler_arg, msg]);
+      const inner_state = state[2];
+      const result = handler(handler_state, msg);
       if (result.action === "result") {
-        const [new_handler_arg, new_msg] = result.msg;
-        return { action: "continue", msg: new_msg, resume_state: ["inner", new_handler_arg, inner_state] };
+        return { action: "continue", msg: result.msg, resume_state: ["inner", result.resume_state, inner_state] };
       }
-      return { action: result.action, msg: result.msg, resume_state: ["handler", result.resume_state, handler_arg, inner_state] };
+      return { action: result.action, msg: result.msg, resume_state: ["handler", result.resume_state, inner_state] };
     }
     throw Error('Bad state: ' + state[0]);
+  };
+}
+
+export function handle2<HI, H, II, I>(action: string, handler: Combinator<HI, H>, inner: Combinator<II, I>): Combinator<[HI, II], HandleState<H, I>> {
+  return {
+    init(arg: [HI, II]) {
+      return handleInit(handler.init(arg[0]), inner.init(arg[1]));
+    },
+    run(state: HandleState<H, I>, msg: any): Result<HandleState<H, I>> {
+      return handle(action, handler.run, inner.run)(state, msg);
+    }
   };
 }
