@@ -1,5 +1,5 @@
 // Test file for experiments.ts
-import { andThen, closure, ClosureState, Combinator, handle, if_then_else_null, Machine, raise2, Result, sequence, smuggle, t } from './experiments';
+import { andThen, closure, ClosureState, Combinator, handle, if_then_else_null, loop, Machine, match, raise, Result, sequence, SequenceState, smuggle, t, construct, withInit } from './experiments';
 
 function handleContinue<S>(machine: Machine<S>, state: S, input: any): [S, string, any] {
   let result = machine(state, input);
@@ -25,15 +25,14 @@ class Transcript<I, S> {
   }
 }
 
-function assertTransforms(machine: Machine<any>, input: any): any {
-  let result = machine(['start'], input);
+function assertTransforms(machine: Combinator<null, unknown>, input: any): any {
+  let result = machine.run(machine.init(null), input);
   while (result.action === 'continue') {
-    result = machine(result.resume_state, result.msg);
+    result = machine.run(result.resume_state, result.msg);
   }
   expect(result.action).toEqual('result');
   return result.msg;
 }
-
 
 describe('Transformer', () => {
   const machine = t(x => x + 1);
@@ -199,63 +198,11 @@ describe('StringIterEquals', () => {
   });
 });
 
-export type UnclosureState<S> = ["start"] | ["inner", S];
-
-function unclosure2<S>(inner: Combinator<unknown, S>): Combinator<null, UnclosureState<S>> {
-  return {
-    init(_: null): UnclosureState<S> {
-      return ["start"];
-    },
-    run(state: UnclosureState<S>, msg: any): Result<UnclosureState<S>> {
-      if (state[0] === "start") {
-        const [state, inner_msg] = msg;
-        return { action: "continue", msg: inner_msg, resume_state: ["inner", inner.init(state)] };
-      }
-      if (state[0] === "inner") {
-        const inner_state = state[1];
-        const result = inner.run(inner_state, msg);
-        return { action: result.action, msg: result.msg, resume_state: ["inner", result.resume_state] };
-      }
-      throw Error('Bad state: ' + state[0]);
-    }
-  };
-}
-
-
-
-// string_iter_equals_inverse := (s) =>
-//   let iter := s str_iter_init;
-//   let str_iter_equals := null string_iter_equals_init;
-//   let bound := handle("iter", iter, str_iter_equals);
-//   become(s, bound)
-//
-//   s => [s, s]
-//   smuggle(str_iter_init)
-//   [s, iter_state] => [[s, iter_state], null]
-//   smuggle(string_iter_equals_init)
-//   [[iter_state, s], str_iter_equals_state] => [s, [iter_state, str_iter_equals_state]]
-//   smuggle(handleInit)
-//   [s, bound] => [s, bound]
-
-
-// function string_iter_equals_inverse_init(_: null) {
-//   return sequenceInit([
-//     transformerInit(null), 
-//     smuggleInit(transformerInit(null)), 
-//     transformerInit(null), 
-//     smuggleInit(transformerInit(null)),
-//     transformerInit(null),
-//     smuggleInit(transformerInit(null)),
-//     transformerInit(null),
-//     unclosureInit(null),
-//   ]);
-// }
-
 const string_iter_equals_inverse = sequence(
   t((s: string) => [s, s]),
   smuggle(str_iter_init),
   t(([s, str_iter]) => [[str_iter, null], s]),
-  unclosure2(handle("iter", str_iter2, string_iter_equals2)),
+  construct(handle("iter", str_iter2, string_iter_equals2)),
 );
 
 describe('StringIterEqualsInverse', () => {
@@ -277,12 +224,12 @@ const char_iter_from_str_iter = sequence(
     }
     return ["iter", ["next"]];
   }),
-  raise2,
+  raise,
   t((has_next: any) => [null, has_next]),
   if_then_else_null(
     sequence(
       t((_: any) => ["iter", ["clone"]]),
-      raise2,
+      raise,
       t((char: any) => ["some", char]),
     ),
     t((_: any) => ["none"]),
@@ -322,14 +269,14 @@ const char_iter_from_string = closure(
 
 describe('CharIterFromString', () => {
   test('empty string', () => {
-    const iter = assertTransforms(char_iter_from_string_init.run, '');
+    const iter = assertTransforms(char_iter_from_string_init, '');
     expect(iter).toEqual(['', -1]);
 
     const transcript = new Transcript(char_iter_from_string, iter);
     transcript.assertNext(['next'], 'result', ['none']);
   });
   test('non-empty string', () => {
-    const iter = assertTransforms(char_iter_from_string_init.run, 'foo');
+    const iter = assertTransforms(char_iter_from_string_init, 'foo');
     expect(iter).toEqual(['foo', -1]);
 
     const transcript = new Transcript(char_iter_from_string, iter);
@@ -340,160 +287,150 @@ describe('CharIterFromString', () => {
   });
 });
 
-// type SSVIterState = ["start"] | ["in_field"] | ["almost_finished"] | ["end"];
+type SSVIterState = ["start"] | ["in_field"] | ["almost_finished"] | ["end"];
 
-// const space_separated_value = sequence([
-//   transformer(([state, msg]: [SSVIterState, any]) =>
-//     [[state, msg], state[0]]
-//   ),
-//   match({
-//     start:
-//       transformer(([state, msg]: [SSVIterState, any]) => {
-//         if (msg[0] !== "next") {
-//           throw Error("Bad msg: " + msg);
-//         }
-//         return [["in_field", ["none"]], true];
-//       }),
-//     in_field: sequence([
-//       transformer(([state, msg]: [SSVIterState, any]) => {
-//         if (msg[0] !== "inner_next") {
-//           throw Error("Bad msg: " + msg);
-//         }
-//         return ["iter", ["next"]];
-//       }),
-//       raise,
-//       transformer((next_char: ["some", string] | ["none"]) => [next_char, next_char[0] === "some"]),
-//       if_then_else(
-//         sequence([
-//           transformer(([_, char]: ["some", string]) => [char, char === " "]),
-//           if_then_else(
-//             transformer((_: any) => [["start"], ["none"]]),
-//             transformer((char: string) => [["in_field"], ["some", char]]),
-//           ),
-//         ]),
-//         transformer(([_]: ["none"]) => [["almost_finished"], ["none"]]),
-//       ),
-//     ]),
-//     almost_finished:
-//       transformer(([state, msg]: [SSVIterState, any]) => {
-//         if (msg[0] !== "next") {
-//           throw Error("Bad msg: " + msg);
-//         }
-//         return [["end"], false];
-//       }),
-//   }),
-// ]);
+const space_separated_value = withInit(["start"], closure(sequence(
+  t(([state, msg]: [SSVIterState, any]) =>
+    [[state, msg], state[0]]
+  ),
+  match({
+    start:
+      t(([state, msg]: [SSVIterState, any]) => {
+        if (msg[0] !== "next") {
+          throw Error("Bad msg: " + msg);
+        }
+        return [["in_field", ["none"]], true];
+      }),
+    in_field: sequence(
+      t(([state, msg]: [SSVIterState, any]) => {
+        if (msg[0] !== "inner_next") {
+          throw Error("Bad msg: " + msg);
+        }
+        return ["iter", ["next"]];
+      }),
+      raise,
+      t((next_char: ["some", string] | ["none"]) => [next_char, next_char[0] === "some"]),
+      if_then_else_null(
+        sequence(
+          t(([_, char]: ["some", string]) => [char, char === " "]),
+          if_then_else_null(
+            t((_: any) => [["start"], ["none"]]),
+            t((char: string) => [["in_field"], ["some", char]]),
+          ),
+        ),
+        t(([_]: ["none"]) => [["almost_finished"], ["none"]]),
+      ),
+    ),
+    almost_finished:
+      t(([state, msg]: [SSVIterState, any]) => {
+        if (msg[0] !== "next") {
+          throw Error("Bad msg: " + msg);
+        }
+        return [["end"], false];
+      }),
+  }),
+)));
 
-// const space_separated_value_for_string_init = sequence([
-//   char_iter_from_string_init,
-//   transformer((iter_state: CharIterFromStringState) => [iter_state, ["start"]]),
-// ]);
+const space_separated_value_for_string_init = sequence(
+  char_iter_from_string_init,
+  t((iter_state: CharIterFromStringState) => [iter_state, null]),
+);
 
-// const space_separated_value_for_string = sequence([
-//   transformer(([[char_iter_state, ssv_state], msg]: [[CharIterFromStringState, SSVIterState], any]) =>
-//     [char_iter_state, [ssv_state, msg]]),
-//   handle("iter", char_iter_from_string, space_separated_value),
-//   transformer(([char_iter_state, [ssv_state, msg]]: [CharIterFromStringState, [SSVIterState, any]]) =>
-//     [[char_iter_state, ssv_state], msg]),
-// ]);
+const space_separated_value_for_string = 
+  handle("iter", char_iter_from_string, space_separated_value);
 
-// describe('SpaceSeparatedValue', () => {
-//   const closed = closure(space_separated_value_for_string);
-//   test('empty string', () => {
-//     const transcript = new Transcript(closed);
-//     transcript.assertNext(
-//       assertTransforms(space_separated_value_for_string_init, ""),
-//       'result', null);
-//     transcript.assertNext(['next'], 'result', true);
-//     transcript.assertNext(['inner_next'], 'result', ['none']);
-//     transcript.assertNext(['next'], 'result', false);
-//   });
-//   test('one field', () => {
-//     const transcript = new Transcript(closed);
-//     transcript.assertNext(
-//       assertTransforms(space_separated_value_for_string_init, "foo"),
-//       'result', null);
-//     transcript.assertNext(['next'], 'result', true);
-//     transcript.assertNext(['inner_next'], 'result', ['some', 'f']);
-//     transcript.assertNext(['inner_next'], 'result', ['some', 'o']);
-//     transcript.assertNext(['inner_next'], 'result', ['some', 'o']);
-//     transcript.assertNext(['inner_next'], 'result', ['none']);
-//     transcript.assertNext(['next'], 'result', false);
-//   });
+describe('SpaceSeparatedValue', () => {
+  // const closed = closure(space_separated_value_for_string);
+  test('empty string', () => {
+    const init = assertTransforms(space_separated_value_for_string_init, "");
 
-//   test('double field', () => {
-//     const transcript = new Transcript(closed);
-//     transcript.assertNext(
-//       assertTransforms(space_separated_value_for_string_init, "foo b"),
-//       'result', null);
-//     transcript.assertNext(['next'], 'result', true);
-//     transcript.assertNext(['inner_next'], 'result', ['some', 'f']);
-//     transcript.assertNext(['inner_next'], 'result', ['some', 'o']);
-//     transcript.assertNext(['inner_next'], 'result', ['some', 'o']);
-//     transcript.assertNext(['inner_next'], 'result', ['none']);
-//     transcript.assertNext(['next'], 'result', true);
-//     transcript.assertNext(['inner_next'], 'result', ['some', 'b']);
-//     transcript.assertNext(['inner_next'], 'result', ['none']);
-//     transcript.assertNext(['next'], 'result', false);
-//   });
-// });
+    const transcript = new Transcript(space_separated_value_for_string, init);
+    transcript.assertNext(['next'], 'result', true);
+    transcript.assertNext(['inner_next'], 'result', ['none']);
+    transcript.assertNext(['next'], 'result', false);
+  });
+  test('one field', () => {
+    const init = assertTransforms(space_separated_value_for_string_init, "foo");
 
-// const parse_int = sequence([
-//   transformer((msg: null) => {
-//     if (msg !== null) {
-//       throw Error("Bad msg: " + msg);
-//     }
-//     return 0;
-//   }),
-//   loop(sequence([
-//     transformer((acc: number) => {
-//       return [acc, ["iter", ["next"]]];
-//     }),
-//     smuggle(raise),
-//     transformer(([acc, msg]: [number, any]) => {
-//       return [[acc, msg], msg[0] === "some"];
-//     }),
-//     if_then_else(
-//       transformer(([acc, char]: [number, ["some", string]]) => {
-//         return ["continue", acc * 10 + (char[1].charCodeAt(0) - '0'.charCodeAt(0))];
-//       }),
-//       transformer(([acc, char]: [number, ["none"]]) => {
-//         return ["break", acc];
-//       }),
-//     ),
-//   ]))
-// ]);
+    const transcript = new Transcript(space_separated_value_for_string, init);
+    transcript.assertNext(['next'], 'result', true);
+    transcript.assertNext(['inner_next'], 'result', ['some', 'f']);
+    transcript.assertNext(['inner_next'], 'result', ['some', 'o']);
+    transcript.assertNext(['inner_next'], 'result', ['some', 'o']);
+    transcript.assertNext(['inner_next'], 'result', ['none']);
+    transcript.assertNext(['next'], 'result', false);
+  });
 
-// describe('ParseInt', () => {
-//   test('empty string', () => {
-//     const transcript = new Transcript(parse_int);
-//     transcript.assertNext(null, 'iter', ['next']);
-//     transcript.assertNext(['none'], 'result', 0);
-//   });
-//   test('non-empty string', () => {
-//     const transcript = new Transcript(parse_int);
-//     transcript.assertNext(null, 'iter', ['next']);
-//     transcript.assertNext(['some', '1'], 'iter', ['next']);
-//     transcript.assertNext(['some', '2'], 'iter', ['next']);
-//     transcript.assertNext(['some', '3'], 'iter', ['next']);
-//     transcript.assertNext(['none'], 'result', 123);
-//   });
-// });
+  test('double field', () => {
+    const init = assertTransforms(space_separated_value_for_string_init, "foo b");
+    const transcript = new Transcript(space_separated_value_for_string, init);  
+    transcript.assertNext(['next'], 'result', true);
+    transcript.assertNext(['inner_next'], 'result', ['some', 'f']);
+    transcript.assertNext(['inner_next'], 'result', ['some', 'o']);
+    transcript.assertNext(['inner_next'], 'result', ['some', 'o']);
+    transcript.assertNext(['inner_next'], 'result', ['none']);
+    transcript.assertNext(['next'], 'result', true);
+    transcript.assertNext(['inner_next'], 'result', ['some', 'b']);
+    transcript.assertNext(['inner_next'], 'result', ['none']);
+    transcript.assertNext(['next'], 'result', false);
+  });
+});
 
-// const parse_int_from_string = sequence([
-//   char_iter_from_string_init,
-//   transformer((iter_state: CharIterFromStringState) => [iter_state, null]),
-//   handle("iter", char_iter_from_string, parse_int),
-//   transformer(([iter_state, result]: [CharIterFromStringState, number]) => result),
-// ]);
+const parse_int = sequence(
+  t((msg: null) => {
+    if (msg !== null) {
+      throw Error("Bad msg: " + msg);
+    }
+    return 0;
+  }),
+  loop(sequence(
+    t((acc: number) => {
+      return [acc, ["iter", ["next"]]];
+    }),
+    smuggle(raise),
+    t(([acc, msg]: [number, any]) => {
+      return [[acc, msg], msg[0] === "some"];
+    }),
+    if_then_else_null(
+      t(([acc, char]: [number, ["some", string]]) => {
+        return ["continue", acc * 10 + (char[1].charCodeAt(0) - '0'.charCodeAt(0))];
+      }),
+      t(([acc, char]: [number, ["none"]]) => {
+        return ["break", acc];
+      }),
+    ),
+  ))
+);
 
-// describe('ParseIntFromString', () => {
-//   test('empty string', () => {
-//     const transcript = new Transcript(parse_int_from_string);
-//     transcript.assertNext("", 'result', 0);
-//   });
-//   test('non-empty string', () => {
-//     const transcript = new Transcript(parse_int_from_string);
-//     transcript.assertNext("1234", 'result', 1234);
-//   });
-// });
+describe('ParseInt', () => {
+  test('empty string', () => {
+    const transcript = new Transcript(parse_int, null);
+    transcript.assertNext(null, 'iter', ['next']);
+    transcript.assertNext(['none'], 'result', 0);
+  });
+  test('non-empty string', () => {
+    const transcript = new Transcript(parse_int, null);
+    transcript.assertNext(null, 'iter', ['next']);
+    transcript.assertNext(['some', '1'], 'iter', ['next']);
+    transcript.assertNext(['some', '2'], 'iter', ['next']);
+    transcript.assertNext(['some', '3'], 'iter', ['next']);
+    transcript.assertNext(['none'], 'result', 123);
+  });
+});
+
+const parse_int_from_string = sequence(
+  char_iter_from_string_init,
+  t((iter_state: CharIterFromStringState) => [[iter_state, null], null]),
+  construct(handle("iter", char_iter_from_string, parse_int)),
+);
+
+describe('ParseIntFromString', () => {
+  test('empty string', () => {
+    const transcript = new Transcript(parse_int_from_string, null);
+    transcript.assertNext("", 'result', 0);
+  });
+  test('non-empty string', () => {
+    const transcript = new Transcript(parse_int_from_string, null);
+    transcript.assertNext("1234", 'result', 1234);
+  });
+});
