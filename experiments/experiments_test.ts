@@ -336,7 +336,7 @@ const space_separated_value_for_string_init = sequence(
   t((iter_state: CharIterFromStringState) => [iter_state, null]),
 );
 
-const space_separated_value_for_string = 
+const space_separated_value_for_string =
   handle("iter", char_iter_from_string, space_separated_value);
 
 describe('SpaceSeparatedValue', () => {
@@ -363,7 +363,7 @@ describe('SpaceSeparatedValue', () => {
 
   test('double field', () => {
     const init = assertTransforms(space_separated_value_for_string_init, "foo b");
-    const transcript = new Transcript(space_separated_value_for_string, init);  
+    const transcript = new Transcript(space_separated_value_for_string, init);
     transcript.assertNext(['next'], 'result', true);
     transcript.assertNext(['inner_next'], 'result', ['some', 'f']);
     transcript.assertNext(['inner_next'], 'result', ['some', 'o']);
@@ -432,5 +432,69 @@ describe('ParseIntFromString', () => {
   test('non-empty string', () => {
     const transcript = new Transcript(parse_int_from_string, null);
     transcript.assertNext("1234", 'result', 1234);
+  });
+});
+
+type IterMapState = ["start" | "middle" | "end"];
+
+const iter_map = withInit(["start"], closure(sequence(
+  t(([state, msg]: [IterMapState, any]) => [[state, msg], msg[0]]),
+  match({
+    next: sequence(
+      t(([state, msg]: [IterMapState, any]) => null),
+      sequence(
+        t((_: null) => ["iter", ["next"]]),
+        raise,
+        t((has_next: boolean) => {
+          if (has_next) {
+            return [["middle"], true];
+          } else {
+            return [["end"], false];
+          }
+        }),
+      ),
+    ),
+    item: sequence(
+      t(([state, msg]: [IterMapState, any]) => {
+        if (state[0] !== "middle") {
+          throw Error("Bad state: " + state[0]);
+        }
+        return msg[1];
+      }),
+      loop(sequence(
+        t((msg: any) => ["fn", msg]),
+        raise,
+        t(([action, msg]: any) => [msg, action]),
+        match({
+          input: sequence(
+            t((msg: any) => ["iter", ["item", msg]]),
+            raise,
+            t((resp: any) => ["continue", resp]),
+          ),
+          result: t((resp: any) => {
+            return ["break", ["middle", resp]];
+          }),
+        }),
+      )),
+    ),
+  }),
+)));
+
+describe('IterMap', () => {
+  test('empty iter', () => {
+    const transcript = new Transcript(iter_map, null);
+    transcript.assertNext(['next'], 'iter', ['next']);
+    transcript.assertNext(false, 'result', false);
+  });
+  test('double ints', () => {
+    const transcript = new Transcript(iter_map, null);
+    transcript.assertNext(['next'], 'iter', ['next']);
+    transcript.assertNext(true, 'result', true);
+    transcript.assertNext(['item', ['clone']], 'fn', ['clone']);
+    transcript.assertNext(['input', ['clone']], 'iter', ['item', ['clone']]);
+    transcript.assertNext(3, 'fn', 3);
+    transcript.assertNext(['result', 6], 'result', 6);
+    transcript.assertNext(['next'], 'iter', ['next']);
+    transcript.assertNext(false, 'result', false);
   });
 });
