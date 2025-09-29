@@ -13,7 +13,7 @@ export type Machine<S, A> = {
   trace(s: S): string
 }
 
-type FUNC_ACTION_TYPE = "result" | "return" | "raise";
+type FUNC_ACTION_TYPE = "result" | "return" | "raise" | "continue";
 
 export type FuncFragmentResult<S> = Result<S, FUNC_ACTION_TYPE>
 
@@ -83,7 +83,7 @@ export function func<S>(name: string, inner: FuncFragment<S>): Function<S> {
     init() { return inner.init() },
     run(state: S, msg: any): Result<S, string> {
       const result = inner.run(state, msg);
-      if (result.action === "result") {
+      if (result.action === "result" || result.action === "continue") {
         return { action: result.action, msg: result.msg, resume_state: result.resume_state };
       }
       if (result.action === "return") {
@@ -115,12 +115,13 @@ type CallState<H, C> = {
   kind: "end",
 };
 
-export type HandlerResult<S> = Result<S, "resume" | "raise" | "result">
+export type HandlerResult<S> = Result<S, "abort" | "raise" | "result" | "continue">
 
-export type Handler<S> = Machine<S, "resume" | "raise" | "result">;
+export type Handler<S> = Machine<S, "abort" | "raise" | "result" | "continue">;
 
+export type CALL_ACTION_TYPE = "raise" | "result" | "continue";
 
-export function call<H, C>(callee: Function<C>, handler: Handler<H>): FuncFragment<CallState<H, C>> {
+export function call<H, C>(callee: Function<C>, handler: Handler<H>): Machine<CallState<H, C>, CALL_ACTION_TYPE> {
   return {
     init() { return { kind: "start" } },
     trace(s: CallState<H, C>): string {
@@ -128,53 +129,145 @@ export function call<H, C>(callee: Function<C>, handler: Handler<H>): FuncFragme
         return callee.name + "()";
       }
       if (s.kind === "ready_to_handle") {
-        return callee.name + "#handler()";
+        return callee.name + "#handler()" + handler.trace(s.handler_state);
       }
       if (s.kind === "end") {
         return "end";
       }
       unreachable(s);
     },
-    run(state: CallState<H, C>, msg: any): FuncFragmentResult<CallState<H, C>> {
+    run(state: CallState<H, C>, msg: any): Result<CallState<H, C>, CALL_ACTION_TYPE> {
       if (state.kind === "start") {
         const [handler_arg, inner_arg] = msg;
-        return { action: "raise", msg: ["continue", inner_arg], resume_state: { kind: "ready_to_call", handler_arg, func_state: callee.init() } };
+        return { action: "continue", msg: inner_arg, resume_state: { kind: "ready_to_call", handler_arg, func_state: callee.init() } };
       }
       if (state.kind === "ready_to_call") {
         const result = callee.run(state.func_state, msg);
+        if (result.action === "result") {
+          return {
+            action: "result",
+            msg: [state.handler_arg, result.msg],
+            resume_state: { kind: "end" }
+          };
+        }
+        if (result.action === "continue") {
+          return { action: "continue", msg: result.msg, resume_state: { kind: "ready_to_call", func_state: result.resume_state, handler_arg: state.handler_arg } };
+        }
         return {
-          action: "raise",
-          msg: ["continue", [state.handler_arg, [result.action, result.msg]]],
+          action: "continue",
+          msg: [state.handler_arg, [result.action, result.msg]],
           resume_state: { kind: "ready_to_handle", func_state: result.resume_state, handler_state: handler.init() }
         };
       }
       if (state.kind === "ready_to_handle") {
         const result = handler.run(state.handler_state, msg);
-        if (result.action === "resume") {
-          const [handler_arg, inner_arg] = result.msg;
-          return { action: "raise", msg: ["continue", inner_arg], resume_state: { kind: "ready_to_call", handler_arg, func_state: state.func_state } };
+        if (result.action === "result") {
+          const [handler_arg, inner_action, inner_arg] = result.msg;
+          return { action: "continue", msg: [inner_action, inner_arg], resume_state: { kind: "ready_to_call", handler_arg, func_state: state.func_state } };
         }
         if (result.action === "raise") {
-          return { action: result.action, msg: result.msg, resume_state: { kind: "ready_to_handle", func_state: state.func_state, handler_state: result.resume_state } };
+          return { action: "raise", msg: result.msg, resume_state: { kind: "ready_to_handle", func_state: state.func_state, handler_state: result.resume_state } };
         }
-        if (result.action === "result") {
+        if (result.action === "abort") {
           const [handler_arg, inner_arg] = result.msg;
           return { action: "result", msg: [handler_arg, inner_arg], resume_state: { kind: "end" } };
         }
-        throw Error("Bad action: " + result.action);
+        if (result.action === "continue") {
+          return { action: "continue", msg: result.msg, resume_state: { kind: "ready_to_handle", func_state: state.func_state, handler_state: result.resume_state } };
+        }
+        unreachable(result.action);
       }
       throw Error("Bad state: " + state);
     }
   };
 }
 
-export function t(f: (msg: any) => any): FuncFragment<null> {
+export type DefaultHandlerState = {
+  kind: "start"
+} | {
+  kind: "end"
+};
+
+export const defaultHandler: Handler<DefaultHandlerState> = {
+  init() { return { kind: "start" } },
+  trace(state: DefaultHandlerState): string {
+    return "defaultHandler(" + state.kind + ")";
+  },
+  run(state: DefaultHandlerState, msg: any): HandlerResult<DefaultHandlerState> {
+    if (state.kind === "start") {
+      const [ctx, [action, args]] = msg;
+      if (action === "result") {
+        return {
+          action: "abort",
+          msg: [ctx, args],
+          resume_state: { kind: "end" },
+        };
+      }
+      throw Error("Bad action: " + action);
+    }
+    throw Error("Bad state: " + state.kind);
+  }
+};
+
+export function callNoRaise<C>(callee: Function<C>) {
+  return sequence(
+    t((msg: any) => [null, msg]),
+    call(callee, defaultHandler),
+    t(([_, msg]) => msg),
+  );
+}
+
+
+export type SimpleHandlerState<S> = {
+  kind: "inner",
+  inner: S,
+} | {
+  kind: "end",
+};
+
+export function simpleHandler<S>(inner: Machine<S, "raise" | "result" | "continue">): Handler<SimpleHandlerState<S>> {
+  return {
+    init() { return { kind: "inner", inner: inner.init() } },
+    trace(s: SimpleHandlerState<S>): string {
+      if (s.kind === "inner") {
+        return inner.trace(s.inner);
+      }
+      if (s.kind === "end") {
+        throw Error("Bad state: " + s.kind);
+      }
+      unreachable(s);
+    },
+    run(s: SimpleHandlerState<S>, msg: any): Result<SimpleHandlerState<S>, "abort" | "raise" | "result" | "continue"> {
+      if (s.kind === "inner") {
+        const result = inner.run(s.inner, msg);
+
+        if (result.action === "result") {
+          const [handler_arg, inner_arg] = result.msg;
+          return { action: "result", msg: [handler_arg, "result", inner_arg], resume_state: { kind: "end" } };
+        }
+        if (result.action === "raise") {
+          return { action: "raise", msg: result.msg, resume_state: { kind: "inner", inner: result.resume_state } };
+        }
+        if (result.action === "continue") {
+          return { action: "continue", msg: result.msg, resume_state: { kind: "inner", inner: result.resume_state } };
+        }
+        throw Error("Bad action: " + result.action);
+      }
+      if (s.kind === "end") {
+        throw Error("Bad state: " + s.kind);
+      }
+      unreachable(s);
+    }
+  };
+}
+
+export function t(f: (msg: any) => any): Machine<null, "result"> {
   return {
     init() { return null },
     trace(s: null): string {
       return "t()";
     },
-    run(state: null, msg: any): FuncFragmentResult<null> {
+    run(state: null, msg: any): Result<null, "result"> {
       return {
         action: "result",
         msg: f(msg),
@@ -184,54 +277,22 @@ export function t(f: (msg: any) => any): FuncFragment<null> {
   }
 }
 
-
-// export type AndThenState<F, G> = {
-//   kind: "start", 
-// } | {
-//   kind: "first", 
-//   state: Startable<F>, 
-// } | {
-//   kind: "second",
-//   state: Startable<G>,
-// };
-
-// export function andThen<F, G>(f: FuncFragment<F>, g: FuncFragment<G>): FuncFragment<AndThenState<F, G>> {
-//   return (state: AndThenState<F, G>, msg: any): FuncFragmentResult<AndThenState<F, G>> => {
-//     if (state.kind === "first") {
-//       const result = f(state.state, msg);
-//       if (result.action === "result") {
-//         return { action: "continue", msg: result.msg, resume_state: ["second", g_state] };
-//       }
-//       return { action: result.action, msg: result.msg, resume_state: ["first", result.resume_state, g_state] };
-//     }
-//     if (state.kind === "second") {
-//       let g_state = state[1];
-//       const result = g(g_state, msg);
-//       return { action: result.action, msg: result.msg, resume_state: ["second", result.resume_state] };
-//     }
-//     throw Error("Bad state: " + state.kind);
-//   };
-// }
-
-
 export type SequenceState = [number, any];
 
-
-
-export function sequence(...fragments: FuncFragment<any>[]): FuncFragment<SequenceState> {
+export function sequence<A>(...fragments: Machine<any, A>[]): Machine<SequenceState, A | "raise" | "result" | "continue"> {
   return {
     init() { return [0, fragments[0].init()] },
     trace(s: SequenceState): string {
       const [index, inner] = s;
       return "#" + index + fragments[index].trace(inner);
     },
-    run(state: SequenceState, msg: any): FuncFragmentResult<SequenceState> {
+    run(state: SequenceState, msg: any): Result<SequenceState, A | "raise" | "result" | "continue"> {
       const [index, inner] = state;
       const result = fragments[index].run(inner, msg);
       if (result.action === "result") {
         const new_index = index + 1;
         if (new_index < fragments.length) {
-          return { action: "raise", msg: ["continue", result.msg], resume_state: [new_index, fragments[new_index].init()] };
+          return { action: "continue", msg: result.msg, resume_state: [new_index, fragments[new_index].init()] };
         } else {
           return { action: "result", msg: result.msg, resume_state: [-1, null] };
         }
@@ -241,64 +302,94 @@ export function sequence(...fragments: FuncFragment<any>[]): FuncFragment<Sequen
   };
 }
 
+export type SmuggleState<S> = { kind: "start" } | { kind: "inner", smuggled: unknown, inner: S } | { kind: "end" };
 
-// export type SmuggleState<S> = { kind: "start" } | { kind: "inner", smuggled: unknown, inner: Startable<S> } | { kind: "end" };
+export function smuggle<S, A>(inner: Machine<S, A>): Machine<SmuggleState<S>, A | "raise" | "result" | "continue"> {
+  return {
+    init() { return { kind: "start" } },
+    trace(state: SmuggleState<S>): string {
+      if (state.kind === "start") {
+        return "smuggle()";
+      }
+      if (state.kind === "inner") {
+        return inner.trace(state.inner);
+      }
+      if (state.kind === "end") {
+        throw Error("Bad state: " + state.kind);
+      }
+      unreachable(state);
+    },
+    run(state: SmuggleState<S>, msg: any): Result<SmuggleState<S>, A | "raise" | "result" | "continue"> {
+      if (state.kind === "start") {
+        const [smuggled, inner_msg] = msg;
+        return { action: "continue", msg: inner_msg, resume_state: { kind: "inner", smuggled, inner: inner.init() } };
+      }
+      if (state.kind === "inner") {
+        const result = inner.run(state.inner, msg);
+        if (result.action === "result") {
+          return { action: "result", msg: [state.smuggled, result.msg], resume_state: { kind: "end" } };
+        } else {
+          return { action: result.action, msg: result.msg, resume_state: { kind: "inner", smuggled: state.smuggled, inner: result.resume_state } };
+        }
+      }
+      if (state.kind === "end") {
+        throw Error("Bad state: " + state.kind);
+      }
+      unreachable(state);
+    }
+  };
+}
 
-// export function smuggle<S>(inner: FuncFragment<S>): FuncFragment<SmuggleState<S>> {
-//   return (state: SmuggleState<S>, msg: any): FuncFragmentResult<SmuggleState<S>> => {
-//     if (state.kind === "start") {
-//       const [smuggled, inner_msg] = msg;
-//       return { action: "raise", msg: ["continue", inner_msg], resume_state: { kind: "inner", smuggled, inner: START_STATE } };
-//     }
-//     if (state.kind === "inner") {
-//       const result = inner(state.inner, msg);
-//       if (result.action === "result") {
-//         return { action: "result", msg: [state.smuggled, result.msg], resume_state: { kind: "end" } };
-//       }
-//       if (result.action === "return") {
-//         return { action: "return", msg: result.msg, resume_state: { kind: "inner", smuggled: state.smuggled, inner: result.resume_state } };
-//       }
-//       if (result.action === "raise") {
-//         return { action: "raise", msg: result.msg, resume_state: { kind: "inner", smuggled: state.smuggled, inner: result.resume_state } };
-//       }
-//       throw Error("Bad action: " + result.action);
-//     }
-//     throw Error("Bad state: " + state.kind);
-//   }
-// }
+export type MatchCases<H extends Record<string, { S: any, A: any }>> = { [K in keyof H]: Machine<H[K]["S"], H[K]["A"]> };
 
-// export type MatchCases<H> = { [K in keyof H]: FuncFragment<H[K]> };
-// export type MatchState<H> = { kind: "start" } | {
-//   kind: "within",
-//   selector: keyof H,
-//   inner: Startable<H[keyof H]>
-// };
+export type MatchState<H extends Record<string, { S: any, A: any }>> = {
+  kind: "start"
+} | {
+  kind: "within",
+  selector: keyof H,
+  inner: H[keyof H]["S"],
+};
 
-// export function match<H>(cases: MatchCases<H>): FuncFragment<MatchState<H>> {
-//   return (state: MatchState<H>, msg: any): FuncFragmentResult<MatchState<H>> => {
-//     if (state.kind === "start") {
-//       let [outer_state, selector]: [any, keyof H] = msg;
-//       return { action: "raise", msg: ["continue", outer_state], resume_state: { kind: "within", selector, inner: START_STATE } };
-//     }
-//     if (state.kind === "within") {
-//       if (!(state.selector in cases)) {
-//         throw Error("Bad selector: " + String(state.selector));
-//       }
-//       const result = cases[state.selector](state.inner, msg);
-//       return { action: result.action, msg: result.msg, resume_state: { kind: "within", selector: state.selector, inner: result.resume_state } };
-//     }
-//     throw Error("Bad state: " + state);
-//   };
-// }
+export function match<H extends Record<string, { S: any, A: any }>>(cases: MatchCases<H>): Machine<MatchState<H>, H[keyof H]["A"] | "raise" | "continue"> {
+  return {
+    init() { return { kind: "start" }; },
+    trace(state: MatchState<H>): string {
+      if (state.kind === "start") {
+        return "match()";
+      }
+      if (state.kind === "within") {
+        return "match(" + String(state.selector) + ")" + cases[state.selector].trace(state.inner);
+      }
+      unreachable(state);
+    },
+    run(state: MatchState<H>, msg: any): Result<MatchState<H>, H[keyof H]["A"] | "raise" | "continue"> {
+      if (state.kind === "start") {
+        let [outer_state, selector]: [any, keyof H] = msg;
+        if (!(selector in cases)) {
+          throw Error("Bad selector: " + String(selector));
+        }
+        return { action: "continue", msg: outer_state, resume_state: { kind: "within", selector, inner: cases[selector].init() } };
+      }
+      if (state.kind === "within") {
+        if (!(state.selector in cases)) {
+          throw Error("Bad selector: " + String(state.selector));
+        }
+        const result = cases[state.selector].run(state.inner, msg);
+        return { action: result.action, msg: result.msg, resume_state: { kind: "within", selector: state.selector, inner: result.resume_state } };
+      }
+      throw Error("Bad state: " + state);
+    }
+  };
+}
 
 type RaiseState = { kind: "start" } | { kind: "await_raise" } | { kind: "end" };
 
-export const raise = {
+export const raise: Machine<RaiseState, "raise" | "result"> = {
   init() { return { kind: "start" }; },
   trace(state: RaiseState): string {
     return "raise()";
   },
-  run(state: RaiseState, msg: any): FuncFragmentResult<RaiseState> {
+  run(state: RaiseState, msg: any): Result<RaiseState, "raise" | "result"> {
     if (state.kind === "start") {
       return {
         action: "raise",
@@ -347,7 +438,7 @@ export const raise = {
 
 export type IfThenElseState<T, F> = { kind: "start" } | { kind: "then", state: T } | { kind: "else", state: F };
 
-export function if_then_else<T, F>(then: FuncFragment<T>, els: FuncFragment<F>): FuncFragment<IfThenElseState<T, F>> {
+export function if_then_else<A, T, F>(then: Machine<T, A>, els: Machine<F, A>): Machine<IfThenElseState<T, F>, A | "continue"> {
   return {
     init() { return { kind: "start" }; },
     trace(state: IfThenElseState<T, F>): string {
@@ -362,19 +453,19 @@ export function if_then_else<T, F>(then: FuncFragment<T>, els: FuncFragment<F>):
       }
       unreachable(state);
     },
-    run(state: IfThenElseState<T, F>, msg: any): FuncFragmentResult<IfThenElseState<T, F>> {
+    run(state: IfThenElseState<T, F>, msg: any): Result<IfThenElseState<T, F>, A | "continue"> {
       if (state.kind === "start") {
         const [outer_state, cond] = msg;
         if (cond) {
           return {
-            action: "raise",
-            msg: ["continue", outer_state],
+            action: "continue",
+            msg: outer_state,
             resume_state: { kind: "then", state: then.init() },
           };
         } else {
           return {
-            action: "raise",
-            msg: ["continue", outer_state],
+            action: "continue",
+            msg: outer_state,
             resume_state: { kind: "else", state: els.init() },
           };
         }
@@ -400,52 +491,46 @@ export function if_then_else<T, F>(then: FuncFragment<T>, els: FuncFragment<F>):
   };
 }
 
-// export function if_then_else<IT, T, IF, F>(then: Combinator<IT, T>, els: Combinator<IF, F>): Combinator<[IT, IF], IfThenElseState<T, F>> {
-//   return {
-//     init([arg_t, arg_f]: [IT, IF]): IfThenElseState<T, F> {
-//       return ["start", then.init(arg_t), els.init(arg_f)];
-//     },
-//     run(state: IfThenElseState<T, F>, msg: any): Result<IfThenElseState<T, F>> {
-//       return if_then_else_impl(then.run, els.run)(state, msg);
-//     }
-//   };
-// }
-// export function if_then_else_null<T, F>(then: Combinator<null, T>, els: Combinator<null, F>): Combinator<null, IfThenElseState<T, F>> {
-//   return {
-//     init(_: null): IfThenElseState<T, F> {
-//       return ["start", then.init(null), els.init(null)];
-//     },
-//     run(state: IfThenElseState<T, F>, msg: any): Result<IfThenElseState<T, F>> {
-//       return if_then_else_impl(then.run, els.run)(state, msg);
-//     }
-//   };
-// }
-
-export type ClosureState<S> = { kind: "start" } | {
+export type ClosureState<C, S> = {
+  kind: "in_constructor",
+  constructor_state: C,
+} | {
   kind: "ready",
   arg: unknown,
 } | { kind: "inner", inner: S };
 
 
-export function closure<S>(inner: Function<S>): Function<ClosureState<S>> {
+export function closure<C, S>(constructor: Function<C>, inner: Function<S>): Function<ClosureState<C, S>> {
   return {
     name: "closure(" + inner.name + ")",
-    init() { return { kind: "start" }; },
-    trace(s: ClosureState<S>): string {
-      if (s.kind === "start" || s.kind === "ready") {
+    init() { return { kind: "in_constructor", constructor_state: constructor.init() }; },
+    trace(s: ClosureState<C, S>): string {
+      if (s.kind === "ready") {
         return "closure(" + inner.name + ")";
+      }
+      if (s.kind === "in_constructor") {
+        return "closure(" + inner.name + ").constructor(" + constructor.name + ")" + constructor.trace(s.constructor_state);
       }
       if (s.kind === "inner") {
         return inner.trace(s.inner)
       }
       unreachable(s);
     },
-    run(state: ClosureState<S>, msg: any): Result<ClosureState<S>, string> {
-      if (state.kind === "start") {
-        return {
-          action: "result",
-          msg: null,
-          resume_state: { kind: "ready", arg: msg },
+    run(state: ClosureState<C, S>, msg: any): Result<ClosureState<C, S>, string> {
+      if (state.kind === "in_constructor") {
+        const result = constructor.run(state.constructor_state, msg);
+        if (result.action === "result") {
+          return {
+            action: "result",
+            msg: null,
+            resume_state: { kind: "ready", arg: result.msg },
+          };
+        } else {
+          return {
+            action: result.action,
+            msg: result.msg,
+            resume_state: { kind: "in_constructor", constructor_state: result.resume_state },
+          }
         }
       }
       if (state.kind === "ready") {
