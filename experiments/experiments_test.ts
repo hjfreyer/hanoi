@@ -1,8 +1,8 @@
 // Test file for experiments.ts
-import { Machine, t, FuncFragmentResult, FuncFragment, call, Handler, Result,  func, closure, HandlerResult, Function, sequence, raise, if_then_else, simpleHandler, match, smuggle, defaultHandler, callNoRaise} from './experiments';
+import { Machine, t, FuncFragmentResult, FuncFragment, call, Handler, Result, func, closure, HandlerResult, Function, sequence, raise, if_then_else, simpleHandler, match, smuggle, defaultHandler, callNoRaise, raiseRaise } from './experiments';
 
 function handleContinue<S>(machine: Function<S>, state: S, input: any): [S, string, any] {
-  console.log("handleContinue", machine.trace(state), JSON.stringify(input));
+  console.log("sending", machine.trace(state), JSON.stringify(input));
   let result = machine.run(state, input);
   while (result.action === 'continue') {
     state = result.resume_state;
@@ -11,6 +11,7 @@ function handleContinue<S>(machine: Function<S>, state: S, input: any): [S, stri
 
     result = machine.run(state, input);
   }
+  console.log("recvd", JSON.stringify(result.msg));
   return [result.resume_state, result.action, result.msg];
 }
 
@@ -53,15 +54,15 @@ type StrIterState = [string, number];
 const str_iter2 = func(
   "str_iter2",
   t(([[str, offset], msg]: [StrIterState, ['next' | 'clone']]): [StrIterState, boolean | string] => {
-  if (msg[0] === 'next') {
-    offset += 1;
-    return [[str, offset], offset < str.length];
-  }
-  if (msg[0] === 'clone') {
-    return [[str, offset], str[offset]];
-  }
-  throw Error('Bad msg: ' + msg[0]);
-}));
+    if (msg[0] === 'next') {
+      offset += 1;
+      return [[str, offset], offset < str.length];
+    }
+    if (msg[0] === 'clone') {
+      return [[str, offset], str[offset]];
+    }
+    throw Error('Bad msg: ' + msg[0]);
+  }));
 
 describe('StrIter', () => {
   test('should work with empty string', () => {
@@ -87,83 +88,83 @@ describe('StrIter', () => {
 type StringIterEqualsState = {
   kind: "start"
 } | {
-  kind: "await_next", 
+  kind: "await_next",
   str: string
 } | {
-  kind: "await_clone", 
+  kind: "await_clone",
   str: string
 } | {
   kind: "end"
 };
 
-const string_iter_equals : Function<StringIterEqualsState> = {
+const string_iter_equals: Function<StringIterEqualsState> = {
   name: "string_iter_equals",
-  init() { return {kind: "start"}; },
+  init() { return { kind: "start" }; },
   trace(state: StringIterEqualsState): string {
     return "string_iter_equals(" + state.kind + ")";
   },
   run(state: StringIterEqualsState, msg: any): Result<StringIterEqualsState, string> {
-  if (state.kind === "start") {
-    const s = msg;
-    return {
-      action: "iter",
-      msg: ["next"],
-      resume_state: {kind: "await_next", str: s},
-    };
-  }
-  if (state.kind === "await_next") {
-    const s = state.str;
-    const [await_action, await_msg] = msg;
-    if (await_action !== "result") {
-      throw Error("Bad action: " + await_action);
-    }
-    const iter_has_next = await_msg;
-    const str_has_next = s.length > 0;
-    if (iter_has_next && str_has_next) {
+    if (state.kind === "start") {
+      const s = msg;
       return {
         action: "iter",
-        msg: ["clone"],
-        resume_state: {kind: "await_clone", str: s},
+        msg: ["next"],
+        resume_state: { kind: "await_next", str: s },
       };
     }
-    if (!iter_has_next && !str_has_next) {
-      return {
-        action: "result",
-        msg: true,
-        resume_state: {kind: "end"},
-      };
-    }
-    // Otherwise: !iter_has_next || !str_has_next
-    return {
-      action: "result",
-      msg: false,
-      resume_state: {kind: "end"},
-    };
-  }
-  if (state.kind === "await_clone") {
-    const s = state.str;
-    const [await_action, await_msg] = msg;
-    if (await_action !== "result") {
-      throw Error("Bad action: " + await_action);
-    }
-    const iter_char = await_msg;
-    const str_char = s[0];
-    if (iter_char === str_char) {
-      return {
-        action: "continue",
-        msg: s.slice(1),
-        resume_state: {kind: "start"},
-      };
-    } else {
+    if (state.kind === "await_next") {
+      const s = state.str;
+      const [await_action, await_msg] = msg;
+      if (await_action !== "result") {
+        throw Error("Bad action: " + await_action);
+      }
+      const iter_has_next = await_msg;
+      const str_has_next = s.length > 0;
+      if (iter_has_next && str_has_next) {
+        return {
+          action: "iter",
+          msg: ["clone"],
+          resume_state: { kind: "await_clone", str: s },
+        };
+      }
+      if (!iter_has_next && !str_has_next) {
+        return {
+          action: "result",
+          msg: true,
+          resume_state: { kind: "end" },
+        };
+      }
+      // Otherwise: !iter_has_next || !str_has_next
       return {
         action: "result",
         msg: false,
-        resume_state: {kind: "end"},
+        resume_state: { kind: "end" },
       };
     }
+    if (state.kind === "await_clone") {
+      const s = state.str;
+      const [await_action, await_msg] = msg;
+      if (await_action !== "result") {
+        throw Error("Bad action: " + await_action);
+      }
+      const iter_char = await_msg;
+      const str_char = s[0];
+      if (iter_char === str_char) {
+        return {
+          action: "continue",
+          msg: s.slice(1),
+          resume_state: { kind: "start" },
+        };
+      } else {
+        return {
+          action: "result",
+          msg: false,
+          resume_state: { kind: "end" },
+        };
+      }
+    }
+    throw Error('Bad state: ' + state.kind);
   }
-  throw Error('Bad state: ' + state.kind);
-}
 };
 
 describe('StringIterEquals', () => {
@@ -221,7 +222,7 @@ const string_iter_equals_handler2 = simpleHandler(sequence(
   t(([str_iter, [action, msg]]) => [[str_iter, msg], action]),
   match({
     iter: sequence(
-      t(([str_iter, msg]) => [null, [str_iter, msg]]), 
+      t(([str_iter, msg]) => [null, [str_iter, msg]]),
       call(str_iter2, defaultHandler),
       t(([_, [str_iter, msg]]) => [str_iter, msg])
     ),
@@ -291,10 +292,10 @@ const char_iter_from_string_init = func("char_iter_from_string_init", callNoRais
 
 const char_iter_from_string = func("char_iter_from_string",
   call(char_iter_from_str_iter, simpleHandler(sequence(t(([iter, [action, msg]]) => [[iter, msg], action]),
-  match({
-    iter: callNoRaise(str_iter2),
-  }))),
-));
+    match({
+      iter: callNoRaise(str_iter2),
+    }))),
+  ));
 
 // // const char_iter_from_string_closure = func(sequence(
 // //   t((msg: any) => [msg, ["input", ["clone"]]]),
@@ -313,7 +314,7 @@ const char_iter_from_string = func("char_iter_from_string",
 // // ));
 
 // const char_iter_from_string_closure = curryState(char_iter_from_string_init, char_iter_from_string);
-  
+
 // //   func(sequence(
 // //   t((msg: any) => [msg, ["input", ["clone"]]]),
 // //   smuggle(raise),
@@ -419,7 +420,7 @@ describe('CharIterFromString', () => {
 //     const transcript = new FuncTranscript(space_separated_value_for_string_closure);
 //     transcript.assertNext(['next'], 'input', ['clone']);
 //     transcript.assertNext('', 'result', true);
-    
+
 //     transcript.assertNext(['inner_next'], 'result', ['none']);
 //     transcript.assertNext(['next'], 'result', false);
 //   });
@@ -509,84 +510,119 @@ describe('CharIterFromString', () => {
 // //   });
 // // });
 
-// // type IterMapState = ["start" | "middle" | "end"];
+type IterMapState = "start" | "middle" | "end";
 
-// // const iter_map = func(withInit(["start"], closure(sequence(
-// //   t(([state, msg]: [IterMapState, any]) => [[state, msg], msg[0]]),
-// //   match({
-// //     next: sequence(
-// //       t(([state, msg]: [IterMapState, any]) => null),
-// //       sequence(
-// //         t((_: null) => ["iter", ["next"]]),
-// //         raise,
-// //         t((has_next: boolean) => {
-// //           if (has_next) {
-// //             return [["middle"], true];
-// //           } else {
-// //             return [["end"], false];
-// //           }
-// //         }),
-// //       ),
-// //     ),
-// //     item: sequence(
-// //       t(([state, msg]: [IterMapState, any]) => {
-// //         if (state[0] !== "middle") {
-// //           throw Error("Bad state: " + state[0]);
-// //         }
-// //         return msg[1];
-// //       }),
-// //       loop(sequence(
-// //         t((msg: any) => ["fn", msg]),
-// //         raise,
-// //         t(([action, msg]: any) => [msg, action]),
-// //         match({
-// //           input: sequence(
-// //             t((msg: any) => ["iter", ["item", msg]]),
-// //             raise,
-// //             t((resp: any) => ["continue", resp]),
-// //           ),
-// //           result: t((resp: any) => {
-// //             return ["break", ["middle", resp]];
-// //           }),
-// //         }),
-// //       )),
-// //     ),
-// //   }),
-// // ))));
+const iter_map_init = func("iter_map_init", t((_: null) => "start"));
 
-// // const doubler = func(sequence(
-// //   t((msg: any) => {
-// //     if (msg[0] !== "clone") {
-// //       throw Error("Bad msg: " + msg);
-// //     }
-// //     return ["input", ["clone"]];
-// //   }),
-// //   raise,
-// //   t((msg: number) => {
-// //     return msg * 2;
-// //   }),
-// // ));
+const iter_map = func("iter_map", sequence(
+  t(([state, msg]: [IterMapState, any]) => [[state, msg.slice(1)], msg[0]]),
+  match({
+    next: sequence(
+      t(([_, rest]: [IterMapState, any[]]) => ["iter", ["next"]]),
+      raise,
+      t((has_next: boolean) => {
+        if (has_next) {
+          return ["middle", true];
+        } else {
+          return ["end", false];
+        }
+      }),
+    ),
+    item: sequence(
+      t(([state, rest]: [IterMapState, any[]]) => {
+        if (state !== "middle") {
+          throw Error("Bad state: " + state);
+        }
+        return [null, rest[0]];
+      }),
+      raiseRaise("fn", simpleHandler(sequence(
+        t(([_, [action, msg]]) => [msg, action]),
+        match({
+          input: sequence(
+            t((msg: any) => ["iter", ["item", msg]]),
+            raise,
+            t((response: any) => [null, response]),
+          ),
+        }),
+      ))
+      ),
+    ),
+  })));
 
-// // describe('IterMap', () => {
-// //   test('empty iter', () => {
-// //     const transcript = new Transcript(iter_map, null);
-// //     transcript.assertNext(['next'], 'iter', ['next']);
-// //     transcript.assertNext(false, 'result', false);
-// //   });
-// //   test('double ints', () => {
-// //     const transcript = new Transcript(iter_map, null);
-// //     transcript.assertNext(['next'], 'iter', ['next']);
-// //     transcript.assertNext(true, 'result', true);
-// //     transcript.assertNext(['item', ['clone']], 'fn', ['clone']);
-// //     transcript.assertNext(['input', ['clone']], 'iter', ['item', ['clone']]);
-// //     transcript.assertNext(3, 'fn', 3);
-// //     transcript.assertNext(['result', 6], 'result', 6);
-// //     transcript.assertNext(['next'], 'iter', ['next']);
-// //     transcript.assertNext(false, 'result', false);
-// //   });
-// //   test('doubler', () => {
-// //     const transcript = new Transcript(doubler, null);
-// //     transcript.assertNext(['clone'], 'input', ['clone']);
-// //     transcript.assertNext(3, 'result', 6);
-// //   });
-// // });
+const doubler = func("doubler", sequence(
+  t((msg: any) => {
+    if (msg[0] !== "clone") {
+      throw Error("Bad msg: " + msg);
+    }
+    return ["input", ["clone"]];
+  }),
+  raise,
+  t((msg: number) => {
+    return msg * 2;
+  }),
+));
+
+describe('IterMap', () => {
+  test('empty iter', () => {
+    const transcript = new FuncTranscript(closure(iter_map_init, iter_map));
+    transcript.assertNext(null, 'result', null);
+    transcript.assertNext(['next'], 'iter', ['next']);
+    transcript.assertNext(['result', false], 'result', false);
+  });
+  test('double ints', () => {
+    const transcript = new FuncTranscript(closure(iter_map_init, iter_map));
+    transcript.assertNext(null, 'result', null);
+    transcript.assertNext(['next'], 'iter', ['next']);
+    transcript.assertNext(['result', true], 'result', true);
+    transcript.assertNext(['item', ['clone']], 'fn', ['clone']);
+    transcript.assertNext(['input', ['clone']], 'iter', ['item', ['clone']]);
+    transcript.assertNext(['result', 3], 'fn', ['result', 3]);
+    transcript.assertNext(['result', 6], 'result', 6);
+    transcript.assertNext(['next'], 'iter', ['next']);
+    transcript.assertNext(['result', false], 'result', false);
+  });
+  test('doubler', () => {
+    const transcript = new FuncTranscript(doubler);
+    transcript.assertNext(['clone'], 'input', ['clone']);
+    transcript.assertNext(['result', 3], 'result', 6);
+  });
+  test('bind_doubler', () => {
+    const bind_doubler_init = func("bind_doubler_init", callNoRaise(iter_map_init));
+    const bind_doubler = func("bind_doubler", sequence(
+      t(([mapped_state, msg]) => [null, [mapped_state, msg]]),
+      call(iter_map, simpleHandler(sequence(
+        t(([_, [action, msg]]) => [msg, action]),
+        match({
+          iter: sequence(
+            t((msg: any) => ["iter", msg]),
+            raise,
+            t((response: any) => [null, response]),
+          ),
+          fn: sequence(
+            t((msg: any) => [null, msg]),
+            call(doubler, simpleHandler(sequence(
+              t(([_, [action, msg]]) => [msg, action]),
+              match({
+                input: sequence(
+                  t((msg: any) => ["iter", ["item", msg]]),
+                  raise,
+                  t((response: any) => [null, response]),
+                ),
+              }),
+            ))),
+          ),
+        }),
+      ))),
+      t(([_, [mapped_state, msg]]) => [mapped_state, msg]),
+    ));
+
+    const transcript = new FuncTranscript(closure(bind_doubler_init, bind_doubler));
+    transcript.assertNext(null, 'result', null);
+    transcript.assertNext(['next'], 'iter', ['next']);
+    transcript.assertNext(['result', true], 'result', true);
+    transcript.assertNext(['item', ['clone']], 'iter', ['item', ['clone']]);
+    transcript.assertNext(['result', 3], 'result', 6);
+    transcript.assertNext(['next'], 'iter', ['next']);
+    transcript.assertNext(['result', false], 'result', false);
+  });
+});

@@ -115,9 +115,9 @@ type CallState<H, C> = {
   kind: "end",
 };
 
-export type HandlerResult<S> = Result<S, "abort" | "raise" | "result" | "continue">
+export type HandlerResult<S> = Result<S, "abort" | "raise" | "resume" | "continue">
 
-export type Handler<S> = Machine<S, "abort" | "raise" | "result" | "continue">;
+export type Handler<S> = Machine<S, "abort" | "raise" | "resume" | "continue">;
 
 export type CALL_ACTION_TYPE = "raise" | "result" | "continue";
 
@@ -161,7 +161,7 @@ export function call<H, C>(callee: Function<C>, handler: Handler<H>): Machine<Ca
       }
       if (state.kind === "ready_to_handle") {
         const result = handler.run(state.handler_state, msg);
-        if (result.action === "result") {
+        if (result.action === "resume") {
           const [handler_arg, inner_action, inner_arg] = result.msg;
           return { action: "continue", msg: [inner_action, inner_arg], resume_state: { kind: "ready_to_call", handler_arg, func_state: state.func_state } };
         }
@@ -237,13 +237,13 @@ export function simpleHandler<S>(inner: Machine<S, "raise" | "result" | "continu
       }
       unreachable(s);
     },
-    run(s: SimpleHandlerState<S>, msg: any): Result<SimpleHandlerState<S>, "abort" | "raise" | "result" | "continue"> {
+    run(s: SimpleHandlerState<S>, msg: any): Result<SimpleHandlerState<S>, "abort" | "raise" | "resume" | "continue"> {
       if (s.kind === "inner") {
         const result = inner.run(s.inner, msg);
 
         if (result.action === "result") {
           const [handler_arg, inner_arg] = result.msg;
-          return { action: "result", msg: [handler_arg, "result", inner_arg], resume_state: { kind: "end" } };
+          return { action: "resume", msg: [handler_arg, "result", inner_arg], resume_state: { kind: "end" } };
         }
         if (result.action === "raise") {
           return { action: "raise", msg: result.msg, resume_state: { kind: "inner", inner: result.resume_state } };
@@ -411,6 +411,90 @@ export const raise: Machine<RaiseState, "raise" | "result"> = {
     throw Error('Bad state: ' + state.kind);
   }
 };
+
+
+type RaiseRaiseState<H>  = {
+  kind: "start"
+} | { 
+  kind: "ready_to_raise", 
+  handler_arg: unknown 
+} | { 
+  kind: "process_response", 
+  handler_arg: unknown 
+} | { 
+  kind: "ready_to_handle", 
+  handler_arg: unknown 
+} | { kind: "handling", handler_state: H } | { kind: "end" };
+
+export function raiseRaise<H>(action: string, handler: Handler<H>): Machine<RaiseRaiseState<H>, "raise" | "result" | "continue"> {
+  return {
+  init() { return { kind: "start" }; },
+  trace(state: RaiseRaiseState<H>): string {
+    if (state.kind === "start") {
+      return "raise(" + action + ")";
+    }
+    if (state.kind === "ready_to_raise") {
+      return "raise(" + action + ")";
+    }
+    if (state.kind === "process_response") {
+      return "raise(" + action + ").process_response";
+    }
+    if (state.kind === "ready_to_handle") {
+      return "raise(" + action + ").handler";
+    }
+    if (state.kind === "handling") {
+      return "raise(" + action + ").handler" + handler.trace(state.handler_state);
+    }
+    if (state.kind === "end") {
+      throw Error("Bad state: " + state.kind);
+    }
+    unreachable(state);
+  },
+  run(state: RaiseRaiseState<H>, msg: any): Result<RaiseRaiseState<H>, "raise" | "result" | "continue"> {
+    if (state.kind === "start") {
+      const [handler_arg, inner_msg] = msg;
+      return {
+        action: "continue",
+        msg: inner_msg,
+        resume_state: { kind: "ready_to_raise", handler_arg },
+      };
+    }
+    if (state.kind === "ready_to_raise") {
+      return { action: "raise", msg: [action, msg], resume_state: { kind: "process_response", handler_arg: state.handler_arg } };
+    }
+    if (state.kind === "process_response") {
+      const [action, inner_msg] = msg;
+      if (action === "result") {
+        return { action: "result", msg: [state.handler_arg, inner_msg], resume_state: { kind: "end" } };
+      } else {
+        return { action: "continue", msg, resume_state: { kind: "ready_to_handle", handler_arg: state.handler_arg } };
+      }
+    }
+    if (state.kind === "ready_to_handle") {
+      return { action: "continue", msg: [state.handler_arg, msg], resume_state: { kind: "handling", handler_state: handler.init() } };
+    }
+    if (state.kind === "handling") {
+      const result = handler.run(state.handler_state, msg);
+      if (result.action === "resume") {
+        const [handler_arg, inner_action, inner_arg] = result.msg;
+        return { action: "continue", msg: [inner_action, inner_arg], resume_state: { kind: "ready_to_raise", handler_arg } };
+      }
+      if (result.action === "raise") {
+        return { action: "raise", msg: result.msg, resume_state: { kind: "handling", handler_state: result.resume_state } };
+      }
+      if (result.action === "abort") {
+        const [handler_arg, inner_arg] = result.msg;
+        return { action: "result", msg: [handler_arg, inner_arg], resume_state: { kind: "end" } };
+      }
+      if (result.action === "continue") {
+        return { action: "continue", msg: result.msg, resume_state: { kind: "handling", handler_state: result.resume_state } };
+      }
+      unreachable(result.action);
+    }
+    throw Error('Bad state: ' + state.kind);
+  }
+};
+}
 // type RetState = ["start"] | ["await_return"] | ["end"];
 
 // export const ret: Combinator<null, RetState> = {
