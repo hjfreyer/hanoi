@@ -1,5 +1,5 @@
 // Test file for experiments.ts
-import { Machine, t, FuncFragmentResult, FuncFragment, call, Handler, Result, func, closure, HandlerResult, Function, sequence, raise, if_then_else, simpleHandler, match, smuggle, defaultHandler, callNoRaise, raiseRaise } from './experiments';
+import { Machine, t, FuncFragmentResult, FuncFragment, call, Handler, Result, func, closure, HandlerResult, Function, sequence, raise, if_then_else, simpleHandler, match, smuggle, defaultHandler, callNoRaise, raiseRaise, loop, brk, next, andThen } from './experiments';
 
 function handleContinue<S>(machine: Function<S>, state: S, input: any): [S, string, any] {
   console.log("sending", machine.trace(state), JSON.stringify(input));
@@ -451,47 +451,55 @@ describe('CharIterFromString', () => {
 //   // });
 // });
 
-// // const parse_int = func(sequence(
-// //   t((msg: null) => {
-// //     if (msg !== null) {
-// //       throw Error("Bad msg: " + msg);
-// //     }
-// //     return 0;
-// //   }),
-// //   loop(sequence(
-// //     t((acc: number) => {
-// //       return [acc, ["iter", ["next"]]];
-// //     }),
-// //     smuggle(raise),
-// //     t(([acc, msg]: [number, any]) => {
-// //       return [[acc, msg], msg[0] === "some"];
-// //     }),
-// //     if_then_else_null(
-// //       t(([acc, char]: [number, ["some", string]]) => {
-// //         return ["continue", acc * 10 + (char[1].charCodeAt(0) - '0'.charCodeAt(0))];
-// //       }),
-// //       t(([acc, char]: [number, ["none"]]) => {
-// //         return ["break", acc];
-// //       }),
-// //     ),
-// //   ))
-// // ));
 
-// // describe('ParseInt', () => {
-// //   test('empty string', () => {
-// //     const transcript = new Transcript(parse_int, null);
-// //     transcript.assertNext(null, 'iter', ['next']);
-// //     transcript.assertNext(['none'], 'result', 0);
-// //   });
-// //   test('non-empty string', () => {
-// //     const transcript = new Transcript(parse_int, null);
-// //     transcript.assertNext(null, 'iter', ['next']);
-// //     transcript.assertNext(['some', '1'], 'iter', ['next']);
-// //     transcript.assertNext(['some', '2'], 'iter', ['next']);
-// //     transcript.assertNext(['some', '3'], 'iter', ['next']);
-// //     transcript.assertNext(['none'], 'result', 123);
-// //   });
-// // });
+const parse_int = func("parse_int", sequence(
+  t((msg: null) => {
+    if (msg !== null) {
+      throw Error("Bad msg: " + msg);
+    }
+    return 0;
+  }),
+  loop(andThen(
+    sequence(
+      t((acc: number) => {
+        return [acc, ["iter", ["next"]]];
+      }),
+      smuggle(raise),
+      t(([acc, msg]: [number, any]) => {
+        return [[acc, msg], msg[0] === "some"];
+      })),
+    if_then_else(
+      andThen(
+        t(([acc, char]: [number, ["some", string]]) => {
+          return acc * 10 + (char[1].charCodeAt(0) - '0'.charCodeAt(0));
+        }),
+        next
+      ),
+      andThen(
+        t(([acc, char]: [number, ["none"]]) => {
+          return acc;
+        }),
+        brk,
+      ),
+    ),
+  ))
+));
+
+describe('ParseInt', () => {
+  test('empty string', () => {
+    const transcript = new FuncTranscript(parse_int);
+    transcript.assertNext(null, 'iter', ['next']);
+    transcript.assertNext(['result', ['none']], 'result', 0);
+  });
+  test('non-empty string', () => {
+    const transcript = new FuncTranscript(parse_int);
+    transcript.assertNext(null, 'iter', ['next']);
+    transcript.assertNext(['result', ['some', '1']], 'iter', ['next']);
+    transcript.assertNext(['result', ['some', '2']], 'iter', ['next']);
+    transcript.assertNext(['result', ['some', '3']], 'iter', ['next']);
+    transcript.assertNext(['result', ['none']], 'result', 123);
+  });
+});
 
 // // const parse_int_from_string = sequence(
 // //   char_iter_from_string_init,

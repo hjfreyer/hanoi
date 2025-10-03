@@ -277,24 +277,60 @@ export function t(f: (msg: any) => any): Machine<null, "result"> {
   }
 }
 
+export type NotResult<T> = T extends "result" ? never : T;
+function isNotResult<T>(t: T): t is NotResult<T> {
+  return t !== "result";
+}
+
+
+export type AndThenState<AS, BS> = { kind: "a", a: AS } | { kind: "b", b: BS };
+
+export function andThen<AS, AA, BS, BA>(a: Machine<AS, AA | "result">, b: Machine<BS, BA>): Machine<AndThenState<AS, BS>, NotResult<AA> | BA | "continue"> {
+  return {
+    init() { return { kind: "a", a: a.init() } },
+    trace(s: AndThenState<AS, BS>): string {
+      if (s.kind === "a") {
+        return "#0/" + a.trace(s.a);
+      }
+      if (s.kind === "b") {
+        return "#1/" + b.trace(s.b);
+      }
+      unreachable(s);
+    },
+    run(s: AndThenState<AS, BS>, msg: any): Result<AndThenState<AS, BS>, NotResult<AA> | BA | "continue"> {
+      if (s.kind === "a") {
+        const result = a.run(s.a, msg);
+        if (isNotResult(result.action)) {
+          return { action: result.action, msg: result.msg, resume_state: { kind: "a", a: result.resume_state } };
+        }else {
+          return { action: "continue", msg: result.msg, resume_state: { kind: "b", b: b.init() } };
+        }
+      }
+      if (s.kind === "b") {
+        const result = b.run(s.b, msg);
+        return { action: result.action, msg: result.msg, resume_state: { kind: "b", b: result.resume_state } };
+      }
+      unreachable(s);
+    }
+  };
+}
+
 export type SequenceState = [number, any];
 
-export function sequence<A>(...fragments: Machine<any, A>[]): Machine<SequenceState, A | "raise" | "result" | "continue"> {
+export function sequence<A>(...fragments: Machine<any, A>[]): Machine<SequenceState, A | "continue"> {
   return {
     init() { return [0, fragments[0].init()] },
     trace(s: SequenceState): string {
       const [index, inner] = s;
       return "#" + index + fragments[index].trace(inner);
     },
-    run(state: SequenceState, msg: any): Result<SequenceState, A | "raise" | "result" | "continue"> {
+    run(state: SequenceState, msg: any): Result<SequenceState, A | "continue"> {
       const [index, inner] = state;
       const result = fragments[index].run(inner, msg);
       if (result.action === "result") {
         const new_index = index + 1;
         if (new_index < fragments.length) {
           return { action: "continue", msg: result.msg, resume_state: [new_index, fragments[new_index].init()] };
-        } else {
-          return { action: "result", msg: result.msg, resume_state: [-1, null] };
         }
       }
       return { action: result.action, msg: result.msg, resume_state: [index, result.resume_state] };
@@ -413,87 +449,87 @@ export const raise: Machine<RaiseState, "raise" | "result"> = {
 };
 
 
-type RaiseRaiseState<H>  = {
+type RaiseRaiseState<H> = {
   kind: "start"
-} | { 
-  kind: "ready_to_raise", 
-  handler_arg: unknown 
-} | { 
-  kind: "process_response", 
-  handler_arg: unknown 
-} | { 
-  kind: "ready_to_handle", 
-  handler_arg: unknown 
+} | {
+  kind: "ready_to_raise",
+  handler_arg: unknown
+} | {
+  kind: "process_response",
+  handler_arg: unknown
+} | {
+  kind: "ready_to_handle",
+  handler_arg: unknown
 } | { kind: "handling", handler_state: H } | { kind: "end" };
 
 export function raiseRaise<H>(action: string, handler: Handler<H>): Machine<RaiseRaiseState<H>, "raise" | "result" | "continue"> {
   return {
-  init() { return { kind: "start" }; },
-  trace(state: RaiseRaiseState<H>): string {
-    if (state.kind === "start") {
-      return "raise(" + action + ")";
-    }
-    if (state.kind === "ready_to_raise") {
-      return "raise(" + action + ")";
-    }
-    if (state.kind === "process_response") {
-      return "raise(" + action + ").process_response";
-    }
-    if (state.kind === "ready_to_handle") {
-      return "raise(" + action + ").handler";
-    }
-    if (state.kind === "handling") {
-      return "raise(" + action + ").handler" + handler.trace(state.handler_state);
-    }
-    if (state.kind === "end") {
-      throw Error("Bad state: " + state.kind);
-    }
-    unreachable(state);
-  },
-  run(state: RaiseRaiseState<H>, msg: any): Result<RaiseRaiseState<H>, "raise" | "result" | "continue"> {
-    if (state.kind === "start") {
-      const [handler_arg, inner_msg] = msg;
-      return {
-        action: "continue",
-        msg: inner_msg,
-        resume_state: { kind: "ready_to_raise", handler_arg },
-      };
-    }
-    if (state.kind === "ready_to_raise") {
-      return { action: "raise", msg: [action, msg], resume_state: { kind: "process_response", handler_arg: state.handler_arg } };
-    }
-    if (state.kind === "process_response") {
-      const [action, inner_msg] = msg;
-      if (action === "result") {
-        return { action: "result", msg: [state.handler_arg, inner_msg], resume_state: { kind: "end" } };
-      } else {
-        return { action: "continue", msg, resume_state: { kind: "ready_to_handle", handler_arg: state.handler_arg } };
+    init() { return { kind: "start" }; },
+    trace(state: RaiseRaiseState<H>): string {
+      if (state.kind === "start") {
+        return "raise(" + action + ")";
       }
+      if (state.kind === "ready_to_raise") {
+        return "raise(" + action + ")";
+      }
+      if (state.kind === "process_response") {
+        return "raise(" + action + ").process_response";
+      }
+      if (state.kind === "ready_to_handle") {
+        return "raise(" + action + ").handler";
+      }
+      if (state.kind === "handling") {
+        return "raise(" + action + ").handler" + handler.trace(state.handler_state);
+      }
+      if (state.kind === "end") {
+        throw Error("Bad state: " + state.kind);
+      }
+      unreachable(state);
+    },
+    run(state: RaiseRaiseState<H>, msg: any): Result<RaiseRaiseState<H>, "raise" | "result" | "continue"> {
+      if (state.kind === "start") {
+        const [handler_arg, inner_msg] = msg;
+        return {
+          action: "continue",
+          msg: inner_msg,
+          resume_state: { kind: "ready_to_raise", handler_arg },
+        };
+      }
+      if (state.kind === "ready_to_raise") {
+        return { action: "raise", msg: [action, msg], resume_state: { kind: "process_response", handler_arg: state.handler_arg } };
+      }
+      if (state.kind === "process_response") {
+        const [action, inner_msg] = msg;
+        if (action === "result") {
+          return { action: "result", msg: [state.handler_arg, inner_msg], resume_state: { kind: "end" } };
+        } else {
+          return { action: "continue", msg, resume_state: { kind: "ready_to_handle", handler_arg: state.handler_arg } };
+        }
+      }
+      if (state.kind === "ready_to_handle") {
+        return { action: "continue", msg: [state.handler_arg, msg], resume_state: { kind: "handling", handler_state: handler.init() } };
+      }
+      if (state.kind === "handling") {
+        const result = handler.run(state.handler_state, msg);
+        if (result.action === "resume") {
+          const [handler_arg, inner_action, inner_arg] = result.msg;
+          return { action: "continue", msg: [inner_action, inner_arg], resume_state: { kind: "ready_to_raise", handler_arg } };
+        }
+        if (result.action === "raise") {
+          return { action: "raise", msg: result.msg, resume_state: { kind: "handling", handler_state: result.resume_state } };
+        }
+        if (result.action === "abort") {
+          const [handler_arg, inner_arg] = result.msg;
+          return { action: "result", msg: [handler_arg, inner_arg], resume_state: { kind: "end" } };
+        }
+        if (result.action === "continue") {
+          return { action: "continue", msg: result.msg, resume_state: { kind: "handling", handler_state: result.resume_state } };
+        }
+        unreachable(result.action);
+      }
+      throw Error('Bad state: ' + state.kind);
     }
-    if (state.kind === "ready_to_handle") {
-      return { action: "continue", msg: [state.handler_arg, msg], resume_state: { kind: "handling", handler_state: handler.init() } };
-    }
-    if (state.kind === "handling") {
-      const result = handler.run(state.handler_state, msg);
-      if (result.action === "resume") {
-        const [handler_arg, inner_action, inner_arg] = result.msg;
-        return { action: "continue", msg: [inner_action, inner_arg], resume_state: { kind: "ready_to_raise", handler_arg } };
-      }
-      if (result.action === "raise") {
-        return { action: "raise", msg: result.msg, resume_state: { kind: "handling", handler_state: result.resume_state } };
-      }
-      if (result.action === "abort") {
-        const [handler_arg, inner_arg] = result.msg;
-        return { action: "result", msg: [handler_arg, inner_arg], resume_state: { kind: "end" } };
-      }
-      if (result.action === "continue") {
-        return { action: "continue", msg: result.msg, resume_state: { kind: "handling", handler_state: result.resume_state } };
-      }
-      unreachable(result.action);
-    }
-    throw Error('Bad state: ' + state.kind);
-  }
-};
+  };
 }
 // type RetState = ["start"] | ["await_return"] | ["end"];
 
@@ -655,35 +691,64 @@ export function closure<C, S>(constructor: Function<C>, inner: Function<S>): Fun
 //   };
 // }
 
-// export type LoopState<S> = ["inner", S] | ["end"];
-// export function loop<S>(inner: Combinator<null, S>): Combinator<null, LoopState<S>> {
-//   return {
-//     init(_: null): LoopState<S> {
-//       return ["inner", inner.init(null)];
-//     },
-//     run(state: LoopState<S>, msg: any): Result<LoopState<S>> {
-//       if (state.kind === "inner") {
-//         const result = inner.run(state[1], msg);
-//         if (result.action === "result") {
-//           const [inner_action, inner_msg] = result.msg;
-//           if (inner_action === "break") {
-//             return { action: "result", msg: inner_msg, resume_state: ["end"] };
-//           }
-//           if (inner_action === "continue") {
-//             return { action: "continue", msg: inner_msg, resume_state: ["inner", inner.init(null)] };
-//           }
-//           throw Error('Bad inner action: ' + inner_action);
-//         }
-//         if (result.action === "return" || result.action === "raise" || result.action === "continue") {
-//           return { action: result.action, msg: result.msg, resume_state: ["inner", result.resume_state] };
-//         }
-//         throw Error('Bad action: ' + result.action);
-//       }
-//       throw Error('Bad state: ' + state.kind);
-//     }
-//   };
-// }
+export type LoopState<S> = { kind: "inner", state: S } | { kind: "end" };
+export function loop<S>(inner: Machine<S, "break" | "continue" | "next" | "raise">): Machine<LoopState<S>, "result" | "continue" | "raise"> {
+  return {
+    init(): LoopState<S> {
+      return { kind: "inner", state: inner.init() };
+    },
+    trace(state: LoopState<S>): string {
+      if (state.kind === "inner") {
+        return "loop(" + inner.trace(state.state) + ")";
+      }
+      if (state.kind === "end") {
+        return "loop(end)";
+      }
+      unreachable(state);
+    },
+    run(state: LoopState<S>, msg: any): Result<LoopState<S>, "result" | "continue" | "raise"> {
+      if (state.kind === "inner") {
+        const result = inner.run(state.state, msg);
 
+        if (result.action === "next") {
+          return { action: "continue", msg: result.msg, resume_state: { kind: "inner", state: inner.init() } };
+        }
+        if (result.action === "break") {
+          return { action: "result", msg: result.msg, resume_state: { kind: "end" } };
+        }
+        if (result.action === "continue") {
+          return { action: "continue", msg: result.msg, resume_state: { kind: "inner", state: result.resume_state } };
+        }
+        if (result.action === "raise") {
+          return { action: "raise", msg: result.msg, resume_state: { kind: "inner", state: result.resume_state } };
+        }
+        unreachable(result.action);
+      }
+      throw Error('Bad state: ' + state.kind);
+    }
+  };
+}
+
+export const brk: Machine<null, "break"> = {
+  init() { return null },
+  trace(state: null): string {
+    return "brk";
+  },
+  run(state: null, msg: any): Result<null, "break"> {
+    return { action: "break", msg, resume_state: null };
+  }
+};
+
+
+export const next: Machine<null, "next"> = {
+  init() { return null },
+  trace(state: null): string {
+    return "next";
+  },
+  run(state: null, msg: any): Result<null, "next"> {
+    return { action: "next", msg, resume_state: null };
+  }
+};
 // export type HandleState<H, I> = ["inner", H, I] | ["handler", H, I] | ["end"];
 
 // export function handle<HI, H, II, I>(action: string, handler: Combinator<HI, H>, inner: Combinator<II, I>): Combinator<[HI, II], HandleState<H, I>> {
