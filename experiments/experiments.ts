@@ -1,5 +1,7 @@
 import assert from "assert";
 
+// reactor_send(self, msg, )
+
 
 export type Action<A, M> = {action: A, msg: M};
 
