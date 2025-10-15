@@ -267,19 +267,12 @@ function* min_between_g(min, max): Generator<any, number, any> {
     return min;
   } else {
     let rec_argmin = yield* min_between_g(min+1, max);
-    let min_result = yield* poll_helper("list", {kind: "min", data: [min, rec_argmin]});
-    // const get_min_op = yield {kind: "start", target: "list", action: {kind: "min", data: [min, rec_argmin]}}
-    // let poll_arg;
-    // let min_result;
-    // while (true) {
-    //   const get_min_action = yield {kind: "poll", target: "list", state: get_min_op, action: poll_arg};
-    //   if (get_min_action.done) {
-    //     min_result = get_min_action.value;
-    //     break;
-    //   }
-    //   poll_arg = get_min_action.value;
-    // }
-    return min_result;
+    let min_result = yield {kind: "request", target: "list", action: {kind: "<", data: [min, rec_argmin]}};
+    if (min_result) {
+      return min;
+    } else {
+      return rec_argmin;
+    }
   }
 }
 
@@ -290,13 +283,10 @@ function *ready(value: any): Generator<any, any, any> {
 describe("min_between", () => {
   test("should work", () => {
     const min_between_op = min_between_g(0, 3);
-    expect(min_between_op.next().value).toEqual({kind: "start", target: "list", action: {kind: "min", data: [2, 3]}});
-    expect(min_between_op.next("op").value).toMatchObject({kind: "poll", target: "list", state: "op", action: undefined});
-    expect(min_between_op.next({done: true, value: 3}).value).toEqual({kind: "start", target: "list", action: {kind: "min", data: [1, 3]}});
-    expect(min_between_op.next("op").value).toMatchObject({kind: "poll", target: "list", state: "op", action: undefined});
-    expect(min_between_op.next({done: true, value: 1}).value).toEqual({kind: "start", target: "list", action: {kind: "min", data: [0, 1]}});
-    expect(min_between_op.next("op").value).toMatchObject({kind: "poll", target: "list", state: "op", action: undefined});
-    expect(min_between_op.next({done: true, value: 1}).value).toEqual(1);
+    expect(min_between_op.next().value).toEqual({kind: "request", target: "list", action: {kind: "<", data: [2, 3]}});
+    expect(min_between_op.next(false).value).toEqual({kind: "request", target: "list", action: {kind: "<", data: [1, 3]}});
+    expect(min_between_op.next(true).value).toEqual({kind: "request", target: "list", action: {kind: "<", data: [0, 1]}});
+    expect(min_between_op.next(false).value).toEqual(1);
   });
 });
 
@@ -305,25 +295,21 @@ function *sort_list_helper(start, end): Generator<any, any, any> {
     return null;
   }
   const min = yield* min_between_g(start, end);
-  const swap_result = yield* poll_helper("list", {kind: "swap", data: [min, start]});
+  const swap_result = yield {kind: "request", target: "list", action: {kind: "swap", data: [min, start]}};
   return yield* sort_list_helper(start+1, end);
 }  
 
 function *sort_list(): Generator<any, null, any> {
-    const len = yield* poll_helper("list", {kind: "len"});
+    const len = yield {kind: "request", target: "list", action: {kind: "len"}};
     return yield* sort_list_helper(0, len-1);
 }
 
 function *list_handler(arr: any[], action: any) {
   if (action.kind === "len") {
     return [arr, arr.length]
-  } else if (action.kind === "min") {
+  } else if (action.kind === "<") {
     const [a, b] = action.data;
-    if (arr[a] <= arr[b]) {
-      return [arr, a]
-    } else{
-      return [arr, b];
-    }
+    return [arr, arr[a] < arr[b]];
   } else if (action.kind === "swap") {
     const [a, b] = action.data;
     const tmp = arr[a];
@@ -334,7 +320,7 @@ function *list_handler(arr: any[], action: any) {
   throw Error("Bad action: " + action.kind);
 }
 
-function* bound_sort(arr: any[]) {
+function* bound_sort(arr) {
   const op = sort_list();
   let arg;
   while (true) {
@@ -342,23 +328,9 @@ function* bound_sort(arr: any[]) {
     if (action.done) {
       return arr;
     }
-    if (action.value.kind === "start") {
+    if (action.value.kind === "request") {
       if (action.value.target === "list") {
-        arg = list_handler(arr, action.value.action);
-        continue;
-      } else {
-        throw Error("Bad target: " + action.value.target);
-      }
-    } else if (action.value.kind === "poll") {
-      if (action.value.target === "list") {
-        const handler_action = action.value.state.next(arr, action.value.action);
-        if (handler_action.done) {
-          [arr, arg] = handler_action.value;
-          arg = {done: true, value: arg};
-        } else {
-          arg = handler_action;
-        }
-        continue;
+        [arr, arg] = yield* list_handler(arr, action.value.action);
       } else {
         throw Error("Bad target: " + action.value.target);
       }
@@ -371,19 +343,13 @@ function* bound_sort(arr: any[]) {
 describe("sort_list", () => {
   test("should work", () => {
     const sort_list_op = sort_list();
-    expect(sort_list_op.next().value).toEqual({kind: "start", target: "list", action: {kind: "len"}});
-    expect(sort_list_op.next("op").value).toEqual({kind: "poll", target: "list", state: "op", action: undefined});
-    expect(sort_list_op.next({done: true, value: 3}).value).toEqual({kind: "start", target: "list", action: {kind: "min", data: [1, 2]}});
-    expect(sort_list_op.next("op").value).toEqual({kind: "poll", target: "list", state: "op", action: undefined});
-    expect(sort_list_op.next({done: true, value: 1}).value).toEqual({kind: "start", target: "list", action: {kind: "min", data: [0, 1]}});
-    expect(sort_list_op.next("op").value).toEqual({kind: "poll", target: "list", state: "op", action: undefined});
-    expect(sort_list_op.next({done: true, value: 1}).value).toEqual({kind: "start", target: "list", action: {kind: "swap", data: [ 1, 0]}});
-    expect(sort_list_op.next("op").value).toEqual({kind: "poll", target: "list", state: "op", action: undefined});
-    expect(sort_list_op.next({done: true, value: null}).value).toEqual({kind: "start", target: "list", action: {kind: "min", data: [1, 2]}});
-    expect(sort_list_op.next("op").value).toEqual({kind: "poll", target: "list", state: "op", action: undefined});
-    expect(sort_list_op.next({done: true, value: 1}).value).toEqual({kind: "start", target: "list", action: {kind: "swap", data: [1, 1]}});
-    expect(sort_list_op.next("op").value).toEqual({kind: "poll", target: "list", state: "op", action: undefined});
-    expect(sort_list_op.next({done: true, value: null}).value).toEqual(null);
+    expect(sort_list_op.next().value).toEqual({kind: "request", target: "list", action: {kind: "len"}});
+    expect(sort_list_op.next(3).value).toEqual({kind: "request", target: "list", action: {kind: "<", data: [1, 2]}});
+    expect(sort_list_op.next(true).value).toEqual({kind: "request", target: "list", action: {kind: "<", data: [0, 1]}});
+    expect(sort_list_op.next(false).value).toEqual({kind: "request", target: "list", action: {kind: "swap", data: [ 1, 0]}});
+    expect(sort_list_op.next(null).value).toEqual({kind: "request", target: "list", action: {kind: "<", data: [1, 2]}});
+    expect(sort_list_op.next(true).value).toEqual({kind: "request", target: "list", action: {kind: "swap", data: [1, 1]}});
+    expect(sort_list_op.next(null).value).toEqual(null);
   });
 
   test("should work with bound", () => {
