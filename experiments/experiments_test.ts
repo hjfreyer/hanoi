@@ -162,7 +162,7 @@ describe("pair", () => {
       if (a_action.kind === "result") {
         return [{ kind: "resume_pair", data: a_state, pair_state }, { kind: "continue" }];
       } else if (a_action.kind === "continue") {
-        return [{ kind: "await", handler, state : a_state, pair_state }, { kind: "continue" }];
+        return [{ kind: "await", handler, state: a_state, pair_state }, { kind: "continue" }];
       } else {
         throw Error("Bad Action: " + a_action.kind);
       }
@@ -251,10 +251,10 @@ function coord(state, action) {
 }
 
 function* poll_helper(target, action) {
-  const op = yield {kind: "start", target, action}
+  const op = yield { kind: "start", target, action }
   let poll_arg;
   while (true) {
-    const get_min_action = yield {kind: "poll", target, state: op, action: poll_arg};
+    const get_min_action = yield { kind: "poll", target, state: op, action: poll_arg };
     if (get_min_action.done) {
       return get_min_action.value;
     }
@@ -266,8 +266,8 @@ function* min_between_g(min, max): Generator<any, number, any> {
   if (min === max) {
     return min;
   } else {
-    let rec_argmin = yield* min_between_g(min+1, max);
-    let min_result = yield {kind: "request", target: "list", action: {kind: "<", data: [min, rec_argmin]}};
+    let rec_argmin = yield* min_between_g(min + 1, max);
+    let min_result = yield { kind: "request", target: "list", action: { kind: "<", data: [min, rec_argmin] } };
     if (min_result) {
       return min;
     } else {
@@ -276,35 +276,35 @@ function* min_between_g(min, max): Generator<any, number, any> {
   }
 }
 
-function *ready(value: any): Generator<any, any, any> {
+function* ready(value: any): Generator<any, any, any> {
   return value;
 }
 
 describe("min_between", () => {
   test("should work", () => {
     const min_between_op = min_between_g(0, 3);
-    expect(min_between_op.next().value).toEqual({kind: "request", target: "list", action: {kind: "<", data: [2, 3]}});
-    expect(min_between_op.next(false).value).toEqual({kind: "request", target: "list", action: {kind: "<", data: [1, 3]}});
-    expect(min_between_op.next(true).value).toEqual({kind: "request", target: "list", action: {kind: "<", data: [0, 1]}});
+    expect(min_between_op.next().value).toEqual({ kind: "request", target: "list", action: { kind: "<", data: [2, 3] } });
+    expect(min_between_op.next(false).value).toEqual({ kind: "request", target: "list", action: { kind: "<", data: [1, 3] } });
+    expect(min_between_op.next(true).value).toEqual({ kind: "request", target: "list", action: { kind: "<", data: [0, 1] } });
     expect(min_between_op.next(false).value).toEqual(1);
   });
 });
 
-function *sort_list_helper(start, end): Generator<any, any, any> {
+function* sort_list_helper(start, end): Generator<any, any, any> {
   if (start === end) {
     return null;
   }
   const min = yield* min_between_g(start, end);
-  const swap_result = yield {kind: "request", target: "list", action: {kind: "swap", data: [min, start]}};
-  return yield* sort_list_helper(start+1, end);
-}  
-
-function *sort_list(): Generator<any, null, any> {
-    const len = yield {kind: "request", target: "list", action: {kind: "len"}};
-    return yield* sort_list_helper(0, len-1);
+  const swap_result = yield { kind: "request", target: "list", action: { kind: "swap", data: [min, start] } };
+  return yield* sort_list_helper(start + 1, end);
 }
 
-function *list_handler(arr: any[], action: any) {
+function* sort_list(): Generator<any, null, any> {
+  const len = yield { kind: "request", target: "list", action: { kind: "len" } };
+  return yield* sort_list_helper(0, len - 1);
+}
+
+function* list_handler(arr: any[], action: any) {
   if (action.kind === "len") {
     return [arr, arr.length]
   } else if (action.kind === "<") {
@@ -343,12 +343,12 @@ function* bound_sort(arr) {
 describe("sort_list", () => {
   test("should work", () => {
     const sort_list_op = sort_list();
-    expect(sort_list_op.next().value).toEqual({kind: "request", target: "list", action: {kind: "len"}});
-    expect(sort_list_op.next(3).value).toEqual({kind: "request", target: "list", action: {kind: "<", data: [1, 2]}});
-    expect(sort_list_op.next(true).value).toEqual({kind: "request", target: "list", action: {kind: "<", data: [0, 1]}});
-    expect(sort_list_op.next(false).value).toEqual({kind: "request", target: "list", action: {kind: "swap", data: [ 1, 0]}});
-    expect(sort_list_op.next(null).value).toEqual({kind: "request", target: "list", action: {kind: "<", data: [1, 2]}});
-    expect(sort_list_op.next(true).value).toEqual({kind: "request", target: "list", action: {kind: "swap", data: [1, 1]}});
+    expect(sort_list_op.next().value).toEqual({ kind: "request", target: "list", action: { kind: "len" } });
+    expect(sort_list_op.next(3).value).toEqual({ kind: "request", target: "list", action: { kind: "<", data: [1, 2] } });
+    expect(sort_list_op.next(true).value).toEqual({ kind: "request", target: "list", action: { kind: "<", data: [0, 1] } });
+    expect(sort_list_op.next(false).value).toEqual({ kind: "request", target: "list", action: { kind: "swap", data: [1, 0] } });
+    expect(sort_list_op.next(null).value).toEqual({ kind: "request", target: "list", action: { kind: "<", data: [1, 2] } });
+    expect(sort_list_op.next(true).value).toEqual({ kind: "request", target: "list", action: { kind: "swap", data: [1, 1] } });
     expect(sort_list_op.next(null).value).toEqual(null);
   });
 
@@ -357,6 +357,142 @@ describe("sort_list", () => {
     expect(sort_list_op.next().value).toEqual([1, 2, 3]);
   });
 });
+
+type ord = '<' | '>' | '=';
+
+// a: char_iter
+// b: char_iter
+function* strcmp() {
+  const a = yield { kind: "request", target: "a", action: { kind: "next" } };
+  const b = yield { kind: "request", target: "b", action: { kind: "next" } };
+  if (a[0] === 'none' && b[0] === 'none') {
+    return '=';
+  } else if (a[0] === 'none') {
+    return '<';
+  } else if (b[0] === 'none') {
+    return '>';
+  } else {
+    const a_char = a[1];
+    const b_char = b[1];
+    if (a_char < b_char) {
+      return '<';
+    } else if (a_char > b_char) {
+      return '>';
+    } else {
+      return yield* strcmp();
+    }
+  }
+}
+
+function* ref_slice_impl(arr, action) {
+  if (action.kind === "item") {
+    const offset = action.offset;
+    const [item, result] = yield { kind: "request", target: "item", state: arr[offset], action: action.inner };
+    arr[offset] = item;
+    return [arr, result];
+  }
+  throw Error("Bad action: " + action.kind);
+}
+
+function* value_slice_impl(arr, action) {
+  if (action.kind === "iter") {
+    return [arr, [-1, arr.length]];
+  } else if (action.kind === "item") {
+    const offset = action.offset;
+    return [arr, arr[offset]];
+  }
+  throw Error("Bad action: " + action.kind);
+}
+
+function* value_slice_iter_impl([offset, len], action) {
+  if (action.kind === "next") {
+    if (offset === len) {
+      return [null, ['none']];
+    } else {
+      const item = yield { kind: "request", target: "slice", action: { kind: "item", data: offset } };
+      return [offset + 1, ['some', item]];
+    }
+  }
+  throw Error("Bad action: " + action.kind);
+}
+
+describe("slice_of_slice_of_numbers", () => {
+  test("manual", () => {
+    const data = [[1, 2, 3], [4, 5, 6]];
+
+    const get_value_op = ref_slice_impl(data, { kind: "item", offset: 0, inner: { kind: "item", offset: 2 } });
+    expect(get_value_op.next().value).toEqual({ kind: "request", target: "item", state: [1, 2, 3], action: { kind: "item", offset: 2 } });
+    expect(get_value_op.next([[1, 2, 3], 3]).value).toEqual([[[1, 2, 3], [4, 5, 6]], 3]);
+  });
+  test("manual delegation", () => {
+    const data = [[1, 2, 3], [4, 5, 6]];
+
+    const get_value_op = ref_slice_impl(data, { kind: "item", offset: 0, inner: { kind: "item", offset: 2 } });
+    expect(get_value_op.next().value).toEqual({ kind: "request", target: "item", state: [1, 2, 3], action: { kind: "item", offset: 2 } });
+    const value_slice_op = value_slice_impl([1, 2, 3], { kind: "item", offset: 2 });
+    expect(value_slice_op.next().value).toEqual([[1, 2, 3], 3]);
+    expect(get_value_op.next([[1, 2, 3], 3]).value).toEqual([[[1, 2, 3], [4, 5, 6]], 3]);
+  });
+  test("binding", () => {
+    function* bound(state, action) {
+      const op = ref_slice_impl(state, action);
+      let arg;
+      while (true) {
+        const resp: any = op.next(arg);
+        if (resp.done) {
+          return resp.value;
+        }
+        if (resp.value.kind === "request") {
+          if (resp.value.target === "item") {
+            arg = yield* value_slice_impl(resp.value.state, resp.value.action);
+          } else {
+            throw Error("Bad target: " + resp.value.target);
+          }
+        } else {
+          throw Error("Bad action: " + resp.value.kind);
+        }
+      }
+    }
+
+
+    const data = [[1, 2, 3], [4, 5, 6]];
+
+    const get_value_op = bound(data, { kind: "item", offset: 0, inner: { kind: "item", offset: 2 } });
+    expect(get_value_op.next().value).toEqual([[[1, 2, 3], [4, 5, 6]], 3]);
+  });
+});
+
+// function* str_iter_impl(str: string, action) {
+//   if (action.kind === "next") {
+//     if (str.length === 0) {
+//       return [null, ['none']];
+//     } else {
+//       return [str.slice(1), ['some', str[0]]];
+//     }
+//   }
+//   throw Error("Bad action: " + action.kind);
+// }
+
+// function* str_impl(str: string, action) {
+//   if (action.kind === "iter") {
+//     return str_iter_impl(str, action);
+//   }
+//   throw Error("Bad action: " + action.kind);
+// }
+
+// function* str() {
+//   const str = yield {kind: "request", target: "str", action: {kind: "next"}};
+//   return yield* str_iter_impl(str, action);
+// }
+
+// describe("strcmp", () => {
+//   test("should work", () => {
+//     const strcmp_op = strcmp();
+//     expect(strcmp_op.next().value).toEqual({kind: "request", target: "a", action: {kind: "next"}});
+//     expect(strcmp_op.next(['none']).value).toEqual({kind: "request", target: "b", action: {kind: "next"}});
+//     expect(strcmp_op.next(['none']).value).toEqual('=');
+//   });
+// });
 
 type Action = { kind: string };
 type InputAction = { kind: "input", msg: any };
