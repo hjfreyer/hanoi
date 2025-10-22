@@ -262,13 +262,18 @@ function* poll_helper(target, action) {
   }
 }
 
-function* min_between_g(min, max): Generator<any, number, any> {
+function* argmin_between_g(min, max): Generator<any, [any, number], any> {
   if (min === max) {
     return min;
   } else {
-    let rec_argmin = yield* min_between_g(min + 1, max);
-    let min_result = yield { kind: "request", target: "list", action: { kind: "<", data: [min, rec_argmin] } };
-    if (min_result) {
+    let rec_argmin;
+    rec_argmin = yield* argmin_between_g(min + 1, max);
+    let min_ref;
+    min_ref = yield { kind: "request", fn: "list_ref", args: [min] };
+    let rec_ref;
+    rec_ref = yield { kind: "request", fn: "list_ref", args: [rec_argmin] };
+    const min_result = yield { kind: "request", fn: "cmp", args: [min_ref, rec_ref] };
+    if (min_result === '<') {
       return min;
     } else {
       return rec_argmin;
@@ -276,17 +281,20 @@ function* min_between_g(min, max): Generator<any, number, any> {
   }
 }
 
-function* ready(value: any): Generator<any, any, any> {
-  return value;
-}
 
 describe("min_between", () => {
   test("should work", () => {
-    const min_between_op = min_between_g(0, 3);
-    expect(min_between_op.next().value).toEqual({ kind: "request", target: "list", action: { kind: "<", data: [2, 3] } });
-    expect(min_between_op.next(false).value).toEqual({ kind: "request", target: "list", action: { kind: "<", data: [1, 3] } });
-    expect(min_between_op.next(true).value).toEqual({ kind: "request", target: "list", action: { kind: "<", data: [0, 1] } });
-    expect(min_between_op.next(false).value).toEqual(1);
+    const min_between_op = argmin_between_g(0, 3);
+    expect(min_between_op.next().value).toEqual({ kind: "request", fn: "list_ref", args: [2] });
+    expect(min_between_op.next(2).value).toEqual({ kind: "request", fn: "list_ref", args: [3] });
+    expect(min_between_op.next(3).value).toEqual({ kind: "request", fn: "cmp", args: [2, 3] });
+    expect(min_between_op.next('<').value).toEqual({ kind: "request", fn: "list_ref", args: [1] });
+    expect(min_between_op.next(1).value).toEqual({ kind: "request", fn: "list_ref", args: [2] });
+    expect(min_between_op.next(2).value).toEqual({ kind: "request", fn: "cmp", args: [1, 2] });
+    expect(min_between_op.next('>').value).toEqual({ kind: "request", fn: "list_ref", args: [0] });
+    expect(min_between_op.next(0).value).toEqual({ kind: "request", fn: "list_ref", args: [2] });
+    expect(min_between_op.next(2).value).toEqual({ kind: "request", fn: "cmp", args: [0, 2] });
+    expect(min_between_op.next('<').value).toEqual(0);
   });
 });
 
@@ -294,45 +302,177 @@ function* sort_list_helper(start, end): Generator<any, any, any> {
   if (start === end) {
     return null;
   }
-  const min = yield* min_between_g(start, end);
-  const swap_result = yield { kind: "request", target: "list", action: { kind: "swap", data: [min, start] } };
+  const min = yield* argmin_between_g(start, end);
+  yield { kind: "request", fn: "list_swap", args: [min, start] };
   return yield* sort_list_helper(start + 1, end);
 }
 
 function* sort_list(): Generator<any, null, any> {
-  const len = yield { kind: "request", target: "list", action: { kind: "len" } };
+  const len = yield { kind: "request", fn: "list_len", args: [] };
   return yield* sort_list_helper(0, len - 1);
 }
 
-function* list_handler(arr: any[], action: any) {
-  if (action.kind === "len") {
-    return [arr, arr.length]
-  } else if (action.kind === "<") {
-    const [a, b] = action.data;
-    return [arr, arr[a] < arr[b]];
-  } else if (action.kind === "swap") {
-    const [a, b] = action.data;
-    const tmp = arr[a];
-    arr[a] = arr[b];
-    arr[b] = tmp;
-    return [arr, null];
-  }
-  throw Error("Bad action: " + action.kind);
+function* with_ref(ref, fn) {
+  const real_val = yield { kind: "request", fn: "ref_get", args: [ref] };
+  const result = fn(real_val);
+  yield { kind: "request", fn: "ref_set", args: [ref, real_val] };
+  return result;
 }
 
-function* bound_sort(arr) {
-  const op = sort_list();
+function* list_len(list) {
+  return yield* with_ref(list, (list) => list.length);
+}
+
+function* list_ref(list, index) {
+  return { kind: "index", list, index };
+}
+
+function* list_swap(list, index1, index2) {
+  return yield* with_ref(list, (list) => {
+    const tmp = list[index1];
+    list[index1] = list[index2];
+    list[index2] = tmp;
+    return null;
+  });
+}
+
+function* builtin_cmp(): any {
+  const a_val = yield { kind: "request", fn: "get_a", args: [] };
+  const b_val = yield { kind: "request", fn: "get_b", args: [] };
+  let result;
+  if (a_val < b_val) {
+    result = '<';
+  } else if (a_val > b_val) {
+    result = '>';
+  } else {
+    result = '=';
+  }
+  yield { kind: "request", fn: "set_a", args: [a_val] };
+  yield { kind: "request", fn: "set_b", args: [b_val] };
+  return result;
+}
+
+function* bind(gen, fns) {
   let arg;
   while (true) {
-    const action = op.next(arg);
+    const action = gen.next(arg);
     if (action.done) {
-      return arr;
+      return action.value;
     }
     if (action.value.kind === "request") {
-      if (action.value.target === "list") {
-        [arr, arg] = yield* list_handler(arr, action.value.action);
+      const fn = fns[action.value.fn];
+      if (fn === undefined) {
+        throw Error("Bad function: " + action.value.fn);
+      }
+      arg = yield* fn(...action.value.args);
+    } else {
+      throw Error("Bad action: " + action.value.kind);
+    }
+  }
+}
+
+function* bound_builtin_cmp(a_ref, b_ref) {
+  return yield* bind(builtin_cmp(), {
+    *get_a() {
+      return yield { kind: "request", fn: "ref_get", args: [a_ref] };
+    },
+    *get_b() {
+      return yield { kind: "request", fn: "ref_get", args: [b_ref] };
+    },
+    *set_a(a_val) {
+      return yield { kind: "request", fn: "ref_set", args: [a_ref, a_val] };
+    },
+    *set_b(b_val) {
+      return yield { kind: "request", fn: "ref_set", args: [b_ref, b_val] };
+    }
+  });
+}
+
+describe("builtin_cmp", () => {
+  test("should work", () => {
+    const builtin_cmp_op = builtin_cmp();
+    expect(builtin_cmp_op.next().value).toEqual({ kind: "request", fn: "get_a", args: [] });
+    expect(builtin_cmp_op.next('a').value).toEqual({ kind: "request", fn: "get_b", args: [] });
+    expect(builtin_cmp_op.next('b').value).toEqual({ kind: "request", fn: "set_a", args: ['a'] });
+    expect(builtin_cmp_op.next(null).value).toEqual({ kind: "request", fn: "set_b", args: ['b'] });
+    expect(builtin_cmp_op.next(null).value).toEqual('<');
+  });
+
+  test("should work with bound", () => {
+    const builtin_cmp_op = bound_builtin_cmp('aref', 'bref');
+    expect(builtin_cmp_op.next().value).toEqual({ kind: "request", fn: "ref_get", args: ['aref'] });
+    expect(builtin_cmp_op.next('a').value).toEqual({ kind: "request", fn: "ref_get", args: ['bref'] });
+    expect(builtin_cmp_op.next('b').value).toEqual({ kind: "request", fn: "ref_set", args: ['aref', 'a'] });
+    expect(builtin_cmp_op.next(null).value).toEqual({ kind: "request", fn: "ref_set", args: ['bref', 'b'] });
+    expect(builtin_cmp_op.next(null).value).toEqual('<');
+  });
+});
+
+function* semi_bound_sort(list) {
+  return yield* bind(sort_list(), {
+    *list_len() {
+      return yield* list_len(list);
+    },
+    *list_ref(index) {
+      return yield* list_ref(list, index);
+    },
+    *list_swap(index1, index2) {
+      return yield* list_swap(list, index1, index2);
+    },
+    *cmp(a, b) {
+      return yield* bound_builtin_cmp(a, b);
+    }
+  });
+}
+
+function ns_ref_get(ns, ref) {
+  if (ref.kind === "named") {
+    if (ns[ref.name] === undefined) {
+      throw Error("Bad named reference: " + ref.name);
+    }
+    const result = ns[ref.name];
+    ns[ref.name] = undefined;
+    return [ns, result];
+  } else if (ref.kind === "index") {
+    let list;
+    [ns, list] = ns_ref_get(ns, ref.list);
+    const result = list[ref.index];
+    list[ref.index] = undefined;
+    ns = ns_ref_set(ns, ref.list, list);
+    return [ns, result];
+  } else {
+    throw Error("Bad reference: " + ref);
+  }
+}
+
+function ns_ref_set(ns, ref, value) {
+  if (ref.kind === "named") {
+    ns[ref.name] = value;
+    return ns;
+  } else if (ref.kind === "index") {
+    let list;
+    [ns, list] = ns_ref_get(ns, ref.list);
+    list[ref.index] = value;
+    return ns_ref_set(ns, ref.list, list);
+  }
+}
+function* ref_space(ns, gen) {
+  let arg;
+  while (true) {
+    const action = gen.next(arg);
+    if (action.done) {
+      return [ns, action.value];
+    }
+    if (action.value.kind === "request") {
+      if (action.value.fn === "ref_get") {
+        const [new_ns, result] = ns_ref_get(ns, action.value.args[0]);
+        ns = new_ns;
+        arg = result;
+      } else if (action.value.fn === "ref_set") {
+        ns = ns_ref_set(ns, action.value.args[0], action.value.args[1]);
+        arg = null;
       } else {
-        throw Error("Bad target: " + action.value.target);
+        throw Error("Bad function: " + action.value.fn);
       }
     } else {
       throw Error("Bad action: " + action.value.kind);
@@ -340,15 +480,29 @@ function* bound_sort(arr) {
   }
 }
 
+function* bound_sort(arr) {
+  const gen = semi_bound_sort({ kind: "named", name: "thelist" });
+  const [new_ns, result] = yield* ref_space({
+    "thelist": arr,
+  }, gen);
+  return new_ns["thelist"];
+}
+
 describe("sort_list", () => {
   test("should work", () => {
     const sort_list_op = sort_list();
-    expect(sort_list_op.next().value).toEqual({ kind: "request", target: "list", action: { kind: "len" } });
-    expect(sort_list_op.next(3).value).toEqual({ kind: "request", target: "list", action: { kind: "<", data: [1, 2] } });
-    expect(sort_list_op.next(true).value).toEqual({ kind: "request", target: "list", action: { kind: "<", data: [0, 1] } });
-    expect(sort_list_op.next(false).value).toEqual({ kind: "request", target: "list", action: { kind: "swap", data: [1, 0] } });
-    expect(sort_list_op.next(null).value).toEqual({ kind: "request", target: "list", action: { kind: "<", data: [1, 2] } });
-    expect(sort_list_op.next(true).value).toEqual({ kind: "request", target: "list", action: { kind: "swap", data: [1, 1] } });
+    expect(sort_list_op.next().value).toEqual({ kind: "request", fn: "list_len", args: [] });
+    expect(sort_list_op.next(3).value).toEqual({ kind: "request", fn: "list_ref", args: [1] });
+    expect(sort_list_op.next('r1').value).toEqual({ kind: "request", fn: "list_ref", args: [2] });
+    expect(sort_list_op.next('r2').value).toEqual({ kind: "request", fn: "cmp", args: ['r1', 'r2'] });
+    expect(sort_list_op.next('<').value).toEqual({ kind: "request", fn: "list_ref", args: [0] });
+    expect(sort_list_op.next('r0').value).toEqual({ kind: "request", fn: "list_ref", args: [1] });
+    expect(sort_list_op.next('r1').value).toEqual({ kind: "request", fn: "cmp", args: ['r0', 'r1'] });
+    expect(sort_list_op.next(">").value).toEqual({ kind: "request", fn: "list_swap", args: [1, 0] });
+    expect(sort_list_op.next(null).value).toEqual({ kind: "request", fn: "list_ref", args: [1] });
+    expect(sort_list_op.next('r1').value).toEqual({ kind: "request", fn: "list_ref", args: [2] });
+    expect(sort_list_op.next('r2').value).toEqual({ kind: "request", fn: "cmp", args: ['r1', 'r2'] });
+    expect(sort_list_op.next('>').value).toEqual({ kind: "request", fn: "list_swap", args: [2, 1] });
     expect(sort_list_op.next(null).value).toEqual(null);
   });
 
@@ -359,6 +513,42 @@ describe("sort_list", () => {
 });
 
 type ord = '<' | '>' | '=';
+
+function* iterator_cmp(a, b, cmp) {
+  let a_has_next, b_has_next;
+  [a, a_has_next] = yield { kind: "request", fn: "a_next", args: [a] };
+  [b, b_has_next] = yield { kind: "request", fn: "b_next", args: [b] };
+  if (a_has_next && b_has_next) {
+    let a_item, b_item;
+    [a, a_item] = yield { kind: "request", fn: "a_item", args: [a] };
+    [b, b_item] = yield { kind: "request", fn: "b_item", args: [b] };
+    const result = yield { kind: "request", fn: "cmp", args: [cmp, a_item, b_item] };
+    return [a, b, cmp, result];
+  } else if (a_has_next) {
+    return [a, b, cmp, '>'];
+  } else if (b_has_next) {
+    return [a, b, cmp, '<'];
+  } else {
+    return [a, b, cmp, '='];
+  }
+}
+
+function* iterable_cmp(a, b, cmp) {
+  let a_iter, b_iter;
+  [a, a_iter] = yield { kind: "request", fn: "a_iter", args: [a] };
+  [b, b_iter] = yield { kind: "request", fn: "b_iter", args: [b] };
+  return yield* iterator_cmp(a_iter, b_iter, cmp);
+}
+
+function* number_cmp(a, b) {
+  if (a < b) {
+    return '<';
+  } else if (a > b) {
+    return '>';
+  } else {
+    return '=';
+  }
+}
 
 // a: char_iter
 // b: char_iter
@@ -459,6 +649,16 @@ describe("slice_of_slice_of_numbers", () => {
 
     const get_value_op = bound(data, { kind: "item", offset: 0, inner: { kind: "item", offset: 2 } });
     expect(get_value_op.next().value).toEqual([[[1, 2, 3], [4, 5, 6]], 3]);
+  });
+
+  test("iter", () => {
+    const data = [[1, 2, 3], [4, 5, 6]];
+
+    const get_iter_op = ref_slice_impl(data, { kind: "item", offset: 0, inner: { kind: "iter" } });
+    expect(get_iter_op.next().value).toEqual({ kind: "request", target: "item", state: [1, 2, 3], action: { kind: "iter" } });
+    expect(get_iter_op.next([[1, 2, 3], [-1, 3]]).value).toEqual([[[1, 2, 3], [4, 5, 6]], [-1, 3]]);
+
+    const iter = [-1, 3];
   });
 });
 
