@@ -514,185 +514,80 @@ describe("sort_list", () => {
 
 type ord = '<' | '>' | '=';
 
-function* iterator_cmp(a, b, cmp) {
-  let a_has_next, b_has_next;
-  [a, a_has_next] = yield { kind: "request", fn: "a_next", args: [a] };
-  [b, b_has_next] = yield { kind: "request", fn: "b_next", args: [b] };
+function* iterator_cmp() {
+  const a_has_next = yield { kind: "request", fn: "a_next", args: [] };
+  const b_has_next = yield { kind: "request", fn: "b_next", args: [] };
   if (a_has_next && b_has_next) {
-    let a_item, b_item;
-    [a, a_item] = yield { kind: "request", fn: "a_item", args: [a] };
-    [b, b_item] = yield { kind: "request", fn: "b_item", args: [b] };
-    const result = yield { kind: "request", fn: "cmp", args: [cmp, a_item, b_item] };
-    return [a, b, cmp, result];
+    const a_item = yield { kind: "request", fn: "a_item", args: [] };
+    const b_item = yield { kind: "request", fn: "b_item", args: [] };
+    const result = yield { kind: "request", fn: "cmp", args: [a_item, b_item] };
+    if (result === '=') {
+      return yield* iterator_cmp();
+    } else {
+      return result;
+    }
   } else if (a_has_next) {
-    return [a, b, cmp, '>'];
+    return '>';
   } else if (b_has_next) {
-    return [a, b, cmp, '<'];
-  } else {
-    return [a, b, cmp, '='];
-  }
-}
-
-function* iterable_cmp(a, b, cmp) {
-  let a_iter, b_iter;
-  [a, a_iter] = yield { kind: "request", fn: "a_iter", args: [a] };
-  [b, b_iter] = yield { kind: "request", fn: "b_iter", args: [b] };
-  return yield* iterator_cmp(a_iter, b_iter, cmp);
-}
-
-function* number_cmp(a, b) {
-  if (a < b) {
     return '<';
-  } else if (a > b) {
-    return '>';
   } else {
     return '=';
   }
 }
 
-// a: char_iter
-// b: char_iter
-function* strcmp() {
-  const a = yield { kind: "request", target: "a", action: { kind: "next" } };
-  const b = yield { kind: "request", target: "b", action: { kind: "next" } };
-  if (a[0] === 'none' && b[0] === 'none') {
-    return '=';
-  } else if (a[0] === 'none') {
-    return '<';
-  } else if (b[0] === 'none') {
-    return '>';
-  } else {
-    const a_char = a[1];
-    const b_char = b[1];
-    if (a_char < b_char) {
-      return '<';
-    } else if (a_char > b_char) {
-      return '>';
-    } else {
-      return yield* strcmp();
-    }
-  }
-}
-
-function* ref_slice_impl(arr, action) {
-  if (action.kind === "item") {
-    const offset = action.offset;
-    const [item, result] = yield { kind: "request", target: "item", state: arr[offset], action: action.inner };
-    arr[offset] = item;
-    return [arr, result];
-  }
-  throw Error("Bad action: " + action.kind);
-}
-
-function* value_slice_impl(arr, action) {
-  if (action.kind === "iter") {
-    return [arr, [-1, arr.length]];
-  } else if (action.kind === "item") {
-    const offset = action.offset;
-    return [arr, arr[offset]];
-  }
-  throw Error("Bad action: " + action.kind);
-}
-
-function* value_slice_iter_impl([offset, len], action) {
-  if (action.kind === "next") {
-    if (offset === len) {
-      return [null, ['none']];
-    } else {
-      const item = yield { kind: "request", target: "slice", action: { kind: "item", data: offset } };
-      return [offset + 1, ['some', item]];
-    }
-  }
-  throw Error("Bad action: " + action.kind);
-}
-
-describe("slice_of_slice_of_numbers", () => {
-  test("manual", () => {
-    const data = [[1, 2, 3], [4, 5, 6]];
-
-    const get_value_op = ref_slice_impl(data, { kind: "item", offset: 0, inner: { kind: "item", offset: 2 } });
-    expect(get_value_op.next().value).toEqual({ kind: "request", target: "item", state: [1, 2, 3], action: { kind: "item", offset: 2 } });
-    expect(get_value_op.next([[1, 2, 3], 3]).value).toEqual([[[1, 2, 3], [4, 5, 6]], 3]);
+function* iterable_cmp() {
+  const a_iter = yield { kind: "request", fn: "a_iter", args: [] };
+  const b_iter = yield { kind: "request", fn: "b_iter", args: [] };
+  return yield* bind(iterator_cmp(), {
+    *a_next() {
+      return yield { kind: "request", fn: "a_iter::next", args: [a_iter] };
+    },
+    *b_next() {
+      return yield { kind: "request", fn: "b_iter::next", args: [b_iter] };
+    },
+    *a_item() {
+      return yield { kind: "request", fn: "a_iter::item", args: [a_iter] };
+    },  
+    *b_item() {
+      return yield { kind: "request", fn: "b_iter::item", args: [b_iter] };
+    },
+    *cmp(a_item, b_item) {
+      return yield { kind: "request", fn: "cmp", args: [a_item, b_item] };
+    },
   });
-  test("manual delegation", () => {
-    const data = [[1, 2, 3], [4, 5, 6]];
+}
 
-    const get_value_op = ref_slice_impl(data, { kind: "item", offset: 0, inner: { kind: "item", offset: 2 } });
-    expect(get_value_op.next().value).toEqual({ kind: "request", target: "item", state: [1, 2, 3], action: { kind: "item", offset: 2 } });
-    const value_slice_op = value_slice_impl([1, 2, 3], { kind: "item", offset: 2 });
-    expect(value_slice_op.next().value).toEqual([[1, 2, 3], 3]);
-    expect(get_value_op.next([[1, 2, 3], 3]).value).toEqual([[[1, 2, 3], [4, 5, 6]], 3]);
-  });
-  test("binding", () => {
-    function* bound(state, action) {
-      const op = ref_slice_impl(state, action);
-      let arg;
-      while (true) {
-        const resp: any = op.next(arg);
-        if (resp.done) {
-          return resp.value;
-        }
-        if (resp.value.kind === "request") {
-          if (resp.value.target === "item") {
-            arg = yield* value_slice_impl(resp.value.state, resp.value.action);
-          } else {
-            throw Error("Bad target: " + resp.value.target);
-          }
-        } else {
-          throw Error("Bad action: " + resp.value.kind);
-        }
-      }
+function* semi_bound_list_iterable_sort(list) {
+  return yield* bind(sort_list(), {
+    *list_len() {
+      return yield* list_len(list);
+    },
+    *list_ref(index) {
+      return yield* list_ref(list, index);
+    },
+    *list_swap(index1, index2) {
+      return yield* list_swap(list, index1, index2);
+    },
+    *cmp(a, b) {
+      return yield* bound_builtin_cmp(a, b);
     }
-
-
-    const data = [[1, 2, 3], [4, 5, 6]];
-
-    const get_value_op = bound(data, { kind: "item", offset: 0, inner: { kind: "item", offset: 2 } });
-    expect(get_value_op.next().value).toEqual([[[1, 2, 3], [4, 5, 6]], 3]);
   });
+}
 
-  test("iter", () => {
-    const data = [[1, 2, 3], [4, 5, 6]];
-
-    const get_iter_op = ref_slice_impl(data, { kind: "item", offset: 0, inner: { kind: "iter" } });
-    expect(get_iter_op.next().value).toEqual({ kind: "request", target: "item", state: [1, 2, 3], action: { kind: "iter" } });
-    expect(get_iter_op.next([[1, 2, 3], [-1, 3]]).value).toEqual([[[1, 2, 3], [4, 5, 6]], [-1, 3]]);
-
-    const iter = [-1, 3];
+describe("sort list of numbers", () => {
+  test("should work", () => {
+    const list = [
+      [3, 1, 2],
+      [1, 2, 3],
+      [3, 1],
+      [1, 2],
+    ];
+    const op = ref_space({'list': list}, semi_bound_list_iterable_sort({kind: "named", name: "list"})).next();
+    expect(op.done).toBe(true);
+    expect(op.value[0]['list']).toEqual([[1, 2], [1, 2, 3], [3, 1], [3, 1, 2]]);
+    expect(op.value[1]).toBeNull();
   });
 });
-
-// function* str_iter_impl(str: string, action) {
-//   if (action.kind === "next") {
-//     if (str.length === 0) {
-//       return [null, ['none']];
-//     } else {
-//       return [str.slice(1), ['some', str[0]]];
-//     }
-//   }
-//   throw Error("Bad action: " + action.kind);
-// }
-
-// function* str_impl(str: string, action) {
-//   if (action.kind === "iter") {
-//     return str_iter_impl(str, action);
-//   }
-//   throw Error("Bad action: " + action.kind);
-// }
-
-// function* str() {
-//   const str = yield {kind: "request", target: "str", action: {kind: "next"}};
-//   return yield* str_iter_impl(str, action);
-// }
-
-// describe("strcmp", () => {
-//   test("should work", () => {
-//     const strcmp_op = strcmp();
-//     expect(strcmp_op.next().value).toEqual({kind: "request", target: "a", action: {kind: "next"}});
-//     expect(strcmp_op.next(['none']).value).toEqual({kind: "request", target: "b", action: {kind: "next"}});
-//     expect(strcmp_op.next(['none']).value).toEqual('=');
-//   });
-// });
 
 type Action = { kind: string };
 type InputAction = { kind: "input", msg: any };
