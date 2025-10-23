@@ -266,13 +266,16 @@ function* argmin_between_g(min, max): Generator<any, [any, number], any> {
   if (min === max) {
     return min;
   } else {
-    let rec_argmin;
-    rec_argmin = yield* argmin_between_g(min + 1, max);
-    let min_ref;
-    min_ref = yield { kind: "request", fn: "list_ref", args: [min] };
-    let rec_ref;
-    rec_ref = yield { kind: "request", fn: "list_ref", args: [rec_argmin] };
-    const min_result = yield { kind: "request", fn: "cmp", args: [min_ref, rec_ref] };
+    const rec_argmin = yield* argmin_between_g(min + 1, max);
+    const cmp_op = yield { kind: "request", fn: "cmp", args: [] };
+    const min_result = yield* bind(cmp_op, {
+      *send_a(msg) {
+        return yield { kind: "request", fn: "list_send", args: [min, msg] };
+      },
+      *send_b(msg) {
+        return yield { kind: "request", fn: "list_send", args: [rec_argmin, msg] };
+      },
+    });
     if (min_result === '<') {
       return min;
     } else {
@@ -284,17 +287,42 @@ function* argmin_between_g(min, max): Generator<any, [any, number], any> {
 
 describe("min_between", () => {
   test("should work", () => {
+    function* comparator(result) {
+      expect(yield { kind: "request", fn: "send_a", args: ["foo"]}).toEqual("baz");
+      expect(yield { kind: "request", fn: "send_b", args: ["bar"]}).toEqual("qux");
+      return result;
+    }
     const min_between_op = argmin_between_g(0, 3);
-    expect(min_between_op.next().value).toEqual({ kind: "request", fn: "list_ref", args: [2] });
-    expect(min_between_op.next(2).value).toEqual({ kind: "request", fn: "list_ref", args: [3] });
-    expect(min_between_op.next(3).value).toEqual({ kind: "request", fn: "cmp", args: [2, 3] });
-    expect(min_between_op.next('<').value).toEqual({ kind: "request", fn: "list_ref", args: [1] });
-    expect(min_between_op.next(1).value).toEqual({ kind: "request", fn: "list_ref", args: [2] });
-    expect(min_between_op.next(2).value).toEqual({ kind: "request", fn: "cmp", args: [1, 2] });
-    expect(min_between_op.next('>').value).toEqual({ kind: "request", fn: "list_ref", args: [0] });
-    expect(min_between_op.next(0).value).toEqual({ kind: "request", fn: "list_ref", args: [2] });
-    expect(min_between_op.next(2).value).toEqual({ kind: "request", fn: "cmp", args: [0, 2] });
-    expect(min_between_op.next('<').value).toEqual(0);
+    expect(min_between_op.next().value).toEqual({ kind: "request", fn: "cmp", args: [] });
+    expect(min_between_op.next(comparator('<')).value).toEqual({ kind: "request", fn: "list_send", args: [2, "foo"] });
+    expect(min_between_op.next("baz").value).toEqual({ kind: "request", fn: "list_send", args: [3, "bar"] });
+    expect(min_between_op.next("qux").value).toEqual({ kind: "request", fn: "cmp", args: [] });
+    expect(min_between_op.next(comparator('>')).value).toEqual({ kind: "request", fn: "list_send", args: [1, "foo"] });
+    expect(min_between_op.next("baz").value).toEqual({ kind: "request", fn: "list_send", args: [2, "bar"] });
+    expect(min_between_op.next("qux").value).toEqual({ kind: "request", fn: "cmp", args: [] });
+    expect(min_between_op.next(comparator('>')).value).toEqual({ kind: "request", fn: "list_send", args: [0, "foo"] });
+    expect(min_between_op.next("baz").value).toEqual({ kind: "request", fn: "list_send", args: [2, "bar"] });
+    expect(min_between_op.next("qux").value).toEqual(2);
+  });
+
+  test("should work with bound", () => {
+    const list = [3, 1, 2];
+    const bound = bind(argmin_between_g(0, 2), {
+      *cmp() {
+        return builtin_cmp_g();
+      },
+      *list_send(index, msg) {
+        if (msg.kind === "get") {
+          return list[index];
+        } else if (msg.kind === "set") {
+          list[index] = msg.value;
+          return list;
+        } else {
+          throw Error("Bad message: " + JSON.stringify(msg));
+        }
+      },
+    });
+    expect(bound.next().value).toEqual(1);
   });
 });
 
@@ -313,42 +341,61 @@ function* sort_list(): Generator<any, null, any> {
 }
 
 function* with_ref(ref, fn) {
-  const real_val = yield { kind: "request", fn: "ref_get", args: [ref] };
-  const result = fn(real_val);
-  yield { kind: "request", fn: "ref_set", args: [ref, real_val] };
+  const [new_ref, real_val] = yield { kind: "request", fn: "ref_get", args: [ref] };
+  const [new_real_val, result] = yield* fn(real_val);
+  const new_new_ref = yield { kind: "request", fn: "ref_set", args: [new_ref, new_real_val] };
+  return [new_new_ref, result];
+}
+
+function* yield_with_ref(ref, fn) {
+  const [new_ref, real_val] = yield { kind: "request", fn: "ref_get", args: [ref] };
+  const [new_real_val, result] = yield fn(real_val);
+  yield { kind: "request", fn: "ref_set", args: [new_ref, new_real_val] };
   return result;
 }
 
 function* list_len(list) {
-  return yield* with_ref(list, (list) => list.length);
+  return [list, list.length];
 }
 
-function* list_ref(list, index) {
-  return { kind: "index", list, index };
+function* list_item(list_ref, index) {
+  return { kind: "index", list: list_ref, index };
 }
 
 function* list_swap(list, index1, index2) {
-  return yield* with_ref(list, (list) => {
-    const tmp = list[index1];
-    list[index1] = list[index2];
-    list[index2] = tmp;
-    return null;
-  });
+  const tmp = list[index1];
+  list[index1] = list[index2];
+  list[index2] = tmp;
+  return [list, null];
 }
 
-function* builtin_cmp(): any {
-  const a_val = yield { kind: "request", fn: "get_a", args: [] };
-  const b_val = yield { kind: "request", fn: "get_b", args: [] };
-  let result;
-  if (a_val < b_val) {
-    result = '<';
-  } else if (a_val > b_val) {
-    result = '>';
+function* list_send_getset(list, index, msg) {
+  if (msg.kind === "get") {
+    return [list, list[index]];
+  } else if (msg.kind === "set") {
+    list[index] = msg.value;
+    return [list, null];
   } else {
-    result = '=';
+    throw Error("Bad message: " + JSON.stringify(msg));
   }
-  yield { kind: "request", fn: "set_a", args: [a_val] };
-  yield { kind: "request", fn: "set_b", args: [b_val] };
+}
+
+function* builtin_cmp(a_val, b_val): any {
+  if (a_val < b_val) {
+    return [a_val, b_val, '<'];
+  } else if (a_val > b_val) {
+    return [a_val, b_val, '>'];
+  } else {
+    return [a_val, b_val, '='];
+  }
+}
+
+function* builtin_cmp_g() {
+  let a_val = yield { kind: "request", fn: "send_a", args: [{kind: "get"}]};
+  let b_val = yield { kind: "request", fn: "send_b", args: [{kind: "get"}]};
+  const [new_a_val, new_b_val, result] = yield* builtin_cmp(a_val, b_val);
+  yield { kind: "request", fn: "send_a", args: [{kind: "set", value: new_a_val}]};
+  yield { kind: "request", fn: "send_b", args: [{kind: "set", value: new_b_val}]};
   return result;
 }
 
@@ -371,59 +418,66 @@ function* bind(gen, fns) {
   }
 }
 
-function* bound_builtin_cmp(a_ref, b_ref) {
-  return yield* bind(builtin_cmp(), {
-    *get_a() {
-      return yield { kind: "request", fn: "ref_get", args: [a_ref] };
-    },
-    *get_b() {
-      return yield { kind: "request", fn: "ref_get", args: [b_ref] };
-    },
-    *set_a(a_val) {
-      return yield { kind: "request", fn: "ref_set", args: [a_ref, a_val] };
-    },
-    *set_b(b_val) {
-      return yield { kind: "request", fn: "ref_set", args: [b_ref, b_val] };
+function* stateful_bind(gen, state, fns) {
+  let arg;
+  while (true) {
+    const action = gen.next(arg);
+    if (action.done) {
+      return [state, action.value];
     }
-  });
+    if (action.value.kind === "request") {
+      const fn = fns[action.value.fn];
+      if (fn === undefined) {
+        throw Error("Bad function: " + action.value.fn);
+      }
+      [state, arg] = yield* fn(state, ...action.value.args);
+    } else {
+      throw Error("Bad action: " + action.value.kind);
+    }
+  }
 }
 
-describe("builtin_cmp", () => {
-  test("should work", () => {
-    const builtin_cmp_op = builtin_cmp();
-    expect(builtin_cmp_op.next().value).toEqual({ kind: "request", fn: "get_a", args: [] });
-    expect(builtin_cmp_op.next('a').value).toEqual({ kind: "request", fn: "get_b", args: [] });
-    expect(builtin_cmp_op.next('b').value).toEqual({ kind: "request", fn: "set_a", args: ['a'] });
-    expect(builtin_cmp_op.next(null).value).toEqual({ kind: "request", fn: "set_b", args: ['b'] });
-    expect(builtin_cmp_op.next(null).value).toEqual('<');
-  });
+// function* bound_builtin_cmp(a_ref, b_ref) {
+//   return yield* bind(builtin_cmp(), {
+//     *get_a() {
+//       return yield { kind: "request", fn: "ref_get", args: [a_ref] };
+//     },
+//     *get_b() {
+//       return yield { kind: "request", fn: "ref_get", args: [b_ref] };
+//     },
+//     *set_a(a_val) {
+//       return yield { kind: "request", fn: "ref_set", args: [a_ref, a_val] };
+//     },
+//     *set_b(b_val) {
+//       return yield { kind: "request", fn: "ref_set", args: [b_ref, b_val] };
+//     }
+//   });
+// }
 
-  test("should work with bound", () => {
-    const builtin_cmp_op = bound_builtin_cmp('aref', 'bref');
-    expect(builtin_cmp_op.next().value).toEqual({ kind: "request", fn: "ref_get", args: ['aref'] });
-    expect(builtin_cmp_op.next('a').value).toEqual({ kind: "request", fn: "ref_get", args: ['bref'] });
-    expect(builtin_cmp_op.next('b').value).toEqual({ kind: "request", fn: "ref_set", args: ['aref', 'a'] });
-    expect(builtin_cmp_op.next(null).value).toEqual({ kind: "request", fn: "ref_set", args: ['bref', 'b'] });
-    expect(builtin_cmp_op.next(null).value).toEqual('<');
-  });
-});
-
-function* semi_bound_sort(list) {
-  return yield* bind(sort_list(), {
-    *list_len() {
-      return yield* list_len(list);
-    },
-    *list_ref(index) {
-      return yield* list_ref(list, index);
-    },
-    *list_swap(index1, index2) {
-      return yield* list_swap(list, index1, index2);
-    },
-    *cmp(a, b) {
-      return yield* bound_builtin_cmp(a, b);
-    }
-  });
+function *ref_get(ref) {
+  return yield { kind: "request", fn: "ref_get", args: [ref] };
 }
+
+function *ref_set(ref, value) {
+  return yield { kind: "request", fn: "ref_set", args: [ref, value] };
+}
+
+// function* semi_bound_sort(list_ref) {
+//   return yield* bind(sort_list(), {
+//     *list_len() {
+//       return yield* with_ref(list_ref, list_len);
+//     },
+//     *list_ref(index) {
+//       return yield* list_item(list_ref, index);
+//     },
+//     *list_swap(index1, index2) {
+//       return yield* with_ref(list_ref, (list) => list_swap(list, index1, index2));
+//     },
+//     *cmp(a, b) {
+//       return yield* bound_builtin_cmp(a, b);
+//     }
+//   });
+// }
 
 function ns_ref_get(ns, ref) {
   if (ref.kind === "named") {
@@ -472,43 +526,29 @@ function* ref_space(ns, gen) {
         ns = ns_ref_set(ns, action.value.args[0], action.value.args[1]);
         arg = null;
       } else {
-        throw Error("Bad function: " + action.value.fn);
+          arg = yield action.value;
       }
     } else {
-      throw Error("Bad action: " + action.value.kind);
+      arg = yield action.value;
     }
   }
 }
 
 function* bound_sort(arr) {
-  const gen = semi_bound_sort({ kind: "named", name: "thelist" });
-  const [new_ns, result] = yield* ref_space({
-    "thelist": arr,
-  }, gen);
-  return new_ns["thelist"];
+  return yield* stateful_bind(sort_list(), arr, {
+    list_len,
+    list_swap,
+    list_send: list_send_getset,
+    *cmp(arr) {
+      return [arr, builtin_cmp_g()];
+    }
+  });
 }
 
 describe("sort_list", () => {
-  test("should work", () => {
-    const sort_list_op = sort_list();
-    expect(sort_list_op.next().value).toEqual({ kind: "request", fn: "list_len", args: [] });
-    expect(sort_list_op.next(3).value).toEqual({ kind: "request", fn: "list_ref", args: [1] });
-    expect(sort_list_op.next('r1').value).toEqual({ kind: "request", fn: "list_ref", args: [2] });
-    expect(sort_list_op.next('r2').value).toEqual({ kind: "request", fn: "cmp", args: ['r1', 'r2'] });
-    expect(sort_list_op.next('<').value).toEqual({ kind: "request", fn: "list_ref", args: [0] });
-    expect(sort_list_op.next('r0').value).toEqual({ kind: "request", fn: "list_ref", args: [1] });
-    expect(sort_list_op.next('r1').value).toEqual({ kind: "request", fn: "cmp", args: ['r0', 'r1'] });
-    expect(sort_list_op.next(">").value).toEqual({ kind: "request", fn: "list_swap", args: [1, 0] });
-    expect(sort_list_op.next(null).value).toEqual({ kind: "request", fn: "list_ref", args: [1] });
-    expect(sort_list_op.next('r1').value).toEqual({ kind: "request", fn: "list_ref", args: [2] });
-    expect(sort_list_op.next('r2').value).toEqual({ kind: "request", fn: "cmp", args: ['r1', 'r2'] });
-    expect(sort_list_op.next('>').value).toEqual({ kind: "request", fn: "list_swap", args: [2, 1] });
-    expect(sort_list_op.next(null).value).toEqual(null);
-  });
-
   test("should work with bound", () => {
     const sort_list_op = bound_sort([3, 1, 2]);
-    expect(sort_list_op.next().value).toEqual([1, 2, 3]);
+    expect(sort_list_op.next().value).toEqual([[1, 2, 3], null]);
   });
 });
 
@@ -538,56 +578,118 @@ function* iterator_cmp() {
 function* iterable_cmp() {
   const a_iter = yield { kind: "request", fn: "a_iter", args: [] };
   const b_iter = yield { kind: "request", fn: "b_iter", args: [] };
-  return yield* bind(iterator_cmp(), {
-    *a_next() {
-      return yield { kind: "request", fn: "a_iter::next", args: [a_iter] };
+  return yield* stateful_bind(iterator_cmp(), {a_iter: a_iter, b_iter: b_iter}, {
+    *a_next({a_iter, b_iter}) {
+      const [new_a_iter, has_next] = yield { kind: "request", fn: "a_iter_next", args: [a_iter] };
+      return [{a_iter: new_a_iter, b_iter: b_iter}, has_next];
     },
-    *b_next() {
-      return yield { kind: "request", fn: "b_iter::next", args: [b_iter] };
+    *b_next({a_iter, b_iter}) {
+      const [new_b_iter, has_next] = yield { kind: "request", fn: "b_iter_next", args: [b_iter] };
+      return [{a_iter: a_iter, b_iter: new_b_iter}, has_next];
     },
-    *a_item() {
-      return yield { kind: "request", fn: "a_iter::item", args: [a_iter] };
+    *a_item({a_iter, b_iter}) {
+      const [new_a_iter, a_item] = yield { kind: "request", fn: "a_iter_item", args: [a_iter] };
+      return [{a_iter: new_a_iter, b_iter: b_iter}, a_item];
     },  
-    *b_item() {
-      return yield { kind: "request", fn: "b_iter::item", args: [b_iter] };
+    *b_item({a_iter, b_iter}) {
+      const [new_b_iter, b_item] = yield { kind: "request", fn: "b_iter_item", args: [b_iter] };
+      return [{a_iter: a_iter, b_iter: new_b_iter}, b_item];
     },
-    *cmp(a_item, b_item) {
-      return yield { kind: "request", fn: "cmp", args: [a_item, b_item] };
+    *cmp({a_iter, b_iter}, a_item, b_item) {
+      const result = yield { kind: "request", fn: "cmp", args: [a_item, b_item] };
+      return [{a_iter: a_iter, b_iter: b_iter}, result];
     },
   });
 }
 
-function* semi_bound_list_iterable_sort(list) {
-  return yield* bind(sort_list(), {
-    *list_len() {
-      return yield* list_len(list);
-    },
-    *list_ref(index) {
-      return yield* list_ref(list, index);
-    },
-    *list_swap(index1, index2) {
-      return yield* list_swap(list, index1, index2);
-    },
-    *cmp(a, b) {
-      return yield* bound_builtin_cmp(a, b);
-    }
-  });
+function* list_iter(list) {
+  const len = yield* list_len(list);
+  return [list, {ref: list, index: -1, len}];
 }
 
-describe("sort list of numbers", () => {
-  test("should work", () => {
-    const list = [
-      [3, 1, 2],
-      [1, 2, 3],
-      [3, 1],
-      [1, 2],
-    ];
-    const op = ref_space({'list': list}, semi_bound_list_iterable_sort({kind: "named", name: "list"})).next();
-    expect(op.done).toBe(true);
-    expect(op.value[0]['list']).toEqual([[1, 2], [1, 2, 3], [3, 1], [3, 1, 2]]);
-    expect(op.value[1]).toBeNull();
-  });
-});
+function* list_iter_next(iter) {
+  console.log("list_iter_next", iter);
+  const index = iter.index + 1;
+  if (index === iter.len) {
+    return [{ref: iter.ref, index: index}, false];
+  } else {
+    return [{ref: iter.ref, index: index}, true];
+  }
+}
+
+// function* list_iter_item(iter) {
+//   const index = iter.index;
+//   return [iter, yield* list_ref(iter.ref, index)];
+// }
+
+// function* semi_bound_list_iterable_sort(list) {
+//   return yield* bind(sort_list(), {
+//     *list_len() {
+//       return yield* list_len(list);
+//     },
+//     *list_ref(index) {
+//       return yield* list_ref(list, index);
+//     },
+//     *list_swap(index1, index2) {
+//       return yield* list_swap(list, index1, index2);
+//     },
+//     *cmp(a, b) {
+//       console.log("semi_bound_list_iterable_sort cmp", a, b);
+//       return yield* bind(iterable_cmp(), {
+//         *a_iter() {
+//           return yield* list_iter(a);
+//         },
+//         *b_iter() {
+//           return yield* list_iter(b);
+//         },
+//         *a_iter_next(a_iter) {
+//           return yield* list_iter_next(a_iter);
+//         },
+//         *b_iter_next(b_iter) {
+//           return yield* list_iter_next(b_iter);
+//         },
+//         *a_iter_item(a_iter) {
+//           return yield* list_iter_item(a_iter);
+//         },
+//         *b_iter_item(b_iter) {
+//           return yield* list_iter_item(b_iter);
+//         },
+//         *cmp(a_item, b_item) {
+//           console.log("cmp", a_item, b_item);
+//           return yield* bind(builtin_cmp(), {
+//             *get_a() {
+//               return yield { kind: "request", fn: "ref_get", args: [a_item] };
+//             },
+//             *get_b() {
+//               return yield { kind: "request", fn: "ref_get", args: [b_item] };
+//             },
+//             *set_a(a_val) {
+//               return yield { kind: "request", fn: "ref_set", args: [a_item, a_val] };
+//             },
+//             *set_b(b_val) {
+//               return yield { kind: "request", fn: "ref_set", args: [b_item, b_val] };
+//             },
+//           });
+//         },
+//       });
+//     }
+//   });
+// }
+
+// describe("sort list of numbers", () => {
+//   test("should work", () => {
+//     const list = [
+//       [3, 1, 2],
+//       [1, 2, 3],
+//       [3, 1],
+//       [1, 2],
+//     ];
+//     const op = ref_space({'list': list}, semi_bound_list_iterable_sort({kind: "named", name: "list"})).next();
+//     expect(op.done).toBe(true);
+//     expect(op.value[0]['list']).toEqual([[1, 2], [1, 2, 3], [3, 1], [3, 1, 2]]);
+//     expect(op.value[1]).toBeNull();
+//   });
+// });
 
 type Action = { kind: string };
 type InputAction = { kind: "input", msg: any };
