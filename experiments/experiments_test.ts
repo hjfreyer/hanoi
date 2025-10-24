@@ -275,6 +275,9 @@ function* argmin_between_g(min, max): Generator<any, [any, number], any> {
       *send_b(msg) {
         return yield { kind: "request", fn: "list_send", args: [rec_argmin, msg] };
       },
+      *item_cmp(msg) {
+        return yield { kind: "request", fn: "item_cmp", args: [msg] };
+      },
     });
     if (min_result === '<') {
       return min;
@@ -555,12 +558,18 @@ describe("sort_list", () => {
 type ord = '<' | '>' | '=';
 
 function* iterator_cmp() {
-  const a_has_next = yield { kind: "request", fn: "a_next", args: [] };
-  const b_has_next = yield { kind: "request", fn: "b_next", args: [] };
+  const a_has_next = yield { kind: "request", fn: "send_a", args: [{kind: "next"}] };
+  const b_has_next = yield { kind: "request", fn: "send_b", args: [{kind: "next"}] };
   if (a_has_next && b_has_next) {
-    const a_item = yield { kind: "request", fn: "a_item", args: [] };
-    const b_item = yield { kind: "request", fn: "b_item", args: [] };
-    const result = yield { kind: "request", fn: "cmp", args: [a_item, b_item] };
+    const cmp_op = yield { kind: "request", fn: "item_cmp", args: [] };
+    const result = yield* bind(cmp_op, {
+      *send_a(msg) {
+        return yield { kind: "request", fn: "send_a", args: [{kind: "item", msg}] };
+      },
+      *send_b(msg) {
+        return yield { kind: "request", fn: "send_b", args: [{kind: "item",  msg}] };
+      },
+    });
     if (result === '=') {
       return yield* iterator_cmp();
     } else {
@@ -576,39 +585,43 @@ function* iterator_cmp() {
 }
 
 function* iterable_cmp() {
-  const a_iter = yield { kind: "request", fn: "a_iter", args: [] };
-  const b_iter = yield { kind: "request", fn: "b_iter", args: [] };
-  return yield* stateful_bind(iterator_cmp(), {a_iter: a_iter, b_iter: b_iter}, {
-    *a_next({a_iter, b_iter}) {
-      const [new_a_iter, has_next] = yield { kind: "request", fn: "a_iter_next", args: [a_iter] };
-      return [{a_iter: new_a_iter, b_iter: b_iter}, has_next];
+  const a_iter = yield { kind: "request", fn: "send_a", args: [{kind: "new_iter"}] };
+  const b_iter = yield { kind: "request", fn: "send_b", args: [{kind: "new_iter"}] };
+  return yield* stateful_bind(iterator_cmp(), {a_iter, b_iter}, {
+    *send_a({a_iter, b_iter}, msg) {
+      if (msg.kind === "next") {
+        const [new_a_iter, has_next] = yield { kind: "request", fn: "send_a", args: [{kind: "iter_next", iter: a_iter}] };
+        return [{a_iter: new_a_iter, b_iter: b_iter}, has_next];
+      } else if (msg.kind === "item") {
+        const [new_a_iter, resp] = yield { kind: "request", fn: "send_a", args: [{kind: "iter_item", msg, iter: a_iter}] };
+        return [{a_iter: new_a_iter, b_iter: b_iter}, resp];
+      } else {
+        throw Error("Bad message: " + JSON.stringify(msg));
+      }
     },
-    *b_next({a_iter, b_iter}) {
-      const [new_b_iter, has_next] = yield { kind: "request", fn: "b_iter_next", args: [b_iter] };
-      return [{a_iter: a_iter, b_iter: new_b_iter}, has_next];
+    *send_b({a_iter, b_iter}, msg) {
+      if (msg.kind === "next") {
+        const [new_b_iter, has_next] = yield { kind: "request", fn: "send_b", args: [{kind: "iter_next", iter: b_iter}] };
+        return [{a_iter: a_iter, b_iter: new_b_iter}, has_next];
+      } else if (msg.kind === "item") {
+        const [new_b_iter, resp] = yield { kind: "request", fn: "send_b", args: [{kind: "iter_item", msg, iter: b_iter}] };
+        return [{a_iter: a_iter, b_iter: new_b_iter}, resp];
+      } else {
+        throw Error("Bad message: " + JSON.stringify(msg));
+      }
     },
-    *a_item({a_iter, b_iter}) {
-      const [new_a_iter, a_item] = yield { kind: "request", fn: "a_iter_item", args: [a_iter] };
-      return [{a_iter: new_a_iter, b_iter: b_iter}, a_item];
-    },  
-    *b_item({a_iter, b_iter}) {
-      const [new_b_iter, b_item] = yield { kind: "request", fn: "b_iter_item", args: [b_iter] };
-      return [{a_iter: a_iter, b_iter: new_b_iter}, b_item];
-    },
-    *cmp({a_iter, b_iter}, a_item, b_item) {
-      const result = yield { kind: "request", fn: "cmp", args: [a_item, b_item] };
-      return [{a_iter: a_iter, b_iter: b_iter}, result];
+    *item_cmp(state) {
+      return [state, yield { kind: "request", fn: "item_cmp", args: [] }];
     },
   });
 }
 
 function* list_iter(list) {
-  const len = yield* list_len(list);
-  return [list, {ref: list, index: -1, len}];
+  const [new_list, len] = yield* list_len(list);
+  return [new_list, {index: -1, len}];
 }
 
 function* list_iter_next(iter) {
-  console.log("list_iter_next", iter);
   const index = iter.index + 1;
   if (index === iter.len) {
     return [{ref: iter.ref, index: index}, false];
@@ -617,79 +630,91 @@ function* list_iter_next(iter) {
   }
 }
 
-// function* list_iter_item(iter) {
+// function* list_iter_item_send(iter, msg) {
 //   const index = iter.index;
 //   return [iter, yield* list_ref(iter.ref, index)];
 // }
 
-// function* semi_bound_list_iterable_sort(list) {
-//   return yield* bind(sort_list(), {
-//     *list_len() {
-//       return yield* list_len(list);
-//     },
-//     *list_ref(index) {
-//       return yield* list_ref(list, index);
-//     },
-//     *list_swap(index1, index2) {
-//       return yield* list_swap(list, index1, index2);
-//     },
-//     *cmp(a, b) {
-//       console.log("semi_bound_list_iterable_sort cmp", a, b);
-//       return yield* bind(iterable_cmp(), {
-//         *a_iter() {
-//           return yield* list_iter(a);
-//         },
-//         *b_iter() {
-//           return yield* list_iter(b);
-//         },
-//         *a_iter_next(a_iter) {
-//           return yield* list_iter_next(a_iter);
-//         },
-//         *b_iter_next(b_iter) {
-//           return yield* list_iter_next(b_iter);
-//         },
-//         *a_iter_item(a_iter) {
-//           return yield* list_iter_item(a_iter);
-//         },
-//         *b_iter_item(b_iter) {
-//           return yield* list_iter_item(b_iter);
-//         },
-//         *cmp(a_item, b_item) {
-//           console.log("cmp", a_item, b_item);
-//           return yield* bind(builtin_cmp(), {
-//             *get_a() {
-//               return yield { kind: "request", fn: "ref_get", args: [a_item] };
-//             },
-//             *get_b() {
-//               return yield { kind: "request", fn: "ref_get", args: [b_item] };
-//             },
-//             *set_a(a_val) {
-//               return yield { kind: "request", fn: "ref_set", args: [a_item, a_val] };
-//             },
-//             *set_b(b_val) {
-//               return yield { kind: "request", fn: "ref_set", args: [b_item, b_val] };
-//             },
-//           });
-//         },
-//       });
-//     }
-//   });
-// }
+function* semi_bound_list_iterable_sort(list) {
+  return yield* stateful_bind(sort_list(), list, {
+    list_len,
 
-// describe("sort list of numbers", () => {
-//   test("should work", () => {
-//     const list = [
-//       [3, 1, 2],
-//       [1, 2, 3],
-//       [3, 1],
-//       [1, 2],
-//     ];
-//     const op = ref_space({'list': list}, semi_bound_list_iterable_sort({kind: "named", name: "list"})).next();
-//     expect(op.done).toBe(true);
-//     expect(op.value[0]['list']).toEqual([[1, 2], [1, 2, 3], [3, 1], [3, 1, 2]]);
-//     expect(op.value[1]).toBeNull();
-//   });
-// });
+    // *list_ref(index) {
+    //   return yield* list_ref(list, index);
+    // },
+    // *list_swap(index1, index2) {
+    //   return yield* list_swap(list, index1, index2);
+    // },
+    *list_send(list, index, msg) {
+      if (msg.kind === "new_iter") {
+        return yield* list_iter(list);
+      } else if (msg.kind === "iter_next") {
+        return [list, yield* list_iter_next(msg.iter)];
+      } else {
+        throw Error("Bad message: " + JSON.stringify(msg));
+      }
+    },
+    *item_cmp(list) {
+      return [list, builtin_cmp_g()];
+    },
+    *cmp(list) {
+      return [list, iterable_cmp()];
+    //   console.log("semi_bound_list_iterable_sort cmp", a, b);
+    //   return yield* bind(iterable_cmp(), {
+    //     *a_iter() {
+    //       return yield* list_iter(a);
+    //     },
+    //     *b_iter() {
+    //       return yield* list_iter(b);
+    //     },
+    //     *a_iter_next(a_iter) {
+    //       return yield* list_iter_next(a_iter);
+    //     },
+    //     *b_iter_next(b_iter) {
+    //       return yield* list_iter_next(b_iter);
+    //     },
+    //     *a_iter_item(a_iter) {
+    //       return yield* list_iter_item(a_iter);
+    //     },
+    //     *b_iter_item(b_iter) {
+    //       return yield* list_iter_item(b_iter);
+    //     },
+    //     *cmp(a_item, b_item) {
+    //       console.log("cmp", a_item, b_item);
+    //       return yield* bind(builtin_cmp(), {
+    //         *get_a() {
+    //           return yield { kind: "request", fn: "ref_get", args: [a_item] };
+    //         },
+    //         *get_b() {
+    //           return yield { kind: "request", fn: "ref_get", args: [b_item] };
+    //         },
+    //         *set_a(a_val) {
+    //           return yield { kind: "request", fn: "ref_set", args: [a_item, a_val] };
+    //         },
+    //         *set_b(b_val) {
+    //           return yield { kind: "request", fn: "ref_set", args: [b_item, b_val] };
+    //         },
+    //       });
+    //     },
+    //   });
+    }
+  });
+}
+
+describe("sort list of numbers", () => {
+  test("should work", () => {
+    const list = [
+      [3, 1, 2],
+      [1, 2, 3],
+      [3, 1],
+      [1, 2],
+    ];
+    const op = semi_bound_list_iterable_sort(list).next();
+    expect(op.value).toEqual([[1, 2], [1, 2, 3], [3, 1], [3, 1, 2]]);
+    expect(op.value[0]['list']).toEqual([[1, 2], [1, 2, 3], [3, 1], [3, 1, 2]]);
+    expect(op.value[1]).toBeNull();
+  });
+});
 
 type Action = { kind: string };
 type InputAction = { kind: "input", msg: any };
