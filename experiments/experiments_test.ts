@@ -270,18 +270,22 @@ function* argmin_between_g(min, max): Generator<any, [any, number], any> {
     const cmp_op = yield { kind: "request", fn: "cmp", args: [] };
     const min_result = yield* bind(cmp_op, {
       *send_a(msg) {
-        return yield { kind: "request", fn: "list", args: [{
-          kind: "item",
-          index: min,
-          args: [msg],
-        }]};
+        return yield {
+          kind: "request", fn: "list", args: [{
+            kind: "item",
+            index: min,
+            args: [msg],
+          }]
+        };
       },
       *send_b(msg) {
-        return yield { kind: "request", fn: "list", args: [{
-          kind: "item",
-          index: rec_argmin,
-          args: [msg],
-        }]};
+        return yield {
+          kind: "request", fn: "list", args: [{
+            kind: "item",
+            index: rec_argmin,
+            args: [msg],
+          }]
+        };
       },
     });
     if (min_result === '<') {
@@ -315,7 +319,7 @@ describe("min_between", () => {
 
   test("should work with bound", () => {
     const list = [3, 1, 2];
-    const bound = stateful_bind(argmin_between_g(0, 2), list , {
+    const bound = stateful_bind(argmin_between_g(0, 2), list, {
       *cmp(list) {
         return [list, builtin_cmp_g()];
       },
@@ -330,12 +334,12 @@ function* sort_list_helper(start, end): Generator<any, any, any> {
     return null;
   }
   const min = yield* argmin_between_g(start, end);
-  yield { kind: "request", fn: "list", args: [{kind: "swap", index1: min, index2: start}] };
+  yield { kind: "request", fn: "list", args: [{ kind: "swap", index1: min, index2: start }] };
   return yield* sort_list_helper(start + 1, end);
 }
 
 function* sort_list(): Generator<any, null, any> {
-  const len = yield { kind: "request", fn: "list", args: [{kind: "len"}] };
+  const len = yield { kind: "request", fn: "list", args: [{ kind: "len" }] };
   return yield* sort_list_helper(0, len - 1);
 }
 
@@ -363,7 +367,7 @@ function list_impl<T>(item_send) {
       list[msg.index2] = tmp;
       return [list, null];
     } else if (msg.kind === "new_iter") {
-      return [list, {index: -1, len: list.length}];
+      return [list, { index: -1, len: list.length }];
     } else if (msg.kind === "iter_next") {
       return [list, yield* list_iter_next(msg.iter)];
     } else if (msg.kind === "iter_item") {
@@ -392,7 +396,7 @@ function* value_list_impl<T>(list: T[], msg: any): Generator<any, [T[], any], an
     list[msg.index2] = tmp;
     return [list, null];
   } else if (msg.kind === "new_iter") {
-    return [list, {index: -1, len: list.length}];
+    return [list, { index: -1, len: list.length }];
   } else if (msg.kind === "iter_next") {
     return [list, yield* list_iter_next(msg.iter)];
   } else if (msg.kind === "iter_item") {
@@ -458,7 +462,7 @@ function* bind(gen: Generator<any, any, any>, fns: { [key: string]: (...args: an
   }
 }
 
-function* stateful_bind<S>(gen : Generator<any, any, any>, state : S, fns : { [key: string]: (state : S, ...args : any[]) => Generator<any, [S, any], any> }): Generator<any, [S, any], any> {
+function* stateful_bind<S>(gen: Generator<any, any, any>, state: S, fns: { [key: string]: (state: S, ...args: any[]) => Generator<any, [S, any], any> }): Generator<any, [S, any], any> {
   let arg;
   while (true) {
     const action = gen.next(arg);
@@ -558,16 +562,16 @@ describe("sort_list", () => {
 type ord = '<' | '>' | '=';
 
 function* iterator_cmp() {
-  const a_has_next = yield { kind: "request", fn: "send_a", args: [{kind: "next"}] };
-  const b_has_next = yield { kind: "request", fn: "send_b", args: [{kind: "next"}] };
+  const a_has_next = yield { kind: "request", fn: "send_a", args: [{ kind: "next" }] };
+  const b_has_next = yield { kind: "request", fn: "send_b", args: [{ kind: "next" }] };
   if (a_has_next && b_has_next) {
     const cmp_op = yield { kind: "request", fn: "item_cmp", args: [] };
     const result = yield* bind(cmp_op, {
       *send_a(msg) {
-        return yield { kind: "request", fn: "send_a", args: [{kind: "item", msg}] };
+        return yield { kind: "request", fn: "send_a", args: [{ kind: "item", msg }] };
       },
       *send_b(msg) {
-        return yield { kind: "request", fn: "send_b", args: [{kind: "item",  msg}] };
+        return yield { kind: "request", fn: "send_b", args: [{ kind: "item", msg }] };
       },
     });
     if (result === '=') {
@@ -585,29 +589,29 @@ function* iterator_cmp() {
 }
 
 function* iterable_cmp() {
-  type IterPair = {a_iter: any, b_iter: any};
+  type IterPair = { a_iter: any, b_iter: any };
 
-  const a_iter = yield { kind: "request", fn: "send_a", args: [{kind: "new_iter"}] };
-  const b_iter = yield { kind: "request", fn: "send_b", args: [{kind: "new_iter"}] };
-  const [spent_iters, result] = yield* stateful_bind<IterPair>(iterator_cmp(), {a_iter, b_iter}, {
-    *send_a({a_iter, b_iter}, msg): Generator<any, [IterPair, any], any> {
+  const a_iter = yield { kind: "request", fn: "send_a", args: [{ kind: "new_iter" }] };
+  const b_iter = yield { kind: "request", fn: "send_b", args: [{ kind: "new_iter" }] };
+  const [spent_iters, result] = yield* stateful_bind<IterPair>(iterator_cmp(), { a_iter, b_iter }, {
+    *send_a({ a_iter, b_iter }, msg): Generator<any, [IterPair, any], any> {
       if (msg.kind === "next") {
-        const [new_a_iter, has_next] = yield { kind: "request", fn: "send_a", args: [{kind: "iter_next", iter: a_iter}] };
-        return [{a_iter: new_a_iter, b_iter: b_iter}, has_next];
+        const [new_a_iter, has_next] = yield { kind: "request", fn: "send_a", args: [{ kind: "iter_next", iter: a_iter }] };
+        return [{ a_iter: new_a_iter, b_iter: b_iter }, has_next];
       } else if (msg.kind === "item") {
-        const [new_a_iter, resp] = yield { kind: "request", fn: "send_a", args: [{kind: "iter_item", msg: msg.msg, iter: a_iter}] };
-        return [{a_iter: new_a_iter, b_iter: b_iter}, resp];
+        const [new_a_iter, resp] = yield { kind: "request", fn: "send_a", args: [{ kind: "iter_item", msg: msg.msg, iter: a_iter }] };
+        return [{ a_iter: new_a_iter, b_iter: b_iter }, resp];
       } else {
         throw Error("Bad message: " + JSON.stringify(msg));
       }
     },
-    *send_b({a_iter, b_iter}, msg) {
+    *send_b({ a_iter, b_iter }, msg) {
       if (msg.kind === "next") {
-        const [new_b_iter, has_next] = yield { kind: "request", fn: "send_b", args: [{kind: "iter_next", iter: b_iter}] };
-        return [{a_iter: a_iter, b_iter: new_b_iter}, has_next];
+        const [new_b_iter, has_next] = yield { kind: "request", fn: "send_b", args: [{ kind: "iter_next", iter: b_iter }] };
+        return [{ a_iter: a_iter, b_iter: new_b_iter }, has_next];
       } else if (msg.kind === "item") {
-        const [new_b_iter, resp] = yield { kind: "request", fn: "send_b", args: [{kind: "iter_item", msg: msg.msg, iter: b_iter}] };
-        return [{a_iter: a_iter, b_iter: new_b_iter}, resp];
+        const [new_b_iter, resp] = yield { kind: "request", fn: "send_b", args: [{ kind: "iter_item", msg: msg.msg, iter: b_iter }] };
+        return [{ a_iter: a_iter, b_iter: new_b_iter }, resp];
       } else {
         throw Error("Bad message: " + JSON.stringify(msg));
       }
@@ -622,9 +626,9 @@ function* iterable_cmp() {
 function* list_iter_next(iter) {
   const index = iter.index + 1;
   if (index === iter.len) {
-    return [{index: index, len: iter.len}, false];
+    return [{ index: index, len: iter.len }, false];
   } else {
-    return [{index: index, len: iter.len}, true];
+    return [{ index: index, len: iter.len }, true];
   }
 }
 
@@ -651,17 +655,17 @@ describe("sort list of lists of numbers", () => {
   test("compare lists", () => {
     const a = [1, 2];
     const b = [3, 1, 2];
-    const op = stateful_bind(iterable_cmp(), {a, b}, {
-      *send_a({a, b}, msg) {
+    const op = stateful_bind(iterable_cmp(), { a, b }, {
+      *send_a({ a, b }, msg) {
         const [new_a, resp] = yield* value_list_impl(a, msg);
-        return [{a: new_a, b}, resp];
+        return [{ a: new_a, b }, resp];
       },
-      *send_b({a, b}, msg) {
+      *send_b({ a, b }, msg) {
         const [new_b, resp] = yield* value_list_impl(b, msg);
-        return [{a, b: new_b}, resp];
+        return [{ a, b: new_b }, resp];
       },
-      *item_cmp({a, b}) {
-        return [{a, b}, builtin_cmp_g()];
+      *item_cmp({ a, b }) {
+        return [{ a, b }, builtin_cmp_g()];
       },
     }).next();
     expect(op.value[1]).toEqual('<');
