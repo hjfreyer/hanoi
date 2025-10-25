@@ -267,28 +267,26 @@ function* argmin_between_g(min, max): Generator<any, [any, number], any> {
     return min;
   } else {
     const rec_argmin = yield* argmin_between_g(min + 1, max);
-    let cmp_op = yield { kind: "request", fn: "cmp", args: [{ kind: "start" }] };
-    const handlers = {
-      *send_a(msg) {
-        return yield {
+    let [_, min_result] = yield* yield_and_stateful_bind("cmp", [], { min, rec_argmin }, {
+      *send_a({ min, rec_argmin }, msg) {
+        return [{ min, rec_argmin }, yield {
           kind: "request", fn: "list", args: [{
             kind: "item",
             index: min,
             args: [msg],
           }]
-        };
+        }];
       },
-      *send_b(msg) {
-        return yield {
+      *send_b({ min, rec_argmin }, msg) {
+        return [{ min, rec_argmin }, yield {
           kind: "request", fn: "list", args: [{
             kind: "item",
-            index: rec_argmin,  // Cheating
+            index: rec_argmin,
             args: [msg],
           }]
-        };
+        }];
       }
-    };
-    let [new_cmp_op, min_result] = yield* poll_cmp_next(cmp_op, handlers);
+    });
 
     if (min_result === '<') {
       return min;
@@ -479,17 +477,19 @@ function* bind(gen: Generator<any, any, any>, fns: { [key: string]: (...args: an
   }
 }
 
-function* poll_cmp_next(cmp_op, handlers) {
+function* yield_and_bind(fn_name, args, handlers) {
+  let cmp_op = yield { kind: "request", fn: fn_name, args: [{ kind: "start", args }] };
+
   let arg;
   while (true) {
     const [new_cmp_op, op_result] = yield {
-      kind: "request", fn: "cmp", args: [{
+      kind: "request", fn: fn_name, args: [{
         kind: "next", args: [cmp_op, arg]
       }]
     };
     cmp_op = new_cmp_op;
     if (op_result.done) {
-      return [cmp_op, op_result.value];
+      return op_result.value;
     }
     assert(op_result.value.kind === "request");
 
@@ -498,6 +498,31 @@ function* poll_cmp_next(cmp_op, handlers) {
       throw Error("Bad request: " + op_result.value);
     }
     arg = yield* fn(...op_result.value.args);
+  }
+}
+
+
+function* yield_and_stateful_bind<S>(fn_name:string, args: any[], state: S, handlers: { [key: string]: (state: S, ...args: any[]) => Generator<any, [S, any], any> }): Generator<any, [S, any], any> {
+  let cmp_op = yield { kind: "request", fn: fn_name, args: [{ kind: "start", args }] };
+
+  let arg;
+  while (true) {
+    const [new_cmp_op, op_result] = yield {
+      kind: "request", fn: fn_name, args: [{
+        kind: "next", args: [cmp_op, arg]
+      }]
+    };
+    cmp_op = new_cmp_op;
+    if (op_result.done) {
+      return [state, op_result.value];
+    }
+    assert(op_result.value.kind === "request");
+
+    const fn = handlers[op_result.value.fn];
+    if (fn === undefined) {
+      throw Error("Bad request: " + op_result.value);
+    }
+    [state, arg] = yield* fn(state, ...op_result.value.args);
   }
 }
 
