@@ -267,43 +267,29 @@ function* argmin_between_g(min, max): Generator<any, [any, number], any> {
     return min;
   } else {
     const rec_argmin = yield* argmin_between_g(min + 1, max);
-    let cmp_op = yield { kind: "request", fn: "cmp", args: [] };
-    let min_result;
-    let arg;
-    while (true) {
-      const [new_cmp_op, op_result] = yield { kind: "request", fn: "cmp_next", args: [cmp_op, arg] };
-      cmp_op = new_cmp_op;
-      if (op_result.done) {
-        min_result = op_result.value;
-        break;
+    let cmp_op = yield { kind: "request", fn: "cmp", args: [{ kind: "start" }] };
+    const handlers = {
+      *send_a(msg) {
+        return yield {
+          kind: "request", fn: "list", args: [{
+            kind: "item",
+            index: min,
+            args: [msg],
+          }]
+        };
+      },
+      *send_b(msg) {
+        return yield {
+          kind: "request", fn: "list", args: [{
+            kind: "item",
+            index: rec_argmin,  // Cheating
+            args: [msg],
+          }]
+        };
       }
-      assert(op_result.value.kind === "request");
-      const handlers = {
-        *send_a(msg) {
-          return yield {
-            kind: "request", fn: "list", args: [{
-              kind: "item",
-              index: min,
-              args: [msg],
-            }]
-          };
-        },
-        *send_b(msg) {
-          return yield {
-            kind: "request", fn: "list", args: [{
-              kind: "item",
-              index: rec_argmin,
-              args: [msg],
-            }]
-          };
-        }
-      };
-      const fn = handlers[op_result.value.fn];
-      if (fn === undefined) {
-        throw Error("Bad request: " + op_result.value);
-      }
-      arg = yield* fn(...op_result.value.args);
-    }
+    };
+    let [new_cmp_op, min_result] = yield* poll_cmp_next(cmp_op, handlers);
+
     if (min_result === '<') {
       return min;
     } else if (min_result === ">" || min_result === "=") {
@@ -338,12 +324,8 @@ describe("min_between", () => {
   test("should work with bound", () => {
     const list = [3, 1, 2];
     const bound = stateful_bind(argmin_between_g(0, 2), list, {
-      *cmp(list) {
-        return [list, yield* builtin_cmp_g_wrapped_new()];
-      },
-      *cmp_next(list, state, msg) {
-        const result = state.gen.next(msg);
-        return [list, [state, result]];
+      *cmp(list, msg) {
+        return [list, yield* builtin_cmp_g_impl(msg)];
       },
       list: value_list_impl,
     });
@@ -463,8 +445,18 @@ function* builtin_cmp_g() {
 }
 
 type BuiltinCmpGState = { gen: Generator<any, any, any> };
-function* builtin_cmp_g_wrapped_new(): Generator<any, BuiltinCmpGState, any> {
-  return { gen: builtin_cmp_g() };
+type BuiltinCmpGAction = { kind: "start" } | { kind: "next", args: [BuiltinCmpGState, any] };
+
+function* builtin_cmp_g_impl(msg: BuiltinCmpGAction): Generator<any, any, any> {
+  if (msg.kind === "start") {
+    return { gen: builtin_cmp_g() };
+  } else if (msg.kind === "next") {
+    const [state, inner_msg] = msg.args;
+    const result = state.gen.next(inner_msg);
+    return [state, result];
+  } else {
+    throw Error("Bad message: " + JSON.stringify(msg));
+  }
 }
 
 
@@ -484,6 +476,28 @@ function* bind(gen: Generator<any, any, any>, fns: { [key: string]: (...args: an
     } else {
       throw Error("Bad action: " + action.value.kind);
     }
+  }
+}
+
+function* poll_cmp_next(cmp_op, handlers) {
+  let arg;
+  while (true) {
+    const [new_cmp_op, op_result] = yield {
+      kind: "request", fn: "cmp", args: [{
+        kind: "next", args: [cmp_op, arg]
+      }]
+    };
+    cmp_op = new_cmp_op;
+    if (op_result.done) {
+      return [cmp_op, op_result.value];
+    }
+    assert(op_result.value.kind === "request");
+
+    const fn = handlers[op_result.value.fn];
+    if (fn === undefined) {
+      throw Error("Bad request: " + op_result.value);
+    }
+    arg = yield* fn(...op_result.value.args);
   }
 }
 
@@ -574,14 +588,9 @@ describe("sort_list", () => {
     function* bound_sort(arr) {
       return yield* stateful_bind(sort_list(), arr, {
         list: value_list_impl,
-        *cmp(arr) {
-          return [arr, yield* builtin_cmp_g_wrapped_new()];
+        *cmp(arr, msg) {
+          return [arr, yield* builtin_cmp_g_impl(msg)];
         },
-        *cmp_next(arr, state, msg) {
-          const result = state.gen.next(msg);
-          return [arr, [state, result]];
-        },
-
       });
     }
     const sort_list_op = bound_sort([3, 1, 2]);
@@ -653,14 +662,6 @@ function* iterable_cmp() {
   return result;
 }
 
-function* iterable_cmp_wrapped_new(): Generator<any, BuiltinCmpGState, any> {
-  return { gen: iterable_cmp() };
-}
-
-function* iterable_cmp_wrapped_next(state: BuiltinCmpGState, msg: any): Generator<any, any, any> {
-  return state.gen.next(msg);
-}
-
 function* list_iter_next(iter) {
   const index = iter.index + 1;
   if (index === iter.len) {
@@ -693,13 +694,17 @@ function* semi_bound_list_iterable_sort(list) {
         },
       });
     },
-    *cmp(list) {
-      return [list, { gen: bound_iterable_cmp() }];
+    *cmp(list, msg) {
+      if (msg.kind === "start") {
+        return [list, { gen: bound_iterable_cmp() }];
+      } else if (msg.kind === "next") {
+        const [state, inner_msg] = msg.args;
+        const result = state.gen.next(inner_msg);
+        return [list, [state, result]];
+      } else {
+        throw Error("Bad message: " + JSON.stringify(msg));
+      }
     },
-    *cmp_next(list, state, msg) {
-      const next_result = state.gen.next(msg);
-      return [list, [state, next_result]];
-    }
   });
 }
 
