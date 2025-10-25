@@ -357,34 +357,31 @@ function* yield_with_ref(ref, fn) {
   return result;
 }
 
-function list_impl<T>(item_send) {
-  function* list_send(list: T[], msg: any): Generator<any, [T[], any], any> {
-    if (msg.kind === "len") {
-      return [list, list.length];
-    } else if (msg.kind === "swap") {
-      const tmp = list[msg.index1];
-      list[msg.index1] = list[msg.index2];
-      list[msg.index2] = tmp;
-      return [list, null];
-    } else if (msg.kind === "new_iter") {
-      return [list, { index: -1, len: list.length }];
-    } else if (msg.kind === "iter_next") {
-      return [list, yield* list_iter_next(msg.iter)];
-    } else if (msg.kind === "iter_item") {
-      const item = list[msg.iter.index];
-      const [new_item, result] = yield* item_send(item, msg.msg);
-      list[msg.iter.index] = new_item;
-      return [list, [msg.iter, result]];
-    } else if (msg.kind === "item") {
-      const item = list[msg.index];
-      const [new_item, result] = yield* item_send(item, ...msg.args);
-      list[msg.index] = new_item;
-      return [list, result];
-    } else {
-      throw Error("Bad message: " + JSON.stringify(msg));
-    }
+function* list_impl<T>(list: T[], msg: any): Generator<any, [T[], any], any> {
+  if (msg.kind === "len") {
+    return [list, list.length];
+  } else if (msg.kind === "swap") {
+    const tmp = list[msg.index1];
+    list[msg.index1] = list[msg.index2];
+    list[msg.index2] = tmp;
+    return [list, null];
+  } else if (msg.kind === "new_iter") {
+    return [list, { index: -1, len: list.length }];
+  } else if (msg.kind === "iter_next") {
+    return [list, yield* list_iter_next(msg.iter)];
+  } else if (msg.kind === "iter_item") {
+    const item = list[msg.iter.index];
+    const [new_item, result] = yield { kind: "request", fn: "item", args: [item, msg.msg] };
+    list[msg.iter.index] = new_item;
+    return [list, [msg.iter, result]];
+  } else if (msg.kind === "item") {
+    const item = list[msg.index];
+    const [new_item, result] = yield { kind: "request", fn: "item", args: [item, ...msg.args] };
+    list[msg.index] = new_item;
+    return [list, result];
+  } else {
+    throw Error("Bad message: " + JSON.stringify(msg));
   }
-  return list_send;
 }
 
 function* value_list_impl<T>(list: T[], msg: any): Generator<any, [T[], any], any> {
@@ -634,7 +631,13 @@ function* list_iter_next(iter) {
 
 function* semi_bound_list_iterable_sort(list) {
   return yield* stateful_bind(sort_list(), list, {
-    list: list_impl(value_list_impl),
+    *list(list, msg) {
+      return yield* bind(list_impl(list, msg), {
+        *item(item, msg) {
+          return yield* value_list_impl(item, msg);
+        },
+      });
+    },
     *cmp(list) {
       return [list, bind(iterable_cmp(), {
         *send_a(msg) {
