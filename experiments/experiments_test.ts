@@ -267,31 +267,49 @@ function* argmin_between_g(min, max): Generator<any, [any, number], any> {
     return min;
   } else {
     const rec_argmin = yield* argmin_between_g(min + 1, max);
-    const cmp_op = yield { kind: "request", fn: "cmp", args: [] };
-    const min_result = yield* bind(cmp_op, {
-      *send_a(msg) {
-        return yield {
-          kind: "request", fn: "list", args: [{
-            kind: "item",
-            index: min,
-            args: [msg],
-          }]
-        };
-      },
-      *send_b(msg) {
-        return yield {
-          kind: "request", fn: "list", args: [{
-            kind: "item",
-            index: rec_argmin,
-            args: [msg],
-          }]
-        };
-      },
-    });
+    let cmp_op = yield { kind: "request", fn: "cmp", args: [] };
+    let min_result;
+    let arg;
+    while (true) {
+      const [new_cmp_op, op_result] = yield { kind: "request", fn: "cmp_next", args: [cmp_op, arg] };
+      cmp_op = new_cmp_op;
+      if (op_result.done) {
+        min_result = op_result.value;
+        break;
+      }
+      assert(op_result.value.kind === "request");
+      const handlers = {
+        *send_a(msg) {
+          return yield {
+            kind: "request", fn: "list", args: [{
+              kind: "item",
+              index: min,
+              args: [msg],
+            }]
+          };
+        },
+        *send_b(msg) {
+          return yield {
+            kind: "request", fn: "list", args: [{
+              kind: "item",
+              index: rec_argmin,
+              args: [msg],
+            }]
+          };
+        }
+      };
+      const fn = handlers[op_result.value.fn];
+      if (fn === undefined) {
+        throw Error("Bad request: " + op_result.value);
+      }
+      arg = yield* fn(...op_result.value.args);
+    }
     if (min_result === '<') {
       return min;
-    } else {
+    } else if (min_result === ">" || min_result === "=") {
       return rec_argmin;
+    } else {
+      throw Error("bad min_result: " + min_result)
     }
   }
 }
@@ -321,7 +339,11 @@ describe("min_between", () => {
     const list = [3, 1, 2];
     const bound = stateful_bind(argmin_between_g(0, 2), list, {
       *cmp(list) {
-        return [list, builtin_cmp_g()];
+        return [list, yield* builtin_cmp_g_wrapped_new()];
+      },
+      *cmp_next(list, state, msg) {
+        const result = state.gen.next(msg);
+        return [list, [state, result]];
       },
       list: value_list_impl,
     });
@@ -440,6 +462,12 @@ function* builtin_cmp_g() {
   return result;
 }
 
+type BuiltinCmpGState = { gen: Generator<any, any, any> };
+function* builtin_cmp_g_wrapped_new(): Generator<any, BuiltinCmpGState, any> {
+  return { gen: builtin_cmp_g() };
+}
+
+
 function* bind(gen: Generator<any, any, any>, fns: { [key: string]: (...args: any[]) => Generator<any, any, any> }): Generator<any, any, any> {
   let arg;
   while (true) {
@@ -547,8 +575,13 @@ describe("sort_list", () => {
       return yield* stateful_bind(sort_list(), arr, {
         list: value_list_impl,
         *cmp(arr) {
-          return [arr, builtin_cmp_g()];
-        }
+          return [arr, yield* builtin_cmp_g_wrapped_new()];
+        },
+        *cmp_next(arr, state, msg) {
+          const result = state.gen.next(msg);
+          return [arr, [state, result]];
+        },
+
       });
     }
     const sort_list_op = bound_sort([3, 1, 2]);
@@ -620,6 +653,14 @@ function* iterable_cmp() {
   return result;
 }
 
+function* iterable_cmp_wrapped_new(): Generator<any, BuiltinCmpGState, any> {
+  return { gen: iterable_cmp() };
+}
+
+function* iterable_cmp_wrapped_next(state: BuiltinCmpGState, msg: any): Generator<any, any, any> {
+  return state.gen.next(msg);
+}
+
 function* list_iter_next(iter) {
   const index = iter.index + 1;
   if (index === iter.len) {
@@ -630,6 +671,20 @@ function* list_iter_next(iter) {
 }
 
 function* semi_bound_list_iterable_sort(list) {
+  function* bound_iterable_cmp(): Generator<any, any, any> {
+    return yield* bind(iterable_cmp(), {
+      *send_a(msg) {
+        return yield { kind: "request", fn: "send_a", args: [msg] };
+      },
+      *send_b(msg) {
+        return yield { kind: "request", fn: "send_b", args: [msg] };
+      },
+      *item_cmp() {
+        return builtin_cmp_g();
+      },
+    })
+  }
+
   return yield* stateful_bind(sort_list(), list, {
     *list(list, msg) {
       return yield* bind(list_impl(list, msg), {
@@ -639,17 +694,11 @@ function* semi_bound_list_iterable_sort(list) {
       });
     },
     *cmp(list) {
-      return [list, bind(iterable_cmp(), {
-        *send_a(msg) {
-          return yield { kind: "request", fn: "send_a", args: [msg] };
-        },
-        *send_b(msg) {
-          return yield { kind: "request", fn: "send_b", args: [msg] };
-        },
-        *item_cmp() {
-          return builtin_cmp_g();
-        },
-      })];
+      return [list, { gen: bound_iterable_cmp() }];
+    },
+    *cmp_next(list, state, msg) {
+      const next_result = state.gen.next(msg);
+      return [list, [state, next_result]];
     }
   });
 }
