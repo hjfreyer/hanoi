@@ -352,8 +352,9 @@ function* yield_with_ref(ref, fn) {
   yield { kind: "request", fn: "ref_set", args: [new_ref, new_real_val] };
   return result;
 }
-function list_impl(item_send) {
-  function* list_send(list, msg) {
+
+function list_impl<T>(item_send) {
+  function* list_send(list: T[], msg: any): Generator<any, [T[], any], any> {
     if (msg.kind === "len") {
       return [list, list.length];
     } else if (msg.kind === "swap") {
@@ -382,7 +383,7 @@ function list_impl(item_send) {
   return list_send;
 }
 
-function* value_list_impl(list, msg) {
+function* value_list_impl<T>(list: T[], msg: any): Generator<any, [T[], any], any> {
   if (msg.kind === "len") {
     return [list, list.length];
   } else if (msg.kind === "swap") {
@@ -438,7 +439,7 @@ function* builtin_cmp_g() {
   return result;
 }
 
-function* bind(gen, fns) {
+function* bind(gen: Generator<any, any, any>, fns: { [key: string]: (...args: any[]) => Generator<any, any, any> }): Generator<any, any, any> {
   let arg;
   while (true) {
     const action = gen.next(arg);
@@ -457,7 +458,7 @@ function* bind(gen, fns) {
   }
 }
 
-function* stateful_bind(gen, state, fns) {
+function* stateful_bind<S>(gen : Generator<any, any, any>, state : S, fns : { [key: string]: (state : S, ...args : any[]) => Generator<any, [S, any], any> }): Generator<any, [S, any], any> {
   let arg;
   while (true) {
     const action = gen.next(arg);
@@ -584,10 +585,12 @@ function* iterator_cmp() {
 }
 
 function* iterable_cmp() {
+  type IterPair = {a_iter: any, b_iter: any};
+
   const a_iter = yield { kind: "request", fn: "send_a", args: [{kind: "new_iter"}] };
   const b_iter = yield { kind: "request", fn: "send_b", args: [{kind: "new_iter"}] };
-  const [spent_iters, result] = yield* stateful_bind(iterator_cmp(), {a_iter, b_iter}, {
-    *send_a({a_iter, b_iter}, msg) {
+  const [spent_iters, result] = yield* stateful_bind<IterPair>(iterator_cmp(), {a_iter, b_iter}, {
+    *send_a({a_iter, b_iter}, msg): Generator<any, [IterPair, any], any> {
       if (msg.kind === "next") {
         const [new_a_iter, has_next] = yield { kind: "request", fn: "send_a", args: [{kind: "iter_next", iter: a_iter}] };
         return [{a_iter: new_a_iter, b_iter: b_iter}, has_next];
