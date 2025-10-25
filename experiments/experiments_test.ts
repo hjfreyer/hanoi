@@ -12,18 +12,14 @@ function* argmin_between_g(min, max): Generator<any, [any, number], any> {
       *send_a({ min, rec_argmin }, msg) {
         return [{ min, rec_argmin }, yield {
           kind: "request", fn: "list", args: [{
-            kind: "item",
-            index: min,
-            args: [msg],
+            kind: "request", fn: "item", args: [min, msg]
           }]
         }];
       },
       *send_b({ min, rec_argmin }, msg) {
         return [{ min, rec_argmin }, yield {
           kind: "request", fn: "list", args: [{
-            kind: "item",
-            index: rec_argmin,
-            args: [msg],
+            kind: "request", fn: "item", args: [rec_argmin, msg]
           }]
         }];
       }
@@ -58,78 +54,139 @@ function* sort_list_helper(start, end): Generator<any, any, any> {
     return null;
   }
   const min = yield* argmin_between_g(start, end);
-  yield { kind: "request", fn: "list", args: [{ kind: "swap", index1: min, index2: start }] };
+  yield { kind: "request", fn: "list", args: [{ kind: "request", fn: "swap", args: [min, start] }] };
   return yield* sort_list_helper(start + 1, end);
 }
 
 function* sort_list(): Generator<any, null, any> {
-  const len = yield { kind: "request", fn: "list", args: [{ kind: "len" }] };
+  const len = yield { kind: "request", fn: "list", args: [{ kind: "request", fn: "len", args: [] }] };
   return yield* sort_list_helper(0, len - 1);
 }
 
 function* list_impl<T>(list: T[], msg: any): Generator<any, [T[], any], any> {
-  if (msg.kind === "len") {
+  assert(msg.kind === "request");
+  if (msg.fn === "len") {
     return [list, list.length];
-  } else if (msg.kind === "swap") {
-    const tmp = list[msg.index1];
-    list[msg.index1] = list[msg.index2];
-    list[msg.index2] = tmp;
+  } else if (msg.fn === "swap") {
+    const [index1, index2] = msg.args;
+    const tmp = list[index1];
+    list[index1] = list[index2];
+    list[index2] = tmp;
     return [list, null];
-  } else if (msg.kind === "new_iter") {
+  } else if (msg.fn === "new_iter") {
     return [list, { index: -1, len: list.length }];
-  } else if (msg.kind === "iter_next") {
-    return [list, yield* list_iter_next(msg.iter)];
-  } else if (msg.kind === "iter_item") {
-    const item = list[msg.iter.index];
-    const [new_item, result] = yield { kind: "request", fn: "item", args: [item, msg.msg] };
-    list[msg.iter.index] = new_item;
-    return [list, [msg.iter, result]];
-  } else if (msg.kind === "item") {
-    const item = list[msg.index];
-    const [new_item, result] = yield { kind: "request", fn: "item", args: [item, ...msg.args] };
-    list[msg.index] = new_item;
+  } else if (msg.fn === "iter_next") {
+    const [iter] = msg.args;
+    return [list, yield* list_iter_next(iter)];
+  } else if (msg.fn === "iter_item") {
+    const [iter, inner_msg] = msg.args;
+    const item = list[iter.index];
+    const [new_item, result] = yield { kind: "request", fn: "item", args: [item, inner_msg] };
+    list[iter.index] = new_item;
+    return [list, [iter, result]];
+  } else if (msg.fn === "item") {
+    const [index, inner_msg] = msg.args;
+    const item = list[index];
+    const [new_item, result] = yield { kind: "request", fn: "item", args: [item, inner_msg] };
+    list[index] = new_item;
     return [list, result];
+  } else {
+    throw Error("Bad request: " + JSON.stringify(msg));
+  }
+}
+
+function* value_list_impl<T>(list: T[], msg: any): Generator<any, [T[], any], any> {
+  assert(msg.kind === "request");
+  if (msg.fn === "len") {
+    return [list, list.length];
+  } else if (msg.fn === "swap") {
+    const [index1, index2] = msg.args;
+    const tmp = list[index1];
+    list[index1] = list[index2];
+    list[index2] = tmp;
+    return [list, null];
+  } else if (msg.fn === "new_iter") {
+    return [list, { index: -1, len: list.length }];
+  } else if (msg.fn === "iter_next") {
+    const [iter] = msg.args;
+    return [list, yield* list_iter_next(iter)];
+  } else if (msg.fn === "iter_item") {
+    const [iter, inner_msg] = msg.args;
+    assert(inner_msg.kind === "request");
+    if (inner_msg.fn === "get") {
+      return [list, [iter, list[iter.index]]];
+    } else if (inner_msg.fn === "set") {
+      list[iter.index] = inner_msg.args[0];
+      return [list, [iter, null]];
+    } else {
+      throw Error("Bad request: " + JSON.stringify(inner_msg));
+    }
+  } else if (msg.fn === "item") {
+    const [index, inner_msg] = msg.args;
+    assert(inner_msg.kind === "request");
+    if (inner_msg.fn === "get") {
+      return [list, list[index]];
+    } else if (inner_msg.fn === "set") {
+      list[index] = inner_msg.args[0];
+      return [list, null];
+    } else {
+      throw Error("Bad request: " + JSON.stringify(inner_msg));
+    }
+  } else {
+    throw Error("Bad request: " + JSON.stringify(msg));
+  }
+}
+
+function* string_impl(str: string, msg: any): Generator<any, [string, any], any> {
+  assert(msg.kind === "request");
+  if (msg.fn === "len") {
+    return [str, str.length];
+  } else if (msg.fn === "new_iter") {
+    return [str, { index: -1, len: str.length }];
+  } else if (msg.fn === "iter_next") {
+    const [iter] = msg.args;
+    const index = iter.index + 1;
+    if (index === iter.len) {
+      return [str, [{ index: index, len: iter.len }, false]];
+    } else {
+      return [str, [{ index: index, len: iter.len }, true]];
+    }
+  } else if (msg.fn === "iter_item") {
+    const [iter, inner_msg] = msg.args;
+    assert(inner_msg.kind === "request");
+    if (inner_msg.fn === "get") {
+      return [str, [iter, str[iter.index]]];
+    } else {
+      throw Error("Bad request: " + JSON.stringify(msg));
+    }
+  } else {
+    throw Error("Bad request: " + JSON.stringify(msg));
+  }
+}
+
+function* string_cmp() {
+  const iter_a = yield { kind: "request", fn: "send_a", args: [{ kind: "request", fn: "new_iter", args: [] }] };
+  const iter_b = yield { kind: "request", fn: "send_b", args: [{ kind: "request", fn: "new_iter", args: [] }] };
+  const [spent_iters, result] = yield* stateful_bind(iterator_cmp(), { iter_a, iter_b }, {
+
+  });
+}
+
+function* name_impl({ first, last }, msg) {
+  if (msg.kind === "send_first") {
+    const [new_first, result] = yield* string_impl(first, msg);
+    return [{ first: new_first, last }, result];
+  } else if (msg.kind === "send_last") {
+    const [new_last, result] = yield* string_impl(last, msg);
+    return [{ first, last: new_last }, result];
   } else {
     throw Error("Bad message: " + JSON.stringify(msg));
   }
 }
 
-function* value_list_impl<T>(list: T[], msg: any): Generator<any, [T[], any], any> {
-  if (msg.kind === "len") {
-    return [list, list.length];
-  } else if (msg.kind === "swap") {
-    const tmp = list[msg.index1];
-    list[msg.index1] = list[msg.index2];
-    list[msg.index2] = tmp;
-    return [list, null];
-  } else if (msg.kind === "new_iter") {
-    return [list, { index: -1, len: list.length }];
-  } else if (msg.kind === "iter_next") {
-    return [list, yield* list_iter_next(msg.iter)];
-  } else if (msg.kind === "iter_item") {
-    const inner_msg = msg.msg;
-    if (inner_msg.kind === "get") {
-      return [list, [msg.iter, list[msg.iter.index]]];
-    } else if (inner_msg.kind === "set") {
-      list[msg.iter.index] = inner_msg.value;
-      return [list, [msg.iter, null]];
-    } else {
-      throw Error("Bad message: " + JSON.stringify(msg));
-    }
-  } else if (msg.kind === "item") {
-    const inner_msg = msg.args[0];
-    if (inner_msg.kind === "get") {
-      return [list, list[msg.index]];
-    } else if (inner_msg.kind === "set") {
-      list[msg.index] = inner_msg.value;
-      return [list, null];
-    } else {
-      throw Error("Bad message: " + JSON.stringify(msg));
-    }
-  } else {
-    throw Error("Bad message: " + JSON.stringify(msg));
-  }
-}
+// function* name_cmp() {
+//   const first_cmp = yield { kind: "request", fn: "send_a", args: [{ kind: "send_" }] };
+// }
 
 function* builtin_cmp(a_val, b_val): any {
   if (a_val < b_val) {
@@ -142,21 +199,22 @@ function* builtin_cmp(a_val, b_val): any {
 }
 
 function* builtin_cmp_g() {
-  let a_val = yield { kind: "request", fn: "send_a", args: [{ kind: "get" }] };
-  let b_val = yield { kind: "request", fn: "send_b", args: [{ kind: "get" }] };
+  let a_val = yield { kind: "request", fn: "send_a", args: [{ kind: "request", fn: "get", args: [] }] };
+  let b_val = yield { kind: "request", fn: "send_b", args: [{ kind: "request", fn: "get", args: [] }] };
   const [new_a_val, new_b_val, result] = yield* builtin_cmp(a_val, b_val);
-  yield { kind: "request", fn: "send_a", args: [{ kind: "set", value: new_a_val }] };
-  yield { kind: "request", fn: "send_b", args: [{ kind: "set", value: new_b_val }] };
+  yield { kind: "request", fn: "send_a", args: [{ kind: "request", fn: "set", args: [new_a_val] }] };
+  yield { kind: "request", fn: "send_b", args: [{ kind: "request", fn: "set", args: [new_b_val] }] };
   return result;
 }
 
 type BuiltinCmpGState = { gen: Generator<any, any, any> };
-type BuiltinCmpGAction = { kind: "start" } | { kind: "next", args: [BuiltinCmpGState, any] };
+type BuiltinCmpGAction = { kind: "request", fn: "start" } | { kind: "request", fn: "next", args: [BuiltinCmpGState, any] };
 
 function* builtin_cmp_g_impl(msg: BuiltinCmpGAction): Generator<any, any, any> {
-  if (msg.kind === "start") {
+  assert(msg.kind === "request");
+  if (msg.fn === "start") {
     return { gen: builtin_cmp_g() };
-  } else if (msg.kind === "next") {
+  } else if (msg.fn === "next") {
     const [state, inner_msg] = msg.args;
     const result = state.gen.next(inner_msg);
     return [state, result];
@@ -186,13 +244,13 @@ function* bind(gen: Generator<any, any, any>, fns: { [key: string]: (...args: an
 }
 
 function* yield_and_bind(fn_name, args, handlers) {
-  let cmp_op = yield { kind: "request", fn: fn_name, args: [{ kind: "start", args }] };
+  let cmp_op = yield { kind: "request", fn: fn_name, args: [{ kind: "request", fn: "start", args }] };
 
   let arg;
   while (true) {
     const [new_cmp_op, op_result] = yield {
       kind: "request", fn: fn_name, args: [{
-        kind: "next", args: [cmp_op, arg]
+        kind: "request", fn: "next", args: [cmp_op, arg]
       }]
     };
     cmp_op = new_cmp_op;
@@ -210,14 +268,14 @@ function* yield_and_bind(fn_name, args, handlers) {
 }
 
 
-function* yield_and_stateful_bind<S>(fn_name:string, args: any[], state: S, handlers: { [key: string]: (state: S, ...args: any[]) => Generator<any, [S, any], any> }): Generator<any, [S, any], any> {
-  let cmp_op = yield { kind: "request", fn: fn_name, args: [{ kind: "start", args }] };
+function* yield_and_stateful_bind<S>(fn_name: string, args: any[], state: S, handlers: { [key: string]: (state: S, ...args: any[]) => Generator<any, [S, any], any> }): Generator<any, [S, any], any> {
+  let cmp_op = yield { kind: "request", fn: fn_name, args: [{ kind: "request", fn: "start", args }] };
 
   let arg;
   while (true) {
     const [new_cmp_op, op_result] = yield {
       kind: "request", fn: fn_name, args: [{
-        kind: "next", args: [cmp_op, arg]
+        kind: "request", fn: "next", args: [cmp_op, arg]
       }]
     };
     cmp_op = new_cmp_op;
@@ -271,16 +329,16 @@ describe("sort_list", () => {
 type ord = '<' | '>' | '=';
 
 function* iterator_cmp() {
-  const a_has_next = yield { kind: "request", fn: "send_a", args: [{ kind: "next" }] };
-  const b_has_next = yield { kind: "request", fn: "send_b", args: [{ kind: "next" }] };
+  const a_has_next = yield { kind: "request", fn: "send_a", args: [{ kind: "request", fn: "next", args: [] }] };
+  const b_has_next = yield { kind: "request", fn: "send_b", args: [{ kind: "request", fn: "next", args: [] }] };
   if (a_has_next && b_has_next) {
     const cmp_op = yield { kind: "request", fn: "item_cmp", args: [] };
     const result = yield* bind(cmp_op, {
       *send_a(msg) {
-        return yield { kind: "request", fn: "send_a", args: [{ kind: "item", msg }] };
+        return yield { kind: "request", fn: "send_a", args: [{ kind: "request", fn: "item", args: [msg] }] };
       },
       *send_b(msg) {
-        return yield { kind: "request", fn: "send_b", args: [{ kind: "item", msg }] };
+        return yield { kind: "request", fn: "send_b", args: [{ kind: "request", fn: "item", args: [msg] }] };
       },
     });
     if (result === '=') {
@@ -300,29 +358,31 @@ function* iterator_cmp() {
 function* iterable_cmp() {
   type IterPair = { a_iter: any, b_iter: any };
 
-  const a_iter = yield { kind: "request", fn: "send_a", args: [{ kind: "new_iter" }] };
-  const b_iter = yield { kind: "request", fn: "send_b", args: [{ kind: "new_iter" }] };
+  const a_iter = yield { kind: "request", fn: "send_a", args: [{ kind: "request", fn: "new_iter", args: [] }] };
+  const b_iter = yield { kind: "request", fn: "send_b", args: [{ kind: "request", fn: "new_iter", args: [] }] };
   const [spent_iters, result] = yield* stateful_bind<IterPair>(iterator_cmp(), { a_iter, b_iter }, {
     *send_a({ a_iter, b_iter }, msg): Generator<any, [IterPair, any], any> {
-      if (msg.kind === "next") {
-        const [new_a_iter, has_next] = yield { kind: "request", fn: "send_a", args: [{ kind: "iter_next", iter: a_iter }] };
+      assert(msg.kind === "request");
+      if (msg.fn === "next") {
+        const [new_a_iter, has_next] = yield { kind: "request", fn: "send_a", args: [{ kind: "request", fn: "iter_next", args: [a_iter] }] };
         return [{ a_iter: new_a_iter, b_iter: b_iter }, has_next];
-      } else if (msg.kind === "item") {
-        const [new_a_iter, resp] = yield { kind: "request", fn: "send_a", args: [{ kind: "iter_item", msg: msg.msg, iter: a_iter }] };
+      } else if (msg.fn === "item") {
+        const [new_a_iter, resp] = yield { kind: "request", fn: "send_a", args: [{ kind: "request", fn: "iter_item", args: [a_iter, msg.args[0]] }] };
         return [{ a_iter: new_a_iter, b_iter: b_iter }, resp];
       } else {
-        throw Error("Bad message: " + JSON.stringify(msg));
+        throw Error("Bad request: " + JSON.stringify(msg));
       }
     },
     *send_b({ a_iter, b_iter }, msg) {
-      if (msg.kind === "next") {
-        const [new_b_iter, has_next] = yield { kind: "request", fn: "send_b", args: [{ kind: "iter_next", iter: b_iter }] };
+      assert(msg.kind === "request");
+      if (msg.fn === "next") {
+        const [new_b_iter, has_next] = yield { kind: "request", fn: "send_b", args: [{ kind: "request", fn: "iter_next", args: [b_iter] }] };
         return [{ a_iter: a_iter, b_iter: new_b_iter }, has_next];
-      } else if (msg.kind === "item") {
-        const [new_b_iter, resp] = yield { kind: "request", fn: "send_b", args: [{ kind: "iter_item", msg: msg.msg, iter: b_iter }] };
+      } else if (msg.fn === "item") {
+        const [new_b_iter, resp] = yield { kind: "request", fn: "send_b", args: [{ kind: "request", fn: "iter_item", args: [b_iter, msg.args[0]] }] };
         return [{ a_iter: a_iter, b_iter: new_b_iter }, resp];
       } else {
-        throw Error("Bad message: " + JSON.stringify(msg));
+        throw Error("Bad request: " + JSON.stringify(msg));
       }
     },
     *item_cmp(state) {
@@ -359,15 +419,14 @@ function* semi_bound_list_iterable_sort(list) {
   return yield* stateful_bind(sort_list(), list, {
     *list(list, msg) {
       return yield* bind(list_impl(list, msg), {
-        *item(item, msg) {
-          return yield* value_list_impl(item, msg);
-        },
+        item: value_list_impl,
       });
     },
     *cmp(list, msg) {
-      if (msg.kind === "start") {
+      assert(msg.kind === "request");
+      if (msg.fn === "start") {
         return [list, { gen: bound_iterable_cmp() }];
-      } else if (msg.kind === "next") {
+      } else if (msg.fn === "next") {
         const [state, inner_msg] = msg.args;
         const result = state.gen.next(inner_msg);
         return [list, [state, result]];
