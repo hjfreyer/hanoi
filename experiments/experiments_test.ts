@@ -3,6 +3,139 @@
 
 import { assert } from "console";
 
+type Machine = {
+  kind: "fn",
+  fn: (arg: any) => any
+} | {
+  kind: "stateful",
+  state: any,
+  fn: (state: any, arg: any) => [any, any]
+} | {
+  kind: "bind",
+  machine: Machine,
+  handler: Machine,
+} | {
+  kind: "cond",
+  true_branch: Machine,
+  false_branch: Machine,
+} | {
+  kind: "match",
+  cases: { [key: string]: Machine },
+} | {
+  kind: "latch",
+  cases: { [key: string]: Machine },
+} | {
+  kind: "and_then",
+  first: Machine,
+  second: Machine,
+} | {
+  kind: "loop",
+  body: Machine,
+}
+
+function machine_apply(machine: Machine, input: any): [Machine, any] {
+  if (machine.kind === "fn") {
+    return [machine, machine.fn(input)];
+  } else if (machine.kind === "stateful") {
+    const [new_state, result] = machine.fn(machine.state, input);
+    return [{ kind: "stateful", state: new_state, fn: machine.fn }, result];
+  } else if (machine.kind === "bind") {
+    const [new_handler, handler_result] = machine_apply(machine.handler, input);
+    if (handler_result.kind === "up") {
+      return [{ kind: "bind", machine: machine.machine, handler: new_handler }, handler_result.inner];
+    } else if (handler_result.kind === "down") {
+      const [new_machine, machine_result] = machine_apply(machine.machine, handler_result.inner);
+      return machine_apply({ kind: "bind", machine: new_machine, handler: new_handler }, machine_result);
+    } else {
+      throw Error("Bad handler result: " + JSON.stringify(handler_result));
+    }
+  } else if (machine.kind === "cond") {
+    const [carry, cond] = input;
+    if (cond === true) {
+      return machine_apply(machine.true_branch, carry);
+    } else if (cond === false) {
+      return machine_apply(machine.false_branch, carry);
+    } else {
+      throw Error("Bad cond: " + JSON.stringify(cond));
+    }
+  } else if (machine.kind === "match") {
+    const case_fn = machine.cases[input.kind];
+    if (case_fn === undefined) {
+      throw Error("Bad match: " + JSON.stringify(input.kind));
+    }
+    const [new_machine, result] = machine_apply(case_fn, input.inner);
+    return [{ kind: "match", cases: { ...machine.cases, [input.kind]: new_machine } }, result];
+  } else if (machine.kind === "latch") {
+    let case_fn = machine.cases[input.kind];
+    if (case_fn === undefined) {
+      throw Error("Bad latch: " + JSON.stringify(input.kind));
+    }
+    return machine_apply(case_fn, input.inner);
+  } else if (machine.kind === "and_then") {
+    const [new_first, first_result] = machine_apply(machine.first, input);
+    if (first_result.kind === "result") {
+      return machine_apply(machine.second, first_result.inner);
+    } else {
+      return [{ kind: "and_then", first: new_first, second: machine.second }, first_result];
+    }
+  } else if (machine.kind === "loop") {
+    const [new_machine, result] = machine_apply(machine.body, input);
+    if (result.kind === "break") {
+      return [{ kind: "loop", body: new_machine }, result.inner];
+    } else if (result.kind === "continue") {
+      return machine_apply({ kind: "loop", body: new_machine }, result.inner);
+    } else {
+      throw Error("Bad loop result: " + JSON.stringify(result));
+    }
+  } else {
+    throw Error("Bad machine: " + JSON.stringify(machine));
+  }
+}
+
+function t(f: (...args: any[]) => any): Machine {
+  return {
+    kind: "fn",
+    fn: f,
+  }
+}
+
+function and_then(fn1: Machine, fn2: Machine): Machine {
+  return {
+    kind: "and_then",
+    first: fn1,
+    second: fn2,
+  }
+}
+
+// argmin = 0;
+// for (i = 0; i < len(arr); i++) {
+//   if (arr[i] < arr[argmin]) {
+//     argmin = i;
+//   }
+// }
+// return argmin;
+
+const argmin_between_machine: Machine = and_then(
+  t((arr: number[]) => { return { kind: "result", inner: [arr, 0, 0] } }),
+  {
+    kind: "loop",
+    body:
+      t(([arr, idx, argmin]: [number[], number, number]) => {
+        if (idx === arr.length) {
+          return { kind: "break", inner: { kind: "result", inner: [arr, argmin] } };
+        } else {
+          return { kind: "continue", inner: [arr, idx + 1, arr[idx] < arr[argmin] ? idx : argmin] };
+        }
+      }),
+  });
+
+describe("argmin_between", () => {
+  test("should work", () => {
+    const [new_machine, result] = machine_apply(argmin_between_machine, [3, 0, 2]);
+    expect(result).toEqual({ kind: "result", inner: [[3, 0, 2], 1] });
+  });
+});
+
 function* argmin_between_g(min, max): Generator<any, [any, number], any> {
   if (min === max) {
     return min;
@@ -470,23 +603,23 @@ describe("sort list of lists of numbers", () => {
   });
 });
 
-type Action = { kind: string };
-type InputAction = { kind: "input", msg: any };
-type ResultAction<O> = { kind: "result", msg: O };
-type Machine<I extends Action, O extends Action> = (i: Action) => Action;
+// type Action = { kind: string };
+// type InputAction = { kind: "input", msg: any };
+// type ResultAction<O> = { kind: "result", msg: O };
+// type Machine<I extends Action, O extends Action> = (i: Action) => Action;
 
-function isInputAction(i: Action): i is InputAction {
-  return i.kind === "input";
-}
+// function isInputAction(i: Action): i is InputAction {
+//   return i.kind === "input";
+// }
 
-function t<I, O>(f: (i: I) => O): Machine<InputAction, ResultAction<O>> {
-  return (i: Action) => {
-    if (!isInputAction(i)) {
-      throw Error("Bad action: " + i.kind);
-    }
-    return { kind: "result", msg: f(i.msg) };
-  }
-}
+// function t<I, O>(f: (i: I) => O): Machine<InputAction, ResultAction<O>> {
+//   return (i: Action) => {
+//     if (!isInputAction(i)) {
+//       throw Error("Bad action: " + i.kind);
+//     }
+//     return { kind: "result", msg: f(i.msg) };
+//   }
+// }
 
 // function pair(self, action) {
 //   const [a, b] = self;
