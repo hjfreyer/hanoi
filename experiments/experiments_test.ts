@@ -128,29 +128,39 @@ function brk(inner: any) {
   }
 }
 
+function res(inner: any) {
+  return {
+    kind: "result",
+    inner: inner,
+  }
+}
+
 const argmin_between_machine: Machine = sequence(
-  t((len: number) => { return { kind: "result", inner: [len, 0, 0] } }),
+  t(([start, end]: [number, number]) => { return { kind: "result", inner: [start, end, start] } }),
   {
     kind: "loop",
     body:
       sequence(
-        t(([len, idx, argmin]: [number, number, number]) => {
-          if (idx === len) {
-            return brk(brk(brk({ kind: "result", inner: [len, argmin] })));
+        t(([start, end, argmin]: [number, number, number]) => {
+          if (start === end) {
+            return brk(brk(brk(res(argmin))));
           }
-          return { kind: "result", inner: [[len, idx, argmin], brk(brk(brk({ kind: "cmp", inner: [idx, argmin] })))] };
+          return res([[start, end, argmin], brk(brk(brk({ kind: "cmp", inner: [start, argmin] })))]);
         }),
         {
           kind: "yield",
-          handler: t(([[len, idx, argmin], ord]) => {
-            if (ord === '<') {
-              return brk(
-                { kind: "continue", inner: [len, idx + 1, idx] }
-              );
-            } else if (ord === '>' || ord === '=') {
-              return brk({ kind: "continue", inner: [len, idx + 1, argmin] });
+          handler: t(([[start, end, argmin], action]) => {
+            if (action.kind === "result") {
+              const ord = action.inner;
+              if (ord === '<') {
+                return brk({ kind: "continue", inner: [start + 1, end, start] });
+              } else if (ord === '>' || ord === '=') {
+                return brk({ kind: "continue", inner: [start + 1, end, argmin] });
+              } else {
+                throw Error("Bad ord: " + ord);
+              }
             } else {
-              throw Error("Bad ord: " + ord);
+              throw Error("Bad action: " + JSON.stringify(action));
             }
           }),
         }
@@ -160,14 +170,14 @@ const argmin_between_machine: Machine = sequence(
 
 describe("argmin_between", () => {
   test("should work", () => {
-    let [state, result] = machine_apply(argmin_between_machine, { kind: "start" }, 3);
+    let [state, result] = machine_apply(argmin_between_machine, { kind: "start" }, [0, 3]);
     expect(result).toEqual({ kind: "cmp", inner: [0, 0] });
-    [state, result] = machine_apply(argmin_between_machine, state, "=");
+    [state, result] = machine_apply(argmin_between_machine, state, res("="));
     expect(result).toEqual({ kind: "cmp", inner: [1, 0] });
-    [state, result] = machine_apply(argmin_between_machine, state, "<");
+    [state, result] = machine_apply(argmin_between_machine, state, res("<"));
     expect(result).toEqual({ kind: "cmp", inner: [2, 1] });
-    [state, result] = machine_apply(argmin_between_machine, state, ">");
-    expect(result).toEqual({ kind: "result", inner: [3, 1] });
+    [state, result] = machine_apply(argmin_between_machine, state, res(">"));
+    expect(result).toEqual(res(1));
   });
 });
 
