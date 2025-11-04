@@ -25,67 +25,82 @@ type Machine = {
   kind: "latch",
   cases: { [key: string]: Machine },
 } | {
-  kind: "and_then",
-  first: Machine,
-  second: Machine,
+  kind: "sequence",
+  machines: Machine[]
 } | {
   kind: "loop",
   body: Machine,
+} | {
+  kind: "yield",
+  handler: Machine,
 }
 
-function machine_apply(machine: Machine, input: any): [Machine, any] {
+function machine_apply(machine: Machine, state: any, input: any): [any, any] {
   if (machine.kind === "fn") {
-    return [machine, machine.fn(input)];
+    return [null, machine.fn(input)];
   } else if (machine.kind === "stateful") {
     const [new_state, result] = machine.fn(machine.state, input);
-    return [{ kind: "stateful", state: new_state, fn: machine.fn }, result];
-  } else if (machine.kind === "bind") {
-    const [new_handler, handler_result] = machine_apply(machine.handler, input);
-    if (handler_result.kind === "up") {
-      return [{ kind: "bind", machine: machine.machine, handler: new_handler }, handler_result.inner];
-    } else if (handler_result.kind === "down") {
-      const [new_machine, machine_result] = machine_apply(machine.machine, handler_result.inner);
-      return machine_apply({ kind: "bind", machine: new_machine, handler: new_handler }, machine_result);
+    return [new_state, result];
+    // } else if (machine.kind === "cond") {
+    //   const [carry, cond] = input;
+    //   if (cond === true) {
+    //     return machine_apply(machine.true_branch, carry);
+    //   } else if (cond === false) {
+    //     return machine_apply(machine.false_branch, carry);
+    //   } else {
+    //     throw Error("Bad cond: " + JSON.stringify(cond));
+    //   }
+    // } else if (machine.kind === "match") {
+    //   const case_fn = machine.cases[input.kind];
+    //   if (case_fn === undefined) {
+    //     throw Error("Bad match: " + JSON.stringify(input.kind));
+    //   }
+    //   const [new_machine, result] = machine_apply(case_fn, input.inner);
+    //   return [{ kind: "match", cases: { ...machine.cases, [input.kind]: new_machine } }, result];
+    // } else if (machine.kind === "latch") {
+    //   let case_fn = machine.cases[input.kind];
+    //   if (case_fn === undefined) {
+    //     throw Error("Bad latch: " + JSON.stringify(input.kind));
+    //   }
+    //   return machine_apply(case_fn, input.inner);
+  } else if (machine.kind === "sequence") {
+    if (state.kind === "start") {
+      return machine_apply(machine, { kind: "step", index: 0, inner: { kind: "start" } }, input);
+    } else if (state.kind === "step") {
+      const [new_state, result] = machine_apply(machine.machines[state.index], state.inner, input);
+      if (result.kind === "break") {
+        return [{ kind: "step", index: state.index, inner: new_state }, result.inner];
+      } else if (result.kind === "yield") {
+        return [{ kind: "step", index: state.index + 1, inner: { kind: "start" } }, result.inner];
+      } else if (result.kind === "result") {
+        return machine_apply(machine, { kind: "step", index: state.index + 1, inner: { kind: "start" } }, result.inner);
+      } else {
+        throw Error("Bad sequence result: " + JSON.stringify(result));
+      }
     } else {
-      throw Error("Bad handler result: " + JSON.stringify(handler_result));
-    }
-  } else if (machine.kind === "cond") {
-    const [carry, cond] = input;
-    if (cond === true) {
-      return machine_apply(machine.true_branch, carry);
-    } else if (cond === false) {
-      return machine_apply(machine.false_branch, carry);
-    } else {
-      throw Error("Bad cond: " + JSON.stringify(cond));
-    }
-  } else if (machine.kind === "match") {
-    const case_fn = machine.cases[input.kind];
-    if (case_fn === undefined) {
-      throw Error("Bad match: " + JSON.stringify(input.kind));
-    }
-    const [new_machine, result] = machine_apply(case_fn, input.inner);
-    return [{ kind: "match", cases: { ...machine.cases, [input.kind]: new_machine } }, result];
-  } else if (machine.kind === "latch") {
-    let case_fn = machine.cases[input.kind];
-    if (case_fn === undefined) {
-      throw Error("Bad latch: " + JSON.stringify(input.kind));
-    }
-    return machine_apply(case_fn, input.inner);
-  } else if (machine.kind === "and_then") {
-    const [new_first, first_result] = machine_apply(machine.first, input);
-    if (first_result.kind === "result") {
-      return machine_apply(machine.second, first_result.inner);
-    } else {
-      return [{ kind: "and_then", first: new_first, second: machine.second }, first_result];
+      throw Error("Bad sequence state: " + JSON.stringify(state));
     }
   } else if (machine.kind === "loop") {
-    const [new_machine, result] = machine_apply(machine.body, input);
+    const [new_state, result] = machine_apply(machine.body, state, input);
     if (result.kind === "break") {
-      return [{ kind: "loop", body: new_machine }, result.inner];
+      return [new_state, result.inner];
     } else if (result.kind === "continue") {
-      return machine_apply({ kind: "loop", body: new_machine }, result.inner);
+      return machine_apply(machine, { kind: "start" }, result.inner);
     } else {
       throw Error("Bad loop result: " + JSON.stringify(result));
+    }
+  } else if (machine.kind === "yield") {
+    if (state.kind === "start") {
+      const [ctx, inner] = input;
+      return [{ kind: "waiting", ctx }, inner];
+    } else if (state.kind === "waiting") {
+      const [new_state, result] = machine_apply(machine.handler, { kind: "start" }, [state.ctx, input]);
+      return [{ kind: "handling", inner: new_state }, result];
+    } else if (state.kind === "handling") {
+      const [new_state, result] = machine_apply(machine.handler, state.inner, input);
+      return [{ kind: "handling", inner: new_state }, result];
+    } else {
+      throw Error("Bad yield state: " + JSON.stringify(state));
     }
   } else {
     throw Error("Bad machine: " + JSON.stringify(machine));
@@ -99,40 +114,60 @@ function t(f: (...args: any[]) => any): Machine {
   }
 }
 
-function and_then(fn1: Machine, fn2: Machine): Machine {
+function sequence(...machines: Machine[]): Machine {
   return {
-    kind: "and_then",
-    first: fn1,
-    second: fn2,
+    kind: "sequence",
+    machines: machines,
   }
 }
 
-// argmin = 0;
-// for (i = 0; i < len(arr); i++) {
-//   if (arr[i] < arr[argmin]) {
-//     argmin = i;
-//   }
-// }
-// return argmin;
+function brk(inner: any) {
+  return {
+    kind: "break",
+    inner: inner,
+  }
+}
 
-const argmin_between_machine: Machine = and_then(
-  t((arr: number[]) => { return { kind: "result", inner: [arr, 0, 0] } }),
+const argmin_between_machine: Machine = sequence(
+  t((len: number) => { return { kind: "result", inner: [len, 0, 0] } }),
   {
     kind: "loop",
     body:
-      t(([arr, idx, argmin]: [number[], number, number]) => {
-        if (idx === arr.length) {
-          return { kind: "break", inner: { kind: "result", inner: [arr, argmin] } };
-        } else {
-          return { kind: "continue", inner: [arr, idx + 1, arr[idx] < arr[argmin] ? idx : argmin] };
+      sequence(
+        t(([len, idx, argmin]: [number, number, number]) => {
+          if (idx === len) {
+            return brk(brk(brk({ kind: "result", inner: [len, argmin] })));
+          }
+          return { kind: "result", inner: [[len, idx, argmin], brk(brk(brk({ kind: "cmp", inner: [idx, argmin] })))] };
+        }),
+        {
+          kind: "yield",
+          handler: t(([[len, idx, argmin], ord]) => {
+            if (ord === '<') {
+              return brk(
+                { kind: "continue", inner: [len, idx + 1, idx] }
+              );
+            } else if (ord === '>' || ord === '=') {
+              return brk({ kind: "continue", inner: [len, idx + 1, argmin] });
+            } else {
+              throw Error("Bad ord: " + ord);
+            }
+          }),
         }
-      }),
-  });
+      ),
+  }
+);
 
 describe("argmin_between", () => {
   test("should work", () => {
-    const [new_machine, result] = machine_apply(argmin_between_machine, [3, 0, 2]);
-    expect(result).toEqual({ kind: "result", inner: [[3, 0, 2], 1] });
+    let [state, result] = machine_apply(argmin_between_machine, { kind: "start" }, 3);
+    expect(result).toEqual({ kind: "cmp", inner: [0, 0] });
+    [state, result] = machine_apply(argmin_between_machine, state, "=");
+    expect(result).toEqual({ kind: "cmp", inner: [1, 0] });
+    [state, result] = machine_apply(argmin_between_machine, state, "<");
+    expect(result).toEqual({ kind: "cmp", inner: [2, 1] });
+    [state, result] = machine_apply(argmin_between_machine, state, ">");
+    expect(result).toEqual({ kind: "result", inner: [3, 1] });
   });
 });
 
