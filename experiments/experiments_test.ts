@@ -117,6 +117,13 @@ function sequence(...machines: Machine[]): Machine {
   }
 }
 
+function loop(body: Machine): Machine {
+  return {
+    kind: "loop",
+    body: body,
+  }
+}
+
 function brk(inner: any) {
   return {
     kind: "break",
@@ -140,44 +147,42 @@ function cont(inner: any) {
 
 const argmin_between_machine: Machine = sequence(
   t(([start, end]: [number, number]) => { return { kind: "result", inner: [start, end, start] } }),
-  {
-    kind: "loop",
-    body:
-      sequence(
-        t(([start, end, argmin]: [number, number, number]) => {
-          if (start === end) {
-            return brk(brk(brk(res(argmin))));
-          }
-          return res([[start, end, argmin], { kind: "cmp" }]);
-        }),
-        {
-          kind: "loop",
-          body: sequence(
-            t(([ctx, msg]) => res([ctx, brk(brk(brk(brk(brk(msg)))))])),
-            { kind: "yield" },
-            t(([[start, end, argmin], action]) => {
-              if (action.kind === "result") {
-                const ord = action.inner;
-                if (ord === '<') {
-                  return brk(brk(brk({ kind: "continue", inner: [start + 1, end, start] })));
-                } else if (ord === '>' || ord === '=') {
-                  return brk(brk(brk({ kind: "continue", inner: [start + 1, end, argmin] })));
-                } else {
-                  throw Error("Bad ord: " + ord);
-                }
-              } else {
-                if (action.kind === "send_a") {
-                  return brk(cont([[start, end, argmin], { kind: "list", inner: { kind: "item", index: start, inner: action.inner } }]));
-                } else if (action.kind === "send_b") {
-                  return brk(cont([[start, end, argmin], { kind: "list", inner: { kind: "item", index: argmin, inner: action.inner } }]));
-                } else {
-                  throw Error("Bad action: " + JSON.stringify(action));
-                }
-              }
-            }),
-          )
-        }),
-  }
+  loop(
+    sequence(
+      t(([start, end, argmin]: [number, number, number]) => {
+        if (start === end) {
+          return brk(brk(brk(res(argmin))));
+        }
+        return res([[start, end, argmin], { kind: "cmp" }]);
+      }),
+      loop(
+        sequence(
+          t(([ctx, msg]) => res([ctx, brk(brk(brk(brk(brk(msg)))))])),
+          { kind: "yield" },
+          t(([[start, end, argmin], action]) => {
+            if (action.kind === "result") {
+              return brk(brk(res([[start, end, argmin], action.inner])));
+            } else if (action.kind === "send_a") {
+              return brk(cont([[start, end, argmin], { kind: "list", inner: { kind: "item", index: start, inner: action.inner } }]));
+            } else if (action.kind === "send_b") {
+              return brk(cont([[start, end, argmin], { kind: "list", inner: { kind: "item", index: argmin, inner: action.inner } }]));
+            } else {
+              throw Error("Bad action: " + JSON.stringify(action));
+            }
+          }),
+        )
+      ),
+      t(([[start, end, argmin], ord]) => {
+        if (ord === '<') {
+          return brk(cont([start + 1, end, start]));
+        } else if (ord === '>' || ord === '=') {
+          return brk(cont([start + 1, end, argmin]));
+        } else {
+          throw Error("Bad ord: " + ord);
+        }
+      })
+    )
+  )
 );
 
 describe("argmin_between", () => {
