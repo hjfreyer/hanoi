@@ -32,7 +32,7 @@ type Machine = {
   body: Machine,
 } | {
   kind: "yield",
-  handler: Machine,
+  // handler: Machine,
 }
 
 function machine_apply(machine: Machine, state: any, input: any): [any, any] {
@@ -94,11 +94,7 @@ function machine_apply(machine: Machine, state: any, input: any): [any, any] {
       const [ctx, inner] = input;
       return [{ kind: "waiting", ctx }, inner];
     } else if (state.kind === "waiting") {
-      const [new_state, result] = machine_apply(machine.handler, { kind: "start" }, [state.ctx, input]);
-      return [{ kind: "handling", inner: new_state }, result];
-    } else if (state.kind === "handling") {
-      const [new_state, result] = machine_apply(machine.handler, state.inner, input);
-      return [{ kind: "handling", inner: new_state }, result];
+      return [{ kind: "done" }, { kind: "result", inner: [state.ctx, input] }];
     } else {
       throw Error("Bad yield state: " + JSON.stringify(state));
     }
@@ -135,6 +131,13 @@ function res(inner: any) {
   }
 }
 
+function cont(inner: any) {
+  return {
+    kind: "continue",
+    inner: inner,
+  }
+}
+
 const argmin_between_machine: Machine = sequence(
   t(([start, end]: [number, number]) => { return { kind: "result", inner: [start, end, start] } }),
   {
@@ -145,38 +148,55 @@ const argmin_between_machine: Machine = sequence(
           if (start === end) {
             return brk(brk(brk(res(argmin))));
           }
-          return res([[start, end, argmin], brk(brk(brk({ kind: "cmp", inner: [start, argmin] })))]);
+          return res([[start, end, argmin], { kind: "cmp" }]);
         }),
         {
-          kind: "yield",
-          handler: t(([[start, end, argmin], action]) => {
-            if (action.kind === "result") {
-              const ord = action.inner;
-              if (ord === '<') {
-                return brk({ kind: "continue", inner: [start + 1, end, start] });
-              } else if (ord === '>' || ord === '=') {
-                return brk({ kind: "continue", inner: [start + 1, end, argmin] });
+          kind: "loop",
+          body: sequence(
+            t(([ctx, msg]) => res([ctx, brk(brk(brk(brk(brk(msg)))))])),
+            { kind: "yield" },
+            t(([[start, end, argmin], action]) => {
+              if (action.kind === "result") {
+                const ord = action.inner;
+                if (ord === '<') {
+                  return brk(brk(brk({ kind: "continue", inner: [start + 1, end, start] })));
+                } else if (ord === '>' || ord === '=') {
+                  return brk(brk(brk({ kind: "continue", inner: [start + 1, end, argmin] })));
+                } else {
+                  throw Error("Bad ord: " + ord);
+                }
               } else {
-                throw Error("Bad ord: " + ord);
+                if (action.kind === "send_a") {
+                  return brk(cont([[start, end, argmin], { kind: "list", inner: { kind: "item", index: start, inner: action.inner } }]));
+                } else if (action.kind === "send_b") {
+                  return brk(cont([[start, end, argmin], { kind: "list", inner: { kind: "item", index: argmin, inner: action.inner } }]));
+                } else {
+                  throw Error("Bad action: " + JSON.stringify(action));
+                }
               }
-            } else {
-              throw Error("Bad action: " + JSON.stringify(action));
-            }
-          }),
-        }
-      ),
+            }),
+          )
+        }),
   }
 );
 
 describe("argmin_between", () => {
   test("should work", () => {
     let [state, result] = machine_apply(argmin_between_machine, { kind: "start" }, [0, 3]);
-    expect(result).toEqual({ kind: "cmp", inner: [0, 0] });
-    [state, result] = machine_apply(argmin_between_machine, state, res("="));
-    expect(result).toEqual({ kind: "cmp", inner: [1, 0] });
+    expect(result).toEqual({ kind: "cmp" });
+    [state, result] = machine_apply(argmin_between_machine, state, { kind: "send_a", inner: "senda" });
+    expect(result).toEqual({ kind: "list", inner: { kind: "item", index: 0, inner: "senda" } });
+    [state, result] = machine_apply(argmin_between_machine, state, { kind: "send_b", inner: "sendb" });
+    expect(result).toEqual({ kind: "list", inner: { kind: "item", index: 0, inner: "sendb" } });
     [state, result] = machine_apply(argmin_between_machine, state, res("<"));
-    expect(result).toEqual({ kind: "cmp", inner: [2, 1] });
-    [state, result] = machine_apply(argmin_between_machine, state, res(">"));
+    expect(result).toEqual({ kind: "cmp" });
+    [state, result] = machine_apply(argmin_between_machine, state, { kind: "send_a", inner: "senda" });
+    expect(result).toEqual({ kind: "list", inner: { kind: "item", index: 1, inner: "senda" } });
+    [state, result] = machine_apply(argmin_between_machine, state, { kind: "send_b", inner: "sendb" });
+    expect(result).toEqual({ kind: "list", inner: { kind: "item", index: 0, inner: "sendb" } });
+    [state, result] = machine_apply(argmin_between_machine, state, res("<"));
+    expect(result).toEqual({ kind: "cmp" });
+    [state, result] = machine_apply(argmin_between_machine, state, res("="));
     expect(result).toEqual(res(1));
   });
 });
