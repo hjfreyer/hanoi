@@ -206,6 +206,52 @@ describe("argmin_between", () => {
   });
 });
 
+const builtin_cmp_machine: Machine = sequence(
+  t((_) => res([null, brk({ kind: "send_a", inner: { kind: "get" } } )])),
+  {kind: "yield"},
+  t(([ctx, msg]) => {
+    assert(msg.kind === "result");
+    return res([msg.inner, brk({kind: "send_b", inner: { kind: "get" } })]);
+  }),
+  {kind: "yield"},
+  t(([a_val, b_val_result]) => {
+    assert(b_val_result.kind === "result");
+    const b_val = b_val_result.inner;
+    let ord;
+    if (a_val < b_val) {
+      ord = '<';
+    } else if (a_val > b_val) {
+      ord = '>';
+    } else {
+      ord = '=';
+    }
+    return res([[ord, b_val], brk({kind: "send_a", inner: { kind: "set", inner: a_val } })]);
+  }),
+  {kind: "yield"},
+  t(([[ord, b_val], msg]) => {
+    return res([ord, brk({kind: "send_b", inner: { kind: "set", inner: b_val } })]);
+  }),
+  {kind: "yield"},
+  t(([ord, msg]) => {
+    return brk(res(ord));
+  }),
+);
+
+describe("builtin_cmp", () => {
+  test("should work", () => {
+    let [state, result] = machine_apply(builtin_cmp_machine, { kind: "start" }, null);
+    expect(result).toEqual({ kind: "send_a", inner: { kind: "get" } });
+    [state, result] = machine_apply(builtin_cmp_machine, state, res(3));
+    expect(result).toEqual({ kind: "send_b", inner: { kind: "get" } });
+    [state, result] = machine_apply(builtin_cmp_machine, state, res(2));
+    expect(result).toEqual({ kind: "send_a", inner: { kind: "set", inner: 3 } });
+    [state, result] = machine_apply(builtin_cmp_machine, state, res(null));
+    expect(result).toEqual({ kind: "send_b", inner: { kind: "set", inner: 2 } });
+    [state, result] = machine_apply(builtin_cmp_machine, state, res(null));
+    expect(result).toEqual(res('>'));
+  });
+});
+
 function* argmin_between_g(min, max): Generator<any, [any, number], any> {
   if (min === max) {
     return min;
