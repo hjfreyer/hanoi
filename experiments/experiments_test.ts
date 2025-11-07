@@ -207,13 +207,13 @@ describe("argmin_between", () => {
 });
 
 const builtin_cmp_machine: Machine = sequence(
-  t((_) => res([null, brk({ kind: "send_a", inner: { kind: "get" } } )])),
-  {kind: "yield"},
+  t((_) => res([null, brk({ kind: "send_a", inner: { kind: "get" } })])),
+  { kind: "yield" },
   t(([ctx, msg]) => {
     assert(msg.kind === "result");
-    return res([msg.inner, brk({kind: "send_b", inner: { kind: "get" } })]);
+    return res([msg.inner, brk({ kind: "send_b", inner: { kind: "get" } })]);
   }),
-  {kind: "yield"},
+  { kind: "yield" },
   t(([a_val, b_val_result]) => {
     assert(b_val_result.kind === "result");
     const b_val = b_val_result.inner;
@@ -225,13 +225,13 @@ const builtin_cmp_machine: Machine = sequence(
     } else {
       ord = '=';
     }
-    return res([[ord, b_val], brk({kind: "send_a", inner: { kind: "set", inner: a_val } })]);
+    return res([[ord, b_val], brk({ kind: "send_a", inner: { kind: "set", inner: a_val } })]);
   }),
-  {kind: "yield"},
+  { kind: "yield" },
   t(([[ord, b_val], msg]) => {
-    return res([ord, brk({kind: "send_b", inner: { kind: "set", inner: b_val } })]);
+    return res([ord, brk({ kind: "send_b", inner: { kind: "set", inner: b_val } })]);
   }),
-  {kind: "yield"},
+  { kind: "yield" },
   t(([ord, msg]) => {
     return brk(res(ord));
   }),
