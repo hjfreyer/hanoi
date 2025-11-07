@@ -76,10 +76,10 @@ function machine_apply(machine: Machine, state: any, input: any): [any, any] {
       return machine_apply(machine, { kind: "step", index: 0, inner: { kind: "start" } }, input);
     } else if (state.kind === "step") {
       const [new_state, result] = machine_apply(machine.machines[state.index], state.inner, input);
-      if (result.kind === "break") {
+      if (state.index === machine.machines.length - 1) {
+        return [{ kind: "step", index: state.index, inner: new_state }, result];
+      } else if (result.kind === "break") {
         return [{ kind: "step", index: state.index, inner: new_state }, result.inner];
-      } else if (result.kind === "yield") {
-        return [{ kind: "step", index: state.index + 1, inner: { kind: "start" } }, result.inner];
       } else if (result.kind === "result") {
         return machine_apply(machine, { kind: "step", index: state.index + 1, inner: { kind: "start" } }, result.inner);
       } else {
@@ -166,39 +166,39 @@ const argmin_between_machine: Machine = sequence(
     sequence(
       t(([start, end, argmin]: [number, number, number]) => {
         if (start === end) {
-          return brk(brk(brk(res(argmin))));
+          return brk(brk(res(argmin)));
         }
         return res([[start, end, argmin], null]);
       }),
       loop(
         sequence(
-          t(([ctx, msg]) => res([ctx, brk(brk(brk(brk(brk({ kind: "cmp", inner: msg })))))])),
+          t(([ctx, msg]) => res([ctx, brk(brk(brk(brk({ kind: "cmp", inner: msg }))))])),
           { kind: "yield" },
           t(([ctx, action]) => res([[ctx, action], action.kind])),
           latch({
-            result: t(([ctx, action]) => brk(brk(res([ctx, action.inner])))),
+            result: t(([ctx, action]) => brk(res([ctx, action.inner]))),
             send_a: sequence(
               t(([[start, end, argmin], action]) => res([[start, end, argmin], { kind: "item", index: start, inner: action.inner }])),
               loop(sequence(
                 t(([ctx, list_arg]) =>
-                  res([ctx, brk(brk(brk(brk(brk(brk(brk(brk({ kind: "list", inner: list_arg }))))))))]),
+                  res([ctx, brk(brk(brk(brk(brk({ kind: "list", inner: list_arg })))))]),
                 ),
                 { kind: "yield" },
                 t(([ctx, action]) => res([[ctx, action], action.kind])),
                 latch({
-                  result: t(([ctx, action]) => brk(brk(brk(brk(cont([ctx, action.inner])))))),
+                  result: t(([ctx, action]) => brk(cont([ctx, action.inner]))),
                 })
               ))),
             send_b: sequence(
               t(([[start, end, argmin], action]) => res([[start, end, argmin], { kind: "item", index: argmin, inner: action.inner }])),
               loop(sequence(
                 t(([ctx, list_arg]) =>
-                  res([ctx, brk(brk(brk(brk(brk(brk(brk(brk({ kind: "list", inner: list_arg }))))))))]),
+                  res([ctx, brk(brk(brk(brk(brk({ kind: "list", inner: list_arg })))))]),
                 ),
                 { kind: "yield" },
                 t(([ctx, action]) => res([[ctx, action], action.kind])),
                 latch({
-                  result: t(([ctx, action]) => brk(brk(brk(brk(cont([ctx, action.inner])))))),
+                  result: t(([ctx, action]) => brk(cont([ctx, action.inner]))),
                 })
               ))),
           }),
@@ -206,9 +206,9 @@ const argmin_between_machine: Machine = sequence(
       ),
       t(([[start, end, argmin], ord]) => {
         if (ord === '<') {
-          return brk(cont([start + 1, end, start]));
+          return cont([start + 1, end, start]);
         } else if (ord === '>' || ord === '=') {
-          return brk(cont([start + 1, end, argmin]));
+          return cont([start + 1, end, argmin]);
         } else {
           throw Error("Bad ord: " + ord);
         }
