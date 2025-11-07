@@ -57,12 +57,16 @@ function machine_apply(machine: Machine, state: any, input: any): [any, any] {
     //   }
     //   const [new_machine, result] = machine_apply(case_fn, input.inner);
     //   return [{ kind: "match", cases: { ...machine.cases, [input.kind]: new_machine } }, result];
-    // } else if (machine.kind === "latch") {
-    //   let case_fn = machine.cases[input.kind];
-    //   if (case_fn === undefined) {
-    //     throw Error("Bad latch: " + JSON.stringify(input.kind));
-    //   }
-    //   return machine_apply(case_fn, input.inner);
+  } else if (machine.kind === "latch") {
+    if (state.kind === "start") {
+      const [ctx, tag] = input
+      return machine_apply(machine, { kind: "latch", tag, inner: { kind: "start" } }, ctx);
+    } else if (state.kind === "latch") {
+      const [new_state, result] = machine_apply(machine.cases[state.tag], state.inner, input);
+      return [{ kind: "latch", tag: state.tag, inner: new_state }, result];
+    } else {
+      throw Error("Bad latch state: " + JSON.stringify(state));
+    }
   } else if (machine.kind === "sequence") {
     if (state.kind === "start") {
       return machine_apply(machine, { kind: "step", index: 0, inner: { kind: "start" } }, input);
@@ -145,6 +149,13 @@ function cont(inner: any) {
   }
 }
 
+function latch(cases: { [key: string]: Machine }): Machine {
+  return {
+    kind: "latch",
+    cases: cases,
+  }
+}
+
 const argmin_between_machine: Machine = sequence(
   t(([start, end]: [number, number]) => { return { kind: "result", inner: [start, end, start] } }),
   loop(
@@ -159,16 +170,11 @@ const argmin_between_machine: Machine = sequence(
         sequence(
           t(([ctx, msg]) => res([ctx, brk(brk(brk(brk(brk(msg)))))])),
           { kind: "yield" },
-          t(([[start, end, argmin], action]) => {
-            if (action.kind === "result") {
-              return brk(brk(res([[start, end, argmin], action.inner])));
-            } else if (action.kind === "send_a") {
-              return brk(cont([[start, end, argmin], { kind: "list", inner: { kind: "item", index: start, inner: action.inner } }]));
-            } else if (action.kind === "send_b") {
-              return brk(cont([[start, end, argmin], { kind: "list", inner: { kind: "item", index: argmin, inner: action.inner } }]));
-            } else {
-              throw Error("Bad action: " + JSON.stringify(action));
-            }
+          t(([ctx, action]) => res([[ctx, action], action.kind])),
+          latch({
+            result: t(([ctx, action]) => brk(brk(res([ctx, action.inner])))),
+            send_a: t(([[start, end, argmin], action]) => brk(cont([[start, end, argmin], { kind: "list", inner: { kind: "item", index: start, inner: action.inner } }]))),
+            send_b: t(([[start, end, argmin], action]) => brk(cont([[start, end, argmin], { kind: "list", inner: { kind: "item", index: argmin, inner: action.inner } }]))),
           }),
         )
       ),
