@@ -62,7 +62,11 @@ function machine_apply(machine: Machine, state: any, input: any): [any, any] {
       const [ctx, tag] = input
       return machine_apply(machine, { kind: "latch", tag, inner: { kind: "start" } }, ctx);
     } else if (state.kind === "latch") {
-      const [new_state, result] = machine_apply(machine.cases[state.tag], state.inner, input);
+      const case_fn = machine.cases[state.tag];
+      if (case_fn === undefined) {
+        throw Error("Bad latch: " + JSON.stringify(state.tag));
+      }
+      const [new_state, result] = machine_apply(case_fn, state.inner, input);
       return [{ kind: "latch", tag: state.tag, inner: new_state }, result];
     } else {
       throw Error("Bad latch state: " + JSON.stringify(state));
@@ -164,17 +168,39 @@ const argmin_between_machine: Machine = sequence(
         if (start === end) {
           return brk(brk(brk(res(argmin))));
         }
-        return res([[start, end, argmin], { kind: "cmp" }]);
+        return res([[start, end, argmin], null]);
       }),
       loop(
         sequence(
-          t(([ctx, msg]) => res([ctx, brk(brk(brk(brk(brk(msg)))))])),
+          t(([ctx, msg]) => res([ctx, brk(brk(brk(brk(brk({ kind: "cmp", inner: msg })))))])),
           { kind: "yield" },
           t(([ctx, action]) => res([[ctx, action], action.kind])),
           latch({
             result: t(([ctx, action]) => brk(brk(res([ctx, action.inner])))),
-            send_a: t(([[start, end, argmin], action]) => brk(cont([[start, end, argmin], { kind: "list", inner: { kind: "item", index: start, inner: action.inner } }]))),
-            send_b: t(([[start, end, argmin], action]) => brk(cont([[start, end, argmin], { kind: "list", inner: { kind: "item", index: argmin, inner: action.inner } }]))),
+            send_a: sequence(
+              t(([[start, end, argmin], action]) => res([[start, end, argmin], { kind: "item", index: start, inner: action.inner }])),
+              loop(sequence(
+                t(([ctx, list_arg]) =>
+                  res([ctx, brk(brk(brk(brk(brk(brk(brk(brk({ kind: "list", inner: list_arg }))))))))]),
+                ),
+                { kind: "yield" },
+                t(([ctx, action]) => res([[ctx, action], action.kind])),
+                latch({
+                  result: t(([ctx, action]) => brk(brk(brk(brk(cont([ctx, action.inner])))))),
+                })
+              ))),
+            send_b: sequence(
+              t(([[start, end, argmin], action]) => res([[start, end, argmin], { kind: "item", index: argmin, inner: action.inner }])),
+              loop(sequence(
+                t(([ctx, list_arg]) =>
+                  res([ctx, brk(brk(brk(brk(brk(brk(brk(brk({ kind: "list", inner: list_arg }))))))))]),
+                ),
+                { kind: "yield" },
+                t(([ctx, action]) => res([[ctx, action], action.kind])),
+                latch({
+                  result: t(([ctx, action]) => brk(brk(brk(brk(cont([ctx, action.inner])))))),
+                })
+              ))),
           }),
         )
       ),
@@ -194,19 +220,27 @@ const argmin_between_machine: Machine = sequence(
 describe("argmin_between", () => {
   test("should work", () => {
     let [state, result] = machine_apply(argmin_between_machine, { kind: "start" }, [0, 3]);
-    expect(result).toEqual({ kind: "cmp" });
+    expect(result).toEqual({ kind: "cmp", inner: null });
     [state, result] = machine_apply(argmin_between_machine, state, { kind: "send_a", inner: "senda" });
     expect(result).toEqual({ kind: "list", inner: { kind: "item", index: 0, inner: "senda" } });
+    [state, result] = machine_apply(argmin_between_machine, state, res("returna"));
+    expect(result).toEqual({ kind: "cmp", inner: "returna" });
     [state, result] = machine_apply(argmin_between_machine, state, { kind: "send_b", inner: "sendb" });
     expect(result).toEqual({ kind: "list", inner: { kind: "item", index: 0, inner: "sendb" } });
+    [state, result] = machine_apply(argmin_between_machine, state, res("returnb"));
+    expect(result).toEqual({ kind: "cmp", inner: "returnb" });
     [state, result] = machine_apply(argmin_between_machine, state, res("<"));
-    expect(result).toEqual({ kind: "cmp" });
+    expect(result).toEqual({ kind: "cmp", inner: null });
     [state, result] = machine_apply(argmin_between_machine, state, { kind: "send_a", inner: "senda" });
     expect(result).toEqual({ kind: "list", inner: { kind: "item", index: 1, inner: "senda" } });
+    [state, result] = machine_apply(argmin_between_machine, state, res("returna"));
+    expect(result).toEqual({ kind: "cmp", inner: "returna" });
     [state, result] = machine_apply(argmin_between_machine, state, { kind: "send_b", inner: "sendb" });
     expect(result).toEqual({ kind: "list", inner: { kind: "item", index: 0, inner: "sendb" } });
+    [state, result] = machine_apply(argmin_between_machine, state, res("returnb"));
+    expect(result).toEqual({ kind: "cmp", inner: "returnb" });
     [state, result] = machine_apply(argmin_between_machine, state, res("<"));
-    expect(result).toEqual({ kind: "cmp" });
+    expect(result).toEqual({ kind: "cmp", inner: null });
     [state, result] = machine_apply(argmin_between_machine, state, res("="));
     expect(result).toEqual(res(1));
   });
