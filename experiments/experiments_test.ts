@@ -35,6 +35,10 @@ type Machine = {
   // handler: Machine,
 }
 
+function panic(msg) {
+  throw Error(msg);
+}
+
 function machine_apply(machine: Machine, state: any, input: any): [any, any] {
   if (machine.kind === "fn") {
     return [null, machine.fn(input)];
@@ -76,14 +80,10 @@ function machine_apply(machine: Machine, state: any, input: any): [any, any] {
       return machine_apply(machine, { kind: "step", index: 0, inner: { kind: "start" } }, input);
     } else if (state.kind === "step") {
       const [new_state, result] = machine_apply(machine.machines[state.index], state.inner, input);
-      if (state.index === machine.machines.length - 1) {
-        return [{ kind: "step", index: state.index, inner: new_state }, result];
-      } else if (result.kind === "break") {
-        return [{ kind: "step", index: state.index, inner: new_state }, result.inner];
-      } else if (result.kind === "result") {
+      if (state.index < machine.machines.length - 1 && result.kind === "seqnext") {
         return machine_apply(machine, { kind: "step", index: state.index + 1, inner: { kind: "start" } }, result.inner);
-      } else {
-        throw Error("Bad sequence result: " + JSON.stringify(result));
+      } {
+        return [{ kind: "step", index: state.index, inner: new_state }, result];
       }
     } else {
       throw Error("Bad sequence state: " + JSON.stringify(state));
@@ -153,6 +153,13 @@ function cont(inner: any) {
   }
 }
 
+function seqnext(inner: any) {
+  return {
+    kind: "seqnext",
+    inner: inner,
+  }
+}
+
 function latch(cases: { [key: string]: Machine }): Machine {
   return {
     kind: "latch",
@@ -160,28 +167,213 @@ function latch(cases: { [key: string]: Machine }): Machine {
   }
 }
 
+function double(input, cb) {
+  return [cb, 'gimme', (x, cb) => [cb, x + x, panic]];
+}
+
+function quad(input, ret_cb) {
+  return [double, null, (msg, cb) => {
+    assert(msg === 'gimme');
+    return [cb, input, (doubled, _) => [double, null, (msg, cb) => {
+      assert(msg === 'gimme');
+      return [cb, doubled, (q, _) => [ret_cb, q, panic]];
+    }]]
+  }];
+}
+
+// describe("argmin_between", () => {
+test("double quad", () => {
+  expect(apply2(quad, 3)[0]).toBe(12);
+});
+
+
+function apply2(target, msg) {
+  let cb = null;
+  while (target !== null) {
+    const [new_target, new_msg, new_cb] = target(msg, cb);
+    target = new_target;
+    msg = new_msg;
+    cb = new_cb;
+  }
+  return [msg, cb];
+}
+
+
+function loop2(body) {
+  return function (msg, break_cb) {
+    return loop2_mid(body, body, msg, break_cb);
+  }
+}
+
+function loop2_mid(body, current_state, msg, caller_cb) {
+  return [current_state, msg, (msg, resume_cb) => {
+    if (msg.kind === "yield" || msg.kind === "return") {
+      return [caller_cb, msg, (resume_msg, caller_cb) => loop2_mid(body, resume_cb, resume_msg, caller_cb)];
+    } else if (msg.kind === "continue") {
+      return loop2_mid(body, body, msg.inner, caller_cb);
+    } else if (msg.kind === "break") {
+      return [caller_cb, res(msg.inner), panic];
+    } else {
+      throw Error("Bad msg: " + JSON.stringify(msg));
+    }
+  }]
+}
+
+function cond(true_branch, false_branch) {
+  return function (msg, cb) {
+    const [ctx, bool] = msg;
+    if (bool === true) {
+      return [true_branch, ctx, cb];
+    } else if (bool === false) {
+      return [false_branch, ctx, cb];
+    } else {
+      throw Error("Bad bool: " + JSON.stringify(bool));
+    }
+  }
+}
+
+function t2(f) {
+  return function (msg, cb) {
+    return [cb, res(f(msg)), panic];
+  }
+}
+
+function seq2(...ts) {
+  function seq2_inner(current_step_idx, current_state, msg, break_cb) {
+    return [current_state, msg, (msg, resume_cb) => {
+      if (msg.kind === "result") {
+        if (current_step_idx === ts.length - 1) {
+          throw Error("Seq2 ran out of steps: " + JSON.stringify(msg));
+        }
+        return seq2_inner(current_step_idx + 1, ts[current_step_idx + 1], msg.inner, break_cb);
+      } else if (msg.kind === "continue" || msg.kind === "yield" || msg.kind === "return") {
+        return [
+          break_cb,
+          msg,
+          (resume_msg, break_cb) => seq2_inner(current_step_idx, resume_cb, resume_msg, break_cb)
+        ];
+      }
+    }]
+  }
+  return function (msg, cb) {
+    return seq2_inner(0, ts[0], msg, cb);
+  }
+}
+
+function yld(msg, cb) {
+  const [ctx, to_yield] = msg;
+  return [cb, { kind: "yield", inner: to_yield }, (msg, cb) => [cb, res([ctx, msg]), panic]];
+}
+
+function rtn(msg, cb) {
+  return [cb, { kind: "return", inner: msg }, panic];
+}
+
+function cont2(msg, cb) {
+  return [cb, { kind: "continue", inner: msg }, panic];
+}
+
+function route(cases) {
+  return function (msg, cb) {
+    const [ctx, inner_msg] = msg;
+    const case_fn = cases[inner_msg.kind];
+    if (case_fn === undefined) {
+      throw Error("Bad route: " + JSON.stringify(inner_msg.kind));
+    }
+    return [case_fn, [ctx, inner_msg.inner], cb];
+  }
+}
+
+function func(name, body) {
+  function func_inner(current_state, msg, caller_cb) {
+    return [current_state, msg, (msg, resume_cb) => {
+      if (msg.kind === "yield") {
+        return [caller_cb, msg.inner, (msg, caller_cb) => func_inner(resume_cb, msg, caller_cb)];
+      } else if (msg.kind === "return") {
+        return [caller_cb, res(msg.inner), panic];
+      } else {
+        throw Error("Bad body result: " + JSON.stringify(msg));
+      }
+    }];
+  }
+
+  return function (msg, cb) {
+    return func_inner(body, msg, cb);
+  }
+}
+
+const increment = func("increment", loop2(seq2(
+  t2(([start, end]) =>
+    [[start, end], start === end]),
+  cond(
+    seq2(t2(([start, end]) => null), rtn),
+    seq2(
+      t2(([start, end]) => [[start, end], { kind: "log", inner: start }]),
+      yld,
+      t2(([[start, end], _]) => [start + 1, end]),
+      cont2,
+    )
+  )
+)));
+
+
+test("increment", () => {
+  let [result, cb] = apply2(increment, [0, 3]);
+  expect(result).toEqual({ kind: "log", inner: 0 });
+  [result, cb] = apply2(cb, null);
+  expect(result).toEqual({ kind: "log", inner: 1 });
+  [result, cb] = apply2(cb, null);
+  expect(result).toEqual({ kind: "log", inner: 2 });
+  [result, cb] = apply2(cb, null);
+  expect(result).toEqual(res(null));
+});
+
+const argmin_between = loop2(seq2(
+  t2(([start, end, argmin]) => res([[start, end, argmin], start === end])),
+  cond(
+    seq2(t2(([start, end, argmin]) => argmin), rtn),
+    seq2(
+      t2(ctx => [ctx, null]),
+      loop2(seq2(
+        t2(([ctx, arg]) => [ctx, { kind: "cmp", inner: arg }]),
+        yld,
+        route({
+          result: brk,
+          send_a: seq2(
+            t2(([ctx, arg]) => [ctx, { kind: "item", index: ctx.start, inner: arg }]),
+            loop2(seq2(
+              t2(([ctx, arg]) => [ctx, { kind: "list", inner: arg }]),
+              yld,
+            )),
+            send_b: seq2(loop2(seq2(t2(([ctx, arg]) => [ctx, { kind: "send_a", inner: { kind: "get" } }]), yld)), yld),
+          })
+      ))
+    )
+  )
+));
+
 const argmin_between_machine: Machine = sequence(
-  t(([start, end]: [number, number]) => { return { kind: "result", inner: [start, end, start] } }),
+  t(([start, end]: [number, number]) => res([start, end, start])),
   loop(
     sequence(
       t(([start, end, argmin]: [number, number, number]) => {
         if (start === end) {
           return brk(brk(res(argmin)));
         }
-        return res([[start, end, argmin], null]);
+        return seqnext([[start, end, argmin], null]);
       }),
       loop(
         sequence(
-          t(([ctx, msg]) => res([ctx, brk(brk(brk(brk({ kind: "cmp", inner: msg }))))])),
+          t(([ctx, msg]) => seqnext([ctx, brk({ kind: "cmp", inner: msg })])),
           { kind: "yield" },
-          t(([ctx, action]) => res([[ctx, action], action.kind])),
+          t(([ctx, action]) => seqnext([[ctx, action], action.kind])),
           latch({
-            result: t(([ctx, action]) => brk(res([ctx, action.inner]))),
+            result: t(([ctx, action]) => brk(seqnext([ctx, action.inner]))),
             send_a: sequence(
-              t(([[start, end, argmin], action]) => res([[start, end, argmin], { kind: "item", index: start, inner: action.inner }])),
+              t(([[start, end, argmin], action]) => seqnext([[start, end, argmin], { kind: "item", index: start, inner: action.inner }])),
               loop(sequence(
                 t(([ctx, list_arg]) =>
-                  res([ctx, brk(brk(brk(brk(brk({ kind: "list", inner: list_arg })))))]),
+                  seqnext([ctx, brk(brk(brk(brk(brk({ kind: "list", inner: list_arg })))))]),
                 ),
                 { kind: "yield" },
                 t(([ctx, action]) => res([[ctx, action], action.kind])),
@@ -219,29 +411,29 @@ const argmin_between_machine: Machine = sequence(
 
 describe("argmin_between", () => {
   test("should work", () => {
-    let [state, result] = machine_apply(argmin_between_machine, { kind: "start" }, [0, 3]);
+    let [result, cb] = apply2(argmin_between, [0, 3]);
     expect(result).toEqual({ kind: "cmp", inner: null });
-    [state, result] = machine_apply(argmin_between_machine, state, { kind: "send_a", inner: "senda" });
+    [result, cb] = apply2(cb, { kind: "send_a", inner: "senda" });
     expect(result).toEqual({ kind: "list", inner: { kind: "item", index: 0, inner: "senda" } });
-    [state, result] = machine_apply(argmin_between_machine, state, res("returna"));
+    [result, cb] = apply2(cb, res("returna"));
     expect(result).toEqual({ kind: "cmp", inner: "returna" });
-    [state, result] = machine_apply(argmin_between_machine, state, { kind: "send_b", inner: "sendb" });
+    [result, cb] = apply2(cb, { kind: "send_b", inner: "sendb" });
     expect(result).toEqual({ kind: "list", inner: { kind: "item", index: 0, inner: "sendb" } });
-    [state, result] = machine_apply(argmin_between_machine, state, res("returnb"));
+    [result, cb] = apply2(cb, res("returnb"));
     expect(result).toEqual({ kind: "cmp", inner: "returnb" });
-    [state, result] = machine_apply(argmin_between_machine, state, res("<"));
+    [result, cb] = apply2(cb, res("<"));
     expect(result).toEqual({ kind: "cmp", inner: null });
-    [state, result] = machine_apply(argmin_between_machine, state, { kind: "send_a", inner: "senda" });
+    [result, cb] = apply2(cb, { kind: "send_a", inner: "senda" });
     expect(result).toEqual({ kind: "list", inner: { kind: "item", index: 1, inner: "senda" } });
-    [state, result] = machine_apply(argmin_between_machine, state, res("returna"));
+    [result, cb] = apply2(cb, res("returna"));
     expect(result).toEqual({ kind: "cmp", inner: "returna" });
-    [state, result] = machine_apply(argmin_between_machine, state, { kind: "send_b", inner: "sendb" });
+    [result, cb] = apply2(cb, { kind: "send_b", inner: "sendb" });
     expect(result).toEqual({ kind: "list", inner: { kind: "item", index: 0, inner: "sendb" } });
-    [state, result] = machine_apply(argmin_between_machine, state, res("returnb"));
+    [result, cb] = apply2(cb, res("returnb"));
     expect(result).toEqual({ kind: "cmp", inner: "returnb" });
-    [state, result] = machine_apply(argmin_between_machine, state, res("<"));
+    [result, cb] = apply2(cb, res("<"));
     expect(result).toEqual({ kind: "cmp", inner: null });
-    [state, result] = machine_apply(argmin_between_machine, state, res("="));
+    [result, cb] = apply2(cb, res("="));
     expect(result).toEqual(res(1));
   });
 });
