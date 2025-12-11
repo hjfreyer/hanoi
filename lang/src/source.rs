@@ -119,7 +119,7 @@ impl FileSpan {
         }
     }
 
-    pub fn as_pest(self, sources: &Sources) -> pest::Span {
+    pub fn as_pest(self, sources: &Sources) -> pest::Span<'_> {
         pest::Span::new(&sources.files[self.file_idx].source, self.start, self.end).unwrap()
     }
 

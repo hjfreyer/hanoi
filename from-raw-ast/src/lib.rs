@@ -5,6 +5,7 @@ use syn::{parse_macro_input, DeriveInput};
 
 #[derive(Debug, Default, FromMeta)]
 #[darling(default)]
+#[allow(dead_code)]
 struct Lorem {
     #[darling(rename = "sit")]
     ipsum: bool,

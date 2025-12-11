@@ -129,7 +129,7 @@ impl Debugger {
     //     }
     // }
 
-    fn code(&self) -> Paragraph {
+    fn code(&self) -> Paragraph<'_> {
         let text = if let Some(span) = self.highlight_span {
             let span = span.as_pest(&self.sources);
             let code = span.get_input();
@@ -208,14 +208,14 @@ impl Debugger {
         .highlight_style(Style::new().black().on_white())
     }
 
-    fn word_text(&self) -> Text {
+    fn word_text(&self) -> Text<'_> {
         let Some(word) = self.vm.current_word() else {
             return Text::default();
         };
         Text::raw(format!("{:?}", word.inner)).red().on_dark_gray()
     }
 
-    fn error_text(&self) -> Text {
+    fn error_text(&self) -> Text<'_> {
         let Some(err) = &self.error else {
             return Text::default();
         };

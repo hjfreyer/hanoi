@@ -13,11 +13,11 @@ use crate::{
 #[grammar = "hanoi.pest"]
 pub struct HanoiParser;
 
-fn span_into_str(span: pest::Span) -> &str {
+fn span_into_str(span: pest::Span<'_>) -> &str {
     span.as_str()
 }
 
-fn span_into_char(span: pest::Span) -> char {
+fn span_into_char(span: pest::Span<'_>) -> char {
     let s = span.as_str();
     assert_eq!(s.len(), 3);
     s.chars().nth(1).unwrap()
@@ -79,7 +79,7 @@ pub struct Char<'t> {
     pub value: char,
 }
 
-fn span_into_string_literal(span: pest::Span) -> String {
+fn span_into_string_literal(span: pest::Span<'_>) -> String {
     let str = span.as_str();
     let str = &str[1..str.len() - 1];
     str.replace("\\n", "\n").replace("\\\"", "\"")
