@@ -1,1622 +1,588 @@
 // Test file for experiments.ts
 // import { Machine, t, FuncFragment, func, Function, closure, Action } from './experiments';
 
-import { assert } from "console";
+import assert from "assert";
 
-type Machine = {
-  kind: "fn",
-  fn: (arg: any) => any
-} | {
-  kind: "stateful",
-  state: any,
-  fn: (state: any, arg: any) => [any, any]
-} | {
-  kind: "bind",
-  machine: Machine,
-  handler: Machine,
-} | {
-  kind: "cond",
-  true_branch: Machine,
-  false_branch: Machine,
-} | {
-  kind: "match",
-  cases: { [key: string]: Machine },
-} | {
-  kind: "latch",
-  cases: { [key: string]: Machine },
-} | {
-  kind: "sequence",
-  machines: Machine[]
-} | {
-  kind: "loop",
-  body: Machine,
-} | {
-  kind: "yield",
-  // handler: Machine,
+type Context = {
+  named: { [key: string]: any },
+  unnamed: any[],
 }
 
-function panic(msg) {
-  throw Error(msg);
-}
+function name_binding(name: string) {
+  return (ctx: Context): Context => {
 
-function machine_apply(machine: Machine, state: any, input: any): [any, any] {
-  if (machine.kind === "fn") {
-    return [null, machine.fn(input)];
-  } else if (machine.kind === "stateful") {
-    const [new_state, result] = machine.fn(machine.state, input);
-    return [new_state, result];
-    // } else if (machine.kind === "cond") {
-    //   const [carry, cond] = input;
-    //   if (cond === true) {
-    //     return machine_apply(machine.true_branch, carry);
-    //   } else if (cond === false) {
-    //     return machine_apply(machine.false_branch, carry);
-    //   } else {
-    //     throw Error("Bad cond: " + JSON.stringify(cond));
-    //   }
-    // } else if (machine.kind === "match") {
-    //   const case_fn = machine.cases[input.kind];
-    //   if (case_fn === undefined) {
-    //     throw Error("Bad match: " + JSON.stringify(input.kind));
-    //   }
-    //   const [new_machine, result] = machine_apply(case_fn, input.inner);
-    //   return [{ kind: "match", cases: { ...machine.cases, [input.kind]: new_machine } }, result];
-  } else if (machine.kind === "latch") {
-    if (state.kind === "start") {
-      const [ctx, tag] = input
-      return machine_apply(machine, { kind: "latch", tag, inner: { kind: "start" } }, ctx);
-    } else if (state.kind === "latch") {
-      const case_fn = machine.cases[state.tag];
-      if (case_fn === undefined) {
-        throw Error("Bad latch: " + JSON.stringify(state.tag));
-      }
-      const [new_state, result] = machine_apply(case_fn, state.inner, input);
-      return [{ kind: "latch", tag: state.tag, inner: new_state }, result];
-    } else {
-      throw Error("Bad latch state: " + JSON.stringify(state));
+    return {
+      named: {
+        ...ctx.named,
+        [name]: ctx.unnamed[0],
+      },
+      unnamed: ctx.unnamed.slice(1),
     }
-  } else if (machine.kind === "sequence") {
-    if (state.kind === "start") {
-      return machine_apply(machine, { kind: "step", index: 0, inner: { kind: "start" } }, input);
-    } else if (state.kind === "step") {
-      const [new_state, result] = machine_apply(machine.machines[state.index], state.inner, input);
-      if (state.index < machine.machines.length - 1 && result.kind === "seqnext") {
-        return machine_apply(machine, { kind: "step", index: state.index + 1, inner: { kind: "start" } }, result.inner);
-      } {
-        return [{ kind: "step", index: state.index, inner: new_state }, result];
-      }
-    } else {
-      throw Error("Bad sequence state: " + JSON.stringify(state));
+  };
+}
+
+function tuple_binding(bindings: ((ctx: Context) => Context)[]) {
+  return (ctx: Context): Context => {
+    const popped = ctx.unnamed[0];
+    assert(popped.length === bindings.length);
+    // Remove the tuple from unnamed stack
+    ctx = { named: { ...ctx.named }, unnamed: ctx.unnamed.slice(1) };
+    for (let i = 0; i < bindings.length; i++) {
+      ctx = { named: { ...ctx.named }, unnamed: [popped[i], ...ctx.unnamed] };
+      ctx = bindings[i](ctx);
     }
-  } else if (machine.kind === "loop") {
-    const [new_state, result] = machine_apply(machine.body, state, input);
-    if (result.kind === "break") {
-      return [new_state, result.inner];
-    } else if (result.kind === "continue") {
-      return machine_apply(machine, { kind: "start" }, result.inner);
-    } else {
-      throw Error("Bad loop result: " + JSON.stringify(result));
-    }
-  } else if (machine.kind === "yield") {
-    if (state.kind === "start") {
-      const [ctx, inner] = input;
-      return [{ kind: "waiting", ctx }, inner];
-    } else if (state.kind === "waiting") {
-      return [{ kind: "done" }, { kind: "result", inner: [state.ctx, input] }];
-    } else {
-      throw Error("Bad yield state: " + JSON.stringify(state));
-    }
-  } else {
-    throw Error("Bad machine: " + JSON.stringify(machine));
+    return ctx;
   }
 }
 
-function t(f: (...args: any[]) => any): Machine {
-  return {
-    kind: "fn",
-    fn: f,
+function drop_binding() {
+  return (ctx: Context): Context => {
+    return { named: { ...ctx.named }, unnamed: ctx.unnamed.slice(1) };
   }
 }
 
-function sequence(...machines: Machine[]): Machine {
-  return {
-    kind: "sequence",
-    machines: machines,
+function literal_binding(value: any) {
+  return (ctx: Context): Context => {
+    const popped = ctx.unnamed[0];
+    assert(popped === value);
+    return { named: { ...ctx.named }, unnamed: ctx.unnamed.slice(1) };
   }
 }
 
-function loop(body: Machine): Machine {
-  return {
-    kind: "loop",
-    body: body,
+function copy(name: string) {
+  return (ctx: Context): Context => {
+    return { named: { ...ctx.named }, unnamed: [ctx.named[name], ...ctx.unnamed] };
   }
 }
 
-function brk(inner: any) {
-  return {
-    kind: "break",
-    inner: inner,
+function mv(name: string) {
+  return (ctx: Context): Context => {
+    const popped = ctx.named[name];
+    delete ctx.named[name];
+    return { named: { ...ctx.named }, unnamed: [popped, ...ctx.unnamed] };
   }
 }
 
-function res(inner: any) {
-  return {
-    kind: "result",
-    inner: inner,
+function push(value: any) {
+  return (ctx: Context): Context => {
+    return { named: { ...ctx.named }, unnamed: [value, ...ctx.unnamed] };
   }
 }
 
-function cont(inner: any) {
-  return {
-    kind: "continue",
-    inner: inner,
+function tuple(size: number) {
+  return (ctx: Context): Context => {
+    return { named: { ...ctx.named }, unnamed: [ctx.unnamed.slice(0, size), ...ctx.unnamed.slice(size)] };
   }
 }
 
-function seqnext(inner: any) {
-  return {
-    kind: "seqnext",
-    inner: inner,
-  }
-}
+// x => *x yield x => *x x tuple(2) 'add yield () => 42 return
 
-function latch(cases: { [key: string]: Machine }): Machine {
-  return {
-    kind: "latch",
-    cases: cases,
-  }
-}
+// seq(
+//   bind x {start} (1 unnamed) -> {end} result(1 named, 0 unnamed)
+//   copy x {start} (1 named, 0 unnamed) -> {end} result(1 named, 1 unnamed)
+//   yield {start} (1 named, 1 unnamed) -> awaiting{all but 1 unnamed} yield(1 unnamed)
+//)
 
-function double(input, cb) {
-  return [cb, 'gimme', (x, cb) => [cb, x + x, panic]];
-}
+// x => loop {
+//   x == 42 if {
+//     'ok' return
+//   } else {
+//     'nope' yield x => continue
+//   }
+// }
 
-function quad(input, ret_cb) {
-  return [double, null, (msg, cb) => {
-    assert(msg === 'gimme');
-    return [cb, input, (doubled, _) => [double, null, (msg, cb) => {
-      assert(msg === 'gimme');
-      return [cb, doubled, (q, _) => [ret_cb, q, panic]];
-    }]]
-  }];
-}
+// seq (
+//   bind x
+//   loop (seq(
+//     x 42 tuple(2) 'eq if (
+//       seq('ok' return)
+//     )
+//   ))
+// )
 
-// describe("argmin_between", () => {
-test("double quad", () => {
-  expect(apply2(quad, 3)[0]).toBe(12);
+describe('binding functions', () => {
+  describe('name_binding', () => {
+    test('binds value from unnamed to named', () => {
+      const ctx: Context = {
+        named: {},
+        unnamed: [42]
+      };
+      const binding = name_binding('x');
+      const result = binding(ctx);
+
+      expect(result.named).toEqual({ x: 42 });
+      expect(result.unnamed).toEqual([]);
+    });
+
+    test('preserves existing named values', () => {
+      const ctx: Context = {
+        named: { y: 10 },
+        unnamed: [42]
+      };
+      const binding = name_binding('x');
+      const result = binding(ctx);
+
+      expect(result.named).toEqual({ x: 42, y: 10 });
+      expect(result.unnamed).toEqual([]);
+    });
+
+    test('removes value from unnamed stack', () => {
+      const ctx: Context = {
+        named: {},
+        unnamed: [42, 100, 200]
+      };
+      const binding = name_binding('x');
+      const result = binding(ctx);
+
+      expect(result.named).toEqual({ x: 42 });
+      expect(result.unnamed).toEqual([100, 200]);
+    });
+
+    test('overwrites existing named value with same name', () => {
+      const ctx: Context = {
+        named: { x: 10 },
+        unnamed: [42]
+      };
+      const binding = name_binding('x');
+      const result = binding(ctx);
+
+      expect(result.named).toEqual({ x: 42 });
+      expect(result.unnamed).toEqual([]);
+    });
+  });
+
+  describe('tuple_binding', () => {
+    test('binds tuple elements to multiple bindings', () => {
+      const ctx: Context = {
+        named: {},
+        unnamed: [[1, 2, 3]]
+      };
+      const binding = tuple_binding([
+        name_binding('a'),
+        name_binding('b'),
+        name_binding('c')
+      ]);
+      const result = binding(ctx);
+
+      expect(result.named).toEqual({ a: 1, b: 2, c: 3 });
+      expect(result.unnamed).toEqual([]);
+    });
+
+    test('preserves existing named values', () => {
+      const ctx: Context = {
+        named: { existing: 'value' },
+        unnamed: [[10, 20]]
+      };
+      const binding = tuple_binding([
+        name_binding('x'),
+        name_binding('y')
+      ]);
+      const result = binding(ctx);
+
+      expect(result.named).toEqual({ existing: 'value', x: 10, y: 20 });
+      expect(result.unnamed).toEqual([]);
+    });
+
+    test('handles empty tuple', () => {
+      const ctx: Context = {
+        named: {},
+        unnamed: [[]]
+      };
+      const binding = tuple_binding([]);
+      const result = binding(ctx);
+
+      expect(result.named).toEqual({});
+      expect(result.unnamed).toEqual([]);
+    });
+
+    test('handles nested bindings', () => {
+      const ctx: Context = {
+        named: {},
+        unnamed: [[[1, 2], 3]]
+      };
+      const binding = tuple_binding([
+        tuple_binding([name_binding('a'), name_binding('b')]),
+        name_binding('c')
+      ]);
+      const result = binding(ctx);
+
+      expect(result.named).toEqual({ a: 1, b: 2, c: 3 });
+      expect(result.unnamed).toEqual([]);
+    });
+
+    test('preserves remaining unnamed values', () => {
+      const ctx: Context = {
+        named: {},
+        unnamed: [[1, 2], 99, 100]
+      };
+      const binding = tuple_binding([
+        name_binding('x'),
+        name_binding('y')
+      ]);
+      const result = binding(ctx);
+
+      expect(result.named).toEqual({ x: 1, y: 2 });
+      expect(result.unnamed).toEqual([99, 100]);
+    });
+  });
+
+  describe('drop_binding', () => {
+    test('drops value from unnamed stack', () => {
+      const ctx: Context = {
+        named: {},
+        unnamed: [42]
+      };
+      const binding = drop_binding();
+      const result = binding(ctx);
+
+      expect(result.named).toEqual({});
+      expect(result.unnamed).toEqual([]);
+    });
+
+    test('preserves named values', () => {
+      const ctx: Context = {
+        named: { x: 10, y: 20 },
+        unnamed: [42]
+      };
+      const binding = drop_binding();
+      const result = binding(ctx);
+
+      expect(result.named).toEqual({ x: 10, y: 20 });
+      expect(result.unnamed).toEqual([]);
+    });
+
+    test('drops only first value from unnamed stack', () => {
+      const ctx: Context = {
+        named: {},
+        unnamed: [42, 100, 200]
+      };
+      const binding = drop_binding();
+      const result = binding(ctx);
+
+      expect(result.named).toEqual({});
+      expect(result.unnamed).toEqual([100, 200]);
+    });
+  });
+
+  describe('literal_binding', () => {
+    test('matches and removes literal number', () => {
+      const ctx: Context = {
+        named: {},
+        unnamed: [42]
+      };
+      const binding = literal_binding(42);
+      const result = binding(ctx);
+
+      expect(result.named).toEqual({});
+      expect(result.unnamed).toEqual([]);
+    });
+
+    test('matches and removes literal string', () => {
+      const ctx: Context = {
+        named: {},
+        unnamed: ['hello']
+      };
+      const binding = literal_binding('hello');
+      const result = binding(ctx);
+
+      expect(result.named).toEqual({});
+      expect(result.unnamed).toEqual([]);
+    });
+
+    test('matches and removes literal boolean', () => {
+      const ctx: Context = {
+        named: {},
+        unnamed: [true]
+      };
+      const binding = literal_binding(true);
+      const result = binding(ctx);
+
+      expect(result.named).toEqual({});
+      expect(result.unnamed).toEqual([]);
+    });
+
+    test('preserves named values', () => {
+      const ctx: Context = {
+        named: { x: 10 },
+        unnamed: [42]
+      };
+      const binding = literal_binding(42);
+      const result = binding(ctx);
+
+      expect(result.named).toEqual({ x: 10 });
+      expect(result.unnamed).toEqual([]);
+    });
+
+    test('preserves remaining unnamed values', () => {
+      const ctx: Context = {
+        named: {},
+        unnamed: [42, 100, 200]
+      };
+      const binding = literal_binding(42);
+      const result = binding(ctx);
+
+      expect(result.named).toEqual({});
+      expect(result.unnamed).toEqual([100, 200]);
+    });
+
+    test('throws assertion error on mismatch', () => {
+      const ctx: Context = {
+        named: {},
+        unnamed: [42]
+      };
+      const binding = literal_binding(100);
+
+      expect(() => binding(ctx)).toThrow();
+    });
+  });
 });
 
+type Machine = (state: any, ctx: Context) => [any, any, Context];
 
-function apply2(target, msg) {
-  let cb = null;
-  while (target !== null) {
-    const [new_target, new_msg, new_cb] = target(msg, cb);
-    target = new_target;
-    msg = new_msg;
-    cb = new_cb;
-  }
-  return [msg, cb];
-}
-
-
-function loop2(body) {
-  return function (msg, break_cb) {
-    return loop2_mid(body, body, msg, break_cb);
+function t(f: (ctx: Context) => Context): Machine {
+  return (state: any, ctx: Context): [any, any, Context] => {
+    assert(state.kind === 'start');
+    return [{kind: 'end'}, 'result', f(ctx)];
   }
 }
 
-function loop2_mid(body, current_state, msg, caller_cb) {
-  return [current_state, msg, (msg, resume_cb) => {
-    if (msg.kind === "yield" || msg.kind === "return") {
-      return [caller_cb, msg, (resume_msg, caller_cb) => loop2_mid(body, resume_cb, resume_msg, caller_cb)];
-    } else if (msg.kind === "continue") {
-      return loop2_mid(body, body, msg.inner, caller_cb);
-    } else if (msg.kind === "break") {
-      return [caller_cb, res(msg.inner), panic];
-    } else {
-      throw Error("Bad msg: " + JSON.stringify(msg));
-    }
-  }]
-}
-
-function cond(true_branch, false_branch) {
-  return function (msg, cb) {
-    const [ctx, bool] = msg;
-    if (bool === true) {
-      return [true_branch, ctx, cb];
-    } else if (bool === false) {
-      return [false_branch, ctx, cb];
-    } else {
-      throw Error("Bad bool: " + JSON.stringify(bool));
-    }
-  }
-}
-
-function t2(f) {
-  return function (msg, cb) {
-    return [cb, res(f(msg)), panic];
-  }
-}
-
-function seq2(...ts) {
-  function seq2_inner(current_step_idx, current_state, msg, break_cb) {
-    return [current_state, msg, (msg, resume_cb) => {
-      if (msg.kind === "result") {
-        if (current_step_idx === ts.length - 1) {
-          throw Error("Seq2 ran out of steps: " + JSON.stringify(msg));
-        }
-        return seq2_inner(current_step_idx + 1, ts[current_step_idx + 1], msg.inner, break_cb);
-      } else if (msg.kind === "continue" || msg.kind === "yield" || msg.kind === "return") {
-        return [
-          break_cb,
-          msg,
-          (resume_msg, break_cb) => seq2_inner(current_step_idx, resume_cb, resume_msg, break_cb)
-        ];
+function seq(...machines: Machine[]): Machine {
+  return (state: any, ctx: Context): [any, any, Context] => {
+    while (true) {
+      if (state.kind === 'start') {
+        state = {kind: 'inner', idx: 0, inner: {kind: 'start'}};
+      }      
+      let idx = state.idx;
+      let inner = state.inner;
+      
+      if (idx === machines.length) {
+        assert(false, "End of sequence: " + JSON.stringify(state));
       }
-    }]
-  }
-  return function (msg, cb) {
-    return seq2_inner(0, ts[0], msg, cb);
-  }
-}
 
-function yld(msg, cb) {
-  const [ctx, to_yield] = msg;
-  return [cb, { kind: "yield", inner: to_yield }, (msg, cb) => [cb, res([ctx, msg]), panic]];
-}
-
-function rtn(msg, cb) {
-  return [cb, { kind: "return", inner: msg }, panic];
-}
-
-function cont2(msg, cb) {
-  return [cb, { kind: "continue", inner: msg }, panic];
-}
-
-function route(cases) {
-  return function (msg, cb) {
-    const [ctx, inner_msg] = msg;
-    const case_fn = cases[inner_msg.kind];
-    if (case_fn === undefined) {
-      throw Error("Bad route: " + JSON.stringify(inner_msg.kind));
-    }
-    return [case_fn, [ctx, inner_msg.inner], cb];
-  }
-}
-
-function func(name, body) {
-  function func_inner(current_state, msg, caller_cb) {
-    return [current_state, msg, (msg, resume_cb) => {
-      if (msg.kind === "yield") {
-        return [caller_cb, msg.inner, (msg, caller_cb) => func_inner(resume_cb, msg, caller_cb)];
-      } else if (msg.kind === "return") {
-        return [caller_cb, res(msg.inner), panic];
+      let [new_inner, action, new_ctx] = machines[idx](inner, ctx);
+      if (action === 'result') {
+        state = {kind: 'inner', idx: idx + 1, inner: {kind: 'start'}};
+        ctx = new_ctx;
       } else {
-        throw Error("Bad body result: " + JSON.stringify(msg));
+        return [{kind: 'inner', idx, inner: new_inner}, action, new_ctx];
       }
-    }];
-  }
-
-  return function (msg, cb) {
-    return func_inner(body, msg, cb);
+    }
   }
 }
 
-const increment = func("increment", loop2(seq2(
-  t2(([start, end]) =>
-    [[start, end], start === end]),
-  cond(
-    seq2(t2(([start, end]) => null), rtn),
-    seq2(
-      t2(([start, end]) => [[start, end], { kind: "log", inner: start }]),
-      yld,
-      t2(([[start, end], _]) => [start + 1, end]),
-      cont2,
-    )
-  )
-)));
+describe('t function', () => {
+  test('transforms context with name_binding', () => {
+    const ctx: Context = {
+      named: {},
+      unnamed: [42]
+    };
+    const machine = t(name_binding('x'));
+    const [state, action, result] = machine({kind: 'start'}, ctx);
 
+    expect(state).toEqual({kind: 'end'});
+    expect(action).toBe('result');
+    expect(result.named).toEqual({ x: 42 });
+    expect(result.unnamed).toEqual([]);
+  });
 
-test("increment", () => {
-  let [result, cb] = apply2(increment, [0, 3]);
-  expect(result).toEqual({ kind: "log", inner: 0 });
-  [result, cb] = apply2(cb, null);
-  expect(result).toEqual({ kind: "log", inner: 1 });
-  [result, cb] = apply2(cb, null);
-  expect(result).toEqual({ kind: "log", inner: 2 });
-  [result, cb] = apply2(cb, null);
-  expect(result).toEqual(res(null));
+  test('transforms context with drop_binding', () => {
+    const ctx: Context = {
+      named: { x: 10 },
+      unnamed: [42, 100]
+    };
+    const machine = t(drop_binding());
+    const [state, action, result] = machine({kind: 'start'}, ctx);
+
+    expect(state).toEqual({kind: 'end'});
+    expect(action).toBe('result');
+    expect(result.named).toEqual({ x: 10 });
+    expect(result.unnamed).toEqual([100]);
+  });
+
+  test('transforms context with literal_binding', () => {
+    const ctx: Context = {
+      named: {},
+      unnamed: [42]
+    };
+    const machine = t(literal_binding(42));
+    const [state, action, result] = machine({kind: 'start'}, ctx);
+
+    expect(state).toEqual({kind: 'end'});
+    expect(action).toBe('result');
+    expect(result.named).toEqual({});
+    expect(result.unnamed).toEqual([]);
+  });
+
+  test('throws on invalid state', () => {
+    const ctx: Context = {
+      named: {},
+      unnamed: [42]
+    };
+    const machine = t(name_binding('x'));
+
+    expect(() => machine({kind: 'invalid'}, ctx)).toThrow();
+  });
 });
 
-const argmin_between = loop2(seq2(
-  t2(([start, end, argmin]) => res([[start, end, argmin], start === end])),
-  cond(
-    seq2(t2(([start, end, argmin]) => argmin), rtn),
-    seq2(
-      t2(ctx => [ctx, null]),
-      loop2(seq2(
-        t2(([ctx, arg]) => [ctx, { kind: "cmp", inner: arg }]),
-        yld,
-        route({
-          result: brk,
-          send_a: seq2(
-            t2(([ctx, arg]) => [ctx, { kind: "item", index: ctx.start, inner: arg }]),
-            loop2(seq2(
-              t2(([ctx, arg]) => [ctx, { kind: "list", inner: arg }]),
-              yld,
-            )),
-            send_b: seq2(loop2(seq2(t2(([ctx, arg]) => [ctx, { kind: "send_a", inner: { kind: "get" } }]), yld)), yld),
-          })
-      ))
-    )
-  )
-));
+function yld(): Machine {
+  return (state: any, ctx: Context): [any, any, Context] => {
+    if (state.kind === 'start') {
+      const popped = ctx.unnamed[0];
+      return [{kind: 'awaiting', ctx: {named: { ...ctx.named }, unnamed: ctx.unnamed.slice(1)}}, 'yield', {named: {}, unnamed: [popped]}];
+    }
+    if (state.kind === 'awaiting') {
+      assert(Object.keys(ctx.named).length === 0);
+      assert(ctx.unnamed.length === 1);
+      const popped = ctx.unnamed[0];
 
-const argmin_between_machine: Machine = sequence(
-  t(([start, end]: [number, number]) => res([start, end, start])),
-  loop(
-    sequence(
-      t(([start, end, argmin]: [number, number, number]) => {
-        if (start === end) {
-          return brk(brk(res(argmin)));
-        }
-        return seqnext([[start, end, argmin], null]);
-      }),
-      loop(
-        sequence(
-          t(([ctx, msg]) => seqnext([ctx, brk({ kind: "cmp", inner: msg })])),
-          { kind: "yield" },
-          t(([ctx, action]) => seqnext([[ctx, action], action.kind])),
-          latch({
-            result: t(([ctx, action]) => brk(seqnext([ctx, action.inner]))),
-            send_a: sequence(
-              t(([[start, end, argmin], action]) => seqnext([[start, end, argmin], { kind: "item", index: start, inner: action.inner }])),
-              loop(sequence(
-                t(([ctx, list_arg]) =>
-                  seqnext([ctx, brk(brk(brk(brk(brk({ kind: "list", inner: list_arg })))))]),
-                ),
-                { kind: "yield" },
-                t(([ctx, action]) => res([[ctx, action], action.kind])),
-                latch({
-                  result: t(([ctx, action]) => brk(cont([ctx, action.inner]))),
-                })
-              ))),
-            send_b: sequence(
-              t(([[start, end, argmin], action]) => res([[start, end, argmin], { kind: "item", index: argmin, inner: action.inner }])),
-              loop(sequence(
-                t(([ctx, list_arg]) =>
-                  res([ctx, brk(brk(brk(brk(brk({ kind: "list", inner: list_arg })))))]),
-                ),
-                { kind: "yield" },
-                t(([ctx, action]) => res([[ctx, action], action.kind])),
-                latch({
-                  result: t(([ctx, action]) => brk(cont([ctx, action.inner]))),
-                })
-              ))),
-          }),
-        )
-      ),
-      t(([[start, end, argmin], ord]) => {
-        if (ord === '<') {
-          return cont([start + 1, end, start]);
-        } else if (ord === '>' || ord === '=') {
-          return cont([start + 1, end, argmin]);
+      return [{kind: 'end'}, 'result', {named: { ...state.ctx.named }, unnamed: [popped, ...state.ctx.unnamed]}];
+    }
+    assert(false, "Bad state: " + JSON.stringify(state));
+  }
+}
+
+describe('combining seq and yld', () => {
+  test('pushes then yields', () => {
+    let ctx: Context = {
+      named: {},
+      unnamed: [1]
+    };
+    const machine = fn(
+      t(name_binding('x')),
+      t(push(2)),
+      yld(),
+      t(mv('x')),
+      t(tuple(2)),
+      ret()
+    );
+    
+    let state;
+    let action;
+    [state, action, ctx] = machine({kind: 'start'}, ctx);
+    
+    expect(ctx.named).toEqual({});
+    expect(ctx.unnamed).toEqual([2]);
+    
+    // Continue to yield
+    [state, action, ctx] = machine(state, {
+      named: {},
+      unnamed: [42]
+    });
+    
+    // Should return what we passed in.
+    expect(state.kind).toBe('end');
+    expect(action).toBe('return');
+    expect(ctx.named).toEqual({});
+    expect(ctx.unnamed).toEqual([[1, 42]]);
+  });
+});
+
+function loop_impl(body: Machine): Machine {
+  return (state: any, ctx: Context): [any, any, Context] => {
+    while (true) {
+      if (state.kind === 'start') {
+        state = {kind: 'inner', inner: {kind: 'start'}};
+      }
+      if (state.kind === 'inner') {
+        const [new_state, action, new_ctx] = body(state.inner, ctx);
+
+        if (action === 'break') {
+          return [{kind: 'end'}, 'result', new_ctx];
+        } else if (action === 'continue') {
+          state = {kind: 'inner', inner: {kind: 'start'}};
+          ctx = new_ctx;
+        } else if (action === 'yield') {
+          return [{kind: 'inner', inner: new_state}, 'yield', new_ctx];
+        } else if (action === 'return') {
+          return [{kind: 'end'}, 'return', new_ctx];
         } else {
-          throw Error("Bad ord: " + ord);
+          assert(false, "Bad action: " + action);
         }
-      })
-    )
-  )
-);
-
-describe("argmin_between", () => {
-  test("should work", () => {
-    let [result, cb] = apply2(argmin_between, [0, 3]);
-    expect(result).toEqual({ kind: "cmp", inner: null });
-    [result, cb] = apply2(cb, { kind: "send_a", inner: "senda" });
-    expect(result).toEqual({ kind: "list", inner: { kind: "item", index: 0, inner: "senda" } });
-    [result, cb] = apply2(cb, res("returna"));
-    expect(result).toEqual({ kind: "cmp", inner: "returna" });
-    [result, cb] = apply2(cb, { kind: "send_b", inner: "sendb" });
-    expect(result).toEqual({ kind: "list", inner: { kind: "item", index: 0, inner: "sendb" } });
-    [result, cb] = apply2(cb, res("returnb"));
-    expect(result).toEqual({ kind: "cmp", inner: "returnb" });
-    [result, cb] = apply2(cb, res("<"));
-    expect(result).toEqual({ kind: "cmp", inner: null });
-    [result, cb] = apply2(cb, { kind: "send_a", inner: "senda" });
-    expect(result).toEqual({ kind: "list", inner: { kind: "item", index: 1, inner: "senda" } });
-    [result, cb] = apply2(cb, res("returna"));
-    expect(result).toEqual({ kind: "cmp", inner: "returna" });
-    [result, cb] = apply2(cb, { kind: "send_b", inner: "sendb" });
-    expect(result).toEqual({ kind: "list", inner: { kind: "item", index: 0, inner: "sendb" } });
-    [result, cb] = apply2(cb, res("returnb"));
-    expect(result).toEqual({ kind: "cmp", inner: "returnb" });
-    [result, cb] = apply2(cb, res("<"));
-    expect(result).toEqual({ kind: "cmp", inner: null });
-    [result, cb] = apply2(cb, res("="));
-    expect(result).toEqual(res(1));
-  });
-});
-
-const builtin_cmp_machine: Machine = sequence(
-  t((_) => res([null, brk({ kind: "send_a", inner: { kind: "get" } })])),
-  { kind: "yield" },
-  t(([ctx, msg]) => {
-    assert(msg.kind === "result");
-    return res([msg.inner, brk({ kind: "send_b", inner: { kind: "get" } })]);
-  }),
-  { kind: "yield" },
-  t(([a_val, b_val_result]) => {
-    assert(b_val_result.kind === "result");
-    const b_val = b_val_result.inner;
-    let ord;
-    if (a_val < b_val) {
-      ord = '<';
-    } else if (a_val > b_val) {
-      ord = '>';
-    } else {
-      ord = '=';
-    }
-    return res([[ord, b_val], brk({ kind: "send_a", inner: { kind: "set", inner: a_val } })]);
-  }),
-  { kind: "yield" },
-  t(([[ord, b_val], msg]) => {
-    return res([ord, brk({ kind: "send_b", inner: { kind: "set", inner: b_val } })]);
-  }),
-  { kind: "yield" },
-  t(([ord, msg]) => {
-    return brk(res(ord));
-  }),
-);
-
-describe("builtin_cmp", () => {
-  test("should work", () => {
-    let [state, result] = machine_apply(builtin_cmp_machine, { kind: "start" }, null);
-    expect(result).toEqual({ kind: "send_a", inner: { kind: "get" } });
-    [state, result] = machine_apply(builtin_cmp_machine, state, res(3));
-    expect(result).toEqual({ kind: "send_b", inner: { kind: "get" } });
-    [state, result] = machine_apply(builtin_cmp_machine, state, res(2));
-    expect(result).toEqual({ kind: "send_a", inner: { kind: "set", inner: 3 } });
-    [state, result] = machine_apply(builtin_cmp_machine, state, res(null));
-    expect(result).toEqual({ kind: "send_b", inner: { kind: "set", inner: 2 } });
-    [state, result] = machine_apply(builtin_cmp_machine, state, res(null));
-    expect(result).toEqual(res('>'));
-  });
-});
-
-function* argmin_between_g(min, max): Generator<any, [any, number], any> {
-  if (min === max) {
-    return min;
-  } else {
-    const rec_argmin = yield* argmin_between_g(min + 1, max);
-    let [_, min_result] = yield* yield_and_stateful_bind("cmp", [], { min, rec_argmin }, {
-      *send_a({ min, rec_argmin }, msg) {
-        return [{ min, rec_argmin }, yield {
-          kind: "request", fn: "list", args: [{
-            kind: "request", fn: "item", args: [min, msg]
-          }]
-        }];
-      },
-      *send_b({ min, rec_argmin }, msg) {
-        return [{ min, rec_argmin }, yield {
-          kind: "request", fn: "list", args: [{
-            kind: "request", fn: "item", args: [rec_argmin, msg]
-          }]
-        }];
+      } else {
+        assert(false, "Bad state: " + JSON.stringify(state));
       }
-    });
-
-    if (min_result === '<') {
-      return min;
-    } else if (min_result === ">" || min_result === "=") {
-      return rec_argmin;
-    } else {
-      throw Error("bad min_result: " + min_result)
     }
   }
 }
 
-
-describe("min_between", () => {
-  test("should work with bound", () => {
-    const list = [3, 1, 2];
-    const bound = stateful_bind(argmin_between_g(0, 2), list, {
-      *cmp(list, msg) {
-        return [list, yield* builtin_cmp_g_impl(msg)];
-      },
-      list: value_list_impl,
-    });
-    expect(bound.next().value[1]).toEqual(1);
-  });
-});
-
-function* sort_list_helper(start, end): Generator<any, any, any> {
-  if (start === end) {
-    return null;
-  }
-  const min = yield* argmin_between_g(start, end);
-  yield { kind: "request", fn: "list", args: [{ kind: "request", fn: "swap", args: [min, start] }] };
-  return yield* sort_list_helper(start + 1, end);
+function loop(...body: Machine[]): Machine {
+  return loop_impl(seq(...body));
 }
 
-function* sort_list(): Generator<any, null, any> {
-  const len = yield { kind: "request", fn: "list", args: [{ kind: "request", fn: "len", args: [] }] };
-  return yield* sort_list_helper(0, len - 1);
-}
-
-function* list_impl<T>(list: T[], msg: any): Generator<any, [T[], any], any> {
-  assert(msg.kind === "request");
-  if (msg.fn === "len") {
-    return [list, list.length];
-  } else if (msg.fn === "swap") {
-    const [index1, index2] = msg.args;
-    const tmp = list[index1];
-    list[index1] = list[index2];
-    list[index2] = tmp;
-    return [list, null];
-  } else if (msg.fn === "new_iter") {
-    return [list, { index: -1, len: list.length }];
-  } else if (msg.fn === "iter_next") {
-    const [iter] = msg.args;
-    return [list, yield* list_iter_next(iter)];
-  } else if (msg.fn === "iter_item") {
-    const [iter, inner_msg] = msg.args;
-    const item = list[iter.index];
-    const [new_item, result] = yield { kind: "request", fn: "item", args: [item, inner_msg] };
-    list[iter.index] = new_item;
-    return [list, [iter, result]];
-  } else if (msg.fn === "item") {
-    const [index, inner_msg] = msg.args;
-    const item = list[index];
-    const [new_item, result] = yield { kind: "request", fn: "item", args: [item, inner_msg] };
-    list[index] = new_item;
-    return [list, result];
-  } else {
-    throw Error("Bad request: " + JSON.stringify(msg));
-  }
-}
-
-function* value_list_impl<T>(list: T[], msg: any): Generator<any, [T[], any], any> {
-  assert(msg.kind === "request");
-  if (msg.fn === "len") {
-    return [list, list.length];
-  } else if (msg.fn === "swap") {
-    const [index1, index2] = msg.args;
-    const tmp = list[index1];
-    list[index1] = list[index2];
-    list[index2] = tmp;
-    return [list, null];
-  } else if (msg.fn === "new_iter") {
-    return [list, { index: -1, len: list.length }];
-  } else if (msg.fn === "iter_next") {
-    const [iter] = msg.args;
-    return [list, yield* list_iter_next(iter)];
-  } else if (msg.fn === "iter_item") {
-    const [iter, inner_msg] = msg.args;
-    assert(inner_msg.kind === "request");
-    if (inner_msg.fn === "get") {
-      return [list, [iter, list[iter.index]]];
-    } else if (inner_msg.fn === "set") {
-      list[iter.index] = inner_msg.args[0];
-      return [list, [iter, null]];
-    } else {
-      throw Error("Bad request: " + JSON.stringify(inner_msg));
+function fn_impl(body: Machine): Machine {
+  return (state: any, ctx: Context): [any, any, Context] => {
+    if (state.kind === 'start') {
+      state = {kind: 'inner', inner: {kind: 'start'}};
     }
-  } else if (msg.fn === "item") {
-    const [index, inner_msg] = msg.args;
-    assert(inner_msg.kind === "request");
-    if (inner_msg.fn === "get") {
-      return [list, list[index]];
-    } else if (inner_msg.fn === "set") {
-      list[index] = inner_msg.args[0];
-      return [list, null];
-    } else {
-      throw Error("Bad request: " + JSON.stringify(inner_msg));
-    }
-  } else {
-    throw Error("Bad request: " + JSON.stringify(msg));
-  }
-}
-
-function* string_impl(str: string, msg: any): Generator<any, [string, any], any> {
-  assert(msg.kind === "request");
-  if (msg.fn === "len") {
-    return [str, str.length];
-  } else if (msg.fn === "new_iter") {
-    return [str, { index: -1, len: str.length }];
-  } else if (msg.fn === "iter_next") {
-    const [iter] = msg.args;
-    const index = iter.index + 1;
-    if (index === iter.len) {
-      return [str, [{ index: index, len: iter.len }, false]];
-    } else {
-      return [str, [{ index: index, len: iter.len }, true]];
-    }
-  } else if (msg.fn === "iter_item") {
-    const [iter, inner_msg] = msg.args;
-    assert(inner_msg.kind === "request");
-    if (inner_msg.fn === "get") {
-      return [str, [iter, str[iter.index]]];
-    } else {
-      throw Error("Bad request: " + JSON.stringify(msg));
-    }
-  } else {
-    throw Error("Bad request: " + JSON.stringify(msg));
-  }
-}
-
-function* string_cmp() {
-  const iter_a = yield { kind: "request", fn: "send_a", args: [{ kind: "request", fn: "new_iter", args: [] }] };
-  const iter_b = yield { kind: "request", fn: "send_b", args: [{ kind: "request", fn: "new_iter", args: [] }] };
-  const [spent_iters, result] = yield* stateful_bind(iterator_cmp(), { iter_a, iter_b }, {
-
-  });
-}
-
-function* name_impl({ first, last }, msg) {
-  if (msg.kind === "send_first") {
-    const [new_first, result] = yield* string_impl(first, msg);
-    return [{ first: new_first, last }, result];
-  } else if (msg.kind === "send_last") {
-    const [new_last, result] = yield* string_impl(last, msg);
-    return [{ first, last: new_last }, result];
-  } else {
-    throw Error("Bad message: " + JSON.stringify(msg));
-  }
-}
-
-// function* name_cmp() {
-//   const first_cmp = yield { kind: "request", fn: "send_a", args: [{ kind: "send_" }] };
-// }
-
-function* builtin_cmp(a_val, b_val): any {
-  if (a_val < b_val) {
-    return [a_val, b_val, '<'];
-  } else if (a_val > b_val) {
-    return [a_val, b_val, '>'];
-  } else {
-    return [a_val, b_val, '='];
-  }
-}
-
-function* builtin_cmp_g() {
-  let a_val = yield { kind: "request", fn: "send_a", args: [{ kind: "request", fn: "get", args: [] }] };
-  let b_val = yield { kind: "request", fn: "send_b", args: [{ kind: "request", fn: "get", args: [] }] };
-  const [new_a_val, new_b_val, result] = yield* builtin_cmp(a_val, b_val);
-  yield { kind: "request", fn: "send_a", args: [{ kind: "request", fn: "set", args: [new_a_val] }] };
-  yield { kind: "request", fn: "send_b", args: [{ kind: "request", fn: "set", args: [new_b_val] }] };
-  return result;
-}
-
-type BuiltinCmpGState = { gen: Generator<any, any, any> };
-type BuiltinCmpGAction = { kind: "request", fn: "start" } | { kind: "request", fn: "next", args: [BuiltinCmpGState, any] };
-
-function* builtin_cmp_g_impl(msg: BuiltinCmpGAction): Generator<any, any, any> {
-  assert(msg.kind === "request");
-  if (msg.fn === "start") {
-    return { gen: builtin_cmp_g() };
-  } else if (msg.fn === "next") {
-    const [state, inner_msg] = msg.args;
-    const result = state.gen.next(inner_msg);
-    return [state, result];
-  } else {
-    throw Error("Bad message: " + JSON.stringify(msg));
-  }
-}
-
-
-function* bind(gen: Generator<any, any, any>, fns: { [key: string]: (...args: any[]) => Generator<any, any, any> }): Generator<any, any, any> {
-  let arg;
-  while (true) {
-    const action = gen.next(arg);
-    if (action.done) {
-      return action.value;
-    }
-    if (action.value.kind === "request") {
-      const fn = fns[action.value.fn];
-      if (fn === undefined) {
-        throw Error("Bad function: " + action.value.fn);
+    if (state.kind === 'inner') {
+      const [new_state, action, new_ctx] = body(state.inner, ctx);
+      if (action === 'return') {
+        return [{kind: 'end'}, 'return', new_ctx];
+      } else if (action === 'yield') {
+        return [{kind: 'inner', inner: new_state}, 'yield', new_ctx];
+      } else {
+        return [{kind: 'inner', inner: new_state}, action, new_ctx];
       }
-      arg = yield* fn(...action.value.args);
-    } else {
-      throw Error("Bad action: " + action.value.kind);
     }
+    assert(false, "Bad state: " + JSON.stringify(state));
   }
 }
 
-function* yield_and_bind(fn_name, args, handlers) {
-  let cmp_op = yield { kind: "request", fn: fn_name, args: [{ kind: "request", fn: "start", args }] };
+function fn(...body: Machine[]): Machine {
+  return fn_impl(seq(...body));
+}
 
-  let arg;
-  while (true) {
-    const [new_cmp_op, op_result] = yield {
-      kind: "request", fn: fn_name, args: [{
-        kind: "request", fn: "next", args: [cmp_op, arg]
-      }]
+function ret(): Machine {
+  return (state: any, ctx: Context): [any, any, Context] => {
+    return [{kind: 'end'}, 'return', ctx];
+  }
+}
+
+function cont(): Machine {
+  return (state: any, ctx: Context): [any, any, Context] => {
+    return [{kind: 'end'}, 'continue', ctx];
+  }
+}
+
+function add(): Machine {
+  return (state: any, ctx: Context): [any, any, Context] => {
+    const a = ctx.unnamed[0];
+    const b = ctx.unnamed[1];
+    return [{kind: 'end'}, 'result', {named: { ...ctx.named }, unnamed: [a + b, ...ctx.unnamed.slice(2)]}];
+  }
+}
+
+describe('loop function', () => {
+  test('loops over sequence', () => {
+    const doubler = fn(
+      t(name_binding('x')),
+      loop(
+        t(copy('x')),
+        t(mv('x')),
+        add(),
+        yld(),
+        t(name_binding('x')),
+        cont(),
+      ),
+    );
+
+    const ctx: Context = {
+      named: {},
+      unnamed: [4]
     };
-    cmp_op = new_cmp_op;
-    if (op_result.done) {
-      return op_result.value;
-    }
-    assert(op_result.value.kind === "request");
+    let [state, action, result] = doubler({kind: 'start'}, ctx);
 
-    const fn = handlers[op_result.value.fn];
-    if (fn === undefined) {
-      throw Error("Bad request: " + op_result.value);
-    }
-    arg = yield* fn(...op_result.value.args);
-  }
-}
+    expect(action).toEqual('yield');
+    expect(result.named).toEqual({});
+    expect(result.unnamed).toEqual([8]);
 
-
-function* yield_and_stateful_bind<S>(fn_name: string, args: any[], state: S, handlers: { [key: string]: (state: S, ...args: any[]) => Generator<any, [S, any], any> }): Generator<any, [S, any], any> {
-  let cmp_op = yield { kind: "request", fn: fn_name, args: [{ kind: "request", fn: "start", args }] };
-
-  let arg;
-  while (true) {
-    const [new_cmp_op, op_result] = yield {
-      kind: "request", fn: fn_name, args: [{
-        kind: "request", fn: "next", args: [cmp_op, arg]
-      }]
-    };
-    cmp_op = new_cmp_op;
-    if (op_result.done) {
-      return [state, op_result.value];
-    }
-    assert(op_result.value.kind === "request");
-
-    const fn = handlers[op_result.value.fn];
-    if (fn === undefined) {
-      throw Error("Bad request: " + op_result.value);
-    }
-    [state, arg] = yield* fn(state, ...op_result.value.args);
-  }
-}
-
-function* stateful_bind<S>(gen: Generator<any, any, any>, state: S, fns: { [key: string]: (state: S, ...args: any[]) => Generator<any, [S, any], any> }): Generator<any, [S, any], any> {
-  let arg;
-  while (true) {
-    const action = gen.next(arg);
-    if (action.done) {
-      return [state, action.value];
-    }
-    if (action.value.kind === "request") {
-      const fn = fns[action.value.fn];
-      if (fn === undefined) {
-        throw Error("Bad function: " + action.value.fn);
-      }
-      [state, arg] = yield* fn(state, ...action.value.args);
-    } else {
-      throw Error("Bad action: " + action.value.kind);
-    }
-  }
-}
-
-describe("sort_list", () => {
-  test("should work with bound", () => {
-    function* bound_sort(arr) {
-      return yield* stateful_bind(sort_list(), arr, {
-        list: value_list_impl,
-        *cmp(arr, msg) {
-          return [arr, yield* builtin_cmp_g_impl(msg)];
-        },
-      });
-    }
-    const sort_list_op = bound_sort([3, 1, 2]);
-    expect(sort_list_op.next().value).toEqual([[1, 2, 3], null]);
-  });
-});
-
-type ord = '<' | '>' | '=';
-
-function* iterator_cmp() {
-  const a_has_next = yield { kind: "request", fn: "send_a", args: [{ kind: "request", fn: "next", args: [] }] };
-  const b_has_next = yield { kind: "request", fn: "send_b", args: [{ kind: "request", fn: "next", args: [] }] };
-  if (a_has_next && b_has_next) {
-    const cmp_op = yield { kind: "request", fn: "item_cmp", args: [] };
-    const result = yield* bind(cmp_op, {
-      *send_a(msg) {
-        return yield { kind: "request", fn: "send_a", args: [{ kind: "request", fn: "item", args: [msg] }] };
-      },
-      *send_b(msg) {
-        return yield { kind: "request", fn: "send_b", args: [{ kind: "request", fn: "item", args: [msg] }] };
-      },
+    [state, action, result] = doubler(state, {
+      named: {},
+      unnamed: [8]
     });
-    if (result === '=') {
-      return yield* iterator_cmp();
-    } else {
-      return result;
-    }
-  } else if (a_has_next) {
-    return '>';
-  } else if (b_has_next) {
-    return '<';
-  } else {
-    return '=';
-  }
-}
 
-function* iterable_cmp() {
-  type IterPair = { a_iter: any, b_iter: any };
-
-  const a_iter = yield { kind: "request", fn: "send_a", args: [{ kind: "request", fn: "new_iter", args: [] }] };
-  const b_iter = yield { kind: "request", fn: "send_b", args: [{ kind: "request", fn: "new_iter", args: [] }] };
-  const [spent_iters, result] = yield* stateful_bind<IterPair>(iterator_cmp(), { a_iter, b_iter }, {
-    *send_a({ a_iter, b_iter }, msg): Generator<any, [IterPair, any], any> {
-      assert(msg.kind === "request");
-      if (msg.fn === "next") {
-        const [new_a_iter, has_next] = yield { kind: "request", fn: "send_a", args: [{ kind: "request", fn: "iter_next", args: [a_iter] }] };
-        return [{ a_iter: new_a_iter, b_iter: b_iter }, has_next];
-      } else if (msg.fn === "item") {
-        const [new_a_iter, resp] = yield { kind: "request", fn: "send_a", args: [{ kind: "request", fn: "iter_item", args: [a_iter, msg.args[0]] }] };
-        return [{ a_iter: new_a_iter, b_iter: b_iter }, resp];
-      } else {
-        throw Error("Bad request: " + JSON.stringify(msg));
-      }
-    },
-    *send_b({ a_iter, b_iter }, msg) {
-      assert(msg.kind === "request");
-      if (msg.fn === "next") {
-        const [new_b_iter, has_next] = yield { kind: "request", fn: "send_b", args: [{ kind: "request", fn: "iter_next", args: [b_iter] }] };
-        return [{ a_iter: a_iter, b_iter: new_b_iter }, has_next];
-      } else if (msg.fn === "item") {
-        const [new_b_iter, resp] = yield { kind: "request", fn: "send_b", args: [{ kind: "request", fn: "iter_item", args: [b_iter, msg.args[0]] }] };
-        return [{ a_iter: a_iter, b_iter: new_b_iter }, resp];
-      } else {
-        throw Error("Bad request: " + JSON.stringify(msg));
-      }
-    },
-    *item_cmp(state) {
-      return [state, yield { kind: "request", fn: "item_cmp", args: [] }];
-    },
-  });
-  return result;
-}
-
-function* list_iter_next(iter) {
-  const index = iter.index + 1;
-  if (index === iter.len) {
-    return [{ index: index, len: iter.len }, false];
-  } else {
-    return [{ index: index, len: iter.len }, true];
-  }
-}
-
-function* semi_bound_list_iterable_sort(list) {
-  function* bound_iterable_cmp(): Generator<any, any, any> {
-    return yield* bind(iterable_cmp(), {
-      *send_a(msg) {
-        return yield { kind: "request", fn: "send_a", args: [msg] };
-      },
-      *send_b(msg) {
-        return yield { kind: "request", fn: "send_b", args: [msg] };
-      },
-      *item_cmp() {
-        return builtin_cmp_g();
-      },
-    })
-  }
-
-  return yield* stateful_bind(sort_list(), list, {
-    *list(list, msg) {
-      return yield* bind(list_impl(list, msg), {
-        item: value_list_impl,
-      });
-    },
-    *cmp(list, msg) {
-      assert(msg.kind === "request");
-      if (msg.fn === "start") {
-        return [list, { gen: bound_iterable_cmp() }];
-      } else if (msg.fn === "next") {
-        const [state, inner_msg] = msg.args;
-        const result = state.gen.next(inner_msg);
-        return [list, [state, result]];
-      } else {
-        throw Error("Bad message: " + JSON.stringify(msg));
-      }
-    },
-  });
-}
-
-describe("sort list of lists of numbers", () => {
-  test("compare lists", () => {
-    const a = [1, 2];
-    const b = [3, 1, 2];
-    const op = stateful_bind(iterable_cmp(), { a, b }, {
-      *send_a({ a, b }, msg) {
-        const [new_a, resp] = yield* value_list_impl(a, msg);
-        return [{ a: new_a, b }, resp];
-      },
-      *send_b({ a, b }, msg) {
-        const [new_b, resp] = yield* value_list_impl(b, msg);
-        return [{ a, b: new_b }, resp];
-      },
-      *item_cmp({ a, b }) {
-        return [{ a, b }, builtin_cmp_g()];
-      },
-    }).next();
-    expect(op.value[1]).toEqual('<');
-  });
-
-  test("should work", () => {
-    const list = [
-      [3, 1, 2],
-      [1, 2, 3],
-      [3, 1],
-      [1, 2],
-    ];
-    const op = semi_bound_list_iterable_sort(list).next();
-    expect(op.value[0]).toEqual([[1, 2], [1, 2, 3], [3, 1], [3, 1, 2]]);
-    expect(op.value[1]).toBeNull();
+    expect(action).toEqual('yield');
+    expect(result.named).toEqual({});
+    expect(result.unnamed).toEqual([16]);
   });
 });
-
-// type Action = { kind: string };
-// type InputAction = { kind: "input", msg: any };
-// type ResultAction<O> = { kind: "result", msg: O };
-// type Machine<I extends Action, O extends Action> = (i: Action) => Action;
-
-// function isInputAction(i: Action): i is InputAction {
-//   return i.kind === "input";
-// }
-
-// function t<I, O>(f: (i: I) => O): Machine<InputAction, ResultAction<O>> {
-//   return (i: Action) => {
-//     if (!isInputAction(i)) {
-//       throw Error("Bad action: " + i.kind);
-//     }
-//     return { kind: "result", msg: f(i.msg) };
-//   }
-// }
-
-// function pair(self, action) {
-//   const [a, b] = self;
-//   if (action.kind === "send") {
-//     if (action.target === "a") {
-//       return [self, action.msg];
-//     }
-//     return [self, action.msg];
-//   }
-//   throw Error("Bad action: " + action.kind);
-// }
-
-// // function handleContinue<S>(machine: Function<S>, state: S, input: any): [S, string, any] {
-// //   console.log("sending", machine.trace(state), JSON.stringify(input));
-// //   let result = machine.run(state, input);
-// //   while (result.action === 'continue') {
-// //     state = result.resume_state;
-// //     input = result.msg;
-// //     console.log("handleContinue", machine.trace(state), JSON.stringify(input));
-
-// //     result = machine.run(state, input);
-// //   }
-// //   console.log("recvd", JSON.stringify(result.msg));
-// //   return [result.resume_state, result.action, result.msg];
-// // }
-
-// class FuncTranscript<S> {
-//   machine: Function<S>;
-//   state: S;
-//   constructor(machine: Function<S>) {
-//     this.machine = machine;
-//     this.state = machine.init();
-//   }
-
-//   assertNext(input_action: string, input_msg: any, expected_action: string, expected_output: any) {
-//     const [new_state, result] = this.machine.run(this.state, { action: input_action, msg: input_msg });
-//     expect([result.action, result.msg]).toEqual([expected_action, expected_output]);
-//     this.state = new_state;
-//   }
-// }
-
-// // // function assertTransforms(machine: Machine<FuncState<unknown>>, input: any): any {
-// // //   let result = machine(START_STATE, input);
-// // //   while (result.action === 'continue') {
-// // //     result = machine(result.resume_state, result.msg);
-// // //   }
-// // //   expect(result.action).toEqual('result');
-// // //   return result.msg;
-// // // }
-
-// describe('Transformer', () => {
-//   const machine = func("example", t((x: number) => x + 1));
-//   test('should do the thing', () => {
-//     const transcript = new FuncTranscript(machine);
-//     transcript.assertNext('input', 2, 'result', 3);
-//   });
-// });
-
-// const str_iter_init = func("str_iter_init", t((s: string) => [s, -1]));
-
-// type StrIterState = [string, number];
-
-// const str_iter2 = func(
-//   "str_iter2",
-//   t(([[str, offset], msg]: [StrIterState, ['next' | 'clone']]): [StrIterState, boolean | string] => {
-//     if (msg[0] === 'next') {
-//       offset += 1;
-//       return [[str, offset], offset < str.length];
-//     }
-//     if (msg[0] === 'clone') {
-//       return [[str, offset], str[offset]];
-//     }
-//     throw Error('Bad msg: ' + msg[0]);
-//   }));
-
-// describe('StrIter', () => {
-//   test('should work with empty string', () => {
-//     const transcript = new FuncTranscript(closure(str_iter_init, str_iter2));
-//     transcript.assertNext('input', '', 'result', null);
-//     transcript.assertNext('input', ['next'], 'result', false);
-//   });
-
-//   test('should work with non-empty string', () => {
-//     const transcript = new FuncTranscript(closure(str_iter_init, str_iter2));
-//     transcript.assertNext('input', 'foo', 'result', null);
-
-//     transcript.assertNext('input', ['next'], 'result', true);
-//     transcript.assertNext('input', ['clone'], 'result', 'f');
-//     transcript.assertNext('input', ['next'], 'result', true);
-//     transcript.assertNext('input', ['clone'], 'result', 'o');
-//     transcript.assertNext('input', ['next'], 'result', true);
-//     transcript.assertNext('input', ['clone'], 'result', 'o');
-//     transcript.assertNext('input', ['next'], 'result', false);
-//   });
-// });
-
-// type StringIterEqualsState = {
-//   kind: "start"
-// } | {
-//   kind: "await_next",
-//   str: string
-// } | {
-//   kind: "await_clone",
-//   str: string
-// } | {
-//   kind: "end"
-// };
-
-// // const string_iter_equals: Function<StringIterEqualsState> = {
-// //   name: "string_iter_equals",
-// //   init() { return { kind: "start" }; },
-// //   trace(state: StringIterEqualsState): string {
-// //     return "string_iter_equals(" + state.kind + ")";
-// //   },
-// //   run(state: StringIterEqualsState, msg: Action<"input" | "resume", any>): [StringIterEqualsState, Action<"iter" | "result", any>] {
-// //     if (state.kind === "start") {
-// //       const s = msg.msg;
-// //       return [{ kind: "await_next", str: s }, {
-// //         action: "iter",
-// //         msg: ["next"],
-// //       }];
-// //     }
-// //     if (state.kind === "await_next") {
-// //       const s = state.str;
-// //       const [await_action, await_msg] = msg;
-// //       if (await_action !== "result") {
-// //         throw Error("Bad action: " + await_action);
-// //       }
-// //       const iter_has_next = await_msg;
-// //       const str_has_next = s.length > 0;
-// //       if (iter_has_next && str_has_next) {
-// //         return {
-// //           action: "iter",
-// //           msg: ["clone"],
-// //           resume_state: { kind: "await_clone", str: s },
-// //         };
-// //       }
-// //       if (!iter_has_next && !str_has_next) {
-// //         return {
-// //           action: "result",
-// //           msg: true,
-// //           resume_state: { kind: "end" },
-// //         };
-// //       }
-// //       // Otherwise: !iter_has_next || !str_has_next
-// //       return {
-// //         action: "result",
-// //         msg: false,
-// //         resume_state: { kind: "end" },
-// //       };
-// //     }
-// //     if (state.kind === "await_clone") {
-// //       const s = state.str;
-// //       const [await_action, await_msg] = msg;
-// //       if (await_action !== "result") {
-// //         throw Error("Bad action: " + await_action);
-// //       }
-// //       const iter_char = await_msg;
-// //       const str_char = s[0];
-// //       if (iter_char === str_char) {
-// //         return {
-// //           action: "continue",
-// //           msg: s.slice(1),
-// //           resume_state: { kind: "start" },
-// //         };
-// //       } else {
-// //         return {
-// //           action: "result",
-// //           msg: false,
-// //           resume_state: { kind: "end" },
-// //         };
-// //       }
-// //     }
-// //     throw Error('Bad state: ' + state.kind);
-// //   }
-// // };
-
-// // const string_iter_equals = func("string_iter_equals", sequence(
-// //   t((s: string) => [s, {action: 'iter', msg: {action: 'next', msg: null}}]),
-// //   call(str_iter_init, nullhandler),
-// //   t(([s, str_iter]) => [str_iter, s]),
-// //   call(string_iter_equals, string_iter_equals_handler2),
-// //   t(([str_iter, result]) => result),
-// // ));
-
-// // describe('StringIterEquals', () => {
-// //   test('should work with empty string', () => {
-// //     const transcript = new FuncTranscript(string_iter_equals);
-// //     transcript.assertNext('', 'iter', ['next']);
-// //     transcript.assertNext(["result", false], 'result', true);
-// //   });
-
-// //   test('should work with non-empty string', () => {
-// //     const transcript = new FuncTranscript(string_iter_equals);
-// //     transcript.assertNext('foo', 'iter', ['next']);
-// //     transcript.assertNext(["result", true], 'iter', ['clone']);
-// //     transcript.assertNext(["result", 'f'], 'iter', ['next']);
-// //     transcript.assertNext(["result", true], 'iter', ['clone']);
-// //     transcript.assertNext(["result", 'o'], 'iter', ['next']);
-// //     transcript.assertNext(["result", true], 'iter', ['clone']);
-// //     transcript.assertNext(["result", 'o'], 'iter', ['next']);
-// //     transcript.assertNext(["result", false], 'result', true);
-// //   });
-
-// //   test('should work with iter shorter than string', () => {
-// //     const transcript = new FuncTranscript(string_iter_equals);
-// //     transcript.assertNext('foo', 'iter', ['next']);
-// //     transcript.assertNext(["result", true], 'iter', ['clone']);
-// //     transcript.assertNext(["result", 'f'], 'iter', ['next']);
-// //     transcript.assertNext(["result", true], 'iter', ['clone']);
-// //     transcript.assertNext(["result", 'o'], 'iter', ['next']);
-// //     transcript.assertNext(["result", false], 'result', false);
-// //   });
-
-// //   test('should work with string shorter than iter', () => {
-// //     const transcript = new FuncTranscript(string_iter_equals);
-// //     transcript.assertNext('foo', 'iter', ['next']);
-// //     transcript.assertNext(["result", true], 'iter', ['clone']);
-// //     transcript.assertNext(["result", 'f'], 'iter', ['next']);
-// //     transcript.assertNext(["result", true], 'iter', ['clone']);
-// //     transcript.assertNext(["result", 'o'], 'iter', ['next']);
-// //     transcript.assertNext(["result", true], 'iter', ['clone']);
-// //     transcript.assertNext(["result", 'o'], 'iter', ['next']);
-// //     transcript.assertNext(["result", true], 'result', false);
-// //   });
-
-// //   test('should work with char mismatch', () => {
-// //     const transcript = new FuncTranscript(string_iter_equals);
-// //     transcript.assertNext('foo', 'iter', ['next']);
-// //     transcript.assertNext(["result", true], 'iter', ['clone']);
-// //     transcript.assertNext(["result", 'f'], 'iter', ['next']);
-// //     transcript.assertNext(["result", true], 'iter', ['clone']);
-// //     transcript.assertNext(["result", 'r'], 'result', false);
-// //   });
-// // });
-
-// // const string_iter_equals_handler2 = simpleHandler(sequence(
-// //   t(([str_iter, [action, msg]]) => [[str_iter, msg], action]),
-// //   match({
-// //     iter: sequence(
-// //       t(([str_iter, msg]) => [null, [str_iter, msg]]),
-// //       call(str_iter2, defaultHandler),
-// //       t(([_, [str_iter, msg]]) => [str_iter, msg])
-// //     ),
-// //     continue: sequence(
-// //       t(([str_iter, msg]) => [str_iter, ["continue", msg]]),
-// //       smuggle(raise),
-// //       t(([str_iter, msg]) => [str_iter, msg]),
-// //     )
-// //   }),
-// // ));
-
-// // const string_iter_equals_inverse = func("string_iter_equals_inverse", sequence(
-// //   t((s: string) => [s, s]),
-// //   call(str_iter_init, defaultHandler),
-// //   t(([s, str_iter]) => [str_iter, s]),
-// //   call(string_iter_equals, string_iter_equals_handler2),
-// //   t(([str_iter, result]) => result),
-// // ));
-
-// // describe('StringIterEqualsInverse', () => {
-// //   test('should work with empty string', () => {
-// //     const transcript = new FuncTranscript(string_iter_equals_inverse);
-// //     transcript.assertNext('', 'result', true);
-// //   });
-// //   test('should work with non-empty string', () => {
-// //     const transcript = new FuncTranscript(string_iter_equals_inverse);
-// //     transcript.assertNext('foo', 'result', true);
-// //   });
-// // });
-
-// // const char_iter_from_str_iter = func("char_iter_from_str_iter", sequence(
-// //   // msg
-// //   t((msg: any) => {
-// //     if (msg[0] !== "next") {
-// //       throw Error("Bad msg: " + msg);
-// //     }
-// //     return ["iter", ["next"]];
-// //   }),
-// //   raise,
-// //   t((has_next: any) => [null, has_next]),
-// //   if_then_else(
-// //     sequence(
-// //       t((_: any) => ["iter", ["clone"]]),
-// //       raise,
-// //       t((char: any) => ["some", char]),
-// //     ),
-// //     t((_: any) => ["none"]),
-// //   )
-// // ));
-
-
-// // describe('CharIterFromStrIter', () => {
-// //   test('unbound with empty string', () => {
-// //     const transcript = new FuncTranscript(char_iter_from_str_iter);
-// //     transcript.assertNext(['next'], 'iter', ['next']);
-// //     transcript.assertNext(["result", false], 'result', ['none']);
-// //   });
-// //   test('unbound with non-empty string', () => {
-// //     const transcript = new FuncTranscript(char_iter_from_str_iter);
-// //     transcript.assertNext(['next'], 'iter', ['next']);
-// //     transcript.assertNext(["result", true], 'iter', ['clone']);
-// //     transcript.assertNext(["result", "f"], 'result', ['some', 'f']);
-// //   });
-// // });
-
-// // const char_iter_from_string_init = func("char_iter_from_string_init", callNoRaise(str_iter_init));
-
-// // const char_iter_from_string = func("char_iter_from_string",
-// //   call(char_iter_from_str_iter, simpleHandler(sequence(t(([iter, [action, msg]]) => [[iter, msg], action]),
-// //     match({
-// //       iter: callNoRaise(str_iter2),
-// //     }))),
-// //   ));
-
-// // // // const char_iter_from_string_closure = func(sequence(
-// // // //   t((msg: any) => [msg, ["input", ["clone"]]]),
-// // // //   smuggle(raise),
-// // // //   call(char_iter_from_string_init, nullhandler),
-// // // //   t(([msg, iter_state]: [any, CharIterFromStringState]) => [iter_state, msg]),
-// // // //   loop( // [iter_state, msg]
-// // // //     sequence(
-// // // //       t(([iter_state, msg]: [CharIterFromStringState, any]) => [null, [iter_state, msg]]),
-// // // //       call(char_iter_from_string, nullhandler),
-// // // //       t(([_, [iter_state, msg]]: [any, [CharIterFromStringState, any]]) => [iter_state, msg]),
-// // // //       smuggle(ret),
-// // // //       t(([iter_state, msg]: [CharIterFromStringState, any]) => ["continue", [iter_state, msg]]),
-// // // //     )
-// // // //   )
-// // // // ));
-
-// // // const char_iter_from_string_closure = curryState(char_iter_from_string_init, char_iter_from_string);
-
-// // // //   func(sequence(
-// // // //   t((msg: any) => [msg, ["input", ["clone"]]]),
-// // // //   smuggle(raise),
-// // // //   call(char_iter_from_string_init, nullhandler),
-// // // //   t(([msg, iter_state]: [any, CharIterFromStringState]) => [iter_state, msg]),
-// // // //   loop( // [iter_state, msg]
-// // // //     sequence(
-// // // //       t(([iter_state, msg]: [CharIterFromStringState, any]) => [null, [iter_state, msg]]),
-// // // //       call(char_iter_from_string, nullhandler),
-// // // //       t(([_, [iter_state, msg]]: [any, [CharIterFromStringState, any]]) => [iter_state, msg]),
-// // // //       smuggle(ret),
-// // // //       t(([iter_state, msg]: [CharIterFromStringState, any]) => ["continue", [iter_state, msg]]),
-// // // //     )
-// // // //   )
-// // // // ));
-
-// // describe('CharIterFromString', () => {
-// //   test('empty string', () => {
-// //     const transcript = new FuncTranscript(closure(char_iter_from_string_init, char_iter_from_string));
-// //     transcript.assertNext('', 'result', null);
-// //     transcript.assertNext(['next'], 'result', ['none']);
-// //   });
-// //   test('non-empty string', () => {
-// //     const transcript = new FuncTranscript(closure(char_iter_from_string_init, char_iter_from_string));
-// //     transcript.assertNext('foo', 'result', null);
-// //     transcript.assertNext(['next'], 'result', ['some', 'f']);
-// //     transcript.assertNext(['next'], 'result', ['some', 'o']);
-// //     transcript.assertNext(['next'], 'result', ['some', 'o']);
-// //     transcript.assertNext(['next'], 'result', ['none']);
-// //   });
-// // });
-
-// // // type SSVIterState = ["start"] | ["in_field"] | ["almost_finished"] | ["end"];
-
-// // // const space_separated_value = func(withInit(["start"], closure(sequence(
-// // //   t(([state, msg]: [SSVIterState, any]) =>
-// // //     [[state, msg], state[0]]
-// // //   ),
-// // //   match({
-// // //     start:
-// // //       t(([state, msg]: [SSVIterState, any]) => {
-// // //         if (msg[0] !== "next") {
-// // //           throw Error("Bad msg: " + msg);
-// // //         }
-// // //         return [["in_field", ["none"]], true];
-// // //       }),
-// // //     in_field: sequence(
-// // //       t(([state, msg]: [SSVIterState, any]) => {
-// // //         if (msg[0] !== "inner_next") {
-// // //           throw Error("Bad msg: " + msg);
-// // //         }
-// // //         return ["iter", ["next"]];
-// // //       }),
-// // //       raise,
-// // //       t((next_char: ["some", string] | ["none"]) => [next_char, next_char[0] === "some"]),
-// // //       if_then_else_null(
-// // //         sequence(
-// // //           t(([_, char]: ["some", string]) => [char, char === " "]),
-// // //           if_then_else_null(
-// // //             t((_: any) => [["start"], ["none"]]),
-// // //             t((char: string) => [["in_field"], ["some", char]]),
-// // //           ),
-// // //         ),
-// // //         t(([_]: ["none"]) => [["almost_finished"], ["none"]]),
-// // //       ),
-// // //     ),
-// // //     almost_finished:
-// // //       t(([state, msg]: [SSVIterState, any]) => {
-// // //         if (msg[0] !== "next") {
-// // //           throw Error("Bad msg: " + msg);
-// // //         }
-// // //         return [["end"], false];
-// // //       }),
-// // //   }),
-// // // ))));
-
-// // // const space_separated_value_for_string_init = func(sequence(
-// // //   t((s: string) => [null, s]),
-// // //   call(char_iter_from_string_init, nullhandler),
-// // //   t(([_, iter_state]: [null, CharIterFromStringState]) => [iter_state, null]),
-// // // ));
-
-
-// // // const space_separated_value_for_string = func(
-// // //   sequence(
-// // //     t((msg: any) => [msg, ["input", ["clone"]]]),
-// // //     call(char_iter_from_string_init, nullhandler),
-// // //     t(([msg, iter_state]: [any, CharIterFromStringState]) => [iter_state, msg]),
-// // //     smuggle(ret),
-// // //     t(([iter_state, msg]: [CharIterFromStringState, any]) => ["continue", [iter_state, msg]]),
-// // //   )
-// // // );
-
-// // // const space_separated_value_for_string_closure = curryState(space_separated_value_for_string_init, space_separated_value_for_string);
-
-// // // // handle("iter", char_iter_from_string, space_separated_value);
-
-// // // describe('SpaceSeparatedValue', () => {
-// // //   // const closed = closure(space_separated_value_for_string);
-// // //   test('empty string', () => {
-// // //     // const init = assertTransforms(space_separated_value_for_string_init, "");
-
-// // //     const transcript = new FuncTranscript(space_separated_value_for_string_closure);
-// // //     transcript.assertNext(['next'], 'input', ['clone']);
-// // //     transcript.assertNext('', 'result', true);
-
-// // //     transcript.assertNext(['inner_next'], 'result', ['none']);
-// // //     transcript.assertNext(['next'], 'result', false);
-// // //   });
-// // //   // test('one field', () => {
-// // //   //   const init = assertTransforms(space_separated_value_for_string_init, "foo");
-
-// // //   //   const transcript = new Transcript(space_separated_value_for_string, init);
-// // //   //   transcript.assertNext(['next'], 'result', true);
-// // //   //   transcript.assertNext(['inner_next'], 'result', ['some', 'f']);
-// // //   //   transcript.assertNext(['inner_next'], 'result', ['some', 'o']);
-// // //   //   transcript.assertNext(['inner_next'], 'result', ['some', 'o']);
-// // //   //   transcript.assertNext(['inner_next'], 'result', ['none']);
-// // //   //   transcript.assertNext(['next'], 'result', false);
-// // //   // });
-
-// // //   // test('double field', () => {
-// // //   //   const init = assertTransforms(space_separated_value_for_string_init, "foo b");
-// // //   //   const transcript = new Transcript(space_separated_value_for_string, init);
-// // //   //   transcript.assertNext(['next'], 'result', true);
-// // //   //   transcript.assertNext(['inner_next'], 'result', ['some', 'f']);
-// // //   //   transcript.assertNext(['inner_next'], 'result', ['some', 'o']);
-// // //   //   transcript.assertNext(['inner_next'], 'result', ['some', 'o']);
-// // //   //   transcript.assertNext(['inner_next'], 'result', ['none']);
-// // //   //   transcript.assertNext(['next'], 'result', true);
-// // //   //   transcript.assertNext(['inner_next'], 'result', ['some', 'b']);
-// // //   //   transcript.assertNext(['inner_next'], 'result', ['none']);
-// // //   //   transcript.assertNext(['next'], 'result', false);
-// // //   // });
-// // // });
-
-
-// // const parse_int = func("parse_int", sequence(
-// //   t((msg: null) => {
-// //     if (msg !== null) {
-// //       throw Error("Bad msg: " + msg);
-// //     }
-// //     return 0;
-// //   }),
-// //   loop(andThen(
-// //     sequence(
-// //       t((acc: number) => {
-// //         return [acc, ["iter", ["next"]]];
-// //       }),
-// //       smuggle(raise),
-// //       t(([acc, msg]: [number, any]) => {
-// //         return [[acc, msg], msg[0] === "some"];
-// //       })),
-// //     if_then_else(
-// //       andThen(
-// //         t(([acc, char]: [number, ["some", string]]) => {
-// //           return acc * 10 + (char[1].charCodeAt(0) - '0'.charCodeAt(0));
-// //         }),
-// //         next
-// //       ),
-// //       andThen(
-// //         t(([acc, char]: [number, ["none"]]) => {
-// //           return acc;
-// //         }),
-// //         brk,
-// //       ),
-// //     ),
-// //   ))
-// // ));
-
-// // describe('ParseInt', () => {
-// //   test('empty string', () => {
-// //     const transcript = new FuncTranscript(parse_int);
-// //     transcript.assertNext(null, 'iter', ['next']);
-// //     transcript.assertNext(['result', ['none']], 'result', 0);
-// //   });
-// //   test('non-empty string', () => {
-// //     const transcript = new FuncTranscript(parse_int);
-// //     transcript.assertNext(null, 'iter', ['next']);
-// //     transcript.assertNext(['result', ['some', '1']], 'iter', ['next']);
-// //     transcript.assertNext(['result', ['some', '2']], 'iter', ['next']);
-// //     transcript.assertNext(['result', ['some', '3']], 'iter', ['next']);
-// //     transcript.assertNext(['result', ['none']], 'result', 123);
-// //   });
-// // });
-
-// // // // const parse_int_from_string = sequence(
-// // // //   char_iter_from_string_init,
-// // // //   t((iter_state: CharIterFromStringState) => [[iter_state, null], null]),
-// // // //   construct(handle("iter", char_iter_from_string, parse_int)),
-// // // // );
-
-// // // // describe('ParseIntFromString', () => {
-// // // //   test('empty string', () => {
-// // // //     const transcript = new Transcript(parse_int_from_string, null);
-// // // //     transcript.assertNext("", 'result', 0);
-// // // //   });
-// // // //   test('non-empty string', () => {
-// // // //     const transcript = new Transcript(parse_int_from_string, null);
-// // // //     transcript.assertNext("1234", 'result', 1234);
-// // // //   });
-// // // // });
-
-// // type IterMapState = "start" | "middle" | "end";
-
-// // const iter_map_init = func("iter_map_init", t((_: null) => "start"));
-
-// // const iter_map = func("iter_map", sequence(
-// //   t(([state, msg]: [IterMapState, any]) => [[state, msg.slice(1)], msg[0]]),
-// //   match({
-// //     next: sequence(
-// //       t(([_, rest]: [IterMapState, any[]]) => ["iter", ["next"]]),
-// //       raise,
-// //       t((has_next: boolean) => {
-// //         if (has_next) {
-// //           return ["middle", true];
-// //         } else {
-// //           return ["end", false];
-// //         }
-// //       }),
-// //     ),
-// //     item: sequence(
-// //       t(([state, rest]: [IterMapState, any[]]) => {
-// //         if (state !== "middle") {
-// //           throw Error("Bad state: " + state);
-// //         }
-// //         return [null, rest[0]];
-// //       }),
-// //       raiseRaise("fn", simpleHandler(sequence(
-// //         t(([_, [action, msg]]) => [msg, action]),
-// //         match({
-// //           input: sequence(
-// //             t((msg: any) => ["iter", ["item", msg]]),
-// //             raise,
-// //             t((response: any) => [null, response]),
-// //           ),
-// //         }),
-// //       ))
-// //       ),
-// //     ),
-// //   })));
-
-// // const doubler = func("doubler", sequence(
-// //   t((msg: any) => {
-// //     if (msg[0] !== "clone") {
-// //       throw Error("Bad msg: " + msg);
-// //     }
-// //     return ["input", ["clone"]];
-// //   }),
-// //   raise,
-// //   t((msg: number) => {
-// //     return msg * 2;
-// //   }),
-// // ));
-
-// // describe('IterMap', () => {
-// //   test('empty iter', () => {
-// //     const transcript = new FuncTranscript(closure(iter_map_init, iter_map));
-// //     transcript.assertNext(null, 'result', null);
-// //     transcript.assertNext(['next'], 'iter', ['next']);
-// //     transcript.assertNext(['result', false], 'result', false);
-// //   });
-// //   test('double ints', () => {
-// //     const transcript = new FuncTranscript(closure(iter_map_init, iter_map));
-// //     transcript.assertNext(null, 'result', null);
-// //     transcript.assertNext(['next'], 'iter', ['next']);
-// //     transcript.assertNext(['result', true], 'result', true);
-// //     transcript.assertNext(['item', ['clone']], 'fn', ['clone']);
-// //     transcript.assertNext(['input', ['clone']], 'iter', ['item', ['clone']]);
-// //     transcript.assertNext(['result', 3], 'fn', ['result', 3]);
-// //     transcript.assertNext(['result', 6], 'result', 6);
-// //     transcript.assertNext(['next'], 'iter', ['next']);
-// //     transcript.assertNext(['result', false], 'result', false);
-// //   });
-// //   test('doubler', () => {
-// //     const transcript = new FuncTranscript(doubler);
-// //     transcript.assertNext(['clone'], 'input', ['clone']);
-// //     transcript.assertNext(['result', 3], 'result', 6);
-// //   });
-// //   test('bind_doubler', () => {
-// //     const bind_doubler_init = func("bind_doubler_init", callNoRaise(iter_map_init));
-// //     const bind_doubler = func("bind_doubler", sequence(
-// //       t(([mapped_state, msg]) => [null, [mapped_state, msg]]),
-// //       call(iter_map, simpleHandler(sequence(
-// //         t(([_, [action, msg]]) => [msg, action]),
-// //         match({
-// //           iter: sequence(
-// //             t((msg: any) => ["iter", msg]),
-// //             raise,
-// //             t((response: any) => [null, response]),
-// //           ),
-// //           fn: sequence(
-// //             t((msg: any) => [null, msg]),
-// //             call(doubler, simpleHandler(sequence(
-// //               t(([_, [action, msg]]) => [msg, action]),
-// //               match({
-// //                 input: sequence(
-// //                   t((msg: any) => ["iter", ["item", msg]]),
-// //                   raise,
-// //                   t((response: any) => [null, response]),
-// //                 ),
-// //               }),
-// //             ))),
-// //           ),
-// //         }),
-// //       ))),
-// //       t(([_, [mapped_state, msg]]) => [mapped_state, msg]),
-// //     ));
-
-// //     const transcript = new FuncTranscript(closure(bind_doubler_init, bind_doubler));
-// //     transcript.assertNext(null, 'result', null);
-// //     transcript.assertNext(['next'], 'iter', ['next']);
-// //     transcript.assertNext(['result', true], 'result', true);
-// //     transcript.assertNext(['item', ['clone']], 'iter', ['item', ['clone']]);
-// //     transcript.assertNext(['result', 3], 'result', 6);
-// //     transcript.assertNext(['next'], 'iter', ['next']);
-// //     transcript.assertNext(['result', false], 'result', false);
-// //   });
-// // });
