@@ -91,3 +91,11 @@ pub struct Library {
     pub sentences: TiVec<SentenceIndex, Sentence>,
     pub exports: BTreeMap<String, SentenceIndex>,
 }
+
+impl Library {
+    pub fn find_symbol(&self, name: &str) -> Option<SymbolIndex> {
+        self.symbols
+            .iter_enumerated()
+            .find_map(|(i, s)| if s == name { Some(i) } else { None })
+    }
+}

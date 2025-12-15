@@ -19,12 +19,7 @@ pub struct Vm {
     pub lib: Library,
     pub call_stack: Vec<ProgramCounter>,
     pub stack: stack::Stack,
-
-    pub runtime: Runtime,
     pub main_symbol: SentenceIndex,
-
-    pub stdin: Box<dyn Read>,
-    pub stdout: Box<dyn Write>,
 }
 
 pub struct VmState {
@@ -49,15 +44,12 @@ enum EvalResult {
 }
 
 impl Vm {
-    pub fn new(lib: Library, runtime: Runtime, main_symbol: SentenceIndex) -> Self {
+    pub fn new(lib: Library, main_symbol: SentenceIndex) -> Self {
         Vm {
             lib,
             call_stack: vec![],
             stack: Stack::default(),
             main_symbol,
-            runtime,
-            stdin: Box::new(stdin()),
-            stdout: Box::new(stdout()),
         }
     }
 
@@ -73,69 +65,50 @@ impl Vm {
         self.stack = state.stack;
     }
 
-    pub fn with_stdin(mut self, stdin: impl Read + 'static) -> Self {
-        self.stdin = Box::new(stdin);
-        self
-    }
-
-    pub fn _with_stdout(mut self, stdout: impl Write + 'static) -> Self {
-        self.stdout = Box::new(stdout);
-        self
-    }
-
-    pub fn current_word(&self) -> Option<&Word> {
-        let Some(pc) = self.call_stack.last() else {
-            return None;
-        };
-        Some(&self.lib.sentences[pc.sentence_idx].words[pc.word_idx])
-    }
-
-    pub fn jump_to(&mut self, sentence_idx: SentenceIndex) {
+    fn jump_to(&mut self, sentence_idx: SentenceIndex) {
         self.call_stack.push(ProgramCounter {
             sentence_idx,
             word_idx: 0,
         });
     }
 
-    // pub fn run_to_trap(&mut self) -> Result<(), EvalError> {
-    //     while self.call_stack.sentence_idx != SentenceIndex::TRAP {
-    //         self.step()?;
-    //     }
-    //     Ok(())
-    // }
+    pub fn run_sentence(&mut self) -> Result<(), EvalError> {
+        self.reset_call_stack();
+        while let StepResult::Continue = self.step()? {}
+        Ok(())
+    }
 
-    pub fn init(&mut self) {
-        self.stack.push(tuple![tagged![start {}], tagged![in {}]]);
-        self.call_stack = vec![ProgramCounter {
-            sentence_idx: self.main_symbol,
-            word_idx: 0,
-        }]
+    pub fn reset_call_stack(&mut self) {
+        if !self.call_stack.is_empty() {
+            panic!("call stack is not empty");
+        }
+        self.jump_to(self.main_symbol);
     }
 
     pub fn step(&mut self) -> Result<StepResult, EvalError> {
-        let pc = loop {
-            let Some(pc) = self.call_stack.last_mut() else {
+        let mut pc = loop {
+            let Some(pc) = self.call_stack.pop() else {
                 return Ok(StepResult::Exit);
             };
-            break pc;
+            if pc.word_idx == self.lib.sentences[pc.sentence_idx].words.len() {
+                continue;
+            } else {
+                break pc;
+            }
         };
         let word = &self.lib.sentences[pc.sentence_idx].words[pc.word_idx];
 
         let res = Self::eval_word(&mut self.stack, word)?;
-        pc.word_idx += 1;
-        if pc.word_idx == self.lib.sentences[pc.sentence_idx].words.len() {
-            self.call_stack.pop();
-        }
         match res {
             EvalResult::Call(sentence_idx) => {
-                if !self.lib.sentences[sentence_idx].words.is_empty() {
-                    self.call_stack.push(ProgramCounter {
-                        sentence_idx,
-                        word_idx: 0,
-                    });
-                }
+                pc.word_idx += 1;
+                self.call_stack.push(pc);
+                self.jump_to(sentence_idx);
             }
-            EvalResult::Continue => {}
+            EvalResult::Continue => {
+                pc.word_idx += 1;
+                self.call_stack.push(pc);
+            }
         }
         Ok(StepResult::Continue)
     }
@@ -177,5 +150,65 @@ impl Vm {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use typed_index_collections::TiVec;
+
+    use crate::bytecode::{Builtin, PrimitiveValue, Sentence, StackOperation};
+
+    use super::*;
+
+    #[test]
+    fn test_run_sentence() {
+        let lib = Library {
+            symbols: vec![].into(),
+            sentences: vec![Sentence {
+                words: vec![
+                    Word::StackOperation(StackOperation::Push(PrimitiveValue::Usize(1))),
+                    Word::StackOperation(StackOperation::Builtin(Builtin::Add)),
+                ],
+            }]
+            .into(),
+            exports: BTreeMap::new(),
+        };
+        let mut vm = Vm::new(lib, SentenceIndex::from(0));
+        vm.stack.push(Value::Usize(1));
+        vm.run_sentence().unwrap();
+        assert_eq!(vm.stack.get(0).unwrap(), &Value::Usize(2));
+        vm.run_sentence().unwrap();
+        assert_eq!(vm.stack.get(0).unwrap(), &Value::Usize(3));
+    }
+
+    #[test]
+    fn test_run_sentence_call() {
+        let lib = Library {
+            symbols: vec![].into(),
+            sentences: vec![
+                Sentence {
+                    words: vec![
+                        Word::StackOperation(StackOperation::Push(PrimitiveValue::Usize(1))),
+                        Word::Call(SentenceIndex::from(1)),
+                    ],
+                },
+                Sentence {
+                    words: vec![
+                        Word::StackOperation(StackOperation::Drop(0)),
+                        Word::StackOperation(StackOperation::Push(PrimitiveValue::Usize(2))),
+                        Word::StackOperation(StackOperation::Builtin(Builtin::Add)),
+                    ],
+                },
+            ]
+            .into(),
+            exports: BTreeMap::new(),
+        };
+        let mut vm = Vm::new(lib, SentenceIndex::from(0));
+        vm.stack.push(Value::Usize(1));
+        vm.run_sentence().unwrap();
+        assert_eq!(vm.stack.get(0).unwrap(), &Value::Usize(3));
     }
 }
