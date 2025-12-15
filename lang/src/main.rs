@@ -5,12 +5,12 @@ mod compiler;
 mod debugger;
 #[macro_use]
 mod flat;
+mod bytecode;
 mod linker;
+mod oldvm;
 mod pen;
 mod runtime;
 mod source;
-mod oldvm;
-mod bytecode;
 mod vm;
 
 use std::{path::PathBuf, process::exit};
@@ -19,8 +19,8 @@ use clap::{Parser, Subcommand};
 use flat::{Library, Value};
 use itertools::Itertools;
 
-use runtime::Runtime;
 use oldvm::{EvalError, Vm};
+use runtime::Runtime;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]

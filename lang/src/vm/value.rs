@@ -1,6 +1,5 @@
 use crate::bytecode::{PrimitiveValue, SymbolIndex};
 
-
 #[derive(Clone, PartialEq, Eq, Debug, Hash)]
 pub enum Value {
     Symbol(SymbolIndex),
@@ -62,7 +61,6 @@ impl std::fmt::Display for ValueType {
         }
     }
 }
-
 
 #[derive(Debug, thiserror::Error)]
 #[error("could not convert to {r#type}: {value:?}")]
@@ -134,7 +132,6 @@ impl TryInto<Vec<Option<Value>>> for Value {
         }
     }
 }
-
 
 impl From<usize> for Value {
     fn from(value: usize) -> Self {

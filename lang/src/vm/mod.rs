@@ -4,7 +4,9 @@ use anyhow::{anyhow, Context};
 use itertools::Itertools;
 
 use crate::{
-    bytecode::{Library, SentenceIndex, Word}, runtime::{self, Runtime}, source::{self, FileSpan}, 
+    bytecode::{Library, SentenceIndex, Word},
+    runtime::{self, Runtime},
+    source::{self, FileSpan},
 };
 
 mod stack;
@@ -118,7 +120,7 @@ impl Vm {
             break pc;
         };
         let word = &self.lib.sentences[pc.sentence_idx].words[pc.word_idx];
-     
+
         let res = Self::eval_word(&mut self.stack, word)?;
         pc.word_idx += 1;
         if pc.word_idx == self.lib.sentences[pc.sentence_idx].words.len() {
@@ -143,14 +145,10 @@ impl Vm {
             Word::StackOperation(op) => {
                 stack.inner_eval(*op)?;
                 Ok(EvalResult::Continue)
-            } 
-            Word::Call(sentence_idx) => {
-                Ok(EvalResult::Call(*sentence_idx))
             }
+            Word::Call(sentence_idx) => Ok(EvalResult::Call(*sentence_idx)),
             Word::Branch(true_case, false_case) => {
-                stack
-                    .check_size(1)
-                    .map_err(|_| EvalError::EmptyStack)?;
+                stack.check_size(1).map_err(|_| EvalError::EmptyStack)?;
                 let cond: bool = stack
                     .pop()
                     .unwrap()
@@ -163,11 +161,9 @@ impl Vm {
                 }
             }
             Word::JumpTable(targets) => {
-                stack
-                    .check_size(1)
-                    .map_err(|_| EvalError::EmptyStack)?;
-                let cond: usize = 
-                    stack.pop()
+                stack.check_size(1).map_err(|_| EvalError::EmptyStack)?;
+                let cond: usize = stack
+                    .pop()
                     .unwrap()
                     .try_into()
                     .map_err(|e| EvalError::JumpTableInvalidIndex { source: e })?;
@@ -175,7 +171,7 @@ impl Vm {
                     return Err(EvalError::JumpTableIndexOutOfBounds {
                         index: cond,
                         size: targets.len(),
-                    })
+                    });
                 } else {
                     Ok(EvalResult::Call(targets[cond]))
                 }

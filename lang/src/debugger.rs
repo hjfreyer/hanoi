@@ -12,8 +12,8 @@ use ratatui::{
 
 use crate::{
     flat::ValueView,
-    source::{self},
     oldvm::{EvalError, Vm, VmState},
+    source::{self},
 };
 
 pub struct Debugger {
