@@ -9,6 +9,8 @@ mod linker;
 mod pen;
 mod runtime;
 mod source;
+mod oldvm;
+mod bytecode;
 mod vm;
 
 use std::{path::PathBuf, process::exit};
@@ -18,7 +20,7 @@ use flat::{Library, Value};
 use itertools::Itertools;
 
 use runtime::Runtime;
-use vm::{EvalError, Vm};
+use oldvm::{EvalError, Vm};
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -154,7 +156,7 @@ fn test(base_dir: PathBuf) -> anyhow::Result<()> {
     let main_symbol = lib.export("test").unwrap();
     let mut vm = Vm::new(lib, Runtime {}, main_symbol);
 
-    fn run(vm: &mut Vm) -> Result<(), vm::EvalError> {
+    fn run(vm: &mut Vm) -> Result<(), oldvm::EvalError> {
         vm.push_value(tuple![tagged![nil {}], tagged![enumerate {}]]);
         // vm.load_label("test");
         vm.run()?;

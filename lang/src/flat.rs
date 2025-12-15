@@ -16,11 +16,11 @@ use crate::{
 };
 
 macro_rules! tuple {
-    [$($x:expr),* $(,)?] => {flat::Value::Tuple(vec![$($x),*])};
+    [$($x:expr),* $(,)?] => {crate::flat::Value::Tuple(vec![$($x),*])};
 }
 macro_rules! symbol {
     ($x:expr) => {
-        flat::Value::Symbol($x.to_owned())
+        crate::flat::Value::Symbol($x.to_owned())
     };
 }
 macro_rules! tagged {

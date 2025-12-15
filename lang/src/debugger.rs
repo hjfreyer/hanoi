@@ -13,7 +13,7 @@ use ratatui::{
 use crate::{
     flat::ValueView,
     source::{self},
-    vm::{EvalError, Vm, VmState},
+    oldvm::{EvalError, Vm, VmState},
 };
 
 pub struct Debugger {
@@ -240,7 +240,7 @@ impl Debugger {
         frame.render_stateful_widget(self.stack(), stack_layout[0], &mut self.stack_state);
     }
 
-    pub fn new(sources: source::Sources, mut vm: crate::vm::Vm) -> Self {
+    pub fn new(sources: source::Sources, mut vm: crate::oldvm::Vm) -> Self {
         vm.init();
         let mut res = Self {
             sources,
