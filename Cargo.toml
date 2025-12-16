@@ -5,4 +5,5 @@ members = [
     "lang",
     "from-raw-ast", 
     "debugger",
+    "debugc",
 ]

@@ -1,0 +1,36 @@
+{
+  "symbols": [],
+  "sentences": [
+    {
+      "words": [
+        {
+          "Call": 1
+        },
+        {
+          "StackOperation": {
+            "Drop": 0
+          }
+        }
+      ]
+    },
+    {
+      "words": [
+        {
+          "StackOperation": {
+            "Push": {
+              "Usize": 2
+            }
+          }
+        },
+        {
+          "StackOperation": {
+            "Builtin": "Prod"
+          }
+        }
+      ]
+    }
+  ],
+  "exports": {
+    "main": 0
+  }
+}

@@ -4,7 +4,12 @@
     // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
     "configurations": [
-
+        {
+            "type": "hanoi",
+            "request": "launch",
+            "name": "Debug Hanoi program",
+            "program": "${file}"
+        },
         {
             "type": "lldb",
             "request": "launch",
@@ -20,7 +25,11 @@
                     "kind": "bin"
                 }
             },
-            "args": ["debug", "data", "main"],
+            "args": [
+                "debug",
+                "data",
+                "main"
+            ],
             "cwd": "${workspaceFolder}"
         },
         {

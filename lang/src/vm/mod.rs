@@ -3,11 +3,7 @@ use std::io::{stdin, stdout, Read, Write};
 use anyhow::{anyhow, Context};
 use itertools::Itertools;
 
-use crate::{
-    bytecode::{Library, SentenceIndex, Word},
-    runtime::{self, Runtime},
-    source::{self, FileSpan},
-};
+use crate::bytecode::{Library, SentenceIndex, Word};
 
 mod stack;
 mod value;

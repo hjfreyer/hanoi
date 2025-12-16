@@ -1,61 +1,172 @@
-use std::io::{self, BufReader, BufWriter};
+use std::io::{BufReader, BufWriter};
+use std::net::TcpListener;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
-use dap::events::OutputEventBody;
+use anyhow::{Context, Result};
+use dap::events::{OutputEventBody, StoppedEventBody};
 use dap::prelude::*;
-use dap::responses::{ResponseBody, SetBreakpointsResponse, ThreadsResponse};
-use thiserror::Error;
+use dap::responses::{
+    ResponseBody, ScopesResponse, SetBreakpointsResponse, SetExceptionBreakpointsResponse,
+    StackTraceResponse, ThreadsResponse,
+};
+use hanoi::bytecode::debuginfo::Library as DebuginfoLibrary;
+use hanoi::bytecode::{Library as BytecodeLibrary, SentenceIndex};
+use hanoi::vm::Vm;
+use serde_json;
 
-#[derive(Error, Debug)]
-enum AdapterError {
-    #[error("Unhandled command")]
-    UnhandledCommand,
+struct DebuggerState {
+    bytecode: Option<BytecodeLibrary>,
+    debuginfo: Option<DebuginfoLibrary>,
+    program_path: Option<PathBuf>,
+    vm: Option<Vm>,
 }
 
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
-
 fn main() -> Result<()> {
-    let stdin = io::stdin();
-    let stdout = io::stdout();
+    // Listen on a TCP port instead of stdio.
+    // Default to 127.0.0.1:4711, overridable via HANOI_DAP_ADDR.
+    let addr = std::env::var("HANOI_DAP_ADDR").unwrap_or_else(|_| "127.0.0.1:4711".to_string());
+    let listener = TcpListener::bind(&addr)?;
+    eprintln!("Hanoi DAP debugger listening on {}", addr);
 
-    let input = BufReader::new(stdin.lock());
-    let output = BufWriter::new(stdout.lock());
+    // Handle a single client connection then exit.
+    if let Some(stream) = listener.incoming().next() {
+        let stream = stream?;
+        let input = BufReader::new(stream.try_clone()?);
+        let output = BufWriter::new(stream);
 
-    let mut server = Server::new(input, output);
+        let mut server = Server::new(input, output);
+        let state = Arc::new(Mutex::new(DebuggerState {
+            bytecode: None,
+            debuginfo: None,
+            program_path: None,
+            vm: None,
+        }));
 
-    while let Some(request) = server.poll_request()? {
-        handle_request(&mut server, request)?;
+        while let Some(request) = server.poll_request()? {
+            handle_request(&mut server, request, Arc::clone(&state))?;
+        }
     }
 
     Ok(())
 }
 
-fn handle_request<R, W>(server: &mut Server<R, W>, request: Request) -> Result<()>
+fn handle_request<R, W>(
+    server: &mut Server<R, W>,
+    request: Request,
+    state: Arc<Mutex<DebuggerState>>,
+) -> Result<()>
 where
     R: std::io::Read,
     W: std::io::Write,
 {
     match request.command {
         Command::Initialize(_) => {
-            let caps = types::Capabilities::default();
+            send_console_output(server, "Initializing Hanoi debugger (dap-rs)...\n")?;
+            let caps = types::Capabilities {
+                supports_configuration_done_request: Some(true),
+                ..Default::default()
+            };
             let response = request.success(ResponseBody::Initialize(caps));
             server.respond(response)?;
 
             server.send_event(Event::Initialized)?;
-            send_console_output(server, "Hanoi debugger (dap-rs) initialized and running.\n")?;
         }
         Command::Launch(ref args) => {
-            let _ = args; // placeholder for future runtime wiring
+            send_console_output(server, "Launching Hanoi program...\n")?;
+            // Extract program path from launch arguments
+            // The program field is typically in the launch arguments
+            let program_path = args
+                .additional_data
+                .as_ref()
+                .and_then(|data| data.get("program"))
+                .and_then(|v| v.as_str())
+                .map(PathBuf::from)
+                .context("Program path not specified in launch arguments")?;
+
+            // Load bytecode file (.hanb)
+            let bytecode_path = program_path.clone();
+            let bytecode_json = std::fs::read_to_string(&bytecode_path).with_context(|| {
+                format!("Failed to read bytecode file: {}", bytecode_path.display())
+            })?;
+
+            let bytecode: BytecodeLibrary =
+                serde_json::from_str(&bytecode_json).context("Failed to parse bytecode JSON")?;
+
+            // Load debuginfo file (.hanb.debuginfo.json)
+            // The bytecode file is .hanb.json, so we need to replace .json with .debuginfo.json
+            let debuginfo_path = {
+                let path_str = bytecode_path.to_string_lossy();
+                if path_str.ends_with(".hanb.json") {
+                    // Replace .json with .debuginfo.json
+                    PathBuf::from(path_str.replace(".hanb.json", ".hanb.debuginfo.json"))
+                } else {
+                    anyhow::bail!(
+                        "Bytecode file must end with .hanb.json, got: {}",
+                        bytecode_path.display()
+                    );
+                }
+            };
+            let debuginfo_json = std::fs::read_to_string(&debuginfo_path).with_context(|| {
+                format!(
+                    "Failed to read debuginfo file: {}",
+                    debuginfo_path.display()
+                )
+            })?;
+
+            let debuginfo: DebuginfoLibrary =
+                serde_json::from_str(&debuginfo_json).context("Failed to parse debuginfo JSON")?;
+
+            send_console_output(
+                server,
+                &format!(
+                    "Loaded bytecode from {} and debuginfo from {}\n",
+                    bytecode_path.display(),
+                    debuginfo_path.display()
+                ),
+            )?;
+
+            // Store in state
+            {
+                let mut state = state.lock().unwrap();
+                state.bytecode = Some(bytecode.clone());
+                state.debuginfo = Some(debuginfo);
+                state.program_path = Some(program_path.clone());
+                state.vm = Some(Vm::new(bytecode, SentenceIndex::from(0)));
+                state.vm.as_mut().unwrap().reset_call_stack();
+            }
 
             let response = request.clone().success(ResponseBody::Launch);
             server.respond(response)?;
-            eprintln!("eprintln test.");
-            send_console_output(server, "Hanoi debugger (dap-rs) received launch request.\n")?;
+
+            send_console_output(
+                server,
+                &format!(
+                    "Hanoi debugger loaded bytecode from {} and debuginfo from {}\n",
+                    bytecode_path.display(),
+                    debuginfo_path.display()
+                ),
+            )?;
+
+            // Send a stop event to indicate the program is ready to be debugged
+            let stop_body = StoppedEventBody {
+                reason: dap::types::StoppedEventReason::Entry,
+                description: Some("Program launched and ready for debugging".to_string()),
+                thread_id: Some(1),
+                preserve_focus_hint: None,
+                text: None,
+                all_threads_stopped: None,
+                hit_breakpoint_ids: None,
+            };
+            server.send_event(Event::Stopped(stop_body))?;
         }
         Command::ConfigurationDone => {
+            send_console_output(server, "Configuration done.\n")?;
             let response = request.success(ResponseBody::ConfigurationDone);
             server.respond(response)?;
         }
         Command::SetBreakpoints(_) => {
+            send_console_output(server, "Setting breakpoints...\n")?;
             let body = ResponseBody::SetBreakpoints(SetBreakpointsResponse {
                 breakpoints: vec![],
             });
@@ -63,6 +174,7 @@ where
             server.respond(response)?;
         }
         Command::Threads => {
+            send_console_output(server, "Getting threads...\n")?;
             let body = ResponseBody::Threads(ThreadsResponse {
                 threads: vec![types::Thread {
                     id: 1,
@@ -73,12 +185,145 @@ where
             let response = request.success(body);
             server.respond(response)?;
         }
+        Command::StepIn(_) => {
+            send_console_output(server, "Stepping in...\n")?;
+
+            {
+                let mut state = state.lock().unwrap();
+                if let Some(ref mut vm) = state.vm {
+                    match vm.step() {
+                        Ok(_) => {
+                            // VM advanced one step; nothing else to do here for now.
+                        }
+                        Err(err) => {
+                            // Log VM step errors to the debug console.
+                            let msg = format!("VM step error: {err:?}\n");
+                            // Ignore errors from console output to avoid masking the original error.
+                            let _ = send_console_output(server, &msg);
+                        }
+                    }
+                } else {
+                    let _ = send_console_output(
+                        server,
+                        "No VM available to step; did launch succeed?\n",
+                    );
+                }
+            }
+
+            let response = request.success(ResponseBody::StepIn);
+            server.respond(response)?;
+
+            // After stepping, notify the client that execution has stopped again.
+            let stop_body = StoppedEventBody {
+                reason: dap::types::StoppedEventReason::Step,
+                description: Some("Stepped in".to_string()),
+                thread_id: Some(1),
+                preserve_focus_hint: None,
+                text: None,
+                all_threads_stopped: Some(true),
+                hit_breakpoint_ids: None,
+            };
+            server.send_event(Event::Stopped(stop_body))?;
+        }
+        Command::StackTrace(_) => {
+            send_console_output(server, "Getting stack trace...\n")?;
+
+            let (stack_frames, total_frames) = {
+                let state = state.lock().unwrap();
+                if let (Some(ref vm), Some(ref debuginfo)) =
+                    (state.vm.as_ref(), state.debuginfo.as_ref())
+                {
+                    let mut frames = Vec::new();
+
+                    // Iterate through call stack in reverse order (top of stack first)
+                    for (frame_id, pc) in vm.call_stack.iter().rev().enumerate() {
+                        let sentence_idx: usize = pc.sentence_idx.into();
+
+                        // Get source location from debuginfo
+                        let source = if let Some(debuginfo_sentence) =
+                            debuginfo.sentences.get(sentence_idx as usize)
+                        {
+                            if let Some(debuginfo_word) = debuginfo_sentence.words.get(pc.word_idx)
+                            {
+                                debuginfo_word.span.as_ref().map(|span| types::Source {
+                                    name: Some(
+                                        span.file
+                                            .file_name()
+                                            .and_then(|n| n.to_str())
+                                            .unwrap_or("unknown")
+                                            .to_string(),
+                                    ),
+                                    path: Some(span.file.to_string_lossy().to_string()),
+                                    ..Default::default()
+                                })
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        };
+
+                        let (line, column) = if let Some(debuginfo_sentence) =
+                            debuginfo.sentences.get(sentence_idx as usize)
+                        {
+                            if let Some(debuginfo_word) = debuginfo_sentence.words.get(pc.word_idx)
+                            {
+                                debuginfo_word
+                                    .span
+                                    .as_ref()
+                                    .map(|span| (span.begin.line as i64, span.begin.col as i64))
+                                    .unwrap_or((0, 0))
+                            } else {
+                                (0, 0)
+                            }
+                        } else {
+                            (0, 0)
+                        };
+
+                        let frame = types::StackFrame {
+                            id: frame_id as i64,
+                            name: format!("sentence_{}", sentence_idx),
+                            source,
+                            line: line,
+                            column: column,
+                            ..Default::default()
+                        };
+                        frames.push(frame);
+                    }
+
+                    let total = frames.len() as i64;
+                    (frames, Some(total))
+                } else {
+                    (vec![], Some(0))
+                }
+            };
+
+            let body = ResponseBody::StackTrace(StackTraceResponse {
+                stack_frames,
+                total_frames,
+            });
+            let response = request.success(body);
+            server.respond(response)?;
+        }
+        Command::Scopes(_) => {
+            send_console_output(server, "Getting scopes...\n")?;
+            let body = ResponseBody::Scopes(ScopesResponse { scopes: vec![] });
+            let response = request.success(body);
+            server.respond(response)?;
+        }
+        Command::Disconnect(_) => {
+            send_console_output(server, "Disconnecting...\n")?;
+            // Acknowledge the disconnect request; no special cleanup yet.
+            let response = request.success(ResponseBody::Disconnect);
+            server.respond(response)?;
+            // After this, the client will typically close the connection.
+        }
         ref other => {
             let message = format!("Unhandled DAP command: {:?}", other);
             eprintln!("{}", message);
             let response = request.clone().error("UnhandledCommand");
             server.respond(response)?;
-            return Err(Box::new(AdapterError::UnhandledCommand));
+            anyhow::bail!("Unhandled DAP command: {:?}", other);
         }
     }
 
@@ -98,4 +343,3 @@ where
     server.send_event(Event::Output(body))?;
     Ok(())
 }
-

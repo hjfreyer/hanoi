@@ -280,13 +280,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "debugc"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "hanoi",
+ "json-spanned-value",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "debugger"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "dap",
+ "hanoi",
  "serde",
  "serde_json",
- "thiserror",
 ]
 
 [[package]]
@@ -389,11 +401,13 @@ dependencies = [
  "from-raw-ast",
  "insta",
  "itertools 0.13.0",
+ "json-spanned-value",
  "pest",
  "pest-ast",
  "pest_derive",
  "ratatui",
  "serde",
+ "serde_json",
  "thiserror",
  "typed-index-collections",
 ]
@@ -477,6 +491,16 @@ name = "itoa"
 version = "1.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "49f1f14873335454500d59611f1cf4a4b0f786f9ac11f4312a78e4cf2566695b"
+
+[[package]]
+name = "json-spanned-value"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a072a97a33ef1d3632223e4e9c56d8bb5ff78c3877c9fc3dcaeee66bcc28be2"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "libc"

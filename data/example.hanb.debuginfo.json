@@ -1,0 +1,64 @@
+{
+  "sentences": [
+    {
+      "words": [
+        {
+          "span": {
+            "file": "/workspaces/hanoi/data/example.hanb.json",
+            "begin": {
+              "line": 6,
+              "col": 9
+            },
+            "end": {
+              "line": 8,
+              "col": 10
+            }
+          }
+        },
+        {
+          "span": {
+            "file": "/workspaces/hanoi/data/example.hanb.json",
+            "begin": {
+              "line": 9,
+              "col": 9
+            },
+            "end": {
+              "line": 13,
+              "col": 10
+            }
+          }
+        }
+      ]
+    },
+    {
+      "words": [
+        {
+          "span": {
+            "file": "/workspaces/hanoi/data/example.hanb.json",
+            "begin": {
+              "line": 18,
+              "col": 9
+            },
+            "end": {
+              "line": 24,
+              "col": 10
+            }
+          }
+        },
+        {
+          "span": {
+            "file": "/workspaces/hanoi/data/example.hanb.json",
+            "begin": {
+              "line": 25,
+              "col": 9
+            },
+            "end": {
+              "line": 29,
+              "col": 10
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

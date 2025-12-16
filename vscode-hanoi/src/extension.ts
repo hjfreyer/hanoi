@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { DebugAdapterServer, DebugAdapterDescriptorFactory, DebugAdapterExecutable, ProviderResult, DebugAdapterDescriptor } from 'vscode';
 
 export function activate(context: vscode.ExtensionContext) {
     console.log('Hanoi Language Support is now active!');
@@ -176,6 +177,26 @@ export function activate(context: vscode.ExtensionContext) {
     }, '#', '@', 'f', 'm', 'u', 's', 'l', 'i', 'e', 'n', 't', 'a', 'd');
 
     context.subscriptions.push(completionProvider);
+
+    // Register debug adapter factory
+    const debugAdapterFactory = new HanoiDebugAdapterFactory();
+    context.subscriptions.push(
+        vscode.debug.registerDebugAdapterDescriptorFactory('hanoi', debugAdapterFactory)
+    );
+}
+
+class HanoiDebugAdapterFactory implements DebugAdapterDescriptorFactory {
+    createDebugAdapterDescriptor(
+        session: vscode.DebugSession,
+        executable: DebugAdapterExecutable | undefined
+    ): ProviderResult<DebugAdapterDescriptor> {
+        const config = session.configuration;
+        const port = config.port || vscode.workspace.getConfiguration('hanoi').get<number>('debuggerPort', 4711);
+        const host = config.host || 'localhost';
+
+        // Connect to DAP server via TCP/IP
+        return new DebugAdapterServer(port, host);
+    }
 }
 
 export function deactivate() {} 

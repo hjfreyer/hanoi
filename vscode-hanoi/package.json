@@ -56,10 +56,10 @@
           "default": 4,
           "description": "Number of spaces for indentation"
         },
-        "hanoi.debuggerPath": {
-          "type": "string",
-          "default": "",
-          "description": "Optional path to the Hanoi debugger executable. If empty, the extension will try to use the workspace build at target/debug/debugger."
+        "hanoi.debuggerPort": {
+          "type": "number",
+          "default": 4711,
+          "description": "Port number to connect to the DAP server"
         }
       }
     },
@@ -70,17 +70,21 @@
         "languages": [
           "hanoi"
         ],
-        "program": "/workspace/hanoi/target/debug/debugger",
         "configurationAttributes": {
-          "launch": {
+          "attach": {
             "required": [
-              "program"
+              "port"
             ],
             "properties": {
-              "program": {
+              "port": {
+                "type": "number",
+                "description": "Port number to connect to the DAP server",
+                "default": 4711
+              },
+              "host": {
                 "type": "string",
-                "description": "Hanoi file to debug",
-                "default": "${file}"
+                "description": "Hostname or IP address of the DAP server",
+                "default": "localhost"
               }
             }
           }
@@ -88,9 +92,10 @@
         "initialConfigurations": [
           {
             "type": "hanoi",
-            "request": "launch",
-            "name": "Launch Hanoi program",
-            "program": "${file}"
+            "request": "attach",
+            "name": "Attach to Hanoi DAP server",
+            "port": 4711,
+            "host": "localhost"
           }
         ]
       }
