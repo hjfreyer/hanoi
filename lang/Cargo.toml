@@ -13,6 +13,7 @@ pest = "2.7.13"
 pest-ast = "0.3.5"
 pest_derive = "2.7.13"
 ratatui = "0.28.1"
+serde = { version = "1.0", features = ["derive"] }
 thiserror = "1.0.65"
 typed-index-collections = "3.1.0"
 from-raw-ast = {path = "../from-raw-ast"}
