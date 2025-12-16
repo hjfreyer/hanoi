@@ -8,7 +8,8 @@
   },
   "categories": [
     "Programming Languages",
-    "Formatters"
+    "Formatters",
+    "Debuggers"
   ],
   "keywords": [
     "hanoi",
@@ -17,7 +18,8 @@
     "formatting"
   ],
   "activationEvents": [
-    "onLanguage:hanoi"
+    "onLanguage:hanoi",
+    "onDebugResolve:hanoi"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -53,9 +55,46 @@
           "type": "number",
           "default": 4,
           "description": "Number of spaces for indentation"
+        },
+        "hanoi.debuggerPath": {
+          "type": "string",
+          "default": "",
+          "description": "Optional path to the Hanoi debugger executable. If empty, the extension will try to use the workspace build at target/debug/debugger."
         }
       }
-    }
+    },
+    "debuggers": [
+      {
+        "type": "hanoi",
+        "label": "Hanoi Debugger",
+        "languages": [
+          "hanoi"
+        ],
+        "program": "/workspace/hanoi/target/debug/debugger",
+        "configurationAttributes": {
+          "launch": {
+            "required": [
+              "program"
+            ],
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "Hanoi file to debug",
+                "default": "${file}"
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "hanoi",
+            "request": "launch",
+            "name": "Launch Hanoi program",
+            "program": "${file}"
+          }
+        ]
+      }
+    ]
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
