@@ -4,7 +4,26 @@
     {
       "words": [
         {
+          "StackOperation": {
+            "Push": {
+              "Usize": 7
+            }
+          }
+        },
+        {
           "Call": 1
+        },
+        {
+          "StackOperation": {
+            "Push": {
+              "Usize": 42
+            }
+          }
+        },
+        {
+          "StackOperation": {
+            "Tuple": 2
+          }
         },
         {
           "StackOperation": {

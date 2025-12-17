@@ -8,7 +8,7 @@ use dap::events::{OutputEventBody, StoppedEventBody};
 use dap::prelude::*;
 use dap::responses::{
     ResponseBody, ScopesResponse, SetBreakpointsResponse, SetExceptionBreakpointsResponse,
-    StackTraceResponse, ThreadsResponse,
+    StackTraceResponse, ThreadsResponse, VariablesResponse,
 };
 use hanoi::bytecode::debuginfo::Library as DebuginfoLibrary;
 use hanoi::bytecode::{Library as BytecodeLibrary, SentenceIndex};
@@ -307,7 +307,55 @@ where
         }
         Command::Scopes(_) => {
             send_console_output(server, "Getting scopes...\n")?;
-            let body = ResponseBody::Scopes(ScopesResponse { scopes: vec![] });
+            
+            let scopes = {
+                let state = state.lock().unwrap();
+                if let Some(ref vm) = state.vm {
+                    let num_variables = vm.stack.len() as i64;
+                    
+                    vec![types::Scope {
+                        name: "Stack".to_string(),
+                        variables_reference: 1,
+                        named_variables: Some(num_variables),
+                        ..Default::default()
+                    }]
+                } else {
+                    vec![]
+                }
+            };
+            
+            let body = ResponseBody::Scopes(ScopesResponse { scopes });
+            let response = request.success(body);
+            server.respond(response)?;
+        }
+        Command::Variables(ref _args) => {
+            send_console_output(server, "Getting variables...\n")?;
+            
+            let variables = {
+                let state = state.lock().unwrap();
+                if let Some(ref vm) = state.vm {
+                    // Return each stack entry as its own variable
+                    // Stack is iterated in reverse so stack[0] is the top
+                    vm.stack
+                        .iter()
+                        .rev()
+                        .enumerate()
+                        .map(|(idx, value)| {
+                            let value_str = format_value(value);
+                            types::Variable {
+                                name: format!("stack[{}]", idx),
+                                value: value_str,
+                                type_field: Some(value.r#type().to_string()),
+                                ..Default::default()
+                            }
+                        })
+                        .collect()
+                } else {
+                    vec![]
+                }
+            };
+            
+            let body = ResponseBody::Variables(VariablesResponse { variables });
             let response = request.success(body);
             server.respond(response)?;
         }
@@ -328,6 +376,38 @@ where
     }
 
     Ok(())
+}
+
+fn format_value(value: &hanoi::vm::Value) -> String {
+    match value {
+        hanoi::vm::Value::Symbol(idx) => {
+            let idx_val: usize = (*idx).into();
+            format!("Symbol({})", idx_val)
+        }
+        hanoi::vm::Value::Usize(u) => format!("{}", u),
+        hanoi::vm::Value::Bool(b) => format!("{}", b),
+        hanoi::vm::Value::Char(c) => format!("'{}'", c),
+        hanoi::vm::Value::Tuple(vals) => {
+            let inner = vals
+                .iter()
+                .map(|v| format_value(v))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("({})", inner)
+        }
+        hanoi::vm::Value::Array(arr) => {
+            let inner = arr
+                .iter()
+                .map(|opt| {
+                    opt.as_ref()
+                        .map(|v| format_value(v))
+                        .unwrap_or_else(|| "None".to_string())
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("[{}]", inner)
+        }
+    }
 }
 
 fn send_console_output<R, W>(server: &mut Server<R, W>, text: &str) -> Result<()>

@@ -10,7 +10,7 @@
               "col": 9
             },
             "end": {
-              "line": 8,
+              "line": 12,
               "col": 10
             }
           }
@@ -19,11 +19,50 @@
           "span": {
             "file": "/workspaces/hanoi/data/example.hanb.json",
             "begin": {
-              "line": 9,
+              "line": 13,
               "col": 9
             },
             "end": {
-              "line": 13,
+              "line": 15,
+              "col": 10
+            }
+          }
+        },
+        {
+          "span": {
+            "file": "/workspaces/hanoi/data/example.hanb.json",
+            "begin": {
+              "line": 16,
+              "col": 9
+            },
+            "end": {
+              "line": 22,
+              "col": 10
+            }
+          }
+        },
+        {
+          "span": {
+            "file": "/workspaces/hanoi/data/example.hanb.json",
+            "begin": {
+              "line": 23,
+              "col": 9
+            },
+            "end": {
+              "line": 27,
+              "col": 10
+            }
+          }
+        },
+        {
+          "span": {
+            "file": "/workspaces/hanoi/data/example.hanb.json",
+            "begin": {
+              "line": 28,
+              "col": 9
+            },
+            "end": {
+              "line": 32,
               "col": 10
             }
           }
@@ -36,11 +75,11 @@
           "span": {
             "file": "/workspaces/hanoi/data/example.hanb.json",
             "begin": {
-              "line": 18,
+              "line": 37,
               "col": 9
             },
             "end": {
-              "line": 24,
+              "line": 43,
               "col": 10
             }
           }
@@ -49,11 +88,11 @@
           "span": {
             "file": "/workspaces/hanoi/data/example.hanb.json",
             "begin": {
-              "line": 25,
+              "line": 44,
               "col": 9
             },
             "end": {
-              "line": 29,
+              "line": 48,
               "col": 10
             }
           }
