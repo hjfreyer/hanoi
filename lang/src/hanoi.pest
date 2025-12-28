@@ -4,17 +4,18 @@ COMMENT = _{ "//" ~ (!NEWLINE ~ ANY)* }
 
 // FILE STRUCTURE
 
-file = { SOI ~ header ~ namespace ~ EOI }
+file = _{ SOI ~ header ~ namespace ~ EOI }
 
 header = _{ ns_import* }
 
-ns_import = _{ "mod" ~ identifier ~ ";" }
+ns_import = { "mod" ~ identifier ~ ";" }
 
 decl = {
     sentence_decl
   | ns_decl
   | fn_decl
   | def_decl
+  | const_decl
 }
 
 // NAMESPACES
@@ -53,6 +54,14 @@ str_char  =  {
 }
 
 literal = { bool | int | char_lit | symbol | nil }
+
+// CONSTANTS
+const_decl = { "const" ~ identifier ~ "=" ~ const_expr ~ ";" }
+
+const_expr = {
+    literal
+  |qualified_label
+}
 
 // VALUES
 
