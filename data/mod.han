@@ -1,34 +1,36 @@
-mod main;
-mod builtin;
-mod vec;
-mod str;
-mod ssv;
+// mod main;
+// mod builtin;
+// mod vec;
+// mod str;
+// mod ssv;
+
+const foo = 3;
+const bar = 'foo;
+
+// sentence main {
+//     #call('main::main_impl)
+// }
 
 
-sentence main {
-    #call('main::main_impl)
-}
+// //sentence test {
+// //    #call('main::tests::main)
+// //}
 
-
-//sentence test {
-//    #call('main::tests::main)
-//}
-
-mod array {
-    sentence new {
-        // Stack: size
-        #array_create
-    }
-    sentence destroy {
-        // Stack: array
-        #array_free #tuple(0)
-    }
-    sentence set {
-        // Stack: (array, index, item)
-        #untuple(3) #array_set
-    }
-    sentence get {
-        // Stack: (array, index)
-        #untuple(2) #array_get #tuple(2)
-    }
-}
+// mod array {
+//     sentence new {
+//         // Stack: size
+//         #array_create
+//     }
+//     sentence destroy {
+//         // Stack: array
+//         #array_free #tuple(0)
+//     }
+//     sentence set {
+//         // Stack: (array, index, item)
+//         #untuple(3) #array_set
+//     }
+//     sentence get {
+//         // Stack: (array, index)
+//         #untuple(2) #array_get #tuple(2)
+//     }
+// }

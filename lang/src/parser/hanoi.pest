@@ -1,0 +1,190 @@
+WHITESPACE = _{ " " | NEWLINE }
+
+COMMENT = _{ "//" ~ (!NEWLINE ~ ANY)* }
+
+// FILE STRUCTURE
+
+file = _{ SOI ~ file_body ~ EOI }
+
+file_body = { file_item* }
+
+external_mod_decl = { "mod" ~ identifier ~ ";" }
+
+file_item = _{
+    external_mod_decl
+  | decl
+}
+
+decl = {
+    sentence_decl
+| external_mod_decl
+  | ns_decl
+  | fn_decl
+  | def_decl
+  | const_decl
+}
+
+// NAMESPACES
+
+ns_decl   = { "mod" ~ identifier ~ "{" ~ namespace ~ "}" }
+namespace = { use* ~ decl* }
+
+use = { "use" ~ path ~ ";" }
+
+// LITERALS
+
+nil = { "nil" }
+
+bool = { "true" | "false" }
+
+int = @{ ASCII_DIGIT+ }
+
+char_lit = @{ "'" ~ lit_char ~ "'" }
+lit_char = @{
+    !("'" | "\\") ~ ANY
+  | "\\" ~ ("'" | "\\" | "/" | "b" | "f" | "n" | "r" | "t")
+  | "\\" ~ ("u" ~ ASCII_HEX_DIGIT{4})
+}
+
+identifier   = @{ id_non_digit ~ (id_non_digit | ASCII_DIGIT)* }
+id_non_digit = _{ ASCII_ALPHA | "_" }
+
+symbol = { "@" ~ (identifier | string) }
+
+string    = @{ "\"" ~ str_inner ~ "\"" }
+str_inner = @{ str_char* }
+str_char  =  {
+    !("\"" | "\\") ~ ANY
+  | "\\" ~ ("\"" | "\\" | "/" | "b" | "f" | "n" | "r" | "t")
+  | "\\" ~ ("u" ~ ASCII_HEX_DIGIT{4})
+}
+
+literal = { bool | int | char_lit | symbol | nil }
+
+// CONSTANTS
+const_decl = { "const" ~ identifier ~ "=" ~ const_expr ~ ";" }
+
+const_expr = {
+    literal
+  |path
+}
+
+// VALUES
+
+copy = { "*" ~ identifier }
+
+tuple_expr = {
+    "(" ~ ")"
+  | "(" ~ expr ~ ("," ~ expr)* ~ ")"
+}
+
+tagged_expr = {
+    "#" ~ identifier ~ "{" ~ "}"
+  | "#" ~ identifier ~ "{" ~ expr ~ ("," ~ expr)* ~ "}"
+}
+
+builtin = { "#" ~ identifier ~ builtin_args? }
+
+builtin_args = _{
+    "(" ~ builtin_arg ~ ("," ~ builtin_arg)* ~ ")"
+}
+builtin_arg  =  { path | int }
+
+path = {
+    "'" ~ identifier ~ ("::" ~ identifier)*
+}
+
+// SENTENCE
+sentence_decl = {
+    "sentence" ~ identifier ~ "{" ~ sentence ~ "}"
+}
+
+sentence = { raw_word* }
+
+raw_word = {
+    literal
+  | builtin
+}
+
+// FN
+
+binding = { tuple_binding | tagged_binding | drop_binding | literal | identifier }
+
+drop_binding  = { "^" }
+tuple_binding = {
+    "(" ~ ")"
+  | "(" ~ binding ~ ("," ~ binding)* ~ ")"
+}
+
+tagged_binding = {
+    "#" ~ identifier ~ "{" ~ "}"
+  | "#" ~ identifier ~ "{" ~ binding ~ ("," ~ binding)* ~ "}"
+}
+
+def_decl = { "def" ~ identifier ~ transformer }
+
+fn_decl = { "fn" ~ binding ~ identifier ~ "=>" ~ expr }
+expr      = { root_expr ~ transformer* }
+
+
+root_expr = {
+    literal
+  | tuple_expr
+  | tagged_expr
+  | block
+  | copy
+  | identifier
+}
+
+block = {
+    "{" ~ statement* ~ expr ~ "}"
+}
+
+statement = {
+    let_statement
+}
+
+let_statement = {
+    "let" ~ binding ~ "=" ~ expr ~ ";"
+}
+
+transformer = {
+    if_expr
+  | match_expr
+  | path
+  | anon_fn
+  | then_fn
+  | do_fn
+}
+
+if_expr = { "if" ~ expr ~ "else" ~ expr }
+
+match_expr = { "match" ~ "{" ~ match_case* ~ "}" }
+
+match_case = { binding ~ "=>" ~ expr ~ "," }
+
+anon_fn = {
+  "[" ~ binding ~ "=>" ~ expr ~ "]"
+}
+
+then_fn = {
+  "c#first" ~ transformer ~ ("c#then" ~ transformer)*
+}
+
+// await_fn = {
+//   "c#await" ~ transformer
+// }
+
+do_fn = {
+  "c#do" ~ transformer
+}
+
+// loop_fn = {
+//   "c#loop" ~ into_fn
+// }
+
+// if_fn = {
+//   "c#if" ~ into_fn ~ "else" ~ into_fn
+// }
+
+// OTHER
