@@ -307,12 +307,12 @@ where
         }
         Command::Scopes(_) => {
             send_console_output(server, "Getting scopes...\n")?;
-            
+
             let scopes = {
                 let state = state.lock().unwrap();
                 if let Some(ref vm) = state.vm {
                     let num_variables = vm.stack.len() as i64;
-                    
+
                     vec![types::Scope {
                         name: "Stack".to_string(),
                         variables_reference: 1,
@@ -323,14 +323,14 @@ where
                     vec![]
                 }
             };
-            
+
             let body = ResponseBody::Scopes(ScopesResponse { scopes });
             let response = request.success(body);
             server.respond(response)?;
         }
         Command::Variables(ref _args) => {
             send_console_output(server, "Getting variables...\n")?;
-            
+
             let variables = {
                 let state = state.lock().unwrap();
                 if let Some(ref vm) = state.vm {
@@ -354,7 +354,7 @@ where
                     vec![]
                 }
             };
-            
+
             let body = ResponseBody::Variables(VariablesResponse { variables });
             let response = request.success(body);
             server.respond(response)?;

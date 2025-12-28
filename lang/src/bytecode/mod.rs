@@ -90,7 +90,7 @@ pub struct Sentence {
     pub words: Vec<Word>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Library {
     pub symbols: TiVec<SymbolIndex, String>,
     pub sentences: TiVec<SentenceIndex, Sentence>,
