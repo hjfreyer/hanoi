@@ -16,8 +16,8 @@ file_item = _{
 }
 
 decl = {
-    sentence_decl
-| external_mod_decl
+  | external_mod_decl
+  | sentence_decl
   | ns_decl
   | fn_decl
   | def_decl
@@ -65,8 +65,8 @@ literal = { bool | int | char_lit | symbol | nil }
 const_decl = { "const" ~ identifier ~ "=" ~ const_expr ~ ";" }
 
 const_expr = {
-    literal
-  |path
+  | literal
+  | path
 }
 
 // VALUES
@@ -83,12 +83,19 @@ tagged_expr = {
   | "#" ~ identifier ~ "{" ~ expr ~ ("," ~ expr)* ~ "}"
 }
 
-builtin = { "#" ~ identifier ~ builtin_args? }
+raw_word = { "#" ~ identifier ~ word_args }
 
-builtin_args = _{
-    "(" ~ builtin_arg ~ ("," ~ builtin_arg)* ~ ")"
+word_args = {  
+  | "(" ~ ")"
+  | "(" ~ word_arg ~ ("," ~ word_arg)* ~ ")"
+  | ""
 }
-builtin_arg  =  { path | int }
+
+word_arg = {
+  | literal
+  | path
+  | sentence
+}
 
 path = {
     "'" ~ identifier ~ ("::" ~ identifier)*
@@ -96,15 +103,10 @@ path = {
 
 // SENTENCE
 sentence_decl = {
-    "sentence" ~ identifier ~ "{" ~ sentence ~ "}"
+    "sentence" ~ identifier ~ sentence
 }
 
-sentence = { raw_word* }
-
-raw_word = {
-    literal
-  | builtin
-}
+sentence = { "{" ~ raw_word* ~ "}" }
 
 // FN
 

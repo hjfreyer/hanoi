@@ -11,7 +11,7 @@ use source::{Loader, Sources};
 use itertools::Itertools;
 use typed_index_collections::TiVec;
 
-use crate::parser::source::FileIndex;
+use crate::{bytecode, parser::source::FileIndex};
 
 pub mod source;
 
@@ -22,19 +22,21 @@ struct HanoiParser;
 
 pub fn load_all(loader: &Loader) -> anyhow::Result<(Sources, Library)> {
     let mut sources = Sources::default();
-    let mut queue = VecDeque::from([PathBuf::from("")]);
+    let mut queue: VecDeque<Vec<source::Span>> = VecDeque::from([vec![]]);
     let mut library = Library::default();
-    while let Some(mod_name) = queue.pop_front() {
-        let file_idx = loader.load(mod_name.clone(), &mut sources)?;
+    while let Some(mod_path) = queue.pop_front() {
+        let mod_name: PathBuf = mod_path.iter().map(|span| span.as_str(&sources)).collect();
+        let file_idx = loader.load(mod_name, &mut sources)?;
         let factory = Factory(file_idx);
 
         let parsed = HanoiParser::parse(Rule::file, &sources.files[file_idx].source)?
             .next()
             .unwrap();
-        let file = factory.file(parsed);
+        let file = factory.file(mod_path.clone(), parsed);
 
         for import in file.imports.iter() {
-            queue.push_back(mod_name.join(import.0.as_str(&sources)));
+            let sub_path = mod_path.iter().cloned().chain([import.0]).collect();
+            queue.push_back(sub_path);
         }
 
         library.files.push(file);
@@ -51,10 +53,14 @@ pub struct Library {
 struct Factory(FileIndex);
 
 impl Factory {
-    fn file(&self, p: Pair<Rule>) -> File {
+    fn file(&self, mod_path: Vec<source::Span>, p: Pair<Rule>) -> File {
         assert_eq!(p.as_rule(), Rule::file_body);
         let pairs = p.into_inner();
-        let mut result = File::default();
+        let mut result = File {
+            mod_path,
+            imports: vec![],
+            namespace: Namespace::default(),
+        };
         for pair in pairs {
             match pair.as_rule() {
                 Rule::external_mod_decl => result
@@ -72,6 +78,7 @@ impl Factory {
         let inner = p.into_inner().exactly_one().unwrap();
         match inner.as_rule() {
             Rule::const_decl => Decl::ConstDecl(self.const_decl(inner)),
+            Rule::sentence_decl => Decl::SentenceDecl(self.sentence_decl(inner)),
             _ => panic!("invalid decl: {:?}", inner.as_rule()),
         }
     }
@@ -85,12 +92,6 @@ impl Factory {
         }
     }
 
-    fn identifier(&self, p: Pair<Rule>) -> Identifier {
-        assert_eq!(p.as_rule(), Rule::identifier);
-        let span = source::Span::from_ast(self.0, p.as_span());
-        Identifier(span)
-    }
-
     fn const_expr(&self, p: Pair<Rule>) -> ConstExpr {
         assert_eq!(p.as_rule(), Rule::const_expr);
         let inner = p.into_inner().exactly_one().unwrap();
@@ -102,6 +103,56 @@ impl Factory {
         }
     }
 
+    fn sentence_decl(&self, p: Pair<Rule>) -> SentenceDecl {
+        assert_eq!(p.as_rule(), Rule::sentence_decl);
+        let span = source::Span::from_ast(self.0, p.as_span());
+        let (name, sentence) = p.into_inner().collect_tuple().unwrap();
+        let name = self.identifier(name);
+        let sentence = self.sentence(sentence);
+        SentenceDecl {
+            span,
+            name,
+            sentence,
+        }
+    }
+
+    fn sentence(&self, p: Pair<Rule>) -> Sentence {
+        assert_eq!(p.as_rule(), Rule::sentence);
+        let span = source::Span::from_ast(self.0, p.as_span());
+        let words = p.into_inner().map(|p| self.word(p)).collect();
+        Sentence { span, words }
+    }
+
+    fn word(&self, p: Pair<Rule>) -> Word {
+        assert_eq!(p.as_rule(), Rule::raw_word);
+        let span = source::Span::from_ast(self.0, p.as_span());
+        let (operator, args) = p.into_inner().collect_tuple().unwrap();
+        let operator = self.identifier(operator);
+        let args = args.into_inner().map(|p| self.word_arg(p)).collect();
+        Word {
+            span,
+            operator,
+            args,
+        }
+    }
+
+    fn word_arg(&self, p: Pair<Rule>) -> WordArg {
+        assert_eq!(p.as_rule(), Rule::word_arg);
+        let inner = p.into_inner().exactly_one().unwrap();
+        match inner.as_rule() {
+            Rule::literal => WordArg::Literal(self.literal(inner)),
+            Rule::path => WordArg::Path(self.path(inner)),
+            Rule::sentence => WordArg::Sentence(self.sentence(inner)),
+            _ => panic!("invalid word arg"),
+        }
+    }
+
+    fn identifier(&self, p: Pair<Rule>) -> Identifier {
+        assert_eq!(p.as_rule(), Rule::identifier);
+        let span = source::Span::from_ast(self.0, p.as_span());
+        Identifier(span)
+    }
+
     fn literal(&self, p: Pair<Rule>) -> Literal {
         assert_eq!(p.as_rule(), Rule::literal);
         let inner = p.into_inner().exactly_one().unwrap();
@@ -110,7 +161,7 @@ impl Factory {
             Rule::int => LiteralType::Int,
             Rule::char_lit => LiteralType::Char,
             Rule::bool => LiteralType::Bool,
-            Rule::symbol => LiteralType::Symbol,
+            // Rule::symbol => LiteralType::Symbol,
             _ => panic!("invalid literal type"),
         };
         Literal { ty, span }
@@ -124,8 +175,9 @@ impl Factory {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct File {
+    pub mod_path: Vec<source::Span>,
     pub imports: Vec<Identifier>,
     pub namespace: Namespace,
 }
@@ -139,7 +191,7 @@ pub struct Namespace {
 #[derive(Debug)]
 pub enum Decl {
     ConstDecl(ConstDecl),
-    // SentenceDecl(SentenceDecl),
+    SentenceDecl(SentenceDecl),
     // FnDecl(FnDecl),
     // DefDecl(DefDecl),
 }
@@ -157,24 +209,66 @@ pub enum ConstExpr {
 }
 
 #[derive(Debug)]
+pub struct SentenceDecl {
+    pub span: source::Span,
+    pub name: Identifier,
+    pub sentence: Sentence,
+}
+
+#[derive(Debug)]
+pub struct Sentence {
+    pub span: source::Span,
+    pub words: Vec<Word>,
+}
+
+#[derive(Debug)]
+pub struct Word {
+    pub span: source::Span,
+    pub operator: Identifier,
+    pub args: Vec<WordArg>,
+}
+
+#[derive(Debug)]
+pub enum WordArg {
+    Literal(Literal),
+    Path(Path),
+    Sentence(Sentence),
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct Literal {
     pub ty: LiteralType,
     pub span: source::Span,
 }
 
-#[derive(Debug)]
+impl Literal {
+    pub fn into_value(self, sources: &source::Sources) -> bytecode::PrimitiveValue {
+        match self.ty {
+            LiteralType::Int => {
+                bytecode::PrimitiveValue::Usize(self.span.as_str(sources).parse().unwrap())
+            }
+            LiteralType::Char => {
+                bytecode::PrimitiveValue::Char(self.span.as_str(sources).chars().nth(1).unwrap())
+            }
+            LiteralType::Bool => {
+                bytecode::PrimitiveValue::Bool(self.span.as_str(sources).parse().unwrap())
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 pub enum LiteralType {
     Int,
     Char,
     Bool,
-    Symbol,
 }
 
 #[derive(Debug)]
 pub struct Path {
-    span: source::Span,
-    segments: Vec<Identifier>,
+    pub span: source::Span,
+    pub segments: Vec<Identifier>,
 }
 
 #[derive(Debug)]
-pub struct Identifier(source::Span);
+pub struct Identifier(pub source::Span);

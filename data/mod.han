@@ -7,9 +7,14 @@
 const foo = 3;
 const bar = 'foo;
 
-// sentence main {
-//     #call('main::main_impl)
-// }
+sentence main {
+    #push('foo)
+    #call('main2)
+}
+
+sentence main2 {
+    #push(42)
+}
 
 
 // //sentence test {
