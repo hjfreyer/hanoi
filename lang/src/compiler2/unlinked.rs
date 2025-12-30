@@ -130,6 +130,36 @@ impl<'a> Builder<'a> {
                     self.visit_word_arg_const_expr(arg),
                 ))
             }
+            "cp" => {
+                let arg = word.args.into_iter().exactly_one().unwrap();
+                ast::Word::StackOperation(ast::StackOperation::Copy(
+                    self.visit_word_arg_variable(arg),
+                ))
+            }
+            "mv" => {
+                let arg = word.args.into_iter().exactly_one().unwrap();
+                ast::Word::StackOperation(ast::StackOperation::Move(
+                    self.visit_word_arg_variable(arg),
+                ))
+            }
+            "drop" => {
+                let arg = word.args.into_iter().exactly_one().unwrap();
+                ast::Word::StackOperation(ast::StackOperation::Drop(
+                    self.visit_word_arg_variable(arg),
+                ))
+            }
+            "tuple" => {
+                let arg = word.args.into_iter().exactly_one().unwrap();
+                ast::Word::StackOperation(ast::StackOperation::Tuple(
+                    self.visit_word_arg_usize(arg),
+                ))
+            }
+            "untuple" => {
+                let arg = word.args.into_iter().exactly_one().unwrap();
+                ast::Word::StackOperation(ast::StackOperation::Untuple(
+                    self.visit_word_arg_usize(arg),
+                ))
+            }
             "call" => {
                 let arg = word.args.into_iter().exactly_one().unwrap();
                 ast::Word::Call(self.visit_word_arg_sentence(arg))
@@ -156,6 +186,27 @@ impl<'a> Builder<'a> {
             _ => panic!("expected sentence or path: {:?}", word_arg),
         };
         self.res.sentence_refs.push_and_get_key(result)
+    }
+
+    fn visit_word_arg_variable(&mut self, word_arg: parser::WordArg) -> ast::VariableRefIndex {
+        let result: usize = match word_arg {
+            parser::WordArg::Literal(literal) => match literal.into_value(self.sources) {
+                bytecode::PrimitiveValue::Usize(value) => value,
+                _ => panic!("expected usize: {:?}", literal),
+            },
+            _ => panic!("expected variable: {:?}", word_arg),
+        };
+        self.res.variable_refs.push_and_get_key(result)
+    }
+
+    fn visit_word_arg_usize(&mut self, word_arg: parser::WordArg) -> usize {
+        match word_arg {
+            parser::WordArg::Literal(literal) => match literal.into_value(self.sources) {
+                bytecode::PrimitiveValue::Usize(value) => value,
+                _ => panic!("expected usize: {:?}", literal),
+            },
+            _ => panic!("expected usize: {:?}", word_arg),
+        }
     }
 }
 

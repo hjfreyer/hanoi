@@ -10,6 +10,7 @@ const bar = 'foo;
 sentence main {
     #push('foo)
     #call('main2)
+    #tuple(2)
 }
 
 sentence main2 {
