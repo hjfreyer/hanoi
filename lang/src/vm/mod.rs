@@ -1,6 +1,6 @@
-use std::io::{stdin, stdout, Read, Write};
+use std::io::{Read, Write, stdin, stdout};
 
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use itertools::Itertools;
 
 use crate::bytecode::{Library, SentenceIndex, Word};
@@ -82,28 +82,25 @@ impl Vm {
     }
 
     pub fn step(&mut self) -> Result<StepResult, EvalError> {
-        let mut pc = loop {
-            let Some(pc) = self.call_stack.pop() else {
-                return Ok(StepResult::Exit);
-            };
-            if pc.word_idx == self.lib.sentences[pc.sentence_idx].words.len() {
-                continue;
-            } else {
-                break pc;
-            }
+        let Some(pc) = self.call_stack.last_mut() else {
+            return Ok(StepResult::Exit);
         };
         let word = &self.lib.sentences[pc.sentence_idx].words[pc.word_idx];
+        pc.word_idx += 1;
 
         let res = Self::eval_word(&mut self.stack, word)?;
         match res {
             EvalResult::Call(sentence_idx) => {
-                pc.word_idx += 1;
-                self.call_stack.push(pc);
                 self.jump_to(sentence_idx);
             }
             EvalResult::Continue => {
-                pc.word_idx += 1;
-                self.call_stack.push(pc);
+                // We already advanced the PC above, but now we ensure that
+                // it points to a real word, if there's any left.
+                while let Some(pc) = self.call_stack.last()
+                    && pc.word_idx == self.lib.sentences[pc.sentence_idx].words.len()
+                {
+                    self.call_stack.pop();
+                }
             }
         }
         Ok(StepResult::Continue)
