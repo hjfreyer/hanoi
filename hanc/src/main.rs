@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use hanoi::{
-    compiler2::{self, unlinked},
-    parser::{self, source},
+    compiler2::{self},
+    parser::source,
 };
 
 #[derive(Parser, Debug)]

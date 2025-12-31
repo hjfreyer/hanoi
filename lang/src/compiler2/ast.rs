@@ -1,10 +1,8 @@
-use std::collections::BTreeMap;
 
 use derive_more::derive::{From, Into};
-use typed_index_collections::TiVec;
 
 use crate::{
-    bytecode::{self, Builtin},
+    bytecode::Builtin,
     parser::source,
 };
 

@@ -1,7 +1,4 @@
-use std::io::{Read, Write, stdin, stdout};
 
-use anyhow::{Context, anyhow};
-use itertools::Itertools;
 
 use crate::bytecode::{Library, SentenceIndex, Word};
 

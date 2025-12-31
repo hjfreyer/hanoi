@@ -1,6 +1,6 @@
 use crate::{
-    bytecode::{Builtin, StackOperation, Word},
-    vm::value::{self, ConversionError, Value},
+    bytecode::{Builtin, StackOperation},
+    vm::value::{ConversionError, Value},
 };
 
 #[derive(Debug, Default, Clone)]
