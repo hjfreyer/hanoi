@@ -128,7 +128,7 @@ impl<'de> Deserialize<'de> for Library {
     {
         let serde_repr = LibrarySerde::deserialize(deserializer)?;
         Ok(Library {
-            debuginfo: Default::default(),
+            debuginfo: serde_repr.debuginfo,
             symbols: serde_repr.symbols.into_iter().collect(),
             sentences: serde_repr.sentences.into_iter().collect(),
             exports: serde_repr.exports,

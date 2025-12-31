@@ -2,12 +2,12 @@ use std::collections::VecDeque;
 
 use itertools::{Itertools, Position};
 use ratatui::{
+    DefaultTerminal,
     crossterm::event,
     layout::{Constraint, Layout},
     style::{Style, Stylize},
     text::Text,
     widgets::{Paragraph, Row, Table, TableState},
-    DefaultTerminal,
 };
 
 use crate::{

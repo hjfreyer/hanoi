@@ -10,10 +10,10 @@ use dap::responses::{
     ResponseBody, ScopesResponse, SetBreakpointsResponse, StackTraceResponse, ThreadsResponse,
     VariablesResponse,
 };
-use hanoi::bytecode::debuginfo::Library as DebuginfoLibrary;
 use hanoi::bytecode::{Library as BytecodeLibrary, SentenceIndex};
-use hanoi::vm::Vm;
-use serde_json;
+use hanoi::compiler2;
+use hanoi::parser::source;
+use hanoi::vm::{ProgramCounter, Vm};
 
 struct DebuggerState {
     bytecode: Option<BytecodeLibrary>,
@@ -42,7 +42,11 @@ fn main() -> Result<()> {
         }));
 
         while let Some(request) = server.poll_request()? {
-            handle_request(&mut server, request, Arc::clone(&state))?;
+            if let Err(err) = handle_request(&mut server, request, Arc::clone(&state)) {
+                let error_msg = format!("Error handling request: {:#}\n", err);
+                eprintln!("{}", error_msg);
+                let _ = send_console_output(&mut server, &error_msg);
+            }
         }
     }
 
@@ -82,14 +86,20 @@ where
                 .map(PathBuf::from)
                 .context("Program path not specified in launch arguments")?;
 
-            // Load bytecode file (.hanb)
-            let bytecode_path = program_path.clone();
-            let bytecode_json = std::fs::read_to_string(&bytecode_path).with_context(|| {
-                format!("Failed to read bytecode file: {}", bytecode_path.display())
-            })?;
+            // Determine base directory (parent of the .han file)
+            let base_dir = program_path
+                .parent()
+                .context("Program path has no parent directory")?
+                .to_path_buf();
 
-            let bytecode: BytecodeLibrary =
-                serde_json::from_str(&bytecode_json).context("Failed to parse bytecode JSON")?;
+            // Compile the .han file
+            send_console_output(
+                server,
+                &format!("Compiling {}...\n", program_path.display()),
+            )?;
+            let loader = source::Loader { base_dir };
+            let bytecode =
+                compiler2::compile(&loader).context("Failed to compile Hanoi program")?;
 
             // Store in state
             {
@@ -106,8 +116,8 @@ where
             send_console_output(
                 server,
                 &format!(
-                    "Hanoi debugger loaded bytecode from {}\n",
-                    bytecode_path.display()
+                    "Hanoi debugger compiled and loaded program from {}\n",
+                    program_path.display()
                 ),
             )?;
 
@@ -196,72 +206,7 @@ where
                 if let (Some(ref vm), Some(ref bytecode)) =
                     (state.vm.as_ref(), state.bytecode.as_ref())
                 {
-                    let debuginfo = &bytecode.debuginfo;
-                    let mut frames = Vec::new();
-
-                    // Iterate through call stack in reverse order (top of stack first)
-                    for (frame_id, pc) in vm.call_stack.iter().rev().enumerate() {
-                        let sentence_idx: usize = pc.sentence_idx.into();
-
-                        // Get source location from debuginfo
-                        let source = if let Some(debuginfo_sentence) =
-                            debuginfo.sentences.get(sentence_idx as usize)
-                        {
-                            if let Some(debuginfo_word) = debuginfo_sentence.words.get(pc.word_idx)
-                            {
-                                debuginfo_word.span.as_ref().and_then(|span| {
-                                    debuginfo
-                                        .files
-                                        .get(span.file)
-                                        .map(|file_path| types::Source {
-                                            name: Some(
-                                                file_path
-                                                    .file_name()
-                                                    .and_then(|n| n.to_str())
-                                                    .unwrap_or("unknown")
-                                                    .to_string(),
-                                            ),
-                                            path: Some(file_path.to_string_lossy().to_string()),
-                                            ..Default::default()
-                                        })
-                                })
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        };
-
-                        let (line, column) = if let Some(debuginfo_sentence) =
-                            debuginfo.sentences.get(sentence_idx as usize)
-                        {
-                            if let Some(debuginfo_word) = debuginfo_sentence.words.get(pc.word_idx)
-                            {
-                                debuginfo_word
-                                    .span
-                                    .as_ref()
-                                    .map(|span| (span.begin.line as i64, span.begin.col as i64))
-                                    .unwrap_or((0, 0))
-                            } else {
-                                (0, 0)
-                            }
-                        } else {
-                            (0, 0)
-                        };
-
-                        let frame = types::StackFrame {
-                            id: frame_id as i64,
-                            name: format!("sentence_{}", sentence_idx),
-                            source,
-                            line: line,
-                            column: column,
-                            ..Default::default()
-                        };
-                        frames.push(frame);
-                    }
-
-                    let total = frames.len() as i64;
-                    (frames, Some(total))
+                    build_stack_frames(bytecode, vm).context("Failed to build stack frames")?
                 } else {
                     (vec![], Some(0))
                 }
@@ -345,6 +290,84 @@ where
     }
 
     Ok(())
+}
+
+fn build_stack_frames(
+    bytecode: &BytecodeLibrary,
+    vm: &Vm,
+) -> Result<(Vec<types::StackFrame>, Option<i64>)> {
+    let mut frames = Vec::new();
+
+    // Iterate through call stack in reverse order (top of stack first)
+    for (frame_id, pc) in vm.call_stack.iter().rev().enumerate() {
+        let frame = build_stack_frame(bytecode, *pc, frame_id as i64)?;
+        frames.push(frame);
+    }
+
+    let total = frames.len() as i64;
+    Ok((frames, Some(total)))
+}
+
+fn build_stack_frame(
+    bytecode: &BytecodeLibrary,
+    pc: ProgramCounter,
+    frame_id: i64,
+) -> Result<types::StackFrame> {
+    let debuginfo = &bytecode.debuginfo;
+    let sentence_idx: usize = pc.sentence_idx.into();
+
+    // Get debuginfo sentence
+    let debuginfo_sentence = debuginfo
+        .sentences
+        .get(sentence_idx)
+        .with_context(|| format!("Missing debuginfo for sentence index {}", sentence_idx))?;
+
+    // Get debuginfo word
+    let debuginfo_word = debuginfo_sentence.words.get(pc.word_idx).with_context(|| {
+        format!(
+            "Missing debuginfo word at index {} in sentence {}",
+            pc.word_idx, sentence_idx
+        )
+    })?;
+
+    // Get source location from debuginfo
+    let source = debuginfo_word.span.as_ref().and_then(|span| {
+        debuginfo
+            .files
+            .get(span.file)
+            .map(|file_path| types::Source {
+                name: Some(
+                    file_path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("unknown")
+                        .to_string(),
+                ),
+                path: Some(
+                    file_path
+                        .canonicalize()
+                        .unwrap()
+                        .to_string_lossy()
+                        .to_string(),
+                ),
+                ..Default::default()
+            })
+    });
+
+    let (line, column) = debuginfo_word
+        .span
+        .as_ref()
+        .map(|span| (span.begin.line as i64, span.begin.col as i64))
+        .unwrap_or((0, 0));
+
+    Ok(types::StackFrame {
+        id: frame_id,
+        name: format!("sentence_{}", sentence_idx),
+        source,
+        line: line,
+        column: column,
+        ..Default::default()
+    })
 }
 
 fn format_value(value: &hanoi::vm::Value) -> String {

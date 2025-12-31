@@ -1,8 +1,8 @@
 use std::{collections::VecDeque, path::PathBuf, result};
 
 use pest::{
-    iterators::{Pair, Pairs},
     Parser,
+    iterators::{Pair, Pairs},
 };
 use pest_derive::Parser;
 

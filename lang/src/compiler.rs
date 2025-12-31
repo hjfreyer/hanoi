@@ -164,11 +164,13 @@ impl<'a, 't> TransformerFactory<'a, 't> {
             span: pest::Span<'t>,
             bindings: Vec<ast::Binding<'t>>,
         ) -> (Transformer<'t>, i32) {
-            let mut children = vec![Transformer::Untuple {
-                span,
-                size: bindings.len(),
-            }
-            .into_pen(p)];
+            let mut children = vec![
+                Transformer::Untuple {
+                    span,
+                    size: bindings.len(),
+                }
+                .into_pen(p),
+            ];
             let mut stack_size = bindings.len() as i32;
             for binding in bindings {
                 children.push(
@@ -834,7 +836,7 @@ impl<'t> Compiler<'t> {
                     return Err(linker::Error::UnusedVariable {
                         location: file_span.location(self.sources),
                         name: file_span.as_str(self.sources).to_owned(),
-                    })
+                    });
                 }
                 Name::Generated(idx) => panic!("Leaked generated variable?? ${}", idx),
             }

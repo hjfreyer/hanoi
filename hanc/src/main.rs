@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use hanoi::{
-    compiler2::unlinked,
+    compiler2::{self, unlinked},
     parser::{self, source},
 };
 
@@ -26,13 +26,7 @@ enum Commands {
 
 fn compile(base_dir: PathBuf, output_dir: PathBuf) -> anyhow::Result<()> {
     let loader = source::Loader { base_dir };
-    let (sources, parsed_library) = parser::load_all(&loader)?;
-
-    let unlinked = unlinked::Library::from_parsed(&sources, parsed_library);
-
-    let linked = unlinked.link(&sources)?;
-
-    let bytecode = linked.into_bytecode(&sources);
+    let bytecode = compiler2::compile(&loader)?;
 
     let bytecode_path = output_dir.join("main.hanb.json");
     std::fs::write(bytecode_path, serde_json::to_string_pretty(&bytecode)?)

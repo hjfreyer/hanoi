@@ -11,6 +11,7 @@ sentence main {
     #push('foo)
     #call('main2)
     #tuple(2)
+    #tuple(1)
 }
 
 sentence main2 {
