@@ -1,12 +1,16 @@
 use std::collections::BTreeMap;
 
+use anyhow::Context;
 use derive_more::derive::{From, Into};
 use itertools::Itertools;
 use typed_index_collections::TiVec;
 
 use crate::{
     bytecode,
-    compiler2::{ast, linked},
+    compiler2::{
+        ast, linked,
+        unresolved::{DebugWith, UseDebugWith},
+    },
     parser::{self, source},
 };
 
@@ -14,15 +18,9 @@ use crate::{
 pub struct ConstDefIndex(usize);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConstName {
+pub struct ConstDecl {
     pub name: ast::Path,
     pub value: ast::ConstRefIndex,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ConstRef {
-    Inline(bytecode::PrimitiveValue),
-    Path(ast::Path),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,211 +29,128 @@ pub enum SentenceRef {
     Path(ast::Path),
 }
 
+impl<C> DebugWith<C> for SentenceRef
+where
+    ast::Path: DebugWith<C>,
+{
+    fn debug_with(&self, c: &C, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SentenceRef::Inline(sentence_def_index) => f
+                .debug_tuple("SentenceRef::Inline")
+                .field(sentence_def_index)
+                .finish(),
+            SentenceRef::Path(path) => f
+                .debug_tuple("SentenceRef::Path")
+                .field(&UseDebugWith(path, c))
+                .finish(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SentenceName {
+pub struct SentenceDecl {
     pub name: ast::Path,
     pub value: ast::SentenceDefIndex,
 }
 
-#[derive(Debug, Clone, Default)]
+impl<C> DebugWith<C> for SentenceDecl
+where
+    ast::Path: DebugWith<C>,
+{
+    fn debug_with(&self, c: &C, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SentenceDecl")
+            .field("name", &UseDebugWith(&self.name, c))
+            .field("value", &self.value)
+            .finish()
+    }
+}
+
+#[derive(Clone, Default)]
 pub struct Library {
     // pub symbol_defs: TiVec<bytecode::SymbolIndex, String>,
-    pub const_refs: TiVec<ast::ConstRefIndex, ConstRef>,
-    pub const_names: Vec<ConstName>,
+    pub const_refs: TiVec<ast::ConstRefIndex, ast::ConstRef>,
+    pub const_decls: Vec<ConstDecl>,
 
     pub variable_refs: TiVec<ast::VariableRefIndex, usize>,
 
     pub sentence_defs: TiVec<ast::SentenceDefIndex, ast::SentenceDef>,
     pub sentence_refs: TiVec<ast::SentenceRefIndex, SentenceRef>,
-    pub sentence_names: Vec<SentenceName>,
-    pub exports: BTreeMap<String, ast::PathIndex>,
+    pub sentence_decls: Vec<SentenceDecl>,
 }
 
-struct Builder<'a> {
+#[derive(Copy, Clone)]
+struct LibraryView<'a> {
     sources: &'a source::Sources,
-    res: Library,
+    library: &'a Library,
 }
 
-impl<'a> Builder<'a> {
-    fn new(sources: &'a source::Sources) -> Self {
-        Self {
-            sources,
-            res: Library::default(),
-        }
-    }
-
-    fn build(self) -> Library {
-        self.res
-    }
-
-    fn visit_file(&mut self, file: parser::File) {
-        for decl in file.namespace.decls {
-            let module_path = ast::Path(file.mod_path.clone());
-            match decl {
-                parser::Decl::ConstDecl(const_decl) => {
-                    self.visit_const_decl(module_path, const_decl);
-                }
-                parser::Decl::SentenceDecl(sentence_decl) => {
-                    self.visit_sentence_decl(module_path, sentence_decl);
-                }
-            }
-        }
-    }
-
-    fn visit_const_decl(&mut self, module_path: ast::Path, const_decl: parser::ConstDecl) {
-        let name = module_path.join(const_decl.name.0);
-        let const_name = ConstName {
-            name,
-            value: self.visit_const_expr(const_decl.value),
-        };
-        self.res.const_names.push(const_name);
-    }
-
-    fn visit_const_expr(&mut self, const_expr: parser::ConstExpr) -> ast::ConstRefIndex {
-        self.res.const_refs.push_and_get_key(match const_expr {
-            parser::ConstExpr::Literal(literal) => {
-                ConstRef::Inline(literal.into_value(self.sources))
-            }
-            parser::ConstExpr::Path(path) => {
-                ConstRef::Path(ast::Path(path.segments.iter().map(|i| i.0).collect()))
-            }
-        })
-    }
-
-    fn visit_sentence_decl(&mut self, module_path: ast::Path, sentence_decl: parser::SentenceDecl) {
-        let name = module_path.join(sentence_decl.name.0);
-        let sentence_name = SentenceName {
-            name,
-            value: self.visit_sentence_def(sentence_decl.sentence),
-        };
-        self.res.sentence_names.push(sentence_name);
-    }
-
-    fn visit_sentence_def(&mut self, sentence: parser::Sentence) -> ast::SentenceDefIndex {
-        let words = sentence
-            .words
-            .into_iter()
-            .map(|w| self.visit_word(w))
-            .collect();
-        self.res
-            .sentence_defs
-            .push_and_get_key(ast::SentenceDef { words })
-    }
-
-    fn visit_word(&mut self, word: parser::Word) -> ast::Word {
-        let inner = match word.operator.0.as_str(self.sources) {
-            "push" => {
-                let arg = word.args.into_iter().exactly_one().unwrap();
-                ast::WordInner::StackOperation(ast::StackOperation::Push(
-                    self.visit_word_arg_const_expr(arg),
-                ))
-            }
-            "cp" => {
-                let arg = word.args.into_iter().exactly_one().unwrap();
-                ast::WordInner::StackOperation(ast::StackOperation::Copy(
-                    self.visit_word_arg_variable(arg),
-                ))
-            }
-            "mv" => {
-                let arg = word.args.into_iter().exactly_one().unwrap();
-                ast::WordInner::StackOperation(ast::StackOperation::Move(
-                    self.visit_word_arg_variable(arg),
-                ))
-            }
-            "drop" => {
-                let arg = word.args.into_iter().exactly_one().unwrap();
-                ast::WordInner::StackOperation(ast::StackOperation::Drop(
-                    self.visit_word_arg_variable(arg),
-                ))
-            }
-            "tuple" => {
-                let arg = word.args.into_iter().exactly_one().unwrap();
-                ast::WordInner::StackOperation(ast::StackOperation::Tuple(
-                    self.visit_word_arg_usize(arg),
-                ))
-            }
-            "untuple" => {
-                let arg = word.args.into_iter().exactly_one().unwrap();
-                ast::WordInner::StackOperation(ast::StackOperation::Untuple(
-                    self.visit_word_arg_usize(arg),
-                ))
-            }
-            "call" => {
-                let arg = word.args.into_iter().exactly_one().unwrap();
-                ast::WordInner::Call(self.visit_word_arg_sentence(arg))
-            }
-            _ => {
-                if let Some(builtin) = bytecode::Builtin::ALL.iter().find(|b| b.name() == word.operator.0.as_str(self.sources)) {
-                    ast::WordInner::StackOperation(ast::StackOperation::Builtin(*builtin))
-                } else {
-                    panic!("unknown word: {}", word.operator.0.as_str(self.sources))
-                }
-            }
-        };
-        ast::Word {
-            inner,
-            span: word.span,
-        }
-    }
-
-    fn visit_word_arg_const_expr(&mut self, word_arg: parser::WordArg) -> ast::ConstRefIndex {
-        let result: ConstRef = match word_arg {
-            parser::WordArg::Literal(literal) => ConstRef::Inline(literal.into_value(self.sources)),
-            parser::WordArg::Path(path) => ConstRef::Path(convert_path(path)),
-            _ => panic!("expected literal or path: {:?}", word_arg),
-        };
-        self.res.const_refs.push_and_get_key(result)
-    }
-
-    fn visit_word_arg_sentence(&mut self, word_arg: parser::WordArg) -> ast::SentenceRefIndex {
-        let result: SentenceRef = match word_arg {
-            parser::WordArg::Sentence(sentence) => {
-                SentenceRef::Inline(self.visit_sentence_def(sentence))
-            }
-            parser::WordArg::Path(path) => SentenceRef::Path(convert_path(path)),
-            _ => panic!("expected sentence or path: {:?}", word_arg),
-        };
-        self.res.sentence_refs.push_and_get_key(result)
-    }
-
-    fn visit_word_arg_variable(&mut self, word_arg: parser::WordArg) -> ast::VariableRefIndex {
-        let result: usize = match word_arg {
-            parser::WordArg::Literal(literal) => match literal.into_value(self.sources) {
-                bytecode::PrimitiveValue::Usize(value) => value,
-                _ => panic!("expected usize: {:?}", literal),
-            },
-            _ => panic!("expected variable: {:?}", word_arg),
-        };
-        self.res.variable_refs.push_and_get_key(result)
-    }
-
-    fn visit_word_arg_usize(&mut self, word_arg: parser::WordArg) -> usize {
-        match word_arg {
-            parser::WordArg::Literal(literal) => match literal.into_value(self.sources) {
-                bytecode::PrimitiveValue::Usize(value) => value,
-                _ => panic!("expected usize: {:?}", literal),
-            },
-            _ => panic!("expected usize: {:?}", word_arg),
-        }
+impl DebugWith<source::Sources> for Library {
+    fn debug_with(
+        &self,
+        sources: &source::Sources,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        f.debug_struct("Library")
+            .field(
+                "const_refs",
+                &UseDebugWith(
+                    &self.const_refs,
+                    &LibraryView {
+                        sources,
+                        library: self,
+                    },
+                ),
+            )
+            .field("const_decls", &self.const_decls)
+            .field("variable_refs", &self.variable_refs)
+            .field(
+                "sentence_defs",
+                &UseDebugWith(
+                    &self.sentence_defs,
+                    &LibraryView {
+                        sources,
+                        library: self,
+                    },
+                ),
+            )
+            .field(
+                "sentence_refs",
+                &UseDebugWith(
+                    &self.sentence_refs,
+                    &LibraryView {
+                        sources,
+                        library: self,
+                    },
+                ),
+            )
+            .field(
+                "sentence_decls",
+                &UseDebugWith(
+                    &self.sentence_decls,
+                    &LibraryView {
+                        sources,
+                        library: self,
+                    },
+                ),
+            )
+            .finish()
     }
 }
 
-fn convert_path(path: parser::Path) -> ast::Path {
-    ast::Path(path.segments.iter().map(|i| i.0).collect())
+impl DebugWith<LibraryView<'_>> for source::Span {
+    fn debug_with(
+        &self,
+        library_view: &LibraryView<'_>,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        f.write_str(self.as_str(library_view.sources))
+    }
 }
 
 impl Library {
-    pub fn from_parsed(sources: &source::Sources, parsed_library: parser::Library) -> Self {
-        let mut builder = Builder::new(sources);
-        for file in parsed_library.files {
-            builder.visit_file(file);
-        }
-        builder.build()
-    }
-
     pub fn link(self, sources: &source::Sources) -> Result<linked::Library, anyhow::Error> {
         let const_map: BTreeMap<Vec<&str>, ast::ConstRefIndex> = self
-            .const_names
+            .const_decls
             .into_iter()
             .map(|c| (c.name.as_strs(sources), c.value))
             .collect();
@@ -243,12 +158,12 @@ impl Library {
         fn deref_const_ref(
             const_ref_index: ast::ConstRefIndex,
             sources: &source::Sources,
-            const_refs: &TiVec<ast::ConstRefIndex, ConstRef>,
+            const_refs: &TiVec<ast::ConstRefIndex, ast::ConstRef>,
             const_map: &BTreeMap<Vec<&str>, ast::ConstRefIndex>,
         ) -> bytecode::PrimitiveValue {
             match &const_refs[const_ref_index] {
-                ConstRef::Inline(value) => *value,
-                ConstRef::Path(path) => deref_const_ref(
+                ast::ConstRef::Inline(value) => *value,
+                ast::ConstRef::Path(path) => deref_const_ref(
                     *const_map.get(path.as_strs(sources).as_slice()).unwrap(),
                     sources,
                     const_refs,
@@ -258,20 +173,27 @@ impl Library {
         }
 
         let sentence_map: BTreeMap<Vec<&str>, ast::SentenceDefIndex> = self
-            .sentence_names
+            .sentence_decls
             .into_iter()
             .map(|s| (s.name.as_strs(sources), s.value))
             .collect();
-        let sentence_refs: TiVec<ast::SentenceRefIndex, ast::SentenceDefIndex> = self
+        let sentence_refs: Result<
+            TiVec<ast::SentenceRefIndex, ast::SentenceDefIndex>,
+            anyhow::Error,
+        > = self
             .sentence_refs
             .into_iter()
             .map(|s| match s {
-                SentenceRef::Inline(sentence_def_index) => sentence_def_index,
-                SentenceRef::Path(path) => {
-                    *sentence_map.get(path.as_strs(sources).as_slice()).unwrap()
-                }
+                SentenceRef::Inline(sentence_def_index) => Ok(sentence_def_index),
+                SentenceRef::Path(path) => sentence_map
+                    .get(path.as_strs(sources).as_slice())
+                    .copied()
+                    .with_context(|| {
+                        format!("sentence not found: {:?}", path.as_strs(sources).join("::"))
+                    }),
             })
             .collect();
+        let sentence_refs = sentence_refs?;
 
         Ok(linked::Library {
             symbol_defs: Default::default(),

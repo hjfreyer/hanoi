@@ -1,9 +1,6 @@
 use std::{collections::VecDeque, path::PathBuf};
 
-use pest::{
-    Parser,
-    iterators::Pair,
-};
+use pest::{Parser, iterators::Pair};
 use pest_derive::Parser;
 
 use source::{Loader, Sources};
@@ -11,7 +8,11 @@ use source::{Loader, Sources};
 use itertools::Itertools;
 use typed_index_collections::TiVec;
 
-use crate::{bytecode, parser::source::FileIndex};
+use crate::{
+    bytecode,
+    compiler2::unresolved::{DebugWith, UseDebugWith},
+    parser::source::FileIndex,
+};
 
 pub mod source;
 
@@ -270,5 +271,14 @@ pub struct Path {
     pub segments: Vec<Identifier>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct Identifier(pub source::Span);
+
+impl<C> DebugWith<C> for Identifier
+where
+    source::Span: DebugWith<C>,
+{
+    fn debug_with(&self, c: &C, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.debug_with(c, f)
+    }
+}

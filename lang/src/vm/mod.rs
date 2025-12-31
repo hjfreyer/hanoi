@@ -1,5 +1,3 @@
-
-
 use crate::bytecode::{Library, SentenceIndex, Word};
 
 mod stack;
