@@ -1,4 +1,4 @@
-// mod main;
+mod main;
 // mod builtin;
 // mod vec;
 // mod str;
@@ -9,14 +9,11 @@ const bar = 'foo;
 
 sentence main {
     #push('foo)
-    #call('main2)
+    #call('main::main)
     #tuple(2)
     #tuple(1)
 }
 
-sentence main2 {
-    #push(42)
-}
 
 
 // //sentence test {

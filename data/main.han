@@ -1,557 +1,563 @@
 
-use 'crate::builtin;
+// use 'crate::builtin;
 
-//mod builtin;
-//mod io;
-//mod ssv;
-//mod iter;
-//mod list;
-//mod str;
-//mod adv1p1;
-//mod multi_iter;
-//
-
-// mod tests {
-//     fn args main => args match {
-//         (#nil{}, #enumerate{}) => (#nil{}, #a{}),
-//         (#a{}, #next{}) => (#b{}, #some{@parse_empty}),
-//         (#b{}, #next{}) => (#c{}, #some{@parse_some}),
-//         (#c{}, #next{}) => (#d{}, #some{@split}),
-//         (#d{}, #next{}) => (#e{}, #none{}),
-
-//         (#nil{}, #run{@parse_empty}) => () 'cases::parse_empty,
-//         (#nil{}, #run{@parse_some}) => () 'cases::parse_some,
-//         (#nil{}, #run{@split}) => {
-//             let #resp{s, #some{}} = (#start{@i}, #next{}) 'super::split_iter;
-//             let #req{s, @iter, (@i, #next{})} = (s, #item{#next{}}) 'super::split_iter;
-//             let #resp{s, #some{}} = (s, #reply{@i, #non_delim{}}) 'super::split_iter;
-//             let #req{s, @iter, (@i, #item{@query})} = (s, #item{#item{@query}}) 'super::split_iter;
-//             let #resp{s, @answer} = (s, #reply{@i, @answer}) 'super::split_iter;
-
-//             let #req{s, @iter, (@i, #next{})} = (s, #item{#next{}}) 'super::split_iter;
-//             let #resp{s, #some{}} = (s, #reply{@i, #delim{}}) 'super::split_iter;
-//             let #resp{s, #none{}} = (s, #item{#next{}}) 'super::split_iter;
-//             let #resp{s, #some{}} = (s, #next{}) 'super::split_iter;
-//             let #req{s, @iter, (@i, #next{})} = (s, #item{#next{}}) 'super::split_iter;
-//             let #resp{s, #none{}} = (s, #reply{@i, #none{}}) 'super::split_iter;
-//             let #resp{s, #none{}} = (s, #next{}) 'super::split_iter;
-
-//             let ^ = s;
-//             ()
-//         },
-//     }
-
-//     mod cases {
-//         fn () parse_empty => {
-//             let (p, #req{#next{}}) = (#nil{}, #parse{}) 'super::super::parseint;
-//             let (^, #resp{0}) = (p, #none{}) 'super::super::parseint;
-//             ()
-//         }
-
-//         fn () parse_some => {
-//             let (p, #req{#next{}}) = (#nil{}, #parse{}) 'super::super::parseint;
-//             let (p, #req{#next{}}) = (p, #some{'6'}) 'super::super::parseint;
-//             let (p, #req{#next{}}) = (p, #some{'7'}) 'super::super::parseint;
-//             let (p, #req{#next{}}) = (p, #some{'2'}) 'super::super::parseint;
-//             let (^, #resp{672}) = (p, #none{}) 'super::super::parseint;
-//             ()
-//         }
-//     }
-// }
-
-// sentence ord {
-//     #ord
-// }
-
-// sentence prod {
-//     #untuple(2) #prod
-// }
-
-// sentence sub {
-//     #untuple(2) #sub
-// }
-
-
-// fn (self, method) parseint => {
-//     self match {
-//         #nil{} => {
-//             let #parse{} = method;
-//             (#await_next{0}, #req{#next{}})
-//         },
-//         #await_next{acc} => {
-//             method match {
-//                 #none{} => (#done{}, #resp{acc}),
-//                 #some{c} => {
-//                     let digit = (c 'ord, 48) 'sub;
-//                     let acc = ((10, acc) 'prod, digit) 'builtin::add;
-//                     (#await_next{acc}, #req{#next{}})
-//                 },
-//             }
-//         },
-//     }
-// }
-
-// mod ints {
-//     fn () alloc => {
-//         (@start, 0)
-//     }
-
-//     fn ((@start, s), @next) main => {
-//         let ^ = 3;
-//         let res = (@some, *s);
-//         ((@start, (s, 1) 'crate::builtin::add), res)
-//     }
-// }
-
-// fn args iter_sum => {
-//     args c#and_then
-//         c#do fn () => 0
-//     then
-//         c#loop c#and_then
-//             c#await fn acc => #req{acc, #iter{#next{}}}
-//         then c#and_then
-//             c#await fn (acc, reply) => reply match {
-//                 #some{} => #resp{(acc, true)},
-//                 #none{} => #resp{(acc, false)},
-//             }
-//         then
-//             c#if 
-//                 c#and_then
-//                     c#await fn acc => #req{acc, #iter{#item{#clone{}}}}
-//                 then
-//                     c#do fn (acc, item) => #continue{(acc, item) 'builtin::add}
-//             else 
-//                 c#do fn acc => #break{acc}
-// }
-
-
-// fn args and_then_test => {
-//     args c#and_then
-//         fn arg => arg match {
-//             #call{()} => #req{42, #next{}},
-//             #reply{42, #some{}} => #resp{55},
-//         }
-//     then
-//         fn arg => arg match {
-//             #call{55} => #req{56, #yetmore{}},
-//             #reply{56, #another{}} => #resp{57},
-//         }
-// }
-
-// fn args await_test => {
-//     args c#and_then
-//         c#await fn () => (42, #next{})
-//     then c#and_then
-//         c#await fn (42, #some{}) => (55, #another{})
-//     then
-//         c#do fn (55, #yetmore{}) => 57
-// }
-
-// fn method map_iter => {
-//     method match {
-//         #next{#start{iter, fn}} => {
-//             #req{#get_next{fn}, @iter, #next{iter}}
-//         },
-//         #reply{#get_next{fn}, message} => message match {
-//             #some{iter, item} => #req{#apply_fn{iter}, @fn, (fn, item)},
-//             #none{iter} => #resp{#none{#done{iter, fn}}},
-//         },
-//         #reply{#apply_fn{iter}, (fn, result)} => #resp{#some{#start{iter, fn}, result}},
-//     }
-// }
-
-// fn (self, method) map_ref_iter => {
-//     self match {
-//         #start{iter, fn_factory} => {
-//             let #next{} = method;
-//             #req{#get_next{fn_factory}, @iter, (iter, #next{})}
-//         },
-//         #get_next{fn_factory} => {
-//             let #reply{iter, message} = method;
-//             message match {
-//                 #some{} => #req{#get_mapper{iter}, @fn_factory, (fn_factory, ())},
-//                 #none{} => #resp{#done{iter, fn_factory}, #none{}},
-//             }
-//         },
-//         #get_mapper{iter} => {
-//             let #reply{fn_factory, fn} = method;
-//             #resp{#idle{iter, fn_factory, fn}, #some{}}
-//         },
-//         #idle{iter, fn_factory, fn} => {
-//             method match {
-//                 #item{msg} => #req{#fwd_fn{iter, fn_factory}, @fn, (fn, msg)},
-//                 #next{} => {
-//                     let ^ = fn;
-//                     #req{#get_next{fn_factory}, @iter, (iter, #next{})}
-//                 },
-//             }
-//         },
-//         #fwd_fn{iter, fn_factory} => {
-//             let #reply{fn, message} = method;
-//             #resp{#idle{iter, fn_factory, fn}, message}
-//         },
-//     }
-// }
-
-// fn (self, method) split_iter => {
-//     self match {
-//         #start{iter} => {
-//             let #next{} = method;
-//             #resp{#in_field{iter}, #some{}}
-//         },
-//         #in_field{iter} => {
-//             let #item{#next{}} = method;
-//             #req{#in_field_get_next{}, @iter, (iter, #next{})}
-//         },
-//         #in_field_get_next{} => {
-//             let #reply{iter, message} = method;
-//             message match {
-//                 #non_delim{} => #resp{#knowing{false, iter}, #some{}},
-//                 #delim{} =>  #resp{#knowing{true, iter}, #some{}},
-//                 #none{} => #resp{#in_field_done{iter}, #none{}},
-//             }
-//         },
-//         #knowing{is_delim, iter} => {
-//             method match {
-//                 #item{#item{msg}} => #req{#knowing_fwd{is_delim}, @iter, (iter, #item{msg})},
-//                 #item{#next{}} => is_delim if {
-//                     #resp{#start{iter}, #none{}}
-//                 } else {
-//                     #req{#in_field_get_next{}, @iter, (iter, #next{})}
-//                 },
-//             }
-//         },
-//         #knowing_fwd{is_delim} => {
-//             let #reply{iter, message} = method;
-//             #resp{#knowing{is_delim, iter}, message}
-//         },
-//         #field_end{iter} => {
-//             let #next{} = method;
-//             #req{#in_field_get_next{}, @iter, (iter, #next{})}
-//         },
-//         #in_field_done{iter} => {
-//             let #next{} = method;
-//             #resp{#done{iter}, #none{}}
-//         },
-//     }
-// }
-
-mod alloc {
-    fn () new => ()
-
-    fn (self, size) malloc => {
-        (self, size 'crate::array::new)
-    }
-
-    fn (self, array) free => {
-        (self, array 'crate::array::destroy)
-    }
+sentence main {
+    #push(10)
+    #push(20)
+    #add
 }
 
-// mod malloc {
-//     fn (allocator, size) init => #start{allocator, size}
+// //mod builtin;
+// //mod io;
+// //mod ssv;
+// //mod iter;
+// //mod list;
+// //mod str;
+// //mod adv1p1;
+// //mod multi_iter;
+// //
 
-//     fn (#start{allocator, size}, ()) =>  (allocator, size 'crate::array::new)
-// }
+// // mod tests {
+// //     fn args main => args match {
+// //         (#nil{}, #enumerate{}) => (#nil{}, #a{}),
+// //         (#a{}, #next{}) => (#b{}, #some{@parse_empty}),
+// //         (#b{}, #next{}) => (#c{}, #some{@parse_some}),
+// //         (#c{}, #next{}) => (#d{}, #some{@split}),
+// //         (#d{}, #next{}) => (#e{}, #none{}),
 
-fn args allocator => args match {
-    (self, #malloc{size}) => (self, size) 'alloc::malloc,
-    (self, #free{array}) => (self, array) 'alloc::free,
-}
+// //         (#nil{}, #run{@parse_empty}) => () 'cases::parse_empty,
+// //         (#nil{}, #run{@parse_some}) => () 'cases::parse_some,
+// //         (#nil{}, #run{@split}) => {
+// //             let #resp{s, #some{}} = (#start{@i}, #next{}) 'super::split_iter;
+// //             let #req{s, @iter, (@i, #next{})} = (s, #item{#next{}}) 'super::split_iter;
+// //             let #resp{s, #some{}} = (s, #reply{@i, #non_delim{}}) 'super::split_iter;
+// //             let #req{s, @iter, (@i, #item{@query})} = (s, #item{#item{@query}}) 'super::split_iter;
+// //             let #resp{s, @answer} = (s, #reply{@i, @answer}) 'super::split_iter;
 
-// mod alloc_bound_vec_new {
-//     fn (allocator, op) init => #start{allocator, op}
+// //             let #req{s, @iter, (@i, #next{})} = (s, #item{#next{}}) 'super::split_iter;
+// //             let #resp{s, #some{}} = (s, #reply{@i, #delim{}}) 'super::split_iter;
+// //             let #resp{s, #none{}} = (s, #item{#next{}}) 'super::split_iter;
+// //             let #resp{s, #some{}} = (s, #next{}) 'super::split_iter;
+// //             let #req{s, @iter, (@i, #next{})} = (s, #item{#next{}}) 'super::split_iter;
+// //             let #resp{s, #none{}} = (s, #reply{@i, #none{}}) 'super::split_iter;
+// //             let #resp{s, #none{}} = (s, #next{}) 'super::split_iter;
 
-//     fn (self, msg) advance => self match {
-//         #start{allocator, op} = (op, msg) 'crate::vec::new::advance match {
-//             (op, #alloc{#malloc{size}}) => {
-//                 let malloc_op = (allocator, size) 'super::malloc::init;
-//                 (#poll_malloc{op, malloc_op}, #stall{})
-//             }
-//         }
+// //             let ^ = s;
+// //             ()
+// //         },
+// //     }
+
+// //     mod cases {
+// //         fn () parse_empty => {
+// //             let (p, #req{#next{}}) = (#nil{}, #parse{}) 'super::super::parseint;
+// //             let (^, #resp{0}) = (p, #none{}) 'super::super::parseint;
+// //             ()
+// //         }
+
+// //         fn () parse_some => {
+// //             let (p, #req{#next{}}) = (#nil{}, #parse{}) 'super::super::parseint;
+// //             let (p, #req{#next{}}) = (p, #some{'6'}) 'super::super::parseint;
+// //             let (p, #req{#next{}}) = (p, #some{'7'}) 'super::super::parseint;
+// //             let (p, #req{#next{}}) = (p, #some{'2'}) 'super::super::parseint;
+// //             let (^, #resp{672}) = (p, #none{}) 'super::super::parseint;
+// //             ()
+// //         }
+// //     }
+// // }
+
+// // sentence ord {
+// //     #ord
+// // }
+
+// // sentence prod {
+// //     #untuple(2) #prod
+// // }
+
+// // sentence sub {
+// //     #untuple(2) #sub
+// // }
+
+
+// // fn (self, method) parseint => {
+// //     self match {
+// //         #nil{} => {
+// //             let #parse{} = method;
+// //             (#await_next{0}, #req{#next{}})
+// //         },
+// //         #await_next{acc} => {
+// //             method match {
+// //                 #none{} => (#done{}, #resp{acc}),
+// //                 #some{c} => {
+// //                     let digit = (c 'ord, 48) 'sub;
+// //                     let acc = ((10, acc) 'prod, digit) 'builtin::add;
+// //                     (#await_next{acc}, #req{#next{}})
+// //                 },
+// //             }
+// //         },
+// //     }
+// // }
+
+// // mod ints {
+// //     fn () alloc => {
+// //         (@start, 0)
+// //     }
+
+// //     fn ((@start, s), @next) main => {
+// //         let ^ = 3;
+// //         let res = (@some, *s);
+// //         ((@start, (s, 1) 'crate::builtin::add), res)
+// //     }
+// // }
+
+// // fn args iter_sum => {
+// //     args c#and_then
+// //         c#do fn () => 0
+// //     then
+// //         c#loop c#and_then
+// //             c#await fn acc => #req{acc, #iter{#next{}}}
+// //         then c#and_then
+// //             c#await fn (acc, reply) => reply match {
+// //                 #some{} => #resp{(acc, true)},
+// //                 #none{} => #resp{(acc, false)},
+// //             }
+// //         then
+// //             c#if 
+// //                 c#and_then
+// //                     c#await fn acc => #req{acc, #iter{#item{#clone{}}}}
+// //                 then
+// //                     c#do fn (acc, item) => #continue{(acc, item) 'builtin::add}
+// //             else 
+// //                 c#do fn acc => #break{acc}
+// // }
+
+
+// // fn args and_then_test => {
+// //     args c#and_then
+// //         fn arg => arg match {
+// //             #call{()} => #req{42, #next{}},
+// //             #reply{42, #some{}} => #resp{55},
+// //         }
+// //     then
+// //         fn arg => arg match {
+// //             #call{55} => #req{56, #yetmore{}},
+// //             #reply{56, #another{}} => #resp{57},
+// //         }
+// // }
+
+// // fn args await_test => {
+// //     args c#and_then
+// //         c#await fn () => (42, #next{})
+// //     then c#and_then
+// //         c#await fn (42, #some{}) => (55, #another{})
+// //     then
+// //         c#do fn (55, #yetmore{}) => 57
+// // }
+
+// // fn method map_iter => {
+// //     method match {
+// //         #next{#start{iter, fn}} => {
+// //             #req{#get_next{fn}, @iter, #next{iter}}
+// //         },
+// //         #reply{#get_next{fn}, message} => message match {
+// //             #some{iter, item} => #req{#apply_fn{iter}, @fn, (fn, item)},
+// //             #none{iter} => #resp{#none{#done{iter, fn}}},
+// //         },
+// //         #reply{#apply_fn{iter}, (fn, result)} => #resp{#some{#start{iter, fn}, result}},
+// //     }
+// // }
+
+// // fn (self, method) map_ref_iter => {
+// //     self match {
+// //         #start{iter, fn_factory} => {
+// //             let #next{} = method;
+// //             #req{#get_next{fn_factory}, @iter, (iter, #next{})}
+// //         },
+// //         #get_next{fn_factory} => {
+// //             let #reply{iter, message} = method;
+// //             message match {
+// //                 #some{} => #req{#get_mapper{iter}, @fn_factory, (fn_factory, ())},
+// //                 #none{} => #resp{#done{iter, fn_factory}, #none{}},
+// //             }
+// //         },
+// //         #get_mapper{iter} => {
+// //             let #reply{fn_factory, fn} = method;
+// //             #resp{#idle{iter, fn_factory, fn}, #some{}}
+// //         },
+// //         #idle{iter, fn_factory, fn} => {
+// //             method match {
+// //                 #item{msg} => #req{#fwd_fn{iter, fn_factory}, @fn, (fn, msg)},
+// //                 #next{} => {
+// //                     let ^ = fn;
+// //                     #req{#get_next{fn_factory}, @iter, (iter, #next{})}
+// //                 },
+// //             }
+// //         },
+// //         #fwd_fn{iter, fn_factory} => {
+// //             let #reply{fn, message} = method;
+// //             #resp{#idle{iter, fn_factory, fn}, message}
+// //         },
+// //     }
+// // }
+
+// // fn (self, method) split_iter => {
+// //     self match {
+// //         #start{iter} => {
+// //             let #next{} = method;
+// //             #resp{#in_field{iter}, #some{}}
+// //         },
+// //         #in_field{iter} => {
+// //             let #item{#next{}} = method;
+// //             #req{#in_field_get_next{}, @iter, (iter, #next{})}
+// //         },
+// //         #in_field_get_next{} => {
+// //             let #reply{iter, message} = method;
+// //             message match {
+// //                 #non_delim{} => #resp{#knowing{false, iter}, #some{}},
+// //                 #delim{} =>  #resp{#knowing{true, iter}, #some{}},
+// //                 #none{} => #resp{#in_field_done{iter}, #none{}},
+// //             }
+// //         },
+// //         #knowing{is_delim, iter} => {
+// //             method match {
+// //                 #item{#item{msg}} => #req{#knowing_fwd{is_delim}, @iter, (iter, #item{msg})},
+// //                 #item{#next{}} => is_delim if {
+// //                     #resp{#start{iter}, #none{}}
+// //                 } else {
+// //                     #req{#in_field_get_next{}, @iter, (iter, #next{})}
+// //                 },
+// //             }
+// //         },
+// //         #knowing_fwd{is_delim} => {
+// //             let #reply{iter, message} = method;
+// //             #resp{#knowing{is_delim, iter}, message}
+// //         },
+// //         #field_end{iter} => {
+// //             let #next{} = method;
+// //             #req{#in_field_get_next{}, @iter, (iter, #next{})}
+// //         },
+// //         #in_field_done{iter} => {
+// //             let #next{} = method;
+// //             #resp{#done{iter}, #none{}}
+// //         },
+// //     }
+// // }
+
+// mod alloc {
+//     fn () new => ()
+
+//     fn (self, size) malloc => {
+//         (self, size 'crate::array::new)
 //     }
 
+//     fn (self, array) free => {
+//         (self, array 'crate::array::destroy)
+//     }
 // }
-// fn (allocator, op) bound_op => args 'crate::vec::new match {
-//     #resp{msg} => (alloc, #resp{msg}),
-//     #req{state, #alloc{msg}} => {
-//         let (alloc, res) = (alloc, msg) 'allocator;
-//         (alloc, #req{state, #stall{res}})
+
+// // mod malloc {
+// //     fn (allocator, size) init => #start{allocator, size}
+
+// //     fn (#start{allocator, size}, ()) =>  (allocator, size 'crate::array::new)
+// // }
+
+// fn args allocator => args match {
+//     (self, #malloc{size}) => (self, size) 'alloc::malloc,
+//     (self, #free{array}) => (self, array) 'alloc::free,
+// }
+
+// // mod alloc_bound_vec_new {
+// //     fn (allocator, op) init => #start{allocator, op}
+
+// //     fn (self, msg) advance => self match {
+// //         #start{allocator, op} = (op, msg) 'crate::vec::new::advance match {
+// //             (op, #alloc{#malloc{size}}) => {
+// //                 let malloc_op = (allocator, size) 'super::malloc::init;
+// //                 (#poll_malloc{op, malloc_op}, #stall{})
+// //             }
+// //         }
+// //     }
+
+// // }
+// // fn (allocator, op) bound_op => args 'crate::vec::new match {
+// //     #resp{msg} => (alloc, #resp{msg}),
+// //     #req{state, #alloc{msg}} => {
+// //         let (alloc, res) = (alloc, msg) 'allocator;
+// //         (alloc, #req{state, #stall{res}})
+// //     },
+// //     #req{state, msg} => {
+// //         (alloc, #req{state, msg})
+// //     },
+// // }
+
+// // fn (alloc, args) bound_vec_push => args 'crate::vec::push match {
+// //     #resp{msg} => (alloc, #resp{msg}),
+// //     #req{state, #alloc{msg}} => {
+// //         let (alloc, res) = (alloc, msg) 'allocator;
+// //         (alloc, #req{state, #stall{res}})
+// //     },
+// //     #req{state, msg} => {
+// //         (alloc, #req{state, msg})
+// //     },
+// // }
+
+
+
+// // fn args bound_new => args match {
+// //     (#start{}, #config{}, op) => {
+// //         (#wrapped{op}, #config{}, ())        
+// //     },
+// //     (#wrapped{op}, port, msg) => {
+// //         (op, port, msg) 'bound_new_helper
+// //     },
+// //     (#pass{state, port, msg}, #stall{}, ()) => {
+// //         (state, port, msg) 'bound_new_helper
+// //     },
+// // }
+// fn (state, msg) alloc => {
+//     let #start{} = state;
+//     msg match {
+//         #malloc{size} => {
+//             let array = size 'crate::array::new;
+//             (#start{}, #out{array})
+//         },
+//         #free{array} => {
+//             let () = array 'crate::array::destroy;
+//             (#start{}, #out{})
+//         },
+//         #pass{} => (#start{}, #pass{}),
+//     }
+// }
+
+// fn ((new_state, alloc_state), (new_msg, alloc_msg)) new_times_alloc => {
+//     let (new_state, new_msg) = (new_state, new_msg) 'crate::vec::new;
+//     let (alloc_state, alloc_msg) = (alloc_state, alloc_msg) 'alloc;
+//     ((new_state, alloc_state), (new_msg, alloc_msg))
+// }
+
+// fn (state, (new_msg, (alloc_req_msg, alloc_resp_msg))) new_times_alloc_regroup => {
+//     let (state, ((new_msg, alloc_req_msg), alloc_resp_msg)) = 
+//         (state, ((new_msg, alloc_req_msg), alloc_resp_msg)) 'new_times_alloc;
+//     (state, (new_msg, (alloc_req_msg, alloc_resp_msg)))
+// }
+
+
+// // Main path:
+// //   A -> #in{} -> B
+// //   B -> #out{}  -> C
+// //     -> #pass{} -> D
+// //   D -> #pass{} -> B
+// //
+// // Alloc path:
+// //   A -> #pass{} -> B
+// //   B -> #alloc_req{}  -> C
+// //     -> #pass{}       -> A
+// //   C -> #alloc_resp{} -> A
+
+// // (A, A) -> (#in{}, #pass{}) -> (B, B)
+// // (B, B) -> (#pass{}, #pass{})      -> (D, A)
+// //        -> (#out{}, #pass{})       -> (C, A)
+// //        -> (#pass{}, #alloc_req{}) -> (D, C)
+// //        -> (#out{}, #alloc_req{})  -> (C, C)
+// // (D, A) -> (#pass{}, #pass{}) -> (B, B)
+// // (C, A) -> 
+// // (D, C) -> (#pass{}, #alloc_resp{}) -> (B, A)
+// // (C, C) ->
+// // (B, A) -> (#out{}, #pass{}) -> (C, B)
+// // (C, B) ->
+
+
+// // Push: 
+// //   (#start{}, #in{}, (vec, item)) -> B
+// //   B: (#end{}, #out{}, vec)
+// //    | (#await_alloc{}, #alloc{}, msg)
+// //   (#await_alloc{}, #alloc{}, msg) -> (#start{}, )
+
+// fn (#start{}, (#in{()}, #pass{})) output_one => (#end{}, (#out{1}, #pass{}))
+
+// //fn args first_two_lines => args match {
+// //    ((state1, state2, (io2, alloc2)), (io1, alloc1)) => {
+// //        let (state1, msg1) = (state1, msg1) 'output_one;
+// //        let (state2, msg2) = (state2, msg2) 'crate::vec::new;
+// //        (#first{#start{}}, )
+// //    },
+// //}
+
+// def main_inner 
+//     c#first c#do [() => 1] 
+//     c#then 'crate::vec::new 
+//     c#then c#do [vec => (vec, 4)] 
+//     c#then 'crate::vec::push
+//     c#then c#do [vec => (vec, 8)] 
+//     c#then 'crate::vec::push
+
+
+// // def main_inner match {
+// //     #start{()} => #start{1} 'crate::vec::new 'main_inner1,
+// //     #cont{#poll_new{state}, deps} => #cont{state, deps} 'crate::vec::new 'main_inner1,
+// //     #cont{#poll_push1{state}, deps} => #cont{state, deps} 'crate::vec::push 'main_inner2,
+// // }
+
+// // def main_inner1 match {
+// //     #cont{state, deps} => #cont{#poll_new{state}, deps},
+// //     #end{vec} => #start{(vec, 4)} 'crate::vec::push 'main_inner2,
+// // }
+
+// // def main_inner2 match {
+// //     #cont{state, deps} => #cont{#poll_push2{state}, deps},
+// //     #end{vec} => #end{vec},
+// // }
+
+// def bound_main match {
+//     #start{()} => #start{()} 'main_inner 'bound_main_inner1,
+//     #cont{#reply{state, deps}, ()} => #cont{state, deps} 'main_inner 'bound_main_inner1,
+// }
+
+// def bound_main_inner1 match {
+//     #end{val} => #end{val},
+//     #cont{state, (alloc)} => alloc match {
+//         #none{} => #cont{#reply{state, (#none{})}, ()},
+//         #some{#malloc{size}} => {
+//             let array = size 'crate::array::new;
+//             #cont{#reply{state, (#some{array})}, ()}
+//         },
+//         #some{#free{array}} => {
+//             let () = array 'crate::array::destroy;
+//             #cont{#reply{state, (#some{()})}, ()}
+//         },
 //     },
-//     #req{state, msg} => {
-//         (alloc, #req{state, msg})
-//     },
 // }
 
-// fn (alloc, args) bound_vec_push => args 'crate::vec::push match {
-//     #resp{msg} => (alloc, #resp{msg}),
-//     #req{state, #alloc{msg}} => {
-//         let (alloc, res) = (alloc, msg) 'allocator;
-//         (alloc, #req{state, #stall{res}})
-//     },
-//     #req{state, msg} => {
-//         (alloc, #req{state, msg})
-//     },
-// }
+// def test1 c#do [() => ()]
+// def test2 c#do [() => {
+//     let 1 = 2;
+//     ()
+// }]
 
+// def tests 
+//     c#first 'crate::ssv::tests::run
 
-
-// fn args bound_new => args match {
-//     (#start{}, #config{}, op) => {
-//         (#wrapped{op}, #config{}, ())        
-//     },
-//     (#wrapped{op}, port, msg) => {
-//         (op, port, msg) 'bound_new_helper
-//     },
-//     (#pass{state, port, msg}, #stall{}, ()) => {
-//         (state, port, msg) 'bound_new_helper
-//     },
-// }
-fn (state, msg) alloc => {
-    let #start{} = state;
-    msg match {
-        #malloc{size} => {
-            let array = size 'crate::array::new;
-            (#start{}, #out{array})
-        },
-        #free{array} => {
-            let () = array 'crate::array::destroy;
-            (#start{}, #out{})
-        },
-        #pass{} => (#start{}, #pass{}),
-    }
-}
-
-fn ((new_state, alloc_state), (new_msg, alloc_msg)) new_times_alloc => {
-    let (new_state, new_msg) = (new_state, new_msg) 'crate::vec::new;
-    let (alloc_state, alloc_msg) = (alloc_state, alloc_msg) 'alloc;
-    ((new_state, alloc_state), (new_msg, alloc_msg))
-}
-
-fn (state, (new_msg, (alloc_req_msg, alloc_resp_msg))) new_times_alloc_regroup => {
-    let (state, ((new_msg, alloc_req_msg), alloc_resp_msg)) = 
-        (state, ((new_msg, alloc_req_msg), alloc_resp_msg)) 'new_times_alloc;
-    (state, (new_msg, (alloc_req_msg, alloc_resp_msg)))
-}
-
-
-// Main path:
-//   A -> #in{} -> B
-//   B -> #out{}  -> C
-//     -> #pass{} -> D
-//   D -> #pass{} -> B
-//
-// Alloc path:
-//   A -> #pass{} -> B
-//   B -> #alloc_req{}  -> C
-//     -> #pass{}       -> A
-//   C -> #alloc_resp{} -> A
-
-// (A, A) -> (#in{}, #pass{}) -> (B, B)
-// (B, B) -> (#pass{}, #pass{})      -> (D, A)
-//        -> (#out{}, #pass{})       -> (C, A)
-//        -> (#pass{}, #alloc_req{}) -> (D, C)
-//        -> (#out{}, #alloc_req{})  -> (C, C)
-// (D, A) -> (#pass{}, #pass{}) -> (B, B)
-// (C, A) -> 
-// (D, C) -> (#pass{}, #alloc_resp{}) -> (B, A)
-// (C, C) ->
-// (B, A) -> (#out{}, #pass{}) -> (C, B)
-// (C, B) ->
-
-
-// Push: 
-//   (#start{}, #in{}, (vec, item)) -> B
-//   B: (#end{}, #out{}, vec)
-//    | (#await_alloc{}, #alloc{}, msg)
-//   (#await_alloc{}, #alloc{}, msg) -> (#start{}, )
-
-fn (#start{}, (#in{()}, #pass{})) output_one => (#end{}, (#out{1}, #pass{}))
-
-//fn args first_two_lines => args match {
-//    ((state1, state2, (io2, alloc2)), (io1, alloc1)) => {
-//        let (state1, msg1) = (state1, msg1) 'output_one;
-//        let (state2, msg2) = (state2, msg2) 'crate::vec::new;
-//        (#first{#start{}}, )
-//    },
-//}
-
-def main_inner 
-    c#first c#do [() => 1] 
-    c#then 'crate::vec::new 
-    c#then c#do [vec => (vec, 4)] 
-    c#then 'crate::vec::push
-    c#then c#do [vec => (vec, 8)] 
-    c#then 'crate::vec::push
-
-
-// def main_inner match {
-//     #start{()} => #start{1} 'crate::vec::new 'main_inner1,
-//     #cont{#poll_new{state}, deps} => #cont{state, deps} 'crate::vec::new 'main_inner1,
-//     #cont{#poll_push1{state}, deps} => #cont{state, deps} 'crate::vec::push 'main_inner2,
-// }
-
-// def main_inner1 match {
-//     #cont{state, deps} => #cont{#poll_new{state}, deps},
-//     #end{vec} => #start{(vec, 4)} 'crate::vec::push 'main_inner2,
-// }
-
-// def main_inner2 match {
-//     #cont{state, deps} => #cont{#poll_push2{state}, deps},
-//     #end{vec} => #end{vec},
-// }
-
-def bound_main match {
-    #start{()} => #start{()} 'main_inner 'bound_main_inner1,
-    #cont{#reply{state, deps}, ()} => #cont{state, deps} 'main_inner 'bound_main_inner1,
-}
-
-def bound_main_inner1 match {
-    #end{val} => #end{val},
-    #cont{state, (alloc)} => alloc match {
-        #none{} => #cont{#reply{state, (#none{})}, ()},
-        #some{#malloc{size}} => {
-            let array = size 'crate::array::new;
-            #cont{#reply{state, (#some{array})}, ()}
-        },
-        #some{#free{array}} => {
-            let () = array 'crate::array::destroy;
-            #cont{#reply{state, (#some{()})}, ()}
-        },
-    },
-}
-
-def test1 c#do [() => ()]
-def test2 c#do [() => {
-    let 1 = 2;
-    ()
-}]
-
-def tests 
-    c#first 'crate::ssv::tests::run
-
-def main_impl match {
-    (#start{}, #in{}) => #start{()} 'tests match {
-        #end{()} => (#end{}, #exit{0}),
-    },
-}
 // def main_impl match {
-//     (#start{}, #in{}) => {
-//         (#handle_bound{#start{()} 'bound_main}, #pass{})
+//     (#start{}, #in{}) => #start{()} 'tests match {
+//         #end{()} => (#end{}, #exit{0}),
 //     },
-//     (#handle_bound{bound_res}, #pass{}) => bound_res match {
-//         #end{vec} => {
-//             let ^ = vec;
-//             ()
-//         },
-
-//         #cont{state, ()} =>          (#handle_bound{#cont{state, ()} 'bound_main}, #pass{}),
-//     },
-//     // (#handle_push1{res}, #pass{}) => res match {
-//     //     (state, (#pass{}, #pass{})) => {
-//     //         (#handle_push1{(state, (#pass{}, #pass{})) 'crate::vec::push}, #pass{})
-//     //     },
-//     //     (state, (#pass{}, #malloc{2})) => {
-//     //         let array = 2 'crate::array::new;
-//     //         (#handle_push2{(state, (#pass{}, #out{array})) 'crate::vec::push}, #pass{})
-//     //     },
-//     // },
-//     // (#handle_push2{res}, #pass{}) => res match {
-//     //     (state, (#pass{}, #pass{})) => {
-//     //         (#handle_push2{(state, (#pass{}, #pass{})) 'crate::vec::push}, #pass{})
-//     //     },
-//     //     (state, (#pass{}, #free{old})) => {
-//     //         let () = old 'crate::array::destroy;
-//     //         (#handle_push3{(state, (#pass{}, #out{})) 'crate::vec::push}, #pass{})
-//     //     },
-//     // },
-//     // (#handle_push3{res}, #pass{}) => res match {
-//     //     (state, (#pass{}, #pass{})) => {
-//     //         (#handle_push3{(state, (#pass{}, #pass{})) 'crate::vec::push}, #pass{})
-//     //     },
-//     //     (#end{}, (#out{vec}, #pass{})) => {
-//     //         let ^ = vec;
-//     //         ()
-//     //     },
-//     // },
 // }
+// // def main_impl match {
+// //     (#start{}, #in{}) => {
+// //         (#handle_bound{#start{()} 'bound_main}, #pass{})
+// //     },
+// //     (#handle_bound{bound_res}, #pass{}) => bound_res match {
+// //         #end{vec} => {
+// //             let ^ = vec;
+// //             ()
+// //         },
+
+// //         #cont{state, ()} =>          (#handle_bound{#cont{state, ()} 'bound_main}, #pass{}),
+// //     },
+// //     // (#handle_push1{res}, #pass{}) => res match {
+// //     //     (state, (#pass{}, #pass{})) => {
+// //     //         (#handle_push1{(state, (#pass{}, #pass{})) 'crate::vec::push}, #pass{})
+// //     //     },
+// //     //     (state, (#pass{}, #malloc{2})) => {
+// //     //         let array = 2 'crate::array::new;
+// //     //         (#handle_push2{(state, (#pass{}, #out{array})) 'crate::vec::push}, #pass{})
+// //     //     },
+// //     // },
+// //     // (#handle_push2{res}, #pass{}) => res match {
+// //     //     (state, (#pass{}, #pass{})) => {
+// //     //         (#handle_push2{(state, (#pass{}, #pass{})) 'crate::vec::push}, #pass{})
+// //     //     },
+// //     //     (state, (#pass{}, #free{old})) => {
+// //     //         let () = old 'crate::array::destroy;
+// //     //         (#handle_push3{(state, (#pass{}, #out{})) 'crate::vec::push}, #pass{})
+// //     //     },
+// //     // },
+// //     // (#handle_push3{res}, #pass{}) => res match {
+// //     //     (state, (#pass{}, #pass{})) => {
+// //     //         (#handle_push3{(state, (#pass{}, #pass{})) 'crate::vec::push}, #pass{})
+// //     //     },
+// //     //     (#end{}, (#out{vec}, #pass{})) => {
+// //     //         let ^ = vec;
+// //     //         ()
+// //     //     },
+// //     // },
+// // }
 
 
-    // let #start{} = state;
+//     // let #start{} = state;
 
-    // let vn = #start{};
+//     // let vn = #start{};
 
-    // let (vn, #alloc{}, #malloc{1}) = (vn, 1) 'crate::vec::new;
-    // let array = 1 'crate::array::new;
-    // let (^, #res{}, vec) = (vn, array) 'crate::vec::new;
+//     // let (vn, #alloc{}, #malloc{1}) = (vn, 1) 'crate::vec::new;
+//     // let array = 1 'crate::array::new;
+//     // let (^, #res{}, vec) = (vn, array) 'crate::vec::new;
 
-    // 
-    // // let (^, #res{vec}) = (vp, ()) 'crate::vec::push::advance;
+//     // 
+//     // // let (^, #res{vec}) = (vp, ()) 'crate::vec::push::advance;
 
-    // let (vp, #alloc{}, #malloc{2}) = (#start{}, (vec, 8)) 'crate::vec::push;
-    // let (vp, #stall{}, ()) = (vp, 2 'crate::array::new) 'crate::vec::push;
-    // let (vp, #alloc{}, #free{array}) = (vp, ()) 'crate::vec::push;
-    // let () = array 'crate::array::destroy;
-    // let (vp, #res{}, vec) = (vp, ()) 'crate::vec::push;
-
-
+//     // let (vp, #alloc{}, #malloc{2}) = (#start{}, (vec, 8)) 'crate::vec::push;
+//     // let (vp, #stall{}, ()) = (vp, 2 'crate::array::new) 'crate::vec::push;
+//     // let (vp, #alloc{}, #free{array}) = (vp, ()) 'crate::vec::push;
+//     // let () = array 'crate::array::destroy;
+//     // let (vp, #res{}, vec) = (vp, ()) 'crate::vec::push;
 
 
-    // let ^ = (vp, vec);
-    // let 0 = 1;
-
-    // let alloc = () 'alloc::new;
-
-    // let (alloc, #req{v, #stall{res}}) = (alloc, #call{1}) 'bound_vec_new;
-    // let (alloc, #resp{v}) = (alloc, #reply{v, res}) 'bound_vec_new;
-
-    // // let #req{v, #alloc{#malloc{1}}} = #call{1} 'crate::vec::new;
-    // // let array = 1 'crate::array::new;
-    // // let #resp{v} = #reply{v, array} 'crate::vec::new;
-
-    // let (alloc, #resp{v}) = (alloc, #call{(v, 3)}) 'bound_vec_push;
-
-    // let (alloc, #req{v, #stall{res}}) = (alloc, #call{(v, 5)}) 'bound_vec_push;
-    // let (alloc, #req{v, #stall{res}}) = (alloc, #reply{v, res}) 'bound_vec_push;
-    // let (alloc, #req{v, #stall{res}}) = (alloc, #reply{v, res}) 'bound_vec_push;
-    // let (alloc, #resp{v}) = (alloc, #reply{v, res}) 'bound_vec_push;
 
 
-    // // let #req{v, #alloc{#malloc{2}}} = #call{(v, 5)} 'crate::vec::push;
-    // // let #req{v, #stall{}} = #reply{v, 2 'crate::array::new} 'crate::vec::push;
-    // // let #req{v, #alloc{#free{old}}} = #reply{v, #continue{}} 'crate::vec::push;
-    // // let () = old 'crate::array::destroy;
-    // // let #resp{v} = #reply{v, ()} 'crate::vec::push;
+//     // let ^ = (vp, vec);
+//     // let 0 = 1;
+
+//     // let alloc = () 'alloc::new;
+
+//     // let (alloc, #req{v, #stall{res}}) = (alloc, #call{1}) 'bound_vec_new;
+//     // let (alloc, #resp{v}) = (alloc, #reply{v, res}) 'bound_vec_new;
+
+//     // // let #req{v, #alloc{#malloc{1}}} = #call{1} 'crate::vec::new;
+//     // // let array = 1 'crate::array::new;
+//     // // let #resp{v} = #reply{v, array} 'crate::vec::new;
+
+//     // let (alloc, #resp{v}) = (alloc, #call{(v, 3)}) 'bound_vec_push;
+
+//     // let (alloc, #req{v, #stall{res}}) = (alloc, #call{(v, 5)}) 'bound_vec_push;
+//     // let (alloc, #req{v, #stall{res}}) = (alloc, #reply{v, res}) 'bound_vec_push;
+//     // let (alloc, #req{v, #stall{res}}) = (alloc, #reply{v, res}) 'bound_vec_push;
+//     // let (alloc, #resp{v}) = (alloc, #reply{v, res}) 'bound_vec_push;
+
+
+//     // // let #req{v, #alloc{#malloc{2}}} = #call{(v, 5)} 'crate::vec::push;
+//     // // let #req{v, #stall{}} = #reply{v, 2 'crate::array::new} 'crate::vec::push;
+//     // // let #req{v, #alloc{#free{old}}} = #reply{v, #continue{}} 'crate::vec::push;
+//     // // let () = old 'crate::array::destroy;
+//     // // let #resp{v} = #reply{v, ()} 'crate::vec::push;
     
-    // let ^ = alloc;
-    // let ^ = v;
+//     // let ^ = alloc;
+//     // let ^ = v;
 
-    // let #req{m, #iter{#next{}}} = #call{()} 'iter_sum;
-    // let #req{m, #iter{#item{#clone{}}}} = #reply{m, #some{}} 'iter_sum;
-    // let #req{m, #stall{}} = #reply{m, 4} 'iter_sum;
-    // let #req{m, #iter{#next{}}} = #reply{m, #continue{}} 'iter_sum;
-    // let #req{m, #iter{#item{#clone{}}}} = #reply{m, #some{}} 'iter_sum;
-    // let #req{m, #stall{}} = #reply{m, 8} 'iter_sum;
-    // let #req{m, #iter{#next{}}} = #reply{m, #continue{}} 'iter_sum;
-    // let #resp{12} = #reply{m, #none{}} 'iter_sum;
+//     // let #req{m, #iter{#next{}}} = #call{()} 'iter_sum;
+//     // let #req{m, #iter{#item{#clone{}}}} = #reply{m, #some{}} 'iter_sum;
+//     // let #req{m, #stall{}} = #reply{m, 4} 'iter_sum;
+//     // let #req{m, #iter{#next{}}} = #reply{m, #continue{}} 'iter_sum;
+//     // let #req{m, #iter{#item{#clone{}}}} = #reply{m, #some{}} 'iter_sum;
+//     // let #req{m, #stall{}} = #reply{m, 8} 'iter_sum;
+//     // let #req{m, #iter{#next{}}} = #reply{m, #continue{}} 'iter_sum;
+//     // let #resp{12} = #reply{m, #none{}} 'iter_sum;
 
-    // let #req{m, #another{}} = #reply{m, #some{}} 'await_test;
-    // let #resp{57} = #reply{m, #yetmore{}} 'await_test;
-    // let #req{m, #yetmore{}} = #reply{m, #some{}} 'and_then_test;
-    // let #resp{57} = #reply{m, #another{}} 'and_then_test;
+//     // let #req{m, #another{}} = #reply{m, #some{}} 'await_test;
+//     // let #resp{57} = #reply{m, #yetmore{}} 'await_test;
+//     // let #req{m, #yetmore{}} = #reply{m, #some{}} 'and_then_test;
+//     // let #resp{57} = #reply{m, #another{}} 'and_then_test;
 
-    // let m = () 'map::alloc;
-    // let (m, (@iter, (@next, ()))) = (m, (@next, ())) 'map::main;
-    // let (m, (@fn, (@apply, 3))) = (m, (@some, 3)) 'map::main;
-    // let (m, (@res, (@some, 6))) = (m, 6) 'map::main;
-    // let (m, (@iter, (@next, ()))) = (m, (@next, ())) 'map::main;
-    // let (m, (@fn, (@apply, 7))) = (m, (@some, 7)) 'map::main;
-    // let (m, (@res, (@some, 14))) = (m, 14) 'map::main;
-    // let (m, (@iter, (@next, ()))) = (m, (@next, ())) 'map::main;
-    // let (^, (@res, (@none, ()))) = (m, (@none, ())) 'map::main;
+//     // let m = () 'map::alloc;
+//     // let (m, (@iter, (@next, ()))) = (m, (@next, ())) 'map::main;
+//     // let (m, (@fn, (@apply, 3))) = (m, (@some, 3)) 'map::main;
+//     // let (m, (@res, (@some, 6))) = (m, 6) 'map::main;
+//     // let (m, (@iter, (@next, ()))) = (m, (@next, ())) 'map::main;
+//     // let (m, (@fn, (@apply, 7))) = (m, (@some, 7)) 'map::main;
+//     // let (m, (@res, (@some, 14))) = (m, 14) 'map::main;
+//     // let (m, (@iter, (@next, ()))) = (m, (@next, ())) 'map::main;
+//     // let (^, (@res, (@none, ()))) = (m, (@none, ())) 'map::main;
 
-    // let ((@nil, ()), test_iter) = ((@nil, ()), (@enumerate, ())) 'tests::main;
-    // let (test_iter, (@some, @parse_empty)) = (test_iter, (@next, ())) 'tests::main;
-    // (#nil{}, #run{@parse_some}) 'tests::main
-    // let ^ = m;
-    // ()
+//     // let ((@nil, ()), test_iter) = ((@nil, ()), (@enumerate, ())) 'tests::main;
+//     // let (test_iter, (@some, @parse_empty)) = (test_iter, (@next, ())) 'tests::main;
+//     // (#nil{}, #run{@parse_some}) 'tests::main
+//     // let ^ = m;
+//     // ()

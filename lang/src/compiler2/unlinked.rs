@@ -164,7 +164,13 @@ impl<'a> Builder<'a> {
                 let arg = word.args.into_iter().exactly_one().unwrap();
                 ast::WordInner::Call(self.visit_word_arg_sentence(arg))
             }
-            _ => panic!("unknown word: {}", word.operator.0.as_str(self.sources)),
+            _ => {
+                if let Some(builtin) = bytecode::Builtin::ALL.iter().find(|b| b.name() == word.operator.0.as_str(self.sources)) {
+                    ast::WordInner::StackOperation(ast::StackOperation::Builtin(*builtin))
+                } else {
+                    panic!("unknown word: {}", word.operator.0.as_str(self.sources))
+                }
+            }
         };
         ast::Word {
             inner,
