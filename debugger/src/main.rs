@@ -7,8 +7,8 @@ use anyhow::{Context, Result};
 use dap::events::{OutputEventBody, StoppedEventBody};
 use dap::prelude::*;
 use dap::responses::{
-    ResponseBody, ScopesResponse, SetBreakpointsResponse, SetExceptionBreakpointsResponse,
-    StackTraceResponse, ThreadsResponse, VariablesResponse,
+    ResponseBody, ScopesResponse, SetBreakpointsResponse, StackTraceResponse, ThreadsResponse,
+    VariablesResponse,
 };
 use hanoi::bytecode::debuginfo::Library as DebuginfoLibrary;
 use hanoi::bytecode::{Library as BytecodeLibrary, SentenceIndex};
@@ -17,7 +17,6 @@ use serde_json;
 
 struct DebuggerState {
     bytecode: Option<BytecodeLibrary>,
-    debuginfo: Option<DebuginfoLibrary>,
     program_path: Option<PathBuf>,
     vm: Option<Vm>,
 }
@@ -38,7 +37,6 @@ fn main() -> Result<()> {
         let mut server = Server::new(input, output);
         let state = Arc::new(Mutex::new(DebuggerState {
             bytecode: None,
-            debuginfo: None,
             program_path: None,
             vm: None,
         }));
@@ -93,44 +91,10 @@ where
             let bytecode: BytecodeLibrary =
                 serde_json::from_str(&bytecode_json).context("Failed to parse bytecode JSON")?;
 
-            // Load debuginfo file (.hanb.debuginfo.json)
-            // The bytecode file is .hanb.json, so we need to replace .json with .debuginfo.json
-            let debuginfo_path = {
-                let path_str = bytecode_path.to_string_lossy();
-                if path_str.ends_with(".hanb.json") {
-                    // Replace .json with .debuginfo.json
-                    PathBuf::from(path_str.replace(".hanb.json", ".hanb.debuginfo.json"))
-                } else {
-                    anyhow::bail!(
-                        "Bytecode file must end with .hanb.json, got: {}",
-                        bytecode_path.display()
-                    );
-                }
-            };
-            let debuginfo_json = std::fs::read_to_string(&debuginfo_path).with_context(|| {
-                format!(
-                    "Failed to read debuginfo file: {}",
-                    debuginfo_path.display()
-                )
-            })?;
-
-            let debuginfo: DebuginfoLibrary =
-                serde_json::from_str(&debuginfo_json).context("Failed to parse debuginfo JSON")?;
-
-            send_console_output(
-                server,
-                &format!(
-                    "Loaded bytecode from {} and debuginfo from {}\n",
-                    bytecode_path.display(),
-                    debuginfo_path.display()
-                ),
-            )?;
-
             // Store in state
             {
                 let mut state = state.lock().unwrap();
                 state.bytecode = Some(bytecode.clone());
-                state.debuginfo = Some(debuginfo);
                 state.program_path = Some(program_path.clone());
                 state.vm = Some(Vm::new(bytecode, SentenceIndex::from(0)));
                 state.vm.as_mut().unwrap().reset_call_stack();
@@ -142,9 +106,8 @@ where
             send_console_output(
                 server,
                 &format!(
-                    "Hanoi debugger loaded bytecode from {} and debuginfo from {}\n",
-                    bytecode_path.display(),
-                    debuginfo_path.display()
+                    "Hanoi debugger loaded bytecode from {}\n",
+                    bytecode_path.display()
                 ),
             )?;
 
@@ -230,9 +193,10 @@ where
 
             let (stack_frames, total_frames) = {
                 let state = state.lock().unwrap();
-                if let (Some(ref vm), Some(ref debuginfo)) =
-                    (state.vm.as_ref(), state.debuginfo.as_ref())
+                if let (Some(ref vm), Some(ref bytecode)) =
+                    (state.vm.as_ref(), state.bytecode.as_ref())
                 {
+                    let debuginfo = &bytecode.debuginfo;
                     let mut frames = Vec::new();
 
                     // Iterate through call stack in reverse order (top of stack first)
@@ -245,16 +209,21 @@ where
                         {
                             if let Some(debuginfo_word) = debuginfo_sentence.words.get(pc.word_idx)
                             {
-                                debuginfo_word.span.as_ref().map(|span| types::Source {
-                                    name: Some(
-                                        span.file
-                                            .file_name()
-                                            .and_then(|n| n.to_str())
-                                            .unwrap_or("unknown")
-                                            .to_string(),
-                                    ),
-                                    path: Some(span.file.to_string_lossy().to_string()),
-                                    ..Default::default()
+                                debuginfo_word.span.as_ref().and_then(|span| {
+                                    debuginfo
+                                        .files
+                                        .get(span.file)
+                                        .map(|file_path| types::Source {
+                                            name: Some(
+                                                file_path
+                                                    .file_name()
+                                                    .and_then(|n| n.to_str())
+                                                    .unwrap_or("unknown")
+                                                    .to_string(),
+                                            ),
+                                            path: Some(file_path.to_string_lossy().to_string()),
+                                            ..Default::default()
+                                        })
                                 })
                             } else {
                                 None

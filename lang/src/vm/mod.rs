@@ -162,6 +162,7 @@ mod tests {
     #[test]
     fn test_run_sentence() {
         let lib = Library {
+            debuginfo: Default::default(),
             symbols: vec![].into(),
             sentences: vec![Sentence {
                 words: vec![
@@ -183,6 +184,7 @@ mod tests {
     #[test]
     fn test_run_sentence_call() {
         let lib = Library {
+            debuginfo: Default::default(),
             symbols: vec![].into(),
             sentences: vec![
                 Sentence {

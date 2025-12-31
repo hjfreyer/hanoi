@@ -123,48 +123,52 @@ impl<'a> Builder<'a> {
     }
 
     fn visit_word(&mut self, word: parser::Word) -> ast::Word {
-        match word.operator.0.as_str(self.sources) {
+        let inner = match word.operator.0.as_str(self.sources) {
             "push" => {
                 let arg = word.args.into_iter().exactly_one().unwrap();
-                ast::Word::StackOperation(ast::StackOperation::Push(
+                ast::WordInner::StackOperation(ast::StackOperation::Push(
                     self.visit_word_arg_const_expr(arg),
                 ))
             }
             "cp" => {
                 let arg = word.args.into_iter().exactly_one().unwrap();
-                ast::Word::StackOperation(ast::StackOperation::Copy(
+                ast::WordInner::StackOperation(ast::StackOperation::Copy(
                     self.visit_word_arg_variable(arg),
                 ))
             }
             "mv" => {
                 let arg = word.args.into_iter().exactly_one().unwrap();
-                ast::Word::StackOperation(ast::StackOperation::Move(
+                ast::WordInner::StackOperation(ast::StackOperation::Move(
                     self.visit_word_arg_variable(arg),
                 ))
             }
             "drop" => {
                 let arg = word.args.into_iter().exactly_one().unwrap();
-                ast::Word::StackOperation(ast::StackOperation::Drop(
+                ast::WordInner::StackOperation(ast::StackOperation::Drop(
                     self.visit_word_arg_variable(arg),
                 ))
             }
             "tuple" => {
                 let arg = word.args.into_iter().exactly_one().unwrap();
-                ast::Word::StackOperation(ast::StackOperation::Tuple(
+                ast::WordInner::StackOperation(ast::StackOperation::Tuple(
                     self.visit_word_arg_usize(arg),
                 ))
             }
             "untuple" => {
                 let arg = word.args.into_iter().exactly_one().unwrap();
-                ast::Word::StackOperation(ast::StackOperation::Untuple(
+                ast::WordInner::StackOperation(ast::StackOperation::Untuple(
                     self.visit_word_arg_usize(arg),
                 ))
             }
             "call" => {
                 let arg = word.args.into_iter().exactly_one().unwrap();
-                ast::Word::Call(self.visit_word_arg_sentence(arg))
+                ast::WordInner::Call(self.visit_word_arg_sentence(arg))
             }
             _ => panic!("unknown word: {}", word.operator.0.as_str(self.sources)),
+        };
+        ast::Word {
+            inner,
+            span: word.span,
         }
     }
 

@@ -50,11 +50,11 @@ impl Loader {
         if path1.exists() {
             return match std::fs::read_to_string(&path1) {
                 Ok(contents) => Ok(sources.files.push_and_get_key(File {
-                    path,
+                    path: path1,
                     source: contents,
                 })),
                 Err(e) => Err(LoadError {
-                    path,
+                    path: path1,
                     error: LoadErrorInner::IO(e.into()),
                 }),
             };
@@ -65,11 +65,11 @@ impl Loader {
         if path2.exists() {
             return match std::fs::read_to_string(&path2) {
                 Ok(contents) => Ok(sources.files.push_and_get_key(File {
-                    path,
+                    path: path2,
                     source: contents,
                 })),
                 Err(e) => Err(LoadError {
-                    path,
+                    path: path2,
                     error: LoadErrorInner::IO(e.into()),
                 }),
             };
@@ -119,8 +119,17 @@ impl Span {
         pest::Span::new(&sources.files[self.file_idx].source, self.start, self.end).unwrap()
     }
 
-    pub fn location(self, sources: &Sources) -> Location {
+    pub fn start_location(self, sources: &Sources) -> Location {
         let (line, col) = self.as_pest(sources).start_pos().line_col();
+        Location {
+            file: sources.files[self.file_idx].path.clone(),
+            line,
+            col,
+        }
+    }
+
+    pub fn end_location(self, sources: &Sources) -> Location {
+        let (line, col) = self.as_pest(sources).end_pos().line_col();
         Location {
             file: sources.files[self.file_idx].path.clone(),
             line,

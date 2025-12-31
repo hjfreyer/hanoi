@@ -43,11 +43,17 @@ pub enum StackOperation {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Word {
+pub enum WordInner {
     StackOperation(StackOperation),
     Call(SentenceRefIndex),
     Branch(SentenceRefIndex, SentenceRefIndex),
     JumpTable(Vec<SentenceRefIndex>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Word {
+    pub inner: WordInner,
+    pub span: source::Span,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

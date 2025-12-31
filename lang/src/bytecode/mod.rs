@@ -92,6 +92,7 @@ pub struct Sentence {
 
 #[derive(Debug, Clone, Default)]
 pub struct Library {
+    pub debuginfo: debuginfo::Library,
     pub symbols: TiVec<SymbolIndex, String>,
     pub sentences: TiVec<SentenceIndex, Sentence>,
     pub exports: BTreeMap<String, SentenceIndex>,
@@ -99,6 +100,7 @@ pub struct Library {
 
 #[derive(Serialize, Deserialize)]
 struct LibrarySerde {
+    debuginfo: debuginfo::Library,
     symbols: Vec<String>,
     sentences: Vec<Sentence>,
     exports: BTreeMap<String, SentenceIndex>,
@@ -110,6 +112,7 @@ impl Serialize for Library {
         S: serde::Serializer,
     {
         let serde_repr = LibrarySerde {
+            debuginfo: self.debuginfo.clone(),
             symbols: self.symbols.iter().cloned().collect(),
             sentences: self.sentences.iter().cloned().collect(),
             exports: self.exports.clone(),
@@ -125,6 +128,7 @@ impl<'de> Deserialize<'de> for Library {
     {
         let serde_repr = LibrarySerde::deserialize(deserializer)?;
         Ok(Library {
+            debuginfo: Default::default(),
             symbols: serde_repr.symbols.into_iter().collect(),
             sentences: serde_repr.sentences.into_iter().collect(),
             exports: serde_repr.exports,

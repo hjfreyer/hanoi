@@ -2,7 +2,11 @@ use std::collections::BTreeMap;
 
 use typed_index_collections::TiVec;
 
-use crate::{bytecode, compiler2::ast};
+use crate::{
+    bytecode::{self, debuginfo},
+    compiler2::ast,
+    parser::source,
+};
 
 #[derive(Debug, Clone)]
 pub struct Library {
@@ -15,8 +19,9 @@ pub struct Library {
 }
 
 impl Library {
-    pub fn into_bytecode(self) -> bytecode::Library {
+    pub fn into_bytecode(self, sources: &source::Sources) -> bytecode::Library {
         bytecode::Library {
+            debuginfo: self.build_debuginfo(sources),
             symbols: self.symbol_defs,
             sentences: self
                 .sentence_defs
@@ -25,8 +30,8 @@ impl Library {
                     words: sentence_def
                         .words
                         .into_iter()
-                        .map(|word| match word {
-                            ast::Word::StackOperation(stack_operation) => {
+                        .map(|word| match word.inner {
+                            ast::WordInner::StackOperation(stack_operation) => {
                                 bytecode::Word::StackOperation(match stack_operation {
                                     ast::StackOperation::Push(const_ref_index) => {
                                         bytecode::StackOperation::Push(
@@ -59,20 +64,22 @@ impl Library {
                                     }
                                 })
                             }
-                            ast::Word::Call(sentence_ref_index) => {
+                            ast::WordInner::Call(sentence_ref_index) => {
                                 bytecode::Word::Call(bytecode::SentenceIndex::from(usize::from(
                                     *self.sentence_refs.get(sentence_ref_index).unwrap(),
                                 )))
                             }
-                            ast::Word::Branch(true_case, false_case) => bytecode::Word::Branch(
-                                bytecode::SentenceIndex::from(usize::from(
-                                    *self.sentence_refs.get(true_case).unwrap(),
-                                )),
-                                bytecode::SentenceIndex::from(usize::from(
-                                    *self.sentence_refs.get(false_case).unwrap(),
-                                )),
-                            ),
-                            ast::Word::JumpTable(jump_table) => bytecode::Word::JumpTable(
+                            ast::WordInner::Branch(true_case, false_case) => {
+                                bytecode::Word::Branch(
+                                    bytecode::SentenceIndex::from(usize::from(
+                                        *self.sentence_refs.get(true_case).unwrap(),
+                                    )),
+                                    bytecode::SentenceIndex::from(usize::from(
+                                        *self.sentence_refs.get(false_case).unwrap(),
+                                    )),
+                                )
+                            }
+                            ast::WordInner::JumpTable(jump_table) => bytecode::Word::JumpTable(
                                 jump_table
                                     .into_iter()
                                     .map(|sentence_ref_index| {
@@ -94,6 +101,37 @@ impl Library {
                         name,
                         bytecode::SentenceIndex::from(usize::from(sentence_def_index)),
                     )
+                })
+                .collect(),
+        }
+    }
+
+    fn build_debuginfo(&self, sources: &source::Sources) -> debuginfo::Library {
+        debuginfo::Library {
+            files: sources.files.iter().map(|file| file.path.clone()).collect(),
+            sentences: self
+                .sentence_defs
+                .iter()
+                .map(|sentence_def| {
+                    let words = sentence_def
+                        .words
+                        .iter()
+                        .map(|word| {
+                            let span = debuginfo::Span {
+                                file: word.span.file_idx.into(),
+                                begin: debuginfo::Position {
+                                    line: word.span.start_location(sources).line,
+                                    col: word.span.start_location(sources).col,
+                                },
+                                end: debuginfo::Position {
+                                    line: word.span.end_location(sources).line,
+                                    col: word.span.end_location(sources).col,
+                                },
+                            };
+                            debuginfo::Word { span: Some(span) }
+                        })
+                        .collect();
+                    debuginfo::Sentence { words }
                 })
                 .collect(),
         }

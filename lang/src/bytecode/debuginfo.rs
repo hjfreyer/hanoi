@@ -9,7 +9,7 @@ pub struct Position {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Span {
-    pub file: PathBuf,
+    pub file: usize,
     pub begin: Position,
     pub end: Position,
 }
@@ -24,7 +24,8 @@ pub struct Sentence {
     pub words: Vec<Word>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Library {
+    pub files: Vec<PathBuf>,
     pub sentences: Vec<Sentence>,
 }

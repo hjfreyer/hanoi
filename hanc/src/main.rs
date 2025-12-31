@@ -32,7 +32,7 @@ fn compile(base_dir: PathBuf, output_dir: PathBuf) -> anyhow::Result<()> {
 
     let linked = unlinked.link(&sources)?;
 
-    let bytecode = linked.into_bytecode();
+    let bytecode = linked.into_bytecode(&sources);
 
     let bytecode_path = output_dir.join("main.hanb.json");
     std::fs::write(bytecode_path, serde_json::to_string_pretty(&bytecode)?)
