@@ -49,7 +49,6 @@ pub enum ConstRef {
     Path(Path),
 }
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, debug_with::DebugWith)]
 #[debug_with(context = source::Sources)]
 pub enum StackOperation {
@@ -84,7 +83,6 @@ pub struct SentenceDef {
     pub words: Vec<Word>,
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionDef {
     pub name: PathIndex,
@@ -94,7 +92,6 @@ pub struct FunctionDef {
 #[derive(Debug, Clone, PartialEq, Eq, debug_with::DebugWith)]
 #[debug_with(context = source::Sources)]
 pub struct Path(pub Vec<source::Span>);
-
 
 impl Path {
     pub fn as_strs<'a>(&self, sources: &'a source::Sources) -> Vec<&'a str> {

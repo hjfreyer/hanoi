@@ -17,8 +17,10 @@ sentence main {
 
 mod thingy {
     const foo = 1;
+    const baz = 2;
     sentence guy {
         #push('foo)
+        #push('baz)
     }
 }
 

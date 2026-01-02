@@ -311,4 +311,3 @@ pub struct Path {
 #[derive(Debug, Clone, Copy, debug_with::DebugWith)]
 #[debug_with(context = source::Sources)]
 pub struct Identifier(pub source::Span);
-

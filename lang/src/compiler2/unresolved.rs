@@ -22,14 +22,12 @@ pub struct ConstDecl {
     pub value: ast::ConstRefIndex,
 }
 
-
 #[derive(Debug, Clone, debug_with::DebugWith)]
 #[debug_with(context = source::Sources)]
 pub struct SentenceDecl {
     pub name: parser::Identifier,
     pub sentence: ast::SentenceDefIndex,
 }
-
 
 #[derive(Debug, Clone, Default, debug_with::DebugWith)]
 #[debug_with(context = source::Sources)]
@@ -38,7 +36,6 @@ pub struct Module {
     pub const_decls: Vec<ConstDecl>,
     pub sentence_decls: Vec<SentenceDecl>,
 }
-
 
 #[derive(Debug, Clone, debug_with::DebugWith)]
 #[debug_with(context = source::Sources)]
@@ -62,13 +59,11 @@ pub struct Library {
     pub sentence_refs: TiVec<ast::SentenceRefIndex, unlinked::SentenceRef>,
 }
 
-
 #[derive(Copy, Clone)]
 struct LibraryView<'a> {
     sources: &'a source::Sources,
     library: &'a Library,
 }
-
 
 struct Builder<'a> {
     sources: &'a source::Sources,
@@ -283,7 +278,11 @@ impl Library {
         builder.build()
     }
 
-    pub fn resolve(self, sources: &source::Sources) -> Result<unlinked::Library, anyhow::Error> {
+    pub fn resolve(
+        mut self,
+        sources: &source::Sources,
+    ) -> Result<unlinked::Library, anyhow::Error> {
+        self.update_paths(sources, self.root_module, ast::Path(vec![]));
         let const_decls = self.get_const_decls(sources, self.root_module, ast::Path(vec![]));
         let sentence_decls = self.get_sentence_decls(sources, self.root_module, ast::Path(vec![]));
         Ok(unlinked::Library {
@@ -342,6 +341,87 @@ impl Library {
             ));
         }
         result
+    }
+
+    fn update_paths(
+        &mut self,
+        sources: &source::Sources,
+        module_index: ModuleIndex,
+        module_path: ast::Path,
+    ) {
+        for submodule in self.modules[module_index].submodules.clone().iter() {
+            self.update_paths(
+                sources,
+                submodule.module,
+                module_path.join(submodule.name.0),
+            );
+        }
+
+        let module = &self.modules[module_index];
+        for const_decl in module.const_decls.iter() {
+            let const_ref = &mut self.const_refs[const_decl.value];
+            match const_ref {
+                ast::ConstRef::Path(path) => {
+                    *path = module_path.join(path.clone());
+                }
+                _ => {}
+            }
+        }
+        for sentence_decl in module.sentence_decls.iter() {
+            let sentence_def = &mut self.sentence_defs[sentence_decl.sentence];
+            for word in sentence_def.words.iter_mut() {
+                match &word.inner {
+                    ast::WordInner::Call(sentence_ref_index) => {
+                        let sentence_ref = &mut self.sentence_refs[*sentence_ref_index];
+                        match sentence_ref {
+                            unlinked::SentenceRef::Path(path) => {
+                                *path = module_path.join(path.clone());
+                            }
+                            _ => {}
+                        }
+                    }
+                    ast::WordInner::StackOperation(stack_operation) => match stack_operation {
+                        ast::StackOperation::Push(const_ref_index) => {
+                            let const_ref = &mut self.const_refs[*const_ref_index];
+                            match const_ref {
+                                ast::ConstRef::Path(path) => {
+                                    *path = module_path.join(path.clone());
+                                }
+                                _ => {}
+                            }
+                        }
+                        _ => {}
+                    },
+                    ast::WordInner::Branch(sentence_ref_index, sentence_ref_index1) => {
+                        let sentence_ref = &mut self.sentence_refs[*sentence_ref_index];
+                        match sentence_ref {
+                            unlinked::SentenceRef::Path(path) => {
+                                *path = module_path.join(path.clone());
+                            }
+                            _ => {}
+                        }
+                        let sentence_ref = &mut self.sentence_refs[*sentence_ref_index1];
+                        match sentence_ref {
+                            unlinked::SentenceRef::Path(path) => {
+                                *path = module_path.join(path.clone());
+                            }
+                            _ => {}
+                        }
+                    }
+                    ast::WordInner::JumpTable(items) => {
+                        for item in items.iter() {
+                            let sentence_ref = &mut self.sentence_refs[*item];
+                            match sentence_ref {
+                                unlinked::SentenceRef::Path(path) => {
+                                    *path = module_path.join(path.clone());
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

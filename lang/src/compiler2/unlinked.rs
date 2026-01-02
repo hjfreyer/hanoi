@@ -27,13 +27,11 @@ pub enum SentenceRef {
     Path(ast::Path),
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SentenceDecl {
     pub name: ast::Path,
     pub value: ast::SentenceDefIndex,
 }
-
 
 #[derive(Clone, Default)]
 pub struct Library {
@@ -54,7 +52,6 @@ struct LibraryView<'a> {
     library: &'a Library,
 }
 
-
 impl Library {
     pub fn link(self, sources: &source::Sources) -> Result<linked::Library, anyhow::Error> {
         let const_map: BTreeMap<Vec<&str>, ast::ConstRefIndex> = self
@@ -68,11 +65,15 @@ impl Library {
             sources: &source::Sources,
             const_refs: &TiVec<ast::ConstRefIndex, ast::ConstRef>,
             const_map: &BTreeMap<Vec<&str>, ast::ConstRefIndex>,
-        ) -> bytecode::PrimitiveValue {
+        ) -> Result<bytecode::PrimitiveValue, anyhow::Error> {
             match &const_refs[const_ref_index] {
-                ast::ConstRef::Inline(value) => *value,
+                ast::ConstRef::Inline(value) => Ok(*value),
                 ast::ConstRef::Path(path) => deref_const_ref(
-                    *const_map.get(path.as_strs(sources).as_slice()).unwrap(),
+                    *const_map
+                        .get(path.as_strs(sources).as_slice())
+                        .with_context(|| {
+                            format!("const not found: {:?}", path.as_strs(sources).join("::"))
+                        })?,
                     sources,
                     const_refs,
                     const_map,
@@ -102,14 +103,14 @@ impl Library {
             })
             .collect();
         let sentence_refs = sentence_refs?;
-
-        Ok(linked::Library {
-            symbol_defs: Default::default(),
-            const_refs: self
-                .const_refs
+        let const_refs: Result<TiVec<ast::ConstRefIndex, bytecode::PrimitiveValue>, anyhow::Error> =
+            self.const_refs
                 .keys()
                 .map(|idx| deref_const_ref(idx, sources, &self.const_refs, &const_map))
-                .collect(),
+                .collect();
+        Ok(linked::Library {
+            symbol_defs: Default::default(),
+            const_refs: const_refs?,
             variable_refs: self.variable_refs,
             sentence_defs: self.sentence_defs,
             sentence_refs,
