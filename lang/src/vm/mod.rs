@@ -155,7 +155,7 @@ mod tests {
     fn test_run_sentence() {
         let lib = Library {
             debuginfo: Default::default(),
-            symbols: vec![].into(),
+            num_symbols: 0,
             sentences: vec![Sentence {
                 words: vec![
                     Word::StackOperation(StackOperation::Push(PrimitiveValue::Usize(1))),
@@ -177,7 +177,7 @@ mod tests {
     fn test_run_sentence_call() {
         let lib = Library {
             debuginfo: Default::default(),
-            symbols: vec![].into(),
+            num_symbols: 0,
             sentences: vec![
                 Sentence {
                     words: vec![

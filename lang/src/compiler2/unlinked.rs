@@ -35,7 +35,7 @@ pub struct SentenceDecl {
 
 #[derive(Clone, Default)]
 pub struct Library {
-    // pub symbol_defs: TiVec<bytecode::SymbolIndex, String>,
+    pub symbol_defs: TiVec<bytecode::SymbolIndex, ast::SymbolDef>,
     pub const_refs: TiVec<ast::ConstRefIndex, ast::ConstRef>,
     pub const_decls: Vec<ConstDecl>,
 
@@ -109,7 +109,7 @@ impl Library {
                 .map(|idx| deref_const_ref(idx, sources, &self.const_refs, &const_map))
                 .collect();
         Ok(linked::Library {
-            symbol_defs: Default::default(),
+            symbol_defs: self.symbol_defs,
             const_refs: const_refs?,
             variable_refs: self.variable_refs,
             sentence_defs: self.sentence_defs,

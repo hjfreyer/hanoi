@@ -7,8 +7,17 @@ mod main;
 const foo = 3;
 const bar = 'foo;
 
+symbol sym;
+symbol sym2;
+
+const sym3 = 'sym;
+
 sentence main {
     #push('foo)
+    #push('sym2)
+    #push('sym)
+    #push('sym3)
+    #assert_eq
     #call('main::main)
     #call('thingy::guy)
     #tuple(2)

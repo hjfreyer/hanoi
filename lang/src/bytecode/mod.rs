@@ -110,7 +110,7 @@ pub struct Sentence {
 #[derive(Debug, Clone, Default)]
 pub struct Library {
     pub debuginfo: debuginfo::Library,
-    pub symbols: TiVec<SymbolIndex, String>,
+    pub num_symbols: usize,
     pub sentences: TiVec<SentenceIndex, Sentence>,
     pub exports: BTreeMap<String, SentenceIndex>,
 }
@@ -118,7 +118,7 @@ pub struct Library {
 #[derive(Serialize, Deserialize)]
 struct LibrarySerde {
     debuginfo: debuginfo::Library,
-    symbols: Vec<String>,
+    num_symbols: usize,
     sentences: Vec<Sentence>,
     exports: BTreeMap<String, SentenceIndex>,
 }
@@ -130,7 +130,7 @@ impl Serialize for Library {
     {
         let serde_repr = LibrarySerde {
             debuginfo: self.debuginfo.clone(),
-            symbols: self.symbols.iter().cloned().collect(),
+            num_symbols: self.num_symbols,
             sentences: self.sentences.iter().cloned().collect(),
             exports: self.exports.clone(),
         };
@@ -146,7 +146,7 @@ impl<'de> Deserialize<'de> for Library {
         let serde_repr = LibrarySerde::deserialize(deserializer)?;
         Ok(Library {
             debuginfo: serde_repr.debuginfo,
-            symbols: serde_repr.symbols.into_iter().collect(),
+            num_symbols: serde_repr.num_symbols,
             sentences: serde_repr.sentences.into_iter().collect(),
             exports: serde_repr.exports,
         })
@@ -154,9 +154,4 @@ impl<'de> Deserialize<'de> for Library {
 }
 
 impl Library {
-    pub fn find_symbol(&self, name: &str) -> Option<SymbolIndex> {
-        self.symbols
-            .iter_enumerated()
-            .find_map(|(i, s)| if s == name { Some(i) } else { None })
-    }
 }

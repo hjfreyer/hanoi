@@ -49,7 +49,7 @@ pub struct ModuleDecl {
 pub struct Library {
     pub root_module: ModuleIndex,
     pub modules: TiVec<ModuleIndex, Module>,
-    // pub symbol_defs: TiVec<bytecode::SymbolIndex, String>,
+    pub symbol_defs: TiVec<bytecode::SymbolIndex, ast::SymbolDef>,
     pub const_refs: TiVec<ast::ConstRefIndex, ast::ConstRef>,
     pub const_decls: Vec<ConstDecl>,
 
@@ -99,6 +99,14 @@ impl<'a> Builder<'a> {
                     module.sentence_decls.push(SentenceDecl {
                         name: sentence_decl.name,
                         sentence: self.visit_sentence_def(sentence_decl.sentence),
+                    });
+                }
+                parser::Decl::SymbolDecl(symbol_decl) => {
+                    let symbol_def_index = self.res.symbol_defs.push_and_get_key(ast::SymbolDef(symbol_decl.name.0));
+                    let const_ref_index = self.res.const_refs.push_and_get_key(ast::ConstRef::Inline(bytecode::PrimitiveValue::Symbol(symbol_def_index)));
+                    module.const_decls.push(ConstDecl {
+                        name: symbol_decl.name,
+                        value: const_ref_index,
                     });
                 }
             }
@@ -238,6 +246,7 @@ impl Library {
             res: Library {
                 root_module: ModuleIndex(0),
                 modules: TiVec::new(),
+                symbol_defs: TiVec::new(),
                 const_refs: TiVec::new(),
                 const_decls: vec![],
                 variable_refs: TiVec::new(),
@@ -288,6 +297,7 @@ impl Library {
         Ok(unlinked::Library {
             const_refs: self.const_refs,
             const_decls,
+            symbol_defs: self.symbol_defs,
             variable_refs: self.variable_refs,
             sentence_defs: self.sentence_defs,
             sentence_refs: self.sentence_refs,

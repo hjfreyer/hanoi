@@ -78,6 +78,7 @@ impl Factory {
             Rule::const_decl => Decl::ConstDecl(self.const_decl(inner)),
             Rule::sentence_decl => Decl::SentenceDecl(self.sentence_decl(inner)),
             Rule::mod_decl => Decl::ModuleDecl(self.module_decl(inner)),
+            Rule::symbol_decl => Decl::SymbolDecl(self.symbol_decl(inner)),
             _ => panic!("invalid decl: {:?}", inner.as_rule()),
         }
     }
@@ -165,6 +166,15 @@ impl Factory {
         }
     }
 
+
+    fn symbol_decl(&self, p: Pair<Rule>) -> SymbolDecl {
+        assert_eq!(p.as_rule(), Rule::symbol_decl);
+        let name = p.into_inner().exactly_one().unwrap();
+        SymbolDecl {
+            name: self.identifier(name),
+        }
+    }
+
     fn identifier(&self, p: Pair<Rule>) -> Identifier {
         assert_eq!(p.as_rule(), Rule::identifier);
         let span = source::Span::from_ast(self.0, p.as_span());
@@ -214,6 +224,7 @@ pub enum Decl {
     ConstDecl(ConstDecl),
     SentenceDecl(SentenceDecl),
     ModuleDecl(ModuleDecl),
+    SymbolDecl(SymbolDecl),
     // FnDecl(FnDecl),
     // DefDecl(DefDecl),
 }
@@ -237,6 +248,12 @@ pub struct ConstDecl {
 pub enum ConstExpr {
     Literal(Literal),
     Path(Path),
+}
+
+#[derive(Debug, debug_with::DebugWith)]
+#[debug_with(context = source::Sources)]
+pub struct SymbolDecl {
+    pub name: Identifier,
 }
 
 #[derive(Debug, debug_with::DebugWith)]

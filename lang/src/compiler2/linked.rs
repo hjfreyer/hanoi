@@ -10,7 +10,7 @@ use crate::{
 
 #[derive(Debug, Clone)]
 pub struct Library {
-    pub symbol_defs: TiVec<bytecode::SymbolIndex, String>,
+    pub symbol_defs: TiVec<bytecode::SymbolIndex, ast::SymbolDef>,
     pub const_refs: TiVec<ast::ConstRefIndex, bytecode::PrimitiveValue>,
     pub variable_refs: TiVec<ast::VariableRefIndex, usize>,
     pub sentence_defs: TiVec<ast::SentenceDefIndex, ast::SentenceDef>,
@@ -22,7 +22,7 @@ impl Library {
     pub fn into_bytecode(self, sources: &source::Sources) -> bytecode::Library {
         bytecode::Library {
             debuginfo: self.build_debuginfo(sources),
-            symbols: self.symbol_defs,
+            num_symbols: self.symbol_defs.len(),
             sentences: self
                 .sentence_defs
                 .into_iter()
@@ -117,21 +117,18 @@ impl Library {
                         .words
                         .iter()
                         .map(|word| {
-                            let span = debuginfo::Span {
-                                file: word.span.file_idx.into(),
-                                begin: debuginfo::Position {
-                                    line: word.span.start_location(sources).line,
-                                    col: word.span.start_location(sources).col,
-                                },
-                                end: debuginfo::Position {
-                                    line: word.span.end_location(sources).line,
-                                    col: word.span.end_location(sources).col,
-                                },
-                            };
-                            debuginfo::Word { span: Some(span) }
+                            debuginfo::Word { span: Some(debuginfo::Span::from_source_span(sources, word.span)) }
                         })
                         .collect();
                     debuginfo::Sentence { words }
+                })
+                .collect(),
+            symbols: self
+                .symbol_defs
+                .iter()
+                .map(|symbol_def| debuginfo::Symbol {
+                    name: symbol_def.0.as_str(sources).to_string(),
+                    span: debuginfo::Span::from_source_span(sources, symbol_def.0),
                 })
                 .collect(),
         }

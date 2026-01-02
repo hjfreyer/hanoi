@@ -21,6 +21,7 @@ decl = {
   | fn_decl
   | def_decl
   | const_decl
+  | symbol_decl
 }
 
 // MODULES
@@ -67,6 +68,8 @@ const_expr = {
   | literal
   | path
 }
+
+symbol_decl = { "symbol" ~ identifier ~ ";" }
 
 // VALUES
 

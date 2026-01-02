@@ -115,11 +115,6 @@ impl From<source::Span> for Path {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SymbolDef {
-    pub name: PathIndex,
-    pub value: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SymbolRef(PathIndex);
+#[derive(Debug, Clone, PartialEq, Eq, debug_with::DebugWith)]
+#[debug_with(context = source::Sources)]
+pub struct SymbolDef(pub source::Span);
