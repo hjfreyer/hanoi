@@ -138,6 +138,13 @@ impl Span {
     }
 }
 
+impl debug_with_trait::DebugWith<Sources> for Span {
+    type Output<'a> = &'a str;
+    fn convert<'a>(&self, context: &'a Sources) -> Self::Output<'a> {
+        self.as_str(context)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Location {
     pub file: PathBuf,

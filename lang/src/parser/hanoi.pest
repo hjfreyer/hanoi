@@ -16,17 +16,16 @@ file_item = _{
 }
 
 decl = {
-  | external_mod_decl
   | sentence_decl
-  | ns_decl
+  | mod_decl
   | fn_decl
   | def_decl
   | const_decl
 }
 
-// NAMESPACES
+// MODULES
 
-ns_decl   = { "mod" ~ identifier ~ "{" ~ namespace ~ "}" }
+mod_decl   = { "mod" ~ identifier ~ "{" ~ namespace ~ "}" }
 namespace = { use* ~ decl* }
 
 use = { "use" ~ path ~ ";" }

@@ -1,4 +1,3 @@
-
 use derive_more::derive::{From, Into};
 use itertools::Itertools;
 use typed_index_collections::TiVec;
@@ -12,10 +11,12 @@ use crate::{
     parser::{self, source},
 };
 
-#[derive(From, Into, Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(From, Into, Debug, Copy, Clone, PartialEq, Eq, Hash, debug_with::DebugWith)]
+#[debug_with(passthrough)]
 pub struct ModuleIndex(usize);
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, debug_with::DebugWith)]
+#[debug_with(context = source::Sources)]
 pub struct ConstDecl {
     pub name: parser::Identifier,
     pub value: ast::ConstRefIndex,
@@ -33,7 +34,8 @@ where
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, debug_with::DebugWith)]
+#[debug_with(context = source::Sources)]
 pub struct SentenceDecl {
     pub name: parser::Identifier,
     pub sentence: ast::SentenceDefIndex,
@@ -51,7 +53,8 @@ where
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, debug_with::DebugWith)]
+#[debug_with(context = source::Sources)]
 pub struct Module {
     pub submodules: Vec<ModuleDecl>,
     pub const_decls: Vec<ConstDecl>,
@@ -85,13 +88,15 @@ where
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, debug_with::DebugWith)]
+#[debug_with(context = source::Sources)]
 pub struct ModuleDecl {
     pub name: parser::Identifier,
     pub module: ModuleIndex,
 }
 
-#[derive(Clone)]
+#[derive(Clone, debug_with::DebugWith)]
+#[debug_with(context = source::Sources)]
 pub struct Library {
     pub root_module: ModuleIndex,
     pub modules: TiVec<ModuleIndex, Module>,
@@ -243,6 +248,12 @@ impl<'a> Builder<'a> {
         let mut module = Module::default();
         for decl in namespace.decls {
             match decl {
+                parser::Decl::ModuleDecl(module_decl) => {
+                    module.submodules.push(ModuleDecl {
+                        name: module_decl.name,
+                        module: self.visit_module(module_decl.namespace),
+                    });
+                }
                 parser::Decl::ConstDecl(const_decl) => {
                     module.const_decls.push(ConstDecl {
                         name: const_decl.name,
@@ -406,6 +417,12 @@ impl Library {
             let module_index = builder.visit_file(file);
             file_modules.push((mod_path, module_index));
         }
+        let root_module_index = file_modules
+            .iter()
+            .find(|(mod_path, _)| mod_path.0.is_empty())
+            .unwrap()
+            .1;
+        builder.res.root_module = root_module_index;
         for (parent_mod_path, parent_index) in file_modules.iter() {
             for (child_mod_path, child_index) in file_modules.iter() {
                 if parent_mod_path.0.len() + 1 == child_mod_path.0.len()

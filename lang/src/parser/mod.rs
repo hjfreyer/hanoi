@@ -8,11 +8,7 @@ use source::{Loader, Sources};
 use itertools::Itertools;
 use typed_index_collections::TiVec;
 
-use crate::{
-    bytecode,
-    compiler2::unresolved::DebugWith,
-    parser::source::FileIndex,
-};
+use crate::{bytecode, parser::source::FileIndex};
 
 pub mod source;
 
@@ -46,7 +42,8 @@ pub fn load_all(loader: &Loader) -> anyhow::Result<(Sources, Library)> {
     Ok((sources, library))
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, debug_with::DebugWith)]
+#[debug_with(context = source::Sources)]
 pub struct Library {
     pub files: TiVec<FileIndex, File>,
 }
@@ -80,8 +77,28 @@ impl Factory {
         match inner.as_rule() {
             Rule::const_decl => Decl::ConstDecl(self.const_decl(inner)),
             Rule::sentence_decl => Decl::SentenceDecl(self.sentence_decl(inner)),
+            Rule::mod_decl => Decl::ModuleDecl(self.module_decl(inner)),
             _ => panic!("invalid decl: {:?}", inner.as_rule()),
         }
+    }
+
+    fn module_decl(&self, p: Pair<Rule>) -> ModuleDecl {
+        assert_eq!(p.as_rule(), Rule::mod_decl);
+        let (name, namespace) = p.into_inner().collect_tuple().unwrap();
+        ModuleDecl {
+            name: self.identifier(name),
+            namespace: self.namespace(namespace),
+        }
+    }
+
+    fn namespace(&self, p: Pair<Rule>) -> Namespace {
+        assert_eq!(p.as_rule(), Rule::namespace);
+        let pairs = p.into_inner();
+        let mut result = Namespace::default();
+        for pair in pairs {
+            result.decls.push(self.decl(pair));
+        }
+        result
     }
 
     fn const_decl(&self, p: Pair<Rule>) -> ConstDecl {
@@ -176,67 +193,85 @@ impl Factory {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, debug_with::DebugWith)]
+#[debug_with(context = source::Sources)]
 pub struct File {
     pub mod_path: Vec<source::Span>,
     pub imports: Vec<Identifier>,
     pub namespace: Namespace,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, debug_with::DebugWith)]
+#[debug_with(context = source::Sources)]
 pub struct Namespace {
     // pub uses: Vec<Use>,
     pub decls: Vec<Decl>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, debug_with::DebugWith)]
+#[debug_with(context = source::Sources)]
 pub enum Decl {
     ConstDecl(ConstDecl),
     SentenceDecl(SentenceDecl),
+    ModuleDecl(ModuleDecl),
     // FnDecl(FnDecl),
     // DefDecl(DefDecl),
 }
 
-#[derive(Debug)]
+#[derive(Debug, debug_with::DebugWith)]
+#[debug_with(context = source::Sources)]
+pub struct ModuleDecl {
+    pub name: Identifier,
+    pub namespace: Namespace,
+}
+
+#[derive(Debug, debug_with::DebugWith)]
+#[debug_with(context = source::Sources)]
 pub struct ConstDecl {
     pub name: Identifier,
     pub value: ConstExpr,
 }
 
-#[derive(Debug)]
+#[derive(Debug, debug_with::DebugWith)]
+#[debug_with(context = source::Sources)]
 pub enum ConstExpr {
     Literal(Literal),
     Path(Path),
 }
 
-#[derive(Debug)]
+#[derive(Debug, debug_with::DebugWith)]
+#[debug_with(context = source::Sources)]
 pub struct SentenceDecl {
     pub span: source::Span,
     pub name: Identifier,
     pub sentence: Sentence,
 }
 
-#[derive(Debug)]
+#[derive(Debug, debug_with::DebugWith)]
+#[debug_with(context = source::Sources)]
 pub struct Sentence {
     pub span: source::Span,
     pub words: Vec<Word>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, debug_with::DebugWith)]
+#[debug_with(context = source::Sources)]
 pub struct Word {
     pub span: source::Span,
     pub operator: Identifier,
     pub args: Vec<WordArg>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, debug_with::DebugWith)]
+#[debug_with(context = source::Sources)]
 pub enum WordArg {
     Literal(Literal),
     Path(Path),
     Sentence(Sentence),
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, debug_with::DebugWith)]
+#[debug_with(context = source::Sources)]
 pub struct Literal {
     pub ty: LiteralType,
     pub span: source::Span,
@@ -258,25 +293,28 @@ impl Literal {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, debug_with::DebugWith)]
+#[debug_with(passthrough)]
 pub enum LiteralType {
     Int,
     Char,
     Bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, debug_with::DebugWith)]
+#[debug_with(context = source::Sources)]
 pub struct Path {
     pub span: source::Span,
     pub segments: Vec<Identifier>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, debug_with::DebugWith)]
+#[debug_with(context = source::Sources)]
 pub struct Identifier(pub source::Span);
 
-impl<C> DebugWith<C> for Identifier
+impl<C> crate::compiler2::unresolved::DebugWith<C> for Identifier
 where
-    source::Span: DebugWith<C>,
+    source::Span: crate::compiler2::unresolved::DebugWith<C>,
 {
     fn debug_with(&self, c: &C, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.0.debug_with(c, f)

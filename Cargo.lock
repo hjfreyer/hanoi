@@ -280,6 +280,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "debug_with"
+version = "0.1.0"
+dependencies = [
+ "darling",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "debug_with_trait"
+version = "0.1.0"
+dependencies = [
+ "typed-index-collections",
+]
+
+[[package]]
 name = "debugger"
 version = "0.1.0"
 dependencies = [
@@ -395,6 +412,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "debug_with",
+ "debug_with_trait",
  "derive_more",
  "from-pest",
  "from-raw-ast",

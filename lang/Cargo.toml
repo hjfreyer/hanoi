@@ -19,6 +19,8 @@ json-spanned-value = "0.1"
 thiserror = "1.0.65"
 typed-index-collections = "3.1.0"
 from-raw-ast = {path = "../from-raw-ast"}
+debug_with = {path = "../debug_with"}
+debug_with_trait = {path = "../debug_with_trait"}
 
 [dev-dependencies]
 insta = { version = "1.43.1", features = ["yaml"] }

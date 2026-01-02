@@ -6,4 +6,6 @@ members = [
     "from-raw-ast", 
     "debugger",
     "hanc",
+    "debug_with",
+    "debug_with_trait",
 ]

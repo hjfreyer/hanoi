@@ -9,7 +9,8 @@ macro_rules! builtins {
     {
         $(($ident:ident, $name:literal),)*
     } => {
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, debug_with::DebugWith)]
+        #[debug_with(passthrough)]
         pub enum Builtin {
             $($ident,)*
         }
@@ -52,13 +53,29 @@ builtins! {
     (ArraySet, "array_set"),
 }
 
-#[derive(From, Into, Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    From,
+    Into,
+    Debug,
+    Copy,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    debug_with::DebugWith,
+)]
+#[debug_with(passthrough)]
 pub struct SymbolIndex(usize);
 
 #[derive(From, Into, Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SentenceIndex(usize);
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, PartialEq, Eq, Debug, Hash, Serialize, Deserialize, debug_with::DebugWith,
+)]
+#[debug_with(passthrough)]
 pub enum PrimitiveValue {
     Symbol(SymbolIndex),
     Usize(usize),

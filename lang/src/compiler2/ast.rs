@@ -6,30 +6,45 @@ use crate::{
     parser::source,
 };
 
+use debug_with_trait;
+
 #[derive(From, Into, Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct IdentifierIndex(usize);
 
 #[derive(From, Into, Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct PathIndex(usize);
 
-#[derive(From, Into, Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    From, Into, Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, debug_with::DebugWith,
+)]
+#[debug_with(passthrough)]
 pub struct VariableRefIndex(usize);
 
 #[derive(From, Into, Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SymbolDefIndex(usize);
 
-#[derive(From, Into, Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    From, Into, Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, debug_with::DebugWith,
+)]
+#[debug_with(passthrough)]
 pub struct SentenceDefIndex(usize);
-#[derive(From, Into, Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    From, Into, Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, debug_with::DebugWith,
+)]
+#[debug_with(passthrough)]
 pub struct SentenceRefIndex(usize);
 
 #[derive(From, Into, Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct FunctionIndex(usize);
 
-#[derive(From, Into, Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    From, Into, Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, debug_with::DebugWith,
+)]
+#[debug_with(passthrough)]
 pub struct ConstRefIndex(usize);
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, debug_with::DebugWith)]
+#[debug_with(context = source::Sources)]
 pub enum ConstRef {
     Inline(bytecode::PrimitiveValue),
     Path(Path),
@@ -50,7 +65,8 @@ where
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, debug_with::DebugWith)]
+#[debug_with(context = source::Sources)]
 pub enum StackOperation {
     Push(ConstRefIndex),
     Copy(VariableRefIndex),
@@ -61,7 +77,8 @@ pub enum StackOperation {
     Untuple(usize),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, debug_with::DebugWith)]
+#[debug_with(context = source::Sources)]
 pub enum WordInner {
     StackOperation(StackOperation),
     Call(SentenceRefIndex),
@@ -69,13 +86,15 @@ pub enum WordInner {
     JumpTable(Vec<SentenceRefIndex>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, debug_with::DebugWith)]
+#[debug_with(context = source::Sources)]
 pub struct Word {
     pub inner: WordInner,
     pub span: source::Span,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, debug_with::DebugWith)]
+#[debug_with(context = source::Sources)]
 pub struct SentenceDef {
     pub words: Vec<Word>,
 }
@@ -97,7 +116,8 @@ pub struct FunctionDef {
     pub sentence: SentenceRefIndex,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, debug_with::DebugWith)]
+#[debug_with(context = source::Sources)]
 pub struct Path(pub Vec<source::Span>);
 
 impl<C> DebugWith<C> for Path

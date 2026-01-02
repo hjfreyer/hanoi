@@ -10,8 +10,16 @@ const bar = 'foo;
 sentence main {
     #push('foo)
     #call('main::main)
+    #call('thingy::guy)
     #tuple(2)
     #tuple(1)
+}
+
+mod thingy {
+    const foo = 1;
+    sentence guy {
+        #push('foo)
+    }
 }
 
 

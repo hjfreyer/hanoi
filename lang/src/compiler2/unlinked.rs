@@ -23,7 +23,8 @@ pub struct ConstDecl {
     pub value: ast::ConstRefIndex,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, debug_with::DebugWith)]
+#[debug_with(context = source::Sources)]
 pub enum SentenceRef {
     Inline(ast::SentenceDefIndex),
     Path(ast::Path),
