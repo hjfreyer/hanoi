@@ -312,11 +312,3 @@ pub struct Path {
 #[debug_with(context = source::Sources)]
 pub struct Identifier(pub source::Span);
 
-impl<C> crate::compiler2::unresolved::DebugWith<C> for Identifier
-where
-    source::Span: crate::compiler2::unresolved::DebugWith<C>,
-{
-    fn debug_with(&self, c: &C, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.debug_with(c, f)
-    }
-}

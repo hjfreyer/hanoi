@@ -7,10 +7,7 @@ use typed_index_collections::TiVec;
 
 use crate::{
     bytecode,
-    compiler2::{
-        ast, linked,
-        unresolved::{DebugWith, UseDebugWith},
-    },
+    compiler2::{ast, linked},
     parser::source,
 };
 
@@ -30,23 +27,6 @@ pub enum SentenceRef {
     Path(ast::Path),
 }
 
-impl<C> DebugWith<C> for SentenceRef
-where
-    ast::Path: DebugWith<C>,
-{
-    fn debug_with(&self, c: &C, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            SentenceRef::Inline(sentence_def_index) => f
-                .debug_tuple("SentenceRef::Inline")
-                .field(sentence_def_index)
-                .finish(),
-            SentenceRef::Path(path) => f
-                .debug_tuple("SentenceRef::Path")
-                .field(&UseDebugWith(path, c))
-                .finish(),
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SentenceDecl {
@@ -54,17 +34,6 @@ pub struct SentenceDecl {
     pub value: ast::SentenceDefIndex,
 }
 
-impl<C> DebugWith<C> for SentenceDecl
-where
-    ast::Path: DebugWith<C>,
-{
-    fn debug_with(&self, c: &C, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SentenceDecl")
-            .field("name", &UseDebugWith(&self.name, c))
-            .field("value", &self.value)
-            .finish()
-    }
-}
 
 #[derive(Clone, Default)]
 pub struct Library {
@@ -85,68 +54,6 @@ struct LibraryView<'a> {
     library: &'a Library,
 }
 
-impl DebugWith<source::Sources> for Library {
-    fn debug_with(
-        &self,
-        sources: &source::Sources,
-        f: &mut std::fmt::Formatter<'_>,
-    ) -> std::fmt::Result {
-        f.debug_struct("Library")
-            .field(
-                "const_refs",
-                &UseDebugWith(
-                    &self.const_refs,
-                    &LibraryView {
-                        sources,
-                        library: self,
-                    },
-                ),
-            )
-            .field("const_decls", &self.const_decls)
-            .field("variable_refs", &self.variable_refs)
-            .field(
-                "sentence_defs",
-                &UseDebugWith(
-                    &self.sentence_defs,
-                    &LibraryView {
-                        sources,
-                        library: self,
-                    },
-                ),
-            )
-            .field(
-                "sentence_refs",
-                &UseDebugWith(
-                    &self.sentence_refs,
-                    &LibraryView {
-                        sources,
-                        library: self,
-                    },
-                ),
-            )
-            .field(
-                "sentence_decls",
-                &UseDebugWith(
-                    &self.sentence_decls,
-                    &LibraryView {
-                        sources,
-                        library: self,
-                    },
-                ),
-            )
-            .finish()
-    }
-}
-
-impl DebugWith<LibraryView<'_>> for source::Span {
-    fn debug_with(
-        &self,
-        library_view: &LibraryView<'_>,
-        f: &mut std::fmt::Formatter<'_>,
-    ) -> std::fmt::Result {
-        f.write_str(self.as_str(library_view.sources))
-    }
-}
 
 impl Library {
     pub fn link(self, sources: &source::Sources) -> Result<linked::Library, anyhow::Error> {

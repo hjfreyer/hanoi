@@ -22,17 +22,6 @@ pub struct ConstDecl {
     pub value: ast::ConstRefIndex,
 }
 
-impl<C> DebugWith<C> for ConstDecl
-where
-    parser::Identifier: DebugWith<C>,
-{
-    fn debug_with(&self, c: &C, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ConstDecl")
-            .field("name", &UseDebugWith(&self.name, c))
-            .field("value", &self.value)
-            .finish()
-    }
-}
 
 #[derive(Debug, Clone, debug_with::DebugWith)]
 #[debug_with(context = source::Sources)]
@@ -41,17 +30,6 @@ pub struct SentenceDecl {
     pub sentence: ast::SentenceDefIndex,
 }
 
-impl<C> DebugWith<C> for SentenceDecl
-where
-    parser::Identifier: DebugWith<C>,
-{
-    fn debug_with(&self, c: &C, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SentenceDecl")
-            .field("name", &UseDebugWith(&self.name, c))
-            .field("sentence", &self.sentence)
-            .finish()
-    }
-}
 
 #[derive(Debug, Clone, Default, debug_with::DebugWith)]
 #[debug_with(context = source::Sources)]
@@ -61,32 +39,6 @@ pub struct Module {
     pub sentence_decls: Vec<SentenceDecl>,
 }
 
-impl<C> DebugWith<C> for Module
-where
-    ConstDecl: DebugWith<C>,
-    SentenceDecl: DebugWith<C>,
-    ModuleDecl: DebugWith<C>,
-{
-    fn debug_with(&self, c: &C, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Module")
-            .field("submodules", &UseDebugWith(&self.submodules, c))
-            .field("const_decls", &UseDebugWith(&self.const_decls, c))
-            .field("sentence_decls", &UseDebugWith(&self.sentence_decls, c))
-            .finish()
-    }
-}
-
-impl<C> DebugWith<C> for ModuleDecl
-where
-    parser::Identifier: DebugWith<C>,
-{
-    fn debug_with(&self, c: &C, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ModuleDecl")
-            .field("name", &UseDebugWith(&self.name, c))
-            .field("module", &self.module)
-            .finish()
-    }
-}
 
 #[derive(Debug, Clone, debug_with::DebugWith)]
 #[debug_with(context = source::Sources)]
@@ -110,78 +62,6 @@ pub struct Library {
     pub sentence_refs: TiVec<ast::SentenceRefIndex, unlinked::SentenceRef>,
 }
 
-impl DebugWith<source::Sources> for Library {
-    fn debug_with(
-        &self,
-        sources: &source::Sources,
-        f: &mut std::fmt::Formatter<'_>,
-    ) -> std::fmt::Result {
-        f.debug_struct("Library")
-            .field("root_module", &self.root_module)
-            .field(
-                "modules",
-                &UseDebugWith(
-                    &self.modules,
-                    &LibraryView {
-                        sources,
-                        library: self,
-                    },
-                ),
-            )
-            .field(
-                "const_refs",
-                &UseDebugWith(
-                    &self.const_refs,
-                    &LibraryView {
-                        sources,
-                        library: self,
-                    },
-                ),
-            )
-            .field(
-                "const_decls",
-                &UseDebugWith(
-                    &self.const_decls,
-                    &LibraryView {
-                        sources,
-                        library: self,
-                    },
-                ),
-            )
-            .field("variable_refs", &self.variable_refs)
-            .field(
-                "sentence_defs",
-                &UseDebugWith(
-                    &self.sentence_defs,
-                    &LibraryView {
-                        sources,
-                        library: self,
-                    },
-                ),
-            )
-            .field(
-                "sentence_refs",
-                &UseDebugWith(
-                    &self.sentence_refs,
-                    &LibraryView {
-                        sources,
-                        library: self,
-                    },
-                ),
-            )
-            .finish()
-    }
-}
-
-impl DebugWith<LibraryView<'_>> for source::Span {
-    fn debug_with(
-        &self,
-        library_view: &LibraryView<'_>,
-        f: &mut std::fmt::Formatter<'_>,
-    ) -> std::fmt::Result {
-        f.write_str(self.as_str(library_view.sources))
-    }
-}
 
 #[derive(Copy, Clone)]
 struct LibraryView<'a> {
@@ -189,46 +69,6 @@ struct LibraryView<'a> {
     library: &'a Library,
 }
 
-pub trait DebugWith<T> {
-    fn debug_with(&self, t: &T, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result;
-}
-
-impl<'a, K, V, C> DebugWith<C> for TiVec<K, V>
-where
-    K: From<usize> + std::fmt::Debug,
-    V: DebugWith<C>,
-{
-    fn debug_with(&self, c: &C, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_map()
-            .entries(
-                self.iter_enumerated()
-                    .map(|(k, v)| (k, UseDebugWith(v, c)))
-                    .collect_vec(),
-            )
-            .finish()
-    }
-}
-impl<'a, V, C> DebugWith<C> for Vec<V>
-where
-    V: DebugWith<C>,
-{
-    fn debug_with(&self, c: &C, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_list()
-            .entries(self.iter().map(|v| UseDebugWith(v, c)))
-            .finish()
-    }
-}
-
-pub struct UseDebugWith<'a, T, C>(pub &'a T, pub &'a C);
-
-impl<'a, T, C> std::fmt::Debug for UseDebugWith<'a, T, C>
-where
-    T: DebugWith<C>,
-{
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.debug_with(self.1, f)
-    }
-}
 
 struct Builder<'a> {
     sources: &'a source::Sources,
