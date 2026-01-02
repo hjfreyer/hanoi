@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 
 use derive_more::derive::{From, Into};
 use itertools::Itertools;
@@ -387,7 +386,7 @@ impl<'a> Builder<'a> {
 }
 
 impl Library {
-    pub fn from_parsed(sources: &source::Sources, mut parsed_library: parser::Library) -> Self {
+    pub fn from_parsed(sources: &source::Sources, parsed_library: parser::Library) -> Self {
         let mut builder = Builder {
             sources,
             res: Library {

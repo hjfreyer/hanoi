@@ -10,7 +10,7 @@ use typed_index_collections::TiVec;
 
 use crate::{
     bytecode,
-    compiler2::unresolved::{DebugWith, UseDebugWith},
+    compiler2::unresolved::DebugWith,
     parser::source::FileIndex,
 };
 

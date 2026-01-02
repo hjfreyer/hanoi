@@ -11,7 +11,7 @@ use crate::{
         ast, linked,
         unresolved::{DebugWith, UseDebugWith},
     },
-    parser::{self, source},
+    parser::source,
 };
 
 #[derive(From, Into, Debug, Copy, Clone, PartialEq, Eq, Hash)]
