@@ -1,7 +1,7 @@
 /// A trait for debugging purposes
 pub trait DebugWith<C> {
     /// The output type for debugging
-    type Output<'a>: 'a
+    type Output<'a>: 'a + std::fmt::Debug
     where
         Self: 'a,
         C: 'a;
@@ -27,7 +27,7 @@ where
 
 impl<C, K, V> DebugWith<C> for typed_index_collections::TiVec<K, V>
 where
-    K: From<usize> + 'static,
+    K: From<usize> + 'static + std::fmt::Debug,
     V: DebugWith<C>,
 {
     type Output<'a>
