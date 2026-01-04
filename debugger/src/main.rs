@@ -115,14 +115,14 @@ impl DebugSession {
     }
 
     fn get_locals(&self, _frame_id: i64) -> Vec<types::Variable> {
-        let Some((locals, stack)) = self.get_stack_frame(_frame_id) else {
+        let Some((locals, _stack)) = self.get_stack_frame(_frame_id) else {
             return vec![];
         };
         locals
             .iter()
             .map(|(k, v)| types::Variable {
-                name: format!("local[{:?}]", k),
-                value: format_value(v),
+                name: format!("{}", self.format_symbol(k)),
+                value: self.format_value(v),
                 type_field: Some(v.r#type().to_string()),
                 ..Default::default()
             })
@@ -138,11 +138,60 @@ impl DebugSession {
             .enumerate()
             .map(|(idx, value)| types::Variable {
                 name: format!("stack[{}]", idx),
-                value: format_value(value),
+                value: self.format_value(value),
                 type_field: Some(value.r#type().to_string()),
                 ..Default::default()
             })
             .collect()
+    }
+
+    fn format_symbol(&self, idx: &bytecode::SymbolIndex) -> String {
+        let idx_val: usize = (*idx).into();
+        // Look up the symbol name in debuginfo
+        if let Some(symbol) = self.bytecode.debuginfo.symbols.get(idx_val) {
+            symbol.name.clone()
+        } else {
+            format!("Symbol({})", idx_val)
+        }
+    }
+
+    fn format_value(&self, value: &hanoi::vm::Value) -> String {
+        match value {
+            hanoi::vm::Value::Symbol(idx) => {
+                format!("'{}", self.format_symbol(idx))
+            }
+            hanoi::vm::Value::Usize(u) => format!("{}", u),
+            hanoi::vm::Value::Bool(b) => format!("{}", b),
+            hanoi::vm::Value::Char(c) => format!("'{}'", c),
+            hanoi::vm::Value::Tuple(vals) => {
+                let inner = vals
+                    .iter()
+                    .map(|v| self.format_value(v))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("({})", inner)
+            }
+            hanoi::vm::Value::Array(arr) => {
+                let inner = arr
+                    .iter()
+                    .map(|opt| {
+                        opt.as_ref()
+                            .map(|v| self.format_value(v))
+                            .unwrap_or_else(|| "None".to_string())
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("[{}]", inner)
+            }
+            hanoi::vm::Value::Map(map) => {
+                let inner = map
+                    .iter()
+                    .map(|(k, v)| format!("'{}: {}", self.format_symbol(k), self.format_value(v)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{{{}}}", inner)
+            }
+        }
     }
 }
 
@@ -506,46 +555,6 @@ fn build_stack_frame(
         column: column,
         ..Default::default()
     })
-}
-
-fn format_value(value: &hanoi::vm::Value) -> String {
-    match value {
-        hanoi::vm::Value::Symbol(idx) => {
-            let idx_val: usize = (*idx).into();
-            format!("Symbol({})", idx_val)
-        }
-        hanoi::vm::Value::Usize(u) => format!("{}", u),
-        hanoi::vm::Value::Bool(b) => format!("{}", b),
-        hanoi::vm::Value::Char(c) => format!("'{}'", c),
-        hanoi::vm::Value::Tuple(vals) => {
-            let inner = vals
-                .iter()
-                .map(|v| format_value(v))
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("({})", inner)
-        }
-        hanoi::vm::Value::Array(arr) => {
-            let inner = arr
-                .iter()
-                .map(|opt| {
-                    opt.as_ref()
-                        .map(|v| format_value(v))
-                        .unwrap_or_else(|| "None".to_string())
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("[{}]", inner)
-        }
-        hanoi::vm::Value::Map(map) => {
-            let inner = map
-                .iter()
-                .map(|(k, v)| format!("{:?}: {}", k, format_value(v)))
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("{{{}}}", inner)
-        }
-    }
 }
 
 fn send_console_output<R, W>(server: &mut Server<R, W>, text: &str) -> Result<()>
