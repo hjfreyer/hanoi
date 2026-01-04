@@ -472,24 +472,32 @@ impl Library {
                         .get(identifier.0.as_str(sources))
                         .expect(format!("local not found: {:?}", identifier).as_str());
 
-                    Self::move_var(*symbol)
-                        .into_iter()
-                        .chain([
-                            // Stack: ({}, ((), x))
-                            ast::WordInner::StackOperation(ast::StackOperation::Untuple(2)),
-                            ast::WordInner::StackOperation(ast::StackOperation::Untuple(2)),
-                            ast::WordInner::StackOperation(ast::StackOperation::Copy(0)),
-                            // Stack: {} () x x
-                            ast::WordInner::StackOperation(ast::StackOperation::Move(2)),
-                            ast::WordInner::StackOperation(ast::StackOperation::Move(2)),
-                            ast::WordInner::StackOperation(ast::StackOperation::Tuple(2)),
-                            // Stack: {} x ((), x)
-                            ast::WordInner::StackOperation(ast::StackOperation::Move(1)),
-                            ast::WordInner::StackOperation(ast::StackOperation::Tuple(2)),
-                            ast::WordInner::StackOperation(ast::StackOperation::Tuple(2)),
-                        ])
-                        .chain(Self::bind_var(*symbol))
-                        .collect()
+                    vec![
+                        // Stack: ({'x: x}, (...))
+                        ast::WordInner::StackOperation(ast::StackOperation::Untuple(2)),
+                        ast::WordInner::StackOperation(ast::StackOperation::Move(1)),
+                        ast::WordInner::StackOperation(ast::StackOperation::Push(*symbol)),
+                        ast::WordInner::StackOperation(ast::StackOperation::Builtin(
+                            bytecode::Builtin::MapGet,
+                        )),
+                        ast::WordInner::StackOperation(ast::StackOperation::Copy(0)),
+                        // Stack: (...) {} x x
+                        ast::WordInner::StackOperation(ast::StackOperation::Move(3)),
+                        ast::WordInner::StackOperation(ast::StackOperation::Move(1)),
+                        ast::WordInner::StackOperation(ast::StackOperation::Builtin(
+                            bytecode::Builtin::TuplePush,
+                        )),
+                        // Stack: {} x (..., x)
+                        ast::WordInner::StackOperation(ast::StackOperation::Move(2)),
+                        ast::WordInner::StackOperation(ast::StackOperation::Move(2)),
+                        ast::WordInner::StackOperation(ast::StackOperation::Push(*symbol)),
+                        ast::WordInner::StackOperation(ast::StackOperation::Builtin(
+                            bytecode::Builtin::MapSet,
+                        )),
+                        // Stack: (..., x) {'x: x}
+                        ast::WordInner::StackOperation(ast::StackOperation::Move(1)),
+                        ast::WordInner::StackOperation(ast::StackOperation::Tuple(2)),
+                    ]
                 }
                 FancyWordInner::MoveVar(identifier) => {
                     let symbol = locals
@@ -500,9 +508,7 @@ impl Library {
                 }
                 FancyWordInner::FnInit => {
                     vec![
-                        ast::WordInner::StackOperation(ast::StackOperation::Tuple(0)),
-                        ast::WordInner::StackOperation(ast::StackOperation::Move(1)),
-                        ast::WordInner::StackOperation(ast::StackOperation::Tuple(2)),
+                        ast::WordInner::StackOperation(ast::StackOperation::Tuple(1)),
                         ast::WordInner::StackOperation(ast::StackOperation::Builtin(
                             bytecode::Builtin::MapNew,
                         )),
@@ -522,10 +528,12 @@ impl Library {
 
     fn bind_var(local: ast::ConstRefIndex) -> Vec<ast::WordInner> {
         vec![
-            // Stack: ({}, ((), x))
+            // Stack: ({}, (..., x))
             ast::WordInner::StackOperation(ast::StackOperation::Untuple(2)),
-            ast::WordInner::StackOperation(ast::StackOperation::Untuple(2)),
-            // Stack: {} () x
+            ast::WordInner::StackOperation(ast::StackOperation::Builtin(
+                bytecode::Builtin::TuplePop,
+            )),
+            // Stack: {} (...) x
             ast::WordInner::StackOperation(ast::StackOperation::Move(2)),
             ast::WordInner::StackOperation(ast::StackOperation::Move(1)),
             ast::WordInner::StackOperation(ast::StackOperation::Push(local)),
@@ -538,16 +546,18 @@ impl Library {
 
     fn move_var(local: ast::ConstRefIndex) -> Vec<ast::WordInner> {
         vec![
-            // Stack: ({'x: x}, ())
+            // Stack: ({'x: x}, ...)
             ast::WordInner::StackOperation(ast::StackOperation::Untuple(2)),
             ast::WordInner::StackOperation(ast::StackOperation::Move(1)),
             ast::WordInner::StackOperation(ast::StackOperation::Push(local)),
             ast::WordInner::StackOperation(ast::StackOperation::Builtin(bytecode::Builtin::MapGet)),
-            // Stack: () {} x
+            // Stack: (...) {} x
             ast::WordInner::StackOperation(ast::StackOperation::Move(2)),
             ast::WordInner::StackOperation(ast::StackOperation::Move(1)),
-            ast::WordInner::StackOperation(ast::StackOperation::Tuple(2)),
-            // Stack: {} ((), x)
+            ast::WordInner::StackOperation(ast::StackOperation::Builtin(
+                bytecode::Builtin::TuplePush,
+            )),
+            // Stack: {} (..., x)
             ast::WordInner::StackOperation(ast::StackOperation::Tuple(2)),
         ]
     }

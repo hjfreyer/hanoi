@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::io::{BufReader, BufWriter};
 use std::net::TcpListener;
 use std::path::PathBuf;
@@ -10,7 +11,7 @@ use dap::responses::{
     ResponseBody, ScopesResponse, SetBreakpointsResponse, StackTraceResponse, ThreadsResponse,
     VariablesResponse,
 };
-use hanoi::bytecode::{Library as BytecodeLibrary, SentenceIndex};
+use hanoi::bytecode::{self, Library as BytecodeLibrary, SentenceIndex};
 use hanoi::parser::source;
 use hanoi::vm::{ProgramCounter, Vm};
 use hanoi::{compiler2, vm};
@@ -96,18 +97,25 @@ impl DebugSession {
         }
     }
 
-    fn get_locals(&self, _frame_id: i64) -> Vec<types::Variable> {
-        eprintln!("Get locals: {}", _frame_id);
+    fn get_stack_frame(
+        &self,
+        _frame_id: i64,
+    ) -> Option<(&BTreeMap<bytecode::SymbolIndex, vm::Value>, &Vec<vm::Value>)> {
         let Some(last_frame) = self.vm.stack.iter().last() else {
-            eprintln!("No last frame");
-            return vec![];
+            return None;
         };
         let vm::Value::Tuple(vals) = last_frame else {
-            eprintln!("Last frame is not a tuple: {:?}", last_frame);
-            return vec![];
+            return None;
         };
-        let Some((vm::Value::Map(locals), stack)) = vals.iter().collect_tuple() else {
-            eprintln!("tuple structure wrong: {:?}", vals);
+        let Some((vm::Value::Map(locals), vm::Value::Tuple(stack))) = vals.iter().collect_tuple()
+        else {
+            return None;
+        };
+        Some((locals, stack))
+    }
+
+    fn get_locals(&self, _frame_id: i64) -> Vec<types::Variable> {
+        let Some((locals, stack)) = self.get_stack_frame(_frame_id) else {
             return vec![];
         };
         locals
@@ -122,21 +130,17 @@ impl DebugSession {
     }
 
     fn get_stack(&self, _frame_id: i64) -> Vec<types::Variable> {
-        // Return each stack entry as its own variable
-        // Stack is iterated in reverse so stack[0] is the top
-        self.vm
-            .stack
+        let Some((_, stack)) = self.get_stack_frame(_frame_id) else {
+            return vec![];
+        };
+        stack
             .iter()
-            .rev()
             .enumerate()
-            .map(|(idx, value)| {
-                let value_str = format_value(value);
-                types::Variable {
-                    name: format!("stack[{}]", idx),
-                    value: value_str,
-                    type_field: Some(value.r#type().to_string()),
-                    ..Default::default()
-                }
+            .map(|(idx, value)| types::Variable {
+                name: format!("stack[{}]", idx),
+                value: format_value(value),
+                type_field: Some(value.r#type().to_string()),
+                ..Default::default()
             })
             .collect()
     }
@@ -345,7 +349,6 @@ where
         }
         Command::Scopes(ref args) => {
             send_console_output(server, "Getting scopes...\n")?;
-            eprintln!("Get scopes: {}", args.frame_id);
             let scopes = {
                 let state = state.lock().unwrap();
                 if let Some(ref session) = state.session {
@@ -357,7 +360,7 @@ where
                     let num_locals_variables = session.get_locals(frame_id).len() as i64;
                     let num_stack_variables = session.get_stack(frame_id).len() as i64;
 
-                    dbg!(vec![
+                    vec![
                         types::Scope {
                             name: "Locals".to_string(),
                             variables_reference: locals_ref,
@@ -370,7 +373,7 @@ where
                             named_variables: Some(num_stack_variables),
                             ..Default::default()
                         },
-                    ])
+                    ]
                 } else {
                     vec![]
                 }

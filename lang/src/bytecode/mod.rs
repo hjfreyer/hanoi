@@ -55,6 +55,9 @@ builtins! {
     (MapNew, "map_new"),
     (MapGet, "map_get"),
     (MapSet, "map_set"),
+
+    (TuplePush, "tuple_push"),
+    (TuplePop, "tuple_pop"),
 }
 
 #[derive(

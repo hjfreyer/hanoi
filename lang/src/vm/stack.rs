@@ -86,6 +86,9 @@ impl Stack {
     }
 
     pub fn tuple(&mut self, size: usize) -> Result<(), EvalError> {
+        if self.inner.len() < size {
+            return Err(EvalError::IndexOutOfRange { idx: size });
+        }
         let vals = self.inner.split_off(self.inner.len() - size);
         self.push(Value::Tuple(vals));
         Ok(())
@@ -344,6 +347,22 @@ impl Stack {
                 self.push(Value::Map(map));
                 Ok(())
             }
+            Builtin::TuplePush => {
+                self.check_size(2)?;
+                let value = self.pop().unwrap();
+                let mut tuple: Vec<Value> = self.pop().unwrap().at_index(0)?;
+                tuple.push(value);
+                self.push(Value::Tuple(tuple));
+                Ok(())
+            }
+            Builtin::TuplePop => {
+                self.check_size(1)?;
+                let mut tuple: Vec<Value> = self.pop().unwrap().at_index(0)?;
+                let value = tuple.pop().ok_or(BuiltinError::EmptyTuple)?;
+                self.push(Value::Tuple(tuple));
+                self.push(value);
+                Ok(())
+            }
         }
     }
 }
@@ -370,6 +389,9 @@ pub enum BuiltinError {
 
     #[error("Array element uninitialized: {index}")]
     UninitializedArrayElement { index: usize },
+
+    #[error("Tuple empty")]
+    EmptyTuple,
 }
 
 #[derive(Debug, thiserror::Error)]
