@@ -15,10 +15,90 @@ use hanoi::compiler2;
 use hanoi::parser::source;
 use hanoi::vm::{ProgramCounter, Vm};
 
+struct DebugSession {
+    bytecode: BytecodeLibrary,
+    vm: Vm,
+}
+
+impl DebugSession {
+    fn step(&mut self, granularity: Option<dap::types::SteppingGranularity>) -> Result<()> {
+        match granularity.unwrap_or(dap::types::SteppingGranularity::Statement) {
+            dap::types::SteppingGranularity::Statement => {
+                // Step until we reach a new statement (new line in source)
+                self.step_to_next_line()
+            }
+            dap::types::SteppingGranularity::Line => {
+                // Step until we reach a new line in source
+                self.step_to_next_line()
+            }
+            dap::types::SteppingGranularity::Instruction => {
+                // Default: step one instruction (word) at a time
+                self.vm
+                    .step()
+                    .map(|_| ())
+                    .map_err(|e| anyhow::anyhow!("{:?}", e))
+            }
+        }
+    }
+
+    fn step_to_next_line(&mut self) -> Result<()> {
+        // Get the current line number
+        let current_line = self
+            .vm
+            .call_stack
+            .last()
+            .and_then(|pc| {
+                let debuginfo = &self.bytecode.debuginfo;
+                let sentence_idx: usize = pc.sentence_idx.into();
+                debuginfo
+                    .sentences
+                    .get(sentence_idx)
+                    .and_then(|sentence| sentence.words.get(pc.word_idx))
+                    .and_then(|word| word.span.as_ref())
+                    .map(|span| span.begin.line)
+            })
+            .unwrap_or(0);
+
+        // Step until we reach a different line or the program exits
+        loop {
+            match self.vm.step() {
+                Ok(hanoi::vm::StepResult::Exit) => {
+                    return Ok(());
+                }
+                Ok(hanoi::vm::StepResult::Continue) => {
+                    // Check if we've moved to a new line
+                    let new_line = self.vm.call_stack.last().and_then(|pc| {
+                        let debuginfo = &self.bytecode.debuginfo;
+                        let sentence_idx: usize = pc.sentence_idx.into();
+                        debuginfo
+                            .sentences
+                            .get(sentence_idx)
+                            .and_then(|sentence| sentence.words.get(pc.word_idx))
+                            .and_then(|word| word.span.as_ref())
+                            .map(|span| span.begin.line)
+                    });
+
+                    if let Some(line) = new_line {
+                        if line != current_line {
+                            // We've reached a new line, stop stepping
+                            return Ok(());
+                        }
+                    } else {
+                        // No debug info available, step once and stop
+                        return Ok(());
+                    }
+                }
+                Err(e) => {
+                    return Err(anyhow::anyhow!("VM step error: {:?}", e));
+                }
+            }
+        }
+    }
+}
+
 struct DebuggerState {
-    bytecode: Option<BytecodeLibrary>,
+    session: Option<DebugSession>,
     program_path: Option<PathBuf>,
-    vm: Option<Vm>,
 }
 
 fn main() -> Result<()> {
@@ -36,9 +116,8 @@ fn main() -> Result<()> {
 
         let mut server = Server::new(input, output);
         let state = Arc::new(Mutex::new(DebuggerState {
-            bytecode: None,
+            session: None,
             program_path: None,
-            vm: None,
         }));
 
         while let Some(request) = server.poll_request()? {
@@ -67,6 +146,7 @@ where
             send_console_output(server, "Initializing Hanoi debugger (dap-rs)...\n")?;
             let caps = types::Capabilities {
                 supports_configuration_done_request: Some(true),
+                supports_stepping_granularity: Some(true),
                 ..Default::default()
             };
             let response = request.success(ResponseBody::Initialize(caps));
@@ -104,10 +184,11 @@ where
             // Store in state
             {
                 let mut state = state.lock().unwrap();
-                state.bytecode = Some(bytecode.clone());
+                let vm = Vm::new(bytecode.clone(), SentenceIndex::from(0));
                 state.program_path = Some(program_path.clone());
-                state.vm = Some(Vm::new(bytecode, SentenceIndex::from(0)));
-                state.vm.as_mut().unwrap().reset_call_stack();
+                let mut session = DebugSession { bytecode, vm };
+                session.vm.reset_call_stack();
+                state.session = Some(session);
             }
 
             let response = request.clone().success(ResponseBody::Launch);
@@ -158,27 +239,25 @@ where
             let response = request.success(body);
             server.respond(response)?;
         }
-        Command::StepIn(_) => {
-            send_console_output(server, "Stepping in...\n")?;
+        Command::StepIn(ref args) => {
+            let granularity = args.granularity.as_ref();
 
             {
                 let mut state = state.lock().unwrap();
-                if let Some(ref mut vm) = state.vm {
-                    match vm.step() {
+                if let Some(ref mut session) = state.session {
+                    match session.step(granularity.cloned()) {
                         Ok(_) => {
-                            // VM advanced one step; nothing else to do here for now.
+                            // VM advanced one step
                         }
                         Err(err) => {
-                            // Log VM step errors to the debug console.
                             let msg = format!("VM step error: {err:?}\n");
-                            // Ignore errors from console output to avoid masking the original error.
                             let _ = send_console_output(server, &msg);
                         }
                     }
                 } else {
                     let _ = send_console_output(
                         server,
-                        "No VM available to step; did launch succeed?\n",
+                        "No debug session available; did launch succeed?\n",
                     );
                 }
             }
@@ -203,10 +282,9 @@ where
 
             let (stack_frames, total_frames) = {
                 let state = state.lock().unwrap();
-                if let (Some(ref vm), Some(ref bytecode)) =
-                    (state.vm.as_ref(), state.bytecode.as_ref())
-                {
-                    build_stack_frames(bytecode, vm).context("Failed to build stack frames")?
+                if let Some(ref session) = state.session {
+                    build_stack_frames(&session.bytecode, &session.vm)
+                        .context("Failed to build stack frames")?
                 } else {
                     (vec![], Some(0))
                 }
@@ -224,8 +302,8 @@ where
 
             let scopes = {
                 let state = state.lock().unwrap();
-                if let Some(ref vm) = state.vm {
-                    let num_variables = vm.stack.len() as i64;
+                if let Some(ref session) = state.session {
+                    let num_variables = session.vm.stack.len() as i64;
 
                     vec![types::Scope {
                         name: "Stack".to_string(),
@@ -247,10 +325,12 @@ where
 
             let variables = {
                 let state = state.lock().unwrap();
-                if let Some(ref vm) = state.vm {
+                if let Some(ref session) = state.session {
                     // Return each stack entry as its own variable
                     // Stack is iterated in reverse so stack[0] is the top
-                    vm.stack
+                    session
+                        .vm
+                        .stack
                         .iter()
                         .rev()
                         .enumerate()
