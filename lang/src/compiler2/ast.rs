@@ -53,9 +53,9 @@ pub enum ConstRef {
 #[debug_with(context = source::Sources)]
 pub enum StackOperation {
     Push(ConstRefIndex),
-    Copy(VariableRefIndex),
-    Drop(VariableRefIndex),
-    Move(VariableRefIndex),
+    Copy(usize),
+    Drop(usize),
+    Move(usize),
     Builtin(Builtin),
     Tuple(usize),
     Untuple(usize),

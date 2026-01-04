@@ -1,5 +1,7 @@
+use std::collections::BTreeMap;
+
 use crate::{
-    bytecode::{Builtin, StackOperation},
+    bytecode::{Builtin, StackOperation, SymbolIndex},
     vm::value::{ConversionError, Value},
 };
 
@@ -319,6 +321,28 @@ impl Stack {
                     self.push(value);
                     Ok(())
                 }
+            }
+            Builtin::MapNew => {
+                self.push(Value::Map(BTreeMap::new()));
+                Ok(())
+            }
+            Builtin::MapGet => {
+                self.check_size(2)?;
+                let key: SymbolIndex = self.pop().unwrap().at_index(1)?;
+                let mut map: BTreeMap<SymbolIndex, Value> = self.pop().unwrap().at_index(0)?;
+                let value = map.remove(&key).unwrap();
+                self.push(Value::Map(map));
+                self.push(value);
+                Ok(())
+            }
+            Builtin::MapSet => {
+                self.check_size(3)?;
+                let key: SymbolIndex = self.pop().unwrap().at_index(2)?;
+                let value = self.pop().unwrap();
+                let mut map: BTreeMap<SymbolIndex, Value> = self.pop().unwrap().at_index(0)?;
+                map.insert(key, value);
+                self.push(Value::Map(map));
+                Ok(())
             }
         }
     }

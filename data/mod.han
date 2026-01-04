@@ -13,6 +13,9 @@ symbol sym2;
 const sym3 = 'sym;
 
 sentence main {
+    #push(3)
+    #call('fn_test::add_one)
+    #call('map_test::main)
     #push('foo)
     #push('sym2)
     #push('sym)
@@ -33,6 +36,68 @@ mod thingy {
     }
 }
 
+mod map_test {
+    symbol foo;
+    sentence main {
+        #map_new
+        #push('foo)
+        #push(32)
+        #map_set
+        #push('foo)
+        #map_get
+        #push(32)
+        #assert_eq
+    }
+}
+
+mod fn_test {
+    // x => x + 1
+    symbol x;
+    sentence add_one {
+        #local(x)
+
+        #fn_init
+        #bind_var(x)
+        #copy_var(x)
+        #move_var(x)
+        // #fancy_tuple(2)
+
+        // Func initialize.
+        // Stack: x
+        #map_new
+        #tuple(0)
+        #mv(2)
+        #tuple(2)
+
+        // Bind to x.
+        // Stack: {} ((), x)
+        #untuple(2)
+        #mv(2)
+        #mv(1)
+        // Stack: () {} x
+        #push('x)
+        #map_set
+        #mv(1)
+        // Stack: {x: x} ()
+
+        // Copy x.
+        #mv(1)
+        #push('x)
+        #map_get
+        #cp(0)
+        #mv(2)
+        #mv(2)
+        #push('x)
+        #map_set
+        #mv(2)
+        #mv(2)
+        #tuple(2)
+
+
+
+    }
+
+}
 
 
 // //sentence test {

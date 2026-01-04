@@ -12,6 +12,8 @@ mod pen;
 mod runtime;
 mod source;
 mod vm;
+mod compiler2;
+mod parser;
 
 use std::{path::PathBuf, process::exit};
 

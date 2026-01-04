@@ -96,6 +96,7 @@ word_args = {
 word_arg = {
   | literal
   | path
+  | identifier
   | sentence
 }
 

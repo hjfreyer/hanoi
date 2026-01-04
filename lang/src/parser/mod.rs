@@ -162,6 +162,7 @@ impl Factory {
             Rule::literal => WordArg::Literal(self.literal(inner)),
             Rule::path => WordArg::Path(self.path(inner)),
             Rule::sentence => WordArg::Sentence(self.sentence(inner)),
+            Rule::identifier => WordArg::Identifier(self.identifier(inner)),
             _ => panic!("invalid word arg"),
         }
     }
@@ -285,6 +286,7 @@ pub enum WordArg {
     Literal(Literal),
     Path(Path),
     Sentence(Sentence),
+    Identifier(Identifier),
 }
 
 #[derive(Debug, Clone, Copy, debug_with::DebugWith)]

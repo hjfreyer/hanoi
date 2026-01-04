@@ -39,8 +39,6 @@ pub struct Library {
     pub const_refs: TiVec<ast::ConstRefIndex, ast::ConstRef>,
     pub const_decls: Vec<ConstDecl>,
 
-    pub variable_refs: TiVec<ast::VariableRefIndex, usize>,
-
     pub sentence_defs: TiVec<ast::SentenceDefIndex, ast::SentenceDef>,
     pub sentence_refs: TiVec<ast::SentenceRefIndex, SentenceRef>,
     pub sentence_decls: Vec<SentenceDecl>,
@@ -111,7 +109,6 @@ impl Library {
         Ok(linked::Library {
             symbol_defs: self.symbol_defs,
             const_refs: const_refs?,
-            variable_refs: self.variable_refs,
             sentence_defs: self.sentence_defs,
             sentence_refs,
             exports: Default::default(),

@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use derive_more::derive::{From, Into};
 use itertools::Itertools;
 use typed_index_collections::TiVec;
@@ -53,16 +55,33 @@ pub struct Library {
     pub const_refs: TiVec<ast::ConstRefIndex, ast::ConstRef>,
     pub const_decls: Vec<ConstDecl>,
 
-    pub variable_refs: TiVec<ast::VariableRefIndex, usize>,
-
-    pub sentence_defs: TiVec<ast::SentenceDefIndex, ast::SentenceDef>,
+    pub sentence_defs: TiVec<ast::SentenceDefIndex, FancySentence>,
     pub sentence_refs: TiVec<ast::SentenceRefIndex, unlinked::SentenceRef>,
 }
 
-#[derive(Copy, Clone)]
-struct LibraryView<'a> {
-    sources: &'a source::Sources,
-    library: &'a Library,
+#[derive(Clone, debug_with::DebugWith)]
+#[debug_with(context = source::Sources)]
+struct FancySentence {
+    words: Vec<FancyWord>,
+}
+
+#[derive(Clone, debug_with::DebugWith)]
+#[debug_with(context = source::Sources)]
+struct FancyWord {
+    inner: FancyWordInner,
+    span: source::Span,
+}
+
+#[derive(Clone, debug_with::DebugWith)]
+#[debug_with(context = source::Sources)]
+enum FancyWordInner {
+    Word(ast::WordInner),
+    FnInit,
+    Local(parser::Identifier),
+    BindVar(parser::Identifier),
+    CopyVar(parser::Identifier),
+    MoveVar(parser::Identifier),
+    Tuple(usize),
 }
 
 struct Builder<'a> {
@@ -102,8 +121,13 @@ impl<'a> Builder<'a> {
                     });
                 }
                 parser::Decl::SymbolDecl(symbol_decl) => {
-                    let symbol_def_index = self.res.symbol_defs.push_and_get_key(ast::SymbolDef(symbol_decl.name.0));
-                    let const_ref_index = self.res.const_refs.push_and_get_key(ast::ConstRef::Inline(bytecode::PrimitiveValue::Symbol(symbol_def_index)));
+                    let symbol_def_index = self
+                        .res
+                        .symbol_defs
+                        .push_and_get_key(ast::SymbolDef(symbol_decl.name.0));
+                    let const_ref_index = self.res.const_refs.push_and_get_key(
+                        ast::ConstRef::Inline(bytecode::PrimitiveValue::Symbol(symbol_def_index)),
+                    );
                     module.const_decls.push(ConstDecl {
                         name: symbol_decl.name,
                         value: const_ref_index,
@@ -129,11 +153,11 @@ impl<'a> Builder<'a> {
         let words = sentence
             .words
             .into_iter()
-            .map(|w| self.visit_word(w))
+            .map(|w| self.visit_fancy_word(w))
             .collect();
         self.res
             .sentence_defs
-            .push_and_get_key(ast::SentenceDef { words })
+            .push_and_get_key(FancySentence { words })
     }
 
     fn visit_word(&mut self, word: parser::Word) -> ast::Word {
@@ -195,6 +219,52 @@ impl<'a> Builder<'a> {
         }
     }
 
+    fn visit_fancy_word(&mut self, word: parser::Word) -> FancyWord {
+        let span = word.span;
+        let inner = match word.operator.0.as_str(self.sources) {
+            "fn_init" => FancyWordInner::FnInit,
+            "bind_var" => {
+                let arg = word.args.into_iter().exactly_one().unwrap();
+                let parser::WordArg::Identifier(identifier) = arg else {
+                    panic!("expected identifier: {:?}", arg);
+                };
+                FancyWordInner::BindVar(identifier)
+            }
+            "copy_var" => {
+                let arg = word.args.into_iter().exactly_one().unwrap();
+                let parser::WordArg::Identifier(identifier) = arg else {
+                    panic!("expected identifier: {:?}", arg);
+                };
+                FancyWordInner::CopyVar(identifier)
+            }
+            "move_var" => {
+                let arg = word.args.into_iter().exactly_one().unwrap();
+                let parser::WordArg::Identifier(identifier) = arg else {
+                    panic!("expected identifier: {:?}", arg);
+                };
+                FancyWordInner::MoveVar(identifier)
+            }
+            "local" => {
+                let arg = word.args.into_iter().exactly_one().unwrap();
+                let parser::WordArg::Identifier(identifier) = arg else {
+                    panic!("expected identifier: {:?}", arg);
+                };
+                FancyWordInner::Local(identifier)
+            }
+            "fancy_tuple" => {
+                let arg = word.args.into_iter().exactly_one().unwrap();
+                FancyWordInner::Tuple(self.visit_word_arg_usize(arg))
+            }
+            _ => {
+                FancyWordInner::Word(self.visit_word(word).inner)
+            }
+        };
+        FancyWord {
+            inner,
+            span,
+        }
+    }
+
     fn visit_word_arg_const_expr(&mut self, word_arg: parser::WordArg) -> ast::ConstRefIndex {
         let result: ast::ConstRef = match word_arg {
             parser::WordArg::Literal(literal) => {
@@ -217,15 +287,14 @@ impl<'a> Builder<'a> {
         self.res.sentence_refs.push_and_get_key(result)
     }
 
-    fn visit_word_arg_variable(&mut self, word_arg: parser::WordArg) -> ast::VariableRefIndex {
-        let result: usize = match word_arg {
+    fn visit_word_arg_variable(&mut self, word_arg: parser::WordArg) -> usize {
+        match word_arg {
             parser::WordArg::Literal(literal) => match literal.into_value(self.sources) {
                 bytecode::PrimitiveValue::Usize(value) => value,
                 _ => panic!("expected usize: {:?}", literal),
             },
             _ => panic!("expected variable: {:?}", word_arg),
-        };
-        self.res.variable_refs.push_and_get_key(result)
+        }
     }
 
     fn visit_word_arg_usize(&mut self, word_arg: parser::WordArg) -> usize {
@@ -249,7 +318,6 @@ impl Library {
                 symbol_defs: TiVec::new(),
                 const_refs: TiVec::new(),
                 const_decls: vec![],
-                variable_refs: TiVec::new(),
                 sentence_defs: TiVec::new(),
                 sentence_refs: TiVec::new(),
             },
@@ -294,12 +362,24 @@ impl Library {
         self.update_paths(sources, self.root_module, ast::Path(vec![]));
         let const_decls = self.get_const_decls(sources, self.root_module, ast::Path(vec![]));
         let sentence_decls = self.get_sentence_decls(sources, self.root_module, ast::Path(vec![]));
+
+        let sentence_defs: TiVec<ast::SentenceDefIndex, ast::SentenceDef> = self
+            .sentence_defs
+            .into_iter()
+            .map(|sentence| {
+                Self::compile_sentence_def(
+                    sources,
+                    &mut self.symbol_defs,
+                    &mut self.const_refs,
+                    sentence,
+                )
+            })
+            .collect();
         Ok(unlinked::Library {
             const_refs: self.const_refs,
             const_decls,
             symbol_defs: self.symbol_defs,
-            variable_refs: self.variable_refs,
-            sentence_defs: self.sentence_defs,
+            sentence_defs,
             sentence_refs: self.sentence_refs,
             sentence_decls,
         })
@@ -353,6 +433,131 @@ impl Library {
         result
     }
 
+    fn compile_sentence_def(
+        sources: &source::Sources,
+        symbol_defs: &mut TiVec<bytecode::SymbolIndex, ast::SymbolDef>,
+        const_refs: &mut TiVec<ast::ConstRefIndex, ast::ConstRef>,
+        sentence: FancySentence,
+    ) -> ast::SentenceDef {
+        let mut words: Vec<ast::Word> = Vec::new();
+        let mut locals: BTreeMap<&str, ast::ConstRefIndex> = BTreeMap::new();
+        for word in sentence.words.into_iter() {
+            let inners: Vec<ast::WordInner> = match word.inner {
+                FancyWordInner::Tuple(size) => {
+                    todo!()
+                    // let mut result = vec![ast::WordInner::StackOperation(ast::StackOperation::Untuple(2))];
+                    // for _ in 0..size {
+                    //     result.push(ast::WordInner::StackOperation(ast::StackOperation::Untuple(2)));
+                    //     result.push(ast::WordInner::StackOperation(ast::StackOperation::Move(1)));
+                    // }
+                    // result.push(ast::WordInner::StackOperation(ast::StackOperation::Tuple(size)));
+                    // result.push(ast::WordInner::StackOperation(ast::StackOperation::Tuple(2)));
+                    // result.push(ast::WordInner::StackOperation(ast::StackOperation::Tuple(2)));
+                    // result
+                }
+                FancyWordInner::Word(inner) => {
+                    vec![inner]
+                }
+                FancyWordInner::Local(identifier) => {
+                    let symbol = bytecode::PrimitiveValue::Symbol(
+                        symbol_defs.push_and_get_key(ast::SymbolDef(identifier.0)),
+                    );
+                    let const_ref = const_refs.push_and_get_key(ast::ConstRef::Inline(symbol));
+                    locals.insert(identifier.0.as_str(sources), const_ref);
+                    vec![]
+                }
+                FancyWordInner::BindVar(identifier) => {
+                    let symbol = locals
+                        .get(identifier.0.as_str(sources))
+                        .expect(format!("local not found: {:?}", identifier).as_str());
+                    Self::bind_var(*symbol)
+                }
+                FancyWordInner::CopyVar(identifier) => {
+                    let symbol = locals
+                        .get(identifier.0.as_str(sources))
+                        .expect(format!("local not found: {:?}", identifier).as_str());
+
+                    Self::move_var(*symbol).into_iter().chain(
+                        [
+                            // Stack: ({}, ((), x))
+                            ast::WordInner::StackOperation(ast::StackOperation::Untuple(2)),
+                            ast::WordInner::StackOperation(ast::StackOperation::Untuple(2)),
+                            ast::WordInner::StackOperation(ast::StackOperation::Copy(0)),
+                            // Stack: {} () x x
+                            ast::WordInner::StackOperation(ast::StackOperation::Move(2)),
+                            ast::WordInner::StackOperation(ast::StackOperation::Move(2)),
+                            ast::WordInner::StackOperation(ast::StackOperation::Tuple(2)),
+
+                            // Stack: {} x ((), x)
+                            ast::WordInner::StackOperation(ast::StackOperation::Move(1)),
+                            ast::WordInner::StackOperation(ast::StackOperation::Tuple(2)),
+                            ast::WordInner::StackOperation(ast::StackOperation::Tuple(2)),
+                        ]
+                    ).chain(Self::bind_var(*symbol)).collect()
+                },
+                FancyWordInner::MoveVar(identifier) => {
+                    let symbol = locals
+                        .get(identifier.0.as_str(sources))
+                        .expect(format!("local not found: {:?}", identifier).as_str());
+
+                    Self::move_var(*symbol)
+                }
+                FancyWordInner::FnInit => {
+                    vec![
+                        ast::WordInner::StackOperation(ast::StackOperation::Tuple(0)),
+                        ast::WordInner::StackOperation(ast::StackOperation::Move(1)),
+                        ast::WordInner::StackOperation(ast::StackOperation::Tuple(2)),
+                        ast::WordInner::StackOperation(ast::StackOperation::Builtin(
+                            bytecode::Builtin::MapNew,
+                        )),
+                        ast::WordInner::StackOperation(ast::StackOperation::Move(1)),
+                        ast::WordInner::StackOperation(ast::StackOperation::Tuple(2)),
+                    ]
+                }
+            };
+            words.extend(inners.into_iter().map(|inner| ast::Word {
+                inner,
+                span: word.span,
+            }));
+        }
+
+        ast::SentenceDef { words }
+    }
+
+    fn bind_var(local: ast::ConstRefIndex) -> Vec<ast::WordInner> {
+        vec![
+            // Stack: ({}, ((), x))
+            ast::WordInner::StackOperation(ast::StackOperation::Untuple(2)),
+            ast::WordInner::StackOperation(ast::StackOperation::Untuple(2)),
+            // Stack: {} () x
+            ast::WordInner::StackOperation(ast::StackOperation::Move(2)),
+            ast::WordInner::StackOperation(ast::StackOperation::Move(1)),
+            ast::WordInner::StackOperation(ast::StackOperation::Push(local)),
+            // Stack: () {} x 'x
+            ast::WordInner::StackOperation(ast::StackOperation::Builtin(bytecode::Builtin::MapSet)),
+            ast::WordInner::StackOperation(ast::StackOperation::Move(1)),
+            ast::WordInner::StackOperation(ast::StackOperation::Tuple(2)),
+        ]
+    }
+
+    fn move_var(local: ast::ConstRefIndex) -> Vec<ast::WordInner> {
+        vec![
+            // Stack: ({'x: x}, ())
+            ast::WordInner::StackOperation(ast::StackOperation::Untuple(2)),
+            ast::WordInner::StackOperation(ast::StackOperation::Move(1)),
+            ast::WordInner::StackOperation(ast::StackOperation::Push(local)),
+            ast::WordInner::StackOperation(ast::StackOperation::Builtin(bytecode::Builtin::MapGet)),
+
+            // Stack: () {} x
+            ast::WordInner::StackOperation(ast::StackOperation::Move(2)),
+            ast::WordInner::StackOperation(ast::StackOperation::Move(1)),
+            ast::WordInner::StackOperation(ast::StackOperation::Tuple(2)),
+
+            // Stack: {} ((), x)
+            ast::WordInner::StackOperation(ast::StackOperation::Tuple(2)),
+        ]
+    }
+
     fn update_paths(
         &mut self,
         sources: &source::Sources,
@@ -381,7 +586,7 @@ impl Library {
             let sentence_def = &mut self.sentence_defs[sentence_decl.sentence];
             for word in sentence_def.words.iter_mut() {
                 match &word.inner {
-                    ast::WordInner::Call(sentence_ref_index) => {
+                    FancyWordInner::Word(ast::WordInner::Call(sentence_ref_index)) => {
                         let sentence_ref = &mut self.sentence_refs[*sentence_ref_index];
                         match sentence_ref {
                             unlinked::SentenceRef::Path(path) => {
@@ -390,19 +595,24 @@ impl Library {
                             _ => {}
                         }
                     }
-                    ast::WordInner::StackOperation(stack_operation) => match stack_operation {
-                        ast::StackOperation::Push(const_ref_index) => {
-                            let const_ref = &mut self.const_refs[*const_ref_index];
-                            match const_ref {
-                                ast::ConstRef::Path(path) => {
-                                    *path = module_path.join(path.clone());
+                    FancyWordInner::Word(ast::WordInner::StackOperation(stack_operation)) => {
+                        match stack_operation {
+                            ast::StackOperation::Push(const_ref_index) => {
+                                let const_ref = &mut self.const_refs[*const_ref_index];
+                                match const_ref {
+                                    ast::ConstRef::Path(path) => {
+                                        *path = module_path.join(path.clone());
+                                    }
+                                    _ => {}
                                 }
-                                _ => {}
                             }
+                            _ => {}
                         }
-                        _ => {}
-                    },
-                    ast::WordInner::Branch(sentence_ref_index, sentence_ref_index1) => {
+                    }
+                    FancyWordInner::Word(ast::WordInner::Branch(
+                        sentence_ref_index,
+                        sentence_ref_index1,
+                    )) => {
                         let sentence_ref = &mut self.sentence_refs[*sentence_ref_index];
                         match sentence_ref {
                             unlinked::SentenceRef::Path(path) => {
@@ -418,7 +628,7 @@ impl Library {
                             _ => {}
                         }
                     }
-                    ast::WordInner::JumpTable(items) => {
+                    FancyWordInner::Word(ast::WordInner::JumpTable(items)) => {
                         for item in items.iter() {
                             let sentence_ref = &mut self.sentence_refs[*item];
                             match sentence_ref {
@@ -429,6 +639,13 @@ impl Library {
                             }
                         }
                     }
+                    FancyWordInner::FnInit => {}
+                    FancyWordInner::Local(identifier) => {}
+                    FancyWordInner::BindVar(identifier) => {}
+                    FancyWordInner::CopyVar(identifier) => {}
+                    FancyWordInner::MoveVar(identifier) => {}
+                    FancyWordInner::Tuple(size) => {}
+                    
                 }
             }
         }

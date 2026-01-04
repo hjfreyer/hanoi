@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use crate::bytecode::{PrimitiveValue, SymbolIndex};
 
 #[derive(Clone, PartialEq, Eq, Debug, Hash)]
@@ -8,6 +10,7 @@ pub enum Value {
     Bool(bool),
     Char(char),
     Array(Vec<Option<Value>>),
+    Map(BTreeMap<SymbolIndex, Value>),
 }
 
 impl Value {
@@ -19,6 +22,7 @@ impl Value {
             Value::Bool(_) => ValueType::Bool,
             Value::Char(_) => ValueType::Char,
             Value::Array(_) => ValueType::Array,
+            Value::Map(_) => ValueType::Map,
         }
     }
 
@@ -47,6 +51,7 @@ pub enum ValueType {
     Bool,
     Char,
     Array,
+    Map,
 }
 
 impl std::fmt::Display for ValueType {
@@ -58,6 +63,7 @@ impl std::fmt::Display for ValueType {
             ValueType::Bool => write!(f, "bool"),
             ValueType::Char => write!(f, "char"),
             ValueType::Array => write!(f, "array"),
+            ValueType::Map => write!(f, "map"),
         }
     }
 }
@@ -128,6 +134,32 @@ impl TryInto<Vec<Option<Value>>> for Value {
             _ => Err(ConversionError {
                 value: self,
                 r#type: ValueType::Array,
+            }),
+        }
+    }
+}
+
+impl TryInto<BTreeMap<SymbolIndex, Value>> for Value {
+    type Error = ConversionError;
+    fn try_into(self) -> Result<BTreeMap<SymbolIndex, Value>, Self::Error> {
+        match self {
+            Value::Map(b) => Ok(b),
+            _ => Err(ConversionError {
+                value: self,
+                r#type: ValueType::Map,
+            }),
+        }
+    }
+}
+
+impl TryInto<SymbolIndex> for Value {
+    type Error = ConversionError;
+    fn try_into(self) -> Result<SymbolIndex, Self::Error> {
+        match self {
+            Value::Symbol(s) => Ok(s),
+            _ => Err(ConversionError {
+                value: self,
+                r#type: ValueType::Symbol,
             }),
         }
     }

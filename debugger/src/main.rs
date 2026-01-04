@@ -399,6 +399,14 @@ fn format_value(value: &hanoi::vm::Value) -> String {
                 .join(", ");
             format!("[{}]", inner)
         }
+        hanoi::vm::Value::Map(map) => {
+            let inner = map
+                .iter()
+                .map(|(k, v)| format!("{:?}: {}", k, format_value(v)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{{{}}}", inner)
+        }
     }
 }
 

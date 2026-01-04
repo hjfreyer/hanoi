@@ -12,7 +12,6 @@ use crate::{
 pub struct Library {
     pub symbol_defs: TiVec<bytecode::SymbolIndex, ast::SymbolDef>,
     pub const_refs: TiVec<ast::ConstRefIndex, bytecode::PrimitiveValue>,
-    pub variable_refs: TiVec<ast::VariableRefIndex, usize>,
     pub sentence_defs: TiVec<ast::SentenceDefIndex, ast::SentenceDef>,
     pub sentence_refs: TiVec<ast::SentenceRefIndex, ast::SentenceDefIndex>,
     pub exports: BTreeMap<String, ast::SentenceDefIndex>,
@@ -38,19 +37,19 @@ impl Library {
                                             self.const_refs.get(const_ref_index).unwrap().clone(),
                                         )
                                     }
-                                    ast::StackOperation::Copy(variable_ref_index) => {
+                                    ast::StackOperation::Copy(index) => {
                                         bytecode::StackOperation::Copy(
-                                            *self.variable_refs.get(variable_ref_index).unwrap(),
+                                            index,
                                         )
                                     }
-                                    ast::StackOperation::Move(variable_ref_index) => {
+                                    ast::StackOperation::Move(index) => {
                                         bytecode::StackOperation::Move(
-                                            *self.variable_refs.get(variable_ref_index).unwrap(),
+                                            index,
                                         )
                                     }
-                                    ast::StackOperation::Drop(variable_ref_index) => {
+                                    ast::StackOperation::Drop(index) => {
                                         bytecode::StackOperation::Drop(
-                                            *self.variable_refs.get(variable_ref_index).unwrap(),
+                                            index,
                                         )
                                     }
                                     ast::StackOperation::Builtin(builtin) => {

@@ -51,6 +51,10 @@ builtins! {
     (ArrayFree, "array_free"),
     (ArrayGet, "array_get"),
     (ArraySet, "array_set"),
+
+    (MapNew, "map_new"),
+    (MapGet, "map_get"),
+    (MapSet, "map_set"),
 }
 
 #[derive(
@@ -65,6 +69,8 @@ builtins! {
     Serialize,
     Deserialize,
     debug_with::DebugWith,
+    PartialOrd,
+    Ord,
 )]
 #[debug_with(passthrough)]
 pub struct SymbolIndex(usize);
