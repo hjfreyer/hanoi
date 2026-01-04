@@ -11,10 +11,11 @@ use dap::responses::{
     VariablesResponse,
 };
 use hanoi::bytecode::{Library as BytecodeLibrary, SentenceIndex};
-use hanoi::compiler2;
 use hanoi::parser::source;
 use hanoi::vm::{ProgramCounter, Vm};
+use hanoi::{compiler2, vm};
 
+use itertools::Itertools;
 struct DebugSession {
     bytecode: BytecodeLibrary,
     vm: Vm,
@@ -93,6 +94,51 @@ impl DebugSession {
                 }
             }
         }
+    }
+
+    fn get_locals(&self, _frame_id: i64) -> Vec<types::Variable> {
+        eprintln!("Get locals: {}", _frame_id);
+        let Some(last_frame) = self.vm.stack.iter().last() else {
+            eprintln!("No last frame");
+            return vec![];
+        };
+        let vm::Value::Tuple(vals) = last_frame else {
+            eprintln!("Last frame is not a tuple: {:?}", last_frame);
+            return vec![];
+        };
+        let Some((vm::Value::Map(locals), stack)) = vals.iter().collect_tuple() else {
+            eprintln!("tuple structure wrong: {:?}", vals);
+            return vec![];
+        };
+        locals
+            .iter()
+            .map(|(k, v)| types::Variable {
+                name: format!("local[{:?}]", k),
+                value: format_value(v),
+                type_field: Some(v.r#type().to_string()),
+                ..Default::default()
+            })
+            .collect()
+    }
+
+    fn get_stack(&self, _frame_id: i64) -> Vec<types::Variable> {
+        // Return each stack entry as its own variable
+        // Stack is iterated in reverse so stack[0] is the top
+        self.vm
+            .stack
+            .iter()
+            .rev()
+            .enumerate()
+            .map(|(idx, value)| {
+                let value_str = format_value(value);
+                types::Variable {
+                    name: format!("stack[{}]", idx),
+                    value: value_str,
+                    type_field: Some(value.r#type().to_string()),
+                    ..Default::default()
+                }
+            })
+            .collect()
     }
 }
 
@@ -297,20 +343,34 @@ where
             let response = request.success(body);
             server.respond(response)?;
         }
-        Command::Scopes(_) => {
+        Command::Scopes(ref args) => {
             send_console_output(server, "Getting scopes...\n")?;
-
+            eprintln!("Get scopes: {}", args.frame_id);
             let scopes = {
                 let state = state.lock().unwrap();
                 if let Some(ref session) = state.session {
-                    let num_variables = session.vm.stack.len() as i64;
+                    let frame_id = args.frame_id;
+                    // Use frame_id * 2 for Locals, frame_id * 2 + 1 for Stack
+                    let locals_ref = (frame_id as i64) * 2;
+                    let stack_ref = (frame_id as i64) * 2 + 1;
 
-                    vec![types::Scope {
-                        name: "Stack".to_string(),
-                        variables_reference: 1,
-                        named_variables: Some(num_variables),
-                        ..Default::default()
-                    }]
+                    let num_locals_variables = session.get_locals(frame_id).len() as i64;
+                    let num_stack_variables = session.get_stack(frame_id).len() as i64;
+
+                    dbg!(vec![
+                        types::Scope {
+                            name: "Locals".to_string(),
+                            variables_reference: locals_ref,
+                            named_variables: Some(num_locals_variables),
+                            ..Default::default()
+                        },
+                        types::Scope {
+                            name: "Stack".to_string(),
+                            variables_reference: stack_ref,
+                            named_variables: Some(num_stack_variables),
+                            ..Default::default()
+                        },
+                    ])
                 } else {
                     vec![]
                 }
@@ -320,30 +380,25 @@ where
             let response = request.success(body);
             server.respond(response)?;
         }
-        Command::Variables(ref _args) => {
+        Command::Variables(ref args) => {
             send_console_output(server, "Getting variables...\n")?;
 
             let variables = {
                 let state = state.lock().unwrap();
                 if let Some(ref session) = state.session {
-                    // Return each stack entry as its own variable
-                    // Stack is iterated in reverse so stack[0] is the top
-                    session
-                        .vm
-                        .stack
-                        .iter()
-                        .rev()
-                        .enumerate()
-                        .map(|(idx, value)| {
-                            let value_str = format_value(value);
-                            types::Variable {
-                                name: format!("stack[{}]", idx),
-                                value: value_str,
-                                type_field: Some(value.r#type().to_string()),
-                                ..Default::default()
-                            }
-                        })
-                        .collect()
+                    let variables_ref = args.variables_reference;
+
+                    // Decode the variables_reference:
+                    // - Even numbers (frame_id * 2) are Locals scopes
+                    // - Odd numbers (frame_id * 2 + 1) are Stack scopes
+                    let frame_id = variables_ref / 2;
+                    if variables_ref % 2 == 0 {
+                        // Locals scope
+                        session.get_locals(frame_id)
+                    } else {
+                        // Stack scope
+                        session.get_stack(frame_id)
+                    }
                 } else {
                     vec![]
                 }
@@ -380,7 +435,7 @@ fn build_stack_frames(
 
     // Iterate through call stack in reverse order (top of stack first)
     for (frame_id, pc) in vm.call_stack.iter().rev().enumerate() {
-        let frame = build_stack_frame(bytecode, *pc, frame_id as i64)?;
+        let frame = build_stack_frame(bytecode, *pc, frame_id as i64 + 1)?;
         frames.push(frame);
     }
 
