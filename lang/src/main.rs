@@ -6,14 +6,14 @@ mod debugger;
 #[macro_use]
 mod flat;
 mod bytecode;
+mod compiler2;
 mod linker;
 mod oldvm;
+mod parser;
 mod pen;
 mod runtime;
 mod source;
 mod vm;
-mod compiler2;
-mod parser;
 
 use std::{path::PathBuf, process::exit};
 

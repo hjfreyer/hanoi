@@ -255,14 +255,9 @@ impl<'a> Builder<'a> {
                 let arg = word.args.into_iter().exactly_one().unwrap();
                 FancyWordInner::Tuple(self.visit_word_arg_usize(arg))
             }
-            _ => {
-                FancyWordInner::Word(self.visit_word(word).inner)
-            }
+            _ => FancyWordInner::Word(self.visit_word(word).inner),
         };
-        FancyWord {
-            inner,
-            span,
-        }
+        FancyWord { inner, span }
     }
 
     fn visit_word_arg_const_expr(&mut self, word_arg: parser::WordArg) -> ast::ConstRefIndex {
@@ -477,8 +472,9 @@ impl Library {
                         .get(identifier.0.as_str(sources))
                         .expect(format!("local not found: {:?}", identifier).as_str());
 
-                    Self::move_var(*symbol).into_iter().chain(
-                        [
+                    Self::move_var(*symbol)
+                        .into_iter()
+                        .chain([
                             // Stack: ({}, ((), x))
                             ast::WordInner::StackOperation(ast::StackOperation::Untuple(2)),
                             ast::WordInner::StackOperation(ast::StackOperation::Untuple(2)),
@@ -487,14 +483,14 @@ impl Library {
                             ast::WordInner::StackOperation(ast::StackOperation::Move(2)),
                             ast::WordInner::StackOperation(ast::StackOperation::Move(2)),
                             ast::WordInner::StackOperation(ast::StackOperation::Tuple(2)),
-
                             // Stack: {} x ((), x)
                             ast::WordInner::StackOperation(ast::StackOperation::Move(1)),
                             ast::WordInner::StackOperation(ast::StackOperation::Tuple(2)),
                             ast::WordInner::StackOperation(ast::StackOperation::Tuple(2)),
-                        ]
-                    ).chain(Self::bind_var(*symbol)).collect()
-                },
+                        ])
+                        .chain(Self::bind_var(*symbol))
+                        .collect()
+                }
                 FancyWordInner::MoveVar(identifier) => {
                     let symbol = locals
                         .get(identifier.0.as_str(sources))
@@ -547,12 +543,10 @@ impl Library {
             ast::WordInner::StackOperation(ast::StackOperation::Move(1)),
             ast::WordInner::StackOperation(ast::StackOperation::Push(local)),
             ast::WordInner::StackOperation(ast::StackOperation::Builtin(bytecode::Builtin::MapGet)),
-
             // Stack: () {} x
             ast::WordInner::StackOperation(ast::StackOperation::Move(2)),
             ast::WordInner::StackOperation(ast::StackOperation::Move(1)),
             ast::WordInner::StackOperation(ast::StackOperation::Tuple(2)),
-
             // Stack: {} ((), x)
             ast::WordInner::StackOperation(ast::StackOperation::Tuple(2)),
         ]
@@ -645,7 +639,6 @@ impl Library {
                     FancyWordInner::CopyVar(identifier) => {}
                     FancyWordInner::MoveVar(identifier) => {}
                     FancyWordInner::Tuple(size) => {}
-                    
                 }
             }
         }

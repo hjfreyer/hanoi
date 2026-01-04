@@ -38,19 +38,13 @@ impl Library {
                                         )
                                     }
                                     ast::StackOperation::Copy(index) => {
-                                        bytecode::StackOperation::Copy(
-                                            index,
-                                        )
+                                        bytecode::StackOperation::Copy(index)
                                     }
                                     ast::StackOperation::Move(index) => {
-                                        bytecode::StackOperation::Move(
-                                            index,
-                                        )
+                                        bytecode::StackOperation::Move(index)
                                     }
                                     ast::StackOperation::Drop(index) => {
-                                        bytecode::StackOperation::Drop(
-                                            index,
-                                        )
+                                        bytecode::StackOperation::Drop(index)
                                     }
                                     ast::StackOperation::Builtin(builtin) => {
                                         bytecode::StackOperation::Builtin(builtin)
@@ -115,8 +109,8 @@ impl Library {
                     let words = sentence_def
                         .words
                         .iter()
-                        .map(|word| {
-                            debuginfo::Word { span: Some(debuginfo::Span::from_source_span(sources, word.span)) }
+                        .map(|word| debuginfo::Word {
+                            span: Some(debuginfo::Span::from_source_span(sources, word.span)),
                         })
                         .collect();
                     debuginfo::Sentence { words }

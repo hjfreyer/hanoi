@@ -167,7 +167,6 @@ impl Factory {
         }
     }
 
-
     fn symbol_decl(&self, p: Pair<Rule>) -> SymbolDecl {
         assert_eq!(p.as_rule(), Rule::symbol_decl);
         let name = p.into_inner().exactly_one().unwrap();

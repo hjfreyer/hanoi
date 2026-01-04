@@ -159,5 +159,4 @@ impl<'de> Deserialize<'de> for Library {
     }
 }
 
-impl Library {
-}
+impl Library {}
