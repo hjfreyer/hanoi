@@ -1,5 +1,5 @@
+mod builtin;
 mod main;
-// mod builtin;
 // mod vec;
 // mod str;
 // mod ssv;
@@ -54,13 +54,14 @@ mod fn_test {
     // x => x + 1
     symbol x;
     sentence add_one {
+        #push('::builtin::START)
         #local(x)
 
         #fn_init
         #bind_var(x)
         #copy_var(x)
         #move_var(x)
-        // #fancy_tuple(2)
+        #fancy_tuple(2)
 
         // Func initialize.
         // Stack: x

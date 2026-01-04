@@ -1,24 +1,25 @@
 
+symbol START;
 
-sentence add {
-    #untuple(2) #add
-}
+// sentence add {
+//     #untuple(2) #add
+// }
 
-sentence eq {
-    #untuple(2) #eq
-}
+// sentence eq {
+//     #untuple(2) #eq
+// }
 
-sentence lt {
-    #untuple(2) #lt
-}
+// sentence lt {
+//     #untuple(2) #lt
+// }
 
-sentence symbol_len {
-    #symbol_len
-}
+// sentence symbol_len {
+//     #symbol_len
+// }
 
-sentence symbol_char_at {
-    #untuple(2) #symbol_char_at
-}
+// sentence symbol_char_at {
+//     #untuple(2) #symbol_char_at
+// }
 
 // fn eq(caller, a, b) {
 //     R{ 

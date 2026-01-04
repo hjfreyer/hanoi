@@ -101,7 +101,15 @@ word_arg = {
 }
 
 path = {
+    relative_path | absolute_path
+}
+
+relative_path = {
     "'" ~ identifier ~ ("::" ~ identifier)*
+}
+
+absolute_path = {
+    "'" ~ "::" ~ identifier ~ ("::" ~ identifier)*
 }
 
 // SENTENCE

@@ -197,9 +197,15 @@ impl Factory {
 
     fn path(&self, p: Pair<Rule>) -> Path {
         assert_eq!(p.as_rule(), Rule::path);
-        let span = source::Span::from_ast(self.0, p.as_span());
-        let segments = p.into_inner().map(|p| self.identifier(p)).collect();
-        Path { span, segments }
+        let inner = p.into_inner().exactly_one().unwrap();
+        let span = source::Span::from_ast(self.0, inner.as_span());
+        let relative = inner.as_rule() == Rule::relative_path;
+        let segments = inner.into_inner().map(|p| self.identifier(p)).collect();
+        Path {
+            span,
+            relative,
+            segments,
+        }
     }
 }
 
@@ -323,6 +329,7 @@ pub enum LiteralType {
 #[debug_with(context = source::Sources)]
 pub struct Path {
     pub span: source::Span,
+    pub relative: bool,
     pub segments: Vec<Identifier>,
 }
 
