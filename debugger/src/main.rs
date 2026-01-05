@@ -283,7 +283,8 @@ where
             // Store in state
             {
                 let mut state = state.lock().unwrap();
-                let vm = Vm::new(bytecode.clone(), SentenceIndex::from(0));
+                let main_symbol = bytecode.exports.get("main").unwrap();
+                let vm = Vm::new(bytecode.clone(), *main_symbol);
                 state.program_path = Some(program_path.clone());
                 let mut session = DebugSession { bytecode, vm };
                 session.vm.reset_call_stack();

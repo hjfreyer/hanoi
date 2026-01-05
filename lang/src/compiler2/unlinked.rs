@@ -44,12 +44,6 @@ pub struct Library {
     pub sentence_decls: Vec<SentenceDecl>,
 }
 
-#[derive(Copy, Clone)]
-struct LibraryView<'a> {
-    sources: &'a source::Sources,
-    library: &'a Library,
-}
-
 impl Library {
     pub fn link(self, sources: &source::Sources) -> Result<linked::Library, anyhow::Error> {
         let const_map: BTreeMap<Vec<&str>, ast::ConstRefIndex> = self
@@ -106,12 +100,17 @@ impl Library {
                 .keys()
                 .map(|idx| deref_const_ref(idx, sources, &self.const_refs, &const_map))
                 .collect();
+
+        let mut exports = BTreeMap::new();
+        if let Some(main) = sentence_map.get(["main"].as_slice()) {
+            exports.insert("main".to_string(), *main);
+        }
         Ok(linked::Library {
             symbol_defs: self.symbol_defs,
             const_refs: const_refs?,
             sentence_defs: self.sentence_defs,
             sentence_refs,
-            exports: Default::default(),
+            exports,
             // sentence_defs: self.sentence_defs,
             // sentence_refs: self
             //     .sentence_refs
