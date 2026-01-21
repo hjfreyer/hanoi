@@ -1,3 +1,54 @@
+
+class MachineHelper {
+    private state: any;
+    constructor(private machine: Machine) {
+        this.state = machine.start();
+    }
+
+    advance(i: Input): Output {
+        const [newState, output] = this.machine.advance(this.state, i);
+        this.state = newState;
+        return output;
+    }
+}
+
+// Custom Jest matcher for MachineHelper
+expect.extend({
+    toAdvanceTo(received: MachineHelper, input: Input, expectedOutput: Output) {
+        const actualOutput = received.advance(input);
+        const pass = this.equals(actualOutput, expectedOutput);
+        
+        if (pass) {
+            return {
+                message: () => `Expected machine not to advance to ${this.utils.printExpected(expectedOutput)}`,
+                pass: true,
+            };
+        } else {
+            return {
+                message: () => 
+                    `Expected machine to advance to:\n` +
+                    `  ${this.utils.printExpected(expectedOutput)}\n` +
+                    `Received:\n` +
+                    `  ${this.utils.printReceived(actualOutput)}\n` +
+                    `Input was:\n` +
+                    `  ${this.utils.printReceived(input)}`,
+                pass: false,
+            };
+        }
+    },
+});
+
+// TypeScript declarations for the custom matcher
+declare global {
+    namespace jest {
+        interface Matchers<R> {
+            toAdvanceTo(input: Input, expectedOutput: Output): R;
+        }
+    }
+}
+
+export {};
+
 type Input = {
     channel: string;
     data: any;
@@ -59,12 +110,19 @@ describe('constant', () => {
         expect(output).toEqual({ channel: 'break/result', data: 'data' });
     });
     it('should handle multiple inputs correctly', () => {
-        const machine = constant('data');
-        runMachine(machine, [
-            { input: { channel: 'result', data: 'input1' }, output: { channel: 'break/result', data: 'data' } },
-            { input: { channel: 'result', data: 'input2' }, output: { channel: 'break/result', data: 'data' } },
-            { input: { channel: 'result', data: 'input3' }, output: { channel: 'break/result', data: 'data' } },
-        ]);
+        const helper = new MachineHelper(constant('data'));
+        expect(helper).toAdvanceTo(
+            { channel: 'result', data: 'input1' },
+            { channel: 'break/result', data: 'data' }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'result', data: 'input2' },
+            { channel: 'break/result', data: 'data' }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'result', data: 'input3' },
+            { channel: 'break/result', data: 'data' }
+        );
     });
 });
 
@@ -134,7 +192,7 @@ function compose(...machines: Machine[]): Machine {
 // });
 
 // Runs a until it is terminal, then runs the matching b from b_map.
-function sequence(a: Machine, b: Machine): Machine {
+function sequenceSingle(a: Machine, b: Machine): Machine {
     return {
         start(): [string, any] {
             return ['a', a.start()];
@@ -142,7 +200,7 @@ function sequence(a: Machine, b: Machine): Machine {
         advance([state, s]: [string, any], i: Input): [any, Output] {
             if (state === 'a') {
                 const [new_s, o] = a.advance(s, i);
-                if (o.channel.startsWith('continue/')) {
+                if (o.channel.startsWith('continue/') || o.channel.startsWith('yield/')) {
                     return [['a', new_s], { channel: o.channel, data: o.data }];
                 }
                 if (o.channel.startsWith('break/')) {
@@ -152,7 +210,7 @@ function sequence(a: Machine, b: Machine): Machine {
             }
             if (state === 'b') {
                 const [new_s, o] = b.advance(s, i);
-                if (o.channel.startsWith('continue/')) {
+                if (o.channel.startsWith('continue/') || o.channel.startsWith('yield/')) {
                     return [['b', new_s], { channel: o.channel, data: o.data }];
                 }
                 if (o.channel.startsWith('break/')) {
@@ -165,15 +223,31 @@ function sequence(a: Machine, b: Machine): Machine {
     }
 }
 
+function sequence(...machines: Machine[]): Machine {
+    if (machines.length === 0) {
+        throw new Error('sequence requires at least one machine');
+    }
+    if (machines.length === 1) {
+        return machines[0];
+    }
+    let result = machines[0];
+    for (let i = 1; i < machines.length; i++) {
+        result = sequenceSingle(result, machines[i]);
+    }
+    return result;
+}
+
 describe('sequence', () => {
     it('should start in A phase and then B phase', () => {
-        const a = constant('data1');
-        const b = constant('data2');
-        const seq = sequence(a, b);
-        runMachine(seq, [
-            { input: { channel: 'result', data: 'ignored1' }, output: { channel: 'continue/result', data: 'data1' } },
-            { input: { channel: 'result', data: 'ignored2' }, output: { channel: 'break/result', data: 'data2' } },
-        ]);
+        const helper = new MachineHelper(sequenceSingle(constant('data1'), constant('data2')));
+        expect(helper).toAdvanceTo(
+            { channel: 'result', data: 'ignored1' },
+            { channel: 'continue/result', data: 'data1' }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'result', data: 'ignored2' },
+            { channel: 'break/result', data: 'data2' }
+        );
     });
 });
 
@@ -200,7 +274,7 @@ function yld(channel: string): Machine {
                 if (i.channel !== "result") {
                     throw new Error('Invalid channel: ' + i.channel);
                 }
-                return ['awaiting', { channel: 'continue/' + channel, data: i.data }];
+                return ['awaiting', { channel: 'yield/' + channel, data: i.data }];
             }
             if (s === 'awaiting') {
                 if (i.channel !== channel) {
@@ -280,25 +354,42 @@ describe('yld', () => {
         const f = func((x: any) => [x + 1, 'hello world']);
         const y = yld('channel');
         const g = func(([x, y]: [number, string]) => '' + y + "/" + x);
-        const machine = sequence(f, sequence(stash(y), sequence(g, brk())));
-        runMachine(machine, [
-            { input: { channel: 'result', data: 4 }, output: { channel: 'continue/result', data: [5, 'hello world'] } },
-            { input: { channel: 'result', data: [5, 'hello world'] }, output: { channel: 'continue/channel', data: 'hello world' } },
-            { input: { channel: 'channel', data: 'my guy' }, output: { channel: 'continue/result', data: [5, 'my guy'] } },
-            { input: { channel: 'result', data: [5, 'my guy'] }, output: { channel: 'continue/result', data: 'my guy/5' } },
-            { input: { channel: 'result', data: 'my guy/5' }, output: { channel: 'break/result', data: 'my guy/5' } },
-        ]);
+        const helper = new MachineHelper(sequence(f, stash(y), g, brk()));
+        expect(helper).toAdvanceTo(
+            { channel: 'result', data: 4 },
+            { channel: 'continue/result', data: [5, 'hello world'] }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'result', data: [5, 'hello world'] },
+            { channel: 'yield/channel', data: 'hello world' }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'channel', data: 'my guy' },
+            { channel: 'continue/result', data: [5, 'my guy'] }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'result', data: [5, 'my guy'] },
+            { channel: 'continue/result', data: 'my guy/5' }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'result', data: 'my guy/5' },
+            { channel: 'break/result', data: 'my guy/5' }
+        );
     });
 
     it('func with yld pipelined', () => {
         const f = func((x: any) => [x + 1, 'hello world']);
         const y = yld('channel');
         const g = func(([x, y]: [number, string]) => '' + y + "/" + x);
-        const machine = pipeline(sequence(f, sequence(stash(y), sequence(g, brk()))));
-        runMachine(machine, [
-            { input: { channel: 'result', data: 4 }, output: { channel: 'continue/channel', data: 'hello world' } },
-            { input: { channel: 'channel', data: 'my guy' }, output: { channel: 'break/result', data: 'my guy/5' } },
-        ]);
+        const helper = new MachineHelper(loop(sequence(f, stash(y), g, brk())));
+        expect(helper).toAdvanceTo(
+            { channel: 'result', data: 4 },
+            { channel: 'channel', data: 'hello world' }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'channel', data: 'my guy' },
+            { channel: 'result', data: 'my guy/5' }
+        );
     });
 });
 
@@ -347,44 +438,87 @@ function array(size: number): Machine {
 
 describe('array', () => {
     it('should set values at valid indices', () => {
-        const arr = array(3);
-        runMachine(arr, [
-            { input: { channel: 'set', data: [0, 'first'] }, output: { channel: 'result', data: null } },
-            { input: { channel: 'set', data: [1, 'second'] }, output: { channel: 'result', data: null } },
-            { input: { channel: 'set', data: [2, 'third'] }, output: { channel: 'result', data: null } },
-        ]);
+        const helper = new MachineHelper(array(3));
+        expect(helper).toAdvanceTo(
+            { channel: 'set', data: [0, 'first'] },
+            { channel: 'result', data: null }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'set', data: [1, 'second'] },
+            { channel: 'result', data: null }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'set', data: [2, 'third'] },
+            { channel: 'result', data: null }
+        );
     });
 
     it('should take values at valid indices', () => {
-        const arr = array(3);
-        runMachine(arr, [
-            { input: { channel: 'set', data: [0, 'value0'] }, output: { channel: 'result', data: null } },
-            { input: { channel: 'set', data: [1, 'value1'] }, output: { channel: 'result', data: null } },
-            { input: { channel: 'take', data: 0 }, output: { channel: 'result', data: 'value0' } },
-            { input: { channel: 'set', data: [0, 'value0'] }, output: { channel: 'result', data: null } },
-            { input: { channel: 'take', data: 1 }, output: { channel: 'result', data: 'value1' } },
-            { input: { channel: 'set', data: [1, 'value1'] }, output: { channel: 'result', data: null } },
-        ]);
+        const helper = new MachineHelper(array(3));
+        expect(helper).toAdvanceTo(
+            { channel: 'set', data: [0, 'value0'] },
+            { channel: 'result', data: null }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'set', data: [1, 'value1'] },
+            { channel: 'result', data: null }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'take', data: 0 },
+            { channel: 'result', data: 'value0' }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'set', data: [0, 'value0'] },
+            { channel: 'result', data: null }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'take', data: 1 },
+            { channel: 'result', data: 'value1' }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'set', data: [1, 'value1'] },
+            { channel: 'result', data: null }
+        );
     });
 
     it('should return null for uninitialized indices', () => {
-        const arr = array(3);
-        runMachine(arr, [
-            { input: { channel: 'take', data: 0 }, output: { channel: 'result', data: null } },
-            { input: { channel: 'set', data: [0, null] }, output: { channel: 'result', data: null } },
-            { input: { channel: 'take', data: 1 }, output: { channel: 'result', data: null } },
-            { input: { channel: 'set', data: [1, null] }, output: { channel: 'result', data: null } },
-        ]);
+        const helper = new MachineHelper(array(3));
+        expect(helper).toAdvanceTo(
+            { channel: 'take', data: 0 },
+            { channel: 'result', data: null }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'set', data: [0, null] },
+            { channel: 'result', data: null }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'take', data: 1 },
+            { channel: 'result', data: null }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'set', data: [1, null] },
+            { channel: 'result', data: null }
+        );
     });
 
     it('should handle take-then-set pattern in incomplete state', () => {
-        const arr = array(3);
-        runMachine(arr, [
-            { input: { channel: 'set', data: [0, 'initial'] }, output: { channel: 'result', data: null } },
-            { input: { channel: 'take', data: 0 }, output: { channel: 'result', data: 'initial' } },
-            { input: { channel: 'set', data: [0, 'updated'] }, output: { channel: 'result', data: null } },
-            { input: { channel: 'take', data: 0 }, output: { channel: 'result', data: 'updated' } },
-        ]);
+        const helper = new MachineHelper(array(3));
+        expect(helper).toAdvanceTo(
+            { channel: 'set', data: [0, 'initial'] },
+            { channel: 'result', data: null }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'take', data: 0 },
+            { channel: 'result', data: 'initial' }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'set', data: [0, 'updated'] },
+            { channel: 'result', data: null }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'take', data: 0 },
+            { channel: 'result', data: 'updated' }
+        );
     });
 
     it('should error on invalid index for set', () => {
@@ -430,28 +564,53 @@ describe('array', () => {
     });
 
     it('should handle multiple operations correctly', () => {
-        const arr = array(5);
-        runMachine(arr, [
-            { input: { channel: 'set', data: [0, 'a'] }, output: { channel: 'result', data: null } },
-            { input: { channel: 'set', data: [1, 'b'] }, output: { channel: 'result', data: null } },
-            { input: { channel: 'set', data: [2, 'c'] }, output: { channel: 'result', data: null } },
-            { input: { channel: 'take', data: 0 }, output: { channel: 'result', data: 'a' } },
-            { input: { channel: 'set', data: [0, 'A'] }, output: { channel: 'result', data: null } },
-            { input: { channel: 'take', data: 1 }, output: { channel: 'result', data: 'b' } },
-            { input: { channel: 'set', data: [1, 'B'] }, output: { channel: 'result', data: null } },
-            { input: { channel: 'take', data: 2 }, output: { channel: 'result', data: 'c' } },
-            { input: { channel: 'set', data: [2, 'C'] }, output: { channel: 'result', data: null } },
-        ]);
+        const helper = new MachineHelper(array(5));
+        expect(helper).toAdvanceTo(
+            { channel: 'set', data: [0, 'a'] },
+            { channel: 'result', data: null }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'set', data: [1, 'b'] },
+            { channel: 'result', data: null }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'set', data: [2, 'c'] },
+            { channel: 'result', data: null }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'take', data: 0 },
+            { channel: 'result', data: 'a' }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'set', data: [0, 'A'] },
+            { channel: 'result', data: null }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'take', data: 1 },
+            { channel: 'result', data: 'b' }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'set', data: [1, 'B'] },
+            { channel: 'result', data: null }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'take', data: 2 },
+            { channel: 'result', data: 'c' }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'set', data: [2, 'C'] },
+            { channel: 'result', data: null }
+        );
     });
 });
 
 function advancePrimitive(s: any, i: Input): [any, Output] {
     const channel = i.channel.split('/');
     if (channel[0] === 'set') {
-        return [i.data, { channel: 'result', data: null }];
+        return [i.data, { channel: 'set', data: null }];
     }
     if (channel[0] === 'copy') {
-        return [s, { channel: 'result', data: s }];
+        return [s, { channel: 'copy', data: s }];
     }
     if (channel[0] === 'element') {
         if (!Array.isArray(s)) {
@@ -480,7 +639,7 @@ function primitive(): Machine {
     }
 }
 
-function name(): Machine {
+function name2(): Machine {
     return {
         start(): any {
             return { kind: 'start' };
@@ -492,15 +651,9 @@ function name(): Machine {
                     const subchannel = channel.slice(1).join('/');
                     return [{ kind: 'awaitingFirst' }, { channel: 'inner/left/' + subchannel, data: i.data }];
                 }
-                if (channel[0] === 'second') {
+                if (channel[0] === 'last') {
                     const subchannel = channel.slice(1).join('/');
-                    return [{ kind: 'awaitingSecond' }, { channel: 'inner/right/' + subchannel, data: i.data }];
-                }
-                throw new Error('Invalid channel: ' + i.channel);
-            }
-            if (s.kind === 'awaitingInit') {
-                if (i.channel === 'inner/result') {
-                    return [{ kind: 'start' }, { channel: 'result', data: null }];
+                    return [{ kind: 'awaitingLast' }, { channel: 'inner/right/' + subchannel, data: i.data }];
                 }
                 throw new Error('Invalid channel: ' + i.channel);
             }
@@ -510,15 +663,24 @@ function name(): Machine {
                 }
                 throw new Error('Invalid channel: ' + i.channel);
             }
-            if (s.kind === 'awaitingSecond') {
+            if (s.kind === 'awaitingLast') {
                 if (i.channel === 'inner/right/result') {
-                    return [{ kind: 'start' }, { channel: 'second/result', data: i.data }];
+                    return [{ kind: 'start' }, { channel: 'last/result', data: i.data }];
                 }
                 throw new Error('Invalid channel: ' + i.channel);
             }
             throw new Error('Invalid state: ' + s);
         },
     }
+}
+
+function name(): Machine {
+    return renameChannels({
+        'inner/left': 'first',
+        'inner/right': 'last',
+        'first': 'inner/left',
+        'last': 'inner/right',
+    });
 }
 
 function product(m1: Machine, m2: Machine): Machine {
@@ -592,6 +754,77 @@ function renameChannel(old_channel: string, new_channel: string): Machine {
     }
 }
 
+function renameChannels(renames: Record<string, string>): Machine {
+    return {
+        start(): any {
+            return null;
+        },
+        advance(s: null, i: Input): [any, Output] {
+            const channel = i.channel.split('/');
+            // Find the longest matching prefix
+            let bestMatch: { oldParts: string[], newParts: string[] } | null = null;
+            let bestLength = -1;
+
+            for (const [old_channel, new_channel] of Object.entries(renames)) {
+                const old_channel_parts = old_channel.split('/');
+                // Handle empty prefix: '' should match everything
+                const effectiveLength = (old_channel_parts.length === 1 && old_channel_parts[0] === '') ? 0 : old_channel_parts.length;
+                
+                if (channel.length >= effectiveLength && effectiveLength > bestLength) {
+                    let matches = true;
+                    // Empty prefix always matches
+                    if (effectiveLength > 0) {
+                        for (let j = 0; j < old_channel_parts.length; j++) {
+                            if (channel[j] !== old_channel_parts[j]) {
+                                matches = false;
+                                break;
+                            }
+                        }
+                    }
+                    if (matches) {
+                        bestMatch = { oldParts: old_channel_parts, newParts: new_channel.split('/') };
+                        bestLength = effectiveLength;
+                    }
+                }
+            }
+
+            if (bestMatch) {
+                const remainingParts = channel.slice(bestLength);
+                // Handle empty new_channel: if newParts is [''] and there are remaining parts, just use remaining parts
+                if (bestMatch.newParts.length === 1 && bestMatch.newParts[0] === '' && remainingParts.length > 0) {
+                    return [null, { channel: remainingParts.join('/'), data: i.data }];
+                }
+                return [null, { channel: [...bestMatch.newParts, ...remainingParts].join('/'), data: i.data }];
+            }
+            return [null, { channel: i.channel, data: i.data }];
+        },
+    }
+}
+
+describe('renameChannels', () => {
+    it('should rename channels', () => {
+        const helper = new MachineHelper(renameChannels({ 'inner/left': 'first', 'inner/right': 'last' }));
+        expect(helper).toAdvanceTo(
+            { channel: 'inner/left/set', data: 'a' },
+            { channel: 'first/set', data: 'a' }
+        );
+    });
+    it('should support empty prefix', () => {
+        const helper = new MachineHelper(renameChannels({ '': 'first' }));
+        expect(helper).toAdvanceTo(
+            { channel: 'set', data: 'a' },
+            { channel: 'first/set', data: 'a' }
+        );
+    });
+    it('should support renaming to empty value', () => {
+        const helper = new MachineHelper(renameChannels({ 'first': '' }));
+        expect(helper).toAdvanceTo(
+            { channel: 'first/set', data: 'a' },
+            { channel: 'set', data: 'a' }
+        );
+    });
+});
+
 function loop(inner: Machine): Machine {
     return {
         start(): any {
@@ -609,6 +842,9 @@ function loop(inner: Machine): Machine {
                 const subchannel = channel.slice(1).join('/');
                 return [inner_s, { channel: subchannel, data: inner_output.data }];
             }
+            if (channel[0] === 'yield') {
+                return [inner_s, { channel: channel.slice(1).join('/'), data: inner_output.data }];
+            }
             throw new Error('Invalid channel: ' + inner_output.channel);
         },
     }
@@ -616,12 +852,23 @@ function loop(inner: Machine): Machine {
 
 describe('name', () => {
     it('should allow accessing elements of the name unbound', () => {
-        runMachine(name(), [
-            { input: { channel: 'first/set', data: 'a' }, output: { channel: 'inner/left/set', data: 'a' } },
-            { input: { channel: 'inner/left/result', data: null }, output: { channel: 'first/result', data: null } },
-            { input: { channel: 'first/copy', data: null }, output: { channel: 'inner/left/copy', data: null } },
-            { input: { channel: 'inner/left/result', data: 'a' }, output: { channel: 'first/result', data: 'a' } },
-        ]);
+        const helper = new MachineHelper(name());
+        expect(helper).toAdvanceTo(
+            { channel: 'first/set', data: 'a' },
+            { channel: 'inner/left/set', data: 'a' }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'inner/left/result', data: null },
+            { channel: 'first/result', data: null }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'first/copy', data: null },
+            { channel: 'inner/left/copy', data: null }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'inner/left/result', data: 'a' },
+            { channel: 'first/result', data: 'a' }
+        );
     });
     it('should allow accessing elements of the name unbound paired', () => {
         const pair = product(primitive(), primitive());
@@ -630,14 +877,31 @@ describe('name', () => {
             renameChannel('left/inner', 'continue/right'),
             renameChannel('right', 'continue/left/inner'),
             renameChannel('left/first', 'break/left/first'));
-        runMachine(name_pair, [
-            { input: { channel: 'left/first/set', data: 'a' }, output: { channel: 'continue/right/left/set', data: 'a' } },
-            { input: { channel: 'right/left/set', data: 'a' }, output: { channel: 'continue/left/inner/left/result', data: null } },
-            { input: { channel: 'left/inner/left/result', data: null }, output: { channel: 'break/left/first/result', data: null } },
-            { input: { channel: 'left/first/copy', data: null }, output: { channel: 'continue/right/left/copy', data: null } },
-            { input: { channel: 'right/left/copy', data: null }, output: { channel: 'continue/left/inner/left/result', data: 'a' } },
-            { input: { channel: 'left/inner/left/result', data: 'a' }, output: { channel: 'break/left/first/result', data: 'a' } },
-        ]);
+        const helper = new MachineHelper(name_pair);
+        expect(helper).toAdvanceTo(
+            { channel: 'left/first/set', data: 'a' },
+            { channel: 'continue/right/left/set', data: 'a' }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'right/left/set', data: 'a' },
+            { channel: 'continue/left/inner/left/set', data: null }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'left/inner/left/set', data: null },
+            { channel: 'break/left/first/set', data: null }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'left/first/copy', data: null },
+            { channel: 'continue/right/left/copy', data: null }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'right/left/copy', data: null },
+            { channel: 'continue/left/inner/left/copy', data: 'a' }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'left/inner/left/result', data: 'a' },
+            { channel: 'break/left/first/result', data: 'a' }
+        );
     });
     it('should allow accessing elements of the name', () => {
         const pair = product(primitive(), primitive());
@@ -654,9 +918,320 @@ describe('name', () => {
             renameChannel('left/second', 'second'),
         );
 
-        runMachine(n, [
-            { input: { channel: 'first/set', data: 'a' }, output: { channel: 'first/result', data: null } },
-            { input: { channel: 'first/copy', data: null }, output: { channel: 'first/result', data: 'a' } },
-        ]);
+        const helper = new MachineHelper(n);
+        expect(helper).toAdvanceTo(
+            { channel: 'first/set', data: 'a' },
+            { channel: 'first/set', data: null }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'first/copy', data: null },
+            { channel: 'first/copy', data: 'a' }
+        );
     });
 });
+
+function stringCompare(): Machine {
+    return {
+        start(): any {
+            return { kind: 'start' };
+        },
+        advance(s: any, i: Input): [any, Output] {
+            if (s.kind === 'start') {
+                if (i.channel === 'result') {
+                    return [{ kind: 'awaitingLeft' }, { channel: 'inner/left/copy', data: null }];
+                }
+                throw new Error('Invalid channel: ' + i.channel);
+            }
+            if (s.kind === 'awaitingLeft') {
+                if (i.channel === 'inner/left/copy') {
+                    return [{ kind: 'awaitingRight', left: i.data }, { channel: 'inner/right/copy', data: null }];
+                }
+                throw new Error('Invalid channel: ' + i.channel);
+            }
+            if (s.kind === 'awaitingRight') {
+                if (i.channel === 'inner/right/copy') {
+                    function strCmp(left: string, right: string): '<' | '>' | '=' {
+                        if (left < right) {
+                            return '<';
+                        }
+                        if (left > right) {
+                            return '>';
+                        }
+                        return '=';
+                    }
+                    return [{ kind: 'start' }, { channel: 'result', data: strCmp(s.left, i.data) }];
+                }
+                throw new Error('Invalid channel: ' + i.channel);
+            }
+            throw new Error('Invalid state: ' + s);
+        },
+    }
+}
+
+describe('stringCompare', () => {
+    it('should compare strings and return less than', () => {
+        const helper = new MachineHelper(stringCompare());
+        expect(helper).toAdvanceTo(
+            { channel: 'result', data: null },
+            { channel: 'inner/left/copy', data: null }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'inner/left/copy', data: 'apple' },
+            { channel: 'inner/right/copy', data: null }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'inner/right/copy', data: 'banana' },
+            { channel: 'result', data: '<' }
+        );
+    });
+
+    it('should compare strings and return greater than', () => {
+        const helper = new MachineHelper(stringCompare());
+        expect(helper).toAdvanceTo(
+            { channel: 'result', data: null },
+            { channel: 'inner/left/copy', data: null }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'inner/left/copy', data: 'zebra' },
+            { channel: 'inner/right/copy', data: null }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'inner/right/copy', data: 'apple' },
+            { channel: 'result', data: '>' }
+        );
+    });
+
+    it('should compare strings and return equal', () => {
+        const helper = new MachineHelper(stringCompare());
+        expect(helper).toAdvanceTo(
+            { channel: 'result', data: null },
+            { channel: 'inner/left/copy', data: null }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'inner/left/copy', data: 'hello' },
+            { channel: 'inner/right/copy', data: null }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'inner/right/copy', data: 'hello' },
+            { channel: 'result', data: '=' }
+        );
+    });
+
+    it('should handle multiple comparisons', () => {
+        const helper = new MachineHelper(stringCompare());
+        expect(helper).toAdvanceTo(
+            { channel: 'result', data: null },
+            { channel: 'inner/left/copy', data: null }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'inner/left/copy', data: 'a' },
+            { channel: 'inner/right/copy', data: null }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'inner/right/copy', data: 'b' },
+            { channel: 'result', data: '<' }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'result', data: null },
+            { channel: 'inner/left/copy', data: null }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'inner/left/copy', data: 'x' },
+            { channel: 'inner/right/copy', data: null }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'inner/right/copy', data: 'y' },
+            { channel: 'result', data: '<' }
+        );
+    });
+
+    it('should work with binding', () => {
+        const testBody = loop(sequence(
+            constant('a'),
+            yld('pair/left/set'),
+            constant('b'),
+            yld('pair/right/set'),
+            compose(
+                renameChannels({
+                    'pair': 'inner',
+                }),
+                stringCompare(),
+                renameChannels({
+                    'inner': 'yield/pair',
+                    'result': 'break/result',
+                }),
+            )
+        ));
+
+        const dataPair = product(primitive(), primitive());
+        const boundBody = compose(
+            product(testBody, dataPair),
+            renameChannels({
+                'left/pair': 'continue/right',
+                'right': 'continue/left/pair',
+                'left/result': 'break/left/result',
+            }),
+        );
+        const boundLoop = compose(renameChannels({ '': 'left' }), loop(boundBody), renameChannels({ 'left': '' }));
+        const helper = new MachineHelper(boundLoop);
+        expect(helper).toAdvanceTo(
+            { channel: 'result', data: null },
+            { channel: 'result', data: '<' }
+        );
+    });
+});
+
+
+function lexCompare(): Machine {
+    return {
+        start(): any {
+            return { kind: 'start' };
+        },
+        advance(s: any, i: Input): [any, Output] {
+            if (s.kind === 'start') {
+                if (i.channel === 'cmp') {
+                    return [{ kind: 'awaitingLeft' }, { channel: 'inner/left/cmp', data: null }];
+                }
+                throw new Error('Invalid channel: ' + i.channel);
+            }
+            if (s.kind === 'awaitingLeft') {
+                if (i.channel === 'inner/left/result') {
+                    if (i.data === '=') {
+                        return [{ kind: 'awaitingRight' }, { channel: 'inner/right/cmp', data: null }];
+                    } else {
+                        return [{ kind: 'start' }, { channel: 'result', data: i.data }];
+                    }
+                }
+                throw new Error('Invalid channel: ' + i.channel);
+            }
+            if (s.kind === 'awaitingRight') {
+                if (i.channel === 'inner/right/result') {
+                    return [{ kind: 'start' }, { channel: 'result', data: i.data }];
+                }
+                throw new Error('Invalid channel: ' + i.channel);
+            }
+            throw new Error('Invalid state: ' + s);
+        },
+    }
+}
+
+describe('lexCompare', () => {
+    it('should return result immediately when left comparison is not equal', () => {
+        const helper = new MachineHelper(lexCompare());
+        expect(helper).toAdvanceTo(
+            { channel: 'cmp', data: null },
+            { channel: 'inner/left/cmp', data: null }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'inner/left/result', data: '<' },
+            { channel: 'result', data: '<' }
+        );
+    });
+
+    it('should return greater than when left comparison is not equal', () => {
+        const helper = new MachineHelper(lexCompare());
+        expect(helper).toAdvanceTo(
+            { channel: 'cmp', data: null },
+            { channel: 'inner/left/cmp', data: null }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'inner/left/result', data: '>' },
+            { channel: 'result', data: '>' }
+        );
+    });
+
+    it('should continue to right comparison when left is equal', () => {
+        const helper = new MachineHelper(lexCompare());
+        expect(helper).toAdvanceTo(
+            { channel: 'cmp', data: null },
+            { channel: 'inner/left/cmp', data: null }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'inner/left/result', data: '=' },
+            { channel: 'inner/right/cmp', data: null }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'inner/right/result', data: '<' },
+            { channel: 'result', data: '<' }
+        );
+    });
+
+    it('should return right comparison result when left is equal', () => {
+        const helper = new MachineHelper(lexCompare());
+        expect(helper).toAdvanceTo(
+            { channel: 'cmp', data: null },
+            { channel: 'inner/left/cmp', data: null }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'inner/left/result', data: '=' },
+            { channel: 'inner/right/cmp', data: null }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'inner/right/result', data: '>' },
+            { channel: 'result', data: '>' }
+        );
+    });
+
+    it('should return equal when both comparisons are equal', () => {
+        const helper = new MachineHelper(lexCompare());
+        expect(helper).toAdvanceTo(
+            { channel: 'cmp', data: null },
+            { channel: 'inner/left/cmp', data: null }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'inner/left/result', data: '=' },
+            { channel: 'inner/right/cmp', data: null }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'inner/right/result', data: '=' },
+            { channel: 'result', data: '=' }
+        );
+    });
+
+    it('should handle multiple comparisons', () => {
+        const helper = new MachineHelper(lexCompare());
+        expect(helper).toAdvanceTo(
+            { channel: 'cmp', data: null },
+            { channel: 'inner/left/cmp', data: null }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'inner/left/result', data: '<' },
+            { channel: 'result', data: '<' }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'cmp', data: null },
+            { channel: 'inner/left/cmp', data: null }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'inner/left/result', data: '=' },
+            { channel: 'inner/right/cmp', data: null }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'inner/right/result', data: '>' },
+            { channel: 'result', data: '>' }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'cmp', data: null },
+            { channel: 'inner/left/cmp', data: null }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'inner/left/result', data: '=' },
+            { channel: 'inner/right/cmp', data: null }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'inner/right/result', data: '=' },
+            { channel: 'result', data: '=' }
+        );
+    });
+});
+
+function nameCompare(): Machine {
+    return {
+        start(): any {
+            return { kind: 'start' };
+        },
+        advance(s: any, i: Input): [any, Output] {
+            return [s, { channel: 'result', data: null }];
+        },
+    }
+}
