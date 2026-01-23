@@ -1225,6 +1225,78 @@ describe('lexCompare', () => {
     });
 });
 
+function helloCount(): Machine {
+    return {
+        start(): any {
+            return 0;
+        },
+        advance(s: any, i: Input): [any, Output] {
+            if (i.channel !== 'hello') {
+                throw new Error('Invalid channel: ' + i.channel);
+            }
+            const {name, dest} = i.data;
+            return [s + 1, { channel: 'out/'+dest, data: "Hello, " + name + "! This is greeting " + s + "." }];
+        },
+    }
+}
+
+describe('helloCount', () => {
+    it('should greet the user', () => {
+        const helper = new MachineHelper(helloCount());
+        expect(helper).toAdvanceTo(
+            { channel: 'hello', data: { name: 'Alice', dest: 'result' } },
+            { channel: 'out/result', data: "Hello, Alice! This is greeting 0." }
+        );
+    });
+});
+
+function wantsGreeting(name: string): Machine {
+    return {
+        start(): any {
+            return { kind: 'start' };
+        },
+        advance(s: any, i: Input): [any, Output] {
+            if (s.kind === 'start') {
+                return [{ kind: 'awaitingGreeting' }, { channel: 'greeter/hello', data: { name: name } }];
+            }
+            if (s.kind === 'awaitingGreeting') {
+                if (i.channel === 'greeter/hello') {
+                    return [{ kind: 'end' }, { channel: 'result', data: null }];
+                }
+                throw new Error('Invalid channel: ' + i.channel);
+            }
+            throw new Error('Invalid state: ' + s);
+        },
+    }
+}
+
+describe('wantsGreeting', () => {
+    it('should ask for a greeting', () => {
+        const helper = new MachineHelper(wantsGreeting('Alice'));
+        expect(helper).toAdvanceTo(
+            { channel: 'result', data: null },
+            { channel: 'greeter/hello', data: { name: 'Alice' } }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'greeter/hello', data: 'yo what up' },
+            { channel: 'result', data: null }
+        );
+    });
+
+    it('double wants greeting', () => {
+        const pair = product(wantsGreeting('Alice'), wantsGreeting('Bob'));
+        const helper = new MachineHelper(pair);
+        expect(helper).toAdvanceTo(
+            { channel: 'left/result', data: null },
+            { channel: 'left/greeter/hello', data: { name: 'Alice' } }
+        );
+        expect(helper).toAdvanceTo(
+            { channel: 'right/result', data: null },
+            { channel: 'right/greeter/hello', data: { name: 'Bob' } }
+        );
+    });
+});
+
 function nameCompare(): Machine {
     return {
         start(): any {
