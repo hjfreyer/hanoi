@@ -35,6 +35,22 @@ class MachineHelper {
             data: output
         };
     }
+    readyForInput(): string[] {
+        return this.machine.readyForInput(this.state);
+    }
+    sendInput(channel: string, data: any) {
+        this.state = this.machine.sendInput(this.state, channel, data);
+    }
+
+    hasOutput(): string[] {
+        return this.machine.hasOutput(this.state);
+    }
+
+    getOutput(channel: string): any {
+        const [newState, output] = this.machine.getOutput(this.state, channel);
+        this.state = newState;
+        return output;
+    }
 }
 
 // Custom Jest matcher for MachineHelper
@@ -1158,7 +1174,7 @@ function loop<S, I, O, C>(inner: Machine<S, I | C, O | C>): Machine<LoopState<S,
 //     });
 // });
 
-// function stringCompare(): Machine {
+// function stringCompare(): Machine<any, any, any> {
 //     return {
 //         start(): any {
 //             return { kind: 'start' };
@@ -1273,40 +1289,40 @@ function loop<S, I, O, C>(inner: Machine<S, I | C, O | C>): Machine<LoopState<S,
 //         );
 //     });
 
-//     it('should work with binding', () => {
-//         const testBody = loop(sequence(
-//             constant('a'),
-//             yld('pair/left/set'),
-//             constant('b'),
-//             yld('pair/right/set'),
-//             compose(
-//                 renameChannels({
-//                     'pair': 'inner',
-//                 }),
-//                 stringCompare(),
-//                 renameChannels({
-//                     'inner': 'yield/pair',
-//                     'result': 'break/result',
-//                 }),
-//             )
-//         ));
+//     // it('should work with binding', () => {
+//     //     const testBody = loop(sequence(
+//     //         constant('a'),
+//     //         yld('pair/left/set'),
+//     //         constant('b'),
+//     //         yld('pair/right/set'),
+//     //         compose(
+//     //             renameChannels({
+//     //                 'pair': 'inner',
+//     //             }),
+//     //             stringCompare(),
+//     //             renameChannels({
+//     //                 'inner': 'yield/pair',
+//     //                 'result': 'break/result',
+//     //             }),
+//     //         )
+//     //     ));
 
-//         const dataPair = product(primitive(), primitive());
-//         const boundBody = compose(
-//             product(testBody, dataPair),
-//             renameChannels({
-//                 'left/pair': 'continue/right',
-//                 'right': 'continue/left/pair',
-//                 'left/result': 'break/left/result',
-//             }),
-//         );
-//         const boundLoop = compose(renameChannels({ '': 'left' }), loop(boundBody), renameChannels({ 'left': '' }));
-//         const helper = new MachineHelper(boundLoop);
-//         expect(helper).toAdvanceTo(
-//             { channel: 'result', data: null, action: '' },
-//             { channel: 'result', data: '<', action: '' }
-//         );
-//     });
+//     //     const dataPair = product(primitive(), primitive());
+//     //     const boundBody = compose(
+//     //         product(testBody, dataPair),
+//     //         renameChannels({
+//     //             'left/pair': 'continue/right',
+//     //             'right': 'continue/left/pair',
+//     //             'left/result': 'break/left/result',
+//     //         }),
+//     //     );
+//     //     const boundLoop = compose(renameChannels({ '': 'left' }), loop(boundBody), renameChannels({ 'left': '' }));
+//     //     const helper = new MachineHelper(boundLoop);
+//     //     expect(helper).toAdvanceTo(
+//     //         { channel: 'result', data: null, action: '' },
+//     //         { channel: 'result', data: '<', action: '' }
+//     //     );
+//     // });
 // });
 
 
@@ -1567,3 +1583,184 @@ function loop<S, I, O, C>(inner: Machine<S, I | C, O | C>): Machine<LoopState<S,
 //         },
 //     }
 // }
+
+function getThingy(onChannel: string): Machine<any, any, any> {
+    return {
+        start(): any {
+            return { kind: 'start' };
+        },
+        readyForInput(s: any): string[] {
+            if (s.kind === 'start') {
+                return [];
+            }
+            if (s.kind === 'awaiting') {
+                return [onChannel];
+            }
+            throw new Error('Invalid state: ' + s);
+        },
+        sendInput(s: any, channel: string, data: any): any {
+            if (s.kind === 'awaiting') {
+                if (channel !== onChannel) {
+                    throw new Error('Invalid channel: ' + channel);
+                }
+                return { kind: 'finished', data };
+            }
+            throw new Error('Invalid state: ' + s);
+        },
+        hasOutput(s: any): string[] {
+            if (s.kind === 'start') {
+                return [onChannel];
+            }
+            if (s.kind === 'finished') {
+                return ["result"];
+            }
+            throw new Error('Invalid state: ' + s);
+        },
+        getOutput(s: any, channel: string): [any, any] {
+            if (s.kind === 'start') {
+                if (channel !== onChannel) {
+                    throw new Error('Invalid channel: ' + channel);
+                }
+                return [{ kind: 'awaiting' }, {kind: 'get'}];
+            }
+            if (s.kind === 'finished') {
+                if (channel !== "result") {
+                    throw new Error('Invalid channel: ' + channel);
+                }
+                return [{kind: 'done'}, s.data];
+            }
+            throw new Error('Invalid state: ' + s);
+        },
+        advance(s: any): [any, boolean] {
+            return [s, false];
+        },
+    }
+}
+
+function composeChannels(m1: Machine<any, any, any>, m2: Machine<any, any, any>, channels: string[], otherChannels: string[]): Machine<any, any, any> {
+    const pair = product(m1, m2);
+
+}
+
+describe('getThingy', () => {
+    it('should output on the specified channel initially', () => {
+        const helper = new MachineHelper(getThingy('foo'));
+        const state = helper['state'];
+        const hasOutput = helper['machine'].hasOutput(state);
+        expect(hasOutput).toEqual(['foo']);
+    });
+
+    it('should transition to awaiting state when getting output', () => {
+        const helper = new MachineHelper(getThingy('foo'));
+        const state = helper['state'];
+        const [newState, output] = helper['machine'].getOutput(state, 'foo');
+        expect(newState).toEqual({ kind: 'awaiting' });
+        expect(output).toEqual({ kind: 'get' });
+    });
+
+    it('should be ready for input on the channel after getting output', () => {
+        const helper = new MachineHelper(getThingy('bar'));
+        const state = helper['state'];
+        const [newState] = helper['machine'].getOutput(state, 'bar');
+        const readyChannels = helper['machine'].readyForInput(newState);
+        expect(readyChannels).toEqual(['bar']);
+    });
+
+    it('should accept input and transition to finished state', () => {
+        const helper = new MachineHelper(getThingy('baz'));
+        let state = helper['state'];
+        [state] = helper['machine'].getOutput(state, 'baz');
+        state = helper['machine'].sendInput(state, 'baz', 42);
+        expect(state).toEqual({ kind: 'finished', data: 42 });
+    });
+
+    it('should output the received data on result channel', () => {
+        const helper = new MachineHelper(getThingy('test'));
+        let state = helper['state'];
+        [state] = helper['machine'].getOutput(state, 'test');
+        state = helper['machine'].sendInput(state, 'test', 'hello');
+        const hasOutput = helper['machine'].hasOutput(state);
+        expect(hasOutput).toEqual(['result']);
+        const [finalState, output] = helper['machine'].getOutput(state, 'result');
+        expect(output).toEqual('hello');
+        expect(finalState).toEqual({ kind: 'done' });
+    });
+
+    it('should work with MachineHelper advance method', () => {
+        const helper = new MachineHelper(getThingy('data'));
+        // First advance: get output on 'data' channel
+        const result1 = helper.advance('', null);
+        expect(result1.channel).toBe('data');
+        expect(result1.data).toEqual({ kind: 'get' });
+        
+        // Second advance: send input on 'data' channel and get result
+        const result2 = helper.advance('data', 'test value');
+        expect(result2.channel).toBe('result');
+        expect(result2.data).toBe('test value');
+    });
+
+    it('should handle numeric data', () => {
+        const helper = new MachineHelper(getThingy('number'));
+        helper.advance('', null); // Get initial output
+        const result = helper.advance('number', 123);
+        expect(result.channel).toBe('result');
+        expect(result.data).toBe(123);
+    });
+
+    it('should handle object data', () => {
+        const helper = new MachineHelper(getThingy('obj'));
+        helper.advance('', null); // Get initial output
+        const testObj = { a: 1, b: 'test' };
+        const result = helper.advance('obj', testObj);
+        expect(result.channel).toBe('result');
+        expect(result.data).toEqual(testObj);
+    });
+
+    it('should handle different channel names', () => {
+        const helper1 = new MachineHelper(getThingy('channel1'));
+        const helper2 = new MachineHelper(getThingy('channel2'));
+        
+        const result1 = helper1.advance('', null);
+        expect(result1.channel).toBe('channel1');
+        
+        const result2 = helper2.advance('', null);
+        expect(result2.channel).toBe('channel2');
+    });
+
+    it('should throw error when getting output from wrong channel initially', () => {
+        const helper = new MachineHelper(getThingy('correct'));
+        const state = helper['state'];
+        expect(() => {
+            helper['machine'].getOutput(state, 'wrong');
+        }).toThrow('Invalid channel: wrong');
+    });
+
+    it('should throw error when sending input on wrong channel', () => {
+        const helper = new MachineHelper(getThingy('correct'));
+        let state = helper['state'];
+        [state] = helper['machine'].getOutput(state, 'correct');
+        expect(() => {
+            helper['machine'].sendInput(state, 'wrong', 'data');
+        }).toThrow('Invalid channel: wrong');
+    });
+
+    it('should throw error when getting result from wrong channel', () => {
+        const helper = new MachineHelper(getThingy('test'));
+        let state = helper['state'];
+        [state] = helper['machine'].getOutput(state, 'test');
+        state = helper['machine'].sendInput(state, 'test', 'data');
+        expect(() => {
+            helper['machine'].getOutput(state, 'wrong');
+        }).toThrow('Invalid channel: wrong');
+    });
+
+    it('should do a parallel fetch with product', () => {
+        const helper = new MachineHelper(product(getThingy('foo'), getThingy('bar')));
+        expect(helper.hasOutput()).toEqual(['left/foo', 'right/bar']);
+        expect(helper.getOutput('left/foo')).toEqual({ kind: 'get' });
+        expect(helper.readyForInput()).toEqual(['left/foo']);
+        helper.sendInput('left/foo', 'data');
+        expect(helper.hasOutput()).toEqual(['left/result', 'right/bar']);
+
+    });
+});
