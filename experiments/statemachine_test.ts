@@ -10,8 +10,6 @@ import path from "path";
 //     choices: Record<string, MachineImpl>
 // }
 
-type Direction = 'in' | 'out';
-
 type MachineType = {
     kind: 'sequence',
     inner: MachineType[]
@@ -26,8 +24,7 @@ type MachineType = {
     left: MachineType,
     right: MachineType,
 } | {
-    kind: 'token',
-    direction: Direction,
+    kind: 'emit',
     token: string,
 };
 
@@ -91,31 +88,28 @@ type MachineType = {
 // }
 
 
-/// Returns possible remainders of transcript after m consumes a prefix.
-function validatePrefix(m: MachineType, transcript: string[]): string[][] {
-    if (m.kind === 'token') {
+/// Returns the remainder of transcript after m consumes a prefix, or null if no valid prefix.
+function validatePrefix(m: MachineType, transcript: string[]): string[] | null {
+    if (m.kind === 'emit') {
         if (transcript.length > 0 && transcript[0] === m.token) {
-            return [transcript.slice(1)];
+            return transcript.slice(1);
         }
-        return [];
+        return null;
     }
     if (m.kind === 'sequence') {
-        let rest: string[][] = [transcript];
+        let rest: string[] = transcript;
         for (const inner of m.inner) {
-            const newRest: string[][] = [];
-            for (const candidate of rest) {
-                const next = validatePrefix(inner, candidate);
-                newRest.push(...next);
-            }
-            rest = newRest;
+            const next = validatePrefix(inner, rest);
+            if (next === null) return null;
+            rest = next;
         }
         return rest;
     }
     if (m.kind === 'choice') {
-        if (transcript.length === 0) return [];
+        if (transcript.length === 0) return null;
         const machine = m.inner[transcript[0]];
-        if (machine === undefined) return [];
-        const rest = transcript.length > 0 ? transcript.slice(1) : [];
+        if (machine === undefined) return null;
+        const rest = transcript.slice(1);
         return validatePrefix(machine, rest);
     }
     if (m.kind === 'loop') {
@@ -123,7 +117,6 @@ function validatePrefix(m: MachineType, transcript: string[]): string[][] {
         return validatePrefix(loopBody, transcript);
     }
     if (m.kind === 'product') {
-        const out: string[][] = [];
         for (let k = 0; k <= transcript.length; k++) {
             const prefix = transcript.slice(0, k);
             const leftTokens: string[] = [];
@@ -140,10 +133,10 @@ function validatePrefix(m: MachineType, transcript: string[]): string[][] {
                 }
             }
             if (!invalid && validateTranscript(m.left, leftTokens) && validateTranscript(m.right, rightTokens)) {
-                out.push(transcript.slice(k));
+                return transcript.slice(k);
             }
         }
-        return out;
+        return null;
     }
     throw new Error(`Unknown machine kind`);
 }
@@ -151,11 +144,11 @@ function validatePrefix(m: MachineType, transcript: string[]): string[][] {
 /// Returns true if a given transcript could be produced by a given machine.
 function validateTranscript(m: MachineType, transcript: string[]): boolean {
     const remainder = validatePrefix(m, transcript);
-    return remainder.some(r => r.length === 0);
+    return remainder !== null && remainder.length === 0;
 }
 
 describe('validateTranscript', () => {
-    const tok = (token: string): MachineType => ({ kind: 'token', direction: 'in', token });
+    const tok = (token: string): MachineType => ({ kind: 'emit', token });
 
     it('validates single token', () => {
         expect(validateTranscript(tok('x'), ['x'])).toBe(true);
@@ -210,7 +203,7 @@ describe('validateTranscript', () => {
 });
 
 describe('product (MachineType)', () => {
-    const tok = (token: string): MachineType => ({ kind: 'token', direction: 'in', token });
+    const tok = (token: string): MachineType => ({ kind: 'emit', token });
 
     it('validates product with left/ and right/ prefixed tokens', () => {
         const m = product(tok('a'), tok('b'));
@@ -280,28 +273,15 @@ function choice(inner: Record<string, MachineType>): MachineType {
     };
 }
 
-function token(t: string, direction: Direction): MachineType {
-    return {
-        kind: 'token',
-        token: t,
-        direction,
-    };
-}
-
 function emit(t: string): MachineType {
     return {
-        kind: 'token',
+        kind: 'emit',
         token: t,
-        direction: 'out',
     };
 }
 
 function receive(t: string): MachineType {
-    return {
-        kind: 'token',
-        token: t,
-        direction: 'in',
-    };
+    return choice({ [t]: sequence() });
 }
 
 function loop(f: (self: MachineType) => MachineType): MachineType {
