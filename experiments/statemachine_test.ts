@@ -21,8 +21,7 @@ type MachineType = {
     inner: (m : MachineType) => MachineType
 } | {
     kind: 'product',
-    left: MachineType,
-    right: MachineType,
+    inner: Record<string, MachineType>,
 } | {
     kind: 'emit',
     token: string,
@@ -117,22 +116,27 @@ function validatePrefix(m: MachineType, transcript: string[]): string[] | null {
         return validatePrefix(loopBody, transcript);
     }
     if (m.kind === 'product') {
+        const channelNames = Object.keys(m.inner);
         for (let k = 0; k <= transcript.length; k++) {
             const prefix = transcript.slice(0, k);
-            const leftTokens: string[] = [];
-            const rightTokens: string[] = [];
+            const tokensByChannel: Record<string, string[]> = {};
+            for (const ch of channelNames) tokensByChannel[ch] = [];
             let invalid = false;
             for (const tag of prefix) {
-                if (tag.startsWith('left/')) {
-                    leftTokens.push(tag.slice(5));
-                } else if (tag.startsWith('right/')) {
-                    rightTokens.push(tag.slice(6));
-                } else {
+                const slash = tag.indexOf('/');
+                if (slash < 0) {
                     invalid = true;
                     break;
                 }
+                const channel = tag.slice(0, slash);
+                const value = tag.slice(slash + 1);
+                if (m.inner[channel] === undefined) {
+                    invalid = true;
+                    break;
+                }
+                tokensByChannel[channel].push(value);
             }
-            if (!invalid && validateTranscript(m.left, leftTokens) && validateTranscript(m.right, rightTokens)) {
+            if (!invalid && channelNames.every(ch => validateTranscript(m.inner[ch], tokensByChannel[ch] ?? []))) {
                 return transcript.slice(k);
             }
         }
@@ -206,13 +210,13 @@ describe('product (MachineType)', () => {
     const tok = (token: string): MachineType => ({ kind: 'emit', token });
 
     it('validates product with left/ and right/ prefixed tokens', () => {
-        const m = product(tok('a'), tok('b'));
+        const m = product({ left: tok('a'), right: tok('b') });
         expect(validateTranscript(m, ['left/a', 'right/b'])).toBe(true);
         expect(validateTranscript(m, ['right/b', 'left/a'])).toBe(true);
     });
 
     it('rejects tokens without left/ or right/ prefix', () => {
-        const m = product(tok('a'), tok('b'));
+        const m = product({ left: tok('a'), right: tok('b') });
         expect(validateTranscript(m, ['a', 'right/b'])).toBe(false);
         expect(validateTranscript(m, ['left/a', 'b'])).toBe(false);
     });
@@ -220,28 +224,28 @@ describe('product (MachineType)', () => {
     it('validates product of sequence machines', () => {
         const left = sequence(tok('x'), tok('y'));
         const right = sequence(tok('a'), tok('b'));
-        const m = product(left, right);
+        const m = product({ left, right });
         expect(validateTranscript(m, ['left/x', 'right/a', 'left/y', 'right/b'])).toBe(true);
     });
 
     it('rejects when left or right stream is invalid', () => {
-        const m = product(tok('a'), tok('b'));
+        const m = product({ left: tok('a'), right: tok('b') });
         expect(validateTranscript(m, ['left/wrong', 'right/b'])).toBe(false);
         expect(validateTranscript(m, ['left/a', 'right/wrong'])).toBe(false);
     });
 
     it('accepts empty transcript when both sides accept empty', () => {
-        const m = product(
-            { kind: 'sequence', inner: [] },
-            { kind: 'sequence', inner: [] },
-        );
+        const m = product({
+            left: { kind: 'sequence', inner: [] },
+            right: { kind: 'sequence', inner: [] },
+        });
         expect(validateTranscript(m, [])).toBe(true);
     });
 
     it('sequence(A, product(B, C), D) leaves remainder for D', () => {
         const m = sequence(
             tok('a'),
-            product(tok('b'), tok('c')),
+            product({ left: tok('b'), right: tok('c') }),
             tok('d'),
         );
         expect(validateTranscript(m, ['a', 'left/b', 'right/c', 'd'])).toBe(true);
@@ -250,8 +254,8 @@ describe('product (MachineType)', () => {
 
     it('sequence(product(A, B), product(C, D), E) two products in a row', () => {
         const m = sequence(
-            product(tok('a'), tok('b')),
-            product(tok('c'), tok('d')),
+            product({ left: tok('a'), right: tok('b') }),
+            product({ left: tok('c'), right: tok('d') }),
             tok('e'),
         );
         expect(validateTranscript(m, ['left/a', 'right/b', 'left/c', 'right/d', 'e'])).toBe(true);
@@ -291,11 +295,11 @@ function loop(f: (self: MachineType) => MachineType): MachineType {
     };
 }
 
-function product(left: MachineType, right: MachineType): MachineType {
+
+function product(inner: Record<string, MachineType>): MachineType {
     return {
         kind: 'product',
-        left,
-        right,
+        inner,
     };
 }
 
@@ -371,7 +375,93 @@ describe('secureDoor', () => {
     });
 });
 
+const ref = loop((self) => choice({ 'end': sequence(), 'get': sequence(emit('result'), self) }));
 
+function comparator(t: MachineType) : MachineType {
+    return loop((self) =>
+        choice({ 
+            'cmp': sequence(
+                product({
+                    'left': t,
+                    'right': t,
+                }),
+                emit('result'),
+                self
+            ),
+            'end': sequence(),
+        })
+    );
+}
+
+function pair(t0 : MachineType, t1 : MachineType) : MachineType {
+    return product({
+        't0': t0,
+        't1': t1,
+    });
+}
+
+describe('comparator', () => {
+    it('accepts cmp then end on both refs then result', () => {
+        expect(validateTranscript(comparator(ref), ['cmp', 'left/end', 'right/end', 'result', 'end'])).toBe(true);
+    });
+
+    it('accepts cmp then one get/result on left, end on right, then result', () => {
+        expect(validateTranscript(comparator(ref), ['cmp', 'left/get', 'left/result', 'left/end', 'right/end', 'result', 'end'])).toBe(true);
+    });
+
+    it('accepts cmp then one get/result on right, end on left, then result', () => {
+        expect(validateTranscript(comparator(ref), ['cmp', 'right/get', 'right/result', 'left/end', 'right/end', 'result', 'end'])).toBe(true);
+    });
+
+    it('accepts cmp then interleaved get/result on both sides then end then result', () => {
+        expect(validateTranscript(comparator(ref), ['cmp', 'left/get', 'right/get', 'left/result', 'right/result', 'left/end', 'right/end', 'result', 'end'])).toBe(true);
+    });
+
+    it('accepts cmp then multiple get/result on both sides then end then result', () => {
+        expect(validateTranscript(comparator(ref), [
+            'cmp',
+            'left/get', 'left/result', 'right/get', 'right/result',
+            'left/get', 'left/result', 'right/get', 'right/result',
+            'left/end', 'right/end',
+            'result',
+            'end',
+        ])).toBe(true);
+    });
+
+    it('rejects missing cmp', () => {
+        expect(validateTranscript(comparator(ref), ['result'])).toBe(false);
+    });
+
+    it('rejects missing final result', () => {
+        expect(validateTranscript(comparator(ref), ['cmp'])).toBe(false);
+    });
+
+    it('rejects incomplete ref stream (get without result)', () => {
+        expect(validateTranscript(comparator(ref), ['cmp', 'left/get', 'result'])).toBe(false);
+    });
+
+    it('rejects wrong channel prefix', () => {
+        expect(validateTranscript(comparator(ref), ['cmp', 'other/get', 'result'])).toBe(false);
+    });
+});
+
+function lexCompare(t0: MachineType, t1: MachineType) : MachineType {
+    return product({
+        cmp: comparator(pair(t0, t1)),
+        t0_cmp: comparator(t0),
+        t1_cmp: comparator(t1),
+    });
+}
+
+describe('lexCompare', () => {
+    it('accepts cmp then end on both refs then result', () => {
+        expect(validateTranscript(lexCompare(ref, ref), [
+            'cmp/cmp',
+            't0_cmp/end',
+            't1_cmp/end',
+            'cmp/end'])).toBe(true);
+    });
+});
 // class MachineHelper {
 //     private state: any;
 //     constructor(private machine: Machine<any, any, any>) {
@@ -2011,7 +2101,7 @@ type Machine<S, I, O> = {
 // }
 
 // function composeChannels(m1: Machine<any, any, any>, m2: Machine<any, any, any>, channels: string[], otherChannels: string[]): Machine<any, any, any> {
-//     const pair = product(m1, m2);
+//     const pair = product({ left: m1, right: m2 });
 //     return pair;
 // }
 
@@ -2128,7 +2218,7 @@ type Machine<S, I, O> = {
 //     });
 
 //     it('should do a parallel fetch with product', () => {
-//         const helper = new MachineHelper(product(getThingy('foo'), getThingy('bar')));
+//         const helper = new MachineHelper(product({ left: getThingy('foo'), right: getThingy('bar') }));
 //         expect(helper.hasOutput()).toEqual(['left/foo', 'right/bar']);
 //         expect(helper.getOutput('left/foo')).toEqual({ kind: 'get' });
 //         expect(helper.readyForInput()).toEqual(['left/foo']);
