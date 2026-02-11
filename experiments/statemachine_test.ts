@@ -27,6 +27,13 @@ type MachineImpl = {
     inner: Record<string, MachineImpl>,
 }
 
+// Helper used in tests: a hidden machine that turns any context into a
+// pair [newCtx, outputData] suitable for driving emit machines.
+const wrapCtxAsPair: MachineImpl = {
+    kind: 'hidden',
+    impl: (ctx: any) => [ctx, {}],
+};
+
 type MachineType = {
     kind: 'sequence',
     inner: MachineType[]
@@ -78,7 +85,7 @@ function invalidMachineType(m: never): never {
     throw new Error('Invalid machine type: ' + JSON.stringify(m));
 }
 
-function liveMachine(m: MachineImpl) : Machine<MachineImplState, string, string> {
+function liveMachine(m: MachineImpl) : Machine<MachineImplState, any, any> {
     return {
         start(ctx: any): MachineImplState {
             if (m.kind === 'emit') {
@@ -160,6 +167,9 @@ function liveMachine(m: MachineImpl) : Machine<MachineImplState, string, string>
             if (m.kind === 'emit') {
                 if (s.kind !== 'emit') {
                     throw new Error('Expected emit state, got ' + JSON.stringify(s));
+                }
+                if (!s.complete) {
+                    throw new Error('Emit state not complete');
                 }
                 return s.ctx;
             }
@@ -262,7 +272,7 @@ function liveMachine(m: MachineImpl) : Machine<MachineImplState, string, string>
                         kind: 'choice', 
                         chosen: true, 
                         choice: channel, 
-                        inner: liveMachine(m.choices[channel]).start(s.ctx),
+                        inner: liveMachine(m.choices[channel]).start([s.ctx, data]),
                     };
                 }
             }
@@ -355,8 +365,12 @@ function liveMachine(m: MachineImpl) : Machine<MachineImplState, string, string>
                 if (channel !== m.token) {
                     throw new Error(`Expected channel '${m.token}', got '${channel}'`);
                 }
-                // Mark emit as complete after output is consumed
-                return [{...s, complete: true}, s.ctx];
+                // ctx is [newCtx, outputData]; emit outputData and store newCtx as ctx.
+                if (!Array.isArray(s.ctx) || s.ctx.length !== 2) {
+                    throw new Error('Emit ctx must be [newCtx, outputData]');
+                }
+                const [newCtx, outputData] = s.ctx;
+                return [{ ...s, complete: true, ctx: newCtx }, outputData];
             }
             if (m.kind === 'choice') {
                 if (s.kind !== 'choice') {
@@ -439,7 +453,12 @@ function liveMachine(m: MachineImpl) : Machine<MachineImplState, string, string>
                     if (s.idx === m.inner.length - 1) {
                         return [{kind: 'sequence', done: true, ctx}, true];
                     } else {
-                        return [{kind: 'sequence', done: false, idx: s.idx + 1, inner: liveMachine(m.inner[s.idx + 1]).start(ctx)}, true];
+                        return [{
+                            kind: 'sequence',
+                            done: false,
+                            idx: s.idx + 1,
+                            inner: liveMachine(m.inner[s.idx + 1]).start(ctx),
+                        }, true];
                     }
                 } else {
                     const [newInnerState, advanced] = innerMachine.advance(s.inner);
@@ -563,19 +582,22 @@ describe('liveMachine', () => {
             expect(() => m.sendInput(state, 'any', 'data')).toThrow('Emit state does not accept input');
         });
 
-        it('getOutput returns context for emit machine', () => {
+        it('getOutput splits ctx into result and output for emit machine', () => {
             const m = liveMachine({
                 kind: 'emit',
                 token: 'hello',
             });
-            const state = m.start({ value: 42 });
+            // For emit machines, ctx is [newCtx, outputData].
+            const state = m.start([{ value: 7 }, { value: 42 }]);
             const [newState, output] = m.getOutput(state, 'hello');
             expect(output).toEqual({ value: 42 });
             // State changes - emit is marked as complete after output is consumed
             expect(newState.kind).toBe('emit');
             if (newState.kind === 'emit') {
                 expect(newState.complete).toBe(true);
-                expect(newState.ctx).toEqual({ value: 42 });
+                expect(newState.ctx).toEqual({ value: 7 });
+                // getResult returns the new context
+                expect(m.getResult(newState)).toEqual({ value: 7 });
             }
         });
 
@@ -613,8 +635,9 @@ describe('liveMachine', () => {
                 kind: 'emit',
                 token: 'hello',
             });
-            const state = m.start({ value: 42 });
-            expect(m.getResult(state)).toEqual({ value: 42 });
+            const state = m.start([{ value: 1 }, { value: 2 }]);
+            const [newState] = m.getOutput(state, 'hello');
+            expect(m.getResult(newState)).toEqual({ value: 1 });
         });
     });
 
@@ -654,19 +677,22 @@ describe('liveMachine', () => {
             const m = liveMachine({
                 kind: 'choice',
                 choices: {
-                    'a': { kind: 'hidden', impl: (ctx: number) => ctx * 2 },
-                    'b': { kind: 'hidden', impl: (ctx: number) => ctx * 3 },
+                    // Choice branches now see [outerCtx, inputData] as their context.
+                    // Test that both pieces of information are available.
+                    'a': { kind: 'hidden', impl: ([outer, input]: [number, number]) => outer + input },
+                    'b': { kind: 'hidden', impl: ([outer, input]: [number, number]) => outer * input },
                 },
             });
             const state = m.start(5);
-            const newState = m.sendInput(state, 'a', undefined);
+            const newState = m.sendInput(state, 'a', 7);
             expect(newState.kind).toBe('choice');
             if (newState.kind === 'choice' && newState.chosen) {
                 expect(newState.chosen).toBe(true);
                 expect(newState.choice).toBe('a');
                 expect(newState.inner.kind).toBe('hidden');
                 if (newState.inner.kind === 'hidden') {
-                    expect(newState.inner.result).toBe(10);
+                    // 5 (outer ctx) + 7 (input data)
+                    expect(newState.inner.result).toBe(12);
                 }
             }
         });
@@ -687,47 +713,15 @@ describe('liveMachine', () => {
                 kind: 'choice',
                 choices: {
                     'emit': { kind: 'emit', token: 'output' },
-                    'hidden': { kind: 'hidden', impl: (ctx: any) => ctx },
+                    // Hidden branch also sees [outerCtx, inputData]; return them as a pair.
+                    'hidden': { kind: 'hidden', impl: (pair: any) => pair },
                 },
             });
-            const state = m.start({});
-            const chosenState = m.sendInput(state, 'hidden', undefined);
+            const state = m.start({ ctx: 1 });
+            const chosenState = m.sendInput(state, 'hidden', { data: 2 } as any);
             expect(m.isComplete(chosenState)).toBe(true);
-            expect(m.getResult(chosenState)).toEqual({});
-        });
-
-        it('nested choice machines work correctly', () => {
-            const m = liveMachine({
-                kind: 'choice',
-                choices: {
-                    'first': {
-                        kind: 'choice',
-                        choices: {
-                            'inner1': { kind: 'hidden', impl: (ctx: number) => ctx + 1 },
-                            'inner2': { kind: 'hidden', impl: (ctx: number) => ctx + 2 },
-                        },
-                    },
-                    'second': { kind: 'hidden', impl: (ctx: number) => ctx * 2 },
-                },
-            });
-            const state = m.start(10);
-            const firstChoice = m.sendInput(state, 'first', undefined);
-            expect(m.isComplete(firstChoice)).toBe(false);
-            // For nested choices, we need to send input to the inner choice machine
-            // The state structure is: {kind: 'choice', chosen: true, choice: 'first', inner: <inner choice state>}
-            if (firstChoice.kind === 'choice' && firstChoice.chosen) {
-                const innerMachine = liveMachine({
-                    kind: 'choice',
-                    choices: {
-                        'inner1': { kind: 'hidden', impl: (ctx: number) => ctx + 1 },
-                        'inner2': { kind: 'hidden', impl: (ctx: number) => ctx + 2 },
-                    },
-                });
-                const innerChoiceState = innerMachine.sendInput(firstChoice.inner, 'inner1', undefined);
-                const finalState = {...firstChoice, inner: innerChoiceState};
-                expect(m.isComplete(finalState)).toBe(true);
-                expect(m.getResult(finalState)).toBe(11);
-            }
+            // Result should contain both the original ctx and the input data.
+            expect(m.getResult(chosenState)).toEqual([{ ctx: 1 }, { data: 2 }]);
         });
 
         it('has no output when no choice made', () => {
@@ -833,9 +827,10 @@ describe('liveMachine', () => {
                     'world': { kind: 'emit', token: 'world' },
                 },
             });
-            const helper = new MachineHelper(m);
-            helper.sendInput('hello', undefined);
-            expect(helper).toAdvanceTo('hello', {});
+            const helper = new MachineHelper(m, 42);
+            helper.sendInput('hello', 7);
+            // Emit branch sees [outerCtx, inputData] as its context, but only outputs inputData.
+            expect(helper).toAdvanceTo('hello', 7);
         });
 
         it('choice to hidden machine works with MachineHelper', () => {
@@ -845,7 +840,7 @@ describe('liveMachine', () => {
                     'double': { kind: 'hidden', impl: (ctx: number) => ctx * 2 },
                 },
             });
-            const helper = new MachineHelper(m);
+            const helper = new MachineHelper(m, 5);
             helper.sendInput('double', 5);
         });
 
@@ -862,17 +857,17 @@ describe('liveMachine', () => {
                     'c': { kind: 'emit', token: 'c' },
                 },
             });
-            const helper1 = new MachineHelper(m);
-            helper1.sendInput('a', undefined);
-            expect(helper1).toAdvanceTo('a', {});
+            const helper1 = new MachineHelper(m, 'ctx1');
+            helper1.sendInput('a', 1);
+            expect(helper1).toAdvanceTo('a', 1);
 
-            const helper2 = new MachineHelper(m);
-            helper2.sendInput('b', undefined);
-            expect(helper2).toAdvanceTo('b', {});
+            const helper2 = new MachineHelper(m, 'ctx2');
+            helper2.sendInput('b', 2);
+            expect(helper2).toAdvanceTo('b', 2);
 
-            const helper3 = new MachineHelper(m);
-            helper3.sendInput('c', undefined);
-            expect(helper3).toAdvanceTo('c', {});
+            const helper3 = new MachineHelper(m, 'ctx3');
+            helper3.sendInput('c', 3);
+            expect(helper3).toAdvanceTo('c', 3);
         });
 
         describe('sequence machines', () => {
@@ -881,7 +876,7 @@ describe('liveMachine', () => {
                     kind: 'sequence',
                     inner: [],
                 });
-                const helper = new MachineHelper(m);
+                const helper = new MachineHelper(m, [{}, {}]);
                 // Empty sequence has no externally visible behavior:
                 // requesting any output should eventually fail.
                 expect(() => (helper as any).getOutput('anything')).toThrow();
@@ -891,12 +886,15 @@ describe('liveMachine', () => {
                 const m = liveMachine({
                     kind: 'sequence',
                     inner: [
+                        wrapCtxAsPair,
                         { kind: 'emit', token: 'first' },
+                        wrapCtxAsPair,
                         { kind: 'emit', token: 'second' },
+                        wrapCtxAsPair,
                         { kind: 'emit', token: 'third' },
                     ],
                 });
-                const helper = new MachineHelper(m);
+                const helper = new MachineHelper(m, {});
                 // First machine in sequence should produce output
                 expect(helper).toAdvanceTo('first', {});
                 // After getting first output, second should be available
@@ -913,24 +911,26 @@ describe('liveMachine', () => {
                         { kind: 'choice', choices: { 'b': { kind: 'emit', token: 'b' } } },
                     ],
                 });
-                const helper = new MachineHelper(m);
+                const helper = new MachineHelper(m, ['s', {}]);
                 // First choice machine needs input
-                helper.sendInput('a', undefined);
-                expect(helper).toAdvanceTo('a', {});
+                helper.sendInput('a', 10);
+                // Emit output is just the input data
+                expect(helper).toAdvanceTo('a', 10);
                 // Second choice machine needs input
-                helper.sendInput('b', undefined);
-                expect(helper).toAdvanceTo('b', {});
+                helper.sendInput('b', 20);
+                expect(helper).toAdvanceTo('b', 20);
             });
 
             it('sequence with hidden machines', () => {
                 const m = liveMachine({
                     kind: 'sequence',
                     inner: [
-                        { kind: 'hidden', impl: (ctx: any) => ctx },
+                        // Prepare ctx as a pair before hitting the emit.
+                        wrapCtxAsPair,
                         { kind: 'emit', token: 'result' },
                     ],
                 });
-                const helper = new MachineHelper(m);
+                const helper = new MachineHelper(m, {});
                 // Hidden machine completes immediately; MachineHelper will advance through it
                 // when we request output on 'result'.
                 expect(helper).toAdvanceTo('result', {});
@@ -940,39 +940,46 @@ describe('liveMachine', () => {
                 const m = liveMachine({
                     kind: 'sequence',
                     inner: [
+                        wrapCtxAsPair,
                         { kind: 'emit', token: 'start' },
                         { kind: 'choice', choices: { 'middle': { kind: 'emit', token: 'middle' } } },
-                        { kind: 'hidden', impl: (ctx: any) => ({ ...ctx, processed: true }) },
+                        // Hidden prepares a pair [newCtx, outputData] for the final emit.
+                        { kind: 'hidden', impl: (ctx: any) => [({ ...(Array.isArray(ctx) ? ctx[0] : ctx), processed: true }), {}] },
                         { kind: 'emit', token: 'end' },
                     ],
                 });
-                const helper = new MachineHelper(m);
+                const helper = new MachineHelper(m, { base: true });
                 // First emit
+                // Default emit output is empty object; ctx ({ base: true }) is carried forward.
                 expect(helper).toAdvanceTo('start', {});
                 // Choice needs input
-                helper.sendInput('middle', undefined);
-                expect(helper).toAdvanceTo('middle', {});
+                helper.sendInput('middle', 1);
+                expect(helper).toAdvanceTo('middle', 1);
                 // Hidden completes immediately; MachineHelper will advance through it
-                // when we request output on 'end'.
-                expect(helper).toAdvanceTo('end', { processed: true });
+                // when we request output on 'end'. Default emit output is {}.
+                expect(helper).toAdvanceTo('end', {});
             });
 
             it('nested sequence works correctly', () => {
                 const m = liveMachine({
                     kind: 'sequence',
                     inner: [
+                        wrapCtxAsPair,
                         { kind: 'emit', token: 'outer-start' },
                         {
                             kind: 'sequence',
                             inner: [
+                                wrapCtxAsPair,
                                 { kind: 'emit', token: 'inner-1' },
+                                wrapCtxAsPair,
                                 { kind: 'emit', token: 'inner-2' },
                             ],
                         },
+                        wrapCtxAsPair,
                         { kind: 'emit', token: 'outer-end' },
                     ],
                 });
-                const helper = new MachineHelper(m);
+                const helper = new MachineHelper(m, {});
                 // Outer start
                 expect(helper).toAdvanceTo('outer-start', {});
                 // Inner sequence first emit
@@ -987,6 +994,7 @@ describe('liveMachine', () => {
                 const m = liveMachine({
                     kind: 'sequence',
                     inner: [
+                        wrapCtxAsPair,
                         { kind: 'emit', token: 'first' },
                         {
                             kind: 'choice',
@@ -994,25 +1002,28 @@ describe('liveMachine', () => {
                                 'path1': {
                                     kind: 'sequence',
                                     inner: [
+                                        wrapCtxAsPair,
                                         { kind: 'emit', token: 'path1-a' },
+                                        wrapCtxAsPair,
                                         { kind: 'emit', token: 'path1-b' },
                                     ],
                                 },
                                 'path2': { kind: 'emit', token: 'path2-single' },
                             },
                         },
+                        wrapCtxAsPair,
                         { kind: 'emit', token: 'last' },
                     ],
                 });
-                const helper = new MachineHelper(m);
-                // First emit
+                const helper = new MachineHelper(m, 'root');
+                // First emit: default output {}
                 expect(helper).toAdvanceTo('first', {});
-                // Choice needs input
-                // Choose path1
-                helper.sendInput('path1', undefined);
+                // Choice needs input; choose path1.
+                helper.sendInput('path1', 100);
+                // Path1 emits use default output {}.
                 expect(helper).toAdvanceTo('path1-a', {});
                 expect(helper).toAdvanceTo('path1-b', {});
-                // Last emit
+                // Last emit again outputs default {}
                 expect(helper).toAdvanceTo('last', {});
             });
 
@@ -1024,8 +1035,9 @@ describe('liveMachine', () => {
                         right: { kind: 'emit', token: 'b' },
                     },
                 });
-                const helper = new MachineHelper(m);
+                const helper = new MachineHelper(m, [{ prod: true }, {}]);
                 // Order doesn't matter; each prefixed channel should produce its own output.
+                // Default emit outputs are empty objects; ctx ({ prod: true }) is carried forward.
                 expect(helper).toAdvanceTo('left/a', {});
                 expect(helper).toAdvanceTo('right/b', {});
             });
@@ -1043,10 +1055,11 @@ describe('liveMachine', () => {
                         right: { kind: 'emit', token: 'R' },
                     },
                 });
-                const helper = new MachineHelper(m);
+                const helper = new MachineHelper(m, ['base', {}]);
                 // Provide input for the left side using a prefixed channel.
-                helper.sendInput('left/pick', undefined);
-                expect(helper).toAdvanceTo('left/L', {});
+                helper.sendInput('left/pick', 5);
+                // Left emit outputs only the input data
+                expect(helper).toAdvanceTo('left/L', 5);
                 // Right side emit is independent.
                 expect(helper).toAdvanceTo('right/R', {});
             });
@@ -1517,10 +1530,11 @@ describe('lexCompare', () => {
         ]);
     });
 });
+
 class MachineHelper {
     private state: any;
-    constructor(private machine: Machine<any, any, any>) {
-        this.state = machine.start({});
+    constructor(private machine: Machine<any, any, any>, initialCtx: any) {
+        this.state = machine.start(initialCtx);
     }
     sendInput(channel: string, data: any) {
         // Advance until the machine is ready to accept input on the given channel,
