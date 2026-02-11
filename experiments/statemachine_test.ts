@@ -22,6 +22,9 @@ type MachineImpl = {
 } | {
     kind: 'sequence',
     inner: MachineImpl[]
+} | {
+    kind: 'product',
+    inner: Record<string, MachineImpl>,
 }
 
 type MachineType = {
@@ -66,6 +69,9 @@ type MachineImplState = {
     kind: 'sequence',
     done: true,
     ctx: any,
+} | {
+    kind: 'product',
+    inner: Record<string, MachineImplState>,
 };
 
 function invalidMachineType(m: never): never {
@@ -96,6 +102,13 @@ function liveMachine(m: MachineImpl) : Machine<MachineImplState, string, string>
                     };
                 }
             }
+            if (m.kind === 'product') {
+                const innerStates: Record<string, MachineImplState> = {};
+                for (const [channel, inner] of Object.entries(m.inner)) {
+                    innerStates[channel] = liveMachine(inner).start(ctx);
+                }
+                return { kind: 'product', inner: innerStates };
+            }
             invalidMachineType(m);
         },
         isComplete(s: MachineImplState): boolean {
@@ -123,6 +136,17 @@ function liveMachine(m: MachineImpl) : Machine<MachineImplState, string, string>
                     throw new Error('Expected sequence state, got ' + JSON.stringify(s));
                 }
                 return s.done;
+            }
+            if (m.kind === 'product') {
+                if (s.kind !== 'product') {
+                    throw new Error('Expected product state, got ' + JSON.stringify(s));
+                }
+                for (const [channel, inner] of Object.entries(m.inner)) {
+                    if (!liveMachine(inner).isComplete(s.inner[channel])) {
+                        return false;
+                    }
+                }
+                return true;
             }
             invalidMachineType(m);
         },
@@ -160,6 +184,19 @@ function liveMachine(m: MachineImpl) : Machine<MachineImplState, string, string>
                 }
                 return s.ctx;
             }
+            if (m.kind === 'product') {
+                if (s.kind !== 'product') {
+                    throw new Error('Expected product state, got ' + JSON.stringify(s));
+                }
+                if (!this.isComplete(s)) {
+                    throw new Error('Product state not complete');
+                }
+                const results: Record<string, any> = {};
+                for (const [channel, inner] of Object.entries(m.inner)) {
+                    results[channel] = liveMachine(inner).getResult(s.inner[channel]);
+                }
+                return results;
+            }
             invalidMachineType(m);
         },
         readyForInput(s: MachineImplState): string[] {
@@ -187,6 +224,20 @@ function liveMachine(m: MachineImpl) : Machine<MachineImplState, string, string>
                     return [];
                 }
                 return liveMachine(m.inner[s.idx]).readyForInput(s.inner);
+            }
+            if (m.kind === 'product') {
+                if (s.kind !== 'product') {
+                    throw new Error('Expected product state, got ' + JSON.stringify(s));
+                }
+                const channels: string[] = [];
+                for (const [prefix, inner] of Object.entries(m.inner)) {
+                    const innerState = s.inner[prefix];
+                    const ready = liveMachine(inner).readyForInput(innerState);
+                    for (const ch of ready) {
+                        channels.push(`${prefix}/${ch}`);
+                    }
+                }
+                return channels;
             }
             invalidMachineType(m);
         },
@@ -225,6 +276,30 @@ function liveMachine(m: MachineImpl) : Machine<MachineImplState, string, string>
                 const newInnerState = liveMachine(m.inner[s.idx]).sendInput(s.inner, channel, data);
                 return {...s, inner: newInnerState};
             }
+            if (m.kind === 'product') {
+                if (s.kind !== 'product') {
+                    throw new Error('Expected product state, got ' + JSON.stringify(s));
+                }
+                const slash = channel.indexOf('/');
+                if (slash < 0) {
+                    throw new Error(`Expected product channel 'prefix/sub', got '${channel}'`);
+                }
+                const prefix = channel.slice(0, slash);
+                const innerChannel = channel.slice(slash + 1);
+                const innerMachine = m.inner[prefix];
+                if (innerMachine === undefined) {
+                    throw new Error(`Product state does not have a branch for channel prefix '${prefix}'`);
+                }
+                const currentInnerState = s.inner[prefix];
+                const newInnerState = liveMachine(innerMachine).sendInput(currentInnerState, innerChannel, data);
+                return {
+                    kind: 'product',
+                    inner: {
+                        ...s.inner,
+                        [prefix]: newInnerState,
+                    },
+                };
+            }
             invalidMachineType(m);
         },
         hasOutput(s: MachineImplState): string[] {
@@ -252,6 +327,20 @@ function liveMachine(m: MachineImpl) : Machine<MachineImplState, string, string>
                     return [];
                 }
                 return liveMachine(m.inner[s.idx]).hasOutput(s.inner);
+            }
+            if (m.kind === 'product') {
+                if (s.kind !== 'product') {
+                    throw new Error('Expected product state, got ' + JSON.stringify(s));
+                }
+                const outputs: string[] = [];
+                for (const [prefix, inner] of Object.entries(m.inner)) {
+                    const innerState = s.inner[prefix];
+                    const innerOutputs = liveMachine(inner).hasOutput(innerState);
+                    for (const ch of innerOutputs) {
+                        outputs.push(`${prefix}/${ch}`);
+                    }
+                }
+                return outputs;
             }
             invalidMachineType(m);
         },
@@ -290,6 +379,33 @@ function liveMachine(m: MachineImpl) : Machine<MachineImplState, string, string>
                 const [newInnerState, output] = liveMachine(m.inner[s.idx]).getOutput(s.inner, channel);
                 return [{...s, inner: newInnerState}, output];
             }
+            if (m.kind === 'product') {
+                if (s.kind !== 'product') {
+                    throw new Error('Expected product state, got ' + JSON.stringify(s));
+                }
+                const slash = channel.indexOf('/');
+                if (slash < 0) {
+                    throw new Error(`Expected product channel 'prefix/sub', got '${channel}'`);
+                }
+                const prefix = channel.slice(0, slash);
+                const innerChannel = channel.slice(slash + 1);
+                const innerMachine = m.inner[prefix];
+                if (innerMachine === undefined) {
+                    throw new Error(`Product state does not have a branch for channel prefix '${prefix}'`);
+                }
+                const currentInnerState = s.inner[prefix];
+                const [newInnerState, output] = liveMachine(innerMachine).getOutput(currentInnerState, innerChannel);
+                return [
+                    {
+                        kind: 'product',
+                        inner: {
+                            ...s.inner,
+                            [prefix]: newInnerState,
+                        },
+                    },
+                    output,
+                ];
+            }
             invalidMachineType(m);
         },
         advance(s: MachineImplState): [MachineImplState, boolean] {
@@ -317,17 +433,41 @@ function liveMachine(m: MachineImpl) : Machine<MachineImplState, string, string>
                 if (s.done === true) {
                     return [s, false];
                 }
-                if (liveMachine(m.inner[s.idx]).isComplete(s.inner)) {
-                    const ctx = liveMachine(m.inner[s.idx]).getResult(s.inner);
+                const innerMachine = liveMachine(m.inner[s.idx]);
+                if (innerMachine.isComplete(s.inner)) {
+                    const ctx = innerMachine.getResult(s.inner);
                     if (s.idx === m.inner.length - 1) {
                         return [{kind: 'sequence', done: true, ctx}, true];
                     } else {
                         return [{kind: 'sequence', done: false, idx: s.idx + 1, inner: liveMachine(m.inner[s.idx + 1]).start(ctx)}, true];
                     }
                 } else {
-                    const [newInnerState, advanced] = liveMachine(m.inner[s.idx]).advance(s.inner);
+                    const [newInnerState, advanced] = innerMachine.advance(s.inner);
                     return [{kind: 'sequence', done: false, idx: s.idx, inner: newInnerState}, advanced];
                 }
+            }
+            if (m.kind === 'product') {
+                if (s.kind !== 'product') {
+                    throw new Error('Expected product state, got ' + JSON.stringify(s));
+                }
+                for (const [prefix, inner] of Object.entries(m.inner)) {
+                    const innerState = s.inner[prefix];
+                    const innerMachine = liveMachine(inner);
+                    const [newInnerState, advanced] = innerMachine.advance(innerState);
+                    if (advanced) {
+                        return [
+                            {
+                                kind: 'product',
+                                inner: {
+                                    ...s.inner,
+                                    [prefix]: newInnerState,
+                                },
+                            },
+                            true,
+                        ];
+                    }
+                }
+                return [s, false];
             }
             invalidMachineType(m);
         },
@@ -874,6 +1014,41 @@ describe('liveMachine', () => {
                 expect(helper).toAdvanceTo('path1-b', {});
                 // Last emit
                 expect(helper).toAdvanceTo('last', {});
+            });
+
+            it('product of emit machines exposes prefixed outputs', () => {
+                const m = liveMachine({
+                    kind: 'product',
+                    inner: {
+                        left: { kind: 'emit', token: 'a' },
+                        right: { kind: 'emit', token: 'b' },
+                    },
+                });
+                const helper = new MachineHelper(m);
+                // Order doesn't matter; each prefixed channel should produce its own output.
+                expect(helper).toAdvanceTo('left/a', {});
+                expect(helper).toAdvanceTo('right/b', {});
+            });
+
+            it('product with choice inner machines uses prefixed input channels', () => {
+                const m = liveMachine({
+                    kind: 'product',
+                    inner: {
+                        left: {
+                            kind: 'choice',
+                            choices: {
+                                pick: { kind: 'emit', token: 'L' },
+                            },
+                        },
+                        right: { kind: 'emit', token: 'R' },
+                    },
+                });
+                const helper = new MachineHelper(m);
+                // Provide input for the left side using a prefixed channel.
+                helper.sendInput('left/pick', undefined);
+                expect(helper).toAdvanceTo('left/L', {});
+                // Right side emit is independent.
+                expect(helper).toAdvanceTo('right/R', {});
             });
         });
     });
