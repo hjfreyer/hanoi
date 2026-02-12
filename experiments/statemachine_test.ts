@@ -27,6 +27,106 @@ type MachineImpl = {
     inner: Record<string, MachineImpl>,
 }
 
+function emit(token: string): MachineImpl {
+    return {
+        kind: 'emit',
+        token,
+    };
+}
+
+function emitValue(token: string, value: any): MachineImpl {
+    return sequence(
+        hidden(ctx => [ctx, value]),
+        emit(token),
+    );
+}
+
+function hidden(impl: (ctx: any) => any): MachineImpl {
+    return {
+        kind: 'hidden',
+        impl,
+    };
+}
+
+function sequence(...inner: MachineImpl[]): MachineImpl {
+    return {
+        kind: 'sequence',
+        inner,
+    };
+}
+
+function choice(choices: Record<string, MachineImpl>): MachineImpl {
+    return {
+        kind: 'choice',
+        choices,
+    };
+}
+
+function product(inner: Record<string, MachineImpl>): MachineImpl {
+    return {
+        kind: 'product',
+        inner,
+    };
+}
+
+function receive(token: string): MachineImpl {
+    return choice({
+        [token]: sequence(),
+    });
+}
+
+function receiveValue(token: string, value: any): MachineImpl {
+    return choice({
+        [token]: hidden(([ctx, actual]) => {
+            if (actual !== value) {
+                throw new Error(`Expected value ${value}, got ${actual}`);
+            }
+            return ctx;
+        }),
+    });
+}
+
+const valueComparator: MachineImpl = 
+sequence(
+    receiveValue('cmp', null),
+    product({
+        left: sequence(
+            emitValue('get', null),
+            receive('result'),
+            hidden(([ctx, value]) => value),
+        ),
+        right: sequence(
+            emitValue('get', null),
+            receive('result'),
+            hidden(([ctx, value]) => value),
+        ),
+    }),
+    hidden(ctx => {
+        const {left, right} = ctx;
+        if (left === right) {
+            return [ctx, '='];
+        } else if (left < right) {
+            return [ctx, '<'];
+        } else {
+            return [ctx, '>'];
+        }
+    }),
+    emit('result'),
+);
+
+describe('valueComparator', () => {
+    it('should compare values', () => {
+        const m = liveMachine(valueComparator);
+        const helper = new MachineHelper(m, null);
+        helper.sendInput('cmp', null);
+        expect(helper).toAdvanceTo('left/get', null);
+        helper.sendInput('left/result', 'foo');
+        expect(helper).toAdvanceTo('right/get', null);
+        helper.sendInput('right/result', 'bar');
+        expect(helper).toAdvanceTo('result', '>');
+    });
+});
+
 // Helper used in tests: a hidden machine that turns any context into a
 // pair [newCtx, outputData] suitable for driving emit machines.
 const wrapCtxAsPair: MachineImpl = {
