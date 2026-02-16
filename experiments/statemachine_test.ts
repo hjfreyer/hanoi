@@ -56,6 +56,9 @@ type MachineImpl = {
     kind: 'match',
     cases: Record<string, MachineImpl>,
     defaultCase: MachineImpl,
+} | {
+    kind: 'loop',
+    inner: MachineImpl,
 };
 
 function emit(token: string): MachineImpl {
@@ -120,6 +123,13 @@ function match(cases: Record<string, MachineImpl>, defaultCase: MachineImpl): Ma
         kind: 'match',
         cases,
         defaultCase,
+    };
+}
+
+function loop(inner: MachineImpl): MachineImpl {
+    return {
+        kind: 'loop',
+        inner,
     };
 }
 
@@ -207,13 +217,17 @@ const lexComparator: MachineImpl = sequence(
         product({
             t0_cmp: sequence(
                 product({
-                    left: sequence(
-                        receiveValue('get', null),
-                        emitValue('impl/get', null),
-                        receive('impl/result'),
-                        emit('result'),
-                        receiveValue('end', null),
-                    ),
+                    left: loop(choice({
+                        get: sequence(
+                            emitValue('impl/get', null),
+                            receive('impl/result'),
+                            emit('result'),
+                            hidden(ctx => ['continue', ctx]),
+                        ),
+                        end: sequence(
+                            hidden(ctx => ['break', ctx]),
+                        ),
+                    })),
                     right: sequence(
                         receiveValue('get', null),
                         emitValue('impl/get', null),
@@ -246,9 +260,18 @@ describe('lexComparator', () => {
         expect(helper).toAdvanceTo('cmp/left/t0/get', null);
         helper.sendInput('cmp/left/t0/result', 'foo');
         expect(helper).toAdvanceTo('t0_cmp/left/result', 'foo');
+        helper.sendInput('t0_cmp/left/get', null);
+        expect(helper).toAdvanceTo('cmp/left/t0/get', null);
+        helper.sendInput('cmp/left/t0/result', 'foo');
+        expect(helper).toAdvanceTo('t0_cmp/left/result', 'foo');
+
         helper.sendInput('t0_cmp/left/end', null);
 
 
+        helper.sendInput('t0_cmp/right/get', null);
+        expect(helper).toAdvanceTo('cmp/right/t0/get', null);
+        helper.sendInput('cmp/right/t0/result', 'bar');
+        expect(helper).toAdvanceTo('t0_cmp/right/result', 'bar');
         helper.sendInput('t0_cmp/right/get', null);
         expect(helper).toAdvanceTo('cmp/right/t0/get', null);
         helper.sendInput('cmp/right/t0/result', 'bar');
@@ -309,6 +332,14 @@ type MachineImplState = {
     /** Key that was matched (string from context value), or null if defaultCase was used */
     caseKey: string | null,
     inner: MachineImplState,
+} | {
+    kind: 'loop',
+    done: false,
+    inner: MachineImplState,
+} | {
+    kind: 'loop',
+    done: true,
+    ctx: any,
 };
 
 function invalidMachineType(m: never): never {
@@ -363,6 +394,13 @@ function liveMachine(m: MachineImpl): Machine<MachineImplState, any, any> {
                     inner: liveMachine(innerMachine).start(subCtx),
                 };
             }
+            if (m.kind === 'loop') {
+                return {
+                    kind: 'loop',
+                    done: false,
+                    inner: liveMachine(m.inner).start(ctx),
+                };
+            }
             invalidMachineType(m);
         },
         isComplete(s: MachineImplState): boolean {
@@ -414,6 +452,12 @@ function liveMachine(m: MachineImpl): Machine<MachineImplState, any, any> {
                 }
                 const innerMachine = s.caseKey !== null && s.caseKey in m.cases ? m.cases[s.caseKey] : m.defaultCase;
                 return liveMachine(innerMachine).isComplete(s.inner);
+            }
+            if (m.kind === 'loop') {
+                if (s.kind !== 'loop') {
+                    throw new Error('Expected loop state, got ' + JSON.stringify(s));
+                }
+                return s.done;
             }
             invalidMachineType(m);
         },
@@ -480,6 +524,15 @@ function liveMachine(m: MachineImpl): Machine<MachineImplState, any, any> {
                 const innerMachine = s.caseKey !== null && s.caseKey in m.cases ? m.cases[s.caseKey] : m.defaultCase;
                 return liveMachine(innerMachine).getResult(s.inner);
             }
+            if (m.kind === 'loop') {
+                if (s.kind !== 'loop') {
+                    throw new Error('Expected loop state, got ' + JSON.stringify(s));
+                }
+                if (s.done === true) {
+                    return s.ctx;
+                }
+                throw new Error('Loop state not complete');
+            }
             invalidMachineType(m);
         },
         readyForInput(s: MachineImplState): string[] {
@@ -536,6 +589,15 @@ function liveMachine(m: MachineImpl): Machine<MachineImplState, any, any> {
                 const innerMachine = s.caseKey !== null && s.caseKey in m.cases ? m.cases[s.caseKey] : m.defaultCase;
                 return liveMachine(innerMachine).readyForInput(s.inner);
             }
+            if (m.kind === 'loop') {
+                if (s.kind !== 'loop') {
+                    throw new Error('Expected loop state, got ' + JSON.stringify(s));
+                }
+                if (s.done === true) {
+                    return [];
+                }
+                return liveMachine(m.inner).readyForInput(s.inner);
+            }
             invalidMachineType(m);
         },
         sendInput(s, channel, data): MachineImplState {
@@ -550,7 +612,8 @@ function liveMachine(m: MachineImpl): Machine<MachineImplState, any, any> {
                     throw new Error('Expected choice state, got ' + JSON.stringify(s));
                 }
                 if (s.chosen === true) {
-                    return liveMachine(m.choices[s.choice]).sendInput(s.inner, channel, data);
+                    const newInnerState = liveMachine(m.choices[s.choice]).sendInput(s.inner, channel, data);
+                    return { ...s, inner: newInnerState };
                 } else {
                     if (m.choices[channel] === undefined) {
                         throw new Error(`Choice state does not have a branch for channel '${channel}'`);
@@ -613,6 +676,16 @@ function liveMachine(m: MachineImpl): Machine<MachineImplState, any, any> {
                 const newInnerState = liveMachine(innerMachine).sendInput(s.inner, channel, data);
                 return { kind: 'match', caseKey: s.caseKey, inner: newInnerState };
             }
+            if (m.kind === 'loop') {
+                if (s.kind !== 'loop') {
+                    throw new Error('Expected loop state, got ' + JSON.stringify(s));
+                }
+                if (s.done === true) {
+                    throw new Error('Loop state does not accept input when done');
+                }
+                const newInnerState = liveMachine(m.inner).sendInput(s.inner, channel, data);
+                return { kind: 'loop', done: false, inner: newInnerState };
+            }
             invalidMachineType(m);
         },
         hasOutput(s: MachineImplState): string[] {
@@ -668,6 +741,15 @@ function liveMachine(m: MachineImpl): Machine<MachineImplState, any, any> {
                 }
                 const innerMachine = s.caseKey !== null && s.caseKey in m.cases ? m.cases[s.caseKey] : m.defaultCase;
                 return liveMachine(innerMachine).hasOutput(s.inner);
+            }
+            if (m.kind === 'loop') {
+                if (s.kind !== 'loop') {
+                    throw new Error('Expected loop state, got ' + JSON.stringify(s));
+                }
+                if (s.done === true) {
+                    return [];
+                }
+                return liveMachine(m.inner).hasOutput(s.inner);
             }
             invalidMachineType(m);
         },
@@ -753,6 +835,16 @@ function liveMachine(m: MachineImpl): Machine<MachineImplState, any, any> {
                 const [newInnerState, output] = liveMachine(innerMachine).getOutput(s.inner, channel);
                 return [{ kind: 'match', caseKey: s.caseKey, inner: newInnerState }, output];
             }
+            if (m.kind === 'loop') {
+                if (s.kind !== 'loop') {
+                    throw new Error('Expected loop state, got ' + JSON.stringify(s));
+                }
+                if (s.done === true) {
+                    return [s, false];
+                }
+                const [newInnerState, output] = liveMachine(m.inner).getOutput(s.inner, channel);
+                return [{ kind: 'loop', done: false, inner: newInnerState }, output];
+            }
             invalidMachineType(m);
         },
         advance(s: MachineImplState): [MachineImplState, boolean] {
@@ -835,6 +927,39 @@ function liveMachine(m: MachineImpl): Machine<MachineImplState, any, any> {
                 const innerMachine = s.caseKey !== null && s.caseKey in m.cases ? m.cases[s.caseKey] : m.defaultCase;
                 const [newInnerState, advanced] = liveMachine(innerMachine).advance(s.inner);
                 return [{ kind: 'match', caseKey: s.caseKey, inner: newInnerState }, advanced];
+            }
+            if (m.kind === 'loop') {
+                if (s.kind !== 'loop') {
+                    throw new Error('Expected loop state, got ' + JSON.stringify(s));
+                }
+                if (s.done === true) {
+                    return [s, false];
+                }
+                const inner = s.inner;
+                const innerMachine = liveMachine(m.inner);
+                const [newInnerState, advanced] = innerMachine.advance(inner);
+                if (advanced) {
+                    return [{ kind: 'loop', done: false, inner: newInnerState }, true];
+                }
+                if (innerMachine.isComplete(inner)) {
+                    const result = innerMachine.getResult(inner);
+                    if (!Array.isArray(result) || result.length !== 2) {
+                        throw new Error(`Loop inner must complete with ['break', ctx] or ['continue', ctx], got ${JSON.stringify(result)}`);
+                    }
+                    const [tag, ctx] = result;
+                    if (tag === 'break') {
+                        return [{ kind: 'loop', done: true, ctx }, true];
+                    }
+                    if (tag === 'continue') {
+                        return [{
+                            kind: 'loop',
+                            done: false,
+                            inner: innerMachine.start(ctx),
+                        }, true];
+                    }
+                    throw new Error(`Loop inner must complete with ['break', ctx] or ['continue', ctx], got tag '${tag}'`);
+                }
+                return [s, false];
             }
             invalidMachineType(m);
         },
@@ -1496,6 +1621,64 @@ describe('liveMachine', () => {
             expect(m.readyForInput(state)).toEqual(['go']);
             const afterInput = m.sendInput(state, 'go', undefined);
             expect(m.hasOutput(afterInput)).toEqual(['done']);
+        });
+    });
+
+    describe('loop machine', () => {
+        it('completes with ctx when inner returns [\'break\', ctx]', () => {
+            const m = liveMachine(loop(
+                hidden((ctx: number) => ['break', ctx + 10]),
+            ));
+            let state = m.start(5);
+            // Loop transitions to done when we advance and see inner completed with ['break', ctx]
+            const [doneState, advanced] = m.advance(state);
+            expect(advanced).toBe(true);
+            state = doneState;
+            expect(m.isComplete(state)).toBe(true);
+            expect(m.getResult(state)).toBe(15);
+        });
+
+        it('restarts inner with ctx when inner returns [\'continue\', ctx]', () => {
+            let runs = 0;
+            const m = liveMachine(loop(
+                hidden((ctx: number) => {
+                    runs++;
+                    if (ctx < 3) {
+                        return ['continue', ctx + 1];
+                    }
+                    return ['break', ctx];
+                }),
+            ));
+            let state = m.start(0);
+            while (!m.isComplete(state)) {
+                const [newState, advanced] = m.advance(state);
+                expect(advanced).toBe(true);
+                state = newState;
+            }
+            expect(runs).toBe(4);
+            expect(m.getResult(state)).toBe(3);
+        });
+
+        it('delegates readyForInput and sendInput to inner until break', () => {
+            const m = liveMachine(loop(
+                choice({
+                    inc: hidden(([ctx, _]: [number, any]) =>
+                        (ctx as number) < 2 ? ['continue', (ctx as number) + 1] : ['break', (ctx as number) + 1]),
+                }),
+            ));
+            let state = m.start(0);
+            expect(m.readyForInput(state)).toEqual(['inc']);
+            state = m.sendInput(state, 'inc', null);
+            for (let i = 0; i < 3; i++) {
+                const [next, advanced] = m.advance(state);
+                expect(advanced).toBe(true);
+                state = next;
+                if (m.isComplete(state)) break;
+                expect(m.readyForInput(state)).toEqual(['inc']);
+                state = m.sendInput(state, 'inc', null);
+            }
+            expect(m.isComplete(state)).toBe(true);
+            expect(m.getResult(state)).toBe(3);
         });
     });
 });
