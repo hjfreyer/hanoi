@@ -19,6 +19,9 @@ type MachineType = {
 } | {
     kind: 'product',
     inner: Record<string, MachineType>,
+} | {
+    kind: 'reverse',
+    inner: MachineType,
 };
 
 type MachineChoice = {
@@ -134,14 +137,35 @@ function validatePrefix(m: MachineType, transcript: TranscriptEntry[]): PrefixRe
         }
         return { kind: 'error', reason: lastError ?? `product: no valid split (channels: [${channelNames.join(', ')}])` };
     }
+    if (m.kind === 'reverse') {
+        const flipped = transcript.map((e) => ({ ...e, direction: (e.direction === 'in' ? 'out' : 'in') as Direction }));
+        const out = validatePrefix(m.inner, flipped);
+        if (out.kind === 'error') {
+            return { kind: 'error', reason: `in reverse: ${out.reason}` };
+        }
+        const remainder = out.remainder.map((e) => ({ ...e, direction: (e.direction === 'in' ? 'out' : 'in') as Direction }));
+        return { kind: 'ok', remainder };
+    }
     throw new Error(`Unknown machine kind`);
 }
 
 export type ValidateResult = { matched: true } | { matched: false; reason: string };
 
 /// Returns whether the transcript matches the machine, and if not, an explanation.
+/// Every transcript must start with ">START" and end with "<END".
 function validateTranscript(m: MachineType, transcript: TranscriptEntry[]): ValidateResult {
-    const prefixResult = validatePrefix(m, transcript);
+    if (transcript.length < 2) {
+        return { matched: false, reason: 'transcript must start with >START and end with <END' };
+    }
+    if (transcript[0].direction !== 'in' || transcript[0].channel !== 'START') {
+        return { matched: false, reason: `transcript must start with >START, got '${formatEntry(transcript[0])}'` };
+    }
+    const last = transcript[transcript.length - 1];
+    if (last.direction !== 'out' || last.channel !== 'END') {
+        return { matched: false, reason: `transcript must end with <END, got '${formatEntry(last)}'` };
+    }
+    const middle = transcript.slice(1, -1);
+    const prefixResult = validatePrefix(m, middle);
     if (prefixResult.kind === 'error') {
         return { matched: false, reason: prefixResult.reason };
     }
@@ -179,41 +203,51 @@ expect.extend({
 
 describe('validateTranscript', () => {
     it('validates single token', () => {
-        expect(receive('x')).toMatchTranscript(['>x']);
+        expect(receive('x')).toMatchTranscript(['>START', '>x', '<END']);
         expect(receive('x')).not.toMatchTranscript([]);
-        expect(receive('x')).not.toMatchTranscript(['>y']);
-        expect(receive('x')).not.toMatchTranscript(['>x', '>x']);
+        expect(receive('x')).not.toMatchTranscript(['>START', '>y', '<END']);
+        expect(receive('x')).not.toMatchTranscript(['>START', '>x', '>x', '<END']);
     });
 
     it('validates sequence', () => {
         const m = sequence(receive('a'), receive('b'), receive('c'));
-        expect(m).toMatchTranscript(['>a', '>b', '>c']);
-        expect(m).not.toMatchTranscript(['>a', '>b']);
-        expect(m).not.toMatchTranscript(['>b', '>a', '>c']);
+        expect(m).toMatchTranscript(['>START', '>a', '>b', '>c', '<END']);
+        expect(m).not.toMatchTranscript(['>START', '>a', '>b', '<END']);
+        expect(m).not.toMatchTranscript(['>START', '>b', '>a', '>c', '<END']);
         expect(m).not.toMatchTranscript([]);
     });
 
     it('validates empty sequence (accepts only empty transcript)', () => {
         const m = { kind: 'sequence' as const, inner: [] };
-        expect(m).toMatchTranscript([]);
-        expect(m).not.toMatchTranscript(['>x']);
+        expect(m).toMatchTranscript(['>START', '<END']);
+        expect(m).not.toMatchTranscript(['>START', '>x', '<END']);
     });
 
     it('validates choice', () => {
         const m = choice({ '>a': sequence(), '>b': sequence(), '>c': sequence() });
-        expect(m).toMatchTranscript(['>a']);
-        expect(m).toMatchTranscript(['>b']);
-        expect(m).toMatchTranscript(['>c']);
-        expect(m).not.toMatchTranscript(['>d']);
+        expect(m).toMatchTranscript(['>START', '>a', '<END']);
+        expect(m).toMatchTranscript(['>START', '>b', '<END']);
+        expect(m).toMatchTranscript(['>START', '>c', '<END']);
+        expect(m).not.toMatchTranscript(['>START', '>d', '<END']);
         expect(m).not.toMatchTranscript([]);
     });
 
     it('validates choice direction (rejects wrong direction)', () => {
         const m = choice({ '>a': sequence(), '<b': sequence() });
-        expect(m).toMatchTranscript(['>a']);
-        expect(m).toMatchTranscript(['<b']);
-        expect(m).not.toMatchTranscript(['<a']);
-        expect(m).not.toMatchTranscript(['>b']);
+        expect(m).toMatchTranscript(['>START', '>a', '<END']);
+        expect(m).toMatchTranscript(['>START', '<b', '<END']);
+        expect(m).not.toMatchTranscript(['>START', '<a', '<END']);
+        expect(m).not.toMatchTranscript(['>START', '>b', '<END']);
+    });
+
+    it('reverse flips direction of all messages', () => {
+        const m = reverse(receive('x'));
+        expect(m).toMatchTranscript(['>START', '<x', '<END']);
+        expect(m).not.toMatchTranscript(['>START', '>x', '<END']);
+        expect(m).not.toMatchTranscript(['>START', '<y', '<END']);
+        const m2 = reverse(sequence(receive('a'), receive('b')));
+        expect(m2).toMatchTranscript(['>START', '<a', '<b', '<END']);
+        expect(m2).not.toMatchTranscript(['>START', '>a', '>b', '<END']);
     });
 
     it('validates loop with multiple tokens', () => {
@@ -224,9 +258,9 @@ describe('validateTranscript', () => {
                 '>end': sequence(),
             }),
         };
-        expect(m).toMatchTranscript(['>end']);
-        expect(m).toMatchTranscript(['>ping', '>pong', '>end']);
-        expect(m).toMatchTranscript(['>ping', '>pong', '>ping', '>pong', '>end']);
+        expect(m).toMatchTranscript(['>START', '>end', '<END']);
+        expect(m).toMatchTranscript(['>START', '>ping', '>pong', '>end', '<END']);
+        expect(m).toMatchTranscript(['>START', '>ping', '>pong', '>ping', '>pong', '>end', '<END']);
     });
 
     it('loop with no way to terminate does not match finite transcript', () => {
@@ -234,34 +268,34 @@ describe('validateTranscript', () => {
             kind: 'loop',
             inner: (self) => sequence(receive('ping'), receive('pong'), self),
         };
-        expect(m).not.toMatchTranscript(['>ping', '>pong']);
+        expect(m).not.toMatchTranscript(['>START', '>ping', '>pong', '<END']);
     });
 });
 
 describe('product (MachineType)', () => {
     it('validates product with left/ and right/ prefixed tokens', () => {
         const m = product({ left: receive('a'), right: receive('b') });
-        expect(m).toMatchTranscript(['>left/a', '>right/b']);
-        expect(m).toMatchTranscript(['>right/b', '>left/a']);
+        expect(m).toMatchTranscript(['>START', '>left/START', '>left/a', '<left/END', '>right/START', '>right/b', '<right/END', '<END']);
+        expect(m).toMatchTranscript(['>START', '>right/START', '>right/b', '<right/END', '>left/START', '>left/a', '<left/END', '<END']);
     });
 
     it('rejects tokens without left/ or right/ prefix', () => {
         const m = product({ left: receive('a'), right: receive('b') });
-        expect(m).not.toMatchTranscript(['>a', '>right/b']);
-        expect(m).not.toMatchTranscript(['>left/a', '>b']);
+        expect(m).not.toMatchTranscript(['>START', '>a', '>right/START', '>right/b', '<right/END', '<END']);
+        expect(m).not.toMatchTranscript(['>START', '>left/START', '>left/a', '<left/END', '>b', '<END']);
     });
 
     it('validates product of sequence machines', () => {
         const left = sequence(receive('x'), receive('y'));
         const right = sequence(receive('a'), receive('b'));
         const m = product({ left, right });
-        expect(m).toMatchTranscript(['>left/x', '>right/a', '>left/y', '>right/b']);
+        expect(m).toMatchTranscript(['>START', '>left/START', '>left/x', '>left/y', '<left/END', '>right/START', '>right/a', '>right/b', '<right/END', '<END']);
     });
 
     it('rejects when left or right stream is invalid', () => {
         const m = product({ left: receive('a'), right: receive('b') });
-        expect(m).not.toMatchTranscript(['>left/wrong', '>right/b']);
-        expect(m).not.toMatchTranscript(['>left/a', '>right/wrong']);
+        expect(m).not.toMatchTranscript(['>START', '>left/START', '>left/wrong', '<left/END', '>right/START', '>right/b', '<right/END', '<END']);
+        expect(m).not.toMatchTranscript(['>START', '>left/START', '>left/a', '<left/END', '>right/START', '>right/wrong', '<right/END', '<END']);
     });
 
     it('accepts empty transcript when both sides accept empty', () => {
@@ -269,7 +303,7 @@ describe('product (MachineType)', () => {
             left: { kind: 'sequence', inner: [] },
             right: { kind: 'sequence', inner: [] },
         });
-        expect(m).toMatchTranscript([]);
+        expect(m).toMatchTranscript(['>START', '>left/START', '<left/END', '>right/START', '<right/END', '<END']);
     });
 
     it('sequence(A, product(B, C), D) leaves remainder for D', () => {
@@ -278,8 +312,8 @@ describe('product (MachineType)', () => {
             product({ left: receive('b'), right: receive('c') }),
             receive('d'),
         );
-        expect(m).toMatchTranscript(['>a', '>left/b', '>right/c', '>d']);
-        expect(m).not.toMatchTranscript(['>a', '>left/b', '>right/c']);
+        expect(m).toMatchTranscript(['>START', '>a', '>left/START', '>left/b', '<left/END', '>right/START', '>right/c', '<right/END', '>d', '<END']);
+        expect(m).not.toMatchTranscript(['>START', '>a', '>left/START', '>left/b', '<left/END', '>right/START', '>right/c', '<right/END', '<END']);
     });
 
     it('sequence(product(A, B), product(C, D), E) two products in a row', () => {
@@ -288,8 +322,8 @@ describe('product (MachineType)', () => {
             product({ left: receive('c'), right: receive('d') }),
             receive('e'),
         );
-        expect(m).toMatchTranscript(['>left/a', '>right/b', '>left/c', '>right/d', '>e']);
-        expect(m).not.toMatchTranscript(['>left/a', '>right/b', '>left/c', '>right/d']);
+        expect(m).toMatchTranscript(['>START', '>left/START', '>left/a', '<left/END', '>right/START', '>right/b', '<right/END', '>left/START', '>left/c', '<left/END', '>right/START', '>right/d', '<right/END', '>e', '<END']);
+        expect(m).not.toMatchTranscript(['>START', '>left/START', '>left/a', '<left/END', '>right/START', '>right/b', '<right/END', '>left/START', '>left/c', '<left/END', '>right/START', '>right/d', '<right/END', '<END']);
     });
 });
 
@@ -330,6 +364,10 @@ function loop(f: (self: MachineType) => MachineType): MachineType {
     };
 }
 
+function reverse(inner: MachineType): MachineType {
+    return { kind: 'reverse', inner };
+}
+
 function product(inner: Record<string, MachineType>): MachineType {
     return {
         kind: 'product',
@@ -360,56 +398,56 @@ const secureDoor = pinPad(
 describe('secureDoor', () => {
     it('accepts four digits then correct, pull, doorOpen', () => {
         expect(secureDoor).toMatchTranscript([
-            '>enterDigit', '>enterDigit', '>enterDigit', '>enterDigit',
-            '<correct', '>pull', '<doorOpen',
+            '>START', '>enterDigit', '>enterDigit', '>enterDigit', '>enterDigit',
+            '<correct', '>pull', '<doorOpen', '<END',
         ]);
     });
 
     it('accepts four digits then incorrect then retry and succeed', () => {
         expect(secureDoor).toMatchTranscript([
-            '>enterDigit', '>enterDigit', '>enterDigit', '>enterDigit',
+            '>START', '>enterDigit', '>enterDigit', '>enterDigit', '>enterDigit',
             '<incorrect',
             '>enterDigit', '>enterDigit', '>enterDigit', '>enterDigit',
-            '<correct', '>pull', '<doorOpen',
+            '<correct', '>pull', '<doorOpen', '<END',
         ]);
     });
 
     it('accepts multiple wrong attempts then succeed', () => {
         expect(secureDoor).toMatchTranscript([
-            '>enterDigit', '>enterDigit', '>enterDigit', '>enterDigit', '<incorrect',
+            '>START', '>enterDigit', '>enterDigit', '>enterDigit', '>enterDigit', '<incorrect',
             '>enterDigit', '>enterDigit', '>enterDigit', '>enterDigit', '<incorrect',
             '>enterDigit', '>enterDigit', '>enterDigit', '>enterDigit',
-            '<correct', '>pull', '<doorOpen',
+            '<correct', '>pull', '<doorOpen', '<END',
         ]);
     });
 
     it('rejects fewer than four digits before correct path', () => {
         expect(secureDoor).not.toMatchTranscript([
-            '>enterDigit', '>enterDigit', '>enterDigit',
-            '<correct', '>pull', '<doorOpen',
+            '>START', '>enterDigit', '>enterDigit', '>enterDigit',
+            '<correct', '>pull', '<doorOpen', '<END',
         ]);
     });
 
     it('rejects wrong order (e.g. doorOpen before pull)', () => {
         expect(secureDoor).not.toMatchTranscript([
-            '>enterDigit', '>enterDigit', '>enterDigit', '>enterDigit',
-            '<correct', '<doorOpen', '>pull',
+            '>START', '>enterDigit', '>enterDigit', '>enterDigit', '>enterDigit',
+            '<correct', '<doorOpen', '>pull', '<END',
         ]);
     });
 
     it('rejects correct without pull and doorOpen', () => {
         expect(secureDoor).not.toMatchTranscript([
-            '>enterDigit', '>enterDigit', '>enterDigit', '>enterDigit',
-            '<correct',
+            '>START', '>enterDigit', '>enterDigit', '>enterDigit', '>enterDigit',
+            '<correct', '<END',
         ]);
     });
 
     it('rejects four digits only (no correct/incorrect outcome)', () => {
-        expect(secureDoor).not.toMatchTranscript(['>enterDigit', '>enterDigit', '>enterDigit', '>enterDigit']);
+        expect(secureDoor).not.toMatchTranscript(['>START', '>enterDigit', '>enterDigit', '>enterDigit', '>enterDigit', '<END']);
     });
 });
 
-const ref = loop((self) => choice({ '>end': sequence(), '>get': sequence(receive('result'), self) }));
+const ref = loop((self) => choice({ '>close': sequence(), '>get': sequence(receive('result'), self) }));
 
 function comparator(t: MachineType) : MachineType {
     return loop((self) =>
@@ -419,10 +457,10 @@ function comparator(t: MachineType) : MachineType {
                     'left': t,
                     'right': t,
                 }),
-                receive('result'),
+                emit('result'),
                 self
             ),
-            '>end': sequence(),
+            '>close': sequence(),
         })
     );
 }
@@ -436,85 +474,100 @@ function pair(t0 : MachineType, t1 : MachineType) : MachineType {
 
 describe('comparator', () => {
     it('accepts cmp then end on both refs then result', () => {
-        expect(comparator(ref)).toMatchTranscript(['>cmp', '>left/end', '>right/end', '>result', '>end']);
+        expect(comparator(ref)).toMatchTranscript([
+            '>START', '>cmp',
+            '>left/START', '>left/close', '<left/END',
+            '>right/START', '>right/close', '<right/END',
+            '<result', '>close', '<END',
+        ]);
     });
 
     it('accepts cmp then one get/result on left, end on right, then result', () => {
-        expect(comparator(ref)).toMatchTranscript(['>cmp', '>left/get', '>left/result', '>left/end', '>right/end', '>result', '>end']);
+        expect(comparator(ref)).toMatchTranscript([
+            '>START', '>cmp',
+            '>left/START', '>left/get', '>left/result', '>left/close', '<left/END',
+            '>right/START', '>right/close', '<right/END',
+            '<result', '>close', '<END',
+        ]);
     });
 
     it('accepts cmp then one get/result on right, end on left, then result', () => {
-        expect(comparator(ref)).toMatchTranscript(['>cmp', '>right/get', '>right/result', '>left/end', '>right/end', '>result', '>end']);
+        expect(comparator(ref)).toMatchTranscript([
+            '>START', '>cmp',
+            '>right/START', '>right/get', '>right/result', '>right/close', '<right/END',
+            '>left/START', '>left/close', '<left/END',
+            '<result', '>close', '<END',
+        ]);
     });
 
     it('accepts cmp then interleaved get/result on both sides then end then result', () => {
-        expect(comparator(ref)).toMatchTranscript(['>cmp', '>left/get', '>right/get', '>left/result', '>right/result', '>left/end', '>right/end', '>result', '>end']);
+        expect(comparator(ref)).toMatchTranscript([
+            '>START', '>cmp',
+            '>left/START', '>left/get', '>left/result', '>left/close', '<left/END',
+            '>right/START', '>right/get', '>right/result', '>right/close', '<right/END',
+            '<result', '>close', '<END',
+        ]);
     });
 
     it('accepts cmp then multiple get/result on both sides then end then result', () => {
         expect(comparator(ref)).toMatchTranscript([
-            '>cmp',
-            '>left/get', '>left/result', '>right/get', '>right/result',
-            '>left/get', '>left/result', '>right/get', '>right/result',
-            '>left/end', '>right/end',
-            '>result',
-            '>end',
+            '>START', '>cmp',
+            '>left/START', '>left/get', '>left/result', '>left/get', '>left/result', '>left/close', '<left/END',
+            '>right/START', '>right/get', '>right/result', '>right/get', '>right/result', '>right/close', '<right/END',
+            '<result', '>close', '<END',
         ]);
     });
 
     it('rejects missing cmp', () => {
-        expect(comparator(ref)).not.toMatchTranscript(['>result']);
+        expect(comparator(ref)).not.toMatchTranscript(['>START', '<result', '<END']);
     });
 
     it('rejects missing final result', () => {
-        expect(comparator(ref)).not.toMatchTranscript(['>cmp']);
+        expect(comparator(ref)).not.toMatchTranscript(['>START', '>cmp', '<END']);
     });
 
     it('rejects incomplete ref stream (get without result)', () => {
-        expect(comparator(ref)).not.toMatchTranscript(['>cmp', '>left/get', '>result']);
+        expect(comparator(ref)).not.toMatchTranscript([
+            '>START', '>cmp',
+            '>left/START', '>left/get', '<left/END',
+            '>right/START', '<right/END',
+            '<result', '<END',
+        ]);
     });
 
     it('rejects wrong channel prefix', () => {
-        expect(comparator(ref)).not.toMatchTranscript(['>cmp', '>other/get', '>result']);
+        expect(comparator(ref)).not.toMatchTranscript([
+            '>START', '>cmp',
+            '>left/START', '>left/end', '<left/END',
+            '>other/get',
+            '>right/START', '>right/end', '<right/END',
+            '<result', '>end', '<END',
+        ]);
     });
 });
 
 function lexCompare(t0: MachineType, t1: MachineType) : MachineType {
     return product({
         cmp: comparator(pair(t0, t1)),
-        t0_cmp: comparator(t0),
-        t1_cmp: comparator(t1),
+        t0_cmp: reverse(comparator(t0)),
+        t1_cmp: reverse(comparator(t1)),
     });
 }
 
 describe('lexCompare', () => {
     it('accepts cmp then end on both refs then result', () => {
-        // This transcript is invalid: cmp channel gets [cmp, end] but comparator expects product then result before end
+        // Sub-transcripts must explicitly START and END at every level. Top-level product: cmp, t0_cmp, t1_cmp.
+        // The cmp channel runs comparator(pair(t0,t1)), which has an inner product(left, right); those need START/END too.
         expect(lexCompare(ref, ref)).toMatchTranscript([
-            '>cmp/cmp',
-            '>t0_cmp/cmp',
-            '>t0_cmp/left/get',
-            '>cmp/left/t0/get',
-            '>cmp/left/t0/result',
-            '>t0_cmp/left/result',
-            '>t0_cmp/left/end',
-            
-            '>t0_cmp/right/get',
-            '>cmp/right/t0/get',
-            '>cmp/right/t0/result',
-            '>t0_cmp/right/result',
-            '>t0_cmp/right/end',
-
-            '>cmp/left/t0/end',
-            '>t0_cmp/result',
-            '>t0_cmp/end',
-            '>t1_cmp/end',
-            '>cmp/left/t1/end',
-            '>cmp/right/t0/end',
-            '>cmp/right/t1/end',
-            '>cmp/result',
-            // '>t1_cmp/end',
-            '>cmp/end',
+            '>START',
+            '>cmp/START', '>cmp/cmp',
+            '>cmp/left/START', '<cmp/left/END',
+            '>cmp/right/START', '<cmp/right/END',
+            '<cmp/result', '>cmp/end',
+            '<cmp/END',
+            '>t0_cmp/START', '<t0_cmp/END',
+            '>t1_cmp/START', '<t1_cmp/END',
+            '<END',
         ]);
     });
 });
