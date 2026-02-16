@@ -10,6 +10,29 @@ declare global {
     }
 }
 
+type ChannelRenameRule = {
+    fromPrefix: string,
+    toPrefix: string,
+}
+
+function applyChannelRenameRules(rules: ChannelRenameRule[], channel: string): string {
+    for (const rule of rules) {
+        if (channel.startsWith(rule.fromPrefix)) {
+            return rule.toPrefix + channel.slice(rule.fromPrefix.length);
+        }
+    }
+    return channel;
+}
+
+function undoChannelRenameRules(rules: ChannelRenameRule[], channel: string): string {
+    for (const rule of rules) {
+        if (channel.startsWith(rule.toPrefix)) {
+            return rule.fromPrefix + channel.slice(rule.toPrefix.length);
+        }
+    }
+    return channel;
+}
+
 type MachineImpl = {
     kind: 'emit',
     token: string,
@@ -25,7 +48,15 @@ type MachineImpl = {
 } | {
     kind: 'product',
     inner: Record<string, MachineImpl>,
-}
+} | {
+    kind: 'rename',
+    rules: ChannelRenameRule[],
+    inner: MachineImpl,
+} | {
+    kind: 'match',
+    cases: Record<string, MachineImpl>,
+    defaultCase: MachineImpl,
+};
 
 function emit(token: string): MachineImpl {
     return {
@@ -46,6 +77,13 @@ function hidden(impl: (ctx: any) => any): MachineImpl {
         kind: 'hidden',
         impl,
     };
+}
+
+function logCtx(message: string): MachineImpl {
+    return hidden((ctx) => {
+        console.log(message, ctx);
+        return ctx;
+    });
 }
 
 function sequence(...inner: MachineImpl[]): MachineImpl {
@@ -69,6 +107,22 @@ function product(inner: Record<string, MachineImpl>): MachineImpl {
     };
 }
 
+function rename(rules: ChannelRenameRule[], inner: MachineImpl): MachineImpl {
+    return {
+        kind: 'rename',
+        rules,
+        inner,
+    };
+}
+
+function match(cases: Record<string, MachineImpl>, defaultCase: MachineImpl): MachineImpl {
+    return {
+        kind: 'match',
+        cases,
+        defaultCase,
+    };
+}
+
 function receive(token: string): MachineImpl {
     return choice({
         [token]: sequence(),
@@ -86,33 +140,33 @@ function receiveValue(token: string, value: any): MachineImpl {
     });
 }
 
-const valueComparator: MachineImpl = 
-sequence(
-    receiveValue('cmp', null),
-    product({
-        left: sequence(
-            emitValue('get', null),
-            receive('result'),
-            hidden(([ctx, value]) => value),
-        ),
-        right: sequence(
-            emitValue('get', null),
-            receive('result'),
-            hidden(([ctx, value]) => value),
-        ),
-    }),
-    hidden(ctx => {
-        const {left, right} = ctx;
-        if (left === right) {
-            return [ctx, '='];
-        } else if (left < right) {
-            return [ctx, '<'];
-        } else {
-            return [ctx, '>'];
-        }
-    }),
-    emit('result'),
-);
+const valueComparator: MachineImpl =
+    sequence(
+        receiveValue('cmp', null),
+        product({
+            left: sequence(
+                emitValue('get', null),
+                receive('result'),
+                hidden(([ctx, value]) => value),
+            ),
+            right: sequence(
+                emitValue('get', null),
+                receive('result'),
+                hidden(([ctx, value]) => value),
+            ),
+        }),
+        hidden(ctx => {
+            const { left, right } = ctx;
+            if (left === right) {
+                return [ctx, '='];
+            } else if (left < right) {
+                return [ctx, '<'];
+            } else {
+                return [ctx, '>'];
+            }
+        }),
+        emit('result'),
+    );
 
 describe('valueComparator', () => {
     it('should compare values', () => {
@@ -127,6 +181,91 @@ describe('valueComparator', () => {
     });
 });
 
+// cmp/cmp: () ->
+// cmp/left/t0: A
+// cmp/left/t1: B
+// cmp/right/t0: A
+// cmp/right/t1: B
+// cmp/result: -> ord
+
+// t0_cmp/cmp: () ->
+// t0_cmp/left: A
+// t0_cmp/right: A
+// t0_cmp/result: -> ord
+
+// t1_cmp/cmp: () ->
+// t1_cmp/left: B
+// t1_cmp/right: B
+// t1_cmp/result: -> ord
+const lexComparator: MachineImpl = sequence(
+    receiveValue('cmp/cmp', null),
+    emitValue('t0_cmp/cmp', null),
+    rename([
+        { fromPrefix: 'cmp/left/t0/', toPrefix: 't0_cmp/left/impl/' },
+        { fromPrefix: 'cmp/right/t0/', toPrefix: 't0_cmp/right/impl/' },
+    ],
+        product({
+            t0_cmp: sequence(
+                product({
+                    left: sequence(
+                        receiveValue('get', null),
+                        emitValue('impl/get', null),
+                        receive('impl/result'),
+                        emit('result'),
+                        receiveValue('end', null),
+                    ),
+                    right: sequence(
+                        receiveValue('get', null),
+                        emitValue('impl/get', null),
+                        receive('impl/result'),
+                        emit('result'),
+                        receiveValue('end', null),
+                    ),
+                }),
+                receive('result'),
+                hidden(([ctx, result]) => result),
+            ),
+        })
+    ),
+    hidden(ctx => [null, ctx['t0_cmp']]),
+    logCtx('ctx'),
+    match({
+        '=': sequence(),
+        '<': sequence(emitValue('cmp/result', '<')),
+        '>': sequence(emitValue('cmp/result', '>')),
+    }, choice({})),
+);
+
+describe('lexComparator', () => {
+    it('should compare values', () => {
+        const m = liveMachine(lexComparator);
+        const helper = new MachineHelper(m, null);
+        helper.sendInput('cmp/cmp', null);
+        expect(helper).toAdvanceTo('t0_cmp/cmp', null);
+        helper.sendInput('t0_cmp/left/get', null);
+        expect(helper).toAdvanceTo('cmp/left/t0/get', null);
+        helper.sendInput('cmp/left/t0/result', 'foo');
+        expect(helper).toAdvanceTo('t0_cmp/left/result', 'foo');
+        helper.sendInput('t0_cmp/left/end', null);
+
+
+        helper.sendInput('t0_cmp/right/get', null);
+        expect(helper).toAdvanceTo('cmp/right/t0/get', null);
+        helper.sendInput('cmp/right/t0/result', 'bar');
+        expect(helper).toAdvanceTo('t0_cmp/right/result', 'bar');
+        helper.sendInput('t0_cmp/right/end', null);
+        helper.sendInput('t0_cmp/result', '>');
+        expect(helper).toAdvanceTo('cmp/result', '>');
+
+
+
+        // expect(helper).toAdvanceTo('bCmp/cmp', null);
+        // helper.sendInput('leftCmp/result', 'foo');
+        // helper.sendInput('rightCmp/result', 'bar');
+        // expect(helper).toAdvanceTo('result', '>');
+    });
+});
+
 // Helper used in tests: a hidden machine that turns any context into a
 // pair [newCtx, outputData] suitable for driving emit machines.
 const wrapCtxAsPair: MachineImpl = {
@@ -135,7 +274,7 @@ const wrapCtxAsPair: MachineImpl = {
 };
 
 type MachineImplState = {
-    kind: 'hidden' 
+    kind: 'hidden'
     result: any,
 } | {
     kind: 'emit',
@@ -162,27 +301,35 @@ type MachineImplState = {
 } | {
     kind: 'product',
     inner: Record<string, MachineImplState>,
+} | {
+    kind: 'rename',
+    inner: MachineImplState,
+} | {
+    kind: 'match',
+    /** Key that was matched (string from context value), or null if defaultCase was used */
+    caseKey: string | null,
+    inner: MachineImplState,
 };
 
 function invalidMachineType(m: never): never {
     throw new Error('Invalid machine type: ' + JSON.stringify(m));
 }
 
-function liveMachine(m: MachineImpl) : Machine<MachineImplState, any, any> {
+function liveMachine(m: MachineImpl): Machine<MachineImplState, any, any> {
     return {
         start(ctx: any): MachineImplState {
             if (m.kind === 'emit') {
-                return {kind: 'emit', complete: false, ctx};
+                return { kind: 'emit', complete: false, ctx };
             }
             if (m.kind === 'choice') {
-                return {kind: 'choice', chosen: false, ctx};
+                return { kind: 'choice', chosen: false, ctx };
             }
             if (m.kind === 'hidden') {
-                return {kind: 'hidden', result: m.impl(ctx)};
+                return { kind: 'hidden', result: m.impl(ctx) };
             }
             if (m.kind === 'sequence') {
                 if (m.inner.length === 0) {
-                    return {kind: 'sequence', done: true, ctx};
+                    return { kind: 'sequence', done: true, ctx };
                 } else {
                     return {
                         kind: 'sequence',
@@ -198,6 +345,23 @@ function liveMachine(m: MachineImpl) : Machine<MachineImplState, any, any> {
                     innerStates[channel] = liveMachine(inner).start(ctx);
                 }
                 return { kind: 'product', inner: innerStates };
+            }
+            if (m.kind === 'rename') {
+                return { kind: 'rename', inner: liveMachine(m.inner).start(ctx) };
+            }
+            if (m.kind === 'match') {
+                if (!Array.isArray(ctx) || ctx.length !== 2) {
+                    throw new Error('Match machine requires context [subCtx, value]');
+                }
+                const [subCtx, value] = ctx;
+                const key = String(value);
+                const caseKey = key in m.cases ? key : null;
+                const innerMachine = caseKey !== null ? m.cases[caseKey] : m.defaultCase;
+                return {
+                    kind: 'match',
+                    caseKey,
+                    inner: liveMachine(innerMachine).start(subCtx),
+                };
             }
             invalidMachineType(m);
         },
@@ -237,6 +401,19 @@ function liveMachine(m: MachineImpl) : Machine<MachineImplState, any, any> {
                     }
                 }
                 return true;
+            }
+            if (m.kind === 'rename') {
+                if (s.kind !== 'rename') {
+                    throw new Error('Expected rename state, got ' + JSON.stringify(s));
+                }
+                return liveMachine(m.inner).isComplete(s.inner);
+            }
+            if (m.kind === 'match') {
+                if (s.kind !== 'match') {
+                    throw new Error('Expected match state, got ' + JSON.stringify(s));
+                }
+                const innerMachine = s.caseKey !== null && s.caseKey in m.cases ? m.cases[s.caseKey] : m.defaultCase;
+                return liveMachine(innerMachine).isComplete(s.inner);
             }
             invalidMachineType(m);
         },
@@ -290,6 +467,19 @@ function liveMachine(m: MachineImpl) : Machine<MachineImplState, any, any> {
                 }
                 return results;
             }
+            if (m.kind === 'rename') {
+                if (s.kind !== 'rename') {
+                    throw new Error('Expected rename state, got ' + JSON.stringify(s));
+                }
+                return liveMachine(m.inner).getResult(s.inner);
+            }
+            if (m.kind === 'match') {
+                if (s.kind !== 'match') {
+                    throw new Error('Expected match state, got ' + JSON.stringify(s));
+                }
+                const innerMachine = s.caseKey !== null && s.caseKey in m.cases ? m.cases[s.caseKey] : m.defaultCase;
+                return liveMachine(innerMachine).getResult(s.inner);
+            }
             invalidMachineType(m);
         },
         readyForInput(s: MachineImplState): string[] {
@@ -332,9 +522,23 @@ function liveMachine(m: MachineImpl) : Machine<MachineImplState, any, any> {
                 }
                 return channels;
             }
+            if (m.kind === 'rename') {
+                if (s.kind !== 'rename') {
+                    throw new Error('Expected rename state, got ' + JSON.stringify(s));
+                }
+                const innerChannels = liveMachine(m.inner).readyForInput(s.inner);
+                return innerChannels.map(ch => undoChannelRenameRules(m.rules, ch));
+            }
+            if (m.kind === 'match') {
+                if (s.kind !== 'match') {
+                    throw new Error('Expected match state, got ' + JSON.stringify(s));
+                }
+                const innerMachine = s.caseKey !== null && s.caseKey in m.cases ? m.cases[s.caseKey] : m.defaultCase;
+                return liveMachine(innerMachine).readyForInput(s.inner);
+            }
             invalidMachineType(m);
         },
-        sendInput (s, channel, data): MachineImplState {
+        sendInput(s, channel, data): MachineImplState {
             if (m.kind === 'hidden') {
                 throw new Error('Hidden state does not accept input');
             }
@@ -352,9 +556,9 @@ function liveMachine(m: MachineImpl) : Machine<MachineImplState, any, any> {
                         throw new Error(`Choice state does not have a branch for channel '${channel}'`);
                     }
                     return {
-                        kind: 'choice', 
-                        chosen: true, 
-                        choice: channel, 
+                        kind: 'choice',
+                        chosen: true,
+                        choice: channel,
                         inner: liveMachine(m.choices[channel]).start([s.ctx, data]),
                     };
                 }
@@ -367,7 +571,7 @@ function liveMachine(m: MachineImpl) : Machine<MachineImplState, any, any> {
                     throw new Error('Sequence state is done');
                 }
                 const newInnerState = liveMachine(m.inner[s.idx]).sendInput(s.inner, channel, data);
-                return {...s, inner: newInnerState};
+                return { ...s, inner: newInnerState };
             }
             if (m.kind === 'product') {
                 if (s.kind !== 'product') {
@@ -392,6 +596,22 @@ function liveMachine(m: MachineImpl) : Machine<MachineImplState, any, any> {
                         [prefix]: newInnerState,
                     },
                 };
+            }
+            if (m.kind === 'rename') {
+                if (s.kind !== 'rename') {
+                    throw new Error('Expected rename state, got ' + JSON.stringify(s));
+                }
+                const innerChannel = applyChannelRenameRules(m.rules, channel);
+                const newInnerState = liveMachine(m.inner).sendInput(s.inner, innerChannel, data);
+                return { kind: 'rename', inner: newInnerState };
+            }
+            if (m.kind === 'match') {
+                if (s.kind !== 'match') {
+                    throw new Error('Expected match state, got ' + JSON.stringify(s));
+                }
+                const innerMachine = s.caseKey !== null && s.caseKey in m.cases ? m.cases[s.caseKey] : m.defaultCase;
+                const newInnerState = liveMachine(innerMachine).sendInput(s.inner, channel, data);
+                return { kind: 'match', caseKey: s.caseKey, inner: newInnerState };
             }
             invalidMachineType(m);
         },
@@ -435,6 +655,20 @@ function liveMachine(m: MachineImpl) : Machine<MachineImplState, any, any> {
                 }
                 return outputs;
             }
+            if (m.kind === 'rename') {
+                if (s.kind !== 'rename') {
+                    throw new Error('Expected rename state, got ' + JSON.stringify(s));
+                }
+                const innerOutputs = liveMachine(m.inner).hasOutput(s.inner);
+                return innerOutputs.map(ch => undoChannelRenameRules(m.rules, ch));
+            }
+            if (m.kind === 'match') {
+                if (s.kind !== 'match') {
+                    throw new Error('Expected match state, got ' + JSON.stringify(s));
+                }
+                const innerMachine = s.caseKey !== null && s.caseKey in m.cases ? m.cases[s.caseKey] : m.defaultCase;
+                return liveMachine(innerMachine).hasOutput(s.inner);
+            }
             invalidMachineType(m);
         },
         getOutput(s: MachineImplState, channel: string): [MachineImplState, any] {
@@ -461,7 +695,7 @@ function liveMachine(m: MachineImpl) : Machine<MachineImplState, any, any> {
                 }
                 if (s.chosen) {
                     const [newInnerState, output] = liveMachine(m.choices[s.choice]).getOutput(s.inner, channel);
-                    return [{...s, inner: newInnerState}, output];
+                    return [{ ...s, inner: newInnerState }, output];
                 } else {
                     throw new Error('Choice state not chosen');
                 }
@@ -474,7 +708,7 @@ function liveMachine(m: MachineImpl) : Machine<MachineImplState, any, any> {
                     throw new Error('Sequence state is done');
                 }
                 const [newInnerState, output] = liveMachine(m.inner[s.idx]).getOutput(s.inner, channel);
-                return [{...s, inner: newInnerState}, output];
+                return [{ ...s, inner: newInnerState }, output];
             }
             if (m.kind === 'product') {
                 if (s.kind !== 'product') {
@@ -503,6 +737,22 @@ function liveMachine(m: MachineImpl) : Machine<MachineImplState, any, any> {
                     output,
                 ];
             }
+            if (m.kind === 'rename') {
+                if (s.kind !== 'rename') {
+                    throw new Error('Expected rename state, got ' + JSON.stringify(s));
+                }
+                const innerChannel = applyChannelRenameRules(m.rules, channel);
+                const [newInnerState, output] = liveMachine(m.inner).getOutput(s.inner, innerChannel);
+                return [{ kind: 'rename', inner: newInnerState }, output];
+            }
+            if (m.kind === 'match') {
+                if (s.kind !== 'match') {
+                    throw new Error('Expected match state, got ' + JSON.stringify(s));
+                }
+                const innerMachine = s.caseKey !== null && s.caseKey in m.cases ? m.cases[s.caseKey] : m.defaultCase;
+                const [newInnerState, output] = liveMachine(innerMachine).getOutput(s.inner, channel);
+                return [{ kind: 'match', caseKey: s.caseKey, inner: newInnerState }, output];
+            }
             invalidMachineType(m);
         },
         advance(s: MachineImplState): [MachineImplState, boolean] {
@@ -518,7 +768,7 @@ function liveMachine(m: MachineImpl) : Machine<MachineImplState, any, any> {
                 }
                 if (s.chosen) {
                     const [newInnerState, advanced] = liveMachine(m.choices[s.choice]).advance(s.inner);
-                    return [{...s, inner: newInnerState}, advanced];
+                    return [{ ...s, inner: newInnerState }, advanced];
                 } else {
                     return [s, false];
                 }
@@ -534,7 +784,7 @@ function liveMachine(m: MachineImpl) : Machine<MachineImplState, any, any> {
                 if (innerMachine.isComplete(s.inner)) {
                     const ctx = innerMachine.getResult(s.inner);
                     if (s.idx === m.inner.length - 1) {
-                        return [{kind: 'sequence', done: true, ctx}, true];
+                        return [{ kind: 'sequence', done: true, ctx }, true];
                     } else {
                         return [{
                             kind: 'sequence',
@@ -545,7 +795,7 @@ function liveMachine(m: MachineImpl) : Machine<MachineImplState, any, any> {
                     }
                 } else {
                     const [newInnerState, advanced] = innerMachine.advance(s.inner);
-                    return [{kind: 'sequence', done: false, idx: s.idx, inner: newInnerState}, advanced];
+                    return [{ kind: 'sequence', done: false, idx: s.idx, inner: newInnerState }, advanced];
                 }
             }
             if (m.kind === 'product') {
@@ -570,6 +820,21 @@ function liveMachine(m: MachineImpl) : Machine<MachineImplState, any, any> {
                     }
                 }
                 return [s, false];
+            }
+            if (m.kind === 'rename') {
+                if (s.kind !== 'rename') {
+                    throw new Error('Expected rename state, got ' + JSON.stringify(s));
+                }
+                const [newInnerState, advanced] = liveMachine(m.inner).advance(s.inner);
+                return [{ kind: 'rename', inner: newInnerState }, advanced];
+            }
+            if (m.kind === 'match') {
+                if (s.kind !== 'match') {
+                    throw new Error('Expected match state, got ' + JSON.stringify(s));
+                }
+                const innerMachine = s.caseKey !== null && s.caseKey in m.cases ? m.cases[s.caseKey] : m.defaultCase;
+                const [newInnerState, advanced] = liveMachine(innerMachine).advance(s.inner);
+                return [{ kind: 'match', caseKey: s.caseKey, inner: newInnerState }, advanced];
             }
             invalidMachineType(m);
         },
@@ -1148,6 +1413,91 @@ describe('liveMachine', () => {
             });
         });
     });
+
+    describe('rename machine', () => {
+        it('translates input channels into inner and output channels back out', () => {
+            // Inner machine: choice with branch 'inner' that emits 'out'. From outside we use 'in' and 'out'.
+            const m = liveMachine(rename(
+                [{ fromPrefix: 'in', toPrefix: 'inner' }, { fromPrefix: 'out', toPrefix: 'out' }],
+                {
+                    kind: 'choice',
+                    choices: {
+                        inner: { kind: 'emit', token: 'out' },
+                    },
+                },
+            ));
+            const state = m.start({});
+            expect(m.readyForInput(state)).toEqual(['in']);
+            const afterInput = m.sendInput(state, 'in', undefined);
+            expect(m.hasOutput(afterInput)).toEqual(['out']);
+            const [newState, output] = m.getOutput(afterInput, 'out');
+            expect(output).toBeUndefined();
+        });
+
+        it('works with MachineHelper when channels are renamed', () => {
+            const m = liveMachine(rename(
+                [{ fromPrefix: 'ext/', toPrefix: '' }],
+                sequence(
+                    receiveValue('get', null),
+                    emitValue('result', 42),
+                ),
+            ));
+            const helper = new MachineHelper(m, null);
+            helper.sendInput('ext/get', null);
+            expect(helper.getOutput('ext/result')).toEqual(42);
+        });
+    });
+
+    describe('match machine', () => {
+        it('selects branch by context value and passes subCtx to inner', () => {
+            const m = liveMachine(match(
+                {
+                    a: sequence(wrapCtxAsPair, { kind: 'emit', token: 'out' }),
+                    b: sequence(wrapCtxAsPair, { kind: 'emit', token: 'out' }),
+                },
+                sequence(wrapCtxAsPair, { kind: 'emit', token: 'default' }),
+            ));
+            // Context [subCtx, value]; value 'a' selects first case, subCtx is passed to inner
+            let state = m.start([{ id: 1 }, 'a']);
+            // Advance past the hidden (wrapCtxAsPair) to reach the emit
+            const [stateAfterAdvance] = m.advance(state);
+            state = stateAfterAdvance;
+            expect(m.hasOutput(state)).toEqual(['out']);
+            const [stateAfterGet, output] = m.getOutput(state, 'out');
+            expect(output).toEqual({});
+            // Advance sequence past the completed emit so the whole match is complete
+            const [finalState] = m.advance(stateAfterGet);
+            expect(m.isComplete(finalState)).toBe(true);
+            expect(m.getResult(finalState)).toEqual({ id: 1 });
+        });
+
+        it('uses defaultCase when value does not match any case', () => {
+            const m = liveMachine(match(
+                { x: { kind: 'emit', token: 'x' } },
+                sequence(wrapCtxAsPair, { kind: 'emit', token: 'default' }),
+            ));
+            let state = m.start([{}, 'other']);
+            const [stateAfterAdvance] = m.advance(state);
+            state = stateAfterAdvance;
+            expect(m.hasOutput(state)).toEqual(['default']);
+        });
+
+        it('delegates input and advance to chosen inner machine', () => {
+            const m = liveMachine(match(
+                {
+                    needInput: {
+                        kind: 'choice',
+                        choices: { go: { kind: 'emit', token: 'done' } },
+                    },
+                },
+                { kind: 'hidden', impl: () => 0 },
+            ));
+            const state = m.start([null, 'needInput']);
+            expect(m.readyForInput(state)).toEqual(['go']);
+            const afterInput = m.sendInput(state, 'go', undefined);
+            expect(m.hasOutput(afterInput)).toEqual(['done']);
+        });
+    });
 });
 
 // MachineType helpers, validators, and related tests have been moved to statemachine_types_test.ts
@@ -1170,7 +1520,7 @@ class MachineHelper {
             const [newState, advanced] = this.machine.advance(this.state);
             if (!advanced) {
                 throw new Error(
-                    `Machine did not advance and is not ready for input on channel '${channel}'`,
+                    `Machine did not advance and is not ready for input on channel '${channel}; ready channels: ${readyChannels.join(', ')}'`,
                 );
             }
             this.state = newState;
@@ -1191,7 +1541,7 @@ class MachineHelper {
             const [newState, advanced] = this.machine.advance(this.state);
             if (!advanced) {
                 throw new Error(
-                    `Machine did not advance and no output available on channel '${channel}'`,
+                    `Machine did not advance and no output available on channel '${channel}'; available outputs: ${availableOutputs.join(', ')}`,
                 );
             }
             this.state = newState;
