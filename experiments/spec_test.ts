@@ -10,9 +10,11 @@
  *    Completion status is monotonic: once a machine reaches completion, it never transitions back
  *    to an incomplete state.
  *    - "Completed" is defined as: matching only the empty transcript.
- *    - Loop bodies and loops themselves are never complete while active. To exit a loop and reach
- *      completion, the loop must be explicitly exited via `break`, transitioning to its completed
- *      continuation (`then`).
+ *    - Loop bodies are not complete while active. A loop is considered completed at iteration
+ *      boundaries (where no iteration is in progress) if its continuation (`then`) is completed.
+ *      To ensure deterministic execution without backtracking, specifications are statically
+ *      validated at build-time to ensure that transition paths at choice points and loop
+ *      boundaries are completely disjoint (LL(1) constraint).
  *
  * 3. Modular Continuations (Spec Builders)
  *    Sequential compositions and combinators are represented as functions (`SpecBuilder`) mapping
@@ -75,8 +77,96 @@ type TranscriptEntry =  {
 
 type SpecBuilder = (next: MachineSpec) => MachineSpec;
 
+function getFirstEvents(spec: MachineSpec): Array<{ kind: "read" | "write", channel: string[] }> {
+    if (spec.kind === "read" || spec.kind === "write") {
+        return [{ kind: spec.kind, channel: spec.channel }];
+    }
+    if (spec.kind === "choice") {
+        const result: Array<{ kind: "read" | "write", channel: string[] }> = [];
+        for (const branch of Object.values(spec.choices)) {
+            result.push(...getFirstEvents(branch));
+        }
+        return result;
+    }
+    if (spec.kind === "loop") {
+        return [...getFirstEvents(spec.body), ...getFirstEvents(spec.then)];
+    }
+    if (spec.kind === "concurrent") {
+        const result: Array<{ kind: "read" | "write", channel: string[] }> = [];
+        for (const [key, sub] of Object.entries(spec.machines)) {
+            for (const ev of getFirstEvents(sub)) {
+                result.push({ kind: ev.kind, channel: [key, ...ev.channel] });
+            }
+        }
+        return result;
+    }
+    if (spec.kind === "prefix") {
+        const result: Array<{ kind: "read" | "write", channel: string[] }> = [];
+        for (const ev of getFirstEvents(spec.inner)) {
+            result.push({ kind: ev.kind, channel: [...spec.prefix, ...ev.channel] });
+        }
+        return result;
+    }
+    if (spec.kind === "complement") {
+        const result: Array<{ kind: "read" | "write", channel: string[] }> = [];
+        for (const ev of getFirstEvents(spec.inner)) {
+            result.push({ kind: ev.kind === "read" ? "write" : "read", channel: ev.channel });
+        }
+        return result;
+    }
+    return [];
+}
+
+function eventToString(ev: { kind: "read" | "write", channel: string[] }): string {
+    return `${ev.kind}:${ev.channel.join(".")}`;
+}
+
+function validateSpec(spec: MachineSpec): void {
+    if (spec.kind === "loop") {
+        const bodyFirst = new Set(getFirstEvents(spec.body).map(eventToString));
+        const thenFirst = new Set(getFirstEvents(spec.then).map(eventToString));
+        
+        for (const item of bodyFirst) {
+            if (thenFirst.has(item)) {
+                throw new Error(`Ambiguity detected in loop: both body and continuation can start with event "${item}"`);
+            }
+        }
+        
+        validateSpec(spec.body);
+        validateSpec(spec.then);
+    } else if (spec.kind === "choice") {
+        const seen = new Set<string>();
+        for (const branch of Object.values(spec.choices)) {
+            const branchFirst = getFirstEvents(branch).map(eventToString);
+            for (const item of branchFirst) {
+                if (seen.has(item)) {
+                    throw new Error(`Ambiguity detected in choice: multiple branches can start with event "${item}"`);
+                }
+                seen.add(item);
+            }
+            validateSpec(branch);
+        }
+        validateSpec(spec.then);
+    } else if (spec.kind === "concurrent") {
+        for (const child of Object.values(spec.machines)) {
+            validateSpec(child);
+        }
+        validateSpec(spec.then);
+    } else if (spec.kind === "prefix") {
+        validateSpec(spec.inner);
+        validateSpec(spec.then);
+    } else if (spec.kind === "complement") {
+        validateSpec(spec.inner);
+        validateSpec(spec.then);
+    } else if (spec.kind === "read" || spec.kind === "write") {
+        validateSpec(spec.then);
+    }
+}
+
 function build(builder: SpecBuilder): MachineSpec {
-    return builder({ kind: "done" });
+    const spec = builder({ kind: "done" });
+    validateSpec(spec);
+    return spec;
 }
 
 function read(channel: string[]): SpecBuilder {
@@ -166,7 +256,7 @@ function isCompleted(spec: MachineSpec): boolean {
         }
     }
     if (spec.kind === "loop") {
-        return false;
+        return spec.current === undefined && isCompleted(spec.then);
     }
     if (spec.kind === "complement") {
         return isCompleted(spec.inner) && isCompleted(spec.then);
@@ -190,105 +280,91 @@ function transition(spec: MachineSpec, entry: TranscriptEntry): MachineSpec | nu
     }
 
     if (spec.kind === "concurrent") {
+        let nextSubSpec: MachineSpec | null = null;
+        let matchedKey: string | null = null;
+        
+        if (entry.channel.length > 0) {
+            const key = entry.channel[0];
+            const subSpec = spec.machines[key];
+            if (subSpec) {
+                const strippedEntry: TranscriptEntry = {
+                    kind: entry.kind,
+                    channel: entry.channel.slice(1)
+                };
+                nextSubSpec = transition(subSpec, strippedEntry);
+                if (nextSubSpec !== null) {
+                    matchedKey = key;
+                }
+            }
+        }
+        
+        if (nextSubSpec !== null && matchedKey !== null) {
+            return {
+                kind: "concurrent",
+                machines: {
+                    ...spec.machines,
+                    [matchedKey]: nextSubSpec
+                },
+                then: spec.then
+            };
+        }
+        
         const concurrentMachinesCompleted = Object.values(spec.machines).every(isCompleted);
         if (concurrentMachinesCompleted) {
             return transition(spec.then, entry);
         }
-        if (entry.channel.length === 0) {
-            return null;
-        }
-        const key = entry.channel[0];
-        const subSpec = spec.machines[key];
-        if (!subSpec) {
-            return null;
-        }
-        const strippedEntry: TranscriptEntry = {
-            kind: entry.kind,
-            channel: entry.channel.slice(1)
-        };
-        const nextSubSpec = transition(subSpec, strippedEntry);
-        if (nextSubSpec === null) {
-            return null;
-        }
-        return {
-            kind: "concurrent",
-            machines: {
-                ...spec.machines,
-                [key]: nextSubSpec
-            },
-            then: spec.then
-        };
+        
+        return null;
     }
 
     if (spec.kind === "choice") {
-        if (entry.channel.length === 0) {
-            return null;
-        }
-        const key = entry.channel[0];
-        
         if (spec.selected === undefined) {
-            const subSpec = spec.choices[key];
-            if (!subSpec) {
+            let matchedKey: string | null = null;
+            let nextSubSpec: MachineSpec | null = null;
+            
+            for (const [key, branch] of Object.entries(spec.choices)) {
+                const next = transition(branch, entry);
+                if (next !== null) {
+                    if (matchedKey !== null) {
+                        throw new Error(`Ambiguity detected in choice: multiple branches can transition on entry ${JSON.stringify(entry)}`);
+                    }
+                    matchedKey = key;
+                    nextSubSpec = next;
+                }
+            }
+            
+            if (matchedKey === null || nextSubSpec === null) {
                 return null;
             }
-            if (isCompleted(subSpec)) {
-                return null;
-            }
-            const strippedEntry: TranscriptEntry = {
-                kind: entry.kind,
-                channel: entry.channel.slice(1)
-            };
-            const nextSubSpec = transition(subSpec, strippedEntry);
-            if (nextSubSpec === null) {
-                return null;
-            }
-            if (isCompleted(nextSubSpec)) {
-                return spec.then;
-            }
+            
             return {
                 kind: "choice",
                 choices: spec.choices,
                 then: spec.then,
-                selected: key,
+                selected: matchedKey,
                 current: nextSubSpec
             };
         } else {
-            if (key !== spec.selected) {
-                return null;
+            const nextSubSpec = transition(spec.current!, entry);
+            if (nextSubSpec !== null) {
+                return {
+                    kind: "choice",
+                    choices: spec.choices,
+                    then: spec.then,
+                    selected: spec.selected,
+                    current: nextSubSpec
+                };
             }
-            const strippedEntry: TranscriptEntry = {
-                kind: entry.kind,
-                channel: entry.channel.slice(1)
-            };
-            const nextSubSpec = transition(spec.current!, strippedEntry);
-            if (nextSubSpec === null) {
-                return null;
+            if (isCompleted(spec.current!)) {
+                return transition(spec.then, entry);
             }
-            if (isCompleted(nextSubSpec)) {
-                return spec.then;
-            }
-            return {
-                kind: "choice",
-                choices: spec.choices,
-                then: spec.then,
-                selected: spec.selected,
-                current: nextSubSpec
-            };
+            return null;
         }
     }
 
     if (spec.kind === "loop") {
-        if (entry.channel.length === 0) {
-            return null;
-        }
-        const key = entry.channel[0];
-        if (key === "step") {
-            const activeBody = spec.current ?? spec.body;
-            const strippedEntry: TranscriptEntry = {
-                kind: entry.kind,
-                channel: entry.channel.slice(1)
-            };
-            const nextBody = transition(activeBody, strippedEntry);
+        if (spec.current !== undefined) {
+            const nextBody = transition(spec.current, entry);
             if (nextBody === null) {
                 return null;
             }
@@ -305,18 +381,30 @@ function transition(spec: MachineSpec, entry: TranscriptEntry): MachineSpec | nu
                 then: spec.then,
                 current: nextBody
             };
-        }
-        if (key === "break") {
-            const atBoundary = spec.current === undefined || isCompleted(spec.current);
-            if (!atBoundary) {
-                return null;
+        } else {
+            const nextBody = transition(spec.body, entry);
+            const nextThen = transition(spec.then, entry);
+            
+            if (nextBody !== null) {
+                if (isCompleted(nextBody)) {
+                    return {
+                        kind: "loop",
+                        body: spec.body,
+                        then: spec.then
+                    };
+                }
+                return {
+                    kind: "loop",
+                    body: spec.body,
+                    then: spec.then,
+                    current: nextBody
+                };
             }
-            if (entry.channel.length !== 1) {
-                return null;
+            if (nextThen !== null) {
+                return nextThen;
             }
-            return spec.then;
+            return null;
         }
-        return null;
     }
 
     if (spec.kind === "complement") {
@@ -325,44 +413,48 @@ function transition(spec: MachineSpec, entry: TranscriptEntry): MachineSpec | nu
             channel: entry.channel
         };
         const nextInner = transition(spec.inner, reversedEntry);
-        if (nextInner === null) {
-            return null;
+        if (nextInner !== null) {
+            return {
+                kind: "complement",
+                inner: nextInner,
+                then: spec.then
+            };
         }
-        if (isCompleted(nextInner)) {
-            return spec.then;
+        if (isCompleted(spec.inner)) {
+            return transition(spec.then, entry);
         }
-        return {
-            kind: "complement",
-            inner: nextInner,
-            then: spec.then
-        };
+        return null;
     }
 
     if (spec.kind === "prefix") {
         if (entry.channel.length < spec.prefix.length) {
+            if (isCompleted(spec.inner)) {
+                return transition(spec.then, entry);
+            }
             return null;
         }
         const hasPrefix = spec.prefix.every((val, index) => entry.channel[index] === val);
-        if (!hasPrefix) {
-            return null;
+        let nextInner: MachineSpec | null = null;
+        if (hasPrefix) {
+            const strippedEntry: TranscriptEntry = {
+                kind: entry.kind,
+                channel: entry.channel.slice(spec.prefix.length)
+            };
+            nextInner = transition(spec.inner, strippedEntry);
         }
-        const strippedEntry: TranscriptEntry = {
-            kind: entry.kind,
-            channel: entry.channel.slice(spec.prefix.length)
-        };
-        const nextInner = transition(spec.inner, strippedEntry);
-        if (nextInner === null) {
-            return null;
+        
+        if (nextInner !== null) {
+            return {
+                kind: "prefix",
+                prefix: spec.prefix,
+                inner: nextInner,
+                then: spec.then
+            };
         }
-        if (isCompleted(nextInner)) {
-            return spec.then;
+        if (isCompleted(spec.inner)) {
+            return transition(spec.then, entry);
         }
-        return {
-            kind: "prefix",
-            prefix: spec.prefix,
-            inner: nextInner,
-            then: spec.then
-        };
+        return null;
     }
 
     return null;
@@ -599,17 +691,17 @@ describe("checkTranscript with choice", () => {
         }));
         // branch 1
         expect(checkTranscript(spec, parseTranscript(`
-            < ok.data
+            < data
         `))).toBe(true);
 
         // branch 2
         expect(checkTranscript(spec, parseTranscript(`
-            < err.msg
+            < msg
         `))).toBe(true);
 
         // invalid branch
         expect(checkTranscript(spec, parseTranscript(`
-            < other.data
+            < other
         `))).toBe(false);
     });
 
@@ -627,7 +719,7 @@ describe("checkTranscript with choice", () => {
             exit: { kind: "done" }
         }));
         expect(checkTranscript(spec, parseTranscript(`
-            < ok.data
+            < data
         `))).toBe(true);
     });
 
@@ -636,7 +728,7 @@ describe("checkTranscript with choice", () => {
             exit: { kind: "done" }
         }));
         expect(checkTranscript(spec, parseTranscript(`
-            < exit.anything
+            < anything
         `))).toBe(false);
     });
 });
@@ -644,88 +736,77 @@ describe("checkTranscript with choice", () => {
 describe("checkTranscript with loop", () => {
     it("matches a loop with 0 iterations", () => {
         const spec = build(loop(build(read(["foo"]))));
-        expect(checkTranscript(spec, parseTranscript(`
-            > break
-        `))).toBe(true);
+        expect(checkTranscript(spec, parseTranscript(``))).toBe(true);
     });
 
     it("matches a loop with multiple iterations", () => {
         const spec = build(loop(build(read(["foo"]))));
         expect(checkTranscript(spec, parseTranscript(`
-            < step.foo
-            < step.foo
-            < step.foo
-            > break
+            < foo
+            < foo
+            < foo
         `))).toBe(true);
     });
 
     it("fails if the loop body does not match", () => {
         const spec = build(loop(build(read(["foo"]))));
         expect(checkTranscript(spec, parseTranscript(`
-            < step.bar
+            < bar
         `))).toBe(false);
     });
 
-    it("fails when breaking in the middle of an iteration", () => {
+    it("fails when stopping in the middle of an iteration", () => {
         const spec = build(loop(build(sequence(read(["foo"]), write(["bar"])))));
         expect(checkTranscript(spec, parseTranscript(`
-            < step.foo
-            > break
+            < foo
         `))).toBe(false);
     });
 
-    it("matches after a complete iteration when breaking", () => {
+    it("matches after a complete iteration", () => {
         const spec = build(loop(build(sequence(read(["foo"]), write(["bar"])))));
         expect(checkTranscript(spec, parseTranscript(`
-            < step.foo
-            > step.bar
-            > break
+            < foo
+            > bar
         `))).toBe(true);
     });
 });
 
 describe("BorrowableSpec", () => {
     it("matches 0 iterations", () => {
-        expect(checkTranscript(BorrowableSpec, parseTranscript(`
-            > break
-        `))).toBe(true);
+        expect(checkTranscript(BorrowableSpec, parseTranscript(``))).toBe(true);
     });
 
     it("matches 1 iteration", () => {
         expect(checkTranscript(BorrowableSpec, parseTranscript(`
-            < step.borrow
-            > step.value
-            < step.restore
-            > break
+            < borrow
+            > value
+            < restore
         `))).toBe(true);
     });
 
     it("matches multiple iterations", () => {
         expect(checkTranscript(BorrowableSpec, parseTranscript(`
-            < step.borrow
-            > step.value
-            < step.restore
-            < step.borrow
-            > step.value
-            < step.restore
-            > break
+            < borrow
+            > value
+            < restore
+            < borrow
+            > value
+            < restore
         `))).toBe(true);
     });
 
-    it("fails when breaking early in an iteration", () => {
+    it("fails when stopping early in an iteration", () => {
         expect(checkTranscript(BorrowableSpec, parseTranscript(`
-            < step.borrow
-            > step.value
-            > break
+            < borrow
+            > value
         `))).toBe(false);
     });
 
     it("fails with incorrect kind for a step", () => {
         expect(checkTranscript(BorrowableSpec, parseTranscript(`
-            < step.borrow
-            < step.value
-            < step.restore
-            > break
+            < borrow
+            < value
+            < restore
         `))).toBe(false);
     });
 });
@@ -755,7 +836,7 @@ describe("checkTranscript with continuations", () => {
             read(["next"])
         ));
         expect(checkTranscript(spec, parseTranscript(`
-            < ok.data
+            < data
             < next
         `))).toBe(true);
     });
@@ -766,32 +847,23 @@ describe("checkTranscript with continuations", () => {
             read(["next"])
         ));
         expect(checkTranscript(spec, parseTranscript(`
-            < step.foo
-            > break
+            < foo
             < next
         `))).toBe(true);
     });
 
-    it("requires key prefix for subsequent steps in a selected choice branch", () => {
+    it("does not require key prefix for choice branches anymore", () => {
         const spec = build(sequence(
             choice({
                 ok: build(sequence(read(["data1"]), read(["data2"])))
             }),
             read(["next"])
         ));
-        // works with prefix on both steps
         expect(checkTranscript(spec, parseTranscript(`
-            < ok.data1
-            < ok.data2
-            < next
-        `))).toBe(true);
-
-        // fails without prefix on the second step
-        expect(checkTranscript(spec, parseTranscript(`
-            < ok.data1
+            < data1
             < data2
             < next
-        `))).toBe(false);
+        `))).toBe(true);
     });
 });
 
@@ -801,17 +873,9 @@ describe("pairBorrowableCopyable", () => {
     it("matches zero iterations of all component loops", () => {
         expect(checkTranscript(spec, parseTranscript(`
             < get
-            < left.left.break
-            < left.right.break
-            < right.left.break
-            < right.right.break
             > leftCmp.get
-            < leftCmp.left.break
-            < leftCmp.right.break
             < leftCmp.return
             > rightCmp.get
-            < rightCmp.left.break
-            < rightCmp.right.break
             < rightCmp.return
             > return
         `))).toBe(true);
@@ -822,38 +886,29 @@ describe("pairBorrowableCopyable", () => {
             < get
 
             > leftCmp.get
-            < leftCmp.left.step.borrow
-            > left.left.step.borrow
-            < left.left.step.value
-            > leftCmp.left.step.value
-            < leftCmp.left.step.restore
-            > left.left.step.restore
-            > leftCmp.left.break
-            < left.left.break
+            < leftCmp.left.borrow
+            > left.left.borrow
+            < left.left.value
+            > leftCmp.left.value
+            < leftCmp.left.restore
+            > left.left.restore
 
-            < leftCmp.right.step.borrow
-            > right.left.step.borrow
-            > leftCmp.right.step.value
-            < right.left.step.value
-            < leftCmp.right.step.restore
-            > right.left.step.restore
+            < leftCmp.right.borrow
+            > right.left.borrow
+            > leftCmp.right.value
+            < right.left.value
+            < leftCmp.right.restore
+            > right.left.restore
 
-            < leftCmp.right.step.borrow
-            > right.left.step.borrow
-            > leftCmp.right.step.value
-            < right.left.step.value
-            < leftCmp.right.step.restore
-            > right.left.step.restore
-            > leftCmp.right.break
-            < right.left.break
+            < leftCmp.right.borrow
+            > right.left.borrow
+            > leftCmp.right.value
+            < right.left.value
+            < leftCmp.right.restore
+            > right.left.restore
+            < leftCmp.return
 
             > rightCmp.get
-            > rightCmp.left.break
-            < left.right.break
-            > rightCmp.right.break
-            < right.right.break
-
-            < leftCmp.return
             < rightCmp.return
             > return
         `))).toBe(true);
@@ -862,15 +917,15 @@ describe("pairBorrowableCopyable", () => {
     it("fails if attempting to transition sub-component before starting comparator", () => {
         expect(checkTranscript(spec, parseTranscript(`
             < get
-            > leftCmp.left.step.borrow
+            > leftCmp.left.borrow
         `))).toBe(false);
     });
 
-    it("fails if loop iterations are incomplete before breaking", () => {
+    it("fails if loop iterations are incomplete", () => {
         expect(checkTranscript(spec, parseTranscript(`
             < get
-            > left.left.step.borrow
-            < left.left.break
+            > left.left.borrow
+            > leftCmp.get
         `))).toBe(false);
     });
 });
@@ -905,11 +960,10 @@ describe("checkTranscript with complement", () => {
         // loop body: read(foo) -> write(bar).
         // Under complement: write(foo) -> read(bar).
         expect(checkTranscript(spec, parseTranscript(`
-            > step.foo
-            < step.bar
-            > step.foo
-            < step.bar
-            > break
+            > foo
+            < bar
+            > foo
+            < bar
             < next
         `))).toBe(true);
     });
@@ -946,11 +1000,48 @@ describe("checkTranscript with prefix", () => {
             read(["next"])
         ));
         expect(checkTranscript(spec, parseTranscript(`
-            < a.step.b
-            < a.step.b
-            > a.break
+            < a.b
+            < a.b
             < next
         `))).toBe(true);
+    });
+});
+
+describe("static validation (LL-1)", () => {
+    it("throws error for ambiguous choice branches", () => {
+        expect(() => {
+            build(choice({
+                branch1: build(read(["foo"])),
+                branch2: build(read(["foo"]))
+            }));
+        }).toThrow(/Ambiguity detected in choice/);
+    });
+
+    it("throws error for ambiguous loop and continuation", () => {
+        expect(() => {
+            build(sequence(
+                loop(build(read(["foo"]))),
+                read(["foo"])
+            ));
+        }).toThrow(/Ambiguity detected in loop/);
+    });
+
+    it("allows non-overlapping choice branches", () => {
+        expect(() => {
+            build(choice({
+                branch1: build(read(["foo"])),
+                branch2: build(read(["bar"]))
+            }));
+        }).not.toThrow();
+    });
+
+    it("allows non-overlapping loop and continuation", () => {
+        expect(() => {
+            build(sequence(
+                loop(build(read(["foo"]))),
+                read(["bar"])
+            ));
+        }).not.toThrow();
     });
 });
 
