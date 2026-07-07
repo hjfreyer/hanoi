@@ -460,6 +460,117 @@ function transition(spec: MachineSpec, entry: TranscriptEntry): MachineSpec | nu
     return null;
 }
 
+function getPossibleTransitions(spec: MachineSpec): TranscriptEntry[] {
+    const result: TranscriptEntry[] = [];
+    
+    if (spec.kind === "read" || spec.kind === "write") {
+        result.push({ kind: spec.kind, channel: spec.channel });
+    } else if (spec.kind === "choice") {
+        if (spec.selected !== undefined) {
+            result.push(...getPossibleTransitions(spec.current!));
+        } else {
+            for (const branch of Object.values(spec.choices)) {
+                result.push(...getPossibleTransitions(branch));
+            }
+        }
+    } else if (spec.kind === "loop") {
+        if (spec.current !== undefined) {
+            result.push(...getPossibleTransitions(spec.current));
+        } else {
+            result.push(...getPossibleTransitions(spec.body));
+            result.push(...getPossibleTransitions(spec.then));
+        }
+    } else if (spec.kind === "concurrent") {
+        for (const [key, sub] of Object.entries(spec.machines)) {
+            for (const ev of getPossibleTransitions(sub)) {
+                result.push({ kind: ev.kind, channel: [key, ...ev.channel] });
+            }
+        }
+        const concurrentMachinesCompleted = Object.values(spec.machines).every(isCompleted);
+        if (concurrentMachinesCompleted) {
+            result.push(...getPossibleTransitions(spec.then));
+        }
+    } else if (spec.kind === "prefix") {
+        for (const ev of getPossibleTransitions(spec.inner)) {
+            result.push({ kind: ev.kind, channel: [...spec.prefix, ...ev.channel] });
+        }
+        if (isCompleted(spec.inner)) {
+            result.push(...getPossibleTransitions(spec.then));
+        }
+    } else if (spec.kind === "complement") {
+        for (const ev of getPossibleTransitions(spec.inner)) {
+            result.push({ kind: ev.kind === "read" ? "write" : "read", channel: ev.channel });
+        }
+        if (isCompleted(spec.inner)) {
+            result.push(...getPossibleTransitions(spec.then));
+        }
+    }
+    
+    // Deduplicate transitions
+    const seen = new Set<string>();
+    const uniqueResult: TranscriptEntry[] = [];
+    for (const ev of result) {
+        const key = `${ev.kind}:${ev.channel.join(".")}`;
+        if (!seen.has(key)) {
+            seen.add(key);
+            uniqueResult.push(ev);
+        }
+    }
+    
+    return uniqueResult;
+}
+
+function isSubtype(a: MachineSpec, b: MachineSpec): boolean {
+    const visited = new Set<string>();
+    
+    function check(currA: MachineSpec, currB: MachineSpec): boolean {
+        const stateKey = `${JSON.stringify(currA)}|${JSON.stringify(currB)}`;
+        if (visited.has(stateKey)) {
+            return true;
+        }
+        visited.add(stateKey);
+        
+        if (isCompleted(currB) && !isCompleted(currA)) {
+            return false;
+        }
+        
+        const aTrans = getPossibleTransitions(currA);
+        const bTrans = getPossibleTransitions(currB);
+        
+        // 1. Contravariant Inputs (Reads): every input that B accepts, A must also accept
+        for (const t of bTrans) {
+            if (t.kind === "read") {
+                const nextA = transition(currA, t);
+                if (nextA === null) {
+                    return false;
+                }
+                const nextB = transition(currB, t)!;
+                if (!check(nextA, nextB)) {
+                    return false;
+                }
+            }
+        }
+        
+        // 2. Covariant Outputs (Writes): every output that A produces, B must also allow/expect
+        for (const t of aTrans) {
+            if (t.kind === "write") {
+                const nextB = transition(currB, t);
+                if (nextB === null) {
+                    return false;
+                }
+                const nextA = transition(currA, t)!;
+                if (!check(nextA, nextB)) {
+                    return false;
+                }
+            }
+        }
+        
+        return true;
+    }
+    
+    return check(a, b);
+}
+
 function checkTranscript(spec : MachineSpec, transcript: TranscriptEntry[]): boolean {
     let current = spec;
     for (const entry of transcript) {
@@ -1042,6 +1153,84 @@ describe("static validation (LL-1)", () => {
                 read(["bar"])
             ));
         }).not.toThrow();
+    });
+});
+
+describe("isSubtype", () => {
+    it("is reflexive (spec is subtype of itself)", () => {
+        const spec = build(sequence(read(["foo"]), write(["bar"])));
+        expect(isSubtype(spec, spec)).toBe(true);
+        
+        const loopSpec = BorrowableSpec;
+        expect(isSubtype(loopSpec, loopSpec)).toBe(true);
+    });
+
+    it("supports contravariant inputs (reads)", () => {
+        // A accepts more inputs than B. A is a subtype of B.
+        const a = build(choice({
+            ok: build(read(["data"])),
+            err: build(read(["msg"]))
+        }));
+        const b = build(choice({
+            ok: build(read(["data"]))
+        }));
+        expect(isSubtype(a, b)).toBe(true);
+        expect(isSubtype(b, a)).toBe(false);
+    });
+
+    it("supports covariant outputs (writes)", () => {
+        // A produces fewer outputs than B. A is a subtype of B.
+        const a = build(choice({
+            ok: build(write(["data"]))
+        }));
+        const b = build(choice({
+            ok: build(write(["data"])),
+            err: build(write(["msg"]))
+        }));
+        expect(isSubtype(a, b)).toBe(true);
+        expect(isSubtype(b, a)).toBe(false);
+    });
+
+    it("respects completion constraints", () => {
+        const a = build(read(["foo"]));
+        const b = { kind: "done" } as MachineSpec;
+        expect(isSubtype(a, b)).toBe(false);
+        expect(isSubtype(b, a)).toBe(false);
+        
+        // done is a subtype of write(foo) because outputting nothing is a subset of outputting foo
+        const c = build(write(["foo"]));
+        expect(isSubtype(b, c)).toBe(true);
+    });
+
+    it("terminates and validates recursive specs (loops)", () => {
+        const a = build(loop(build(read(["x"]))));
+        const b = build(loop(build(read(["x"]))));
+        expect(isSubtype(a, b)).toBe(true);
+        
+        const loopMore = build(loop(build(choice({
+            x: build(read(["x"])),
+            y: build(read(["y"]))
+        }))));
+        const loopLess = build(loop(build(read(["x"]))));
+        expect(isSubtype(loopMore, loopLess)).toBe(true);
+        expect(isSubtype(loopLess, loopMore)).toBe(false);
+    });
+
+    it("verifies sequential borrowable uses can subtype a single concurrent borrowable", () => {
+        const workerA = build(complement(build(BorrowSpec)));
+        const workerB = build(complement(build(BorrowSpec)));
+        
+        const subtype = build(sequence(
+            concurrent({ worker: workerA, channel: BorrowableSpec }),
+            concurrent({ worker: workerB, channel: BorrowableSpec })
+        ));
+        
+        const supertype = build(concurrent({
+            worker: build(sequence(complement(build(BorrowSpec)), complement(build(BorrowSpec)))),
+            channel: BorrowableSpec
+        }));
+        
+        expect(isSubtype(subtype, supertype)).toBe(true);
     });
 });
 
