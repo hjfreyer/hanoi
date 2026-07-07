@@ -607,17 +607,62 @@ describe("isSubtype", () => {
     });
 
     it("verifies sequential borrowable uses can subtype a single concurrent borrowable", () => {
-        const workerA = build(complement(build(BorrowSpec)));
-        const workerB = build(complement(build(BorrowSpec)));
-        
+        // A single sequential worker that performs two borrows inline,
+        // separated by an intermediate action.
         const subtype = build(sequence(
-            concurrent({ worker: workerA, channel: BorrowableSpec }),
-            concurrent({ worker: workerB, channel: BorrowableSpec })
+            read(["main", "request"]),
+            write(["val1", "borrow"]),
+            read(["val1", "value"]),
+            write(["main", "partial response"]),  // NOTE: we're very sensitive to the placement of this.
+            write(["val2", "borrow"]),
+            read(["val2", "value"]),
+            write(["val2", "restore"]),
+            write(["val1", "restore"]),
+            write(["main", "response"]),
+        ));
+        
+        // A version of subtype with all the "borrowable" stuff factored out.
+        const factoredSubtype = build(sequence(
+            read(["request"]),
+            write(["partial response"]),
+            write(["response"]),
         ));
         
         const supertype = build(concurrent({
-            worker: build(sequence(complement(build(BorrowSpec)), complement(build(BorrowSpec)))),
-            channel: BorrowableSpec
+            main: factoredSubtype,
+            val1: build(complement(BorrowableSpec)),
+            val2: build(complement(BorrowableSpec)),
+        }));
+        
+        expect(isSubtype(subtype, supertype)).toBe(true);
+    });
+
+    it("verifies sequential borrowable uses can subtype a single concurrent borrowable in a loop", () => {
+        // A single sequential worker that performs two borrows inline,
+        // separated by an intermediate action.
+        const subtype = build(loop(build(sequence(
+            read(["main", "request"]),
+            write(["val1", "borrow"]),
+            read(["val1", "value"]),
+            write(["main", "partial response"]),  // NOTE: we're very sensitive to the placement of this.
+            write(["val2", "borrow"]),
+            read(["val2", "value"]),
+            write(["val2", "restore"]),
+            write(["val1", "restore"]),
+            write(["main", "response"]),
+        ))));
+        
+        // A version of subtype with all the "borrowable" stuff factored out.
+        const factoredSubtype = build(loop(build(sequence(
+            read(["request"]),
+            write(["partial response"]),
+            write(["response"]),
+        ))));
+        
+        const supertype = build(concurrent({
+            main: factoredSubtype,
+            val1: build(complement(BorrowableSpec)),
+            val2: build(complement(BorrowableSpec)),
         }));
         
         expect(isSubtype(subtype, supertype)).toBe(true);
