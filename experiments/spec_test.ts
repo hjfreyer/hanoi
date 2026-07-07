@@ -1,6 +1,6 @@
 import {
     MachineSpec, TranscriptEntry, SpecBuilder,
-    build, read, write, concurrent, choice, loop, complement, prefix, sequence,
+    build, read, write, concurrent, choice, loop, complement, prefix, trace, sequence,
     transition, isCompleted, checkTranscript, parseTranscript,
     getPossibleTransitions, isSubtype
 } from "./spec";
@@ -782,5 +782,49 @@ describe("parseTranscript", () => {
     it("throws on empty channel segments", () => {
         expect(() => parseTranscript("< foo..bar")).toThrow();
         expect(() => parseTranscript("< .")).toThrow();
+    });
+});
+
+describe("trace spec operator", () => {
+    it("resolves internal matched transitions and hides wired channels", () => {
+        // Compose a producer that writes "mid" and consumer that reads "mid" then writes "out"
+        const inner = build(concurrent({
+            prod: build(write(["mid"])),
+            cons: build(sequence(read(["mid"]), write(["out"])))
+        }));
+
+        // Trace prod.mid to cons.mid
+        const spec = build(trace(inner, ["prod", "mid"], ["cons", "mid"]));
+
+        // First events of the inner spec are: prod.mid and others.
+        // But in the traced spec, the internal communication resolves silently, leaving only the external "cons.out" write!
+        const possible = getPossibleTransitions(spec);
+        expect(possible).toEqual([
+            { kind: "write", channel: ["cons", "out"] }
+        ]);
+
+        // Transitioning on cons.out should complete the spec
+        const next = transition(spec, { kind: "write", channel: ["cons", "out"] });
+        expect(next).not.toBeNull();
+        expect(isCompleted(next!)).toBe(true);
+    });
+
+    it("remains blocked if internal transitions do not match", () => {
+        // Producer writes "mid" but consumer reads a different channel "other"
+        const inner = build(concurrent({
+            prod: build(write(["mid"])),
+            cons: build(sequence(read(["other"]), write(["out"])))
+        }));
+
+        // Trace prod.mid to cons.mid (but cons is reading "cons.other", not "cons.mid"!)
+        const spec = build(trace(inner, ["prod", "mid"], ["cons", "mid"]));
+
+        // Since they don't match, they cannot synchronize.
+        // prod.mid is a write on pathA, which is wired/hidden, so it cannot be performed externally.
+        // cons.other is a read, which is not wired, so it's visible.
+        const possible = getPossibleTransitions(spec);
+        expect(possible).toEqual([
+            { kind: "read", channel: ["cons", "other"] }
+        ]);
     });
 });

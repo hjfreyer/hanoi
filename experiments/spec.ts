@@ -65,6 +65,12 @@ export type MachineSpec = {
     prefix: string[]
     inner: MachineSpec
     then: MachineSpec
+} | {
+    kind: "trace"
+    inner: MachineSpec
+    pathA: string[]
+    pathB: string[]
+    then: MachineSpec
 };
 
 export type TranscriptEntry =  {
@@ -76,6 +82,30 @@ export type TranscriptEntry =  {
 };
 
 export type SpecBuilder = (next: MachineSpec) => MachineSpec;
+
+function resolveTraceInternal(inner: MachineSpec, pathA: string[], pathB: string[]): MachineSpec {
+    let current = inner;
+    while (true) {
+        let next = transition(current, { kind: "write", channel: pathA });
+        if (next) {
+            let next2 = transition(next, { kind: "read", channel: pathB });
+            if (next2) {
+                current = next2;
+                continue;
+            }
+        }
+        next = transition(current, { kind: "write", channel: pathB });
+        if (next) {
+            let next2 = transition(next, { kind: "read", channel: pathA });
+            if (next2) {
+                current = next2;
+                continue;
+            }
+        }
+        break;
+    }
+    return current;
+}
 
 function getFirstEvents(spec: MachineSpec): Array<{ kind: "read" | "write", channel: string[] }> {
     if (spec.kind === "read" || spec.kind === "write") {
@@ -111,6 +141,16 @@ function getFirstEvents(spec: MachineSpec): Array<{ kind: "read" | "write", chan
         const result: Array<{ kind: "read" | "write", channel: string[] }> = [];
         for (const ev of getFirstEvents(spec.inner)) {
             result.push({ kind: ev.kind === "read" ? "write" : "read", channel: ev.channel });
+        }
+        return result;
+    }
+    if (spec.kind === "trace") {
+        const resolvedInner = resolveTraceInternal(spec.inner, spec.pathA, spec.pathB);
+        const result: Array<{ kind: "read" | "write", channel: string[] }> = [];
+        for (const ev of getFirstEvents(resolvedInner)) {
+            if (!channelsEqual(ev.channel, spec.pathA) && !channelsEqual(ev.channel, spec.pathB)) {
+                result.push(ev);
+            }
         }
         return result;
     }
@@ -156,6 +196,9 @@ function validateSpec(spec: MachineSpec): void {
         validateSpec(spec.inner);
         validateSpec(spec.then);
     } else if (spec.kind === "complement") {
+        validateSpec(spec.inner);
+        validateSpec(spec.then);
+    } else if (spec.kind === "trace") {
         validateSpec(spec.inner);
         validateSpec(spec.then);
     } else if (spec.kind === "read" || spec.kind === "write") {
@@ -225,6 +268,15 @@ export function prefix(prefixPath: string[], inner: MachineSpec): SpecBuilder {
         then: next
     });
 }
+export function trace(inner: MachineSpec, pathA: string[], pathB: string[]): SpecBuilder {
+    return (next: MachineSpec) => ({
+        kind: "trace",
+        inner,
+        pathA,
+        pathB,
+        then: next
+    });
+}
 
 export function sequence(...parts: SpecBuilder[]): SpecBuilder {
     return (next: MachineSpec) => {
@@ -263,6 +315,10 @@ export function isCompleted(spec: MachineSpec): boolean {
     }
     if (spec.kind === "prefix") {
         return isCompleted(spec.inner) && isCompleted(spec.then);
+    }
+    if (spec.kind === "trace") {
+        const resolvedInner = resolveTraceInternal(spec.inner, spec.pathA, spec.pathB);
+        return isCompleted(resolvedInner) && isCompleted(spec.then);
     }
     return false;
 }
@@ -457,6 +513,30 @@ export function transition(spec: MachineSpec, entry: TranscriptEntry): MachineSp
         return null;
     }
 
+    if (spec.kind === "trace") {
+        if (channelsEqual(entry.channel, spec.pathA) || channelsEqual(entry.channel, spec.pathB)) {
+            return null;
+        }
+
+        const resolvedInner = resolveTraceInternal(spec.inner, spec.pathA, spec.pathB);
+        const nextInner = transition(resolvedInner, entry);
+        if (nextInner !== null) {
+            const finalInner = resolveTraceInternal(nextInner, spec.pathA, spec.pathB);
+            return {
+                kind: "trace",
+                inner: finalInner,
+                pathA: spec.pathA,
+                pathB: spec.pathB,
+                then: spec.then
+            };
+        }
+
+        if (isCompleted(resolvedInner)) {
+            return transition(spec.then, entry);
+        }
+        return null;
+    }
+
     return null;
 }
 
@@ -502,6 +582,16 @@ export function getPossibleTransitions(spec: MachineSpec): TranscriptEntry[] {
             result.push({ kind: ev.kind === "read" ? "write" : "read", channel: ev.channel });
         }
         if (isCompleted(spec.inner)) {
+            result.push(...getPossibleTransitions(spec.then));
+        }
+    } else if (spec.kind === "trace") {
+        const resolvedInner = resolveTraceInternal(spec.inner, spec.pathA, spec.pathB);
+        for (const ev of getPossibleTransitions(resolvedInner)) {
+            if (!channelsEqual(ev.channel, spec.pathA) && !channelsEqual(ev.channel, spec.pathB)) {
+                result.push(ev);
+            }
+        }
+        if (isCompleted(resolvedInner)) {
             result.push(...getPossibleTransitions(spec.then));
         }
     }
@@ -623,4 +713,70 @@ export function parseTranscript(text: string): TranscriptEntry[] {
     }
 
     return result;
+}
+
+export function hideSpecChannels(spec: MachineSpec, paths: string[][], prefix: string[] = []): MachineSpec {
+    const isHidden = (channel: string[]) => {
+        const absolute = [...prefix, ...channel];
+        return paths.some(p => channelsEqual(absolute, p));
+    };
+
+    if (spec.kind === "read" || spec.kind === "write") {
+        if (isHidden(spec.channel)) {
+            return hideSpecChannels(spec.then, paths, prefix);
+        }
+        return {
+            ...spec,
+            then: hideSpecChannels(spec.then, paths, prefix)
+        };
+    }
+    if (spec.kind === "done") {
+        return spec;
+    }
+    if (spec.kind === "concurrent") {
+        const sub: Record<string, MachineSpec> = {};
+        for (const [key, m] of Object.entries(spec.machines)) {
+            sub[key] = hideSpecChannels(m, paths, [...prefix, key]);
+        }
+        return {
+            ...spec,
+            machines: sub,
+            then: hideSpecChannels(spec.then, paths, prefix)
+        };
+    }
+    if (spec.kind === "choice") {
+        const sub: Record<string, MachineSpec> = {};
+        for (const [key, m] of Object.entries(spec.choices)) {
+            sub[key] = hideSpecChannels(m, paths, prefix);
+        }
+        return {
+            ...spec,
+            choices: sub,
+            then: hideSpecChannels(spec.then, paths, prefix),
+            current: spec.current ? hideSpecChannels(spec.current, paths, prefix) : undefined
+        };
+    }
+    if (spec.kind === "loop") {
+        return {
+            ...spec,
+            body: hideSpecChannels(spec.body, paths, prefix),
+            then: hideSpecChannels(spec.then, paths, prefix),
+            current: spec.current ? hideSpecChannels(spec.current, paths, prefix) : undefined
+        };
+    }
+    if (spec.kind === "prefix") {
+        return {
+            ...spec,
+            inner: hideSpecChannels(spec.inner, paths, [...prefix, ...spec.prefix]),
+            then: hideSpecChannels(spec.then, paths, prefix)
+        };
+    }
+    if (spec.kind === "complement") {
+        return {
+            ...spec,
+            inner: hideSpecChannels(spec.inner, paths, prefix),
+            then: hideSpecChannels(spec.then, paths, prefix)
+        };
+    }
+    return spec;
 }
