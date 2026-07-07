@@ -520,18 +520,26 @@ export function getPossibleTransitions(spec: MachineSpec): TranscriptEntry[] {
     return uniqueResult;
 }
 
-export function isSubtype(a: MachineSpec, b: MachineSpec): boolean {
+export type SubtypeResult = {
+    isSubtype: true;
+} | {
+    isSubtype: false;
+    reason: "completion" | "read" | "write";
+    transcript: TranscriptEntry[];
+};
+
+export function isSubtype(a: MachineSpec, b: MachineSpec): SubtypeResult {
     const visited = new Set<string>();
     
-    function check(currA: MachineSpec, currB: MachineSpec): boolean {
+    function check(currA: MachineSpec, currB: MachineSpec, path: TranscriptEntry[]): SubtypeResult {
         const stateKey = `${JSON.stringify(currA)}|${JSON.stringify(currB)}`;
         if (visited.has(stateKey)) {
-            return true;
+            return { isSubtype: true };
         }
         visited.add(stateKey);
         
         if (isCompleted(currB) && !isCompleted(currA)) {
-            return false;
+            return { isSubtype: false, reason: "completion", transcript: path };
         }
         
         const aTrans = getPossibleTransitions(currA);
@@ -542,11 +550,12 @@ export function isSubtype(a: MachineSpec, b: MachineSpec): boolean {
             if (t.kind === "read") {
                 const nextA = transition(currA, t);
                 if (nextA === null) {
-                    return false;
+                    return { isSubtype: false, reason: "read", transcript: [...path, t] };
                 }
                 const nextB = transition(currB, t)!;
-                if (!check(nextA, nextB)) {
-                    return false;
+                const result = check(nextA, nextB, [...path, t]);
+                if (!result.isSubtype) {
+                    return result;
                 }
             }
         }
@@ -556,19 +565,20 @@ export function isSubtype(a: MachineSpec, b: MachineSpec): boolean {
             if (t.kind === "write") {
                 const nextB = transition(currB, t);
                 if (nextB === null) {
-                    return false;
+                    return { isSubtype: false, reason: "write", transcript: [...path, t] };
                 }
                 const nextA = transition(currA, t)!;
-                if (!check(nextA, nextB)) {
-                    return false;
+                const result = check(nextA, nextB, [...path, t]);
+                if (!result.isSubtype) {
+                    return result;
                 }
             }
         }
         
-        return true;
+        return { isSubtype: true };
     }
     
-    return check(a, b);
+    return check(a, b, []);
 }
 
 export function checkTranscript(spec : MachineSpec, transcript: TranscriptEntry[]): boolean {

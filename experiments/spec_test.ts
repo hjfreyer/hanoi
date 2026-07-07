@@ -549,10 +549,10 @@ describe("static validation (LL-1)", () => {
 describe("isSubtype", () => {
     it("is reflexive (spec is subtype of itself)", () => {
         const spec = build(sequence(read(["foo"]), write(["bar"])));
-        expect(isSubtype(spec, spec)).toBe(true);
+        expect(isSubtype(spec, spec).isSubtype).toBe(true);
         
         const loopSpec = BorrowableSpec;
-        expect(isSubtype(loopSpec, loopSpec)).toBe(true);
+        expect(isSubtype(loopSpec, loopSpec).isSubtype).toBe(true);
     });
 
     it("supports contravariant inputs (reads)", () => {
@@ -564,8 +564,14 @@ describe("isSubtype", () => {
         const b = build(choice({
             ok: build(read(["data"]))
         }));
-        expect(isSubtype(a, b)).toBe(true);
-        expect(isSubtype(b, a)).toBe(false);
+        expect(isSubtype(a, b).isSubtype).toBe(true);
+        
+        const res = isSubtype(b, a);
+        expect(res.isSubtype).toBe(false);
+        if (res.isSubtype === false) {
+            expect(res.reason).toBe("read");
+            expect(res.transcript).toEqual(parseTranscript("< msg"));
+        }
     });
 
     it("supports covariant outputs (writes)", () => {
@@ -577,33 +583,57 @@ describe("isSubtype", () => {
             ok: build(write(["data"])),
             err: build(write(["msg"]))
         }));
-        expect(isSubtype(a, b)).toBe(true);
-        expect(isSubtype(b, a)).toBe(false);
+        expect(isSubtype(a, b).isSubtype).toBe(true);
+        
+        const res = isSubtype(b, a);
+        expect(res.isSubtype).toBe(false);
+        if (res.isSubtype === false) {
+            expect(res.reason).toBe("write");
+            expect(res.transcript).toEqual(parseTranscript("> msg"));
+        }
     });
 
     it("respects completion constraints", () => {
         const a = build(read(["foo"]));
         const b = { kind: "done" } as MachineSpec;
-        expect(isSubtype(a, b)).toBe(false);
-        expect(isSubtype(b, a)).toBe(false);
+        
+        const resAtoB = isSubtype(a, b);
+        expect(resAtoB.isSubtype).toBe(false);
+        if (resAtoB.isSubtype === false) {
+            expect(resAtoB.reason).toBe("completion");
+            expect(resAtoB.transcript).toEqual(parseTranscript(""));
+        }
+        
+        const resBtoA = isSubtype(b, a);
+        expect(resBtoA.isSubtype).toBe(false);
+        if (resBtoA.isSubtype === false) {
+            expect(resBtoA.reason).toBe("read");
+            expect(resBtoA.transcript).toEqual(parseTranscript("< foo"));
+        }
         
         // done is a subtype of write(foo) because outputting nothing is a subset of outputting foo
         const c = build(write(["foo"]));
-        expect(isSubtype(b, c)).toBe(true);
+        expect(isSubtype(b, c).isSubtype).toBe(true);
     });
 
     it("terminates and validates recursive specs (loops)", () => {
         const a = build(loop(build(read(["x"]))));
         const b = build(loop(build(read(["x"]))));
-        expect(isSubtype(a, b)).toBe(true);
+        expect(isSubtype(a, b).isSubtype).toBe(true);
         
         const loopMore = build(loop(build(choice({
             x: build(read(["x"])),
             y: build(read(["y"]))
         }))));
         const loopLess = build(loop(build(read(["x"]))));
-        expect(isSubtype(loopMore, loopLess)).toBe(true);
-        expect(isSubtype(loopLess, loopMore)).toBe(false);
+        expect(isSubtype(loopMore, loopLess).isSubtype).toBe(true);
+        
+        const res = isSubtype(loopLess, loopMore);
+        expect(res.isSubtype).toBe(false);
+        if (res.isSubtype === false) {
+            expect(res.reason).toBe("read");
+            expect(res.transcript).toEqual(parseTranscript("< y"));
+        }
     });
 
     it("verifies sequential borrowable uses can subtype a single concurrent borrowable", () => {
@@ -634,7 +664,7 @@ describe("isSubtype", () => {
             val2: build(complement(BorrowableSpec)),
         }));
         
-        expect(isSubtype(subtype, supertype)).toBe(true);
+        expect(isSubtype(subtype, supertype).isSubtype).toBe(true);
     });
 
     it("verifies sequential borrowable uses can subtype a single concurrent borrowable in a loop", () => {
@@ -665,7 +695,53 @@ describe("isSubtype", () => {
             val2: build(complement(BorrowableSpec)),
         }));
         
-        expect(isSubtype(subtype, supertype)).toBe(true);
+        expect(isSubtype(subtype, supertype).isSubtype).toBe(true);
+    });
+
+    it("returns correct nested path in a nested read mismatch", () => {
+        const subtype = build(sequence(
+            read(["step1"]),
+            write(["step2"]),
+            read(["step3"])
+        ));
+        const supertype = build(sequence(
+            read(["step1"]),
+            write(["step2"]),
+            read(["step4"])
+        ));
+        const res = isSubtype(subtype, supertype);
+        expect(res.isSubtype).toBe(false);
+        if (res.isSubtype === false) {
+            expect(res.reason).toBe("read");
+            expect(res.transcript).toEqual(parseTranscript(`
+                < step1
+                > step2
+                < step4
+            `));
+        }
+    });
+
+    it("returns correct nested path in a nested write mismatch", () => {
+        const subtype = build(sequence(
+            read(["step1"]),
+            write(["step2"]),
+            write(["step3"])
+        ));
+        const supertype = build(sequence(
+            read(["step1"]),
+            write(["step2"]),
+            write(["step4"])
+        ));
+        const res = isSubtype(subtype, supertype);
+        expect(res.isSubtype).toBe(false);
+        if (res.isSubtype === false) {
+            expect(res.reason).toBe("write");
+            expect(res.transcript).toEqual(parseTranscript(`
+                < step1
+                > step2
+                > step3
+            `));
+        }
     });
 });
 
