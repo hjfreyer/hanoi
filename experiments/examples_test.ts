@@ -494,16 +494,16 @@ describe("Fibonacci Machine 2 (sequential assignment)", () => {
     });
 });
 
-export class AddCellMachine implements MachineInstance {
+export class BinaryCellMachine implements MachineInstance {
     private spec: MachineSpec;
     private state: "reading" | "writing" | "done" = "reading";
-    private xVal: number = 0;
-    private yVal: number = 0;
+    private xVal: any = 0;
+    private yVal: any = 0;
     private xKey: string;
     private yKey: string;
     private remainingReads = new Set<string>();
 
-    constructor(srcX: string[], srcY: string[], destZ: string[]) {
+    constructor(srcX: string[], srcY: string[], destZ: string[], private op: (x: any, y: any) => any) {
         this.xKey = srcX[srcX.length - 1];
         this.yKey = srcY[srcY.length - 1];
         this.remainingReads.add(this.xKey);
@@ -566,7 +566,7 @@ export class AddCellMachine implements MachineInstance {
                 if (!nextSpec) throw new Error("Invalid transition on z write");
                 this.spec = nextSpec;
                 this.state = "done";
-                return { kind: "write", channel: writeTrans.channel, value: this.xVal + this.yVal };
+                return { kind: "write", channel: writeTrans.channel, value: this.op(this.xVal, this.yVal) };
             }
             this.state = "done";
         }
@@ -574,6 +574,13 @@ export class AddCellMachine implements MachineInstance {
         return { kind: "done" };
     }
 }
+
+export class AddCellMachine extends BinaryCellMachine {
+    constructor(srcX: string[], srcY: string[], destZ: string[]) {
+        super(srcX, srcY, destZ, (x, y) => x + y);
+    }
+}
+
 
 describe("AddCellMachine", () => {
     it("requests copy from cell X and cell Y, and writes the sum to cell Z", () => {
