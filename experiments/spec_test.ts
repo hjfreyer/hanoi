@@ -827,4 +827,47 @@ describe("trace spec operator", () => {
             { kind: "read", channel: ["cons", "other"] }
         ]);
     });
+
+    it("resolves matched transitions and hides wired channels via prefixes", () => {
+        // Compose a producer that writes ["mid", "val"] (so "prod.mid.val")
+        // and consumer that reads ["mid", "val"] (so "cons.mid.val") then writes ["external", "out"] (so "cons.external.out")
+        const inner = build(concurrent({
+            prod: build(write(["mid", "val"])),
+            cons: build(sequence(read(["mid", "val"]), write(["external", "out"])))
+        }));
+
+        // Trace prod.mid to cons.mid
+        const spec = build(trace(inner, ["prod", "mid"], ["cons", "mid"]));
+
+        // The internal communication on prod.mid.val and cons.mid.val resolves silently.
+        // The external "cons.external.out" write remains visible!
+        const possible = getPossibleTransitions(spec);
+        expect(possible).toEqual([
+            { kind: "write", channel: ["cons", "external", "out"] }
+        ]);
+
+        // Transitioning on cons.external.out should complete the spec
+        const next = transition(spec, { kind: "write", channel: ["cons", "external", "out"] });
+        expect(next).not.toBeNull();
+        expect(isCompleted(next!)).toBe(true);
+    });
+
+    it("does not match if suffixes do not match under prefix tracing", () => {
+        // Producer writes ["mid", "val"] (prod.mid.val), consumer reads ["mid", "other"] (cons.mid.other)
+        const inner = build(concurrent({
+            prod: build(write(["mid", "val"])),
+            cons: build(sequence(read(["mid", "other"]), write(["external", "out"]))),
+            unrelated: build(write(["info"]))
+        }));
+
+        // Trace prod.mid to cons.mid
+        const spec = build(trace(inner, ["prod", "mid"], ["cons", "mid"]));
+
+        // Since suffixes ("val" vs "other") do not match under the wired prefixes, they cannot synchronize.
+        // The unrelated write remains visible.
+        const possible = getPossibleTransitions(spec);
+        expect(possible).toEqual([
+            { kind: "write", channel: ["unrelated", "info"] }
+        ]);
+    });
 });

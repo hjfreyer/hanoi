@@ -122,6 +122,14 @@ export function channelsEqual(a: string[], b: string[]): boolean {
     return a.every((val, index) => val === b[index]);
 }
 
+function getSuffix(channel: string[], prefix: string[]): string[] | null {
+    if (channel.length < prefix.length) return null;
+    for (let i = 0; i < prefix.length; i++) {
+        if (channel[i] !== prefix[i]) return null;
+    }
+    return channel.slice(prefix.length);
+}
+
 export class TraceMachine implements MachineInstance {
     private inner: MachineInstance;
     private pathA: string[];
@@ -161,19 +169,21 @@ export class TraceMachine implements MachineInstance {
         let current = res;
         while (true) {
             if (current.kind === "write") {
-                if (channelsEqual(current.channel, this.pathA)) {
-                    this.inner.step({ channel: this.pathB, value: current.value });
+                const suffixA = getSuffix(current.channel, this.pathA);
+                if (suffixA !== null) {
+                    this.inner.step({ channel: [...this.pathB, ...suffixA], value: current.value });
                     current = this.inner.step();
                     continue;
                 }
-                if (channelsEqual(current.channel, this.pathB)) {
-                    this.inner.step({ channel: this.pathA, value: current.value });
+                const suffixB = getSuffix(current.channel, this.pathB);
+                if (suffixB !== null) {
+                    this.inner.step({ channel: [...this.pathA, ...suffixB], value: current.value });
                     current = this.inner.step();
                     continue;
                 }
             }
             if (current.kind === "read") {
-                if (channelsEqual(current.channel, this.pathA) || channelsEqual(current.channel, this.pathB)) {
+                if (getSuffix(current.channel, this.pathA) !== null || getSuffix(current.channel, this.pathB) !== null) {
                     current = this.inner.step();
                     continue;
                 }

@@ -1,5 +1,5 @@
 import { MachineSpec, build, sequence, read, write, concurrent, choice, loop, complement, isCompleted, transition } from "./spec";
-import { MachineInstance, StepResult, SequenceMachine, ConcurrentMachine, TraceMachine, WriteConstantMachine, DiscardMachine, LoopMachine, DupMachine } from "./impl";
+import { MachineInstance, StepResult, SequenceMachine, ConcurrentMachine, TraceMachine, WriteConstantMachine, DiscardMachine, LoopMachine, DupMachine, channelsEqual } from "./impl";
 
 describe("step-by-step MachineInstance model", () => {
     class DoubleMachine implements MachineInstance {
@@ -314,6 +314,72 @@ describe("TraceMachine", () => {
 
         // Done
         expect(wired.step()).toEqual({ kind: "done" });
+    });
+
+    it("wires producer and consumer via prefixes", () => {
+        const producer = new ProducerMachine(); // writes ["out"], which is ["producer", "out"] under concurrent
+        const consumer = new ConsumerMachine(); // reads ["in"], which is ["consumer", "in"] under concurrent
+        const comp = new ConcurrentMachine({ producer, consumer });
+
+        // Wire "producer" prefix directly to "consumer" prefix.
+        // The write to ["producer", "out"] should map to ["consumer", "out"], which does NOT match the consumer's expected read of ["consumer", "in"]!
+        const badWired = new TraceMachine(comp, ["producer"], ["consumer"]);
+        expect(badWired.step()).toEqual({ kind: "waiting" });
+
+        // Now, let's create a prefix-compatible pair:
+        class PrefixProducer implements MachineInstance {
+            private spec = build(write(["mid", "data"]));
+            private done = false;
+            getSpec() { return this.spec; }
+            isCompleted() { return this.done; }
+            step(): StepResult {
+                if (this.done) return { kind: "done" };
+                this.spec = { kind: "done" };
+                this.done = true;
+                return { kind: "write", channel: ["mid", "data"], value: 100 };
+            }
+        }
+
+        class PrefixConsumer implements MachineInstance {
+            private spec = build(sequence(read(["mid", "data"]), write(["result"])));
+            private state: "waiting_in" | "ready_res" | "done" = "waiting_in";
+            private val = 0;
+            getSpec() { return this.spec; }
+            isCompleted() { return this.state === "done"; }
+            step(action?: { channel: string[]; value?: any }): StepResult {
+                if (this.state === "waiting_in") {
+                    if (!action || !channelsEqual(action.channel, ["mid", "data"])) return { kind: "waiting" };
+                    this.val = action.value;
+                    const next = transition(this.spec, { kind: "read", channel: ["mid", "data"] });
+                    if (!next) throw new Error("Invalid transition");
+                    this.spec = next;
+                    this.state = "ready_res";
+                    return { kind: "read", channel: ["mid", "data"], value: this.val };
+                }
+                if (this.state === "ready_res") {
+                    const next = transition(this.spec, { kind: "write", channel: ["result"] });
+                    if (!next) throw new Error("Invalid transition");
+                    this.spec = next;
+                    this.state = "done";
+                    return { kind: "write", channel: ["result"], value: this.val * 3 };
+                }
+                return { kind: "done" };
+            }
+        }
+
+        const prefProd = new PrefixProducer();
+        const prefCons = new PrefixConsumer();
+        const comp2 = new ConcurrentMachine({ producer: prefProd, consumer: prefCons });
+
+        // Wire "producer.mid" prefix to "consumer.mid" prefix.
+        // A write on ["producer", "mid", "data"] should map to ["consumer", "mid", "data"].
+        // Since prefCons reads ["consumer", "mid", "data"], it should route successfully!
+        const wired = new TraceMachine(comp2, ["producer", "mid"], ["consumer", "mid"]);
+        expect(wired.isCompleted()).toBe(false);
+
+        const res = wired.step();
+        expect(res).toEqual({ kind: "write", channel: ["consumer", "result"], value: 300 });
+        expect(wired.isCompleted()).toBe(true);
     });
 });
 

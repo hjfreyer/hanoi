@@ -303,10 +303,8 @@ describe("Automated AddMachine Wiring", () => {
         systemWired = new TraceMachine(systemWired, ["system", "add", "z"], ["system", "z", "set"]);
 
         // 2. Wire the driver to the system:
-        // driver.x.copy -> system.x.copy
-        let wired = new TraceMachine(systemWired, ["driver", "x", "copy"], ["system", "x", "copy"]);
-        // driver.y.copy -> system.y.copy
-        wired = new TraceMachine(wired, ["driver", "y", "copy"], ["system", "y", "copy"]);
+        // driver.x.copy -> system.x.copy, driver.y.copy -> system.y.copy
+        let wired = new TraceMachine(systemWired, ["driver"], ["system"]);
 
         // Execute the entire pipeline in one single step!
         // It runs silently and terminates since there are no more active writes.
@@ -436,20 +434,10 @@ export function createFibonacciMachine2(): MachineInstance {
         ctrl: controller
     });
 
-    // Wire cell values to the controller's shared read channels
-    let wired = new TraceMachine(comp, ["A", "value"], ["ctrl", "A", "value"]);
-    wired = new TraceMachine(wired, ["B", "value"], ["ctrl", "B", "value"]);
-    wired = new TraceMachine(wired, ["C", "value"], ["ctrl", "C", "value"]);
-
-    // Wire copy triggers
-    wired = new TraceMachine(wired, ["ctrl", "A", "copy"], ["A", "copy"]);
-    wired = new TraceMachine(wired, ["ctrl", "B", "copy"], ["B", "copy"]);
-    wired = new TraceMachine(wired, ["ctrl", "C", "copy"], ["C", "copy"]);
-
-    // Wire set channels
-    wired = new TraceMachine(wired, ["ctrl", "A", "set"], ["A", "set"]);
-    wired = new TraceMachine(wired, ["ctrl", "B", "set"], ["B", "set"]);
-    wired = new TraceMachine(wired, ["ctrl", "C", "set"], ["C", "set"]);
+    // Wire cells A, B, and C to controller using prefix wiring
+    let wired = new TraceMachine(comp, ["ctrl", "A"], ["A"]);
+    wired = new TraceMachine(wired, ["ctrl", "B"], ["B"]);
+    wired = new TraceMachine(wired, ["ctrl", "C"], ["C"]);
 
     return wired;
 }
@@ -601,11 +589,9 @@ describe("AddCellMachine", () => {
             add: add
         });
 
-        let wired = new TraceMachine(comp, ["add", "x", "copy"], ["x", "copy"]);
-        wired = new TraceMachine(wired, ["x", "value"], ["add", "x", "value"]);
-        wired = new TraceMachine(wired, ["add", "y", "copy"], ["y", "copy"]);
-        wired = new TraceMachine(wired, ["y", "value"], ["add", "y", "value"]);
-        wired = new TraceMachine(wired, ["add", "z", "set"], ["z", "set"]);
+        let wired = new TraceMachine(comp, ["add", "x"], ["x"]);
+        wired = new TraceMachine(wired, ["add", "y"], ["y"]);
+        wired = new TraceMachine(wired, ["add", "z"], ["z"]);
 
         const res = wired.step();
         expect(res).toEqual({ kind: "done" });

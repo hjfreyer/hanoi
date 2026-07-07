@@ -83,26 +83,53 @@ export type TranscriptEntry =  {
 
 export type SpecBuilder = (next: MachineSpec) => MachineSpec;
 
+function getSuffix(channel: string[], prefix: string[]): string[] | null {
+    if (channel.length < prefix.length) return null;
+    for (let i = 0; i < prefix.length; i++) {
+        if (channel[i] !== prefix[i]) return null;
+    }
+    return channel.slice(prefix.length);
+}
+
 function resolveTraceInternal(inner: MachineSpec, pathA: string[], pathB: string[]): MachineSpec {
     let current = inner;
     while (true) {
-        let next = transition(current, { kind: "write", channel: pathA });
-        if (next) {
-            let next2 = transition(next, { kind: "read", channel: pathB });
-            if (next2) {
-                current = next2;
-                continue;
+        let transitioned = false;
+        const possible = getPossibleTransitions(current);
+        for (const ev of possible) {
+            if (ev.kind === "write") {
+                const suffixA = getSuffix(ev.channel, pathA);
+                if (suffixA !== null) {
+                    const mappedChannel = [...pathB, ...suffixA];
+                    const next = transition(current, ev);
+                    if (next) {
+                        const next2 = transition(next, { kind: "read", channel: mappedChannel });
+                        if (next2) {
+                            current = next2;
+                            transitioned = true;
+                            break;
+                        }
+                    }
+                }
+                
+                const suffixB = getSuffix(ev.channel, pathB);
+                if (suffixB !== null) {
+                    const mappedChannel = [...pathA, ...suffixB];
+                    const next = transition(current, ev);
+                    if (next) {
+                        const next2 = transition(next, { kind: "read", channel: mappedChannel });
+                        if (next2) {
+                            current = next2;
+                            transitioned = true;
+                            break;
+                        }
+                    }
+                }
             }
         }
-        next = transition(current, { kind: "write", channel: pathB });
-        if (next) {
-            let next2 = transition(next, { kind: "read", channel: pathA });
-            if (next2) {
-                current = next2;
-                continue;
-            }
+        if (!transitioned) {
+            break;
         }
-        break;
     }
     return current;
 }
@@ -148,7 +175,7 @@ function getFirstEvents(spec: MachineSpec): Array<{ kind: "read" | "write", chan
         const resolvedInner = resolveTraceInternal(spec.inner, spec.pathA, spec.pathB);
         const result: Array<{ kind: "read" | "write", channel: string[] }> = [];
         for (const ev of getFirstEvents(resolvedInner)) {
-            if (!channelsEqual(ev.channel, spec.pathA) && !channelsEqual(ev.channel, spec.pathB)) {
+            if (getSuffix(ev.channel, spec.pathA) === null && getSuffix(ev.channel, spec.pathB) === null) {
                 result.push(ev);
             }
         }
@@ -514,7 +541,7 @@ export function transition(spec: MachineSpec, entry: TranscriptEntry): MachineSp
     }
 
     if (spec.kind === "trace") {
-        if (channelsEqual(entry.channel, spec.pathA) || channelsEqual(entry.channel, spec.pathB)) {
+        if (getSuffix(entry.channel, spec.pathA) !== null || getSuffix(entry.channel, spec.pathB) !== null) {
             return null;
         }
 
@@ -587,7 +614,7 @@ export function getPossibleTransitions(spec: MachineSpec): TranscriptEntry[] {
     } else if (spec.kind === "trace") {
         const resolvedInner = resolveTraceInternal(spec.inner, spec.pathA, spec.pathB);
         for (const ev of getPossibleTransitions(resolvedInner)) {
-            if (!channelsEqual(ev.channel, spec.pathA) && !channelsEqual(ev.channel, spec.pathB)) {
+            if (getSuffix(ev.channel, spec.pathA) === null && getSuffix(ev.channel, spec.pathB) === null) {
                 result.push(ev);
             }
         }
