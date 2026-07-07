@@ -162,11 +162,13 @@ export class TraceMachine implements MachineInstance {
         while (true) {
             if (current.kind === "write") {
                 if (channelsEqual(current.channel, this.pathA)) {
-                    current = this.inner.step({ channel: this.pathB, value: current.value });
+                    this.inner.step({ channel: this.pathB, value: current.value });
+                    current = this.inner.step();
                     continue;
                 }
                 if (channelsEqual(current.channel, this.pathB)) {
-                    current = this.inner.step({ channel: this.pathA, value: current.value });
+                    this.inner.step({ channel: this.pathA, value: current.value });
+                    current = this.inner.step();
                     continue;
                 }
             }

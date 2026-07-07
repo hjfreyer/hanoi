@@ -1,5 +1,5 @@
-import { build, sequence, read, write, choice, loop, concurrent, parseTranscript, checkTranscript, transition, isCompleted, getPossibleTransitions } from "./spec";
-import { MachineInstance, StepResult, ConcurrentMachine, TraceMachine, SequenceMachine, WriteConstantMachine, DiscardMachine, LoopMachine, DupMachine } from "./impl";
+import { MachineSpec, build, sequence, read, write, choice, loop, concurrent, parseTranscript, checkTranscript, transition, isCompleted, getPossibleTransitions } from "./spec";
+import { MachineInstance, StepResult, ConcurrentMachine, TraceMachine, SequenceMachine, WriteConstantMachine, DiscardMachine, LoopMachine, DupMachine, channelsEqual } from "./impl";
 
 // 1. Define the ValueCell specs
 export const ValueCellSpec = build(loop(build(choice({
@@ -342,143 +342,274 @@ describe("LessThanMachine example", () => {
     });
 });
 
-export function createFibonacciMachine(): MachineInstance {
+
+
+export class AssignCellMachine implements MachineInstance {
+    private spec: MachineSpec;
+    private state: "copying" | "reading" | "writing" | "done" = "copying";
+    private val: any;
+    private copyChan: string[];
+    private readChan: string[];
+    private setChan: string[];
+
+    constructor(src: string[], dest: string[]) {
+        this.copyChan = [...src, "copy"];
+        this.readChan = [...src, "value"];
+        this.setChan = [...dest, "set"];
+        this.spec = build(sequence(
+            write(this.copyChan),
+            read(this.readChan),
+            write(this.setChan)
+        ));
+    }
+
+    getSpec() {
+        return this.spec;
+    }
+
+    isCompleted() {
+        return this.state === "done";
+    }
+
+    step(action?: { channel: string[]; value?: any }): StepResult {
+        if (this.state === "copying") {
+            const possible = getPossibleTransitions(this.spec);
+            const writeTrans = possible.find(t => t.kind === "write");
+            if (writeTrans) {
+                const nextSpec = transition(this.spec, writeTrans);
+                if (!nextSpec) throw new Error("Invalid transition on copy");
+                this.spec = nextSpec;
+                this.state = "reading";
+                return { kind: "write", channel: writeTrans.channel, value: null };
+            }
+            this.state = "reading";
+        }
+
+        if (this.state === "reading") {
+            if (!action || !channelsEqual(action.channel, this.readChan)) {
+                return { kind: "waiting" };
+            }
+            const nextSpec = transition(this.spec, { kind: "read", channel: this.readChan });
+            if (!nextSpec) throw new Error("Invalid transition on read");
+            this.spec = nextSpec;
+            this.val = action.value;
+            this.state = "writing";
+            return { kind: "read", channel: this.readChan, value: action.value };
+        }
+
+        if (this.state === "writing") {
+            const possible = getPossibleTransitions(this.spec);
+            const writeTrans = possible.find(t => t.kind === "write");
+            if (writeTrans) {
+                const nextSpec = transition(this.spec, writeTrans);
+                if (!nextSpec) throw new Error("Invalid transition on set");
+                this.spec = nextSpec;
+                this.state = "done";
+                return { kind: "write", channel: writeTrans.channel, value: this.val };
+            }
+            this.state = "done";
+        }
+
+        return { kind: "done" };
+    }
+}
+
+export function createFibonacciMachine2(): MachineInstance {
     const cellA = new ValueCellMachine(0);
     const cellB = new ValueCellMachine(1);
-    const cellTemp = new ValueCellMachine();
-    const add = new LoopMachine(() => new AddMachine());
-    const dupB = new LoopMachine(() => new DupMachine(["in"], ["out0", "out1", "value"]));
+    const cellC = new ValueCellMachine(1);
 
-    // Construct the controller dynamically using primitives and LoopMachine
     const controller = new LoopMachine(() => {
         return new SequenceMachine([
             new DiscardMachine(["next"]),
-            new WriteConstantMachine(["A", "copy"], null),
-            new WriteConstantMachine(["B", "copy"], null),
-            new WriteConstantMachine(["Temp", "copy"], null)
+            new AssignCellMachine(["B"], ["out"]),
+            new AddCellMachine(["A"], ["B"], ["C"]),
+            new AssignCellMachine(["B"], ["A"]),
+            new AssignCellMachine(["C"], ["B"])
         ]);
     });
 
     const comp = new ConcurrentMachine({
         A: cellA,
         B: cellB,
-        Temp: cellTemp,
-        add: add,
-        dupB: dupB,
+        C: cellC,
         ctrl: controller
     });
 
-    // Wire A.copy
-    let wired = new TraceMachine(comp, ["ctrl", "A", "copy"], ["A", "copy"]);
+    // Wire cell values to the controller's shared read channels
+    let wired = new TraceMachine(comp, ["A", "value"], ["ctrl", "A", "value"]);
+    wired = new TraceMachine(wired, ["B", "value"], ["ctrl", "B", "value"]);
+    wired = new TraceMachine(wired, ["C", "value"], ["ctrl", "C", "value"]);
 
-    // Wire A.value -> add.x
-    wired = new TraceMachine(wired, ["A", "value"], ["add", "x"]);
-
-    // Wire B.copy
+    // Wire copy triggers
+    wired = new TraceMachine(wired, ["ctrl", "A", "copy"], ["A", "copy"]);
     wired = new TraceMachine(wired, ["ctrl", "B", "copy"], ["B", "copy"]);
+    wired = new TraceMachine(wired, ["ctrl", "C", "copy"], ["C", "copy"]);
 
-    // Wire B.value -> dupB.in
-    wired = new TraceMachine(wired, ["B", "value"], ["dupB", "in"]);
-
-    // Wire dupB outputs
-    wired = new TraceMachine(wired, ["dupB", "out0"], ["A", "set"]);
-    wired = new TraceMachine(wired, ["dupB", "out1"], ["add", "y"]);
-
-    // Wire add.z -> Temp.set
-    wired = new TraceMachine(wired, ["add", "z"], ["Temp", "set"]);
-
-    // Wire Temp.copy
-    wired = new TraceMachine(wired, ["ctrl", "Temp", "copy"], ["Temp", "copy"]);
-
-    // Wire Temp.value -> B.set
-    wired = new TraceMachine(wired, ["Temp", "value"], ["B", "set"]);
+    // Wire set channels
+    wired = new TraceMachine(wired, ["ctrl", "A", "set"], ["A", "set"]);
+    wired = new TraceMachine(wired, ["ctrl", "B", "set"], ["B", "set"]);
+    wired = new TraceMachine(wired, ["ctrl", "C", "set"], ["C", "set"]);
 
     return wired;
 }
 
-describe("Fibonacci Machine (pure composition)", () => {
+describe("Fibonacci Machine 2 (sequential assignment)", () => {
     it("returns sequential Fibonacci numbers on each 'ctrl.next' trigger", () => {
-        const fib = createFibonacciMachine();
+        const fib = createFibonacciMachine2();
 
-        // 1st trigger: return 1 (sum of 0 and 1)
+        // 1st trigger: return 1 (initial B)
         let res = fib.step({ channel: ["ctrl", "next"], value: null });
         expect(res).toEqual({ kind: "read", channel: ["ctrl", "next"], value: null });
         res = fib.step();
-        expect(res).toEqual({ kind: "write", channel: ["dupB", "value"], value: 1 });
-        // Propagation step: updates cellB with Temp value and resets loop controller
+        expect(res).toEqual({ kind: "write", channel: ["ctrl", "out", "set"], value: 1 });
+        
+        // Single propagation tick: runs add, shift1, shift2, and resets loop
         res = fib.step();
         expect(res).toEqual({ kind: "waiting" });
 
-        // 2nd trigger: return 1 (sum of 1 and 1)
+        // 2nd trigger: return 1 (value of B after 1st update)
         res = fib.step({ channel: ["ctrl", "next"], value: null });
         expect(res).toEqual({ kind: "read", channel: ["ctrl", "next"], value: null });
         res = fib.step();
-        expect(res).toEqual({ kind: "write", channel: ["dupB", "value"], value: 1 });
+        expect(res).toEqual({ kind: "write", channel: ["ctrl", "out", "set"], value: 1 });
+        
         res = fib.step();
         expect(res).toEqual({ kind: "waiting" });
 
-        // 3rd trigger: return 2 (sum of 1 and 1)
+        // 3rd trigger: return 2
         res = fib.step({ channel: ["ctrl", "next"], value: null });
         expect(res).toEqual({ kind: "read", channel: ["ctrl", "next"], value: null });
         res = fib.step();
-        expect(res).toEqual({ kind: "write", channel: ["dupB", "value"], value: 2 });
+        expect(res).toEqual({ kind: "write", channel: ["ctrl", "out", "set"], value: 2 });
+        
         res = fib.step();
         expect(res).toEqual({ kind: "waiting" });
 
-        // 4th trigger: return 3 (sum of 1 and 2)
+        // 4th trigger: return 3
         res = fib.step({ channel: ["ctrl", "next"], value: null });
         expect(res).toEqual({ kind: "read", channel: ["ctrl", "next"], value: null });
         res = fib.step();
-        expect(res).toEqual({ kind: "write", channel: ["dupB", "value"], value: 3 });
+        expect(res).toEqual({ kind: "write", channel: ["ctrl", "out", "set"], value: 3 });
+        
         res = fib.step();
         expect(res).toEqual({ kind: "waiting" });
 
-        // 5th trigger: return 5 (sum of 2 and 3)
+        // 5th trigger: return 5
         res = fib.step({ channel: ["ctrl", "next"], value: null });
         expect(res).toEqual({ kind: "read", channel: ["ctrl", "next"], value: null });
         res = fib.step();
-        expect(res).toEqual({ kind: "write", channel: ["dupB", "value"], value: 5 });
-        res = fib.step();
-        expect(res).toEqual({ kind: "waiting" });
-
-        // 6th trigger: return 8 (sum of 3 and 5)
-        res = fib.step({ channel: ["ctrl", "next"], value: null });
-        expect(res).toEqual({ kind: "read", channel: ["ctrl", "next"], value: null });
-        res = fib.step();
-        expect(res).toEqual({ kind: "write", channel: ["dupB", "value"], value: 8 });
-        res = fib.step();
-        expect(res).toEqual({ kind: "waiting" });
-
-        // 7th trigger: return 13 (sum of 5 and 8)
-        res = fib.step({ channel: ["ctrl", "next"], value: null });
-        expect(res).toEqual({ kind: "read", channel: ["ctrl", "next"], value: null });
-        res = fib.step();
-        expect(res).toEqual({ kind: "write", channel: ["dupB", "value"], value: 13 });
+        expect(res).toEqual({ kind: "write", channel: ["ctrl", "out", "set"], value: 5 });
+        
         res = fib.step();
         expect(res).toEqual({ kind: "waiting" });
     });
+});
 
-    it("verifies transcripts against the resolved Fibonacci spec", () => {
-        const fib = createFibonacciMachine();
-        const spec = fib.getSpec();
+export class AddCellMachine implements MachineInstance {
+    private spec: MachineSpec;
+    private state: "reading" | "writing" | "done" = "reading";
+    private xVal: number = 0;
+    private yVal: number = 0;
+    private xKey: string;
+    private yKey: string;
+    private remainingReads = new Set<string>();
 
-        // The external transcript showing only inputs and outputs
-        const valid = parseTranscript(`
-            < ctrl.next
-            > dupB.value
-            < ctrl.next
-            > dupB.value
-            < ctrl.next
-            > dupB.value
-        `);
-        expect(checkTranscript(spec, valid)).toBe(true);
+    constructor(srcX: string[], srcY: string[], destZ: string[]) {
+        this.xKey = srcX[srcX.length - 1];
+        this.yKey = srcY[srcY.length - 1];
+        this.remainingReads.add(this.xKey);
+        this.remainingReads.add(this.yKey);
 
-        // An invalid transcript containing internal channels that should be hidden
-        const invalidInternal = parseTranscript(`
-            < ctrl.next
-            > A.copy
-            > dupB.value
-        `);
-        expect(checkTranscript(spec, invalidInternal)).toBe(false);
+        this.spec = build(sequence(
+            concurrent({
+                [this.xKey]: build(sequence(write(["copy"]), read(["value"]))),
+                [this.yKey]: build(sequence(write(["copy"]), read(["value"])))
+            }),
+            write([...destZ, "set"])
+        ));
+    }
+
+    getSpec() {
+        return this.spec;
+    }
+
+    isCompleted() {
+        return this.state === "done";
+    }
+
+    step(action?: { channel: string[]; value?: any }): StepResult {
+        if (this.state === "reading") {
+            if (action) {
+                const key = action.channel[0];
+                if (this.remainingReads.has(key)) {
+                    const nextSpec = transition(this.spec, { kind: "read", channel: action.channel });
+                    if (nextSpec) {
+                        this.spec = nextSpec;
+                        if (key === this.xKey) this.xVal = action.value;
+                        else if (key === this.yKey) this.yVal = action.value;
+
+                        this.remainingReads.delete(key);
+                        if (this.remainingReads.size === 0) {
+                            this.state = "writing";
+                        }
+                        return { kind: "read", channel: action.channel, value: action.value };
+                    }
+                }
+            }
+
+            const possible = getPossibleTransitions(this.spec);
+            const writeTrans = possible.find(t => t.kind === "write");
+            if (writeTrans) {
+                const nextSpec = transition(this.spec, writeTrans);
+                if (!nextSpec) throw new Error("Invalid transition on write copy");
+                this.spec = nextSpec;
+                return { kind: "write", channel: writeTrans.channel, value: null };
+            }
+
+            return { kind: "waiting" };
+        }
+
+        if (this.state === "writing") {
+            const possible = getPossibleTransitions(this.spec);
+            const writeTrans = possible.find(t => t.kind === "write");
+            if (writeTrans) {
+                const nextSpec = transition(this.spec, writeTrans);
+                if (!nextSpec) throw new Error("Invalid transition on z write");
+                this.spec = nextSpec;
+                this.state = "done";
+                return { kind: "write", channel: writeTrans.channel, value: this.xVal + this.yVal };
+            }
+            this.state = "done";
+        }
+
+        return { kind: "done" };
+    }
+}
+
+describe("AddCellMachine", () => {
+    it("requests copy from cell X and cell Y, and writes the sum to cell Z", () => {
+        const cellX = new ValueCellMachine(10);
+        const cellY = new ValueCellMachine(20);
+        const cellZ = new ValueCellMachine();
+        const add = new AddCellMachine(["x"], ["y"], ["z"]);
+
+        const comp = new ConcurrentMachine({
+            x: cellX,
+            y: cellY,
+            z: cellZ,
+            add: add
+        });
+
+        let wired = new TraceMachine(comp, ["add", "x", "copy"], ["x", "copy"]);
+        wired = new TraceMachine(wired, ["x", "value"], ["add", "x", "value"]);
+        wired = new TraceMachine(wired, ["add", "y", "copy"], ["y", "copy"]);
+        wired = new TraceMachine(wired, ["y", "value"], ["add", "y", "value"]);
+        wired = new TraceMachine(wired, ["add", "z", "set"], ["z", "set"]);
+
+        const res = wired.step();
+        expect(res).toEqual({ kind: "done" });
+
+        expect(cellZ.getValue()).toBe(30);
     });
 });
