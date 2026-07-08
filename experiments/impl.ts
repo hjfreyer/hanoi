@@ -504,5 +504,77 @@ export class RenameMachine implements MachineInstance {
     }
 }
 
+export class IndexedMachine implements MachineInstance {
+    private factory: () => MachineInstance;
+    private active: Record<string, MachineInstance> = {};
+    private templateSpec: MachineSpec;
+
+    constructor(factory: () => MachineInstance, active: Record<string, MachineInstance> = {}) {
+        this.factory = factory;
+        this.active = active;
+        const dummy = factory();
+        this.templateSpec = dummy.getSpec();
+    }
+
+    getSpec(): MachineSpec {
+        const activeSpecs: Record<string, MachineSpec> = {};
+        for (const [key, sub] of Object.entries(this.active)) {
+            activeSpecs[key] = sub.getSpec();
+        }
+        return {
+            kind: "indexed",
+            inner: this.templateSpec,
+            active: activeSpecs,
+            then: { kind: "done" }
+        };
+    }
+
+    isCompleted(): boolean {
+        return Object.values(this.active).every(sub => sub.isCompleted());
+    }
+
+    step(action?: { channel: string[]; value?: any }): StepResult {
+        if (action && action.channel.length > 0) {
+            const index = action.channel[0];
+            const suffix = action.channel.slice(1);
+            
+            if (!this.active[index]) {
+                this.active[index] = this.factory();
+            }
+            
+            const sub = this.active[index];
+            const res = sub.step({ channel: suffix, value: action.value });
+            
+            if (sub.isCompleted()) {
+                delete this.active[index];
+            }
+            
+            if (res.kind === "read" || res.kind === "write") {
+                return {
+                    ...res,
+                    channel: [index, ...res.channel]
+                };
+            }
+            return res;
+        }
+
+        for (const [key, sub] of Object.entries(this.active)) {
+            const res = sub.step();
+            if (res.kind === "write") {
+                if (sub.isCompleted()) {
+                    delete this.active[key];
+                }
+                return {
+                    kind: "write",
+                    channel: [key, ...res.channel],
+                    value: res.value
+                };
+            }
+        }
+
+        return { kind: "waiting" };
+    }
+}
+
 
 

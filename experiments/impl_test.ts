@@ -1,5 +1,5 @@
-import { MachineSpec, build, sequence, read, write, concurrent, choice, loop, complement, isCompleted, transition } from "./spec";
-import { MachineInstance, StepResult, SequenceMachine, ConcurrentMachine, TraceMachine, WriteConstantMachine, DiscardMachine, LoopMachine, DupMachine, channelsEqual, RenameMachine } from "./impl";
+import { MachineSpec, build, sequence, read, write, concurrent, choice, loop, complement, isCompleted, transition, indexed } from "./spec";
+import { MachineInstance, StepResult, SequenceMachine, ConcurrentMachine, TraceMachine, WriteConstantMachine, DiscardMachine, LoopMachine, DupMachine, channelsEqual, RenameMachine, IndexedMachine } from "./impl";
 
 describe("step-by-step MachineInstance model", () => {
     class DoubleMachine implements MachineInstance {
@@ -568,3 +568,71 @@ describe("RenameMachine", () => {
         expect(m.isCompleted()).toBe(true);
     });
 });
+
+describe("IndexedMachine", () => {
+    it("instantiates family instances dynamically and routes steps correctly", () => {
+        // A simple read-then-write machine factory
+        class MockWorker implements MachineInstance {
+            private done = false;
+            private val: any;
+            getSpec(): MachineSpec {
+                return build(sequence(read(["c"]), write(["d"])));
+            }
+            isCompleted(): boolean {
+                return this.done;
+            }
+            step(action?: { channel: string[]; value?: any }): StepResult {
+                if (action) {
+                    this.val = action.value;
+                    return { kind: "read", channel: ["c"], value: action.value };
+                }
+                this.done = true;
+                return { kind: "write", channel: ["d"], value: this.val };
+            }
+        }
+
+        const m = new IndexedMachine(() => new MockWorker());
+
+        // Spec matches template
+        expect(m.getSpec()).toEqual({
+            kind: "indexed",
+            inner: build(sequence(read(["c"]), write(["d"]))),
+            active: {},
+            then: { kind: "done" }
+        });
+
+        expect(m.isCompleted()).toBe(true);
+
+        // Transition p0
+        expect(m.step({ channel: ["p0", "c"], value: 100 })).toEqual({
+            kind: "read",
+            channel: ["p0", "c"],
+            value: 100
+        });
+        expect(m.isCompleted()).toBe(false);
+
+        // Transition p1 concurrently
+        expect(m.step({ channel: ["p1", "c"], value: 200 })).toEqual({
+            kind: "read",
+            channel: ["p1", "c"],
+            value: 200
+        });
+
+        // Step one of them (since they are in Record order, p0 is step first)
+        expect(m.step()).toEqual({
+            kind: "write",
+            channel: ["p0", "d"],
+            value: 100
+        });
+
+        // Step the other one
+        expect(m.step()).toEqual({
+            kind: "write",
+            channel: ["p1", "d"],
+            value: 200
+        });
+
+        expect(m.isCompleted()).toBe(true);
+    });
+});
+

@@ -76,6 +76,12 @@ export type MachineSpec = {
     mapping: Array<[string[], string[]]>
     inner: MachineSpec
     then: MachineSpec
+} | {
+    kind: "indexed"
+    inner: MachineSpec
+    active?: Record<string, MachineSpec>
+    activated?: boolean
+    then: MachineSpec
 };
 
 export type TranscriptEntry =  {
@@ -218,6 +224,20 @@ function getFirstEvents(spec: MachineSpec): Array<{ kind: "read" | "write", chan
         }
         return result;
     }
+    if (spec.kind === "indexed") {
+        const result: Array<{ kind: "read" | "write", channel: string[] }> = [];
+        if (spec.active) {
+            for (const [key, activeSpec] of Object.entries(spec.active)) {
+                for (const ev of getFirstEvents(activeSpec)) {
+                    result.push({ kind: ev.kind, channel: [key, ...ev.channel] });
+                }
+            }
+        }
+        for (const ev of getFirstEvents(spec.inner)) {
+            result.push({ kind: ev.kind, channel: ["*", ...ev.channel] });
+        }
+        return result;
+    }
     return [];
 }
 
@@ -268,6 +288,15 @@ function serializeSpec(spec: MachineSpec, visited = new Map<MachineSpec, string>
         case "rename": {
             const mappingsStr = spec.mapping.map(([from, to]) => `${from.join(".")}:${to.join(".")}`).join(",");
             return `rename({${mappingsStr}},${serializeSpec(spec.inner, visited)})->${serializeSpec(spec.then, visited)}`;
+        }
+        case "indexed": {
+            const activeStr = spec.active
+                ? Object.entries(spec.active)
+                    .map(([k, v]) => `${k}:${serializeSpec(v, visited)}`)
+                    .sort()
+                    .join(",")
+                : "";
+            return `indexed(${serializeSpec(spec.inner, visited)}){${activeStr}}->${serializeSpec(spec.then, visited)}`;
         }
     }
 }
@@ -406,6 +435,14 @@ function validateSpec(spec: MachineSpec): void {
     } else if (spec.kind === "rename") {
         validateSpec(spec.inner);
         validateSpec(spec.then);
+    } else if (spec.kind === "indexed") {
+        validateSpec(spec.inner);
+        if (spec.active) {
+            for (const activeSpec of Object.values(spec.active)) {
+                validateSpec(activeSpec);
+            }
+        }
+        validateSpec(spec.then);
     } else if (spec.kind === "read" || spec.kind === "write") {
         validateSpec(spec.then);
     }
@@ -482,6 +519,14 @@ export function rename(mapping: Array<[string[], string[]]>, inner: MachineSpec)
         then: next
     });
 }
+export function indexed(inner: MachineSpec): SpecBuilder {
+    return (next: MachineSpec) => ({
+        kind: "indexed",
+        inner,
+        active: {},
+        then: next
+    });
+}
 export function trace(inner: MachineSpec, pathA: string[], pathB: string[]): SpecBuilder {
     return (next: MachineSpec) => ({
         kind: "trace",
@@ -537,6 +582,14 @@ export function isCompleted(spec: MachineSpec): boolean {
     if (spec.kind === "rename") {
         return isCompleted(spec.inner) && isCompleted(spec.then);
     }
+    if (spec.kind === "indexed") {
+        if (spec.active) {
+            const allActiveCompleted = Object.values(spec.active).every(isCompleted);
+            if (!allActiveCompleted) return false;
+        }
+        if (spec.then.kind === "done") return true;
+        return spec.activated ? isCompleted(spec.then) : false;
+    }
     return false;
 }
 
@@ -548,6 +601,35 @@ export function transition(spec: MachineSpec, entry: TranscriptEntry): MachineSp
     if (spec.kind === "read" || spec.kind === "write") {
         if (spec.kind === entry.kind && channelsEqual(spec.channel, entry.channel)) {
             return spec.then;
+        }
+        return null;
+    }
+
+    if (spec.kind === "indexed") {
+        if (entry.channel.length > 0) {
+            const index = entry.channel[0];
+            const suffix = entry.channel.slice(1);
+            
+            const active = spec.active ? { ...spec.active } : {};
+            const subSpec = active[index] || spec.inner;
+            
+            const nextSubSpec = transition(subSpec, { ...entry, channel: suffix });
+            if (nextSubSpec) {
+                if (isCompleted(nextSubSpec)) {
+                    delete active[index];
+                } else {
+                    active[index] = nextSubSpec;
+                }
+                return {
+                    ...spec,
+                    active,
+                    activated: true
+                };
+            }
+        }
+        const allActiveCompleted = spec.active ? Object.values(spec.active).every(isCompleted) : true;
+        if (spec.activated && allActiveCompleted) {
+            return transition(spec.then, entry);
         }
         return null;
     }
@@ -844,6 +926,20 @@ export function getPossibleTransitions(spec: MachineSpec): TranscriptEntry[] {
         if (isCompleted(resolvedInner)) {
             result.push(...getPossibleTransitions(spec.then));
         }
+    } else if (spec.kind === "indexed") {
+        if (spec.active) {
+            for (const [key, activeSpec] of Object.entries(spec.active)) {
+                for (const ev of getPossibleTransitions(activeSpec)) {
+                    result.push({ kind: ev.kind, channel: [key, ...ev.channel] });
+                }
+            }
+        }
+        for (const ev of getPossibleTransitions(spec.inner)) {
+            result.push({ kind: ev.kind, channel: ["*", ...ev.channel] });
+        }
+        if (isCompleted(spec)) {
+            result.push(...getPossibleTransitions(spec.then));
+        }
     }
     
     // Deduplicate transitions
@@ -869,6 +965,10 @@ export type SubtypeResult = {
 };
 
 export function isSubtype(a: MachineSpec, b: MachineSpec): SubtypeResult {
+    if (a.kind === "indexed" && b.kind === "indexed") {
+        return isSubtype(a.inner, b.inner);
+    }
+
     const visited = new Set<string>();
     
     function check(currA: MachineSpec, currB: MachineSpec, path: TranscriptEntry[]): SubtypeResult {
@@ -1045,6 +1145,20 @@ export function hideSpecChannels(spec: MachineSpec, paths: string[][], prefix: s
         return {
             ...spec,
             inner: hideSpecChannels(spec.inner, paths, prefix),
+            then: hideSpecChannels(spec.then, paths, prefix)
+        };
+    }
+    if (spec.kind === "indexed") {
+        const active: Record<string, MachineSpec> = {};
+        if (spec.active) {
+            for (const [key, m] of Object.entries(spec.active)) {
+                active[key] = hideSpecChannels(m, paths, [...prefix, key]);
+            }
+        }
+        return {
+            ...spec,
+            inner: hideSpecChannels(spec.inner, paths, prefix),
+            active: spec.active ? active : undefined,
             then: hideSpecChannels(spec.then, paths, prefix)
         };
     }

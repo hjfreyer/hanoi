@@ -1,8 +1,8 @@
-import { MachineSpec, build, sequence, read, write, choice, loop, concurrent, transition, isCompleted, getPossibleTransitions } from "./spec";
+import { MachineSpec, build, sequence, read, write, choice, loop, concurrent, transition, isCompleted, getPossibleTransitions, indexed } from "./spec";
 import { MachineInstance, StepResult, channelsEqual } from "./impl";
 
 // 1. Define the ValueCell specs
-export const ValueCellSpec = build(loop(build(choice({
+export const ValueCellSpec = build(indexed(build(choice({
     set: build(read(["set"])),
     copy: build(sequence(
         read(["copy"]),
@@ -11,8 +11,8 @@ export const ValueCellSpec = build(loop(build(choice({
 }))));
 
 export const UninitValueCellSpec = build(sequence(
-    read(["set"]),
-    loop(build(choice({
+    indexed(build(read(["set"]))),
+    indexed(build(choice({
         set: build(read(["set"])),
         copy: build(sequence(
             read(["copy"]),
@@ -23,18 +23,15 @@ export const UninitValueCellSpec = build(sequence(
 
 // 2. Implement the unified ValueCellMachine using MachineInstance
 export class ValueCellMachine implements MachineInstance {
-    private spec: any;
+    private spec: MachineSpec;
     private value: any;
-    private state: "uninit" | "ready" | "pending_value";
 
     constructor(initialValue?: any) {
         if (initialValue !== undefined) {
             this.value = initialValue;
             this.spec = ValueCellSpec;
-            this.state = "ready";
         } else {
             this.spec = UninitValueCellSpec;
-            this.state = "uninit";
         }
     }
 
@@ -51,44 +48,36 @@ export class ValueCellMachine implements MachineInstance {
     }
 
     step(action?: { channel: string[]; value?: any }): StepResult {
-        if (this.state === "uninit") {
-            if (!action || action.channel[0] !== "set") {
+        if (action) {
+            const isWrite = action.channel[action.channel.length - 1] === "value";
+            const transcriptKind = isWrite ? "write" : "read";
+            
+            const nextSpec = transition(this.spec, { kind: transcriptKind, channel: action.channel });
+            if (!nextSpec) {
                 return { kind: "waiting" };
             }
-            const next = transition(this.spec, { kind: "read", channel: ["set"] });
-            if (!next) throw new Error("Invalid transition");
-            this.spec = next;
-            this.value = action.value;
-            this.state = "ready";
-            return { kind: "read", channel: ["set"], value: action.value };
+            
+            this.spec = nextSpec;
+            if (action.channel[action.channel.length - 1] === "set") {
+                this.value = action.value;
+            }
+            return { kind: transcriptKind, channel: action.channel, value: action.value };
         }
 
-        if (this.state === "ready") {
-            if (!action) {
-                return { kind: "waiting" };
+        const possible = getPossibleTransitions(this.spec);
+        const writeTransitions = possible.filter(t => t.kind === "write");
+        
+        
+        if (writeTransitions.length > 0) {
+            const t = writeTransitions[0];
+            const nextSpec = transition(this.spec, t);
+            if (nextSpec) {
+                this.spec = nextSpec;
+                return { kind: "write", channel: t.channel, value: this.value };
             }
-            if (action.channel[0] === "set") {
-                const next = transition(this.spec, { kind: "read", channel: ["set"] });
-                if (!next) throw new Error("Invalid transition");
-                this.spec = next;
-                this.value = action.value;
-                return { kind: "read", channel: ["set"], value: action.value };
-            }
-            if (action.channel[0] === "copy") {
-                const next = transition(this.spec, { kind: "read", channel: ["copy"] });
-                if (!next) throw new Error("Invalid transition");
-                this.spec = next;
-                this.state = "pending_value";
-                return { kind: "read", channel: ["copy"], value: action.value };
-            }
-            throw new Error(`Invalid action channel: ${action.channel}`);
-        } else {
-            const next = transition(this.spec, { kind: "write", channel: ["value"] });
-            if (!next) throw new Error("Invalid transition");
-            this.spec = next;
-            this.state = "ready";
-            return { kind: "write", channel: ["value"], value: this.value };
         }
+
+        return { kind: "waiting" };
     }
 }
 

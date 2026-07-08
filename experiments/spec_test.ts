@@ -1,6 +1,6 @@
 import {
     MachineSpec, TranscriptEntry, SpecBuilder,
-    build, read, write, concurrent, choice, loop, complement, prefix, rename, trace, sequence,
+    build, read, write, concurrent, choice, loop, complement, prefix, rename, trace, sequence, indexed,
     transition, isCompleted, checkTranscript, parseTranscript,
     getPossibleTransitions, isSubtype
 } from "./spec";
@@ -970,5 +970,61 @@ describe("trace spec operator", () => {
         expect(() => {
             build(trace(inner, ["prod", "mid"], ["cons", "mid"]));
         }).toThrow(/Blocked wired transition/);
+    });
+});
+
+describe("indexed spec", () => {
+    it("transitions active indices dynamically and cleans them up upon completion", () => {
+        // A single-read-then-write spec: sequence(read(["copy"]), write(["value"]))
+        const inner = build(sequence(read(["copy"]), write(["value"])));
+        const spec = build(indexed(inner));
+
+        // Initial state has no active specs
+        expect(isCompleted(spec)).toBe(true);
+
+        // Transition on "p0.copy" (which instantiates active["p0"] as inner)
+        const s1 = transition(spec, { kind: "read", channel: ["p0", "copy"] });
+        expect(s1).not.toBeNull();
+        expect(isCompleted(s1!)).toBe(false);
+
+        // Transition on "p1.copy" (which instantiates active["p1"] concurrently)
+        const s2 = transition(s1!, { kind: "read", channel: ["p1", "copy"] });
+        expect(s2).not.toBeNull();
+        expect(isCompleted(s2!)).toBe(false);
+
+        // Step "p0" to completion by writing "value"
+        const s3 = transition(s2!, { kind: "write", channel: ["p0", "value"] });
+        expect(s3).not.toBeNull();
+        expect(isCompleted(s3!)).toBe(false); // p1 is still active
+
+        // Step "p1" to completion
+        const s4 = transition(s3!, { kind: "write", channel: ["p1", "value"] });
+        expect(s4).not.toBeNull();
+        expect(isCompleted(s4!)).toBe(true); // both cleaned up
+    });
+
+    it("verifies transcripts using checkTranscript", () => {
+        const inner = build(sequence(read(["copy"]), write(["value"])));
+        const spec = build(indexed(inner));
+
+        expect(checkTranscript(spec, parseTranscript(`
+            < p0.copy
+            < p1.copy
+            > p0.value
+            > p1.value
+        `))).toBe(true);
+
+        expect(checkTranscript(spec, parseTranscript(`
+            < p0.copy
+            > p1.value
+        `))).toBe(false); // wrong index
+    });
+
+    it("works with isSubtype", () => {
+        const inner = build(sequence(read(["copy"]), write(["value"])));
+        const specA = build(indexed(inner));
+        const specB = build(indexed(inner));
+
+        expect(isSubtype(specA, specB).isSubtype).toBe(true);
     });
 });

@@ -1,11 +1,20 @@
 // NOTE: All examples in this file must only use primitives (from primitives.ts) and combinators (from impl.ts), rather than implementing custom JS functionality directly.
 
-import { MachineInstance, ConcurrentMachine, TraceMachine, SequenceMachine, DiscardMachine, LoopMachine, RenameMachine } from "./impl";
+import { MachineInstance, ConcurrentMachine, TraceMachine, SequenceMachine, DiscardMachine, LoopMachine, RenameMachine, ChoiceMachine } from "./impl";
 import {
     ValueCellMachine,
     AssignCellMachine,
-    AddCellMachine
+    AddCellMachine,
+    LessThanCellMachine
 } from "./primitives";
+
+function makeUnindexedCell(cell: ValueCellMachine): RenameMachine {
+    return new RenameMachine(cell, [
+        [["p0", "copy"], ["copy"]],
+        [["p0", "value"], ["value"]],
+        [["p0", "set"], ["set"]]
+    ]);
+}
 
 export function createFibonacciMachine2(): MachineInstance {
     const cellA = new ValueCellMachine(0);
@@ -23,9 +32,9 @@ export function createFibonacciMachine2(): MachineInstance {
     });
 
     const comp = new ConcurrentMachine({
-        A: cellA,
-        B: cellB,
-        C: cellC,
+        A: makeUnindexedCell(cellA),
+        B: makeUnindexedCell(cellB),
+        C: makeUnindexedCell(cellC),
         ctrl: controller
     });
 
@@ -86,5 +95,94 @@ describe("Fibonacci Machine 2 (sequential assignment)", () => {
         
         res = fib.step();
         expect(res).toEqual({ kind: "waiting" });
+    });
+});
+
+export function createMinMachine(): MachineInstance {
+    const lessThan = new RenameMachine(new LessThanCellMachine(), [
+        [["out0"], ["cond"]]
+    ]);
+
+    const choice = new ChoiceMachine({
+        true: new SequenceMachine([
+            new DiscardMachine(["cond", "true"]),
+            new AssignCellMachine()
+        ]),
+        false: new SequenceMachine([
+            new DiscardMachine(["cond", "false"]),
+            new RenameMachine(new AssignCellMachine(), [
+                [["in0"], ["in1"]]
+            ])
+        ])
+    });
+
+    const controller = new RenameMachine(
+        new TraceMachine(
+            new ConcurrentMachine({
+                lessThan: lessThan,
+                choice: choice
+            }),
+            ["lessThan", "cond"], ["choice", "cond"]
+        ),
+        [
+            [["lessThan", "in0"], ["in0", "lessThan"]],
+            [["lessThan", "in1"], ["in1", "lessThan"]],
+            [["choice", "in0"], ["in0", "choice"]],
+            [["choice", "in1"], ["in1", "choice"]],
+            [["choice", "out0"], ["out0", "choice"]]
+        ]
+    );
+
+    return controller;
+}
+
+describe("MinSystem (conditional control flow example)", () => {
+    it("computes minimum when A < B (true branch)", () => {
+        const cellA = new ValueCellMachine(10);
+        const cellB = new ValueCellMachine(20);
+        const cellMin = new ValueCellMachine();
+        const ctrl = createMinMachine();
+
+        const comp = new ConcurrentMachine({
+            in0: cellA,
+            in1: cellB,
+            out0: cellMin,
+            ctrl: ctrl
+        });
+
+        let wired = new TraceMachine(comp, ["ctrl", "in0"], ["in0"]);
+        wired = new TraceMachine(wired, ["ctrl", "in1"], ["in1"]);
+        wired = new TraceMachine(wired, ["ctrl", "out0"], ["out0"]);
+
+        const res = wired.step();
+        expect(res).toEqual({ kind: "done" });
+
+        // A is 10, B is 20, so MIN should be 10 (value of A)
+        expect(cellMin.getValue()).toBe(10);
+    });
+
+    it("computes minimum when A > B (false branch)", () => {
+        const cellA = new ValueCellMachine(50);
+        const cellB = new ValueCellMachine(20);
+        const cellMin = new ValueCellMachine();
+        const ctrl = createMinMachine();
+
+        const comp = new ConcurrentMachine({
+            in0: cellA,
+            in1: cellB,
+            out0: cellMin,
+            ctrl: ctrl
+        });
+
+        let wired = new TraceMachine(comp, ["ctrl", "in0"], ["in0"]);
+        wired = new TraceMachine(wired, ["ctrl", "in1"], ["in1"]);
+        wired = new TraceMachine(wired, ["ctrl", "out0"], ["out0"]);
+
+        // Run the automated pipeline in one tick
+        const res = wired.step();
+        expect(res).toEqual({ kind: "done" });
+
+        // A is 50, B is 20, so MIN should be 20 (value of B)
+        expect(cellMin.getValue()).toBe(20);
     });
 });

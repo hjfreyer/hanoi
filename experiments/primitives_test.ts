@@ -1,5 +1,5 @@
 import { parseTranscript, checkTranscript } from "./spec";
-import { ConcurrentMachine, TraceMachine, SequenceMachine, WriteConstantMachine } from "./impl";
+import { ConcurrentMachine, TraceMachine, SequenceMachine, WriteConstantMachine, RenameMachine } from "./impl";
 import {
     ValueCellSpec,
     UninitValueCellSpec,
@@ -16,36 +16,44 @@ import {
     TestMachine
 } from "./primitives";
 
+function makeUnindexedCell(cell: ValueCellMachine): RenameMachine {
+    return new RenameMachine(cell, [
+        [["p0", "copy"], ["copy"]],
+        [["p0", "value"], ["value"]],
+        [["p0", "set"], ["set"]]
+    ]);
+}
+
 describe("ValueCell example", () => {
     it("can set and copy values step-by-step", () => {
         const machine = new ValueCellMachine(42);
 
         // Initially copy should return 42
-        let res = machine.step({ channel: ["copy"], value: null });
-        expect(res).toEqual({ kind: "read", channel: ["copy"], value: null });
+        let res = machine.step({ channel: ["p0", "copy"], value: null });
+        expect(res).toEqual({ kind: "read", channel: ["p0", "copy"], value: null });
 
         res = machine.step();
-        expect(res).toEqual({ kind: "write", channel: ["value"], value: 42 });
+        expect(res).toEqual({ kind: "write", channel: ["p0", "value"], value: 42 });
 
         // Set value to 100
-        res = machine.step({ channel: ["set"], value: 100 });
-        expect(res).toEqual({ kind: "read", channel: ["set"], value: 100 });
+        res = machine.step({ channel: ["p1", "set"], value: 100 });
+        expect(res).toEqual({ kind: "read", channel: ["p1", "set"], value: 100 });
 
         // Copy should now return 100
-        res = machine.step({ channel: ["copy"], value: null });
-        expect(res).toEqual({ kind: "read", channel: ["copy"], value: null });
+        res = machine.step({ channel: ["p0", "copy"], value: null });
+        expect(res).toEqual({ kind: "read", channel: ["p0", "copy"], value: null });
 
         res = machine.step();
-        expect(res).toEqual({ kind: "write", channel: ["value"], value: 100 });
+        expect(res).toEqual({ kind: "write", channel: ["p0", "value"], value: 100 });
     });
 
     it("verifies a valid execution transcript against ValueCellSpec", () => {
         const transcript = parseTranscript(`
-            < copy
-            > value
-            < set
-            < copy
-            > value
+            < p0.copy
+            > p0.value
+            < p1.set
+            < p0.copy
+            > p0.value
         `);
         expect(checkTranscript(ValueCellSpec, transcript)).toBe(true);
     });
@@ -55,7 +63,7 @@ describe("UninitValueCell example", () => {
     it("fails if machine tries to copy before set", () => {
         const machine = new ValueCellMachine();
         // Trying to step copy before setting should not be accepted/should return waiting
-        const res = machine.step({ channel: ["copy"], value: null });
+        const res = machine.step({ channel: ["p0", "copy"], value: null });
         expect(res).toEqual({ kind: "waiting" });
     });
 
@@ -63,29 +71,29 @@ describe("UninitValueCell example", () => {
         const machine = new ValueCellMachine();
 
         // Set value to 25
-        let res = machine.step({ channel: ["set"], value: 25 });
-        expect(res).toEqual({ kind: "read", channel: ["set"], value: 25 });
+        let res = machine.step({ channel: ["p0", "set"], value: 25 });
+        expect(res).toEqual({ kind: "read", channel: ["p0", "set"], value: 25 });
 
         // Now copy should succeed and return 25
-        res = machine.step({ channel: ["copy"], value: null });
-        expect(res).toEqual({ kind: "read", channel: ["copy"], value: null });
+        res = machine.step({ channel: ["p1", "copy"], value: null });
+        expect(res).toEqual({ kind: "read", channel: ["p1", "copy"], value: null });
 
         res = machine.step();
-        expect(res).toEqual({ kind: "write", channel: ["value"], value: 25 });
+        expect(res).toEqual({ kind: "write", channel: ["p1", "value"], value: 25 });
     });
 
     it("verifies transcripts against UninitValueCellSpec", () => {
         const valid = parseTranscript(`
-            < set
-            < copy
-            > value
+            < p0.set
+            < p1.copy
+            > p1.value
         `);
         expect(checkTranscript(UninitValueCellSpec, valid)).toBe(true);
 
         const invalid = parseTranscript(`
-            < copy
-            > value
-            < set
+            < p0.copy
+            > p0.value
+            < p1.set
         `);
         expect(checkTranscript(UninitValueCellSpec, invalid)).toBe(false);
     });
@@ -131,9 +139,9 @@ describe("Automated AddMachine Wiring", () => {
 
         const comp = new ConcurrentMachine({
             system: new ConcurrentMachine({
-                in0: cellIn0,
-                in1: cellIn1,
-                out0: cellOut0,
+                in0: makeUnindexedCell(cellIn0),
+                in1: makeUnindexedCell(cellIn1),
+                out0: makeUnindexedCell(cellOut0),
                 add: add
             }),
             driver: driver
@@ -237,9 +245,9 @@ describe("AddCellMachine", () => {
         const add = new AddCellMachine();
 
         const comp = new ConcurrentMachine({
-            in0: cellIn0,
-            in1: cellIn1,
-            out0: cellOut0,
+            in0: makeUnindexedCell(cellIn0),
+            in1: makeUnindexedCell(cellIn1),
+            out0: makeUnindexedCell(cellOut0),
             add: add
         });
 
@@ -265,10 +273,10 @@ describe("LessThanCellMachine", () => {
             const lessThan = new LessThanCellMachine();
 
             const comp = new ConcurrentMachine({
-                in0: cellIn0,
-                in1: cellIn1,
-                t: cellTrue,
-                f: cellFalse,
+                in0: makeUnindexedCell(cellIn0),
+                in1: makeUnindexedCell(cellIn1),
+                t: makeUnindexedCell(cellTrue),
+                f: makeUnindexedCell(cellFalse),
                 lessThan: lessThan
             });
 
@@ -293,10 +301,10 @@ describe("LessThanCellMachine", () => {
             const lessThan = new LessThanCellMachine();
 
             const comp = new ConcurrentMachine({
-                in0: cellIn0,
-                in1: cellIn1,
-                t: cellTrue,
-                f: cellFalse,
+                in0: makeUnindexedCell(cellIn0),
+                in1: makeUnindexedCell(cellIn1),
+                t: makeUnindexedCell(cellTrue),
+                f: makeUnindexedCell(cellFalse),
                 lessThan: lessThan
             });
 
