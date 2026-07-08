@@ -1,5 +1,5 @@
 import { MachineSpec, build, sequence, read, write, concurrent, choice, loop, complement, isCompleted, transition } from "./spec";
-import { MachineInstance, StepResult, SequenceMachine, ConcurrentMachine, TraceMachine, WriteConstantMachine, DiscardMachine, LoopMachine, DupMachine, channelsEqual } from "./impl";
+import { MachineInstance, StepResult, SequenceMachine, ConcurrentMachine, TraceMachine, WriteConstantMachine, DiscardMachine, LoopMachine, DupMachine, channelsEqual, RenameMachine } from "./impl";
 
 describe("step-by-step MachineInstance model", () => {
     class DoubleMachine implements MachineInstance {
@@ -449,6 +449,122 @@ describe("DupMachine", () => {
         if (w1.kind === "write" && w2.kind === "write") {
             expect(w1.channel).not.toEqual(w2.channel);
         }
+        expect(m.isCompleted()).toBe(true);
+    });
+});
+
+describe("RenameMachine", () => {
+    it("renames read and write channels and produces the correct spec", () => {
+        // A machine that reads "c" and writes the read value to "d"
+        class ReadWriteMachine implements MachineInstance {
+            private val: any = undefined;
+            private state: "reading" | "writing" | "done" = "reading";
+
+            getSpec(): MachineSpec {
+                return build(sequence(read(["c"]), write(["d"])));
+            }
+            isCompleted(): boolean {
+                return this.state === "done";
+            }
+            step(action?: { channel: string[]; value?: any }): StepResult {
+                if (this.state === "reading") {
+                    if (!action || action.channel[0] !== "c") return { kind: "waiting" };
+                    this.val = action.value;
+                    this.state = "writing";
+                    return { kind: "read", channel: ["c"], value: action.value };
+                }
+                if (this.state === "writing") {
+                    this.state = "done";
+                    return { kind: "write", channel: ["d"], value: this.val };
+                }
+                return { kind: "done" };
+            }
+        }
+
+        const inner = new ReadWriteMachine();
+        const m = new RenameMachine(inner, [ [["c"], ["x"]], [["d"], ["y"]] ]);
+
+        // Verify spec matches
+        expect(m.getSpec()).toEqual({
+            kind: "rename",
+            mapping: [ [["c"], ["x"]], [["d"], ["y"]] ],
+            inner: inner.getSpec(),
+            then: { kind: "done" }
+        });
+
+        expect(m.isCompleted()).toBe(false);
+
+        // Transition: external read "x"
+        expect(m.step({ channel: ["x"], value: 42 })).toEqual({
+            kind: "read",
+            channel: ["x"],
+            value: 42
+        });
+
+        // Transition: external write "y"
+        expect(m.step()).toEqual({
+            kind: "write",
+            channel: ["y"],
+            value: 42
+        });
+
+        expect(m.isCompleted()).toBe(true);
+    });
+
+    it("rejects transition attempts on internal mapped names", () => {
+        class ReadC implements MachineInstance {
+            getSpec(): MachineSpec { return build(read(["c"])); }
+            isCompleted(): boolean { return false; }
+            step(action?: { channel: string[]; value?: any }): StepResult {
+                if (!action || action.channel[0] !== "c") return { kind: "waiting" };
+                return { kind: "read", channel: ["c"], value: action.value };
+            }
+        }
+
+        const m = new RenameMachine(new ReadC(), [ [["c"], ["x"]] ]);
+
+        // Mapped external name works
+        expect(m.step({ channel: ["x"], value: 1 })).toEqual({ kind: "read", channel: ["x"], value: 1 });
+
+        const m2 = new RenameMachine(new ReadC(), [ [["c"], ["x"]] ]);
+        // Original internal name is rejected
+        expect(m2.step({ channel: ["c"], value: 1 })).toEqual({ kind: "waiting" });
+    });
+
+    it("supports prefix matching for multi-level paths", () => {
+        class PrefixedMachine implements MachineInstance {
+            private state: "reading" | "writing" | "done" = "reading";
+            getSpec(): MachineSpec { return build(sequence(read(["c", "val"]), write(["c", "status"]))); }
+            isCompleted(): boolean { return this.state === "done"; }
+            step(action?: { channel: string[]; value?: any }): StepResult {
+                if (this.state === "reading") {
+                    if (!action || !channelsEqual(action.channel, ["c", "val"])) return { kind: "waiting" };
+                    this.state = "writing";
+                    return { kind: "read", channel: ["c", "val"], value: action.value };
+                }
+                if (this.state === "writing") {
+                    this.state = "done";
+                    return { kind: "write", channel: ["c", "status"], value: "ok" };
+                }
+                return { kind: "done" };
+            }
+        }
+
+        const m = new RenameMachine(new PrefixedMachine(), [ [["c"], ["x"]] ]);
+
+        // Read matches x.val -> c.val
+        expect(m.step({ channel: ["x", "val"], value: 100 })).toEqual({
+            kind: "read",
+            channel: ["x", "val"],
+            value: 100
+        });
+
+        // Write outputs x.status -> c.status
+        expect(m.step()).toEqual({
+            kind: "write",
+            channel: ["x", "status"],
+            value: "ok"
+        });
         expect(m.isCompleted()).toBe(true);
     });
 });

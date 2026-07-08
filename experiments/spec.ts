@@ -71,6 +71,11 @@ export type MachineSpec = {
     pathA: string[]
     pathB: string[]
     then: MachineSpec
+} | {
+    kind: "rename"
+    mapping: Array<[string[], string[]]>
+    inner: MachineSpec
+    then: MachineSpec
 };
 
 export type TranscriptEntry =  {
@@ -83,12 +88,37 @@ export type TranscriptEntry =  {
 
 export type SpecBuilder = (next: MachineSpec) => MachineSpec;
 
-function getSuffix(channel: string[], prefix: string[]): string[] | null {
+export function getSuffix(channel: string[], prefix: string[]): string[] | null {
     if (channel.length < prefix.length) return null;
     for (let i = 0; i < prefix.length; i++) {
         if (channel[i] !== prefix[i]) return null;
     }
     return channel.slice(prefix.length);
+}
+
+export function translateOuterToInner(chan: string[], mapping: Array<[string[], string[]]>): string[] | null {
+    for (const [from, to] of mapping) {
+        if (getSuffix(chan, from) !== null && !channelsEqual(from, to)) {
+            return null;
+        }
+    }
+    for (const [from, to] of mapping) {
+        const suffix = getSuffix(chan, to);
+        if (suffix !== null) {
+            return [...from, ...suffix];
+        }
+    }
+    return chan;
+}
+
+export function translateInnerToOuter(chan: string[], mapping: Array<[string[], string[]]>): string[] {
+    for (const [from, to] of mapping) {
+        const suffix = getSuffix(chan, from);
+        if (suffix !== null) {
+            return [...to, ...suffix];
+        }
+    }
+    return chan;
 }
 
 function resolveTraceInternal(inner: MachineSpec, pathA: string[], pathB: string[]): MachineSpec {
@@ -171,6 +201,13 @@ function getFirstEvents(spec: MachineSpec): Array<{ kind: "read" | "write", chan
         }
         return result;
     }
+    if (spec.kind === "rename") {
+        const result: Array<{ kind: "read" | "write", channel: string[] }> = [];
+        for (const ev of getFirstEvents(spec.inner)) {
+            result.push({ kind: ev.kind, channel: translateInnerToOuter(ev.channel, spec.mapping) });
+        }
+        return result;
+    }
     if (spec.kind === "trace") {
         const resolvedInner = resolveTraceInternal(spec.inner, spec.pathA, spec.pathB);
         const result: Array<{ kind: "read" | "write", channel: string[] }> = [];
@@ -186,6 +223,143 @@ function getFirstEvents(spec: MachineSpec): Array<{ kind: "read" | "write", chan
 
 function eventToString(ev: { kind: "read" | "write", channel: string[] }): string {
     return `${ev.kind}:${ev.channel.join(".")}`;
+}
+
+function serializeSpec(spec: MachineSpec, visited = new Map<MachineSpec, string>()): string {
+    if (visited.has(spec)) {
+        return visited.get(spec)!;
+    }
+    const id = `REF_${visited.size}`;
+    visited.set(spec, id);
+
+    switch (spec.kind) {
+        case "done":
+            return "done";
+        case "read":
+            return `read(${spec.channel.join(".")})->${serializeSpec(spec.then, visited)}`;
+        case "write":
+            return `write(${spec.channel.join(".")})->${serializeSpec(spec.then, visited)}`;
+        case "concurrent": {
+            const subs = Object.entries(spec.machines)
+                .map(([k, v]) => `${k}:${serializeSpec(v, visited)}`)
+                .sort()
+                .join(",");
+            return `concurrent({${subs}})->${serializeSpec(spec.then, visited)}`;
+        }
+        case "choice": {
+            const choices = Object.entries(spec.choices)
+                .map(([k, v]) => `${k}:${serializeSpec(v, visited)}`)
+                .sort()
+                .join(",");
+            const current = spec.current ? `[curr:${serializeSpec(spec.current, visited)}]` : "";
+            return `choice({${choices}})${spec.selected || ""}${current}->${serializeSpec(spec.then, visited)}`;
+        }
+        case "loop": {
+            const body = serializeSpec(spec.body, visited);
+            const current = spec.current ? `[curr:${serializeSpec(spec.current, visited)}]` : "";
+            return `loop(${body})${current}->${serializeSpec(spec.then, visited)}`;
+        }
+        case "prefix":
+            return `prefix(${spec.prefix.join(".")},${serializeSpec(spec.inner, visited)})->${serializeSpec(spec.then, visited)}`;
+        case "complement":
+            return `complement(${serializeSpec(spec.inner, visited)})->${serializeSpec(spec.then, visited)}`;
+        case "trace":
+            return `trace(${serializeSpec(spec.inner, visited)},${spec.pathA.join(".")},${spec.pathB.join(".")})->${serializeSpec(spec.then, visited)}`;
+        case "rename": {
+            const mappingsStr = spec.mapping.map(([from, to]) => `${from.join(".")}:${to.join(".")}`).join(",");
+            return `rename({${mappingsStr}},${serializeSpec(spec.inner, visited)})->${serializeSpec(spec.then, visited)}`;
+        }
+    }
+}
+
+function validateTraceSpecRecursively(
+    spec: MachineSpec,
+    pathA: string[],
+    pathB: string[],
+    visited: Set<string>
+): void {
+    const key = serializeSpec(spec);
+    if (visited.has(key)) {
+        return;
+    }
+    visited.add(key);
+
+    const possible = getPossibleTransitions(spec);
+    
+    for (const ev of possible) {
+        // 1. Check if ev matches pathA
+        const suffixA = getSuffix(ev.channel, pathA);
+        if (suffixA !== null) {
+            const oppositeKind = ev.kind === "write" ? "read" : "write";
+            const targetChannel = [...pathB, ...suffixA];
+            const targetExists = possible.some(other => 
+                other.kind === oppositeKind && channelsEqual(other.channel, targetChannel)
+            );
+            if (!targetExists) {
+                throw new Error(
+                    `Blocked wired transition: event "${ev.kind === "read" ? "<" : ">"} ${ev.channel.join(".")}" is possible, ` +
+                    `but its counterpart "${oppositeKind === "read" ? "<" : ">"} ${targetChannel.join(".")}" is not ready.`
+                );
+            }
+        }
+
+        // 2. Check if ev matches pathB
+        const suffixB = getSuffix(ev.channel, pathB);
+        if (suffixB !== null) {
+            const oppositeKind = ev.kind === "write" ? "read" : "write";
+            const targetChannel = [...pathA, ...suffixB];
+            const targetExists = possible.some(other => 
+                other.kind === oppositeKind && channelsEqual(other.channel, targetChannel)
+            );
+            if (!targetExists) {
+                throw new Error(
+                    `Blocked wired transition: event "${ev.kind === "read" ? "<" : ">"} ${ev.channel.join(".")}" is possible, ` +
+                    `but its counterpart "${oppositeKind === "read" ? "<" : ">"} ${targetChannel.join(".")}" is not ready.`
+                );
+            }
+        }
+    }
+
+    // Explore next states
+    // A: External transitions
+    for (const ev of possible) {
+        const isWired = getSuffix(ev.channel, pathA) !== null || getSuffix(ev.channel, pathB) !== null;
+        if (!isWired) {
+            const next = transition(spec, ev);
+            if (next) {
+                validateTraceSpecRecursively(next, pathA, pathB, visited);
+            }
+        }
+    }
+
+    // B: Synchronized internal transitions
+    for (const ev of possible) {
+        if (ev.kind === "write") {
+            const suffixA = getSuffix(ev.channel, pathA);
+            if (suffixA !== null) {
+                const targetChannel = [...pathB, ...suffixA];
+                const next1 = transition(spec, ev);
+                if (next1) {
+                    const next2 = transition(next1, { kind: "read", channel: targetChannel });
+                    if (next2) {
+                        validateTraceSpecRecursively(next2, pathA, pathB, visited);
+                    }
+                }
+            }
+
+            const suffixB = getSuffix(ev.channel, pathB);
+            if (suffixB !== null) {
+                const targetChannel = [...pathA, ...suffixB];
+                const next1 = transition(spec, ev);
+                if (next1) {
+                    const next2 = transition(next1, { kind: "read", channel: targetChannel });
+                    if (next2) {
+                        validateTraceSpecRecursively(next2, pathA, pathB, visited);
+                    }
+                }
+            }
+        }
+    }
 }
 
 function validateSpec(spec: MachineSpec): void {
@@ -226,6 +400,10 @@ function validateSpec(spec: MachineSpec): void {
         validateSpec(spec.inner);
         validateSpec(spec.then);
     } else if (spec.kind === "trace") {
+        validateTraceSpecRecursively(spec.inner, spec.pathA, spec.pathB, new Set());
+        validateSpec(spec.inner);
+        validateSpec(spec.then);
+    } else if (spec.kind === "rename") {
         validateSpec(spec.inner);
         validateSpec(spec.then);
     } else if (spec.kind === "read" || spec.kind === "write") {
@@ -295,6 +473,15 @@ export function prefix(prefixPath: string[], inner: MachineSpec): SpecBuilder {
         then: next
     });
 }
+
+export function rename(mapping: Array<[string[], string[]]>, inner: MachineSpec): SpecBuilder {
+    return (next: MachineSpec) => ({
+        kind: "rename",
+        mapping,
+        inner,
+        then: next
+    });
+}
 export function trace(inner: MachineSpec, pathA: string[], pathB: string[]): SpecBuilder {
     return (next: MachineSpec) => ({
         kind: "trace",
@@ -315,7 +502,7 @@ export function sequence(...parts: SpecBuilder[]): SpecBuilder {
     };
 }
 
-function channelsEqual(a: string[], b: string[]): boolean {
+export function channelsEqual(a: string[], b: string[]): boolean {
     if (a.length !== b.length) return false;
     return a.every((val, index) => val === b[index]);
 }
@@ -346,6 +533,9 @@ export function isCompleted(spec: MachineSpec): boolean {
     if (spec.kind === "trace") {
         const resolvedInner = resolveTraceInternal(spec.inner, spec.pathA, spec.pathB);
         return isCompleted(resolvedInner) && isCompleted(spec.then);
+    }
+    if (spec.kind === "rename") {
+        return isCompleted(spec.inner) && isCompleted(spec.then);
     }
     return false;
 }
@@ -540,6 +730,32 @@ export function transition(spec: MachineSpec, entry: TranscriptEntry): MachineSp
         return null;
     }
 
+    if (spec.kind === "rename") {
+        const innerChannel = translateOuterToInner(entry.channel, spec.mapping);
+        if (innerChannel === null) {
+            return null;
+        }
+
+        const strippedEntry: TranscriptEntry = {
+            kind: entry.kind,
+            channel: innerChannel
+        };
+        const nextInner = transition(spec.inner, strippedEntry);
+
+        if (nextInner !== null) {
+            return {
+                kind: "rename",
+                mapping: spec.mapping,
+                inner: nextInner,
+                then: spec.then
+            };
+        }
+        if (isCompleted(spec.inner)) {
+            return transition(spec.then, entry);
+        }
+        return null;
+    }
+
     if (spec.kind === "trace") {
         if (getSuffix(entry.channel, spec.pathA) !== null || getSuffix(entry.channel, spec.pathB) !== null) {
             return null;
@@ -607,6 +823,13 @@ export function getPossibleTransitions(spec: MachineSpec): TranscriptEntry[] {
     } else if (spec.kind === "complement") {
         for (const ev of getPossibleTransitions(spec.inner)) {
             result.push({ kind: ev.kind === "read" ? "write" : "read", channel: ev.channel });
+        }
+        if (isCompleted(spec.inner)) {
+            result.push(...getPossibleTransitions(spec.then));
+        }
+    } else if (spec.kind === "rename") {
+        for (const ev of getPossibleTransitions(spec.inner)) {
+            result.push({ kind: ev.kind, channel: translateInnerToOuter(ev.channel, spec.mapping) });
         }
         if (isCompleted(spec.inner)) {
             result.push(...getPossibleTransitions(spec.then));
@@ -795,6 +1018,26 @@ export function hideSpecChannels(spec: MachineSpec, paths: string[][], prefix: s
         return {
             ...spec,
             inner: hideSpecChannels(spec.inner, paths, [...prefix, ...spec.prefix]),
+            then: hideSpecChannels(spec.then, paths, prefix)
+        };
+    }
+    if (spec.kind === "rename") {
+        const mappedPaths = paths.map(path => {
+            for (const [from, to] of spec.mapping) {
+                if (path.length >= prefix.length + to.length) {
+                    const candidateTo = path.slice(prefix.length, prefix.length + to.length);
+                    if (channelsEqual(candidateTo, to)) {
+                        const suffix = path.slice(prefix.length + to.length);
+                        return [...prefix, ...from, ...suffix];
+                    }
+                }
+            }
+            return path;
+        });
+
+        return {
+            ...spec,
+            inner: hideSpecChannels(spec.inner, mappedPaths, prefix),
             then: hideSpecChannels(spec.then, paths, prefix)
         };
     }

@@ -1,6 +1,6 @@
 // NOTE: All examples in this file must only use primitives (from primitives.ts) and combinators (from impl.ts), rather than implementing custom JS functionality directly.
 
-import { MachineInstance, ConcurrentMachine, TraceMachine, SequenceMachine, DiscardMachine, LoopMachine } from "./impl";
+import { MachineInstance, ConcurrentMachine, TraceMachine, SequenceMachine, DiscardMachine, LoopMachine, RenameMachine } from "./impl";
 import {
     ValueCellMachine,
     AssignCellMachine,
@@ -15,10 +15,10 @@ export function createFibonacciMachine2(): MachineInstance {
     const controller = new LoopMachine(() => {
         return new SequenceMachine([
             new DiscardMachine(["next"]),
-            new AssignCellMachine(["B"], ["out"]),
-            new AddCellMachine(["A"], ["B"], ["C"]),
-            new AssignCellMachine(["B"], ["A"]),
-            new AssignCellMachine(["C"], ["B"])
+            new RenameMachine(new AssignCellMachine(), [ [["in0"], ["B"]], [["out0"], ["out0"]] ]),
+            new RenameMachine(new AddCellMachine(), [ [["in0"], ["A"]], [["in1"], ["B"]], [["out0"], ["C"]] ]),
+            new RenameMachine(new AssignCellMachine(), [ [["in0"], ["B"]], [["out0"], ["A"]] ]),
+            new RenameMachine(new AssignCellMachine(), [ [["in0"], ["C"]], [["out0"], ["B"]] ])
         ]);
     });
 
@@ -45,7 +45,7 @@ describe("Fibonacci Machine 2 (sequential assignment)", () => {
         let res = fib.step({ channel: ["ctrl", "next"], value: null });
         expect(res).toEqual({ kind: "read", channel: ["ctrl", "next"], value: null });
         res = fib.step();
-        expect(res).toEqual({ kind: "write", channel: ["ctrl", "out", "set"], value: 1 });
+        expect(res).toEqual({ kind: "write", channel: ["ctrl", "out0", "set"], value: 1 });
         
         // Single propagation tick: runs add, shift1, shift2, and resets loop
         res = fib.step();
@@ -55,7 +55,7 @@ describe("Fibonacci Machine 2 (sequential assignment)", () => {
         res = fib.step({ channel: ["ctrl", "next"], value: null });
         expect(res).toEqual({ kind: "read", channel: ["ctrl", "next"], value: null });
         res = fib.step();
-        expect(res).toEqual({ kind: "write", channel: ["ctrl", "out", "set"], value: 1 });
+        expect(res).toEqual({ kind: "write", channel: ["ctrl", "out0", "set"], value: 1 });
         
         res = fib.step();
         expect(res).toEqual({ kind: "waiting" });
@@ -64,7 +64,7 @@ describe("Fibonacci Machine 2 (sequential assignment)", () => {
         res = fib.step({ channel: ["ctrl", "next"], value: null });
         expect(res).toEqual({ kind: "read", channel: ["ctrl", "next"], value: null });
         res = fib.step();
-        expect(res).toEqual({ kind: "write", channel: ["ctrl", "out", "set"], value: 2 });
+        expect(res).toEqual({ kind: "write", channel: ["ctrl", "out0", "set"], value: 2 });
         
         res = fib.step();
         expect(res).toEqual({ kind: "waiting" });
@@ -73,7 +73,7 @@ describe("Fibonacci Machine 2 (sequential assignment)", () => {
         res = fib.step({ channel: ["ctrl", "next"], value: null });
         expect(res).toEqual({ kind: "read", channel: ["ctrl", "next"], value: null });
         res = fib.step();
-        expect(res).toEqual({ kind: "write", channel: ["ctrl", "out", "set"], value: 3 });
+        expect(res).toEqual({ kind: "write", channel: ["ctrl", "out0", "set"], value: 3 });
         
         res = fib.step();
         expect(res).toEqual({ kind: "waiting" });
@@ -82,7 +82,7 @@ describe("Fibonacci Machine 2 (sequential assignment)", () => {
         res = fib.step({ channel: ["ctrl", "next"], value: null });
         expect(res).toEqual({ kind: "read", channel: ["ctrl", "next"], value: null });
         res = fib.step();
-        expect(res).toEqual({ kind: "write", channel: ["ctrl", "out", "set"], value: 5 });
+        expect(res).toEqual({ kind: "write", channel: ["ctrl", "out0", "set"], value: 5 });
         
         res = fib.step();
         expect(res).toEqual({ kind: "waiting" });

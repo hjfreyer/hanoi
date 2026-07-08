@@ -1,6 +1,6 @@
 import {
     MachineSpec, TranscriptEntry, SpecBuilder,
-    build, read, write, concurrent, choice, loop, complement, prefix, trace, sequence,
+    build, read, write, concurrent, choice, loop, complement, prefix, rename, trace, sequence,
     transition, isCompleted, checkTranscript, parseTranscript,
     getPossibleTransitions, isSubtype
 } from "./spec";
@@ -508,6 +508,104 @@ describe("checkTranscript with prefix", () => {
     });
 });
 
+describe("checkTranscript with rename", () => {
+    it("renames read and write channels", () => {
+        const spec = build(rename([ [["c"], ["in0"]], [["d"], ["out0"]] ], build(sequence(
+            read(["c"]),
+            write(["d"])
+        ))));
+        expect(checkTranscript(spec, parseTranscript(`
+            < in0
+            > out0
+        `))).toBe(true);
+
+        // fails if original name is used
+        expect(checkTranscript(spec, parseTranscript(`
+            < c
+            > d
+        `))).toBe(false);
+    });
+
+    it("works with nested renaming", () => {
+        const specNested = build(rename([ [["in0"], ["out0"]] ], build(rename([ [["c"], ["in0"]] ], build(read(["c"]))))));
+        expect(checkTranscript(specNested, parseTranscript(`
+            < out0
+        `))).toBe(true);
+    });
+
+    it("supports prefix matching for multi-level paths", () => {
+        const spec = build(rename([ [["c"], ["in0"]] ], build(sequence(
+            read(["c", "val"]),
+            write(["c", "status"])
+        ))));
+        expect(checkTranscript(spec, parseTranscript(`
+            < in0.val
+            > in0.status
+        `))).toBe(true);
+
+        // fails on unmapped/internal name use
+        expect(checkTranscript(spec, parseTranscript(`
+            < c.val
+        `))).toBe(false);
+    });
+
+    it("handles channel name collisions (acceptable vs unacceptable circumstances)", () => {
+        // Circumstance 1: Acceptable Collision
+        // Mutually exclusive writes (choice) with identical continuations.
+        // Because the branches terminate immediately after the write,
+        // it doesn't matter which branch the validator selects.
+        const acceptableSpec = build(rename(
+            [ [["in0"], ["A"]], [["in1"], ["A"]] ],
+            build(choice({
+                branch0: build(write(["in0"])),
+                branch1: build(write(["in1"]))
+            }))
+        ));
+        expect(checkTranscript(acceptableSpec, parseTranscript(`
+            > A
+        `))).toBe(true);
+
+        // Circumstance 2: Unacceptable Collision (Concurrent reads)
+        // Since both internal reads are active concurrently, and the outer-to-inner mapping
+        // always statically resolves "A" to "in0", the second "< A" fails to transition "in1".
+        const unacceptableConcurrent = build(rename(
+            [ [["in0"], ["A"]], [["in1"], ["A"]] ],
+            build(concurrent({
+                c0: build(read(["in0"])),
+                c1: build(read(["in1"]))
+            }))
+        ));
+        // The first read succeeds (mapped to in0), but the second fails (mapped to in0, which is done).
+        expect(checkTranscript(unacceptableConcurrent, parseTranscript(`
+            < A
+            < A
+        `))).toBe(false);
+
+        // Circumstance 3: Unacceptable Collision (Different continuations)
+        // Although the writes are mutually exclusive, they lead to different continuations.
+        // If the inner spec chooses branch1 (writes "in1" -> mapped to "A", then "done1"),
+        // the validator maps the first "> A" to "in0" (selecting branch0) and expects "done0" next,
+        // causing validation to fail when "done1" is received.
+        const unacceptableContinuation = build(rename(
+            [ [["in0"], ["A"]], [["in1"], ["A"]] ],
+            build(choice({
+                branch0: build(sequence(write(["in0"]), write(["done0"]))),
+                branch1: build(sequence(write(["in1"]), write(["done1"])))
+            }))
+        ));
+        // Succeeds if we send done0 (validator selected branch0)
+        expect(checkTranscript(unacceptableContinuation, parseTranscript(`
+            > A
+            > done0
+        `))).toBe(true);
+        // Fails if we send done1 (which is what branch1 actually outputs)
+        expect(checkTranscript(unacceptableContinuation, parseTranscript(`
+            > A
+            > done1
+        `))).toBe(false);
+    });
+});
+
 describe("static validation (LL-1)", () => {
     it("throws error for ambiguous choice branches", () => {
         expect(() => {
@@ -553,6 +651,19 @@ describe("isSubtype", () => {
         
         const loopSpec = BorrowableSpec;
         expect(isSubtype(loopSpec, loopSpec).isSubtype).toBe(true);
+    });
+
+    it("renamed spec is equivalent to direct outer-name representation", () => {
+        const renamed = build(rename([ [["c"], ["in0"]], [["d"], ["out0"]] ], build(sequence(
+            read(["c"]),
+            write(["d"])
+        ))));
+        const direct = build(sequence(
+            read(["in0"]),
+            write(["out0"])
+        ));
+        expect(isSubtype(renamed, direct).isSubtype).toBe(true);
+        expect(isSubtype(direct, renamed).isSubtype).toBe(true);
     });
 
     it("supports contravariant inputs (reads)", () => {
@@ -809,7 +920,7 @@ describe("trace spec operator", () => {
         expect(isCompleted(next!)).toBe(true);
     });
 
-    it("remains blocked if internal transitions do not match", () => {
+    it("throws a validation error if internal transitions do not match", () => {
         // Producer writes "mid" but consumer reads a different channel "other"
         const inner = build(concurrent({
             prod: build(write(["mid"])),
@@ -817,15 +928,10 @@ describe("trace spec operator", () => {
         }));
 
         // Trace prod.mid to cons.mid (but cons is reading "cons.other", not "cons.mid"!)
-        const spec = build(trace(inner, ["prod", "mid"], ["cons", "mid"]));
-
-        // Since they don't match, they cannot synchronize.
-        // prod.mid is a write on pathA, which is wired/hidden, so it cannot be performed externally.
-        // cons.other is a read, which is not wired, so it's visible.
-        const possible = getPossibleTransitions(spec);
-        expect(possible).toEqual([
-            { kind: "read", channel: ["cons", "other"] }
-        ]);
+        // Should throw validation error because prod.mid (write) has no matching reader
+        expect(() => {
+            build(trace(inner, ["prod", "mid"], ["cons", "mid"]));
+        }).toThrow(/Blocked wired transition/);
     });
 
     it("resolves matched transitions and hides wired channels via prefixes", () => {
@@ -852,7 +958,7 @@ describe("trace spec operator", () => {
         expect(isCompleted(next!)).toBe(true);
     });
 
-    it("does not match if suffixes do not match under prefix tracing", () => {
+    it("throws validation error if suffixes do not match under prefix tracing", () => {
         // Producer writes ["mid", "val"] (prod.mid.val), consumer reads ["mid", "other"] (cons.mid.other)
         const inner = build(concurrent({
             prod: build(write(["mid", "val"])),
@@ -860,14 +966,9 @@ describe("trace spec operator", () => {
             unrelated: build(write(["info"]))
         }));
 
-        // Trace prod.mid to cons.mid
-        const spec = build(trace(inner, ["prod", "mid"], ["cons", "mid"]));
-
-        // Since suffixes ("val" vs "other") do not match under the wired prefixes, they cannot synchronize.
-        // The unrelated write remains visible.
-        const possible = getPossibleTransitions(spec);
-        expect(possible).toEqual([
-            { kind: "write", channel: ["unrelated", "info"] }
-        ]);
+        // Trace prod.mid to cons.mid should throw because prod.mid.val has no matching consumer
+        expect(() => {
+            build(trace(inner, ["prod", "mid"], ["cons", "mid"]));
+        }).toThrow(/Blocked wired transition/);
     });
 });

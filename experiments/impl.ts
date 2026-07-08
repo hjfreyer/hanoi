@@ -325,3 +325,184 @@ export class DupMachine implements MachineInstance {
         return { kind: "done" };
     }
 }
+
+export class ChoiceMachine implements MachineInstance {
+    private machines: Record<string, MachineInstance>;
+    private selected?: string;
+
+    constructor(machines: Record<string, MachineInstance>) {
+        this.machines = machines;
+    }
+
+    getSpec(): MachineSpec {
+        const subSpecs: Record<string, MachineSpec> = {};
+        for (const [key, sub] of Object.entries(this.machines)) {
+            subSpecs[key] = sub.getSpec();
+        }
+        return {
+            kind: "choice",
+            choices: subSpecs,
+            then: { kind: "done" },
+            selected: this.selected,
+            current: this.selected ? this.machines[this.selected].getSpec() : undefined
+        };
+    }
+
+    isCompleted(): boolean {
+        if (this.selected === undefined) {
+            return false;
+        }
+        return this.machines[this.selected].isCompleted();
+    }
+
+    step(action?: { channel: string[]; value?: any }): StepResult {
+        if (this.selected !== undefined) {
+            return this.machines[this.selected].step(action);
+        }
+
+        if (action) {
+            // Find which sub-machine can accept this read action
+            for (const [key, sub] of Object.entries(this.machines)) {
+                const next = transition(sub.getSpec(), { kind: "read", channel: action.channel });
+                if (next !== null) {
+                    this.selected = key;
+                    return sub.step(action);
+                }
+            }
+            return { kind: "waiting" };
+        }
+
+        // Check if any sub-machine wants to write
+        for (const [key, sub] of Object.entries(this.machines)) {
+            const res = sub.step();
+            if (res.kind === "write") {
+                this.selected = key;
+                return res;
+            }
+        }
+
+        return { kind: "waiting" };
+    }
+}
+
+export class PrefixMachine implements MachineInstance {
+    private inner: MachineInstance;
+    private prefixPath: string[];
+
+    constructor(prefixPath: string[], inner: MachineInstance) {
+        this.inner = inner;
+        this.prefixPath = prefixPath;
+    }
+
+    getSpec(): MachineSpec {
+        return {
+            kind: "prefix",
+            prefix: this.prefixPath,
+            inner: this.inner.getSpec(),
+            then: { kind: "done" }
+        };
+    }
+
+    isCompleted(): boolean {
+        return this.inner.isCompleted();
+    }
+
+    step(action?: { channel: string[]; value?: any }): StepResult {
+        if (action) {
+            const suffix = getSuffix(action.channel, this.prefixPath);
+            if (suffix === null) {
+                return { kind: "waiting" };
+            }
+            const res = this.inner.step({ channel: suffix, value: action.value });
+            return this.wrapResult(res);
+        }
+
+        const res = this.inner.step();
+        return this.wrapResult(res);
+    }
+
+    private wrapResult(res: StepResult): StepResult {
+        if (res.kind === "read" || res.kind === "write") {
+            return {
+                ...res,
+                channel: [...this.prefixPath, ...res.channel]
+            };
+        }
+        return res;
+    }
+}
+
+export class RenameMachine implements MachineInstance {
+    private inner: MachineInstance;
+    private mapping: Array<[string[], string[]]>;
+
+    constructor(inner: MachineInstance, mapping: Array<[string[], string[]]>) {
+        this.inner = inner;
+        this.mapping = mapping;
+    }
+
+    getSpec(): MachineSpec {
+        return {
+            kind: "rename",
+            mapping: this.mapping,
+            inner: this.inner.getSpec(),
+            then: { kind: "done" }
+        };
+    }
+
+    isCompleted(): boolean {
+        return this.inner.isCompleted();
+    }
+
+    step(action?: { channel: string[]; value?: any }): StepResult {
+        if (action) {
+            const mappedChan = this.translateOuterToInner(action.channel);
+            if (mappedChan === null) {
+                return { kind: "waiting" };
+            }
+            const res = this.inner.step({ channel: mappedChan, value: action.value });
+            return this.wrapResult(res);
+        }
+
+        const res = this.inner.step();
+        return this.wrapResult(res);
+    }
+
+    private translateOuterToInner(chan: string[]): string[] | null {
+        for (const [from, to] of this.mapping) {
+            if (getSuffix(chan, from) !== null && !channelsEqual(from, to)) {
+                return null;
+            }
+        }
+        for (const [from, to] of this.mapping) {
+            const suffix = getSuffix(chan, to);
+            if (suffix !== null) {
+                return [...from, ...suffix];
+            }
+        }
+        return chan;
+    }
+
+    private wrapResult(res: StepResult): StepResult {
+        if (res.kind === "read" || res.kind === "write") {
+            return {
+                ...res,
+                channel: this.translateInnerToOuter(res.channel)
+            };
+        }
+        return res;
+    }
+
+    private translateInnerToOuter(chan: string[]): string[] {
+        for (const [from, to] of this.mapping) {
+            const suffix = getSuffix(chan, from);
+            if (suffix !== null) {
+                return [...to, ...suffix];
+            }
+        }
+        return chan;
+    }
+}
+
+
+
