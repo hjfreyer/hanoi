@@ -14,13 +14,7 @@ export interface MachineInstance {
 }
 
 export function concatSpecs(a: MachineSpec, b: MachineSpec): MachineSpec {
-    if (a.kind === "done") {
-        return b;
-    }
-    return {
-        ...a,
-        then: concatSpecs(a.then, b)
-    } as MachineSpec;
+    return sequence(a, b);
 }
 
 export class SequenceMachine implements MachineInstance {
@@ -38,11 +32,7 @@ export class SequenceMachine implements MachineInstance {
     }
 
     getSpec(): MachineSpec {
-        let spec: MachineSpec = { kind: "done" };
-        for (let i = this.machines.length - 1; i >= 0; i--) {
-            spec = concatSpecs(this.machines[i].getSpec(), spec);
-        }
-        return spec;
+        return sequence(...this.machines.map(m => m.getSpec()));
     }
 
     isCompleted(state: any): boolean {
@@ -99,8 +89,7 @@ export class ConcurrentMachine implements MachineInstance {
         }
         return {
             kind: "concurrent",
-            machines: subSpecs,
-            then: { kind: "done" }
+            machines: subSpecs
         };
     }
 
@@ -198,8 +187,7 @@ export class TraceMachine implements MachineInstance {
             kind: "trace",
             inner: this.inner.getSpec(),
             pathA: this.pathA,
-            pathB: this.pathB,
-            then: { kind: "done" }
+            pathB: this.pathB
         };
     }
 
@@ -449,14 +437,13 @@ export class ChoiceMachine implements MachineInstance {
     }
 
     getSpec(): MachineSpec {
-        const subSpecs: Record<string, MachineSpec> = {};
-        for (const [key, sub] of Object.entries(this.machines)) {
-            subSpecs[key] = sub.getSpec();
+        const subSpecs: MachineSpec[] = [];
+        for (const sub of Object.values(this.machines)) {
+            subSpecs.push(sub.getSpec());
         }
         return {
             kind: "choice",
-            choices: subSpecs,
-            then: { kind: "done" }
+            choices: subSpecs
         };
     }
 
@@ -550,8 +537,7 @@ export class PrefixMachine implements MachineInstance {
         return {
             kind: "prefix",
             prefix: this.prefixPath,
-            inner: this.inner.getSpec(),
-            then: { kind: "done" }
+            inner: this.inner.getSpec()
         };
     }
 
@@ -609,8 +595,7 @@ export class RenameMachine implements MachineInstance {
         return {
             kind: "rename",
             mapping: this.mapping,
-            inner: this.inner.getSpec(),
-            then: { kind: "done" }
+            inner: this.inner.getSpec()
         };
     }
 
@@ -705,7 +690,8 @@ export class IndexedMachine implements MachineInstance {
             kind: "indexed",
             inner: this.templateSpec,
             active: activeSpecs,
-            then: { kind: "done" }
+            activated: Object.keys(this.active).length > 0,
+            then: sequence()
         };
     }
 

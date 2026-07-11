@@ -360,7 +360,7 @@ describe("SequenceMachine", () => {
     it("handles empty sequence", () => {
         const seq = new Runner(new SequenceMachine([]));
         expect(seq.isCompleted()).toBe(true);
-        expect(seq.getSpec()).toEqual({ kind: "done" });
+        expect(seq.getSpec()).toEqual(sequence());
         expect(seq.step()).toEqual({ kind: "done" });
     });
 });
@@ -546,8 +546,7 @@ describe("RenameMachine", () => {
         expect(m.getSpec()).toEqual({
             kind: "rename",
             mapping: [ [["c"], ["x"]], [["d"], ["y"]] ],
-            inner: inner.getSpec(),
-            then: { kind: "done" }
+            inner: inner.getSpec()
         });
 
         expect(m.isCompleted()).toBe(false);
@@ -609,7 +608,8 @@ describe("IndexedMachine", () => {
             kind: "indexed",
             inner: build(sequence(read(["c"]), write(["d"]))),
             active: {},
-            then: { kind: "done" }
+            activated: false,
+            then: sequence()
         });
 
         expect(m.isCompleted()).toBe(true);

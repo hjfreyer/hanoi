@@ -1,8 +1,9 @@
 import {
     MachineSpec, TranscriptEntry, SpecBuilder,
-    build, read, write, concurrent, choice, loop, complement, prefix, rename, trace, sequence, indexed,
+    build, read, write, concurrent, choice, loop, star, complement, prefix, rename, trace, sequence, indexed,
     transition, isCompleted, checkTranscript, parseTranscript,
-    getPossibleTransitions, isSubtype
+    getPossibleTransitions, isSubtype, serializeCompiledSpec,
+    DfaContext, compileToSpec, CompiledSpec
 } from "./spec";
 
 const BorrowSpec : SpecBuilder = sequence(
@@ -43,64 +44,62 @@ function pairComparator(left: MachineSpec, right: MachineSpec) {
 const pairBorrowableCopyable = pairComparator(BorrowableSpec, Copyable);
 
 describe("sequence", () => {
-    it("returns done for empty sequence", () => {
-        expect(build(sequence())).toEqual({ kind: "done" });
+    it("returns empty sequence for empty sequence", () => {
+        expect(build(sequence())).toEqual({ kind: "sequence", specs: [] });
     });
 
-    it("creates nested MachineSpec for sequence of parts", () => {
+    it("creates sequence of parts", () => {
         expect(build(sequence(
             read(["a"]),
             write(["b"])
         ))).toEqual({
-            kind: "read",
-            channel: ["a"],
-            then: {
-                kind: "write",
-                channel: ["b"],
-                then: { kind: "done" }
-            }
+            kind: "sequence",
+            specs: [
+                { kind: "read", channel: ["a"] },
+                { kind: "write", channel: ["b"] }
+            ]
         });
     });
 });
 
 describe("checkTranscript", () => {
     it("matches done with empty transcript", () => {
-        expect(checkTranscript(build(sequence()), parseTranscript(``))).toBe(true);
+        expect(checkTranscript(compileToSpec(build(sequence())), parseTranscript(``))).toBe(true);
     });
 
     it("does not match done with non-empty transcript", () => {
-        expect(checkTranscript(build(sequence()), parseTranscript(`
+        expect(checkTranscript(compileToSpec(build(sequence())), parseTranscript(`
             < a
         `))).toBe(false);
     });
 
     it("matches read with correct single entry", () => {
-        expect(checkTranscript(build(sequence(read(["a", "b"]))), parseTranscript(`
+        expect(checkTranscript(compileToSpec(build(sequence(read(["a", "b"])))), parseTranscript(`
             < a.b
         `))).toBe(true);
     });
 
     it("does not match read with wrong kind", () => {
-        expect(checkTranscript(build(sequence(read(["a"]))), parseTranscript(`
+        expect(checkTranscript(compileToSpec(build(sequence(read(["a"])))), parseTranscript(`
             > a
         `))).toBe(false);
     });
 
     it("does not match read with wrong channel path", () => {
-        expect(checkTranscript(build(sequence(read(["a", "b"]))), parseTranscript(`
+        expect(checkTranscript(compileToSpec(build(sequence(read(["a", "b"])))), parseTranscript(`
             < a.c
         `))).toBe(false);
     });
 
     it("does not match read with different channel length", () => {
-        expect(checkTranscript(build(sequence(read(["a"]))), parseTranscript(`
+        expect(checkTranscript(compileToSpec(build(sequence(read(["a"])))), parseTranscript(`
             < a.b
         `))).toBe(false);
     });
 
     it("does not match if transcript has multiple entries but spec ends with done", () => {
         expect(checkTranscript(
-            build(sequence(read(["a"]))),
+            compileToSpec(build(sequence(read(["a"])))),
             parseTranscript(`
                 < a
                 < a
@@ -109,10 +108,10 @@ describe("checkTranscript", () => {
     });
 
     it("matches a multi-step sequence", () => {
-        const spec = build(sequence(
+        const spec = compileToSpec(build(sequence(
             read(["a"]),
             write(["b"])
-        ));
+        )));
         expect(checkTranscript(spec, parseTranscript(`
             < a
             > b
@@ -120,10 +119,10 @@ describe("checkTranscript", () => {
     });
 
     it("does not match multi-step sequence with incorrect entry", () => {
-        const spec = build(sequence(
+        const spec = compileToSpec(build(sequence(
             read(["a"]),
             write(["b"])
-        ));
+        )));
         expect(checkTranscript(spec, parseTranscript(`
             < a
             < b
@@ -133,10 +132,10 @@ describe("checkTranscript", () => {
 
 describe("checkTranscript with concurrent", () => {
     it("matches concurrent specs with interleaved entries", () => {
-        const spec = build(concurrent({
+        const spec = compileToSpec(build(concurrent({
             left: build(read(["foo"])),
             right: build(write(["bar"]))
-        }));
+        })));
         // interleaved 1
         expect(checkTranscript(spec, parseTranscript(`
             < left.foo
@@ -151,20 +150,20 @@ describe("checkTranscript with concurrent", () => {
     });
 
     it("does not match concurrent spec if one machine is not completed", () => {
-        const spec = build(concurrent({
+        const spec = compileToSpec(build(concurrent({
             left: build(read(["foo"])),
             right: build(write(["bar"]))
-        }));
+        })));
         expect(checkTranscript(spec, parseTranscript(`
             < left.foo
         `))).toBe(false);
     });
 
     it("fails when passing data to a completed machine", () => {
-        const spec = build(concurrent({
+        const spec = compileToSpec(build(concurrent({
             left: build(read(["foo"])),
             right: build(write(["bar"]))
-        }));
+        })));
         expect(checkTranscript(spec, parseTranscript(`
             < left.foo
             > right.bar
@@ -173,11 +172,11 @@ describe("checkTranscript with concurrent", () => {
     });
 
     it("matches nested concurrent specs", () => {
-        const spec = build(concurrent({
+        const spec = compileToSpec(build(concurrent({
             outer: build(concurrent({
                 inner: build(read(["foo"]))
             }))
-        }));
+        })));
         expect(checkTranscript(spec, parseTranscript(`
             < outer.inner.foo
         `))).toBe(true);
@@ -186,10 +185,10 @@ describe("checkTranscript with concurrent", () => {
 
 describe("checkTranscript with choice", () => {
     it("matches choice branches", () => {
-        const spec = build(choice({
+        const spec = compileToSpec(build(choice({
             ok: build(read(["data"])),
             err: build(read(["msg"]))
-        }));
+        })));
         // branch 1
         expect(checkTranscript(spec, parseTranscript(`
             < data
@@ -207,27 +206,27 @@ describe("checkTranscript with choice", () => {
     });
 
     it("is completed if at least one branch is completed", () => {
-        const spec = build(choice({
+        const spec = compileToSpec(build(choice({
             ok: build(read(["data"])),
-            exit: { kind: "done" }
-        }));
+            exit: sequence()
+        })));
         expect(checkTranscript(spec, parseTranscript(""))).toBe(true);
     });
 
     it("can still take a different branch even if one branch is completed", () => {
-        const spec = build(choice({
+        const spec = compileToSpec(build(choice({
             ok: build(read(["data"])),
-            exit: { kind: "done" }
-        }));
+            exit: sequence()
+        })));
         expect(checkTranscript(spec, parseTranscript(`
             < data
         `))).toBe(true);
     });
 
     it("fails if attempting to pass data to a completed choice branch", () => {
-        const spec = build(choice({
-            exit: { kind: "done" }
-        }));
+        const spec = compileToSpec(build(choice({
+            exit: sequence()
+        })));
         expect(checkTranscript(spec, parseTranscript(`
             < anything
         `))).toBe(false);
@@ -236,12 +235,12 @@ describe("checkTranscript with choice", () => {
 
 describe("checkTranscript with loop", () => {
     it("matches a loop with 0 iterations", () => {
-        const spec = build(loop(build(read(["foo"]))));
+        const spec = compileToSpec(build(loop(build(read(["foo"])))));
         expect(checkTranscript(spec, parseTranscript(``))).toBe(true);
     });
 
     it("matches a loop with multiple iterations", () => {
-        const spec = build(loop(build(read(["foo"]))));
+        const spec = compileToSpec(build(loop(build(read(["foo"])))));
         expect(checkTranscript(spec, parseTranscript(`
             < foo
             < foo
@@ -250,21 +249,21 @@ describe("checkTranscript with loop", () => {
     });
 
     it("fails if the loop body does not match", () => {
-        const spec = build(loop(build(read(["foo"]))));
+        const spec = compileToSpec(build(loop(build(read(["foo"])))));
         expect(checkTranscript(spec, parseTranscript(`
             < bar
         `))).toBe(false);
     });
 
     it("fails when stopping in the middle of an iteration", () => {
-        const spec = build(loop(build(sequence(read(["foo"]), write(["bar"])))));
+        const spec = compileToSpec(build(loop(build(sequence(read(["foo"]), write(["bar"]))))));
         expect(checkTranscript(spec, parseTranscript(`
             < foo
         `))).toBe(false);
     });
 
     it("matches after a complete iteration", () => {
-        const spec = build(loop(build(sequence(read(["foo"]), write(["bar"])))));
+        const spec = compileToSpec(build(loop(build(sequence(read(["foo"]), write(["bar"]))))));
         expect(checkTranscript(spec, parseTranscript(`
             < foo
             > bar
@@ -274,11 +273,11 @@ describe("checkTranscript with loop", () => {
 
 describe("BorrowableSpec", () => {
     it("matches 0 iterations", () => {
-        expect(checkTranscript(BorrowableSpec, parseTranscript(``))).toBe(true);
+        expect(checkTranscript(compileToSpec(BorrowableSpec), parseTranscript(``))).toBe(true);
     });
 
     it("matches 1 iteration", () => {
-        expect(checkTranscript(BorrowableSpec, parseTranscript(`
+        expect(checkTranscript(compileToSpec(BorrowableSpec), parseTranscript(`
             < borrow
             > value
             < restore
@@ -286,7 +285,7 @@ describe("BorrowableSpec", () => {
     });
 
     it("matches multiple iterations", () => {
-        expect(checkTranscript(BorrowableSpec, parseTranscript(`
+        expect(checkTranscript(compileToSpec(BorrowableSpec), parseTranscript(`
             < borrow
             > value
             < restore
@@ -297,14 +296,14 @@ describe("BorrowableSpec", () => {
     });
 
     it("fails when stopping early in an iteration", () => {
-        expect(checkTranscript(BorrowableSpec, parseTranscript(`
+        expect(checkTranscript(compileToSpec(BorrowableSpec), parseTranscript(`
             < borrow
             > value
         `))).toBe(false);
     });
 
     it("fails with incorrect kind for a step", () => {
-        expect(checkTranscript(BorrowableSpec, parseTranscript(`
+        expect(checkTranscript(compileToSpec(BorrowableSpec), parseTranscript(`
             < borrow
             < value
             < restore
@@ -314,13 +313,13 @@ describe("BorrowableSpec", () => {
 
 describe("checkTranscript with continuations", () => {
     it("matches concurrent specs with interleaved entries and continuation", () => {
-        const spec = build(sequence(
+        const spec = compileToSpec(build(sequence(
             concurrent({
                 left: build(read(["foo"])),
                 right: build(write(["bar"]))
             }),
             read(["next"])
-        ));
+        )));
         expect(checkTranscript(spec, parseTranscript(`
             < left.foo
             > right.bar
@@ -329,13 +328,13 @@ describe("checkTranscript with continuations", () => {
     });
 
     it("matches choice specs with continuation", () => {
-        const spec = build(sequence(
+        const spec = compileToSpec(build(sequence(
             choice({
                 ok: build(read(["data"])),
                 err: build(read(["msg"]))
             }),
             read(["next"])
-        ));
+        )));
         expect(checkTranscript(spec, parseTranscript(`
             < data
             < next
@@ -343,10 +342,10 @@ describe("checkTranscript with continuations", () => {
     });
 
     it("matches loop with continuation", () => {
-        const spec = build(sequence(
+        const spec = compileToSpec(build(sequence(
             loop(build(read(["foo"]))),
             read(["next"])
-        ));
+        )));
         expect(checkTranscript(spec, parseTranscript(`
             < foo
             < next
@@ -354,12 +353,12 @@ describe("checkTranscript with continuations", () => {
     });
 
     it("does not require key prefix for choice branches anymore", () => {
-        const spec = build(sequence(
+        const spec = compileToSpec(build(sequence(
             choice({
                 ok: build(sequence(read(["data1"]), read(["data2"])))
             }),
             read(["next"])
-        ));
+        )));
         expect(checkTranscript(spec, parseTranscript(`
             < data1
             < data2
@@ -369,7 +368,7 @@ describe("checkTranscript with continuations", () => {
 });
 
 describe("pairBorrowableCopyable", () => {
-    const spec = build(pairBorrowableCopyable);
+    const spec = compileToSpec(build(pairBorrowableCopyable));
 
     it("matches zero iterations of all component loops", () => {
         expect(checkTranscript(spec, parseTranscript(`
@@ -433,10 +432,10 @@ describe("pairBorrowableCopyable", () => {
 
 describe("checkTranscript with complement", () => {
     it("reverses reads and writes", () => {
-        const spec = build(complement(build(sequence(
+        const spec = compileToSpec(build(complement(build(sequence(
             read(["foo"]),
             write(["bar"])
-        ))));
+        )))));
         // read becomes write, write becomes read
         expect(checkTranscript(spec, parseTranscript(`
             > foo
@@ -451,13 +450,13 @@ describe("checkTranscript with complement", () => {
     });
 
     it("works with nested loops and continuations", () => {
-        const spec = build(sequence(
+        const spec = compileToSpec(build(sequence(
             complement(build(loop(build(sequence(
                 read(["foo"]),
                 write(["bar"])
             ))))),
             read(["next"])
-        ));
+        )));
         // loop body: read(foo) -> write(bar).
         // Under complement: write(foo) -> read(bar).
         expect(checkTranscript(spec, parseTranscript(`
@@ -472,10 +471,10 @@ describe("checkTranscript with complement", () => {
 
 describe("checkTranscript with prefix", () => {
     it("prefixes read and write channels", () => {
-        const spec = build(prefix(["a", "b"], build(sequence(
+        const spec = compileToSpec(build(prefix(["a", "b"], build(sequence(
             read(["c"]),
             write(["d"])
-        ))));
+        )))));
         expect(checkTranscript(spec, parseTranscript(`
             < a.b.c
             > a.b.d
@@ -489,17 +488,17 @@ describe("checkTranscript with prefix", () => {
     });
 
     it("works with nested prefixing", () => {
-        const spec = build(prefix(["a"], build(prefix(["b"], build(read(["c"]))))));
+        const spec = compileToSpec(build(prefix(["a"], build(prefix(["b"], build(read(["c"])))))));
         expect(checkTranscript(spec, parseTranscript(`
             < a.b.c
         `))).toBe(true);
     });
 
     it("works with loops and continuations", () => {
-        const spec = build(sequence(
+        const spec = compileToSpec(build(sequence(
             prefix(["a"], build(loop(build(read(["b"]))))),
             read(["next"])
-        ));
+        )));
         expect(checkTranscript(spec, parseTranscript(`
             < a.b
             < a.b
@@ -510,10 +509,10 @@ describe("checkTranscript with prefix", () => {
 
 describe("checkTranscript with rename", () => {
     it("renames read and write channels", () => {
-        const spec = build(rename([ [["c"], ["in0"]], [["d"], ["out0"]] ], build(sequence(
+        const spec = compileToSpec(build(rename([ [["c"], ["in0"]], [["d"], ["out0"]] ], build(sequence(
             read(["c"]),
             write(["d"])
-        ))));
+        )))));
         expect(checkTranscript(spec, parseTranscript(`
             < in0
             > out0
@@ -527,17 +526,17 @@ describe("checkTranscript with rename", () => {
     });
 
     it("works with nested renaming", () => {
-        const specNested = build(rename([ [["in0"], ["out0"]] ], build(rename([ [["c"], ["in0"]] ], build(read(["c"]))))));
+        const specNested = compileToSpec(build(rename([ [["in0"], ["out0"]] ], build(rename([ [["c"], ["in0"]] ], build(read(["c"])))))));
         expect(checkTranscript(specNested, parseTranscript(`
             < out0
         `))).toBe(true);
     });
 
     it("supports prefix matching for multi-level paths", () => {
-        const spec = build(rename([ [["c"], ["in0"]] ], build(sequence(
+        const spec = compileToSpec(build(rename([ [["c"], ["in0"]] ], build(sequence(
             read(["c", "val"]),
             write(["c", "status"])
-        ))));
+        )))));
         expect(checkTranscript(spec, parseTranscript(`
             < in0.val
             > in0.status
@@ -554,13 +553,13 @@ describe("checkTranscript with rename", () => {
         // Mutually exclusive writes (choice) with identical continuations.
         // Because the branches terminate immediately after the write,
         // it doesn't matter which branch the validator selects.
-        const acceptableSpec = build(rename(
+        const acceptableSpec = compileToSpec(build(rename(
             [ [["in0"], ["A"]], [["in1"], ["A"]] ],
             build(choice({
                 branch0: build(write(["in0"])),
                 branch1: build(write(["in1"]))
             }))
-        ));
+        )));
         expect(checkTranscript(acceptableSpec, parseTranscript(`
             > A
         `))).toBe(true);
@@ -568,13 +567,13 @@ describe("checkTranscript with rename", () => {
         // Circumstance 2: Unacceptable Collision (Concurrent reads)
         // Since both internal reads are active concurrently, and the outer-to-inner mapping
         // always statically resolves "A" to "in0", the second "< A" fails to transition "in1".
-        const unacceptableConcurrent = build(rename(
+        const unacceptableConcurrent = compileToSpec(build(rename(
             [ [["in0"], ["A"]], [["in1"], ["A"]] ],
             build(concurrent({
                 c0: build(read(["in0"])),
                 c1: build(read(["in1"]))
             }))
-        ));
+        )));
         // The first read succeeds (mapped to in0), but the second fails (mapped to in0, which is done).
         expect(checkTranscript(unacceptableConcurrent, parseTranscript(`
             < A
@@ -586,13 +585,13 @@ describe("checkTranscript with rename", () => {
         // If the inner spec chooses branch1 (writes "in1" -> mapped to "A", then "done1"),
         // the validator maps the first "> A" to "in0" (selecting branch0) and expects "done0" next,
         // causing validation to fail when "done1" is received.
-        const unacceptableContinuation = build(rename(
+        const unacceptableContinuation = compileToSpec(build(rename(
             [ [["in0"], ["A"]], [["in1"], ["A"]] ],
             build(choice({
                 branch0: build(sequence(write(["in0"]), write(["done0"]))),
                 branch1: build(sequence(write(["in1"]), write(["done1"])))
             }))
-        ));
+        )));
         // Succeeds if we send done0 (validator selected branch0)
         expect(checkTranscript(unacceptableContinuation, parseTranscript(`
             > A
@@ -646,35 +645,35 @@ describe("static validation (LL-1)", () => {
 
 describe("isSubtype", () => {
     it("is reflexive (spec is subtype of itself)", () => {
-        const spec = build(sequence(read(["foo"]), write(["bar"])));
+        const spec = compileToSpec(build(sequence(read(["foo"]), write(["bar"]))));
         expect(isSubtype(spec, spec).isSubtype).toBe(true);
         
-        const loopSpec = BorrowableSpec;
+        const loopSpec = compileToSpec(BorrowableSpec);
         expect(isSubtype(loopSpec, loopSpec).isSubtype).toBe(true);
     });
 
     it("renamed spec is equivalent to direct outer-name representation", () => {
-        const renamed = build(rename([ [["c"], ["in0"]], [["d"], ["out0"]] ], build(sequence(
+        const renamed = compileToSpec(build(rename([ [["c"], ["in0"]], [["d"], ["out0"]] ], build(sequence(
             read(["c"]),
             write(["d"])
-        ))));
-        const direct = build(sequence(
+        )))));
+        const direct = compileToSpec(build(sequence(
             read(["in0"]),
             write(["out0"])
-        ));
+        )));
         expect(isSubtype(renamed, direct).isSubtype).toBe(true);
         expect(isSubtype(direct, renamed).isSubtype).toBe(true);
     });
 
     it("supports contravariant inputs (reads)", () => {
         // A accepts more inputs than B. A is a subtype of B.
-        const a = build(choice({
+        const a = compileToSpec(build(choice({
             ok: build(read(["data"])),
             err: build(read(["msg"]))
-        }));
-        const b = build(choice({
+        })));
+        const b = compileToSpec(build(choice({
             ok: build(read(["data"]))
-        }));
+        })));
         expect(isSubtype(a, b).isSubtype).toBe(true);
         
         const res = isSubtype(b, a);
@@ -687,13 +686,13 @@ describe("isSubtype", () => {
 
     it("supports covariant outputs (writes)", () => {
         // A produces fewer outputs than B. A is a subtype of B.
-        const a = build(choice({
+        const a = compileToSpec(build(choice({
             ok: build(write(["data"]))
-        }));
-        const b = build(choice({
+        })));
+        const b = compileToSpec(build(choice({
             ok: build(write(["data"])),
             err: build(write(["msg"]))
-        }));
+        })));
         expect(isSubtype(a, b).isSubtype).toBe(true);
         
         const res = isSubtype(b, a);
@@ -705,8 +704,8 @@ describe("isSubtype", () => {
     });
 
     it("respects completion constraints", () => {
-        const a = build(read(["foo"]));
-        const b = { kind: "done" } as MachineSpec;
+        const a = compileToSpec(build(read(["foo"])));
+        const b = compileToSpec(sequence());
         
         const resAtoB = isSubtype(a, b);
         expect(resAtoB.isSubtype).toBe(false);
@@ -723,20 +722,20 @@ describe("isSubtype", () => {
         }
         
         // done is a subtype of write(foo) because outputting nothing is a subset of outputting foo
-        const c = build(write(["foo"]));
+        const c = compileToSpec(build(write(["foo"])));
         expect(isSubtype(b, c).isSubtype).toBe(true);
     });
 
     it("terminates and validates recursive specs (loops)", () => {
-        const a = build(loop(build(read(["x"]))));
-        const b = build(loop(build(read(["x"]))));
+        const a = compileToSpec(build(loop(build(read(["x"])))));
+        const b = compileToSpec(build(loop(build(read(["x"])))));
         expect(isSubtype(a, b).isSubtype).toBe(true);
         
-        const loopMore = build(loop(build(choice({
+        const loopMore = compileToSpec(build(loop(build(choice({
             x: build(read(["x"])),
             y: build(read(["y"]))
-        }))));
-        const loopLess = build(loop(build(read(["x"]))));
+        })))));
+        const loopLess = compileToSpec(build(loop(build(read(["x"])))));
         expect(isSubtype(loopMore, loopLess).isSubtype).toBe(true);
         
         const res = isSubtype(loopLess, loopMore);
@@ -750,7 +749,7 @@ describe("isSubtype", () => {
     it("verifies sequential borrowable uses can subtype a single concurrent borrowable", () => {
         // A single sequential worker that performs two borrows inline,
         // separated by an intermediate action.
-        const subtype = build(sequence(
+        const subtype = compileToSpec(build(sequence(
             read(["main", "request"]),
             write(["val1", "borrow"]),
             read(["val1", "value"]),
@@ -760,7 +759,7 @@ describe("isSubtype", () => {
             write(["val2", "restore"]),
             write(["val1", "restore"]),
             write(["main", "response"]),
-        ));
+        )));
         
         // A version of subtype with all the "borrowable" stuff factored out.
         const factoredSubtype = build(sequence(
@@ -769,11 +768,11 @@ describe("isSubtype", () => {
             write(["response"]),
         ));
         
-        const supertype = build(concurrent({
+        const supertype = compileToSpec(build(concurrent({
             main: factoredSubtype,
             val1: build(complement(BorrowableSpec)),
             val2: build(complement(BorrowableSpec)),
-        }));
+        })));
         
         expect(isSubtype(subtype, supertype).isSubtype).toBe(true);
     });
@@ -781,7 +780,7 @@ describe("isSubtype", () => {
     it("verifies sequential borrowable uses can subtype a single concurrent borrowable in a loop", () => {
         // A single sequential worker that performs two borrows inline,
         // separated by an intermediate action.
-        const subtype = build(loop(build(sequence(
+        const subtype = compileToSpec(build(loop(build(sequence(
             read(["main", "request"]),
             write(["val1", "borrow"]),
             read(["val1", "value"]),
@@ -791,7 +790,7 @@ describe("isSubtype", () => {
             write(["val2", "restore"]),
             write(["val1", "restore"]),
             write(["main", "response"]),
-        ))));
+        )))));
         
         // A version of subtype with all the "borrowable" stuff factored out.
         const factoredSubtype = build(loop(build(sequence(
@@ -800,26 +799,26 @@ describe("isSubtype", () => {
             write(["response"]),
         ))));
         
-        const supertype = build(concurrent({
+        const supertype = compileToSpec(build(concurrent({
             main: factoredSubtype,
             val1: build(complement(BorrowableSpec)),
             val2: build(complement(BorrowableSpec)),
-        }));
+        })));
         
         expect(isSubtype(subtype, supertype).isSubtype).toBe(true);
     });
 
     it("returns correct nested path in a nested read mismatch", () => {
-        const subtype = build(sequence(
+        const subtype = compileToSpec(build(sequence(
             read(["step1"]),
             write(["step2"]),
             read(["step3"])
-        ));
-        const supertype = build(sequence(
+        )));
+        const supertype = compileToSpec(build(sequence(
             read(["step1"]),
             write(["step2"]),
             read(["step4"])
-        ));
+        )));
         const res = isSubtype(subtype, supertype);
         expect(res.isSubtype).toBe(false);
         if (res.isSubtype === false) {
@@ -833,16 +832,16 @@ describe("isSubtype", () => {
     });
 
     it("returns correct nested path in a nested write mismatch", () => {
-        const subtype = build(sequence(
+        const subtype = compileToSpec(build(sequence(
             read(["step1"]),
             write(["step2"]),
             write(["step3"])
-        ));
-        const supertype = build(sequence(
+        )));
+        const supertype = compileToSpec(build(sequence(
             read(["step1"]),
             write(["step2"]),
             write(["step4"])
-        ));
+        )));
         const res = isSubtype(subtype, supertype);
         expect(res.isSubtype).toBe(false);
         if (res.isSubtype === false) {
@@ -1005,7 +1004,7 @@ describe("indexed spec", () => {
 
     it("verifies transcripts using checkTranscript", () => {
         const inner = build(sequence(read(["copy"]), write(["value"])));
-        const spec = build(indexed(inner));
+        const spec = compileToSpec(build(indexed(inner)));
 
         expect(checkTranscript(spec, parseTranscript(`
             < p0.copy
@@ -1022,8 +1021,8 @@ describe("indexed spec", () => {
 
     it("works with isSubtype", () => {
         const inner = build(sequence(read(["copy"]), write(["value"])));
-        const specA = build(indexed(inner));
-        const specB = build(indexed(inner));
+        const specA = compileToSpec(build(indexed(inner)));
+        const specB = compileToSpec(build(indexed(inner)));
 
         expect(isSubtype(specA, specB).isSubtype).toBe(true);
     });

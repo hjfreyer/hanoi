@@ -1,100 +1,101 @@
-/**
- * Design Principles for Machine Specifications and Trace-Matching
- *
- * 1. Trace-Based Semantics (Transcript Matching)
- *    Specs define the set of allowed execution transcripts (sequences of reads '<' and writes '>')
- *    on channels. Rather than defining concrete code implementations, specs describe allowable
- *    interface behaviors.
- *
- * 2. Monotonic Completion (Liveness)
- *    Completion status is monotonic: once a machine reaches completion, it never transitions back
- *    to an incomplete state.
- *    - "Completed" is defined as: matching only the empty transcript.
- *    - Loop bodies are not complete while active. A loop is considered completed at iteration
- *      boundaries (where no iteration is in progress) if its continuation (`then`) is completed.
- *      To ensure deterministic execution without backtracking, specifications are statically
- *      validated at build-time to ensure that transition paths at choice points and loop
- *      boundaries are completely disjoint (LL(1) constraint).
- *
- * 3. Modular Continuations (Spec Builders)
- *    Sequential compositions and combinators are represented as functions (`SpecBuilder`) mapping
- *    the continuation (`then`) to the built spec. This eliminates intermediate linkage states and
- *    forces all sequences to be terminated explicitly.
- *
- * 4. Duality (Complement)
- *    A protocol spec (like a Borrowable channel spec) and the worker using that channel are duals.
- *    The `complement` combinator reverses the directions of reads and writes, allowing the same
- *    specification to be reused for both the provider and the client of a channel.
- *
- * 5. Isolation and Namespacing (Prefix)
- *    The `prefix` combinator namespaces all interactions of a sub-machine to a target channel path
- *    sequence, allowing modular composition of nested, concurrent components.
- */
+export type MachineSpec =
+    | { kind: "read"; channel: string[] }
+    | { kind: "write"; channel: string[] }
+    | { kind: "sequence"; specs: MachineSpec[] }
+    | { kind: "choice"; choices: MachineSpec[] }
+    | { kind: "star"; inner: MachineSpec }
+    | { kind: "concurrent"; machines: Record<string, MachineSpec> }
+    | { kind: "complement"; inner: MachineSpec }
+    | { kind: "rename"; mapping: Array<[string[], string[]]>; inner: MachineSpec }
+    | { kind: "prefix"; prefix: string[]; inner: MachineSpec }
+    | { kind: "indexed"; inner: MachineSpec; active: Record<string, MachineSpec>; activated: boolean; then: MachineSpec }
+    | { kind: "trace"; inner: MachineSpec; pathA: string[]; pathB: string[] };
 
-export type MachineSpec = {
-    kind: "read"
-    channel: string[],
-    then: MachineSpec,
-} | {
-    kind: "write"
-    channel: string[],
-    then: MachineSpec,
-} | {
-    kind: "done"
-} | {
-    kind: "concurrent"
-    machines: Record<string, MachineSpec>
-    then: MachineSpec
-} | {
-    kind: "choice"
-    choices: Record<string, MachineSpec>
-    then: MachineSpec
-    selected?: string
-    current?: MachineSpec
-} | {
-    kind: "loop"
-    body: MachineSpec
-    then: MachineSpec
-    current?: MachineSpec
-} | {
-    kind: "complement"
-    inner: MachineSpec
-    then: MachineSpec
-} | {
-    kind: "prefix"
-    prefix: string[]
-    inner: MachineSpec
-    then: MachineSpec
-} | {
-    kind: "trace"
-    inner: MachineSpec
-    pathA: string[]
-    pathB: string[]
-    then: MachineSpec
-} | {
-    kind: "rename"
-    mapping: Array<[string[], string[]]>
-    inner: MachineSpec
-    then: MachineSpec
-} | {
-    kind: "indexed"
-    inner: MachineSpec
-    active?: Record<string, MachineSpec>
-    activated?: boolean
-    then: MachineSpec
-};
+export type TranscriptEntry =
+    | { kind: "read"; channel: string[] }
+    | { kind: "write"; channel: string[] };
 
-export type TranscriptEntry =  {
-    kind: "read"
-    channel: string[],
-} | {
-    kind: "write"
-    channel: string[],
-};
+interface DfaTransition {
+    kind: "read" | "write";
+    channel: string[];
+    targetIndex: number;
+}
 
-export type SpecBuilder = (next: MachineSpec) => MachineSpec;
+interface StandardDfaNode {
+    kind?: "standard";
+    index: number;
+    isCompleted: boolean;
+    transitions: DfaTransition[];
+}
 
-export function getSuffix(channel: string[], prefix: string[]): string[] | null {
+interface ConcurrentDfaNode {
+    kind: "concurrent";
+    index: number;
+    machines: Record<string, number>;
+    continuationIndex?: number;
+}
+
+interface ComplementDfaNode {
+    kind: "complement";
+    index: number;
+    innerStartIndex: number;
+}
+
+interface RenameDfaNode {
+    kind: "rename";
+    index: number;
+    innerStartIndex: number;
+    mapping: Array<[string[], string[]]>;
+}
+
+interface PrefixDfaNode {
+    kind: "prefix";
+    index: number;
+    innerStartIndex: number;
+    prefix: string[];
+}
+
+interface IndexedDfaNode {
+    kind: "indexed";
+    index: number;
+    innerStartIndex: number;
+    continuationIndex?: number;
+}
+
+type DfaNode =
+    | StandardDfaNode
+    | ConcurrentDfaNode
+    | ComplementDfaNode
+    | RenameDfaNode
+    | PrefixDfaNode
+    | IndexedDfaNode;
+
+export class DfaContext {
+    nodes: DfaNode[] = [];
+}
+
+export interface CompiledSpec {
+    context: DfaContext;
+    startIndex: number;
+}
+
+type SubtypeResult =
+    | { isSubtype: true }
+    | { isSubtype: false; reason: "completion" | "read" | "write"; transcript: TranscriptEntry[] };
+
+export type SpecBuilder = MachineSpec;
+
+function channelsEqual(a: string[], b: string[]): boolean {
+    if (a.length !== b.length) return false;
+    return a.every((val, index) => val === b[index]);
+}
+
+function channelsMatch(pattern: string[], actual: string[]): boolean {
+    if (pattern.length !== actual.length) return false;
+    return pattern.every((val, index) => val === "*" || val === actual[index]);
+}
+
+function getSuffix(channel: string[], prefix: string[]): string[] | null {
     if (channel.length < prefix.length) return null;
     for (let i = 0; i < prefix.length; i++) {
         if (channel[i] !== prefix[i]) return null;
@@ -102,7 +103,7 @@ export function getSuffix(channel: string[], prefix: string[]): string[] | null 
     return channel.slice(prefix.length);
 }
 
-export function translateOuterToInner(chan: string[], mapping: Array<[string[], string[]]>): string[] | null {
+function translateOuterToInner(chan: string[], mapping: Array<[string[], string[]]>): string[] | null {
     for (const [from, to] of mapping) {
         if (getSuffix(chan, from) !== null && !channelsEqual(from, to)) {
             return null;
@@ -117,7 +118,7 @@ export function translateOuterToInner(chan: string[], mapping: Array<[string[], 
     return chan;
 }
 
-export function translateInnerToOuter(chan: string[], mapping: Array<[string[], string[]]>): string[] {
+function translateInnerToOuter(chan: string[], mapping: Array<[string[], string[]]>): string[] {
     for (const [from, to] of mapping) {
         const suffix = getSuffix(chan, from);
         if (suffix !== null) {
@@ -127,822 +128,488 @@ export function translateInnerToOuter(chan: string[], mapping: Array<[string[], 
     return chan;
 }
 
-function resolveTraceInternal(inner: MachineSpec, pathA: string[], pathB: string[]): MachineSpec {
-    let current = inner;
-    while (true) {
-        let transitioned = false;
-        const possible = getPossibleTransitions(current);
-        for (const ev of possible) {
-            if (ev.kind === "write") {
-                const suffixA = getSuffix(ev.channel, pathA);
-                if (suffixA !== null) {
-                    const mappedChannel = [...pathB, ...suffixA];
-                    const next = transition(current, ev);
-                    if (next) {
-                        const next2 = transition(next, { kind: "read", channel: mappedChannel });
-                        if (next2) {
-                            current = next2;
-                            transitioned = true;
-                            break;
-                        }
-                    }
-                }
-                
-                const suffixB = getSuffix(ev.channel, pathB);
-                if (suffixB !== null) {
-                    const mappedChannel = [...pathA, ...suffixB];
-                    const next = transition(current, ev);
-                    if (next) {
-                        const next2 = transition(next, { kind: "read", channel: mappedChannel });
-                        if (next2) {
-                            current = next2;
-                            transitioned = true;
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-        if (!transitioned) {
-            break;
-        }
-    }
-    return current;
-}
-
-function getFirstEvents(spec: MachineSpec): Array<{ kind: "read" | "write", channel: string[] }> {
-    if (spec.kind === "read" || spec.kind === "write") {
-        return [{ kind: spec.kind, channel: spec.channel }];
-    }
-    if (spec.kind === "choice") {
-        const result: Array<{ kind: "read" | "write", channel: string[] }> = [];
-        for (const branch of Object.values(spec.choices)) {
-            result.push(...getFirstEvents(branch));
-        }
-        return result;
-    }
-    if (spec.kind === "loop") {
-        return [...getFirstEvents(spec.body), ...getFirstEvents(spec.then)];
-    }
-    if (spec.kind === "concurrent") {
-        const result: Array<{ kind: "read" | "write", channel: string[] }> = [];
-        for (const [key, sub] of Object.entries(spec.machines)) {
-            for (const ev of getFirstEvents(sub)) {
-                result.push({ kind: ev.kind, channel: [key, ...ev.channel] });
-            }
-        }
-        return result;
-    }
-    if (spec.kind === "prefix") {
-        const result: Array<{ kind: "read" | "write", channel: string[] }> = [];
-        for (const ev of getFirstEvents(spec.inner)) {
-            result.push({ kind: ev.kind, channel: [...spec.prefix, ...ev.channel] });
-        }
-        return result;
-    }
-    if (spec.kind === "complement") {
-        const result: Array<{ kind: "read" | "write", channel: string[] }> = [];
-        for (const ev of getFirstEvents(spec.inner)) {
-            result.push({ kind: ev.kind === "read" ? "write" : "read", channel: ev.channel });
-        }
-        return result;
-    }
-    if (spec.kind === "rename") {
-        const result: Array<{ kind: "read" | "write", channel: string[] }> = [];
-        for (const ev of getFirstEvents(spec.inner)) {
-            result.push({ kind: ev.kind, channel: translateInnerToOuter(ev.channel, spec.mapping) });
-        }
-        return result;
-    }
-    if (spec.kind === "trace") {
-        const resolvedInner = resolveTraceInternal(spec.inner, spec.pathA, spec.pathB);
-        const result: Array<{ kind: "read" | "write", channel: string[] }> = [];
-        for (const ev of getFirstEvents(resolvedInner)) {
-            if (getSuffix(ev.channel, spec.pathA) === null && getSuffix(ev.channel, spec.pathB) === null) {
-                result.push(ev);
-            }
-        }
-        return result;
-    }
-    if (spec.kind === "indexed") {
-        const result: Array<{ kind: "read" | "write", channel: string[] }> = [];
-        if (spec.active) {
-            for (const [key, activeSpec] of Object.entries(spec.active)) {
-                for (const ev of getFirstEvents(activeSpec)) {
-                    result.push({ kind: ev.kind, channel: [key, ...ev.channel] });
-                }
-            }
-        }
-        for (const ev of getFirstEvents(spec.inner)) {
-            result.push({ kind: ev.kind, channel: ["*", ...ev.channel] });
-        }
-        return result;
-    }
-    return [];
-}
-
-function eventToString(ev: { kind: "read" | "write", channel: string[] }): string {
-    return `${ev.kind}:${ev.channel.join(".")}`;
-}
-
-function serializeSpec(spec: MachineSpec, visited = new Map<MachineSpec, string>()): string {
-    if (visited.has(spec)) {
-        return visited.get(spec)!;
-    }
-    const id = `REF_${visited.size}`;
-    visited.set(spec, id);
-
-    switch (spec.kind) {
-        case "done":
-            return "done";
+function equals(a: MachineSpec, b: MachineSpec): boolean {
+    if (a.kind !== b.kind) return false;
+    switch (a.kind) {
         case "read":
-            return `read(${spec.channel.join(".")})->${serializeSpec(spec.then, visited)}`;
+            return channelsEqual(a.channel, (b as typeof a).channel);
         case "write":
-            return `write(${spec.channel.join(".")})->${serializeSpec(spec.then, visited)}`;
+            return channelsEqual(a.channel, (b as typeof a).channel);
+        case "sequence":
+            if (a.specs.length !== (b as typeof a).specs.length) return false;
+            return a.specs.every((spec, i) => equals(spec, (b as typeof a).specs[i]));
+        case "choice":
+            if (a.choices.length !== (b as typeof a).choices.length) return false;
+            return a.choices.every((choice, i) => equals(choice, (b as typeof a).choices[i]));
+        case "star":
+            return equals(a.inner, (b as typeof a).inner);
         case "concurrent": {
-            const subs = Object.entries(spec.machines)
-                .map(([k, v]) => `${k}:${serializeSpec(v, visited)}`)
-                .sort()
-                .join(",");
-            return `concurrent({${subs}})->${serializeSpec(spec.then, visited)}`;
+            const keysA = Object.keys(a.machines);
+            const keysB = Object.keys((b as typeof a).machines);
+            if (keysA.length !== keysB.length) return false;
+            for (const key of keysA) {
+                const subB = (b as typeof a).machines[key];
+                if (!subB || !equals(a.machines[key], subB)) return false;
+            }
+            return true;
         }
-        case "choice": {
-            const choices = Object.entries(spec.choices)
-                .map(([k, v]) => `${k}:${serializeSpec(v, visited)}`)
-                .sort()
-                .join(",");
-            const current = spec.current ? `[curr:${serializeSpec(spec.current, visited)}]` : "";
-            return `choice({${choices}})${spec.selected || ""}${current}->${serializeSpec(spec.then, visited)}`;
-        }
-        case "loop": {
-            const body = serializeSpec(spec.body, visited);
-            const current = spec.current ? `[curr:${serializeSpec(spec.current, visited)}]` : "";
-            return `loop(${body})${current}->${serializeSpec(spec.then, visited)}`;
+        case "complement":
+            return equals(a.inner, (b as typeof a).inner);
+        case "rename": {
+            if (a.mapping.length !== (b as typeof a).mapping.length) return false;
+            for (let i = 0; i < a.mapping.length; i++) {
+                const pairA = a.mapping[i];
+                const pairB = (b as typeof a).mapping[i];
+                if (!channelsEqual(pairA[0], pairB[0]) || !channelsEqual(pairA[1], pairB[1])) return false;
+            }
+            return equals(a.inner, (b as typeof a).inner);
         }
         case "prefix":
-            return `prefix(${spec.prefix.join(".")},${serializeSpec(spec.inner, visited)})->${serializeSpec(spec.then, visited)}`;
-        case "complement":
-            return `complement(${serializeSpec(spec.inner, visited)})->${serializeSpec(spec.then, visited)}`;
-        case "trace":
-            return `trace(${serializeSpec(spec.inner, visited)},${spec.pathA.join(".")},${spec.pathB.join(".")})->${serializeSpec(spec.then, visited)}`;
-        case "rename": {
-            const mappingsStr = spec.mapping.map(([from, to]) => `${from.join(".")}:${to.join(".")}`).join(",");
-            return `rename({${mappingsStr}},${serializeSpec(spec.inner, visited)})->${serializeSpec(spec.then, visited)}`;
-        }
+            return channelsEqual(a.prefix, (b as typeof a).prefix) && equals(a.inner, (b as typeof a).inner);
         case "indexed": {
-            const activeStr = spec.active
-                ? Object.entries(spec.active)
-                    .map(([k, v]) => `${k}:${serializeSpec(v, visited)}`)
-                    .sort()
-                    .join(",")
-                : "";
-            return `indexed(${serializeSpec(spec.inner, visited)}){${activeStr}}->${serializeSpec(spec.then, visited)}`;
+            if (!equals(a.inner, (b as typeof a).inner)) return false;
+            if (a.activated !== (b as typeof a).activated) return false;
+            if (!equals(a.then, (b as typeof a).then)) return false;
+            const keysA = Object.keys(a.active).sort();
+            const keysB = Object.keys((b as typeof a).active).sort();
+            if (keysA.length !== keysB.length) return false;
+            for (let i = 0; i < keysA.length; i++) {
+                if (keysA[i] !== keysB[i]) return false;
+                if (!equals(a.active[keysA[i]], (b as typeof a).active[keysB[i]])) return false;
+            }
+            return true;
         }
+        case "trace":
+            return channelsEqual(a.pathA, (b as typeof a).pathA) &&
+                   channelsEqual(a.pathB, (b as typeof a).pathB) &&
+                   equals(a.inner, (b as typeof a).inner);
     }
 }
 
-function validateTraceSpecRecursively(
-    spec: MachineSpec,
-    pathA: string[],
-    pathB: string[],
-    visited: Set<string>
-): void {
-    const key = serializeSpec(spec);
-    if (visited.has(key)) {
-        return;
-    }
-    visited.add(key);
+export function read(channel: string[]): MachineSpec {
+    return { kind: "read", channel };
+}
 
-    const possible = getPossibleTransitions(spec);
-    
-    for (const ev of possible) {
-        // 1. Check if ev matches pathA
-        const suffixA = getSuffix(ev.channel, pathA);
-        if (suffixA !== null) {
-            const oppositeKind = ev.kind === "write" ? "read" : "write";
-            const targetChannel = [...pathB, ...suffixA];
-            const targetExists = possible.some(other => 
-                other.kind === oppositeKind && channelsEqual(other.channel, targetChannel)
-            );
-            if (!targetExists) {
-                throw new Error(
-                    `Blocked wired transition: event "${ev.kind === "read" ? "<" : ">"} ${ev.channel.join(".")}" is possible, ` +
-                    `but its counterpart "${oppositeKind === "read" ? "<" : ">"} ${targetChannel.join(".")}" is not ready.`
-                );
-            }
-        }
+export function write(channel: string[]): MachineSpec {
+    return { kind: "write", channel };
+}
 
-        // 2. Check if ev matches pathB
-        const suffixB = getSuffix(ev.channel, pathB);
-        if (suffixB !== null) {
-            const oppositeKind = ev.kind === "write" ? "read" : "write";
-            const targetChannel = [...pathA, ...suffixB];
-            const targetExists = possible.some(other => 
-                other.kind === oppositeKind && channelsEqual(other.channel, targetChannel)
-            );
-            if (!targetExists) {
-                throw new Error(
-                    `Blocked wired transition: event "${ev.kind === "read" ? "<" : ">"} ${ev.channel.join(".")}" is possible, ` +
-                    `but its counterpart "${oppositeKind === "read" ? "<" : ">"} ${targetChannel.join(".")}" is not ready.`
-                );
-            }
+export function sequence(...specs: MachineSpec[]): MachineSpec {
+    const flat: MachineSpec[] = [];
+    for (const spec of specs) {
+        if (spec.kind === "sequence") {
+            flat.push(...spec.specs);
+        } else {
+            flat.push(spec);
         }
     }
 
-    // Explore next states
-    // A: External transitions
-    for (const ev of possible) {
-        const isWired = getSuffix(ev.channel, pathA) !== null || getSuffix(ev.channel, pathB) !== null;
-        if (!isWired) {
-            const next = transition(spec, ev);
-            if (next) {
-                validateTraceSpecRecursively(next, pathA, pathB, visited);
-            }
+    // Link indexed continuations for completion semantics compatibility
+    for (let i = 0; i < flat.length - 1; i++) {
+        const spec = flat[i];
+        if (spec.kind === "indexed") {
+            const rest = sequence(...flat.slice(i + 1));
+            (spec as any).then = rest;
         }
     }
 
-    // B: Synchronized internal transitions
-    for (const ev of possible) {
-        if (ev.kind === "write") {
-            const suffixA = getSuffix(ev.channel, pathA);
-            if (suffixA !== null) {
-                const targetChannel = [...pathB, ...suffixA];
-                const next1 = transition(spec, ev);
-                if (next1) {
-                    const next2 = transition(next1, { kind: "read", channel: targetChannel });
-                    if (next2) {
-                        validateTraceSpecRecursively(next2, pathA, pathB, visited);
+    if (flat.length === 1) {
+        return flat[0];
+    }
+    return { kind: "sequence", specs: flat };
+}
+
+export function choice(...args: any[]): MachineSpec {
+    if (args.length === 1 && typeof args[0] === "object" && !Array.isArray(args[0]) && args[0] !== null && !("kind" in args[0])) {
+        const record = args[0] as Record<string, MachineSpec>;
+        return { kind: "choice", choices: Object.values(record) };
+    }
+    const flat: MachineSpec[] = [];
+    for (const spec of args) {
+        if (spec.kind === "choice") {
+            flat.push(...spec.choices);
+        } else {
+            flat.push(spec);
+        }
+    }
+    if (flat.length === 1) {
+        return flat[0];
+    }
+    return { kind: "choice", choices: flat };
+}
+
+export function star(inner: MachineSpec): MachineSpec {
+    return { kind: "star", inner };
+}
+
+export function loop(inner: MachineSpec): MachineSpec {
+    return star(inner);
+}
+
+export function concurrent(machines: Record<string, MachineSpec>): MachineSpec {
+    return { kind: "concurrent", machines };
+}
+
+export function complement(inner: MachineSpec): MachineSpec {
+    if (inner.kind === "complement") {
+        return inner.inner;
+    }
+    return { kind: "complement", inner };
+}
+
+export function rename(mapping: Array<[string[], string[]]>, inner: MachineSpec): MachineSpec {
+    if (mapping.length === 0) {
+        return inner;
+    }
+    return { kind: "rename", mapping, inner };
+}
+
+export function prefix(prefixPath: string[], inner: MachineSpec): MachineSpec {
+    if (prefixPath.length === 0) {
+        return inner;
+    }
+    if (inner.kind === "prefix") {
+        return { kind: "prefix", prefix: [...prefixPath, ...inner.prefix], inner: inner.inner };
+    }
+    return { kind: "prefix", prefix: prefixPath, inner };
+}
+
+export function indexed(inner: MachineSpec, active: Record<string, MachineSpec> = {}): MachineSpec {
+    return { kind: "indexed", inner, active, activated: false, then: sequence() };
+}
+
+export function trace(arg1: any, arg2: any, arg3?: any): MachineSpec {
+    if (Array.isArray(arg1) && Array.isArray(arg2)) {
+        return { kind: "trace", pathA: arg1, pathB: arg2, inner: arg3 };
+    } else {
+        return { kind: "trace", inner: arg1, pathA: arg2, pathB: arg3 };
+    }
+}
+
+function validateSpec(spec: MachineSpec) {
+    switch (spec.kind) {
+        case "choice": {
+            const seen = new Set<string>();
+            for (const branch of spec.choices) {
+                const possible = getPossibleTransitions(branch);
+                for (const ev of possible) {
+                    const key = `${ev.kind}:${ev.channel.join(".")}`;
+                    if (seen.has(key)) {
+                        throw new Error(`Ambiguity detected in choice: event ${ev.kind}(${ev.channel.join(".")}) accepted by multiple branches`);
+                    }
+                    seen.add(key);
+                }
+                validateSpec(branch);
+            }
+            break;
+        }
+        case "sequence": {
+            for (let i = 0; i < spec.specs.length - 1; i++) {
+                const current = spec.specs[i];
+                if (current.kind === "star") {
+                    const loopPoss = getPossibleTransitions(current.inner);
+                    const contPoss = getPossibleTransitions(sequence(...spec.specs.slice(i + 1)));
+                    for (const ev of loopPoss) {
+                        const key = `${ev.kind}:${ev.channel.join(".")}`;
+                        if (contPoss.some(c => `${c.kind}:${c.channel.join(".")}` === key)) {
+                            throw new Error(`Ambiguity detected in loop: event ${ev.kind}(${ev.channel.join(".")}) accepted by both loop body and continuation`);
+                        }
                     }
                 }
             }
-
-            const suffixB = getSuffix(ev.channel, pathB);
-            if (suffixB !== null) {
-                const targetChannel = [...pathA, ...suffixB];
-                const next1 = transition(spec, ev);
-                if (next1) {
-                    const next2 = transition(next1, { kind: "read", channel: targetChannel });
-                    if (next2) {
-                        validateTraceSpecRecursively(next2, pathA, pathB, visited);
-                    }
-                }
+            for (const sub of spec.specs) {
+                validateSpec(sub);
             }
+            break;
         }
+        case "star":
+            validateSpec(spec.inner);
+            break;
+        case "concurrent":
+            for (const sub of Object.values(spec.machines)) {
+                validateSpec(sub);
+            }
+            break;
+        case "complement":
+        case "rename":
+        case "prefix":
+            validateSpec(spec.inner);
+            break;
+        case "indexed":
+            validateSpec(spec.inner);
+            for (const sub of Object.values(spec.active)) {
+                validateSpec(sub);
+            }
+            break;
+        case "trace":
+            resolveEpsilonTransitions([spec.inner], spec.pathA, spec.pathB);
+            validateSpec(spec.inner);
+            break;
     }
 }
 
-function validateSpec(spec: MachineSpec): void {
-    if (spec.kind === "loop") {
-        const bodyFirst = new Set(getFirstEvents(spec.body).map(eventToString));
-        const thenFirst = new Set(getFirstEvents(spec.then).map(eventToString));
-        
-        for (const item of bodyFirst) {
-            if (thenFirst.has(item)) {
-                throw new Error(`Ambiguity detected in loop: both body and continuation can start with event "${item}"`);
-            }
-        }
-        
-        validateSpec(spec.body);
-        validateSpec(spec.then);
-    } else if (spec.kind === "choice") {
-        const seen = new Set<string>();
-        for (const branch of Object.values(spec.choices)) {
-            const branchFirst = getFirstEvents(branch).map(eventToString);
-            for (const item of branchFirst) {
-                if (seen.has(item)) {
-                    throw new Error(`Ambiguity detected in choice: multiple branches can start with event "${item}"`);
-                }
-                seen.add(item);
-            }
-            validateSpec(branch);
-        }
-        validateSpec(spec.then);
-    } else if (spec.kind === "concurrent") {
-        for (const child of Object.values(spec.machines)) {
-            validateSpec(child);
-        }
-        validateSpec(spec.then);
-    } else if (spec.kind === "prefix") {
-        validateSpec(spec.inner);
-        validateSpec(spec.then);
-    } else if (spec.kind === "complement") {
-        validateSpec(spec.inner);
-        validateSpec(spec.then);
-    } else if (spec.kind === "trace") {
-        validateTraceSpecRecursively(spec.inner, spec.pathA, spec.pathB, new Set());
-        validateSpec(spec.inner);
-        validateSpec(spec.then);
-    } else if (spec.kind === "rename") {
-        validateSpec(spec.inner);
-        validateSpec(spec.then);
-    } else if (spec.kind === "indexed") {
-        validateSpec(spec.inner);
-        if (spec.active) {
-            for (const activeSpec of Object.values(spec.active)) {
-                validateSpec(activeSpec);
-            }
-        }
-        validateSpec(spec.then);
-    } else if (spec.kind === "read" || spec.kind === "write") {
-        validateSpec(spec.then);
-    }
-}
-
-export function build(builder: SpecBuilder): MachineSpec {
-    const spec = builder({ kind: "done" });
+export function build(spec: MachineSpec): MachineSpec {
     validateSpec(spec);
     return spec;
 }
 
-export function read(channel: string[]): SpecBuilder {
-    return (next: MachineSpec) => ({
-        kind: "read",
-        channel,
-        then: next
-    });
-}
-
-export function write(channel: string[]): SpecBuilder {
-    return (next: MachineSpec) => ({
-        kind: "write",
-        channel,
-        then: next
-    });
-}
-
-export function concurrent(machines: Record<string, MachineSpec>): SpecBuilder {
-    return (next: MachineSpec) => ({
-        kind: "concurrent",
-        machines,
-        then: next
-    });
-}
-
-export function choice(choices: Record<string, MachineSpec>): SpecBuilder {
-    return (next: MachineSpec) => ({
-        kind: "choice",
-        choices,
-        then: next
-    });
-}
-
-export function loop(body: MachineSpec): SpecBuilder {
-    return (next: MachineSpec) => ({
-        kind: "loop",
-        body,
-        then: next
-    });
-}
-
-export function complement(inner: MachineSpec): SpecBuilder {
-    return (next: MachineSpec) => ({
-        kind: "complement",
-        inner,
-        then: next
-    });
-}
-
-export function prefix(prefixPath: string[], inner: MachineSpec): SpecBuilder {
-    return (next: MachineSpec) => ({
-        kind: "prefix",
-        prefix: prefixPath,
-        inner,
-        then: next
-    });
-}
-
-export function rename(mapping: Array<[string[], string[]]>, inner: MachineSpec): SpecBuilder {
-    return (next: MachineSpec) => ({
-        kind: "rename",
-        mapping,
-        inner,
-        then: next
-    });
-}
-export function indexed(inner: MachineSpec): SpecBuilder {
-    return (next: MachineSpec) => ({
-        kind: "indexed",
-        inner,
-        active: {},
-        then: next
-    });
-}
-export function trace(inner: MachineSpec, pathA: string[], pathB: string[]): SpecBuilder {
-    return (next: MachineSpec) => ({
-        kind: "trace",
-        inner,
-        pathA,
-        pathB,
-        then: next
-    });
-}
-
-export function sequence(...parts: SpecBuilder[]): SpecBuilder {
-    return (next: MachineSpec) => {
-        let spec = next;
-        for (let i = parts.length - 1; i >= 0; i--) {
-            spec = parts[i](spec);
-        }
-        return spec;
-    };
-}
-
-export function channelsEqual(a: string[], b: string[]): boolean {
-    if (a.length !== b.length) return false;
-    return a.every((val, index) => val === b[index]);
-}
-
 export function isCompleted(spec: MachineSpec): boolean {
-    if (spec.kind === "done") {
-        return true;
-    }
-    if (spec.kind === "concurrent") {
-        return Object.values(spec.machines).every(isCompleted) && isCompleted(spec.then);
-    }
-    if (spec.kind === "choice") {
-        if (spec.selected === undefined) {
-            return Object.values(spec.choices).some(isCompleted) && isCompleted(spec.then);
-        } else {
-            return isCompleted(spec.current!) && isCompleted(spec.then);
-        }
-    }
-    if (spec.kind === "loop") {
-        return spec.current === undefined && isCompleted(spec.then);
-    }
-    if (spec.kind === "complement") {
-        return isCompleted(spec.inner) && isCompleted(spec.then);
-    }
-    if (spec.kind === "prefix") {
-        return isCompleted(spec.inner) && isCompleted(spec.then);
-    }
-    if (spec.kind === "trace") {
-        const resolvedInner = resolveTraceInternal(spec.inner, spec.pathA, spec.pathB);
-        return isCompleted(resolvedInner) && isCompleted(spec.then);
-    }
-    if (spec.kind === "rename") {
-        return isCompleted(spec.inner) && isCompleted(spec.then);
-    }
-    if (spec.kind === "indexed") {
-        if (spec.active) {
+    switch (spec.kind) {
+        case "read":
+        case "write":
+            return false;
+        case "sequence":
+            return spec.specs.every(isCompleted);
+        case "choice":
+            return spec.choices.some(isCompleted);
+        case "star":
+            return true;
+        case "concurrent":
+            return Object.values(spec.machines).every(isCompleted);
+        case "complement":
+        case "rename":
+        case "prefix":
+            return isCompleted(spec.inner);
+        case "indexed": {
             const allActiveCompleted = Object.values(spec.active).every(isCompleted);
             if (!allActiveCompleted) return false;
+            if (spec.then.kind === "sequence" && spec.then.specs.length === 0) return true;
+            return spec.activated ? isCompleted(spec.then) : false;
         }
-        if (spec.then.kind === "done") return true;
-        return spec.activated ? isCompleted(spec.then) : false;
+        case "trace": {
+            const closure = resolveEpsilonTransitions([spec.inner], spec.pathA, spec.pathB);
+            return closure.some(isCompleted);
+        }
     }
-    return false;
 }
 
-export function transition(spec: MachineSpec, entry: TranscriptEntry): MachineSpec | null {
-    if (spec.kind === "done") {
-        return null;
-    }
-
-    if (spec.kind === "read" || spec.kind === "write") {
-        if (spec.kind === entry.kind && channelsEqual(spec.channel, entry.channel)) {
-            return spec.then;
-        }
-        return null;
-    }
-
-    if (spec.kind === "indexed") {
-        if (entry.channel.length > 0) {
-            const index = entry.channel[0];
-            const suffix = entry.channel.slice(1);
-            
-            const active = spec.active ? { ...spec.active } : {};
-            const subSpec = active[index] || spec.inner;
-            
-            const nextSubSpec = transition(subSpec, { ...entry, channel: suffix });
-            if (nextSubSpec) {
-                if (isCompleted(nextSubSpec)) {
-                    delete active[index];
-                } else {
-                    active[index] = nextSubSpec;
-                }
-                return {
-                    ...spec,
-                    active,
-                    activated: true
-                };
+function transitionNfa(spec: MachineSpec, entry: TranscriptEntry): MachineSpec[] {
+    switch (spec.kind) {
+        case "read":
+            if (entry.kind === "read" && channelsEqual(spec.channel, entry.channel)) {
+                return [sequence()];
             }
+            return [];
+        case "write":
+            if (entry.kind === "write" && channelsEqual(spec.channel, entry.channel)) {
+                return [sequence()];
+            }
+            return [];
+        case "choice": {
+            const results: MachineSpec[] = [];
+            for (const choiceSpec of spec.choices) {
+                results.push(...transitionNfa(choiceSpec, entry));
+            }
+            return results;
         }
-        const allActiveCompleted = spec.active ? Object.values(spec.active).every(isCompleted) : true;
-        if (spec.activated && allActiveCompleted) {
-            return transition(spec.then, entry);
-        }
-        return null;
-    }
+        case "sequence": {
+            const results: MachineSpec[] = [];
+            for (let i = 0; i < spec.specs.length; i++) {
+                const head = spec.specs[i];
+                const tail = spec.specs.slice(i + 1);
 
-    if (spec.kind === "concurrent") {
-        let nextSubSpec: MachineSpec | null = null;
-        let matchedKey: string | null = null;
-        
-        if (entry.channel.length > 0) {
+                const headTransitions = transitionNfa(head, entry);
+                for (const nextHead of headTransitions) {
+                    results.push(sequence(nextHead, ...tail));
+                }
+
+                if (!isCompleted(head)) {
+                    break;
+                }
+            }
+            return results;
+        }
+        case "star": {
+            return transitionNfa(spec.inner, entry)
+                .map(nextInner => sequence(nextInner, spec));
+        }
+        case "concurrent": {
+            if (entry.channel.length === 0) return [];
             const key = entry.channel[0];
-            const subSpec = spec.machines[key];
-            if (subSpec) {
-                const strippedEntry: TranscriptEntry = {
-                    kind: entry.kind,
-                    channel: entry.channel.slice(1)
-                };
-                nextSubSpec = transition(subSpec, strippedEntry);
-                if (nextSubSpec !== null) {
-                    matchedKey = key;
-                }
-            }
-        }
-        
-        if (nextSubSpec !== null && matchedKey !== null) {
-            return {
+            const sub = spec.machines[key];
+            if (!sub) return [];
+            const strippedEntry: TranscriptEntry = {
+                kind: entry.kind,
+                channel: entry.channel.slice(1)
+            };
+            return transitionNfa(sub, strippedEntry).map(nextSub => ({
                 kind: "concurrent",
                 machines: {
                     ...spec.machines,
-                    [matchedKey]: nextSubSpec
-                },
-                then: spec.then
-            };
-        }
-        
-        const concurrentMachinesCompleted = Object.values(spec.machines).every(isCompleted);
-        if (concurrentMachinesCompleted) {
-            return transition(spec.then, entry);
-        }
-        
-        return null;
-    }
-
-    if (spec.kind === "choice") {
-        if (spec.selected === undefined) {
-            let matchedKey: string | null = null;
-            let nextSubSpec: MachineSpec | null = null;
-            
-            for (const [key, branch] of Object.entries(spec.choices)) {
-                const next = transition(branch, entry);
-                if (next !== null) {
-                    if (matchedKey !== null) {
-                        throw new Error(`Ambiguity detected in choice: multiple branches can transition on entry ${JSON.stringify(entry)}`);
-                    }
-                    matchedKey = key;
-                    nextSubSpec = next;
+                    [key]: nextSub
                 }
-            }
-            
-            if (matchedKey === null || nextSubSpec === null) {
-                return null;
-            }
-            
-            return {
-                kind: "choice",
-                choices: spec.choices,
-                then: spec.then,
-                selected: matchedKey,
-                current: nextSubSpec
+            }));
+        }
+        case "complement": {
+            const reversedEntry: TranscriptEntry = {
+                kind: entry.kind === "read" ? "write" : "read",
+                channel: entry.channel
             };
-        } else {
-            const nextSubSpec = transition(spec.current!, entry);
-            if (nextSubSpec !== null) {
-                return {
-                    kind: "choice",
-                    choices: spec.choices,
-                    then: spec.then,
-                    selected: spec.selected,
-                    current: nextSubSpec
-                };
-            }
-            if (isCompleted(spec.current!)) {
-                return transition(spec.then, entry);
-            }
-            return null;
+            return transitionNfa(spec.inner, reversedEntry).map(nextInner => complement(nextInner));
         }
-    }
-
-    if (spec.kind === "loop") {
-        if (spec.current !== undefined) {
-            const nextBody = transition(spec.current, entry);
-            if (nextBody === null) {
-                return null;
-            }
-            if (isCompleted(nextBody)) {
-                return {
-                    kind: "loop",
-                    body: spec.body,
-                    then: spec.then
-                };
-            }
-            return {
-                kind: "loop",
-                body: spec.body,
-                then: spec.then,
-                current: nextBody
-            };
-        } else {
-            const nextBody = transition(spec.body, entry);
-            const nextThen = transition(spec.then, entry);
-            
-            if (nextBody !== null) {
-                if (isCompleted(nextBody)) {
-                    return {
-                        kind: "loop",
-                        body: spec.body,
-                        then: spec.then
-                    };
-                }
-                return {
-                    kind: "loop",
-                    body: spec.body,
-                    then: spec.then,
-                    current: nextBody
-                };
-            }
-            if (nextThen !== null) {
-                return nextThen;
-            }
-            return null;
-        }
-    }
-
-    if (spec.kind === "complement") {
-        const reversedEntry: TranscriptEntry = {
-            kind: entry.kind === "read" ? "write" : "read",
-            channel: entry.channel
-        };
-        const nextInner = transition(spec.inner, reversedEntry);
-        if (nextInner !== null) {
-            return {
-                kind: "complement",
-                inner: nextInner,
-                then: spec.then
-            };
-        }
-        if (isCompleted(spec.inner)) {
-            return transition(spec.then, entry);
-        }
-        return null;
-    }
-
-    if (spec.kind === "prefix") {
-        if (entry.channel.length < spec.prefix.length) {
-            if (isCompleted(spec.inner)) {
-                return transition(spec.then, entry);
-            }
-            return null;
-        }
-        const hasPrefix = spec.prefix.every((val, index) => entry.channel[index] === val);
-        let nextInner: MachineSpec | null = null;
-        if (hasPrefix) {
+        case "rename": {
+            const innerChannel = translateOuterToInner(entry.channel, spec.mapping);
+            if (innerChannel === null) return [];
             const strippedEntry: TranscriptEntry = {
                 kind: entry.kind,
-                channel: entry.channel.slice(spec.prefix.length)
+                channel: innerChannel
             };
-            nextInner = transition(spec.inner, strippedEntry);
+            return transitionNfa(spec.inner, strippedEntry).map(nextInner => rename(spec.mapping, nextInner));
         }
-        
-        if (nextInner !== null) {
-            return {
-                kind: "prefix",
-                prefix: spec.prefix,
-                inner: nextInner,
-                then: spec.then
+        case "prefix": {
+            const suffix = getSuffix(entry.channel, spec.prefix);
+            if (suffix === null) return [];
+            const strippedEntry: TranscriptEntry = {
+                kind: entry.kind,
+                channel: suffix
             };
+            return transitionNfa(spec.inner, strippedEntry).map(nextInner => prefix(spec.prefix, nextInner));
         }
-        if (isCompleted(spec.inner)) {
-            return transition(spec.then, entry);
+        case "indexed": {
+            if (entry.channel.length === 0) return [];
+            const index = entry.channel[0];
+            const suffix = entry.channel.slice(1);
+            const strippedEntry: TranscriptEntry = {
+                kind: entry.kind,
+                channel: suffix
+            };
+
+            const results: MachineSpec[] = [];
+
+            if (index.startsWith("*") && !spec.active[index]) {
+                const starCount = Object.keys(spec.active).filter(k => k.startsWith("*")).length;
+                if (starCount >= 3) {
+                    return [];
+                }
+            }
+
+            const subSpec = spec.active[index] || spec.inner;
+            const nextSubs = transitionNfa(subSpec, strippedEntry);
+            for (const nextSub of nextSubs) {
+                const active = { ...spec.active };
+                if (isCompleted(nextSub)) {
+                    delete active[index];
+                } else {
+                    active[index] = nextSub;
+                }
+                results.push({
+                    kind: "indexed",
+                    inner: spec.inner,
+                    active,
+                    activated: true,
+                    then: spec.then
+                });
+            }
+
+            // Also allow transitioning the continuation if we are activated and all active are completed
+            const allActiveCompleted = Object.values(spec.active).every(isCompleted);
+            if (spec.activated && allActiveCompleted) {
+                results.push(...transitionNfa(spec.then, entry));
+            }
+
+            return results;
         }
-        return null;
+        case "trace": {
+            if (getSuffix(entry.channel, spec.pathA) !== null || getSuffix(entry.channel, spec.pathB) !== null) {
+                return [];
+            }
+            const closure = resolveEpsilonTransitions([spec.inner], spec.pathA, spec.pathB);
+            const results: MachineSpec[] = [];
+            for (const s of closure) {
+                const nextStates = transitionNfa(s, entry);
+                for (const nextState of nextStates) {
+                    results.push(trace(spec.pathA, spec.pathB, nextState));
+                }
+            }
+            return results;
+        }
     }
+}
 
-    if (spec.kind === "rename") {
-        const innerChannel = translateOuterToInner(entry.channel, spec.mapping);
-        if (innerChannel === null) {
-            return null;
-        }
-
-        const strippedEntry: TranscriptEntry = {
-            kind: entry.kind,
-            channel: innerChannel
-        };
-        const nextInner = transition(spec.inner, strippedEntry);
-
-        if (nextInner !== null) {
-            return {
-                kind: "rename",
-                mapping: spec.mapping,
-                inner: nextInner,
-                then: spec.then
-            };
-        }
-        if (isCompleted(spec.inner)) {
-            return transition(spec.then, entry);
-        }
-        return null;
-    }
-
-    if (spec.kind === "trace") {
-        if (getSuffix(entry.channel, spec.pathA) !== null || getSuffix(entry.channel, spec.pathB) !== null) {
-            return null;
-        }
-
-        const resolvedInner = resolveTraceInternal(spec.inner, spec.pathA, spec.pathB);
-        const nextInner = transition(resolvedInner, entry);
-        if (nextInner !== null) {
-            const finalInner = resolveTraceInternal(nextInner, spec.pathA, spec.pathB);
-            return {
-                kind: "trace",
-                inner: finalInner,
-                pathA: spec.pathA,
-                pathB: spec.pathB,
-                then: spec.then
-            };
-        }
-
-        if (isCompleted(resolvedInner)) {
-            return transition(spec.then, entry);
-        }
-        return null;
-    }
-
-    return null;
+export function transition(spec: MachineSpec, entry: TranscriptEntry): MachineSpec | null {
+    const nexts = transitionNfa(spec, entry);
+    return nexts.length > 0 ? nexts[0] : null;
 }
 
 export function getPossibleTransitions(spec: MachineSpec): TranscriptEntry[] {
     const result: TranscriptEntry[] = [];
-    
-    if (spec.kind === "read" || spec.kind === "write") {
-        result.push({ kind: spec.kind, channel: spec.channel });
-    } else if (spec.kind === "choice") {
-        if (spec.selected !== undefined) {
-            result.push(...getPossibleTransitions(spec.current!));
-        } else {
-            for (const branch of Object.values(spec.choices)) {
-                result.push(...getPossibleTransitions(branch));
+
+    switch (spec.kind) {
+        case "read":
+        case "write":
+            result.push({ kind: spec.kind, channel: spec.channel });
+            break;
+        case "choice":
+            for (const sub of spec.choices) {
+                result.push(...getPossibleTransitions(sub));
             }
-        }
-    } else if (spec.kind === "loop") {
-        if (spec.current !== undefined) {
-            result.push(...getPossibleTransitions(spec.current));
-        } else {
-            result.push(...getPossibleTransitions(spec.body));
-            result.push(...getPossibleTransitions(spec.then));
-        }
-    } else if (spec.kind === "concurrent") {
-        for (const [key, sub] of Object.entries(spec.machines)) {
-            for (const ev of getPossibleTransitions(sub)) {
-                result.push({ kind: ev.kind, channel: [key, ...ev.channel] });
-            }
-        }
-        const concurrentMachinesCompleted = Object.values(spec.machines).every(isCompleted);
-        if (concurrentMachinesCompleted) {
-            result.push(...getPossibleTransitions(spec.then));
-        }
-    } else if (spec.kind === "prefix") {
-        for (const ev of getPossibleTransitions(spec.inner)) {
-            result.push({ kind: ev.kind, channel: [...spec.prefix, ...ev.channel] });
-        }
-        if (isCompleted(spec.inner)) {
-            result.push(...getPossibleTransitions(spec.then));
-        }
-    } else if (spec.kind === "complement") {
-        for (const ev of getPossibleTransitions(spec.inner)) {
-            result.push({ kind: ev.kind === "read" ? "write" : "read", channel: ev.channel });
-        }
-        if (isCompleted(spec.inner)) {
-            result.push(...getPossibleTransitions(spec.then));
-        }
-    } else if (spec.kind === "rename") {
-        for (const ev of getPossibleTransitions(spec.inner)) {
-            result.push({ kind: ev.kind, channel: translateInnerToOuter(ev.channel, spec.mapping) });
-        }
-        if (isCompleted(spec.inner)) {
-            result.push(...getPossibleTransitions(spec.then));
-        }
-    } else if (spec.kind === "trace") {
-        const resolvedInner = resolveTraceInternal(spec.inner, spec.pathA, spec.pathB);
-        for (const ev of getPossibleTransitions(resolvedInner)) {
-            if (getSuffix(ev.channel, spec.pathA) === null && getSuffix(ev.channel, spec.pathB) === null) {
-                result.push(ev);
-            }
-        }
-        if (isCompleted(resolvedInner)) {
-            result.push(...getPossibleTransitions(spec.then));
-        }
-    } else if (spec.kind === "indexed") {
-        if (spec.active) {
-            for (const [key, activeSpec] of Object.entries(spec.active)) {
-                for (const ev of getPossibleTransitions(activeSpec)) {
-                    result.push({ kind: ev.kind, channel: [key, ...ev.channel] });
+            break;
+        case "sequence":
+            for (const sub of spec.specs) {
+                result.push(...getPossibleTransitions(sub));
+                if (!isCompleted(sub)) {
+                    break;
                 }
             }
-        }
-        for (const ev of getPossibleTransitions(spec.inner)) {
-            result.push({ kind: ev.kind, channel: ["*", ...ev.channel] });
-        }
-        if (isCompleted(spec)) {
-            result.push(...getPossibleTransitions(spec.then));
+            break;
+        case "star":
+            result.push(...getPossibleTransitions(spec.inner));
+            break;
+        case "concurrent":
+            for (const [key, sub] of Object.entries(spec.machines)) {
+                for (const t of getPossibleTransitions(sub)) {
+                    result.push({ kind: t.kind, channel: [key, ...t.channel] });
+                }
+            }
+            break;
+        case "complement":
+            for (const t of getPossibleTransitions(spec.inner)) {
+                result.push({ kind: t.kind === "read" ? "write" : "read", channel: t.channel });
+            }
+            break;
+        case "rename":
+            for (const t of getPossibleTransitions(spec.inner)) {
+                result.push({ kind: t.kind, channel: translateInnerToOuter(t.channel, spec.mapping) });
+            }
+            break;
+        case "prefix":
+            for (const t of getPossibleTransitions(spec.inner)) {
+                result.push({ kind: t.kind, channel: [...spec.prefix, ...t.channel] });
+            }
+            break;
+        case "indexed":
+            for (const [key, subSpec] of Object.entries(spec.active)) {
+                for (const t of getPossibleTransitions(subSpec)) {
+                    result.push({ kind: t.kind, channel: [key, ...t.channel] });
+                }
+            }
+            let nextKeyIdx = 0;
+            while (spec.active[`*${nextKeyIdx}`]) {
+                nextKeyIdx++;
+            }
+            const nextKey = `*${nextKeyIdx}`;
+            for (const t of getPossibleTransitions(spec.inner)) {
+                result.push({ kind: t.kind, channel: [nextKey, ...t.channel] });
+            }
+            // If activated and all active are completed, we can also transition the continuation
+            const allActiveCompleted = Object.values(spec.active).every(isCompleted);
+            if (spec.activated && allActiveCompleted) {
+                result.push(...getPossibleTransitions(spec.then));
+            }
+            break;
+        case "trace": {
+            const closure = resolveEpsilonTransitions([spec.inner], spec.pathA, spec.pathB);
+            for (const s of closure) {
+                for (const t of getPossibleTransitions(s)) {
+                    if (getSuffix(t.channel, spec.pathA) === null && getSuffix(t.channel, spec.pathB) === null) {
+                        result.push(t);
+                    }
+                }
+            }
+            break;
         }
     }
-    
-    // Deduplicate transitions
+
     const seen = new Set<string>();
     const uniqueResult: TranscriptEntry[] = [];
     for (const ev of result) {
@@ -952,85 +619,790 @@ export function getPossibleTransitions(spec: MachineSpec): TranscriptEntry[] {
             uniqueResult.push(ev);
         }
     }
-    
+
     return uniqueResult;
 }
 
-export type SubtypeResult = {
-    isSubtype: true;
-} | {
-    isSubtype: false;
-    reason: "completion" | "read" | "write";
-    transcript: TranscriptEntry[];
-};
 
-export function isSubtype(a: MachineSpec, b: MachineSpec): SubtypeResult {
-    if (a.kind === "indexed" && b.kind === "indexed") {
-        return isSubtype(a.inner, b.inner);
+function deduplicateStates(states: MachineSpec[]): MachineSpec[] {
+    const result: MachineSpec[] = [];
+    for (const state of states) {
+        if (!result.some(r => equals(r, state))) {
+            result.push(state);
+        }
+    }
+    return result;
+}
+
+function stateSetsEqual(a: MachineSpec[], b: MachineSpec[]): boolean {
+    if (a.length !== b.length) return false;
+    return a.every(x => b.some(y => equals(x, y)));
+}
+
+function resolveEpsilonTransitions(states: MachineSpec[], pathA: string[], pathB: string[]): MachineSpec[] {
+    const closure = deduplicateStates(states);
+    const queue = [...closure];
+
+    while (queue.length > 0) {
+        const current = queue.shift()!;
+        const possible = getPossibleTransitions(current);
+
+        for (const ev of possible) {
+            if (ev.kind === "write") {
+                const suffixA = getSuffix(ev.channel, pathA);
+                if (suffixA !== null) {
+                    const readChannel = [...pathB, ...suffixA];
+                    const readEvent: TranscriptEntry = { kind: "read", channel: readChannel };
+
+                    const intermediateStates = transitionNfa(current, ev);
+                    if (intermediateStates.length > 0) {
+                        let matched = false;
+                        for (const s1 of intermediateStates) {
+                            const nextStates = transitionNfa(s1, readEvent);
+                            if (nextStates.length > 0) {
+                                matched = true;
+                                for (const s2 of nextStates) {
+                                    if (!closure.some(c => equals(c, s2))) {
+                                        closure.push(s2);
+                                        queue.push(s2);
+                                    }
+                                }
+                            }
+                        }
+                        if (!matched) {
+                            throw new Error(`Blocked wired transition: ${ev.channel.join(".")} has no matching reader`);
+                        }
+                    }
+                }
+
+                const suffixB = getSuffix(ev.channel, pathB);
+                if (suffixB !== null) {
+                    const readChannel = [...pathA, ...suffixB];
+                    const readEvent: TranscriptEntry = { kind: "read", channel: readChannel };
+
+                    const intermediateStates = transitionNfa(current, ev);
+                    if (intermediateStates.length > 0) {
+                        let matched = false;
+                        for (const s1 of intermediateStates) {
+                            const nextStates = transitionNfa(s1, readEvent);
+                            if (nextStates.length > 0) {
+                                matched = true;
+                                for (const s2 of nextStates) {
+                                    if (!closure.some(c => equals(c, s2))) {
+                                        closure.push(s2);
+                                        queue.push(s2);
+                                    }
+                                }
+                            }
+                        }
+                        if (!matched) {
+                            throw new Error(`Blocked wired transition: ${ev.channel.join(".")} has no matching reader`);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return closure;
+}
+
+function hasConcurrent(spec: MachineSpec): boolean {
+    switch (spec.kind) {
+        case "concurrent":
+            return true;
+        case "sequence":
+            return spec.specs.some(hasConcurrent);
+        case "choice":
+            return spec.choices.some(hasConcurrent);
+        case "star":
+        case "complement":
+        case "rename":
+        case "prefix":
+            return hasConcurrent(spec.inner);
+        case "indexed":
+            return true;
+        case "trace":
+            return hasConcurrent(spec.inner);
+        default:
+            return false;
+    }
+}
+
+function compileStructural(spec: MachineSpec, context: DfaContext): number | null {
+    if (!hasConcurrent(spec)) return null;
+
+    if (spec.kind === "concurrent") {
+        const subIndices: Record<string, number> = {};
+        for (const [key, subSpec] of Object.entries(spec.machines)) {
+            subIndices[key] = compile(subSpec, context);
+        }
+        const index = context.nodes.length;
+        context.nodes.push({
+            kind: "concurrent",
+            index,
+            machines: subIndices
+        });
+        return index;
+    }
+    if (spec.kind === "indexed") {
+        const innerStart = compile(spec.inner, context);
+        const index = context.nodes.length;
+        context.nodes.push({
+            kind: "indexed",
+            index,
+            innerStartIndex: innerStart
+        });
+        return index;
+    }
+    if (spec.kind === "complement") {
+        const innerStart = compile(spec.inner, context);
+        const index = context.nodes.length;
+        context.nodes.push({
+            kind: "complement",
+            index,
+            innerStartIndex: innerStart
+        });
+        return index;
+    }
+    if (spec.kind === "rename") {
+        const innerStart = compile(spec.inner, context);
+        const index = context.nodes.length;
+        context.nodes.push({
+            kind: "rename",
+            index,
+            innerStartIndex: innerStart,
+            mapping: spec.mapping
+        });
+        return index;
+    }
+    if (spec.kind === "prefix") {
+        const innerStart = compile(spec.inner, context);
+        const index = context.nodes.length;
+        context.nodes.push({
+            kind: "prefix",
+            index,
+            innerStartIndex: innerStart,
+            prefix: spec.prefix
+        });
+        return index;
+    }
+    if (spec.kind === "sequence" && spec.specs.length > 0) {
+        const head = spec.specs[0];
+        const tail = spec.specs.slice(1);
+        
+        const headIdx = compileStructural(head, context);
+        if (headIdx !== null) {
+            const tailIndex = compile(sequence(...tail), context);
+            const headNode = context.nodes[headIdx];
+            if (headNode.kind === "concurrent" || headNode.kind === "indexed") {
+                headNode.continuationIndex = tailIndex;
+            } else if (headNode.kind === "complement" || headNode.kind === "rename" || headNode.kind === "prefix") {
+                let current: any = headNode;
+                while (current.kind === "complement" || current.kind === "rename" || current.kind === "prefix") {
+                    current = context.nodes[current.innerStartIndex];
+                }
+                if (current.kind === "concurrent" || current.kind === "indexed") {
+                    current.continuationIndex = tailIndex;
+                }
+            }
+            return headIdx;
+        }
+    }
+    return null;
+}
+
+function compile(spec: MachineSpec, context: DfaContext): number {
+    const structIndex = compileStructural(spec, context);
+    if (structIndex !== null) return structIndex;
+
+    const nodeStates: MachineSpec[][] = [];
+    const startOffset = context.nodes.length;
+
+    function getOrCreateNodeIndex(states: MachineSpec[]): number {
+        for (let i = 0; i < nodeStates.length; i++) {
+            if (stateSetsEqual(nodeStates[i], states)) {
+                return startOffset + i;
+            }
+        }
+        const index = startOffset + nodeStates.length;
+        nodeStates.push(states);
+        context.nodes.push({
+            index,
+            isCompleted: states.some(isCompleted),
+            transitions: []
+        });
+        return index;
     }
 
-    const visited = new Set<string>();
+    const initialStates = deduplicateStates([spec]);
+    const startIndex = getOrCreateNodeIndex(initialStates);
+
+    let processedCount = 0;
+    while (processedCount < nodeStates.length) {
+        const localIndex = processedCount;
+        processedCount++;
+
+        const currentNfaStates = nodeStates[localIndex];
+        const node = context.nodes[startOffset + localIndex] as StandardDfaNode;
+
+        const possibleEvents: TranscriptEntry[] = [];
+        for (const s of currentNfaStates) {
+            possibleEvents.push(...getPossibleTransitions(s));
+        }
+
+        const seenEvents = new Set<string>();
+        const uniqueEvents: TranscriptEntry[] = [];
+        for (const ev of possibleEvents) {
+            const evKey = `${ev.kind}:${ev.channel.join(".")}`;
+            if (!seenEvents.has(evKey)) {
+                seenEvents.add(evKey);
+                uniqueEvents.push(ev);
+            }
+        }
+
+        for (const entry of uniqueEvents) {
+            const nextStatesRaw: MachineSpec[] = [];
+            for (const s of currentNfaStates) {
+                nextStatesRaw.push(...transitionNfa(s, entry));
+            }
+            const nextStates = deduplicateStates(nextStatesRaw);
+            if (nextStates.length > 0) {
+                let targetIndex: number;
+                let structIdx: number | null = null;
+                if (nextStates.length === 1) {
+                    structIdx = compileStructural(nextStates[0], context);
+                }
+                if (structIdx !== null) {
+                    targetIndex = structIdx;
+                } else {
+                    targetIndex = getOrCreateNodeIndex(nextStates);
+                }
+                node.transitions.push({
+                    kind: entry.kind,
+                    channel: entry.channel,
+                    targetIndex
+                });
+            }
+        }
+    }
+
+    return startIndex;
+}
+
+export function compileToSpec(spec: MachineSpec): CompiledSpec {
+    const context = new DfaContext();
+    const startIndex = compile(spec, context);
+    return { context, startIndex };
+}
+
+type DfaRunState =
+    | { kind: "standard"; index: number }
+    | { kind: "concurrent"; index: number; machines: Record<string, DfaRunState> }
+    | { kind: "complement"; inner: DfaRunState }
+    | { kind: "rename"; inner: DfaRunState; mapping: Array<[string[], string[]]> }
+    | { kind: "prefix"; inner: DfaRunState; prefix: string[] }
+    | { kind: "indexed"; index: number; active: Record<string, DfaRunState>; activated: boolean };
+
+function initRunState(index: number, context: DfaContext): DfaRunState {
+    const node = context.nodes[index];
+    if (node.kind === "concurrent") {
+        const machines: Record<string, DfaRunState> = {};
+        for (const [key, subStart] of Object.entries(node.machines)) {
+            machines[key] = initRunState(subStart, context);
+        }
+        return { kind: "concurrent", index, machines };
+    }
+    if (node.kind === "indexed") {
+        return { kind: "indexed", index, active: {}, activated: false };
+    }
+    if (node.kind === "complement") {
+        return { kind: "complement", inner: initRunState(node.innerStartIndex, context) };
+    }
+    if (node.kind === "rename") {
+        return { kind: "rename", inner: initRunState(node.innerStartIndex, context), mapping: node.mapping };
+    }
+    if (node.kind === "prefix") {
+        return { kind: "prefix", inner: initRunState(node.innerStartIndex, context), prefix: node.prefix };
+    }
+    return { kind: "standard", index };
+}
+
+function isRunStateCompleted(state: DfaRunState, context: DfaContext): boolean {
+    if (state.kind === "concurrent") {
+        const node = context.nodes[state.index] as ConcurrentDfaNode;
+        const allSubCompleted = Object.values(state.machines).every(s => isRunStateCompleted(s, context));
+        if (allSubCompleted) {
+            if (node.continuationIndex !== undefined) {
+                return isRunStateCompleted(initRunState(node.continuationIndex, context), context);
+            }
+            return true;
+        }
+        return false;
+    }
+    if (state.kind === "indexed") {
+        const node = context.nodes[state.index] as IndexedDfaNode;
+        const allActiveCompleted = Object.values(state.active).every(s => isRunStateCompleted(s, context));
+        if (!allActiveCompleted) return false;
+        if (node.continuationIndex !== undefined) {
+            return state.activated ? isRunStateCompleted(initRunState(node.continuationIndex, context), context) : false;
+        }
+        return true;
+    }
+    if (state.kind === "complement") {
+        return isRunStateCompleted(state.inner, context);
+    }
+    if (state.kind === "rename") {
+        return isRunStateCompleted(state.inner, context);
+    }
+    if (state.kind === "prefix") {
+        return isRunStateCompleted(state.inner, context);
+    }
+    const node = context.nodes[state.index] as StandardDfaNode;
+    return node.isCompleted;
+}
+
+function transitionRunState(state: DfaRunState, entry: TranscriptEntry, context: DfaContext): DfaRunState[] {
+    if (state.kind === "standard") {
+        const node = context.nodes[state.index] as StandardDfaNode;
+        const matches = node.transitions.filter(t => 
+            t.kind === entry.kind && 
+            channelsMatch(t.channel, entry.channel)
+        );
+        return matches.map(match => initRunState(match.targetIndex, context));
+    }
     
-    function check(currA: MachineSpec, currB: MachineSpec, path: TranscriptEntry[]): SubtypeResult {
-        const stateKey = `${JSON.stringify(currA)}|${JSON.stringify(currB)}`;
+    if (state.kind === "concurrent") {
+        const node = context.nodes[state.index] as ConcurrentDfaNode;
+        const results: DfaRunState[] = [];
+
+        if (entry.channel.length > 0) {
+            const key = entry.channel[0];
+            const subState = state.machines[key];
+            if (subState) {
+                const strippedEntry: TranscriptEntry = {
+                    kind: entry.kind,
+                    channel: entry.channel.slice(1)
+                };
+                const nextSubs = transitionRunState(subState, strippedEntry, context);
+                for (const ns of nextSubs) {
+                    results.push({
+                        kind: "concurrent",
+                        index: state.index,
+                        machines: {
+                            ...state.machines,
+                            [key]: ns
+                        }
+                    });
+                }
+            }
+        }
+
+        const allSubCompleted = Object.values(state.machines).every(s => isRunStateCompleted(s, context));
+        if (allSubCompleted && node.continuationIndex !== undefined) {
+            results.push(...transitionRunState(initRunState(node.continuationIndex, context), entry, context));
+        }
+
+        return results;
+    }
+
+    if (state.kind === "indexed") {
+        const node = context.nodes[state.index] as IndexedDfaNode;
+        const results: DfaRunState[] = [];
+
+        if (entry.channel.length > 0) {
+            const index = entry.channel[0];
+            const suffix = entry.channel.slice(1);
+            const strippedEntry: TranscriptEntry = {
+                kind: entry.kind,
+                channel: suffix
+            };
+
+            if (state.active[index]) {
+                const nextSubs = transitionRunState(state.active[index], strippedEntry, context);
+                for (const ns of nextSubs) {
+                    const active = { ...state.active };
+                    if (isRunStateCompleted(ns, context)) {
+                        delete active[index];
+                    } else {
+                        active[index] = ns;
+                    }
+                    results.push({
+                        kind: "indexed",
+                        index: state.index,
+                        active,
+                        activated: true
+                    });
+                }
+            } else {
+                let allowed = true;
+                if (index.startsWith("*")) {
+                    const starCount = Object.keys(state.active).filter(k => k.startsWith("*")).length;
+                    if (starCount >= 3) {
+                        allowed = false;
+                    }
+                }
+                if (allowed) {
+                    const innerStart = initRunState(node.innerStartIndex, context);
+                    const nextSubs = transitionRunState(innerStart, strippedEntry, context);
+                    for (const ns of nextSubs) {
+                        const active = { ...state.active };
+                        if (!isRunStateCompleted(ns, context)) {
+                            active[index] = ns;
+                        }
+                        results.push({
+                            kind: "indexed",
+                            index: state.index,
+                            active,
+                            activated: true
+                        });
+                    }
+                }
+            }
+        }
+
+        const allActiveCompleted = Object.values(state.active).every(s => isRunStateCompleted(s, context));
+        if (state.activated && allActiveCompleted && node.continuationIndex !== undefined) {
+            results.push(...transitionRunState(initRunState(node.continuationIndex, context), entry, context));
+        }
+
+        return results;
+    }
+
+    if (state.kind === "complement") {
+        const reversedEntry: TranscriptEntry = {
+            kind: entry.kind === "read" ? "write" : "read",
+            channel: entry.channel
+        };
+        const nextInners = transitionRunState(state.inner, reversedEntry, context);
+        return nextInners.map(ni => ({ kind: "complement", inner: ni }));
+    }
+
+    if (state.kind === "rename") {
+        const innerChannel = translateOuterToInner(entry.channel, state.mapping);
+        if (innerChannel === null) return [];
+        const strippedEntry: TranscriptEntry = {
+            kind: entry.kind,
+            channel: innerChannel
+        };
+        const nextInners = transitionRunState(state.inner, strippedEntry, context);
+        return nextInners.map(ni => ({ kind: "rename", inner: ni, mapping: state.mapping }));
+    }
+
+    if (state.kind === "prefix") {
+        const suffix = getSuffix(entry.channel, state.prefix);
+        if (suffix === null) return [];
+        const strippedEntry: TranscriptEntry = {
+            kind: entry.kind,
+            channel: suffix
+        };
+        const nextInners = transitionRunState(state.inner, strippedEntry, context);
+        return nextInners.map(ni => ({ kind: "prefix", inner: ni, prefix: state.prefix }));
+    }
+
+    return [];
+}
+
+function getRunStateTransitions(state: DfaRunState, context: DfaContext): TranscriptEntry[] {
+    if (state.kind === "standard") {
+        const node = context.nodes[state.index] as StandardDfaNode;
+        return node.transitions.map(t => ({ kind: t.kind, channel: t.channel }));
+    }
+    
+    if (state.kind === "concurrent") {
+        const node = context.nodes[state.index] as ConcurrentDfaNode;
+        const result: TranscriptEntry[] = [];
+        for (const [key, subState] of Object.entries(state.machines)) {
+            for (const t of getRunStateTransitions(subState, context)) {
+                result.push({ kind: t.kind, channel: [key, ...t.channel] });
+            }
+        }
+        
+        const allSubCompleted = Object.values(state.machines).every(s => isRunStateCompleted(s, context));
+        if (allSubCompleted && node.continuationIndex !== undefined) {
+            result.push(...getRunStateTransitions(initRunState(node.continuationIndex, context), context));
+        }
+
+        const seen = new Set<string>();
+        return result.filter(ev => {
+            const key = `${ev.kind}:${ev.channel.join(".")}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        });
+    }
+
+    if (state.kind === "complement") {
+        return getRunStateTransitions(state.inner, context).map(t => ({
+            kind: t.kind === "read" ? "write" : "read",
+            channel: t.channel
+        }));
+    }
+
+    if (state.kind === "rename") {
+        return getRunStateTransitions(state.inner, context).map(t => ({
+            kind: t.kind,
+            channel: translateInnerToOuter(t.channel, state.mapping)
+        }));
+    }
+
+    if (state.kind === "prefix") {
+        return getRunStateTransitions(state.inner, context).map(t => ({
+            kind: t.kind,
+            channel: [...state.prefix, ...t.channel]
+        }));
+    }
+
+    if (state.kind === "indexed") {
+        const node = context.nodes[state.index] as IndexedDfaNode;
+        const result: TranscriptEntry[] = [];
+
+        for (const [key, subState] of Object.entries(state.active)) {
+            for (const t of getRunStateTransitions(subState, context)) {
+                result.push({ kind: t.kind, channel: [key, ...t.channel] });
+            }
+        }
+
+        let nextKeyIdx = 0;
+        while (state.active[`*${nextKeyIdx}`]) {
+            nextKeyIdx++;
+        }
+        if (nextKeyIdx < 3) {
+            const innerStart = initRunState(node.innerStartIndex, context);
+            for (const t of getRunStateTransitions(innerStart, context)) {
+                result.push({ kind: t.kind, channel: [`*${nextKeyIdx}`, ...t.channel] });
+            }
+        }
+
+        const allActiveCompleted = Object.values(state.active).every(s => isRunStateCompleted(s, context));
+        if (allActiveCompleted && node.continuationIndex !== undefined) {
+            result.push(...getRunStateTransitions(initRunState(node.continuationIndex, context), context));
+        }
+
+        const seen = new Set<string>();
+        return result.filter(ev => {
+            const key = `${ev.kind}:${ev.channel.join(".")}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        });
+    }
+
+    return [];
+}
+
+function isSubtypeCompiled(a: CompiledSpec, b: CompiledSpec): SubtypeResult {
+    const visited = new Set<string>();
+
+    function serializeRunState(state: DfaRunState): string {
+        if (state.kind === "standard") return `${state.index}`;
+        if (state.kind === "concurrent") {
+            const subs = Object.entries(state.machines)
+                .map(([k, v]) => `${k}:${serializeRunState(v)}`)
+                .sort()
+                .join(",");
+            return `concurrent({${subs}})`;
+        }
+        if (state.kind === "complement") {
+            return `complement(${serializeRunState(state.inner)})`;
+        }
+        if (state.kind === "rename") {
+            return `rename(${serializeRunState(state.inner)})`;
+        }
+        if (state.kind === "prefix") {
+            return `prefix(${serializeRunState(state.inner)})`;
+        }
+        if (state.kind === "indexed") {
+            const subs = Object.entries(state.active)
+                .map(([k, v]) => `${k}:${serializeRunState(v)}`)
+                .sort()
+                .join(",");
+            const activePart = subs ? `{${subs}}` : "";
+            const act = state.activated ? "[activated]" : "";
+            return `indexed(${state.index})${activePart}${act}`;
+        }
+        return "";
+    }
+
+    function serializeStateSet(states: DfaRunState[]): string {
+        const strs = states.map(serializeRunState);
+        strs.sort();
+        return strs.join(",");
+    }
+
+    function check(statesA: DfaRunState[], statesB: DfaRunState[], path: TranscriptEntry[]): SubtypeResult {
+        if (statesA.length === 1 && statesA[0].kind === "indexed" && statesB.length === 1 && statesB[0].kind === "indexed") {
+            const runA = statesA[0];
+            const runB = statesB[0];
+            const nodeA = a.context.nodes[runA.index] as IndexedDfaNode;
+            const nodeB = b.context.nodes[runB.index] as IndexedDfaNode;
+            
+            const resInner = isSubtypeCompiled(
+                { context: a.context, startIndex: nodeA.innerStartIndex },
+                { context: b.context, startIndex: nodeB.innerStartIndex }
+            );
+            if (resInner.isSubtype === false) {
+                const mappedTranscript = resInner.transcript.map(t => ({
+                    kind: t.kind,
+                    channel: ["*", ...t.channel]
+                }));
+                return {
+                    isSubtype: false,
+                    reason: resInner.reason,
+                    transcript: [...path, ...mappedTranscript]
+                };
+            }
+            
+            if (nodeA.continuationIndex !== undefined || nodeB.continuationIndex !== undefined) {
+                const doneIndexA = compile(sequence(), a.context);
+                const doneIndexB = compile(sequence(), b.context);
+                const idxA = nodeA.continuationIndex !== undefined ? nodeA.continuationIndex : doneIndexA;
+                const idxB = nodeB.continuationIndex !== undefined ? nodeB.continuationIndex : doneIndexB;
+                const resCont = isSubtypeCompiled(
+                    { context: a.context, startIndex: idxA },
+                    { context: b.context, startIndex: idxB }
+                );
+                if (!resCont.isSubtype) return resCont;
+            }
+            return { isSubtype: true };
+        }
+
+        const stateKey = `${serializeStateSet(statesA)}|${serializeStateSet(statesB)}`;
         if (visited.has(stateKey)) {
             return { isSubtype: true };
         }
         visited.add(stateKey);
-        
-        if (isCompleted(currB) && !isCompleted(currA)) {
+
+        const completedA = statesA.some(s => isRunStateCompleted(s, a.context));
+        const completedB = statesB.some(s => isRunStateCompleted(s, b.context));
+
+        if (completedB && !completedA) {
             return { isSubtype: false, reason: "completion", transcript: path };
         }
-        
-        const aTrans = getPossibleTransitions(currA);
-        const bTrans = getPossibleTransitions(currB);
-        
-        // 1. Contravariant Inputs (Reads): every input that B accepts, A must also accept
-        for (const t of bTrans) {
-            if (t.kind === "read") {
-                const nextA = transition(currA, t);
-                if (nextA === null) {
-                    return { isSubtype: false, reason: "read", transcript: [...path, t] };
-                }
-                const nextB = transition(currB, t)!;
-                const result = check(nextA, nextB, [...path, t]);
-                if (!result.isSubtype) {
-                    return result;
-                }
+
+        const possibleB: TranscriptEntry[] = [];
+        for (const sB of statesB) {
+            possibleB.push(...getRunStateTransitions(sB, b.context));
+        }
+        const uniqueB: TranscriptEntry[] = [];
+        const seenB = new Set<string>();
+        for (const ev of possibleB) {
+            const key = `${ev.kind}:${ev.channel.join(".")}`;
+            if (!seenB.has(key)) {
+                seenB.add(key);
+                uniqueB.push(ev);
             }
         }
-        
-        // 2. Covariant Outputs (Writes): every output that A produces, B must also allow/expect
-        for (const t of aTrans) {
-            if (t.kind === "write") {
-                const nextB = transition(currB, t);
-                if (nextB === null) {
-                    return { isSubtype: false, reason: "write", transcript: [...path, t] };
-                }
-                const nextA = transition(currA, t)!;
-                const result = check(nextA, nextB, [...path, t]);
-                if (!result.isSubtype) {
-                    return result;
-                }
+
+        const possibleA: TranscriptEntry[] = [];
+        for (const sA of statesA) {
+            possibleA.push(...getRunStateTransitions(sA, a.context));
+        }
+        const uniqueA: TranscriptEntry[] = [];
+        const seenA = new Set<string>();
+        for (const ev of possibleA) {
+            const key = `${ev.kind}:${ev.channel.join(".")}`;
+            if (!seenA.has(key)) {
+                seenA.add(key);
+                uniqueA.push(ev);
             }
         }
-        
+
+        for (const ev of uniqueB) {
+            if (ev.kind === "read") {
+                const nextAs: DfaRunState[] = [];
+                for (const sA of statesA) {
+                    nextAs.push(...transitionRunState(sA, ev, a.context));
+                }
+                if (nextAs.length === 0) {
+                    return { isSubtype: false, reason: "read", transcript: [...path, ev] };
+                }
+                
+                const nextBs: DfaRunState[] = [];
+                for (const sB of statesB) {
+                    nextBs.push(...transitionRunState(sB, ev, b.context));
+                }
+                
+                const res = check(nextAs, nextBs, [...path, ev]);
+                if (!res.isSubtype) return res;
+            }
+        }
+
+        for (const ev of uniqueA) {
+            if (ev.kind === "write") {
+                const nextBs: DfaRunState[] = [];
+                for (const sB of statesB) {
+                    nextBs.push(...transitionRunState(sB, ev, b.context));
+                }
+                if (nextBs.length === 0) {
+                    return { isSubtype: false, reason: "write", transcript: [...path, ev] };
+                }
+                
+                const nextAs: DfaRunState[] = [];
+                for (const sA of statesA) {
+                    nextAs.push(...transitionRunState(sA, ev, a.context));
+                }
+                
+                const res = check(nextAs, nextBs, [...path, ev]);
+                if (!res.isSubtype) return res;
+            }
+        }
+
         return { isSubtype: true };
     }
-    
-    return check(a, b, []);
+
+    const initA = [initRunState(a.startIndex, a.context)];
+    const initB = [initRunState(b.startIndex, b.context)];
+    return check(initA, initB, []);
 }
 
-export function checkTranscript(spec : MachineSpec, transcript: TranscriptEntry[]): boolean {
-    let current = spec;
+export function isSubtype(a: CompiledSpec, b: CompiledSpec): SubtypeResult {
+    return isSubtypeCompiled(a, b);
+}
+
+export function checkTranscript(spec: CompiledSpec, transcript: TranscriptEntry[]): boolean {
+    let currentGlobalStates: DfaRunState[] = [initRunState(spec.startIndex, spec.context)];
+
     for (const entry of transcript) {
-        const next = transition(current, entry);
-        if (next === null) {
+        const nextGlobals: DfaRunState[] = [];
+        for (const s of currentGlobalStates) {
+            nextGlobals.push(...transitionRunState(s, entry, spec.context));
+        }
+        currentGlobalStates = nextGlobals;
+        if (currentGlobalStates.length === 0) {
             return false;
         }
-        current = next;
     }
-    return isCompleted(current);
+
+    return currentGlobalStates.some(s => isRunStateCompleted(s, spec.context));
+}
+
+export function serializeCompiledSpec(compiled: CompiledSpec): string {
+    return compiled.context.nodes.map(node => {
+        if (node.kind === "concurrent") {
+            const subs = Object.entries(node.machines)
+                .map(([k, v]) => `${k}:${v}`)
+                .sort()
+                .join(",");
+            const cont = node.continuationIndex !== undefined ? `->${node.continuationIndex}` : "";
+            return `${node.index}: concurrent({${subs}})${cont}`;
+        }
+        if (node.kind === "indexed") {
+            const cont = node.continuationIndex !== undefined ? `->${node.continuationIndex}` : "";
+            return `${node.index}: indexed(${node.innerStartIndex})${cont}`;
+        }
+        if (node.kind === "complement") {
+            return `${node.index}: complement(${node.innerStartIndex})`;
+        }
+        if (node.kind === "rename") {
+            const mappingStr = node.mapping.map(([from, to]) => `${from.join(".")}:${to.join(".")}`).join(",");
+            return `${node.index}: rename({${mappingStr}},${node.innerStartIndex})`;
+        }
+        if (node.kind === "prefix") {
+            return `${node.index}: prefix(${node.prefix.join(".")},${node.innerStartIndex})`;
+        }
+        const transStr = node.transitions.map(t => `${t.kind}(${t.channel.join(".")})->${t.targetIndex}`).join(", ");
+        return `${node.index}${node.isCompleted ? "*" : ""}: [${transStr}]`;
+    }).join("\n");
 }
 
 export function parseTranscript(text: string): TranscriptEntry[] {
@@ -1063,104 +1435,4 @@ export function parseTranscript(text: string): TranscriptEntry[] {
     }
 
     return result;
-}
-
-export function hideSpecChannels(spec: MachineSpec, paths: string[][], prefix: string[] = []): MachineSpec {
-    const isHidden = (channel: string[]) => {
-        const absolute = [...prefix, ...channel];
-        return paths.some(p => channelsEqual(absolute, p));
-    };
-
-    if (spec.kind === "read" || spec.kind === "write") {
-        if (isHidden(spec.channel)) {
-            return hideSpecChannels(spec.then, paths, prefix);
-        }
-        return {
-            ...spec,
-            then: hideSpecChannels(spec.then, paths, prefix)
-        };
-    }
-    if (spec.kind === "done") {
-        return spec;
-    }
-    if (spec.kind === "concurrent") {
-        const sub: Record<string, MachineSpec> = {};
-        for (const [key, m] of Object.entries(spec.machines)) {
-            sub[key] = hideSpecChannels(m, paths, [...prefix, key]);
-        }
-        return {
-            ...spec,
-            machines: sub,
-            then: hideSpecChannels(spec.then, paths, prefix)
-        };
-    }
-    if (spec.kind === "choice") {
-        const sub: Record<string, MachineSpec> = {};
-        for (const [key, m] of Object.entries(spec.choices)) {
-            sub[key] = hideSpecChannels(m, paths, prefix);
-        }
-        return {
-            ...spec,
-            choices: sub,
-            then: hideSpecChannels(spec.then, paths, prefix),
-            current: spec.current ? hideSpecChannels(spec.current, paths, prefix) : undefined
-        };
-    }
-    if (spec.kind === "loop") {
-        return {
-            ...spec,
-            body: hideSpecChannels(spec.body, paths, prefix),
-            then: hideSpecChannels(spec.then, paths, prefix),
-            current: spec.current ? hideSpecChannels(spec.current, paths, prefix) : undefined
-        };
-    }
-    if (spec.kind === "prefix") {
-        return {
-            ...spec,
-            inner: hideSpecChannels(spec.inner, paths, [...prefix, ...spec.prefix]),
-            then: hideSpecChannels(spec.then, paths, prefix)
-        };
-    }
-    if (spec.kind === "rename") {
-        const mappedPaths = paths.map(path => {
-            for (const [from, to] of spec.mapping) {
-                if (path.length >= prefix.length + to.length) {
-                    const candidateTo = path.slice(prefix.length, prefix.length + to.length);
-                    if (channelsEqual(candidateTo, to)) {
-                        const suffix = path.slice(prefix.length + to.length);
-                        return [...prefix, ...from, ...suffix];
-                    }
-                }
-            }
-            return path;
-        });
-
-        return {
-            ...spec,
-            inner: hideSpecChannels(spec.inner, mappedPaths, prefix),
-            then: hideSpecChannels(spec.then, paths, prefix)
-        };
-    }
-    if (spec.kind === "complement") {
-        return {
-            ...spec,
-            inner: hideSpecChannels(spec.inner, paths, prefix),
-            then: hideSpecChannels(spec.then, paths, prefix)
-        };
-    }
-    if (spec.kind === "indexed") {
-        const active: Record<string, MachineSpec> = {};
-        if (spec.active) {
-            for (const [key, m] of Object.entries(spec.active)) {
-                active[key] = hideSpecChannels(m, paths, [...prefix, key]);
-            }
-        }
-        return {
-            ...spec,
-            inner: hideSpecChannels(spec.inner, paths, prefix),
-            active: spec.active ? active : undefined,
-            then: hideSpecChannels(spec.then, paths, prefix)
-        };
-    }
-    return spec;
 }

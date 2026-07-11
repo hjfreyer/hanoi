@@ -1,4 +1,4 @@
-import { parseTranscript, checkTranscript } from "./spec";
+import { parseTranscript, checkTranscript, compileToSpec } from "./spec";
 import { ConcurrentMachine, TraceMachine, SequenceMachine, WriteConstantMachine, RenameMachine, findStateForMachine } from "./impl";
 import {
     ValueCellSpec,
@@ -76,7 +76,7 @@ describe("ValueCell example", () => {
             < p0.copy
             > p0.value
         `);
-        expect(checkTranscript(ValueCellSpec, transcript)).toBe(true);
+        expect(checkTranscript(compileToSpec(ValueCellSpec), transcript)).toBe(true);
     });
 });
 
@@ -109,14 +109,14 @@ describe("UninitValueCell example", () => {
             < p1.copy
             > p1.value
         `);
-        expect(checkTranscript(UninitValueCellSpec, valid)).toBe(true);
+        expect(checkTranscript(compileToSpec(UninitValueCellSpec), valid)).toBe(true);
 
         const invalid = parseTranscript(`
             < p0.copy
             > p0.value
             < p1.set
         `);
-        expect(checkTranscript(UninitValueCellSpec, invalid)).toBe(false);
+        expect(checkTranscript(compileToSpec(UninitValueCellSpec), invalid)).toBe(false);
     });
 });
 
@@ -141,7 +141,7 @@ describe("AddMachine example", () => {
             < in1
             > out0
         `);
-        expect(checkTranscript(AddSpec, valid)).toBe(true);
+        expect(checkTranscript(compileToSpec(AddSpec), valid)).toBe(true);
     });
 });
 
@@ -222,14 +222,14 @@ describe("LessThanMachine example", () => {
             < in1
             > out0.true
         `);
-        expect(checkTranscript(LessThanSpec, validTrue)).toBe(true);
+        expect(checkTranscript(compileToSpec(LessThanSpec), validTrue)).toBe(true);
 
         const validFalse = parseTranscript(`
             < in1
             < in0
             > out0.false
         `);
-        expect(checkTranscript(LessThanSpec, validFalse)).toBe(true);
+        expect(checkTranscript(compileToSpec(LessThanSpec), validFalse)).toBe(true);
 
         const invalid = parseTranscript(`
             < in0
@@ -237,7 +237,7 @@ describe("LessThanMachine example", () => {
             > out0.true
             > out0.false
         `);
-        expect(checkTranscript(LessThanSpec, invalid)).toBe(false);
+        expect(checkTranscript(compileToSpec(LessThanSpec), invalid)).toBe(false);
     });
 });
 
@@ -402,19 +402,19 @@ describe("TestMachine", () => {
             < input
             > out0.true
         `);
-        expect(checkTranscript(TestSpec, validTrue)).toBe(true);
+        expect(checkTranscript(compileToSpec(TestSpec), validTrue)).toBe(true);
 
         const validFalse = parseTranscript(`
             < input
             > out0.false
         `);
-        expect(checkTranscript(TestSpec, validFalse)).toBe(true);
+        expect(checkTranscript(compileToSpec(TestSpec), validFalse)).toBe(true);
 
         const invalid = parseTranscript(`
             < input
             > out0.true
             > out0.false
         `);
-        expect(checkTranscript(TestSpec, invalid)).toBe(false);
+        expect(checkTranscript(compileToSpec(TestSpec), invalid)).toBe(false);
     });
 });
