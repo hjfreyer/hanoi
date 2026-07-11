@@ -1,4 +1,4 @@
-import { MachineSpec, build, sequence, read, write, concurrent, choice, loop, complement, isCompleted, transition, indexed } from "./spec";
+import { MachineSpec, sequence, read, write, concurrent, choice, loop, complement, isCompleted, transition, indexed } from "./spec";
 import { MachineInstance, StepResult, SequenceMachine, ConcurrentMachine, TraceMachine, WriteConstantMachine, DiscardMachine, LoopMachine, DupMachine, channelsEqual, RenameMachine, IndexedMachine } from "./impl";
 
 class Runner {
@@ -37,7 +37,7 @@ class DoubleMachine implements MachineInstance {
     }
 
     getSpec(): MachineSpec {
-        return build(sequence(read(["a"]), write(["b"])));
+        return sequence(read(["a"]), write(["b"]));
     }
 
     isCompleted(state: any): boolean {
@@ -86,7 +86,7 @@ class ProducerMachine implements MachineInstance {
             done: false
         };
     }
-    getSpec() { return build(write(["out"])); }
+    getSpec() { return write(["out"]); }
     isCompleted(state: any) { return state.done; }
     step(state: any): { result: StepResult; state: any } {
         if (state.done) return { result: { kind: "done" }, state };
@@ -106,7 +106,7 @@ class ConsumerMachine implements MachineInstance {
             val: 0
         };
     }
-    getSpec() { return build(sequence(read(["in"]), write(["result"]))); }
+    getSpec() { return sequence(read(["in"]), write(["result"])); }
     isCompleted(state: any) { return state.state === "done"; }
     step(state: any, action?: { channel: string[]; value?: any }): { result: StepResult; state: any } {
         if (state.state === "waiting_in") {
@@ -139,7 +139,7 @@ class PrefixProducer implements MachineInstance {
             done: false
         };
     }
-    getSpec() { return build(write(["mid", "data"])); }
+    getSpec() { return write(["mid", "data"]); }
     isCompleted(state: any) { return state.done; }
     step(state: any): { result: StepResult; state: any } {
         if (state.done) return { result: { kind: "done" }, state };
@@ -159,7 +159,7 @@ class PrefixConsumer implements MachineInstance {
             val: 0
         };
     }
-    getSpec() { return build(sequence(read(["mid", "data"]), write(["result"]))); }
+    getSpec() { return sequence(read(["mid", "data"]), write(["result"])); }
     isCompleted(state: any) { return state.state === "done"; }
     step(state: any, action?: { channel: string[]; value?: any }): { result: StepResult; state: any } {
         if (state.state === "waiting_in") {
@@ -194,7 +194,7 @@ class ReadWriteMachine implements MachineInstance {
         };
     }
     getSpec(): MachineSpec {
-        return build(sequence(read(["c"]), write(["d"])));
+        return sequence(read(["c"]), write(["d"]));
     }
     isCompleted(state: any): boolean {
         return state.state === "done";
@@ -226,7 +226,7 @@ class ReadWriteMachine implements MachineInstance {
 
 class ReadC implements MachineInstance {
     createState(): any { return {}; }
-    getSpec(): MachineSpec { return build(read(["c"])); }
+    getSpec(): MachineSpec { return read(["c"]); }
     isCompleted(state: any): boolean { return false; }
     step(state: any, action?: { channel: string[]; value?: any }): { result: StepResult; state: any } {
         if (!action || action.channel[0] !== "c") return { result: { kind: "waiting" }, state };
@@ -238,7 +238,7 @@ class PrefixedMachine implements MachineInstance {
     createState(): any {
         return { state: "reading" };
     }
-    getSpec(): MachineSpec { return build(sequence(read(["c", "val"]), write(["c", "status"]))); }
+    getSpec(): MachineSpec { return sequence(read(["c", "val"]), write(["c", "status"])); }
     isCompleted(state: any): boolean { return state.state === "done"; }
     step(state: any, action?: { channel: string[]; value?: any }): { result: StepResult; state: any } {
         if (state.state === "reading") {
@@ -272,7 +272,7 @@ class MockWorker implements MachineInstance {
         };
     }
     getSpec(): MachineSpec {
-        return build(sequence(read(["c"]), write(["d"])));
+        return sequence(read(["c"]), write(["d"]));
     }
     isCompleted(state: any): boolean {
         return state.done;
@@ -606,7 +606,7 @@ describe("IndexedMachine", () => {
         // Spec matches template
         expect(m.getSpec()).toEqual({
             kind: "indexed",
-            inner: build(sequence(read(["c"]), write(["d"]))),
+            inner: sequence(read(["c"]), write(["d"])),
             active: {},
             activated: false,
             then: sequence()

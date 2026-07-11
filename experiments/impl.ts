@@ -1,4 +1,4 @@
-import { MachineSpec, transition, isCompleted, build, read, write, loop, concurrent, sequence, getPossibleTransitions } from "./spec";
+import { MachineSpec, transition, isCompleted, read, write, loop, concurrent, sequence, getPossibleTransitions } from "./spec";
 
 export type StepResult =
     | { kind: "write"; channel: string[]; value: any }
@@ -262,7 +262,7 @@ export class WriteConstantMachine implements MachineInstance {
     }
 
     getSpec(): MachineSpec {
-        return build(write(this.channel));
+        return write(this.channel);
     }
 
     isCompleted(state: any): boolean {
@@ -291,7 +291,7 @@ export class DiscardMachine implements MachineInstance {
     }
 
     getSpec(): MachineSpec {
-        return build(read(this.channel));
+        return read(this.channel);
     }
 
     isCompleted(state: any): boolean {
@@ -329,7 +329,7 @@ export class LoopMachine implements MachineInstance {
     }
 
     getSpec(): MachineSpec {
-        return build(loop(this.factory().getSpec()));
+        return loop(this.factory().getSpec());
     }
 
     isCompleted(state: any): boolean {
@@ -368,9 +368,9 @@ export class DupMachine implements MachineInstance {
 
     getSpec(): MachineSpec {
         const concurrentWrites = concurrent(
-            Object.fromEntries(this.outKeys.map(key => [key, build(write([]))]))
+            Object.fromEntries(this.outKeys.map(key => [key, write([])]))
         );
-        return build(sequence(read(this.inChannel), concurrentWrites));
+        return sequence(read(this.inChannel), concurrentWrites);
     }
 
     isCompleted(state: any): boolean {

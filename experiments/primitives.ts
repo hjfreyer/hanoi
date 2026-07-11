@@ -2,23 +2,23 @@ import { MachineSpec, build, sequence, read, write, choice, loop, concurrent, tr
 import { MachineInstance, StepResult, channelsEqual } from "./impl";
 
 // 1. Define the ValueCell specs
-export const ValueCellSpec = build(indexed(build(choice({
-    set: build(read(["set"])),
-    copy: build(sequence(
+export const ValueCellSpec = build(indexed(choice({
+    set: read(["set"]),
+    copy: sequence(
         read(["copy"]),
         write(["value"])
-    ))
-}))));
+    )
+})));
 
 export const UninitValueCellSpec = build(sequence(
-    indexed(build(read(["set"]))),
-    indexed(build(choice({
-        set: build(read(["set"])),
-        copy: build(sequence(
+    indexed(read(["set"])),
+    indexed(choice({
+        set: read(["set"]),
+        copy: sequence(
             read(["copy"]),
             write(["value"])
-        ))
-    })))
+        )
+    }))
 ));
 
 // 2. Implement the unified ValueCellMachine using MachineInstance
@@ -86,8 +86,8 @@ export class ValueCellMachine implements MachineInstance {
 // 3. Define the BinaryValue spec (reads in0 and in1, then writes out0)
 export const BinaryValueSpec = build(sequence(
     concurrent({
-        in0: build(read([])),
-        in1: build(read([]))
+        in0: read([]),
+        in1: read([])
     }),
     write(["out0"])
 ));
@@ -173,12 +173,12 @@ export class AddMachine extends BinaryValueMachine {
 
 export const BinaryPredicateSpec = build(sequence(
     concurrent({
-        in0: build(read([])),
-        in1: build(read([]))
+        in0: read([]),
+        in1: read([])
     }),
     choice({
-        true: build(write(["out0", "true"])),
-        false: build(write(["out0", "false"]))
+        true: write(["out0", "true"]),
+        false: write(["out0", "false"])
     })
 ));
 
@@ -275,11 +275,11 @@ export class AssignCellMachine implements MachineInstance {
     }
 
     getSpec(): MachineSpec {
-        return build(sequence(
+        return sequence(
             write(this.copyChan),
             read(this.readChan),
             write(this.setChan)
-        ));
+        );
     }
 
     isCompleted(state: any): boolean {
@@ -340,13 +340,13 @@ export class BinaryCellMachine implements MachineInstance {
     }
 
     getSpec(): MachineSpec {
-        return build(sequence(
+        return sequence(
             concurrent({
-                in0: build(sequence(write(["copy"]), read(["value"]))),
-                in1: build(sequence(write(["copy"]), read(["value"])))
+                in0: sequence(write(["copy"]), read(["value"])),
+                in1: sequence(write(["copy"]), read(["value"]))
             }),
             write(["out0", "set"])
-        ));
+        );
     }
 
     isCompleted(state: any): boolean {
@@ -443,16 +443,16 @@ export class BinaryPredicateCellMachine implements MachineInstance {
     }
 
     getSpec(): MachineSpec {
-        return build(sequence(
+        return sequence(
             concurrent({
-                in0: build(sequence(write(["copy"]), read(["value"]))),
-                in1: build(sequence(write(["copy"]), read(["value"])))
+                in0: sequence(write(["copy"]), read(["value"])),
+                in1: sequence(write(["copy"]), read(["value"]))
             }),
             choice({
-                true: build(write(["out0", "true"])),
-                false: build(write(["out0", "false"]))
+                true: write(["out0", "true"]),
+                false: write(["out0", "false"])
             })
-        ));
+        );
     }
 
     isCompleted(state: any): boolean {
@@ -539,8 +539,8 @@ export class LessThanCellMachine extends BinaryPredicateCellMachine {
 export const TestSpec = build(sequence(
     read(["input"]),
     choice({
-        true: build(write(["out0", "true"])),
-        false: build(write(["out0", "false"]))
+        true: write(["out0", "true"]),
+        false: write(["out0", "false"])
     })
 ));
 

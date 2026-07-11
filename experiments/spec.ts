@@ -83,8 +83,6 @@ type SubtypeResult =
     | { isSubtype: true }
     | { isSubtype: false; reason: "completion" | "read" | "write"; transcript: TranscriptEntry[] };
 
-export type SpecBuilder = MachineSpec;
-
 function channelsEqual(a: string[], b: string[]): boolean {
     if (a.length !== b.length) return false;
     return a.every((val, index) => val === b[index]);
