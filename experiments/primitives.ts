@@ -303,11 +303,27 @@ export class LessThanMachine extends BinaryPredicateMachine {
   }
 }
 
-// 5. Implement AssignCellMachine
-export class AssignCellMachine implements MachineInstance {
+export const AreEqualSpec = BinaryPredicateSpec;
+
+export class AreEqualMachine extends BinaryPredicateMachine {
+  constructor() {
+    super((x, y) => x === y);
+  }
+}
+
+// 5. Implement UnaryCellMachine and AssignCellMachine
+export const UnaryCellSpec = sequence(
+  write(["in0", "copy"]),
+  read(["in0", "value"]),
+  write(["out0", "set"]),
+);
+
+export class UnaryCellMachine implements MachineInstance {
   private copyChan = ["in0", "copy"];
   private readChan = ["in0", "value"];
   private setChan = ["out0", "set"];
+
+  constructor(private op: (val: any) => any) {}
 
   createState(): any {
     return {
@@ -317,11 +333,7 @@ export class AssignCellMachine implements MachineInstance {
   }
 
   getSpec(): MachineSpec {
-    return sequence(
-      write(this.copyChan),
-      read(this.readChan),
-      write(this.setChan),
-    );
+    return UnaryCellSpec;
   }
 
   isCompleted(state: any): boolean {
@@ -358,7 +370,11 @@ export class AssignCellMachine implements MachineInstance {
 
     if (state.state === "writing") {
       return {
-        result: { kind: "write", channel: this.setChan, value: state.val },
+        result: {
+          kind: "write",
+          channel: this.setChan,
+          value: this.op(state.val),
+        },
         state: {
           ...state,
           state: "done",
@@ -367,6 +383,12 @@ export class AssignCellMachine implements MachineInstance {
     }
 
     return { result: { kind: "done" }, state };
+  }
+}
+
+export class AssignCellMachine extends UnaryCellMachine {
+  constructor() {
+    super((val) => val);
   }
 }
 
@@ -488,6 +510,28 @@ export class BinaryCellMachine implements MachineInstance {
 export class AddCellMachine extends BinaryCellMachine {
   constructor() {
     super((x, y) => x + y);
+  }
+}
+
+export const CharAtSpec = sequence(
+  concurrent({
+    in0: sequence(write(["copy"]), read(["value"])),
+    in1: sequence(write(["copy"]), read(["value"])),
+  }),
+  write(["out0", "set"]),
+);
+
+export class CharAtMachine extends BinaryCellMachine {
+  constructor() {
+    super((str, index) => {
+      if (typeof str !== "string") {
+        throw new Error("First argument must be a string");
+      }
+      if (typeof index !== "number" || !Number.isInteger(index)) {
+        throw new Error("Second argument must be an integer");
+      }
+      return str.charAt(index);
+    });
   }
 }
 
@@ -613,6 +657,12 @@ export class LessThanCellMachine extends BinaryPredicateCellMachine {
   }
 }
 
+export class AreEqualCellMachine extends BinaryPredicateCellMachine {
+  constructor() {
+    super((x, y) => x === y);
+  }
+}
+
 export const TestSpec = sequence(
   read(["input"]),
   choice({
@@ -676,4 +726,17 @@ export function createIterSpec(spec: MachineSpec): MachineSpec {
     read(["next"]),
     write(["none"]),
   );
+}
+
+export const StringLengthSpec = UnaryCellSpec;
+
+export class StringLengthMachine extends UnaryCellMachine {
+  constructor() {
+    super((val) => {
+      if (typeof val !== "string") {
+        throw new Error("Value is not a string");
+      }
+      return val.length;
+    });
+  }
 }

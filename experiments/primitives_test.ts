@@ -29,6 +29,13 @@ import {
   TestSpec,
   TestMachine,
   createIterSpec,
+  StringLengthMachine,
+  StringLengthSpec,
+  CharAtMachine,
+  CharAtSpec,
+  AreEqualMachine,
+  AreEqualSpec,
+  AreEqualCellMachine,
 } from "./primitives";
 
 class Runner {
@@ -607,5 +614,222 @@ describe("createIterSpec", () => {
       > none
     `);
     expect(checkTranscript(iterSpec, forbiddenDoubleNone)).toBe(false);
+  });
+});
+
+describe("StringLengthMachine", () => {
+  it("requests copy from in0 cell, reads its string value, and writes the length to out0", () => {
+    const machine = new Runner(new StringLengthMachine());
+    expect(machine.isCompleted()).toBe(false);
+
+    // Step 1: writes copy command to in0
+    let res = machine.step();
+    expect(res).toEqual({
+      kind: "write",
+      channel: ["in0", "copy"],
+      value: null,
+    });
+
+    // Step 2: reads the value from in0
+    res = machine.step({ channel: ["in0", "value"], value: "hello" });
+    expect(res).toEqual({
+      kind: "read",
+      channel: ["in0", "value"],
+      value: "hello",
+    });
+
+    // Step 3: writes the length (5) to out0
+    res = machine.step();
+    expect(res).toEqual({
+      kind: "write",
+      channel: ["out0", "set"],
+      value: 5,
+    });
+
+    expect(machine.isCompleted()).toBe(true);
+    expect(machine.step()).toEqual({ kind: "done" });
+  });
+
+  it("verifies valid transcripts against StringLengthSpec", () => {
+    const valid = parseTranscript(`
+      > in0.copy
+      < in0.value
+      > out0.set
+    `);
+    expect(checkTranscript(compileToSpec(StringLengthSpec), valid)).toBe(true);
+  });
+
+  it("throws an error when a non-string value is read", () => {
+    const machine = new Runner(new StringLengthMachine());
+    machine.step(); // write copy
+    machine.step({ channel: ["in0", "value"], value: 123 }); // read number 123
+    expect(() => {
+      machine.step(); // try to step (computes length)
+    }).toThrow("Value is not a string");
+  });
+});
+
+describe("CharAtMachine", () => {
+  it("requests copy from in0 and in1, reads value from both, and writes charAt index to out0", () => {
+    const machine = new Runner(new CharAtMachine());
+    expect(machine.isCompleted()).toBe(false);
+
+    // Initial state: outputs two copy writes in concurrent
+    let res = machine.step();
+    expect(res).toEqual({
+      kind: "write",
+      channel: ["in0", "copy"],
+      value: null,
+    });
+
+    res = machine.step();
+    expect(res).toEqual({
+      kind: "write",
+      channel: ["in1", "copy"],
+      value: null,
+    });
+
+    // Step 2: reads the value from both cells
+    res = machine.step({ channel: ["in0", "value"], value: "banana" });
+    expect(res).toEqual({
+      kind: "read",
+      channel: ["in0", "value"],
+      value: "banana",
+    });
+
+    res = machine.step({ channel: ["in1", "value"], value: 3 });
+    expect(res).toEqual({
+      kind: "read",
+      channel: ["in1", "value"],
+      value: 3,
+    });
+
+    // Step 3: writes the charAt value ("a") to out0
+    res = machine.step();
+    expect(res).toEqual({
+      kind: "write",
+      channel: ["out0", "set"],
+      value: "a",
+    });
+
+    expect(machine.isCompleted()).toBe(true);
+    expect(machine.step()).toEqual({ kind: "done" });
+  });
+
+  it("verifies valid transcripts against CharAtSpec", () => {
+    const valid = parseTranscript(`
+      > in0.copy
+      > in1.copy
+      < in0.value
+      < in1.value
+      > out0.set
+    `);
+    expect(checkTranscript(compileToSpec(CharAtSpec), valid)).toBe(true);
+  });
+
+  it("throws an error when non-string value is passed as first argument", () => {
+    const machine = new Runner(new CharAtMachine());
+    machine.step(); // write in0 copy
+    machine.step(); // write in1 copy
+    machine.step({ channel: ["in0", "value"], value: 123 }); // non-string value
+    machine.step({ channel: ["in1", "value"], value: 0 }); // index
+    expect(() => {
+      machine.step();
+    }).toThrow("First argument must be a string");
+  });
+
+  it("throws an error when non-integer index is passed", () => {
+    const machine = new Runner(new CharAtMachine());
+    machine.step(); // write in0 copy
+    machine.step(); // write in1 copy
+    machine.step({ channel: ["in0", "value"], value: "banana" }); // string
+    machine.step({ channel: ["in1", "value"], value: 1.5 }); // non-integer index
+    expect(() => {
+      machine.step();
+    }).toThrow("Second argument must be an integer");
+  });
+});
+
+describe("AreEqualMachine and AreEqualCellMachine", () => {
+  it("AreEqualMachine compares x and y and writes true/false output", () => {
+    // Equal case
+    {
+      const machine = new Runner(new AreEqualMachine());
+      expect(machine.step({ channel: ["in0"], value: 100 })).toEqual({
+        kind: "read",
+        channel: ["in0"],
+        value: 100,
+      });
+      expect(machine.step({ channel: ["in1"], value: 100 })).toEqual({
+        kind: "read",
+        channel: ["in1"],
+        value: 100,
+      });
+      expect(machine.step()).toEqual({
+        kind: "write",
+        channel: ["out0", "true"],
+        value: null,
+      });
+    }
+
+    // Not equal case
+    {
+      const machine = new Runner(new AreEqualMachine());
+      machine.step({ channel: ["in0"], value: 100 });
+      machine.step({ channel: ["in1"], value: 200 });
+      expect(machine.step()).toEqual({
+        kind: "write",
+        channel: ["out0", "false"],
+        value: null,
+      });
+    }
+  });
+
+  it("verifies valid transcripts against AreEqualSpec", () => {
+    const valid = parseTranscript(`
+      < in0
+      < in1
+      > out0.true
+    `);
+    expect(checkTranscript(compileToSpec(AreEqualSpec), valid)).toBe(true);
+  });
+
+  it("AreEqualCellMachine requests copy from cell in0 and in1, and writes true/false to cell out0", () => {
+    const cellIn0 = new ValueCellMachine(42);
+    const cellIn1 = new ValueCellMachine(42);
+    const cellTrue = new ValueCellMachine();
+    const cellFalse = new ValueCellMachine();
+    const eq = new AreEqualCellMachine();
+
+    const comp = new ConcurrentMachine({
+      in0: makeUnindexedCell(cellIn0),
+      in1: makeUnindexedCell(cellIn1),
+      t: makeUnindexedCell(cellTrue),
+      f: makeUnindexedCell(cellFalse),
+      eq: eq,
+    });
+
+    let wired = new TraceMachine(comp, ["eq", "in0"], ["in0"]);
+    wired = new TraceMachine(wired, ["eq", "in1"], ["in1"]);
+    wired = new TraceMachine(wired, ["eq", "out0", "true"], ["t", "set"]);
+    wired = new TraceMachine(wired, ["eq", "out0", "false"], ["f", "set"]);
+
+    const runner = new Runner(wired);
+    const res = runner.step();
+    expect(res).toEqual({ kind: "waiting" });
+
+    const cellTrueState = findStateForMachine(
+      wired,
+      runner.getState(),
+      cellTrue,
+    );
+    expect(cellTrue.getValue(cellTrueState)).toBe(null);
+
+    const cellFalseState = findStateForMachine(
+      wired,
+      runner.getState(),
+      cellFalse,
+    );
+    expect(cellFalse.getValue(cellFalseState)).toBeUndefined();
   });
 });
