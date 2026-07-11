@@ -7,9 +7,10 @@ export type StepResult =
     | { kind: "done" };
 
 export interface MachineInstance {
+    createState(): any;
     getSpec(): MachineSpec;
-    isCompleted(): boolean;
-    step(action?: { channel: string[]; value?: any }): StepResult;
+    isCompleted(state: any): boolean;
+    step(state: any, action?: { channel: string[]; value?: any }): { result: StepResult; state: any };
 }
 
 export function concatSpecs(a: MachineSpec, b: MachineSpec): MachineSpec {
@@ -24,36 +25,55 @@ export function concatSpecs(a: MachineSpec, b: MachineSpec): MachineSpec {
 
 export class SequenceMachine implements MachineInstance {
     private machines: MachineInstance[];
-    private currentIndex = 0;
 
     constructor(machines: MachineInstance[]) {
         this.machines = machines;
     }
 
+    createState(): any {
+        return {
+            currentIndex: 0,
+            states: this.machines.map(m => m.createState())
+        };
+    }
+
     getSpec(): MachineSpec {
         let spec: MachineSpec = { kind: "done" };
-        for (let i = this.machines.length - 1; i >= this.currentIndex; i--) {
+        for (let i = this.machines.length - 1; i >= 0; i--) {
             spec = concatSpecs(this.machines[i].getSpec(), spec);
         }
         return spec;
     }
 
-    isCompleted(): boolean {
-        return this.currentIndex >= this.machines.length || this.machines.slice(this.currentIndex).every(m => m.isCompleted());
+    isCompleted(state: any): boolean {
+        return state.currentIndex >= this.machines.length || 
+            this.machines.slice(state.currentIndex).every((m, idx) => m.isCompleted(state.states[state.currentIndex + idx]));
     }
 
-    step(action?: { channel: string[]; value?: any }): StepResult {
-        if (this.currentIndex >= this.machines.length) {
-            return { kind: "done" };
+    step(state: any, action?: { channel: string[]; value?: any }): { result: StepResult; state: any } {
+        if (state.currentIndex >= this.machines.length) {
+            return { result: { kind: "done" }, state };
         }
 
-        const active = this.machines[this.currentIndex];
-        const res = active.step(action);
-        if (res.kind === "done") {
-            this.currentIndex++;
-            return this.step(action);
+        const active = this.machines[state.currentIndex];
+        const activeState = state.states[state.currentIndex];
+        const { result, state: nextActiveState } = active.step(activeState, action);
+
+        const nextStates = [...state.states];
+        nextStates[state.currentIndex] = nextActiveState;
+        const nextState = {
+            ...state,
+            states: nextStates
+        };
+
+        if (result.kind === "done") {
+            const nextSeqState = {
+                ...nextState,
+                currentIndex: state.currentIndex + 1
+            };
+            return this.step(nextSeqState, action);
         }
-        return res;
+        return { result, state: nextState };
     }
 }
 
@@ -62,6 +82,14 @@ export class ConcurrentMachine implements MachineInstance {
 
     constructor(machines: Record<string, MachineInstance>) {
         this.machines = machines;
+    }
+
+    createState(): any {
+        const states: Record<string, any> = {};
+        for (const [key, sub] of Object.entries(this.machines)) {
+            states[key] = sub.createState();
+        }
+        return { states };
     }
 
     getSpec(): MachineSpec {
@@ -76,44 +104,62 @@ export class ConcurrentMachine implements MachineInstance {
         };
     }
 
-    isCompleted(): boolean {
-        return Object.values(this.machines).every(sub => sub.isCompleted());
+    isCompleted(state: any): boolean {
+        return Object.entries(this.machines).every(([key, sub]) => sub.isCompleted(state.states[key]));
     }
-    step(action?: { channel: string[]; value?: any }): StepResult {
+
+    step(state: any, action?: { channel: string[]; value?: any }): { result: StepResult; state: any } {
         if (action && action.channel.length > 0) {
             const key = action.channel[0];
             const sub = this.machines[key];
             if (!sub) {
-                return { kind: "waiting" };
+                return { result: { kind: "waiting" }, state };
             }
-            const res = sub.step({ channel: action.channel.slice(1), value: action.value });
-            if (res.kind === "read" || res.kind === "write") {
+            const activeState = state.states[key];
+            const { result, state: nextActiveState } = sub.step(activeState, { channel: action.channel.slice(1), value: action.value });
+            
+            const nextStates = {
+                ...state.states,
+                [key]: nextActiveState
+            };
+            const nextState = { ...state, states: nextStates };
+
+            if (result.kind === "read" || result.kind === "write") {
                 return {
-                    ...res,
-                    channel: [key, ...res.channel]
+                    result: {
+                        ...result,
+                        channel: [key, ...result.channel]
+                    },
+                    state: nextState
                 };
             }
-            return res;
+            return { result, state: nextState };
         }
 
         // Try to let sub-machines perform writes
+        let currentStates = { ...state.states };
         for (const [key, sub] of Object.entries(this.machines)) {
-            if (sub.isCompleted()) continue;
-            const res = sub.step();
-            if (res.kind === "write") {
+            const activeState = currentStates[key];
+            if (sub.isCompleted(activeState)) continue;
+            const { result, state: nextActiveState } = sub.step(activeState);
+            currentStates[key] = nextActiveState;
+            if (result.kind === "write") {
                 return {
-                    kind: "write",
-                    channel: [key, ...res.channel],
-                    value: res.value
+                    result: {
+                        kind: "write",
+                        channel: [key, ...result.channel],
+                        value: result.value
+                    },
+                    state: { ...state, states: currentStates }
                 };
             }
         }
 
-        if (this.isCompleted()) {
-            return { kind: "done" };
+        if (this.isCompleted({ ...state, states: currentStates })) {
+            return { result: { kind: "done" }, state: { ...state, states: currentStates } };
         }
 
-        return { kind: "waiting" };
+        return { result: { kind: "waiting" }, state: { ...state, states: currentStates } };
     }
 }
 
@@ -141,6 +187,12 @@ export class TraceMachine implements MachineInstance {
         this.pathB = pathB;
     }
 
+    createState(): any {
+        return {
+            innerState: this.inner.createState()
+        };
+    }
+
     getSpec(): MachineSpec {
         return {
             kind: "trace",
@@ -151,187 +203,249 @@ export class TraceMachine implements MachineInstance {
         };
     }
 
-    isCompleted(): boolean {
-        return this.inner.isCompleted();
+    isCompleted(state: any): boolean {
+        return this.inner.isCompleted(state.innerState);
     }
 
-    step(action?: { channel: string[]; value?: any }): StepResult {
+    step(state: any, action?: { channel: string[]; value?: any }): { result: StepResult; state: any } {
+        let innerState = state.innerState;
+        let res: StepResult;
+        
         if (action) {
-            const res = this.inner.step(action);
-            return this.processInternal(res);
+            const stepRes = this.inner.step(innerState, action);
+            res = stepRes.result;
+            innerState = stepRes.state;
+        } else {
+            const stepRes = this.inner.step(innerState);
+            res = stepRes.result;
+            innerState = stepRes.state;
         }
 
-        const res = this.inner.step();
-        return this.processInternal(res);
+        const processed = this.processInternal(innerState, res);
+        return {
+            result: processed.result,
+            state: { ...state, innerState: processed.innerState }
+        };
     }
 
-    private processInternal(res: StepResult): StepResult {
+    private processInternal(innerState: any, res: StepResult): { result: StepResult; innerState: any } {
         let current = res;
+        let currentInnerState = innerState;
         while (true) {
             if (current.kind === "write") {
                 const suffixA = getSuffix(current.channel, this.pathA);
                 if (suffixA !== null) {
-                    this.inner.step({ channel: [...this.pathB, ...suffixA], value: current.value });
-                    current = this.inner.step();
+                    const stepRes1 = this.inner.step(currentInnerState, { channel: [...this.pathB, ...suffixA], value: current.value });
+                    const stepRes2 = this.inner.step(stepRes1.state);
+                    current = stepRes2.result;
+                    currentInnerState = stepRes2.state;
                     continue;
                 }
                 const suffixB = getSuffix(current.channel, this.pathB);
                 if (suffixB !== null) {
-                    this.inner.step({ channel: [...this.pathA, ...suffixB], value: current.value });
-                    current = this.inner.step();
+                    const stepRes1 = this.inner.step(currentInnerState, { channel: [...this.pathA, ...suffixB], value: current.value });
+                    const stepRes2 = this.inner.step(stepRes1.state);
+                    current = stepRes2.result;
+                    currentInnerState = stepRes2.state;
                     continue;
                 }
             }
             if (current.kind === "read") {
                 if (getSuffix(current.channel, this.pathA) !== null || getSuffix(current.channel, this.pathB) !== null) {
-                    current = this.inner.step();
+                    const stepRes = this.inner.step(currentInnerState);
+                    current = stepRes.result;
+                    currentInnerState = stepRes.state;
                     continue;
                 }
             }
             break;
         }
-        return current;
+        return { result: current, innerState: currentInnerState };
     }
 }
 
 export class WriteConstantMachine implements MachineInstance {
-    private spec: MachineSpec;
-    private done = false;
+    constructor(private channel: string[], private value: any) {}
 
-    constructor(private channel: string[], private value: any) {
-        this.spec = build(write(channel));
+    createState(): any {
+        return {
+            done: false
+        };
     }
 
     getSpec(): MachineSpec {
-        return this.spec;
+        return build(write(this.channel));
     }
 
-    isCompleted(): boolean {
-        return this.done;
+    isCompleted(state: any): boolean {
+        return state.done;
     }
 
-    step(): StepResult {
-        if (this.done) return { kind: "done" };
-        this.spec = { kind: "done" };
-        this.done = true;
-        return { kind: "write", channel: this.channel, value: this.value };
+    step(state: any, action?: { channel: string[]; value?: any }): { result: StepResult; state: any } {
+        if (state.done) return { result: { kind: "done" }, state };
+        return {
+            result: { kind: "write", channel: this.channel, value: this.value },
+            state: {
+                done: true
+            }
+        };
     }
 }
 
 export class DiscardMachine implements MachineInstance {
-    private spec: MachineSpec;
-    private done = false;
-    private val: any = undefined;
+    constructor(private channel: string[]) {}
 
-    constructor(private channel: string[]) {
-        this.spec = build(read(channel));
+    createState(): any {
+        return {
+            done: false,
+            val: undefined
+        };
     }
 
     getSpec(): MachineSpec {
-        return this.spec;
+        return build(read(this.channel));
     }
 
-    isCompleted(): boolean {
-        return this.done;
+    isCompleted(state: any): boolean {
+        return state.done;
     }
 
-    getValue(): any {
-        return this.val;
+    getValue(state: any): any {
+        return state.val;
     }
 
-    step(action?: { channel: string[]; value?: any }): StepResult {
-        if (this.done) return { kind: "done" };
+    step(state: any, action?: { channel: string[]; value?: any }): { result: StepResult; state: any } {
+        if (state.done) return { result: { kind: "done" }, state };
         if (!action || !channelsEqual(action.channel, this.channel)) {
-            return { kind: "waiting" };
+            return { result: { kind: "waiting" }, state };
         }
-        this.spec = { kind: "done" };
-        this.done = true;
-        this.val = action.value;
-        return { kind: "read", channel: this.channel, value: action.value };
+        return {
+            result: { kind: "read", channel: this.channel, value: action.value },
+            state: {
+                done: true,
+                val: action.value
+            }
+        };
     }
 }
 
 export class LoopMachine implements MachineInstance {
-    private current: MachineInstance;
+    constructor(private factory: () => MachineInstance) {}
 
-    constructor(private factory: () => MachineInstance) {
-        this.current = this.factory();
+    createState(): any {
+        const sub = this.factory();
+        return {
+            sub,
+            subState: sub.createState()
+        };
     }
 
     getSpec(): MachineSpec {
-        return build(loop(this.current.getSpec()));
+        return build(loop(this.factory().getSpec()));
     }
 
-    isCompleted(): boolean {
+    isCompleted(state: any): boolean {
         return false;
     }
 
-    step(action?: { channel: string[]; value?: any }): StepResult {
-        if (this.current.isCompleted()) {
-            this.current = this.factory();
+    step(state: any, action?: { channel: string[]; value?: any }): { result: StepResult; state: any } {
+        let sub = state.sub;
+        let subState = state.subState;
+        if (sub.isCompleted(subState)) {
+            sub = this.factory();
+            subState = sub.createState();
         }
-        return this.current.step(action);
+        const { result, state: nextSubState } = sub.step(subState, action);
+        return {
+            result,
+            state: {
+                ...state,
+                sub,
+                subState: nextSubState
+            }
+        };
     }
 }
 
 export class DupMachine implements MachineInstance {
-    private spec: MachineSpec;
-    private state: "waiting" | "ready" | "done" = "waiting";
-    private val: any = undefined;
+    constructor(private inChannel: string[], private outKeys: string[]) {}
 
-    constructor(private inChannel: string[], private outKeys: string[]) {
+    createState(): any {
+        return {
+            state: "waiting",
+            remainingWrites: [...this.outKeys],
+            val: undefined
+        };
+    }
+
+    getSpec(): MachineSpec {
         const concurrentWrites = concurrent(
-            Object.fromEntries(outKeys.map(key => [key, build(write([]))]))
+            Object.fromEntries(this.outKeys.map(key => [key, build(write([]))]))
         );
-        this.spec = build(sequence(read(inChannel), concurrentWrites));
+        return build(sequence(read(this.inChannel), concurrentWrites));
     }
 
-    getSpec() {
-        return this.spec;
+    isCompleted(state: any): boolean {
+        return state.state === "done";
     }
 
-    isCompleted() {
-        return this.state === "done";
-    }
-
-    step(action?: { channel: string[]; value?: any }): StepResult {
-        if (this.state === "waiting") {
+    step(state: any, action?: { channel: string[]; value?: any }): { result: StepResult; state: any } {
+        if (state.state === "waiting") {
             if (!action || !channelsEqual(action.channel, this.inChannel)) {
-                return { kind: "waiting" };
+                return { result: { kind: "waiting" }, state };
             }
-            const next = transition(this.spec, { kind: "read", channel: this.inChannel });
-            if (!next) throw new Error("Invalid transition");
-            this.spec = next;
-            this.val = action.value;
-            this.state = "ready";
-            return { kind: "read", channel: this.inChannel, value: action.value };
-        }
-
-        if (this.state === "ready") {
-            const possible = getPossibleTransitions(this.spec);
-            const writeTrans = possible.find(t => t.kind === "write");
-            if (writeTrans) {
-                const next = transition(this.spec, writeTrans);
-                if (!next) throw new Error("Invalid transition");
-                this.spec = next;
-                if (isCompleted(this.spec)) {
-                    this.state = "done";
+            return {
+                result: { kind: "read", channel: this.inChannel, value: action.value },
+                state: {
+                    ...state,
+                    val: action.value,
+                    state: "ready"
                 }
-                return { kind: "write", channel: writeTrans.channel, value: this.val };
-            }
-            this.state = "done";
+            };
         }
 
-        return { kind: "done" };
+        if (state.state === "ready") {
+            if (state.remainingWrites.length > 0) {
+                const nextKey = state.remainingWrites[0];
+                const nextRemaining = state.remainingWrites.slice(1);
+                return {
+                    result: { kind: "write", channel: [nextKey], value: state.val },
+                    state: {
+                        ...state,
+                        remainingWrites: nextRemaining,
+                        state: nextRemaining.length === 0 ? "done" : "ready"
+                    }
+                };
+            }
+            return {
+                result: { kind: "done" },
+                state: {
+                    ...state,
+                    state: "done"
+                }
+            };
+        }
+
+        return { result: { kind: "done" }, state };
     }
 }
 
 export class ChoiceMachine implements MachineInstance {
     private machines: Record<string, MachineInstance>;
-    private selected?: string;
 
     constructor(machines: Record<string, MachineInstance>) {
         this.machines = machines;
+    }
+
+    createState(): any {
+        const states: Record<string, any> = {};
+        for (const [key, sub] of Object.entries(this.machines)) {
+            states[key] = sub.createState();
+        }
+        return {
+            selected: undefined,
+            states
+        };
     }
 
     getSpec(): MachineSpec {
@@ -342,46 +456,78 @@ export class ChoiceMachine implements MachineInstance {
         return {
             kind: "choice",
             choices: subSpecs,
-            then: { kind: "done" },
-            selected: this.selected,
-            current: this.selected ? this.machines[this.selected].getSpec() : undefined
+            then: { kind: "done" }
         };
     }
 
-    isCompleted(): boolean {
-        if (this.selected === undefined) {
+    isCompleted(state: any): boolean {
+        if (state.selected === undefined) {
             return false;
         }
-        return this.machines[this.selected].isCompleted();
+        return this.machines[state.selected].isCompleted(state.states[state.selected]);
     }
 
-    step(action?: { channel: string[]; value?: any }): StepResult {
-        if (this.selected !== undefined) {
-            return this.machines[this.selected].step(action);
+    step(state: any, action?: { channel: string[]; value?: any }): { result: StepResult; state: any } {
+        if (state.selected !== undefined) {
+            const sub = this.machines[state.selected];
+            const subState = state.states[state.selected];
+            const { result, state: nextSubState } = sub.step(subState, action);
+            const nextStates = {
+                ...state.states,
+                [state.selected]: nextSubState
+            };
+            return {
+                result,
+                state: {
+                    ...state,
+                    states: nextStates
+                }
+            };
         }
 
         if (action) {
             // Find which sub-machine can accept this read action
             for (const [key, sub] of Object.entries(this.machines)) {
+                const subState = state.states[key];
                 const next = transition(sub.getSpec(), { kind: "read", channel: action.channel });
                 if (next !== null) {
-                    this.selected = key;
-                    return sub.step(action);
+                    const { result, state: nextSubState } = sub.step(subState, action);
+                    const nextStates = {
+                        ...state.states,
+                        [key]: nextSubState
+                    };
+                    return {
+                        result,
+                        state: {
+                            ...state,
+                            selected: key,
+                            states: nextStates
+                        }
+                    };
                 }
             }
-            return { kind: "waiting" };
+            return { result: { kind: "waiting" }, state };
         }
 
         // Check if any sub-machine wants to write
+        const nextStates = { ...state.states };
         for (const [key, sub] of Object.entries(this.machines)) {
-            const res = sub.step();
-            if (res.kind === "write") {
-                this.selected = key;
-                return res;
+            const subState = nextStates[key];
+            const { result, state: nextSubState } = sub.step(subState);
+            nextStates[key] = nextSubState;
+            if (result.kind === "write") {
+                return {
+                    result,
+                    state: {
+                        ...state,
+                        selected: key,
+                        states: nextStates
+                    }
+                };
             }
         }
 
-        return { kind: "waiting" };
+        return { result: { kind: "waiting" }, state: { ...state, states: nextStates } };
     }
 }
 
@@ -394,6 +540,12 @@ export class PrefixMachine implements MachineInstance {
         this.prefixPath = prefixPath;
     }
 
+    createState(): any {
+        return {
+            innerState: this.inner.createState()
+        };
+    }
+
     getSpec(): MachineSpec {
         return {
             kind: "prefix",
@@ -403,22 +555,28 @@ export class PrefixMachine implements MachineInstance {
         };
     }
 
-    isCompleted(): boolean {
-        return this.inner.isCompleted();
+    isCompleted(state: any): boolean {
+        return this.inner.isCompleted(state.innerState);
     }
 
-    step(action?: { channel: string[]; value?: any }): StepResult {
+    step(state: any, action?: { channel: string[]; value?: any }): { result: StepResult; state: any } {
         if (action) {
             const suffix = getSuffix(action.channel, this.prefixPath);
             if (suffix === null) {
-                return { kind: "waiting" };
+                return { result: { kind: "waiting" }, state };
             }
-            const res = this.inner.step({ channel: suffix, value: action.value });
-            return this.wrapResult(res);
+            const { result, state: nextInnerState } = this.inner.step(state.innerState, { channel: suffix, value: action.value });
+            return {
+                result: this.wrapResult(result),
+                state: { ...state, innerState: nextInnerState }
+            };
         }
 
-        const res = this.inner.step();
-        return this.wrapResult(res);
+        const { result, state: nextInnerState } = this.inner.step(state.innerState);
+        return {
+            result: this.wrapResult(result),
+            state: { ...state, innerState: nextInnerState }
+        };
     }
 
     private wrapResult(res: StepResult): StepResult {
@@ -441,6 +599,12 @@ export class RenameMachine implements MachineInstance {
         this.mapping = mapping;
     }
 
+    createState(): any {
+        return {
+            innerState: this.inner.createState()
+        };
+    }
+
     getSpec(): MachineSpec {
         return {
             kind: "rename",
@@ -450,22 +614,28 @@ export class RenameMachine implements MachineInstance {
         };
     }
 
-    isCompleted(): boolean {
-        return this.inner.isCompleted();
+    isCompleted(state: any): boolean {
+        return this.inner.isCompleted(state.innerState);
     }
 
-    step(action?: { channel: string[]; value?: any }): StepResult {
+    step(state: any, action?: { channel: string[]; value?: any }): { result: StepResult; state: any } {
         if (action) {
             const mappedChan = this.translateOuterToInner(action.channel);
             if (mappedChan === null) {
-                return { kind: "waiting" };
+                return { result: { kind: "waiting" }, state };
             }
-            const res = this.inner.step({ channel: mappedChan, value: action.value });
-            return this.wrapResult(res);
+            const { result, state: nextInnerState } = this.inner.step(state.innerState, { channel: mappedChan, value: action.value });
+            return {
+                result: this.wrapResult(result),
+                state: { ...state, innerState: nextInnerState }
+            };
         }
 
-        const res = this.inner.step();
-        return this.wrapResult(res);
+        const { result, state: nextInnerState } = this.inner.step(state.innerState);
+        return {
+            result: this.wrapResult(result),
+            state: { ...state, innerState: nextInnerState }
+        };
     }
 
     private translateOuterToInner(chan: string[]): string[] | null {
@@ -506,7 +676,7 @@ export class RenameMachine implements MachineInstance {
 
 export class IndexedMachine implements MachineInstance {
     private factory: () => MachineInstance;
-    private active: Record<string, MachineInstance> = {};
+    private active: Record<string, MachineInstance>;
     private templateSpec: MachineSpec;
 
     constructor(factory: () => MachineInstance, active: Record<string, MachineInstance> = {}) {
@@ -514,6 +684,16 @@ export class IndexedMachine implements MachineInstance {
         this.active = active;
         const dummy = factory();
         this.templateSpec = dummy.getSpec();
+    }
+
+    createState(): any {
+        const activeStates: Record<string, any> = {};
+        for (const [key, sub] of Object.entries(this.active)) {
+            activeStates[key] = sub.createState();
+        }
+        return {
+            activeStates
+        };
     }
 
     getSpec(): MachineSpec {
@@ -529,52 +709,103 @@ export class IndexedMachine implements MachineInstance {
         };
     }
 
-    isCompleted(): boolean {
-        return Object.values(this.active).every(sub => sub.isCompleted());
+
+    isCompleted(state: any): boolean {
+        return Object.entries(state.activeStates).every(([key, subState]) => {
+            const sub = this.factory();
+            return sub.isCompleted(subState);
+        });
     }
 
-    step(action?: { channel: string[]; value?: any }): StepResult {
+    step(state: any, action?: { channel: string[]; value?: any }): { result: StepResult; state: any } {
         if (action && action.channel.length > 0) {
             const index = action.channel[0];
             const suffix = action.channel.slice(1);
             
-            if (!this.active[index]) {
-                this.active[index] = this.factory();
+            const sub = this.factory();
+            let subState = state.activeStates[index];
+            if (!subState) {
+                subState = sub.createState();
             }
             
-            const sub = this.active[index];
-            const res = sub.step({ channel: suffix, value: action.value });
+            const { result, state: nextSubState } = sub.step(subState, { channel: suffix, value: action.value });
             
-            if (sub.isCompleted()) {
-                delete this.active[index];
+            const nextActiveStates = { ...state.activeStates };
+            if (sub.isCompleted(nextSubState)) {
+                delete nextActiveStates[index];
+            } else {
+                nextActiveStates[index] = nextSubState;
             }
             
-            if (res.kind === "read" || res.kind === "write") {
+            const nextState = {
+                ...state,
+                activeStates: nextActiveStates
+            };
+
+            if (result.kind === "read" || result.kind === "write") {
                 return {
-                    ...res,
-                    channel: [index, ...res.channel]
+                    result: {
+                        ...result,
+                        channel: [index, ...result.channel]
+                    },
+                    state: nextState
                 };
             }
-            return res;
+            return { result, state: nextState };
         }
 
-        for (const [key, sub] of Object.entries(this.active)) {
-            const res = sub.step();
-            if (res.kind === "write") {
-                if (sub.isCompleted()) {
-                    delete this.active[key];
+        const nextActiveStates = { ...state.activeStates };
+        for (const [key, subState] of Object.entries(state.activeStates)) {
+            const sub = this.factory();
+            const { result, state: nextSubState } = sub.step(subState);
+            nextActiveStates[key] = nextSubState;
+            if (result.kind === "write") {
+                if (sub.isCompleted(nextSubState)) {
+                    delete nextActiveStates[key];
                 }
                 return {
-                    kind: "write",
-                    channel: [key, ...res.channel],
-                    value: res.value
+                    result: {
+                        kind: "write",
+                        channel: [key, ...result.channel],
+                        value: result.value
+                    },
+                    state: {
+                        ...state,
+                        activeStates: nextActiveStates
+                    }
                 };
             }
         }
 
-        return { kind: "waiting" };
+        return { result: { kind: "waiting" }, state: { ...state, activeStates: nextActiveStates } };
     }
 }
+
+export function findStateForMachine(machine: MachineInstance, state: any, target: MachineInstance): any | null {
+    if (machine === target) {
+        return state;
+    }
+    if (machine instanceof TraceMachine) {
+        return findStateForMachine((machine as any).inner, state.innerState, target);
+    }
+    if (machine instanceof RenameMachine) {
+        return findStateForMachine((machine as any).inner, state.innerState, target);
+    }
+    if (machine instanceof ConcurrentMachine) {
+        for (const [key, sub] of Object.entries((machine as any).machines)) {
+            const found = findStateForMachine(sub as MachineInstance, state.states[key], target);
+            if (found !== null) return found;
+        }
+    }
+    if (machine instanceof SequenceMachine) {
+        for (let i = 0; i < (machine as any).machines.length; i++) {
+            const found = findStateForMachine((machine as any).machines[i], state.states[i], target);
+            if (found !== null) return found;
+        }
+    }
+    return null;
+}
+
 
 
 

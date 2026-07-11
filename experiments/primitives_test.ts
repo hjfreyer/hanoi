@@ -1,5 +1,5 @@
 import { parseTranscript, checkTranscript } from "./spec";
-import { ConcurrentMachine, TraceMachine, SequenceMachine, WriteConstantMachine, RenameMachine } from "./impl";
+import { ConcurrentMachine, TraceMachine, SequenceMachine, WriteConstantMachine, RenameMachine, findStateForMachine } from "./impl";
 import {
     ValueCellSpec,
     UninitValueCellSpec,
@@ -16,6 +16,27 @@ import {
     TestMachine
 } from "./primitives";
 
+class Runner {
+    private state: any;
+    constructor(private machine: any) {
+        this.state = machine.createState();
+    }
+    isCompleted(): boolean {
+        return this.machine.isCompleted(this.state);
+    }
+    getSpec(): any {
+        return this.machine.getSpec(this.state);
+    }
+    step(action?: { channel: string[]; value?: any }): any {
+        const { result, state } = this.machine.step(this.state, action);
+        this.state = state;
+        return result;
+    }
+    getState(): any {
+        return this.state;
+    }
+}
+
 function makeUnindexedCell(cell: ValueCellMachine): RenameMachine {
     return new RenameMachine(cell, [
         [["p0", "copy"], ["copy"]],
@@ -26,7 +47,7 @@ function makeUnindexedCell(cell: ValueCellMachine): RenameMachine {
 
 describe("ValueCell example", () => {
     it("can set and copy values step-by-step", () => {
-        const machine = new ValueCellMachine(42);
+        const machine = new Runner(new ValueCellMachine(42));
 
         // Initially copy should return 42
         let res = machine.step({ channel: ["p0", "copy"], value: null });
@@ -61,14 +82,14 @@ describe("ValueCell example", () => {
 
 describe("UninitValueCell example", () => {
     it("fails if machine tries to copy before set", () => {
-        const machine = new ValueCellMachine();
+        const machine = new Runner(new ValueCellMachine());
         // Trying to step copy before setting should not be accepted/should return waiting
         const res = machine.step({ channel: ["p0", "copy"], value: null });
         expect(res).toEqual({ kind: "waiting" });
     });
 
     it("can set first and then copy", () => {
-        const machine = new ValueCellMachine();
+        const machine = new Runner(new ValueCellMachine());
 
         // Set value to 25
         let res = machine.step({ channel: ["p0", "set"], value: 25 });
@@ -101,7 +122,7 @@ describe("UninitValueCell example", () => {
 
 describe("AddMachine example", () => {
     it("can read in0 and in1 in any order and writes sum to out0", () => {
-        const machine = new AddMachine();
+        const machine = new Runner(new AddMachine());
         expect(machine.isCompleted()).toBe(false);
         expect(machine.step()).toEqual({ kind: "waiting" });
 
@@ -161,12 +182,14 @@ describe("Automated AddMachine Wiring", () => {
 
         // Execute the entire pipeline in one single step!
         // It runs silently and terminates since there are no more active writes.
-        const res = wired.step();
+        const runner = new Runner(wired);
+        const res = runner.step();
         expect(res).toEqual({ kind: "done" });
-        expect(wired.isCompleted()).toBe(true);
+        expect(runner.isCompleted()).toBe(true);
 
         // Verify cellOut0 has stored the correct sum of 30!
-        expect(cellOut0.getValue()).toBe(30);
+        const cellOut0State = findStateForMachine(wired, runner.getState(), cellOut0);
+        expect(cellOut0.getValue(cellOut0State)).toBe(30);
     });
 });
 
@@ -174,7 +197,7 @@ describe("LessThanMachine example", () => {
     it("compares x and y and writes to true or false", () => {
         // Test case 1: x < y is true
         {
-            const machine = new LessThanMachine();
+            const machine = new Runner(new LessThanMachine());
             expect(machine.isCompleted()).toBe(false);
             expect(machine.step()).toEqual({ kind: "waiting" });
             expect(machine.step({ channel: ["in0"], value: 10 })).toEqual({ kind: "read", channel: ["in0"], value: 10 });
@@ -185,7 +208,7 @@ describe("LessThanMachine example", () => {
 
         // Test case 2: in0 < in1 is false
         {
-            const machine = new LessThanMachine();
+            const machine = new Runner(new LessThanMachine());
             expect(machine.step({ channel: ["in0"], value: 50 })).toEqual({ kind: "read", channel: ["in0"], value: 50 });
             expect(machine.step({ channel: ["in1"], value: 20 })).toEqual({ kind: "read", channel: ["in1"], value: 20 });
             expect(machine.step()).toEqual({ kind: "write", channel: ["out0", "false"], value: null });
@@ -222,14 +245,14 @@ describe("BinaryPredicateMachine example (Equals)", () => {
     it("compares in0 and in1 and writes true/false output", () => {
         // Equal case
         {
-            const machine = new BinaryPredicateMachine((x, y) => x === y);
+            const machine = new Runner(new BinaryPredicateMachine((x, y) => x === y));
             expect(machine.step({ channel: ["in0"], value: 10 })).toEqual({ kind: "read", channel: ["in0"], value: 10 });
             expect(machine.step({ channel: ["in1"], value: 10 })).toEqual({ kind: "read", channel: ["in1"], value: 10 });
             expect(machine.step()).toEqual({ kind: "write", channel: ["out0", "true"], value: null });
         }
         // Not equal case
         {
-            const machine = new BinaryPredicateMachine((x, y) => x === y);
+            const machine = new Runner(new BinaryPredicateMachine((x, y) => x === y));
             expect(machine.step({ channel: ["in0"], value: 10 })).toEqual({ kind: "read", channel: ["in0"], value: 10 });
             expect(machine.step({ channel: ["in1"], value: 20 })).toEqual({ kind: "read", channel: ["in1"], value: 20 });
             expect(machine.step()).toEqual({ kind: "write", channel: ["out0", "false"], value: null });
@@ -255,10 +278,12 @@ describe("AddCellMachine", () => {
         wired = new TraceMachine(wired, ["add", "in1"], ["in1"]);
         wired = new TraceMachine(wired, ["add", "out0"], ["out0"]);
 
-        const res = wired.step();
+        const runner = new Runner(wired);
+        const res = runner.step();
         expect(res).toEqual({ kind: "done" });
 
-        expect(cellOut0.getValue()).toBe(30);
+        const cellOut0State = findStateForMachine(wired, runner.getState(), cellOut0);
+        expect(cellOut0.getValue(cellOut0State)).toBe(30);
     });
 });
 
@@ -285,11 +310,15 @@ describe("LessThanCellMachine", () => {
             wired = new TraceMachine(wired, ["lessThan", "out0", "true"], ["t", "set"]);
             wired = new TraceMachine(wired, ["lessThan", "out0", "false"], ["f", "set"]);
 
-            const res = wired.step();
+            const runner = new Runner(wired);
+            const res = runner.step();
             expect(res).toEqual({ kind: "waiting" });
 
-            expect(cellTrue.getValue()).toBe(null);
-            expect(cellFalse.getValue()).toBeUndefined();
+            const cellTrueState = findStateForMachine(wired, runner.getState(), cellTrue);
+            expect(cellTrue.getValue(cellTrueState)).toBe(null);
+
+            const cellFalseState = findStateForMachine(wired, runner.getState(), cellFalse);
+            expect(cellFalse.getValue(cellFalseState)).toBeUndefined();
         }
 
         // Case 2: 50 < 20 (false)
@@ -313,18 +342,22 @@ describe("LessThanCellMachine", () => {
             wired = new TraceMachine(wired, ["lessThan", "out0", "true"], ["t", "set"]);
             wired = new TraceMachine(wired, ["lessThan", "out0", "false"], ["f", "set"]);
 
-            const res = wired.step();
+            const runner = new Runner(wired);
+            const res = runner.step();
             expect(res).toEqual({ kind: "waiting" });
 
-            expect(cellTrue.getValue()).toBeUndefined();
-            expect(cellFalse.getValue()).toBe(null);
+            const cellTrueState = findStateForMachine(wired, runner.getState(), cellTrue);
+            expect(cellTrue.getValue(cellTrueState)).toBeUndefined();
+
+            const cellFalseState = findStateForMachine(wired, runner.getState(), cellFalse);
+            expect(cellFalse.getValue(cellFalseState)).toBe(null);
         }
     });
 });
 
 describe("TestMachine", () => {
     it("outputs true when input is true", () => {
-        const machine = new TestMachine();
+        const machine = new Runner(new TestMachine());
         expect(machine.isCompleted()).toBe(false);
 
         expect(machine.step()).toEqual({ kind: "waiting" });
@@ -346,7 +379,7 @@ describe("TestMachine", () => {
     });
 
     it("outputs false when input is false", () => {
-        const machine = new TestMachine();
+        const machine = new Runner(new TestMachine());
         expect(machine.isCompleted()).toBe(false);
 
         expect(machine.step({ channel: ["input"], value: false })).toEqual({

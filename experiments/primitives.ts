@@ -23,61 +23,63 @@ export const UninitValueCellSpec = build(sequence(
 
 // 2. Implement the unified ValueCellMachine using MachineInstance
 export class ValueCellMachine implements MachineInstance {
-    private spec: MachineSpec;
-    private value: any;
+    constructor(private initialValue?: any) {}
 
-    constructor(initialValue?: any) {
-        if (initialValue !== undefined) {
-            this.value = initialValue;
-            this.spec = ValueCellSpec;
-        } else {
-            this.spec = UninitValueCellSpec;
-        }
+    createState(): any {
+        return {
+            value: this.initialValue,
+            pendingWriteIndex: undefined
+        };
     }
 
-    getValue() {
-        return this.value;
+    getValue(state: any): any {
+        return state.value;
     }
 
-    getSpec() {
-        return this.spec;
+    getSpec(): MachineSpec {
+        return this.initialValue !== undefined ? ValueCellSpec : UninitValueCellSpec;
     }
 
-    isCompleted() {
-        return isCompleted(this.spec);
+    isCompleted(state: any): boolean {
+        return state.value !== undefined && state.pendingWriteIndex === undefined;
     }
 
-    step(action?: { channel: string[]; value?: any }): StepResult {
+    step(state: any, action?: { channel: string[]; value?: any }): { result: StepResult; state: any } {
         if (action) {
-            const isWrite = action.channel[action.channel.length - 1] === "value";
-            const transcriptKind = isWrite ? "write" : "read";
-            
-            const nextSpec = transition(this.spec, { kind: transcriptKind, channel: action.channel });
-            if (!nextSpec) {
-                return { kind: "waiting" };
+            const lastSegment = action.channel[action.channel.length - 1];
+            const prefix = action.channel.slice(0, -1);
+            if (lastSegment === "set") {
+                return {
+                    result: { kind: "read", channel: action.channel, value: action.value },
+                    state: {
+                        value: action.value,
+                        pendingWriteIndex: undefined
+                    }
+                };
             }
-            
-            this.spec = nextSpec;
-            if (action.channel[action.channel.length - 1] === "set") {
-                this.value = action.value;
+            if (lastSegment === "copy" && state.value !== undefined) {
+                return {
+                    result: { kind: "read", channel: action.channel, value: action.value },
+                    state: {
+                        ...state,
+                        pendingWriteIndex: prefix
+                    }
+                };
             }
-            return { kind: transcriptKind, channel: action.channel, value: action.value };
+            return { result: { kind: "waiting" }, state };
         }
 
-        const possible = getPossibleTransitions(this.spec);
-        const writeTransitions = possible.filter(t => t.kind === "write");
-        
-        
-        if (writeTransitions.length > 0) {
-            const t = writeTransitions[0];
-            const nextSpec = transition(this.spec, t);
-            if (nextSpec) {
-                this.spec = nextSpec;
-                return { kind: "write", channel: t.channel, value: this.value };
-            }
+        if (state.pendingWriteIndex !== undefined) {
+            return {
+                result: { kind: "write", channel: [...state.pendingWriteIndex, "value"], value: state.value },
+                state: {
+                    ...state,
+                    pendingWriteIndex: undefined
+                }
+            };
         }
 
-        return { kind: "waiting" };
+        return { result: { kind: "waiting" }, state };
     }
 }
 
@@ -94,57 +96,72 @@ export const AddSpec = BinaryValueSpec;
 
 // 4. Implement the BinaryValueMachine using MachineInstance
 export class BinaryValueMachine implements MachineInstance {
-    private spec = BinaryValueSpec;
-    private xVal?: any;
-    private yVal?: any;
-    private state: "waiting" | "ready_z" | "done" = "waiting";
-
     constructor(private op: (x: any, y: any) => any) {}
 
-    getSpec() {
-        return this.spec;
+    createState(): any {
+        return {
+            xVal: undefined,
+            yVal: undefined,
+            state: "waiting"
+        };
     }
 
-    isCompleted() {
-        return isCompleted(this.spec);
+    getSpec(): MachineSpec {
+        return BinaryValueSpec;
     }
 
-    step(action?: { channel: string[]; value?: any }): StepResult {
-        if (this.state === "waiting") {
+    isCompleted(state: any): boolean {
+        return state.state === "done";
+    }
+
+    step(state: any, action?: { channel: string[]; value?: any }): { result: StepResult; state: any } {
+        if (state.state === "waiting") {
             if (!action) {
-                return { kind: "waiting" };
+                return { result: { kind: "waiting" }, state };
             }
             if (action.channel[0] === "in0") {
-                const next = transition(this.spec, { kind: "read", channel: ["in0"] });
-                if (!next) throw new Error("Invalid transition");
-                this.spec = next;
-                this.xVal = action.value;
-                this.checkReady();
-                return { kind: "read", channel: ["in0"], value: action.value };
+                const nextState = {
+                    ...state,
+                    xVal: action.value
+                };
+                const finalState = this.checkReady(nextState);
+                return {
+                    result: { kind: "read", channel: ["in0"], value: action.value },
+                    state: finalState
+                };
             }
             if (action.channel[0] === "in1") {
-                const next = transition(this.spec, { kind: "read", channel: ["in1"] });
-                if (!next) throw new Error("Invalid transition");
-                this.spec = next;
-                this.yVal = action.value;
-                this.checkReady();
-                return { kind: "read", channel: ["in1"], value: action.value };
+                const nextState = {
+                    ...state,
+                    yVal: action.value
+                };
+                const finalState = this.checkReady(nextState);
+                return {
+                    result: { kind: "read", channel: ["in1"], value: action.value },
+                    state: finalState
+                };
             }
             throw new Error(`Invalid channel: ${action.channel}`);
-        } else if (this.state === "ready_z") {
-            const next = transition(this.spec, { kind: "write", channel: ["out0"] });
-            if (!next) throw new Error("Invalid transition");
-            this.spec = next;
-            this.state = "done";
-            return { kind: "write", channel: ["out0"], value: this.op(this.xVal, this.yVal) };
+        } else if (state.state === "ready_z") {
+            return {
+                result: { kind: "write", channel: ["out0"], value: this.op(state.xVal, state.yVal) },
+                state: {
+                    ...state,
+                    state: "done"
+                }
+            };
         }
-        return { kind: "done" };
+        return { result: { kind: "done" }, state };
     }
 
-    private checkReady() {
-        if (this.xVal !== undefined && this.yVal !== undefined) {
-            this.state = "ready_z";
+    private checkReady(state: any): any {
+        if (state.xVal !== undefined && state.yVal !== undefined) {
+            return {
+                ...state,
+                state: "ready_z"
+            };
         }
+        return state;
     }
 }
 
@@ -168,58 +185,73 @@ export const BinaryPredicateSpec = build(sequence(
 export const LessThanSpec = BinaryPredicateSpec;
 
 export class BinaryPredicateMachine implements MachineInstance {
-    private spec = BinaryPredicateSpec;
-    private xVal?: any;
-    private yVal?: any;
-    private state: "waiting" | "ready_output" | "done" = "waiting";
-
     constructor(private pred: (x: any, y: any) => boolean) {}
 
-    getSpec() {
-        return this.spec;
+    createState(): any {
+        return {
+            xVal: undefined,
+            yVal: undefined,
+            state: "waiting"
+        };
     }
 
-    isCompleted() {
-        return this.state === "done";
+    getSpec(): MachineSpec {
+        return BinaryPredicateSpec;
     }
 
-    step(action?: { channel: string[]; value?: any }): StepResult {
-        if (this.state === "waiting") {
+    isCompleted(state: any): boolean {
+        return state.state === "done";
+    }
+
+    step(state: any, action?: { channel: string[]; value?: any }): { result: StepResult; state: any } {
+        if (state.state === "waiting") {
             if (!action) {
-                return { kind: "waiting" };
+                return { result: { kind: "waiting" }, state };
             }
             if (action.channel[0] === "in0") {
-                const next = transition(this.spec, { kind: "read", channel: ["in0"] });
-                if (!next) throw new Error("Invalid transition on in0");
-                this.spec = next;
-                this.xVal = action.value;
-                this.checkReady();
-                return { kind: "read", channel: ["in0"], value: action.value };
+                const nextState = {
+                    ...state,
+                    xVal: action.value
+                };
+                const finalState = this.checkReady(nextState);
+                return {
+                    result: { kind: "read", channel: ["in0"], value: action.value },
+                    state: finalState
+                };
             }
             if (action.channel[0] === "in1") {
-                const next = transition(this.spec, { kind: "read", channel: ["in1"] });
-                if (!next) throw new Error("Invalid transition on in1");
-                this.spec = next;
-                this.yVal = action.value;
-                this.checkReady();
-                return { kind: "read", channel: ["in1"], value: action.value };
+                const nextState = {
+                    ...state,
+                    yVal: action.value
+                };
+                const finalState = this.checkReady(nextState);
+                return {
+                    result: { kind: "read", channel: ["in1"], value: action.value },
+                    state: finalState
+                };
             }
             throw new Error(`Invalid channel: ${action.channel}`);
-        } else if (this.state === "ready_output") {
-            const outChan = this.pred(this.xVal, this.yVal) ? ["out0", "true"] : ["out0", "false"];
-            const next = transition(this.spec, { kind: "write", channel: outChan });
-            if (!next) throw new Error(`Invalid transition on write ${outChan.join(".")}`);
-            this.spec = next;
-            this.state = "done";
-            return { kind: "write", channel: outChan, value: null };
+        } else if (state.state === "ready_output") {
+            const outChan = this.pred(state.xVal, state.yVal) ? ["out0", "true"] : ["out0", "false"];
+            return {
+                result: { kind: "write", channel: outChan, value: null },
+                state: {
+                    ...state,
+                    state: "done"
+                }
+            };
         }
-        return { kind: "done" };
+        return { result: { kind: "done" }, state };
     }
 
-    private checkReady() {
-        if (this.xVal !== undefined && this.yVal !== undefined) {
-            this.state = "ready_output";
+    private checkReady(state: any): any {
+        if (state.xVal !== undefined && state.yVal !== undefined) {
+            return {
+                ...state,
+                state: "ready_output"
+            };
         }
+        return state;
     }
 }
 
@@ -231,88 +263,84 @@ export class LessThanMachine extends BinaryPredicateMachine {
 
 // 5. Implement AssignCellMachine
 export class AssignCellMachine implements MachineInstance {
-    private spec: MachineSpec;
-    private state: "copying" | "reading" | "writing" | "done" = "copying";
-    private val: any;
-    private copyChan: string[];
-    private readChan: string[];
-    private setChan: string[];
+    private copyChan = ["in0", "copy"];
+    private readChan = ["in0", "value"];
+    private setChan = ["out0", "set"];
 
-    constructor() {
-        this.copyChan = ["in0", "copy"];
-        this.readChan = ["in0", "value"];
-        this.setChan = ["out0", "set"];
-        this.spec = build(sequence(
+    createState(): any {
+        return {
+            state: "copying",
+            val: undefined
+        };
+    }
+
+    getSpec(): MachineSpec {
+        return build(sequence(
             write(this.copyChan),
             read(this.readChan),
             write(this.setChan)
         ));
     }
 
-    getSpec() {
-        return this.spec;
+    isCompleted(state: any): boolean {
+        return state.state === "done";
     }
 
-    isCompleted() {
-        return this.state === "done";
-    }
-
-    step(action?: { channel: string[]; value?: any }): StepResult {
-        if (this.state === "copying") {
-            const possible = getPossibleTransitions(this.spec);
-            const writeTrans = possible.find(t => t.kind === "write");
-            if (writeTrans) {
-                const nextSpec = transition(this.spec, writeTrans);
-                if (!nextSpec) throw new Error("Invalid transition on copy");
-                this.spec = nextSpec;
-                this.state = "reading";
-                return { kind: "write", channel: writeTrans.channel, value: null };
-            }
-            this.state = "reading";
+    step(state: any, action?: { channel: string[]; value?: any }): { result: StepResult; state: any } {
+        if (state.state === "copying") {
+            return {
+                result: { kind: "write", channel: this.copyChan, value: null },
+                state: {
+                    ...state,
+                    state: "reading"
+                }
+            };
         }
 
-        if (this.state === "reading") {
+        if (state.state === "reading") {
             if (!action || !channelsEqual(action.channel, this.readChan)) {
-                return { kind: "waiting" };
+                return { result: { kind: "waiting" }, state };
             }
-            const nextSpec = transition(this.spec, { kind: "read", channel: this.readChan });
-            if (!nextSpec) throw new Error("Invalid transition on read");
-            this.spec = nextSpec;
-            this.val = action.value;
-            this.state = "writing";
-            return { kind: "read", channel: this.readChan, value: action.value };
+            return {
+                result: { kind: "read", channel: this.readChan, value: action.value },
+                state: {
+                    ...state,
+                    val: action.value,
+                    state: "writing"
+                }
+            };
         }
 
-        if (this.state === "writing") {
-            const possible = getPossibleTransitions(this.spec);
-            const writeTrans = possible.find(t => t.kind === "write");
-            if (writeTrans) {
-                const nextSpec = transition(this.spec, writeTrans);
-                if (!nextSpec) throw new Error("Invalid transition on set");
-                this.spec = nextSpec;
-                this.state = "done";
-                return { kind: "write", channel: writeTrans.channel, value: this.val };
-            }
-            this.state = "done";
+        if (state.state === "writing") {
+            return {
+                result: { kind: "write", channel: this.setChan, value: state.val },
+                state: {
+                    ...state,
+                    state: "done"
+                }
+            };
         }
 
-        return { kind: "done" };
+        return { result: { kind: "done" }, state };
     }
 }
 
 // 6. Implement BinaryCellMachine and AddCellMachine
 export class BinaryCellMachine implements MachineInstance {
-    private spec: MachineSpec;
-    private state: "reading" | "writing" | "done" = "reading";
-    private xVal: any = 0;
-    private yVal: any = 0;
-    private remainingReads = new Set<string>();
+    constructor(private op: (x: any, y: any) => any) {}
 
-    constructor(private op: (x: any, y: any) => any) {
-        this.remainingReads.add("in0");
-        this.remainingReads.add("in1");
+    createState(): any {
+        return {
+            in0State: "writing_copy", // "writing_copy" | "reading" | "done"
+            in1State: "writing_copy", // "writing_copy" | "reading" | "done"
+            xVal: 0,
+            yVal: 0,
+            state: "reading_phase" // "reading_phase" | "writing_phase" | "done"
+        };
+    }
 
-        this.spec = build(sequence(
+    getSpec(): MachineSpec {
+        return build(sequence(
             concurrent({
                 in0: build(sequence(write(["copy"]), read(["value"]))),
                 in1: build(sequence(write(["copy"]), read(["value"])))
@@ -321,60 +349,77 @@ export class BinaryCellMachine implements MachineInstance {
         ));
     }
 
-    getSpec() {
-        return this.spec;
+    isCompleted(state: any): boolean {
+        return state.state === "done";
     }
 
-    isCompleted() {
-        return this.state === "done";
-    }
-
-    step(action?: { channel: string[]; value?: any }): StepResult {
-        if (this.state === "reading") {
+    step(state: any, action?: { channel: string[]; value?: any }): { result: StepResult; state: any } {
+        if (state.state === "reading_phase") {
             if (action) {
                 const key = action.channel[0];
-                if (this.remainingReads.has(key)) {
-                    const nextSpec = transition(this.spec, { kind: "read", channel: action.channel });
-                    if (nextSpec) {
-                        this.spec = nextSpec;
-                        if (key === "in0") this.xVal = action.value;
-                        else if (key === "in1") this.yVal = action.value;
-
-                        this.remainingReads.delete(key);
-                        if (this.remainingReads.size === 0) {
-                            this.state = "writing";
+                const last = action.channel[action.channel.length - 1];
+                if (key === "in0" && last === "value" && state.in0State === "reading") {
+                    const nextIn0State = "done";
+                    const isAllDone = nextIn0State === "done" && state.in1State === "done";
+                    return {
+                        result: { kind: "read", channel: action.channel, value: action.value },
+                        state: {
+                            ...state,
+                            in0State: nextIn0State,
+                            xVal: action.value,
+                            state: isAllDone ? "writing_phase" : "reading_phase"
                         }
-                        return { kind: "read", channel: action.channel, value: action.value };
-                    }
+                    };
                 }
+                if (key === "in1" && last === "value" && state.in1State === "reading") {
+                    const nextIn1State = "done";
+                    const isAllDone = state.in0State === "done" && nextIn1State === "done";
+                    return {
+                        result: { kind: "read", channel: action.channel, value: action.value },
+                        state: {
+                            ...state,
+                            in1State: nextIn1State,
+                            yVal: action.value,
+                            state: isAllDone ? "writing_phase" : "reading_phase"
+                        }
+                    };
+                }
+                return { result: { kind: "waiting" }, state };
             }
 
-            const possible = getPossibleTransitions(this.spec);
-            const writeTrans = possible.find(t => t.kind === "write");
-            if (writeTrans) {
-                const nextSpec = transition(this.spec, writeTrans);
-                if (!nextSpec) throw new Error("Invalid transition on write copy");
-                this.spec = nextSpec;
-                return { kind: "write", channel: writeTrans.channel, value: null };
+            // If no action, output copy writes
+            if (state.in0State === "writing_copy") {
+                return {
+                    result: { kind: "write", channel: ["in0", "copy"], value: null },
+                    state: {
+                        ...state,
+                        in0State: "reading"
+                    }
+                };
             }
-
-            return { kind: "waiting" };
+            if (state.in1State === "writing_copy") {
+                return {
+                    result: { kind: "write", channel: ["in1", "copy"], value: null },
+                    state: {
+                        ...state,
+                        in1State: "reading"
+                    }
+                };
+            }
+            return { result: { kind: "waiting" }, state };
         }
 
-        if (this.state === "writing") {
-            const possible = getPossibleTransitions(this.spec);
-            const writeTrans = possible.find(t => t.kind === "write");
-            if (writeTrans) {
-                const nextSpec = transition(this.spec, writeTrans);
-                if (!nextSpec) throw new Error("Invalid transition on z write");
-                this.spec = nextSpec;
-                this.state = "done";
-                return { kind: "write", channel: writeTrans.channel, value: this.op(this.xVal, this.yVal) };
-            }
-            this.state = "done";
+        if (state.state === "writing_phase") {
+            return {
+                result: { kind: "write", channel: ["out0", "set"], value: this.op(state.xVal, state.yVal) },
+                state: {
+                    ...state,
+                    state: "done"
+                }
+            };
         }
 
-        return { kind: "done" };
+        return { result: { kind: "done" }, state };
     }
 }
 
@@ -385,17 +430,20 @@ export class AddCellMachine extends BinaryCellMachine {
 }
 
 export class BinaryPredicateCellMachine implements MachineInstance {
-    private spec: MachineSpec;
-    private state: "reading" | "writing" | "done" = "reading";
-    private xVal: any = 0;
-    private yVal: any = 0;
-    private remainingReads = new Set<string>();
+    constructor(private pred: (x: any, y: any) => boolean) {}
 
-    constructor(private pred: (x: any, y: any) => boolean) {
-        this.remainingReads.add("in0");
-        this.remainingReads.add("in1");
+    createState(): any {
+        return {
+            in0State: "writing_copy", // "writing_copy" | "reading" | "done"
+            in1State: "writing_copy", // "writing_copy" | "reading" | "done"
+            xVal: 0,
+            yVal: 0,
+            state: "reading_phase" // "reading_phase" | "writing_phase" | "done"
+        };
+    }
 
-        this.spec = build(sequence(
+    getSpec(): MachineSpec {
+        return build(sequence(
             concurrent({
                 in0: build(sequence(write(["copy"]), read(["value"]))),
                 in1: build(sequence(write(["copy"]), read(["value"])))
@@ -407,56 +455,78 @@ export class BinaryPredicateCellMachine implements MachineInstance {
         ));
     }
 
-    getSpec() {
-        return this.spec;
+    isCompleted(state: any): boolean {
+        return state.state === "done";
     }
 
-    isCompleted() {
-        return this.state === "done";
-    }
-
-    step(action?: { channel: string[]; value?: any }): StepResult {
-        if (this.state === "reading") {
+    step(state: any, action?: { channel: string[]; value?: any }): { result: StepResult; state: any } {
+        if (state.state === "reading_phase") {
             if (action) {
                 const key = action.channel[0];
-                if (this.remainingReads.has(key)) {
-                    const nextSpec = transition(this.spec, { kind: "read", channel: action.channel });
-                    if (nextSpec) {
-                        this.spec = nextSpec;
-                        if (key === "in0") this.xVal = action.value;
-                        else if (key === "in1") this.yVal = action.value;
-
-                        this.remainingReads.delete(key);
-                        if (this.remainingReads.size === 0) {
-                            this.state = "writing";
+                const last = action.channel[action.channel.length - 1];
+                if (key === "in0" && last === "value" && state.in0State === "reading") {
+                    const nextIn0State = "done";
+                    const isAllDone = nextIn0State === "done" && state.in1State === "done";
+                    return {
+                        result: { kind: "read", channel: action.channel, value: action.value },
+                        state: {
+                            ...state,
+                            in0State: nextIn0State,
+                            xVal: action.value,
+                            state: isAllDone ? "writing_phase" : "reading_phase"
                         }
-                        return { kind: "read", channel: action.channel, value: action.value };
-                    }
+                    };
                 }
+                if (key === "in1" && last === "value" && state.in1State === "reading") {
+                    const nextIn1State = "done";
+                    const isAllDone = state.in0State === "done" && nextIn1State === "done";
+                    return {
+                        result: { kind: "read", channel: action.channel, value: action.value },
+                        state: {
+                            ...state,
+                            in1State: nextIn1State,
+                            yVal: action.value,
+                            state: isAllDone ? "writing_phase" : "reading_phase"
+                        }
+                    };
+                }
+                return { result: { kind: "waiting" }, state };
             }
 
-            const possible = getPossibleTransitions(this.spec);
-            const writeTrans = possible.find(t => t.kind === "write");
-            if (writeTrans) {
-                const nextSpec = transition(this.spec, writeTrans);
-                if (!nextSpec) throw new Error("Invalid transition on write copy");
-                this.spec = nextSpec;
-                return { kind: "write", channel: writeTrans.channel, value: null };
+            // If no action, output copy writes
+            if (state.in0State === "writing_copy") {
+                return {
+                    result: { kind: "write", channel: ["in0", "copy"], value: null },
+                    state: {
+                        ...state,
+                        in0State: "reading"
+                    }
+                };
             }
-
-            return { kind: "waiting" };
+            if (state.in1State === "writing_copy") {
+                return {
+                    result: { kind: "write", channel: ["in1", "copy"], value: null },
+                    state: {
+                        ...state,
+                        in1State: "reading"
+                    }
+                };
+            }
+            return { result: { kind: "waiting" }, state };
         }
 
-        if (this.state === "writing") {
-            const outChan = this.pred(this.xVal, this.yVal) ? ["out0", "true"] : ["out0", "false"];
-            const next = transition(this.spec, { kind: "write", channel: outChan });
-            if (!next) throw new Error(`Invalid transition on write ${outChan.join(".")}`);
-            this.spec = next;
-            this.state = "done";
-            return { kind: "write", channel: outChan, value: null };
+        if (state.state === "writing_phase") {
+            const outChan = this.pred(state.xVal, state.yVal) ? ["out0", "true"] : ["out0", "false"];
+            return {
+                result: { kind: "write", channel: outChan, value: null },
+                state: {
+                    ...state,
+                    state: "done"
+                }
+            };
         }
 
-        return { kind: "done" };
+        return { result: { kind: "done" }, state };
     }
 }
 
@@ -475,40 +545,47 @@ export const TestSpec = build(sequence(
 ));
 
 export class TestMachine implements MachineInstance {
-    private spec: MachineSpec = TestSpec;
-    private inputVal = false;
-    private state: "reading" | "writing" | "done" = "reading";
-
-    getSpec() {
-        return this.spec;
+    createState(): any {
+        return {
+            inputVal: false,
+            state: "reading"
+        };
     }
 
-    isCompleted() {
-        return this.state === "done";
+    getSpec(): MachineSpec {
+        return TestSpec;
     }
 
-    step(action?: { channel: string[]; value?: any }): StepResult {
-        if (this.state === "reading") {
+    isCompleted(state: any): boolean {
+        return state.state === "done";
+    }
+
+    step(state: any, action?: { channel: string[]; value?: any }): { result: StepResult; state: any } {
+        if (state.state === "reading") {
             if (!action || !channelsEqual(action.channel, ["input"])) {
-                return { kind: "waiting" };
+                return { result: { kind: "waiting" }, state };
             }
-            const next = transition(this.spec, { kind: "read", channel: ["input"] });
-            if (!next) throw new Error("Invalid transition on read input");
-            this.spec = next;
-            this.inputVal = !!action.value;
-            this.state = "writing";
-            return { kind: "read", channel: ["input"], value: action.value };
+            return {
+                result: { kind: "read", channel: ["input"], value: action.value },
+                state: {
+                    ...state,
+                    inputVal: !!action.value,
+                    state: "writing"
+                }
+            };
         }
 
-        if (this.state === "writing") {
-            const outChan = this.inputVal ? ["out0", "true"] : ["out0", "false"];
-            const next = transition(this.spec, { kind: "write", channel: outChan });
-            if (!next) throw new Error(`Invalid transition on write ${outChan.join(".")}`);
-            this.spec = next;
-            this.state = "done";
-            return { kind: "write", channel: outChan, value: null };
+        if (state.state === "writing") {
+            const outChan = state.inputVal ? ["out0", "true"] : ["out0", "false"];
+            return {
+                result: { kind: "write", channel: outChan, value: null },
+                state: {
+                    ...state,
+                    state: "done"
+                }
+            };
         }
 
-        return { kind: "done" };
+        return { result: { kind: "done" }, state };
     }
 }

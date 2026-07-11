@@ -1,53 +1,305 @@
 import { MachineSpec, build, sequence, read, write, concurrent, choice, loop, complement, isCompleted, transition, indexed } from "./spec";
 import { MachineInstance, StepResult, SequenceMachine, ConcurrentMachine, TraceMachine, WriteConstantMachine, DiscardMachine, LoopMachine, DupMachine, channelsEqual, RenameMachine, IndexedMachine } from "./impl";
 
-describe("step-by-step MachineInstance model", () => {
-    class DoubleMachine implements MachineInstance {
-        private spec: MachineSpec;
-        private state: "init" | "waiting_a" | "ready_b" | "done" = "init";
-        private val = 0;
-
-        constructor() {
-            this.spec = build(sequence(read(["a"]), write(["b"])));
+class Runner {
+    private state: any;
+    constructor(private machine: MachineInstance) {
+        this.state = machine.createState();
+    }
+    isCompleted(): boolean {
+        return this.machine.isCompleted(this.state);
+    }
+    getSpec(): MachineSpec {
+        return this.machine.getSpec();
+    }
+    step(action?: { channel: string[]; value?: any }): StepResult {
+        const { result, state } = this.machine.step(this.state, action);
+        this.state = state;
+        return result;
+    }
+    getValue(): any {
+        if ("getValue" in this.machine) {
+            return (this.machine as any).getValue(this.state);
         }
+        throw new Error("getValue not supported on this machine");
+    }
+    getState(): any {
+        return this.state;
+    }
+}
 
-        getSpec(): MachineSpec {
-            return this.spec;
-        }
-
-        isCompleted(): boolean {
-            return isCompleted(this.spec);
-        }
-
-        step(action?: { channel: string[]; value?: any }): StepResult {
-            if (this.state === "init") {
-                this.state = "waiting_a";
-                return { kind: "waiting" };
-            }
-            if (this.state === "waiting_a") {
-                if (!action || action.channel[0] !== "a") {
-                    return { kind: "waiting" };
-                }
-                this.val = action.value;
-                const next = transition(this.spec, { kind: "read", channel: ["a"] });
-                if (!next) throw new Error("Invalid transition");
-                this.spec = next;
-                this.state = "ready_b";
-                return { kind: "read", channel: ["a"], value: this.val };
-            }
-            if (this.state === "ready_b") {
-                const next = transition(this.spec, { kind: "write", channel: ["b"] });
-                if (!next) throw new Error("Invalid transition");
-                this.spec = next;
-                this.state = "done";
-                return { kind: "write", channel: ["b"], value: this.val * 2 };
-            }
-            return { kind: "done" };
-        }
+class DoubleMachine implements MachineInstance {
+    createState(): any {
+        return {
+            state: "init",
+            val: 0
+        };
     }
 
+    getSpec(): MachineSpec {
+        return build(sequence(read(["a"]), write(["b"])));
+    }
+
+    isCompleted(state: any): boolean {
+        return state.state === "done";
+    }
+
+    step(state: any, action?: { channel: string[]; value?: any }): { result: StepResult; state: any } {
+        if (state.state === "init") {
+            return {
+                result: { kind: "waiting" },
+                state: {
+                    ...state,
+                    state: "waiting_a"
+                }
+            };
+        }
+        if (state.state === "waiting_a") {
+            if (!action || action.channel[0] !== "a") {
+                return { result: { kind: "waiting" }, state };
+            }
+            return {
+                result: { kind: "read", channel: ["a"], value: action.value },
+                state: {
+                    ...state,
+                    val: action.value,
+                    state: "ready_b"
+                }
+            };
+        }
+        if (state.state === "ready_b") {
+            return {
+                result: { kind: "write", channel: ["b"], value: state.val * 2 },
+                state: {
+                    ...state,
+                    state: "done"
+                }
+            };
+        }
+        return { result: { kind: "done" }, state };
+    }
+}
+
+class ProducerMachine implements MachineInstance {
+    createState(): any {
+        return {
+            done: false
+        };
+    }
+    getSpec() { return build(write(["out"])); }
+    isCompleted(state: any) { return state.done; }
+    step(state: any): { result: StepResult; state: any } {
+        if (state.done) return { result: { kind: "done" }, state };
+        return {
+            result: { kind: "write", channel: ["out"], value: 42 },
+            state: {
+                done: true
+            }
+        };
+    }
+}
+
+class ConsumerMachine implements MachineInstance {
+    createState(): any {
+        return {
+            state: "waiting_in",
+            val: 0
+        };
+    }
+    getSpec() { return build(sequence(read(["in"]), write(["result"]))); }
+    isCompleted(state: any) { return state.state === "done"; }
+    step(state: any, action?: { channel: string[]; value?: any }): { result: StepResult; state: any } {
+        if (state.state === "waiting_in") {
+            if (!action || action.channel[0] !== "in") return { result: { kind: "waiting" }, state };
+            return {
+                result: { kind: "read", channel: ["in"], value: action.value },
+                state: {
+                    ...state,
+                    val: action.value,
+                    state: "ready_res"
+                }
+            };
+        }
+        if (state.state === "ready_res") {
+            return {
+                result: { kind: "write", channel: ["result"], value: state.val * 2 },
+                state: {
+                    ...state,
+                    state: "done"
+                }
+            };
+        }
+        return { result: { kind: "done" }, state };
+    }
+}
+
+class PrefixProducer implements MachineInstance {
+    createState(): any {
+        return {
+            done: false
+        };
+    }
+    getSpec() { return build(write(["mid", "data"])); }
+    isCompleted(state: any) { return state.done; }
+    step(state: any): { result: StepResult; state: any } {
+        if (state.done) return { result: { kind: "done" }, state };
+        return {
+            result: { kind: "write", channel: ["mid", "data"], value: 100 },
+            state: {
+                done: true
+            }
+        };
+    }
+}
+
+class PrefixConsumer implements MachineInstance {
+    createState(): any {
+        return {
+            state: "waiting_in",
+            val: 0
+        };
+    }
+    getSpec() { return build(sequence(read(["mid", "data"]), write(["result"]))); }
+    isCompleted(state: any) { return state.state === "done"; }
+    step(state: any, action?: { channel: string[]; value?: any }): { result: StepResult; state: any } {
+        if (state.state === "waiting_in") {
+            if (!action || !channelsEqual(action.channel, ["mid", "data"])) return { result: { kind: "waiting" }, state };
+            return {
+                result: { kind: "read", channel: ["mid", "data"], value: action.value },
+                state: {
+                    ...state,
+                    val: action.value,
+                    state: "ready_res"
+                }
+            };
+        }
+        if (state.state === "ready_res") {
+            return {
+                result: { kind: "write", channel: ["result"], value: state.val * 3 },
+                state: {
+                    ...state,
+                    state: "done"
+                }
+            };
+        }
+        return { result: { kind: "done" }, state };
+    }
+}
+
+class ReadWriteMachine implements MachineInstance {
+    createState(): any {
+        return {
+            val: undefined,
+            state: "reading"
+        };
+    }
+    getSpec(): MachineSpec {
+        return build(sequence(read(["c"]), write(["d"])));
+    }
+    isCompleted(state: any): boolean {
+        return state.state === "done";
+    }
+    step(state: any, action?: { channel: string[]; value?: any }): { result: StepResult; state: any } {
+        if (state.state === "reading") {
+            if (!action || action.channel[0] !== "c") return { result: { kind: "waiting" }, state };
+            return {
+                result: { kind: "read", channel: ["c"], value: action.value },
+                state: {
+                    ...state,
+                    val: action.value,
+                    state: "writing"
+                }
+            };
+        }
+        if (state.state === "writing") {
+            return {
+                result: { kind: "write", channel: ["d"], value: state.val },
+                state: {
+                    ...state,
+                    state: "done"
+                }
+            };
+        }
+        return { result: { kind: "done" }, state };
+    }
+}
+
+class ReadC implements MachineInstance {
+    createState(): any { return {}; }
+    getSpec(): MachineSpec { return build(read(["c"])); }
+    isCompleted(state: any): boolean { return false; }
+    step(state: any, action?: { channel: string[]; value?: any }): { result: StepResult; state: any } {
+        if (!action || action.channel[0] !== "c") return { result: { kind: "waiting" }, state };
+        return { result: { kind: "read", channel: ["c"], value: action.value }, state };
+    }
+}
+
+class PrefixedMachine implements MachineInstance {
+    createState(): any {
+        return { state: "reading" };
+    }
+    getSpec(): MachineSpec { return build(sequence(read(["c", "val"]), write(["c", "status"]))); }
+    isCompleted(state: any): boolean { return state.state === "done"; }
+    step(state: any, action?: { channel: string[]; value?: any }): { result: StepResult; state: any } {
+        if (state.state === "reading") {
+            if (!action || !channelsEqual(action.channel, ["c", "val"])) return { result: { kind: "waiting" }, state };
+            return {
+                result: { kind: "read", channel: ["c", "val"], value: action.value },
+                state: {
+                    ...state,
+                    state: "writing"
+                }
+            };
+        }
+        if (state.state === "writing") {
+            return {
+                result: { kind: "write", channel: ["c", "status"], value: "ok" },
+                state: {
+                    ...state,
+                    state: "done"
+                }
+            };
+        }
+        return { result: { kind: "done" }, state };
+    }
+}
+
+class MockWorker implements MachineInstance {
+    createState(): any {
+        return {
+            done: false,
+            val: undefined
+        };
+    }
+    getSpec(): MachineSpec {
+        return build(sequence(read(["c"]), write(["d"])));
+    }
+    isCompleted(state: any): boolean {
+        return state.done;
+    }
+    step(state: any, action?: { channel: string[]; value?: any }): { result: StepResult; state: any } {
+        if (action) {
+            return {
+                result: { kind: "read", channel: ["c"], value: action.value },
+                state: {
+                    ...state,
+                    val: action.value
+                }
+            };
+        }
+        return {
+            result: { kind: "write", channel: ["d"], value: state.val },
+            state: {
+                ...state,
+                done: true
+            }
+        };
+    }
+}
+
+describe("step-by-step MachineInstance model", () => {
     it("drives a machine step-by-step", () => {
-        const machine = new DoubleMachine();
+        const machine = new Runner(new DoubleMachine());
         expect(machine.isCompleted()).toBe(false);
 
         // 1. Initial state, returns waiting since first spec action is a read
@@ -72,54 +324,10 @@ describe("step-by-step MachineInstance model", () => {
 });
 
 describe("SequenceMachine", () => {
-    class DoubleMachine implements MachineInstance {
-        private spec: MachineSpec;
-        private state: "init" | "waiting_a" | "ready_b" | "done" = "init";
-        private val = 0;
-
-        constructor() {
-            this.spec = build(sequence(read(["a"]), write(["b"])));
-        }
-
-        getSpec(): MachineSpec {
-            return this.spec;
-        }
-
-        isCompleted(): boolean {
-            return isCompleted(this.spec);
-        }
-
-        step(action?: { channel: string[]; value?: any }): StepResult {
-            if (this.state === "init") {
-                this.state = "waiting_a";
-                return { kind: "waiting" };
-            }
-            if (this.state === "waiting_a") {
-                if (!action || action.channel[0] !== "a") {
-                    return { kind: "waiting" };
-                }
-                this.val = action.value;
-                const next = transition(this.spec, { kind: "read", channel: ["a"] });
-                if (!next) throw new Error("Invalid transition");
-                this.spec = next;
-                this.state = "ready_b";
-                return { kind: "read", channel: ["a"], value: this.val };
-            }
-            if (this.state === "ready_b") {
-                const next = transition(this.spec, { kind: "write", channel: ["b"] });
-                if (!next) throw new Error("Invalid transition");
-                this.spec = next;
-                this.state = "done";
-                return { kind: "write", channel: ["b"], value: this.val * 2 };
-            }
-            return { kind: "done" };
-        }
-    }
-
     it("runs machines sequentially", () => {
         const m1 = new DoubleMachine();
         const m2 = new DoubleMachine();
-        const seq = new SequenceMachine([m1, m2]);
+        const seq = new Runner(new SequenceMachine([m1, m2]));
 
         expect(seq.isCompleted()).toBe(false);
 
@@ -150,7 +358,7 @@ describe("SequenceMachine", () => {
     });
 
     it("handles empty sequence", () => {
-        const seq = new SequenceMachine([]);
+        const seq = new Runner(new SequenceMachine([]));
         expect(seq.isCompleted()).toBe(true);
         expect(seq.getSpec()).toEqual({ kind: "done" });
         expect(seq.step()).toEqual({ kind: "done" });
@@ -158,54 +366,10 @@ describe("SequenceMachine", () => {
 });
 
 describe("ConcurrentMachine", () => {
-    class DoubleMachine implements MachineInstance {
-        private spec: MachineSpec;
-        private state: "init" | "waiting_a" | "ready_b" | "done" = "init";
-        private val = 0;
-
-        constructor() {
-            this.spec = build(sequence(read(["a"]), write(["b"])));
-        }
-
-        getSpec(): MachineSpec {
-            return this.spec;
-        }
-
-        isCompleted(): boolean {
-            return isCompleted(this.spec);
-        }
-
-        step(action?: { channel: string[]; value?: any }): StepResult {
-            if (this.state === "init") {
-                this.state = "waiting_a";
-                return { kind: "waiting" };
-            }
-            if (this.state === "waiting_a") {
-                if (!action || action.channel[0] !== "a") {
-                    return { kind: "waiting" };
-                }
-                this.val = action.value;
-                const next = transition(this.spec, { kind: "read", channel: ["a"] });
-                if (!next) throw new Error("Invalid transition");
-                this.spec = next;
-                this.state = "ready_b";
-                return { kind: "read", channel: ["a"], value: this.val };
-            }
-            if (this.state === "ready_b") {
-                const next = transition(this.spec, { kind: "write", channel: ["b"] });
-                if (!next) throw new Error("Invalid transition");
-                this.spec = next;
-                this.state = "done";
-                return { kind: "write", channel: ["b"], value: this.val * 2 };
-            }
-            return { kind: "done" };
-        }
-    }
-
     it("runs machines concurrently", () => {
         const left = new DoubleMachine();
         const right = new DoubleMachine();
-        const comp = new ConcurrentMachine({ left, right });
+        const comp = new Runner(new ConcurrentMachine({ left, right }));
 
         expect(comp.isCompleted()).toBe(false);
 
@@ -230,7 +394,7 @@ describe("ConcurrentMachine", () => {
     it("bypasses waiting machines to let advancing ones write", () => {
         const left = new DoubleMachine();
         const right = new DoubleMachine();
-        const comp = new ConcurrentMachine({ left, right });
+        const comp = new Runner(new ConcurrentMachine({ left, right }));
 
         // Initialize left into waiting state
         expect(comp.step()).toEqual({ kind: "waiting" });
@@ -256,53 +420,13 @@ describe("ConcurrentMachine", () => {
 });
 
 describe("TraceMachine", () => {
-    class ProducerMachine implements MachineInstance {
-        private spec = build(write(["out"]));
-        private done = false;
-        getSpec() { return this.spec; }
-        isCompleted() { return this.done; }
-        step(): StepResult {
-            if (this.done) return { kind: "done" };
-            this.spec = { kind: "done" };
-            this.done = true;
-            return { kind: "write", channel: ["out"], value: 42 };
-        }
-    }
-
-    class ConsumerMachine implements MachineInstance {
-        private spec = build(sequence(read(["in"]), write(["result"])));
-        private state: "waiting_in" | "ready_res" | "done" = "waiting_in";
-        private val = 0;
-        getSpec() { return this.spec; }
-        isCompleted() { return this.state === "done"; }
-        step(action?: { channel: string[]; value?: any }): StepResult {
-            if (this.state === "waiting_in") {
-                if (!action || action.channel[0] !== "in") return { kind: "waiting" };
-                this.val = action.value;
-                const next = transition(this.spec, { kind: "read", channel: ["in"] });
-                if (!next) throw new Error("Invalid transition");
-                this.spec = next;
-                this.state = "ready_res";
-                return { kind: "read", channel: ["in"], value: this.val };
-            }
-            if (this.state === "ready_res") {
-                const next = transition(this.spec, { kind: "write", channel: ["result"] });
-                if (!next) throw new Error("Invalid transition");
-                this.spec = next;
-                this.state = "done";
-                return { kind: "write", channel: ["result"], value: this.val * 2 };
-            }
-            return { kind: "done" };
-        }
-    }
-
     it("wires producer and consumer directly", () => {
         const producer = new ProducerMachine();
         const consumer = new ConsumerMachine();
         const comp = new ConcurrentMachine({ producer, consumer });
         
         // Wire producer's "out" to consumer's "in"
-        const wired = new TraceMachine(comp, ["producer", "out"], ["consumer", "in"]);
+        const wired = new Runner(new TraceMachine(comp, ["producer", "out"], ["consumer", "in"]));
 
         expect(wired.isCompleted()).toBe(false);
 
@@ -323,50 +447,10 @@ describe("TraceMachine", () => {
 
         // Wire "producer" prefix directly to "consumer" prefix.
         // The write to ["producer", "out"] should map to ["consumer", "out"], which does NOT match the consumer's expected read of ["consumer", "in"]!
-        const badWired = new TraceMachine(comp, ["producer"], ["consumer"]);
+        const badWired = new Runner(new TraceMachine(comp, ["producer"], ["consumer"]));
         expect(badWired.step()).toEqual({ kind: "waiting" });
 
         // Now, let's create a prefix-compatible pair:
-        class PrefixProducer implements MachineInstance {
-            private spec = build(write(["mid", "data"]));
-            private done = false;
-            getSpec() { return this.spec; }
-            isCompleted() { return this.done; }
-            step(): StepResult {
-                if (this.done) return { kind: "done" };
-                this.spec = { kind: "done" };
-                this.done = true;
-                return { kind: "write", channel: ["mid", "data"], value: 100 };
-            }
-        }
-
-        class PrefixConsumer implements MachineInstance {
-            private spec = build(sequence(read(["mid", "data"]), write(["result"])));
-            private state: "waiting_in" | "ready_res" | "done" = "waiting_in";
-            private val = 0;
-            getSpec() { return this.spec; }
-            isCompleted() { return this.state === "done"; }
-            step(action?: { channel: string[]; value?: any }): StepResult {
-                if (this.state === "waiting_in") {
-                    if (!action || !channelsEqual(action.channel, ["mid", "data"])) return { kind: "waiting" };
-                    this.val = action.value;
-                    const next = transition(this.spec, { kind: "read", channel: ["mid", "data"] });
-                    if (!next) throw new Error("Invalid transition");
-                    this.spec = next;
-                    this.state = "ready_res";
-                    return { kind: "read", channel: ["mid", "data"], value: this.val };
-                }
-                if (this.state === "ready_res") {
-                    const next = transition(this.spec, { kind: "write", channel: ["result"] });
-                    if (!next) throw new Error("Invalid transition");
-                    this.spec = next;
-                    this.state = "done";
-                    return { kind: "write", channel: ["result"], value: this.val * 3 };
-                }
-                return { kind: "done" };
-            }
-        }
-
         const prefProd = new PrefixProducer();
         const prefCons = new PrefixConsumer();
         const comp2 = new ConcurrentMachine({ producer: prefProd, consumer: prefCons });
@@ -374,7 +458,7 @@ describe("TraceMachine", () => {
         // Wire "producer.mid" prefix to "consumer.mid" prefix.
         // A write on ["producer", "mid", "data"] should map to ["consumer", "mid", "data"].
         // Since prefCons reads ["consumer", "mid", "data"], it should route successfully!
-        const wired = new TraceMachine(comp2, ["producer", "mid"], ["consumer", "mid"]);
+        const wired = new Runner(new TraceMachine(comp2, ["producer", "mid"], ["consumer", "mid"]));
         expect(wired.isCompleted()).toBe(false);
 
         const res = wired.step();
@@ -385,7 +469,7 @@ describe("TraceMachine", () => {
 
 describe("WriteConstantMachine", () => {
     it("writes a static constant value and completes", () => {
-        const m = new WriteConstantMachine(["foo"], 42);
+        const m = new Runner(new WriteConstantMachine(["foo"], 42));
         expect(m.isCompleted()).toBe(false);
         expect(m.step()).toEqual({ kind: "write", channel: ["foo"], value: 42 });
         expect(m.isCompleted()).toBe(true);
@@ -395,7 +479,7 @@ describe("WriteConstantMachine", () => {
 
 describe("DiscardMachine", () => {
     it("reads a value, stores it, and completes", () => {
-        const m = new DiscardMachine(["foo"]);
+        const m = new Runner(new DiscardMachine(["foo"]));
         expect(m.isCompleted()).toBe(false);
         expect(m.step()).toEqual({ kind: "waiting" });
         expect(m.step({ channel: ["foo"], value: 100 })).toEqual({ kind: "read", channel: ["foo"], value: 100 });
@@ -408,10 +492,10 @@ describe("DiscardMachine", () => {
 describe("LoopMachine", () => {
     it("runs an inner machine in a loop indefinitely", () => {
         let counter = 0;
-        const m = new LoopMachine(() => {
+        const m = new Runner(new LoopMachine(() => {
             counter++;
             return new WriteConstantMachine(["foo"], counter);
-        });
+        }));
 
         expect(m.isCompleted()).toBe(false);
         // Iteration 1
@@ -426,7 +510,7 @@ describe("LoopMachine", () => {
 
 describe("DupMachine", () => {
     it("reads a value and copies it to multiple outputs concurrently", () => {
-        const m = new DupMachine(["in"], ["out1", "out2"]);
+        const m = new Runner(new DupMachine(["in"], ["out1", "out2"]));
         expect(m.isCompleted()).toBe(false);
         expect(m.step()).toEqual({ kind: "waiting" });
         
@@ -455,34 +539,8 @@ describe("DupMachine", () => {
 
 describe("RenameMachine", () => {
     it("renames read and write channels and produces the correct spec", () => {
-        // A machine that reads "c" and writes the read value to "d"
-        class ReadWriteMachine implements MachineInstance {
-            private val: any = undefined;
-            private state: "reading" | "writing" | "done" = "reading";
-
-            getSpec(): MachineSpec {
-                return build(sequence(read(["c"]), write(["d"])));
-            }
-            isCompleted(): boolean {
-                return this.state === "done";
-            }
-            step(action?: { channel: string[]; value?: any }): StepResult {
-                if (this.state === "reading") {
-                    if (!action || action.channel[0] !== "c") return { kind: "waiting" };
-                    this.val = action.value;
-                    this.state = "writing";
-                    return { kind: "read", channel: ["c"], value: action.value };
-                }
-                if (this.state === "writing") {
-                    this.state = "done";
-                    return { kind: "write", channel: ["d"], value: this.val };
-                }
-                return { kind: "done" };
-            }
-        }
-
         const inner = new ReadWriteMachine();
-        const m = new RenameMachine(inner, [ [["c"], ["x"]], [["d"], ["y"]] ]);
+        const m = new Runner(new RenameMachine(inner, [ [["c"], ["x"]], [["d"], ["y"]] ]));
 
         // Verify spec matches
         expect(m.getSpec()).toEqual({
@@ -512,45 +570,18 @@ describe("RenameMachine", () => {
     });
 
     it("rejects transition attempts on internal mapped names", () => {
-        class ReadC implements MachineInstance {
-            getSpec(): MachineSpec { return build(read(["c"])); }
-            isCompleted(): boolean { return false; }
-            step(action?: { channel: string[]; value?: any }): StepResult {
-                if (!action || action.channel[0] !== "c") return { kind: "waiting" };
-                return { kind: "read", channel: ["c"], value: action.value };
-            }
-        }
-
-        const m = new RenameMachine(new ReadC(), [ [["c"], ["x"]] ]);
+        const m = new Runner(new RenameMachine(new ReadC(), [ [["c"], ["x"]] ]));
 
         // Mapped external name works
         expect(m.step({ channel: ["x"], value: 1 })).toEqual({ kind: "read", channel: ["x"], value: 1 });
 
-        const m2 = new RenameMachine(new ReadC(), [ [["c"], ["x"]] ]);
+        const m2 = new Runner(new RenameMachine(new ReadC(), [ [["c"], ["x"]] ]));
         // Original internal name is rejected
         expect(m2.step({ channel: ["c"], value: 1 })).toEqual({ kind: "waiting" });
     });
 
     it("supports prefix matching for multi-level paths", () => {
-        class PrefixedMachine implements MachineInstance {
-            private state: "reading" | "writing" | "done" = "reading";
-            getSpec(): MachineSpec { return build(sequence(read(["c", "val"]), write(["c", "status"]))); }
-            isCompleted(): boolean { return this.state === "done"; }
-            step(action?: { channel: string[]; value?: any }): StepResult {
-                if (this.state === "reading") {
-                    if (!action || !channelsEqual(action.channel, ["c", "val"])) return { kind: "waiting" };
-                    this.state = "writing";
-                    return { kind: "read", channel: ["c", "val"], value: action.value };
-                }
-                if (this.state === "writing") {
-                    this.state = "done";
-                    return { kind: "write", channel: ["c", "status"], value: "ok" };
-                }
-                return { kind: "done" };
-            }
-        }
-
-        const m = new RenameMachine(new PrefixedMachine(), [ [["c"], ["x"]] ]);
+        const m = new Runner(new RenameMachine(new PrefixedMachine(), [ [["c"], ["x"]] ]));
 
         // Read matches x.val -> c.val
         expect(m.step({ channel: ["x", "val"], value: 100 })).toEqual({
@@ -571,27 +602,7 @@ describe("RenameMachine", () => {
 
 describe("IndexedMachine", () => {
     it("instantiates family instances dynamically and routes steps correctly", () => {
-        // A simple read-then-write machine factory
-        class MockWorker implements MachineInstance {
-            private done = false;
-            private val: any;
-            getSpec(): MachineSpec {
-                return build(sequence(read(["c"]), write(["d"])));
-            }
-            isCompleted(): boolean {
-                return this.done;
-            }
-            step(action?: { channel: string[]; value?: any }): StepResult {
-                if (action) {
-                    this.val = action.value;
-                    return { kind: "read", channel: ["c"], value: action.value };
-                }
-                this.done = true;
-                return { kind: "write", channel: ["d"], value: this.val };
-            }
-        }
-
-        const m = new IndexedMachine(() => new MockWorker());
+        const m = new Runner(new IndexedMachine(() => new MockWorker()));
 
         // Spec matches template
         expect(m.getSpec()).toEqual({
@@ -635,4 +646,3 @@ describe("IndexedMachine", () => {
         expect(m.isCompleted()).toBe(true);
     });
 });
-

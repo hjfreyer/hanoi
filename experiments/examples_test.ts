@@ -1,12 +1,33 @@
 // NOTE: All examples in this file must only use primitives (from primitives.ts) and combinators (from impl.ts), rather than implementing custom JS functionality directly.
 
-import { MachineInstance, ConcurrentMachine, TraceMachine, SequenceMachine, DiscardMachine, LoopMachine, RenameMachine, ChoiceMachine } from "./impl";
+import { MachineInstance, ConcurrentMachine, TraceMachine, SequenceMachine, DiscardMachine, LoopMachine, RenameMachine, ChoiceMachine, findStateForMachine } from "./impl";
 import {
     ValueCellMachine,
     AssignCellMachine,
     AddCellMachine,
     LessThanCellMachine
 } from "./primitives";
+
+class Runner {
+    private state: any;
+    constructor(private machine: any) {
+        this.state = machine.createState();
+    }
+    isCompleted(): boolean {
+        return this.machine.isCompleted(this.state);
+    }
+    getSpec(): any {
+        return this.machine.getSpec(this.state);
+    }
+    step(action?: { channel: string[]; value?: any }): any {
+        const { result, state } = this.machine.step(this.state, action);
+        this.state = state;
+        return result;
+    }
+    getState(): any {
+        return this.state;
+    }
+}
 
 function makeUnindexedCell(cell: ValueCellMachine): RenameMachine {
     return new RenameMachine(cell, [
@@ -48,7 +69,7 @@ export function createFibonacciMachine2(): MachineInstance {
 
 describe("Fibonacci Machine 2 (sequential assignment)", () => {
     it("returns sequential Fibonacci numbers on each 'ctrl.next' trigger", () => {
-        const fib = createFibonacciMachine2();
+        const fib = new Runner(createFibonacciMachine2());
 
         // 1st trigger: return 1 (initial B)
         let res = fib.step({ channel: ["ctrl", "next"], value: null });
@@ -154,11 +175,13 @@ describe("MinSystem (conditional control flow example)", () => {
         wired = new TraceMachine(wired, ["ctrl", "in1"], ["in1"]);
         wired = new TraceMachine(wired, ["ctrl", "out0"], ["out0"]);
 
-        const res = wired.step();
+        const runner = new Runner(wired);
+        const res = runner.step();
         expect(res).toEqual({ kind: "done" });
 
         // A is 10, B is 20, so MIN should be 10 (value of A)
-        expect(cellMin.getValue()).toBe(10);
+        const cellMinState = findStateForMachine(wired, runner.getState(), cellMin);
+        expect(cellMin.getValue(cellMinState)).toBe(10);
     });
 
     it("computes minimum when A > B (false branch)", () => {
@@ -179,10 +202,12 @@ describe("MinSystem (conditional control flow example)", () => {
         wired = new TraceMachine(wired, ["ctrl", "out0"], ["out0"]);
 
         // Run the automated pipeline in one tick
-        const res = wired.step();
+        const runner = new Runner(wired);
+        const res = runner.step();
         expect(res).toEqual({ kind: "done" });
 
         // A is 50, B is 20, so MIN should be 20 (value of B)
-        expect(cellMin.getValue()).toBe(20);
+        const cellMinState = findStateForMachine(wired, runner.getState(), cellMin);
+        expect(cellMin.getValue(cellMinState)).toBe(20);
     });
 });
