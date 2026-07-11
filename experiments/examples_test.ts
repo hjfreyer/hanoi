@@ -10,6 +10,8 @@ import {
   RenameMachine,
   ChoiceMachine,
   findStateForMachine,
+  WriteConstantMachine,
+  PrefixMachine,
 } from "./impl";
 import {
   ValueCellMachine,
@@ -54,24 +56,30 @@ export function createFibonacciMachine2(): MachineInstance {
 
   const controller = new LoopMachine(() => {
     return new SequenceMachine([
-      new DiscardMachine(["next"]),
-      new RenameMachine(new AssignCellMachine(), [
-        [["in0"], ["B"]],
-        [["out0"], ["out0"]],
-      ]),
-      new RenameMachine(new AddCellMachine(), [
-        [["in0"], ["A"]],
-        [["in1"], ["B"]],
-        [["out0"], ["C"]],
-      ]),
-      new RenameMachine(new AssignCellMachine(), [
-        [["in0"], ["B"]],
-        [["out0"], ["A"]],
-      ]),
-      new RenameMachine(new AssignCellMachine(), [
-        [["in0"], ["C"]],
-        [["out0"], ["B"]],
-      ]),
+      new PrefixMachine(
+        ["env"],
+        new SequenceMachine([
+          new DiscardMachine(["next"]),
+          new RenameMachine(new AssignCellMachine(), [
+            [["in0"], ["B"]],
+            [["out0"], ["out0"]],
+          ]),
+          new RenameMachine(new AddCellMachine(), [
+            [["in0"], ["A"]],
+            [["in1"], ["B"]],
+            [["out0"], ["C"]],
+          ]),
+          new RenameMachine(new AssignCellMachine(), [
+            [["in0"], ["B"]],
+            [["out0"], ["A"]],
+          ]),
+          new RenameMachine(new AssignCellMachine(), [
+            [["in0"], ["C"]],
+            [["out0"], ["B"]],
+          ]),
+        ]),
+      ),
+      new WriteConstantMachine(["loop", "continue"], null),
     ]);
   });
 

@@ -31,9 +31,9 @@ const BorrowSpec: MachineSpec = sequence(
   read(["restore"]),
 );
 
-const BorrowableSpec: MachineSpec = loop(BorrowSpec);
+const BorrowableSpec: MachineSpec = star(BorrowSpec);
 
-const Copyable = loop(sequence(read(["copy"]), write(["value"])));
+const Copyable = star(sequence(read(["copy"]), write(["value"])));
 
 function pairSpec(left: MachineSpec, right: MachineSpec): MachineSpec {
   return concurrent({ left, right });
@@ -350,12 +350,12 @@ describe("checkTranscript with choice", () => {
 
 describe("checkTranscript with loop", () => {
   it("matches a loop with 0 iterations", () => {
-    const spec = compileToSpec(loop(read(["foo"])));
+    const spec = compileToSpec(star(read(["foo"])));
     expect(checkTranscript(spec, parseTranscript(``))).toBe(true);
   });
 
   it("matches a loop with multiple iterations", () => {
-    const spec = compileToSpec(loop(read(["foo"])));
+    const spec = compileToSpec(star(read(["foo"])));
     expect(
       checkTranscript(
         spec,
@@ -369,7 +369,7 @@ describe("checkTranscript with loop", () => {
   });
 
   it("fails if the loop body does not match", () => {
-    const spec = compileToSpec(loop(read(["foo"])));
+    const spec = compileToSpec(star(read(["foo"])));
     expect(
       checkTranscript(
         spec,
@@ -381,7 +381,7 @@ describe("checkTranscript with loop", () => {
   });
 
   it("fails when stopping in the middle of an iteration", () => {
-    const spec = compileToSpec(loop(sequence(read(["foo"]), write(["bar"]))));
+    const spec = compileToSpec(star(sequence(read(["foo"]), write(["bar"]))));
     expect(
       checkTranscript(
         spec,
@@ -393,7 +393,7 @@ describe("checkTranscript with loop", () => {
   });
 
   it("matches after a complete iteration", () => {
-    const spec = compileToSpec(loop(sequence(read(["foo"]), write(["bar"]))));
+    const spec = compileToSpec(star(sequence(read(["foo"]), write(["bar"]))));
     expect(
       checkTranscript(
         spec,
@@ -513,7 +513,7 @@ describe("checkTranscript with continuations", () => {
   });
 
   it("matches loop with continuation", () => {
-    const spec = compileToSpec(sequence(loop(read(["foo"])), read(["next"])));
+    const spec = compileToSpec(sequence(star(read(["foo"])), read(["next"])));
     expect(
       checkTranscript(
         spec,
@@ -661,7 +661,7 @@ describe("checkTranscript with complement", () => {
   it("works with nested loops and continuations", () => {
     const spec = compileToSpec(
       sequence(
-        complement(loop(sequence(read(["foo"]), write(["bar"])))),
+        complement(star(sequence(read(["foo"]), write(["bar"])))),
         read(["next"]),
       ),
     );
@@ -723,7 +723,7 @@ describe("checkTranscript with prefix", () => {
 
   it("works with loops and continuations", () => {
     const spec = compileToSpec(
-      sequence(prefix(["a"], loop(read(["b"]))), read(["next"])),
+      sequence(prefix(["a"], star(read(["b"]))), read(["next"])),
     );
     expect(
       checkTranscript(
@@ -919,7 +919,7 @@ describe("static validation (LL-1)", () => {
 
   it("allows ambiguous loop and continuation", () => {
     expect(() => {
-      compileToSpec(sequence(loop(read(["foo"])), read(["foo"])));
+      compileToSpec(sequence(star(read(["foo"])), read(["foo"])));
     }).not.toThrow();
   });
 
@@ -936,7 +936,7 @@ describe("static validation (LL-1)", () => {
 
   it("allows non-overlapping loop and continuation", () => {
     expect(() => {
-      compileToSpec(sequence(loop(read(["foo"])), read(["bar"])));
+      compileToSpec(sequence(star(read(["foo"])), read(["bar"])));
     }).not.toThrow();
   });
 });
@@ -1035,19 +1035,19 @@ describe("isSubtype", () => {
   });
 
   it("terminates and validates recursive specs (loops)", () => {
-    const a = compileToSpec(loop(read(["x"])));
-    const b = compileToSpec(loop(read(["x"])));
+    const a = compileToSpec(star(read(["x"])));
+    const b = compileToSpec(star(read(["x"])));
     expect(isSubtype(a, b).isSubtype).toBe(true);
 
     const loopMore = compileToSpec(
-      loop(
+      star(
         choice({
           x: read(["x"]),
           y: read(["y"]),
         }),
       ),
     );
-    const loopLess = compileToSpec(loop(read(["x"])));
+    const loopLess = compileToSpec(star(read(["x"])));
     expect(isSubtype(loopMore, loopLess).isSubtype).toBe(true);
 
     const res = isSubtype(loopLess, loopMore);
@@ -1097,7 +1097,7 @@ describe("isSubtype", () => {
     // A single sequential worker that performs two borrows inline,
     // separated by an intermediate action.
     const subtype = compileToSpec(
-      loop(
+      star(
         sequence(
           read(["main", "request"]),
           write(["val1", "borrow"]),
@@ -1113,7 +1113,7 @@ describe("isSubtype", () => {
     );
 
     // A version of subtype with all the "borrowable" stuff factored out.
-    const factoredSubtype = loop(
+    const factoredSubtype = star(
       sequence(
         read(["request"]),
         write(["partial response"]),

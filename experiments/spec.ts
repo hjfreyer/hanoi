@@ -8,6 +8,7 @@ export type MachineSpec =
   | { kind: "complement"; inner: MachineSpec }
   | { kind: "rename"; mapping: Array<[string[], string[]]>; inner: MachineSpec }
   | { kind: "prefix"; prefix: string[]; inner: MachineSpec }
+  | { kind: "unprefix"; prefix: string[]; inner: MachineSpec }
   | {
       kind: "indexed";
       inner: MachineSpec;
@@ -60,6 +61,13 @@ interface PrefixDfaNode {
   prefix: string[];
 }
 
+interface UnprefixDfaNode {
+  kind: "unprefix";
+  index: number;
+  innerStartIndex: number;
+  prefix: string[];
+}
+
 interface IndexedDfaNode {
   kind: "indexed";
   index: number;
@@ -73,6 +81,7 @@ type DfaNode =
   | ComplementDfaNode
   | RenameDfaNode
   | PrefixDfaNode
+  | UnprefixDfaNode
   | IndexedDfaNode;
 
 export class DfaContext {
@@ -188,6 +197,11 @@ function equals(a: MachineSpec, b: MachineSpec): boolean {
         channelsEqual(a.prefix, (b as typeof a).prefix) &&
         equals(a.inner, (b as typeof a).inner)
       );
+    case "unprefix":
+      return (
+        channelsEqual(a.prefix, (b as typeof a).prefix) &&
+        equals(a.inner, (b as typeof a).inner)
+      );
     case "indexed": {
       if (!equals(a.inner, (b as typeof a).inner)) return false;
       if (a.activated !== (b as typeof a).activated) return false;
@@ -274,7 +288,27 @@ export function star(inner: MachineSpec): MachineSpec {
 }
 
 export function loop(inner: MachineSpec): MachineSpec {
-  return star(inner);
+  return star(unprefix(["env"], inner));
+}
+
+export function unprefix(
+  prefixPath: string[],
+  inner: MachineSpec,
+): MachineSpec {
+  if (prefixPath.length === 0) {
+    return inner;
+  }
+  if (inner.kind === "sequence" && inner.specs.length === 0) {
+    return inner;
+  }
+  if (inner.kind === "unprefix") {
+    return {
+      kind: "unprefix",
+      prefix: [...prefixPath, ...inner.prefix],
+      inner: inner.inner,
+    };
+  }
+  return { kind: "unprefix", prefix: prefixPath, inner };
 }
 
 export function concurrent(machines: Record<string, MachineSpec>): MachineSpec {
@@ -300,6 +334,9 @@ export function rename(
 
 export function prefix(prefixPath: string[], inner: MachineSpec): MachineSpec {
   if (prefixPath.length === 0) {
+    return inner;
+  }
+  if (inner.kind === "sequence" && inner.specs.length === 0) {
     return inner;
   }
   if (inner.kind === "prefix") {
@@ -352,6 +389,7 @@ function validateSpec(spec: MachineSpec) {
     case "complement":
     case "rename":
     case "prefix":
+    case "unprefix":
       validateSpec(spec.inner);
       break;
     case "indexed":
@@ -383,6 +421,7 @@ export function isCompleted(spec: MachineSpec): boolean {
     case "complement":
     case "rename":
     case "prefix":
+    case "unprefix":
       return isCompleted(spec.inner);
     case "indexed": {
       const allActiveCompleted = Object.values(spec.active).every(isCompleted);
@@ -495,6 +534,15 @@ function transitionNfa(
       };
       return transitionNfa(spec.inner, strippedEntry).map((nextInner) =>
         prefix(spec.prefix, nextInner),
+      );
+    }
+    case "unprefix": {
+      const innerEntry: TranscriptEntry = {
+        kind: entry.kind,
+        channel: [...spec.prefix, ...entry.channel],
+      };
+      return transitionNfa(spec.inner, innerEntry).map((nextInner) =>
+        unprefix(spec.prefix, nextInner),
       );
     }
     case "indexed": {
@@ -625,6 +673,14 @@ export function getPossibleTransitions(spec: MachineSpec): TranscriptEntry[] {
     case "prefix":
       for (const t of getPossibleTransitions(spec.inner)) {
         result.push({ kind: t.kind, channel: [...spec.prefix, ...t.channel] });
+      }
+      break;
+    case "unprefix":
+      for (const t of getPossibleTransitions(spec.inner)) {
+        const suffix = getSuffix(t.channel, spec.prefix);
+        if (suffix !== null) {
+          result.push({ kind: t.kind, channel: suffix });
+        }
       }
       break;
     case "indexed":
@@ -788,6 +844,7 @@ function hasConcurrent(spec: MachineSpec): boolean {
     case "complement":
     case "rename":
     case "prefix":
+    case "unprefix":
       return hasConcurrent(spec.inner);
     case "indexed":
       return true;
@@ -859,6 +916,17 @@ function compileStructural(
     });
     return index;
   }
+  if (spec.kind === "unprefix") {
+    const innerStart = compile(spec.inner, context);
+    const index = context.nodes.length;
+    context.nodes.push({
+      kind: "unprefix",
+      index,
+      innerStartIndex: innerStart,
+      prefix: spec.prefix,
+    } as any);
+    return index;
+  }
   if (spec.kind === "sequence" && spec.specs.length > 0) {
     const head = spec.specs[0];
     const tail = spec.specs.slice(1);
@@ -872,13 +940,15 @@ function compileStructural(
       } else if (
         headNode.kind === "complement" ||
         headNode.kind === "rename" ||
-        headNode.kind === "prefix"
+        headNode.kind === "prefix" ||
+        headNode.kind === "unprefix"
       ) {
         let current: any = headNode;
         while (
           current.kind === "complement" ||
           current.kind === "rename" ||
-          current.kind === "prefix"
+          current.kind === "prefix" ||
+          current.kind === "unprefix"
         ) {
           current = context.nodes[current.innerStartIndex];
         }
@@ -983,6 +1053,7 @@ type DfaRunState =
   | { kind: "complement"; inner: DfaRunState }
   | { kind: "rename"; inner: DfaRunState; mapping: Array<[string[], string[]]> }
   | { kind: "prefix"; inner: DfaRunState; prefix: string[] }
+  | { kind: "unprefix"; inner: DfaRunState; prefix: string[] }
   | {
       kind: "indexed";
       index: number;
@@ -1018,6 +1089,13 @@ function initRunState(index: number, context: DfaContext): DfaRunState {
   if (node.kind === "prefix") {
     return {
       kind: "prefix",
+      inner: initRunState(node.innerStartIndex, context),
+      prefix: node.prefix,
+    };
+  }
+  if (node.kind === "unprefix") {
+    return {
+      kind: "unprefix",
       inner: initRunState(node.innerStartIndex, context),
       prefix: node.prefix,
     };
@@ -1065,6 +1143,9 @@ function isRunStateCompleted(state: DfaRunState, context: DfaContext): boolean {
     return isRunStateCompleted(state.inner, context);
   }
   if (state.kind === "prefix") {
+    return isRunStateCompleted(state.inner, context);
+  }
+  if (state.kind === "unprefix") {
     return isRunStateCompleted(state.inner, context);
   }
   const node = context.nodes[state.index] as StandardDfaNode;
@@ -1250,6 +1331,20 @@ function transitionRunState(
     }));
   }
 
+  if (state.kind === "unprefix") {
+    const innerChannel = [...state.prefix, ...entry.channel];
+    const innerEntry: TranscriptEntry = {
+      kind: entry.kind,
+      channel: innerChannel,
+    };
+    const nextInners = transitionRunState(state.inner, innerEntry, context);
+    return nextInners.map((ni) => ({
+      kind: "unprefix",
+      inner: ni,
+      prefix: state.prefix,
+    }));
+  }
+
   return [];
 }
 
@@ -1311,6 +1406,17 @@ function getRunStateTransitions(
       kind: t.kind,
       channel: [...state.prefix, ...t.channel],
     }));
+  }
+
+  if (state.kind === "unprefix") {
+    const result: TranscriptEntry[] = [];
+    for (const t of getRunStateTransitions(state.inner, context)) {
+      const suffix = getSuffix(t.channel, state.prefix);
+      if (suffix !== null) {
+        result.push({ kind: t.kind, channel: suffix });
+      }
+    }
+    return result;
   }
 
   if (state.kind === "indexed") {
@@ -1381,6 +1487,9 @@ function isSubtypeCompiled(a: CompiledSpec, b: CompiledSpec): SubtypeResult {
     }
     if (state.kind === "prefix") {
       return `prefix(${serializeRunState(state.inner)})`;
+    }
+    if (state.kind === "unprefix") {
+      return `unprefix(${serializeRunState(state.inner)})`;
     }
     if (state.kind === "indexed") {
       const subs = Object.entries(state.active)
@@ -1610,6 +1719,9 @@ export function serializeCompiledSpec(compiled: CompiledSpec): string {
       }
       if (node.kind === "prefix") {
         return `${node.index}: prefix(${node.prefix.join(".")},${node.innerStartIndex})`;
+      }
+      if (node.kind === "unprefix") {
+        return `${node.index}: unprefix(${node.prefix.join(".")},${node.innerStartIndex})`;
       }
       const transStr = node.transitions
         .map((t) => `${t.kind}(${t.channel.join(".")})->${t.targetIndex}`)

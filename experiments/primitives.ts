@@ -5,6 +5,7 @@ import {
   write,
   choice,
   loop,
+  star,
   concurrent,
   transition,
   isCompleted,
@@ -722,7 +723,7 @@ export class TestMachine implements MachineInstance {
 
 export function createIterSpec(spec: MachineSpec): MachineSpec {
   return sequence(
-    loop(sequence(read(["next"]), write(["some"]), prefix(["value"], spec))),
+    star(sequence(read(["next"]), write(["some"]), prefix(["value"], spec))),
     read(["next"]),
     write(["none"]),
   );

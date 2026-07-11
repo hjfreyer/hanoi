@@ -631,12 +631,16 @@ describe("DiscardMachine", () => {
 });
 
 describe("LoopMachine", () => {
-  it("runs an inner machine in a loop indefinitely", () => {
+  it("runs an inner machine in a loop indefinitely using env and loop.continue", () => {
     let counter = 0;
     const m = new Runner(
       new LoopMachine(() => {
         counter++;
-        return new WriteConstantMachine(["foo"], counter);
+        const currentCounter = counter;
+        return new SequenceMachine([
+          new WriteConstantMachine(["env", "foo"], currentCounter),
+          new WriteConstantMachine(["loop", "continue"], null),
+        ]);
       }),
     );
 
@@ -648,6 +652,108 @@ describe("LoopMachine", () => {
     // Iteration 3
     expect(m.step()).toEqual({ kind: "write", channel: ["foo"], value: 3 });
     expect(m.isCompleted()).toBe(false);
+  });
+
+  it("terminates when loop.break is written", () => {
+    let counter = 0;
+    const m = new Runner(
+      new LoopMachine(() => {
+        counter++;
+        const currentCounter = counter;
+        if (currentCounter < 3) {
+          return new SequenceMachine([
+            new WriteConstantMachine(["env", "foo"], currentCounter),
+            new WriteConstantMachine(["loop", "continue"], null),
+          ]);
+        } else {
+          return new SequenceMachine([
+            new WriteConstantMachine(["env", "foo"], currentCounter),
+            new WriteConstantMachine(["loop", "break"], null),
+          ]);
+        }
+      }),
+    );
+
+    expect(m.isCompleted()).toBe(false);
+    expect(m.step()).toEqual({ kind: "write", channel: ["foo"], value: 1 });
+    expect(m.isCompleted()).toBe(false);
+    expect(m.step()).toEqual({ kind: "write", channel: ["foo"], value: 2 });
+    expect(m.isCompleted()).toBe(false);
+    expect(m.step()).toEqual({ kind: "write", channel: ["foo"], value: 3 });
+    expect(m.isCompleted()).toBe(false);
+    expect(m.step()).toEqual({ kind: "done" });
+    expect(m.isCompleted()).toBe(true);
+    expect(m.step()).toEqual({ kind: "done" });
+  });
+
+  it("supports nested loops with targeted breaks via env.loop.break", () => {
+    let outerCount = 0;
+    let innerCount = 0;
+
+    const m = new Runner(
+      new LoopMachine(() => {
+        outerCount++;
+        const currentOuter = outerCount;
+        return new SequenceMachine([
+          new WriteConstantMachine(["env", "outer_val"], currentOuter),
+          // Inner loop
+          new LoopMachine(() => {
+            innerCount++;
+            const currentInner = innerCount;
+            if (currentInner < 3) {
+              return new SequenceMachine([
+                new WriteConstantMachine(
+                  ["env", "env", "inner_val"],
+                  currentInner,
+                ),
+                new WriteConstantMachine(["loop", "continue"], null),
+              ]);
+            } else {
+              // Write env.loop.break to break the outer loop!
+              return new SequenceMachine([
+                new WriteConstantMachine(
+                  ["env", "env", "inner_val"],
+                  currentInner,
+                ),
+                new WriteConstantMachine(["env", "loop", "break"], null),
+              ]);
+            }
+          }),
+        ]);
+      }),
+    );
+
+    // Step 1: outer writes outer_val = 1
+    expect(m.step()).toEqual({
+      kind: "write",
+      channel: ["outer_val"],
+      value: 1,
+    });
+
+    // Step 2: inner writes inner_val = 1
+    expect(m.step()).toEqual({
+      kind: "write",
+      channel: ["inner_val"],
+      value: 1,
+    });
+
+    // Step 3: inner writes inner_val = 2
+    expect(m.step()).toEqual({
+      kind: "write",
+      channel: ["inner_val"],
+      value: 2,
+    });
+
+    // Step 4: inner writes inner_val = 3, then writes env.loop.break (which targets the outer loop)
+    expect(m.step()).toEqual({
+      kind: "write",
+      channel: ["inner_val"],
+      value: 3,
+    });
+    expect(m.isCompleted()).toBe(false);
+    expect(m.step()).toEqual({ kind: "done" });
+    expect(m.isCompleted()).toBe(true);
+    expect(m.step()).toEqual({ kind: "done" });
   });
 });
 

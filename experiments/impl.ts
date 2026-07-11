@@ -1,13 +1,11 @@
 import {
   MachineSpec,
   transition,
-  isCompleted,
   read,
   write,
   loop,
   concurrent,
   sequence,
-  getPossibleTransitions,
 } from "./spec";
 
 export type StepResult =
@@ -385,6 +383,7 @@ export class LoopMachine implements MachineInstance {
     return {
       sub,
       subState: sub.createState(),
+      isTerminated: false,
     };
   }
 
@@ -393,28 +392,77 @@ export class LoopMachine implements MachineInstance {
   }
 
   isCompleted(state: any): boolean {
-    return false;
+    return state.isTerminated;
   }
 
   step(
     state: any,
     action?: { channel: string[]; value?: any },
   ): { result: StepResult; state: any } {
-    let sub = state.sub;
-    let subState = state.subState;
-    if (sub.isCompleted(subState)) {
-      sub = this.factory();
-      subState = sub.createState();
+    if (state.isTerminated) {
+      return { result: { kind: "done" }, state };
     }
-    const { result, state: nextSubState } = sub.step(subState, action);
-    return {
-      result,
-      state: {
-        ...state,
-        sub,
-        subState: nextSubState,
-      },
-    };
+
+    let currentSub = state.sub;
+    let currentSubState = state.subState;
+    let currentAction = action;
+
+    while (true) {
+      if (currentSub.isCompleted(currentSubState)) {
+        currentSub = this.factory();
+        currentSubState = currentSub.createState();
+      }
+
+      let subAction: any = undefined;
+      if (currentAction) {
+        subAction = {
+          channel: ["env", ...currentAction.channel],
+          value: currentAction.value,
+        };
+        currentAction = undefined; // consume it
+      }
+
+      const { result, state: nextSubState } = currentSub.step(
+        currentSubState,
+        subAction,
+      );
+      currentSubState = nextSubState;
+
+      if (result.kind === "write") {
+        if (channelsEqual(result.channel, ["loop", "break"])) {
+          return {
+            result: { kind: "done" },
+            state: {
+              sub: currentSub,
+              subState: currentSubState,
+              isTerminated: true,
+            },
+          };
+        }
+        if (channelsEqual(result.channel, ["loop", "continue"])) {
+          currentSub = this.factory();
+          currentSubState = currentSub.createState();
+          continue; // loop again synchronously
+        }
+      }
+
+      let finalResult = result;
+      if (result.kind === "write" || result.kind === "read") {
+        finalResult = {
+          ...result,
+          channel: result.channel.slice(1),
+        };
+      }
+
+      return {
+        result: finalResult,
+        state: {
+          sub: currentSub,
+          subState: currentSubState,
+          isTerminated: false,
+        },
+      };
+    }
   }
 }
 
