@@ -1,4 +1,11 @@
-import { parseTranscript, checkTranscript, compileToSpec } from "./spec";
+import {
+  parseTranscript,
+  checkTranscript,
+  compileToSpec,
+  sequence,
+  read,
+  write,
+} from "./spec";
 import {
   ConcurrentMachine,
   TraceMachine,
@@ -21,6 +28,7 @@ import {
   AddCellMachine,
   TestSpec,
   TestMachine,
+  createIterSpec,
 } from "./primitives";
 
 class Runner {
@@ -545,5 +553,59 @@ describe("TestMachine", () => {
             > out0.false
         `);
     expect(checkTranscript(compileToSpec(TestSpec), invalid)).toBe(false);
+  });
+});
+
+describe("createIterSpec", () => {
+  it("creates an iterator spec that reads next, writes some and performs spec, and stops after none", () => {
+    const spec = sequence(read(["copy"]), write(["value"]));
+    const iterSpec = compileToSpec(createIterSpec(spec));
+
+    // Valid: 2 iterations, then none, and stop
+    const valid = parseTranscript(`
+      < next
+      > some
+      < value.copy
+      > value.value
+      < next
+      > some
+      < value.copy
+      > value.value
+      < next
+      > none
+    `);
+    expect(checkTranscript(iterSpec, valid)).toBe(true);
+
+    // Invalid: performing input after none
+    const invalidAfterNone = parseTranscript(`
+      < next
+      > none
+      < next
+    `);
+    expect(checkTranscript(iterSpec, invalidAfterNone)).toBe(false);
+
+    // Invalid: performing value copy after none
+    const invalidCopyAfterNone = parseTranscript(`
+      < next
+      > none
+      < value.copy
+    `);
+    expect(checkTranscript(iterSpec, invalidCopyAfterNone)).toBe(false);
+
+    // Valid: 0 iterations (just none)
+    const zeroIterations = parseTranscript(`
+      < next
+      > none
+    `);
+    expect(checkTranscript(iterSpec, zeroIterations)).toBe(true);
+
+    // Forbidden: another next and none after none
+    const forbiddenDoubleNone = parseTranscript(`
+      < next
+      > none
+      < next
+      > none
+    `);
+    expect(checkTranscript(iterSpec, forbiddenDoubleNone)).toBe(false);
   });
 });

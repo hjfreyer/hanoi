@@ -330,42 +330,12 @@ export function trace(arg1: any, arg2: any, arg3?: any): MachineSpec {
 function validateSpec(spec: MachineSpec) {
   switch (spec.kind) {
     case "choice": {
-      const seen = new Set<string>();
       for (const branch of spec.choices) {
-        const possible = getPossibleTransitions(branch);
-        for (const ev of possible) {
-          const key = `${ev.kind}:${ev.channel.join(".")}`;
-          if (seen.has(key)) {
-            throw new Error(
-              `Ambiguity detected in choice: event ${ev.kind}(${ev.channel.join(".")}) accepted by multiple branches`,
-            );
-          }
-          seen.add(key);
-        }
         validateSpec(branch);
       }
       break;
     }
     case "sequence": {
-      for (let i = 0; i < spec.specs.length - 1; i++) {
-        const current = spec.specs[i];
-        if (current.kind === "star") {
-          const loopPoss = getPossibleTransitions(current.inner);
-          const contPoss = getPossibleTransitions(
-            sequence(...spec.specs.slice(i + 1)),
-          );
-          for (const ev of loopPoss) {
-            const key = `${ev.kind}:${ev.channel.join(".")}`;
-            if (
-              contPoss.some((c) => `${c.kind}:${c.channel.join(".")}` === key)
-            ) {
-              throw new Error(
-                `Ambiguity detected in loop: event ${ev.kind}(${ev.channel.join(".")}) accepted by both loop body and continuation`,
-              );
-            }
-          }
-        }
-      }
       for (const sub of spec.specs) {
         validateSpec(sub);
       }

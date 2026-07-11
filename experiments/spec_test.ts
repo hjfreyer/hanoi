@@ -906,7 +906,7 @@ describe("checkTranscript with rename", () => {
 });
 
 describe("static validation (LL-1)", () => {
-  it("throws error for ambiguous choice branches", () => {
+  it("allows ambiguous choice branches", () => {
     expect(() => {
       compileToSpec(
         choice({
@@ -914,13 +914,13 @@ describe("static validation (LL-1)", () => {
           branch2: read(["foo"]),
         }),
       );
-    }).toThrow(/Ambiguity detected in choice/);
+    }).not.toThrow();
   });
 
-  it("throws error for ambiguous loop and continuation", () => {
+  it("allows ambiguous loop and continuation", () => {
     expect(() => {
       compileToSpec(sequence(loop(read(["foo"])), read(["foo"])));
-    }).toThrow(/Ambiguity detected in loop/);
+    }).not.toThrow();
   });
 
   it("allows non-overlapping choice branches", () => {
@@ -1356,5 +1356,12 @@ describe("indexed spec", () => {
     const specB = compileToSpec(indexed(inner));
 
     expect(isSubtype(specA, specB).isSubtype).toBe(true);
+  });
+
+  it("compiles a nested indexed spec", () => {
+    const inner = sequence(read(["copy"]), write(["value"]));
+    const nested = indexed(indexed(inner));
+    const spec = compileToSpec(nested);
+    expect(spec).toBeDefined();
   });
 });

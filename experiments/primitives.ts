@@ -10,6 +10,9 @@ import {
   isCompleted,
   getPossibleTransitions,
   indexed,
+  rename,
+  prefix,
+  trace,
 } from "./spec";
 import { MachineInstance, StepResult, channelsEqual } from "./impl";
 
@@ -665,4 +668,12 @@ export class TestMachine implements MachineInstance {
 
     return { result: { kind: "done" }, state };
   }
+}
+
+export function createIterSpec(spec: MachineSpec): MachineSpec {
+  return sequence(
+    loop(sequence(read(["next"]), write(["some"]), prefix(["value"], spec))),
+    read(["next"]),
+    write(["none"]),
+  );
 }
