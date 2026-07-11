@@ -1,6 +1,5 @@
 import {
   MachineSpec,
-  build,
   sequence,
   read,
   write,
@@ -15,24 +14,20 @@ import {
 import { MachineInstance, StepResult, channelsEqual } from "./impl";
 
 // 1. Define the ValueCell specs
-export const ValueCellSpec = build(
+export const ValueCellSpec = indexed(
+  choice({
+    set: read(["set"]),
+    copy: sequence(read(["copy"]), write(["value"])),
+  }),
+);
+
+export const UninitValueCellSpec = sequence(
+  indexed(read(["set"])),
   indexed(
     choice({
       set: read(["set"]),
       copy: sequence(read(["copy"]), write(["value"])),
     }),
-  ),
-);
-
-export const UninitValueCellSpec = build(
-  sequence(
-    indexed(read(["set"])),
-    indexed(
-      choice({
-        set: read(["set"]),
-        copy: sequence(read(["copy"]), write(["value"])),
-      }),
-    ),
   ),
 );
 
@@ -116,14 +111,12 @@ export class ValueCellMachine implements MachineInstance {
 }
 
 // 3. Define the BinaryValue spec (reads in0 and in1, then writes out0)
-export const BinaryValueSpec = build(
-  sequence(
-    concurrent({
-      in0: read([]),
-      in1: read([]),
-    }),
-    write(["out0"]),
-  ),
+export const BinaryValueSpec = sequence(
+  concurrent({
+    in0: read([]),
+    in1: read([]),
+  }),
+  write(["out0"]),
 );
 
 export const AddSpec = BinaryValueSpec;
@@ -212,17 +205,15 @@ export class AddMachine extends BinaryValueMachine {
   }
 }
 
-export const BinaryPredicateSpec = build(
-  sequence(
-    concurrent({
-      in0: read([]),
-      in1: read([]),
-    }),
-    choice({
-      true: write(["out0", "true"]),
-      false: write(["out0", "false"]),
-    }),
-  ),
+export const BinaryPredicateSpec = sequence(
+  concurrent({
+    in0: read([]),
+    in1: read([]),
+  }),
+  choice({
+    true: write(["out0", "true"]),
+    false: write(["out0", "false"]),
+  }),
 );
 
 export const LessThanSpec = BinaryPredicateSpec;
@@ -619,14 +610,12 @@ export class LessThanCellMachine extends BinaryPredicateCellMachine {
   }
 }
 
-export const TestSpec = build(
-  sequence(
-    read(["input"]),
-    choice({
-      true: write(["out0", "true"]),
-      false: write(["out0", "false"]),
-    }),
-  ),
+export const TestSpec = sequence(
+  read(["input"]),
+  choice({
+    true: write(["out0", "true"]),
+    false: write(["out0", "false"]),
+  }),
 );
 
 export class TestMachine implements MachineInstance {

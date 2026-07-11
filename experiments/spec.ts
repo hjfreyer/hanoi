@@ -397,11 +397,6 @@ function validateSpec(spec: MachineSpec) {
   }
 }
 
-export function build(spec: MachineSpec): MachineSpec {
-  validateSpec(spec);
-  return spec;
-}
-
 export function isCompleted(spec: MachineSpec): boolean {
   switch (spec.kind) {
     case "read":
@@ -1006,6 +1001,7 @@ function compile(spec: MachineSpec, context: DfaContext): number {
 }
 
 export function compileToSpec(spec: MachineSpec): CompiledSpec {
+  validateSpec(spec);
   const context = new DfaContext();
   const startIndex = compile(spec, context);
   return { context, startIndex };
