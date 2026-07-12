@@ -25,33 +25,7 @@ import {
   RenameMachine,
   IndexedMachine,
 } from "./impl";
-
-class Runner {
-  private state: any;
-  constructor(private machine: MachineInstance) {
-    this.state = machine.createState();
-  }
-  isCompleted(): boolean {
-    return this.machine.isCompleted(this.state);
-  }
-  getSpec(): MachineSpec {
-    return this.machine.getSpec();
-  }
-  step(action?: { channel: string[]; value?: any }): StepResult {
-    const { result, state } = this.machine.step(this.state, action);
-    this.state = state;
-    return result;
-  }
-  getValue(): any {
-    if ("getValue" in this.machine) {
-      return (this.machine as any).getValue(this.state);
-    }
-    throw new Error("getValue not supported on this machine");
-  }
-  getState(): any {
-    return this.state;
-  }
-}
+import { Runner } from "./testing";
 
 class DoubleMachine implements MachineInstance {
   createState(): any {

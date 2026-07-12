@@ -18,36 +18,10 @@ import {
   AssignCellMachine,
   AddCellMachine,
   LessThanCellMachine,
+  StringLengthMachine,
+  CharAtMachine,
 } from "./primitives";
-
-class Runner {
-  private state: any;
-  constructor(private machine: any) {
-    this.state = machine.createState();
-  }
-  isCompleted(): boolean {
-    return this.machine.isCompleted(this.state);
-  }
-  getSpec(): any {
-    return this.machine.getSpec(this.state);
-  }
-  step(action?: { channel: string[]; value?: any }): any {
-    const { result, state } = this.machine.step(this.state, action);
-    this.state = state;
-    return result;
-  }
-  getState(): any {
-    return this.state;
-  }
-}
-
-function makeUnindexedCell(cell: ValueCellMachine): RenameMachine {
-  return new RenameMachine(cell, [
-    [["p0", "copy"], ["copy"]],
-    [["p0", "value"], ["value"]],
-    [["p0", "set"], ["set"]],
-  ]);
-}
+import { Runner, makeUnindexedCell } from "./testing";
 
 export function createFibonacciMachine2(): MachineInstance {
   const cellA = new ValueCellMachine(0);
@@ -294,5 +268,213 @@ describe("MinSystem (conditional control flow example)", () => {
     // A is 50, B is 20, so MIN should be 20 (value of B)
     const cellMinState = findStateForMachine(wired, runner.getState(), cellMin);
     expect(cellMin.getValue(cellMinState)).toBe(20);
+  });
+});
+
+export function createStringCharIterator(): MachineInstance {
+  const cellIdx = new ValueCellMachine(0);
+  const cellLen = new ValueCellMachine(0);
+  const cellChar = new ValueCellMachine("");
+  const cellOne = new ValueCellMachine(1);
+
+  const controller = new SequenceMachine([
+    // Initialize len = str.length
+    new RenameMachine(new StringLengthMachine(), [
+      [["in0", "copy"], ["str", "copy"]],
+      [["in0", "value"], ["str", "value"]],
+      [["out0", "set"], ["len", "set"]],
+    ]),
+
+    // Loop
+    new LoopMachine(() => {
+      return new SequenceMachine([
+        new SequenceMachine([
+          new DiscardMachine(["env", "next"]),
+          new RenameMachine(
+            new TraceMachine(
+              new ConcurrentMachine({
+                lessThan: new RenameMachine(new LessThanCellMachine(), [
+                  [["in0", "copy"], ["idx", "copy"]],
+                  [["in0", "value"], ["idx", "value"]],
+                  [["in1", "copy"], ["len", "copy"]],
+                  [["in1", "value"], ["len", "value"]],
+                  [["out0"], ["cond"]],
+                ]),
+                choice: new ChoiceMachine({
+                  true: new SequenceMachine([
+                    new DiscardMachine(["cond", "true"]),
+                    // Write some
+                    new WriteConstantMachine(["env", "some"], null),
+
+                    // Get character at idx
+                    new RenameMachine(new CharAtMachine(), [
+                      [["in0", "copy"], ["env", "str", "copy"]],
+                      [["in0", "value"], ["env", "str", "value"]],
+                      [["in1", "copy"], ["idx", "copy"]],
+                      [["in1", "value"], ["idx", "value"]],
+                      [["out0", "set"], ["char", "set"]],
+                    ]),
+
+                    // Increment idx: idx = idx + 1
+                    new RenameMachine(new AddCellMachine(), [
+                      [["in0", "copy"], ["idx", "copy"]],
+                      [["in0", "value"], ["idx", "value"]],
+                      [["in1", "copy"], ["one", "copy"]],
+                      [["in1", "value"], ["one", "value"]],
+                      [["out0", "set"], ["idx", "set"]],
+                    ]),
+                  ]),
+                  false: new SequenceMachine([
+                    new DiscardMachine(["cond", "false"]),
+                    // Break out of the loop
+                    new WriteConstantMachine(["loop", "break"], null),
+                  ]),
+                }),
+              }),
+              ["lessThan", "cond"],
+              ["choice", "cond"],
+            ),
+            [
+              [["lessThan", "idx"], ["env", "idx", "lessThan"]],
+              [["lessThan", "len"], ["env", "len", "lessThan"]],
+              [["choice", "idx"], ["env", "idx", "choice"]],
+              [["choice", "char"], ["env", "char", "choice"]],
+              [["choice", "one"], ["env", "one", "choice"]],
+              [["choice", "env", "str"], ["env", "str"]],
+              [["choice", "env", "some"], ["env", "some"]],
+              [["choice", "loop"], ["loop"]],
+            ],
+          ),
+        ]),
+        // loop continue
+        new WriteConstantMachine(["loop", "continue"], null),
+      ]);
+    }),
+
+    // After loop terminates: write none directly
+    new WriteConstantMachine(["none"], null),
+  ]);
+
+  const comp = new ConcurrentMachine({
+    idx: makeUnindexedCell(cellIdx),
+    len: makeUnindexedCell(cellLen),
+    char: makeUnindexedCell(cellChar),
+    one: makeUnindexedCell(cellOne),
+    ctrl: controller,
+  });
+
+  // Wire internal cells to ctrl
+  let wired = new TraceMachine(comp, ["ctrl", "idx"], ["idx"]);
+  wired = new TraceMachine(wired, ["ctrl", "len"], ["len"]);
+  wired = new TraceMachine(wired, ["ctrl", "char", "choice", "set"], ["char", "set"]);
+  wired = new TraceMachine(wired, ["ctrl", "one"], ["one"]);
+
+  return new RenameMachine(wired, [
+    [["ctrl", "next"], ["next"]],
+    [["ctrl", "some"], ["some"]],
+    [["ctrl", "none"], ["none"]],
+    [["char", "copy"], ["value", "copy"]],
+    [["char", "value"], ["value", "value"]],
+    [["ctrl", "str", "copy"], ["str", "copy"]],
+    [["ctrl", "str", "value"], ["str", "value"]],
+  ]);
+}
+
+describe("String Character Iterator", () => {
+  it("iterates over a non-empty string", () => {
+    const strCell = new ValueCellMachine("cat");
+    const iterator = createStringCharIterator();
+    const system = new ConcurrentMachine({
+      str: makeUnindexedCell(strCell),
+      iter: iterator,
+    });
+    // Wire str to iter.str
+    let wired = new TraceMachine(system, ["iter", "str"], ["str"]);
+    const runner = new Runner(wired);
+
+    // Initial state: not started. Runs StringLength (internal) and blocks on first read("next")
+    expect(runner.run()).toEqual([]);
+
+    // 1st iteration: trigger next, then read value "c"
+    expect(runner.run({ channel: ["iter", "next"], value: null })).toEqual([
+      { kind: "read", channel: ["iter", "next"], value: null },
+      { kind: "write", channel: ["iter", "some"], value: null },
+    ]);
+    expect(runner.run({ channel: ["iter", "value", "copy"], value: null })).toEqual([
+      { kind: "read", channel: ["iter", "value", "copy"], value: null },
+      { kind: "write", channel: ["iter", "value", "value"], value: "c" },
+    ]);
+
+    // 2nd iteration: trigger next, then read value "a"
+    expect(runner.run({ channel: ["iter", "next"], value: null })).toEqual([
+      { kind: "read", channel: ["iter", "next"], value: null },
+      { kind: "write", channel: ["iter", "some"], value: null },
+    ]);
+    expect(runner.run({ channel: ["iter", "value", "copy"], value: null })).toEqual([
+      { kind: "read", channel: ["iter", "value", "copy"], value: null },
+      { kind: "write", channel: ["iter", "value", "value"], value: "a" },
+    ]);
+
+    // 3rd iteration: trigger next, then read value "t"
+    expect(runner.run({ channel: ["iter", "next"], value: null })).toEqual([
+      { kind: "read", channel: ["iter", "next"], value: null },
+      { kind: "write", channel: ["iter", "some"], value: null },
+    ]);
+    expect(runner.run({ channel: ["iter", "value", "copy"], value: null })).toEqual([
+      { kind: "read", channel: ["iter", "value", "copy"], value: null },
+      { kind: "write", channel: ["iter", "value", "value"], value: "t" },
+    ]);
+
+    // End of loop: trigger next, yields none and completes
+    expect(runner.run({ channel: ["iter", "next"], value: null })).toEqual([
+      { kind: "read", channel: ["iter", "next"], value: null },
+      { kind: "write", channel: ["iter", "none"], value: null },
+      { kind: "done" },
+    ]);
+  });
+
+  it("iterates over an empty string", () => {
+    const strCell = new ValueCellMachine("");
+    const iterator = createStringCharIterator();
+    const system = new ConcurrentMachine({
+      str: makeUnindexedCell(strCell),
+      iter: iterator,
+    });
+    // Wire str to iter.str
+    let wired = new TraceMachine(system, ["iter", "str"], ["str"]);
+    const runner = new Runner(wired);
+
+    let stepRes = runner.step();
+    expect(stepRes).toEqual({ kind: "waiting" });
+
+    stepRes = runner.step({ channel: ["iter", "next"], value: null });
+    expect(stepRes).toEqual({ kind: "read", channel: ["iter", "next"], value: null });
+
+    stepRes = runner.step();
+    expect(stepRes).toEqual({ kind: "write", channel: ["iter", "none"], value: null });
+
+    stepRes = runner.step();
+    expect(stepRes).toEqual({ kind: "done" });
+  });
+
+  it("iterates over an empty string using run()", () => {
+    const strCell = new ValueCellMachine("");
+    const iterator = createStringCharIterator();
+    const system = new ConcurrentMachine({
+      str: makeUnindexedCell(strCell),
+      iter: iterator,
+    });
+    let wired = new TraceMachine(system, ["iter", "str"], ["str"]);
+    const runner = new Runner(wired);
+
+    // Initial run: executes initialization (StringLength) and stops when waiting on next
+    expect(runner.run()).toEqual([]);
+
+    // Trigger next: runs until it hits waiting (or done in this case because string is empty)
+    expect(runner.run({ channel: ["iter", "next"], value: null })).toEqual([
+      { kind: "read", channel: ["iter", "next"], value: null },
+      { kind: "write", channel: ["iter", "none"], value: null },
+      { kind: "done" },
+    ]);
   });
 });

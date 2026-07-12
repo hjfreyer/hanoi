@@ -37,35 +37,7 @@ import {
   AreEqualSpec,
   AreEqualCellMachine,
 } from "./primitives";
-
-class Runner {
-  private state: any;
-  constructor(private machine: any) {
-    this.state = machine.createState();
-  }
-  isCompleted(): boolean {
-    return this.machine.isCompleted(this.state);
-  }
-  getSpec(): any {
-    return this.machine.getSpec(this.state);
-  }
-  step(action?: { channel: string[]; value?: any }): any {
-    const { result, state } = this.machine.step(this.state, action);
-    this.state = state;
-    return result;
-  }
-  getState(): any {
-    return this.state;
-  }
-}
-
-function makeUnindexedCell(cell: ValueCellMachine): RenameMachine {
-  return new RenameMachine(cell, [
-    [["p0", "copy"], ["copy"]],
-    [["p0", "value"], ["value"]],
-    [["p0", "set"], ["set"]],
-  ]);
-}
+import { Runner, makeUnindexedCell } from "./testing";
 
 describe("ValueCell example", () => {
   it("can set and copy values step-by-step", () => {
