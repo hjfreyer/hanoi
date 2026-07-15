@@ -115,6 +115,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "test-runner"
+version = "0.1.0"
+dependencies = [
+ "bytecode",
+ "vm",
+]
+
+[[package]]
 name = "typed-index-collections"
 version = "3.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

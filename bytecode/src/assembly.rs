@@ -8,6 +8,7 @@ use crate::value::{Value, Symbol};
 enum Token {
     Export,
     SymbolKeyword,
+    TestKeyword,
     Identifier(String),
     StringLiteral(String),
     LBrace,
@@ -143,6 +144,7 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
                 match ident.as_str() {
                     "export" => tokens.push(Token::Export),
                     "symbol" => tokens.push(Token::SymbolKeyword),
+                    "test" => tokens.push(Token::TestKeyword),
                     "nil" => tokens.push(Token::Nil),
                     "true" => tokens.push(Token::Bool(true)),
                     "false" => tokens.push(Token::Bool(false)),
@@ -338,6 +340,7 @@ enum TopLevelItem {
 
 struct TopLevelSentence {
     is_exported: bool,
+    is_test: bool,
     name: String,
     body: ParsedSentence,
 }
@@ -366,12 +369,20 @@ fn parse_top_level(stream: &mut TokenStream) -> Result<Vec<TopLevelItem>, String
 
             items.push(TopLevelItem::SymbolDecl { name, debug_desc });
         } else {
-            let is_exported = if stream.peek() == Some(&Token::Export) {
-                stream.next();
-                true
-            } else {
-                false
-            };
+            let mut is_exported = false;
+            let mut is_test = false;
+
+            loop {
+                if stream.peek() == Some(&Token::Export) {
+                    stream.next();
+                    is_exported = true;
+                } else if stream.peek() == Some(&Token::TestKeyword) {
+                    stream.next();
+                    is_test = true;
+                } else {
+                    break;
+                }
+            }
 
             let name = match stream.next() {
                 Some(Token::Identifier(name)) => name,
@@ -387,6 +398,7 @@ fn parse_top_level(stream: &mut TokenStream) -> Result<Vec<TopLevelItem>, String
 
             items.push(TopLevelItem::Sentence(TopLevelSentence {
                 is_exported,
+                is_test,
                 name,
                 body,
             }));
@@ -447,6 +459,8 @@ pub struct AssemblyResult {
     pub library: Library,
     /// Maps exported sentence label names to their SentenceIndex.
     pub exports: HashMap<String, SentenceIndex>,
+    /// Maps test sentence label names to their SentenceIndex.
+    pub tests: HashMap<String, SentenceIndex>,
 }
 
 struct Compiler {
@@ -454,6 +468,7 @@ struct Compiler {
     declared_symbols: HashMap<String, Value>,
     sentences: Vec<Vec<Instruction>>,
     exports: HashMap<String, SentenceIndex>,
+    tests: HashMap<String, SentenceIndex>,
 }
 
 impl Compiler {
@@ -541,7 +556,7 @@ impl Compiler {
     }
 }
 
-/// Assembles the input text into a `Library` and export mappings.
+/// Assembles the input text into a `Library` and export/test mappings.
 pub fn assemble(input: &str) -> Result<AssemblyResult, String> {
     let tokens = tokenize(input)?;
     let mut stream = TokenStream { tokens, position: 0 };
@@ -577,6 +592,7 @@ pub fn assemble(input: &str) -> Result<AssemblyResult, String> {
         declared_symbols,
         sentences: Vec::new(),
         exports: HashMap::new(),
+        tests: HashMap::new(),
     };
 
     // Pass 2: Map top-level names to their index
@@ -593,6 +609,10 @@ pub fn assemble(input: &str) -> Result<AssemblyResult, String> {
         
         if sentence.is_exported {
             compiler.exports.insert(sentence.name.clone(), s_idx);
+        }
+
+        if sentence.is_test {
+            compiler.tests.insert(sentence.name.clone(), s_idx);
         }
     }
 
@@ -613,5 +633,6 @@ pub fn assemble(input: &str) -> Result<AssemblyResult, String> {
     Ok(AssemblyResult {
         library,
         exports: compiler.exports,
+        tests: compiler.tests,
     })
 }

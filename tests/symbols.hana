@@ -1,0 +1,39 @@
+# Tests for unique Symbols
+
+symbol sym_a "A Symbol"
+symbol sym_b "B Symbol"
+symbol sym_c
+
+test symbol_equality {
+    # Pushing the same symbol multiple times compares equal
+    push sym_a
+    push sym_a
+    equal
+    assert
+}
+
+test symbol_inequality {
+    # Distinct symbol definitions compare unequal
+    push sym_a
+    push sym_b
+    equal
+    not
+    assert
+    
+    push sym_b
+    push sym_c
+    equal
+    not
+    assert
+}
+
+test symbol_cross_sentence {
+    push sym_c
+    jump check_symbol
+}
+
+check_symbol {
+    push sym_c
+    equal
+    assert
+}

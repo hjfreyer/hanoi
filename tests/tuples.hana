@@ -1,0 +1,34 @@
+# Tests for tuples and nested tuples
+
+test simple_tuple {
+    push 1
+    push 2
+    push 3
+    tuple 3
+    untuple 3
+    push 3
+    assert_eq
+    push 2
+    assert_eq
+    push 1
+    assert_eq
+}
+
+test nested_tuples {
+    push 10
+    push (20, 30)
+    tuple 2
+    
+    # Destructure outer tuple
+    untuple 2
+    
+    # Destructure inner tuple
+    untuple 2
+    
+    push 30
+    assert_eq
+    push 20
+    assert_eq
+    push 10
+    assert_eq
+}

@@ -151,4 +151,23 @@ mod tests {
             panic!("Expected pushing of two symbols");
         }
     }
+
+    #[test]
+    fn test_assemble_test_annotation() {
+        let code = r#"
+            test my_test {
+                push 1
+                assert
+            }
+            export test my_exported_test {
+                push 2
+                assert
+            }
+        "#;
+        let res = assemble(code).unwrap();
+        assert_eq!(res.tests.get("my_test"), Some(&SentenceIndex::from(0)));
+        assert_eq!(res.tests.get("my_exported_test"), Some(&SentenceIndex::from(1)));
+        assert_eq!(res.exports.get("my_exported_test"), Some(&SentenceIndex::from(1)));
+        assert_eq!(res.exports.get("my_test"), None);
+    }
 }

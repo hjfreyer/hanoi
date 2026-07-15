@@ -1,0 +1,47 @@
+# Tests for control flow and subroutine call stack returns
+
+test unconditional_jump {
+    push 100
+    jump target_sentence
+}
+
+target_sentence {
+    push 100
+    assert_eq
+}
+
+test conditional_branch {
+    push true
+    branch {
+        # Inline true block
+        push 10
+    } {
+        panic
+    }
+    push 10
+    assert_eq
+}
+
+test recursion_and_returns {
+    push 10
+    jump recursive_helper
+}
+
+recursive_helper {
+    # top of stack is decrement counter
+    pick 0
+    push 0
+    equal
+    branch {
+        # Base case: pop the counter and return
+        drop 0
+    } {
+        # Recursive case: decrement and recurse
+        push 1
+        sub
+        jump recursive_helper
+        # Verification that we returned back up the stack
+        push true
+        assert
+    }
+}

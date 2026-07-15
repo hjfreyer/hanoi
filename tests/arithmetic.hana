@@ -1,0 +1,60 @@
+# Tests for arithmetic operations
+
+test add_numbers {
+    push 10
+    push 20
+    add
+    push 30
+    assert_eq
+}
+
+test subtract_numbers {
+    push 50
+    push 20
+    sub
+    push 30
+    assert_eq
+}
+
+test multiply_numbers {
+    push 5
+    push 6
+    mul
+    push 30
+    assert_eq
+}
+
+test divide_numbers {
+    push 90
+    push 3
+    div
+    push 30
+    assert_eq
+}
+
+test modulo_numbers {
+    push 35
+    push 10
+    mod
+    push 5
+    assert_eq
+}
+
+test negate_number {
+    push 42
+    neg
+    push -42
+    assert_eq
+}
+
+test logical_not {
+    push true
+    not
+    push false
+    assert_eq
+    
+    push false
+    not
+    push true
+    assert_eq
+}
