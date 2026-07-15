@@ -429,4 +429,35 @@ mod tests {
         assert!(res.is_err());
         assert!(res.unwrap_err().contains("Assertion failed"));
     }
+
+    #[test]
+    fn test_integration_assembler_vm() {
+        let code = r#"
+            export start {
+                push 10
+                push 20
+                add
+                push 30
+                assert_eq
+                
+                # Test branching with inline targets
+                push true
+                branch {
+                    push 100
+                } {
+                    panic
+                }
+                
+                # Check that the branch returned and we continue here
+                push 100
+                assert_eq
+            }
+        "#;
+        let res = bytecode::assemble(code).unwrap();
+        let start_idx = *res.exports.get("start").unwrap();
+        
+        let mut vm = VM::new(res.library);
+        assert!(vm.execute(start_idx).is_ok());
+        assert!(vm.stack().is_empty());
+    }
 }

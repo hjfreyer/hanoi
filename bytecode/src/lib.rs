@@ -1,7 +1,9 @@
+pub mod assembly;
 pub mod library;
 pub mod opcode;
 pub mod value;
 
+pub use assembly::{assemble, AssemblyResult};
 pub use library::{Library, Sentence, SentenceIndex};
 pub use opcode::Instruction;
 pub use value::Value;
@@ -48,5 +50,78 @@ mod tests {
 
         assert_eq!(library.sentences[idx1], sentence1);
         assert_eq!(library.sentences[idx2], sentence2);
+    }
+
+    #[test]
+    fn test_assemble_simple() {
+        let code = r#"
+            export entry {
+                push 42
+                push (1, 2, (3, nil))
+                drop 1
+            }
+        "#;
+        let res = assemble(code).unwrap();
+        assert_eq!(res.exports.get("entry"), Some(&SentenceIndex::from(0)));
+        assert_eq!(res.library.sentences.len(), 1);
+        assert_eq!(
+            res.library.sentences[SentenceIndex::from(0)],
+            vec![
+                Instruction::Push(Value::Int(42)),
+                Instruction::Push(Value::Tuple(vec![
+                    Value::Int(1),
+                    Value::Int(2),
+                    Value::Tuple(vec![Value::Int(3), Value::Nil])
+                ])),
+                Instruction::Drop(1),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_assemble_nested_branching() {
+        let code = r#"
+            entry {
+                push true
+                branch {
+                    push 42
+                } {
+                    jump entry
+                }
+            }
+        "#;
+        let res = assemble(code).unwrap();
+        // Should have compiled 3 sentences:
+        // Index 0: entry
+        // Index 1: inline true block
+        // Index 2: inline false block
+        assert_eq!(res.library.sentences.len(), 3);
+        assert_eq!(
+            res.library.sentences[SentenceIndex::from(0)],
+            vec![
+                Instruction::Push(Value::Bool(true)),
+                Instruction::Branch(SentenceIndex::from(1), SentenceIndex::from(2)),
+            ]
+        );
+        assert_eq!(
+            res.library.sentences[SentenceIndex::from(1)],
+            vec![Instruction::Push(Value::Int(42))]
+        );
+        assert_eq!(
+            res.library.sentences[SentenceIndex::from(2)],
+            vec![Instruction::Jump(SentenceIndex::from(0))]
+        );
+    }
+
+    #[test]
+    fn test_assemble_invalid_label() {
+        let code = r#"
+            entry {
+                jump non_existent_label
+            }
+        "#;
+        let res = assemble(code);
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("Unresolved label target"));
     }
 }
