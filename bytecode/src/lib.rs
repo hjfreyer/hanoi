@@ -124,4 +124,31 @@ mod tests {
         assert!(res.is_err());
         assert!(res.unwrap_err().contains("Unresolved label target"));
     }
+
+    #[test]
+    fn test_assemble_symbols() {
+        let code = r#"
+            symbol sym1 "My Custom Symbol"
+            symbol sym2
+            
+            entry {
+                push sym1
+                push sym2
+            }
+        "#;
+        let res = assemble(code).unwrap();
+        assert_eq!(res.library.sentences.len(), 1);
+        
+        let sentence = &res.library.sentences[SentenceIndex::from(0)];
+        assert_eq!(sentence.len(), 2);
+        
+        // Assert sym1 and sym2 are distinct symbols
+        if let (Instruction::Push(Value::Symbol(s1)), Instruction::Push(Value::Symbol(s2))) = (&sentence[0], &sentence[1]) {
+            assert_ne!(s1, s2);
+            assert_eq!(s1.name, "My Custom Symbol");
+            assert_eq!(s2.name, "sym2");
+        } else {
+            panic!("Expected pushing of two symbols");
+        }
+    }
 }

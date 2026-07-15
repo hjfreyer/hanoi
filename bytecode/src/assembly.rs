@@ -1,13 +1,15 @@
 use std::collections::HashMap;
 use crate::library::{Library, SentenceIndex};
 use crate::opcode::Instruction;
-use crate::value::Value;
+use crate::value::{Value, Symbol};
 
 /// Token types for the assembly lexer.
 #[derive(Debug, Clone, PartialEq)]
 enum Token {
     Export,
+    SymbolKeyword,
     Identifier(String),
+    StringLiteral(String),
     LBrace,
     RBrace,
     LParen,
@@ -69,6 +71,22 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
                 tokens.push(Token::Colon);
                 chars.next();
             }
+            '"' => {
+                chars.next(); // consume '"'
+                let mut string_val = String::new();
+                let mut closed = false;
+                while let Some(next_c) = chars.next() {
+                    if next_c == '"' {
+                        closed = true;
+                        break;
+                    }
+                    string_val.push(next_c);
+                }
+                if !closed {
+                    return Err(format!("Line {}: Unclosed string literal", line));
+                }
+                tokens.push(Token::StringLiteral(string_val));
+            }
             // Parse negative or positive numbers
             '-' | '0'..='9' => {
                 let mut number_str = String::new();
@@ -124,6 +142,7 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
 
                 match ident.as_str() {
                     "export" => tokens.push(Token::Export),
+                    "symbol" => tokens.push(Token::SymbolKeyword),
                     "nil" => tokens.push(Token::Nil),
                     "true" => tokens.push(Token::Bool(true)),
                     "false" => tokens.push(Token::Bool(false)),
@@ -168,18 +187,19 @@ impl TokenStream {
     }
 }
 
-/// Recursively parse values (including nested tuples).
-fn parse_value(stream: &mut TokenStream) -> Result<Value, String> {
+/// Parses values into ParsedValue AST nodes.
+fn parse_value(stream: &mut TokenStream) -> Result<ParsedValue, String> {
     match stream.next() {
-        Some(Token::Nil) => Ok(Value::Nil),
-        Some(Token::Bool(b)) => Ok(Value::Bool(b)),
-        Some(Token::Int(i)) => Ok(Value::Int(i)),
-        Some(Token::Float(f)) => Ok(Value::Float(f)),
+        Some(Token::Nil) => Ok(ParsedValue::Nil),
+        Some(Token::Bool(b)) => Ok(ParsedValue::Bool(b)),
+        Some(Token::Int(i)) => Ok(ParsedValue::Int(i)),
+        Some(Token::Float(f)) => Ok(ParsedValue::Float(f)),
+        Some(Token::Identifier(name)) => Ok(ParsedValue::SymbolRef(name)),
         Some(Token::LParen) => {
             let mut elements = Vec::new();
             if stream.peek() == Some(&Token::RParen) {
                 stream.next(); // consume ')'
-                return Ok(Value::Tuple(elements));
+                return Ok(ParsedValue::Tuple(elements));
             }
 
             loop {
@@ -203,7 +223,7 @@ fn parse_value(stream: &mut TokenStream) -> Result<Value, String> {
                     }
                 }
             }
-            Ok(Value::Tuple(elements))
+            Ok(ParsedValue::Tuple(elements))
         }
         Some(other) => Err(format!("Expected value, found {:?}", other)),
         None => Err("Expected value, found end of input".to_string()),
@@ -308,43 +328,82 @@ fn parse_instruction(stream: &mut TokenStream) -> Result<ParsedInstruction, Stri
     }
 }
 
+enum TopLevelItem {
+    SymbolDecl {
+        name: String,
+        debug_desc: Option<String>,
+    },
+    Sentence(TopLevelSentence),
+}
+
 struct TopLevelSentence {
     is_exported: bool,
     name: String,
     body: ParsedSentence,
 }
 
-fn parse_top_level(stream: &mut TokenStream) -> Result<Vec<TopLevelSentence>, String> {
-    let mut sentences = Vec::new();
+fn parse_top_level(stream: &mut TokenStream) -> Result<Vec<TopLevelItem>, String> {
+    let mut items = Vec::new();
 
     while stream.peek().is_some() {
-        let is_exported = if stream.peek() == Some(&Token::Export) {
-            stream.next();
-            true
+        if stream.peek() == Some(&Token::SymbolKeyword) {
+            stream.next(); // consume 'symbol'
+            let name = match stream.next() {
+                Some(Token::Identifier(name)) => name,
+                Some(other) => return Err(format!("Expected symbol name identifier, found {:?}", other)),
+                None => return Err("Expected symbol name identifier, found end of input".to_string()),
+            };
+
+            let debug_desc = if let Some(Token::StringLiteral(_)) = stream.peek() {
+                if let Some(Token::StringLiteral(desc)) = stream.next() {
+                    Some(desc)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            items.push(TopLevelItem::SymbolDecl { name, debug_desc });
         } else {
-            false
-        };
+            let is_exported = if stream.peek() == Some(&Token::Export) {
+                stream.next();
+                true
+            } else {
+                false
+            };
 
-        let name = match stream.next() {
-            Some(Token::Identifier(name)) => name,
-            Some(other) => return Err(format!("Expected sentence name identifier, found {:?}", other)),
-            None => return Err("Expected sentence name identifier, found end of input".to_string()),
-        };
+            let name = match stream.next() {
+                Some(Token::Identifier(name)) => name,
+                Some(other) => return Err(format!("Expected sentence name identifier, found {:?}", other)),
+                None => return Err("Expected sentence name identifier, found end of input".to_string()),
+            };
 
-        if stream.peek() == Some(&Token::Colon) {
-            stream.next();
+            if stream.peek() == Some(&Token::Colon) {
+                stream.next();
+            }
+
+            let body = parse_sentence_body(stream)?;
+
+            items.push(TopLevelItem::Sentence(TopLevelSentence {
+                is_exported,
+                name,
+                body,
+            }));
         }
-
-        let body = parse_sentence_body(stream)?;
-
-        sentences.push(TopLevelSentence {
-            is_exported,
-            name,
-            body,
-        });
     }
 
-    Ok(sentences)
+    Ok(items)
+}
+
+#[derive(Debug, Clone)]
+enum ParsedValue {
+    Nil,
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    Tuple(Vec<ParsedValue>),
+    SymbolRef(String),
 }
 
 struct ParsedSentence {
@@ -357,7 +416,7 @@ enum Target {
 }
 
 enum ParsedInstruction {
-    Push(Value),
+    Push(ParsedValue),
     Drop(usize),
     Pick(usize),
     Roll(usize),
@@ -392,16 +451,43 @@ pub struct AssemblyResult {
 
 struct Compiler {
     label_map: HashMap<String, SentenceIndex>,
+    declared_symbols: HashMap<String, Value>,
     sentences: Vec<Vec<Instruction>>,
     exports: HashMap<String, SentenceIndex>,
 }
 
 impl Compiler {
+    fn compile_value(&self, parsed: ParsedValue) -> Result<Value, String> {
+        match parsed {
+            ParsedValue::Nil => Ok(Value::Nil),
+            ParsedValue::Bool(b) => Ok(Value::Bool(b)),
+            ParsedValue::Int(i) => Ok(Value::Int(i)),
+            ParsedValue::Float(f) => Ok(Value::Float(f)),
+            ParsedValue::Tuple(elements) => {
+                let mut compiled_elements = Vec::new();
+                for elem in elements {
+                    compiled_elements.push(self.compile_value(elem)?);
+                }
+                Ok(Value::Tuple(compiled_elements))
+            }
+            ParsedValue::SymbolRef(name) => {
+                if let Some(val) = self.declared_symbols.get(&name) {
+                    Ok(val.clone())
+                } else {
+                    Err(format!("Undeclared symbol reference: '{}'", name))
+                }
+            }
+        }
+    }
+
     fn compile_sentence_body(&mut self, instructions: Vec<ParsedInstruction>) -> Result<Vec<Instruction>, String> {
         let mut compiled = Vec::new();
         for inst in instructions {
             let c_inst = match inst {
-                ParsedInstruction::Push(v) => Instruction::Push(v),
+                ParsedInstruction::Push(v) => {
+                    let compiled_val = self.compile_value(v)?;
+                    Instruction::Push(compiled_val)
+                }
                 ParsedInstruction::Drop(d) => Instruction::Drop(d),
                 ParsedInstruction::Pick(d) => Instruction::Pick(d),
                 ParsedInstruction::Roll(d) => Instruction::Roll(d),
@@ -459,30 +545,62 @@ impl Compiler {
 pub fn assemble(input: &str) -> Result<AssemblyResult, String> {
     let tokens = tokenize(input)?;
     let mut stream = TokenStream { tokens, position: 0 };
-    let top_level = parse_top_level(&mut stream)?;
+    let items = parse_top_level(&mut stream)?;
+
+    let mut declared_symbols = HashMap::new();
+    let mut symbol_counter = 0;
+    let mut sentences = Vec::new();
+
+    // Pass 1: Parse and collect symbol declarations and top-level sentence definitions
+    for item in items {
+        match item {
+            TopLevelItem::SymbolDecl { name, debug_desc } => {
+                if declared_symbols.contains_key(&name) {
+                    return Err(format!("Duplicate symbol declaration: {}", name));
+                }
+                let desc = debug_desc.unwrap_or_else(|| name.clone());
+                let symbol = Symbol {
+                    id: symbol_counter,
+                    name: desc,
+                };
+                symbol_counter += 1;
+                declared_symbols.insert(name, Value::Symbol(symbol));
+            }
+            TopLevelItem::Sentence(s) => {
+                sentences.push(s);
+            }
+        }
+    }
 
     let mut compiler = Compiler {
         label_map: HashMap::new(),
+        declared_symbols,
         sentences: Vec::new(),
         exports: HashMap::new(),
     };
 
-    // Pass 1: Map top-level names to their index
-    for (idx, sentence) in top_level.iter().enumerate() {
+    // Pass 2: Map top-level names to their index
+    for (idx, sentence) in sentences.iter().enumerate() {
         let s_idx = SentenceIndex::from(idx);
+        
+        if compiler.declared_symbols.contains_key(&sentence.name) {
+            return Err(format!("Sentence name '{}' collides with declared symbol", sentence.name));
+        }
+
         if compiler.label_map.insert(sentence.name.clone(), s_idx).is_some() {
             return Err(format!("Duplicate sentence name: {}", sentence.name));
         }
+        
         if sentence.is_exported {
             compiler.exports.insert(sentence.name.clone(), s_idx);
         }
     }
 
     // Pre-allocate space for top-level sentences
-    compiler.sentences.resize(top_level.len(), Vec::new());
+    compiler.sentences.resize(sentences.len(), Vec::new());
 
-    // Pass 2: Compile instructions recursively (handles inline sentences)
-    for (idx, sentence) in top_level.into_iter().enumerate() {
+    // Pass 3: Compile instructions recursively (resolves references to symbols)
+    for (idx, sentence) in sentences.into_iter().enumerate() {
         let compiled_instructions = compiler.compile_sentence_body(sentence.body.instructions)?;
         compiler.sentences[idx] = compiled_instructions;
     }

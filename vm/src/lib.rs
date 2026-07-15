@@ -45,6 +45,7 @@ impl VM {
             Value::Int(x) => *x != 0,
             Value::Float(x) => *x != 0.0 && !x.is_nan(),
             Value::Tuple(_) => true,
+            Value::Symbol(_) => true,
         }
     }
 
@@ -458,6 +459,39 @@ mod tests {
         
         let mut vm = VM::new(res.library);
         assert!(vm.execute(start_idx).is_ok());
+        assert!(vm.stack().is_empty());
+    }
+
+    #[test]
+    fn test_symbols_vm() {
+        let code = r#"
+            symbol status_ok "Successful execution"
+            symbol status_error "Execution error"
+            
+            export entry {
+                push status_ok
+                jump verify
+            }
+            
+            verify {
+                # Top of stack has the passed symbol. Compare it to status_ok.
+                push status_ok
+                equal
+                assert
+                
+                # Compare it to status_error (should not be equal)
+                push status_ok
+                push status_error
+                equal
+                not
+                assert
+            }
+        "#;
+        let res = bytecode::assemble(code).unwrap();
+        let entry_idx = *res.exports.get("entry").unwrap();
+        
+        let mut vm = VM::new(res.library);
+        assert!(vm.execute(entry_idx).is_ok());
         assert!(vm.stack().is_empty());
     }
 }

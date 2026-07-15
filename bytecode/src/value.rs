@@ -1,5 +1,18 @@
 use std::fmt;
 
+/// Represents a unique identifier with a debugging description name.
+#[derive(Debug, Clone, Eq)]
+pub struct Symbol {
+    pub id: usize,
+    pub name: String,
+}
+
+impl PartialEq for Symbol {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
 /// Represents any value that can be operated on or stored by the VM.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -13,6 +26,8 @@ pub enum Value {
     Float(f64),
     /// A conceptual tuple containing multiple values.
     Tuple(Vec<Value>),
+    /// A unique symbol value.
+    Symbol(Symbol),
 }
 
 impl fmt::Display for Value {
@@ -36,6 +51,7 @@ impl fmt::Display for Value {
                 }
                 write!(f, ")")
             }
+            Value::Symbol(sym) => write!(f, "symbol({})", sym.name),
         }
     }
 }
