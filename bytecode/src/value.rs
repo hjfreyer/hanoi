@@ -11,6 +11,8 @@ pub enum Value {
     Int(i64),
     /// A 64-bit floating-point number.
     Float(f64),
+    /// A conceptual tuple containing multiple values.
+    Tuple(Vec<Value>),
 }
 
 impl fmt::Display for Value {
@@ -20,6 +22,20 @@ impl fmt::Display for Value {
             Value::Bool(b) => write!(f, "{}", b),
             Value::Int(i) => write!(f, "{}", i),
             Value::Float(val) => write!(f, "{}", val),
+            Value::Tuple(elements) => {
+                write!(f, "(")?;
+                for (idx, elem) in elements.iter().enumerate() {
+                    if idx > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", elem)?;
+                }
+                // Single-element tuples print with a trailing comma to distinguish them
+                if elements.len() == 1 {
+                    write!(f, ",")?;
+                }
+                write!(f, ")")
+            }
         }
     }
 }

@@ -37,13 +37,14 @@ impl VM {
 
     /// Helper to determine the truthiness of a value.
     /// Nil is falsey. Bool(false) is falsey. Numbers equal to zero are falsey.
-    /// Everything else is truthy.
+    /// Tuples are always truthy. Everything else is truthy.
     fn is_truthy(&self, value: &Value) -> bool {
         match value {
             Value::Nil => false,
             Value::Bool(b) => *b,
             Value::Int(x) => *x != 0,
             Value::Float(x) => *x != 0.0 && !x.is_nan(),
+            Value::Tuple(_) => true,
         }
     }
 
@@ -261,6 +262,27 @@ impl VM {
                         return Err(format!("Assertion failed: values are not equal: {:?} != {:?}", a, b));
                     }
                 }
+                Instruction::Tuple(n) => {
+                    if self.stack.len() < n {
+                        return Err(format!("Stack underflow on Tuple: requested {} but stack size {}", n, self.stack.len()));
+                    }
+                    let index = self.stack.len() - n;
+                    let elements = self.stack.split_off(index);
+                    self.stack.push(Value::Tuple(elements));
+                }
+                Instruction::Untuple(n) => {
+                    let val = self.pop()?;
+                    if let Value::Tuple(elements) = val {
+                        if elements.len() != n {
+                            return Err(format!("Tuple size mismatch on Untuple: expected {} but tuple has {}", n, elements.len()));
+                        }
+                        for elem in elements {
+                            self.stack.push(elem);
+                        }
+                    } else {
+                        return Err(format!("Expected Value::Tuple on Untuple, found {:?}", val));
+                    }
+                }
             }
         }
 
@@ -363,6 +385,32 @@ mod tests {
 
         let mut vm = VM::new(library);
         assert!(vm.execute(SentenceIndex::from(0)).is_ok());
+        assert!(vm.stack().is_empty());
+    }
+
+    #[test]
+    fn test_tuples() {
+        let mut library = Library::new();
+        // push 1, push 2, push 3, tuple(3) -> Tuple(1, 2, 3)
+        // untuple(3) -> pushes 1, 2, 3 back.
+        let sentence = vec![
+            Instruction::Push(Value::Int(1)),
+            Instruction::Push(Value::Int(2)),
+            Instruction::Push(Value::Int(3)),
+            Instruction::Tuple(3),
+            Instruction::Untuple(3),
+            Instruction::Push(Value::Int(3)),
+            Instruction::AssertEqual,
+            Instruction::Push(Value::Int(2)),
+            Instruction::AssertEqual,
+            Instruction::Push(Value::Int(1)),
+            Instruction::AssertEqual,
+        ];
+        library.sentences.push(sentence);
+        let idx = SentenceIndex::from(0);
+
+        let mut vm = VM::new(library);
+        assert!(vm.execute(idx).is_ok());
         assert!(vm.stack().is_empty());
     }
 

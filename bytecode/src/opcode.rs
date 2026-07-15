@@ -55,4 +55,10 @@ pub enum Instruction {
     Assert,
     /// Pop the top two values off the stack and panic if they are not equal.
     AssertEqual,
+    
+    /// Pops the top N values off the stack and packages them into a single Tuple.
+    Tuple(usize),
+    /// Pops a Tuple off the stack, checks that it contains exactly N elements,
+    /// and pushes each of those elements back onto the stack in order.
+    Untuple(usize),
 }
