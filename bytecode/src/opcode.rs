@@ -61,4 +61,9 @@ pub enum Instruction {
     /// Pops a Tuple off the stack, checks that it contains exactly N elements,
     /// and pushes each of those elements back onto the stack in order.
     Untuple(usize),
+    
+    /// Pop the top two values on the stack, evaluate logical AND on their truthiness, and push the result.
+    And,
+    /// Pop the top two values on the stack, evaluate logical OR on their truthiness, and push the result.
+    Or,
 }

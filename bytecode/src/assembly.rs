@@ -304,6 +304,8 @@ fn parse_instruction(stream: &mut TokenStream) -> Result<ParsedInstruction, Stri
         "divide" | "div" => Ok(ParsedInstruction::Divide),
         "modulo" | "mod" => Ok(ParsedInstruction::Modulo),
         "not" => Ok(ParsedInstruction::Not),
+        "and" => Ok(ParsedInstruction::And),
+        "or" => Ok(ParsedInstruction::Or),
         "negate" | "neg" => Ok(ParsedInstruction::Negate),
         "print" => Ok(ParsedInstruction::Print),
         "jump" => {
@@ -450,6 +452,8 @@ enum ParsedInstruction {
     AssertEqual,
     Tuple(usize),
     Untuple(usize),
+    And,
+    Or,
 }
 
 /// The result of parsing and compiling assembly code.
@@ -522,6 +526,8 @@ impl Compiler {
                 ParsedInstruction::AssertEqual => Instruction::AssertEqual,
                 ParsedInstruction::Tuple(n) => Instruction::Tuple(n),
                 ParsedInstruction::Untuple(n) => Instruction::Untuple(n),
+                ParsedInstruction::And => Instruction::And,
+                ParsedInstruction::Or => Instruction::Or,
                 ParsedInstruction::Jump(target) => {
                     let target_idx = self.resolve_target(target)?;
                     Instruction::Jump(target_idx)

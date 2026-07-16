@@ -217,6 +217,18 @@ impl VM {
                     let val = self.pop()?;
                     self.stack.push(Value::Bool(!self.is_truthy(&val)));
                 }
+                Instruction::And => {
+                    let b = self.pop()?;
+                    let a = self.pop()?;
+                    let res = self.is_truthy(&a) && self.is_truthy(&b);
+                    self.stack.push(Value::Bool(res));
+                }
+                Instruction::Or => {
+                    let b = self.pop()?;
+                    let a = self.pop()?;
+                    let res = self.is_truthy(&a) || self.is_truthy(&b);
+                    self.stack.push(Value::Bool(res));
+                }
                 Instruction::Negate => {
                     let val = self.pop()?;
                     let res = match val {

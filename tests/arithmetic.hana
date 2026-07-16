@@ -58,3 +58,35 @@ test logical_not {
     push true
     assert_eq
 }
+
+test boolean_operations {
+    push true
+    push true
+    and
+    push true
+    assert_eq
+
+    push true
+    push false
+    and
+    push false
+    assert_eq
+
+    push false
+    push false
+    and
+    push false
+    assert_eq
+
+    push true
+    push false
+    or
+    push true
+    assert_eq
+
+    push false
+    push false
+    or
+    push false
+    assert_eq
+}
