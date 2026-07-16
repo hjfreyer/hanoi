@@ -2,8 +2,9 @@
 
 # Declare Customer states
 symbol customer_state_idle        "Customer is idle"
+symbol customer_state_thirsty     "Customer is thirsty"
 symbol customer_state_ordered     "Customer ordered coffee"
-symbol customer_state_satisfied   "Customer received coffee and is satisfied"
+symbol customer_state_has_coffee  "Customer received coffee and has coffee"
 
 # Declare Barista states
 symbol barista_state_idle      "Barista is idle"
@@ -12,6 +13,8 @@ symbol barista_state_brewing   "Barista is brewing coffee"
 # Declare events
 symbol event_order       "Order event"
 symbol event_coffee      "Prepared coffee drink event"
+symbol event_want_coffee "Customer wants coffee event"
+symbol event_enjoy       "Customer enjoys coffee event"
 
 # Declare statuses
 symbol status_rejected    "Event was rejected"
@@ -26,26 +29,36 @@ init_barista {
     push barista_state_idle
 }
 
-# customer_accept takes [state, event] and pushes true or false.
-# It does not consume the state and event.
+# customer_accept takes [state] and returns ValueSet.
+# It does not consume the state.
 customer_accept {
-    pick 1
+    pick 0
     push customer_state_idle
     equal
     branch {
-        pick 0
-        push event_order
-        equal
+        push singleton(event_want_coffee)
     } {
-        pick 1
-        push customer_state_ordered
+        pick 0
+        push customer_state_thirsty
         equal
         branch {
-            pick 0
-            push event_coffee
-            equal
+            push singleton(event_order)
         } {
-            push false
+            pick 0
+            push customer_state_ordered
+            equal
+            branch {
+                push singleton(event_coffee)
+            } {
+                pick 0
+                push customer_state_has_coffee
+                equal
+                branch {
+                    push singleton(event_enjoy)
+                } {
+                    panic
+                }
+            }
         }
     }
 }
@@ -59,34 +72,55 @@ customer_process {
     branch {
         drop 0
         drop 0
-        push customer_state_ordered
+        push customer_state_thirsty
     } {
-        drop 0
-        drop 0
-        push customer_state_satisfied
+        pick 1
+        push customer_state_thirsty
+        equal
+        branch {
+            drop 0
+            drop 0
+            push customer_state_ordered
+        } {
+            pick 1
+            push customer_state_ordered
+            equal
+            branch {
+                drop 0
+                drop 0
+                push customer_state_has_coffee
+            } {
+                pick 1
+                push customer_state_has_coffee
+                equal
+                branch {
+                    drop 0
+                    drop 0
+                    push customer_state_idle
+                } {
+                    panic
+                }
+            }
+        }
     }
 }
 
-# barista_accept takes [state, event] and pushes true or false.
-# It does not consume the state and event.
+# barista_accept takes [state] and returns ValueSet.
+# It does not consume the state.
 barista_accept {
-    pick 1
+    pick 0
     push barista_state_idle
     equal
     branch {
-        pick 0
-        push event_order
-        equal
+        push singleton(event_order)
     } {
-        pick 1
+        pick 0
         push barista_state_brewing
         equal
         branch {
-            pick 0
-            push event_coffee
-            equal
+            push singleton(event_coffee)
         } {
-            push false
+            panic
         }
     }
 }
@@ -102,9 +136,16 @@ barista_process {
         drop 0
         push barista_state_brewing
     } {
-        drop 0
-        drop 0
-        push barista_state_idle
+        pick 1
+        push barista_state_brewing
+        equal
+        branch {
+            drop 0
+            drop 0
+            push barista_state_idle
+        } {
+            panic
+        }
     }
 }
 
@@ -115,69 +156,152 @@ concurrent_init {
     tuple 2
 }
 
-# concurrent_accept takes [joint_state, event] and pushes true or false.
-# It does not consume the joint_state and event.
+# concurrent_accept takes [joint_state] and returns ValueSet.
+# It does not consume the joint_state.
 concurrent_accept {
-    # Stack: [joint_state, event]
-    pick 1
-    # Stack: [joint_state, event, joint_state]
+    pick 0
     untuple 2
-    # Stack: [joint_state, event, C, B]
-    pick 2
-    # Stack: [joint_state, event, C, B, event]
-    
-    # We want to run customer_accept on [C, event]
-    pick 2  # copies C. Stack: [..., C]
-    pick 1  # copies event. Stack: [..., C, event]
+    roll 1
     jump customer_accept
-    # Stack: [joint_state, event, C, B, event, bool_c]
-    # Cleanup C and event under bool_c:
-    drop 2
     drop 1
-    # Stack: [joint_state, event, C, B, event, bool_c]
-    
-    # We want to run barista_accept on [B, event]
-    pick 2  # copies B
-    pick 2  # copies event
+    roll 1
     jump barista_accept
-    # Stack: [joint_state, event, C, B, event, bool_c, bool_b]
-    # Cleanup B and event under bool_b:
-    drop 2
     drop 1
+    # Stack: [joint_state, C_accept, B_accept]
     
-    # Stack: [joint_state, event, C, B, event, bool_c, bool_b]
-    # AND the two booleans together
-    and
+    # We want to compute:
+    # 1. SyncAccepted = intersection(intersection(C_accept, B_accept), SyncSet)
+    # 2. NonSyncAccepted = intersection(union(C_accept, B_accept), NonSyncSet)
+    # 3. Result = union(SyncAccepted, NonSyncAccepted)
     
-    # Stack: [joint_state, event, C, B, event, result_bool]
-    # Cleanup C, B, event:
-    drop 3
-    drop 2
-    drop 1
+    # Let's copy C_accept and B_accept to compute union:
+    pick 1
+    pick 1
+    set_union
+    # Stack: [joint_state, C_accept, B_accept, C_union_B]
+    
+    # NonSyncSet = union(singleton(event_want_coffee), singleton(event_enjoy))
+    push union(singleton(event_want_coffee), singleton(event_enjoy))
+    set_intersection
+    # Stack: [joint_state, C_accept, B_accept, NonSyncAccepted]
+    
+    # Now compute SyncAccepted. We have C_accept and B_accept at depth 2 and 1:
+    roll 2 # moves C_accept to top. Stack: [joint_state, B_accept, NonSyncAccepted, C_accept]
+    roll 2 # moves B_accept to top. Stack: [joint_state, NonSyncAccepted, C_accept, B_accept]
+    set_intersection
+    # Stack: [joint_state, NonSyncAccepted, C_B_intersection]
+    
+    # SyncSet = union(singleton(event_order), singleton(event_coffee))
+    push union(singleton(event_order), singleton(event_coffee))
+    set_intersection
+    # Stack: [joint_state, NonSyncAccepted, SyncAccepted]
+    
+    # Finally, union the two results:
+    set_union
+    # Stack: [joint_state, Result]
 }
 
 # concurrent_process takes [joint_state, event] and returns [next_joint_state]
-# Assumes valid transition.
 concurrent_process {
-    # Stack: [joint_state, event] (event is top, index 0)
-    roll 1
-    # Stack: [event, joint_state] (joint_state is top, index 0)
-    untuple 2
-    # Stack: [event, C, B] (B is top, index 0)
+    # Check if event is synchronized: event == event_order || event == event_coffee
+    pick 0
+    push event_order
+    equal
+    branch {
+        push true
+    } {
+        pick 0
+        push event_coffee
+        equal
+    }
     
-    # We want to run customer_process on [C, event]
-    pick 2  # copies event. Stack: [event, C, B, event]
-    roll 2  # moves C to top. Stack: [event, B, event, C]
-    roll 1  # swaps event and C. Stack: [event, B, C, event]
-    jump customer_process
-    # Stack: [event, B, C']
-    
-    # Rearrange so B and event are at the top to call barista_process
-    roll 1  # swaps C' and B. Stack: [event, C', B]
-    roll 2  # moves event to top. Stack: [C', B, event]
-    jump barista_process
-    # Stack: [C', B']
-    tuple 2
+    # Stack: [joint_state, event, is_synchronized]
+    branch {
+        # --- SYNCHRONIZED CASE ---
+        # Event is order or coffee. Send to both.
+        # Stack: [joint_state, event]
+        roll 1
+        # Stack: [event, joint_state]
+        untuple 2
+        # Stack: [event, C, B]
+        
+        pick 2  # copies event -> Stack: [event, C, B, event]
+        roll 2  # moves C to top -> Stack: [event, B, event, C]
+        roll 1  # swaps event and C -> Stack: [event, B, C, event]
+        jump customer_process
+        # Stack: [event, B, C']
+        
+        roll 1  # swaps C' and B -> Stack: [event, C', B]
+        roll 2  # moves event to top -> Stack: [C', B, event]
+        jump barista_process
+        # Stack: [C', B']
+        tuple 2
+    } {
+        # --- UNSYNCHRONIZED CASE ---
+        # Stack: [joint_state, event]
+        roll 1
+        # Stack: [event, joint_state]
+        untuple 2
+        # Stack: [event, C, B]
+        
+        # Check if Customer accepts event
+        pick 1  # copies C -> Stack: [event, C, B, C]
+        jump customer_accept
+        # Stack: [event, C, B, C, C_accept]
+        drop 1  # drops C -> Stack: [event, C, B, C_accept]
+        pick 3  # copies event -> Stack: [event, C, B, C_accept, event]
+        roll 1  # swaps C_accept and event -> Stack: [event, C, B, event, C_accept]
+        set_contains
+        # Stack: [event, C, B, customer_accepts]
+        
+        # Check if Barista accepts event
+        pick 1  # copies B -> Stack: [event, C, B, customer_accepts, B]
+        jump barista_accept
+        # Stack: [event, C, B, customer_accepts, B, B_accept]
+        drop 1  # drops B -> Stack: [event, C, B, customer_accepts, B_accept]
+        pick 4  # copies event -> Stack: [event, C, B, customer_accepts, B_accept, event]
+        roll 1  # swaps B_accept and event -> Stack: [event, C, B, customer_accepts, event, B_accept]
+        set_contains
+        # Stack: [event, C, B, customer_accepts, barista_accepts]
+        
+        # Now branch on customer_accepts (which is at depth 1, so let's roll it to top)
+        roll 1  # swaps customer_accepts and barista_accepts -> Stack: [event, C, B, barista_accepts, customer_accepts]
+        branch {
+            # Customer accepts!
+            # Clean up barista_accepts
+            drop 0  # drops barista_accepts -> Stack: [event, C, B]
+            
+            # Send event to Customer only
+            pick 2  # copies event -> Stack: [event, C, B, event]
+            roll 2  # moves C to top -> Stack: [event, B, event, C]
+            roll 1  # swaps event and C -> Stack: [event, B, C, event]
+            jump customer_process
+            # Stack: [event, B, C']
+            
+            roll 2  # moves event to top -> Stack: [B, C', event]
+            drop 0  # drops event -> Stack: [B, C']
+            roll 1  # swaps C' and B -> Stack: [C', B]
+            tuple 2
+        } {
+            # Customer did not accept. Check if Barista accepts (which is at top of stack!)
+            # Stack: [event, C, B, barista_accepts]
+            branch {
+                # Barista accepts!
+                # Send event to Barista only
+                # Stack: [event, C, B]
+                pick 2  # copies event -> Stack: [event, C, B, event]
+                jump barista_process
+                # Stack: [event, C, B']
+                
+                roll 2  # moves event to top -> Stack: [C, B', event]
+                drop 0  # drops event -> Stack: [C, B']
+                tuple 2
+            } {
+                # Neither accepts! Panic!
+                panic
+            }
+        }
+    }
 }
 
 # Test the concurrent joint Customer-Barista system
@@ -185,95 +309,76 @@ test verify_concurrent_system {
     # 1. Initialize joint state -> [(customer_state_idle, barista_state_idle)]
     jump concurrent_init
     
-    # 2. Customer orders coffee / Barista receives order: trigger event_order
-    push event_order
+    # 2. Customer wants coffee
+    push event_want_coffee
+    pick 1
     jump concurrent_accept
+    drop 1
+    set_contains
     assert
+    
+    push event_want_coffee
+    jump concurrent_process # [(customer_state_thirsty, barista_state_idle)]
+    
+    # 3. Customer orders coffee / Barista receives order: trigger event_order
+    push event_order
+    pick 1
+    jump concurrent_accept
+    drop 1
+    set_contains
+    assert
+    
+    push event_order
     jump concurrent_process # [(customer_state_ordered, barista_state_brewing)]
     
-    # 3. Barista finishes brewing / Customer receives coffee: trigger event_coffee
+    # 4. Barista finishes brewing / Customer receives coffee: trigger event_coffee
     push event_coffee
+    pick 1
     jump concurrent_accept
+    drop 1
+    set_contains
     assert
-    jump concurrent_process # [(customer_state_satisfied, barista_state_idle)]
+    
+    push event_coffee
+    jump concurrent_process # [(customer_state_has_coffee, barista_state_idle)]
+    
+    # 5. Customer enjoys coffee
+    push event_enjoy
+    pick 1
+    jump concurrent_accept
+    drop 1
+    set_contains
+    assert
+    
+    push event_enjoy
+    jump concurrent_process # [(customer_state_idle, barista_state_idle)]
     
     # Verify final states
     untuple 2
     push barista_state_idle
     assert_eq
-    push customer_state_satisfied
+    push customer_state_idle
     assert_eq
 }
 
-# Test the full Customer-Barista communication loop
-test verify_customer_barista_loop {
-    # 1. Initialize states -> [customer_state_idle] then [customer_state_idle, barista_state_idle]
-    jump init_customer
-    jump init_barista
-    
-    # 2. Transition customer to customer_state_ordered.
-    # Swap customer and barista states on the stack so customer is at the top.
-    roll 1                   # [customer_state_idle, barista_state_idle] -> [barista_state_idle, customer_state_idle]
-    push event_order         # [barista_state_idle, customer_state_idle, event_order]
-    
-    # Validate event acceptance
-    jump customer_accept     # [barista_state_idle, customer_state_idle, event_order, true]
-    assert
-    jump customer_process    # [barista_state_idle, customer_state_ordered]
-    
-    # 3. Barista receives the order.
-    # Swap so barista state is at the top.
-    roll 1                   # [barista_state_idle, customer_state_ordered] -> [customer_state_ordered, barista_state_idle]
-    push event_order         # [customer_state_ordered, barista_state_idle, event_order]
-    
-    # Validate event acceptance
-    jump barista_accept      # [customer_state_ordered, barista_state_idle, event_order, true]
-    assert
-    jump barista_process     # [customer_state_ordered, barista_state_brewing]
-    
-    # 4. Barista finishes brewing and produces coffee.
-    push event_coffee        # [customer_state_ordered, barista_state_brewing, event_coffee]
-    
-    # Validate event acceptance
-    jump barista_accept      # [customer_state_ordered, barista_state_brewing, event_coffee, true]
-    assert
-    jump barista_process     # [customer_state_ordered, barista_state_idle]
-    
-    # 5. Customer receives the coffee.
-    # We have [customer_state_ordered, barista_state_idle] (with barista_state_idle on top).
-    # Swap customer and barista states on the stack so customer is at the top.
-    roll 1                   # [customer_state_ordered, barista_state_idle] -> [barista_state_idle, customer_state_ordered]
-    push event_coffee        # [barista_state_idle, customer_state_ordered, event_coffee]
-    
-    # Validate event acceptance
-    jump customer_accept     # [barista_state_idle, customer_state_ordered, event_coffee, true]
-    assert
-    jump customer_process    # [barista_state_idle, customer_state_satisfied]
-    
-    # Clean up and verify final customer state is satisfied
-    push customer_state_satisfied
-    assert_eq                # [barista_state_idle]
-    push barista_state_idle
-    assert_eq                # []
-}
 
 # Test the rejection of invalid events for Customer
 test verify_customer_rejection {
     # 1. Initialize state -> [customer_state_idle]
     jump init_customer
     
-    # 2. Trigger invalid coffee event on idle -> [customer_state_idle, event_coffee]
+    # 2. Trigger invalid coffee event on idle -> [customer_state_idle]
     push event_coffee
-    
-    # Validate acceptance: returns [customer_state_idle, event_coffee, false]
+    pick 1
     jump customer_accept
+    drop 1
+    set_contains
     
     # Assert that the return value is false
     push false
     assert_eq
     
-    # Clean up state and event from the stack
-    drop 0
+    # Clean up state from the stack
     drop 0
 }
 
@@ -282,17 +387,17 @@ test verify_barista_rejection {
     # 1. Initialize state -> [barista_state_idle]
     jump init_barista
     
-    # 2. Trigger invalid coffee event on idle -> [barista_state_idle, event_coffee]
+    # 2. Trigger invalid coffee event on idle -> [barista_state_idle]
     push event_coffee
-    
-    # Validate acceptance: returns [barista_state_idle, event_coffee, false]
+    pick 1
     jump barista_accept
+    drop 1
+    set_contains
     
     # Assert that the return value is false
     push false
     assert_eq
     
-    # Clean up state and event from the stack
-    drop 0
+    # Clean up state from the stack
     drop 0
 }
