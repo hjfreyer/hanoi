@@ -6,7 +6,7 @@ pub mod value;
 pub use assembly::{assemble, AssemblyResult};
 pub use library::{Library, Sentence, SentenceIndex};
 pub use opcode::Instruction;
-pub use value::Value;
+pub use value::{Value, ValueSet};
 
 #[cfg(test)]
 mod tests {
@@ -14,10 +14,61 @@ mod tests {
 
     #[test]
     fn test_value_display() {
-        assert_eq!(format!("{}", Value::Nil), "nil");
         assert_eq!(format!("{}", Value::Bool(true)), "true");
         assert_eq!(format!("{}", Value::Int(42)), "42");
         assert_eq!(format!("{}", Value::Float(3.14)), "3.14");
+    }
+
+    #[test]
+    fn test_value_set_display() {
+        let empty = Value::Set(ValueSet::Empty);
+        let universal = Value::Set(ValueSet::Universal);
+        let singleton = Value::Set(ValueSet::Singleton(Box::new(Value::Int(42))));
+        let union_set = Value::Set(ValueSet::Union(
+            Box::new(ValueSet::Empty),
+            Box::new(ValueSet::Universal),
+        ));
+        let intersection_set = Value::Set(ValueSet::Intersection(
+            Box::new(ValueSet::Empty),
+            Box::new(ValueSet::Universal),
+        ));
+        let tuple_set = Value::Set(ValueSet::Tuple(vec![ValueSet::Empty, ValueSet::Universal]));
+
+        assert_eq!(format!("{}", empty), "empty_set");
+        assert_eq!(format!("{}", universal), "universal_set");
+        assert_eq!(format!("{}", singleton), "singleton(42)");
+        assert_eq!(format!("{}", union_set), "union(empty_set, universal_set)");
+        assert_eq!(format!("{}", intersection_set), "intersection(empty_set, universal_set)");
+        assert_eq!(format!("{}", tuple_set), "set_tuple(empty_set, universal_set)");
+    }
+
+    #[test]
+    fn test_value_set_choose() {
+        let empty = ValueSet::Empty;
+        let universal = ValueSet::Universal;
+        let singleton = ValueSet::Singleton(Box::new(Value::Int(42)));
+        let union_set = ValueSet::Union(
+            Box::new(ValueSet::Empty),
+            Box::new(ValueSet::Singleton(Box::new(Value::Int(100)))),
+        );
+        let intersection_set = ValueSet::Intersection(
+            Box::new(ValueSet::Union(
+                Box::new(ValueSet::Singleton(Box::new(Value::Int(10)))),
+                Box::new(ValueSet::Singleton(Box::new(Value::Int(20)))),
+            )),
+            Box::new(ValueSet::Singleton(Box::new(Value::Int(20)))),
+        );
+        let tuple_set = ValueSet::Tuple(vec![
+            ValueSet::Singleton(Box::new(Value::Int(5))),
+            ValueSet::Singleton(Box::new(Value::Int(6))),
+        ]);
+
+        assert_eq!(empty.choose(), None);
+        assert_eq!(universal.choose(), Some(Value::Tuple(vec![])));
+        assert_eq!(singleton.choose(), Some(Value::Int(42)));
+        assert_eq!(union_set.choose(), Some(Value::Int(100)));
+        assert_eq!(intersection_set.choose(), Some(Value::Int(20)));
+        assert_eq!(tuple_set.choose(), Some(Value::Tuple(vec![Value::Int(5), Value::Int(6)])));
     }
 
     #[test]
@@ -57,7 +108,7 @@ mod tests {
         let code = r#"
             export entry {
                 push 42
-                push (1, 2, (3, nil))
+                push (1, 2, (3, false))
                 drop 1
             }
         "#;
@@ -71,7 +122,7 @@ mod tests {
                 Instruction::Push(Value::Tuple(vec![
                     Value::Int(1),
                     Value::Int(2),
-                    Value::Tuple(vec![Value::Int(3), Value::Nil])
+                    Value::Tuple(vec![Value::Int(3), Value::Bool(false)])
                 ])),
                 Instruction::Drop(1),
             ]

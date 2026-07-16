@@ -1,4 +1,4 @@
-use bytecode::{Instruction, Library, SentenceIndex, Value};
+use bytecode::{Instruction, Library, SentenceIndex, Value, ValueSet};
 
 /// The virtual machine that executes sentences from a loaded library.
 pub struct VM {
@@ -36,16 +36,16 @@ impl VM {
     }
 
     /// Helper to determine the truthiness of a value.
-    /// Nil is falsey. Bool(false) is falsey. Numbers equal to zero are falsey.
+    /// Bool(false) is falsey. Numbers equal to zero are falsey.
     /// Tuples are always truthy. Everything else is truthy.
     fn is_truthy(&self, value: &Value) -> bool {
         match value {
-            Value::Nil => false,
             Value::Bool(b) => *b,
             Value::Int(x) => *x != 0,
             Value::Float(x) => *x != 0.0 && !x.is_nan(),
             Value::Tuple(_) => true,
             Value::Symbol(_) => true,
+            Value::Set(_) => true,
         }
     }
 
@@ -294,6 +294,67 @@ impl VM {
                         }
                     } else {
                         return Err(format!("Expected Value::Tuple on Untuple, found {:?}", val));
+                    }
+                }
+                Instruction::SetContains => {
+                    let set_val = self.pop()?;
+                    let elem_val = self.pop()?;
+                    if let Value::Set(set) = set_val {
+                        self.stack.push(Value::Bool(set.contains(&elem_val)));
+                    } else {
+                        return Err(format!("Expected Value::Set on set_contains, found {:?}", set_val));
+                    }
+                }
+                Instruction::SetUnion => {
+                    let b = self.pop()?;
+                    let a = self.pop()?;
+                    match (a, b) {
+                        (Value::Set(s1), Value::Set(s2)) => {
+                            self.stack.push(Value::Set(ValueSet::Union(Box::new(s1), Box::new(s2))));
+                        }
+                        (v1, v2) => return Err(format!("Cannot union non-set values {:?} and {:?}", v1, v2)),
+                    }
+                }
+                Instruction::SetIntersection => {
+                    let b = self.pop()?;
+                    let a = self.pop()?;
+                    match (a, b) {
+                        (Value::Set(s1), Value::Set(s2)) => {
+                            self.stack.push(Value::Set(ValueSet::Intersection(Box::new(s1), Box::new(s2))));
+                        }
+                        (v1, v2) => return Err(format!("Cannot intersect non-set values {:?} and {:?}", v1, v2)),
+                    }
+                }
+                Instruction::SetSingleton => {
+                    let val = self.pop()?;
+                    self.stack.push(Value::Set(ValueSet::Singleton(Box::new(val))));
+                }
+                Instruction::SetTuple(n) => {
+                    if self.stack.len() < n {
+                        return Err(format!("Stack underflow on SetTuple: requested {} but stack size {}", n, self.stack.len()));
+                    }
+                    let index = self.stack.len() - n;
+                    let elements = self.stack.split_off(index);
+                    let mut sets = Vec::new();
+                    for elem in elements {
+                        if let Value::Set(s) = elem {
+                            sets.push(s);
+                        } else {
+                            return Err(format!("Expected Value::Set for SetTuple element, found {:?}", elem));
+                        }
+                    }
+                    self.stack.push(Value::Set(ValueSet::Tuple(sets)));
+                }
+                Instruction::SetChoose => {
+                    let set_val = self.pop()?;
+                    if let Value::Set(set) = set_val {
+                        if let Some(elem) = set.choose() {
+                            self.stack.push(Value::Tuple(vec![elem, Value::Bool(true)]));
+                        } else {
+                            self.stack.push(Value::Tuple(vec![Value::Tuple(vec![]), Value::Bool(false)]));
+                        }
+                    } else {
+                        return Err(format!("Expected Value::Set on set_choose, found {:?}", set_val));
                     }
                 }
             }

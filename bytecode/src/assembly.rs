@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use crate::library::{Library, SentenceIndex};
 use crate::opcode::Instruction;
-use crate::value::{Value, Symbol};
+use crate::value::{Value, Symbol, ValueSet};
 
 /// Token types for the assembly lexer.
 #[derive(Debug, Clone, PartialEq)]
@@ -19,7 +19,6 @@ enum Token {
     Colon,
     Int(i64),
     Float(f64),
-    Nil,
     Bool(bool),
 }
 
@@ -145,7 +144,6 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
                     "export" => tokens.push(Token::Export),
                     "symbol" => tokens.push(Token::SymbolKeyword),
                     "test" => tokens.push(Token::TestKeyword),
-                    "nil" => tokens.push(Token::Nil),
                     "true" => tokens.push(Token::Bool(true)),
                     "false" => tokens.push(Token::Bool(false)),
                     _ => tokens.push(Token::Identifier(ident)),
@@ -192,11 +190,67 @@ impl TokenStream {
 /// Parses values into ParsedValue AST nodes.
 fn parse_value(stream: &mut TokenStream) -> Result<ParsedValue, String> {
     match stream.next() {
-        Some(Token::Nil) => Ok(ParsedValue::Nil),
         Some(Token::Bool(b)) => Ok(ParsedValue::Bool(b)),
         Some(Token::Int(i)) => Ok(ParsedValue::Int(i)),
         Some(Token::Float(f)) => Ok(ParsedValue::Float(f)),
-        Some(Token::Identifier(name)) => Ok(ParsedValue::SymbolRef(name)),
+        Some(Token::Identifier(name)) => {
+            match name.as_str() {
+                "empty_set" => Ok(ParsedValue::SetEmpty),
+                "universal_set" => Ok(ParsedValue::SetUniversal),
+                "singleton" => {
+                    stream.expect(Token::LParen)?;
+                    let val = parse_value(stream)?;
+                    stream.expect(Token::RParen)?;
+                    Ok(ParsedValue::SetSingleton(Box::new(val)))
+                }
+                "union" => {
+                    stream.expect(Token::LParen)?;
+                    let left = parse_value(stream)?;
+                    stream.expect(Token::Comma)?;
+                    let right = parse_value(stream)?;
+                    stream.expect(Token::RParen)?;
+                    Ok(ParsedValue::SetUnion(Box::new(left), Box::new(right)))
+                }
+                "intersection" => {
+                    stream.expect(Token::LParen)?;
+                    let left = parse_value(stream)?;
+                    stream.expect(Token::Comma)?;
+                    let right = parse_value(stream)?;
+                    stream.expect(Token::RParen)?;
+                    Ok(ParsedValue::SetIntersection(Box::new(left), Box::new(right)))
+                }
+                "set_tuple" => {
+                    stream.expect(Token::LParen)?;
+                    let mut elements = Vec::new();
+                    if stream.peek() == Some(&Token::RParen) {
+                        stream.next(); // consume ')'
+                    } else {
+                        loop {
+                            let val = parse_value(stream)?;
+                            elements.push(val);
+                            match stream.peek() {
+                                Some(&Token::Comma) => {
+                                    stream.next(); // consume ','
+                                    if stream.peek() == Some(&Token::RParen) {
+                                        stream.next(); // consume trailing comma and ')'
+                                        break;
+                                    }
+                                }
+                                Some(&Token::RParen) => {
+                                    stream.next(); // consume ')'
+                                    break;
+                                }
+                                other => {
+                                    return Err(format!("Expected ',' or ')', found {:?}", other));
+                                }
+                            }
+                        }
+                    }
+                    Ok(ParsedValue::SetTuple(elements))
+                }
+                _ => Ok(ParsedValue::SymbolRef(name)),
+            }
+        }
         Some(Token::LParen) => {
             let mut elements = Vec::new();
             if stream.peek() == Some(&Token::RParen) {
@@ -328,6 +382,15 @@ fn parse_instruction(stream: &mut TokenStream) -> Result<ParsedInstruction, Stri
             let size = parse_usize(stream)?;
             Ok(ParsedInstruction::Untuple(size))
         }
+        "set_contains" => Ok(ParsedInstruction::SetContains),
+        "set_union" => Ok(ParsedInstruction::SetUnion),
+        "set_intersection" => Ok(ParsedInstruction::SetIntersection),
+        "set_singleton" => Ok(ParsedInstruction::SetSingleton),
+        "set_tuple" => {
+            let size = parse_usize(stream)?;
+            Ok(ParsedInstruction::SetTuple(size))
+        }
+        "set_choose" => Ok(ParsedInstruction::SetChoose),
         other => Err(format!("Unknown instruction mnemonic: '{}'", other)),
     }
 }
@@ -412,12 +475,17 @@ fn parse_top_level(stream: &mut TokenStream) -> Result<Vec<TopLevelItem>, String
 
 #[derive(Debug, Clone)]
 enum ParsedValue {
-    Nil,
     Bool(bool),
     Int(i64),
     Float(f64),
     Tuple(Vec<ParsedValue>),
     SymbolRef(String),
+    SetEmpty,
+    SetUniversal,
+    SetSingleton(Box<ParsedValue>),
+    SetUnion(Box<ParsedValue>, Box<ParsedValue>),
+    SetIntersection(Box<ParsedValue>, Box<ParsedValue>),
+    SetTuple(Vec<ParsedValue>),
 }
 
 struct ParsedSentence {
@@ -454,6 +522,12 @@ enum ParsedInstruction {
     Untuple(usize),
     And,
     Or,
+    SetContains,
+    SetUnion,
+    SetIntersection,
+    SetSingleton,
+    SetTuple(usize),
+    SetChoose,
 }
 
 /// The result of parsing and compiling assembly code.
@@ -478,7 +552,6 @@ struct Compiler {
 impl Compiler {
     fn compile_value(&self, parsed: ParsedValue) -> Result<Value, String> {
         match parsed {
-            ParsedValue::Nil => Ok(Value::Nil),
             ParsedValue::Bool(b) => Ok(Value::Bool(b)),
             ParsedValue::Int(i) => Ok(Value::Int(i)),
             ParsedValue::Float(f) => Ok(Value::Float(f)),
@@ -495,6 +568,45 @@ impl Compiler {
                 } else {
                     Err(format!("Undeclared symbol reference: '{}'", name))
                 }
+            }
+            ParsedValue::SetEmpty => Ok(Value::Set(ValueSet::Empty)),
+            ParsedValue::SetUniversal => Ok(Value::Set(ValueSet::Universal)),
+            ParsedValue::SetSingleton(v) => {
+                let val = self.compile_value(*v)?;
+                Ok(Value::Set(ValueSet::Singleton(Box::new(val))))
+            }
+            ParsedValue::SetUnion(a, b) => {
+                let s1 = match self.compile_value(*a)? {
+                    Value::Set(s) => s,
+                    other => return Err(format!("Expected Set in union, found {:?}", other)),
+                };
+                let s2 = match self.compile_value(*b)? {
+                    Value::Set(s) => s,
+                    other => return Err(format!("Expected Set in union, found {:?}", other)),
+                };
+                Ok(Value::Set(ValueSet::Union(Box::new(s1), Box::new(s2))))
+            }
+            ParsedValue::SetIntersection(a, b) => {
+                let s1 = match self.compile_value(*a)? {
+                    Value::Set(s) => s,
+                    other => return Err(format!("Expected Set in intersection, found {:?}", other)),
+                };
+                let s2 = match self.compile_value(*b)? {
+                    Value::Set(s) => s,
+                    other => return Err(format!("Expected Set in intersection, found {:?}", other)),
+                };
+                Ok(Value::Set(ValueSet::Intersection(Box::new(s1), Box::new(s2))))
+            }
+            ParsedValue::SetTuple(elements) => {
+                let mut compiled_elements = Vec::new();
+                for elem in elements {
+                    let s = match self.compile_value(elem)? {
+                        Value::Set(s) => s,
+                        other => return Err(format!("Expected Set in set_tuple, found {:?}", other)),
+                    };
+                    compiled_elements.push(s);
+                }
+                Ok(Value::Set(ValueSet::Tuple(compiled_elements)))
             }
         }
     }
@@ -528,6 +640,12 @@ impl Compiler {
                 ParsedInstruction::Untuple(n) => Instruction::Untuple(n),
                 ParsedInstruction::And => Instruction::And,
                 ParsedInstruction::Or => Instruction::Or,
+                ParsedInstruction::SetContains => Instruction::SetContains,
+                ParsedInstruction::SetUnion => Instruction::SetUnion,
+                ParsedInstruction::SetIntersection => Instruction::SetIntersection,
+                ParsedInstruction::SetSingleton => Instruction::SetSingleton,
+                ParsedInstruction::SetTuple(n) => Instruction::SetTuple(n),
+                ParsedInstruction::SetChoose => Instruction::SetChoose,
                 ParsedInstruction::Jump(target) => {
                     let target_idx = self.resolve_target(target)?;
                     Instruction::Jump(target_idx)

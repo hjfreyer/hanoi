@@ -66,4 +66,17 @@ pub enum Instruction {
     And,
     /// Pop the top two values on the stack, evaluate logical OR on their truthiness, and push the result.
     Or,
+    
+    /// Pop a ValueSet and a Value off the stack, check if the value is in the set, and push a Bool.
+    SetContains,
+    /// Pop two ValueSets off the stack, and push their union ValueSet.
+    SetUnion,
+    /// Pop two ValueSets off the stack, and push their intersection ValueSet.
+    SetIntersection,
+    /// Pop a Value off the stack, and push its singleton ValueSet.
+    SetSingleton,
+    /// Pop N ValueSets off the stack, and push a set tuple of those N sets.
+    SetTuple(usize),
+    /// Pop a ValueSet off the stack, select an arbitrary element, and push a tuple (has_element: bool, element: any).
+    SetChoose,
 }

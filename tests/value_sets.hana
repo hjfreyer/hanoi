@@ -1,0 +1,260 @@
+# Integration tests for ValueSet functionality
+
+test empty_set_literal {
+    # Check that nothing is in empty_set
+    push 42
+    push empty_set
+    set_contains
+    not
+    assert
+
+    push true
+    push empty_set
+    set_contains
+    not
+    assert
+}
+
+test universal_set_literal {
+    # Check that everything is in universal_set
+    push 42
+    push universal_set
+    set_contains
+    assert
+
+    push (1, 2)
+    push universal_set
+    set_contains
+    assert
+}
+
+test singleton_literal {
+    push 42
+    push singleton(42)
+    set_contains
+    assert
+
+    push 43
+    push singleton(42)
+    set_contains
+    not
+    assert
+}
+
+test union_literal {
+    push 1
+    push union(singleton(1), singleton(2))
+    set_contains
+    assert
+
+    push 2
+    push union(singleton(1), singleton(2))
+    set_contains
+    assert
+
+    push 3
+    push union(singleton(1), singleton(2))
+    set_contains
+    not
+    assert
+}
+
+test intersection_literal {
+    push 2
+    push intersection(union(singleton(1), singleton(2)), singleton(2))
+    set_contains
+    assert
+
+    push 1
+    push intersection(union(singleton(1), singleton(2)), singleton(2))
+    set_contains
+    not
+    assert
+}
+
+test set_tuple_literal {
+    # set_tuple(singleton(10), union(singleton(20), singleton(30)))
+    # (10, 20) should be in it
+    push (10, 20)
+    push set_tuple(singleton(10), union(singleton(20), singleton(30)))
+    set_contains
+    assert
+
+    # (10, 30) should be in it
+    push (10, 30)
+    push set_tuple(singleton(10), union(singleton(20), singleton(30)))
+    set_contains
+    assert
+
+    # (10, 40) should not be in it
+    push (10, 40)
+    push set_tuple(singleton(10), union(singleton(20), singleton(30)))
+    set_contains
+    not
+    assert
+
+    # (5, 20) should not be in it
+    push (5, 20)
+    push set_tuple(singleton(10), union(singleton(20), singleton(30)))
+    set_contains
+    not
+    assert
+}
+
+test dynamic_set_operations {
+    # Test set_singleton instruction
+    push 100
+    set_singleton # stack: [singleton(100)]
+    
+    # Test set_union instruction
+    push 200
+    set_singleton # stack: [singleton(100), singleton(200)]
+    set_union # stack: [union(singleton(100), singleton(200))]
+    
+    # Check 100 is in it
+    push 100
+    pick 1
+    set_contains
+    assert
+    
+    # Check 200 is in it
+    push 200
+    pick 1
+    set_contains
+    assert
+    
+    # Check 300 is not in it
+    push 300
+    pick 1
+    set_contains
+    not
+    assert
+    
+    # Clean up union
+    drop 0
+
+    # Test set_intersection instruction
+    push 1
+    set_singleton
+    push 2
+    set_singleton
+    set_union # union(singleton(1), singleton(2))
+    push 2
+    set_singleton
+    set_intersection # intersection(union(1, 2), 2)
+    
+    push 2
+    pick 1
+    set_contains
+    assert
+    
+    push 1
+    pick 1
+    set_contains
+    not
+    assert
+    
+    drop 0
+    
+    # Test set_tuple instruction
+    push 10
+    set_singleton
+    push 20
+    set_singleton
+    set_tuple 2
+    
+    push (10, 20)
+    pick 1
+    set_contains
+    assert
+    
+    push (10, 30)
+    pick 1
+    set_contains
+    not
+    assert
+    
+    drop 0
+}
+
+test set_choose_empty {
+    push empty_set
+    set_choose
+    # Expected: ((), false)
+    untuple 2
+    # Stack: [(), false]
+    tuple 2
+    push ((), false)
+    assert_eq
+}
+
+test set_choose_universal {
+    push universal_set
+    set_choose
+    # Expected: (ELEMENT, true)
+    untuple 2
+    # Stack: [ELEMENT, true] (true is top)
+    assert
+    # Clean up ELEMENT
+    drop 0
+}
+
+test set_choose_singleton {
+    push singleton(42)
+    set_choose
+    untuple 2
+    # Stack: [42, true]
+    assert
+    push 42
+    assert_eq
+}
+
+test set_choose_union {
+    push union(singleton(10), singleton(20))
+    set_choose
+    untuple 2
+    # Stack: [ELEMENT, true]
+    assert
+    # element is either 10 or 20. Let's check:
+    pick 0
+    push 10
+    equal
+    branch {
+        drop 0
+    } {
+        push 20
+        assert_eq
+    }
+}
+
+test set_choose_intersection {
+    push intersection(union(singleton(10), singleton(20)), singleton(20))
+    set_choose
+    untuple 2
+    # Stack: [20, true]
+    assert
+    push 20
+    assert_eq
+}
+
+test set_choose_tuple {
+    push set_tuple(singleton(5), union(singleton(10), singleton(20)))
+    set_choose
+    untuple 2
+    # Stack: [(5, ELEMENT), true]
+    assert
+    # element should be a tuple (5, 10) or (5, 20).
+    untuple 2
+    # has 10 or 20 on top, 5 below
+    pick 0
+    push 10
+    equal
+    branch {
+        drop 0
+    } {
+        push 20
+        assert_eq
+    }
+    push 5
+    assert_eq
+}
