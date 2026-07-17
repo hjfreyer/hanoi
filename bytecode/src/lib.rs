@@ -62,6 +62,17 @@ mod tests {
             ValueSet::Singleton(Box::new(Value::Int(5))),
             ValueSet::Singleton(Box::new(Value::Int(6))),
         ]);
+        let diff_set = ValueSet::Difference(
+            Box::new(ValueSet::Union(
+                Box::new(ValueSet::Singleton(Box::new(Value::Int(10)))),
+                Box::new(ValueSet::Singleton(Box::new(Value::Int(20)))),
+            )),
+            Box::new(ValueSet::Singleton(Box::new(Value::Int(10)))),
+        );
+        let infinite_diff = ValueSet::Difference(
+            Box::new(ValueSet::Universal),
+            Box::new(ValueSet::Singleton(Box::new(Value::Int(10)))),
+        );
 
         assert_eq!(empty.choose(), None);
         assert_eq!(universal.choose(), Some(Value::Tuple(vec![])));
@@ -69,6 +80,12 @@ mod tests {
         assert_eq!(union_set.choose(), Some(Value::Int(100)));
         assert_eq!(intersection_set.choose(), Some(Value::Int(20)));
         assert_eq!(tuple_set.choose(), Some(Value::Tuple(vec![Value::Int(5), Value::Int(6)])));
+        assert_eq!(diff_set.choose(), Some(Value::Int(20)));
+
+        let res = std::panic::catch_unwind(|| {
+            let _ = infinite_diff.choose();
+        });
+        assert!(res.is_err());
     }
 
     #[test]

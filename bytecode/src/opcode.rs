@@ -73,6 +73,8 @@ pub enum Instruction {
     SetUnion,
     /// Pop two ValueSets off the stack, and push their intersection ValueSet.
     SetIntersection,
+    /// Pop two ValueSets off the stack, and push their difference ValueSet.
+    SetDifference,
     /// Pop a Value off the stack, and push its singleton ValueSet.
     SetSingleton,
     /// Pop N ValueSets off the stack, and push a set tuple of those N sets.

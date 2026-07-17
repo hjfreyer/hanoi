@@ -38,6 +38,7 @@ pub enum ValueSet {
     Singleton(Box<Value>),
     Union(Box<ValueSet>, Box<ValueSet>),
     Intersection(Box<ValueSet>, Box<ValueSet>),
+    Difference(Box<ValueSet>, Box<ValueSet>),
     Tuple(Vec<ValueSet>),
 }
 
@@ -50,6 +51,7 @@ impl ValueSet {
             ValueSet::Singleton(v) => *v.as_ref() == *val,
             ValueSet::Union(a, b) => a.contains(val) || b.contains(val),
             ValueSet::Intersection(a, b) => a.contains(val) && b.contains(val),
+            ValueSet::Difference(a, b) => a.contains(val) && !b.contains(val),
             ValueSet::Tuple(sets) => {
                 if let Value::Tuple(elements) = val {
                     if sets.len() != elements.len() {
@@ -64,12 +66,65 @@ impl ValueSet {
         }
     }
 
+    /// Return all elements in the set if it is finite, otherwise None.
+    pub fn elements(&self) -> Option<Vec<Value>> {
+        match self {
+            ValueSet::Empty => Some(vec![]),
+            ValueSet::Universal => None,
+            ValueSet::Singleton(v) => Some(vec![*v.clone()]),
+            ValueSet::Union(a, b) => {
+                let ea = a.elements()?;
+                let eb = b.elements()?;
+                let mut res = ea;
+                for v in eb {
+                    if !res.contains(&v) {
+                        res.push(v);
+                    }
+                }
+                Some(res)
+            }
+            ValueSet::Intersection(a, b) => {
+                if let Some(ea) = a.elements() {
+                    Some(ea.into_iter().filter(|v| b.contains(v)).collect())
+                } else if let Some(eb) = b.elements() {
+                    Some(eb.into_iter().filter(|v| a.contains(v)).collect())
+                } else {
+                    None
+                }
+            }
+            ValueSet::Tuple(sets) => {
+                let mut current = vec![Value::Tuple(vec![])];
+                for set in sets {
+                    let elems = set.elements()?;
+                    let mut next = Vec::new();
+                    for cur in current {
+                        if let Value::Tuple(cv) = cur {
+                            for e in &elems {
+                                let mut new_cv = cv.clone();
+                                new_cv.push(e.clone());
+                                next.push(Value::Tuple(new_cv));
+                            }
+                        }
+                    }
+                    current = next;
+                }
+                Some(current)
+            }
+            ValueSet::Difference(a, b) => {
+                let ea = a.elements()?;
+                Some(ea.into_iter().filter(|v| !b.contains(v)).collect())
+            }
+        }
+    }
+
     /// Choose an arbitrary element from the set, if one exists.
     pub fn choose(&self) -> Option<Value> {
+        if let Some(elems) = self.elements() {
+            return elems.first().cloned();
+        }
         match self {
-            ValueSet::Empty => None,
             ValueSet::Universal => Some(Value::Tuple(vec![])),
-            ValueSet::Singleton(v) => Some(*v.clone()),
+            ValueSet::Difference(_, _) => panic!("Cannot choose from a difference set with an infinite LHS"),
             ValueSet::Union(a, b) => a.choose().or_else(|| b.choose()),
             ValueSet::Intersection(a, b) => choose_intersection(a, b),
             ValueSet::Tuple(sets) => {
@@ -83,6 +138,7 @@ impl ValueSet {
                 }
                 Some(Value::Tuple(elements))
             }
+            _ => None,
         }
     }
 }
@@ -133,6 +189,14 @@ fn choose_intersection(a: &ValueSet, b: &ValueSet) -> Option<Value> {
                 Some(Value::Tuple(elements))
             }
         }
+        (ValueSet::Difference(a1, a2), other) => {
+            let intersection = ValueSet::Intersection(a1.clone(), Box::new(other.clone()));
+            ValueSet::Difference(Box::new(intersection), a2.clone()).choose()
+        }
+        (other, ValueSet::Difference(b1, b2)) => {
+            let intersection = ValueSet::Intersection(Box::new(other.clone()), b1.clone());
+            ValueSet::Difference(Box::new(intersection), b2.clone()).choose()
+        }
     }
 }
 
@@ -144,6 +208,7 @@ impl fmt::Display for ValueSet {
             ValueSet::Singleton(v) => write!(f, "singleton({})", v),
             ValueSet::Union(a, b) => write!(f, "union({}, {})", a, b),
             ValueSet::Intersection(a, b) => write!(f, "intersection({}, {})", a, b),
+            ValueSet::Difference(a, b) => write!(f, "difference({}, {})", a, b),
             ValueSet::Tuple(elements) => {
                 write!(f, "set_tuple(")?;
                 for (idx, elem) in elements.iter().enumerate() {

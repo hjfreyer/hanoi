@@ -325,6 +325,16 @@ impl VM {
                         (v1, v2) => return Err(format!("Cannot intersect non-set values {:?} and {:?}", v1, v2)),
                     }
                 }
+                Instruction::SetDifference => {
+                    let b = self.pop()?;
+                    let a = self.pop()?;
+                    match (a, b) {
+                        (Value::Set(s1), Value::Set(s2)) => {
+                            self.stack.push(Value::Set(ValueSet::Difference(Box::new(s1), Box::new(s2))));
+                        }
+                        (v1, v2) => return Err(format!("Cannot compute difference of non-set values {:?} and {:?}", v1, v2)),
+                    }
+                }
                 Instruction::SetSingleton => {
                     let val = self.pop()?;
                     self.stack.push(Value::Set(ValueSet::Singleton(Box::new(val))));

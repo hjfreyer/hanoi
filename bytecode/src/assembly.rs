@@ -219,6 +219,14 @@ fn parse_value(stream: &mut TokenStream) -> Result<ParsedValue, String> {
                     stream.expect(Token::RParen)?;
                     Ok(ParsedValue::SetIntersection(Box::new(left), Box::new(right)))
                 }
+                "difference" => {
+                    stream.expect(Token::LParen)?;
+                    let left = parse_value(stream)?;
+                    stream.expect(Token::Comma)?;
+                    let right = parse_value(stream)?;
+                    stream.expect(Token::RParen)?;
+                    Ok(ParsedValue::SetDifference(Box::new(left), Box::new(right)))
+                }
                 "set_tuple" => {
                     stream.expect(Token::LParen)?;
                     let mut elements = Vec::new();
@@ -385,6 +393,7 @@ fn parse_instruction(stream: &mut TokenStream) -> Result<ParsedInstruction, Stri
         "set_contains" => Ok(ParsedInstruction::SetContains),
         "set_union" => Ok(ParsedInstruction::SetUnion),
         "set_intersection" => Ok(ParsedInstruction::SetIntersection),
+        "set_difference" => Ok(ParsedInstruction::SetDifference),
         "set_singleton" => Ok(ParsedInstruction::SetSingleton),
         "set_tuple" => {
             let size = parse_usize(stream)?;
@@ -485,6 +494,7 @@ enum ParsedValue {
     SetSingleton(Box<ParsedValue>),
     SetUnion(Box<ParsedValue>, Box<ParsedValue>),
     SetIntersection(Box<ParsedValue>, Box<ParsedValue>),
+    SetDifference(Box<ParsedValue>, Box<ParsedValue>),
     SetTuple(Vec<ParsedValue>),
 }
 
@@ -525,6 +535,7 @@ enum ParsedInstruction {
     SetContains,
     SetUnion,
     SetIntersection,
+    SetDifference,
     SetSingleton,
     SetTuple(usize),
     SetChoose,
@@ -597,6 +608,17 @@ impl Compiler {
                 };
                 Ok(Value::Set(ValueSet::Intersection(Box::new(s1), Box::new(s2))))
             }
+            ParsedValue::SetDifference(a, b) => {
+                let s1 = match self.compile_value(*a)? {
+                    Value::Set(s) => s,
+                    other => return Err(format!("Expected Set in difference, found {:?}", other)),
+                };
+                let s2 = match self.compile_value(*b)? {
+                    Value::Set(s) => s,
+                    other => return Err(format!("Expected Set in difference, found {:?}", other)),
+                };
+                Ok(Value::Set(ValueSet::Difference(Box::new(s1), Box::new(s2))))
+            }
             ParsedValue::SetTuple(elements) => {
                 let mut compiled_elements = Vec::new();
                 for elem in elements {
@@ -643,6 +665,7 @@ impl Compiler {
                 ParsedInstruction::SetContains => Instruction::SetContains,
                 ParsedInstruction::SetUnion => Instruction::SetUnion,
                 ParsedInstruction::SetIntersection => Instruction::SetIntersection,
+                ParsedInstruction::SetDifference => Instruction::SetDifference,
                 ParsedInstruction::SetSingleton => Instruction::SetSingleton,
                 ParsedInstruction::SetTuple(n) => Instruction::SetTuple(n),
                 ParsedInstruction::SetChoose => Instruction::SetChoose,

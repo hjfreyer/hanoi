@@ -72,6 +72,21 @@ test intersection_literal {
     assert
 }
 
+test difference_literal {
+    # 20 is in difference(union(10, 20), 10)
+    push 20
+    push difference(union(singleton(10), singleton(20)), singleton(10))
+    set_contains
+    assert
+
+    # 10 is not in difference(union(10, 20), 10)
+    push 10
+    push difference(union(singleton(10), singleton(20)), singleton(10))
+    set_contains
+    not
+    assert
+}
+
 test set_tuple_literal {
     # set_tuple(singleton(10), union(singleton(20), singleton(30)))
     # (10, 20) should be in it
@@ -175,6 +190,29 @@ test dynamic_set_operations {
     assert
     
     drop 0
+
+    # Test set_difference instruction
+    push 1
+    set_singleton
+    push 2
+    set_singleton
+    set_union # union(1, 2)
+    push 1
+    set_singleton # stack: [union(1, 2), singleton(1)]
+    set_difference # stack: [difference(union(1, 2), singleton(1))]
+
+    push 2
+    pick 1
+    set_contains
+    assert
+
+    push 1
+    pick 1
+    set_contains
+    not
+    assert
+
+    drop 0
 }
 
 test set_choose_empty {
@@ -256,5 +294,15 @@ test set_choose_tuple {
         assert_eq
     }
     push 5
+    assert_eq
+}
+
+test set_choose_difference {
+    push difference(union(singleton(10), singleton(20)), singleton(10))
+    set_choose
+    untuple 2
+    # Stack: [20, true]
+    assert
+    push 20
     assert_eq
 }

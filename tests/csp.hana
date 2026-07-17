@@ -15,6 +15,7 @@ symbol event_order       "Order event"
 symbol event_coffee      "Prepared coffee drink event"
 symbol event_want_coffee "Customer wants coffee event"
 symbol event_enjoy       "Customer enjoys coffee event"
+symbol event_tau          "Tau event"
 
 # Declare statuses
 symbol status_rejected    "Event was rejected"
@@ -171,8 +172,8 @@ concurrent_accept {
     
     # We want to compute:
     # 1. SyncAccepted = intersection(intersection(C_accept, B_accept), SyncSet)
-    # 2. NonSyncAccepted = intersection(union(C_accept, B_accept), NonSyncSet)
-    # 3. Result = union(SyncAccepted, NonSyncAccepted)
+    # 2. NonHiddenAccepted = intersection(union(C_accept, B_accept), NonHiddenSet)
+    # 3. Result = union(SyncAccepted, NonHiddenAccepted)
     
     # Let's copy C_accept and B_accept to compute union:
     pick 1
@@ -180,21 +181,21 @@ concurrent_accept {
     set_union
     # Stack: [joint_state, C_accept, B_accept, C_union_B]
     
-    # NonSyncSet = union(singleton(event_want_coffee), singleton(event_enjoy))
+    # NonHiddenSet = union(singleton(event_want_coffee), singleton(event_enjoy))
     push union(singleton(event_want_coffee), singleton(event_enjoy))
     set_intersection
-    # Stack: [joint_state, C_accept, B_accept, NonSyncAccepted]
+    # Stack: [joint_state, C_accept, B_accept, NonHiddenAccepted]
     
     # Now compute SyncAccepted. We have C_accept and B_accept at depth 2 and 1:
-    roll 2 # moves C_accept to top. Stack: [joint_state, B_accept, NonSyncAccepted, C_accept]
-    roll 2 # moves B_accept to top. Stack: [joint_state, NonSyncAccepted, C_accept, B_accept]
+    roll 2 # moves C_accept to top. Stack: [joint_state, B_accept, NonHiddenAccepted, C_accept]
+    roll 2 # moves B_accept to top. Stack: [joint_state, NonHiddenAccepted, C_accept, B_accept]
     set_intersection
-    # Stack: [joint_state, NonSyncAccepted, C_B_intersection]
+    # Stack: [joint_state, NonHiddenAccepted, C_B_intersection]
     
     # SyncSet = union(singleton(event_order), singleton(event_coffee))
     push union(singleton(event_order), singleton(event_coffee))
     set_intersection
-    # Stack: [joint_state, NonSyncAccepted, SyncAccepted]
+    # Stack: [joint_state, NonHiddenAccepted, SyncAccepted]
     
     # Finally, union the two results:
     set_union
@@ -304,6 +305,138 @@ concurrent_process {
     }
 }
 
+# hidden_init initializes the joint state.
+hidden_init {
+    jump concurrent_init
+}
+
+# hidden_set pushes the ValueSet of hidden events.
+hidden_set {
+    push union(singleton(event_order), singleton(event_coffee))
+}
+
+# hidden_accept takes [joint_state] and returns ValueSet.
+# It does not consume the joint_state.
+hidden_accept {
+    pick 0
+    jump concurrent_accept
+    drop 1
+    # Stack: [joint_state, JointAccept]
+    
+    # Compute NonHiddenAccepted = difference(JointAccept, SyncSet)
+    pick 0
+    jump hidden_set
+    set_difference
+    # Stack: [joint_state, JointAccept, NonHiddenAccepted]
+    
+    # Compute HasSync = intersection(JointAccept, SyncSet)
+    roll 1 # moves JointAccept to top. Stack: [joint_state, NonHiddenAccepted, JointAccept]
+    jump hidden_set
+    set_intersection
+    # Stack: [joint_state, NonHiddenAccepted, HasSync]
+    
+    # Check if HasSync is empty
+    push empty_set
+    equal
+    branch {
+        # HasSync is empty. Just return NonHiddenAccepted.
+        # Stack: [joint_state, NonHiddenAccepted]
+    } {
+        # HasSync is not empty! Union with singleton(event_tau).
+        # Stack: [joint_state, NonHiddenAccepted]
+        push singleton(event_tau)
+        set_union
+        # Stack: [joint_state, Result]
+    }
+}
+
+# hidden_process takes [joint_state, event] and returns next_joint_state.
+hidden_process {
+    pick 0
+    push event_tau
+    equal
+    branch {
+        drop 0 # drop event_tau
+        
+        jump concurrent_accept
+        jump hidden_set
+        set_intersection
+        set_choose
+        untuple 2
+        branch {
+            jump concurrent_process
+        } {
+            panic
+        }
+    } {
+        jump concurrent_process
+    }
+}
+
+# Test the hidden joint Customer-Barista system
+test verify_hidden_system {
+    # 1. Initialize hidden joint state -> [(customer_state_idle, barista_state_idle)]
+    jump hidden_init
+    
+    # customer_state_idle accepts event_want_coffee. Let's verify.
+    push event_want_coffee
+    pick 1
+    jump hidden_accept
+    drop 1
+    set_contains
+    assert
+    
+    # 2. Trigger event_want_coffee -> [(customer_state_thirsty, barista_state_idle)]
+    push event_want_coffee
+    jump hidden_process
+    
+    # In customer_state_thirsty, customer wants to order (event_order, which is synchronized/hidden).
+    # Thus, the joint state should accept event_tau.
+    push event_tau
+    pick 1
+    jump hidden_accept
+    drop 1
+    set_contains
+    assert
+    
+    # 3. Drive event_tau -> [(customer_state_ordered, barista_state_brewing)]
+    push event_tau
+    jump hidden_process
+    
+    # In customer_state_ordered / barista_state_brewing, event_coffee is synchronized/hidden.
+    # Thus, the joint state should accept event_tau.
+    push event_tau
+    pick 1
+    jump hidden_accept
+    drop 1
+    set_contains
+    assert
+    
+    # 4. Drive event_tau -> [(customer_state_has_coffee, barista_state_idle)]
+    push event_tau
+    jump hidden_process
+    
+    # In customer_state_has_coffee, customer wants event_enjoy (unsynchronized).
+    # Thus, the joint state should accept event_enjoy.
+    push event_enjoy
+    pick 1
+    jump hidden_accept
+    drop 1
+    set_contains
+    assert
+    
+    # 5. Trigger event_enjoy -> [(customer_state_idle, barista_state_idle)]
+    push event_enjoy
+    jump hidden_process
+    
+    # Verify final states
+    untuple 2
+    push barista_state_idle
+    assert_eq
+    push customer_state_idle
+    assert_eq
+}
+
 # Test the concurrent joint Customer-Barista system
 test verify_concurrent_system {
     # 1. Initialize joint state -> [(customer_state_idle, barista_state_idle)]
@@ -360,7 +493,6 @@ test verify_concurrent_system {
     push customer_state_idle
     assert_eq
 }
-
 
 # Test the rejection of invalid events for Customer
 test verify_customer_rejection {
