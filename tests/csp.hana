@@ -16,6 +16,8 @@ symbol event_coffee      "Prepared coffee drink event"
 symbol event_want_coffee "Customer wants coffee event"
 symbol event_enjoy       "Customer enjoys coffee event"
 symbol event_tau          "Tau event"
+symbol event_latte       "Latte drink"
+symbol event_espresso    "Espresso drink"
 
 # Declare statuses
 symbol status_rejected    "Event was rejected"
@@ -43,13 +45,13 @@ customer_accept {
         push customer_state_thirsty
         equal
         branch {
-            push singleton(event_order)
+            push singleton((event_order, event_latte))
         } {
             pick 0
             push customer_state_ordered
             equal
             branch {
-                push singleton(event_coffee)
+                push singleton((event_coffee, event_latte))
             } {
                 pick 0
                 push customer_state_has_coffee
@@ -113,13 +115,19 @@ barista_accept {
     push barista_state_idle
     equal
     branch {
-        push singleton(event_order)
+        push set_tuple(singleton(event_order), universal_set)
     } {
         pick 0
+        untuple 2
+        roll 1
         push barista_state_brewing
         equal
         branch {
-            push singleton(event_coffee)
+            # Stack: [state, drink]
+            push event_coffee
+            roll 1
+            tuple 2
+            set_singleton
         } {
             panic
         }
@@ -133,11 +141,24 @@ barista_process {
     push barista_state_idle
     equal
     branch {
-        drop 0
-        drop 0
+        # Transition from idle to brewing: state is barista_state_idle, event is (event_order, drink)
+        # Inputs: [state, event]
+        untuple 2 # Stack: [state, event_order, drink]
+        roll 1    # Swaps event_order and drink. Stack: [state, drink, event_order]
+        drop 0    # Drops event_order. Stack: [state, drink]
+        roll 1    # Swaps state and drink. Stack: [drink, state]
+        drop 0    # Drops state. Stack: [drink]
+        
+        # Construct (barista_state_brewing, drink)
         push barista_state_brewing
+        roll 1    # Swaps barista_state_brewing and drink. Stack: [barista_state_brewing, drink]
+        tuple 2
     } {
+        # Transition from brewing to idle: state is (barista_state_brewing, drink), event is (event_coffee, drink)
+        # Check if the state is indeed a brewing state
         pick 1
+        untuple 2 # Stack: [state, event, state_status, drink]
+        drop 0    # Drops drink. Stack: [state, event, state_status]
         push barista_state_brewing
         equal
         branch {
@@ -192,8 +213,8 @@ concurrent_accept {
     set_intersection
     # Stack: [joint_state, NonHiddenAccepted, C_B_intersection]
     
-    # SyncSet = union(singleton(event_order), singleton(event_coffee))
-    push union(singleton(event_order), singleton(event_coffee))
+    # SyncSet = union(set_tuple(singleton(event_order), universal_set), set_tuple(singleton(event_coffee), universal_set))
+    push union(set_tuple(singleton(event_order), universal_set), set_tuple(singleton(event_coffee), universal_set))
     set_intersection
     # Stack: [joint_state, NonHiddenAccepted, SyncAccepted]
     
@@ -204,17 +225,10 @@ concurrent_accept {
 
 # concurrent_process takes [joint_state, event] and returns [next_joint_state]
 concurrent_process {
-    # Check if event is synchronized: event == event_order || event == event_coffee
+    # Check if event is synchronized
     pick 0
-    push event_order
-    equal
-    branch {
-        push true
-    } {
-        pick 0
-        push event_coffee
-        equal
-    }
+    push union(set_tuple(singleton(event_order), universal_set), set_tuple(singleton(event_coffee), universal_set))
+    set_contains
     
     # Stack: [joint_state, event, is_synchronized]
     branch {
@@ -312,7 +326,7 @@ hidden_init {
 
 # hidden_set pushes the ValueSet of hidden events.
 hidden_set {
-    push union(singleton(event_order), singleton(event_coffee))
+    push union(set_tuple(singleton(event_order), universal_set), set_tuple(singleton(event_coffee), universal_set))
 }
 
 # hidden_accept takes [joint_state] and returns ValueSet.
@@ -453,26 +467,26 @@ test verify_concurrent_system {
     push event_want_coffee
     jump concurrent_process # [(customer_state_thirsty, barista_state_idle)]
     
-    # 3. Customer orders coffee / Barista receives order: trigger event_order
-    push event_order
+    # 3. Customer orders coffee / Barista receives order: trigger (event_order, event_latte)
+    push (event_order, event_latte)
     pick 1
     jump concurrent_accept
     drop 1
     set_contains
     assert
     
-    push event_order
+    push (event_order, event_latte)
     jump concurrent_process # [(customer_state_ordered, barista_state_brewing)]
     
-    # 4. Barista finishes brewing / Customer receives coffee: trigger event_coffee
-    push event_coffee
+    # 4. Barista finishes brewing / Customer receives coffee: trigger (event_coffee, event_latte)
+    push (event_coffee, event_latte)
     pick 1
     jump concurrent_accept
     drop 1
     set_contains
     assert
     
-    push event_coffee
+    push (event_coffee, event_latte)
     jump concurrent_process # [(customer_state_has_coffee, barista_state_idle)]
     
     # 5. Customer enjoys coffee
@@ -512,6 +526,56 @@ test verify_customer_rejection {
     
     # Clean up state from the stack
     drop 0
+
+    # 3. Test that customer in thirsty accepts (event_order, event_latte)
+    jump init_customer
+    push event_want_coffee
+    jump customer_process
+    
+    push (event_order, event_latte)
+    pick 1
+    jump customer_accept
+    drop 1
+    set_contains
+    assert
+    
+    # 4. Test that customer in thirsty rejects (event_order, event_espresso)
+    push (event_order, event_espresso)
+    pick 1
+    jump customer_accept
+    drop 1
+    set_contains
+    push false
+    assert_eq
+    
+    # Clean up state
+    drop 0
+
+    # 5. Test that customer in ordered accepts (event_coffee, event_latte)
+    jump init_customer
+    push event_want_coffee
+    jump customer_process
+    push (event_order, event_latte)
+    jump customer_process # now in customer_state_ordered
+    
+    push (event_coffee, event_latte)
+    pick 1
+    jump customer_accept
+    drop 1
+    set_contains
+    assert
+
+    # 6. Test that customer in ordered rejects (event_coffee, event_espresso)
+    push (event_coffee, event_espresso)
+    pick 1
+    jump customer_accept
+    drop 1
+    set_contains
+    push false
+    assert_eq
+
+    # Clean up state
+    drop 0
 }
 
 # Test the rejection of invalid events for Barista
@@ -531,5 +595,90 @@ test verify_barista_rejection {
     assert_eq
     
     # Clean up state from the stack
+    drop 0
+
+    # 3. Test that barista in idle accepts (event_order, event_latte)
+    jump init_barista
+    push (event_order, event_latte)
+    pick 1
+    jump barista_accept
+    drop 1
+    set_contains
+    assert
+    drop 0
+    
+    # 4. Test that barista in idle accepts (event_order, event_espresso)
+    jump init_barista
+    push (event_order, event_espresso)
+    pick 1
+    jump barista_accept
+    drop 1
+    set_contains
+    assert
+    drop 0
+    
+    # 5. Test that barista in idle does NOT accept event_order (as a raw symbol)
+    jump init_barista
+    push event_order
+    pick 1
+    jump barista_accept
+    drop 1
+    set_contains
+    push false
+    assert_eq
+    drop 0
+
+    # 6. Test that barista in brewing (latte) accepts (event_coffee, event_latte)
+    jump init_barista
+    push (event_order, event_latte)
+    jump barista_process # now in barista_state_brewing state: (barista_state_brewing, event_latte)
+    
+    push (event_coffee, event_latte)
+    pick 1
+    jump barista_accept
+    drop 1
+    set_contains
+    assert
+    drop 0
+
+    # 7. Test that barista in brewing (latte) rejects (event_coffee, event_espresso)
+    jump init_barista
+    push (event_order, event_latte)
+    jump barista_process # now in barista_state_brewing state: (barista_state_brewing, event_latte)
+    
+    push (event_coffee, event_espresso)
+    pick 1
+    jump barista_accept
+    drop 1
+    set_contains
+    push false
+    assert_eq
+    drop 0
+
+    # 8. Test that barista in brewing (espresso) accepts (event_coffee, event_espresso)
+    jump init_barista
+    push (event_order, event_espresso)
+    jump barista_process # now in barista_state_brewing state: (barista_state_brewing, event_espresso)
+    
+    push (event_coffee, event_espresso)
+    pick 1
+    jump barista_accept
+    drop 1
+    set_contains
+    assert
+    drop 0
+
+    # 9. Test that barista in brewing (latte) does NOT accept event_coffee (as a raw symbol)
+    jump init_barista
+    push (event_order, event_latte)
+    jump barista_process # now in barista_state_brewing state: (barista_state_brewing, event_latte)
+    
+    push event_coffee
+    pick 1
+    jump barista_accept
+    drop 1
+    set_contains
+    push false
+    assert_eq
     drop 0
 }
