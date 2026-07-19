@@ -306,3 +306,37 @@ test set_choose_difference {
     push 20
     assert_eq
 }
+
+test complement_literal {
+    # 10 is not in complement(singleton(10))
+    push 10
+    push complement(singleton(10))
+    set_contains
+    not
+    assert
+
+    # 20 is in complement(singleton(10))
+    push 20
+    push complement(singleton(10))
+    set_contains
+    assert
+}
+
+test set_complement_instruction {
+    push 10
+    set_singleton
+    set_complement # stack: [complement(singleton(10))]
+
+    push 10
+    pick 1
+    set_contains
+    not
+    assert
+
+    push 20
+    pick 1
+    set_contains
+    assert
+
+    drop 0
+}

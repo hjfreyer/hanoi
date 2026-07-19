@@ -75,6 +75,8 @@ pub enum Instruction {
     SetIntersection,
     /// Pop two ValueSets off the stack, and push their difference ValueSet.
     SetDifference,
+    /// Pop a ValueSet off the stack, and push its complement ValueSet.
+    SetComplement,
     /// Pop a Value off the stack, and push its singleton ValueSet.
     SetSingleton,
     /// Pop N ValueSets off the stack, and push a set tuple of those N sets.

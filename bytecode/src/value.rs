@@ -38,7 +38,7 @@ pub enum ValueSet {
     Singleton(Box<Value>),
     Union(Box<ValueSet>, Box<ValueSet>),
     Intersection(Box<ValueSet>, Box<ValueSet>),
-    Difference(Box<ValueSet>, Box<ValueSet>),
+    Complement(Box<ValueSet>),
     Tuple(Vec<ValueSet>),
 }
 
@@ -51,7 +51,7 @@ impl ValueSet {
             ValueSet::Singleton(v) => *v.as_ref() == *val,
             ValueSet::Union(a, b) => a.contains(val) || b.contains(val),
             ValueSet::Intersection(a, b) => a.contains(val) && b.contains(val),
-            ValueSet::Difference(a, b) => a.contains(val) && !b.contains(val),
+            ValueSet::Complement(a) => !a.contains(val),
             ValueSet::Tuple(sets) => {
                 if let Value::Tuple(elements) = val {
                     if sets.len() != elements.len() {
@@ -110,10 +110,7 @@ impl ValueSet {
                 }
                 Some(current)
             }
-            ValueSet::Difference(a, b) => {
-                let ea = a.elements()?;
-                Some(ea.into_iter().filter(|v| !b.contains(v)).collect())
-            }
+            ValueSet::Complement(_) => None,
         }
     }
 
@@ -124,7 +121,7 @@ impl ValueSet {
         }
         match self {
             ValueSet::Universal => Some(Value::Tuple(vec![])),
-            ValueSet::Difference(_, _) => panic!("Cannot choose from a difference set with an infinite LHS"),
+            ValueSet::Complement(_) => panic!("Cannot choose from a complement set (which is infinite)"),
             ValueSet::Union(a, b) => a.choose().or_else(|| b.choose()),
             ValueSet::Intersection(a, b) => choose_intersection(a, b),
             ValueSet::Tuple(sets) => {
@@ -189,13 +186,19 @@ fn choose_intersection(a: &ValueSet, b: &ValueSet) -> Option<Value> {
                 Some(Value::Tuple(elements))
             }
         }
-        (ValueSet::Difference(a1, a2), other) => {
-            let intersection = ValueSet::Intersection(a1.clone(), Box::new(other.clone()));
-            ValueSet::Difference(Box::new(intersection), a2.clone()).choose()
+        (ValueSet::Complement(a1), other) => {
+            if let Some(elems) = other.elements() {
+                elems.into_iter().find(|v| !a1.contains(v))
+            } else {
+                panic!("Cannot choose from an intersection with an infinite LHS/RHS complement");
+            }
         }
-        (other, ValueSet::Difference(b1, b2)) => {
-            let intersection = ValueSet::Intersection(Box::new(other.clone()), b1.clone());
-            ValueSet::Difference(Box::new(intersection), b2.clone()).choose()
+        (other, ValueSet::Complement(b1)) => {
+            if let Some(elems) = other.elements() {
+                elems.into_iter().find(|v| !b1.contains(v))
+            } else {
+                panic!("Cannot choose from an intersection with an infinite LHS/RHS complement");
+            }
         }
     }
 }
@@ -208,7 +211,7 @@ impl fmt::Display for ValueSet {
             ValueSet::Singleton(v) => write!(f, "singleton({})", v),
             ValueSet::Union(a, b) => write!(f, "union({}, {})", a, b),
             ValueSet::Intersection(a, b) => write!(f, "intersection({}, {})", a, b),
-            ValueSet::Difference(a, b) => write!(f, "difference({}, {})", a, b),
+            ValueSet::Complement(a) => write!(f, "complement({})", a),
             ValueSet::Tuple(elements) => {
                 write!(f, "set_tuple(")?;
                 for (idx, elem) in elements.iter().enumerate() {

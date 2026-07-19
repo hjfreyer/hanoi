@@ -62,16 +62,16 @@ mod tests {
             ValueSet::Singleton(Box::new(Value::Int(5))),
             ValueSet::Singleton(Box::new(Value::Int(6))),
         ]);
-        let diff_set = ValueSet::Difference(
+        let diff_set = ValueSet::Intersection(
             Box::new(ValueSet::Union(
                 Box::new(ValueSet::Singleton(Box::new(Value::Int(10)))),
                 Box::new(ValueSet::Singleton(Box::new(Value::Int(20)))),
             )),
-            Box::new(ValueSet::Singleton(Box::new(Value::Int(10)))),
+            Box::new(ValueSet::Complement(Box::new(ValueSet::Singleton(Box::new(Value::Int(10)))))),
         );
-        let infinite_diff = ValueSet::Difference(
+        let infinite_diff = ValueSet::Intersection(
             Box::new(ValueSet::Universal),
-            Box::new(ValueSet::Singleton(Box::new(Value::Int(10)))),
+            Box::new(ValueSet::Complement(Box::new(ValueSet::Singleton(Box::new(Value::Int(10)))))),
         );
 
         assert_eq!(empty.choose(), None);

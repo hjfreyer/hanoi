@@ -286,6 +286,17 @@ fn parse_value(stream: &mut TokenStream) -> Result<ParsedValue, String> {
                         Ok(ParsedValue::SymbolRef(path))
                     }
                 }
+                "complement" => {
+                    if stream.peek() == Some(&Token::LParen) {
+                        stream.expect(Token::LParen)?;
+                        let val = parse_value(stream)?;
+                        stream.expect(Token::RParen)?;
+                        Ok(ParsedValue::SetComplement(Box::new(val)))
+                    } else {
+                        let path = parse_path(stream, name)?;
+                        Ok(ParsedValue::SymbolRef(path))
+                    }
+                }
                 "set_tuple" => {
                     if stream.peek() == Some(&Token::LParen) {
                         stream.expect(Token::LParen)?;
@@ -486,6 +497,7 @@ fn parse_instruction(stream: &mut TokenStream) -> Result<ParsedInstruction, Stri
         "set_union" => Ok(ParsedInstruction::SetUnion),
         "set_intersection" => Ok(ParsedInstruction::SetIntersection),
         "set_difference" => Ok(ParsedInstruction::SetDifference),
+        "set_complement" => Ok(ParsedInstruction::SetComplement),
         "set_singleton" => Ok(ParsedInstruction::SetSingleton),
         "set_tuple" => {
             let size = parse_usize(stream)?;
@@ -666,6 +678,7 @@ enum ParsedValue {
     SetUnion(Box<ParsedValue>, Box<ParsedValue>),
     SetIntersection(Box<ParsedValue>, Box<ParsedValue>),
     SetDifference(Box<ParsedValue>, Box<ParsedValue>),
+    SetComplement(Box<ParsedValue>),
     SetTuple(Vec<ParsedValue>),
 }
 
@@ -707,6 +720,7 @@ enum ParsedInstruction {
     SetUnion,
     SetIntersection,
     SetDifference,
+    SetComplement,
     SetSingleton,
     SetTuple(usize),
     SetChoose,
@@ -1476,7 +1490,14 @@ impl<'a> Compiler<'a> {
                     Value::Set(s) => s,
                     other => return Err(format!("Expected Set in difference, found {:?}", other)),
                 };
-                Ok(Value::Set(ValueSet::Difference(Box::new(s1), Box::new(s2))))
+                Ok(Value::Set(ValueSet::Intersection(Box::new(s1), Box::new(ValueSet::Complement(Box::new(s2))))))
+            }
+            ParsedValue::SetComplement(val) => {
+                let s = match self.compile_value(current_path, *val)? {
+                    Value::Set(s) => s,
+                    other => return Err(format!("Expected Set in complement, found {:?}", other)),
+                };
+                Ok(Value::Set(ValueSet::Complement(Box::new(s))))
             }
             ParsedValue::SetTuple(elements) => {
                 let mut compiled_elements = Vec::new();
@@ -1525,6 +1546,7 @@ impl<'a> Compiler<'a> {
                 ParsedInstruction::SetUnion => Instruction::SetUnion,
                 ParsedInstruction::SetIntersection => Instruction::SetIntersection,
                 ParsedInstruction::SetDifference => Instruction::SetDifference,
+                ParsedInstruction::SetComplement => Instruction::SetComplement,
                 ParsedInstruction::SetSingleton => Instruction::SetSingleton,
                 ParsedInstruction::SetTuple(n) => Instruction::SetTuple(n),
                 ParsedInstruction::SetChoose => Instruction::SetChoose,
