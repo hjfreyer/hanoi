@@ -180,12 +180,7 @@ mod barista {
 sync_events {
     push union(set_tuple(singleton(event::order), universal_set), set_tuple(singleton(event::coffee), universal_set))
 }
-
-non_hidden_events {
-    push union(singleton(event::want_coffee), singleton(event::enjoy))
-}
-
-mod concurrent compose_concurrent(customer, barista, sync_events, non_hidden_events);
+mod concurrent compose_concurrent(customer, barista, sync_events);
 mod hidden compose_hidden(concurrent, sync_events);
 
 # Test the hidden joint Customer-Barista system
