@@ -25,8 +25,8 @@ mod foo {
             assert
             
             # Reference root symbol using crate::
-            push crate::root_sym
-            push crate::root_sym
+            push crate::namespacing::root_sym
+            push crate::namespacing::root_sym
             equal
             assert
 

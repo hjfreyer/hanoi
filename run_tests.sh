@@ -16,27 +16,12 @@ echo "Running Hanoi integration tests..."
 echo "======================================"
 echo ""
 
-failed=0
-passed=0
-
-for test_file in tests/*.hana; do
-    echo "--------------------------------------"
-    echo "Running tests in: $test_file"
-    echo "--------------------------------------"
-    
-    if ./target/debug/test-runner "$test_file"; then
-        passed=$((passed + 1))
-    else
-        failed=$((failed + 1))
-    fi
-    echo ""
-done
-
-echo "======================================"
-if [ "$failed" -eq 0 ]; then
-    echo "All integration test files passed ($passed files)."
+if ./target/debug/test-runner tests; then
+    echo "======================================"
+    echo "All integration tests passed."
     exit 0
 else
-    echo "FAILED: $failed test files failed ($passed passed)."
+    echo "======================================"
+    echo "FAILED: Integration tests failed."
     exit 1
 fi

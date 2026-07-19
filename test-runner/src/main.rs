@@ -6,27 +6,27 @@ use std::io::{self, Write};
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
-        eprintln!("Usage: {} <file.hana>", args[0]);
+        eprintln!("Usage: {} <directory>", args[0]);
         process::exit(1);
     }
 
     let path = &args[1];
-    if !path.ends_with(".hana") {
-        eprintln!("Error: File '{}' must have a '.hana' extension", path);
+    let file_path = std::path::Path::new(path).join("main.hana");
+    if !file_path.exists() {
+        eprintln!("Error: Directory '{}' does not contain 'main.hana'", path);
         process::exit(1);
     }
 
-    let code = match fs::read_to_string(path) {
+    let code = match fs::read_to_string(&file_path) {
         Ok(content) => content,
         Err(err) => {
-            eprintln!("Error reading file '{}': {}", path, err);
+            eprintln!("Error reading file '{}': {}", file_path.display(), err);
             process::exit(1);
         }
     };
 
-    let file_path = std::path::Path::new(path);
-    let base_dir = file_path.parent().zip(file_path.file_stem()).map(|(p, s)| p.join(s));
-    let res = match bytecode::assemble_with_path(&code, base_dir.as_deref()) {
+    let base_dir = file_path.parent();
+    let res = match bytecode::assemble_with_path(&code, base_dir) {
         Ok(result) => result,
         Err(err) => {
             eprintln!("Assembly Error:\n{}", err);
@@ -35,7 +35,7 @@ fn main() {
     };
 
     if res.tests.is_empty() {
-        println!("No tests found in '{}'.", path);
+        println!("No tests found in '{}'.", file_path.display());
         return;
     }
 
