@@ -506,6 +506,11 @@ enum TopLevelItem {
         name: String,
         items: Vec<TopLevelItem>,
     },
+    Compose {
+        name: String,
+        composer: String,
+        args: Vec<Path>,
+    },
 }
 
 struct TopLevelSentence {
@@ -555,6 +560,36 @@ fn parse_items(stream: &mut TokenStream, end_token: Option<Token>, base_dir: Opt
                 Some(other) => return Err(format!("Expected module name identifier, found {:?}", other)),
                 None => return Err("Expected module name identifier, found end of input".to_string()),
             };
+            
+            if let Some(&Token::Identifier(ref ident)) = stream.peek() {
+                if ident == "compose_concurrent" || ident == "compose_hidden" {
+                    let composer = match stream.next() {
+                        Some(Token::Identifier(id)) => id,
+                        _ => unreachable!(),
+                    };
+                    stream.expect(Token::LParen)?;
+                    let mut args = Vec::new();
+                    if stream.peek() != Some(&Token::RParen) {
+                        loop {
+                            let first_ident = match stream.next() {
+                                Some(Token::Identifier(id)) => id,
+                                Some(other) => return Err(format!("Expected identifier for path, found {:?}", other)),
+                                None => return Err("Expected identifier for path, found end of input".to_string()),
+                            };
+                            args.push(parse_path(stream, first_ident)?);
+                            if stream.peek() == Some(&Token::Comma) {
+                                stream.next();
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                    stream.expect(Token::RParen)?;
+                    stream.expect(Token::Semicolon)?;
+                    items.push(TopLevelItem::Compose { name, composer, args });
+                    continue;
+                }
+            }
             
             if stream.peek() == Some(&Token::Semicolon) {
                 stream.next(); // consume ';'
@@ -805,9 +840,509 @@ fn build_module_tree(
 
                 module.submodules.insert(name, submodule);
             }
+            TopLevelItem::Compose { name, composer, args } => {
+                if name == "crate" || name == "super" {
+                    return Err(format!("Cannot use reserved keyword '{}' as name", name));
+                }
+
+                if module.symbols.contains_key(&name)
+                    || module.sentences.contains_key(&name)
+                    || module.submodules.contains_key(&name)
+                {
+                    return Err(format!("Duplicate declaration of name '{}' in module '{}'", name, module.name));
+                }
+
+                let generated_items = generate_composition_items(&composer, &args)?;
+                let mut submodule = Module::new(name.clone());
+                current_path.push(name.clone());
+                build_module_tree(
+                    generated_items,
+                    current_path,
+                    symbol_counter,
+                    sentence_counter,
+                    &mut submodule,
+                    flat_sentences,
+                    exports,
+                    tests,
+                )?;
+                current_path.pop();
+
+                module.submodules.insert(name, submodule);
+            }
         }
     }
     Ok(())
+}
+
+fn generate_composition_items(
+    composer: &str,
+    args: &[Path],
+) -> Result<Vec<TopLevelItem>, String> {
+    fn adjust_path(path: &Path) -> Path {
+        let mut segments = Vec::new();
+        if let Some(first) = path.segments.first() {
+            match first {
+                PathSegment::Crate => segments = path.segments.clone(),
+                _ => {
+                    segments.push(PathSegment::Super);
+                    segments.extend(path.segments.clone());
+                }
+            }
+        }
+        Path { segments }
+    }
+
+    if composer == "compose_concurrent" {
+        if args.len() != 4 {
+            return Err("compose_concurrent requires exactly 4 arguments".to_string());
+        }
+        let p1 = adjust_path(&args[0]);
+        let p2 = adjust_path(&args[1]);
+        let sync_fn = adjust_path(&args[2]);
+        let non_hidden_fn = adjust_path(&args[3]);
+
+        let mut p1_init = p1.clone(); p1_init.segments.push(PathSegment::Identifier("init".to_string()));
+        let mut p2_init = p2.clone(); p2_init.segments.push(PathSegment::Identifier("init".to_string()));
+        let mut p1_accept = p1.clone(); p1_accept.segments.push(PathSegment::Identifier("accept".to_string()));
+        let mut p2_accept = p2.clone(); p2_accept.segments.push(PathSegment::Identifier("accept".to_string()));
+        let mut p1_process = p1.clone(); p1_process.segments.push(PathSegment::Identifier("process".to_string()));
+        let mut p2_process = p2.clone(); p2_process.segments.push(PathSegment::Identifier("process".to_string()));
+
+        let init_sentence = TopLevelSentence {
+            is_exported: false,
+            is_test: false,
+            name: "init".to_string(),
+            body: ParsedSentence {
+                instructions: vec![
+                    // Initialize both component states
+                    ParsedInstruction::Jump(Target::Label(p1_init)),
+                    ParsedInstruction::Jump(Target::Label(p2_init)),
+                    // Package them as a tuple (state1, state2)
+                    ParsedInstruction::Tuple(2),
+                ],
+            },
+        };
+
+        let accept_sentence = TopLevelSentence {
+            is_exported: false,
+            is_test: false,
+            name: "accept".to_string(),
+            body: ParsedSentence {
+                instructions: vec![
+                    // Extract component states from the joint tuple
+                    // Stack: [joint_state] -> [joint_state, joint_state]
+                    ParsedInstruction::Pick(0),
+                    // Stack: [joint_state, joint_state] -> [joint_state, C_state, B_state]
+                    ParsedInstruction::Untuple(2),
+                    // Stack: [joint_state, C_state, B_state] -> [joint_state, B_state, C_state]
+                    ParsedInstruction::Roll(1),
+                    
+                    // Invoke P1's accept function
+                    // Stack: [joint_state, B_state, C_state] -> [joint_state, B_state, C_state, C_accept]
+                    ParsedInstruction::Jump(Target::Label(p1_accept.clone())),
+                    // Discard C_state
+                    // Stack: [joint_state, B_state, C_state, C_accept] -> [joint_state, B_state, C_accept]
+                    ParsedInstruction::Drop(1),
+                    // Swap B_state and C_accept
+                    // Stack: [joint_state, B_state, C_accept] -> [joint_state, C_accept, B_state]
+                    ParsedInstruction::Roll(1),
+                    
+                    // Invoke P2's accept function
+                    // Stack: [joint_state, C_accept, B_state] -> [joint_state, C_accept, B_state, B_accept]
+                    ParsedInstruction::Jump(Target::Label(p2_accept.clone())),
+                    // Discard B_state
+                    // Stack: [joint_state, C_accept, B_state, B_accept] -> [joint_state, C_accept, B_accept]
+                    ParsedInstruction::Drop(1),
+                    
+                    // Compute union(C_accept, B_accept) for asynchronous events
+                    // Stack: [joint_state, C_accept, B_accept] -> [joint_state, C_accept, B_accept, C_accept]
+                    ParsedInstruction::Pick(1),
+                    // Stack: -> [joint_state, C_accept, B_accept, C_accept, B_accept]
+                    ParsedInstruction::Pick(1),
+                    // Stack: -> [joint_state, C_accept, B_accept, C_union_B]
+                    ParsedInstruction::SetUnion,
+                    
+                    // Intersect with NonHiddenEvents to keep the set finite
+                    // Stack: -> [joint_state, C_accept, B_accept, C_union_B, NonHiddenSet]
+                    ParsedInstruction::Jump(Target::Label(non_hidden_fn.clone())),
+                    // Stack: -> [joint_state, C_accept, B_accept, AsyncAccepted]
+                    ParsedInstruction::SetIntersection,
+                    
+                    // Move C_accept and B_accept to top to intersect them
+                    // Stack: -> [joint_state, B_accept, AsyncAccepted, C_accept]
+                    ParsedInstruction::Roll(2),
+                    // Stack: -> [joint_state, AsyncAccepted, C_accept, B_accept]
+                    ParsedInstruction::Roll(2),
+                    // Stack: -> [joint_state, AsyncAccepted, C_B_intersection]
+                    ParsedInstruction::SetIntersection,
+                    
+                    // Intersect with SyncEvents
+                    // Stack: -> [joint_state, AsyncAccepted, C_B_intersection, SyncSet]
+                    ParsedInstruction::Jump(Target::Label(sync_fn.clone())),
+                    // Stack: -> [joint_state, AsyncAccepted, SyncAccepted]
+                    ParsedInstruction::SetIntersection,
+                    
+                    // Union AsyncAccepted and SyncAccepted
+                    // Stack: -> [joint_state, Result]
+                    ParsedInstruction::SetUnion,
+                ],
+            },
+        };
+
+        let process_sentence = TopLevelSentence {
+            is_exported: false,
+            is_test: false,
+            name: "process".to_string(),
+            body: ParsedSentence {
+                instructions: vec![
+                    // Check if event is synchronized
+                    // Stack: [joint_state, event] -> [joint_state, event, event]
+                    ParsedInstruction::Pick(0),
+                    // Stack: -> [joint_state, event, event, SyncSet]
+                    ParsedInstruction::Jump(Target::Label(sync_fn.clone())),
+                    // Stack: -> [joint_state, event, is_synchronized]
+                    ParsedInstruction::SetContains,
+                    
+                    // Branch on whether the event is synchronized
+                    ParsedInstruction::Branch(
+                        // --- SYNCHRONIZED CASE ---
+                        // Both components must process the event simultaneously
+                        Target::Inline(ParsedSentence {
+                            instructions: vec![
+                                // Swap joint_state and event
+                                // Stack: [joint_state, event] -> [event, joint_state]
+                                ParsedInstruction::Roll(1),
+                                // Stack: -> [event, C_state, B_state]
+                                ParsedInstruction::Untuple(2),
+                                
+                                // Copy event to top
+                                // Stack: -> [event, C_state, B_state, event]
+                                ParsedInstruction::Pick(2),
+                                // Move C_state to top
+                                // Stack: -> [event, B_state, event, C_state]
+                                ParsedInstruction::Roll(2),
+                                // Swap event and C_state
+                                // Stack: -> [event, B_state, C_state, event]
+                                ParsedInstruction::Roll(1),
+                                // Process P1 transition
+                                // Stack: -> [event, B_state, C_state']
+                                ParsedInstruction::Jump(Target::Label(p1_process.clone())),
+                                
+                                // Swap C_state' and B_state
+                                // Stack: -> [event, C_state', B_state]
+                                ParsedInstruction::Roll(1),
+                                // Move event to top
+                                // Stack: -> [C_state', B_state, event]
+                                ParsedInstruction::Roll(2),
+                                // Process P2 transition
+                                // Stack: -> [C_state', B_state']
+                                ParsedInstruction::Jump(Target::Label(p2_process.clone())),
+                                
+                                // Wrap into next joint state tuple
+                                // Stack: -> [(C_state', B_state')]
+                                ParsedInstruction::Tuple(2),
+                            ]
+                        }),
+                        // --- UNSYNCHRONIZED CASE ---
+                        // Only one component processes the event asynchronously
+                        Target::Inline(ParsedSentence {
+                            instructions: vec![
+                                // Swap joint_state and event
+                                // Stack: [joint_state, event] -> [event, joint_state]
+                                ParsedInstruction::Roll(1),
+                                // Stack: -> [event, C_state, B_state]
+                                ParsedInstruction::Untuple(2),
+                                
+                                // Check if P1 accepts the event
+                                // Stack: -> [event, C_state, B_state, C_state]
+                                ParsedInstruction::Pick(1),
+                                // Stack: -> [event, C_state, B_state, C_state, C_accept]
+                                ParsedInstruction::Jump(Target::Label(p1_accept.clone())),
+                                // Stack: -> [event, C_state, B_state, C_accept]
+                                ParsedInstruction::Drop(1),
+                                // Stack: -> [event, C_state, B_state, C_accept, event]
+                                ParsedInstruction::Pick(3),
+                                // Stack: -> [event, C_state, B_state, event, C_accept]
+                                ParsedInstruction::Roll(1),
+                                // Stack: -> [event, C_state, B_state, p1_accepts]
+                                ParsedInstruction::SetContains,
+                                
+                                // Check if P2 accepts the event
+                                // Stack: -> [event, C_state, B_state, p1_accepts, B_state]
+                                ParsedInstruction::Pick(1),
+                                // Stack: -> [event, C_state, B_state, p1_accepts, B_state, B_accept]
+                                ParsedInstruction::Jump(Target::Label(p2_accept.clone())),
+                                // Stack: -> [event, C_state, B_state, p1_accepts, B_accept]
+                                ParsedInstruction::Drop(1),
+                                // Stack: -> [event, C_state, B_state, p1_accepts, B_accept, event]
+                                ParsedInstruction::Pick(4),
+                                // Stack: -> [event, C_state, B_state, p1_accepts, event, B_accept]
+                                ParsedInstruction::Roll(1),
+                                // Stack: -> [event, C_state, B_state, p1_accepts, p2_accepts]
+                                ParsedInstruction::SetContains,
+                                
+                                // Swap p1_accepts and p2_accepts
+                                // Stack: -> [event, C_state, B_state, p2_accepts, p1_accepts]
+                                ParsedInstruction::Roll(1),
+                                // Branch on p1_accepts
+                                ParsedInstruction::Branch(
+                                    // P1 accepts
+                                    Target::Inline(ParsedSentence {
+                                        instructions: vec![
+                                            // Discard p2_accepts
+                                            // Stack: [event, C_state, B_state]
+                                            ParsedInstruction::Drop(0),
+                                            
+                                            // Copy event to top
+                                            // Stack: -> [event, C_state, B_state, event]
+                                            ParsedInstruction::Pick(2),
+                                            // Move C_state to top
+                                            // Stack: -> [event, B_state, event, C_state]
+                                            ParsedInstruction::Roll(2),
+                                            // Swap event and C_state
+                                            // Stack: -> [event, B_state, C_state, event]
+                                            ParsedInstruction::Roll(1),
+                                            // Process P1 transition
+                                            // Stack: -> [event, B_state, C_state']
+                                            ParsedInstruction::Jump(Target::Label(p1_process.clone())),
+                                            
+                                            // Move event to top and discard it
+                                            // Stack: -> [B_state, C_state', event]
+                                            ParsedInstruction::Roll(2),
+                                            // Stack: -> [B_state, C_state']
+                                            ParsedInstruction::Drop(0),
+                                            // Swap C_state' and B_state (original unchanged state)
+                                            // Stack: -> [C_state', B_state]
+                                            ParsedInstruction::Roll(1),
+                                            // Wrap next state tuple
+                                            ParsedInstruction::Tuple(2),
+                                        ]
+                                    }),
+                                    // P1 does not accept; check if P2 accepts
+                                    Target::Inline(ParsedSentence {
+                                        instructions: vec![
+                                            // Branch on p2_accepts
+                                            // Stack: [event, C_state, B_state, p2_accepts]
+                                            ParsedInstruction::Branch(
+                                                // P2 accepts
+                                                Target::Inline(ParsedSentence {
+                                                    instructions: vec![
+                                                        // Copy event to top
+                                                        // Stack: [event, C_state, B_state] -> [event, C_state, B_state, event]
+                                                        ParsedInstruction::Pick(2),
+                                                        // Process P2 transition
+                                                        // Stack: -> [event, C_state, B_state']
+                                                        ParsedInstruction::Jump(Target::Label(p2_process.clone())),
+                                                        
+                                                        // Move event to top and discard it
+                                                        // Stack: -> [C_state, B_state', event]
+                                                        ParsedInstruction::Roll(2),
+                                                        // Stack: -> [C_state, B_state']
+                                                        ParsedInstruction::Drop(0),
+                                                        // Wrap next state tuple
+                                                        ParsedInstruction::Tuple(2),
+                                                    ]
+                                                }),
+                                                // Neither accepts: illegal transition in composition
+                                                Target::Inline(ParsedSentence {
+                                                    instructions: vec![
+                                                        ParsedInstruction::Panic,
+                                                    ]
+                                                })
+                                            )
+                                        ]
+                                    })
+                                )
+                            ]
+                        })
+                    )
+                ],
+            },
+        };
+
+        Ok(vec![
+            TopLevelItem::Sentence(init_sentence),
+            TopLevelItem::Sentence(accept_sentence),
+            TopLevelItem::Sentence(process_sentence),
+        ])
+    } else if composer == "compose_hidden" {
+        if args.len() != 2 {
+            return Err("compose_hidden requires exactly 2 arguments".to_string());
+        }
+        let concurrent = adjust_path(&args[0]);
+        let sync_fn = adjust_path(&args[1]);
+
+        let mut concurrent_init = concurrent.clone(); concurrent_init.segments.push(PathSegment::Identifier("init".to_string()));
+        let mut concurrent_accept = concurrent.clone(); concurrent_accept.segments.push(PathSegment::Identifier("accept".to_string()));
+        let mut concurrent_process = concurrent.clone(); concurrent_process.segments.push(PathSegment::Identifier("process".to_string()));
+
+        let init_sentence = TopLevelSentence {
+            is_exported: false,
+            is_test: false,
+            name: "init".to_string(),
+            body: ParsedSentence {
+                instructions: vec![
+                    // Delegate initialization to joint concurrent system
+                    ParsedInstruction::Jump(Target::Label(concurrent_init)),
+                ],
+            },
+        };
+
+        let set_sentence = TopLevelSentence {
+            is_exported: false,
+            is_test: false,
+            name: "set".to_string(),
+            body: ParsedSentence {
+                instructions: vec![
+                    // Return the set of synchronized (hidden) events
+                    ParsedInstruction::Jump(Target::Label(sync_fn.clone())),
+                ],
+            },
+        };
+
+        let accept_sentence = TopLevelSentence {
+            is_exported: false,
+            is_test: false,
+            name: "accept".to_string(),
+            body: ParsedSentence {
+                instructions: vec![
+                    // Query the concurrent accept set
+                    // Stack: [joint_state] -> [joint_state, joint_state]
+                    ParsedInstruction::Pick(0),
+                    // Stack: -> [joint_state, JointAccept]
+                    ParsedInstruction::Jump(Target::Label(concurrent_accept.clone())),
+                    // Stack: -> [joint_state, JointAccept]
+                    ParsedInstruction::Drop(1),
+                    
+                    // Compute NonHiddenAccepted = difference(JointAccept, SyncSet)
+                    // Stack: -> [joint_state, JointAccept, JointAccept]
+                    ParsedInstruction::Pick(0),
+                    // Stack: -> [joint_state, JointAccept, JointAccept, SyncSet]
+                    ParsedInstruction::Jump(Target::Label(sync_fn.clone())),
+                    // Stack: -> [joint_state, JointAccept, NonHiddenAccepted]
+                    ParsedInstruction::SetDifference,
+                    
+                    // Compute HasSync = intersection(JointAccept, SyncSet)
+                    // Stack: -> [joint_state, NonHiddenAccepted, JointAccept]
+                    ParsedInstruction::Roll(1),
+                    // Stack: -> [joint_state, NonHiddenAccepted, JointAccept, SyncSet]
+                    ParsedInstruction::Jump(Target::Label(sync_fn.clone())),
+                    // Stack: -> [joint_state, NonHiddenAccepted, HasSync]
+                    ParsedInstruction::SetIntersection,
+                    
+                    // Check if HasSync is empty
+                    // Stack: -> [joint_state, NonHiddenAccepted, HasSync, empty_set]
+                    ParsedInstruction::Push(ParsedValue::SetEmpty),
+                    // Stack: -> [joint_state, NonHiddenAccepted, has_sync_is_empty]
+                    ParsedInstruction::Equal,
+                    ParsedInstruction::Branch(
+                        // HasSync is empty; just return NonHiddenAccepted
+                        // Stack: -> [joint_state, NonHiddenAccepted]
+                        Target::Inline(ParsedSentence {
+                            instructions: vec![]
+                        }),
+                        // HasSync contains hidden events; offer tau transition
+                        Target::Inline(ParsedSentence {
+                            instructions: vec![
+                                // Push tau symbol
+                                ParsedInstruction::Push(ParsedValue::SymbolRef(Path {
+                                    segments: vec![
+                                        PathSegment::Crate,
+                                        PathSegment::Identifier("prelude".to_string()),
+                                        PathSegment::Identifier("event".to_string()),
+                                        PathSegment::Identifier("tau".to_string()),
+                                    ],
+                                })),
+                                // Stack: -> [joint_state, NonHiddenAccepted, {tau}]
+                                ParsedInstruction::SetSingleton,
+                                // Stack: -> [joint_state, NonHiddenAccepted union {tau}]
+                                ParsedInstruction::SetUnion,
+                            ]
+                        })
+                    )
+                ],
+            },
+        };
+
+        let process_sentence = TopLevelSentence {
+            is_exported: false,
+            is_test: false,
+            name: "process".to_string(),
+            body: ParsedSentence {
+                instructions: vec![
+                    // Check if the event is a tau transition
+                    // Stack: [joint_state, event] -> [joint_state, event, event]
+                    ParsedInstruction::Pick(0),
+                    // Stack: -> [joint_state, event, event, tau]
+                    ParsedInstruction::Push(ParsedValue::SymbolRef(Path {
+                        segments: vec![
+                            PathSegment::Crate,
+                            PathSegment::Identifier("prelude".to_string()),
+                            PathSegment::Identifier("event".to_string()),
+                            PathSegment::Identifier("tau".to_string()),
+                        ],
+                    })),
+                    // Stack: -> [joint_state, event, is_tau]
+                    ParsedInstruction::Equal,
+                    ParsedInstruction::Branch(
+                        // --- TAU CASE ---
+                        // Choose a hidden event to drive internally
+                        Target::Inline(ParsedSentence {
+                            instructions: vec![
+                                // Discard event (which is tau)
+                                // Stack: [joint_state]
+                                ParsedInstruction::Drop(0),
+                                
+                                // Fetch accepted joint events
+                                // Stack: -> [joint_state, JointAccept]
+                                ParsedInstruction::Jump(Target::Label(concurrent_accept.clone())),
+                                // Fetch hidden events
+                                // Stack: -> [joint_state, JointAccept, SyncSet]
+                                ParsedInstruction::Jump(Target::Label(sync_fn.clone())),
+                                // Stack: -> [joint_state, HasSync]
+                                ParsedInstruction::SetIntersection,
+                                // Choose one event: returns tuple (chosen_event, has_element)
+                                // Stack: -> [joint_state, has_element, chosen_event] (after untuple)
+                                ParsedInstruction::SetChoose,
+                                ParsedInstruction::Untuple(2),
+                                ParsedInstruction::Branch(
+                                    // Event selected successfully; process it
+                                    // Stack: [joint_state, chosen_event]
+                                    Target::Inline(ParsedSentence {
+                                        instructions: vec![
+                                            ParsedInstruction::Jump(Target::Label(concurrent_process.clone())),
+                                        ]
+                                    }),
+                                    // No hidden event accepts; impossible tau
+                                    Target::Inline(ParsedSentence {
+                                        instructions: vec![
+                                            ParsedInstruction::Panic,
+                                        ]
+                                    })
+                                )
+                            ]
+                        }),
+                        // --- OBSERVABLE CASE ---
+                        // Directly delegate to concurrent process transition
+                        Target::Inline(ParsedSentence {
+                            instructions: vec![
+                                ParsedInstruction::Jump(Target::Label(concurrent_process)),
+                            ]
+                        })
+                    )
+                ],
+            },
+        };
+
+        Ok(vec![
+            TopLevelItem::Sentence(init_sentence),
+            TopLevelItem::Sentence(set_sentence),
+            TopLevelItem::Sentence(accept_sentence),
+            TopLevelItem::Sentence(process_sentence),
+        ])
+    } else {
+        Err(format!("Unknown composer: {}", composer))
+    }
 }
 
 enum ResolvedItem {
