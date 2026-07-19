@@ -3,12 +3,26 @@ use crate::library::{Library, SentenceIndex};
 use crate::opcode::Instruction;
 use crate::value::{Value, Symbol, ValueSet};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PathSegment {
+    Crate,
+    Super,
+    Identifier(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Path {
+    pub segments: Vec<PathSegment>,
+}
+
 /// Token types for the assembly lexer.
 #[derive(Debug, Clone, PartialEq)]
 enum Token {
     Export,
     SymbolKeyword,
     TestKeyword,
+    ModKeyword,
+    DoubleColon,
     Identifier(String),
     StringLiteral(String),
     LBrace,
@@ -68,8 +82,13 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
                 chars.next();
             }
             ':' => {
-                tokens.push(Token::Colon);
                 chars.next();
+                if chars.peek() == Some(&':') {
+                    chars.next();
+                    tokens.push(Token::DoubleColon);
+                } else {
+                    tokens.push(Token::Colon);
+                }
             }
             '"' => {
                 chars.next(); // consume '"'
@@ -144,6 +163,7 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
                     "export" => tokens.push(Token::Export),
                     "symbol" => tokens.push(Token::SymbolKeyword),
                     "test" => tokens.push(Token::TestKeyword),
+                    "mod" => tokens.push(Token::ModKeyword),
                     "true" => tokens.push(Token::Bool(true)),
                     "false" => tokens.push(Token::Bool(false)),
                     _ => tokens.push(Token::Identifier(ident)),
@@ -195,68 +215,110 @@ fn parse_value(stream: &mut TokenStream) -> Result<ParsedValue, String> {
         Some(Token::Float(f)) => Ok(ParsedValue::Float(f)),
         Some(Token::Identifier(name)) => {
             match name.as_str() {
-                "empty_set" => Ok(ParsedValue::SetEmpty),
-                "universal_set" => Ok(ParsedValue::SetUniversal),
+                "empty_set" => {
+                    if let Some(&Token::DoubleColon) = stream.peek() {
+                        let path = parse_path(stream, name)?;
+                        Ok(ParsedValue::SymbolRef(path))
+                    } else {
+                        Ok(ParsedValue::SetEmpty)
+                    }
+                }
+                "universal_set" => {
+                    if let Some(&Token::DoubleColon) = stream.peek() {
+                        let path = parse_path(stream, name)?;
+                        Ok(ParsedValue::SymbolRef(path))
+                    } else {
+                        Ok(ParsedValue::SetUniversal)
+                    }
+                }
                 "singleton" => {
-                    stream.expect(Token::LParen)?;
-                    let val = parse_value(stream)?;
-                    stream.expect(Token::RParen)?;
-                    Ok(ParsedValue::SetSingleton(Box::new(val)))
+                    if stream.peek() == Some(&Token::LParen) {
+                        stream.expect(Token::LParen)?;
+                        let val = parse_value(stream)?;
+                        stream.expect(Token::RParen)?;
+                        Ok(ParsedValue::SetSingleton(Box::new(val)))
+                    } else {
+                        let path = parse_path(stream, name)?;
+                        Ok(ParsedValue::SymbolRef(path))
+                    }
                 }
                 "union" => {
-                    stream.expect(Token::LParen)?;
-                    let left = parse_value(stream)?;
-                    stream.expect(Token::Comma)?;
-                    let right = parse_value(stream)?;
-                    stream.expect(Token::RParen)?;
-                    Ok(ParsedValue::SetUnion(Box::new(left), Box::new(right)))
+                    if stream.peek() == Some(&Token::LParen) {
+                        stream.expect(Token::LParen)?;
+                        let left = parse_value(stream)?;
+                        stream.expect(Token::Comma)?;
+                        let right = parse_value(stream)?;
+                        stream.expect(Token::RParen)?;
+                        Ok(ParsedValue::SetUnion(Box::new(left), Box::new(right)))
+                    } else {
+                        let path = parse_path(stream, name)?;
+                        Ok(ParsedValue::SymbolRef(path))
+                    }
                 }
                 "intersection" => {
-                    stream.expect(Token::LParen)?;
-                    let left = parse_value(stream)?;
-                    stream.expect(Token::Comma)?;
-                    let right = parse_value(stream)?;
-                    stream.expect(Token::RParen)?;
-                    Ok(ParsedValue::SetIntersection(Box::new(left), Box::new(right)))
+                    if stream.peek() == Some(&Token::LParen) {
+                        stream.expect(Token::LParen)?;
+                        let left = parse_value(stream)?;
+                        stream.expect(Token::Comma)?;
+                        let right = parse_value(stream)?;
+                        stream.expect(Token::RParen)?;
+                        Ok(ParsedValue::SetIntersection(Box::new(left), Box::new(right)))
+                    } else {
+                        let path = parse_path(stream, name)?;
+                        Ok(ParsedValue::SymbolRef(path))
+                    }
                 }
                 "difference" => {
-                    stream.expect(Token::LParen)?;
-                    let left = parse_value(stream)?;
-                    stream.expect(Token::Comma)?;
-                    let right = parse_value(stream)?;
-                    stream.expect(Token::RParen)?;
-                    Ok(ParsedValue::SetDifference(Box::new(left), Box::new(right)))
+                    if stream.peek() == Some(&Token::LParen) {
+                        stream.expect(Token::LParen)?;
+                        let left = parse_value(stream)?;
+                        stream.expect(Token::Comma)?;
+                        let right = parse_value(stream)?;
+                        stream.expect(Token::RParen)?;
+                        Ok(ParsedValue::SetDifference(Box::new(left), Box::new(right)))
+                    } else {
+                        let path = parse_path(stream, name)?;
+                        Ok(ParsedValue::SymbolRef(path))
+                    }
                 }
                 "set_tuple" => {
-                    stream.expect(Token::LParen)?;
-                    let mut elements = Vec::new();
-                    if stream.peek() == Some(&Token::RParen) {
-                        stream.next(); // consume ')'
-                    } else {
-                        loop {
-                            let val = parse_value(stream)?;
-                            elements.push(val);
-                            match stream.peek() {
-                                Some(&Token::Comma) => {
-                                    stream.next(); // consume ','
-                                    if stream.peek() == Some(&Token::RParen) {
-                                        stream.next(); // consume trailing comma and ')'
+                    if stream.peek() == Some(&Token::LParen) {
+                        stream.expect(Token::LParen)?;
+                        let mut elements = Vec::new();
+                        if stream.peek() == Some(&Token::RParen) {
+                            stream.next(); // consume ')'
+                        } else {
+                            loop {
+                                let val = parse_value(stream)?;
+                                elements.push(val);
+                                match stream.peek() {
+                                    Some(&Token::Comma) => {
+                                        stream.next(); // consume ','
+                                        if stream.peek() == Some(&Token::RParen) {
+                                            stream.next(); // consume trailing comma and ')'
+                                            break;
+                                        }
+                                    }
+                                    Some(&Token::RParen) => {
+                                        stream.next(); // consume ')'
                                         break;
                                     }
-                                }
-                                Some(&Token::RParen) => {
-                                    stream.next(); // consume ')'
-                                    break;
-                                }
-                                other => {
-                                    return Err(format!("Expected ',' or ')', found {:?}", other));
+                                    other => {
+                                        return Err(format!("Expected ',' or ')', found {:?}", other));
+                                    }
                                 }
                             }
                         }
+                        Ok(ParsedValue::SetTuple(elements))
+                    } else {
+                        let path = parse_path(stream, name)?;
+                        Ok(ParsedValue::SymbolRef(path))
                     }
-                    Ok(ParsedValue::SetTuple(elements))
                 }
-                _ => Ok(ParsedValue::SymbolRef(name)),
+                _ => {
+                    let path = parse_path(stream, name)?;
+                    Ok(ParsedValue::SymbolRef(path))
+                }
             }
         }
         Some(Token::LParen) => {
@@ -294,12 +356,36 @@ fn parse_value(stream: &mut TokenStream) -> Result<ParsedValue, String> {
     }
 }
 
+fn parse_path(stream: &mut TokenStream, first_ident: String) -> Result<Path, String> {
+    let mut segments = vec![parse_segment(&first_ident)];
+    while let Some(&Token::DoubleColon) = stream.peek() {
+        stream.next(); // consume '::'
+        match stream.next() {
+            Some(Token::Identifier(name)) => {
+                segments.push(parse_segment(&name));
+            }
+            Some(other) => return Err(format!("Expected identifier after '::', found {:?}", other)),
+            None => return Err("Expected identifier after '::', found end of input".to_string()),
+        }
+    }
+    Ok(Path { segments })
+}
+
+fn parse_segment(name: &str) -> PathSegment {
+    match name {
+        "crate" => PathSegment::Crate,
+        "super" => PathSegment::Super,
+        other => PathSegment::Identifier(other.to_string()),
+    }
+}
+
 /// Parses a target which is either a named label or an inline `{}` block.
 fn parse_target(stream: &mut TokenStream) -> Result<Target, String> {
     match stream.peek() {
         Some(&Token::Identifier(_)) => {
             if let Some(Token::Identifier(name)) = stream.next() {
-                Ok(Target::Label(name))
+                let path = parse_path(stream, name)?;
+                Ok(Target::Label(path))
             } else {
                 unreachable!()
             }
@@ -337,6 +423,7 @@ fn parse_instruction(stream: &mut TokenStream) -> Result<ParsedInstruction, Stri
     let token = stream.next().ok_or_else(|| "Expected instruction, found end of input".to_string())?;
     let name = match token {
         Token::Identifier(name) => name,
+        Token::ModKeyword => "mod".to_string(),
         other => return Err(format!("Expected instruction mnemonic, found {:?}", other)),
     };
 
@@ -410,6 +497,10 @@ enum TopLevelItem {
         debug_desc: Option<String>,
     },
     Sentence(TopLevelSentence),
+    Mod {
+        name: String,
+        items: Vec<TopLevelItem>,
+    },
 }
 
 struct TopLevelSentence {
@@ -420,9 +511,19 @@ struct TopLevelSentence {
 }
 
 fn parse_top_level(stream: &mut TokenStream) -> Result<Vec<TopLevelItem>, String> {
+    parse_items(stream, None)
+}
+
+fn parse_items(stream: &mut TokenStream, end_token: Option<Token>) -> Result<Vec<TopLevelItem>, String> {
     let mut items = Vec::new();
 
     while stream.peek().is_some() {
+        if let Some(ref end) = end_token {
+            if stream.peek() == Some(end) {
+                break;
+            }
+        }
+
         if stream.peek() == Some(&Token::SymbolKeyword) {
             stream.next(); // consume 'symbol'
             let name = match stream.next() {
@@ -442,6 +543,17 @@ fn parse_top_level(stream: &mut TokenStream) -> Result<Vec<TopLevelItem>, String
             };
 
             items.push(TopLevelItem::SymbolDecl { name, debug_desc });
+        } else if stream.peek() == Some(&Token::ModKeyword) {
+            stream.next(); // consume 'mod'
+            let name = match stream.next() {
+                Some(Token::Identifier(name)) => name,
+                Some(other) => return Err(format!("Expected module name identifier, found {:?}", other)),
+                None => return Err("Expected module name identifier, found end of input".to_string()),
+            };
+            stream.expect(Token::LBrace)?;
+            let mod_items = parse_items(stream, Some(Token::RBrace))?;
+            stream.expect(Token::RBrace)?;
+            items.push(TopLevelItem::Mod { name, items: mod_items });
         } else {
             let mut is_exported = false;
             let mut is_test = false;
@@ -488,7 +600,7 @@ enum ParsedValue {
     Int(i64),
     Float(f64),
     Tuple(Vec<ParsedValue>),
-    SymbolRef(String),
+    SymbolRef(Path),
     SetEmpty,
     SetUniversal,
     SetSingleton(Box<ParsedValue>),
@@ -503,7 +615,7 @@ struct ParsedSentence {
 }
 
 enum Target {
-    Label(String),
+    Label(Path),
     Inline(ParsedSentence),
 }
 
@@ -552,16 +664,205 @@ pub struct AssemblyResult {
     pub tests: HashMap<String, SentenceIndex>,
 }
 
-struct Compiler {
-    label_map: HashMap<String, SentenceIndex>,
-    declared_symbols: HashMap<String, Value>,
-    sentences: Vec<Vec<Instruction>>,
-    exports: HashMap<String, SentenceIndex>,
-    tests: HashMap<String, SentenceIndex>,
+struct Module {
+    name: String,
+    symbols: HashMap<String, Value>,
+    sentences: HashMap<String, SentenceIndex>,
+    submodules: HashMap<String, Module>,
 }
 
-impl Compiler {
-    fn compile_value(&self, parsed: ParsedValue) -> Result<Value, String> {
+impl Module {
+    fn new(name: String) -> Self {
+        Self {
+            name,
+            symbols: HashMap::new(),
+            sentences: HashMap::new(),
+            submodules: HashMap::new(),
+        }
+    }
+}
+
+fn build_module_tree(
+    items: Vec<TopLevelItem>,
+    current_path: &mut Vec<String>,
+    symbol_counter: &mut usize,
+    sentence_counter: &mut usize,
+    module: &mut Module,
+    flat_sentences: &mut Vec<(Vec<String>, TopLevelSentence)>,
+    exports: &mut HashMap<String, SentenceIndex>,
+    tests: &mut HashMap<String, SentenceIndex>,
+) -> Result<(), String> {
+    for item in items {
+        match item {
+            TopLevelItem::SymbolDecl { name, debug_desc } => {
+                if name == "crate" || name == "super" {
+                    return Err(format!("Cannot use reserved keyword '{}' as name", name));
+                }
+
+                if module.symbols.contains_key(&name)
+                    || module.sentences.contains_key(&name)
+                    || module.submodules.contains_key(&name)
+                {
+                    return Err(format!("Duplicate declaration of name '{}' in module '{}'", name, module.name));
+                }
+
+                let fq_name = if current_path.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{}::{}", current_path.join("::"), name)
+                };
+
+                let desc = debug_desc.unwrap_or(fq_name);
+                let symbol = Value::Symbol(Symbol {
+                    id: *symbol_counter,
+                    name: desc,
+                });
+                *symbol_counter += 1;
+
+                module.symbols.insert(name, symbol);
+            }
+            TopLevelItem::Sentence(s) => {
+                if s.name == "crate" || s.name == "super" {
+                    return Err(format!("Cannot use reserved keyword '{}' as name", s.name));
+                }
+
+                if module.symbols.contains_key(&s.name)
+                    || module.sentences.contains_key(&s.name)
+                    || module.submodules.contains_key(&s.name)
+                {
+                    return Err(format!("Duplicate declaration of name '{}' in module '{}'", s.name, module.name));
+                }
+
+                let s_idx = SentenceIndex::from(*sentence_counter);
+                *sentence_counter += 1;
+
+                module.sentences.insert(s.name.clone(), s_idx);
+
+                let fq_name = if current_path.is_empty() {
+                    s.name.clone()
+                } else {
+                    format!("{}::{}", current_path.join("::"), s.name)
+                };
+
+                if s.is_exported {
+                    exports.insert(fq_name.clone(), s_idx);
+                }
+                if s.is_test {
+                    tests.insert(fq_name.clone(), s_idx);
+                }
+
+                flat_sentences.push((current_path.clone(), s));
+            }
+            TopLevelItem::Mod { name, items: mod_items } => {
+                if name == "crate" || name == "super" {
+                    return Err(format!("Cannot use reserved keyword '{}' as name", name));
+                }
+
+                if module.symbols.contains_key(&name)
+                    || module.sentences.contains_key(&name)
+                    || module.submodules.contains_key(&name)
+                {
+                    return Err(format!("Duplicate declaration of name '{}' in module '{}'", name, module.name));
+                }
+
+                let mut submodule = Module::new(name.clone());
+                current_path.push(name.clone());
+                build_module_tree(
+                    mod_items,
+                    current_path,
+                    symbol_counter,
+                    sentence_counter,
+                    &mut submodule,
+                    flat_sentences,
+                    exports,
+                    tests,
+                )?;
+                current_path.pop();
+
+                module.submodules.insert(name, submodule);
+            }
+        }
+    }
+    Ok(())
+}
+
+enum ResolvedItem {
+    Symbol(Value),
+    Sentence(SentenceIndex),
+}
+
+struct Compiler<'a> {
+    root_module: &'a Module,
+    sentences: Vec<Vec<Instruction>>,
+}
+
+impl<'a> Compiler<'a> {
+    fn resolve_path(&self, current_path: &[String], path: &Path) -> Result<ResolvedItem, String> {
+        let mut curr_node = self.root_module;
+        let mut segments_iter = path.segments.iter().peekable();
+
+        if let Some(first) = segments_iter.peek() {
+            match first {
+                PathSegment::Crate => {
+                    segments_iter.next();
+                    // curr_node is already root_module
+                }
+                PathSegment::Super => {
+                    let mut up_count = 0;
+                    while let Some(PathSegment::Super) = segments_iter.peek() {
+                        segments_iter.next();
+                        up_count += 1;
+                    }
+                    if up_count > current_path.len() {
+                        return Err(format!("Path goes up too many levels (current path depth: {})", current_path.len()));
+                    }
+                    let target_depth = current_path.len() - up_count;
+                    let target_path = &current_path[..target_depth];
+                    for name in target_path {
+                        curr_node = curr_node.submodules.get(name)
+                            .ok_or_else(|| format!("Internal error: submodule '{}' not found in path navigation", name))?;
+                    }
+                }
+                PathSegment::Identifier(_) => {
+                    for name in current_path {
+                        curr_node = curr_node.submodules.get(name)
+                            .ok_or_else(|| format!("Internal error: submodule '{}' not found in path navigation", name))?;
+                    }
+                }
+            }
+        }
+
+        let mut last_name: Option<&str> = None;
+        while let Some(seg) = segments_iter.next() {
+            match seg {
+                PathSegment::Crate => return Err("'crate' can only appear at the beginning of a path".to_string()),
+                PathSegment::Super => return Err("'super' can only appear at the beginning of a path".to_string()),
+                PathSegment::Identifier(name) => {
+                    if segments_iter.peek().is_none() {
+                        last_name = Some(name);
+                    } else {
+                        if let Some(sub) = curr_node.submodules.get(name) {
+                            curr_node = sub;
+                        } else {
+                            return Err(format!("Module '{}' not found in '{}'", name, curr_node.name));
+                        }
+                    }
+                }
+            }
+        }
+
+        let last_name = last_name.ok_or_else(|| "Empty path after navigation".to_string())?;
+
+        if let Some(val) = curr_node.symbols.get(last_name) {
+            Ok(ResolvedItem::Symbol(val.clone()))
+        } else if let Some(&idx) = curr_node.sentences.get(last_name) {
+            Ok(ResolvedItem::Sentence(idx))
+        } else {
+            Err(format!("Item '{}' not found in module '{}'", last_name, curr_node.name))
+        }
+    }
+
+    fn compile_value(&self, current_path: &[String], parsed: ParsedValue) -> Result<Value, String> {
         match parsed {
             ParsedValue::Bool(b) => Ok(Value::Bool(b)),
             ParsedValue::Int(i) => Ok(Value::Int(i)),
@@ -569,51 +870,50 @@ impl Compiler {
             ParsedValue::Tuple(elements) => {
                 let mut compiled_elements = Vec::new();
                 for elem in elements {
-                    compiled_elements.push(self.compile_value(elem)?);
+                    compiled_elements.push(self.compile_value(current_path, elem)?);
                 }
                 Ok(Value::Tuple(compiled_elements))
             }
-            ParsedValue::SymbolRef(name) => {
-                if let Some(val) = self.declared_symbols.get(&name) {
-                    Ok(val.clone())
-                } else {
-                    Err(format!("Undeclared symbol reference: '{}'", name))
+            ParsedValue::SymbolRef(path) => {
+                match self.resolve_path(current_path, &path)? {
+                    ResolvedItem::Symbol(val) => Ok(val),
+                    ResolvedItem::Sentence(_) => Err(format!("Expected symbol, found sentence at path {:?}", path)),
                 }
             }
             ParsedValue::SetEmpty => Ok(Value::Set(ValueSet::Empty)),
             ParsedValue::SetUniversal => Ok(Value::Set(ValueSet::Universal)),
             ParsedValue::SetSingleton(v) => {
-                let val = self.compile_value(*v)?;
+                let val = self.compile_value(current_path, *v)?;
                 Ok(Value::Set(ValueSet::Singleton(Box::new(val))))
             }
             ParsedValue::SetUnion(a, b) => {
-                let s1 = match self.compile_value(*a)? {
+                let s1 = match self.compile_value(current_path, *a)? {
                     Value::Set(s) => s,
                     other => return Err(format!("Expected Set in union, found {:?}", other)),
                 };
-                let s2 = match self.compile_value(*b)? {
+                let s2 = match self.compile_value(current_path, *b)? {
                     Value::Set(s) => s,
                     other => return Err(format!("Expected Set in union, found {:?}", other)),
                 };
                 Ok(Value::Set(ValueSet::Union(Box::new(s1), Box::new(s2))))
             }
             ParsedValue::SetIntersection(a, b) => {
-                let s1 = match self.compile_value(*a)? {
+                let s1 = match self.compile_value(current_path, *a)? {
                     Value::Set(s) => s,
                     other => return Err(format!("Expected Set in intersection, found {:?}", other)),
                 };
-                let s2 = match self.compile_value(*b)? {
+                let s2 = match self.compile_value(current_path, *b)? {
                     Value::Set(s) => s,
                     other => return Err(format!("Expected Set in intersection, found {:?}", other)),
                 };
                 Ok(Value::Set(ValueSet::Intersection(Box::new(s1), Box::new(s2))))
             }
             ParsedValue::SetDifference(a, b) => {
-                let s1 = match self.compile_value(*a)? {
+                let s1 = match self.compile_value(current_path, *a)? {
                     Value::Set(s) => s,
                     other => return Err(format!("Expected Set in difference, found {:?}", other)),
                 };
-                let s2 = match self.compile_value(*b)? {
+                let s2 = match self.compile_value(current_path, *b)? {
                     Value::Set(s) => s,
                     other => return Err(format!("Expected Set in difference, found {:?}", other)),
                 };
@@ -622,7 +922,7 @@ impl Compiler {
             ParsedValue::SetTuple(elements) => {
                 let mut compiled_elements = Vec::new();
                 for elem in elements {
-                    let s = match self.compile_value(elem)? {
+                    let s = match self.compile_value(current_path, elem)? {
                         Value::Set(s) => s,
                         other => return Err(format!("Expected Set in set_tuple, found {:?}", other)),
                     };
@@ -633,12 +933,12 @@ impl Compiler {
         }
     }
 
-    fn compile_sentence_body(&mut self, instructions: Vec<ParsedInstruction>) -> Result<Vec<Instruction>, String> {
+    fn compile_sentence_body(&mut self, current_path: &[String], instructions: Vec<ParsedInstruction>) -> Result<Vec<Instruction>, String> {
         let mut compiled = Vec::new();
         for inst in instructions {
             let c_inst = match inst {
                 ParsedInstruction::Push(v) => {
-                    let compiled_val = self.compile_value(v)?;
+                    let compiled_val = self.compile_value(current_path, v)?;
                     Instruction::Push(compiled_val)
                 }
                 ParsedInstruction::Drop(d) => Instruction::Drop(d),
@@ -670,12 +970,12 @@ impl Compiler {
                 ParsedInstruction::SetTuple(n) => Instruction::SetTuple(n),
                 ParsedInstruction::SetChoose => Instruction::SetChoose,
                 ParsedInstruction::Jump(target) => {
-                    let target_idx = self.resolve_target(target)?;
+                    let target_idx = self.resolve_target(current_path, target)?;
                     Instruction::Jump(target_idx)
                 }
                 ParsedInstruction::Branch(t1, t2) => {
-                    let idx1 = self.resolve_target(t1)?;
-                    let idx2 = self.resolve_target(t2)?;
+                    let idx1 = self.resolve_target(current_path, t1)?;
+                    let idx2 = self.resolve_target(current_path, t2)?;
                     Instruction::Branch(idx1, idx2)
                 }
             };
@@ -684,17 +984,18 @@ impl Compiler {
         Ok(compiled)
     }
 
-    fn resolve_target(&mut self, target: Target) -> Result<SentenceIndex, String> {
+    fn resolve_target(&mut self, current_path: &[String], target: Target) -> Result<SentenceIndex, String> {
         match target {
-            Target::Label(name) => {
-                self.label_map.get(&name)
-                    .copied()
-                    .ok_or_else(|| format!("Unresolved label target: {}", name))
+            Target::Label(path) => {
+                match self.resolve_path(current_path, &path).map_err(|e| format!("Unresolved label target: {}", e))? {
+                    ResolvedItem::Sentence(idx) => Ok(idx),
+                    ResolvedItem::Symbol(_) => Err(format!("Expected sentence, found symbol at path {:?}", path)),
+                }
             }
             Target::Inline(parsed_sentence) => {
                 let new_idx = SentenceIndex::from(self.sentences.len());
                 self.sentences.push(Vec::new());
-                let compiled_body = self.compile_sentence_body(parsed_sentence.instructions)?;
+                let compiled_body = self.compile_sentence_body(current_path, parsed_sentence.instructions)?;
                 let idx_usize: usize = new_idx.into();
                 self.sentences[idx_usize] = compiled_body;
                 Ok(new_idx)
@@ -709,66 +1010,36 @@ pub fn assemble(input: &str) -> Result<AssemblyResult, String> {
     let mut stream = TokenStream { tokens, position: 0 };
     let items = parse_top_level(&mut stream)?;
 
-    let mut declared_symbols = HashMap::new();
+    let mut root_module = Module::new("crate".to_string());
     let mut symbol_counter = 0;
-    let mut sentences = Vec::new();
+    let mut sentence_counter = 0;
+    let mut flat_sentences = Vec::new();
+    let mut exports = HashMap::new();
+    let mut tests = HashMap::new();
 
-    // Pass 1: Parse and collect symbol declarations and top-level sentence definitions
-    for item in items {
-        match item {
-            TopLevelItem::SymbolDecl { name, debug_desc } => {
-                if declared_symbols.contains_key(&name) {
-                    return Err(format!("Duplicate symbol declaration: {}", name));
-                }
-                let desc = debug_desc.unwrap_or_else(|| name.clone());
-                let symbol = Symbol {
-                    id: symbol_counter,
-                    name: desc,
-                };
-                symbol_counter += 1;
-                declared_symbols.insert(name, Value::Symbol(symbol));
-            }
-            TopLevelItem::Sentence(s) => {
-                sentences.push(s);
-            }
-        }
-    }
+    let mut current_path = Vec::new();
+    build_module_tree(
+        items,
+        &mut current_path,
+        &mut symbol_counter,
+        &mut sentence_counter,
+        &mut root_module,
+        &mut flat_sentences,
+        &mut exports,
+        &mut tests,
+    )?;
 
     let mut compiler = Compiler {
-        label_map: HashMap::new(),
-        declared_symbols,
+        root_module: &root_module,
         sentences: Vec::new(),
-        exports: HashMap::new(),
-        tests: HashMap::new(),
     };
 
-    // Pass 2: Map top-level names to their index
-    for (idx, sentence) in sentences.iter().enumerate() {
-        let s_idx = SentenceIndex::from(idx);
-        
-        if compiler.declared_symbols.contains_key(&sentence.name) {
-            return Err(format!("Sentence name '{}' collides with declared symbol", sentence.name));
-        }
+    // Pre-allocate space for all named sentences
+    compiler.sentences.resize(sentence_counter, Vec::new());
 
-        if compiler.label_map.insert(sentence.name.clone(), s_idx).is_some() {
-            return Err(format!("Duplicate sentence name: {}", sentence.name));
-        }
-        
-        if sentence.is_exported {
-            compiler.exports.insert(sentence.name.clone(), s_idx);
-        }
-
-        if sentence.is_test {
-            compiler.tests.insert(sentence.name.clone(), s_idx);
-        }
-    }
-
-    // Pre-allocate space for top-level sentences
-    compiler.sentences.resize(sentences.len(), Vec::new());
-
-    // Pass 3: Compile instructions recursively (resolves references to symbols)
-    for (idx, sentence) in sentences.into_iter().enumerate() {
-        let compiled_instructions = compiler.compile_sentence_body(sentence.body.instructions)?;
+    // Compile instructions recursively
+    for (idx, (path, sentence)) in flat_sentences.into_iter().enumerate() {
+        let compiled_instructions = compiler.compile_sentence_body(&path, sentence.body.instructions)?;
         compiler.sentences[idx] = compiled_instructions;
     }
 
@@ -779,7 +1050,7 @@ pub fn assemble(input: &str) -> Result<AssemblyResult, String> {
 
     Ok(AssemblyResult {
         library,
-        exports: compiler.exports,
-        tests: compiler.tests,
+        exports,
+        tests,
     })
 }

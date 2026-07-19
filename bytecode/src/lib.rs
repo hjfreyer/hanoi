@@ -238,4 +238,58 @@ mod tests {
         assert_eq!(res.exports.get("my_exported_test"), Some(&SentenceIndex::from(1)));
         assert_eq!(res.exports.get("my_test"), None);
     }
+
+    #[test]
+    fn test_assemble_reserved_keywords() {
+        let code = r#"
+            mod crate {}
+        "#;
+        assert!(assemble(code).is_err());
+
+        let code2 = r#"
+            symbol super
+        "#;
+        assert!(assemble(code2).is_err());
+    }
+
+    #[test]
+    fn test_assemble_duplicate_names() {
+        let code = r#"
+            symbol foo
+            mod foo {}
+        "#;
+        assert!(assemble(code).is_err());
+    }
+
+    #[test]
+    fn test_assemble_up_path_error() {
+        let code = r#"
+            entry {
+                jump super::entry
+            }
+        "#;
+        let res = assemble(code);
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("goes up too many levels"));
+    }
+
+    #[test]
+    fn test_assemble_namespaces() {
+        let code = r#"
+            mod a {
+                symbol my_sym "A's Symbol"
+                mod b {
+                    export test my_test {
+                        push super::my_sym
+                        push crate::a::my_sym
+                        equal
+                        assert
+                    }
+                }
+            }
+        "#;
+        let res = assemble(code).unwrap();
+        assert!(res.tests.contains_key("a::b::my_test"));
+        assert!(res.exports.contains_key("a::b::my_test"));
+    }
 }
