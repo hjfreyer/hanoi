@@ -1,4 +1,10 @@
 # CSP Customer and Barista interaction simulation with state machines
+# Modified to support multiple concurrent customers with preferred drinks
+
+mod customer_id {
+    symbol c1 "Customer 1"
+    symbol c2 "Customer 2"
+}
 
 mod event {
     # Declare events
@@ -10,7 +16,7 @@ mod event {
     symbol espresso    "Espresso drink"
 }
 
-mod customer {
+mod customer_impl {
     mod state {
         # Declare Customer states
         symbol idle        "Customer is idle"
@@ -19,37 +25,76 @@ mod customer {
         symbol has_coffee  "Customer received coffee and has coffee"
     }
 
-    # Initializes customer state
-    init {
-        push state::idle
-    }
-
-    # accept takes [state] and returns ValueSet.
-    # It does not consume the state.
+    # accept takes state: (id, preferred_drink, internal_state) and returns ValueSet of accepted events.
+    # The accepted events are:
+    # - If internal_state is idle: {(want_coffee, id)}
+    # - If internal_state is thirsty: {(order, id, preferred_drink)}
+    # - If internal_state is ordered: {(coffee, id, preferred_drink)}
+    # - If internal_state is has_coffee: {(enjoy, id)}
     accept {
+        pick 0 # Duplicate state so we don't consume it
+        untuple 3 # Stack: [state, id, preferred_drink, internal_state]
         pick 0
         push state::idle
         equal
         branch {
-            push singleton(super::event::want_coffee)
+            # Construct the set {(want_coffee, id)}
+            push super::event::want_coffee
+            pick 3 # id
+            tuple 2
+            set_singleton # Stack: [state, id, preferred_drink, internal_state, set]
+            
+            # Clean up the temporaries
+            drop 1
+            drop 1
+            drop 1
         } {
             pick 0
             push state::thirsty
             equal
             branch {
-                push singleton((super::event::order, super::event::latte))
+                # Construct the set {(order, id, preferred_drink)}
+                push super::event::order
+                pick 3 # id
+                pick 3 # preferred_drink
+                tuple 3
+                set_singleton
+                
+                # Clean up
+                drop 1
+                drop 1
+                drop 1
             } {
                 pick 0
                 push state::ordered
                 equal
                 branch {
-                    push singleton((super::event::coffee, super::event::latte))
+                    # Construct the set {(coffee, id, preferred_drink)}
+                    push super::event::coffee
+                    pick 3 # id
+                    pick 3 # preferred_drink
+                    tuple 3
+                    set_singleton
+                    
+                    # Clean up
+                    drop 1
+                    drop 1
+                    drop 1
                 } {
                     pick 0
                     push state::has_coffee
                     equal
                     branch {
-                        push singleton(super::event::enjoy)
+                        # Construct the set {(enjoy, id)}
+                        push super::event::enjoy
+                        pick 3 # id
+                        tuple 2
+                        set_singleton
+                        
+                        # Clean up
+                        drop 1
+                        drop 1
+                        drop 1
                     } {
                         panic
                     }
@@ -59,45 +104,93 @@ mod customer {
     }
 
     # process takes [state, event] and returns next_state.
-    # Assumes valid transition.
+    # state is (id, preferred_drink, internal_state)
+    # event is one of the above.
     process {
-        pick 1
+        # Stack: [(id, preferred_drink, internal_state), event]
+        roll 1 # Stack: [event, (id, preferred_drink, internal_state)]
+        untuple 3 # Stack: [event, id, preferred_drink, internal_state]
+        
+        # Check internal_state
+        pick 0
         push state::idle
         equal
         branch {
+            # Transition from idle to thirsty
             drop 0
+            roll 2
             drop 0
             push state::thirsty
+            tuple 3
         } {
-            pick 1
+            pick 0
             push state::thirsty
             equal
             branch {
+                # Transition from thirsty to ordered
                 drop 0
+                roll 2
                 drop 0
                 push state::ordered
+                tuple 3
             } {
-                pick 1
+                pick 0
                 push state::ordered
                 equal
                 branch {
+                    # Transition from ordered to has_coffee
                     drop 0
+                    roll 2
                     drop 0
                     push state::has_coffee
+                    tuple 3
                 } {
-                    pick 1
+                    pick 0
                     push state::has_coffee
                     equal
                     branch {
+                        # Transition from has_coffee to idle
                         drop 0
+                        roll 2
                         drop 0
                         push state::idle
+                        tuple 3
                     } {
                         panic
                     }
                 }
             }
         }
+    }
+}
+
+mod customer1 {
+    init {
+        push super::customer_id::c1
+        push super::event::latte
+        push super::customer_impl::state::idle
+        tuple 3
+    }
+    accept {
+        jump super::customer_impl::accept
+    }
+    process {
+        jump super::customer_impl::process
+    }
+}
+
+mod customer2 {
+    init {
+        push super::customer_id::c2
+        push super::event::espresso
+        push super::customer_impl::state::idle
+        tuple 3
+    }
+    accept {
+        jump super::customer_impl::accept
+    }
+    process {
+        jump super::customer_impl::process
     }
 }
 
@@ -114,24 +207,28 @@ mod barista {
     }
 
     # accept takes [state] and returns ValueSet.
-    # It does not consume the state.
+    # idle: accepts (order, id, drink)
+    # brewing: accepts (coffee, id, drink)
     accept {
         pick 0
         push state::idle
         equal
         branch {
-            push set_tuple(singleton(super::event::order), universal_set)
+            push set_tuple(singleton(super::event::order), universal_set, universal_set)
         } {
             pick 0
-            untuple 2
-            roll 1
+            untuple 2 # Stack: [state, state_status, (id, drink)]
+            roll 1 # Stack: [state, (id, drink), state_status]
             push state::brewing
             equal
             branch {
-                # Stack: [state, drink]
-                push super::event::coffee
-                roll 1
-                tuple 2
+                # Stack: [state, (id, drink)]
+                # We want to return {(coffee, id, drink)}
+                untuple 2 # Stack: [state, id, drink]
+                push super::event::coffee # Stack: [state, id, drink, coffee]
+                roll 2 # Stack: [state, drink, coffee, id]
+                roll 2 # Stack: [state, coffee, id, drink]
+                tuple 3 # Stack: [state, (coffee, id, drink)]
                 set_singleton
             } {
                 panic
@@ -140,68 +237,70 @@ mod barista {
     }
 
     # process takes [state, event] and returns next_state.
-    # Assumes valid transition.
     process {
+        # Inputs: [state, event]
         pick 1
         push state::idle
         equal
         branch {
-            # Transition from idle to brewing: state is idle, event is (order, drink)
-            # Inputs: [state, event]
-            untuple 2 # Stack: [state, order, drink]
-            roll 1    # Swaps order and drink. Stack: [state, drink, order]
-            drop 0    # Drops order. Stack: [state, drink]
-            roll 1    # Swaps state and drink. Stack: [drink, state]
-            drop 0    # Drops state. Stack: [drink]
+            # Transition from idle to brewing.
+            # event is (order, id, drink). We want next state to be (state::brewing, (id, drink)).
+            # Stack: [state, event]
+            roll 1 # Stack: [event, state]
+            drop 0 # Stack: [event]
             
-            # Construct (brewing, drink)
+            untuple 3 # Stack: [order, id, drink]
+            roll 2 # Stack: [id, drink, order]
+            drop 0 # Stack: [id, drink]
+            tuple 2 # Stack: [(id, drink)]
             push state::brewing
-            roll 1    # Swaps state::brewing and drink. Stack: [state::brewing, drink]
-            tuple 2
+            roll 1
+            tuple 2 # Stack: [(state::brewing, (id, drink))]
         } {
-            # Transition from brewing to idle: state is (brewing, drink), event is (coffee, drink)
-            # Check if the state is indeed a brewing state
-            pick 1
-            untuple 2 # Stack: [state, event, state_status, drink]
-            drop 0    # Drops drink. Stack: [state, event, state_status]
-            push state::brewing
-            equal
-            branch {
-                drop 0
-                drop 0
-                push state::idle
-            } {
-                panic
-            }
+            # Transition from brewing to idle: state is (state::brewing, (id, drink)), event is (coffee, id, drink).
+            # We want to return state::idle.
+            # Stack: [state, event]
+            drop 0
+            drop 0
+            push state::idle
         }
     }
 }
 
-sync_events {
-    push union(set_tuple(singleton(event::order), universal_set), set_tuple(singleton(event::coffee), universal_set))
+customers_sync {
+    push empty_set
 }
-mod concurrent compose_concurrent(customer, barista, sync_events);
+
+sync_events {
+    push union(
+        set_tuple(singleton(event::order), universal_set, universal_set),
+        set_tuple(singleton(event::coffee), universal_set, universal_set)
+    )
+}
+
+mod customers compose_concurrent(customer1, customer2, customers_sync);
+mod concurrent compose_concurrent(customers, barista, sync_events);
 mod hidden compose_hidden(concurrent, sync_events);
 
 # Test the hidden joint Customer-Barista system
 test verify_hidden_system {
-    # 1. Initialize hidden joint state -> [(customer::state::idle, barista::state::idle)]
+    # 1. Initialize hidden joint state -> [(((c1, latte, idle), (c2, espresso, idle)), idle)]
     jump hidden::init
     
-    # customer::state::idle accepts event::want_coffee. Let's verify.
-    push event::want_coffee
+    # customer 1 wants coffee. Let's verify.
+    push (event::want_coffee, customer_id::c1)
     pick 1
     jump hidden::accept
     drop 1
     set_contains
     assert
     
-    # 2. Trigger event::want_coffee -> [(customer::state::thirsty, barista::state::idle)]
-    push event::want_coffee
+    # 2. Trigger event::want_coffee for c1 -> [(((c1, latte, thirsty), (c2, espresso, idle)), idle)]
+    push (event::want_coffee, customer_id::c1)
     jump hidden::process
     
-    # In customer::state::thirsty, customer wants to order (event::order, which is synchronized/hidden).
-    # Thus, the joint state should accept crate::prelude::event::tau.
+    # customer 1 is thirsty, barista is idle.
+    # Thus, the joint state should accept tau to perform order.
     push crate::prelude::event::tau
     pick 1
     jump hidden::accept
@@ -209,136 +308,251 @@ test verify_hidden_system {
     set_contains
     assert
     
-    # 3. Drive tau -> [(customer::state::ordered, barista::state::brewing)]
-    push crate::prelude::event::tau
-    jump hidden::process
-    
-    # In customer::state::ordered / barista::state::brewing, event::coffee is synchronized/hidden.
-    # Thus, the joint state should accept crate::prelude::event::tau.
-    push crate::prelude::event::tau
-    pick 1
-    jump hidden::accept
-    drop 1
-    set_contains
-    assert
-    
-    # 4. Drive tau -> [(customer::state::has_coffee, barista::state::idle)]
+    # 3. Drive tau -> [(((c1, latte, ordered), (c2, espresso, idle)), (brewing, (c1, latte)))]
     push crate::prelude::event::tau
     jump hidden::process
     
-    # In customer::state::has_coffee, customer wants event::enjoy (unsynchronized).
-    # Thus, the joint state should accept event::enjoy.
-    push event::enjoy
+    # customer 2 wants coffee. Let's verify.
+    push (event::want_coffee, customer_id::c2)
     pick 1
     jump hidden::accept
     drop 1
     set_contains
     assert
     
-    # 5. Trigger event::enjoy -> [(customer::state::idle, barista::state::idle)]
-    push event::enjoy
+    # 4. Trigger event::want_coffee for c2 -> [(((c1, latte, ordered), (c2, espresso, thirsty)), (brewing, (c1, latte)))]
+    push (event::want_coffee, customer_id::c2)
+    jump hidden::process
+    
+    # Barista is brewing for c1, so customer 2 cannot order yet.
+    # Barista can finish brewing (coffee delivery), which is a hidden/sync event -> accepts tau.
+    push crate::prelude::event::tau
+    pick 1
+    jump hidden::accept
+    drop 1
+    set_contains
+    assert
+    
+    # 5. Drive tau -> [(((c1, latte, has_coffee), (c2, espresso, thirsty)), idle)]
+    push crate::prelude::event::tau
+    jump hidden::process
+    
+    # customer 2 is thirsty, barista is idle. Accepts tau (order).
+    push crate::prelude::event::tau
+    pick 1
+    jump hidden::accept
+    drop 1
+    set_contains
+    assert
+    
+    # 6. Drive tau -> [(((c1, latte, has_coffee), (c2, espresso, ordered)), (brewing, (c2, espresso)))]
+    push crate::prelude::event::tau
+    jump hidden::process
+    
+    # customer 1 enjoys coffee (unsynchronized).
+    push (event::enjoy, customer_id::c1)
+    pick 1
+    jump hidden::accept
+    drop 1
+    set_contains
+    assert
+    
+    # 7. Trigger enjoy for c1 -> [(((c1, latte, idle), (c2, espresso, ordered)), (brewing, (c2, espresso)))]
+    push (event::enjoy, customer_id::c1)
+    jump hidden::process
+    
+    # Barista finishes brewing for c2 (hidden) -> accepts tau.
+    push crate::prelude::event::tau
+    pick 1
+    jump hidden::accept
+    drop 1
+    set_contains
+    assert
+    
+    # 8. Drive tau -> [(((c1, latte, idle), (c2, espresso, has_coffee)), idle)]
+    push crate::prelude::event::tau
+    jump hidden::process
+    
+    # customer 2 enjoys coffee (unsynchronized).
+    push (event::enjoy, customer_id::c2)
+    pick 1
+    jump hidden::accept
+    drop 1
+    set_contains
+    assert
+    
+    # 9. Trigger enjoy for c2 -> [(((c1, latte, idle), (c2, espresso, idle)), idle)]
+    push (event::enjoy, customer_id::c2)
     jump hidden::process
     
     # Verify final states
     untuple 2
     push barista::state::idle
     assert_eq
-    push customer::state::idle
+    untuple 2
+    untuple 3
+    push customer_impl::state::idle
+    assert_eq
+    push event::espresso
+    assert_eq
+    push customer_id::c2
+    assert_eq
+    untuple 3
+    push customer_impl::state::idle
+    assert_eq
+    push event::latte
+    assert_eq
+    push customer_id::c1
     assert_eq
 }
 
 # Test the concurrent joint Customer-Barista system
 test verify_concurrent_system {
-    # 1. Initialize joint state -> [(customer::state::idle, barista::state::idle)]
+    # 1. Initialize joint state -> [(((c1, latte, idle), (c2, espresso, idle)), idle)]
     jump concurrent::init
     
-    # 2. Customer wants coffee
-    push event::want_coffee
+    # 2. Customer 1 wants coffee
+    push (event::want_coffee, customer_id::c1)
     pick 1
     jump concurrent::accept
     drop 1
     set_contains
     assert
     
-    push event::want_coffee
-    jump concurrent::process # [(customer::state::thirsty, barista::state::idle)]
+    push (event::want_coffee, customer_id::c1)
+    jump concurrent::process
     
-    # 3. Customer orders coffee / Barista receives order: trigger (event::order, event::latte)
-    push (event::order, event::latte)
+    # 3. Customer 2 wants coffee
+    push (event::want_coffee, customer_id::c2)
     pick 1
     jump concurrent::accept
     drop 1
     set_contains
     assert
     
-    push (event::order, event::latte)
-    jump concurrent::process # [(customer::state::ordered, barista::state::brewing)]
+    push (event::want_coffee, customer_id::c2)
+    jump concurrent::process
     
-    # 4. Barista finishes brewing / Customer receives coffee: trigger (event::coffee, event::latte)
-    push (event::coffee, event::latte)
+    # 4. Customer 1 orders coffee (prefers latte)
+    push (event::order, customer_id::c1, event::latte)
     pick 1
     jump concurrent::accept
     drop 1
     set_contains
     assert
     
-    push (event::coffee, event::latte)
-    jump concurrent::process # [(customer::state::has_coffee, barista::state::idle)]
+    push (event::order, customer_id::c1, event::latte)
+    jump concurrent::process
     
-    # 5. Customer enjoys coffee
-    push event::enjoy
+    # 5. Barista finishes brewing for Customer 1
+    push (event::coffee, customer_id::c1, event::latte)
     pick 1
     jump concurrent::accept
     drop 1
     set_contains
     assert
     
-    push event::enjoy
-    jump concurrent::process # [(customer::state::idle, barista::state::idle)]
+    push (event::coffee, customer_id::c1, event::latte)
+    jump concurrent::process
+    
+    # 6. Customer 2 orders coffee (prefers espresso)
+    push (event::order, customer_id::c2, event::espresso)
+    pick 1
+    jump concurrent::accept
+    drop 1
+    set_contains
+    assert
+    
+    push (event::order, customer_id::c2, event::espresso)
+    jump concurrent::process
+    
+    # 7. Customer 1 enjoys coffee
+    push (event::enjoy, customer_id::c1)
+    pick 1
+    jump concurrent::accept
+    drop 1
+    set_contains
+    assert
+    
+    push (event::enjoy, customer_id::c1)
+    jump concurrent::process
+    
+    # 8. Barista finishes brewing for Customer 2
+    push (event::coffee, customer_id::c2, event::espresso)
+    pick 1
+    jump concurrent::accept
+    drop 1
+    set_contains
+    assert
+    
+    push (event::coffee, customer_id::c2, event::espresso)
+    jump concurrent::process
+    
+    # 9. Customer 2 enjoys coffee
+    push (event::enjoy, customer_id::c2)
+    pick 1
+    jump concurrent::accept
+    drop 1
+    set_contains
+    assert
+    
+    push (event::enjoy, customer_id::c2)
+    jump concurrent::process
     
     # Verify final states
     untuple 2
     push barista::state::idle
     assert_eq
-    push customer::state::idle
+    untuple 2
+    untuple 3
+    push customer_impl::state::idle
+    assert_eq
+    push event::espresso
+    assert_eq
+    push customer_id::c2
+    assert_eq
+    untuple 3
+    push customer_impl::state::idle
+    assert_eq
+    push event::latte
+    assert_eq
+    push customer_id::c1
     assert_eq
 }
 
 # Test the rejection of invalid events for Customer
 test verify_customer_rejection {
-    # 1. Initialize state -> [customer::state::idle]
-    jump customer::init
+    # 1. Initialize state -> [(c1, latte, idle)]
+    jump customer1::init
     
-    # 2. Trigger invalid coffee event on idle -> [customer::state::idle]
-    push event::coffee
+    # 2. Trigger invalid coffee event on idle
+    push (event::coffee, customer_id::c1, event::latte)
     pick 1
-    jump customer::accept
+    jump customer1::accept
     drop 1
     set_contains
-    
-    # Assert that the return value is false
     push false
     assert_eq
     
     # Clean up state from the stack
     drop 0
 
-    # 3. Test that customer in thirsty accepts (event::order, event::latte)
-    jump customer::init
-    push event::want_coffee
-    jump customer::process
+    # 3. Test that customer 1 in thirsty accepts (order, c1, latte)
+    jump customer1::init
+    push (event::want_coffee, customer_id::c1)
+    jump customer1::process
     
-    push (event::order, event::latte)
+    push (event::order, customer_id::c1, event::latte)
     pick 1
-    jump customer::accept
+    jump customer1::accept
     drop 1
     set_contains
     assert
     
-    # 4. Test that customer in thirsty rejects (event::order, event::espresso)
-    push (event::order, event::espresso)
+    # 4. Test that customer 1 in thirsty rejects (order, c1, espresso)
+    push (event::order, customer_id::c1, event::espresso)
     pick 1
-    jump customer::accept
+    jump customer1::accept
     drop 1
     set_contains
     push false
@@ -347,24 +561,24 @@ test verify_customer_rejection {
     # Clean up state
     drop 0
 
-    # 5. Test that customer in ordered accepts (event::coffee, event::latte)
-    jump customer::init
-    push event::want_coffee
-    jump customer::process
-    push (event::order, event::latte)
-    jump customer::process # now in customer::state::ordered
+    # 5. Test that customer 1 in ordered accepts (coffee, c1, latte)
+    jump customer1::init
+    push (event::want_coffee, customer_id::c1)
+    jump customer1::process
+    push (event::order, customer_id::c1, event::latte)
+    jump customer1::process # now in customer_impl::state::ordered
     
-    push (event::coffee, event::latte)
+    push (event::coffee, customer_id::c1, event::latte)
     pick 1
-    jump customer::accept
+    jump customer1::accept
     drop 1
     set_contains
     assert
 
-    # 6. Test that customer in ordered rejects (event::coffee, event::espresso)
-    push (event::coffee, event::espresso)
+    # 6. Test that customer 1 in ordered rejects (coffee, c1, espresso)
+    push (event::coffee, customer_id::c1, event::espresso)
     pick 1
-    jump customer::accept
+    jump customer1::accept
     drop 1
     set_contains
     push false
@@ -379,23 +593,19 @@ test verify_barista_rejection {
     # 1. Initialize state -> [barista::state::idle]
     jump barista::init
     
-    # 2. Trigger invalid coffee event on idle -> [barista::state::idle]
-    push event::coffee
+    # 2. Trigger invalid coffee event on idle
+    push (event::coffee, customer_id::c1, event::latte)
     pick 1
     jump barista::accept
     drop 1
     set_contains
-    
-    # Assert that the return value is false
     push false
     assert_eq
-    
-    # Clean up state from the stack
     drop 0
 
-    # 3. Test that barista in idle accepts (event::order, event::latte)
+    # 3. Test that barista in idle accepts (order, c1, latte)
     jump barista::init
-    push (event::order, event::latte)
+    push (event::order, customer_id::c1, event::latte)
     pick 1
     jump barista::accept
     drop 1
@@ -403,9 +613,9 @@ test verify_barista_rejection {
     assert
     drop 0
     
-    # 4. Test that barista in idle accepts (event::order, event::espresso)
+    # 4. Test that barista in idle accepts (order, c2, espresso)
     jump barista::init
-    push (event::order, event::espresso)
+    push (event::order, customer_id::c2, event::espresso)
     pick 1
     jump barista::accept
     drop 1
@@ -413,7 +623,7 @@ test verify_barista_rejection {
     assert
     drop 0
     
-    # 5. Test that barista in idle does NOT accept event::order (as a raw symbol)
+    # 5. Test that barista in idle does NOT accept order (as a raw symbol)
     jump barista::init
     push event::order
     pick 1
@@ -424,12 +634,12 @@ test verify_barista_rejection {
     assert_eq
     drop 0
 
-    # 6. Test that barista in brewing (latte) accepts (event::coffee, event::latte)
+    # 6. Test that barista in brewing (c1, latte) accepts (coffee, c1, latte)
     jump barista::init
-    push (event::order, event::latte)
-    jump barista::process # now in barista::state::brewing state: (barista::state::brewing, latte)
+    push (event::order, customer_id::c1, event::latte)
+    jump barista::process # now in brewing: (state::brewing, (c1, latte))
     
-    push (event::coffee, event::latte)
+    push (event::coffee, customer_id::c1, event::latte)
     pick 1
     jump barista::accept
     drop 1
@@ -437,12 +647,12 @@ test verify_barista_rejection {
     assert
     drop 0
 
-    # 7. Test that barista in brewing (latte) rejects (event::coffee, event::espresso)
+    # 7. Test that barista in brewing (c1, latte) rejects (coffee, c1, espresso)
     jump barista::init
-    push (event::order, event::latte)
-    jump barista::process # now in barista::state::brewing state: (barista::state::brewing, latte)
+    push (event::order, customer_id::c1, event::latte)
+    jump barista::process
     
-    push (event::coffee, event::espresso)
+    push (event::coffee, customer_id::c1, event::espresso)
     pick 1
     jump barista::accept
     drop 1
@@ -451,25 +661,12 @@ test verify_barista_rejection {
     assert_eq
     drop 0
 
-    # 8. Test that barista in brewing (espresso) accepts (event::coffee, event::espresso)
+    # 8. Test that barista in brewing (c1, latte) rejects (coffee, c2, latte)
     jump barista::init
-    push (event::order, event::espresso)
-    jump barista::process # now in barista::state::brewing state: (barista::state::brewing, espresso)
+    push (event::order, customer_id::c1, event::latte)
+    jump barista::process
     
-    push (event::coffee, event::espresso)
-    pick 1
-    jump barista::accept
-    drop 1
-    set_contains
-    assert
-    drop 0
-
-    # 9. Test that barista in brewing (latte) does NOT accept event::coffee (as a raw symbol)
-    jump barista::init
-    push (event::order, event::latte)
-    jump barista::process # now in barista::state::brewing state: (barista::state::brewing, latte)
-    
-    push event::coffee
+    push (event::coffee, customer_id::c2, event::latte)
     pick 1
     jump barista::accept
     drop 1
