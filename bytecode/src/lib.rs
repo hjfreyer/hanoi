@@ -335,4 +335,52 @@ mod tests {
         let _ = std::fs::remove_file(tmp_dir.join("helper.hana"));
         let _ = std::fs::remove_dir(tmp_dir);
     }
+
+    #[test]
+    fn test_value_set_dnf() {
+        // Union with Empty
+        let u_empty = ValueSet::Union(
+            Box::new(ValueSet::Empty),
+            Box::new(ValueSet::Singleton(Box::new(Value::Int(42)))),
+        );
+        assert_eq!(u_empty.to_dnf(), ValueSet::Singleton(Box::new(Value::Int(42))));
+
+        // Intersection of conflicting Singletons
+        let inter_conflict = ValueSet::Intersection(
+            Box::new(ValueSet::Singleton(Box::new(Value::Int(10)))),
+            Box::new(ValueSet::Singleton(Box::new(Value::Int(20)))),
+        );
+        assert_eq!(inter_conflict.to_dnf(), ValueSet::Empty);
+
+        // Intersection of Singleton and Complement (non-containing)
+        let inter_comp_ok = ValueSet::Intersection(
+            Box::new(ValueSet::Singleton(Box::new(Value::Int(10)))),
+            Box::new(ValueSet::Complement(Box::new(ValueSet::Singleton(Box::new(Value::Int(20)))))),
+        );
+        assert_eq!(inter_comp_ok.to_dnf(), ValueSet::Singleton(Box::new(Value::Int(10))));
+
+        // Intersection of Singleton and Complement (containing)
+        let inter_comp_bad = ValueSet::Intersection(
+            Box::new(ValueSet::Singleton(Box::new(Value::Int(10)))),
+            Box::new(ValueSet::Complement(Box::new(ValueSet::Singleton(Box::new(Value::Int(10)))))),
+        );
+        assert_eq!(inter_comp_bad.to_dnf(), ValueSet::Empty);
+
+        // Singleton of Tuple rewritten to Tuple of Singletons
+        let s_tuple = ValueSet::Singleton(Box::new(Value::Tuple(vec![Value::Int(10), Value::Int(20)])));
+        assert_eq!(
+            s_tuple.to_dnf(),
+            ValueSet::Tuple(vec![
+                ValueSet::Singleton(Box::new(Value::Int(10))),
+                ValueSet::Singleton(Box::new(Value::Int(20))),
+            ])
+        );
+
+        // Tuple containing Empty simplifies to Empty
+        let t_empty = ValueSet::Tuple(vec![
+            ValueSet::Singleton(Box::new(Value::Int(10))),
+            ValueSet::Empty,
+        ]);
+        assert_eq!(t_empty.to_dnf(), ValueSet::Empty);
+    }
 }

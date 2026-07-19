@@ -77,182 +77,229 @@ impl ValueSet {
         }
     }
 
-    /// Return all elements in the set if it is finite, otherwise None.
-    pub fn elements(&self) -> Option<Vec<Value>> {
+    /// Convert the ValueSet into Disjunctive Normal Form (DNF).
+    ///
+    /// The resulting ValueSet is guaranteed to satisfy the following structural properties:
+    /// 1. **Unions at the Top Level**: `Union` nodes are pulled to the top level of the AST and
+    ///    never nested inside `Intersection`, `Complement`, or `Tuple` nodes.
+    /// 2. **Simplification of Singletons**: Any `Singleton` containing a tuple value is rewritten
+    ///    to a `Tuple` of singletons. Intersections involving `Singleton` are fully evaluated to
+    ///    either `Singleton` or `Empty`.
+    /// 3. **Tuple-Tuple/Complement Simplification**: Intersections between `Tuple` and `Tuple`
+    ///    are merged element-wise. Intersections between `Tuple` and `Complement(Tuple)` are
+    ///    distributed into a union of tuples.
+    /// 4. **No Complex Intersections**: Any remaining `Intersection` node can only consist of
+    ///    `Complement` sets of atomic values (which are infinite and yield `ChooseResult::Unknown`).
+    /// 5. **Empty and Universal Boundaries**: Set operations involving `Empty` or `Universal` are
+    ///    fully simplified (e.g. union with `Empty`, intersection with `Universal`, or any `Tuple`
+    ///    containing `Empty` simplifies to `Empty`).
+    pub fn to_dnf(&self) -> ValueSet {
         match self {
-            ValueSet::Empty => Some(vec![]),
-            ValueSet::Universal => None,
-            ValueSet::Singleton(v) => Some(vec![*v.clone()]),
-            ValueSet::Union(a, b) => {
-                let ea = a.elements()?;
-                let eb = b.elements()?;
-                let mut res = ea;
-                for v in eb {
-                    if !res.contains(&v) {
-                        res.push(v);
+            ValueSet::Empty => ValueSet::Empty,
+            ValueSet::Universal => ValueSet::Universal,
+            ValueSet::Singleton(v) => {
+                match v.as_ref() {
+                    Value::Tuple(elements) => {
+                        // Rewrite Singleton of Tuple to Tuple of Singletons
+                        ValueSet::Tuple(
+                            elements.iter().map(|e| {
+                                ValueSet::Singleton(Box::new(e.clone()))
+                            }).collect()
+                        ).to_dnf()
+                    }
+                    _ => ValueSet::Singleton(v.clone())
+                }
+            }
+            ValueSet::Complement(a) => {
+                match a.as_ref() {
+                    ValueSet::Empty => ValueSet::Universal,
+                    ValueSet::Universal => ValueSet::Empty,
+                    ValueSet::Complement(x) => x.to_dnf(),
+                    ValueSet::Union(x, y) => {
+                        // De Morgan: (X U Y)^c = X^c n Y^c
+                        ValueSet::Intersection(
+                            Box::new(ValueSet::Complement(x.clone())),
+                            Box::new(ValueSet::Complement(y.clone()))
+                        ).to_dnf()
+                    }
+                    ValueSet::Intersection(x, y) => {
+                        // De Morgan: (X n Y)^c = X^c U Y^c
+                        ValueSet::Union(
+                            Box::new(ValueSet::Complement(x.clone())),
+                            Box::new(ValueSet::Complement(y.clone()))
+                        ).to_dnf()
+                    }
+                    _ => {
+                        let a_dnf = a.to_dnf();
+                        if a_dnf != **a {
+                            ValueSet::Complement(Box::new(a_dnf)).to_dnf()
+                        } else {
+                            ValueSet::Complement(Box::new(a_dnf))
+                        }
                     }
                 }
-                Some(res)
+            }
+            ValueSet::Union(a, b) => {
+                let a_dnf = a.to_dnf();
+                let b_dnf = b.to_dnf();
+                match (&a_dnf, &b_dnf) {
+                    (ValueSet::Empty, other) => other.clone(),
+                    (other, ValueSet::Empty) => other.clone(),
+                    (ValueSet::Universal, _) | (_, ValueSet::Universal) => ValueSet::Universal,
+                    _ => ValueSet::Union(Box::new(a_dnf), Box::new(b_dnf)),
+                }
             }
             ValueSet::Intersection(a, b) => {
-                if let Some(ea) = a.elements() {
-                    Some(ea.into_iter().filter(|v| b.contains(v)).collect())
-                } else if let Some(eb) = b.elements() {
-                    Some(eb.into_iter().filter(|v| a.contains(v)).collect())
-                } else {
-                    None
+                let a_dnf = a.to_dnf();
+                let b_dnf = b.to_dnf();
+                match (&a_dnf, &b_dnf) {
+                    (ValueSet::Empty, _) | (_, ValueSet::Empty) => ValueSet::Empty,
+                    (ValueSet::Universal, other) => other.clone(),
+                    (other, ValueSet::Universal) => other.clone(),
+                    (ValueSet::Union(x, y), _) => {
+                        // (X U Y) n B = (X n B) U (Y n B)
+                        ValueSet::Union(
+                            Box::new(ValueSet::Intersection(x.clone(), Box::new(b_dnf.clone()))),
+                            Box::new(ValueSet::Intersection(y.clone(), Box::new(b_dnf.clone())))
+                        ).to_dnf()
+                    }
+                    (_, ValueSet::Union(x, y)) => {
+                        // A n (X U Y) = (A n X) U (A n Y)
+                        ValueSet::Union(
+                            Box::new(ValueSet::Intersection(Box::new(a_dnf.clone()), x.clone())),
+                            Box::new(ValueSet::Intersection(Box::new(a_dnf.clone()), y.clone()))
+                        ).to_dnf()
+                    }
+                    (ValueSet::Singleton(v), other) => {
+                        if other.contains(v) {
+                            ValueSet::Singleton(v.clone())
+                        } else {
+                            ValueSet::Empty
+                        }
+                    }
+                    (other, ValueSet::Singleton(v)) => {
+                        if other.contains(v) {
+                            ValueSet::Singleton(v.clone())
+                        } else {
+                            ValueSet::Empty
+                        }
+                    }
+                    (ValueSet::Tuple(sets_a), ValueSet::Tuple(sets_b)) => {
+                        if sets_a.len() != sets_b.len() {
+                            ValueSet::Empty
+                        } else {
+                            let merged: Vec<ValueSet> = sets_a.iter().zip(sets_b.iter()).map(|(sa, sb)| {
+                                ValueSet::Intersection(Box::new(sa.clone()), Box::new(sb.clone()))
+                            }).collect();
+                            ValueSet::Tuple(merged).to_dnf()
+                        }
+                    }
+                    (ValueSet::Tuple(sets_t), ValueSet::Complement(inner)) => {
+                        match inner.as_ref() {
+                            ValueSet::Tuple(sets_c) => {
+                                if sets_t.len() != sets_c.len() {
+                                    a_dnf.clone()
+                                } else {
+                                    let k = sets_t.len();
+                                    let mut union_res = ValueSet::Empty;
+                                    for i in 0..k {
+                                        let mut new_sets = sets_t.clone();
+                                        new_sets[i] = ValueSet::Intersection(
+                                            Box::new(sets_t[i].clone()),
+                                            Box::new(ValueSet::Complement(Box::new(sets_c[i].clone())))
+                                        );
+                                        let term = ValueSet::Tuple(new_sets);
+                                        if union_res == ValueSet::Empty {
+                                            union_res = term;
+                                        } else {
+                                            union_res = ValueSet::Union(Box::new(union_res), Box::new(term));
+                                        }
+                                    }
+                                    union_res.to_dnf()
+                                }
+                            }
+                            _ => a_dnf.clone(),
+                        }
+                    }
+                    (ValueSet::Complement(inner), ValueSet::Tuple(sets_t)) => {
+                        match inner.as_ref() {
+                            ValueSet::Tuple(sets_c) => {
+                                if sets_t.len() != sets_c.len() {
+                                    b_dnf.clone()
+                                } else {
+                                    let k = sets_t.len();
+                                    let mut union_res = ValueSet::Empty;
+                                    for i in 0..k {
+                                        let mut new_sets = sets_t.clone();
+                                        new_sets[i] = ValueSet::Intersection(
+                                            Box::new(sets_t[i].clone()),
+                                            Box::new(ValueSet::Complement(Box::new(sets_c[i].clone())))
+                                        );
+                                        let term = ValueSet::Tuple(new_sets);
+                                        if union_res == ValueSet::Empty {
+                                            union_res = term;
+                                        } else {
+                                            union_res = ValueSet::Union(Box::new(union_res), Box::new(term));
+                                        }
+                                    }
+                                    union_res.to_dnf()
+                                }
+                            }
+                            _ => b_dnf.clone(),
+                        }
+                    }
+                    _ => ValueSet::Intersection(Box::new(a_dnf), Box::new(b_dnf)),
                 }
             }
             ValueSet::Tuple(sets) => {
-                let mut current = vec![Value::Tuple(vec![])];
-                for set in sets {
-                    let elems = set.elements()?;
-                    let mut next = Vec::new();
-                    for cur in current {
-                        if let Value::Tuple(cv) = cur {
-                            for e in &elems {
-                                let mut new_cv = cv.clone();
-                                new_cv.push(e.clone());
-                                next.push(Value::Tuple(new_cv));
-                            }
-                        }
-                    }
-                    current = next;
+                let sets_dnf: Vec<ValueSet> = sets.iter().map(|s| s.to_dnf()).collect();
+                if sets_dnf.iter().any(|s| matches!(s, ValueSet::Empty)) {
+                    ValueSet::Empty
+                } else {
+                    ValueSet::Tuple(sets_dnf)
                 }
-                Some(current)
             }
-            ValueSet::Complement(_) => None,
         }
     }
 
     /// Choose an arbitrary element from the set, if one exists.
     pub fn choose(&self) -> ChooseResult {
-        if let Some(elems) = self.elements() {
-            if let Some(first) = elems.first() {
-                return ChooseResult::Found(first.clone());
-            } else {
-                return ChooseResult::Empty;
-            }
-        }
+        let dnf = self.to_dnf();
+        dnf.choose_dnf()
+    }
+
+    fn choose_dnf(&self) -> ChooseResult {
         // Note: We must ensure that we never return ChooseResult::Empty on a non-empty set.
         // If the set could be non-empty but we are unable to determine an element (e.g. because it is infinite or complex),
         // we must return ChooseResult::Unknown.
         match self {
+            ValueSet::Empty => ChooseResult::Empty,
             ValueSet::Universal => ChooseResult::Found(Value::Tuple(vec![])),
+            ValueSet::Singleton(v) => ChooseResult::Found(*v.clone()),
             ValueSet::Complement(_) => ChooseResult::Unknown,
             ValueSet::Union(a, b) => {
-                match a.choose() {
+                match a.choose_dnf() {
                     ChooseResult::Found(v) => ChooseResult::Found(v),
                     ChooseResult::Unknown => {
-                        match b.choose() {
+                        match b.choose_dnf() {
                             ChooseResult::Found(v) => ChooseResult::Found(v),
                             _ => ChooseResult::Unknown,
                         }
                     }
-                    ChooseResult::Empty => b.choose(),
+                    ChooseResult::Empty => b.choose_dnf(),
                 }
             }
-            ValueSet::Intersection(a, b) => choose_intersection(a, b),
+            ValueSet::Intersection(_, _) => ChooseResult::Unknown,
             ValueSet::Tuple(sets) => {
                 let mut elements = Vec::new();
                 for set in sets {
-                    match set.choose() {
+                    match set.choose_dnf() {
                         ChooseResult::Found(elem) => elements.push(elem),
                         ChooseResult::Unknown => return ChooseResult::Unknown,
                         ChooseResult::Empty => return ChooseResult::Empty,
                     }
                 }
                 ChooseResult::Found(Value::Tuple(elements))
-            }
-            _ => ChooseResult::Unknown,
-        }
-    }
-}
-
-fn choose_intersection(a: &ValueSet, b: &ValueSet) -> ChooseResult {
-    match (a, b) {
-        (ValueSet::Empty, _) | (_, ValueSet::Empty) => ChooseResult::Empty,
-        (ValueSet::Universal, other) => other.choose(),
-        (_, ValueSet::Universal) => a.choose(),
-        (ValueSet::Singleton(v), other) => {
-            if other.contains(v) {
-                ChooseResult::Found(*v.clone())
-            } else {
-                ChooseResult::Empty
-            }
-        }
-        (other, ValueSet::Singleton(v)) => {
-            if other.contains(v) {
-                ChooseResult::Found(*v.clone())
-            } else {
-                ChooseResult::Empty
-            }
-        }
-        (ValueSet::Union(a1, a2), other) => {
-            match choose_intersection(a1, other) {
-                ChooseResult::Found(v) => ChooseResult::Found(v),
-                ChooseResult::Unknown => {
-                    match choose_intersection(a2, other) {
-                        ChooseResult::Found(v) => ChooseResult::Found(v),
-                        _ => ChooseResult::Unknown,
-                    }
-                }
-                ChooseResult::Empty => choose_intersection(a2, other),
-            }
-        }
-        (other, ValueSet::Union(b1, b2)) => {
-            match choose_intersection(other, b1) {
-                ChooseResult::Found(v) => ChooseResult::Found(v),
-                ChooseResult::Unknown => {
-                    match choose_intersection(other, b2) {
-                        ChooseResult::Found(v) => ChooseResult::Found(v),
-                        _ => ChooseResult::Unknown,
-                    }
-                }
-                ChooseResult::Empty => choose_intersection(other, b2),
-            }
-        }
-        (ValueSet::Intersection(a1, a2), other) => {
-            choose_intersection(a1, &ValueSet::Intersection(a2.clone(), Box::new(other.clone())))
-        }
-        (other, ValueSet::Intersection(b1, b2)) => {
-            choose_intersection(other, &ValueSet::Intersection(b1.clone(), b2.clone()))
-        }
-        (ValueSet::Tuple(sets_a), ValueSet::Tuple(sets_b)) => {
-            if sets_a.len() != sets_b.len() {
-                ChooseResult::Empty
-            } else {
-                let mut elements = Vec::new();
-                for (sa, sb) in sets_a.iter().zip(sets_b.iter()) {
-                    match choose_intersection(sa, sb) {
-                        ChooseResult::Found(elem) => elements.push(elem),
-                        ChooseResult::Unknown => return ChooseResult::Unknown,
-                        ChooseResult::Empty => return ChooseResult::Empty,
-                    }
-                }
-                ChooseResult::Found(Value::Tuple(elements))
-            }
-        }
-        (ValueSet::Complement(a1), other) => {
-            if let Some(elems) = other.elements() {
-                if let Some(found) = elems.into_iter().find(|v| !a1.contains(v)) {
-                    ChooseResult::Found(found)
-                } else {
-                    ChooseResult::Empty
-                }
-            } else {
-                ChooseResult::Unknown
-            }
-        }
-        (other, ValueSet::Complement(b1)) => {
-            if let Some(elems) = other.elements() {
-                if let Some(found) = elems.into_iter().find(|v| !b1.contains(v)) {
-                    ChooseResult::Found(found)
-                } else {
-                    ChooseResult::Empty
-                }
-            } else {
-                ChooseResult::Unknown
             }
         }
     }
