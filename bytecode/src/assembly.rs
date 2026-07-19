@@ -23,6 +23,7 @@ enum Token {
     TestKeyword,
     ModKeyword,
     DoubleColon,
+    Semicolon,
     Identifier(String),
     StringLiteral(String),
     LBrace,
@@ -79,6 +80,10 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
             }
             ',' => {
                 tokens.push(Token::Comma);
+                chars.next();
+            }
+            ';' => {
+                tokens.push(Token::Semicolon);
                 chars.next();
             }
             ':' => {
@@ -510,11 +515,11 @@ struct TopLevelSentence {
     body: ParsedSentence,
 }
 
-fn parse_top_level(stream: &mut TokenStream) -> Result<Vec<TopLevelItem>, String> {
-    parse_items(stream, None)
+fn parse_top_level(stream: &mut TokenStream, base_dir: Option<&std::path::Path>) -> Result<Vec<TopLevelItem>, String> {
+    parse_items(stream, None, base_dir)
 }
 
-fn parse_items(stream: &mut TokenStream, end_token: Option<Token>) -> Result<Vec<TopLevelItem>, String> {
+fn parse_items(stream: &mut TokenStream, end_token: Option<Token>, base_dir: Option<&std::path::Path>) -> Result<Vec<TopLevelItem>, String> {
     let mut items = Vec::new();
 
     while stream.peek().is_some() {
@@ -550,10 +555,29 @@ fn parse_items(stream: &mut TokenStream, end_token: Option<Token>) -> Result<Vec
                 Some(other) => return Err(format!("Expected module name identifier, found {:?}", other)),
                 None => return Err("Expected module name identifier, found end of input".to_string()),
             };
-            stream.expect(Token::LBrace)?;
-            let mod_items = parse_items(stream, Some(Token::RBrace))?;
-            stream.expect(Token::RBrace)?;
-            items.push(TopLevelItem::Mod { name, items: mod_items });
+            
+            if stream.peek() == Some(&Token::Semicolon) {
+                stream.next(); // consume ';'
+                let base = base_dir.ok_or_else(|| {
+                    format!("Cannot load external module '{}' because no base directory context was provided", name)
+                })?;
+                let file_name = format!("{}.hana", name);
+                let file_path = base.join(&file_name);
+                let file_content = std::fs::read_to_string(&file_path)
+                    .map_err(|e| format!("Failed to read module file '{}' at {:?}: {}", file_name, file_path, e))?;
+                
+                let tokens = tokenize(&file_content)?;
+                let mut sub_stream = TokenStream { tokens, position: 0 };
+                let new_base = base.join(&name);
+                let mod_items = parse_items(&mut sub_stream, None, Some(&new_base))?;
+                items.push(TopLevelItem::Mod { name, items: mod_items });
+            } else {
+                stream.expect(Token::LBrace)?;
+                let new_base = base_dir.map(|b| b.join(&name));
+                let mod_items = parse_items(stream, Some(Token::RBrace), new_base.as_deref())?;
+                stream.expect(Token::RBrace)?;
+                items.push(TopLevelItem::Mod { name, items: mod_items });
+            }
         } else {
             let mut is_exported = false;
             let mut is_test = false;
@@ -1006,9 +1030,14 @@ impl<'a> Compiler<'a> {
 
 /// Assembles the input text into a `Library` and export/test mappings.
 pub fn assemble(input: &str) -> Result<AssemblyResult, String> {
+    assemble_with_path(input, None)
+}
+
+/// Assembles the input text with an optional base directory context for resolving external modules.
+pub fn assemble_with_path(input: &str, base_dir: Option<&std::path::Path>) -> Result<AssemblyResult, String> {
     let tokens = tokenize(input)?;
     let mut stream = TokenStream { tokens, position: 0 };
-    let items = parse_top_level(&mut stream)?;
+    let items = parse_top_level(&mut stream, base_dir)?;
 
     let mut root_module = Module::new("crate".to_string());
     let mut symbol_counter = 0;

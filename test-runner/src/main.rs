@@ -24,7 +24,9 @@ fn main() {
         }
     };
 
-    let res = match bytecode::assemble(&code) {
+    let file_path = std::path::Path::new(path);
+    let base_dir = file_path.parent().zip(file_path.file_stem()).map(|(p, s)| p.join(s));
+    let res = match bytecode::assemble_with_path(&code, base_dir.as_deref()) {
         Ok(result) => result,
         Err(err) => {
             eprintln!("Assembly Error:\n{}", err);

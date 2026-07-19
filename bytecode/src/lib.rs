@@ -3,7 +3,7 @@ pub mod library;
 pub mod opcode;
 pub mod value;
 
-pub use assembly::{assemble, AssemblyResult};
+pub use assembly::{assemble, assemble_with_path, AssemblyResult};
 pub use library::{Library, Sentence, SentenceIndex};
 pub use opcode::Instruction;
 pub use value::{Value, ValueSet};
@@ -290,6 +290,46 @@ mod tests {
         "#;
         let res = assemble(code).unwrap();
         assert!(res.tests.contains_key("a::b::my_test"));
+        assert!(res.tests.contains_key("a::b::my_test"));
         assert!(res.exports.contains_key("a::b::my_test"));
+    }
+
+    #[test]
+    fn test_assemble_file_mod_error_no_context() {
+        let code = r#"
+            mod my_external_file_module;
+        "#;
+        let res = assemble(code);
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("no base directory context was provided"));
+    }
+
+    #[test]
+    fn test_assemble_file_mod_success() {
+        let tmp_dir = std::env::temp_dir().join("hanoi_test_file_mods");
+        let _ = std::fs::create_dir_all(&tmp_dir);
+        
+        let main_code = r#"
+            mod helper;
+            
+            test run {
+                push helper::val
+                push helper::val
+                equal
+                assert
+            }
+        "#;
+        
+        let helper_code = r#"
+            symbol val "Helper Val"
+        "#;
+        
+        std::fs::write(tmp_dir.join("helper.hana"), helper_code).unwrap();
+        
+        let res = assemble_with_path(main_code, Some(&tmp_dir)).unwrap();
+        assert!(res.tests.contains_key("run"));
+        
+        let _ = std::fs::remove_file(tmp_dir.join("helper.hana"));
+        let _ = std::fs::remove_dir(tmp_dir);
     }
 }

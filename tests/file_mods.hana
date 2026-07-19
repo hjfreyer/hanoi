@@ -1,0 +1,9 @@
+# Main file for file module tests
+mod sub_module;
+
+test verify_import {
+    push sub_module::my_val
+    push sub_module::my_val
+    equal
+    assert
+}
