@@ -30,6 +30,17 @@ pub enum Value {
     Set(ValueSet),
 }
 
+/// Represents the result of attempting to choose an element from a set.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ChooseResult {
+    /// The set is empty, so no element can be chosen.
+    Empty,
+    /// An element was successfully chosen.
+    Found(Value),
+    /// The set is non-empty, but we cannot determine/choose an element (e.g., it is infinite or complement).
+    Unknown,
+}
+
 /// Represents a mathematical set of values.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ValueSet {
@@ -115,55 +126,91 @@ impl ValueSet {
     }
 
     /// Choose an arbitrary element from the set, if one exists.
-    pub fn choose(&self) -> Option<Value> {
+    pub fn choose(&self) -> ChooseResult {
         if let Some(elems) = self.elements() {
-            return elems.first().cloned();
+            if let Some(first) = elems.first() {
+                return ChooseResult::Found(first.clone());
+            } else {
+                return ChooseResult::Empty;
+            }
         }
+        // Note: We must ensure that we never return ChooseResult::Empty on a non-empty set.
+        // If the set could be non-empty but we are unable to determine an element (e.g. because it is infinite or complex),
+        // we must return ChooseResult::Unknown.
         match self {
-            ValueSet::Universal => Some(Value::Tuple(vec![])),
-            ValueSet::Complement(_) => panic!("Cannot choose from a complement set (which is infinite)"),
-            ValueSet::Union(a, b) => a.choose().or_else(|| b.choose()),
+            ValueSet::Universal => ChooseResult::Found(Value::Tuple(vec![])),
+            ValueSet::Complement(_) => ChooseResult::Unknown,
+            ValueSet::Union(a, b) => {
+                match a.choose() {
+                    ChooseResult::Found(v) => ChooseResult::Found(v),
+                    ChooseResult::Unknown => {
+                        match b.choose() {
+                            ChooseResult::Found(v) => ChooseResult::Found(v),
+                            _ => ChooseResult::Unknown,
+                        }
+                    }
+                    ChooseResult::Empty => b.choose(),
+                }
+            }
             ValueSet::Intersection(a, b) => choose_intersection(a, b),
             ValueSet::Tuple(sets) => {
                 let mut elements = Vec::new();
                 for set in sets {
-                    if let Some(elem) = set.choose() {
-                        elements.push(elem);
-                    } else {
-                        return None;
+                    match set.choose() {
+                        ChooseResult::Found(elem) => elements.push(elem),
+                        ChooseResult::Unknown => return ChooseResult::Unknown,
+                        ChooseResult::Empty => return ChooseResult::Empty,
                     }
                 }
-                Some(Value::Tuple(elements))
+                ChooseResult::Found(Value::Tuple(elements))
             }
-            _ => None,
+            _ => ChooseResult::Unknown,
         }
     }
 }
 
-fn choose_intersection(a: &ValueSet, b: &ValueSet) -> Option<Value> {
+fn choose_intersection(a: &ValueSet, b: &ValueSet) -> ChooseResult {
     match (a, b) {
-        (ValueSet::Empty, _) | (_, ValueSet::Empty) => None,
+        (ValueSet::Empty, _) | (_, ValueSet::Empty) => ChooseResult::Empty,
         (ValueSet::Universal, other) => other.choose(),
         (_, ValueSet::Universal) => a.choose(),
         (ValueSet::Singleton(v), other) => {
             if other.contains(v) {
-                Some(*v.clone())
+                ChooseResult::Found(*v.clone())
             } else {
-                None
+                ChooseResult::Empty
             }
         }
         (other, ValueSet::Singleton(v)) => {
             if other.contains(v) {
-                Some(*v.clone())
+                ChooseResult::Found(*v.clone())
             } else {
-                None
+                ChooseResult::Empty
             }
         }
         (ValueSet::Union(a1, a2), other) => {
-            choose_intersection(a1, other).or_else(|| choose_intersection(a2, other))
+            match choose_intersection(a1, other) {
+                ChooseResult::Found(v) => ChooseResult::Found(v),
+                ChooseResult::Unknown => {
+                    match choose_intersection(a2, other) {
+                        ChooseResult::Found(v) => ChooseResult::Found(v),
+                        _ => ChooseResult::Unknown,
+                    }
+                }
+                ChooseResult::Empty => choose_intersection(a2, other),
+            }
         }
         (other, ValueSet::Union(b1, b2)) => {
-            choose_intersection(other, b1).or_else(|| choose_intersection(other, b2))
+            match choose_intersection(other, b1) {
+                ChooseResult::Found(v) => ChooseResult::Found(v),
+                ChooseResult::Unknown => {
+                    match choose_intersection(other, b2) {
+                        ChooseResult::Found(v) => ChooseResult::Found(v),
+                        _ => ChooseResult::Unknown,
+                    }
+                }
+                ChooseResult::Empty => choose_intersection(other, b2),
+            }
         }
         (ValueSet::Intersection(a1, a2), other) => {
             choose_intersection(a1, &ValueSet::Intersection(a2.clone(), Box::new(other.clone())))
@@ -173,31 +220,39 @@ fn choose_intersection(a: &ValueSet, b: &ValueSet) -> Option<Value> {
         }
         (ValueSet::Tuple(sets_a), ValueSet::Tuple(sets_b)) => {
             if sets_a.len() != sets_b.len() {
-                None
+                ChooseResult::Empty
             } else {
                 let mut elements = Vec::new();
                 for (sa, sb) in sets_a.iter().zip(sets_b.iter()) {
-                    if let Some(elem) = choose_intersection(sa, sb) {
-                        elements.push(elem);
-                    } else {
-                        return None;
+                    match choose_intersection(sa, sb) {
+                        ChooseResult::Found(elem) => elements.push(elem),
+                        ChooseResult::Unknown => return ChooseResult::Unknown,
+                        ChooseResult::Empty => return ChooseResult::Empty,
                     }
                 }
-                Some(Value::Tuple(elements))
+                ChooseResult::Found(Value::Tuple(elements))
             }
         }
         (ValueSet::Complement(a1), other) => {
             if let Some(elems) = other.elements() {
-                elems.into_iter().find(|v| !a1.contains(v))
+                if let Some(found) = elems.into_iter().find(|v| !a1.contains(v)) {
+                    ChooseResult::Found(found)
+                } else {
+                    ChooseResult::Empty
+                }
             } else {
-                panic!("Cannot choose from an intersection with an infinite LHS/RHS complement");
+                ChooseResult::Unknown
             }
         }
         (other, ValueSet::Complement(b1)) => {
             if let Some(elems) = other.elements() {
-                elems.into_iter().find(|v| !b1.contains(v))
+                if let Some(found) = elems.into_iter().find(|v| !b1.contains(v)) {
+                    ChooseResult::Found(found)
+                } else {
+                    ChooseResult::Empty
+                }
             } else {
-                panic!("Cannot choose from an intersection with an infinite LHS/RHS complement");
+                ChooseResult::Unknown
             }
         }
     }

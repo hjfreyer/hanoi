@@ -1,4 +1,4 @@
-use bytecode::{Instruction, Library, SentenceIndex, Value, ValueSet};
+use bytecode::{Instruction, Library, SentenceIndex, Value, ValueSet, ChooseResult};
 
 /// The virtual machine that executes sentences from a loaded library.
 pub struct VM {
@@ -370,10 +370,16 @@ impl VM {
                 Instruction::SetChoose => {
                     let set_val = self.pop()?;
                     if let Value::Set(set) = set_val {
-                        if let Some(elem) = set.choose() {
-                            self.stack.push(Value::Tuple(vec![elem, Value::Bool(true)]));
-                        } else {
-                            self.stack.push(Value::Tuple(vec![Value::Tuple(vec![]), Value::Bool(false)]));
+                        match set.choose() {
+                            ChooseResult::Found(elem) => {
+                                self.stack.push(Value::Tuple(vec![elem, Value::Bool(true)]));
+                            }
+                            ChooseResult::Empty => {
+                                self.stack.push(Value::Tuple(vec![Value::Tuple(vec![]), Value::Bool(false)]));
+                            }
+                            ChooseResult::Unknown => {
+                                panic!("Cannot choose from an infinite set");
+                            }
                         }
                     } else {
                         return Err(format!("Expected Value::Set on set_choose, found {:?}", set_val));

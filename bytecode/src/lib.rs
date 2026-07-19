@@ -6,7 +6,7 @@ pub mod value;
 pub use assembly::{assemble, assemble_with_path, AssemblyResult};
 pub use library::{Library, Sentence, SentenceIndex};
 pub use opcode::Instruction;
-pub use value::{Value, ValueSet};
+pub use value::{Value, ValueSet, ChooseResult};
 
 #[cfg(test)]
 mod tests {
@@ -74,16 +74,19 @@ mod tests {
             Box::new(ValueSet::Complement(Box::new(ValueSet::Singleton(Box::new(Value::Int(10)))))),
         );
 
-        assert_eq!(empty.choose(), None);
-        assert_eq!(universal.choose(), Some(Value::Tuple(vec![])));
-        assert_eq!(singleton.choose(), Some(Value::Int(42)));
-        assert_eq!(union_set.choose(), Some(Value::Int(100)));
-        assert_eq!(intersection_set.choose(), Some(Value::Int(20)));
-        assert_eq!(tuple_set.choose(), Some(Value::Tuple(vec![Value::Int(5), Value::Int(6)])));
-        assert_eq!(diff_set.choose(), Some(Value::Int(20)));
+        assert_eq!(empty.choose(), ChooseResult::Empty);
+        assert_eq!(universal.choose(), ChooseResult::Found(Value::Tuple(vec![])));
+        assert_eq!(singleton.choose(), ChooseResult::Found(Value::Int(42)));
+        assert_eq!(union_set.choose(), ChooseResult::Found(Value::Int(100)));
+        assert_eq!(intersection_set.choose(), ChooseResult::Found(Value::Int(20)));
+        assert_eq!(tuple_set.choose(), ChooseResult::Found(Value::Tuple(vec![Value::Int(5), Value::Int(6)])));
+        assert_eq!(diff_set.choose(), ChooseResult::Found(Value::Int(20)));
 
         let res = std::panic::catch_unwind(|| {
-            let _ = infinite_diff.choose();
+            match infinite_diff.choose() {
+                ChooseResult::Unknown => panic!("Cannot choose from an infinite set"),
+                _ => {}
+            }
         });
         assert!(res.is_err());
     }
