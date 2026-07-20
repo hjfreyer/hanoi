@@ -14,7 +14,14 @@ mod char_iterator {
     }
     
     # accept: takes state (sym, idx) and returns ValueSet of accepted events.
+    # String character iterator does not accept any external events (empty_set).
     accept {
+        push empty_set
+    }
+
+    # emit: takes state (sym, idx) and returns ValueSet of emitted events.
+    # Emits {(next, ch)} when idx < len, and {(done, ())} when idx == len.
+    emit {
         # Stack: [(sym, idx)]
         pick 0
         untuple 2 # Stack: [(sym, idx), sym, idx]
@@ -94,9 +101,9 @@ test iterate_string_ascii {
     jump char_iterator::init # Stack: [state]
     
     # Step 0: state is ("abc", 0)
-    # Check accepted event
+    # Check emitted event
     pick 0 # state
-    jump char_iterator::accept # Stack: [state, accept_set]
+    jump char_iterator::emit # Stack: [state, emit_set]
     set_choose
     untuple 2 # Stack: [state, (next, ch), has_elem]
     assert
@@ -113,7 +120,7 @@ test iterate_string_ascii {
     
     # Step 1: state is ("abc", 1)
     pick 0
-    jump char_iterator::accept
+    jump char_iterator::emit
     set_choose
     untuple 2
     assert
@@ -129,7 +136,7 @@ test iterate_string_ascii {
     
     # Step 2: state is ("abc", 2)
     pick 0
-    jump char_iterator::accept
+    jump char_iterator::emit
     set_choose
     untuple 2
     assert
@@ -143,9 +150,9 @@ test iterate_string_ascii {
     push (next, 99)
     jump char_iterator::process # Stack: [state_3]
     
-    # Step 3: state is ("abc", 3) - should accept (done, ())
+    # Step 3: state is ("abc", 3) - should emit (done, ())
     pick 0
-    jump char_iterator::accept
+    jump char_iterator::emit
     set_choose
     untuple 2
     assert
@@ -161,7 +168,7 @@ test iterate_string_ascii {
     
     # Step 4: state is ("abc", 4) - now it's truly empty_set
     pick 0
-    jump char_iterator::accept
+    jump char_iterator::emit
     set_choose
     untuple 2
     not
@@ -182,9 +189,9 @@ test iterate_empty {
     push empty_str
     jump char_iterator::init
     
-    # Step 0: state is ("", 0), should accept (done, ())
+    # Step 0: state is ("", 0), should emit (done, ())
     pick 0
-    jump char_iterator::accept
+    jump char_iterator::emit
     set_choose
     untuple 2
     assert
@@ -198,9 +205,9 @@ test iterate_empty {
     push (done, ())
     jump char_iterator::process # Stack: [state_1]
     
-    # Step 1: state is ("", 1), should accept empty_set
+    # Step 1: state is ("", 1), should emit empty_set
     pick 0
-    jump char_iterator::accept
+    jump char_iterator::emit
     set_choose
     untuple 2
     not
@@ -222,7 +229,7 @@ test iterate_unicode {
     
     # 'c' (99)
     pick 0
-    jump char_iterator::accept
+    jump char_iterator::emit
     set_choose
     untuple 2
     assert
@@ -236,7 +243,7 @@ test iterate_unicode {
     
     # 'a' (97)
     pick 0
-    jump char_iterator::accept
+    jump char_iterator::emit
     set_choose
     untuple 2
     assert
@@ -250,7 +257,7 @@ test iterate_unicode {
     
     # 'f' (102)
     pick 0
-    jump char_iterator::accept
+    jump char_iterator::emit
     set_choose
     untuple 2
     assert
@@ -264,7 +271,7 @@ test iterate_unicode {
     
     # 'é' (233)
     pick 0
-    jump char_iterator::accept
+    jump char_iterator::emit
     set_choose
     untuple 2
     assert
@@ -276,9 +283,9 @@ test iterate_unicode {
     push (next, 233)
     jump char_iterator::process
     
-    # Done step (idx == 4): accepts (done, ())
+    # Done step (idx == 4): emits (done, ())
     pick 0
-    jump char_iterator::accept
+    jump char_iterator::emit
     set_choose
     untuple 2
     assert
@@ -292,9 +299,9 @@ test iterate_unicode {
     push (done, ())
     jump char_iterator::process # Stack: [state_5]
     
-    # Truly Done step (idx == 5): accepts empty_set
+    # Truly Done step (idx == 5): emits empty_set
     pick 0
-    jump char_iterator::accept
+    jump char_iterator::emit
     set_choose
     untuple 2
     not

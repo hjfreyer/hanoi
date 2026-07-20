@@ -918,6 +918,8 @@ fn compose_concurrent(args: &[Path]) -> Result<Vec<TopLevelItem>, String> {
     let mut p2_init = p2.clone(); p2_init.segments.push(PathSegment::Identifier("init".to_string()));
     let mut p1_accept = p1.clone(); p1_accept.segments.push(PathSegment::Identifier("accept".to_string()));
     let mut p2_accept = p2.clone(); p2_accept.segments.push(PathSegment::Identifier("accept".to_string()));
+    let mut p1_emit = p1.clone(); p1_emit.segments.push(PathSegment::Identifier("emit".to_string()));
+    let mut p2_emit = p2.clone(); p2_emit.segments.push(PathSegment::Identifier("emit".to_string()));
     let mut p1_process = p1.clone(); p1_process.segments.push(PathSegment::Identifier("process".to_string()));
     let mut p2_process = p2.clone(); p2_process.segments.push(PathSegment::Identifier("process".to_string()));
 
@@ -1002,6 +1004,78 @@ fn compose_concurrent(args: &[Path]) -> Result<Vec<TopLevelItem>, String> {
         },
     };
 
+    let emit_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "emit".to_string(),
+        body: ParsedSentence {
+            instructions: vec![
+                // Extract joint state parts: [joint_state] -> [joint_state, s1, s2]
+                ParsedInstruction::Pick(0),
+                ParsedInstruction::Untuple(2),
+                ParsedInstruction::Roll(1), // Stack: [joint_state, s2, s1]
+                
+                // P1 accept and emit
+                // Stack: [joint_state, s2, s1] -> [joint_state, s2, s1, A1]
+                ParsedInstruction::Pick(0),
+                ParsedInstruction::Jump(Target::Label(p1_accept.clone())),
+                ParsedInstruction::Drop(1), // Stack: [joint_state, s2, s1, A1]
+                ParsedInstruction::Roll(1), // Stack: [joint_state, s2, A1, s1]
+                ParsedInstruction::Jump(Target::Label(p1_emit.clone())),
+                ParsedInstruction::Drop(1), // Stack: [joint_state, s2, A1, E1]
+                
+                // P2 accept and emit
+                // Stack: [joint_state, s2, A1, E1] -> [joint_state, A1, E1, s2]
+                ParsedInstruction::Roll(2),
+                // Stack: -> [joint_state, A1, E1, s2, s2] -> [joint_state, A1, E1, s2, s2, A2]
+                ParsedInstruction::Pick(0),
+                ParsedInstruction::Jump(Target::Label(p2_accept.clone())),
+                ParsedInstruction::Drop(1), // Stack: [joint_state, A1, E1, s2, A2]
+                ParsedInstruction::Roll(1), // Stack: [joint_state, A1, E1, A2, s2]
+                ParsedInstruction::Jump(Target::Label(p2_emit.clone())),
+                ParsedInstruction::Drop(1), // Stack: [joint_state, A1, E1, A2, E2]
+                
+                // P2_participate = E2 U A2
+                ParsedInstruction::Pick(0),
+                ParsedInstruction::Roll(2),
+                ParsedInstruction::SetUnion, // Stack: [joint_state, A1, E1, E2, P2]
+                
+                // P1_participate = E1 U A1
+                ParsedInstruction::Pick(2),
+                ParsedInstruction::Roll(4),
+                ParsedInstruction::SetUnion, // Stack: [joint_state, E1, E2, P2, P1]
+                
+                // P_both = P1_participate intersect P2_participate
+                ParsedInstruction::SetIntersection, // Stack: [joint_state, E1, E2, P_both]
+                
+                // P_both_sync = P_both intersect SyncSet
+                ParsedInstruction::Jump(Target::Label(sync_fn.clone())),
+                ParsedInstruction::SetIntersection, // Stack: [joint_state, E1, E2, P_both_sync]
+                
+                // E_union = E1 U E2
+                ParsedInstruction::Roll(2),
+                ParsedInstruction::Roll(2),
+                ParsedInstruction::SetUnion, // Stack: [joint_state, P_both_sync, E_union]
+                
+                // E_sync = E_union intersect P_both_sync
+                ParsedInstruction::Pick(0),
+                ParsedInstruction::Pick(2),
+                ParsedInstruction::SetIntersection, // Stack: [joint_state, P_both_sync, E_union, E_sync]
+                
+                // E_async = E_union difference SyncSet
+                ParsedInstruction::Roll(1),
+                ParsedInstruction::Jump(Target::Label(sync_fn.clone())),
+                ParsedInstruction::SetDifference, // Stack: [joint_state, P_both_sync, E_sync, E_async]
+                
+                // E_joint = E_sync U E_async
+                ParsedInstruction::SetUnion, // Stack: [joint_state, P_both_sync, E_joint]
+                
+                // Clean up stack: drop P_both_sync, leaving joint_state underneath E_joint
+                ParsedInstruction::Drop(1),
+            ],
+        },
+    };
+
     let process_sentence = TopLevelSentence {
         is_exported: false,
         is_test: false,
@@ -1066,43 +1140,59 @@ fn compose_concurrent(args: &[Path]) -> Result<Vec<TopLevelItem>, String> {
                             // Stack: -> [event, C_state, B_state]
                             ParsedInstruction::Untuple(2),
                             
-                            // Check if P1 accepts the event
+                            // Check if P1 participates in the event
                             // Stack: -> [event, C_state, B_state, C_state]
                             ParsedInstruction::Pick(1),
                             // Stack: -> [event, C_state, B_state, C_state, C_accept]
                             ParsedInstruction::Jump(Target::Label(p1_accept.clone())),
                             // Stack: -> [event, C_state, B_state, C_accept]
                             ParsedInstruction::Drop(1),
-                            // Stack: -> [event, C_state, B_state, C_accept, event]
-                            ParsedInstruction::Pick(3),
-                            // Stack: -> [event, C_state, B_state, event, C_accept]
-                            ParsedInstruction::Roll(1),
-                            // Stack: -> [event, C_state, B_state, p1_accepts]
-                            ParsedInstruction::SetContains,
-                            
-                            // Check if P2 accepts the event
-                            // Stack: -> [event, C_state, B_state, p1_accepts, B_state]
-                            ParsedInstruction::Pick(1),
-                            // Stack: -> [event, C_state, B_state, p1_accepts, B_state, B_accept]
-                            ParsedInstruction::Jump(Target::Label(p2_accept.clone())),
-                            // Stack: -> [event, C_state, B_state, p1_accepts, B_accept]
+                            // Stack: -> [event, C_state, B_state, C_accept, C_state]
+                            ParsedInstruction::Pick(2),
+                            // Stack: -> [event, C_state, B_state, C_accept, C_state, C_emit]
+                            ParsedInstruction::Jump(Target::Label(p1_emit.clone())),
+                            // Stack: -> [event, C_state, B_state, C_accept, C_emit]
                             ParsedInstruction::Drop(1),
-                            // Stack: -> [event, C_state, B_state, p1_accepts, B_accept, event]
-                            ParsedInstruction::Pick(4),
-                            // Stack: -> [event, C_state, B_state, p1_accepts, event, B_accept]
+                            // Stack: -> [event, C_state, B_state, C_participate]
+                            ParsedInstruction::SetUnion,
+                            // Stack: -> [event, C_state, B_state, C_participate, event]
+                            ParsedInstruction::Pick(3),
+                            // Stack: -> [event, C_state, B_state, event, C_participate]
                             ParsedInstruction::Roll(1),
-                            // Stack: -> [event, C_state, B_state, p1_accepts, p2_accepts]
+                            // Stack: -> [event, C_state, B_state, p1_participates]
                             ParsedInstruction::SetContains,
                             
-                            // Swap p1_accepts and p2_accepts
-                            // Stack: -> [event, C_state, B_state, p2_accepts, p1_accepts]
+                            // Check if P2 participates in the event
+                            // Stack: -> [event, C_state, B_state, p1_participates, B_state]
+                            ParsedInstruction::Pick(1),
+                            // Stack: -> [event, C_state, B_state, p1_participates, B_state, B_accept]
+                            ParsedInstruction::Jump(Target::Label(p2_accept.clone())),
+                            // Stack: -> [event, C_state, B_state, p1_participates, B_accept]
+                            ParsedInstruction::Drop(1),
+                            // Stack: -> [event, C_state, B_state, p1_participates, B_accept, B_state]
+                            ParsedInstruction::Pick(2),
+                            // Stack: -> [event, C_state, B_state, p1_participates, B_accept, B_state, B_emit]
+                            ParsedInstruction::Jump(Target::Label(p2_emit.clone())),
+                            // Stack: -> [event, C_state, B_state, p1_participates, B_accept, B_emit]
+                            ParsedInstruction::Drop(1),
+                            // Stack: -> [event, C_state, B_state, p1_participates, B_participate]
+                            ParsedInstruction::SetUnion,
+                            // Stack: -> [event, C_state, B_state, p1_participates, B_participate, event]
+                            ParsedInstruction::Pick(4),
+                            // Stack: -> [event, C_state, B_state, p1_participates, event, B_participate]
                             ParsedInstruction::Roll(1),
-                            // Branch on p1_accepts
+                            // Stack: -> [event, C_state, B_state, p1_participates, p2_participates]
+                            ParsedInstruction::SetContains,
+                            
+                            // Swap p1_participates and p2_participates
+                            // Stack: -> [event, C_state, B_state, p2_participates, p1_participates]
+                            ParsedInstruction::Roll(1),
+                            // Branch on p1_participates
                             ParsedInstruction::Branch(
                                 // P1 accepts
                                 Target::Inline(ParsedSentence {
                                     instructions: vec![
-                                        // Discard p2_accepts
+                                        // Discard p2_participates
                                         // Stack: [event, C_state, B_state]
                                         ParsedInstruction::Drop(0),
                                         
@@ -1134,8 +1224,8 @@ fn compose_concurrent(args: &[Path]) -> Result<Vec<TopLevelItem>, String> {
                                 // P1 does not accept; check if P2 accepts
                                 Target::Inline(ParsedSentence {
                                     instructions: vec![
-                                        // Branch on p2_accepts
-                                        // Stack: [event, C_state, B_state, p2_accepts]
+                                        // Branch on p2_participates
+                                        // Stack: [event, C_state, B_state, p2_participates]
                                         ParsedInstruction::Branch(
                                             // P2 accepts
                                             Target::Inline(ParsedSentence {
@@ -1176,6 +1266,7 @@ fn compose_concurrent(args: &[Path]) -> Result<Vec<TopLevelItem>, String> {
     Ok(vec![
         TopLevelItem::Sentence(init_sentence),
         TopLevelItem::Sentence(accept_sentence),
+        TopLevelItem::Sentence(emit_sentence),
         TopLevelItem::Sentence(process_sentence),
     ])
 }
@@ -1189,6 +1280,7 @@ fn compose_hidden(args: &[Path]) -> Result<Vec<TopLevelItem>, String> {
 
     let mut concurrent_init = concurrent.clone(); concurrent_init.segments.push(PathSegment::Identifier("init".to_string()));
     let mut concurrent_accept = concurrent.clone(); concurrent_accept.segments.push(PathSegment::Identifier("accept".to_string()));
+    let mut concurrent_emit = concurrent.clone(); concurrent_emit.segments.push(PathSegment::Identifier("emit".to_string()));
     let mut concurrent_process = concurrent.clone(); concurrent_process.segments.push(PathSegment::Identifier("process".to_string()));
 
     let init_sentence = TopLevelSentence {
@@ -1230,36 +1322,52 @@ fn compose_hidden(args: &[Path]) -> Result<Vec<TopLevelItem>, String> {
                 ParsedInstruction::Drop(1),
                 
                 // Compute NonHiddenAccepted = difference(JointAccept, SyncSet)
-                // Stack: -> [joint_state, JointAccept, JointAccept]
-                ParsedInstruction::Pick(0),
-                // Stack: -> [joint_state, JointAccept, JointAccept, SyncSet]
+                // Stack: -> [joint_state, JointAccept, SyncSet]
                 ParsedInstruction::Jump(Target::Label(hidden_fn.clone())),
-                // Stack: -> [joint_state, JointAccept, NonHiddenAccepted]
+                // Stack: -> [joint_state, NonHiddenAccepted]
+                ParsedInstruction::SetDifference,
+            ],
+        },
+    };
+
+    let emit_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "emit".to_string(),
+        body: ParsedSentence {
+            instructions: vec![
+                // Query concurrent emit: [joint_state] -> [joint_state, JointEmit]
+                ParsedInstruction::Pick(0),
+                ParsedInstruction::Jump(Target::Label(concurrent_emit.clone())),
+                ParsedInstruction::Drop(1),
+                
+                // Compute NonHiddenEmit = JointEmit \ H
+                // Stack: -> [joint_state, JointEmit, JointEmit]
+                ParsedInstruction::Pick(0),
+                // Stack: -> [joint_state, JointEmit, JointEmit, H]
+                ParsedInstruction::Jump(Target::Label(hidden_fn.clone())),
+                // Stack: -> [joint_state, JointEmit, NonHiddenEmit]
                 ParsedInstruction::SetDifference,
                 
-                // Compute HasSync = intersection(JointAccept, SyncSet)
-                // Stack: -> [joint_state, NonHiddenAccepted, JointAccept]
+                // Compute HasSync = JointEmit \cap H
+                // Stack: -> [joint_state, NonHiddenEmit, JointEmit]
                 ParsedInstruction::Roll(1),
-                // Stack: -> [joint_state, NonHiddenAccepted, JointAccept, SyncSet]
+                // Stack: -> [joint_state, NonHiddenEmit, JointEmit, H]
                 ParsedInstruction::Jump(Target::Label(hidden_fn.clone())),
-                // Stack: -> [joint_state, NonHiddenAccepted, HasSync]
+                // Stack: -> [joint_state, NonHiddenEmit, HasSync]
                 ParsedInstruction::SetIntersection,
                 
-                // Check if HasSync is empty
-                // Stack: -> [joint_state, NonHiddenAccepted, HasSync, empty_set]
+                // If HasSync is not empty, union with {tau}
                 ParsedInstruction::Push(ParsedValue::SetEmpty),
-                // Stack: -> [joint_state, NonHiddenAccepted, has_sync_is_empty]
                 ParsedInstruction::Equal,
                 ParsedInstruction::Branch(
-                    // HasSync is empty; just return NonHiddenAccepted
-                    // Stack: -> [joint_state, NonHiddenAccepted]
+                    // HasSync is empty: do nothing, returning NonHiddenEmit
                     Target::Inline(ParsedSentence {
                         instructions: vec![]
                     }),
-                    // HasSync contains hidden events; offer tau transition
+                    // HasSync contains hidden events: union with {tau}
                     Target::Inline(ParsedSentence {
                         instructions: vec![
-                            // Push tau symbol
                             ParsedInstruction::Push(ParsedValue::SymbolRef(Path {
                                 segments: vec![
                                     PathSegment::Crate,
@@ -1268,13 +1376,11 @@ fn compose_hidden(args: &[Path]) -> Result<Vec<TopLevelItem>, String> {
                                     PathSegment::Identifier("tau".to_string()),
                                 ],
                             })),
-                            // Stack: -> [joint_state, NonHiddenAccepted, {tau}]
                             ParsedInstruction::SetSingleton,
-                            // Stack: -> [joint_state, NonHiddenAccepted union {tau}]
                             ParsedInstruction::SetUnion,
                         ]
                     })
-                )
+                ),
             ],
         },
     };
@@ -1309,10 +1415,10 @@ fn compose_hidden(args: &[Path]) -> Result<Vec<TopLevelItem>, String> {
                             ParsedInstruction::Drop(0),
                             
                             // Fetch accepted joint events
-                            // Stack: -> [joint_state, JointAccept]
-                            ParsedInstruction::Jump(Target::Label(concurrent_accept.clone())),
+                            // Stack: -> [joint_state, JointEmit]
+                            ParsedInstruction::Jump(Target::Label(concurrent_emit.clone())),
                             // Fetch hidden events
-                            // Stack: -> [joint_state, JointAccept, SyncSet]
+                            // Stack: -> [joint_state, JointEmit, SyncSet]
                             ParsedInstruction::Jump(Target::Label(hidden_fn.clone())),
                             // Stack: -> [joint_state, HasSync]
                             ParsedInstruction::SetIntersection,
@@ -1353,6 +1459,7 @@ fn compose_hidden(args: &[Path]) -> Result<Vec<TopLevelItem>, String> {
         TopLevelItem::Sentence(init_sentence),
         TopLevelItem::Sentence(set_sentence),
         TopLevelItem::Sentence(accept_sentence),
+        TopLevelItem::Sentence(emit_sentence),
         TopLevelItem::Sentence(process_sentence),
     ])
 }
