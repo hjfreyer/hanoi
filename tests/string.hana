@@ -1,0 +1,309 @@
+# String character iterator machine and tests
+# This machine is initialized with a symbol and acts as an iterator over its characters.
+
+symbol next "Next character event"
+symbol done "Iteration finished event"
+
+mod char_iterator {
+    # Initialize with a symbol.
+    # Expects sym on stack.
+    # Returns (sym, 0) state.
+    init {
+        push 0
+        tuple 2
+    }
+    
+    # accept: takes state (sym, idx) and returns ValueSet of accepted events.
+    accept {
+        # Stack: [(sym, idx)]
+        pick 0
+        untuple 2 # Stack: [(sym, idx), sym, idx]
+        
+        pick 1 # sym
+        symbol_len # Stack: [(sym, idx), sym, idx, len]
+        
+        pick 1 # idx
+        pick 1 # len
+        less # Stack: [(sym, idx), sym, idx, len, idx < len]
+        
+        branch {
+            # Get character at idx
+            pick 2 # sym
+            pick 2 # idx
+            symbol_char_at # Stack: [(sym, idx), sym, idx, len, ch]
+            
+            # Construct event: (next, ch)
+            push super::next
+            roll 1 # ch
+            tuple 2 # Stack: [(sym, idx), sym, idx, len, (next, ch)]
+            
+            set_singleton # Stack: [(sym, idx), sym, idx, len, {(next, ch)}]
+            
+            # Clean up temporaries
+            drop 4
+            drop 3
+            drop 2
+            drop 1
+        } {
+            # idx >= len: check if idx == len
+            pick 1 # idx
+            pick 1 # len
+            equal # Stack: [(sym, idx), sym, idx, len, idx == len]
+            
+            branch {
+                # Construct event: (done, ())
+                push super::done
+                tuple 0 # ()
+                tuple 2 # (done, ())
+                set_singleton
+                
+                # Clean up
+                drop 4
+                drop 3
+                drop 2
+                drop 1
+            } {
+                # idx > len: return empty_set
+                push empty_set
+                
+                # Clean up
+                drop 4
+                drop 3
+                drop 2
+                drop 1
+            }
+        }
+    }
+    
+    # process: takes state (sym, idx) and event, returns (sym, idx + 1)
+    process {
+        # Stack: [(sym, idx), event]
+        drop 0 # drop event. Stack: [(sym, idx)]
+        untuple 2 # Stack: [sym, idx]
+        push 1
+        add # Stack: [sym, idx + 1]
+        tuple 2
+    }
+}
+
+symbol my_str "abc"
+
+test iterate_string_ascii {
+    # Initialize state
+    push my_str
+    jump char_iterator::init # Stack: [state]
+    
+    # Step 0: state is ("abc", 0)
+    # Check accepted event
+    pick 0 # state
+    jump char_iterator::accept # Stack: [state, accept_set]
+    set_choose
+    untuple 2 # Stack: [state, (next, ch), has_elem]
+    assert
+    
+    untuple 2 # Stack: [state, next, ch]
+    push 97 # 'a'
+    assert_eq
+    push next
+    assert_eq
+    
+    # Process transition
+    push (next, 97)
+    jump char_iterator::process # Stack: [state_1]
+    
+    # Step 1: state is ("abc", 1)
+    pick 0
+    jump char_iterator::accept
+    set_choose
+    untuple 2
+    assert
+    
+    untuple 2
+    push 98 # 'b'
+    assert_eq
+    push next
+    assert_eq
+    
+    push (next, 98)
+    jump char_iterator::process # Stack: [state_2]
+    
+    # Step 2: state is ("abc", 2)
+    pick 0
+    jump char_iterator::accept
+    set_choose
+    untuple 2
+    assert
+    
+    untuple 2
+    push 99 # 'c'
+    assert_eq
+    push next
+    assert_eq
+    
+    push (next, 99)
+    jump char_iterator::process # Stack: [state_3]
+    
+    # Step 3: state is ("abc", 3) - should accept (done, ())
+    pick 0
+    jump char_iterator::accept
+    set_choose
+    untuple 2
+    assert
+    
+    untuple 2
+    tuple 0
+    assert_eq
+    push done
+    assert_eq
+    
+    push (done, ())
+    jump char_iterator::process # Stack: [state_4]
+    
+    # Step 4: state is ("abc", 4) - now it's truly empty_set
+    pick 0
+    jump char_iterator::accept
+    set_choose
+    untuple 2
+    not
+    assert
+    drop 0
+    
+    # Verify final state is ("abc", 4)
+    untuple 2
+    push 4
+    assert_eq
+    push my_str
+    assert_eq
+}
+
+symbol empty_str ""
+
+test iterate_empty {
+    push empty_str
+    jump char_iterator::init
+    
+    # Step 0: state is ("", 0), should accept (done, ())
+    pick 0
+    jump char_iterator::accept
+    set_choose
+    untuple 2
+    assert
+    
+    untuple 2
+    tuple 0
+    assert_eq
+    push done
+    assert_eq
+    
+    push (done, ())
+    jump char_iterator::process # Stack: [state_1]
+    
+    # Step 1: state is ("", 1), should accept empty_set
+    pick 0
+    jump char_iterator::accept
+    set_choose
+    untuple 2
+    not
+    assert
+    drop 0
+    
+    untuple 2
+    push 1
+    assert_eq
+    push empty_str
+    assert_eq
+}
+
+symbol cafe_str "café"
+
+test iterate_unicode {
+    push cafe_str
+    jump char_iterator::init
+    
+    # 'c' (99)
+    pick 0
+    jump char_iterator::accept
+    set_choose
+    untuple 2
+    assert
+    untuple 2
+    push 99
+    assert_eq
+    push next
+    assert_eq
+    push (next, 99)
+    jump char_iterator::process
+    
+    # 'a' (97)
+    pick 0
+    jump char_iterator::accept
+    set_choose
+    untuple 2
+    assert
+    untuple 2
+    push 97
+    assert_eq
+    push next
+    assert_eq
+    push (next, 97)
+    jump char_iterator::process
+    
+    # 'f' (102)
+    pick 0
+    jump char_iterator::accept
+    set_choose
+    untuple 2
+    assert
+    untuple 2
+    push 102
+    assert_eq
+    push next
+    assert_eq
+    push (next, 102)
+    jump char_iterator::process
+    
+    # 'é' (233)
+    pick 0
+    jump char_iterator::accept
+    set_choose
+    untuple 2
+    assert
+    untuple 2
+    push 233
+    assert_eq
+    push next
+    assert_eq
+    push (next, 233)
+    jump char_iterator::process
+    
+    # Done step (idx == 4): accepts (done, ())
+    pick 0
+    jump char_iterator::accept
+    set_choose
+    untuple 2
+    assert
+    
+    untuple 2
+    tuple 0
+    assert_eq
+    push done
+    assert_eq
+    
+    push (done, ())
+    jump char_iterator::process # Stack: [state_5]
+    
+    # Truly Done step (idx == 5): accepts empty_set
+    pick 0
+    jump char_iterator::accept
+    set_choose
+    untuple 2
+    not
+    assert
+    drop 0
+    
+    untuple 2
+    push 5
+    assert_eq
+    push cafe_str
+    assert_eq
+}

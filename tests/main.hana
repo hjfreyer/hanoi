@@ -7,3 +7,4 @@ mod namespacing;
 mod symbols;
 mod tuples;
 mod value_sets;
+mod string;
