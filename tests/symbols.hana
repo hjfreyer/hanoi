@@ -37,3 +37,34 @@ check_symbol {
     equal
     assert
 }
+
+test symbol_len_operation {
+    push sym_a
+    symbol_len
+    push 8
+    assert_eq
+    
+    push sym_b
+    symbol_len
+    push 8
+    assert_eq
+    
+    push sym_c
+    symbol_len
+    push 14
+    assert_eq
+}
+
+test symbol_char_at_operation {
+    push sym_a
+    push 0
+    symbol_char_at
+    push 65
+    assert_eq
+    
+    push sym_a
+    push 2
+    symbol_char_at
+    push 83
+    assert_eq
+}

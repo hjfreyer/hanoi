@@ -83,4 +83,9 @@ pub enum Instruction {
     SetTuple(usize),
     /// Pop a ValueSet off the stack, select an arbitrary element, and push a tuple (has_element: bool, element: any).
     SetChoose,
+    
+    /// Pop a Symbol off the stack, and push its character length as an Int.
+    SymbolLen,
+    /// Pop an index (Int) and a Symbol off the stack, and push the Unicode code point of the character at that index as an Int.
+    SymbolCharAt,
 }

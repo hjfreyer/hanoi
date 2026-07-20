@@ -385,6 +385,31 @@ impl VM {
                         return Err(format!("Expected Value::Set on set_choose, found {:?}", set_val));
                     }
                 }
+                Instruction::SymbolLen => {
+                    let val = self.pop()?;
+                    if let Value::Symbol(sym) = val {
+                        self.stack.push(Value::Int(sym.name.chars().count() as i64));
+                    } else {
+                        return Err(format!("Expected Value::Symbol on symbol_len, found {:?}", val));
+                    }
+                }
+                Instruction::SymbolCharAt => {
+                    let idx_val = self.pop()?;
+                    let sym_val = self.pop()?;
+                    match (sym_val, idx_val) {
+                        (Value::Symbol(sym), Value::Int(idx)) => {
+                            let char_count = sym.name.chars().count() as i64;
+                            if idx < 0 || idx >= char_count {
+                                return Err(format!("Symbol index out of bounds: index {} on symbol '{}' of length {}", idx, sym.name, char_count));
+                            }
+                            let ch = sym.name.chars().nth(idx as usize).unwrap();
+                            self.stack.push(Value::Int(ch as i64));
+                        }
+                        (s, i) => {
+                            return Err(format!("Expected (Value::Symbol, Value::Int) on symbol_char_at, found ({:?}, {:?})", s, i));
+                        }
+                    }
+                }
             }
         }
 
@@ -594,5 +619,65 @@ mod tests {
         let mut vm = VM::new(res.library);
         assert!(vm.execute(entry_idx).is_ok());
         assert!(vm.stack().is_empty());
+    }
+
+    #[test]
+    fn test_symbol_len_and_char_at() {
+        let code = r#"
+            symbol ascii_sym "hello"
+            symbol unicode_sym "café"
+            
+            export test_len {
+                push ascii_sym
+                symbol_len
+                push 5
+                assert_eq
+                
+                push unicode_sym
+                symbol_len
+                push 4
+                assert_eq
+            }
+            
+            export test_char_at {
+                push ascii_sym
+                push 1
+                symbol_char_at
+                push 101
+                assert_eq
+                
+                push unicode_sym
+                push 3
+                symbol_char_at
+                push 233
+                assert_eq
+            }
+            
+            export test_out_of_bounds {
+                push unicode_sym
+                push 4
+                symbol_char_at
+            }
+        "#;
+        let res = bytecode::assemble(code).unwrap();
+        
+        // Run test_len
+        let test_len_idx = *res.exports.get("test_len").unwrap();
+        let mut vm = VM::new(res.library.clone());
+        assert!(vm.execute(test_len_idx).is_ok());
+        assert!(vm.stack().is_empty());
+        
+        // Run test_char_at
+        let test_char_idx = *res.exports.get("test_char_at").unwrap();
+        let mut vm = VM::new(res.library.clone());
+        assert!(vm.execute(test_char_idx).is_ok());
+        assert!(vm.stack().is_empty());
+        
+        // Run test_out_of_bounds (should fail)
+        let oob_idx = *res.exports.get("test_out_of_bounds").unwrap();
+        let mut vm = VM::new(res.library);
+        let run_res = vm.execute(oob_idx);
+        assert!(run_res.is_err());
+        assert!(run_res.unwrap_err().contains("Symbol index out of bounds"));
     }
 }

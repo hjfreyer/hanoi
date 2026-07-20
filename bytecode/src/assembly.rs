@@ -504,6 +504,8 @@ fn parse_instruction(stream: &mut TokenStream) -> Result<ParsedInstruction, Stri
             Ok(ParsedInstruction::SetTuple(size))
         }
         "set_choose" => Ok(ParsedInstruction::SetChoose),
+        "symbol_len" => Ok(ParsedInstruction::SymbolLen),
+        "symbol_char_at" => Ok(ParsedInstruction::SymbolCharAt),
         other => Err(format!("Unknown instruction mnemonic: '{}'", other)),
     }
 }
@@ -724,6 +726,8 @@ enum ParsedInstruction {
     SetSingleton,
     SetTuple(usize),
     SetChoose,
+    SymbolLen,
+    SymbolCharAt,
 }
 
 /// The result of parsing and compiling assembly code.
@@ -1555,6 +1559,8 @@ impl<'a> Compiler<'a> {
                 ParsedInstruction::SetSingleton => Instruction::SetSingleton,
                 ParsedInstruction::SetTuple(n) => Instruction::SetTuple(n),
                 ParsedInstruction::SetChoose => Instruction::SetChoose,
+                ParsedInstruction::SymbolLen => Instruction::SymbolLen,
+                ParsedInstruction::SymbolCharAt => Instruction::SymbolCharAt,
                 ParsedInstruction::Jump(target) => {
                     let target_idx = self.resolve_target(current_path, target)?;
                     Instruction::Jump(target_idx)
