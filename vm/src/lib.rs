@@ -5,6 +5,7 @@ pub struct VM {
     library: Library,
     stack: Vec<Value>,
     call_stack: Vec<(SentenceIndex, usize)>,
+    tracing: bool,
 }
 
 impl VM {
@@ -14,7 +15,13 @@ impl VM {
             library,
             stack: Vec::new(),
             call_stack: Vec::new(),
+            tracing: false,
         }
+    }
+
+    /// Enables or disables detailed operation-by-operation tracing.
+    pub fn set_tracing(&mut self, tracing: bool) {
+        self.tracing = tracing;
     }
 
     /// Returns a slice representing the current stack.
@@ -64,10 +71,19 @@ impl VM {
             if ip >= sentence.len() {
                 // Return to the caller if there's an address on the call stack
                 if let Some((caller_sentence, caller_ip)) = self.call_stack.pop() {
+                    if self.tracing {
+                        println!(
+                            "[TRACE] Returning to Sentence: {:?}, IP: {}",
+                            caller_sentence, caller_ip
+                        );
+                    }
                     current_sentence = caller_sentence;
                     ip = caller_ip;
                     continue;
                 } else {
+                    if self.tracing {
+                        println!("[TRACE] Finished execution");
+                    }
                     // Terminate execution if the call stack is empty
                     break;
                 }
@@ -75,6 +91,12 @@ impl VM {
 
             // Clone the instruction to release the borrow on self.library
             let instruction = sentence[ip].clone();
+            if self.tracing {
+                println!(
+                    "[TRACE] Sentence: {:?}, IP: {}, Instruction: {:?} | Stack: {:?} | CallStack: {:?}",
+                    current_sentence, ip, instruction, self.stack, self.call_stack
+                );
+            }
             ip += 1;
 
             match instruction {
@@ -679,5 +701,22 @@ mod tests {
         let run_res = vm.execute(oob_idx);
         assert!(run_res.is_err());
         assert!(run_res.unwrap_err().contains("Symbol index out of bounds"));
+    }
+
+    #[test]
+    fn test_tracing_execution() {
+        let code = r#"
+            export entry {
+                push 42
+                push 100
+                add
+            }
+        "#;
+        let res = bytecode::assemble(code).unwrap();
+        let entry_idx = *res.exports.get("entry").unwrap();
+        let mut vm = VM::new(res.library);
+        vm.set_tracing(true);
+        assert!(vm.execute(entry_idx).is_ok());
+        assert_eq!(vm.stack(), &[Value::Int(142)]);
     }
 }

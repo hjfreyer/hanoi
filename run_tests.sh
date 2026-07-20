@@ -16,7 +16,7 @@ echo "Running Hanoi integration tests..."
 echo "======================================"
 echo ""
 
-if ./target/debug/test-runner tests; then
+if ./target/debug/test-runner tests "$@"; then
     echo "======================================"
     echo "All integration tests passed."
     exit 0

@@ -1,17 +1,32 @@
-use std::env;
 use std::fs;
 use std::process;
 use std::io::{self, Write};
+use clap::Parser;
+
+/// Hanoi Test Runner
+#[derive(Parser, Debug)]
+#[command(version, about = "Hanoi integration test runner", long_about = None)]
+struct Args {
+    /// Directory containing main.hana and test files
+    directory: String,
+
+    /// Substring filter for test names
+    #[arg(long = "test-filter")]
+    test_filter: Option<String>,
+
+    /// Enable detailed operation-by-operation tracing
+    #[arg(short = 't', long = "trace")]
+    trace: bool,
+}
 
 fn main() {
-    let args: Vec<String> = env::args().collect();
-    if args.len() < 2 {
-        eprintln!("Usage: {} <directory>", args[0]);
-        process::exit(1);
-    }
+    let args = Args::parse();
+    
+    let path = &args.directory;
+    let filter = args.test_filter;
+    let trace = args.trace;
 
-    let path = &args[1];
-    let file_path = std::path::Path::new(path).join("main.hana");
+    let file_path = std::path::Path::new(&path).join("main.hana");
     if !file_path.exists() {
         eprintln!("Error: Directory '{}' does not contain 'main.hana'", path);
         process::exit(1);
@@ -39,30 +54,64 @@ fn main() {
         return;
     }
 
-    println!("Running {} tests...", res.tests.len());
-    let mut failed = 0;
+    let total_tests = res.tests.len();
 
     // Stable sort tests by name for consistent output
     let mut tests: Vec<(&String, &bytecode::SentenceIndex)> = res.tests.iter().collect();
     tests.sort_by_key(|(name, _)| *name);
 
+    if let Some(ref pattern) = filter {
+        tests.retain(|(name, _)| name.contains(pattern));
+    }
+
+    if tests.is_empty() {
+        if let Some(ref pattern) = filter {
+            println!("No tests matched the filter '{}'.", pattern);
+        } else {
+            println!("No tests found in '{}'.", file_path.display());
+        }
+        return;
+    }
+
+    let tests_run = tests.len();
+    let filtered_out = total_tests - tests_run;
+    println!("Running {} tests...", tests_run);
+    let mut failed = 0;
+
     for (name, &index) in tests {
-        print!("test {} ... ", name);
-        io::stdout().flush().unwrap();
+        if trace {
+            println!("test {}", name);
+        } else {
+            print!("test {} ... ", name);
+            io::stdout().flush().unwrap();
+        }
 
         // Each test runs in its own fresh VM instance
         let mut vm = vm::VM::new(res.library.clone());
+        vm.set_tracing(trace);
         match vm.execute(index) {
             Ok(()) => {
                 if vm.stack().is_empty() {
-                    println!("ok");
+                    if trace {
+                        println!("result: ok");
+                    } else {
+                        println!("ok");
+                    }
                 } else {
-                    println!("FAILED (stack was not empty: {:?})", vm.stack());
+                    if trace {
+                        println!("result: FAILED (stack was not empty: {:?})", vm.stack());
+                    } else {
+                        println!("FAILED (stack was not empty: {:?})", vm.stack());
+                    }
                     failed += 1;
                 }
             }
             Err(err) => {
-                println!("FAILED ({})", err);
+                if trace {
+                    println!("result: FAILED ({})", err);
+                } else {
+                    println!("FAILED ({})", err);
+                }
                 failed += 1;
             }
         }
@@ -70,9 +119,18 @@ fn main() {
 
     println!();
     if failed > 0 {
-        println!("test result: FAILED. {} passed; {} failed", res.tests.len() - failed, failed);
+        println!(
+            "test result: FAILED. {} passed; {} failed; {} filtered out",
+            tests_run - failed,
+            failed,
+            filtered_out
+        );
         process::exit(1);
     } else {
-        println!("test result: ok. {} passed; 0 failed", res.tests.len());
+        println!(
+            "test result: ok. {} passed; 0 failed; {} filtered out",
+            tests_run,
+            filtered_out
+        );
     }
 }

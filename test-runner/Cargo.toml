@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 bytecode = { path = "../bytecode" }
 vm = { path = "../vm" }
+clap = { version = "4", features = ["derive"] }
