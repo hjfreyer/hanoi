@@ -1,316 +1,791 @@
 # String character iterator machine and tests
-# This machine is initialized with a symbol and acts as an iterator over its characters.
+# Unprefixed string_ref state machine, prefixed_string_ref decorator & CSP char_iterator (hard-coded ports)
 
 symbol next "Next character event"
 symbol done "Iteration finished event"
 
-mod char_iterator {
-    # Initialize with a symbol.
+symbol in   "in"
+symbol out  "out"
+
+# Base unprefixed string_ref machine
+mod string_ref {
+    symbol length       "Query string length"
+    symbol charat       "Query character at index"
+    symbol length_resp  "Response for string length"
+    symbol charat_resp  "Response for character at index"
+    symbol none         "None option variant"
+    symbol some         "Some option variant"
+    symbol idle         "Idle state"
+
+    # Initialize with a symbol representing string contents.
     # Expects sym on stack.
-    # Returns (sym, 0) state.
+    # Returns (sym, idle) state.
     init {
-        push 0
+        push idle
         tuple 2
     }
     
-    # accept: takes state (sym, idx) and returns ValueSet of accepted events.
-    # String character iterator does not accept any external events (empty_set).
+    # accept: takes state (sym, internal_state) and returns ValueSet of accepted events.
+    # At rest (idle), accepts (length, ()) or (charat, N).
     accept {
-        push empty_set
-    }
-
-    # emit: takes state (sym, idx) and returns ValueSet of emitted events.
-    # Emits {(next, ch)} when idx < len, and {(done, ())} when idx == len.
-    emit {
-        # Stack: [(sym, idx)]
         pick 0
-        untuple 2 # Stack: [(sym, idx), sym, idx]
-        
-        pick 1 # sym
-        symbol_len # Stack: [(sym, idx), sym, idx, len]
-        
-        pick 1 # idx
-        pick 1 # len
-        less # Stack: [(sym, idx), sym, idx, len, idx < len]
-        
+        untuple 2 # Stack: [state, sym, internal_state]
+        pick 0 # duplicate internal_state before comparison
+        push idle
+        equal
         branch {
-            # Get character at idx
-            pick 2 # sym
-            pick 2 # idx
-            symbol_char_at # Stack: [(sym, idx), sym, idx, len, ch]
+            # Accept (length, ())
+            push singleton((length, ()))
             
-            # Construct event: (next, ch)
-            push super::next
-            roll 1 # ch
-            tuple 2 # Stack: [(sym, idx), sym, idx, len, (next, ch)]
+            # Accept (charat, N) for any N
+            push set_tuple(singleton(charat), universal_set)
+            set_union
             
-            set_singleton # Stack: [(sym, idx), sym, idx, len, {(next, ch)}]
-            
-            # Clean up temporaries
-            drop 4
-            drop 3
-            drop 2
+            # Clean up internal_state and sym
+            drop 1
             drop 1
         } {
-            # idx >= len: check if idx == len
-            pick 1 # idx
-            pick 1 # len
-            equal # Stack: [(sym, idx), sym, idx, len, idx == len]
+            push empty_set
+            drop 1
+            drop 1
+        }
+    }
+
+    # emit: takes state (sym, internal_state) and returns ValueSet of emitted events.
+    # In response state, emits internal_state which is (length_resp, len) or (charat_resp, ...).
+    emit {
+        pick 0
+        untuple 2 # Stack: [state, sym, internal_state]
+        pick 0 # duplicate internal_state before comparison
+        push idle
+        equal
+        branch {
+            # At rest: emits nothing
+            push empty_set
+            drop 1
+            drop 1
+        } {
+            # In response state: internal_state is the response event
+            pick 0 # duplicate internal_state
+            set_singleton
             
+            drop 1
+            drop 1
+        }
+    }
+
+    # process: takes state and event, returns next_state
+    process {
+        # Stack: [state, event]
+        roll 1 # Stack: [event, state]
+        untuple 2 # Stack: [event, sym, internal_state]
+        
+        pick 0
+        push idle
+        equal
+        branch {
+            # Case 1: internal_state is idle. We processed a query event (length, ()) or (charat, N).
+            drop 0 # drop internal_state. Stack: [event, sym]
+            roll 1 # Stack: [sym, event]
+            untuple 2 # Stack: [sym, query_type, query_payload]
+            
+            pick 1 # query_type
+            push length
+            equal
             branch {
-                # Construct event: (done, ())
-                push super::done
-                tuple 0 # ()
-                tuple 2 # (done, ())
-                set_singleton
+                # length query: query_payload is ()
+                drop 0 # drop query_payload (which is ())
+                drop 0 # drop query_type. Stack: [sym]
                 
-                # Clean up
-                drop 4
-                drop 3
-                drop 2
-                drop 1
+                pick 0 # sym
+                symbol_len # len
+                
+                push length_resp
+                roll 1
+                tuple 2 # (length_resp, len)
+                
+                tuple 2 # (sym, (length_resp, len))
             } {
-                # idx > len: return empty_set
-                push empty_set
+                # charat query: query_payload is N
+                drop 1 # drop query_type. Stack: [sym, N]
                 
-                # Clean up
-                drop 4
-                drop 3
-                drop 2
-                drop 1
+                # Check if N < len
+                pick 1 # sym
+                symbol_len # len
+                
+                pick 1 # N
+                pick 1 # len
+                less
+                branch {
+                    # N < len: return character
+                    drop 0 # drop len
+                    pick 1 # sym
+                    pick 1 # N
+                    symbol_char_at # ch
+                    
+                    push some
+                    roll 1
+                    tuple 2 # (some, ch)
+                    
+                    push charat_resp
+                    roll 1
+                    tuple 2 # (charat_resp, (some, ch))
+                    
+                    # Clean up N
+                    drop 1 # Stack: [sym, (charat_resp, (some, ch))]
+                    
+                    tuple 2 # (sym, (charat_resp, (some, ch)))
+                } {
+                    # N >= len: return none
+                    drop 0 # drop len
+                    drop 0 # drop N. Stack: [sym]
+                    
+                    push none
+                    tuple 0
+                    tuple 2 # (none, ())
+                    
+                    push charat_resp
+                    roll 1
+                    tuple 2 # (charat_resp, (none, ()))
+                    
+                    tuple 2 # (sym, (charat_resp, (none, ())))
+                }
+            }
+        } {
+            # Case 2: internal_state is not idle. We processed the response event.
+            # Transition back to idle.
+            # Stack: [event, sym, internal_state]
+            drop 0 # drop internal_state
+            roll 1 # Stack: [sym, event]
+            drop 0 # drop event. Stack: [sym]
+            
+            push idle
+            tuple 2 # (sym, idle)
+        }
+    }
+}
+
+# Prefixed decorator for string_ref that uses the hard-coded "in" symbol to prefix all events
+mod prefixed_string_ref {
+    # Initialize with sym on stack.
+    # Delegates to string_ref::init. Returns string_ref_state = (sym, idle).
+    init {
+        jump super::string_ref::init
+    }
+    
+    # accept: takes string_ref_state and returns set of (in, event) for accepted events
+    accept {
+        jump super::string_ref::accept # Stack: [string_ref_state, unprefixed_accept_set]
+        push super::in
+        set_singleton # {in}
+        roll 1 # Stack: [string_ref_state, {in}, unprefixed_accept_set]
+        set_tuple 2 # set of (in, event)
+    }
+
+    # emit: takes string_ref_state and returns set of (in, event) for emitted events
+    emit {
+        jump super::string_ref::emit # Stack: [string_ref_state, unprefixed_emit_set]
+        push super::in
+        set_singleton # {in}
+        roll 1 # Stack: [string_ref_state, {in}, unprefixed_emit_set]
+        set_tuple 2 # set of (in, event)
+    }
+
+    # process: takes string_ref_state and event (in, sub_event), returns next string_ref_state
+    process {
+        # Stack: [string_ref_state, (in_sym, sub_event)]
+        untuple 2 # Stack: [string_ref_state, in_sym, sub_event]
+        
+        # Assert that in_sym == super::in
+        pick 1 # in_sym
+        push super::in
+        assert_eq
+        
+        drop 1 # drop in_sym. Stack: [string_ref_state, sub_event]
+        
+        # Call string_ref::process
+        jump super::string_ref::process
+    }
+}
+
+mod char_iterator {
+    symbol fetch        "Fetch charat state"
+    symbol await_charat "Await charat response state"
+    symbol yield_next   "Yield next character state"
+    symbol yield_done   "Yield done state"
+    symbol done_state   "Finished iteration state"
+
+    # Initialize char_iterator state.
+    # Returns (fetch, 0) state.
+    init {
+        push fetch
+        push 0
+        tuple 2 # (fetch, 0)
+    }
+    
+    # accept: takes state (tag, payload) and returns ValueSet of accepted events.
+    # Accepts (in, (charat_resp, ...)) when internal_state is (await_charat, idx).
+    accept {
+        pick 0
+        untuple 2 # Stack: [state, tag, payload]
+        pick 1 # tag
+        push await_charat
+        equal
+        branch {
+            # In await_charat state: accepts charat_resp on channel "in"
+            drop 0 # drop tag
+            drop 0 # drop payload
+            
+            # Construct set of (in, (charat_resp, (some, ch)))
+            push super::in
+            set_singleton
+            push set_tuple(singleton(super::string_ref::charat_resp), set_tuple(singleton(super::string_ref::some), universal_set))
+            set_tuple 2 # set of (in, (charat_resp, (some, ch)))
+            
+            # Construct set of (in, (charat_resp, (none, ())))
+            push super::in
+            set_singleton
+            push singleton((super::string_ref::charat_resp, (super::string_ref::none, ())))
+            set_tuple 2 # set of (in, (charat_resp, (none, ())))
+            
+            set_union
+        } {
+            push empty_set
+            drop 1
+            drop 1
+        }
+    }
+
+    # emit: takes state (tag, payload) and returns ValueSet of emitted events.
+    emit {
+        pick 0
+        untuple 2 # Stack: [state, tag, payload]
+        
+        pick 1 # tag
+        push fetch
+        equal
+        branch {
+            # fetch state: emits (in, (charat, idx))
+            drop 1 # drop tag
+            push super::string_ref::charat
+            roll 1 # payload is idx
+            tuple 2 # (charat, idx)
+            
+            push super::in
+            roll 1
+            tuple 2 # (in, (charat, idx))
+            set_singleton
+        } {
+            pick 1 # tag
+            push yield_next
+            equal
+            branch {
+                # yield_next state: payload is (idx, ch), emits (out, (next, ch))
+                drop 1 # drop tag
+                untuple 2 # Stack: [state, idx, ch]
+                drop 1 # drop idx. Stack: [state, ch]
+                
+                push super::next
+                roll 1 # ch
+                tuple 2 # (next, ch)
+                
+                push super::out
+                roll 1
+                tuple 2 # (out, (next, ch))
+                set_singleton
+            } {
+                pick 1 # tag
+                push yield_done
+                equal
+                branch {
+                    # yield_done state: emits (out, (done, ()))
+                    drop 0 # drop payload
+                    drop 0 # drop tag
+                    
+                    push super::done
+                    tuple 0
+                    tuple 2 # (done, ())
+                    
+                    push super::out
+                    roll 1
+                    tuple 2 # (out, (done, ()))
+                    set_singleton
+                } {
+                    # await_charat or done_state: emits empty_set
+                    push empty_set
+                    drop 1
+                    drop 1
+                }
             }
         }
     }
     
-    # process: takes state (sym, idx) and event, returns (sym, idx + 1)
+    # process: takes state (tag, payload) and event, returns next_state
     process {
-        # Stack: [(sym, idx), event]
-        drop 0 # drop event. Stack: [(sym, idx)]
-        untuple 2 # Stack: [sym, idx]
-        push 1
-        add # Stack: [sym, idx + 1]
-        tuple 2
+        # Stack: [state, event]
+        roll 1 # Stack: [event, state]
+        untuple 2 # Stack: [event, tag, payload]
+        
+        pick 1 # tag
+        push fetch
+        equal
+        branch {
+            # Transition from (fetch, idx) to (await_charat, idx)
+            # Stack: [event, tag, payload]
+            drop 1 # drop tag
+            push await_charat
+            roll 1 # payload (idx)
+            tuple 2 # (await_charat, idx)
+            
+            # Stack: [event, (await_charat, idx)]
+            roll 1 # moves event to top
+            drop 0 # drop event. Stack: [(await_charat, idx)]
+        } {
+            pick 1 # tag
+            push await_charat
+            equal
+            branch {
+                # Transition from (await_charat, idx) to (yield_next, (idx, ch)) or (yield_done, idx)
+                # Stack: [event, tag, payload] (payload is idx)
+                drop 1 # drop tag. Stack: [event, idx]
+                roll 1 # moves event to top. Stack: [idx, event]
+                untuple 2 # Stack: [idx, port, resp_event]
+                drop 1 # drop port. Stack: [idx, resp_event]
+                untuple 2 # Stack: [idx, charat_resp, resp_payload]
+                drop 1 # drop charat_resp. Stack: [idx, resp_payload]
+                untuple 2 # Stack: [idx, variant, val]
+                
+                pick 1 # variant
+                push super::string_ref::some
+                equal
+                branch {
+                    # Variant is some (val is ch)
+                    # Stack: [idx, variant, ch]
+                    drop 1 # drop variant. Stack: [idx, ch]
+                    tuple 2 # (idx, ch)
+                    
+                    push yield_next
+                    roll 1
+                    tuple 2 # (yield_next, (idx, ch))
+                } {
+                    # Variant is none
+                    # Stack: [idx, variant, ()]
+                    drop 0 # drop ()
+                    drop 0 # drop variant. Stack: [idx]
+                    
+                    push yield_done
+                    roll 1
+                    tuple 2 # (yield_done, idx)
+                }
+            } {
+                pick 1 # tag
+                push yield_next
+                equal
+                branch {
+                    # Transition from (yield_next, (idx, ch)) to (fetch, idx + 1)
+                    # Stack: [event, tag, payload] (payload is (idx, ch))
+                    drop 1 # drop tag
+                    untuple 2 # Stack: [event, idx, ch]
+                    drop 0 # drop ch. Stack: [event, idx]
+                    roll 1 # moves event to top
+                    drop 0 # drop event. Stack: [idx]
+                    
+                    push 1
+                    add # idx + 1
+                    
+                    push fetch
+                    roll 1
+                    tuple 2 # (fetch, idx + 1)
+                } {
+                    # Transition from (yield_done, idx) to (done_state, idx)
+                    # Stack: [event, tag, payload] (payload is idx)
+                    drop 1 # drop tag. Stack: [event, idx]
+                    roll 1 # moves event to top
+                    drop 0 # drop event. Stack: [idx]
+                    
+                    push done_state
+                    roll 1
+                    tuple 2 # (done_state, idx)
+                }
+            }
+        }
     }
 }
 
 symbol my_str "abc"
+symbol empty_str ""
+symbol cafe_str "café"
+symbol xyz_str "xyz"
+
+mod string_ref_instance {
+    init {
+        push super::my_str
+        jump super::prefixed_string_ref::init
+    }
+    accept {
+        jump super::prefixed_string_ref::accept
+    }
+    emit {
+        jump super::prefixed_string_ref::emit
+    }
+    process {
+        jump super::prefixed_string_ref::process
+    }
+}
+
+sync_in {
+    push set_tuple(singleton(in), universal_set)
+}
+
+mod string_system compose_concurrent(string_ref_instance, char_iterator, sync_in);
+mod string_hidden compose_hidden(string_system, sync_in);
 
 test iterate_string_ascii {
-    # Initialize state
-    push my_str
-    jump char_iterator::init # Stack: [state]
+    # Initialize system -> [((my_str, idle), (fetch, 0))]
+    jump string_hidden::init
     
-    # Step 0: state is ("abc", 0)
-    # Check emitted event
-    pick 0 # state
-    jump char_iterator::emit # Stack: [state, emit_set]
-    set_choose
-    untuple 2 # Stack: [state, (next, ch), has_elem]
+    # Step 0: drive tau (charat request)
+    push crate::prelude::event::tau
+    jump string_hidden::process
+    
+    # drive tau (charat response)
+    push crate::prelude::event::tau
+    jump string_hidden::process
+    
+    # Check emitted iterator event: (out, (next, 97)) ('a')
+    push (out, (next, 97))
+    pick 1
+    jump string_hidden::emit
+    drop 1
+    set_contains
     assert
     
-    untuple 2 # Stack: [state, next, ch]
-    push 97 # 'a'
-    assert_eq
-    push next
-    assert_eq
+    # Process iterator event
+    push (out, (next, 97))
+    jump string_hidden::process
     
-    # Process transition
-    push (next, 97)
-    jump char_iterator::process # Stack: [state_1]
+    # Step 1: drive 2 taus for 'b' (98)
+    push crate::prelude::event::tau
+    jump string_hidden::process
+    push crate::prelude::event::tau
+    jump string_hidden::process
     
-    # Step 1: state is ("abc", 1)
-    pick 0
-    jump char_iterator::emit
-    set_choose
-    untuple 2
+    push (out, (next, 98))
+    pick 1
+    jump string_hidden::emit
+    drop 1
+    set_contains
     assert
     
-    untuple 2
-    push 98 # 'b'
-    assert_eq
-    push next
-    assert_eq
+    push (out, (next, 98))
+    jump string_hidden::process
     
-    push (next, 98)
-    jump char_iterator::process # Stack: [state_2]
+    # Step 2: drive 2 taus for 'c' (99)
+    push crate::prelude::event::tau
+    jump string_hidden::process
+    push crate::prelude::event::tau
+    jump string_hidden::process
     
-    # Step 2: state is ("abc", 2)
-    pick 0
-    jump char_iterator::emit
-    set_choose
-    untuple 2
+    push (out, (next, 99))
+    pick 1
+    jump string_hidden::emit
+    drop 1
+    set_contains
     assert
     
-    untuple 2
-    push 99 # 'c'
-    assert_eq
-    push next
-    assert_eq
+    push (out, (next, 99))
+    jump string_hidden::process
     
-    push (next, 99)
-    jump char_iterator::process # Stack: [state_3]
+    # Step 3: drive 2 taus for done
+    push crate::prelude::event::tau
+    jump string_hidden::process
+    push crate::prelude::event::tau
+    jump string_hidden::process
     
-    # Step 3: state is ("abc", 3) - should emit (done, ())
-    pick 0
-    jump char_iterator::emit
-    set_choose
-    untuple 2
+    push (out, (done, ()))
+    pick 1
+    jump string_hidden::emit
+    drop 1
+    set_contains
     assert
     
-    untuple 2
-    tuple 0
-    assert_eq
-    push done
+    push (out, (done, ()))
+    jump string_hidden::process
+    
+    # Clean up state from stack
+    drop 0
+}
+
+test verify_string_ref {
+    # Initialize base unprefixed string_ref with string xyz_str
+    push xyz_str
+    jump string_ref::init # Stack: [state]
+    
+    # 1. Test accept set at rest
+    jump string_ref::accept # Stack: [state, accept_set]
+    
+    # Check that it accepts (length, ())
+    push (string_ref::length, ())
+    pick 1
+    set_contains
+    assert
+    
+    # Check that it accepts (charat, 0)
+    push (string_ref::charat, 0)
+    pick 1
+    set_contains
+    assert
+    
+    # Check that it accepts (charat, 5)
+    push (string_ref::charat, 5)
+    pick 1
+    set_contains
+    assert
+    
+    drop 0 # drop accept_set
+    
+    # 2. Test emit set at rest
+    jump string_ref::emit # Stack: [state, emit_set]
+    push empty_set
     assert_eq
     
-    push (done, ())
-    jump char_iterator::process # Stack: [state_4]
+    # 3. Query length -> [state] -> [next_state]
+    push (string_ref::length, ())
+    jump string_ref::process
     
-    # Step 4: state is ("abc", 4) - now it's truly empty_set
-    pick 0
-    jump char_iterator::emit
-    set_choose
-    untuple 2
-    not
+    # Now state should be ("xyz", (length_resp, 3))
+    # It should emit (length_resp, 3)
+    jump string_ref::emit # Stack: [state, emit_set]
+    push (string_ref::length_resp, 3)
+    pick 1
+    set_contains
     assert
     drop 0
     
-    # Verify final state is ("abc", 4)
+    # Process emission event -> transitions back to idle
+    push (string_ref::length_resp, 3)
+    jump string_ref::process
+    
+    # 4. Query charat 1 (in-bounds)
+    push (string_ref::charat, 1)
+    jump string_ref::process
+    
+    # Now state should emit (charat_resp, (some, 121))
+    jump string_ref::emit
+    push (string_ref::charat_resp, (string_ref::some, 121))
+    pick 1
+    set_contains
+    assert
+    drop 0
+    
+    push (string_ref::charat_resp, (string_ref::some, 121))
+    jump string_ref::process
+    
+    # 5. Query charat 5 (out-of-bounds)
+    push (string_ref::charat, 5)
+    jump string_ref::process
+    
+    # Now state should emit (charat_resp, (none, ()))
+    jump string_ref::emit
+    push (string_ref::charat_resp, (string_ref::none, ()))
+    pick 1
+    set_contains
+    assert
+    drop 0
+    
+    push (string_ref::charat_resp, (string_ref::none, ()))
+    jump string_ref::process
+    
+    # Verify final state is ("xyz", idle)
     untuple 2
-    push 4
+    push string_ref::idle
     assert_eq
-    push my_str
+    push xyz_str
     assert_eq
 }
 
-symbol empty_str ""
+test verify_prefixed_string_ref {
+    # Initialize prefixed_string_ref with string xyz_str
+    push xyz_str
+    jump prefixed_string_ref::init # Stack: [state]
+    
+    # 1. Test accept set at rest on channel in
+    jump prefixed_string_ref::accept # Stack: [state, accept_set]
+    
+    push (in, (string_ref::length, ()))
+    pick 1
+    set_contains
+    assert
+    
+    push (in, (string_ref::charat, 0))
+    pick 1
+    set_contains
+    assert
+    
+    drop 0 # drop accept_set
+    
+    # 2. Query charat 1
+    push (in, (string_ref::charat, 1))
+    jump prefixed_string_ref::process
+    
+    # Verify emission of (in, (charat_resp, (some, 121)))
+    jump prefixed_string_ref::emit
+    push (in, (string_ref::charat_resp, (string_ref::some, 121)))
+    pick 1
+    set_contains
+    assert
+    drop 0
+    
+    # Process emission back to idle
+    push (in, (string_ref::charat_resp, (string_ref::some, 121)))
+    jump prefixed_string_ref::process
+    
+    # Verify state is (xyz, idle)
+    untuple 2
+    push string_ref::idle
+    assert_eq
+    push xyz_str
+    assert_eq
+}
+
+mod empty_string_ref_instance {
+    init {
+        push super::empty_str
+        jump super::prefixed_string_ref::init
+    }
+    accept {
+        jump super::prefixed_string_ref::accept
+    }
+    emit {
+        jump super::prefixed_string_ref::emit
+    }
+    process {
+        jump super::prefixed_string_ref::process
+    }
+}
+
+mod empty_string_system compose_concurrent(empty_string_ref_instance, char_iterator, sync_in);
+mod empty_string_hidden compose_hidden(empty_string_system, sync_in);
 
 test iterate_empty {
-    push empty_str
-    jump char_iterator::init
+    jump empty_string_hidden::init
     
-    # Step 0: state is ("", 0), should emit (done, ())
-    pick 0
-    jump char_iterator::emit
-    set_choose
-    untuple 2
+    # Drive 2 taus (charat query + charat_resp)
+    push crate::prelude::event::tau
+    jump empty_string_hidden::process
+    push crate::prelude::event::tau
+    jump empty_string_hidden::process
+    
+    # Check emitted iterator event: (out, (done, ()))
+    push (out, (done, ()))
+    pick 1
+    jump empty_string_hidden::emit
+    drop 1
+    set_contains
     assert
     
-    untuple 2
-    tuple 0
-    assert_eq
-    push done
-    assert_eq
+    push (out, (done, ()))
+    jump empty_string_hidden::process
     
-    push (done, ())
-    jump char_iterator::process # Stack: [state_1]
-    
-    # Step 1: state is ("", 1), should emit empty_set
-    pick 0
-    jump char_iterator::emit
-    set_choose
-    untuple 2
-    not
-    assert
     drop 0
-    
-    untuple 2
-    push 1
-    assert_eq
-    push empty_str
-    assert_eq
 }
 
-symbol cafe_str "café"
+mod cafe_string_ref_instance {
+    init {
+        push super::cafe_str
+        jump super::prefixed_string_ref::init
+    }
+    accept {
+        jump super::prefixed_string_ref::accept
+    }
+    emit {
+        jump super::prefixed_string_ref::emit
+    }
+    process {
+        jump super::prefixed_string_ref::process
+    }
+}
+
+mod cafe_string_system compose_concurrent(cafe_string_ref_instance, char_iterator, sync_in);
+mod cafe_string_hidden compose_hidden(cafe_string_system, sync_in);
 
 test iterate_unicode {
-    push cafe_str
-    jump char_iterator::init
+    jump cafe_string_hidden::init
     
     # 'c' (99)
-    pick 0
-    jump char_iterator::emit
-    set_choose
-    untuple 2
+    push crate::prelude::event::tau
+    jump cafe_string_hidden::process
+    push crate::prelude::event::tau
+    jump cafe_string_hidden::process
+    
+    push (out, (next, 99))
+    pick 1
+    jump cafe_string_hidden::emit
+    drop 1
+    set_contains
     assert
-    untuple 2
-    push 99
-    assert_eq
-    push next
-    assert_eq
-    push (next, 99)
-    jump char_iterator::process
+    push (out, (next, 99))
+    jump cafe_string_hidden::process
     
     # 'a' (97)
-    pick 0
-    jump char_iterator::emit
-    set_choose
-    untuple 2
+    push crate::prelude::event::tau
+    jump cafe_string_hidden::process
+    push crate::prelude::event::tau
+    jump cafe_string_hidden::process
+    
+    push (out, (next, 97))
+    pick 1
+    jump cafe_string_hidden::emit
+    drop 1
+    set_contains
     assert
-    untuple 2
-    push 97
-    assert_eq
-    push next
-    assert_eq
-    push (next, 97)
-    jump char_iterator::process
+    push (out, (next, 97))
+    jump cafe_string_hidden::process
     
     # 'f' (102)
-    pick 0
-    jump char_iterator::emit
-    set_choose
-    untuple 2
+    push crate::prelude::event::tau
+    jump cafe_string_hidden::process
+    push crate::prelude::event::tau
+    jump cafe_string_hidden::process
+    
+    push (out, (next, 102))
+    pick 1
+    jump cafe_string_hidden::emit
+    drop 1
+    set_contains
     assert
-    untuple 2
-    push 102
-    assert_eq
-    push next
-    assert_eq
-    push (next, 102)
-    jump char_iterator::process
+    push (out, (next, 102))
+    jump cafe_string_hidden::process
     
     # 'é' (233)
-    pick 0
-    jump char_iterator::emit
-    set_choose
-    untuple 2
+    push crate::prelude::event::tau
+    jump cafe_string_hidden::process
+    push crate::prelude::event::tau
+    jump cafe_string_hidden::process
+    
+    push (out, (next, 233))
+    pick 1
+    jump cafe_string_hidden::emit
+    drop 1
+    set_contains
     assert
-    untuple 2
-    push 233
-    assert_eq
-    push next
-    assert_eq
-    push (next, 233)
-    jump char_iterator::process
+    push (out, (next, 233))
+    jump cafe_string_hidden::process
     
-    # Done step (idx == 4): emits (done, ())
-    pick 0
-    jump char_iterator::emit
-    set_choose
-    untuple 2
+    # done
+    push crate::prelude::event::tau
+    jump cafe_string_hidden::process
+    push crate::prelude::event::tau
+    jump cafe_string_hidden::process
+    
+    push (out, (done, ()))
+    pick 1
+    jump cafe_string_hidden::emit
+    drop 1
+    set_contains
     assert
+    push (out, (done, ()))
+    jump cafe_string_hidden::process
     
-    untuple 2
-    tuple 0
-    assert_eq
-    push done
-    assert_eq
-    
-    push (done, ())
-    jump char_iterator::process # Stack: [state_5]
-    
-    # Truly Done step (idx == 5): emits empty_set
-    pick 0
-    jump char_iterator::emit
-    set_choose
-    untuple 2
-    not
-    assert
     drop 0
-    
-    untuple 2
-    push 5
-    assert_eq
-    push cafe_str
-    assert_eq
 }
