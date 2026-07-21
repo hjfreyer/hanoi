@@ -759,6 +759,446 @@ mod parseint {
     }
 }
 
+mod split {
+    symbol in                   "split::in"
+    symbol out                  "split::out"
+    symbol next                 "next"
+    symbol start                "start"
+    symbol item                 "item"
+    symbol end                  "end"
+    symbol done                 "done"
+
+    symbol state_idle           "idle"
+    symbol state_await_start    "await_start"
+    symbol state_yield_start    "yield_start"
+    symbol state_yield_item     "yield_item"
+    symbol state_await_field    "await_field"
+    symbol state_yield_end      "yield_end"
+    symbol state_yield_end_done "yield_end_done"
+    symbol state_idle_done      "idle_done"
+    symbol state_yield_done     "yield_done"
+    symbol state_done           "done"
+
+    # init: accepts delim on stack. Returns (state_idle, delim).
+    init {
+        push state_idle
+        roll 1
+        tuple 2
+    }
+
+    # accept: takes [state] and returns ValueSet of accepted events.
+    accept {
+        untuple 2 # Stack: [tag, payload]
+        
+        pick 1 # tag
+        push state_idle
+        equal
+        branch {
+            # idle: accepts (out, (next, ()))
+            drop 0 # drop payload
+            drop 0 # drop tag
+            
+            push out
+            set_singleton
+            push singleton((next, ()))
+            set_tuple 2
+        } {
+            pick 1 # tag
+            push state_idle_done
+            equal
+            branch {
+                # idle_done: accepts (out, (next, ()))
+                drop 0
+                drop 0
+                
+                push out
+                set_singleton
+                push singleton((next, ()))
+                set_tuple 2
+            } {
+                pick 1 # tag
+                push state_await_start
+                equal
+                branch {
+                    # await_start: accepts (in, (next, ch)) or (in, (done, ()))
+                    drop 0
+                    drop 0
+                    
+                    push in
+                    set_singleton
+                    push set_tuple(singleton(super::next), universal_set)
+                    set_tuple 2
+                    
+                    push in
+                    set_singleton
+                    push singleton((super::done, ()))
+                    set_tuple 2
+                    
+                    set_union
+                } {
+                    pick 1 # tag
+                    push state_await_field
+                    equal
+                    branch {
+                        # await_field: accepts (in, (next, ch)) or (in, (done, ()))
+                        drop 0
+                        drop 0
+                        
+                        push in
+                        set_singleton
+                        push set_tuple(singleton(super::next), universal_set)
+                        set_tuple 2
+                        
+                        push in
+                        set_singleton
+                        push singleton((super::done, ()))
+                        set_tuple 2
+                        
+                        set_union
+                    } {
+                        drop 0
+                        drop 0
+                        push empty_set
+                    }
+                }
+            }
+        }
+    }
+
+    # emit: takes [state] and returns ValueSet of emitted events.
+    emit {
+        untuple 2 # Stack: [tag, payload]
+        
+        pick 1 # tag
+        push state_yield_start
+        equal
+        branch {
+            # yield_start: emits (out, (start, ()))
+            drop 0 # drop payload
+            drop 0 # drop tag
+            
+            push start
+            tuple 0
+            tuple 2 # (start, ())
+            
+            push out
+            roll 1
+            tuple 2 # (out, (start, ()))
+            set_singleton
+        } {
+            pick 1 # tag
+            push state_yield_item
+            equal
+            branch {
+                # yield_item: payload is (delim, ch). Emits (out, (item, (next, ch)))
+                drop 1 # drop tag. Stack: [(delim, ch)]
+                untuple 2 # Stack: [delim, ch]
+                roll 1
+                drop 0 # drop delim. Stack: [ch]
+                
+                push super::next
+                roll 1 # ch
+                tuple 2 # (next, ch)
+                
+                push item
+                roll 1
+                tuple 2 # (item, (next, ch))
+                
+                push out
+                roll 1
+                tuple 2 # (out, (item, (next, ch)))
+                set_singleton
+            } {
+                pick 1 # tag
+                push state_yield_end
+                equal
+                branch {
+                    # yield_end: emits (out, (end, ()))
+                    drop 0
+                    drop 0
+                    
+                    push end
+                    tuple 0
+                    tuple 2 # (end, ())
+                    
+                    push out
+                    roll 1
+                    tuple 2 # (out, (end, ()))
+                    set_singleton
+                } {
+                    pick 1 # tag
+                    push state_yield_end_done
+                    equal
+                    branch {
+                        # yield_end_done: emits (out, (end, ()))
+                        drop 0
+                        drop 0
+                        
+                        push end
+                        tuple 0
+                        tuple 2 # (end, ())
+                        
+                        push out
+                        roll 1
+                        tuple 2 # (out, (end, ()))
+                        set_singleton
+                    } {
+                        pick 1 # tag
+                        push state_yield_done
+                        equal
+                        branch {
+                            # yield_done: emits (out, (done, ()))
+                            drop 0
+                            drop 0
+                            
+                            push done
+                            tuple 0
+                            tuple 2 # (done, ())
+                            
+                            push out
+                            roll 1
+                            tuple 2 # (out, (done, ()))
+                            set_singleton
+                        } {
+                            drop 0
+                            drop 0
+                            push empty_set
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    # process: takes [state, event] and returns next_state.
+    process {
+        # Stack: [state, event]
+        roll 1 # Stack: [event, state]
+        untuple 2 # Stack: [event, tag, payload]
+        
+        pick 1 # tag
+        push state_idle
+        equal
+        branch {
+            # Transition from idle to await_start
+            drop 1 # drop tag
+            roll 1 # Stack: [delim, event]
+            drop 0 # drop event. Stack: [delim]
+            
+            push state_await_start
+            roll 1 # delim
+            tuple 2 # (state_await_start, delim)
+        } {
+            pick 1 # tag
+            push state_idle_done
+            equal
+            branch {
+                # Transition from idle_done to yield_done
+                drop 1 # drop tag
+                roll 1 # Stack: [delim, event]
+                drop 0 # drop event. Stack: [delim]
+                
+                push state_yield_done
+                roll 1 # delim
+                tuple 2 # (state_yield_done, delim)
+            } {
+                pick 1 # tag
+                push state_await_start
+                equal
+                branch {
+                    # Process event on in in state_await_start
+                    drop 1 # drop tag
+                    roll 1 # Stack: [delim, event]
+                    
+                    untuple 2 # Stack: [delim, in_sym, inner_event]
+                    drop 1 # drop in_sym. Stack: [delim, inner_event]
+                    
+                    untuple 2 # Stack: [delim, iter_tag, val]
+                    
+                    pick 1 # iter_tag
+                    push super::next
+                    equal
+                    branch {
+                        # iter_tag == next: val is ch
+                        # Stack: [delim, iter_tag, ch]
+                        roll 1 # Stack: [delim, ch, iter_tag]
+                        drop 0 # drop iter_tag. Stack: [delim, ch]
+                        tuple 2 # (delim, ch)
+                        
+                        push state_yield_start
+                        roll 1
+                        tuple 2 # (state_yield_start, (delim, ch))
+                    } {
+                        # iter_tag == done: val is ()
+                        # Stack: [delim, iter_tag, ()]
+                        drop 0 # drop ()
+                        drop 0 # drop iter_tag. Stack: [delim]
+                        
+                        push state_yield_done
+                        roll 1
+                        tuple 2 # (state_yield_done, delim)
+                    }
+                } {
+                    pick 1 # tag
+                    push state_yield_start
+                    equal
+                    branch {
+                        # Process emission of start
+                        drop 1 # drop tag
+                        roll 1 # Stack: [payload, event]
+                        drop 0 # drop event. Stack: [(delim, ch)]
+                        
+                        pick 0
+                        untuple 2 # Stack: [(delim, ch), delim, ch]
+                        pick 0 # ch
+                        pick 2 # delim
+                        equal
+                        branch {
+                            # ch == delim: empty field! Transition to yield_end
+                            drop 0 # drop ch
+                            drop 0 # drop delim
+                            untuple 2 # Stack: [delim, ch]
+                            drop 0 # drop ch. Stack: [delim]
+                            
+                            push state_yield_end
+                            roll 1
+                            tuple 2 # (state_yield_end, delim)
+                        } {
+                            # ch != delim: transition to yield_item
+                            drop 0 # drop ch
+                            drop 0 # drop delim. Stack: [(delim, ch)]
+                            
+                            push state_yield_item
+                            roll 1
+                            tuple 2 # (state_yield_item, (delim, ch))
+                        }
+                    } {
+                        pick 1 # tag
+                        push state_yield_item
+                        equal
+                        branch {
+                            # Process emission of item
+                            drop 1 # drop tag
+                            roll 1 # Stack: [payload, event]
+                            drop 0 # drop event. Stack: [(delim, ch)]
+                            untuple 2 # Stack: [delim, ch]
+                            drop 0 # drop ch. Stack: [delim]
+                            
+                            push state_await_field
+                            roll 1
+                            tuple 2 # (state_await_field, delim)
+                        } {
+                            pick 1 # tag
+                            push state_await_field
+                            equal
+                            branch {
+                                # Process event on in in state_await_field
+                                drop 1 # drop tag
+                                roll 1 # Stack: [delim, event]
+                                
+                                untuple 2 # Stack: [delim, in_sym, inner_event]
+                                drop 1 # drop in_sym. Stack: [delim, inner_event]
+                                
+                                untuple 2 # Stack: [delim, iter_tag, val]
+                                
+                                pick 1 # iter_tag
+                                push super::next
+                                equal
+                                branch {
+                                    # iter_tag == next: val is ch
+                                    # Stack: [delim, iter_tag, ch]
+                                    roll 1 # Stack: [delim, ch, iter_tag]
+                                    drop 0 # drop iter_tag. Stack: [delim, ch]
+                                    
+                                    # Check if ch == delim
+                                    pick 0 # ch
+                                    pick 2 # delim
+                                    equal
+                                    branch {
+                                        # ch == delim: end of field!
+                                        drop 0 # drop ch
+                                        
+                                        push state_yield_end
+                                        roll 1 # delim
+                                        tuple 2 # (state_yield_end, delim)
+                                    } {
+                                        # ch != delim: another item!
+                                        tuple 2 # (delim, ch)
+                                        
+                                        push state_yield_item
+                                        roll 1
+                                        tuple 2 # (state_yield_item, (delim, ch))
+                                    }
+                                } {
+                                    # iter_tag == done: end of field (and stream)!
+                                    # Stack: [delim, iter_tag, ()]
+                                    drop 0 # drop ()
+                                    drop 0 # drop iter_tag. Stack: [delim]
+                                    
+                                    push state_yield_end_done
+                                    roll 1
+                                    tuple 2 # (state_yield_end_done, delim)
+                                }
+                            } {
+                                pick 1 # tag
+                                push state_yield_end
+                                equal
+                                branch {
+                                    # Process emission of end -> transition to idle
+                                    drop 1 # drop tag
+                                    roll 1 # Stack: [delim, event]
+                                    drop 0 # drop event. Stack: [delim]
+                                    
+                                    push state_idle
+                                    roll 1
+                                    tuple 2 # (state_idle, delim)
+                                } {
+                                    pick 1 # tag
+                                    push state_yield_end_done
+                                    equal
+                                    branch {
+                                        # Process emission of end -> transition to idle_done
+                                        drop 1 # drop tag
+                                        roll 1 # Stack: [delim, event]
+                                        drop 0 # drop event. Stack: [delim]
+                                        
+                                        push state_idle_done
+                                        roll 1
+                                        tuple 2 # (state_idle_done, delim)
+                                    } {
+                                        pick 1 # tag
+                                        push state_yield_done
+                                        equal
+                                        branch {
+                                            # Process emission of done -> transition to done
+                                            drop 1 # drop tag
+                                            roll 1 # Stack: [delim, event]
+                                            drop 0 # drop event. Stack: [delim]
+                                            
+                                            push state_done
+                                            roll 1
+                                            tuple 2 # (state_done, delim)
+                                        } {
+                                            # state_done or error
+                                            drop 1 # drop tag
+                                            roll 1 # Stack: [delim, event]
+                                            drop 0 # drop event
+                                            
+                                            push state_done
+                                            roll 1
+                                            tuple 2 # (state_done, delim)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 symbol my_str "abc"
 symbol empty_str ""
 symbol cafe_str "café"
@@ -1368,6 +1808,183 @@ test iterate_unicode {
     assert
     push (char_iterator::out, (done, ()))
     jump cafe_string_hidden::process
+    
+    drop 0
+}
+
+symbol comma_str "a,b"
+
+mod comma_str_base {
+    init {
+        push super::comma_str
+        jump super::string_ref::init
+    }
+    accept { jump super::string_ref::accept }
+    emit { jump super::string_ref::emit }
+    process { jump super::string_ref::process }
+}
+
+mod comma_str_hidden compose_hidden(
+    compose_concurrent(
+        compose_prefix(comma_str_base, char_iterator::in),
+        char_iterator,
+        sync_char_iterator_in
+    ),
+    sync_char_iterator_in
+);
+
+mod split_comma_base {
+    init {
+        push 44 # ','
+        jump super::split::init
+    }
+    accept { jump super::split::accept }
+    emit { jump super::split::emit }
+    process { jump super::split::process }
+}
+
+sync_split_in {
+    push set_tuple(singleton(split::in), universal_set)
+}
+
+mod split_system compose_hidden(
+    compose_concurrent(
+        split_comma_base,
+        compose_rename_prefix(char_iterator::out, split::in, comma_str_hidden),
+        sync_split_in
+    ),
+    sync_split_in
+);
+
+test split_string {
+    jump split_system::init
+    
+    # --- Field 1: "a" ---
+    # 1. Send (split::out, (split::next, ()))
+    push (split::out, (split::next, ()))
+    jump split_system::process
+    
+    # 2. Drive 3 taus (charat request + charat_resp + split::in sync)
+    push crate::prelude::event::tau
+    jump split_system::process
+    push crate::prelude::event::tau
+    jump split_system::process
+    push crate::prelude::event::tau
+    jump split_system::process
+    
+    # 3. Check emitted: (split::out, (split::start, ()))
+    pick 0
+    jump split_system::emit
+    push (split::out, (split::start, ()))
+    roll 1
+    set_contains
+    assert
+    
+    # Process start event
+    push (split::out, (split::start, ()))
+    jump split_system::process
+    
+    # 4. Check emitted: (split::out, (split::item, (next, 97))) ('a')
+    pick 0
+    jump split_system::emit
+    push (split::out, (split::item, (next, 97)))
+    roll 1
+    set_contains
+    assert
+    
+    # Process item event
+    push (split::out, (split::item, (next, 97)))
+    jump split_system::process
+    
+    # 5. Drive 3 taus for next char (',')
+    push crate::prelude::event::tau
+    jump split_system::process
+    push crate::prelude::event::tau
+    jump split_system::process
+    push crate::prelude::event::tau
+    jump split_system::process
+    
+    # 6. Check emitted: (split::out, (split::end, ()))
+    pick 0
+    jump split_system::emit
+    push (split::out, (split::end, ()))
+    roll 1
+    set_contains
+    assert
+    
+    # Process end event
+    push (split::out, (split::end, ()))
+    jump split_system::process
+    
+    # --- Field 2: "b" ---
+    # 7. Send (split::out, (split::next, ()))
+    push (split::out, (split::next, ()))
+    jump split_system::process
+    
+    # 8. Drive 3 taus for 'b'
+    push crate::prelude::event::tau
+    jump split_system::process
+    push crate::prelude::event::tau
+    jump split_system::process
+    push crate::prelude::event::tau
+    jump split_system::process
+    
+    # 9. Check emitted: (split::out, (split::start, ()))
+    pick 0
+    jump split_system::emit
+    push (split::out, (split::start, ()))
+    roll 1
+    set_contains
+    assert
+    
+    push (split::out, (split::start, ()))
+    jump split_system::process
+    
+    # 10. Check emitted: (split::out, (split::item, (next, 98))) ('b')
+    pick 0
+    jump split_system::emit
+    push (split::out, (split::item, (next, 98)))
+    roll 1
+    set_contains
+    assert
+    
+    push (split::out, (split::item, (next, 98)))
+    jump split_system::process
+    
+    # 11. Drive 3 taus for done
+    push crate::prelude::event::tau
+    jump split_system::process
+    push crate::prelude::event::tau
+    jump split_system::process
+    push crate::prelude::event::tau
+    jump split_system::process
+    
+    # 12. Check emitted: (split::out, (split::end, ()))
+    pick 0
+    jump split_system::emit
+    push (split::out, (split::end, ()))
+    roll 1
+    set_contains
+    assert
+    
+    push (split::out, (split::end, ()))
+    jump split_system::process
+    
+    # --- Done ---
+    # 13. Send (split::out, (split::next, ()))
+    push (split::out, (split::next, ()))
+    jump split_system::process
+    
+    # 14. Check emitted: (split::out, (split::done, ()))
+    pick 0
+    jump split_system::emit
+    push (split::out, (split::done, ()))
+    roll 1
+    set_contains
+    assert
+    
+    push (split::out, (split::done, ()))
+    jump split_system::process
     
     drop 0
 }
