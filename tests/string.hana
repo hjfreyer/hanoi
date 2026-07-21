@@ -455,10 +455,317 @@ mod char_iterator {
     }
 }
 
+symbol copy  "copy"
+symbol value "value"
+symbol ok    "ok"
+symbol err   "err"
+
+mod parseint {
+    symbol idle         "Idle state"
+    symbol parsing      "Parsing state"
+    symbol yielding_ok  "Yielding ok result state"
+    symbol yielding_err "Yielding err result state"
+
+    # init: returns idle state
+    init {
+        push idle
+    }
+
+    # accept: takes [state] and returns ValueSet of accepted events.
+    # Accepts out.copy when idle, or in.out.next / in.out.done when parsing.
+    accept {
+        pick 0
+        push idle
+        equal
+        branch {
+            # idle: accepts (out, (copy, ()))
+            drop 0
+            push super::out
+            set_singleton
+            push singleton((super::copy, ()))
+            set_tuple 2
+        } {
+            untuple 2 # Stack: [tag, payload]
+            pick 1 # tag
+            push parsing
+            equal
+            branch {
+                drop 0 # drop payload
+                drop 0 # drop tag
+                
+                # Accepts (in, (out, (next, ch))) for any ch
+                push super::in
+                set_singleton
+                push set_tuple(singleton(super::out), set_tuple(singleton(super::next), universal_set))
+                set_tuple 2 # set of (in, (out, (next, ch)))
+                
+                # Accepts (in, (out, (done, ())))
+                push super::in
+                set_singleton
+                push singleton((super::out, (super::done, ())))
+                set_tuple 2 # set of (in, (out, (done, ())))
+                
+                set_union
+            } {
+                pick 1 # tag
+                push yielding_ok
+                equal
+                branch {
+                    drop 0
+                    drop 0
+                    push empty_set
+                } {
+                    pick 1 # tag
+                    push yielding_err
+                    equal
+                    branch {
+                        drop 0
+                        drop 0
+                        push empty_set
+                    } {
+                        panic
+                    }
+                }
+            }
+        }
+    }
+
+    # emit: takes [state] and returns ValueSet of emitted events.
+    # Emits out.value.ok.N or out.value.err when in yielding state.
+    emit {
+        pick 0
+        push idle
+        equal
+        branch {
+            drop 0
+            push empty_set
+        } {
+            untuple 2 # Stack: [tag, payload]
+            pick 1 # tag
+            push parsing
+            equal
+            branch {
+                drop 0
+                drop 0
+                push empty_set
+            } {
+                pick 1 # tag
+                push yielding_ok
+                equal
+                branch {
+                    # payload is N (the parsed integer)
+                    # Emits (out, (value, (ok, N)))
+                    drop 1 # drop tag. Stack: [N]
+                    push super::ok
+                    roll 1 # N
+                    tuple 2 # (ok, N)
+                    
+                    push super::value
+                    roll 1
+                    tuple 2 # (value, (ok, N))
+                    
+                    push super::out
+                    roll 1
+                    tuple 2 # (out, (value, (ok, N)))
+                    
+                    set_singleton
+                } {
+                    pick 1 # tag
+                    push yielding_err
+                    equal
+                    branch {
+                        # Emits (out, (value, (err, ())))
+                        drop 0 # drop payload
+                        drop 0 # drop tag
+                        
+                        push super::err
+                        tuple 0
+                        tuple 2 # (err, ())
+                        
+                        push super::value
+                        roll 1
+                        tuple 2 # (value, (err, ()))
+                        
+                        push super::out
+                        roll 1
+                        tuple 2 # (out, (value, (err, ())))
+                        
+                        set_singleton
+                    } {
+                        panic
+                    }
+                }
+            }
+        }
+    }
+
+    # process: takes [state, event] and returns next_state.
+    process {
+        # Stack: [state, event]
+        pick 1 # state
+        push idle
+        equal
+        branch {
+            # State is idle: event is (out, (copy, ()))
+            drop 0 # drop event
+            drop 0 # drop state
+            
+            # Init parsing state: (parsing, (0, 0)) -> (acc = 0, count = 0)
+            push parsing
+            push 0
+            push 0
+            tuple 2 # (acc=0, count=0)
+            tuple 2 # (parsing, (0, 0))
+        } {
+            # State is (tag, payload)
+            roll 1 # Stack: [event, state]
+            untuple 2 # Stack: [event, tag, payload]
+            
+            pick 1 # tag
+            push yielding_ok
+            equal
+            branch {
+                # Process emission of yielding_ok -> returns idle state
+                drop 0 # drop payload
+                drop 0 # drop tag
+                drop 0 # drop event
+                push idle
+            } {
+                pick 1 # tag
+                push yielding_err
+                equal
+                branch {
+                    # Process emission of yielding_err -> returns idle state
+                    drop 0 # drop payload
+                    drop 0 # drop tag
+                    drop 0 # drop event
+                    push idle
+                } {
+                    pick 1 # tag
+                    push parsing
+                    equal
+                    branch {
+                        # Stack: [event, tag, payload]
+                        drop 1 # drop tag
+                        roll 1 # Stack: [payload, event]
+                        
+                        untuple 2 # Stack: [payload, in_sym, inner_event]
+                        drop 1 # drop in_sym. Stack: [payload, inner_event]
+                        
+                        # inner_event is (out, (item_tag, val))
+                        untuple 2 # Stack: [payload, out_sym, (item_tag, val)]
+                        drop 1 # drop out_sym
+                        untuple 2 # Stack: [payload, item_tag, val]
+                        
+                        roll 2 # Stack: [item_tag, val, payload]
+                        untuple 2 # Stack: [item_tag, val, acc, count]
+                        
+                        # Check item_tag
+                        pick 3 # item_tag
+                        push super::next
+                        equal
+                        branch {
+                            # item_tag == next: val is character codepoint (ch)
+                            roll 3 # Stack: [val, acc, count, item_tag]
+                            drop 0 # drop item_tag. Stack: [ch, acc, count]
+                            
+                            # Check if ch >= 48 && ch <= 57
+                            pick 2 # ch
+                            push 48
+                            less
+                            branch {
+                                # ch < 48: non-digit error!
+                                drop 0
+                                drop 0
+                                drop 0
+                                push yielding_err
+                                tuple 0
+                                tuple 2 # (yielding_err, ())
+                            } {
+                                pick 2 # ch
+                                push 57
+                                greater
+                                branch {
+                                    # ch > 57: non-digit error!
+                                    drop 0
+                                    drop 0
+                                    drop 0
+                                    push yielding_err
+                                    tuple 0
+                                    tuple 2 # (yielding_err, ())
+                                } {
+                                    # ch is a digit 0..9
+                                    # digit = ch - 48
+                                    roll 2 # Stack: [acc, count, ch]
+                                    push 48
+                                    sub # Stack: [acc, count, digit]
+                                    
+                                    # acc' = acc * 10 + digit
+                                    roll 2 # Stack: [count, digit, acc]
+                                    push 10
+                                    mul
+                                    add # acc' = acc * 10 + digit
+                                    
+                                    # count' = count + 1
+                                    roll 1 # Stack: [acc', count]
+                                    push 1
+                                    add # count' = count + 1
+                                    
+                                    tuple 2 # (acc', count')
+                                    push parsing
+                                    roll 1
+                                    tuple 2 # (parsing, (acc', count'))
+                                }
+                            }
+                        } {
+                            # Check if item_tag == done
+                            pick 3 # item_tag
+                            push super::done
+                            equal
+                            branch {
+                                # Stack: [item_tag, val, acc, count]
+                                roll 3 # Stack: [val, acc, count, item_tag]
+                                drop 0 # Stack: [val, acc, count]
+                                roll 2 # Stack: [acc, count, val]
+                                drop 0 # Stack: [acc, count]
+                                
+                                # Check if count > 0
+                                pick 0 # count
+                                push 0
+                                greater
+                                branch {
+                                    # count > 0: success! Return (yielding_ok, acc)
+                                    drop 0 # drop count. Stack: [acc]
+                                    push yielding_ok
+                                    roll 1 # acc
+                                    tuple 2 # (yielding_ok, acc)
+                                } {
+                                    # count == 0: empty input error! Return (yielding_err, ())
+                                    drop 0 # drop count
+                                    drop 0 # drop acc
+                                    push yielding_err
+                                    tuple 0
+                                    tuple 2 # (yielding_err, ())
+                                }
+                            } {
+                                panic
+                            }
+                        }
+                    } {
+                        panic
+                    }
+                }
+            }
+        }
+    }
+}
+
 symbol my_str "abc"
 symbol empty_str ""
 symbol cafe_str "café"
 symbol xyz_str "xyz"
+symbol str_123 "123"
+symbol str_45a "45a"
 
 mod string_ref_base {
     init {
@@ -562,6 +869,197 @@ test iterate_string_ascii {
     jump string_hidden::process
     
     # Clean up state from stack
+    drop 0
+}
+
+mod str_123_base {
+    init {
+        push super::str_123
+        jump super::string_ref::init
+    }
+    accept { jump super::string_ref::accept }
+    emit { jump super::string_ref::emit }
+    process { jump super::string_ref::process }
+}
+
+mod str_123_hidden compose_hidden(
+    compose_concurrent(
+        compose_prefix(str_123_base, in),
+        char_iterator,
+        sync_in
+    ),
+    sync_in
+);
+
+mod parseint_123_system compose_hidden(
+    compose_concurrent(
+        parseint,
+        compose_prefix(str_123_hidden, in),
+        sync_in
+    ),
+    sync_in
+);
+
+test parseint_valid_number {
+    jump parseint_123_system::init
+    
+    # 1. Verify idle parseint accepts (out, (copy, ()))
+    pick 0
+    jump parseint_123_system::accept
+    push (out, (copy, ()))
+    roll 1
+    set_contains
+    assert
+    
+    # 2. Trigger (out, (copy, ())) -> transitions parseint to parsing
+    push (out, (copy, ()))
+    jump parseint_123_system::process
+    
+    # 3. Drive 12 tau steps
+    push crate::prelude::event::tau
+    jump parseint_123_system::process
+    push crate::prelude::event::tau
+    jump parseint_123_system::process
+    push crate::prelude::event::tau
+    jump parseint_123_system::process
+    push crate::prelude::event::tau
+    jump parseint_123_system::process
+    push crate::prelude::event::tau
+    jump parseint_123_system::process
+    push crate::prelude::event::tau
+    jump parseint_123_system::process
+    push crate::prelude::event::tau
+    jump parseint_123_system::process
+    push crate::prelude::event::tau
+    jump parseint_123_system::process
+    push crate::prelude::event::tau
+    jump parseint_123_system::process
+    push crate::prelude::event::tau
+    jump parseint_123_system::process
+    push crate::prelude::event::tau
+    jump parseint_123_system::process
+    push crate::prelude::event::tau
+    jump parseint_123_system::process
+    
+    # 4. Check emitted result: (out, (value, (ok, 123)))
+    pick 0
+    jump parseint_123_system::emit
+    push (out, (value, (ok, 123)))
+    roll 1
+    set_contains
+    assert
+    
+    # Process emission event -> transitions back to idle
+    push (out, (value, (ok, 123)))
+    jump parseint_123_system::process
+    
+    drop 0
+}
+
+mod str_45a_base {
+    init {
+        push super::str_45a
+        jump super::string_ref::init
+    }
+    accept { jump super::string_ref::accept }
+    emit { jump super::string_ref::emit }
+    process { jump super::string_ref::process }
+}
+
+mod str_45a_hidden compose_hidden(
+    compose_concurrent(
+        compose_prefix(str_45a_base, in),
+        char_iterator,
+        sync_in
+    ),
+    sync_in
+);
+
+mod parseint_45a_system compose_hidden(
+    compose_concurrent(
+        parseint,
+        compose_prefix(str_45a_hidden, in),
+        sync_in
+    ),
+    sync_in
+);
+
+test parseint_invalid_char {
+    jump parseint_45a_system::init
+    
+    # Trigger copy
+    push (out, (copy, ()))
+    jump parseint_45a_system::process
+    
+    # Drive 9 taus
+    push crate::prelude::event::tau
+    jump parseint_45a_system::process
+    push crate::prelude::event::tau
+    jump parseint_45a_system::process
+    push crate::prelude::event::tau
+    jump parseint_45a_system::process
+    push crate::prelude::event::tau
+    jump parseint_45a_system::process
+    push crate::prelude::event::tau
+    jump parseint_45a_system::process
+    push crate::prelude::event::tau
+    jump parseint_45a_system::process
+    push crate::prelude::event::tau
+    jump parseint_45a_system::process
+    push crate::prelude::event::tau
+    jump parseint_45a_system::process
+    push crate::prelude::event::tau
+    jump parseint_45a_system::process
+    
+    # Check emitted result: (out, (value, (err, ())))
+    pick 0
+    jump parseint_45a_system::emit
+    push (out, (value, (err, ())))
+    roll 1
+    set_contains
+    assert
+    
+    push (out, (value, (err, ())))
+    jump parseint_45a_system::process
+    
+    drop 0
+}
+
+mod parseint_empty_system compose_hidden(
+    compose_concurrent(
+        parseint,
+        compose_prefix(empty_string_hidden, in),
+        sync_in
+    ),
+    sync_in
+);
+
+test parseint_empty_string {
+    jump parseint_empty_system::init
+    
+    # Trigger copy
+    push (out, (copy, ()))
+    jump parseint_empty_system::process
+    
+    # Drive 3 taus for done
+    push crate::prelude::event::tau
+    jump parseint_empty_system::process
+    push crate::prelude::event::tau
+    jump parseint_empty_system::process
+    push crate::prelude::event::tau
+    jump parseint_empty_system::process
+    
+    # Check emitted result: (out, (value, (err, ())))
+    pick 0
+    jump parseint_empty_system::emit
+    push (out, (value, (err, ())))
+    roll 1
+    set_contains
+    assert
+    
+    push (out, (value, (err, ())))
+    jump parseint_empty_system::process
+    
     drop 0
 }
 

@@ -2,13 +2,13 @@
 
 This directory contains Hanoi integration tests, including modeling of **Communicating Sequential Processes (CSP)** style state machines.
 
-A **CSP Machine** in Hanoi is represented as a module containing three standard sentences (functions) to manage state initialization, event acceptance, and state transitions.
+A **CSP Machine** in Hanoi is represented as a module containing standard sentences (functions) to manage state initialization (`init`), event acceptance (`accept`), event emission (`emit`), and state transitions (`process`).
 
 ---
 
 ## Machine Structure
 
-Every machine module must implement three sentences: `init`, `accept`, and `process`.
+Every machine module can implement four standard sentences: `init`, `accept`, `emit`, and `process`.
 
 ```
                   [sym / params]  (Input to init)
@@ -19,15 +19,15 @@ Every machine module must implement three sentences: `init`, `accept`, and `proc
                      └──┬──┘
                         │
                         ▼  [state]
-                        ├──────────────────────┐
-                        ▼                      ▼
-                    ┌───┴──┐               ┌───┴───┐
-                    │accept│               │process│ ◄─── [event]
-                    └───┬──┘               └───┬───┘
-                        │                      │
-                        ▼                      ▼
-                   [ValueSet]            [next_state]
-               (Accepted events)
+         ┌──────────────┼──────────────┐
+         ▼              ▼              ▼
+     ┌───┴──┐       ┌───┴──┐       ┌───┴───┐
+     │accept│       │ emit │       │process│ ◄─── [event]
+     └───┬──┘       └───┬──┘       └───┬───┘
+         │              │              │
+         ▼              ▼              ▼
+    [ValueSet]     [ValueSet]     [next_state]
+(Accepted events)(Emitted events)
 ```
 
 ### 1. `init`
@@ -36,11 +36,16 @@ Initializes and pushes the starting state of the machine onto the stack.
 * **Stack Output:** Pushes the initial state representation (typically a `Tuple`).
 
 ### 2. `accept`
-Calculates and returns a set of events that the machine is currently willing to participate in.
+Calculates and returns a set of events that the machine is currently willing to accept (passive/input events).
 * **Stack Input:** Pops the current `state`.
-* **Stack Output:** Pushes a `ValueSet` containing the accepted events. If the machine has terminated or is blocked, it pushes `empty_set`.
+* **Stack Output:** Pushes a `ValueSet` containing the accepted events. If the machine has terminated or accepts no inputs in its current state, it pushes `empty_set`.
 
-### 3. `process`
+### 3. `emit`
+Calculates and returns a set of events that the machine proactively emits (output events).
+* **Stack Input:** Pops the current `state`.
+* **Stack Output:** Pushes a `ValueSet` containing the emitted events. If the machine emits no events in its current state, it pushes `empty_set`.
+
+### 4. `process`
 Computes the next state of the machine after executing a chosen event.
 * **Stack Input:** Pops `event` (top of stack) and then `state` (second-to-top).
 * **Stack Output:** Pushes the new updated `state`.
@@ -59,6 +64,9 @@ Events are usually represented as a `Tuple` consisting of an event identifier sy
 * **Coffee Order Event:** `(order, customer_id, drink_symbol)`
 * **Iterator Step Event:** `(next, character_unicode_codepoint)`
 * **Iterator Finished Event:** `(done, ())`
+
+Events can also be structured using **Path Notation** (dot notation), which maps to nested right-hand tuples terminating in unit `()`:
+* **Path Notation:** `foo.bar.baz` corresponds to `(foo, (bar, (baz, ())))`
 
 ---
 

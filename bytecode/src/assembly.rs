@@ -1467,15 +1467,12 @@ fn compose_hidden(args: &[Path]) -> Result<Vec<TopLevelItem>, String> {
                 // Stack: -> [NonHiddenEmit, HasSync]
                 ParsedInstruction::SetIntersection,
                 
-                // If HasSync is not empty, union with {tau}
-                ParsedInstruction::Push(ParsedValue::SetEmpty),
-                ParsedInstruction::Equal,
+                // Check if HasSync contains any elements using SetChoose
+                ParsedInstruction::SetChoose,
+                ParsedInstruction::Untuple(2), // Stack: [NonHiddenEmit, chosen_elem, has_element]
+                ParsedInstruction::Drop(1), // Stack: [NonHiddenEmit, has_element] (drops chosen_elem at depth 1)
                 ParsedInstruction::Branch(
-                    // HasSync is empty: do nothing, returning NonHiddenEmit
-                    Target::Inline(ParsedSentence {
-                        instructions: vec![]
-                    }),
-                    // HasSync contains hidden events: union with {tau}
+                    // HasSync contains hidden events (has_element is true): union NonHiddenEmit with {tau}
                     Target::Inline(ParsedSentence {
                         instructions: vec![
                             ParsedInstruction::Push(ParsedValue::SymbolRef(Path {
@@ -1489,6 +1486,10 @@ fn compose_hidden(args: &[Path]) -> Result<Vec<TopLevelItem>, String> {
                             ParsedInstruction::SetSingleton,
                             ParsedInstruction::SetUnion,
                         ]
+                    }),
+                    // HasSync is empty (has_element is false): return NonHiddenEmit unchanged
+                    Target::Inline(ParsedSentence {
+                        instructions: vec![]
                     })
                 ),
             ],
@@ -1530,11 +1531,33 @@ fn compose_hidden(args: &[Path]) -> Result<Vec<TopLevelItem>, String> {
                             // Fetch accepted joint events
                             // Stack: -> [joint_state, JointEmit]
                             ParsedInstruction::Jump(Target::Label(concurrent_emit.clone())),
-                            // Fetch hidden events
-                            // Stack: -> [joint_state, JointEmit, SyncSet]
-                            ParsedInstruction::Jump(Target::Label(hidden_fn.clone())),
-                            // Stack: -> [joint_state, HasSync]
-                            ParsedInstruction::SetIntersection,
+                            
+                            // TauSet = {tau}
+                            ParsedInstruction::Push(ParsedValue::SymbolRef(Path {
+                                segments: vec![
+                                    PathSegment::Crate,
+                                    PathSegment::Identifier("prelude".to_string()),
+                                    PathSegment::Identifier("event".to_string()),
+                                    PathSegment::Identifier("tau".to_string()),
+                                ],
+                            })),
+                            ParsedInstruction::SetSingleton, // Stack: [joint_state, JointEmit, TauSet]
+                            
+                            // TauInEmit = JointEmit \cap TauSet
+                            ParsedInstruction::Pick(1),
+                            ParsedInstruction::Pick(1),
+                            ParsedInstruction::SetIntersection, // Stack: [joint_state, JointEmit, TauSet, TauInEmit]
+                            
+                            // SyncInEmit = JointEmit \cap SyncSet
+                            ParsedInstruction::Roll(2), // Stack: [joint_state, TauSet, TauInEmit, JointEmit]
+                            ParsedInstruction::Jump(Target::Label(hidden_fn.clone())), // Stack: [joint_state, TauSet, TauInEmit, JointEmit, SyncSet]
+                            ParsedInstruction::SetIntersection, // Stack: [joint_state, TauSet, TauInEmit, SyncInEmit]
+                            
+                            // Clean up TauSet and union TauInEmit with SyncInEmit -> HiddenEvents
+                            ParsedInstruction::Roll(2),
+                            ParsedInstruction::Drop(0), // Stack: [joint_state, TauInEmit, SyncInEmit]
+                            ParsedInstruction::SetUnion, // Stack: [joint_state, HiddenEvents]
+                            
                             // Choose one event: returns tuple (chosen_event, has_element)
                             // Stack: -> [joint_state, has_element, chosen_event] (after untuple)
                             ParsedInstruction::SetChoose,
@@ -1622,10 +1645,36 @@ fn compose_prefix(args: &[Path]) -> Result<Vec<TopLevelItem>, String> {
         body: ParsedSentence {
             instructions: vec![
                 ParsedInstruction::Jump(Target::Label(machine_emit)),
+                // Stack: [InnerEmit]
+                // Separate tau from non-tau events: TauSet = {tau}
+                ParsedInstruction::Push(ParsedValue::SymbolRef(Path {
+                    segments: vec![
+                        PathSegment::Crate,
+                        PathSegment::Identifier("prelude".to_string()),
+                        PathSegment::Identifier("event".to_string()),
+                        PathSegment::Identifier("tau".to_string()),
+                    ],
+                })),
+                ParsedInstruction::SetSingleton, // Stack: [InnerEmit, TauSet]
+                
+                // HasTau = InnerEmit \cap TauSet
+                ParsedInstruction::Pick(1),
+                ParsedInstruction::Pick(1),
+                ParsedInstruction::SetIntersection, // Stack: [InnerEmit, TauSet, HasTau]
+                
+                // NonTauEmit = InnerEmit \ TauSet
+                ParsedInstruction::Roll(2),
+                ParsedInstruction::Roll(2),
+                ParsedInstruction::SetDifference, // Stack: [HasTau, NonTauEmit]
+                
+                // PrefixedEmit = prefix_sym x NonTauEmit
                 ParsedInstruction::Push(ParsedValue::SymbolRef(prefix_sym.clone())),
                 ParsedInstruction::SetSingleton,
                 ParsedInstruction::Roll(1),
-                ParsedInstruction::SetTuple(2),
+                ParsedInstruction::SetTuple(2), // Stack: [HasTau, PrefixedEmit]
+                
+                // Result = PrefixedEmit U HasTau
+                ParsedInstruction::SetUnion,
             ],
         },
     };
@@ -1636,12 +1685,41 @@ fn compose_prefix(args: &[Path]) -> Result<Vec<TopLevelItem>, String> {
         name: "process".to_string(),
         body: ParsedSentence {
             instructions: vec![
-                ParsedInstruction::Untuple(2),
-                ParsedInstruction::Pick(1),
-                ParsedInstruction::Push(ParsedValue::SymbolRef(prefix_sym.clone())),
-                ParsedInstruction::AssertEqual,
-                ParsedInstruction::Drop(1),
-                ParsedInstruction::Jump(Target::Label(machine_process)),
+                // Check if event is tau
+                // Stack: [state, event] -> [state, event, event]
+                ParsedInstruction::Pick(0),
+                ParsedInstruction::Push(ParsedValue::SymbolRef(Path {
+                    segments: vec![
+                        PathSegment::Crate,
+                        PathSegment::Identifier("prelude".to_string()),
+                        PathSegment::Identifier("event".to_string()),
+                        PathSegment::Identifier("tau".to_string()),
+                    ],
+                })),
+                ParsedInstruction::Equal,
+                ParsedInstruction::Branch(
+                    // --- TAU CASE ---
+                    Target::Inline(ParsedSentence {
+                        instructions: vec![
+                            // Delegate tau directly to machine_process
+                            // Stack: [state, tau]
+                            ParsedInstruction::Jump(Target::Label(machine_process.clone())),
+                        ]
+                    }),
+                    // --- OBSERVABLE CASE ---
+                    Target::Inline(ParsedSentence {
+                        instructions: vec![
+                            // Stack: [state, (prefix, inner_event)]
+                            ParsedInstruction::Untuple(2),
+                            ParsedInstruction::Pick(1),
+                            ParsedInstruction::Push(ParsedValue::SymbolRef(prefix_sym.clone())),
+                            ParsedInstruction::AssertEqual,
+                            ParsedInstruction::Drop(1),
+                            // Stack: [state, inner_event]
+                            ParsedInstruction::Jump(Target::Label(machine_process.clone())),
+                        ]
+                    })
+                )
             ],
         },
     };
