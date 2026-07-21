@@ -510,6 +510,15 @@ fn parse_instruction(stream: &mut TokenStream) -> Result<ParsedInstruction, Stri
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum ModuleExpr {
+    Named(Path),
+    Composer {
+        composer: String,
+        args: Vec<ModuleExpr>,
+    },
+}
+
 enum TopLevelItem {
     SymbolDecl {
         name: String,
@@ -523,7 +532,7 @@ enum TopLevelItem {
     Compose {
         name: String,
         composer: String,
-        args: Vec<Path>,
+        args: Vec<ModuleExpr>,
     },
 }
 
@@ -532,6 +541,40 @@ struct TopLevelSentence {
     is_test: bool,
     name: String,
     body: ParsedSentence,
+}
+
+fn is_composer_name(name: &str) -> bool {
+    name == "compose_concurrent" || name == "compose_hidden" || name == "compose_prefix"
+}
+
+fn parse_module_expr(stream: &mut TokenStream) -> Result<ModuleExpr, String> {
+    if let Some(Token::Identifier(ident)) = stream.peek().cloned() {
+        if is_composer_name(&ident) {
+            stream.next(); // consume composer name
+            stream.expect(Token::LParen)?;
+            let mut args = Vec::new();
+            if stream.peek() != Some(&Token::RParen) {
+                loop {
+                    args.push(parse_module_expr(stream)?);
+                    if stream.peek() == Some(&Token::Comma) {
+                        stream.next();
+                    } else {
+                        break;
+                    }
+                }
+            }
+            stream.expect(Token::RParen)?;
+            return Ok(ModuleExpr::Composer { composer: ident, args });
+        }
+    }
+
+    let first_ident = match stream.next() {
+        Some(Token::Identifier(id)) => id,
+        Some(other) => return Err(format!("Expected identifier for module path or composer, found {:?}", other)),
+        None => return Err("Expected identifier for module path or composer, found end of input".to_string()),
+    };
+    let path = parse_path(stream, first_ident)?;
+    Ok(ModuleExpr::Named(path))
 }
 
 fn parse_top_level(stream: &mut TokenStream, base_dir: Option<&std::path::Path>) -> Result<Vec<TopLevelItem>, String> {
@@ -576,7 +619,7 @@ fn parse_items(stream: &mut TokenStream, end_token: Option<Token>, base_dir: Opt
             };
             
             if let Some(&Token::Identifier(ref ident)) = stream.peek() {
-                if ident == "compose_concurrent" || ident == "compose_hidden" || ident == "compose_prefix" {
+                if is_composer_name(ident) {
                     let composer = match stream.next() {
                         Some(Token::Identifier(id)) => id,
                         _ => unreachable!(),
@@ -585,12 +628,7 @@ fn parse_items(stream: &mut TokenStream, end_token: Option<Token>, base_dir: Opt
                     let mut args = Vec::new();
                     if stream.peek() != Some(&Token::RParen) {
                         loop {
-                            let first_ident = match stream.next() {
-                                Some(Token::Identifier(id)) => id,
-                                Some(other) => return Err(format!("Expected identifier for path, found {:?}", other)),
-                                None => return Err("Expected identifier for path, found end of input".to_string()),
-                            };
-                            args.push(parse_path(stream, first_ident)?);
+                            args.push(parse_module_expr(stream)?);
                             if stream.peek() == Some(&Token::Comma) {
                                 stream.next();
                             } else {
@@ -769,6 +807,87 @@ fn build_module_tree(
     exports: &mut HashMap<String, SentenceIndex>,
     tests: &mut HashMap<String, SentenceIndex>,
 ) -> Result<(), String> {
+    let mut anon_counter = 0;
+    build_module_tree_impl(
+        items,
+        current_path,
+        symbol_counter,
+        sentence_counter,
+        module,
+        flat_sentences,
+        exports,
+        tests,
+        &mut anon_counter,
+    )
+}
+
+fn resolve_module_expr(
+    expr: &ModuleExpr,
+    current_path: &mut Vec<String>,
+    symbol_counter: &mut usize,
+    sentence_counter: &mut usize,
+    parent_module: &mut Module,
+    flat_sentences: &mut Vec<(Vec<String>, TopLevelSentence)>,
+    exports: &mut HashMap<String, SentenceIndex>,
+    tests: &mut HashMap<String, SentenceIndex>,
+    anon_counter: &mut usize,
+) -> Result<Path, String> {
+    match expr {
+        ModuleExpr::Named(path) => Ok(path.clone()),
+        ModuleExpr::Composer { composer, args } => {
+            let mut resolved_args = Vec::new();
+            for arg in args {
+                resolved_args.push(resolve_module_expr(
+                    arg,
+                    current_path,
+                    symbol_counter,
+                    sentence_counter,
+                    parent_module,
+                    flat_sentences,
+                    exports,
+                    tests,
+                    anon_counter,
+                )?);
+            }
+            let generated_items = generate_composition_items(composer, &resolved_args)?;
+            let anon_name = format!("__anon_mod_{}", anon_counter);
+            *anon_counter += 1;
+
+            let mut anon_submodule = Module::new(anon_name.clone());
+            current_path.push(anon_name.clone());
+            build_module_tree_impl(
+                generated_items,
+                current_path,
+                symbol_counter,
+                sentence_counter,
+                &mut anon_submodule,
+                flat_sentences,
+                exports,
+                tests,
+                anon_counter,
+            )?;
+            current_path.pop();
+
+            parent_module.submodules.insert(anon_name.clone(), anon_submodule);
+
+            Ok(Path {
+                segments: vec![PathSegment::Identifier(anon_name)],
+            })
+        }
+    }
+}
+
+fn build_module_tree_impl(
+    items: Vec<TopLevelItem>,
+    current_path: &mut Vec<String>,
+    symbol_counter: &mut usize,
+    sentence_counter: &mut usize,
+    module: &mut Module,
+    flat_sentences: &mut Vec<(Vec<String>, TopLevelSentence)>,
+    exports: &mut HashMap<String, SentenceIndex>,
+    tests: &mut HashMap<String, SentenceIndex>,
+    anon_counter: &mut usize,
+) -> Result<(), String> {
     for item in items {
         match item {
             TopLevelItem::SymbolDecl { name, debug_desc } => {
@@ -844,7 +963,7 @@ fn build_module_tree(
 
                 let mut submodule = Module::new(name.clone());
                 current_path.push(name.clone());
-                build_module_tree(
+                build_module_tree_impl(
                     mod_items,
                     current_path,
                     symbol_counter,
@@ -853,6 +972,7 @@ fn build_module_tree(
                     flat_sentences,
                     exports,
                     tests,
+                    anon_counter,
                 )?;
                 current_path.pop();
 
@@ -870,10 +990,25 @@ fn build_module_tree(
                     return Err(format!("Duplicate declaration of name '{}' in module '{}'", name, module.name));
                 }
 
-                let generated_items = generate_composition_items(&composer, &args)?;
+                let mut resolved_args = Vec::new();
+                for arg in &args {
+                    resolved_args.push(resolve_module_expr(
+                        arg,
+                        current_path,
+                        symbol_counter,
+                        sentence_counter,
+                        module,
+                        flat_sentences,
+                        exports,
+                        tests,
+                        anon_counter,
+                    )?);
+                }
+
+                let generated_items = generate_composition_items(&composer, &resolved_args)?;
                 let mut submodule = Module::new(name.clone());
                 current_path.push(name.clone());
-                build_module_tree(
+                build_module_tree_impl(
                     generated_items,
                     current_path,
                     symbol_counter,
@@ -882,6 +1017,7 @@ fn build_module_tree(
                     flat_sentences,
                     exports,
                     tests,
+                    anon_counter,
                 )?;
                 current_path.pop();
 

@@ -392,14 +392,18 @@ mod string_ref_base {
     }
 }
 
-mod string_ref_instance compose_prefix(string_ref_base, in);
-
 sync_in {
     push set_tuple(singleton(in), universal_set)
 }
 
-mod string_system compose_concurrent(string_ref_instance, char_iterator, sync_in);
-mod string_hidden compose_hidden(string_system, sync_in);
+mod string_hidden compose_hidden(
+    compose_concurrent(
+        compose_prefix(string_ref_base, in),
+        char_iterator,
+        sync_in
+    ),
+    sync_in
+);
 
 test iterate_string_ascii {
     # Initialize system -> [((my_str, idle), (fetch, 0))]
@@ -642,9 +646,14 @@ mod empty_string_ref_base {
     }
 }
 
-mod empty_string_ref_instance compose_prefix(empty_string_ref_base, in);
-mod empty_string_system compose_concurrent(empty_string_ref_instance, char_iterator, sync_in);
-mod empty_string_hidden compose_hidden(empty_string_system, sync_in);
+mod empty_string_hidden compose_hidden(
+    compose_concurrent(
+        compose_prefix(empty_string_ref_base, in),
+        char_iterator,
+        sync_in
+    ),
+    sync_in
+);
 
 test iterate_empty {
     jump empty_string_hidden::init
@@ -685,9 +694,14 @@ mod cafe_string_ref_base {
     }
 }
 
-mod cafe_string_ref_instance compose_prefix(cafe_string_ref_base, in);
-mod cafe_string_system compose_concurrent(cafe_string_ref_instance, char_iterator, sync_in);
-mod cafe_string_hidden compose_hidden(cafe_string_system, sync_in);
+mod cafe_string_hidden compose_hidden(
+    compose_concurrent(
+        compose_prefix(cafe_string_ref_base, in),
+        char_iterator,
+        sync_in
+    ),
+    sync_in
+);
 
 test iterate_unicode {
     jump cafe_string_hidden::init
