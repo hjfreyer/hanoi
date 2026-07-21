@@ -748,9 +748,11 @@ mod tests {
                     push 0
                 }
                 export accept {
+                    drop 0
                     push singleton(crate::payload)
                 }
                 export emit {
+                    drop 0
                     push singleton(crate::payload)
                 }
                 export process {
@@ -805,12 +807,17 @@ mod tests {
                 pick 0
                 push 1
                 assert_eq
+                # Query tau_reduce on state 1
+                pick 0
+                jump renamed::tau_reduce
+                untuple 2
+                pick 0
+                not
+                assert
+                drop 0
 
-                # Process tau event on state 1 -> state becomes 2
-                push crate::prelude::event::tau
-                jump renamed::process
-                # Stack has [2]
-                push 2
+                # Assert state value is 1
+                push 1
                 assert_eq
             }
         "#;
@@ -826,9 +833,82 @@ mod tests {
         let bad_code = r#"
             symbol a
             symbol b
-            mod m { export init { push 0 } export accept { push empty_set } export emit { push empty_set } export process { } }
+            mod m { export init { push 0 } export accept { drop 0 push empty_set } export emit { drop 0 push empty_set } export process { } }
             mod bad compose_rename_prefix(a, m);
         "#;
         assert!(bytecode::assemble(bad_code).is_err());
+    }
+
+    #[test]
+    fn test_tau_reduce() {
+        let code = r#"
+            mod m_no_tau {
+                export init {
+                    push 0
+                }
+                export accept {
+                    drop 0
+                    push empty_set
+                }
+                export emit {
+                    drop 0
+                    push empty_set
+                }
+                export tau_reduce {
+                    push false
+                    roll 1
+                    tuple 2
+                }
+                export process {
+                }
+            }
+
+            mod m_with_tau {
+                export init {
+                    push 0
+                }
+                export accept {
+                    drop 0
+                    push empty_set
+                }
+                export emit {
+                    drop 0
+                    push empty_set
+                }
+                export tau_reduce {
+                    drop 0
+                    push 1
+                    push true
+                    tuple 2
+                }
+                export process {
+                }
+            }
+
+            export test_tau {
+                # Test m_no_tau
+                jump m_no_tau::init
+                jump m_no_tau::tau_reduce
+                untuple 2
+                not
+                assert
+                drop 0
+
+                # Test m_with_tau
+                jump m_with_tau::init
+                jump m_with_tau::tau_reduce
+                untuple 2
+                assert
+                push 1
+                assert_eq
+            }
+        "#;
+        let res = bytecode::assemble(code).unwrap();
+        let test_idx = *res.exports.get("test_tau").unwrap();
+
+        let mut vm = VM::new(res.library);
+        if let Err(e) = vm.execute(test_idx) {
+            panic!("Execution failed: {}", e);
+        }
     }
 }

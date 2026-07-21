@@ -68,6 +68,11 @@ mod string_ref {
         }
     }
 
+    tau_reduce {
+        push false
+        tuple 2
+    }
+
     # emit: takes state (sym, internal_state) and returns ValueSet of emitted events.
     # In response state, emits internal_state which is (length_resp, len) or (charat_resp, ...).
     emit {
@@ -281,6 +286,11 @@ mod char_iterator {
                 }
             }
         }
+    }
+
+    tau_reduce {
+        push false
+        tuple 2
     }
 
     # emit: takes state (tag, payload) and returns ValueSet of emitted events.
@@ -529,6 +539,11 @@ mod parseint {
                 }
             }
         }
+    }
+
+    tau_reduce {
+        push false
+        tuple 2
     }
 
     # emit: takes [state] and returns ValueSet of emitted events.
@@ -863,6 +878,11 @@ mod split {
                 }
             }
         }
+    }
+
+    tau_reduce {
+        push false
+        tuple 2
     }
 
     # emit: takes [state] and returns ValueSet of emitted events.
@@ -1214,6 +1234,9 @@ mod string_ref_base {
     accept {
         jump super::string_ref::accept
     }
+    tau_reduce {
+        jump super::string_ref::tau_reduce
+    }
     emit {
         jump super::string_ref::emit
     }
@@ -1240,12 +1263,14 @@ test iterate_string_ascii {
     jump string_hidden::init
     
     # Step 0: drive tau (charat request)
-    push crate::prelude::event::tau
-    jump string_hidden::process
+    jump string_hidden::tau_reduce
+    untuple 2
+    assert
     
     # drive tau (charat response)
-    push crate::prelude::event::tau
-    jump string_hidden::process
+    jump string_hidden::tau_reduce
+    untuple 2
+    assert
     
     # Check emitted iterator event: (char_iterator::out, (next, 97)) ('a')
     pick 0
@@ -1260,10 +1285,12 @@ test iterate_string_ascii {
     jump string_hidden::process
     
     # Step 1: drive 2 taus for 'b' (98)
-    push crate::prelude::event::tau
-    jump string_hidden::process
-    push crate::prelude::event::tau
-    jump string_hidden::process
+    jump string_hidden::tau_reduce
+    untuple 2
+    assert
+    jump string_hidden::tau_reduce
+    untuple 2
+    assert
     
     pick 0
     jump string_hidden::emit
@@ -1276,10 +1303,12 @@ test iterate_string_ascii {
     jump string_hidden::process
     
     # Step 2: drive 2 taus for 'c' (99)
-    push crate::prelude::event::tau
-    jump string_hidden::process
-    push crate::prelude::event::tau
-    jump string_hidden::process
+    jump string_hidden::tau_reduce
+    untuple 2
+    assert
+    jump string_hidden::tau_reduce
+    untuple 2
+    assert
     
     pick 0
     jump string_hidden::emit
@@ -1292,10 +1321,12 @@ test iterate_string_ascii {
     jump string_hidden::process
     
     # Step 3: drive 2 taus for done
-    push crate::prelude::event::tau
-    jump string_hidden::process
-    push crate::prelude::event::tau
-    jump string_hidden::process
+    jump string_hidden::tau_reduce
+    untuple 2
+    assert
+    jump string_hidden::tau_reduce
+    untuple 2
+    assert
     
     pick 0
     jump string_hidden::emit
@@ -1317,6 +1348,7 @@ mod str_123_base {
         jump super::string_ref::init
     }
     accept { jump super::string_ref::accept }
+    tau_reduce { jump super::string_ref::tau_reduce }
     emit { jump super::string_ref::emit }
     process { jump super::string_ref::process }
 }
@@ -1359,30 +1391,42 @@ test parseint_valid_number {
     jump parseint_123_system::process
     
     # 3. Drive 12 tau steps
-    push crate::prelude::event::tau
-    jump parseint_123_system::process
-    push crate::prelude::event::tau
-    jump parseint_123_system::process
-    push crate::prelude::event::tau
-    jump parseint_123_system::process
-    push crate::prelude::event::tau
-    jump parseint_123_system::process
-    push crate::prelude::event::tau
-    jump parseint_123_system::process
-    push crate::prelude::event::tau
-    jump parseint_123_system::process
-    push crate::prelude::event::tau
-    jump parseint_123_system::process
-    push crate::prelude::event::tau
-    jump parseint_123_system::process
-    push crate::prelude::event::tau
-    jump parseint_123_system::process
-    push crate::prelude::event::tau
-    jump parseint_123_system::process
-    push crate::prelude::event::tau
-    jump parseint_123_system::process
-    push crate::prelude::event::tau
-    jump parseint_123_system::process
+    jump parseint_123_system::tau_reduce
+    untuple 2
+    assert
+    jump parseint_123_system::tau_reduce
+    untuple 2
+    assert
+    jump parseint_123_system::tau_reduce
+    untuple 2
+    assert
+    jump parseint_123_system::tau_reduce
+    untuple 2
+    assert
+    jump parseint_123_system::tau_reduce
+    untuple 2
+    assert
+    jump parseint_123_system::tau_reduce
+    untuple 2
+    assert
+    jump parseint_123_system::tau_reduce
+    untuple 2
+    assert
+    jump parseint_123_system::tau_reduce
+    untuple 2
+    assert
+    jump parseint_123_system::tau_reduce
+    untuple 2
+    assert
+    jump parseint_123_system::tau_reduce
+    untuple 2
+    assert
+    jump parseint_123_system::tau_reduce
+    untuple 2
+    assert
+    jump parseint_123_system::tau_reduce
+    untuple 2
+    assert
     
     # 4. Check emitted result: (parseint::out, (value, (ok, 123)))
     pick 0
@@ -1405,6 +1449,7 @@ mod str_45a_base {
         jump super::string_ref::init
     }
     accept { jump super::string_ref::accept }
+    tau_reduce { jump super::string_ref::tau_reduce }
     emit { jump super::string_ref::emit }
     process { jump super::string_ref::process }
 }
@@ -1435,24 +1480,33 @@ test parseint_invalid_char {
     jump parseint_45a_system::process
     
     # Drive 9 taus
-    push crate::prelude::event::tau
-    jump parseint_45a_system::process
-    push crate::prelude::event::tau
-    jump parseint_45a_system::process
-    push crate::prelude::event::tau
-    jump parseint_45a_system::process
-    push crate::prelude::event::tau
-    jump parseint_45a_system::process
-    push crate::prelude::event::tau
-    jump parseint_45a_system::process
-    push crate::prelude::event::tau
-    jump parseint_45a_system::process
-    push crate::prelude::event::tau
-    jump parseint_45a_system::process
-    push crate::prelude::event::tau
-    jump parseint_45a_system::process
-    push crate::prelude::event::tau
-    jump parseint_45a_system::process
+    jump parseint_45a_system::tau_reduce
+    untuple 2
+    assert
+    jump parseint_45a_system::tau_reduce
+    untuple 2
+    assert
+    jump parseint_45a_system::tau_reduce
+    untuple 2
+    assert
+    jump parseint_45a_system::tau_reduce
+    untuple 2
+    assert
+    jump parseint_45a_system::tau_reduce
+    untuple 2
+    assert
+    jump parseint_45a_system::tau_reduce
+    untuple 2
+    assert
+    jump parseint_45a_system::tau_reduce
+    untuple 2
+    assert
+    jump parseint_45a_system::tau_reduce
+    untuple 2
+    assert
+    jump parseint_45a_system::tau_reduce
+    untuple 2
+    assert
     
     # Check emitted result: (parseint::out, (value, (err, ())))
     pick 0
@@ -1485,12 +1539,15 @@ test parseint_empty_string {
     jump parseint_empty_system::process
     
     # Drive 3 taus for done
-    push crate::prelude::event::tau
-    jump parseint_empty_system::process
-    push crate::prelude::event::tau
-    jump parseint_empty_system::process
-    push crate::prelude::event::tau
-    jump parseint_empty_system::process
+    jump parseint_empty_system::tau_reduce
+    untuple 2
+    assert
+    jump parseint_empty_system::tau_reduce
+    untuple 2
+    assert
+    jump parseint_empty_system::tau_reduce
+    untuple 2
+    assert
     
     # Check emitted result: (parseint::out, (value, (err, ())))
     pick 0
@@ -1604,6 +1661,9 @@ mod xyz_string_ref_base {
     accept {
         jump super::string_ref::accept
     }
+    tau_reduce {
+        jump super::string_ref::tau_reduce
+    }
     emit {
         jump super::string_ref::emit
     }
@@ -1666,6 +1726,9 @@ mod empty_string_ref_base {
     accept {
         jump super::string_ref::accept
     }
+    tau_reduce {
+        jump super::string_ref::tau_reduce
+    }
     emit {
         jump super::string_ref::emit
     }
@@ -1687,10 +1750,12 @@ test iterate_empty {
     jump empty_string_hidden::init
     
     # Drive 2 taus (charat query + charat_resp)
-    push crate::prelude::event::tau
-    jump empty_string_hidden::process
-    push crate::prelude::event::tau
-    jump empty_string_hidden::process
+    jump empty_string_hidden::tau_reduce
+    untuple 2
+    assert
+    jump empty_string_hidden::tau_reduce
+    untuple 2
+    assert
     
     # Check emitted iterator event: (char_iterator::out, (done, ()))
     pick 0
@@ -1714,6 +1779,9 @@ mod cafe_string_ref_base {
     accept {
         jump super::string_ref::accept
     }
+    tau_reduce {
+        jump super::string_ref::tau_reduce
+    }
     emit {
         jump super::string_ref::emit
     }
@@ -1735,10 +1803,12 @@ test iterate_unicode {
     jump cafe_string_hidden::init
     
     # 'c' (99)
-    push crate::prelude::event::tau
-    jump cafe_string_hidden::process
-    push crate::prelude::event::tau
-    jump cafe_string_hidden::process
+    jump cafe_string_hidden::tau_reduce
+    untuple 2
+    assert
+    jump cafe_string_hidden::tau_reduce
+    untuple 2
+    assert
     
     pick 0
     jump cafe_string_hidden::emit
@@ -1750,10 +1820,12 @@ test iterate_unicode {
     jump cafe_string_hidden::process
     
     # 'a' (97)
-    push crate::prelude::event::tau
-    jump cafe_string_hidden::process
-    push crate::prelude::event::tau
-    jump cafe_string_hidden::process
+    jump cafe_string_hidden::tau_reduce
+    untuple 2
+    assert
+    jump cafe_string_hidden::tau_reduce
+    untuple 2
+    assert
     
     pick 0
     jump cafe_string_hidden::emit
@@ -1765,10 +1837,12 @@ test iterate_unicode {
     jump cafe_string_hidden::process
     
     # 'f' (102)
-    push crate::prelude::event::tau
-    jump cafe_string_hidden::process
-    push crate::prelude::event::tau
-    jump cafe_string_hidden::process
+    jump cafe_string_hidden::tau_reduce
+    untuple 2
+    assert
+    jump cafe_string_hidden::tau_reduce
+    untuple 2
+    assert
     
     pick 0
     jump cafe_string_hidden::emit
@@ -1780,10 +1854,12 @@ test iterate_unicode {
     jump cafe_string_hidden::process
     
     # 'é' (233)
-    push crate::prelude::event::tau
-    jump cafe_string_hidden::process
-    push crate::prelude::event::tau
-    jump cafe_string_hidden::process
+    jump cafe_string_hidden::tau_reduce
+    untuple 2
+    assert
+    jump cafe_string_hidden::tau_reduce
+    untuple 2
+    assert
     
     pick 0
     jump cafe_string_hidden::emit
@@ -1795,10 +1871,12 @@ test iterate_unicode {
     jump cafe_string_hidden::process
     
     # done
-    push crate::prelude::event::tau
-    jump cafe_string_hidden::process
-    push crate::prelude::event::tau
-    jump cafe_string_hidden::process
+    jump cafe_string_hidden::tau_reduce
+    untuple 2
+    assert
+    jump cafe_string_hidden::tau_reduce
+    untuple 2
+    assert
     
     pick 0
     jump cafe_string_hidden::emit
@@ -1820,6 +1898,7 @@ mod comma_str_base {
         jump super::string_ref::init
     }
     accept { jump super::string_ref::accept }
+    tau_reduce { jump super::string_ref::tau_reduce }
     emit { jump super::string_ref::emit }
     process { jump super::string_ref::process }
 }
@@ -1839,6 +1918,7 @@ mod split_comma_base {
         jump super::split::init
     }
     accept { jump super::split::accept }
+    tau_reduce { jump super::split::tau_reduce }
     emit { jump super::split::emit }
     process { jump super::split::process }
 }
@@ -1865,12 +1945,15 @@ test split_string {
     jump split_system::process
     
     # 2. Drive 3 taus (charat request + charat_resp + split::in sync)
-    push crate::prelude::event::tau
-    jump split_system::process
-    push crate::prelude::event::tau
-    jump split_system::process
-    push crate::prelude::event::tau
-    jump split_system::process
+    jump split_system::tau_reduce
+    untuple 2
+    assert
+    jump split_system::tau_reduce
+    untuple 2
+    assert
+    jump split_system::tau_reduce
+    untuple 2
+    assert
     
     # 3. Check emitted: (split::out, (split::start, ()))
     pick 0
@@ -1897,12 +1980,15 @@ test split_string {
     jump split_system::process
     
     # 5. Drive 3 taus for next char (',')
-    push crate::prelude::event::tau
-    jump split_system::process
-    push crate::prelude::event::tau
-    jump split_system::process
-    push crate::prelude::event::tau
-    jump split_system::process
+    jump split_system::tau_reduce
+    untuple 2
+    assert
+    jump split_system::tau_reduce
+    untuple 2
+    assert
+    jump split_system::tau_reduce
+    untuple 2
+    assert
     
     # 6. Check emitted: (split::out, (split::end, ()))
     pick 0
@@ -1922,12 +2008,15 @@ test split_string {
     jump split_system::process
     
     # 8. Drive 3 taus for 'b'
-    push crate::prelude::event::tau
-    jump split_system::process
-    push crate::prelude::event::tau
-    jump split_system::process
-    push crate::prelude::event::tau
-    jump split_system::process
+    jump split_system::tau_reduce
+    untuple 2
+    assert
+    jump split_system::tau_reduce
+    untuple 2
+    assert
+    jump split_system::tau_reduce
+    untuple 2
+    assert
     
     # 9. Check emitted: (split::out, (split::start, ()))
     pick 0
@@ -1952,12 +2041,15 @@ test split_string {
     jump split_system::process
     
     # 11. Drive 3 taus for done
-    push crate::prelude::event::tau
-    jump split_system::process
-    push crate::prelude::event::tau
-    jump split_system::process
-    push crate::prelude::event::tau
-    jump split_system::process
+    jump split_system::tau_reduce
+    untuple 2
+    assert
+    jump split_system::tau_reduce
+    untuple 2
+    assert
+    jump split_system::tau_reduce
+    untuple 2
+    assert
     
     # 12. Check emitted: (split::out, (split::end, ()))
     pick 0

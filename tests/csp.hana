@@ -85,6 +85,11 @@ mod customer_impl {
         }
     }
 
+    tau_reduce {
+        push false
+        tuple 2
+    }
+
     # emit takes state: (id, preferred_drink, internal_state) and returns ValueSet of emitted events.
     # The emitted events are:
     # - If internal_state is thirsty: {(order, id, preferred_drink)} (proactive request to barista)
@@ -207,6 +212,9 @@ mod customer1 {
     accept {
         jump super::customer_impl::accept
     }
+    tau_reduce {
+        jump super::customer_impl::tau_reduce
+    }
     emit {
         jump super::customer_impl::emit
     }
@@ -224,6 +232,9 @@ mod customer2 {
     }
     accept {
         jump super::customer_impl::accept
+    }
+    tau_reduce {
+        jump super::customer_impl::tau_reduce
     }
     emit {
         jump super::customer_impl::emit
@@ -266,6 +277,11 @@ mod barista {
                 panic
             }
         }
+    }
+
+    tau_reduce {
+        push false
+        tuple 2
     }
 
     # emit takes [state] and returns ValueSet.
@@ -362,17 +378,12 @@ test verify_hidden_system {
     jump hidden::process
     
     # customer 1 is thirsty, barista is idle.
-    # Thus, the joint state should emit tau to perform order.
-    pick 0
-    jump hidden::emit
-    push crate::prelude::event::tau
-    roll 1
-    set_contains
-    assert
+    # Thus, the joint state should perform order.
     
     # 3. Drive tau -> [(((c1, latte, ordered), (c2, espresso, idle)), (brewing, (c1, latte)))]
-    push crate::prelude::event::tau
-    jump hidden::process
+    jump hidden::tau_reduce
+    untuple 2
+    assert
     
     # customer 2 wants coffee. Let's verify it is accepted.
     pick 0
@@ -387,29 +398,19 @@ test verify_hidden_system {
     jump hidden::process
     
     # Barista is brewing for c1, so customer 2 cannot order yet.
-    # Barista can finish brewing (coffee delivery), which is a hidden/sync event -> emits tau.
-    pick 0
-    jump hidden::emit
-    push crate::prelude::event::tau
-    roll 1
-    set_contains
-    assert
+    # Barista can finish brewing (coffee delivery), which is a hidden/sync event.
     
     # 5. Drive tau -> [(((c1, latte, has_coffee), (c2, espresso, thirsty)), idle)]
-    push crate::prelude::event::tau
-    jump hidden::process
-    
-    # customer 2 is thirsty, barista is idle. Emits tau (order).
-    pick 0
-    jump hidden::emit
-    push crate::prelude::event::tau
-    roll 1
-    set_contains
+    jump hidden::tau_reduce
+    untuple 2
     assert
     
+    # customer 2 is thirsty, barista is idle.
+    
     # 6. Drive tau -> [(((c1, latte, has_coffee), (c2, espresso, ordered)), (brewing, (c2, espresso)))]
-    push crate::prelude::event::tau
-    jump hidden::process
+    jump hidden::tau_reduce
+    untuple 2
+    assert
     
     # customer 1 enjoys coffee (unsynchronized). Let's verify it is accepted (from environment).
     pick 0
@@ -423,17 +424,12 @@ test verify_hidden_system {
     push (event::enjoy, customer_id::c1)
     jump hidden::process
     
-    # Barista finishes brewing for c2 (hidden) -> emits tau.
-    pick 0
-    jump hidden::emit
-    push crate::prelude::event::tau
-    roll 1
-    set_contains
-    assert
+    # Barista finishes brewing for c2 (hidden).
     
     # 8. Drive tau -> [(((c1, latte, idle), (c2, espresso, has_coffee)), idle)]
-    push crate::prelude::event::tau
-    jump hidden::process
+    jump hidden::tau_reduce
+    untuple 2
+    assert
     
     # customer 2 enjoys coffee (unsynchronized). Let's verify it is accepted.
     pick 0

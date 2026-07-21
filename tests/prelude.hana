@@ -1,3 +1,2 @@
 mod event {
-    symbol tau "Tau event"
 }
