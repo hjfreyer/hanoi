@@ -165,48 +165,7 @@ mod string_ref {
     }
 }
 
-# Prefixed decorator for string_ref that uses the hard-coded "in" symbol to prefix all events
-mod prefixed_string_ref {
-    # Initialize with sym on stack.
-    # Delegates to string_ref::init. Returns string_ref_state = (sym, idle).
-    init {
-        jump super::string_ref::init
-    }
-    
-    # accept: takes string_ref_state and returns set of (in, event) for accepted events
-    accept {
-        jump super::string_ref::accept # Stack: [string_ref_state, unprefixed_accept_set]
-        push super::in
-        set_singleton # {in}
-        roll 1 # Stack: [string_ref_state, {in}, unprefixed_accept_set]
-        set_tuple 2 # set of (in, event)
-    }
 
-    # emit: takes string_ref_state and returns set of (in, event) for emitted events
-    emit {
-        jump super::string_ref::emit # Stack: [string_ref_state, unprefixed_emit_set]
-        push super::in
-        set_singleton # {in}
-        roll 1 # Stack: [string_ref_state, {in}, unprefixed_emit_set]
-        set_tuple 2 # set of (in, event)
-    }
-
-    # process: takes string_ref_state and event (in, sub_event), returns next string_ref_state
-    process {
-        # Stack: [string_ref_state, (in_sym, sub_event)]
-        untuple 2 # Stack: [string_ref_state, in_sym, sub_event]
-        
-        # Assert that in_sym == super::in
-        pick 1 # in_sym
-        push super::in
-        assert_eq
-        
-        drop 1 # drop in_sym. Stack: [string_ref_state, sub_event]
-        
-        # Call string_ref::process
-        jump super::string_ref::process
-    }
-}
 
 mod char_iterator {
     symbol fetch        "Fetch charat state"
@@ -417,21 +376,23 @@ symbol empty_str ""
 symbol cafe_str "café"
 symbol xyz_str "xyz"
 
-mod string_ref_instance {
+mod string_ref_base {
     init {
         push super::my_str
-        jump super::prefixed_string_ref::init
+        jump super::string_ref::init
     }
     accept {
-        jump super::prefixed_string_ref::accept
+        jump super::string_ref::accept
     }
     emit {
-        jump super::prefixed_string_ref::emit
+        jump super::string_ref::emit
     }
     process {
-        jump super::prefixed_string_ref::process
+        jump super::string_ref::process
     }
 }
+
+mod string_ref_instance compose_prefix(string_ref_base, in);
 
 sync_in {
     push set_tuple(singleton(in), universal_set)
@@ -604,13 +565,30 @@ test verify_string_ref {
     assert_eq
 }
 
+mod xyz_string_ref_base {
+    init {
+        push super::xyz_str
+        jump super::string_ref::init
+    }
+    accept {
+        jump super::string_ref::accept
+    }
+    emit {
+        jump super::string_ref::emit
+    }
+    process {
+        jump super::string_ref::process
+    }
+}
+
+mod xyz_string_ref_instance compose_prefix(xyz_string_ref_base, in);
+
 test verify_prefixed_string_ref {
-    # Initialize prefixed_string_ref with string xyz_str
-    push xyz_str
-    jump prefixed_string_ref::init # Stack: [state]
+    # Initialize xyz_string_ref_instance
+    jump xyz_string_ref_instance::init # Stack: [state]
     
     # 1. Test accept set at rest on channel in
-    jump prefixed_string_ref::accept # Stack: [state, accept_set]
+    jump xyz_string_ref_instance::accept # Stack: [state, accept_set]
     
     push (in, (string_ref::length, ()))
     pick 1
@@ -626,10 +604,10 @@ test verify_prefixed_string_ref {
     
     # 2. Query charat 1
     push (in, (string_ref::charat, 1))
-    jump prefixed_string_ref::process
+    jump xyz_string_ref_instance::process
     
     # Verify emission of (in, (charat_resp, (some, 121)))
-    jump prefixed_string_ref::emit
+    jump xyz_string_ref_instance::emit
     push (in, (string_ref::charat_resp, (string_ref::some, 121)))
     pick 1
     set_contains
@@ -638,9 +616,9 @@ test verify_prefixed_string_ref {
     
     # Process emission back to idle
     push (in, (string_ref::charat_resp, (string_ref::some, 121)))
-    jump prefixed_string_ref::process
+    jump xyz_string_ref_instance::process
     
-    # Verify state is (xyz, idle)
+    # Verify state is (xyz_str, idle)
     untuple 2
     push string_ref::idle
     assert_eq
@@ -648,22 +626,23 @@ test verify_prefixed_string_ref {
     assert_eq
 }
 
-mod empty_string_ref_instance {
+mod empty_string_ref_base {
     init {
         push super::empty_str
-        jump super::prefixed_string_ref::init
+        jump super::string_ref::init
     }
     accept {
-        jump super::prefixed_string_ref::accept
+        jump super::string_ref::accept
     }
     emit {
-        jump super::prefixed_string_ref::emit
+        jump super::string_ref::emit
     }
     process {
-        jump super::prefixed_string_ref::process
+        jump super::string_ref::process
     }
 }
 
+mod empty_string_ref_instance compose_prefix(empty_string_ref_base, in);
 mod empty_string_system compose_concurrent(empty_string_ref_instance, char_iterator, sync_in);
 mod empty_string_hidden compose_hidden(empty_string_system, sync_in);
 
@@ -690,22 +669,23 @@ test iterate_empty {
     drop 0
 }
 
-mod cafe_string_ref_instance {
+mod cafe_string_ref_base {
     init {
         push super::cafe_str
-        jump super::prefixed_string_ref::init
+        jump super::string_ref::init
     }
     accept {
-        jump super::prefixed_string_ref::accept
+        jump super::string_ref::accept
     }
     emit {
-        jump super::prefixed_string_ref::emit
+        jump super::string_ref::emit
     }
     process {
-        jump super::prefixed_string_ref::process
+        jump super::string_ref::process
     }
 }
 
+mod cafe_string_ref_instance compose_prefix(cafe_string_ref_base, in);
 mod cafe_string_system compose_concurrent(cafe_string_ref_instance, char_iterator, sync_in);
 mod cafe_string_hidden compose_hidden(cafe_string_system, sync_in);
 

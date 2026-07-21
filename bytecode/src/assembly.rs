@@ -576,7 +576,7 @@ fn parse_items(stream: &mut TokenStream, end_token: Option<Token>, base_dir: Opt
             };
             
             if let Some(&Token::Identifier(ref ident)) = stream.peek() {
-                if ident == "compose_concurrent" || ident == "compose_hidden" {
+                if ident == "compose_concurrent" || ident == "compose_hidden" || ident == "compose_prefix" {
                     let composer = match stream.next() {
                         Some(Token::Identifier(id)) => id,
                         _ => unreachable!(),
@@ -1464,6 +1464,83 @@ fn compose_hidden(args: &[Path]) -> Result<Vec<TopLevelItem>, String> {
     ])
 }
 
+fn compose_prefix(args: &[Path]) -> Result<Vec<TopLevelItem>, String> {
+    if args.len() != 2 {
+        return Err("compose_prefix requires exactly 2 arguments: target_machine and prefix_symbol".to_string());
+    }
+    let machine = adjust_path(&args[0]);
+    let prefix_sym = adjust_path(&args[1]);
+
+    let mut machine_init = machine.clone(); machine_init.segments.push(PathSegment::Identifier("init".to_string()));
+    let mut machine_accept = machine.clone(); machine_accept.segments.push(PathSegment::Identifier("accept".to_string()));
+    let mut machine_emit = machine.clone(); machine_emit.segments.push(PathSegment::Identifier("emit".to_string()));
+    let mut machine_process = machine.clone(); machine_process.segments.push(PathSegment::Identifier("process".to_string()));
+
+    let init_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "init".to_string(),
+        body: ParsedSentence {
+            instructions: vec![
+                ParsedInstruction::Jump(Target::Label(machine_init)),
+            ],
+        },
+    };
+
+    let accept_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "accept".to_string(),
+        body: ParsedSentence {
+            instructions: vec![
+                ParsedInstruction::Jump(Target::Label(machine_accept)),
+                ParsedInstruction::Push(ParsedValue::SymbolRef(prefix_sym.clone())),
+                ParsedInstruction::SetSingleton,
+                ParsedInstruction::Roll(1),
+                ParsedInstruction::SetTuple(2),
+            ],
+        },
+    };
+
+    let emit_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "emit".to_string(),
+        body: ParsedSentence {
+            instructions: vec![
+                ParsedInstruction::Jump(Target::Label(machine_emit)),
+                ParsedInstruction::Push(ParsedValue::SymbolRef(prefix_sym.clone())),
+                ParsedInstruction::SetSingleton,
+                ParsedInstruction::Roll(1),
+                ParsedInstruction::SetTuple(2),
+            ],
+        },
+    };
+
+    let process_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "process".to_string(),
+        body: ParsedSentence {
+            instructions: vec![
+                ParsedInstruction::Untuple(2),
+                ParsedInstruction::Pick(1),
+                ParsedInstruction::Push(ParsedValue::SymbolRef(prefix_sym.clone())),
+                ParsedInstruction::AssertEqual,
+                ParsedInstruction::Drop(1),
+                ParsedInstruction::Jump(Target::Label(machine_process)),
+            ],
+        },
+    };
+
+    Ok(vec![
+        TopLevelItem::Sentence(init_sentence),
+        TopLevelItem::Sentence(accept_sentence),
+        TopLevelItem::Sentence(emit_sentence),
+        TopLevelItem::Sentence(process_sentence),
+    ])
+}
+
 fn generate_composition_items(
     composer: &str,
     args: &[Path],
@@ -1471,6 +1548,7 @@ fn generate_composition_items(
     match composer {
         "compose_concurrent" => compose_concurrent(args),
         "compose_hidden" => compose_hidden(args),
+        "compose_prefix" => compose_prefix(args),
         _ => Err(format!("Unknown composer: {}", composer)),
     }
 }
