@@ -77,6 +77,72 @@ impl ValueSet {
         }
     }
 
+    /// Replace occurrences of `from` symbol as the first path component of events (pairs) with `to` symbol.
+    pub fn rename_prefix(&self, from: &Symbol, to: &Symbol) -> ValueSet {
+        match self {
+            ValueSet::Empty => ValueSet::Empty,
+            ValueSet::Universal => ValueSet::Universal,
+            ValueSet::Singleton(v) => {
+                match v.as_ref() {
+                    Value::Tuple(elems) => {
+                        if !elems.is_empty() {
+                            if let Value::Symbol(s) = &elems[0] {
+                                if s == from {
+                                    let mut new_elems = elems.clone();
+                                    new_elems[0] = Value::Symbol(to.clone());
+                                    return ValueSet::Singleton(Box::new(Value::Tuple(new_elems)));
+                                }
+                            }
+                        }
+                        ValueSet::Singleton(v.clone())
+                    }
+                    _ => ValueSet::Singleton(v.clone()),
+                }
+            }
+            ValueSet::Union(a, b) => ValueSet::Union(
+                Box::new(a.rename_prefix(from, to)),
+                Box::new(b.rename_prefix(from, to)),
+            ),
+            ValueSet::Intersection(a, b) => ValueSet::Intersection(
+                Box::new(a.rename_prefix(from, to)),
+                Box::new(b.rename_prefix(from, to)),
+            ),
+            ValueSet::Complement(a) => ValueSet::Complement(Box::new(a.rename_prefix(from, to))),
+            ValueSet::Tuple(sets) => {
+                if !sets.is_empty() {
+                    let mut new_sets = sets.clone();
+                    new_sets[0] = Self::replace_symbol(&new_sets[0], from, to);
+                    ValueSet::Tuple(new_sets)
+                } else {
+                    ValueSet::Tuple(sets.clone())
+                }
+            }
+        }
+    }
+
+    fn replace_symbol(set: &ValueSet, from: &Symbol, to: &Symbol) -> ValueSet {
+        match set {
+            ValueSet::Singleton(v) => {
+                if let Value::Symbol(s) = v.as_ref() {
+                    if s == from {
+                        return ValueSet::Singleton(Box::new(Value::Symbol(to.clone())));
+                    }
+                }
+                ValueSet::Singleton(v.clone())
+            }
+            ValueSet::Union(a, b) => ValueSet::Union(
+                Box::new(Self::replace_symbol(a, from, to)),
+                Box::new(Self::replace_symbol(b, from, to)),
+            ),
+            ValueSet::Intersection(a, b) => ValueSet::Intersection(
+                Box::new(Self::replace_symbol(a, from, to)),
+                Box::new(Self::replace_symbol(b, from, to)),
+            ),
+            ValueSet::Complement(a) => ValueSet::Complement(Box::new(Self::replace_symbol(a, from, to))),
+            other => other.clone(),
+        }
+    }
+
     /// Convert the ValueSet into Disjunctive Normal Form (DNF).
     ///
     /// The resulting ValueSet is guaranteed to satisfy the following structural properties:

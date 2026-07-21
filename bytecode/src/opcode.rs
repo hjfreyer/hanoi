@@ -88,4 +88,6 @@ pub enum Instruction {
     SymbolLen,
     /// Pop an index (Int) and a Symbol off the stack, and push the Unicode code point of the character at that index as an Int.
     SymbolCharAt,
+    /// Pop a ValueSet, a 'from' Symbol, and a 'to' Symbol, and push a ValueSet where events starting with 'from' are rewritten to start with 'to'.
+    SetRenamePrefix,
 }

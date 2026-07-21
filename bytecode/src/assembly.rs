@@ -506,6 +506,7 @@ fn parse_instruction(stream: &mut TokenStream) -> Result<ParsedInstruction, Stri
         "set_choose" => Ok(ParsedInstruction::SetChoose),
         "symbol_len" => Ok(ParsedInstruction::SymbolLen),
         "symbol_char_at" => Ok(ParsedInstruction::SymbolCharAt),
+        "set_rename_prefix" => Ok(ParsedInstruction::SetRenamePrefix),
         other => Err(format!("Unknown instruction mnemonic: '{}'", other)),
     }
 }
@@ -544,7 +545,7 @@ struct TopLevelSentence {
 }
 
 fn is_composer_name(name: &str) -> bool {
-    name == "compose_concurrent" || name == "compose_hidden" || name == "compose_prefix"
+    name == "compose_concurrent" || name == "compose_hidden" || name == "compose_prefix" || name == "compose_rename_prefix"
 }
 
 fn parse_module_expr(stream: &mut TokenStream) -> Result<ModuleExpr, String> {
@@ -766,6 +767,7 @@ enum ParsedInstruction {
     SetChoose,
     SymbolLen,
     SymbolCharAt,
+    SetRenamePrefix,
 }
 
 /// The result of parsing and compiling assembly code.
@@ -1732,6 +1734,129 @@ fn compose_prefix(args: &[Path]) -> Result<Vec<TopLevelItem>, String> {
     ])
 }
 
+fn compose_rename_prefix(args: &[Path]) -> Result<Vec<TopLevelItem>, String> {
+    if args.len() != 3 {
+        return Err("compose_rename_prefix requires exactly 3 arguments: from_symbol, to_symbol, and target_machine".to_string());
+    }
+    let from_sym = adjust_path(&args[0]);
+    let to_sym = adjust_path(&args[1]);
+    let machine = adjust_path(&args[2]);
+
+    let mut machine_init = machine.clone(); machine_init.segments.push(PathSegment::Identifier("init".to_string()));
+    let mut machine_accept = machine.clone(); machine_accept.segments.push(PathSegment::Identifier("accept".to_string()));
+    let mut machine_emit = machine.clone(); machine_emit.segments.push(PathSegment::Identifier("emit".to_string()));
+    let mut machine_process = machine.clone(); machine_process.segments.push(PathSegment::Identifier("process".to_string()));
+
+    let init_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "init".to_string(),
+        body: ParsedSentence {
+            instructions: vec![
+                ParsedInstruction::Jump(Target::Label(machine_init)),
+            ],
+        },
+    };
+
+    let accept_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "accept".to_string(),
+        body: ParsedSentence {
+            instructions: vec![
+                ParsedInstruction::Jump(Target::Label(machine_accept)),
+                ParsedInstruction::Push(ParsedValue::SymbolRef(from_sym.clone())),
+                ParsedInstruction::Push(ParsedValue::SymbolRef(to_sym.clone())),
+                ParsedInstruction::SetRenamePrefix,
+            ],
+        },
+    };
+
+    let emit_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "emit".to_string(),
+        body: ParsedSentence {
+            instructions: vec![
+                ParsedInstruction::Jump(Target::Label(machine_emit)),
+                ParsedInstruction::Push(ParsedValue::SymbolRef(from_sym.clone())),
+                ParsedInstruction::Push(ParsedValue::SymbolRef(to_sym.clone())),
+                ParsedInstruction::SetRenamePrefix,
+            ],
+        },
+    };
+
+    let process_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "process".to_string(),
+        body: ParsedSentence {
+            instructions: vec![
+                // Check if event is tau
+                // Stack: [state, event] -> [state, event, event]
+                ParsedInstruction::Pick(0),
+                ParsedInstruction::Push(ParsedValue::SymbolRef(Path {
+                    segments: vec![
+                        PathSegment::Crate,
+                        PathSegment::Identifier("prelude".to_string()),
+                        PathSegment::Identifier("event".to_string()),
+                        PathSegment::Identifier("tau".to_string()),
+                    ],
+                })),
+                ParsedInstruction::Equal,
+                ParsedInstruction::Branch(
+                    // --- TAU CASE ---
+                    Target::Inline(ParsedSentence {
+                        instructions: vec![
+                            ParsedInstruction::Jump(Target::Label(machine_process.clone())),
+                        ]
+                    }),
+                    // --- OBSERVABLE CASE ---
+                    Target::Inline(ParsedSentence {
+                        instructions: vec![
+                            // Stack: [state, (first, second)]
+                            ParsedInstruction::Untuple(2), // Stack: [state, first, second]
+                            ParsedInstruction::Pick(1),    // Stack: [state, first, second, first]
+                            ParsedInstruction::Push(ParsedValue::SymbolRef(to_sym.clone())), // Stack: [state, first, second, first, to_sym]
+                            ParsedInstruction::Equal,      // Stack: [state, first, second, is_to]
+                            ParsedInstruction::Branch(
+                                // --- FIRST == TO_SYM ---
+                                Target::Inline(ParsedSentence {
+                                    instructions: vec![
+                                        // Replace to_sym with from_sym
+                                        // Stack: [state, first, second] (where first is to_sym)
+                                        ParsedInstruction::Roll(1), // Stack: [state, second, first]
+                                        ParsedInstruction::Drop(0), // Stack: [state, second]
+                                        ParsedInstruction::Push(ParsedValue::SymbolRef(from_sym.clone())), // Stack: [state, second, from_sym]
+                                        ParsedInstruction::Roll(1), // Stack: [state, from_sym, second]
+                                        ParsedInstruction::Tuple(2), // Stack: [state, (from_sym, second)]
+                                        ParsedInstruction::Jump(Target::Label(machine_process.clone())),
+                                    ]
+                                }),
+                                // --- FIRST != TO_SYM ---
+                                Target::Inline(ParsedSentence {
+                                    instructions: vec![
+                                        // Keep (first, second) as is
+                                        ParsedInstruction::Tuple(2), // Stack: [state, (first, second)]
+                                        ParsedInstruction::Jump(Target::Label(machine_process.clone())),
+                                    ]
+                                })
+                            )
+                        ]
+                    })
+                )
+            ],
+        },
+    };
+
+    Ok(vec![
+        TopLevelItem::Sentence(init_sentence),
+        TopLevelItem::Sentence(accept_sentence),
+        TopLevelItem::Sentence(emit_sentence),
+        TopLevelItem::Sentence(process_sentence),
+    ])
+}
+
 fn generate_composition_items(
     composer: &str,
     args: &[Path],
@@ -1740,6 +1865,7 @@ fn generate_composition_items(
         "compose_concurrent" => compose_concurrent(args),
         "compose_hidden" => compose_hidden(args),
         "compose_prefix" => compose_prefix(args),
+        "compose_rename_prefix" => compose_rename_prefix(args),
         _ => Err(format!("Unknown composer: {}", composer)),
     }
 }
@@ -1937,6 +2063,7 @@ impl<'a> Compiler<'a> {
                 ParsedInstruction::SetChoose => Instruction::SetChoose,
                 ParsedInstruction::SymbolLen => Instruction::SymbolLen,
                 ParsedInstruction::SymbolCharAt => Instruction::SymbolCharAt,
+                ParsedInstruction::SetRenamePrefix => Instruction::SetRenamePrefix,
                 ParsedInstruction::Jump(target) => {
                     let target_idx = self.resolve_target(current_path, target)?;
                     Instruction::Jump(target_idx)

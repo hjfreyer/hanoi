@@ -4,9 +4,6 @@
 symbol next "Next character event"
 symbol done "Iteration finished event"
 
-symbol in   "in"
-symbol out  "out"
-
 # Base unprefixed string_ref machine
 mod string_ref {
     symbol length       "Query string length"
@@ -204,6 +201,8 @@ mod string_ref {
 
 
 mod char_iterator {
+    symbol in           "char_iterator::in"
+    symbol out          "char_iterator::out"
     symbol fetch        "Fetch charat state"
     symbol await_charat "Await charat response state"
     symbol yield_next   "Yield next character state"
@@ -231,13 +230,13 @@ mod char_iterator {
             drop 0 # drop payload
             
             # Construct set of (in, (charat_resp, (some, ch)))
-            push super::in
+            push in
             set_singleton
             push set_tuple(singleton(super::string_ref::charat_resp), set_tuple(singleton(super::string_ref::some), universal_set))
             set_tuple 2 # set of (in, (charat_resp, (some, ch)))
             
             # Construct set of (in, (charat_resp, (none, ())))
-            push super::in
+            push in
             set_singleton
             push singleton((super::string_ref::charat_resp, (super::string_ref::none, ())))
             set_tuple 2 # set of (in, (charat_resp, (none, ())))
@@ -298,7 +297,7 @@ mod char_iterator {
             roll 1 # payload is idx
             tuple 2 # (charat, idx)
             
-            push super::in
+            push in
             roll 1
             tuple 2 # (in, (charat, idx))
             set_singleton
@@ -317,7 +316,7 @@ mod char_iterator {
                 roll 1 # ch
                 tuple 2 # (next, ch)
                 
-                push super::out
+                push out
                 roll 1
                 tuple 2 # (out, (next, ch))
                 set_singleton
@@ -334,7 +333,7 @@ mod char_iterator {
                     tuple 0
                     tuple 2 # (done, ())
                     
-                    push super::out
+                    push out
                     roll 1
                     tuple 2 # (out, (done, ()))
                     set_singleton
@@ -461,6 +460,8 @@ symbol ok    "ok"
 symbol err   "err"
 
 mod parseint {
+    symbol in           "parseint::in"
+    symbol out          "parseint::out"
     symbol idle         "Idle state"
     symbol parsing      "Parsing state"
     symbol yielding_ok  "Yielding ok result state"
@@ -480,7 +481,7 @@ mod parseint {
         branch {
             # idle: accepts (out, (copy, ()))
             drop 0
-            push super::out
+            push out
             set_singleton
             push singleton((super::copy, ()))
             set_tuple 2
@@ -493,17 +494,17 @@ mod parseint {
                 drop 0 # drop payload
                 drop 0 # drop tag
                 
-                # Accepts (in, (out, (next, ch))) for any ch
-                push super::in
+                # Accepts (in, (next, ch)) for any ch
+                push in
                 set_singleton
-                push set_tuple(singleton(super::out), set_tuple(singleton(super::next), universal_set))
-                set_tuple 2 # set of (in, (out, (next, ch)))
+                push set_tuple(singleton(super::next), universal_set)
+                set_tuple 2 # set of (in, (next, ch))
                 
-                # Accepts (in, (out, (done, ())))
-                push super::in
+                # Accepts (in, (done, ()))
+                push in
                 set_singleton
-                push singleton((super::out, (super::done, ())))
-                set_tuple 2 # set of (in, (out, (done, ())))
+                push singleton((super::done, ()))
+                set_tuple 2 # set of (in, (done, ()))
                 
                 set_union
             } {
@@ -564,7 +565,7 @@ mod parseint {
                     roll 1
                     tuple 2 # (value, (ok, N))
                     
-                    push super::out
+                    push out
                     roll 1
                     tuple 2 # (out, (value, (ok, N)))
                     
@@ -586,7 +587,7 @@ mod parseint {
                         roll 1
                         tuple 2 # (value, (err, ()))
                         
-                        push super::out
+                        push out
                         roll 1
                         tuple 2 # (out, (value, (err, ())))
                         
@@ -652,9 +653,7 @@ mod parseint {
                         untuple 2 # Stack: [payload, in_sym, inner_event]
                         drop 1 # drop in_sym. Stack: [payload, inner_event]
                         
-                        # inner_event is (out, (item_tag, val))
-                        untuple 2 # Stack: [payload, out_sym, (item_tag, val)]
-                        drop 1 # drop out_sym
+                        # inner_event is (item_tag, val)
                         untuple 2 # Stack: [payload, item_tag, val]
                         
                         roll 2 # Stack: [item_tag, val, payload]
@@ -783,17 +782,17 @@ mod string_ref_base {
     }
 }
 
-sync_in {
-    push set_tuple(singleton(in), universal_set)
+sync_char_iterator_in {
+    push set_tuple(singleton(char_iterator::in), universal_set)
 }
 
 mod string_hidden compose_hidden(
     compose_concurrent(
-        compose_prefix(string_ref_base, in),
+        compose_prefix(string_ref_base, char_iterator::in),
         char_iterator,
-        sync_in
+        sync_char_iterator_in
     ),
-    sync_in
+    sync_char_iterator_in
 );
 
 test iterate_string_ascii {
@@ -808,16 +807,16 @@ test iterate_string_ascii {
     push crate::prelude::event::tau
     jump string_hidden::process
     
-    # Check emitted iterator event: (out, (next, 97)) ('a')
+    # Check emitted iterator event: (char_iterator::out, (next, 97)) ('a')
     pick 0
     jump string_hidden::emit
-    push (out, (next, 97))
+    push (char_iterator::out, (next, 97))
     roll 1
     set_contains
     assert
     
     # Process iterator event
-    push (out, (next, 97))
+    push (char_iterator::out, (next, 97))
     jump string_hidden::process
     
     # Step 1: drive 2 taus for 'b' (98)
@@ -828,12 +827,12 @@ test iterate_string_ascii {
     
     pick 0
     jump string_hidden::emit
-    push (out, (next, 98))
+    push (char_iterator::out, (next, 98))
     roll 1
     set_contains
     assert
     
-    push (out, (next, 98))
+    push (char_iterator::out, (next, 98))
     jump string_hidden::process
     
     # Step 2: drive 2 taus for 'c' (99)
@@ -844,12 +843,12 @@ test iterate_string_ascii {
     
     pick 0
     jump string_hidden::emit
-    push (out, (next, 99))
+    push (char_iterator::out, (next, 99))
     roll 1
     set_contains
     assert
     
-    push (out, (next, 99))
+    push (char_iterator::out, (next, 99))
     jump string_hidden::process
     
     # Step 3: drive 2 taus for done
@@ -860,12 +859,12 @@ test iterate_string_ascii {
     
     pick 0
     jump string_hidden::emit
-    push (out, (done, ()))
+    push (char_iterator::out, (done, ()))
     roll 1
     set_contains
     assert
     
-    push (out, (done, ()))
+    push (char_iterator::out, (done, ()))
     jump string_hidden::process
     
     # Clean up state from stack
@@ -884,35 +883,39 @@ mod str_123_base {
 
 mod str_123_hidden compose_hidden(
     compose_concurrent(
-        compose_prefix(str_123_base, in),
+        compose_prefix(str_123_base, char_iterator::in),
         char_iterator,
-        sync_in
+        sync_char_iterator_in
     ),
-    sync_in
+    sync_char_iterator_in
 );
+
+sync_parseint_in {
+    push set_tuple(singleton(parseint::in), universal_set)
+}
 
 mod parseint_123_system compose_hidden(
     compose_concurrent(
         parseint,
-        compose_prefix(str_123_hidden, in),
-        sync_in
+        compose_rename_prefix(char_iterator::out, parseint::in, str_123_hidden),
+        sync_parseint_in
     ),
-    sync_in
+    sync_parseint_in
 );
 
 test parseint_valid_number {
     jump parseint_123_system::init
     
-    # 1. Verify idle parseint accepts (out, (copy, ()))
+    # 1. Verify idle parseint accepts (parseint::out, (copy, ()))
     pick 0
     jump parseint_123_system::accept
-    push (out, (copy, ()))
+    push (parseint::out, (copy, ()))
     roll 1
     set_contains
     assert
     
-    # 2. Trigger (out, (copy, ())) -> transitions parseint to parsing
-    push (out, (copy, ()))
+    # 2. Trigger (parseint::out, (copy, ())) -> transitions parseint to parsing
+    push (parseint::out, (copy, ()))
     jump parseint_123_system::process
     
     # 3. Drive 12 tau steps
@@ -941,16 +944,16 @@ test parseint_valid_number {
     push crate::prelude::event::tau
     jump parseint_123_system::process
     
-    # 4. Check emitted result: (out, (value, (ok, 123)))
+    # 4. Check emitted result: (parseint::out, (value, (ok, 123)))
     pick 0
     jump parseint_123_system::emit
-    push (out, (value, (ok, 123)))
+    push (parseint::out, (value, (ok, 123)))
     roll 1
     set_contains
     assert
     
     # Process emission event -> transitions back to idle
-    push (out, (value, (ok, 123)))
+    push (parseint::out, (value, (ok, 123)))
     jump parseint_123_system::process
     
     drop 0
@@ -968,27 +971,27 @@ mod str_45a_base {
 
 mod str_45a_hidden compose_hidden(
     compose_concurrent(
-        compose_prefix(str_45a_base, in),
+        compose_prefix(str_45a_base, char_iterator::in),
         char_iterator,
-        sync_in
+        sync_char_iterator_in
     ),
-    sync_in
+    sync_char_iterator_in
 );
 
 mod parseint_45a_system compose_hidden(
     compose_concurrent(
         parseint,
-        compose_prefix(str_45a_hidden, in),
-        sync_in
+        compose_rename_prefix(char_iterator::out, parseint::in, str_45a_hidden),
+        sync_parseint_in
     ),
-    sync_in
+    sync_parseint_in
 );
 
 test parseint_invalid_char {
     jump parseint_45a_system::init
     
     # Trigger copy
-    push (out, (copy, ()))
+    push (parseint::out, (copy, ()))
     jump parseint_45a_system::process
     
     # Drive 9 taus
@@ -1011,15 +1014,15 @@ test parseint_invalid_char {
     push crate::prelude::event::tau
     jump parseint_45a_system::process
     
-    # Check emitted result: (out, (value, (err, ())))
+    # Check emitted result: (parseint::out, (value, (err, ())))
     pick 0
     jump parseint_45a_system::emit
-    push (out, (value, (err, ())))
+    push (parseint::out, (value, (err, ())))
     roll 1
     set_contains
     assert
     
-    push (out, (value, (err, ())))
+    push (parseint::out, (value, (err, ())))
     jump parseint_45a_system::process
     
     drop 0
@@ -1028,17 +1031,17 @@ test parseint_invalid_char {
 mod parseint_empty_system compose_hidden(
     compose_concurrent(
         parseint,
-        compose_prefix(empty_string_hidden, in),
-        sync_in
+        compose_rename_prefix(char_iterator::out, parseint::in, empty_string_hidden),
+        sync_parseint_in
     ),
-    sync_in
+    sync_parseint_in
 );
 
 test parseint_empty_string {
     jump parseint_empty_system::init
     
     # Trigger copy
-    push (out, (copy, ()))
+    push (parseint::out, (copy, ()))
     jump parseint_empty_system::process
     
     # Drive 3 taus for done
@@ -1049,15 +1052,15 @@ test parseint_empty_string {
     push crate::prelude::event::tau
     jump parseint_empty_system::process
     
-    # Check emitted result: (out, (value, (err, ())))
+    # Check emitted result: (parseint::out, (value, (err, ())))
     pick 0
     jump parseint_empty_system::emit
-    push (out, (value, (err, ())))
+    push (parseint::out, (value, (err, ())))
     roll 1
     set_contains
     assert
     
-    push (out, (value, (err, ())))
+    push (parseint::out, (value, (err, ())))
     jump parseint_empty_system::process
     
     drop 0
@@ -1169,22 +1172,22 @@ mod xyz_string_ref_base {
     }
 }
 
-mod xyz_string_ref_instance compose_prefix(xyz_string_ref_base, in);
+mod xyz_string_ref_instance compose_prefix(xyz_string_ref_base, char_iterator::in);
 
 test verify_prefixed_string_ref {
     # Initialize xyz_string_ref_instance
     jump xyz_string_ref_instance::init # Stack: [state]
     
-    # 1. Test accept set at rest on channel in
+    # 1. Test accept set at rest on channel char_iterator::in
     pick 0
     jump xyz_string_ref_instance::accept # Stack: [state, accept_set]
     
-    push (in, (string_ref::length, ()))
+    push (char_iterator::in, (string_ref::length, ()))
     pick 1
     set_contains
     assert
     
-    push (in, (string_ref::charat, 0))
+    push (char_iterator::in, (string_ref::charat, 0))
     pick 1
     set_contains
     assert
@@ -1192,19 +1195,19 @@ test verify_prefixed_string_ref {
     drop 0 # drop accept_set
     
     # 2. Query charat 1
-    push (in, (string_ref::charat, 1))
+    push (char_iterator::in, (string_ref::charat, 1))
     jump xyz_string_ref_instance::process
     
-    # Verify emission of (in, (charat_resp, (some, 121)))
+    # Verify emission of (char_iterator::in, (charat_resp, (some, 121)))
     pick 0
     jump xyz_string_ref_instance::emit
-    push (in, (string_ref::charat_resp, (string_ref::some, 121)))
+    push (char_iterator::in, (string_ref::charat_resp, (string_ref::some, 121)))
     roll 1
     set_contains
     assert
     
     # Process emission back to idle
-    push (in, (string_ref::charat_resp, (string_ref::some, 121)))
+    push (char_iterator::in, (string_ref::charat_resp, (string_ref::some, 121)))
     jump xyz_string_ref_instance::process
     
     # Verify state is (xyz_str, idle)
@@ -1233,11 +1236,11 @@ mod empty_string_ref_base {
 
 mod empty_string_hidden compose_hidden(
     compose_concurrent(
-        compose_prefix(empty_string_ref_base, in),
+        compose_prefix(empty_string_ref_base, char_iterator::in),
         char_iterator,
-        sync_in
+        sync_char_iterator_in
     ),
-    sync_in
+    sync_char_iterator_in
 );
 
 test iterate_empty {
@@ -1249,15 +1252,15 @@ test iterate_empty {
     push crate::prelude::event::tau
     jump empty_string_hidden::process
     
-    # Check emitted iterator event: (out, (done, ()))
+    # Check emitted iterator event: (char_iterator::out, (done, ()))
     pick 0
     jump empty_string_hidden::emit
-    push (out, (done, ()))
+    push (char_iterator::out, (done, ()))
     roll 1
     set_contains
     assert
     
-    push (out, (done, ()))
+    push (char_iterator::out, (done, ()))
     jump empty_string_hidden::process
     
     drop 0
@@ -1281,11 +1284,11 @@ mod cafe_string_ref_base {
 
 mod cafe_string_hidden compose_hidden(
     compose_concurrent(
-        compose_prefix(cafe_string_ref_base, in),
+        compose_prefix(cafe_string_ref_base, char_iterator::in),
         char_iterator,
-        sync_in
+        sync_char_iterator_in
     ),
-    sync_in
+    sync_char_iterator_in
 );
 
 test iterate_unicode {
@@ -1299,11 +1302,11 @@ test iterate_unicode {
     
     pick 0
     jump cafe_string_hidden::emit
-    push (out, (next, 99))
+    push (char_iterator::out, (next, 99))
     roll 1
     set_contains
     assert
-    push (out, (next, 99))
+    push (char_iterator::out, (next, 99))
     jump cafe_string_hidden::process
     
     # 'a' (97)
@@ -1314,11 +1317,11 @@ test iterate_unicode {
     
     pick 0
     jump cafe_string_hidden::emit
-    push (out, (next, 97))
+    push (char_iterator::out, (next, 97))
     roll 1
     set_contains
     assert
-    push (out, (next, 97))
+    push (char_iterator::out, (next, 97))
     jump cafe_string_hidden::process
     
     # 'f' (102)
@@ -1329,11 +1332,11 @@ test iterate_unicode {
     
     pick 0
     jump cafe_string_hidden::emit
-    push (out, (next, 102))
+    push (char_iterator::out, (next, 102))
     roll 1
     set_contains
     assert
-    push (out, (next, 102))
+    push (char_iterator::out, (next, 102))
     jump cafe_string_hidden::process
     
     # 'é' (233)
@@ -1344,11 +1347,11 @@ test iterate_unicode {
     
     pick 0
     jump cafe_string_hidden::emit
-    push (out, (next, 233))
+    push (char_iterator::out, (next, 233))
     roll 1
     set_contains
     assert
-    push (out, (next, 233))
+    push (char_iterator::out, (next, 233))
     jump cafe_string_hidden::process
     
     # done
@@ -1359,11 +1362,11 @@ test iterate_unicode {
     
     pick 0
     jump cafe_string_hidden::emit
-    push (out, (done, ()))
+    push (char_iterator::out, (done, ()))
     roll 1
     set_contains
     assert
-    push (out, (done, ()))
+    push (char_iterator::out, (done, ()))
     jump cafe_string_hidden::process
     
     drop 0

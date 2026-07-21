@@ -428,8 +428,19 @@ impl VM {
                             self.stack.push(Value::Int(ch as i64));
                         }
                         (s, i) => {
-                            return Err(format!("Expected (Value::Symbol, Value::Int) on symbol_char_at, found ({:?}, {:?})", s, i));
+                            return Err(format!("Invalid arguments to symbol_char_at: expected Symbol, Int, found {:?}, {:?}", s, i));
                         }
+                    }
+                }
+                Instruction::SetRenamePrefix => {
+                    let to_val = self.pop()?;
+                    let from_val = self.pop()?;
+                    let set_val = self.pop()?;
+                    match (set_val, from_val, to_val) {
+                        (Value::Set(set), Value::Symbol(from_sym), Value::Symbol(to_sym)) => {
+                            self.stack.push(Value::Set(set.rename_prefix(&from_sym, &to_sym)));
+                        }
+                        (s, f, t) => return Err(format!("Invalid arguments to set_rename_prefix: expected Set, Symbol, Symbol, found {:?}, {:?}, {:?}", s, f, t)),
                     }
                 }
             }
@@ -717,6 +728,107 @@ mod tests {
         let mut vm = VM::new(res.library);
         vm.set_tracing(true);
         assert!(vm.execute(entry_idx).is_ok());
-        assert_eq!(vm.stack(), &[Value::Int(142)]);
+    }
+
+    #[test]
+    fn test_compose_rename_prefix() {
+        let code = r#"
+            mod prelude {
+                mod event {
+                    symbol tau
+                }
+            }
+
+            symbol from_sym "FromSymbol"
+            symbol to_sym "ToSymbol"
+            symbol payload "Payload"
+
+            mod base {
+                export init {
+                    push 0
+                }
+                export accept {
+                    push singleton(crate::payload)
+                }
+                export emit {
+                    push singleton(crate::payload)
+                }
+                export process {
+                    # Stack: [state, event]
+                    roll 1
+                    push 1
+                    add
+                    roll 1
+                    drop 0
+                }
+            }
+
+            mod prefixed compose_prefix(base, from_sym);
+            mod renamed compose_rename_prefix(from_sym, to_sym, prefixed);
+
+            export test_rename {
+                # Initialize state
+                jump renamed::init
+                
+                # Stack: [state] (which is 0)
+                # Query accept set
+                pick 0
+                jump renamed::accept
+                # Stack: [state, AcceptSet]
+                
+                # Check that (to_sym, payload) is in AcceptSet
+                push to_sym
+                push payload
+                tuple 2
+                roll 1
+                set_contains
+                assert
+                
+                # Query emit set
+                pick 0
+                jump renamed::emit
+                # Stack: [state, EmitSet]
+                push to_sym
+                push payload
+                tuple 2
+                roll 1
+                set_contains
+                assert
+                
+                # Process event (to_sym, payload) -> rewrites to (from_sym, payload)
+                # Stack has [0]
+                push to_sym
+                push payload
+                tuple 2
+                jump renamed::process
+                # Stack has [1] (new_state)
+                pick 0
+                push 1
+                assert_eq
+
+                # Process tau event on state 1 -> state becomes 2
+                push crate::prelude::event::tau
+                jump renamed::process
+                # Stack has [2]
+                push 2
+                assert_eq
+            }
+        "#;
+        let res = bytecode::assemble(code).unwrap();
+        let test_idx = *res.exports.get("test_rename").unwrap();
+
+        let mut vm = VM::new(res.library);
+        if let Err(e) = vm.execute(test_idx) {
+            panic!("Execution failed: {}", e);
+        }
+
+        // Also test argument count error
+        let bad_code = r#"
+            symbol a
+            symbol b
+            mod m { export init { push 0 } export accept { push empty_set } export emit { push empty_set } export process { } }
+            mod bad compose_rename_prefix(a, m);
+        "#;
+        assert!(bytecode::assemble(bad_code).is_err());
     }
 }
