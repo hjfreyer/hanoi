@@ -28,49 +28,85 @@ mod string_ref {
     # accept: takes state (sym, internal_state) and returns ValueSet of accepted events.
     # At rest (idle), accepts (length, ()) or (charat, N).
     accept {
-        pick 0
-        untuple 2 # Stack: [state, sym, internal_state]
+        untuple 2 # Stack: [sym, internal_state]
         pick 0 # duplicate internal_state before comparison
         push idle
         equal
         branch {
             # Accept (length, ())
+            drop 0 # drop internal_state
+            drop 0 # drop sym
             push singleton((length, ()))
             
             # Accept (charat, N) for any N
             push set_tuple(singleton(charat), universal_set)
             set_union
-            
-            # Clean up internal_state and sym
-            drop 1
-            drop 1
         } {
-            push empty_set
-            drop 1
-            drop 1
+            # In response state: accepts nothing (empty_set)
+            pick 0
+            untuple 2 # Stack: [sym, internal_state, resp_tag, resp_val]
+            pick 1 # resp_tag
+            push length_resp
+            equal
+            branch {
+                drop 0
+                drop 0
+                drop 0
+                drop 0
+                push empty_set
+            } {
+                pick 1 # resp_tag
+                push charat_resp
+                equal
+                branch {
+                    drop 0
+                    drop 0
+                    drop 0
+                    drop 0
+                    push empty_set
+                } {
+                    panic
+                }
+            }
         }
     }
 
     # emit: takes state (sym, internal_state) and returns ValueSet of emitted events.
     # In response state, emits internal_state which is (length_resp, len) or (charat_resp, ...).
     emit {
-        pick 0
-        untuple 2 # Stack: [state, sym, internal_state]
+        untuple 2 # Stack: [sym, internal_state]
         pick 0 # duplicate internal_state before comparison
         push idle
         equal
         branch {
             # At rest: emits nothing
+            drop 0 # drop internal_state
+            drop 0 # drop sym
             push empty_set
-            drop 1
-            drop 1
         } {
             # In response state: internal_state is the response event
-            pick 0 # duplicate internal_state
-            set_singleton
-            
-            drop 1
-            drop 1
+            drop 1 # drop sym. Stack: [internal_state]
+            pick 0
+            untuple 2 # Stack: [internal_state, resp_tag, resp_val]
+            pick 1 # resp_tag
+            push length_resp
+            equal
+            branch {
+                drop 0
+                drop 0
+                set_singleton
+            } {
+                pick 1 # resp_tag
+                push charat_resp
+                equal
+                branch {
+                    drop 0
+                    drop 0
+                    set_singleton
+                } {
+                    panic
+                }
+            }
         }
     }
 
@@ -185,8 +221,7 @@ mod char_iterator {
     # accept: takes state (tag, payload) and returns ValueSet of accepted events.
     # Accepts (in, (charat_resp, ...)) when internal_state is (await_charat, idx).
     accept {
-        pick 0
-        untuple 2 # Stack: [state, tag, payload]
+        untuple 2 # Stack: [tag, payload]
         pick 1 # tag
         push await_charat
         equal
@@ -209,16 +244,49 @@ mod char_iterator {
             
             set_union
         } {
-            push empty_set
-            drop 1
-            drop 1
+            pick 1 # tag
+            push fetch
+            equal
+            branch {
+                drop 0
+                drop 0
+                push empty_set
+            } {
+                pick 1 # tag
+                push yield_next
+                equal
+                branch {
+                    drop 0
+                    drop 0
+                    push empty_set
+                } {
+                    pick 1 # tag
+                    push yield_done
+                    equal
+                    branch {
+                        drop 0
+                        drop 0
+                        push empty_set
+                    } {
+                        pick 1 # tag
+                        push done_state
+                        equal
+                        branch {
+                            drop 0
+                            drop 0
+                            push empty_set
+                        } {
+                            panic
+                        }
+                    }
+                }
+            }
         }
     }
 
     # emit: takes state (tag, payload) and returns ValueSet of emitted events.
     emit {
-        pick 0
-        untuple 2 # Stack: [state, tag, payload]
+        untuple 2 # Stack: [tag, payload]
         
         pick 1 # tag
         push fetch
@@ -241,8 +309,9 @@ mod char_iterator {
             branch {
                 # yield_next state: payload is (idx, ch), emits (out, (next, ch))
                 drop 1 # drop tag
-                untuple 2 # Stack: [state, idx, ch]
-                drop 1 # drop idx. Stack: [state, ch]
+                untuple 2 # Stack: [idx, ch]
+                roll 1 # Stack: [ch, idx]
+                drop 0 # drop idx
                 
                 push super::next
                 roll 1 # ch
@@ -270,10 +339,25 @@ mod char_iterator {
                     tuple 2 # (out, (done, ()))
                     set_singleton
                 } {
-                    # await_charat or done_state: emits empty_set
-                    push empty_set
-                    drop 1
-                    drop 1
+                    pick 1 # tag
+                    push await_charat
+                    equal
+                    branch {
+                        drop 0
+                        drop 0
+                        push empty_set
+                    } {
+                        pick 1 # tag
+                        push done_state
+                        equal
+                        branch {
+                            drop 0
+                            drop 0
+                            push empty_set
+                        } {
+                            panic
+                        }
+                    }
                 }
             }
         }
@@ -418,10 +502,10 @@ test iterate_string_ascii {
     jump string_hidden::process
     
     # Check emitted iterator event: (out, (next, 97)) ('a')
-    push (out, (next, 97))
-    pick 1
+    pick 0
     jump string_hidden::emit
-    drop 1
+    push (out, (next, 97))
+    roll 1
     set_contains
     assert
     
@@ -435,10 +519,10 @@ test iterate_string_ascii {
     push crate::prelude::event::tau
     jump string_hidden::process
     
-    push (out, (next, 98))
-    pick 1
+    pick 0
     jump string_hidden::emit
-    drop 1
+    push (out, (next, 98))
+    roll 1
     set_contains
     assert
     
@@ -451,10 +535,10 @@ test iterate_string_ascii {
     push crate::prelude::event::tau
     jump string_hidden::process
     
-    push (out, (next, 99))
-    pick 1
+    pick 0
     jump string_hidden::emit
-    drop 1
+    push (out, (next, 99))
+    roll 1
     set_contains
     assert
     
@@ -467,10 +551,10 @@ test iterate_string_ascii {
     push crate::prelude::event::tau
     jump string_hidden::process
     
-    push (out, (done, ()))
-    pick 1
+    pick 0
     jump string_hidden::emit
-    drop 1
+    push (out, (done, ()))
+    roll 1
     set_contains
     assert
     
@@ -487,6 +571,7 @@ test verify_string_ref {
     jump string_ref::init # Stack: [state]
     
     # 1. Test accept set at rest
+    pick 0
     jump string_ref::accept # Stack: [state, accept_set]
     
     # Check that it accepts (length, ())
@@ -510,6 +595,7 @@ test verify_string_ref {
     drop 0 # drop accept_set
     
     # 2. Test emit set at rest
+    pick 0
     jump string_ref::emit # Stack: [state, emit_set]
     push empty_set
     assert_eq
@@ -520,12 +606,12 @@ test verify_string_ref {
     
     # Now state should be ("xyz", (length_resp, 3))
     # It should emit (length_resp, 3)
+    pick 0
     jump string_ref::emit # Stack: [state, emit_set]
     push (string_ref::length_resp, 3)
-    pick 1
+    roll 1
     set_contains
     assert
-    drop 0
     
     # Process emission event -> transitions back to idle
     push (string_ref::length_resp, 3)
@@ -536,12 +622,12 @@ test verify_string_ref {
     jump string_ref::process
     
     # Now state should emit (charat_resp, (some, 121))
+    pick 0
     jump string_ref::emit
     push (string_ref::charat_resp, (string_ref::some, 121))
-    pick 1
+    roll 1
     set_contains
     assert
-    drop 0
     
     push (string_ref::charat_resp, (string_ref::some, 121))
     jump string_ref::process
@@ -551,12 +637,12 @@ test verify_string_ref {
     jump string_ref::process
     
     # Now state should emit (charat_resp, (none, ()))
+    pick 0
     jump string_ref::emit
     push (string_ref::charat_resp, (string_ref::none, ()))
-    pick 1
+    roll 1
     set_contains
     assert
-    drop 0
     
     push (string_ref::charat_resp, (string_ref::none, ()))
     jump string_ref::process
@@ -592,6 +678,7 @@ test verify_prefixed_string_ref {
     jump xyz_string_ref_instance::init # Stack: [state]
     
     # 1. Test accept set at rest on channel in
+    pick 0
     jump xyz_string_ref_instance::accept # Stack: [state, accept_set]
     
     push (in, (string_ref::length, ()))
@@ -611,12 +698,12 @@ test verify_prefixed_string_ref {
     jump xyz_string_ref_instance::process
     
     # Verify emission of (in, (charat_resp, (some, 121)))
+    pick 0
     jump xyz_string_ref_instance::emit
     push (in, (string_ref::charat_resp, (string_ref::some, 121)))
-    pick 1
+    roll 1
     set_contains
     assert
-    drop 0
     
     # Process emission back to idle
     push (in, (string_ref::charat_resp, (string_ref::some, 121)))
@@ -665,10 +752,10 @@ test iterate_empty {
     jump empty_string_hidden::process
     
     # Check emitted iterator event: (out, (done, ()))
-    push (out, (done, ()))
-    pick 1
+    pick 0
     jump empty_string_hidden::emit
-    drop 1
+    push (out, (done, ()))
+    roll 1
     set_contains
     assert
     
@@ -712,10 +799,10 @@ test iterate_unicode {
     push crate::prelude::event::tau
     jump cafe_string_hidden::process
     
-    push (out, (next, 99))
-    pick 1
+    pick 0
     jump cafe_string_hidden::emit
-    drop 1
+    push (out, (next, 99))
+    roll 1
     set_contains
     assert
     push (out, (next, 99))
@@ -727,10 +814,10 @@ test iterate_unicode {
     push crate::prelude::event::tau
     jump cafe_string_hidden::process
     
-    push (out, (next, 97))
-    pick 1
+    pick 0
     jump cafe_string_hidden::emit
-    drop 1
+    push (out, (next, 97))
+    roll 1
     set_contains
     assert
     push (out, (next, 97))
@@ -742,10 +829,10 @@ test iterate_unicode {
     push crate::prelude::event::tau
     jump cafe_string_hidden::process
     
-    push (out, (next, 102))
-    pick 1
+    pick 0
     jump cafe_string_hidden::emit
-    drop 1
+    push (out, (next, 102))
+    roll 1
     set_contains
     assert
     push (out, (next, 102))
@@ -757,10 +844,10 @@ test iterate_unicode {
     push crate::prelude::event::tau
     jump cafe_string_hidden::process
     
-    push (out, (next, 233))
-    pick 1
+    pick 0
     jump cafe_string_hidden::emit
-    drop 1
+    push (out, (next, 233))
+    roll 1
     set_contains
     assert
     push (out, (next, 233))
@@ -772,10 +859,10 @@ test iterate_unicode {
     push crate::prelude::event::tau
     jump cafe_string_hidden::process
     
-    push (out, (done, ()))
-    pick 1
+    pick 0
     jump cafe_string_hidden::emit
-    drop 1
+    push (out, (done, ()))
+    roll 1
     set_contains
     assert
     push (out, (done, ()))

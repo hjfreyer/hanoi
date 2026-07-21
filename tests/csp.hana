@@ -31,53 +31,55 @@ mod customer_impl {
     # - If internal_state is ordered: {(coffee, id, preferred_drink)} (from barista)
     # - If internal_state is has_coffee: {(enjoy, id)} (from environment)
     accept {
-        pick 0
-        untuple 3 # Stack: [state, id, preferred_drink, internal_state]
+        untuple 3 # Stack: [id, preferred_drink, internal_state]
         pick 0
         push state::idle
         equal
         branch {
             # Customer accepts want_coffee from environment
+            drop 0 # drop internal_state
+            drop 0 # drop preferred_drink
             push super::event::want_coffee
-            pick 3 # id
+            roll 1 # Stack: [want_coffee, id]
             tuple 2
             set_singleton
-            drop 1
-            drop 1
-            drop 1
         } {
             pick 0
             push state::ordered
             equal
             branch {
                 # Customer accepts coffee from barista
+                drop 0 # drop internal_state
                 push super::event::coffee
-                pick 3 # id
-                pick 3 # preferred_drink
+                roll 2 # Stack: [preferred_drink, coffee, id]
+                roll 2 # Stack: [coffee, id, preferred_drink]
                 tuple 3
                 set_singleton
-                drop 1
-                drop 1
-                drop 1
             } {
                 pick 0
                 push state::has_coffee
                 equal
                 branch {
                     # Customer accepts enjoy from environment
+                    drop 0 # drop internal_state
+                    drop 0 # drop preferred_drink
                     push super::event::enjoy
-                    pick 3 # id
+                    roll 1 # Stack: [enjoy, id]
                     tuple 2
                     set_singleton
-                    drop 1
-                    drop 1
-                    drop 1
                 } {
-                    # Thirsty state does not accept any inputs (empty_set)
-                    push empty_set
-                    drop 1
-                    drop 1
-                    drop 1
+                    pick 0
+                    push state::thirsty
+                    equal
+                    branch {
+                        # Thirsty state does not accept any inputs (empty_set)
+                        drop 0
+                        drop 0
+                        drop 0
+                        push empty_set
+                    } {
+                        panic
+                    }
                 }
             }
         }
@@ -87,27 +89,50 @@ mod customer_impl {
     # The emitted events are:
     # - If internal_state is thirsty: {(order, id, preferred_drink)} (proactive request to barista)
     emit {
-        pick 0
-        untuple 3 # Stack: [state, id, preferred_drink, internal_state]
+        untuple 3 # Stack: [id, preferred_drink, internal_state]
         pick 0
         push state::thirsty
         equal
         branch {
             # Customer emits order request to barista
+            drop 0 # drop internal_state
             push super::event::order
-            pick 3 # id
-            pick 3 # preferred_drink
+            roll 2 # Stack: [preferred_drink, order, id]
+            roll 2 # Stack: [order, id, preferred_drink]
             tuple 3
             set_singleton
-            drop 1
-            drop 1
-            drop 1
         } {
-            # Idle, Ordered, and HasCoffee states do not emit requests (empty_set)
-            push empty_set
-            drop 1
-            drop 1
-            drop 1
+            pick 0
+            push state::idle
+            equal
+            branch {
+                drop 0
+                drop 0
+                drop 0
+                push empty_set
+            } {
+                pick 0
+                push state::ordered
+                equal
+                branch {
+                    drop 0
+                    drop 0
+                    drop 0
+                    push empty_set
+                } {
+                    pick 0
+                    push state::has_coffee
+                    equal
+                    branch {
+                        drop 0
+                        drop 0
+                        drop 0
+                        push empty_set
+                    } {
+                        panic
+                    }
+                }
+            }
         }
     }
 
@@ -227,9 +252,19 @@ mod barista {
         push state::idle
         equal
         branch {
+            drop 0
             push set_tuple(singleton(super::event::order), universal_set, universal_set)
         } {
-            push empty_set
+            untuple 2 # Stack: [state_status, (id, drink)]
+            roll 1 # Stack: [(id, drink), state_status]
+            push state::brewing
+            equal
+            branch {
+                drop 0
+                push empty_set
+            } {
+                panic
+            }
         }
     }
 
@@ -241,21 +276,21 @@ mod barista {
         equal
         branch {
             # Barista is idle, so emit nothing (empty_set)
+            drop 0
             push empty_set
         } {
-            pick 0
-            untuple 2 # Stack: [state, state_status, (id, drink)]
-            roll 1 # Stack: [state, (id, drink), state_status]
+            untuple 2 # Stack: [state_status, (id, drink)]
+            roll 1 # Stack: [(id, drink), state_status]
             push state::brewing
             equal
             branch {
                 # Barista is brewing, so emit coffee delivery: {(coffee, id, drink)}
-                # Stack: [state, (id, drink)]
-                untuple 2 # Stack: [state, id, drink]
-                push super::event::coffee # Stack: [state, id, drink, coffee]
-                roll 2 # Stack: [state, drink, coffee, id]
-                roll 2 # Stack: [state, coffee, id, drink]
-                tuple 3 # Stack: [state, (coffee, id, drink)]
+                # Stack: [(id, drink)]
+                untuple 2 # Stack: [id, drink]
+                push super::event::coffee # Stack: [id, drink, coffee]
+                roll 2 # Stack: [drink, coffee, id]
+                roll 2 # Stack: [coffee, id, drink]
+                tuple 3 # Stack: [(coffee, id, drink)]
                 set_singleton
             } {
                 panic
@@ -315,10 +350,10 @@ test verify_hidden_system {
     jump hidden::init
     
     # customer 1 wants coffee. Let's verify it is accepted (from environment).
-    push (event::want_coffee, customer_id::c1)
-    pick 1
+    pick 0
     jump hidden::accept
-    drop 1
+    push (event::want_coffee, customer_id::c1)
+    roll 1
     set_contains
     assert
     
@@ -328,10 +363,10 @@ test verify_hidden_system {
     
     # customer 1 is thirsty, barista is idle.
     # Thus, the joint state should emit tau to perform order.
-    push crate::prelude::event::tau
-    pick 1
+    pick 0
     jump hidden::emit
-    drop 1
+    push crate::prelude::event::tau
+    roll 1
     set_contains
     assert
     
@@ -340,10 +375,10 @@ test verify_hidden_system {
     jump hidden::process
     
     # customer 2 wants coffee. Let's verify it is accepted.
-    push (event::want_coffee, customer_id::c2)
-    pick 1
+    pick 0
     jump hidden::accept
-    drop 1
+    push (event::want_coffee, customer_id::c2)
+    roll 1
     set_contains
     assert
     
@@ -353,10 +388,10 @@ test verify_hidden_system {
     
     # Barista is brewing for c1, so customer 2 cannot order yet.
     # Barista can finish brewing (coffee delivery), which is a hidden/sync event -> emits tau.
-    push crate::prelude::event::tau
-    pick 1
+    pick 0
     jump hidden::emit
-    drop 1
+    push crate::prelude::event::tau
+    roll 1
     set_contains
     assert
     
@@ -365,10 +400,10 @@ test verify_hidden_system {
     jump hidden::process
     
     # customer 2 is thirsty, barista is idle. Emits tau (order).
-    push crate::prelude::event::tau
-    pick 1
+    pick 0
     jump hidden::emit
-    drop 1
+    push crate::prelude::event::tau
+    roll 1
     set_contains
     assert
     
@@ -377,10 +412,10 @@ test verify_hidden_system {
     jump hidden::process
     
     # customer 1 enjoys coffee (unsynchronized). Let's verify it is accepted (from environment).
-    push (event::enjoy, customer_id::c1)
-    pick 1
+    pick 0
     jump hidden::accept
-    drop 1
+    push (event::enjoy, customer_id::c1)
+    roll 1
     set_contains
     assert
     
@@ -389,10 +424,10 @@ test verify_hidden_system {
     jump hidden::process
     
     # Barista finishes brewing for c2 (hidden) -> emits tau.
-    push crate::prelude::event::tau
-    pick 1
+    pick 0
     jump hidden::emit
-    drop 1
+    push crate::prelude::event::tau
+    roll 1
     set_contains
     assert
     
@@ -401,10 +436,10 @@ test verify_hidden_system {
     jump hidden::process
     
     # customer 2 enjoys coffee (unsynchronized). Let's verify it is accepted.
-    push (event::enjoy, customer_id::c2)
-    pick 1
+    pick 0
     jump hidden::accept
-    drop 1
+    push (event::enjoy, customer_id::c2)
+    roll 1
     set_contains
     assert
     
@@ -439,10 +474,10 @@ test verify_concurrent_system {
     jump concurrent::init
     
     # 2. Customer 1 wants coffee (accepted from environment)
-    push (event::want_coffee, customer_id::c1)
-    pick 1
+    pick 0
     jump concurrent::accept
-    drop 1
+    push (event::want_coffee, customer_id::c1)
+    roll 1
     set_contains
     assert
     
@@ -450,10 +485,10 @@ test verify_concurrent_system {
     jump concurrent::process
     
     # 3. Customer 2 wants coffee (accepted from environment)
-    push (event::want_coffee, customer_id::c2)
-    pick 1
+    pick 0
     jump concurrent::accept
-    drop 1
+    push (event::want_coffee, customer_id::c2)
+    roll 1
     set_contains
     assert
     
@@ -461,10 +496,10 @@ test verify_concurrent_system {
     jump concurrent::process
     
     # 4. Customer 1 orders coffee (emitted request)
-    push (event::order, customer_id::c1, event::latte)
-    pick 1
+    pick 0
     jump concurrent::emit
-    drop 1
+    push (event::order, customer_id::c1, event::latte)
+    roll 1
     set_contains
     assert
     
@@ -472,10 +507,10 @@ test verify_concurrent_system {
     jump concurrent::process
     
     # 5. Barista finishes brewing for Customer 1 (emitted request)
-    push (event::coffee, customer_id::c1, event::latte)
-    pick 1
+    pick 0
     jump concurrent::emit
-    drop 1
+    push (event::coffee, customer_id::c1, event::latte)
+    roll 1
     set_contains
     assert
     
@@ -483,10 +518,10 @@ test verify_concurrent_system {
     jump concurrent::process
     
     # 6. Customer 2 orders coffee (emitted request)
-    push (event::order, customer_id::c2, event::espresso)
-    pick 1
+    pick 0
     jump concurrent::emit
-    drop 1
+    push (event::order, customer_id::c2, event::espresso)
+    roll 1
     set_contains
     assert
     
@@ -494,10 +529,10 @@ test verify_concurrent_system {
     jump concurrent::process
     
     # 7. Customer 1 enjoys coffee (accepted from environment)
-    push (event::enjoy, customer_id::c1)
-    pick 1
+    pick 0
     jump concurrent::accept
-    drop 1
+    push (event::enjoy, customer_id::c1)
+    roll 1
     set_contains
     assert
     
@@ -505,10 +540,10 @@ test verify_concurrent_system {
     jump concurrent::process
     
     # 8. Barista finishes brewing for Customer 2 (emitted request)
-    push (event::coffee, customer_id::c2, event::espresso)
-    pick 1
+    pick 0
     jump concurrent::emit
-    drop 1
+    push (event::coffee, customer_id::c2, event::espresso)
+    roll 1
     set_contains
     assert
     
@@ -516,10 +551,10 @@ test verify_concurrent_system {
     jump concurrent::process
     
     # 9. Customer 2 enjoys coffee (accepted from environment)
-    push (event::enjoy, customer_id::c2)
-    pick 1
+    pick 0
     jump concurrent::accept
-    drop 1
+    push (event::enjoy, customer_id::c2)
+    roll 1
     set_contains
     assert
     
@@ -553,40 +588,32 @@ test verify_customer_rejection {
     jump customer1::init
     
     # 2. Test that customer in idle accepts want_coffee but rejects coffee
-    push (event::coffee, customer_id::c1, event::latte)
-    pick 1
     jump customer1::accept
-    drop 1
+    push (event::coffee, customer_id::c1, event::latte)
+    roll 1
     set_contains
     push false
     assert_eq
-    
-    # Clean up state from the stack
-    drop 0
 
     # 3. Test that customer 1 in thirsty emits (order, c1, latte)
     jump customer1::init
     push (event::want_coffee, customer_id::c1)
     jump customer1::process
     
-    push (event::order, customer_id::c1, event::latte)
-    pick 1
+    pick 0
     jump customer1::emit
-    drop 1
+    push (event::order, customer_id::c1, event::latte)
+    roll 1
     set_contains
     assert
     
     # 4. Test that customer 1 in thirsty rejects (order, c1, espresso) as emit
-    push (event::order, customer_id::c1, event::espresso)
-    pick 1
     jump customer1::emit
-    drop 1
+    push (event::order, customer_id::c1, event::espresso)
+    roll 1
     set_contains
     push false
     assert_eq
-    
-    # Clean up state
-    drop 0
 
     # 5. Test that customer 1 in ordered accepts (coffee, c1, latte)
     jump customer1::init
@@ -595,24 +622,20 @@ test verify_customer_rejection {
     push (event::order, customer_id::c1, event::latte)
     jump customer1::process # now in customer_impl::state::ordered
     
-    push (event::coffee, customer_id::c1, event::latte)
-    pick 1
+    pick 0
     jump customer1::accept
-    drop 1
+    push (event::coffee, customer_id::c1, event::latte)
+    roll 1
     set_contains
     assert
 
     # 6. Test that customer 1 in ordered rejects (coffee, c1, espresso)
-    push (event::coffee, customer_id::c1, event::espresso)
-    pick 1
     jump customer1::accept
-    drop 1
+    push (event::coffee, customer_id::c1, event::espresso)
+    roll 1
     set_contains
     push false
     assert_eq
-
-    # Clean up state
-    drop 0
 }
 
 # Test the rejection of invalid events for Barista
@@ -621,84 +644,70 @@ test verify_barista_rejection {
     jump barista::init
     
     # 2. Trigger invalid coffee event on idle (coffee is emit, not accept)
-    push (event::coffee, customer_id::c1, event::latte)
-    pick 1
     jump barista::accept
-    drop 1
+    push (event::coffee, customer_id::c1, event::latte)
+    roll 1
     set_contains
     push false
     assert_eq
-    drop 0
 
     # 3. Test that barista in idle accepts (order, c1, latte)
     jump barista::init
-    push (event::order, customer_id::c1, event::latte)
-    pick 1
     jump barista::accept
-    drop 1
+    push (event::order, customer_id::c1, event::latte)
+    roll 1
     set_contains
     assert
-    drop 0
     
     # 4. Test that barista in idle accepts (order, c2, espresso)
     jump barista::init
-    push (event::order, customer_id::c2, event::espresso)
-    pick 1
     jump barista::accept
-    drop 1
+    push (event::order, customer_id::c2, event::espresso)
+    roll 1
     set_contains
     assert
-    drop 0
     
     # 5. Test that barista in idle does NOT accept order (as a raw symbol)
     jump barista::init
-    push event::order
-    pick 1
     jump barista::accept
-    drop 1
+    push event::order
+    roll 1
     set_contains
     push false
     assert_eq
-    drop 0
 
     # 6. Test that barista in brewing (c1, latte) emits (coffee, c1, latte)
     jump barista::init
     push (event::order, customer_id::c1, event::latte)
     jump barista::process # now in brewing: (state::brewing, (c1, latte))
     
-    push (event::coffee, customer_id::c1, event::latte)
-    pick 1
     jump barista::emit
-    drop 1
+    push (event::coffee, customer_id::c1, event::latte)
+    roll 1
     set_contains
     assert
-    drop 0
 
     # 7. Test that barista in brewing (c1, latte) rejects (coffee, c1, espresso) as emit
     jump barista::init
     push (event::order, customer_id::c1, event::latte)
     jump barista::process
     
-    push (event::coffee, customer_id::c1, event::espresso)
-    pick 1
     jump barista::emit
-    drop 1
+    push (event::coffee, customer_id::c1, event::espresso)
+    roll 1
     set_contains
     push false
     assert_eq
-    drop 0
 
     # 8. Test that barista in brewing (c1, latte) rejects (coffee, c2, latte) as emit
     jump barista::init
     push (event::order, customer_id::c1, event::latte)
     jump barista::process
     
-    push (event::coffee, customer_id::c2, event::latte)
-    pick 1
     jump barista::emit
-    drop 1
+    push (event::coffee, customer_id::c2, event::latte)
+    roll 1
     set_contains
     push false
     assert_eq
-    drop 0
 }
