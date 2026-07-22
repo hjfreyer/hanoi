@@ -6,6 +6,8 @@ pub struct VM {
     stack: Vec<Value>,
     call_stack: Vec<(SentenceIndex, usize)>,
     tracing: bool,
+    gas_limit: Option<u64>,
+    steps_executed: u64,
 }
 
 impl VM {
@@ -16,12 +18,24 @@ impl VM {
             stack: Vec::new(),
             call_stack: Vec::new(),
             tracing: false,
+            gas_limit: None,
+            steps_executed: 0,
         }
     }
 
     /// Enables or disables detailed operation-by-operation tracing.
     pub fn set_tracing(&mut self, tracing: bool) {
         self.tracing = tracing;
+    }
+
+    /// Sets the maximum number of VM steps allowed during execution.
+    pub fn set_gas_limit(&mut self, gas_limit: Option<u64>) {
+        self.gas_limit = gas_limit;
+    }
+
+    /// Returns the number of steps executed during the last run.
+    pub fn steps_executed(&self) -> u64 {
+        self.steps_executed
     }
 
     /// Returns a slice representing the current stack.
@@ -62,6 +76,7 @@ impl VM {
     pub fn execute(&mut self, start_sentence: SentenceIndex) -> Result<(), String> {
         let mut current_sentence = start_sentence;
         let mut ip = 0;
+        self.steps_executed = 0;
 
         loop {
             // Get the sentence reference
@@ -98,6 +113,13 @@ impl VM {
                 );
             }
             ip += 1;
+
+            if let Some(limit) = self.gas_limit {
+                if self.steps_executed >= limit {
+                    return Err("gas limit exceeded".to_string());
+                }
+            }
+            self.steps_executed += 1;
 
             match instruction {
                 Instruction::Push(value) => {

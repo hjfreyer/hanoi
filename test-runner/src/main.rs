@@ -14,6 +14,10 @@ struct Args {
     #[arg(long = "test-filter")]
     test_filter: Option<String>,
 
+    /// Maximum number of VM steps per test case
+    #[arg(long = "test-gas", default_value = "10000000")]
+    test_gas: u64,
+
     /// Enable detailed operation-by-operation tracing
     #[arg(short = 't', long = "trace")]
     trace: bool,
@@ -25,6 +29,7 @@ fn main() {
     let path = &args.directory;
     let filter = args.test_filter;
     let trace = args.trace;
+    let gas_limit = args.test_gas;
 
     let file_path = std::path::Path::new(&path).join("main.hana");
     if !file_path.exists() {
@@ -89,28 +94,29 @@ fn main() {
         // Each test runs in its own fresh VM instance
         let mut vm = vm::VM::new(res.library.clone());
         vm.set_tracing(trace);
+        vm.set_gas_limit(Some(gas_limit));
         match vm.execute(index) {
             Ok(()) => {
                 if vm.stack().is_empty() {
                     if trace {
-                        println!("result: ok");
+                        println!("result: ok ({} steps)", vm.steps_executed());
                     } else {
-                        println!("ok");
+                        println!("ok ({} steps)", vm.steps_executed());
                     }
                 } else {
                     if trace {
-                        println!("result: FAILED (stack was not empty: {:?})", vm.stack());
+                        println!("result: FAILED (stack was not empty: {:?}) ({} steps)", vm.stack(), vm.steps_executed());
                     } else {
-                        println!("FAILED (stack was not empty: {:?})", vm.stack());
+                        println!("FAILED (stack was not empty: {:?}) ({} steps)", vm.stack(), vm.steps_executed());
                     }
                     failed += 1;
                 }
             }
             Err(err) => {
                 if trace {
-                    println!("result: FAILED ({})", err);
+                    println!("result: FAILED ({}) ({} steps)", err, vm.steps_executed());
                 } else {
-                    println!("FAILED ({})", err);
+                    println!("FAILED ({}) ({} steps)", err, vm.steps_executed());
                 }
                 failed += 1;
             }
