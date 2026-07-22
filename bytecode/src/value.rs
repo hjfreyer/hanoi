@@ -314,6 +314,18 @@ impl ValueSet {
                             _ => b_dnf.clone(),
                         }
                     }
+                    (ValueSet::Tuple(_), ValueSet::Intersection(x, y)) => {
+                        ValueSet::Intersection(
+                            Box::new(ValueSet::Intersection(Box::new(a_dnf.clone()), x.clone()).to_dnf()),
+                            y.clone()
+                        ).to_dnf()
+                    }
+                    (ValueSet::Intersection(x, y), ValueSet::Tuple(_)) => {
+                        ValueSet::Intersection(
+                            Box::new(ValueSet::Intersection(x.clone(), Box::new(b_dnf.clone())).to_dnf()),
+                            y.clone()
+                        ).to_dnf()
+                    }
                     _ => ValueSet::Intersection(Box::new(a_dnf), Box::new(b_dnf)),
                 }
             }

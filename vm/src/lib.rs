@@ -422,7 +422,7 @@ impl VM {
                                 self.stack.push(Value::Tuple(vec![Value::Tuple(vec![]), Value::Bool(false)]));
                             }
                             ChooseResult::Unknown => {
-                                panic!("Cannot choose from an infinite set");
+                                panic!("Cannot choose from an infinite set: {:?}", set);
                             }
                         }
                     } else {
