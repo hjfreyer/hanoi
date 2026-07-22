@@ -41,9 +41,10 @@ Calculates and returns a set of events that the machine is currently willing to 
 * **Stack Output:** Pushes a `ValueSet` containing the accepted events. If the machine has terminated or accepts no inputs in its current state, it pushes `empty_set`.
 
 ### 3. `emit`
-Calculates and returns a set of events that the machine proactively emits (output events).
+Calculates and returns a single event that the machine proactively emits (output event).
 * **Stack Input:** Pops the current `state`.
-* **Stack Output:** Pushes a `ValueSet` containing the emitted events. If the machine emits no events in its current state, it pushes `empty_set`.
+* **Stack Output:** Pushes a tuple `(event, has_event)`. If the machine emits an event, `has_event` is `true`. If the machine emits no events in its current state, `has_event` is `false` (in which case the first element of the tuple is ignored, e.g., `()`).
+
 
 ### 4. `process`
 Computes the next state of the machine after executing a chosen event.

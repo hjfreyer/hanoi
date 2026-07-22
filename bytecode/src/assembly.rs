@@ -723,15 +723,18 @@ enum ParsedValue {
     SetTuple(Vec<ParsedValue>),
 }
 
+#[derive(Debug, Clone)]
 struct ParsedSentence {
     instructions: Vec<ParsedInstruction>,
 }
 
+#[derive(Debug, Clone)]
 enum Target {
     Label(Path),
     Inline(ParsedSentence),
 }
 
+#[derive(Debug, Clone)]
 enum ParsedInstruction {
     Push(ParsedValue),
     Drop(usize),
@@ -1136,71 +1139,163 @@ fn compose_concurrent(args: &[Path]) -> Result<Vec<TopLevelItem>, String> {
         },
     };
 
+    let return_e1 = || vec![
+        ParsedInstruction::Pick(4),
+        ParsedInstruction::Push(ParsedValue::Bool(true)),
+        ParsedInstruction::Tuple(2),
+        ParsedInstruction::Drop(1),
+        ParsedInstruction::Drop(1),
+        ParsedInstruction::Drop(1),
+        ParsedInstruction::Drop(1),
+        ParsedInstruction::Drop(1),
+        ParsedInstruction::Drop(1),
+    ];
+
+    let return_e2 = || vec![
+        ParsedInstruction::Pick(1),
+        ParsedInstruction::Push(ParsedValue::Bool(true)),
+        ParsedInstruction::Tuple(2),
+        ParsedInstruction::Drop(1),
+        ParsedInstruction::Drop(1),
+        ParsedInstruction::Drop(1),
+        ParsedInstruction::Drop(1),
+        ParsedInstruction::Drop(1),
+        ParsedInstruction::Drop(1),
+    ];
+
+    let return_none = || vec![
+        ParsedInstruction::Tuple(0),
+        ParsedInstruction::Push(ParsedValue::Bool(false)),
+        ParsedInstruction::Tuple(2),
+        ParsedInstruction::Drop(1),
+        ParsedInstruction::Drop(1),
+        ParsedInstruction::Drop(1),
+        ParsedInstruction::Drop(1),
+        ParsedInstruction::Drop(1),
+        ParsedInstruction::Drop(1),
+    ];
+
+    let check_e2 = ParsedSentence {
+        instructions: vec![
+            ParsedInstruction::Pick(0), // has_e2
+            ParsedInstruction::Branch(
+                // IF has_e2 is true:
+                Target::Inline(ParsedSentence {
+                    instructions: vec![
+                        // Check if e2 is in SyncSet
+                        ParsedInstruction::Pick(1), // e2
+                        ParsedInstruction::Jump(Target::Label(sync_fn.clone())),
+                        ParsedInstruction::SetContains,
+                        ParsedInstruction::Branch(
+                            // IF e2 is in SyncSet: check if e2 in A1
+                            Target::Inline(ParsedSentence {
+                                instructions: vec![
+                                    ParsedInstruction::Pick(1), // e2
+                                    ParsedInstruction::Pick(6), // A1 (since e2 is pushed, A1 is at depth 6)
+                                    ParsedInstruction::SetContains,
+                                    ParsedInstruction::Branch(
+                                        Target::Inline(ParsedSentence { instructions: return_e2() }), // in A1 -> return e2
+                                        Target::Inline(ParsedSentence { instructions: return_none() }), // not in A1 -> return none
+                                    ),
+                                ],
+                            }),
+                            // IF e2 is NOT in SyncSet: return e2
+                            Target::Inline(ParsedSentence { instructions: return_e2() }),
+                        ),
+                    ],
+                }),
+                // IF has_e2 is false: return none
+                Target::Inline(ParsedSentence { instructions: return_none() }),
+            ),
+        ],
+    };
+
+    let check_e1 = ParsedSentence {
+        instructions: vec![
+            ParsedInstruction::Pick(3), // has_e1
+            ParsedInstruction::Branch(
+                // IF has_e1 is true:
+                Target::Inline(ParsedSentence {
+                    instructions: vec![
+                        // Check if e1 is in SyncSet
+                        ParsedInstruction::Pick(4), // e1
+                        ParsedInstruction::Jump(Target::Label(sync_fn.clone())),
+                        ParsedInstruction::SetContains,
+                        ParsedInstruction::Branch(
+                            // IF e1 is in SyncSet: check if e1 in A2 or (has_e2 and e2 == e1)
+                            Target::Inline(ParsedSentence {
+                                instructions: vec![
+                                    // Check if e1 in A2
+                                    ParsedInstruction::Pick(4), // e1
+                                    ParsedInstruction::Pick(3), // A2 (e1 pushed, so A2 goes from depth 2 to 3)
+                                    ParsedInstruction::SetContains,
+                                    ParsedInstruction::Branch(
+                                        // IF e1 in A2: return e1
+                                        Target::Inline(ParsedSentence { instructions: return_e1() }),
+                                        // IF e1 NOT in A2: check has_e2 and e2 == e1
+                                        Target::Inline(ParsedSentence {
+                                            instructions: vec![
+                                                ParsedInstruction::Pick(0), // has_e2
+                                                ParsedInstruction::Branch(
+                                                    // IF has_e2 is true: compare e2 == e1
+                                                    Target::Inline(ParsedSentence {
+                                                        instructions: vec![
+                                                            ParsedInstruction::Pick(1), // e2
+                                                            ParsedInstruction::Pick(5), // e1 (e2 pushed, so e1 goes from depth 4 to 5)
+                                                            ParsedInstruction::Equal,
+                                                            ParsedInstruction::Branch(
+                                                                Target::Inline(ParsedSentence { instructions: return_e1() }), // equal -> return e1
+                                                                Target::Inline(check_e2.clone()), // not equal -> check e2
+                                                            ),
+                                                        ],
+                                                    }),
+                                                    // IF has_e2 is false: check e2
+                                                    Target::Inline(check_e2.clone()),
+                                                ),
+                                            ],
+                                        }),
+                                    ),
+                                ],
+                            }),
+                            // IF e1 is NOT in SyncSet: return e1
+                            Target::Inline(ParsedSentence { instructions: return_e1() }),
+                        ),
+                    ],
+                }),
+                // IF has_e1 is false: check e2
+                Target::Inline(check_e2),
+            ),
+        ],
+    };
+
+    let mut emit_instructions = vec![
+        // Extract joint state parts: [joint_state] -> [s1, s2]
+        ParsedInstruction::Untuple(2),
+        ParsedInstruction::Roll(1), // Stack: [s2, s1]
+        
+        // P1 accept and emit (p1_accept and p1_emit consume s1)
+        ParsedInstruction::Pick(0),
+        ParsedInstruction::Jump(Target::Label(p1_accept.clone())), // Stack: [s2, s1, A1]
+        ParsedInstruction::Roll(1), // Stack: [s2, A1, s1]
+        ParsedInstruction::Jump(Target::Label(p1_emit.clone())),   // Stack: [s2, A1, (e1, has_e1)]
+        ParsedInstruction::Untuple(2), // Stack: [s2, A1, e1, has_e1]
+        
+        // P2 accept and emit (p2_accept and p2_emit consume s2)
+        ParsedInstruction::Roll(3), // Stack: [A1, e1, has_e1, s2]
+        ParsedInstruction::Pick(0),
+        ParsedInstruction::Jump(Target::Label(p2_accept.clone())), // Stack: [A1, e1, has_e1, s2, A2]
+        ParsedInstruction::Roll(1), // Stack: [A1, e1, has_e1, A2, s2]
+        ParsedInstruction::Jump(Target::Label(p2_emit.clone())),   // Stack: [A1, e1, has_e1, A2, (e2, has_e2)]
+        ParsedInstruction::Untuple(2), // Stack: [A1, e1, has_e1, A2, e2, has_e2]
+    ];
+    emit_instructions.extend(check_e1.instructions);
+
     let emit_sentence = TopLevelSentence {
         is_exported: false,
         is_test: false,
         name: "emit".to_string(),
         body: ParsedSentence {
-            instructions: vec![
-                // Extract joint state parts: [joint_state] -> [s1, s2]
-                ParsedInstruction::Untuple(2),
-                ParsedInstruction::Roll(1), // Stack: [s2, s1]
-                
-                // P1 accept and emit (p1_accept and p1_emit consume s1)
-                // Stack: [s2, s1] -> [s2, s1, s1]
-                ParsedInstruction::Pick(0),
-                ParsedInstruction::Jump(Target::Label(p1_accept.clone())), // Stack: [s2, s1, A1]
-                ParsedInstruction::Roll(1), // Stack: [s2, A1, s1]
-                ParsedInstruction::Jump(Target::Label(p1_emit.clone())),   // Stack: [s2, A1, E1]
-                
-                // P2 accept and emit (p2_accept and p2_emit consume s2)
-                // Stack: [s2, A1, E1] -> [A1, E1, s2]
-                ParsedInstruction::Roll(2),
-                // Stack: -> [A1, E1, s2, s2]
-                ParsedInstruction::Pick(0),
-                ParsedInstruction::Jump(Target::Label(p2_accept.clone())), // Stack: [A1, E1, s2, A2]
-                ParsedInstruction::Roll(1), // Stack: [A1, E1, A2, s2]
-                ParsedInstruction::Jump(Target::Label(p2_emit.clone())),   // Stack: [A1, E1, A2, E2]
-                
-                // P2_participate = E2 U A2
-                ParsedInstruction::Pick(0),
-                ParsedInstruction::Roll(2),
-                ParsedInstruction::SetUnion, // Stack: [A1, E1, E2, P2]
-                
-                // P1_participate = E1 U A1
-                ParsedInstruction::Pick(2),
-                ParsedInstruction::Roll(4),
-                ParsedInstruction::SetUnion, // Stack: [E1, E2, P2, P1]
-                
-                // P_both = P1_participate intersect P2_participate
-                ParsedInstruction::SetIntersection, // Stack: [E1, E2, P_both]
-                
-                // P_both_sync = P_both intersect SyncSet
-                ParsedInstruction::Jump(Target::Label(sync_fn.clone())),
-                ParsedInstruction::SetIntersection, // Stack: [E1, E2, P_both_sync]
-                
-                // E_union = E1 U E2
-                ParsedInstruction::Roll(2),
-                ParsedInstruction::Roll(2),
-                ParsedInstruction::SetUnion, // Stack: [P_both_sync, E_union]
-                
-                // E_sync = E_union intersect P_both_sync
-                ParsedInstruction::Pick(0),
-                ParsedInstruction::Pick(2),
-                ParsedInstruction::SetIntersection, // Stack: [P_both_sync, E_union, E_sync]
-                
-                // E_async = E_union difference SyncSet
-                ParsedInstruction::Roll(1),
-                ParsedInstruction::Jump(Target::Label(sync_fn.clone())),
-                ParsedInstruction::SetDifference, // Stack: [P_both_sync, E_sync, E_async]
-                
-                // E_joint = E_sync U E_async
-                ParsedInstruction::SetUnion, // Stack: [P_both_sync, E_joint]
-                
-                // Clean up stack: drop P_both_sync
-                ParsedInstruction::Roll(1),
-                ParsedInstruction::Drop(0), // Stack: [E_joint]
-            ],
+            instructions: emit_instructions,
         },
     };
 
@@ -1269,40 +1364,70 @@ fn compose_concurrent(args: &[Path]) -> Result<Vec<TopLevelItem>, String> {
                             ParsedInstruction::Untuple(2),
                             
                             // Check if P1 participates in the event
-                            // Stack: -> [event, C_state, B_state, C_state]
                             ParsedInstruction::Pick(1),
-                            // Stack: -> [event, C_state, B_state, C_accept]
                             ParsedInstruction::Jump(Target::Label(p1_accept.clone())),
-                            // Stack: -> [event, C_state, B_state, C_accept, C_state]
-                            ParsedInstruction::Pick(2),
-                            // Stack: -> [event, C_state, B_state, C_accept, C_emit]
-                            ParsedInstruction::Jump(Target::Label(p1_emit.clone())),
-                            // Stack: -> [event, C_state, B_state, C_participate]
-                            ParsedInstruction::SetUnion,
-                            // Stack: -> [event, C_state, B_state, C_participate, event]
                             ParsedInstruction::Pick(3),
-                            // Stack: -> [event, C_state, B_state, event, C_participate]
                             ParsedInstruction::Roll(1),
-                            // Stack: -> [event, C_state, B_state, p1_participates]
                             ParsedInstruction::SetContains,
+                            ParsedInstruction::Branch(
+                                Target::Inline(ParsedSentence {
+                                    instructions: vec![ParsedInstruction::Push(ParsedValue::Bool(true))],
+                                }),
+                                Target::Inline(ParsedSentence {
+                                    instructions: vec![
+                                        ParsedInstruction::Pick(1),
+                                        ParsedInstruction::Jump(Target::Label(p1_emit.clone())),
+                                        ParsedInstruction::Untuple(2),
+                                        ParsedInstruction::Branch(
+                                            Target::Inline(ParsedSentence {
+                                                instructions: vec![
+                                                    ParsedInstruction::Pick(3),
+                                                    ParsedInstruction::Equal,
+                                                ],
+                                            }),
+                                            Target::Inline(ParsedSentence {
+                                                instructions: vec![
+                                                    ParsedInstruction::Drop(0),
+                                                    ParsedInstruction::Push(ParsedValue::Bool(false)),
+                                                ],
+                                            }),
+                                        ),
+                                    ],
+                                }),
+                            ),
                             
                             // Check if P2 participates in the event
-                            // Stack: -> [event, C_state, B_state, p1_participates, B_state]
                             ParsedInstruction::Pick(1),
-                            // Stack: -> [event, C_state, B_state, p1_participates, B_accept]
                             ParsedInstruction::Jump(Target::Label(p2_accept.clone())),
-                            // Stack: -> [event, C_state, B_state, p1_participates, B_accept, B_state]
-                            ParsedInstruction::Pick(2),
-                            // Stack: -> [event, C_state, B_state, p1_participates, B_accept, B_emit]
-                            ParsedInstruction::Jump(Target::Label(p2_emit.clone())),
-                            // Stack: -> [event, C_state, B_state, p1_participates, B_participate]
-                            ParsedInstruction::SetUnion,
-                            // Stack: -> [event, C_state, B_state, p1_participates, B_participate, event]
                             ParsedInstruction::Pick(4),
-                            // Stack: -> [event, C_state, B_state, p1_participates, event, B_participate]
                             ParsedInstruction::Roll(1),
-                            // Stack: -> [event, C_state, B_state, p1_participates, p2_participates]
                             ParsedInstruction::SetContains,
+                            ParsedInstruction::Branch(
+                                Target::Inline(ParsedSentence {
+                                    instructions: vec![ParsedInstruction::Push(ParsedValue::Bool(true))],
+                                }),
+                                Target::Inline(ParsedSentence {
+                                    instructions: vec![
+                                        ParsedInstruction::Pick(1),
+                                        ParsedInstruction::Jump(Target::Label(p2_emit.clone())),
+                                        ParsedInstruction::Untuple(2),
+                                        ParsedInstruction::Branch(
+                                            Target::Inline(ParsedSentence {
+                                                instructions: vec![
+                                                    ParsedInstruction::Pick(4),
+                                                    ParsedInstruction::Equal,
+                                                ],
+                                            }),
+                                            Target::Inline(ParsedSentence {
+                                                instructions: vec![
+                                                    ParsedInstruction::Drop(0),
+                                                    ParsedInstruction::Push(ParsedValue::Bool(false)),
+                                                ],
+                                            }),
+                                        ),
+                                    ],
+                                }),
+                            ),
                             
                             // Swap p1_participates and p2_participates
                             // Stack: -> [event, C_state, B_state, p2_participates, p1_participates]
@@ -1509,14 +1634,51 @@ fn compose_hidden(args: &[Path]) -> Result<Vec<TopLevelItem>, String> {
         name: "emit".to_string(),
         body: ParsedSentence {
             instructions: vec![
-                // Query concurrent emit (consumes joint_state): [joint_state] -> [JointEmit]
-                ParsedInstruction::Jump(Target::Label(concurrent_emit.clone())),
-                
-                // Compute NonHiddenEmit = JointEmit \ H
-                // Stack: -> [JointEmit, H]
-                ParsedInstruction::Jump(Target::Label(hidden_fn.clone())),
-                // Stack: -> [NonHiddenEmit]
-                ParsedInstruction::SetDifference,
+                ParsedInstruction::Pick(0), // Stack: [joint_state, joint_state]
+                ParsedInstruction::Jump(Target::Label(concurrent_emit.clone())), // Stack: [joint_state, (event, has_event)]
+                ParsedInstruction::Untuple(2), // Stack: [joint_state, event, has_event]
+                ParsedInstruction::Branch(
+                    // IF has_event is true
+                    Target::Inline(ParsedSentence {
+                        instructions: vec![
+                            // Check if event is in the hidden set H
+                            ParsedInstruction::Pick(0), // event
+                            ParsedInstruction::Jump(Target::Label(hidden_fn.clone())), // Stack: [joint_state, event, H]
+                            ParsedInstruction::SetContains, // Stack: [joint_state, event, is_hidden]
+                            ParsedInstruction::Branch(
+                                // IF is_hidden is true -> return no event (hide it)
+                                Target::Inline(ParsedSentence {
+                                    instructions: vec![
+                                        ParsedInstruction::Drop(0), // drop event
+                                        ParsedInstruction::Drop(0), // drop joint_state
+                                        ParsedInstruction::Tuple(0),
+                                        ParsedInstruction::Push(ParsedValue::Bool(false)),
+                                        ParsedInstruction::Tuple(2),
+                                    ],
+                                }),
+                                // IF is_hidden is false -> return the event (E, true)
+                                Target::Inline(ParsedSentence {
+                                    instructions: vec![
+                                        ParsedInstruction::Roll(1), // swap event and joint_state -> [event, joint_state]
+                                        ParsedInstruction::Drop(0), // drop joint_state
+                                        ParsedInstruction::Push(ParsedValue::Bool(true)),
+                                        ParsedInstruction::Tuple(2),
+                                    ],
+                                }),
+                            ),
+                        ],
+                    }),
+                    // IF has_event is false
+                    Target::Inline(ParsedSentence {
+                        instructions: vec![
+                            ParsedInstruction::Drop(0), // drop event
+                            ParsedInstruction::Drop(0), // drop joint_state
+                            ParsedInstruction::Tuple(0),
+                            ParsedInstruction::Push(ParsedValue::Bool(false)),
+                            ParsedInstruction::Tuple(2),
+                        ],
+                    }),
+                ),
             ],
         },
     };
@@ -1540,7 +1702,7 @@ fn compose_hidden(args: &[Path]) -> Result<Vec<TopLevelItem>, String> {
         body: ParsedSentence {
             instructions: vec![
                 // Check if a tau reduction can be done first
-                // Query p2_tau_reduce directly
+                // Query concurrent_tau_reduce directly
                 ParsedInstruction::Pick(0), // Stack: [state, state]
                 ParsedInstruction::Jump(Target::Label(concurrent_tau_reduce)), // Stack: [state, (next_state, concurrent_changed)]
                 ParsedInstruction::Untuple(2), // Stack: [state, next_state, concurrent_changed]
@@ -1562,31 +1724,45 @@ fn compose_hidden(args: &[Path]) -> Result<Vec<TopLevelItem>, String> {
                             // Stack: [state, next_state]
                             ParsedInstruction::Drop(0), // Stack: [state] (drop next_state, which is same as state)
                             
-                            // Check if there are any hidden events in emit
+                            // Check if there is an emitted event in inner emit
                             ParsedInstruction::Pick(0), // Stack: [state, state]
-                            ParsedInstruction::Jump(Target::Label(concurrent_emit.clone())), // Stack: [state, JointEmit]
-                            ParsedInstruction::Jump(Target::Label(hidden_fn.clone())), // Stack: [state, JointEmit, SyncSet]
-                            ParsedInstruction::SetIntersection, // Stack: [state, HiddenEvents]
-                            ParsedInstruction::SetChoose, // Stack: [state, (chosen_event, has_element)]
-                            ParsedInstruction::Untuple(2), // Stack: [state, chosen_event, has_element]
+                            ParsedInstruction::Jump(Target::Label(concurrent_emit.clone())), // Stack: [state, (event, has_event)]
+                            ParsedInstruction::Untuple(2), // Stack: [state, event, has_event]
                             
                             ParsedInstruction::Branch(
-                                // IF has_element IS TRUE (we can perform hidden transition):
+                                // IF has_event IS TRUE:
                                 Target::Inline(ParsedSentence {
                                     instructions: vec![
-                                        // Stack: [state, chosen_event]
-                                        ParsedInstruction::Jump(Target::Label(concurrent_process.clone())), // Stack: [next_state]
-                                        ParsedInstruction::Push(ParsedValue::Bool(true)), // Stack: [next_state, true]
-                                        ParsedInstruction::Tuple(2), // Stack: [(next_state, true)]
+                                        // Check if event is hidden
+                                        ParsedInstruction::Pick(0), // event
+                                        ParsedInstruction::Jump(Target::Label(hidden_fn.clone())), // Stack: [state, event, H]
+                                        ParsedInstruction::SetContains, // Stack: [state, event, is_hidden]
+                                        ParsedInstruction::Branch(
+                                            // IF is_hidden is true -> transition
+                                            Target::Inline(ParsedSentence {
+                                                instructions: vec![
+                                                    ParsedInstruction::Jump(Target::Label(concurrent_process.clone())), // Stack: [next_state]
+                                                    ParsedInstruction::Push(ParsedValue::Bool(true)),
+                                                    ParsedInstruction::Tuple(2),
+                                                ],
+                                            }),
+                                            // IF is_hidden is false -> no tau transition, return (state, false)
+                                            Target::Inline(ParsedSentence {
+                                                instructions: vec![
+                                                    ParsedInstruction::Drop(0), // drop event
+                                                    ParsedInstruction::Push(ParsedValue::Bool(false)),
+                                                    ParsedInstruction::Tuple(2),
+                                                ],
+                                            }),
+                                        ),
                                     ],
                                 }),
-                                // IF has_element IS FALSE:
+                                // IF has_event IS FALSE:
                                 Target::Inline(ParsedSentence {
                                     instructions: vec![
-                                        // Stack: [state, chosen_event]
-                                        ParsedInstruction::Drop(0), // Stack: [state]
-                                        ParsedInstruction::Push(ParsedValue::Bool(false)), // Stack: [state, false]
-                                        ParsedInstruction::Tuple(2), // Stack: [(state, false)]
+                                        ParsedInstruction::Drop(0), // drop event
+                                        ParsedInstruction::Push(ParsedValue::Bool(false)),
+                                        ParsedInstruction::Tuple(2),
                                     ],
                                 }),
                             ),
@@ -1652,11 +1828,26 @@ fn compose_prefix(args: &[Path]) -> Result<Vec<TopLevelItem>, String> {
         body: ParsedSentence {
             instructions: vec![
                 ParsedInstruction::Jump(Target::Label(machine_emit)),
-                // Stack: [InnerEmit]
-                ParsedInstruction::Push(ParsedValue::SymbolRef(prefix_sym.clone())),
-                ParsedInstruction::SetSingleton,
-                ParsedInstruction::Roll(1),
-                ParsedInstruction::SetTuple(2),
+                ParsedInstruction::Untuple(2),
+                ParsedInstruction::Branch(
+                    Target::Inline(ParsedSentence {
+                        instructions: vec![
+                            ParsedInstruction::Push(ParsedValue::SymbolRef(prefix_sym.clone())),
+                            ParsedInstruction::Roll(1),
+                            ParsedInstruction::Tuple(2),
+                            ParsedInstruction::Push(ParsedValue::Bool(true)),
+                            ParsedInstruction::Tuple(2),
+                        ],
+                    }),
+                    Target::Inline(ParsedSentence {
+                        instructions: vec![
+                            ParsedInstruction::Drop(0),
+                            ParsedInstruction::Tuple(0),
+                            ParsedInstruction::Push(ParsedValue::Bool(false)),
+                            ParsedInstruction::Tuple(2),
+                        ],
+                    }),
+                ),
             ],
         },
     };
@@ -1746,9 +1937,45 @@ fn compose_rename_prefix(args: &[Path]) -> Result<Vec<TopLevelItem>, String> {
         body: ParsedSentence {
             instructions: vec![
                 ParsedInstruction::Jump(Target::Label(machine_emit)),
-                ParsedInstruction::Push(ParsedValue::SymbolRef(from_sym.clone())),
-                ParsedInstruction::Push(ParsedValue::SymbolRef(to_sym.clone())),
-                ParsedInstruction::SetRenamePrefix,
+                ParsedInstruction::Untuple(2),
+                ParsedInstruction::Branch(
+                    Target::Inline(ParsedSentence {
+                        instructions: vec![
+                            ParsedInstruction::Untuple(2),
+                            ParsedInstruction::Pick(1),
+                            ParsedInstruction::Push(ParsedValue::SymbolRef(from_sym.clone())),
+                            ParsedInstruction::Equal,
+                            ParsedInstruction::Branch(
+                                Target::Inline(ParsedSentence {
+                                    instructions: vec![
+                                        ParsedInstruction::Roll(1),
+                                        ParsedInstruction::Drop(0),
+                                        ParsedInstruction::Push(ParsedValue::SymbolRef(to_sym.clone())),
+                                        ParsedInstruction::Roll(1),
+                                        ParsedInstruction::Tuple(2),
+                                        ParsedInstruction::Push(ParsedValue::Bool(true)),
+                                        ParsedInstruction::Tuple(2),
+                                    ],
+                                }),
+                                Target::Inline(ParsedSentence {
+                                    instructions: vec![
+                                        ParsedInstruction::Tuple(2),
+                                        ParsedInstruction::Push(ParsedValue::Bool(true)),
+                                        ParsedInstruction::Tuple(2),
+                                    ],
+                                }),
+                            ),
+                        ],
+                    }),
+                    Target::Inline(ParsedSentence {
+                        instructions: vec![
+                            ParsedInstruction::Drop(0),
+                            ParsedInstruction::Tuple(0),
+                            ParsedInstruction::Push(ParsedValue::Bool(false)),
+                            ParsedInstruction::Tuple(2),
+                        ],
+                    }),
+                ),
             ],
         },
     };

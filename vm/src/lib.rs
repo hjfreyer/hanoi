@@ -775,7 +775,9 @@ mod tests {
                 }
                 export emit {
                     drop 0
-                    push singleton(crate::payload)
+                    push crate::payload
+                    push true
+                    tuple 2
                 }
                 export process {
                     # Stack: [state, event]
@@ -808,16 +810,15 @@ mod tests {
                 set_contains
                 assert
                 
-                # Query emit set
+                # Query emit tuple
                 pick 0
                 jump renamed::emit
-                # Stack: [state, EmitSet]
+                untuple 2
+                assert
                 push to_sym
                 push payload
                 tuple 2
-                roll 1
-                set_contains
-                assert
+                assert_eq
                 
                 # Process event (to_sym, payload) -> rewrites to (from_sym, payload)
                 # Stack has [0]
@@ -855,7 +856,7 @@ mod tests {
         let bad_code = r#"
             symbol a
             symbol b
-            mod m { export init { push 0 } export accept { drop 0 push empty_set } export emit { drop 0 push empty_set } export process { } }
+            mod m { export init { push 0 } export accept { drop 0 push empty_set } export emit { drop 0 tuple 0 push false tuple 2 } export process { } }
             mod bad compose_rename_prefix(a, m);
         "#;
         assert!(bytecode::assemble(bad_code).is_err());
@@ -874,7 +875,9 @@ mod tests {
                 }
                 export emit {
                     drop 0
-                    push empty_set
+                    tuple 0
+                    push false
+                    tuple 2
                 }
                 export tau_reduce {
                     push false
@@ -895,7 +898,9 @@ mod tests {
                 }
                 export emit {
                     drop 0
-                    push empty_set
+                    tuple 0
+                    push false
+                    tuple 2
                 }
                 export tau_reduce {
                     drop 0

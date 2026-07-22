@@ -106,7 +106,8 @@ mod customer_impl {
             push super::super::queue::push_back
             roll 1
             tuple 2 # (push_back, (id, preferred_drink))
-            set_singleton
+            push true
+            tuple 2
         } {
             pick 0
             push state::idle
@@ -115,7 +116,9 @@ mod customer_impl {
                 drop 0
                 drop 0
                 drop 0
-                push empty_set
+                tuple 0
+                push false
+                tuple 2
             } {
                 pick 0
                 push state::ordered
@@ -124,7 +127,9 @@ mod customer_impl {
                     drop 0
                     drop 0
                     drop 0
-                    push empty_set
+                    tuple 0
+                    push false
+                    tuple 2
                 } {
                     pick 0
                     push state::has_coffee
@@ -133,7 +138,9 @@ mod customer_impl {
                         drop 0
                         drop 0
                         drop 0
-                        push empty_set
+                        tuple 0
+                        push false
+                        tuple 2
                     } {
                         panic
                     }
@@ -318,14 +325,17 @@ mod barista {
             tuple 0
             tuple 2
             tuple 2
-            set_singleton
+            push true
+            tuple 2
         } {
             pick 0
             push state::awaiting_order
             equal
             branch {
                 drop 0
-                push empty_set
+                tuple 0
+                push false
+                tuple 2
             } {
                 # Must be brewing
                 untuple 2 # Stack: [state_status, (id, drink)]
@@ -339,7 +349,8 @@ mod barista {
                     roll 2 # Stack: [drink, coffee, id]
                     roll 2 # Stack: [coffee, id, drink]
                     tuple 3 # Stack: [(coffee, id, drink)]
-                    set_singleton
+                    push true
+                    tuple 2
                 } {
                     panic
                 }
@@ -636,10 +647,10 @@ test verify_concurrent_system {
     # 2. Barista requests await_front
     pick 0
     jump concurrent::emit
-    push (super::queue::await_front, (super::prelude::req, ()))
-    roll 1
-    set_contains
+    untuple 2
     assert
+    push (super::queue::await_front, (super::prelude::req, ()))
+    assert_eq
     
     push (super::queue::await_front, (super::prelude::req, ()))
     jump concurrent::process
@@ -669,10 +680,10 @@ test verify_concurrent_system {
     # 5. Customer 1 orders coffee (emitted request from customer)
     pick 0
     jump concurrent::emit
-    push (super::queue::push_back, (customer_id::c1, event::latte))
-    roll 1
-    set_contains
+    untuple 2
     assert
+    push (super::queue::push_back, (customer_id::c1, event::latte))
+    assert_eq
     
     push (super::queue::push_back, (customer_id::c1, event::latte))
     jump concurrent::process
@@ -681,10 +692,10 @@ test verify_concurrent_system {
     # 6. Queue responds to await_front request with the popped customer 1 value
     pick 0
     jump concurrent::emit
-    push (super::queue::await_front, (super::prelude::resp, (super::prelude::some, ((customer_id::c1, event::latte), ()))))
-    roll 1
-    set_contains
+    untuple 2
     assert
+    push (super::queue::await_front, (super::prelude::resp, (super::prelude::some, ((customer_id::c1, event::latte), ()))))
+    assert_eq
     
     push (super::queue::await_front, (super::prelude::resp, (super::prelude::some, ((customer_id::c1, event::latte), ()))))
     jump concurrent::process
@@ -692,10 +703,10 @@ test verify_concurrent_system {
     # 7. Customer 2 orders coffee (emitted request from customer)
     pick 0
     jump concurrent::emit
-    push (super::queue::push_back, (customer_id::c2, event::espresso))
-    roll 1
-    set_contains
+    untuple 2
     assert
+    push (super::queue::push_back, (customer_id::c2, event::espresso))
+    assert_eq
     
     push (super::queue::push_back, (customer_id::c2, event::espresso))
     jump concurrent::process
@@ -704,10 +715,10 @@ test verify_concurrent_system {
     # 8. Barista finishes brewing for Customer 1
     pick 0
     jump concurrent::emit
-    push (event::coffee, customer_id::c1, event::latte)
-    roll 1
-    set_contains
+    untuple 2
     assert
+    push (event::coffee, customer_id::c1, event::latte)
+    assert_eq
     
     push (event::coffee, customer_id::c1, event::latte)
     jump concurrent::process
@@ -726,10 +737,10 @@ test verify_concurrent_system {
     # 10. Barista requests await_front
     pick 0
     jump concurrent::emit
-    push (super::queue::await_front, (super::prelude::req, ()))
-    roll 1
-    set_contains
+    untuple 2
     assert
+    push (super::queue::await_front, (super::prelude::req, ()))
+    assert_eq
     
     push (super::queue::await_front, (super::prelude::req, ()))
     jump concurrent::process
@@ -737,10 +748,10 @@ test verify_concurrent_system {
     # 11. Queue immediately responds to await_front request with the popped customer 2 value
     pick 0
     jump concurrent::emit
-    push (super::queue::await_front, (super::prelude::resp, (super::prelude::some, ((customer_id::c2, event::espresso), ()))))
-    roll 1
-    set_contains
+    untuple 2
     assert
+    push (super::queue::await_front, (super::prelude::resp, (super::prelude::some, ((customer_id::c2, event::espresso), ()))))
+    assert_eq
     
     push (super::queue::await_front, (super::prelude::resp, (super::prelude::some, ((customer_id::c2, event::espresso), ()))))
     jump concurrent::process
@@ -748,10 +759,10 @@ test verify_concurrent_system {
     # 12. Barista finishes brewing for Customer 2
     pick 0
     jump concurrent::emit
-    push (event::coffee, customer_id::c2, event::espresso)
-    roll 1
-    set_contains
+    untuple 2
     assert
+    push (event::coffee, customer_id::c2, event::espresso)
+    assert_eq
     
     push (event::coffee, customer_id::c2, event::espresso)
     jump concurrent::process
@@ -822,10 +833,10 @@ test verify_barista_rejection {
     # 3. Test that barista in idle emits await_front.req
     jump barista::init
     jump barista::emit
-    push (super::queue::await_front, (super::prelude::req, ()))
-    roll 1
-    set_contains
+    untuple 2
     assert
+    push (super::queue::await_front, (super::prelude::req, ()))
+    assert_eq
     
     # 4. Test that barista in awaiting_order accepts await_front.resp.some.val
     jump barista::init
@@ -844,9 +855,8 @@ test verify_barista_rejection {
     jump barista::process # Transition to awaiting_order
     
     jump barista::emit
-    push (event::coffee, customer_id::c1, event::latte)
-    roll 1
-    set_contains
-    push false
-    assert_eq
+    untuple 2
+    not
+    assert
+    drop 0
 }

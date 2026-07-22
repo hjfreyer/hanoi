@@ -84,7 +84,9 @@ mod string_ref {
             # At rest: emits nothing
             drop 0 # drop internal_state
             drop 0 # drop sym
-            push empty_set
+            tuple 0
+            push false
+            tuple 2
         } {
             # In response state: internal_state is the response event
             drop 1 # drop sym. Stack: [internal_state]
@@ -96,7 +98,8 @@ mod string_ref {
             branch {
                 drop 0
                 drop 0
-                set_singleton
+                push true
+                tuple 2
             } {
                 pick 1 # resp_tag
                 push charat_resp
@@ -104,7 +107,8 @@ mod string_ref {
                 branch {
                     drop 0
                     drop 0
-                    set_singleton
+                    push true
+                    tuple 2
                 } {
                     panic
                 }
@@ -310,7 +314,8 @@ mod char_iterator {
             push in
             roll 1
             tuple 2 # (in, (charat, idx))
-            set_singleton
+            push true
+            tuple 2
         } {
             pick 1 # tag
             push yield_next
@@ -329,7 +334,8 @@ mod char_iterator {
                 push out
                 roll 1
                 tuple 2 # (out, (next, ch))
-                set_singleton
+                push true
+                tuple 2
             } {
                 pick 1 # tag
                 push yield_done
@@ -346,7 +352,8 @@ mod char_iterator {
                     push out
                     roll 1
                     tuple 2 # (out, (done, ()))
-                    set_singleton
+                    push true
+                    tuple 2
                 } {
                     pick 1 # tag
                     push await_charat
@@ -354,7 +361,9 @@ mod char_iterator {
                     branch {
                         drop 0
                         drop 0
-                        push empty_set
+                        tuple 0
+                        push false
+                        tuple 2
                     } {
                         pick 1 # tag
                         push done_state
@@ -362,7 +371,9 @@ mod char_iterator {
                         branch {
                             drop 0
                             drop 0
-                            push empty_set
+                            tuple 0
+                            push false
+                            tuple 2
                         } {
                             panic
                         }
@@ -554,7 +565,9 @@ mod parseint {
         equal
         branch {
             drop 0
-            push empty_set
+            tuple 0
+            push false
+            tuple 2
         } {
             untuple 2 # Stack: [tag, payload]
             pick 1 # tag
@@ -563,7 +576,9 @@ mod parseint {
             branch {
                 drop 0
                 drop 0
-                push empty_set
+                tuple 0
+                push false
+                tuple 2
             } {
                 pick 1 # tag
                 push yielding_ok
@@ -584,7 +599,8 @@ mod parseint {
                     roll 1
                     tuple 2 # (out, (value, (ok, N)))
                     
-                    set_singleton
+                    push true
+                    tuple 2
                 } {
                     pick 1 # tag
                     push yielding_err
@@ -606,7 +622,8 @@ mod parseint {
                         roll 1
                         tuple 2 # (out, (value, (err, ())))
                         
-                        set_singleton
+                        push true
+                        tuple 2
                     } {
                         panic
                     }
@@ -904,7 +921,8 @@ mod split {
             push out
             roll 1
             tuple 2 # (out, (start, ()))
-            set_singleton
+            push true
+            tuple 2
         } {
             pick 1 # tag
             push state_yield_item
@@ -927,7 +945,8 @@ mod split {
                 push out
                 roll 1
                 tuple 2 # (out, (item, (next, ch)))
-                set_singleton
+                push true
+                tuple 2
             } {
                 pick 1 # tag
                 push state_yield_end
@@ -944,7 +963,8 @@ mod split {
                     push out
                     roll 1
                     tuple 2 # (out, (end, ()))
-                    set_singleton
+                    push true
+                    tuple 2
                 } {
                     pick 1 # tag
                     push state_yield_end_done
@@ -961,7 +981,8 @@ mod split {
                         push out
                         roll 1
                         tuple 2 # (out, (end, ()))
-                        set_singleton
+                        push true
+                        tuple 2
                     } {
                         pick 1 # tag
                         push state_yield_done
@@ -978,11 +999,14 @@ mod split {
                             push out
                             roll 1
                             tuple 2 # (out, (done, ()))
-                            set_singleton
+                            push true
+                            tuple 2
                         } {
                             drop 0
                             drop 0
-                            push empty_set
+                            tuple 0
+                            push false
+                            tuple 2
                         }
                     }
                 }
@@ -1275,10 +1299,10 @@ test iterate_string_ascii {
     # Check emitted iterator event: (char_iterator::out, (next, 97)) ('a')
     pick 0
     jump string_hidden::emit
-    push (char_iterator::out, (next, 97))
-    roll 1
-    set_contains
+    untuple 2
     assert
+    push (char_iterator::out, (next, 97))
+    assert_eq
     
     # Process iterator event
     push (char_iterator::out, (next, 97))
@@ -1294,10 +1318,10 @@ test iterate_string_ascii {
     
     pick 0
     jump string_hidden::emit
-    push (char_iterator::out, (next, 98))
-    roll 1
-    set_contains
+    untuple 2
     assert
+    push (char_iterator::out, (next, 98))
+    assert_eq
     
     push (char_iterator::out, (next, 98))
     jump string_hidden::process
@@ -1312,10 +1336,10 @@ test iterate_string_ascii {
     
     pick 0
     jump string_hidden::emit
-    push (char_iterator::out, (next, 99))
-    roll 1
-    set_contains
+    untuple 2
     assert
+    push (char_iterator::out, (next, 99))
+    assert_eq
     
     push (char_iterator::out, (next, 99))
     jump string_hidden::process
@@ -1330,10 +1354,10 @@ test iterate_string_ascii {
     
     pick 0
     jump string_hidden::emit
-    push (char_iterator::out, (done, ()))
-    roll 1
-    set_contains
+    untuple 2
     assert
+    push (char_iterator::out, (done, ()))
+    assert_eq
     
     push (char_iterator::out, (done, ()))
     jump string_hidden::process
@@ -1431,10 +1455,10 @@ test parseint_valid_number {
     # 4. Check emitted result: (parseint::out, (value, (ok, 123)))
     pick 0
     jump parseint_123_system::emit
-    push (parseint::out, (value, (ok, 123)))
-    roll 1
-    set_contains
+    untuple 2
     assert
+    push (parseint::out, (value, (ok, 123)))
+    assert_eq
     
     # Process emission event -> transitions back to idle
     push (parseint::out, (value, (ok, 123)))
@@ -1511,10 +1535,10 @@ test parseint_invalid_char {
     # Check emitted result: (parseint::out, (value, (err, ())))
     pick 0
     jump parseint_45a_system::emit
-    push (parseint::out, (value, (err, ())))
-    roll 1
-    set_contains
+    untuple 2
     assert
+    push (parseint::out, (value, (err, ())))
+    assert_eq
     
     push (parseint::out, (value, (err, ())))
     jump parseint_45a_system::process
@@ -1552,10 +1576,10 @@ test parseint_empty_string {
     # Check emitted result: (parseint::out, (value, (err, ())))
     pick 0
     jump parseint_empty_system::emit
-    push (parseint::out, (value, (err, ())))
-    roll 1
-    set_contains
+    untuple 2
     assert
+    push (parseint::out, (value, (err, ())))
+    assert_eq
     
     push (parseint::out, (value, (err, ())))
     jump parseint_empty_system::process
@@ -1594,9 +1618,11 @@ test verify_string_ref {
     
     # 2. Test emit set at rest
     pick 0
-    jump string_ref::emit # Stack: [state, emit_set]
-    push empty_set
-    assert_eq
+    jump string_ref::emit
+    untuple 2
+    not
+    assert
+    drop 0
     
     # 3. Query length -> [state] -> [next_state]
     push (string_ref::length, ())
@@ -1605,11 +1631,11 @@ test verify_string_ref {
     # Now state should be ("xyz", (length_resp, 3))
     # It should emit (length_resp, 3)
     pick 0
-    jump string_ref::emit # Stack: [state, emit_set]
-    push (string_ref::length_resp, 3)
-    roll 1
-    set_contains
+    jump string_ref::emit
+    untuple 2
     assert
+    push (string_ref::length_resp, 3)
+    assert_eq
     
     # Process emission event -> transitions back to idle
     push (string_ref::length_resp, 3)
@@ -1622,10 +1648,10 @@ test verify_string_ref {
     # Now state should emit (charat_resp, (some, 121))
     pick 0
     jump string_ref::emit
-    push (string_ref::charat_resp, (string_ref::some, 121))
-    roll 1
-    set_contains
+    untuple 2
     assert
+    push (string_ref::charat_resp, (string_ref::some, 121))
+    assert_eq
     
     push (string_ref::charat_resp, (string_ref::some, 121))
     jump string_ref::process
@@ -1637,10 +1663,10 @@ test verify_string_ref {
     # Now state should emit (charat_resp, (none, ()))
     pick 0
     jump string_ref::emit
-    push (string_ref::charat_resp, (string_ref::none, ()))
-    roll 1
-    set_contains
+    untuple 2
     assert
+    push (string_ref::charat_resp, (string_ref::none, ()))
+    assert_eq
     
     push (string_ref::charat_resp, (string_ref::none, ()))
     jump string_ref::process
@@ -1701,10 +1727,10 @@ test verify_prefixed_string_ref {
     # Verify emission of (char_iterator::in, (charat_resp, (some, 121)))
     pick 0
     jump xyz_string_ref_instance::emit
-    push (char_iterator::in, (string_ref::charat_resp, (string_ref::some, 121)))
-    roll 1
-    set_contains
+    untuple 2
     assert
+    push (char_iterator::in, (string_ref::charat_resp, (string_ref::some, 121)))
+    assert_eq
     
     # Process emission back to idle
     push (char_iterator::in, (string_ref::charat_resp, (string_ref::some, 121)))
@@ -1760,10 +1786,10 @@ test iterate_empty {
     # Check emitted iterator event: (char_iterator::out, (done, ()))
     pick 0
     jump empty_string_hidden::emit
-    push (char_iterator::out, (done, ()))
-    roll 1
-    set_contains
+    untuple 2
     assert
+    push (char_iterator::out, (done, ()))
+    assert_eq
     
     push (char_iterator::out, (done, ()))
     jump empty_string_hidden::process
@@ -1812,10 +1838,10 @@ test iterate_unicode {
     
     pick 0
     jump cafe_string_hidden::emit
-    push (char_iterator::out, (next, 99))
-    roll 1
-    set_contains
+    untuple 2
     assert
+    push (char_iterator::out, (next, 99))
+    assert_eq
     push (char_iterator::out, (next, 99))
     jump cafe_string_hidden::process
     
@@ -1829,10 +1855,10 @@ test iterate_unicode {
     
     pick 0
     jump cafe_string_hidden::emit
-    push (char_iterator::out, (next, 97))
-    roll 1
-    set_contains
+    untuple 2
     assert
+    push (char_iterator::out, (next, 97))
+    assert_eq
     push (char_iterator::out, (next, 97))
     jump cafe_string_hidden::process
     
@@ -1846,10 +1872,10 @@ test iterate_unicode {
     
     pick 0
     jump cafe_string_hidden::emit
-    push (char_iterator::out, (next, 102))
-    roll 1
-    set_contains
+    untuple 2
     assert
+    push (char_iterator::out, (next, 102))
+    assert_eq
     push (char_iterator::out, (next, 102))
     jump cafe_string_hidden::process
     
@@ -1863,10 +1889,10 @@ test iterate_unicode {
     
     pick 0
     jump cafe_string_hidden::emit
-    push (char_iterator::out, (next, 233))
-    roll 1
-    set_contains
+    untuple 2
     assert
+    push (char_iterator::out, (next, 233))
+    assert_eq
     push (char_iterator::out, (next, 233))
     jump cafe_string_hidden::process
     
@@ -1880,10 +1906,10 @@ test iterate_unicode {
     
     pick 0
     jump cafe_string_hidden::emit
-    push (char_iterator::out, (done, ()))
-    roll 1
-    set_contains
+    untuple 2
     assert
+    push (char_iterator::out, (done, ()))
+    assert_eq
     push (char_iterator::out, (done, ()))
     jump cafe_string_hidden::process
     
@@ -1958,10 +1984,10 @@ test split_string {
     # 3. Check emitted: (split::out, (split::start, ()))
     pick 0
     jump split_system::emit
-    push (split::out, (split::start, ()))
-    roll 1
-    set_contains
+    untuple 2
     assert
+    push (split::out, (split::start, ()))
+    assert_eq
     
     # Process start event
     push (split::out, (split::start, ()))
@@ -1970,10 +1996,10 @@ test split_string {
     # 4. Check emitted: (split::out, (split::item, (next, 97))) ('a')
     pick 0
     jump split_system::emit
-    push (split::out, (split::item, (next, 97)))
-    roll 1
-    set_contains
+    untuple 2
     assert
+    push (split::out, (split::item, (next, 97)))
+    assert_eq
     
     # Process item event
     push (split::out, (split::item, (next, 97)))
@@ -1993,10 +2019,10 @@ test split_string {
     # 6. Check emitted: (split::out, (split::end, ()))
     pick 0
     jump split_system::emit
-    push (split::out, (split::end, ()))
-    roll 1
-    set_contains
+    untuple 2
     assert
+    push (split::out, (split::end, ()))
+    assert_eq
     
     # Process end event
     push (split::out, (split::end, ()))
@@ -2021,10 +2047,10 @@ test split_string {
     # 9. Check emitted: (split::out, (split::start, ()))
     pick 0
     jump split_system::emit
-    push (split::out, (split::start, ()))
-    roll 1
-    set_contains
+    untuple 2
     assert
+    push (split::out, (split::start, ()))
+    assert_eq
     
     push (split::out, (split::start, ()))
     jump split_system::process
@@ -2032,10 +2058,10 @@ test split_string {
     # 10. Check emitted: (split::out, (split::item, (next, 98))) ('b')
     pick 0
     jump split_system::emit
-    push (split::out, (split::item, (next, 98)))
-    roll 1
-    set_contains
+    untuple 2
     assert
+    push (split::out, (split::item, (next, 98)))
+    assert_eq
     
     push (split::out, (split::item, (next, 98)))
     jump split_system::process
@@ -2054,10 +2080,10 @@ test split_string {
     # 12. Check emitted: (split::out, (split::end, ()))
     pick 0
     jump split_system::emit
-    push (split::out, (split::end, ()))
-    roll 1
-    set_contains
+    untuple 2
     assert
+    push (split::out, (split::end, ()))
+    assert_eq
     
     push (split::out, (split::end, ()))
     jump split_system::process
@@ -2070,10 +2096,10 @@ test split_string {
     # 14. Check emitted: (split::out, (split::done, ()))
     pick 0
     jump split_system::emit
-    push (split::out, (split::done, ()))
-    roll 1
-    set_contains
+    untuple 2
     assert
+    push (split::out, (split::done, ()))
+    assert_eq
     
     push (split::out, (split::done, ()))
     jump split_system::process

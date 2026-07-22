@@ -106,6 +106,13 @@ mod queue {
                     # In response states, we accept the exact response we emit
                     tuple 4 # [state]
                     jump super::queue::emit
+                    untuple 2
+                    branch {
+                        set_singleton
+                    } {
+                        drop 0
+                        push empty_set
+                    }
                 } {
                     drop 0
                     drop 0
@@ -117,7 +124,7 @@ mod queue {
         }
     }
 
-    # emit: takes [state] and returns ValueSet of emitted events
+    # emit: takes [state] and returns (event, has_event)
     emit {
         # Stack: [state]
         untuple 4
@@ -141,7 +148,8 @@ mod queue {
             push super::pop_front
             roll 1
             tuple 2 # (pop_front, (resp, payload))
-            set_singleton
+            push true
+            tuple 2
             
             drop 1
             drop 1
@@ -162,7 +170,8 @@ mod queue {
                 push super::await_front
                 roll 1
                 tuple 2 # (await_front, (resp, payload))
-                set_singleton
+                push true
+                tuple 2
                 
                 drop 1
                 drop 1
@@ -173,7 +182,9 @@ mod queue {
                 drop 0
                 drop 0
                 drop 0
-                push empty_set
+                tuple 0
+                push false
+                tuple 2
             }
         }
     }
@@ -573,10 +584,10 @@ test verify_queue_machine {
     # Check emitted event: (pop_front, (resp, (some, (10, ()))))
     pick 0
     jump queue::emit
-    push (pop_front, (super::prelude::resp, (super::prelude::some, (10, ()))))
-    roll 1
-    set_contains
+    untuple 2
     assert
+    push (pop_front, (super::prelude::resp, (super::prelude::some, (10, ()))))
+    assert_eq
     
     # Process emitted event to return to idle
     push (pop_front, (super::prelude::resp, (super::prelude::some, (10, ()))))
@@ -589,10 +600,10 @@ test verify_queue_machine {
     
     pick 0
     jump queue::emit
-    push (pop_front, (super::prelude::resp, (super::prelude::some, (20, ()))))
-    roll 1
-    set_contains
+    untuple 2
     assert
+    push (pop_front, (super::prelude::resp, (super::prelude::some, (20, ()))))
+    assert_eq
     
     push (pop_front, (super::prelude::resp, (super::prelude::some, (20, ()))))
     jump queue::process
@@ -604,10 +615,10 @@ test verify_queue_machine {
     
     pick 0
     jump queue::emit
-    push (pop_front, (super::prelude::resp, (super::prelude::none, ())))
-    roll 1
-    set_contains
+    untuple 2
     assert
+    push (pop_front, (super::prelude::resp, (super::prelude::none, ())))
+    assert_eq
     
     push (pop_front, (super::prelude::resp, (super::prelude::none, ())))
     jump queue::process
@@ -632,10 +643,10 @@ test verify_queue_machine {
     # Check emitted event: (pop_front, (resp, (none, ())))
     pick 0
     jump queue::emit
-    push (pop_front, (super::prelude::resp, (super::prelude::none, ())))
-    roll 1
-    set_contains
+    untuple 2
     assert
+    push (pop_front, (super::prelude::resp, (super::prelude::none, ())))
+    assert_eq
     
     # Process emitted event to return to awaiting_push state
     push (pop_front, (super::prelude::resp, (super::prelude::none, ())))
@@ -649,10 +660,10 @@ test verify_queue_machine {
     # Check that queue is in awaiting_front_resp state and emits await_front.resp
     pick 0
     jump queue::emit
-    push (await_front, (super::prelude::resp, (super::prelude::some, (100, ()))))
-    roll 1
-    set_contains
+    untuple 2
     assert
+    push (await_front, (super::prelude::resp, (super::prelude::some, (100, ()))))
+    assert_eq
     
     # Process await_front.resp to return to idle
     push (await_front, (super::prelude::resp, (super::prelude::some, (100, ()))))
