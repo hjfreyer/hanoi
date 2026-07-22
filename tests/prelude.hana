@@ -1,2 +1,7 @@
+symbol none "None option variant"
+symbol some "Some option variant"
+symbol req  "Request tag"
+symbol resp "Response tag"
+
 mod event {
 }

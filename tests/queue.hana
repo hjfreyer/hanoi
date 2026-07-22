@@ -1,0 +1,401 @@
+# Queue CSP State Machine driven by tau reductions
+
+symbol push_back    "Push element event"
+symbol pop_front         "Pop element event"
+symbol pop_front_resp    "Pop response event"
+
+symbol idle         "Idle state"
+symbol descending   "Descending stage"
+symbol rebuilding   "Rebuilding stage"
+symbol done         "Done stage"
+
+mod queue {
+    # init: takes [q] on stack and returns state [(idle, q, (), ())]
+    init {
+        # Stack: [q]
+        push super::idle
+        roll 1
+        push ()
+        push ()
+        tuple 4
+    }
+
+    # accept: takes [state] and returns ValueSet of accepted events
+    accept {
+        # Stack: [state]
+        untuple 4
+        # Stack: [tag, current, accumulator, new_el]
+        
+        pick 3 # tag
+        push super::idle
+        equal
+        branch {
+            # Idle: accept push and pop events
+            drop 0
+            drop 0
+            drop 0
+            drop 0 # Clean up
+            
+            push super::push_back
+            set_singleton
+            push universal_set
+            set_tuple 2 # set of (push_back, val)
+            
+            push super::pop_front
+            set_singleton
+            
+            push super::super::prelude::req
+            tuple 0
+            tuple 2 # (req, ())
+            set_singleton
+            
+            set_tuple 2 # set of (pop_front, (req, ()))
+            
+            set_union
+        } {
+            drop 0
+            drop 0
+            drop 0
+            drop 0 # Clean up
+            push empty_set
+        }
+    }
+
+    # emit: takes [state] and returns ValueSet of emitted events
+    emit {
+        # Stack: [state]
+        untuple 4
+        # Stack: [tag, current, accumulator, new_el]
+        
+        pick 3 # tag
+        push super::pop_front_resp
+        equal
+        branch {
+            # Emit (pop_front, (resp, payload)) where payload is stored in accumulator
+            # Stack: [tag, current, accumulator, new_el]
+            pick 1 # accumulator (the payload)
+            push super::super::prelude::resp
+            roll 1
+            tuple 2 # (resp, payload)
+            
+            push super::pop_front
+            roll 1
+            tuple 2 # (pop_front, (resp, payload))
+            set_singleton
+            
+            drop 1
+            drop 1
+            drop 1
+            drop 1 # Clean up
+        } {
+            drop 0
+            drop 0
+            drop 0
+            drop 0
+            push empty_set
+        }
+    }
+
+    # process: takes [state, event] and returns next_state
+    process {
+        # Stack: [state, event]
+        roll 1 # Stack: [event, state]
+        untuple 4
+        # Stack: [event, tag, current, accumulator, new_el]
+        
+        pick 3 # tag
+        push super::idle
+        equal
+        branch {
+            # Processing in idle state: event is (push, val) or (pop, ())
+            drop 3 # drop tag. Stack: [event, current, accumulator, new_el]
+            roll 3 # Stack: [current, accumulator, new_el, event]
+            untuple 2
+            # Stack: [current, accumulator, new_el, type, payload]
+            
+            pick 1 # type
+            push super::push_back
+            equal
+            branch {
+                # PUSH: payload is val
+                drop 1 # drop type. Stack: [current, accumulator, new_el, val]
+                drop 1 # drop new_el (which is ()). Stack: [current, accumulator, val]
+                drop 1 # drop accumulator (which is ()). Stack: [current, val]
+                
+                # We transition to descending stage
+                # State should be: (descending, current, (), val)
+                push super::descending
+                roll 2  # Stack: [val, descending, current]
+                roll 2  # Stack: [descending, current, val]
+                push () # Stack: [descending, current, val, ()]
+                roll 1  # Stack: [descending, current, (), val]
+                tuple 4 # [next_state]
+            } {
+                # POP: payload is ()
+                drop 1 # drop type
+                drop 0 # drop payload (()). Stack: [current, accumulator, new_el]
+                
+                # Check if current (queue) is ()
+                pick 2 # current. Stack: [current, accumulator, new_el, current]
+                push ()
+                equal
+                branch {
+                    # Queue is empty: transition to pop_front_resp with none option
+                    # State: (pop_front_resp, (), (none, ()), ())
+                    drop 0
+                    drop 0
+                    drop 0 # drop current, accumulator, new_el
+                    push super::pop_front_resp
+                    push ()
+                    
+                    # Construct (none, ())
+                    push super::super::prelude::none
+                    tuple 0
+                    tuple 2
+                    
+                    push ()
+                    tuple 4 # [next_state]
+                } {
+                    # Queue is NOT empty: current is (head, rest)
+                    pick 2 # current. Stack: [current, accumulator, new_el, current]
+                    untuple 2 # Stack: [current, accumulator, new_el, head, rest]
+                    
+                    # Next state is (pop_front_resp, rest, (some, (head, ())), ())
+                    roll 1 # Stack: [..., rest, head]
+                    
+                    # Construct (some, (head, ()))
+                    push super::super::prelude::some
+                    roll 1
+                    tuple 0
+                    tuple 2
+                    tuple 2
+                    
+                    push ()
+                    push super::pop_front_resp
+                    roll 3
+                    roll 3
+                    roll 3
+                    tuple 4 # [next_state]
+                    
+                    # Clean up
+                    drop 1
+                    drop 1
+                    drop 1
+                }
+            }
+        } {
+            # Processing in response state: return to idle
+            # Stack: [event, tag, current, accumulator, new_el]
+            # Next state is (idle, current, (), ())
+            push super::idle
+            pick 3 # current. Stack: [event, tag, current, accumulator, new_el, idle, current]
+            push ()
+            push ()
+            tuple 4 # [next_state]
+            
+            # Clean up
+            drop 1
+            drop 1
+            drop 1
+            drop 1
+            drop 1
+        }
+    }
+
+    # tau_reduce: takes [state] and returns (new_state, changed)
+    tau_reduce {
+        # Stack: [state]
+        pick 0 # duplicate state. Stack: [state, state]
+        untuple 4
+        # Stack: [state, tag, current, accumulator, new_el]
+        # Depth 0: new_el
+        # Depth 1: accumulator
+        # Depth 2: current
+        # Depth 3: tag
+        # Depth 4: state
+        
+        pick 3 # duplicate tag. Stack: [state, tag, current, accumulator, new_el, tag]
+        push super::descending
+        equal
+        branch {
+            # Stage is descending:
+            pick 2 # current. Stack: [state, tag, current, accumulator, new_el, current]
+            push ()
+            equal
+            branch {
+                # current is ()
+                pick 0  # Stack: [state, tag, current, accumulator, new_el, new_el]
+                push () # Stack: [state, tag, current, accumulator, new_el, new_el, ()]
+                tuple 2 # Stack: [state, tag, current, accumulator, new_el, new_current]
+                push super::rebuilding
+                roll 1  # Stack: [state, tag, current, accumulator, new_el, rebuilding, new_current]
+                pick 3  # Stack: [state, tag, current, accumulator, new_el, rebuilding, new_current, accumulator]
+                pick 3  # Stack: [state, tag, current, accumulator, new_el, rebuilding, new_current, accumulator, new_el]
+                tuple 4 # Stack: [state, tag, current, accumulator, new_el, new_state]
+                push true
+                tuple 2 # Stack: [state, tag, current, accumulator, new_el, (new_state, true)]
+                drop 1
+                drop 1
+                drop 1
+                drop 1
+                drop 1 # Stack: [(new_state, true)]
+            } {
+                # current is NOT ()
+                pick 2  # Stack: [state, tag, current, accumulator, new_el, current]
+                untuple 2 # Stack: [state, tag, current, accumulator, new_el, head, rest]
+                roll 1  # Stack: [state, tag, current, accumulator, new_el, rest, head]
+                pick 3  # Stack: [state, tag, current, accumulator, new_el, rest, head, accumulator]
+                tuple 2 # Stack: [state, tag, current, accumulator, new_el, rest, new_accumulator]
+                push super::descending
+                roll 2  # Stack: [state, tag, current, accumulator, new_el, new_accumulator, descending, rest]
+                roll 2  # Stack: [state, tag, current, accumulator, new_el, descending, rest, new_accumulator]
+                pick 3  # Stack: [state, tag, current, accumulator, new_el, descending, rest, new_accumulator, new_el]
+                tuple 4 # Stack: [state, tag, current, accumulator, new_el, new_state]
+                push true
+                tuple 2 # Stack: [state, tag, current, accumulator, new_el, (new_state, true)]
+                drop 1
+                drop 1
+                drop 1
+                drop 1
+                drop 1 # Stack: [(new_state, true)]
+            }
+        } {
+            pick 3 # duplicate tag. Stack: [state, tag, current, accumulator, new_el, tag]
+            push super::rebuilding
+            equal
+            branch {
+                # Stage is rebuilding:
+                pick 1 # accumulator. Stack: [state, tag, current, accumulator, new_el, accumulator]
+                push ()
+                equal
+                branch {
+                    # accumulator is () -> Transition to idle state
+                    push super::idle # Stack: [state, tag, current, accumulator, new_el, idle]
+                    pick 3  # Stack: [state, tag, current, accumulator, new_el, idle, current]
+                    push () # Stack: [state, tag, current, accumulator, new_el, idle, current, ()]
+                    push () # Stack: [state, tag, current, accumulator, new_el, idle, current, (), ()]
+                    tuple 4 # Stack: [state, tag, current, accumulator, new_el, new_state]
+                    push true
+                    tuple 2 # Stack: [state, tag, current, accumulator, new_el, (new_state, true)]
+                    drop 1
+                    drop 1
+                    drop 1
+                    drop 1
+                    drop 1 # Stack: [(new_state, true)]
+                } {
+                    # accumulator is NOT ()
+                    pick 1  # Stack: [state, tag, current, accumulator, new_el, accumulator]
+                    untuple 2 # Stack: [state, tag, current, accumulator, new_el, head, rest_acc]
+                    pick 4  # Stack: [state, tag, current, accumulator, new_el, head, rest_acc, current]
+                    roll 2  # Stack: [state, tag, current, accumulator, new_el, rest_acc, current, head]
+                    roll 1  # Stack: [state, tag, current, accumulator, new_el, rest_acc, head, current]
+                    tuple 2 # Stack: [state, tag, current, accumulator, new_el, rest_acc, new_current]
+                    push super::rebuilding # Stack: [state, tag, current, accumulator, new_el, rest_acc, new_current, rebuilding]
+                    roll 2  # Stack: [state, tag, current, accumulator, new_el, new_current, rebuilding, rest_acc]
+                    roll 2  # Stack: [state, tag, current, accumulator, new_el, rebuilding, rest_acc, new_current]
+                    roll 1  # Stack: [state, tag, current, accumulator, new_el, rebuilding, new_current, rest_acc]
+                    pick 3  # Stack: [state, tag, current, accumulator, new_el, rebuilding, new_current, rest_acc, new_el]
+                    tuple 4 # Stack: [state, tag, current, accumulator, new_el, new_state]
+                    push true
+                    tuple 2 # Stack: [state, tag, current, accumulator, new_el, (new_state, true)]
+                    drop 1
+                    drop 1
+                    drop 1
+                    drop 1
+                    drop 1 # Stack: [(new_state, true)]
+                }
+            } {
+                # Stage is idle / done / response (no transition):
+                pick 4 # get original state. Stack: [state, tag, current, accumulator, new_el, state]
+                push false
+                tuple 2 # Stack: [state, tag, current, accumulator, new_el, (state, false)]
+                drop 1
+                drop 1
+                drop 1
+                drop 1
+                drop 1 # Stack: [(state, false)]
+            }
+        }
+    }
+}
+
+# Helper to drive the queue's tau reductions in tests
+drive_reductions {
+    # Stack: [state]
+    pick 0
+    jump queue::tau_reduce
+    # Stack: [state, (new_state, changed)]
+    untuple 2
+    # Stack: [state, new_state, changed]
+    branch {
+        drop 1 # drop old state. Stack: [new_state]
+        jump drive_reductions
+    } {
+        drop 0 # drop new_state. Stack: [state]
+    }
+}
+
+test verify_queue_machine {
+    # 1. Initialize queue machine with empty queue ()
+    push ()
+    jump queue::init
+    
+    # 2. Push 10
+    push (push_back, 10)
+    jump queue::process
+    jump drive_reductions
+    
+    # 3. Push 20
+    push (push_back, 20)
+    jump queue::process
+    jump drive_reductions
+    
+    # 4. Pop (should yield 10)
+    push (pop_front, (super::prelude::req, ()))
+    jump queue::process
+    jump drive_reductions
+    
+    # Check emitted event: (pop_front, (resp, (some, (10, ()))))
+    pick 0
+    jump queue::emit
+    push (pop_front, (super::prelude::resp, (super::prelude::some, (10, ()))))
+    roll 1
+    set_contains
+    assert
+    
+    # Process emitted event to return to idle
+    push (pop_front, (super::prelude::resp, (super::prelude::some, (10, ()))))
+    jump queue::process
+    
+    # 5. Pop (should yield 20)
+    push (pop_front, (super::prelude::req, ()))
+    jump queue::process
+    jump drive_reductions
+    
+    pick 0
+    jump queue::emit
+    push (pop_front, (super::prelude::resp, (super::prelude::some, (20, ()))))
+    roll 1
+    set_contains
+    assert
+    
+    push (pop_front, (super::prelude::resp, (super::prelude::some, (20, ()))))
+    jump queue::process
+    
+    # 6. Pop on empty queue (should yield pop_front.resp.none)
+    push (pop_front, (super::prelude::req, ()))
+    jump queue::process
+    jump drive_reductions
+    
+    pick 0
+    jump queue::emit
+    push (pop_front, (super::prelude::resp, (super::prelude::none, ())))
+    roll 1
+    set_contains
+    assert
+    
+    push (pop_front, (super::prelude::resp, (super::prelude::none, ())))
+    jump queue::process
+    
+    drop 0 # clean up state
+}
