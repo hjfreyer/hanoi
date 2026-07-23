@@ -14,7 +14,7 @@ impl PartialEq for Symbol {
 }
 
 /// Represents any value that can be operated on or stored by the VM.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub enum Value {
     /// A boolean value (true or false).
     Bool(bool),
@@ -42,7 +42,7 @@ pub enum ChooseResult {
 }
 
 /// Represents a mathematical set of values.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub enum ValueSet {
     Empty,
     Universal,
@@ -429,6 +429,18 @@ impl fmt::Display for Value {
             Value::Symbol(sym) => write!(f, "symbol({})", sym.name),
             Value::Set(set) => write!(f, "{}", set),
         }
+    }
+}
+
+impl fmt::Debug for Value {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self)
+    }
+}
+
+impl fmt::Debug for ValueSet {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self)
     }
 }
 

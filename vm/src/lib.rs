@@ -108,8 +108,8 @@ impl VM {
             let instruction = sentence[ip].clone();
             if self.tracing {
                 println!(
-                    "[TRACE] Sentence: {:?}, IP: {}, Instruction: {:?} | Stack: {:?} | CallStack: {:?}",
-                    current_sentence, ip, instruction, self.stack, self.call_stack
+                    "[TRACE] Sentence: {:?}, IP: {}, Instruction: {:?} | Stack: {:?}",
+                    current_sentence, ip, instruction, self.stack
                 );
             }
             ip += 1;
