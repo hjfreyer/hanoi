@@ -3,7 +3,7 @@
 mod foo {
     symbol inner_sym "Inner"
 
-    target_sentence {
+    sentence target_sentence {
         push 42
         assert_eq
     }
@@ -11,7 +11,7 @@ mod foo {
     mod bar {
         symbol deepest_sym "Deepest"
 
-        export test check_deep {
+        export test sentence check_deep {
             # Reference sibling
             push deepest_sym
             push deepest_sym
@@ -36,7 +36,7 @@ mod foo {
         }
     }
 
-    test check_sibling {
+    test sentence check_sibling {
         push inner_sym
         push inner_sym
         equal
@@ -46,7 +46,7 @@ mod foo {
 
 symbol root_sym "Root"
 
-test check_root {
+test sentence check_root {
     # Reference nested symbol using path
     push foo::inner_sym
     push foo::inner_sym

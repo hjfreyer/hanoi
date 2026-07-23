@@ -1,6 +1,6 @@
 # Integration tests for ValueSet functionality
 
-test empty_set_literal {
+test sentence empty_set_literal {
     # Check that nothing is in empty_set
     push 42
     push empty_set
@@ -15,7 +15,7 @@ test empty_set_literal {
     assert
 }
 
-test universal_set_literal {
+test sentence universal_set_literal {
     # Check that everything is in universal_set
     push 42
     push universal_set
@@ -28,7 +28,7 @@ test universal_set_literal {
     assert
 }
 
-test singleton_literal {
+test sentence singleton_literal {
     push 42
     push singleton(42)
     set_contains
@@ -41,7 +41,7 @@ test singleton_literal {
     assert
 }
 
-test union_literal {
+test sentence union_literal {
     push 1
     push union(singleton(1), singleton(2))
     set_contains
@@ -59,7 +59,7 @@ test union_literal {
     assert
 }
 
-test intersection_literal {
+test sentence intersection_literal {
     push 2
     push intersection(union(singleton(1), singleton(2)), singleton(2))
     set_contains
@@ -72,7 +72,7 @@ test intersection_literal {
     assert
 }
 
-test difference_literal {
+test sentence difference_literal {
     # 20 is in difference(union(10, 20), 10)
     push 20
     push difference(union(singleton(10), singleton(20)), singleton(10))
@@ -87,7 +87,7 @@ test difference_literal {
     assert
 }
 
-test set_tuple_literal {
+test sentence set_tuple_literal {
     # set_tuple(singleton(10), union(singleton(20), singleton(30)))
     # (10, 20) should be in it
     push (10, 20)
@@ -116,7 +116,7 @@ test set_tuple_literal {
     assert
 }
 
-test dynamic_set_operations {
+test sentence dynamic_set_operations {
     # Test set_singleton instruction
     push 100
     set_singleton # stack: [singleton(100)]
@@ -215,7 +215,7 @@ test dynamic_set_operations {
     drop 0
 }
 
-test set_choose_empty {
+test sentence set_choose_empty {
     push empty_set
     set_choose
     # Expected: ((), false)
@@ -226,7 +226,7 @@ test set_choose_empty {
     assert_eq
 }
 
-test set_choose_universal {
+test sentence set_choose_universal {
     push universal_set
     set_choose
     # Expected: (ELEMENT, true)
@@ -237,7 +237,7 @@ test set_choose_universal {
     drop 0
 }
 
-test set_choose_singleton {
+test sentence set_choose_singleton {
     push singleton(42)
     set_choose
     untuple 2
@@ -247,7 +247,7 @@ test set_choose_singleton {
     assert_eq
 }
 
-test set_choose_union {
+test sentence set_choose_union {
     push union(singleton(10), singleton(20))
     set_choose
     untuple 2
@@ -265,7 +265,7 @@ test set_choose_union {
     }
 }
 
-test set_choose_intersection {
+test sentence set_choose_intersection {
     push intersection(union(singleton(10), singleton(20)), singleton(20))
     set_choose
     untuple 2
@@ -275,7 +275,7 @@ test set_choose_intersection {
     assert_eq
 }
 
-test set_choose_tuple {
+test sentence set_choose_tuple {
     push set_tuple(singleton(5), union(singleton(10), singleton(20)))
     set_choose
     untuple 2
@@ -297,7 +297,7 @@ test set_choose_tuple {
     assert_eq
 }
 
-test set_choose_difference {
+test sentence set_choose_difference {
     push difference(union(singleton(10), singleton(20)), singleton(10))
     set_choose
     untuple 2
@@ -307,7 +307,7 @@ test set_choose_difference {
     assert_eq
 }
 
-test complement_literal {
+test sentence complement_literal {
     # 10 is not in complement(singleton(10))
     push 10
     push complement(singleton(10))
@@ -322,7 +322,7 @@ test complement_literal {
     assert
 }
 
-test set_complement_instruction {
+test sentence set_complement_instruction {
     push 10
     set_singleton
     set_complement # stack: [complement(singleton(10))]

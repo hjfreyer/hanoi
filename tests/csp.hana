@@ -31,7 +31,7 @@ mod customer_impl {
     # - If internal_state is idle: {(want_coffee, id)} (from environment)
     # - If internal_state is ordered: {(coffee, id, preferred_drink)} (from barista)
     # - If internal_state is has_coffee: {(enjoy, id)} (from environment)
-    accept {
+    sentence accept {
         untuple 3 # Stack: [id, preferred_drink, internal_state]
         pick 0
         push state::idle
@@ -86,7 +86,7 @@ mod customer_impl {
         }
     }
 
-    tau_reduce {
+    sentence tau_reduce {
         push false
         tuple 2
     }
@@ -94,7 +94,7 @@ mod customer_impl {
     # emit takes state: (id, preferred_drink, internal_state) and returns ValueSet of emitted events.
     # The emitted events are:
     # - If internal_state is thirsty: {(push_back, (id, preferred_drink))} (request to queue)
-    emit {
+    sentence emit {
         untuple 3 # Stack: [id, preferred_drink, internal_state]
         pick 0
         push state::thirsty
@@ -151,7 +151,7 @@ mod customer_impl {
 
     # process takes [state, event] and returns next_state.
     # state is (id, preferred_drink, internal_state)
-    process {
+    sentence process {
         # Stack: [(id, preferred_drink, internal_state), event]
         roll 1 # Stack: [event, (id, preferred_drink, internal_state)]
         untuple 3 # Stack: [event, id, preferred_drink, internal_state]
@@ -210,43 +210,43 @@ mod customer_impl {
 }
 
 mod customer1 {
-    init {
+    sentence init {
         push super::customer_id::c1
         push super::event::latte
         push super::customer_impl::state::idle
         tuple 3
     }
-    accept {
+    sentence accept {
         jump super::customer_impl::accept
     }
-    tau_reduce {
+    sentence tau_reduce {
         jump super::customer_impl::tau_reduce
     }
-    emit {
+    sentence emit {
         jump super::customer_impl::emit
     }
-    process {
+    sentence process {
         jump super::customer_impl::process
     }
 }
 
 mod customer2 {
-    init {
+    sentence init {
         push super::customer_id::c2
         push super::event::espresso
         push super::customer_impl::state::idle
         tuple 3
     }
-    accept {
+    sentence accept {
         jump super::customer_impl::accept
     }
-    tau_reduce {
+    sentence tau_reduce {
         jump super::customer_impl::tau_reduce
     }
-    emit {
+    sentence emit {
         jump super::customer_impl::emit
     }
-    process {
+    sentence process {
         jump super::customer_impl::process
     }
 }
@@ -260,12 +260,12 @@ mod barista {
     }
 
     # Initializes barista state
-    init {
+    sentence init {
         push state::idle
     }
 
     # accept takes [state] and returns ValueSet.
-    accept {
+    sentence accept {
         # Stack: [state]
         pick 0
         push state::idle
@@ -305,7 +305,7 @@ mod barista {
         }
     }
 
-    tau_reduce {
+    sentence tau_reduce {
         push false
         tuple 2
     }
@@ -313,7 +313,7 @@ mod barista {
     # emit takes [state] and returns ValueSet.
     # idle: emits await_front.req
     # brewing: emits (coffee, id, drink)
-    emit {
+    sentence emit {
         # Stack: [state]
         pick 0
         push state::idle
@@ -359,7 +359,7 @@ mod barista {
     }
 
     # process takes [state, event] and returns next_state.
-    process {
+    sentence process {
         # Inputs: [state, event]
         pick 1 # state
         push state::idle
@@ -401,19 +401,19 @@ mod barista {
     }
 }
 
-customers_sync {
+sentence customers_sync {
     push empty_set
 }
 
 mod customers compose_concurrent(customer1, customer2, customers_sync);
 
-customers_queue_sync {
+sentence customers_queue_sync {
     push set_tuple(singleton(super::queue::push_back), universal_set)
 }
 
 mod customers_and_queue compose_concurrent(customers, super::queue::queue, customers_queue_sync);
 
-joint_sync {
+sentence joint_sync {
     # Sync barista and queue on await_front
     push set_tuple(singleton(super::queue::await_front), universal_set)
     
@@ -424,7 +424,7 @@ joint_sync {
 
 mod concurrent compose_concurrent(customers_and_queue, barista, joint_sync);
 
-hidden_events {
+sentence hidden_events {
     push set_tuple(singleton(super::queue::push_back), universal_set)
     
     push set_tuple(singleton(event::coffee), universal_set, universal_set)
@@ -437,7 +437,7 @@ hidden_events {
 mod hidden compose_hidden(concurrent, hidden_events);
 
 # Helpers to drive tau transitions in tests
-drive_tau {
+sentence drive_tau {
     # Stack: [state]
     pick 0
     jump hidden::tau_reduce
@@ -451,7 +451,7 @@ drive_tau {
     }
 }
 
-drive_concurrent_tau {
+sentence drive_concurrent_tau {
     # Stack: [state]
     pick 0
     jump concurrent::tau_reduce
@@ -466,7 +466,7 @@ drive_concurrent_tau {
 }
 
 # Test the hidden joint Customer-Queue-Barista system
-test verify_hidden_system {
+test sentence verify_hidden_system {
     # 1. Initialize hidden joint state
     jump hidden::init
     
@@ -640,7 +640,7 @@ test verify_hidden_system {
 }
 
 # Test the concurrent joint Customer-Queue-Barista system
-test verify_concurrent_system {
+test sentence verify_concurrent_system {
     # 1. Initialize joint state
     jump concurrent::init
     
@@ -810,7 +810,7 @@ test verify_concurrent_system {
 }
 
 # Test the rejection of invalid events for Barista
-test verify_barista_rejection {
+test sentence verify_barista_rejection {
     # 1. Trigger invalid coffee event on idle (coffee is emit, not accept)
     jump barista::init
     

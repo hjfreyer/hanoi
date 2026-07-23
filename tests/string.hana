@@ -17,14 +17,14 @@ mod string_ref {
     # Initialize with a symbol representing string contents.
     # Expects sym on stack.
     # Returns (sym, idle) state.
-    init {
+    sentence init {
         push idle
         tuple 2
     }
     
     # accept: takes state (sym, internal_state) and returns ValueSet of accepted events.
     # At rest (idle), accepts (length, ()) or (charat, N).
-    accept {
+    sentence accept {
         untuple 2 # Stack: [sym, internal_state]
         pick 0 # duplicate internal_state before comparison
         push idle
@@ -68,14 +68,14 @@ mod string_ref {
         }
     }
 
-    tau_reduce {
+    sentence tau_reduce {
         push false
         tuple 2
     }
 
     # emit: takes state (sym, internal_state) and returns ValueSet of emitted events.
     # In response state, emits internal_state which is (length_resp, len) or (charat_resp, ...).
-    emit {
+    sentence emit {
         untuple 2 # Stack: [sym, internal_state]
         pick 0 # duplicate internal_state before comparison
         push idle
@@ -117,7 +117,7 @@ mod string_ref {
     }
 
     # process: takes state and event, returns next_state
-    process {
+    sentence process {
         # Stack: [state, event]
         roll 1 # Stack: [event, state]
         untuple 2 # Stack: [event, sym, internal_state]
@@ -220,7 +220,7 @@ mod char_iterator {
 
     # Initialize char_iterator state.
     # Returns (fetch, 0) state.
-    init {
+    sentence init {
         push fetch
         push 0
         tuple 2 # (fetch, 0)
@@ -228,7 +228,7 @@ mod char_iterator {
     
     # accept: takes state (tag, payload) and returns ValueSet of accepted events.
     # Accepts (in, (charat_resp, ...)) when internal_state is (await_charat, idx).
-    accept {
+    sentence accept {
         untuple 2 # Stack: [tag, payload]
         pick 1 # tag
         push await_charat
@@ -292,13 +292,13 @@ mod char_iterator {
         }
     }
 
-    tau_reduce {
+    sentence tau_reduce {
         push false
         tuple 2
     }
 
     # emit: takes state (tag, payload) and returns ValueSet of emitted events.
-    emit {
+    sentence emit {
         untuple 2 # Stack: [tag, payload]
         
         pick 1 # tag
@@ -384,7 +384,7 @@ mod char_iterator {
     }
     
     # process: takes state (tag, payload) and event, returns next_state
-    process {
+    sentence process {
         # Stack: [state, event]
         roll 1 # Stack: [event, state]
         untuple 2 # Stack: [event, tag, payload]
@@ -489,13 +489,13 @@ mod parseint {
     symbol yielding_err "Yielding err result state"
 
     # init: returns idle state
-    init {
+    sentence init {
         push idle
     }
 
     # accept: takes [state] and returns ValueSet of accepted events.
     # Accepts out.copy when idle, or in.out.next / in.out.done when parsing.
-    accept {
+    sentence accept {
         pick 0
         push idle
         equal
@@ -552,14 +552,14 @@ mod parseint {
         }
     }
 
-    tau_reduce {
+    sentence tau_reduce {
         push false
         tuple 2
     }
 
     # emit: takes [state] and returns ValueSet of emitted events.
     # Emits out.value.ok.N or out.value.err when in yielding state.
-    emit {
+    sentence emit {
         pick 0
         push idle
         equal
@@ -633,7 +633,7 @@ mod parseint {
     }
 
     # process: takes [state, event] and returns next_state.
-    process {
+    sentence process {
         # Stack: [state, event]
         pick 1 # state
         push idle
@@ -812,14 +812,14 @@ mod split {
     symbol state_done           "done"
 
     # init: accepts delim on stack. Returns (state_idle, delim).
-    init {
+    sentence init {
         push state_idle
         roll 1
         tuple 2
     }
 
     # accept: takes [state] and returns ValueSet of accepted events.
-    accept {
+    sentence accept {
         untuple 2 # Stack: [tag, payload]
         
         pick 1 # tag
@@ -897,13 +897,13 @@ mod split {
         }
     }
 
-    tau_reduce {
+    sentence tau_reduce {
         push false
         tuple 2
     }
 
     # emit: takes [state] and returns ValueSet of emitted events.
-    emit {
+    sentence emit {
         untuple 2 # Stack: [tag, payload]
         
         pick 1 # tag
@@ -1015,7 +1015,7 @@ mod split {
     }
 
     # process: takes [state, event] and returns next_state.
-    process {
+    sentence process {
         # Stack: [state, event]
         roll 1 # Stack: [event, state]
         untuple 2 # Stack: [event, tag, payload]
@@ -1251,25 +1251,25 @@ symbol str_123 "123"
 symbol str_45a "45a"
 
 mod string_ref_base {
-    init {
+    sentence init {
         push super::my_str
         jump super::string_ref::init
     }
-    accept {
+    sentence accept {
         jump super::string_ref::accept
     }
-    tau_reduce {
+    sentence tau_reduce {
         jump super::string_ref::tau_reduce
     }
-    emit {
+    sentence emit {
         jump super::string_ref::emit
     }
-    process {
+    sentence process {
         jump super::string_ref::process
     }
 }
 
-sync_char_iterator_in {
+sentence sync_char_iterator_in {
     push set_tuple(singleton(char_iterator::in), universal_set)
 }
 
@@ -1282,7 +1282,7 @@ mod string_hidden compose_hidden(
     sync_char_iterator_in
 );
 
-test iterate_string_ascii {
+test sentence iterate_string_ascii {
     # Initialize system -> [((my_str, idle), (fetch, 0))]
     jump string_hidden::init
     
@@ -1367,14 +1367,14 @@ test iterate_string_ascii {
 }
 
 mod str_123_base {
-    init {
+    sentence init {
         push super::str_123
         jump super::string_ref::init
     }
-    accept { jump super::string_ref::accept }
-    tau_reduce { jump super::string_ref::tau_reduce }
-    emit { jump super::string_ref::emit }
-    process { jump super::string_ref::process }
+    sentence accept { jump super::string_ref::accept }
+    sentence tau_reduce { jump super::string_ref::tau_reduce }
+    sentence emit { jump super::string_ref::emit }
+    sentence process { jump super::string_ref::process }
 }
 
 mod str_123_hidden compose_hidden(
@@ -1386,7 +1386,7 @@ mod str_123_hidden compose_hidden(
     sync_char_iterator_in
 );
 
-sync_parseint_in {
+sentence sync_parseint_in {
     push set_tuple(singleton(parseint::in), universal_set)
 }
 
@@ -1399,7 +1399,7 @@ mod parseint_123_system compose_hidden(
     sync_parseint_in
 );
 
-test parseint_valid_number {
+test sentence parseint_valid_number {
     jump parseint_123_system::init
     
     # 1. Verify idle parseint accepts (parseint::out, (copy, ()))
@@ -1468,14 +1468,14 @@ test parseint_valid_number {
 }
 
 mod str_45a_base {
-    init {
+    sentence init {
         push super::str_45a
         jump super::string_ref::init
     }
-    accept { jump super::string_ref::accept }
-    tau_reduce { jump super::string_ref::tau_reduce }
-    emit { jump super::string_ref::emit }
-    process { jump super::string_ref::process }
+    sentence accept { jump super::string_ref::accept }
+    sentence tau_reduce { jump super::string_ref::tau_reduce }
+    sentence emit { jump super::string_ref::emit }
+    sentence process { jump super::string_ref::process }
 }
 
 mod str_45a_hidden compose_hidden(
@@ -1496,7 +1496,7 @@ mod parseint_45a_system compose_hidden(
     sync_parseint_in
 );
 
-test parseint_invalid_char {
+test sentence parseint_invalid_char {
     jump parseint_45a_system::init
     
     # Trigger copy
@@ -1555,7 +1555,7 @@ mod parseint_empty_system compose_hidden(
     sync_parseint_in
 );
 
-test parseint_empty_string {
+test sentence parseint_empty_string {
     jump parseint_empty_system::init
     
     # Trigger copy
@@ -1587,7 +1587,7 @@ test parseint_empty_string {
     drop 0
 }
 
-test verify_string_ref {
+test sentence verify_string_ref {
     # Initialize base unprefixed string_ref with string xyz_str
     push xyz_str
     jump string_ref::init # Stack: [state]
@@ -1680,27 +1680,27 @@ test verify_string_ref {
 }
 
 mod xyz_string_ref_base {
-    init {
+    sentence init {
         push super::xyz_str
         jump super::string_ref::init
     }
-    accept {
+    sentence accept {
         jump super::string_ref::accept
     }
-    tau_reduce {
+    sentence tau_reduce {
         jump super::string_ref::tau_reduce
     }
-    emit {
+    sentence emit {
         jump super::string_ref::emit
     }
-    process {
+    sentence process {
         jump super::string_ref::process
     }
 }
 
 mod xyz_string_ref_instance compose_prefix(xyz_string_ref_base, char_iterator::in);
 
-test verify_prefixed_string_ref {
+test sentence verify_prefixed_string_ref {
     # Initialize xyz_string_ref_instance
     jump xyz_string_ref_instance::init # Stack: [state]
     
@@ -1745,20 +1745,20 @@ test verify_prefixed_string_ref {
 }
 
 mod empty_string_ref_base {
-    init {
+    sentence init {
         push super::empty_str
         jump super::string_ref::init
     }
-    accept {
+    sentence accept {
         jump super::string_ref::accept
     }
-    tau_reduce {
+    sentence tau_reduce {
         jump super::string_ref::tau_reduce
     }
-    emit {
+    sentence emit {
         jump super::string_ref::emit
     }
-    process {
+    sentence process {
         jump super::string_ref::process
     }
 }
@@ -1772,7 +1772,7 @@ mod empty_string_hidden compose_hidden(
     sync_char_iterator_in
 );
 
-test iterate_empty {
+test sentence iterate_empty {
     jump empty_string_hidden::init
     
     # Drive 2 taus (charat query + charat_resp)
@@ -1798,20 +1798,20 @@ test iterate_empty {
 }
 
 mod cafe_string_ref_base {
-    init {
+    sentence init {
         push super::cafe_str
         jump super::string_ref::init
     }
-    accept {
+    sentence accept {
         jump super::string_ref::accept
     }
-    tau_reduce {
+    sentence tau_reduce {
         jump super::string_ref::tau_reduce
     }
-    emit {
+    sentence emit {
         jump super::string_ref::emit
     }
-    process {
+    sentence process {
         jump super::string_ref::process
     }
 }
@@ -1825,7 +1825,7 @@ mod cafe_string_hidden compose_hidden(
     sync_char_iterator_in
 );
 
-test iterate_unicode {
+test sentence iterate_unicode {
     jump cafe_string_hidden::init
     
     # 'c' (99)
@@ -1919,14 +1919,14 @@ test iterate_unicode {
 symbol comma_str "a,b"
 
 mod comma_str_base {
-    init {
+    sentence init {
         push super::comma_str
         jump super::string_ref::init
     }
-    accept { jump super::string_ref::accept }
-    tau_reduce { jump super::string_ref::tau_reduce }
-    emit { jump super::string_ref::emit }
-    process { jump super::string_ref::process }
+    sentence accept { jump super::string_ref::accept }
+    sentence tau_reduce { jump super::string_ref::tau_reduce }
+    sentence emit { jump super::string_ref::emit }
+    sentence process { jump super::string_ref::process }
 }
 
 mod comma_str_hidden compose_hidden(
@@ -1939,17 +1939,17 @@ mod comma_str_hidden compose_hidden(
 );
 
 mod split_comma_base {
-    init {
+    sentence init {
         push 44 # ','
         jump super::split::init
     }
-    accept { jump super::split::accept }
-    tau_reduce { jump super::split::tau_reduce }
-    emit { jump super::split::emit }
-    process { jump super::split::process }
+    sentence accept { jump super::split::accept }
+    sentence tau_reduce { jump super::split::tau_reduce }
+    sentence emit { jump super::split::emit }
+    sentence process { jump super::split::process }
 }
 
-sync_split_in {
+sentence sync_split_in {
     push set_tuple(singleton(split::in), universal_set)
 }
 
@@ -1962,7 +1962,7 @@ mod split_system compose_hidden(
     sync_split_in
 );
 
-test split_string {
+test sentence split_string {
     jump split_system::init
     
     # --- Field 1: "a" ---

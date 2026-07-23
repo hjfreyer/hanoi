@@ -15,7 +15,7 @@ symbol done                 "Done stage"
 
 mod queue {
     # init: takes no arguments and returns state [(idle, (), (), ())]
-    init {
+    sentence init {
         push super::idle
         push ()
         push ()
@@ -24,7 +24,7 @@ mod queue {
     }
 
     # accept: takes [state] and returns ValueSet of accepted events
-    accept {
+    sentence accept {
         # Stack: [state]
         untuple 4
         # Stack: [tag, current, accumulator, new_el]
@@ -125,7 +125,7 @@ mod queue {
     }
 
     # emit: takes [state] and returns (event, has_event)
-    emit {
+    sentence emit {
         # Stack: [state]
         untuple 4
         # Stack: [tag, current, accumulator, new_el]
@@ -190,7 +190,7 @@ mod queue {
     }
 
     # process: takes [state, event] and returns next_state
-    process {
+    sentence process {
         # Stack: [state, event]
         roll 1 # Stack: [event, state]
         untuple 4
@@ -434,7 +434,7 @@ mod queue {
     }
 
     # tau_reduce: takes [state] and returns (new_state, changed)
-    tau_reduce {
+    sentence tau_reduce {
         # Stack: [state]
         pick 0 # duplicate state. Stack: [state, state]
         untuple 4
@@ -548,7 +548,7 @@ mod queue {
 }
 
 # Helper to drive the queue's tau reductions in tests
-drive_reductions {
+sentence drive_reductions {
     # Stack: [state]
     pick 0
     jump queue::tau_reduce
@@ -563,7 +563,7 @@ drive_reductions {
     }
 }
 
-test verify_queue_machine {
+test sentence verify_queue_machine {
     jump queue::init
     
     # 2. Push 10

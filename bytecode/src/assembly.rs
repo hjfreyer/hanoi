@@ -22,6 +22,7 @@ enum Token {
     SymbolKeyword,
     TestKeyword,
     ModKeyword,
+    SentenceKeyword,
     DoubleColon,
     Semicolon,
     Identifier(String),
@@ -169,6 +170,7 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
                     "symbol" => tokens.push(Token::SymbolKeyword),
                     "test" => tokens.push(Token::TestKeyword),
                     "mod" => tokens.push(Token::ModKeyword),
+                    "sentence" => tokens.push(Token::SentenceKeyword),
                     "true" => tokens.push(Token::Bool(true)),
                     "false" => tokens.push(Token::Bool(false)),
                     _ => tokens.push(Token::Identifier(ident)),
@@ -681,6 +683,8 @@ fn parse_items(stream: &mut TokenStream, end_token: Option<Token>, base_dir: Opt
                     break;
                 }
             }
+
+            stream.expect(Token::SentenceKeyword)?;
 
             let name = match stream.next() {
                 Some(Token::Identifier(name)) => name,

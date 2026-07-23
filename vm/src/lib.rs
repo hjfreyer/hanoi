@@ -615,7 +615,7 @@ mod tests {
     #[test]
     fn test_integration_assembler_vm() {
         let code = r#"
-            export start {
+            export sentence start {
                 push 10
                 push 20
                 add
@@ -649,12 +649,12 @@ mod tests {
             symbol status_ok "Successful execution"
             symbol status_error "Execution error"
             
-            export entry {
+            export sentence entry {
                 push status_ok
                 jump verify
             }
             
-            verify {
+            sentence verify {
                 # Top of stack has the passed symbol. Compare it to status_ok.
                 push status_ok
                 equal
@@ -682,7 +682,7 @@ mod tests {
             symbol ascii_sym "hello"
             symbol unicode_sym "café"
             
-            export test_len {
+            export sentence test_len {
                 push ascii_sym
                 symbol_len
                 push 5
@@ -694,7 +694,7 @@ mod tests {
                 assert_eq
             }
             
-            export test_char_at {
+            export sentence test_char_at {
                 push ascii_sym
                 push 1
                 symbol_char_at
@@ -708,7 +708,7 @@ mod tests {
                 assert_eq
             }
             
-            export test_out_of_bounds {
+            export sentence test_out_of_bounds {
                 push unicode_sym
                 push 4
                 symbol_char_at
@@ -739,7 +739,7 @@ mod tests {
     #[test]
     fn test_tracing_execution() {
         let code = r#"
-            export entry {
+            export sentence entry {
                 push 42
                 push 100
                 add
@@ -766,20 +766,20 @@ mod tests {
             symbol payload "Payload"
 
             mod base {
-                export init {
+                export sentence init {
                     push 0
                 }
-                export accept {
+                export sentence accept {
                     drop 0
                     push singleton(crate::payload)
                 }
-                export emit {
+                export sentence emit {
                     drop 0
                     push crate::payload
                     push true
                     tuple 2
                 }
-                export process {
+                export sentence process {
                     # Stack: [state, event]
                     roll 1
                     push 1
@@ -792,7 +792,7 @@ mod tests {
             mod prefixed compose_prefix(base, from_sym);
             mod renamed compose_rename_prefix(from_sym, to_sym, prefixed);
 
-            export test_rename {
+            export sentence test_rename {
                 # Initialize state
                 jump renamed::init
                 
@@ -856,7 +856,7 @@ mod tests {
         let bad_code = r#"
             symbol a
             symbol b
-            mod m { export init { push 0 } export accept { drop 0 push empty_set } export emit { drop 0 tuple 0 push false tuple 2 } export process { } }
+            mod m { export sentence init { push 0 } export sentence accept { drop 0 push empty_set } export sentence emit { drop 0 tuple 0 push false tuple 2 } export sentence process { } }
             mod bad compose_rename_prefix(a, m);
         "#;
         assert!(bytecode::assemble(bad_code).is_err());
@@ -866,53 +866,53 @@ mod tests {
     fn test_tau_reduce() {
         let code = r#"
             mod m_no_tau {
-                export init {
+                export sentence init {
                     push 0
                 }
-                export accept {
+                export sentence accept {
                     drop 0
                     push empty_set
                 }
-                export emit {
+                export sentence emit {
                     drop 0
                     tuple 0
                     push false
                     tuple 2
                 }
-                export tau_reduce {
+                export sentence tau_reduce {
                     push false
                     roll 1
                     tuple 2
                 }
-                export process {
+                export sentence process {
                 }
             }
 
             mod m_with_tau {
-                export init {
+                export sentence init {
                     push 0
                 }
-                export accept {
+                export sentence accept {
                     drop 0
                     push empty_set
                 }
-                export emit {
+                export sentence emit {
                     drop 0
                     tuple 0
                     push false
                     tuple 2
                 }
-                export tau_reduce {
+                export sentence tau_reduce {
                     drop 0
                     push 1
                     push true
                     tuple 2
                 }
-                export process {
+                export sentence process {
                 }
             }
 
-            export test_tau {
+            export sentence test_tau {
                 # Test m_no_tau
                 jump m_no_tau::init
                 jump m_no_tau::tau_reduce

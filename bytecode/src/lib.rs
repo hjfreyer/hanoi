@@ -126,7 +126,7 @@ mod tests {
     #[test]
     fn test_assemble_simple() {
         let code = r#"
-            export entry {
+            export sentence entry {
                 push 42
                 push (1, 2, (3, false))
                 drop 1
@@ -152,7 +152,7 @@ mod tests {
     #[test]
     fn test_assemble_nested_branching() {
         let code = r#"
-            entry {
+            sentence entry {
                 push true
                 branch {
                     push 42
@@ -187,7 +187,7 @@ mod tests {
     #[test]
     fn test_assemble_invalid_label() {
         let code = r#"
-            entry {
+            sentence entry {
                 jump non_existent_label
             }
         "#;
@@ -202,7 +202,7 @@ mod tests {
             symbol sym1 "My Custom Symbol"
             symbol sym2
             
-            entry {
+            sentence entry {
                 push sym1
                 push sym2
             }
@@ -226,11 +226,11 @@ mod tests {
     #[test]
     fn test_assemble_test_annotation() {
         let code = r#"
-            test my_test {
+            test sentence my_test {
                 push 1
                 assert
             }
-            export test my_exported_test {
+            export test sentence my_exported_test {
                 push 2
                 assert
             }
@@ -267,7 +267,7 @@ mod tests {
     #[test]
     fn test_assemble_up_path_error() {
         let code = r#"
-            entry {
+            sentence entry {
                 jump super::entry
             }
         "#;
@@ -282,7 +282,7 @@ mod tests {
             mod a {
                 symbol my_sym "A's Symbol"
                 mod b {
-                    export test my_test {
+                    export test sentence my_test {
                         push super::my_sym
                         push crate::a::my_sym
                         equal
@@ -315,7 +315,7 @@ mod tests {
         let main_code = r#"
             mod helper;
             
-            test run {
+            test sentence run {
                 push helper::val
                 push helper::val
                 equal

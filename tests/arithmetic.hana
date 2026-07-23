@@ -1,6 +1,6 @@
 # Tests for arithmetic operations
 
-test add_numbers {
+test sentence add_numbers {
     push 10
     push 20
     add
@@ -8,7 +8,7 @@ test add_numbers {
     assert_eq
 }
 
-test subtract_numbers {
+test sentence subtract_numbers {
     push 50
     push 20
     sub
@@ -16,7 +16,7 @@ test subtract_numbers {
     assert_eq
 }
 
-test multiply_numbers {
+test sentence multiply_numbers {
     push 5
     push 6
     mul
@@ -24,7 +24,7 @@ test multiply_numbers {
     assert_eq
 }
 
-test divide_numbers {
+test sentence divide_numbers {
     push 90
     push 3
     div
@@ -32,7 +32,7 @@ test divide_numbers {
     assert_eq
 }
 
-test modulo_numbers {
+test sentence modulo_numbers {
     push 35
     push 10
     mod
@@ -40,14 +40,14 @@ test modulo_numbers {
     assert_eq
 }
 
-test negate_number {
+test sentence negate_number {
     push 42
     neg
     push -42
     assert_eq
 }
 
-test logical_not {
+test sentence logical_not {
     push true
     not
     push false
@@ -59,7 +59,7 @@ test logical_not {
     assert_eq
 }
 
-test boolean_operations {
+test sentence boolean_operations {
     push true
     push true
     and
