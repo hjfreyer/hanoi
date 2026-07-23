@@ -545,6 +545,26 @@ mod queue {
             }
         }
     }
+
+    sentence is_done {
+        drop 0
+        push false
+    }
+
+    sentence is_ready_to_finish {
+        untuple 4
+        pick 3
+        push super::idle
+        equal
+        roll 4
+        drop 0
+        roll 3
+        drop 0
+        roll 2
+        drop 0
+        roll 1
+        drop 0
+    }
 }
 
 # Helper to drive the queue's tau reductions in tests

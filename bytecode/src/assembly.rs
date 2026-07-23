@@ -1085,6 +1085,10 @@ fn compose_concurrent(args: &[Path]) -> Result<Vec<TopLevelItem>, String> {
     let mut p2_process = p2.clone(); p2_process.segments.push(PathSegment::Identifier("process".to_string()));
     let mut p1_tau_reduce = p1.clone(); p1_tau_reduce.segments.push(PathSegment::Identifier("tau_reduce".to_string()));
     let mut p2_tau_reduce = p2.clone(); p2_tau_reduce.segments.push(PathSegment::Identifier("tau_reduce".to_string()));
+    let mut p1_is_done = p1.clone(); p1_is_done.segments.push(PathSegment::Identifier("is_done".to_string()));
+    let mut p2_is_done = p2.clone(); p2_is_done.segments.push(PathSegment::Identifier("is_done".to_string()));
+    let mut p1_is_ready_to_finish = p1.clone(); p1_is_ready_to_finish.segments.push(PathSegment::Identifier("is_ready_to_finish".to_string()));
+    let mut p2_is_ready_to_finish = p2.clone(); p2_is_ready_to_finish.segments.push(PathSegment::Identifier("is_ready_to_finish".to_string()));
 
     let init_sentence = TopLevelSentence {
         is_exported: false,
@@ -1583,12 +1587,73 @@ fn compose_concurrent(args: &[Path]) -> Result<Vec<TopLevelItem>, String> {
         },
     };
 
+    let is_done_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "is_done".to_string(),
+        body: ParsedSentence {
+            instructions: vec![
+                ParsedInstruction::Untuple(2), // Stack: [state1, state2]
+                ParsedInstruction::Pick(1),    // Stack: [state1, state2, state1]
+                ParsedInstruction::Jump(Target::Label(p1_is_ready_to_finish.clone())), // Stack: [state1, state2, p1_ready]
+                ParsedInstruction::Roll(2),    // Stack: [state2, p1_ready, state1]
+                ParsedInstruction::Jump(Target::Label(p1_is_done.clone())), // Stack: [state2, p1_ready, p1_done]
+                ParsedInstruction::Roll(2),    // Stack: [p1_ready, p1_done, state2]
+                ParsedInstruction::Pick(0),    // Stack: [p1_ready, p1_done, state2, state2]
+                ParsedInstruction::Jump(Target::Label(p2_is_ready_to_finish.clone())), // Stack: [p1_ready, p1_done, state2, p2_ready]
+                ParsedInstruction::Roll(1),    // Stack: [p1_ready, p1_done, p2_ready, state2]
+                ParsedInstruction::Jump(Target::Label(p2_is_done.clone())), // Stack: [p1_ready, p1_done, p2_ready, p2_done]
+                
+                // Compute (p1_ready && p2_done)
+                ParsedInstruction::Pick(3),
+                ParsedInstruction::Pick(1),
+                ParsedInstruction::And,
+                
+                // Compute (p2_ready && p1_done)
+                ParsedInstruction::Pick(2),
+                ParsedInstruction::Pick(4),
+                ParsedInstruction::And,
+                
+                // Compute cond1 || cond2
+                ParsedInstruction::Or,
+                
+                // Stack cleanup
+                ParsedInstruction::Roll(4),
+                ParsedInstruction::Drop(0),
+                ParsedInstruction::Roll(3),
+                ParsedInstruction::Drop(0),
+                ParsedInstruction::Roll(2),
+                ParsedInstruction::Drop(0),
+                ParsedInstruction::Roll(1),
+                ParsedInstruction::Drop(0),
+            ],
+        },
+    };
+
+    let is_ready_to_finish_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "is_ready_to_finish".to_string(),
+        body: ParsedSentence {
+            instructions: vec![
+                ParsedInstruction::Untuple(2), // Stack: [state1, state2]
+                ParsedInstruction::Roll(1),    // Stack: [state2, state1]
+                ParsedInstruction::Jump(Target::Label(p1_is_ready_to_finish)), // Stack: [state2, p1_ready]
+                ParsedInstruction::Roll(1),    // Stack: [p1_ready, state2]
+                ParsedInstruction::Jump(Target::Label(p2_is_ready_to_finish)), // Stack: [p1_ready, p2_ready]
+                ParsedInstruction::Or,         // Stack: [p1_ready || p2_ready]
+            ],
+        },
+    };
+
     Ok(vec![
         TopLevelItem::Sentence(init_sentence),
         TopLevelItem::Sentence(accept_sentence),
         TopLevelItem::Sentence(emit_sentence),
         TopLevelItem::Sentence(process_sentence),
         TopLevelItem::Sentence(tau_reduce_sentence),
+        TopLevelItem::Sentence(is_done_sentence),
+        TopLevelItem::Sentence(is_ready_to_finish_sentence),
     ])
 }
 
@@ -1604,6 +1669,8 @@ fn compose_hidden(args: &[Path]) -> Result<Vec<TopLevelItem>, String> {
     let mut concurrent_emit = concurrent.clone(); concurrent_emit.segments.push(PathSegment::Identifier("emit".to_string()));
     let mut concurrent_process = concurrent.clone(); concurrent_process.segments.push(PathSegment::Identifier("process".to_string()));
     let mut concurrent_tau_reduce = concurrent.clone(); concurrent_tau_reduce.segments.push(PathSegment::Identifier("tau_reduce".to_string()));
+    let mut concurrent_is_done = concurrent.clone(); concurrent_is_done.segments.push(PathSegment::Identifier("is_done".to_string()));
+    let mut concurrent_is_ready_to_finish = concurrent.clone(); concurrent_is_ready_to_finish.segments.push(PathSegment::Identifier("is_ready_to_finish".to_string()));
 
     let init_sentence = TopLevelSentence {
         is_exported: false,
@@ -1793,6 +1860,28 @@ fn compose_hidden(args: &[Path]) -> Result<Vec<TopLevelItem>, String> {
         },
     };
 
+    let is_done_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "is_done".to_string(),
+        body: ParsedSentence {
+            instructions: vec![
+                ParsedInstruction::Jump(Target::Label(concurrent_is_done)),
+            ],
+        },
+    };
+
+    let is_ready_to_finish_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "is_ready_to_finish".to_string(),
+        body: ParsedSentence {
+            instructions: vec![
+                ParsedInstruction::Jump(Target::Label(concurrent_is_ready_to_finish)),
+            ],
+        },
+    };
+
     Ok(vec![
         TopLevelItem::Sentence(init_sentence),
         TopLevelItem::Sentence(set_sentence),
@@ -1800,6 +1889,8 @@ fn compose_hidden(args: &[Path]) -> Result<Vec<TopLevelItem>, String> {
         TopLevelItem::Sentence(emit_sentence),
         TopLevelItem::Sentence(process_sentence),
         TopLevelItem::Sentence(tau_reduce_sentence),
+        TopLevelItem::Sentence(is_done_sentence),
+        TopLevelItem::Sentence(is_ready_to_finish_sentence),
     ])
 }
 
@@ -1814,6 +1905,8 @@ fn compose_prefix(args: &[Path]) -> Result<Vec<TopLevelItem>, String> {
     let mut machine_accept = machine.clone(); machine_accept.segments.push(PathSegment::Identifier("accept".to_string()));
     let mut machine_emit = machine.clone(); machine_emit.segments.push(PathSegment::Identifier("emit".to_string()));
     let mut machine_process = machine.clone(); machine_process.segments.push(PathSegment::Identifier("process".to_string()));
+    let mut machine_is_done = machine.clone(); machine_is_done.segments.push(PathSegment::Identifier("is_done".to_string()));
+    let mut machine_is_ready_to_finish = machine.clone(); machine_is_ready_to_finish.segments.push(PathSegment::Identifier("is_ready_to_finish".to_string()));
 
     let init_sentence = TopLevelSentence {
         is_exported: false,
@@ -1902,12 +1995,36 @@ fn compose_prefix(args: &[Path]) -> Result<Vec<TopLevelItem>, String> {
         },
     };
 
+    let is_done_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "is_done".to_string(),
+        body: ParsedSentence {
+            instructions: vec![
+                ParsedInstruction::Jump(Target::Label(machine_is_done)),
+            ],
+        },
+    };
+
+    let is_ready_to_finish_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "is_ready_to_finish".to_string(),
+        body: ParsedSentence {
+            instructions: vec![
+                ParsedInstruction::Jump(Target::Label(machine_is_ready_to_finish)),
+            ],
+        },
+    };
+
     Ok(vec![
         TopLevelItem::Sentence(init_sentence),
         TopLevelItem::Sentence(accept_sentence),
         TopLevelItem::Sentence(emit_sentence),
         TopLevelItem::Sentence(process_sentence),
         TopLevelItem::Sentence(tau_reduce_sentence),
+        TopLevelItem::Sentence(is_done_sentence),
+        TopLevelItem::Sentence(is_ready_to_finish_sentence),
     ])
 }
 
@@ -1924,6 +2041,8 @@ fn compose_rename_prefix(args: &[Path]) -> Result<Vec<TopLevelItem>, String> {
     let mut machine_emit = machine.clone(); machine_emit.segments.push(PathSegment::Identifier("emit".to_string()));
     let mut machine_process = machine.clone(); machine_process.segments.push(PathSegment::Identifier("process".to_string()));
     let mut machine_tau_reduce = machine.clone(); machine_tau_reduce.segments.push(PathSegment::Identifier("tau_reduce".to_string()));
+    let mut machine_is_done = machine.clone(); machine_is_done.segments.push(PathSegment::Identifier("is_done".to_string()));
+    let mut machine_is_ready_to_finish = machine.clone(); machine_is_ready_to_finish.segments.push(PathSegment::Identifier("is_ready_to_finish".to_string()));
 
     let init_sentence = TopLevelSentence {
         is_exported: false,
@@ -2049,12 +2168,36 @@ fn compose_rename_prefix(args: &[Path]) -> Result<Vec<TopLevelItem>, String> {
         },
     };
 
+    let is_done_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "is_done".to_string(),
+        body: ParsedSentence {
+            instructions: vec![
+                ParsedInstruction::Jump(Target::Label(machine_is_done)),
+            ],
+        },
+    };
+
+    let is_ready_to_finish_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "is_ready_to_finish".to_string(),
+        body: ParsedSentence {
+            instructions: vec![
+                ParsedInstruction::Jump(Target::Label(machine_is_ready_to_finish)),
+            ],
+        },
+    };
+
     Ok(vec![
         TopLevelItem::Sentence(init_sentence),
         TopLevelItem::Sentence(accept_sentence),
         TopLevelItem::Sentence(emit_sentence),
         TopLevelItem::Sentence(process_sentence),
         TopLevelItem::Sentence(tau_reduce_sentence),
+        TopLevelItem::Sentence(is_done_sentence),
+        TopLevelItem::Sentence(is_ready_to_finish_sentence),
     ])
 }
 
@@ -2092,6 +2235,8 @@ fn compose_static_closure(args: &[ResolvedArg]) -> Result<Vec<TopLevelItem>, Str
     let mut machine_emit = machine.clone(); machine_emit.segments.push(PathSegment::Identifier("emit".to_string()));
     let mut machine_process = machine.clone(); machine_process.segments.push(PathSegment::Identifier("process".to_string()));
     let mut machine_tau_reduce = machine.clone(); machine_tau_reduce.segments.push(PathSegment::Identifier("tau_reduce".to_string()));
+    let mut machine_is_done = machine.clone(); machine_is_done.segments.push(PathSegment::Identifier("is_done".to_string()));
+    let mut machine_is_ready_to_finish = machine.clone(); machine_is_ready_to_finish.segments.push(PathSegment::Identifier("is_ready_to_finish".to_string()));
 
     let init_sentence = TopLevelSentence {
         is_exported: false,
@@ -2149,12 +2294,36 @@ fn compose_static_closure(args: &[ResolvedArg]) -> Result<Vec<TopLevelItem>, Str
         },
     };
 
+    let is_done_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "is_done".to_string(),
+        body: ParsedSentence {
+            instructions: vec![
+                ParsedInstruction::Jump(Target::Label(machine_is_done)),
+            ],
+        },
+    };
+
+    let is_ready_to_finish_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "is_ready_to_finish".to_string(),
+        body: ParsedSentence {
+            instructions: vec![
+                ParsedInstruction::Jump(Target::Label(machine_is_ready_to_finish)),
+            ],
+        },
+    };
+
     Ok(vec![
         TopLevelItem::Sentence(init_sentence),
         TopLevelItem::Sentence(accept_sentence),
         TopLevelItem::Sentence(emit_sentence),
         TopLevelItem::Sentence(process_sentence),
         TopLevelItem::Sentence(tau_reduce_sentence),
+        TopLevelItem::Sentence(is_done_sentence),
+        TopLevelItem::Sentence(is_ready_to_finish_sentence),
     ])
 }
 

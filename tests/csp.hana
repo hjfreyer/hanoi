@@ -210,6 +210,16 @@ mod customer_impl {
             }
         }
     }
+
+    sentence is_done {
+        drop 0
+        push false
+    }
+
+    sentence is_ready_to_finish {
+        drop 0
+        push false
+    }
 }
 
 mod customer1 compose_static_closure(customer_impl, (super::customer_id::c1, super::event::latte, super::customer_impl::state::idle));
@@ -363,6 +373,16 @@ mod barista {
                 push state::idle
             }
         }
+    }
+
+    sentence is_done {
+        drop 0
+        push false
+    }
+
+    sentence is_ready_to_finish {
+        push state::idle
+        equal
     }
 }
 

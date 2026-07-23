@@ -205,6 +205,18 @@ mod string_ref {
             tuple 2 # (sym, idle)
         }
     }
+
+    sentence is_done {
+        drop 0
+        push false
+    }
+
+    sentence is_ready_to_finish {
+        untuple 2
+        drop 0
+        push idle
+        equal
+    }
 }
 
 
@@ -472,6 +484,20 @@ mod char_iterator {
                 }
             }
         }
+    }
+
+    sentence is_done {
+        untuple 2
+        drop 0
+        push done_state
+        equal
+    }
+
+    sentence is_ready_to_finish {
+        untuple 2
+        drop 0
+        push done_state
+        equal
     }
 }
 
@@ -788,6 +814,16 @@ mod parseint {
                 }
             }
         }
+    }
+
+    sentence is_done {
+        drop 0
+        push false
+    }
+
+    sentence is_ready_to_finish {
+        push idle
+        equal
     }
 }
 
@@ -1241,6 +1277,29 @@ mod split {
             }
         }
     }
+
+    sentence is_done {
+        untuple 2
+        drop 0
+        push state_done
+        equal
+    }
+
+    sentence is_ready_to_finish {
+        untuple 2
+        drop 0
+        pick 0
+        push state_idle
+        equal
+        pick 1
+        push state_idle_done
+        equal
+        or
+        roll 1
+        push state_done
+        equal
+        or
+    }
 }
 
 symbol my_str "abc"
@@ -1266,6 +1325,14 @@ mod string_ref_base {
     }
     sentence process {
         jump super::string_ref::process
+    }
+
+    sentence is_done {
+        jump super::string_ref::is_done
+    }
+
+    sentence is_ready_to_finish {
+        jump super::string_ref::is_ready_to_finish
     }
 }
 
