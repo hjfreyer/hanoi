@@ -26,6 +26,9 @@ mod customer_impl {
         symbol has_coffee  "Customer received coffee and has coffee"
     }
 
+    sentence init {
+    }
+
     # accept takes state: (id, preferred_drink, internal_state) and returns ValueSet of accepted events.
     # The accepted events are:
     # - If internal_state is idle: {(want_coffee, id)} (from environment)
@@ -209,47 +212,9 @@ mod customer_impl {
     }
 }
 
-mod customer1 {
-    sentence init {
-        push super::customer_id::c1
-        push super::event::latte
-        push super::customer_impl::state::idle
-        tuple 3
-    }
-    sentence accept {
-        jump super::customer_impl::accept
-    }
-    sentence tau_reduce {
-        jump super::customer_impl::tau_reduce
-    }
-    sentence emit {
-        jump super::customer_impl::emit
-    }
-    sentence process {
-        jump super::customer_impl::process
-    }
-}
+mod customer1 compose_static_closure(customer_impl, (super::customer_id::c1, super::event::latte, super::customer_impl::state::idle));
 
-mod customer2 {
-    sentence init {
-        push super::customer_id::c2
-        push super::event::espresso
-        push super::customer_impl::state::idle
-        tuple 3
-    }
-    sentence accept {
-        jump super::customer_impl::accept
-    }
-    sentence tau_reduce {
-        jump super::customer_impl::tau_reduce
-    }
-    sentence emit {
-        jump super::customer_impl::emit
-    }
-    sentence process {
-        jump super::customer_impl::process
-    }
-}
+mod customer2 compose_static_closure(customer_impl, (super::customer_id::c2, super::event::espresso, super::customer_impl::state::idle));
 
 mod barista {
     mod state {

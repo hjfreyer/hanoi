@@ -520,6 +520,13 @@ pub enum ModuleExpr {
         composer: String,
         args: Vec<ModuleExpr>,
     },
+    Value(ParsedValue),
+}
+
+#[derive(Debug, Clone)]
+pub enum ResolvedArg {
+    Path(Path),
+    Value(ParsedValue),
 }
 
 enum TopLevelItem {
@@ -547,7 +554,7 @@ struct TopLevelSentence {
 }
 
 fn is_composer_name(name: &str) -> bool {
-    name == "compose_concurrent" || name == "compose_hidden" || name == "compose_prefix" || name == "compose_rename_prefix"
+    name == "compose_concurrent" || name == "compose_hidden" || name == "compose_prefix" || name == "compose_rename_prefix" || name == "compose_static_closure"
 }
 
 fn parse_module_expr(stream: &mut TokenStream) -> Result<ModuleExpr, String> {
@@ -571,13 +578,21 @@ fn parse_module_expr(stream: &mut TokenStream) -> Result<ModuleExpr, String> {
         }
     }
 
-    let first_ident = match stream.next() {
-        Some(Token::Identifier(id)) => id,
-        Some(other) => return Err(format!("Expected identifier for module path or composer, found {:?}", other)),
-        None => return Err("Expected identifier for module path or composer, found end of input".to_string()),
-    };
-    let path = parse_path(stream, first_ident)?;
-    Ok(ModuleExpr::Named(path))
+    match stream.peek() {
+        Some(Token::Identifier(_)) => {
+            let first_ident = match stream.next() {
+                Some(Token::Identifier(id)) => id,
+                _ => unreachable!(),
+            };
+            let path = parse_path(stream, first_ident)?;
+            Ok(ModuleExpr::Named(path))
+        }
+        Some(_) => {
+            let val = parse_value(stream)?;
+            Ok(ModuleExpr::Value(val))
+        }
+        None => Err("Expected module expression or value, found end of input".to_string()),
+    }
 }
 
 fn parse_top_level(stream: &mut TokenStream, base_dir: Option<&std::path::Path>) -> Result<Vec<TopLevelItem>, String> {
@@ -711,7 +726,7 @@ fn parse_items(stream: &mut TokenStream, end_token: Option<Token>, base_dir: Opt
 }
 
 #[derive(Debug, Clone)]
-enum ParsedValue {
+pub enum ParsedValue {
     Bool(bool),
     Int(i64),
     Float(f64),
@@ -840,9 +855,10 @@ fn resolve_module_expr(
     exports: &mut HashMap<String, SentenceIndex>,
     tests: &mut HashMap<String, SentenceIndex>,
     anon_counter: &mut usize,
-) -> Result<Path, String> {
+) -> Result<ResolvedArg, String> {
     match expr {
-        ModuleExpr::Named(path) => Ok(path.clone()),
+        ModuleExpr::Named(path) => Ok(ResolvedArg::Path(path.clone())),
+        ModuleExpr::Value(val) => Ok(ResolvedArg::Value(val.clone())),
         ModuleExpr::Composer { composer, args } => {
             let mut resolved_args = Vec::new();
             for arg in args {
@@ -879,9 +895,9 @@ fn resolve_module_expr(
 
             parent_module.submodules.insert(anon_name.clone(), anon_submodule);
 
-            Ok(Path {
+            Ok(ResolvedArg::Path(Path {
                 segments: vec![PathSegment::Identifier(anon_name)],
-            })
+            }))
         }
     }
 }
@@ -2042,15 +2058,128 @@ fn compose_rename_prefix(args: &[Path]) -> Result<Vec<TopLevelItem>, String> {
     ])
 }
 
+fn extract_paths(args: &[ResolvedArg], composer_name: &str) -> Result<Vec<Path>, String> {
+    let mut paths = Vec::new();
+    for arg in args {
+        match arg {
+            ResolvedArg::Path(p) => paths.push(p.clone()),
+            ResolvedArg::Value(_) => {
+                return Err(format!(
+                    "{} expects path arguments, found a literal value",
+                    composer_name
+                ));
+            }
+        }
+    }
+    Ok(paths)
+}
+
+fn compose_static_closure(args: &[ResolvedArg]) -> Result<Vec<TopLevelItem>, String> {
+    if args.len() != 2 {
+        return Err("compose_static_closure requires exactly 2 arguments: target_machine and a value".to_string());
+    }
+    let machine = match &args[0] {
+        ResolvedArg::Path(path) => adjust_path(path),
+        _ => return Err("compose_static_closure: first argument must be a machine module path".to_string()),
+    };
+    let val = match &args[1] {
+        ResolvedArg::Value(val) => val.clone(),
+        ResolvedArg::Path(path) => ParsedValue::SymbolRef(adjust_path(path)),
+    };
+
+    let mut machine_init = machine.clone(); machine_init.segments.push(PathSegment::Identifier("init".to_string()));
+    let mut machine_accept = machine.clone(); machine_accept.segments.push(PathSegment::Identifier("accept".to_string()));
+    let mut machine_emit = machine.clone(); machine_emit.segments.push(PathSegment::Identifier("emit".to_string()));
+    let mut machine_process = machine.clone(); machine_process.segments.push(PathSegment::Identifier("process".to_string()));
+    let mut machine_tau_reduce = machine.clone(); machine_tau_reduce.segments.push(PathSegment::Identifier("tau_reduce".to_string()));
+
+    let init_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "init".to_string(),
+        body: ParsedSentence {
+            instructions: vec![
+                ParsedInstruction::Push(val),
+                ParsedInstruction::Jump(Target::Label(machine_init)),
+            ],
+        },
+    };
+
+    let accept_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "accept".to_string(),
+        body: ParsedSentence {
+            instructions: vec![
+                ParsedInstruction::Jump(Target::Label(machine_accept)),
+            ],
+        },
+    };
+
+    let emit_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "emit".to_string(),
+        body: ParsedSentence {
+            instructions: vec![
+                ParsedInstruction::Jump(Target::Label(machine_emit)),
+            ],
+        },
+    };
+
+    let process_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "process".to_string(),
+        body: ParsedSentence {
+            instructions: vec![
+                ParsedInstruction::Jump(Target::Label(machine_process)),
+            ],
+        },
+    };
+
+    let tau_reduce_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "tau_reduce".to_string(),
+        body: ParsedSentence {
+            instructions: vec![
+                ParsedInstruction::Jump(Target::Label(machine_tau_reduce)),
+            ],
+        },
+    };
+
+    Ok(vec![
+        TopLevelItem::Sentence(init_sentence),
+        TopLevelItem::Sentence(accept_sentence),
+        TopLevelItem::Sentence(emit_sentence),
+        TopLevelItem::Sentence(process_sentence),
+        TopLevelItem::Sentence(tau_reduce_sentence),
+    ])
+}
+
 fn generate_composition_items(
     composer: &str,
-    args: &[Path],
+    args: &[ResolvedArg],
 ) -> Result<Vec<TopLevelItem>, String> {
     match composer {
-        "compose_concurrent" => compose_concurrent(args),
-        "compose_hidden" => compose_hidden(args),
-        "compose_prefix" => compose_prefix(args),
-        "compose_rename_prefix" => compose_rename_prefix(args),
+        "compose_concurrent" => {
+            let paths = extract_paths(args, "compose_concurrent")?;
+            compose_concurrent(&paths)
+        }
+        "compose_hidden" => {
+            let paths = extract_paths(args, "compose_hidden")?;
+            compose_hidden(&paths)
+        }
+        "compose_prefix" => {
+            let paths = extract_paths(args, "compose_prefix")?;
+            compose_prefix(&paths)
+        }
+        "compose_rename_prefix" => {
+            let paths = extract_paths(args, "compose_rename_prefix")?;
+            compose_rename_prefix(&paths)
+        }
+        "compose_static_closure" => compose_static_closure(args),
         _ => Err(format!("Unknown composer: {}", composer)),
     }
 }

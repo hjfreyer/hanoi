@@ -1366,20 +1366,9 @@ test sentence iterate_string_ascii {
     drop 0
 }
 
-mod str_123_base {
-    sentence init {
-        push super::str_123
-        jump super::string_ref::init
-    }
-    sentence accept { jump super::string_ref::accept }
-    sentence tau_reduce { jump super::string_ref::tau_reduce }
-    sentence emit { jump super::string_ref::emit }
-    sentence process { jump super::string_ref::process }
-}
-
 mod str_123_hidden compose_hidden(
     compose_concurrent(
-        compose_prefix(str_123_base, char_iterator::in),
+        compose_prefix(compose_static_closure(string_ref, str_123), char_iterator::in),
         char_iterator,
         sync_char_iterator_in
     ),
@@ -1467,20 +1456,9 @@ test sentence parseint_valid_number {
     drop 0
 }
 
-mod str_45a_base {
-    sentence init {
-        push super::str_45a
-        jump super::string_ref::init
-    }
-    sentence accept { jump super::string_ref::accept }
-    sentence tau_reduce { jump super::string_ref::tau_reduce }
-    sentence emit { jump super::string_ref::emit }
-    sentence process { jump super::string_ref::process }
-}
-
 mod str_45a_hidden compose_hidden(
     compose_concurrent(
-        compose_prefix(str_45a_base, char_iterator::in),
+        compose_prefix(compose_static_closure(string_ref, str_45a), char_iterator::in),
         char_iterator,
         sync_char_iterator_in
     ),
@@ -1679,26 +1657,7 @@ test sentence verify_string_ref {
     assert_eq
 }
 
-mod xyz_string_ref_base {
-    sentence init {
-        push super::xyz_str
-        jump super::string_ref::init
-    }
-    sentence accept {
-        jump super::string_ref::accept
-    }
-    sentence tau_reduce {
-        jump super::string_ref::tau_reduce
-    }
-    sentence emit {
-        jump super::string_ref::emit
-    }
-    sentence process {
-        jump super::string_ref::process
-    }
-}
-
-mod xyz_string_ref_instance compose_prefix(xyz_string_ref_base, char_iterator::in);
+mod xyz_string_ref_instance compose_prefix(compose_static_closure(string_ref, xyz_str), char_iterator::in);
 
 test sentence verify_prefixed_string_ref {
     # Initialize xyz_string_ref_instance
@@ -1744,28 +1703,9 @@ test sentence verify_prefixed_string_ref {
     assert_eq
 }
 
-mod empty_string_ref_base {
-    sentence init {
-        push super::empty_str
-        jump super::string_ref::init
-    }
-    sentence accept {
-        jump super::string_ref::accept
-    }
-    sentence tau_reduce {
-        jump super::string_ref::tau_reduce
-    }
-    sentence emit {
-        jump super::string_ref::emit
-    }
-    sentence process {
-        jump super::string_ref::process
-    }
-}
-
 mod empty_string_hidden compose_hidden(
     compose_concurrent(
-        compose_prefix(empty_string_ref_base, char_iterator::in),
+        compose_prefix(compose_static_closure(string_ref, empty_str), char_iterator::in),
         char_iterator,
         sync_char_iterator_in
     ),
@@ -1797,28 +1737,9 @@ test sentence iterate_empty {
     drop 0
 }
 
-mod cafe_string_ref_base {
-    sentence init {
-        push super::cafe_str
-        jump super::string_ref::init
-    }
-    sentence accept {
-        jump super::string_ref::accept
-    }
-    sentence tau_reduce {
-        jump super::string_ref::tau_reduce
-    }
-    sentence emit {
-        jump super::string_ref::emit
-    }
-    sentence process {
-        jump super::string_ref::process
-    }
-}
-
 mod cafe_string_hidden compose_hidden(
     compose_concurrent(
-        compose_prefix(cafe_string_ref_base, char_iterator::in),
+        compose_prefix(compose_static_closure(string_ref, cafe_str), char_iterator::in),
         char_iterator,
         sync_char_iterator_in
     ),
@@ -1918,36 +1839,14 @@ test sentence iterate_unicode {
 
 symbol comma_str "a,b"
 
-mod comma_str_base {
-    sentence init {
-        push super::comma_str
-        jump super::string_ref::init
-    }
-    sentence accept { jump super::string_ref::accept }
-    sentence tau_reduce { jump super::string_ref::tau_reduce }
-    sentence emit { jump super::string_ref::emit }
-    sentence process { jump super::string_ref::process }
-}
-
 mod comma_str_hidden compose_hidden(
     compose_concurrent(
-        compose_prefix(comma_str_base, char_iterator::in),
+        compose_prefix(compose_static_closure(string_ref, comma_str), char_iterator::in),
         char_iterator,
         sync_char_iterator_in
     ),
     sync_char_iterator_in
 );
-
-mod split_comma_base {
-    sentence init {
-        push 44 # ','
-        jump super::split::init
-    }
-    sentence accept { jump super::split::accept }
-    sentence tau_reduce { jump super::split::tau_reduce }
-    sentence emit { jump super::split::emit }
-    sentence process { jump super::split::process }
-}
 
 sentence sync_split_in {
     push set_tuple(singleton(split::in), universal_set)
@@ -1955,7 +1854,7 @@ sentence sync_split_in {
 
 mod split_system compose_hidden(
     compose_concurrent(
-        split_comma_base,
+        compose_static_closure(split, 44),
         compose_rename_prefix(char_iterator::out, split::in, comma_str_hidden),
         sync_split_in
     ),

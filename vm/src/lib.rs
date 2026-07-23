@@ -863,6 +863,57 @@ mod tests {
     }
 
     #[test]
+    fn test_compose_static_closure() {
+        let code = r#"
+            mod base {
+                export sentence init {
+                    # Stack has the value pushed by the composer
+                    push 10
+                    add
+                }
+                export sentence accept {
+                    push empty_set
+                }
+                export sentence emit {
+                    tuple 0
+                    push false
+                    tuple 2
+                }
+                export sentence process {
+                    push 100
+                    add
+                }
+                export sentence tau_reduce {
+                    push false
+                    tuple 2
+                }
+            }
+
+            mod closed compose_static_closure(base, 42);
+
+            export sentence test_closure {
+                # Initialize state: should push 42, then call base::init which adds 10 -> returns 52
+                jump closed::init
+                pick 0
+                push 52
+                assert_eq
+
+                # Call process: should push 100, then add -> 152
+                jump closed::process
+                push 152
+                assert_eq
+            }
+        "#;
+        let res = bytecode::assemble(code).unwrap();
+        let test_idx = *res.exports.get("test_closure").unwrap();
+
+        let mut vm = VM::new(res.library);
+        if let Err(e) = vm.execute(test_idx) {
+            panic!("Execution failed: {}", e);
+        }
+    }
+
+    #[test]
     fn test_tau_reduce() {
         let code = r#"
             mod m_no_tau {
