@@ -2,13 +2,13 @@
 
 This directory contains Hanoi integration tests, including modeling of **Communicating Sequential Processes (CSP)** style state machines.
 
-A **CSP Machine** in Hanoi is represented as a module containing standard sentences (functions) to manage state initialization (`init`), event acceptance (`accept`), event emission (`emit`), state transitions (`process`), termination status (`is_done`), and checking readiness to finish (`is_ready_to_finish`).
+A **CSP Machine** in Hanoi is represented as a module containing standard sentences (functions) to manage state initialization (`init`), event acceptance (`accept`), event emission (`emit`), state transitions (`process`), internal/silent transitions (`tau_reduce`), termination status (`is_done`), and checking readiness to finish (`is_ready_to_finish`).
 
 ---
 
 ## Machine Structure
 
-Every machine module can implement six standard sentences: `init`, `accept`, `emit`, `process`, `is_done`, and `is_ready_to_finish`.
+Every machine module can implement seven standard sentences: `init`, `accept`, `emit`, `process`, `tau_reduce`, `is_done`, and `is_ready_to_finish`.
 
 ```
                   [sym / params]  (Input to init)
@@ -60,6 +60,11 @@ Determines if the machine has terminated.
 Determines if the machine is in a state where it is ready to finish (note that machines that are done must also always be ready to finish).
 * **Stack Input:** Pops the current `state`.
 * **Stack Output:** Pushes a `Boolean` (`true` if the machine is ready to finish, `false` otherwise).
+
+### 7. `tau_reduce`
+Computes an internal/silent transition (tau step) on the state without interacting with the environment.
+* **Stack Input:** Pops the current `state`.
+* **Stack Output:** Pushes a tuple `(new_state, changed)` where `changed` is a `Boolean` indicating if an internal transition was performed. If no internal transition occurred, it returns `(state, false)`.
 
 ---
 

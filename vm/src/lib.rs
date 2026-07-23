@@ -787,6 +787,18 @@ mod tests {
                     roll 1
                     drop 0
                 }
+                export sentence is_done {
+                    drop 0
+                    push false
+                }
+                export sentence is_ready_to_finish {
+                    drop 0
+                    push false
+                }
+                export sentence tau_reduce {
+                    push false
+                    tuple 2
+                }
             }
 
             mod prefixed compose_prefix(base, from_sym);
@@ -887,6 +899,14 @@ mod tests {
                     push false
                     tuple 2
                 }
+                export sentence is_done {
+                    drop 0
+                    push false
+                }
+                export sentence is_ready_to_finish {
+                    drop 0
+                    push false
+                }
             }
 
             mod closed compose_static_closure(base, 42);
@@ -937,6 +957,14 @@ mod tests {
                 }
                 export sentence process {
                 }
+                export sentence is_done {
+                    drop 0
+                    push false
+                }
+                export sentence is_ready_to_finish {
+                    drop 0
+                    push false
+                }
             }
 
             mod m_with_tau {
@@ -960,6 +988,14 @@ mod tests {
                     tuple 2
                 }
                 export sentence process {
+                }
+                export sentence is_done {
+                    drop 0
+                    push false
+                }
+                export sentence is_ready_to_finish {
+                    drop 0
+                    push false
                 }
             }
 
