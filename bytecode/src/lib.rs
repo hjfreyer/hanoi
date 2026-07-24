@@ -3,7 +3,7 @@ pub mod library;
 pub mod opcode;
 pub mod value;
 
-pub use assembly::{assemble, assemble_with_path, AssemblyResult};
+pub use assembly::{assemble, assemble_with_path};
 pub use library::{Library, Sentence, SentenceIndex};
 pub use opcode::Instruction;
 pub use value::{Value, ValueSet, ChooseResult};
@@ -134,9 +134,9 @@ mod tests {
         "#;
         let res = assemble(code).unwrap();
         assert_eq!(res.exports.get("entry"), Some(&SentenceIndex::from(0)));
-        assert_eq!(res.library.sentences.len(), 1);
+        assert_eq!(res.sentences.len(), 1);
         assert_eq!(
-            res.library.sentences[SentenceIndex::from(0)],
+            res.sentences[SentenceIndex::from(0)],
             vec![
                 Instruction::Push(Value::Int(42)),
                 Instruction::Push(Value::Tuple(vec![
@@ -166,20 +166,20 @@ mod tests {
         // Index 0: entry
         // Index 1: inline true block
         // Index 2: inline false block
-        assert_eq!(res.library.sentences.len(), 3);
+        assert_eq!(res.sentences.len(), 3);
         assert_eq!(
-            res.library.sentences[SentenceIndex::from(0)],
+            res.sentences[SentenceIndex::from(0)],
             vec![
                 Instruction::Push(Value::Bool(true)),
                 Instruction::Branch(SentenceIndex::from(1), SentenceIndex::from(2)),
             ]
         );
         assert_eq!(
-            res.library.sentences[SentenceIndex::from(1)],
+            res.sentences[SentenceIndex::from(1)],
             vec![Instruction::Push(Value::Int(42))]
         );
         assert_eq!(
-            res.library.sentences[SentenceIndex::from(2)],
+            res.sentences[SentenceIndex::from(2)],
             vec![Instruction::Jump(SentenceIndex::from(0))]
         );
     }
@@ -208,9 +208,9 @@ mod tests {
             }
         "#;
         let res = assemble(code).unwrap();
-        assert_eq!(res.library.sentences.len(), 1);
+        assert_eq!(res.sentences.len(), 1);
         
-        let sentence = &res.library.sentences[SentenceIndex::from(0)];
+        let sentence = &res.sentences[SentenceIndex::from(0)];
         assert_eq!(sentence.len(), 2);
         
         // Assert sym1 and sym2 are distinct symbols

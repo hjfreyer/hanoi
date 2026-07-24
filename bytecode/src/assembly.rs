@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use crate::library::{Library, SentenceIndex};
 use crate::opcode::Instruction;
 use crate::value::{Value, Symbol, ValueSet};
@@ -193,6 +193,10 @@ struct TokenStream {
 impl TokenStream {
     fn peek(&self) -> Option<&Token> {
         self.tokens.get(self.position)
+    }
+
+    fn peek_at(&self, offset: usize) -> Option<&Token> {
+        self.tokens.get(self.position + offset)
     }
 
     fn next(&mut self) -> Option<Token> {
@@ -538,6 +542,7 @@ enum TopLevelItem {
     Mod {
         name: String,
         items: Vec<TopLevelItem>,
+        is_test: bool,
     },
     Compose {
         name: String,
@@ -628,62 +633,68 @@ fn parse_items(stream: &mut TokenStream, end_token: Option<Token>, base_dir: Opt
             };
 
             items.push(TopLevelItem::SymbolDecl { name, debug_desc });
-        } else if stream.peek() == Some(&Token::ModKeyword) {
-            stream.next(); // consume 'mod'
-            let name = match stream.next() {
-                Some(Token::Identifier(name)) => name,
-                Some(other) => return Err(format!("Expected module name identifier, found {:?}", other)),
-                None => return Err("Expected module name identifier, found end of input".to_string()),
-            };
-            
-            if let Some(&Token::Identifier(ref ident)) = stream.peek() {
-                if is_composer_name(ident) {
-                    let composer = match stream.next() {
-                        Some(Token::Identifier(id)) => id,
-                        _ => unreachable!(),
-                    };
-                    stream.expect(Token::LParen)?;
-                    let mut args = Vec::new();
-                    if stream.peek() != Some(&Token::RParen) {
-                        loop {
-                            args.push(parse_module_expr(stream)?);
-                            if stream.peek() == Some(&Token::Comma) {
-                                stream.next();
-                            } else {
-                                break;
+        } else {
+            let is_test_mod = stream.peek() == Some(&Token::TestKeyword) && stream.peek_at(1) == Some(&Token::ModKeyword);
+
+            if is_test_mod || stream.peek() == Some(&Token::ModKeyword) {
+                if is_test_mod {
+                    stream.next(); // consume 'test'
+                }
+                stream.next(); // consume 'mod'
+                let name = match stream.next() {
+                    Some(Token::Identifier(name)) => name,
+                    Some(other) => return Err(format!("Expected module name identifier, found {:?}", other)),
+                    None => return Err("Expected module name identifier, found end of input".to_string()),
+                };
+                
+                if let Some(&Token::Identifier(ref ident)) = stream.peek() {
+                    if is_composer_name(ident) {
+                        let composer = match stream.next() {
+                            Some(Token::Identifier(id)) => id,
+                            _ => unreachable!(),
+                        };
+                        stream.expect(Token::LParen)?;
+                        let mut args = Vec::new();
+                        if stream.peek() != Some(&Token::RParen) {
+                            loop {
+                                args.push(parse_module_expr(stream)?);
+                                if stream.peek() == Some(&Token::Comma) {
+                                    stream.next();
+                                } else {
+                                    break;
+                                }
                             }
                         }
+                        stream.expect(Token::RParen)?;
+                        stream.expect(Token::Semicolon)?;
+                        items.push(TopLevelItem::Compose { name, composer, args });
+                        continue;
                     }
-                    stream.expect(Token::RParen)?;
-                    stream.expect(Token::Semicolon)?;
-                    items.push(TopLevelItem::Compose { name, composer, args });
-                    continue;
                 }
-            }
-            
-            if stream.peek() == Some(&Token::Semicolon) {
-                stream.next(); // consume ';'
-                let base = base_dir.ok_or_else(|| {
-                    format!("Cannot load external module '{}' because no base directory context was provided", name)
-                })?;
-                let file_name = format!("{}.hana", name);
-                let file_path = base.join(&file_name);
-                let file_content = std::fs::read_to_string(&file_path)
-                    .map_err(|e| format!("Failed to read module file '{}' at {:?}: {}", file_name, file_path, e))?;
                 
-                let tokens = tokenize(&file_content)?;
-                let mut sub_stream = TokenStream { tokens, position: 0 };
-                let new_base = base.join(&name);
-                let mod_items = parse_items(&mut sub_stream, None, Some(&new_base))?;
-                items.push(TopLevelItem::Mod { name, items: mod_items });
+                if stream.peek() == Some(&Token::Semicolon) {
+                    stream.next(); // consume ';'
+                    let base = base_dir.ok_or_else(|| {
+                        format!("Cannot load external module '{}' because no base directory context was provided", name)
+                    })?;
+                    let file_name = format!("{}.hana", name);
+                    let file_path = base.join(&file_name);
+                    let file_content = std::fs::read_to_string(&file_path)
+                        .map_err(|e| format!("Failed to read module file '{}' at {:?}: {}", file_name, file_path, e))?;
+                    
+                    let tokens = tokenize(&file_content)?;
+                    let mut sub_stream = TokenStream { tokens, position: 0 };
+                    let new_base = base.join(&name);
+                    let mod_items = parse_items(&mut sub_stream, None, Some(&new_base))?;
+                    items.push(TopLevelItem::Mod { name, items: mod_items, is_test: is_test_mod });
+                } else {
+                    stream.expect(Token::LBrace)?;
+                    let new_base = base_dir.map(|b| b.join(&name));
+                    let mod_items = parse_items(stream, Some(Token::RBrace), new_base.as_deref())?;
+                    stream.expect(Token::RBrace)?;
+                    items.push(TopLevelItem::Mod { name, items: mod_items, is_test: is_test_mod });
+                }
             } else {
-                stream.expect(Token::LBrace)?;
-                let new_base = base_dir.map(|b| b.join(&name));
-                let mod_items = parse_items(stream, Some(Token::RBrace), new_base.as_deref())?;
-                stream.expect(Token::RBrace)?;
-                items.push(TopLevelItem::Mod { name, items: mod_items });
-            }
-        } else {
             let mut is_exported = false;
             let mut is_test = false;
 
@@ -719,6 +730,7 @@ fn parse_items(stream: &mut TokenStream, end_token: Option<Token>, base_dir: Opt
                 name,
                 body,
             }));
+        }
         }
     }
 
@@ -792,16 +804,7 @@ enum ParsedInstruction {
     SetRenamePrefix,
 }
 
-/// The result of parsing and compiling assembly code.
-#[derive(Debug, Clone, PartialEq)]
-pub struct AssemblyResult {
-    /// The compiled bytecode library.
-    pub library: Library,
-    /// Maps exported sentence label names to their SentenceIndex.
-    pub exports: HashMap<String, SentenceIndex>,
-    /// Maps test sentence label names to their SentenceIndex.
-    pub tests: HashMap<String, SentenceIndex>,
-}
+
 
 struct Module {
     name: String,
@@ -830,6 +833,7 @@ fn build_module_tree(
     flat_sentences: &mut Vec<(Vec<String>, TopLevelSentence)>,
     exports: &mut HashMap<String, SentenceIndex>,
     tests: &mut HashMap<String, SentenceIndex>,
+    test_machines: &mut HashSet<String>,
 ) -> Result<(), String> {
     let mut anon_counter = 0;
     build_module_tree_impl(
@@ -841,6 +845,7 @@ fn build_module_tree(
         flat_sentences,
         exports,
         tests,
+        test_machines,
         &mut anon_counter,
     )
 }
@@ -854,6 +859,7 @@ fn resolve_module_expr(
     flat_sentences: &mut Vec<(Vec<String>, TopLevelSentence)>,
     exports: &mut HashMap<String, SentenceIndex>,
     tests: &mut HashMap<String, SentenceIndex>,
+    test_machines: &mut HashSet<String>,
     anon_counter: &mut usize,
 ) -> Result<ResolvedArg, String> {
     match expr {
@@ -871,6 +877,7 @@ fn resolve_module_expr(
                     flat_sentences,
                     exports,
                     tests,
+                    test_machines,
                     anon_counter,
                 )?);
             }
@@ -889,6 +896,7 @@ fn resolve_module_expr(
                 flat_sentences,
                 exports,
                 tests,
+                test_machines,
                 anon_counter,
             )?;
             current_path.pop();
@@ -911,6 +919,7 @@ fn build_module_tree_impl(
     flat_sentences: &mut Vec<(Vec<String>, TopLevelSentence)>,
     exports: &mut HashMap<String, SentenceIndex>,
     tests: &mut HashMap<String, SentenceIndex>,
+    test_machines: &mut HashSet<String>,
     anon_counter: &mut usize,
 ) -> Result<(), String> {
     for item in items {
@@ -974,7 +983,7 @@ fn build_module_tree_impl(
 
                 flat_sentences.push((current_path.clone(), s));
             }
-            TopLevelItem::Mod { name, items: mod_items } => {
+            TopLevelItem::Mod { name, items: mod_items, is_test } => {
                 if name == "crate" || name == "super" {
                     return Err(format!("Cannot use reserved keyword '{}' as name", name));
                 }
@@ -997,8 +1006,18 @@ fn build_module_tree_impl(
                     flat_sentences,
                     exports,
                     tests,
+                    test_machines,
                     anon_counter,
                 )?;
+
+                let mod_fq_path = current_path.join("::");
+                if is_test {
+                    let _init_idx = submodule.sentences.get("init")
+                        .copied()
+                        .ok_or_else(|| format!("Test mod '{}' must export an 'init' sentence", mod_fq_path))?;
+                    test_machines.insert(mod_fq_path);
+                }
+
                 current_path.pop();
 
                 module.submodules.insert(name, submodule);
@@ -1026,6 +1045,7 @@ fn build_module_tree_impl(
                         flat_sentences,
                         exports,
                         tests,
+                        test_machines,
                         anon_counter,
                     )?);
                 }
@@ -1042,6 +1062,7 @@ fn build_module_tree_impl(
                     flat_sentences,
                     exports,
                     tests,
+                    test_machines,
                     anon_counter,
                 )?;
                 current_path.pop();
@@ -2582,13 +2603,30 @@ impl<'a> Compiler<'a> {
     }
 }
 
-/// Assembles the input text into a `Library` and export/test mappings.
-pub fn assemble(input: &str) -> Result<AssemblyResult, String> {
+/// Assembles the input text into a `Library`.
+pub fn assemble(input: &str) -> Result<Library, String> {
     assemble_with_path(input, None)
 }
 
+fn collect_symbols(module: &Module, current_path: &mut Vec<String>, symbols_map: &mut HashMap<String, Value>) {
+    for (name, symbol) in &module.symbols {
+        let fq_name = if current_path.is_empty() {
+            name.clone()
+        } else {
+            format!("{}::{}", current_path.join("::"), name)
+        };
+        symbols_map.insert(fq_name, symbol.clone());
+    }
+
+    for (sub_name, sub_module) in &module.submodules {
+        current_path.push(sub_name.clone());
+        collect_symbols(sub_module, current_path, symbols_map);
+        current_path.pop();
+    }
+}
+
 /// Assembles the input text with an optional base directory context for resolving external modules.
-pub fn assemble_with_path(input: &str, base_dir: Option<&std::path::Path>) -> Result<AssemblyResult, String> {
+pub fn assemble_with_path(input: &str, base_dir: Option<&std::path::Path>) -> Result<Library, String> {
     let tokens = tokenize(input)?;
     let mut stream = TokenStream { tokens, position: 0 };
     let items = parse_top_level(&mut stream, base_dir)?;
@@ -2599,6 +2637,7 @@ pub fn assemble_with_path(input: &str, base_dir: Option<&std::path::Path>) -> Re
     let mut flat_sentences = Vec::new();
     let mut exports = HashMap::new();
     let mut tests = HashMap::new();
+    let mut test_machines = HashSet::new();
 
     let mut current_path = Vec::new();
     build_module_tree(
@@ -2610,6 +2649,7 @@ pub fn assemble_with_path(input: &str, base_dir: Option<&std::path::Path>) -> Re
         &mut flat_sentences,
         &mut exports,
         &mut tests,
+        &mut test_machines,
     )?;
 
     let mut compiler = Compiler {
@@ -2630,10 +2670,14 @@ pub fn assemble_with_path(input: &str, base_dir: Option<&std::path::Path>) -> Re
     for s in compiler.sentences {
         library.sentences.push(s);
     }
+    library.exports = exports;
+    library.tests = tests;
+    library.test_machines = test_machines;
 
-    Ok(AssemblyResult {
-        library,
-        exports,
-        tests,
-    })
+    let mut symbols_map = HashMap::new();
+    let mut path_tracker = Vec::new();
+    collect_symbols(&root_module, &mut path_tracker, &mut symbols_map);
+    library.symbols = symbols_map;
+
+    Ok(library)
 }

@@ -1,4 +1,6 @@
 use crate::opcode::Instruction;
+use crate::value::Value;
+use std::collections::{HashMap, HashSet};
 use derive_more::{From, Into};
 use typed_index_collections::TiVec;
 
@@ -13,6 +15,10 @@ pub type Sentence = Vec<Instruction>;
 #[derive(Debug, Clone, PartialEq)]
 pub struct Library {
     pub sentences: TiVec<SentenceIndex, Sentence>,
+    pub exports: HashMap<String, SentenceIndex>,
+    pub symbols: HashMap<String, Value>,
+    pub tests: HashMap<String, SentenceIndex>,
+    pub test_machines: HashSet<String>,
 }
 
 impl Library {
@@ -20,6 +26,10 @@ impl Library {
     pub fn new() -> Self {
         Self {
             sentences: TiVec::new(),
+            exports: HashMap::new(),
+            symbols: HashMap::new(),
+            tests: HashMap::new(),
+            test_machines: HashSet::new(),
         }
     }
 }

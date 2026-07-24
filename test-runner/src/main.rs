@@ -23,7 +23,8 @@ struct Args {
     trace: bool,
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let args = Args::parse();
     
     let path = &args.directory;
@@ -54,22 +55,29 @@ fn main() {
         }
     };
 
-    if res.tests.is_empty() {
+    let mut all_tests = Vec::new();
+    for (name, &idx) in &res.tests {
+        all_tests.push((name.clone(), idx, false));
+    }
+    for name in &res.test_machines {
+        all_tests.push((name.clone(), bytecode::SentenceIndex::from(0), true));
+    }
+
+    if all_tests.is_empty() {
         println!("No tests found in '{}'.", file_path.display());
         return;
     }
 
-    let total_tests = res.tests.len();
+    let total_tests = all_tests.len();
 
     // Stable sort tests by name for consistent output
-    let mut tests: Vec<(&String, &bytecode::SentenceIndex)> = res.tests.iter().collect();
-    tests.sort_by_key(|(name, _)| *name);
+    all_tests.sort_by(|a, b| a.0.cmp(&b.0));
 
     if let Some(ref pattern) = filter {
-        tests.retain(|(name, _)| name.contains(pattern));
+        all_tests.retain(|(name, _, _)| name.contains(pattern));
     }
 
-    if tests.is_empty() {
+    if all_tests.is_empty() {
         if let Some(ref pattern) = filter {
             println!("No tests matched the filter '{}'.", pattern);
         } else {
@@ -78,12 +86,12 @@ fn main() {
         return;
     }
 
-    let tests_run = tests.len();
+    let tests_run = all_tests.len();
     let filtered_out = total_tests - tests_run;
     println!("Running {} tests...", tests_run);
     let mut failed = 0;
 
-    for (name, &index) in tests {
+    for (name, index, is_machine) in all_tests {
         if trace {
             println!("test {}", name);
         } else {
@@ -91,34 +99,79 @@ fn main() {
             io::stdout().flush().unwrap();
         }
 
-        // Each test runs in its own fresh VM instance
-        let mut vm = vm::VM::new(res.library.clone());
-        vm.set_tracing(trace);
-        vm.set_gas_limit(Some(gas_limit));
-        match vm.execute(index) {
-            Ok(()) => {
-                if vm.stack().is_empty() {
+        if is_machine {
+            let env = vm::DefaultEnvironment::new(&res);
+            let mut runtime = match vm::Runtime::new(res.clone(), &name, env) {
+                Ok(rt) => rt,
+                Err(err) => {
                     if trace {
-                        println!("result: ok ({} steps)", vm.steps_executed());
+                        println!("result: FAILED ({})", err);
                     } else {
-                        println!("ok ({} steps)", vm.steps_executed());
+                        println!("FAILED ({})", err);
                     }
-                } else {
-                    if trace {
-                        println!("result: FAILED (stack was not empty: {:?}) ({} steps)", vm.stack(), vm.steps_executed());
+                    failed += 1;
+                    continue;
+                }
+            };
+            runtime.vm_mut().set_tracing(trace);
+            runtime.vm_mut().set_gas_limit(Some(gas_limit));
+
+            match runtime.run().await {
+                Ok(()) => {
+                    if runtime.vm().stack().is_empty() {
+                        if trace {
+                            println!("result: ok ({} steps)", runtime.vm().steps_executed());
+                        } else {
+                            println!("ok ({} steps)", runtime.vm().steps_executed());
+                        }
                     } else {
-                        println!("FAILED (stack was not empty: {:?}) ({} steps)", vm.stack(), vm.steps_executed());
+                        if trace {
+                            println!("result: FAILED (stack was not empty: {:?}) ({} steps)", runtime.vm().stack(), runtime.vm().steps_executed());
+                        } else {
+                            println!("FAILED (stack was not empty: {:?}) ({} steps)", runtime.vm().stack(), runtime.vm().steps_executed());
+                        }
+                        failed += 1;
+                    }
+                }
+                Err(err) => {
+                    if trace {
+                        println!("result: FAILED ({}) ({} steps)", err, runtime.vm().steps_executed());
+                    } else {
+                        println!("FAILED ({}) ({} steps)", err, runtime.vm().steps_executed());
                     }
                     failed += 1;
                 }
             }
-            Err(err) => {
-                if trace {
-                    println!("result: FAILED ({}) ({} steps)", err, vm.steps_executed());
-                } else {
-                    println!("FAILED ({}) ({} steps)", err, vm.steps_executed());
+        } else {
+            // Each test runs in its own fresh VM instance
+            let mut vm = vm::VM::new(res.clone());
+            vm.set_tracing(trace);
+            vm.set_gas_limit(Some(gas_limit));
+            match vm.execute(index) {
+                Ok(()) => {
+                    if vm.stack().is_empty() {
+                        if trace {
+                            println!("result: ok ({} steps)", vm.steps_executed());
+                        } else {
+                            println!("ok ({} steps)", vm.steps_executed());
+                        }
+                    } else {
+                        if trace {
+                            println!("result: FAILED (stack was not empty: {:?}) ({} steps)", vm.stack(), vm.steps_executed());
+                        } else {
+                            println!("FAILED (stack was not empty: {:?}) ({} steps)", vm.stack(), vm.steps_executed());
+                        }
+                        failed += 1;
+                    }
                 }
-                failed += 1;
+                Err(err) => {
+                    if trace {
+                        println!("result: FAILED ({}) ({} steps)", err, vm.steps_executed());
+                    } else {
+                        println!("FAILED ({}) ({} steps)", err, vm.steps_executed());
+                    }
+                    failed += 1;
+                }
             }
         }
     }

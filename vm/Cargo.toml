@@ -5,3 +5,6 @@ edition = "2024"
 
 [dependencies]
 bytecode = { version = "0.1.0", path = "../bytecode" }
+
+[dev-dependencies]
+tokio = { version = "1.0", features = ["rt", "macros", "sync"] }

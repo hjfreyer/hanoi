@@ -1,3 +1,13 @@
+mod std {
+    mod io {
+        symbol io "std::io"
+        mod stdout {
+            symbol stdout "std::io::stdout"
+            symbol putch "std::io::stdout::putch"
+        }
+    }
+}
+
 mod prelude;
 mod arithmetic;
 mod control_flow;
@@ -10,4 +20,5 @@ mod value_sets;
 mod string;
 mod queue;
 mod is_done_test;
+mod runtime_stdout;
 

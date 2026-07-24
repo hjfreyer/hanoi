@@ -1,0 +1,66 @@
+test mod verify_print_hello {
+    symbol hello "Hello from Hanoi VM Async Runtime!\n"
+
+    export sentence init {
+        push 0
+    }
+
+    export sentence accept {
+        drop 0
+        push empty_set
+    }
+
+    export sentence tau_reduce {
+        push false
+        tuple 2
+    }
+
+    export sentence emit {
+        pick 0
+        push hello
+        symbol_len
+        less
+        branch {
+            push crate::std::io::io
+            push crate::std::io::stdout::stdout
+            push crate::std::io::stdout::putch
+            
+            push hello
+            pick 4 # index
+            symbol_char_at
+            
+            push ()
+            tuple 2 # (char, ())
+            tuple 2 # (putch, (char, ()))
+            tuple 2 # (stdout, (putch, (char, ())))
+            tuple 2 # (io, (stdout, (putch, (char, ()))))
+            
+            roll 1
+            drop 0
+            push true
+            tuple 2
+        } {
+            drop 0
+            tuple 0
+            push false
+            tuple 2
+        }
+    }
+
+    export sentence process {
+        drop 0 # drop event
+        push 1
+        add
+    }
+
+    export sentence is_done {
+        push hello
+        symbol_len
+        less
+        not
+    }
+
+    export sentence is_ready_to_finish {
+        push false
+    }
+}

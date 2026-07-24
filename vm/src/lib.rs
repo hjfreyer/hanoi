@@ -1,5 +1,8 @@
 use bytecode::{Instruction, Library, SentenceIndex, Value, ValueSet, ChooseResult};
 
+pub mod runtime;
+pub use runtime::{Runtime, Environment, DefaultEnvironment};
+
 /// The virtual machine that executes sentences from a loaded library.
 pub struct VM {
     library: Library,
@@ -638,7 +641,7 @@ mod tests {
         let res = bytecode::assemble(code).unwrap();
         let start_idx = *res.exports.get("start").unwrap();
         
-        let mut vm = VM::new(res.library);
+        let mut vm = VM::new(res);
         assert!(vm.execute(start_idx).is_ok());
         assert!(vm.stack().is_empty());
     }
@@ -671,7 +674,7 @@ mod tests {
         let res = bytecode::assemble(code).unwrap();
         let entry_idx = *res.exports.get("entry").unwrap();
         
-        let mut vm = VM::new(res.library);
+        let mut vm = VM::new(res);
         assert!(vm.execute(entry_idx).is_ok());
         assert!(vm.stack().is_empty());
     }
@@ -718,19 +721,19 @@ mod tests {
         
         // Run test_len
         let test_len_idx = *res.exports.get("test_len").unwrap();
-        let mut vm = VM::new(res.library.clone());
+        let mut vm = VM::new(res.clone());
         assert!(vm.execute(test_len_idx).is_ok());
         assert!(vm.stack().is_empty());
         
         // Run test_char_at
         let test_char_idx = *res.exports.get("test_char_at").unwrap();
-        let mut vm = VM::new(res.library.clone());
+        let mut vm = VM::new(res.clone());
         assert!(vm.execute(test_char_idx).is_ok());
         assert!(vm.stack().is_empty());
         
         // Run test_out_of_bounds (should fail)
         let oob_idx = *res.exports.get("test_out_of_bounds").unwrap();
-        let mut vm = VM::new(res.library);
+        let mut vm = VM::new(res);
         let run_res = vm.execute(oob_idx);
         assert!(run_res.is_err());
         assert!(run_res.unwrap_err().contains("Symbol index out of bounds"));
@@ -747,7 +750,7 @@ mod tests {
         "#;
         let res = bytecode::assemble(code).unwrap();
         let entry_idx = *res.exports.get("entry").unwrap();
-        let mut vm = VM::new(res.library);
+        let mut vm = VM::new(res);
         vm.set_tracing(true);
         assert!(vm.execute(entry_idx).is_ok());
     }
@@ -859,7 +862,7 @@ mod tests {
         let res = bytecode::assemble(code).unwrap();
         let test_idx = *res.exports.get("test_rename").unwrap();
 
-        let mut vm = VM::new(res.library);
+        let mut vm = VM::new(res);
         if let Err(e) = vm.execute(test_idx) {
             panic!("Execution failed: {}", e);
         }
@@ -927,7 +930,7 @@ mod tests {
         let res = bytecode::assemble(code).unwrap();
         let test_idx = *res.exports.get("test_closure").unwrap();
 
-        let mut vm = VM::new(res.library);
+        let mut vm = VM::new(res);
         if let Err(e) = vm.execute(test_idx) {
             panic!("Execution failed: {}", e);
         }
@@ -1020,9 +1023,263 @@ mod tests {
         let res = bytecode::assemble(code).unwrap();
         let test_idx = *res.exports.get("test_tau").unwrap();
 
-        let mut vm = VM::new(res.library);
+        let mut vm = VM::new(res);
         if let Err(e) = vm.execute(test_idx) {
             panic!("Execution failed: {}", e);
         }
+    }
+}
+
+#[cfg(test)]
+mod runtime_tests {
+    use super::*;
+    use bytecode::assemble;
+    use bytecode::value::Symbol;
+
+    struct TestEnv {
+        received_ping: bool,
+    }
+
+    impl Environment for TestEnv {
+        async fn handle_event(&mut self, event: Value) -> Result<(), String> {
+            match event {
+                Value::Symbol(sym) => {
+                    if sym.name == "ping event" {
+                        self.received_ping = true;
+                        return Ok(());
+                    }
+                    Err(format!("Unexpected symbol event: {}", sym.name))
+                }
+                other => Err(format!("Unexpected event type: {:?}", other))
+            }
+        }
+
+        async fn wait_for_event(&mut self, accept_set: &ValueSet) -> Result<Value, String> {
+            if !self.received_ping {
+                return Err("wait_for_event called before ping!".to_string());
+            }
+
+            fn find_symbol_in_set(set: &ValueSet, name: &str) -> Option<Symbol> {
+                match set {
+                    ValueSet::Singleton(box_val) => {
+                        if let Value::Symbol(sym) = &**box_val {
+                            if sym.name == name {
+                                return Some(sym.clone());
+                            }
+                        }
+                        None
+                    }
+                    ValueSet::Union(a, b) => {
+                        find_symbol_in_set(a, name).or_else(|| find_symbol_in_set(b, name))
+                    }
+                    ValueSet::Intersection(a, b) => {
+                        find_symbol_in_set(a, name).or_else(|| find_symbol_in_set(b, name))
+                    }
+                    ValueSet::Tuple(sets) => {
+                        for s in sets {
+                            if let Some(sym) = find_symbol_in_set(s, name) {
+                                return Some(sym);
+                            }
+                        }
+                        None
+                    }
+                    ValueSet::Complement(s) => find_symbol_in_set(s, name),
+                    _ => None,
+                }
+            }
+
+            if let Some(sym) = find_symbol_in_set(accept_set, "pong event") {
+                Ok(Value::Symbol(sym))
+            } else {
+                Err(format!("Environment expected pong to be accepted, but set is {:?}", accept_set))
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_runtime_ping_pong() {
+        let code = r#"
+            mod main {
+                mod state {
+                    symbol init "initial state"
+                    symbol waiting "waiting state"
+                    symbol done "done state"
+                }
+
+                mod event {
+                    symbol ping "ping event"
+                    symbol pong "pong event"
+                }
+
+                export sentence init {
+                    push state::init
+                }
+
+                export sentence accept {
+                    push state::waiting
+                    equal
+                    branch {
+                        push event::pong
+                        set_singleton
+                    } {
+                        push empty_set
+                    }
+                }
+
+                export sentence tau_reduce {
+                    push false
+                    tuple 2
+                }
+
+                export sentence emit {
+                    push state::init
+                    equal
+                    branch {
+                        push event::ping
+                        push true
+                        tuple 2
+                    } {
+                        tuple 0
+                        push false
+                        tuple 2
+                    }
+                }
+
+                export sentence process {
+                    roll 1 # swap event and state
+                    push state::init
+                    equal
+                    branch {
+                        push event::ping
+                        assert_eq
+                        push state::waiting
+                    } {
+                        push event::pong
+                        assert_eq
+                        push state::done
+                    }
+                }
+
+                export sentence is_done {
+                    push state::done
+                    equal
+                }
+
+                export sentence is_ready_to_finish {
+                    push false
+                }
+            }
+        "#;
+
+        let res = assemble(code).unwrap();
+        let env = TestEnv { received_ping: false };
+        let mut runtime = Runtime::new(res, "main", env).unwrap();
+
+        let run_res = runtime.run().await;
+        if let Err(ref e) = run_res {
+            println!("Runtime run failed: {}", e);
+        }
+        assert!(run_res.is_ok());
+        assert!(runtime.environment.received_ping);
+    }
+
+    #[tokio::test]
+    async fn test_runtime_hello_world() {
+        let code = r#"
+            mod std {
+                mod io {
+                    symbol io "std::io"
+                    mod stdout {
+                        symbol stdout "std::io::stdout"
+                        symbol putch "std::io::stdout::putch"
+                    }
+                }
+            }
+
+            mod main {
+                symbol hello "Hello, World!"
+
+                export sentence init {
+                    push 0
+                }
+
+                export sentence accept {
+                    drop 0
+                    push empty_set
+                }
+
+                export sentence tau_reduce {
+                    push false
+                    tuple 2
+                }
+
+                export sentence emit {
+                    pick 0
+                    push hello
+                    symbol_len
+                    less
+                    branch {
+                        # Construct CSP tuple: (io, (stdout, (putch, (char, ()))))
+                        push crate::std::io::io
+                        
+                        push crate::std::io::stdout::stdout
+                        
+                        push crate::std::io::stdout::putch
+                        
+                        push hello
+                        pick 4 # index
+                        symbol_char_at
+                        
+                        push ()
+                        tuple 2 # (char, ())
+                        tuple 2 # (putch, (char, ()))
+                        tuple 2 # (stdout, (putch, (char, ())))
+                        tuple 2 # (io, (stdout, (putch, (char, ()))))
+                        
+                        # Stack is [index, event]
+                        # We swap to [event, index], drop index, then push true and wrap
+                        roll 1
+                        drop 0
+                        push true
+                        tuple 2
+                    } {
+                        drop 0
+                        tuple 0
+                        push false
+                        tuple 2
+                    }
+                }
+
+                export sentence process {
+                    drop 0 # drop event
+                    push 1
+                    add
+                }
+
+                export sentence is_done {
+                    push hello
+                    symbol_len
+                    less
+                    not
+                }
+
+                export sentence is_ready_to_finish {
+                    push false
+                }
+            }
+        "#;
+
+        let res = assemble(code).unwrap();
+        let env = DefaultEnvironment::with_capture(&res);
+        let mut runtime = Runtime::new(res, "main", env).unwrap();
+
+        let run_res = runtime.run().await;
+        if let Err(ref e) = run_res {
+            println!("Hello world run failed: {}", e);
+        }
+        assert!(run_res.is_ok());
+        
+        let output = runtime.environment.captured_output().unwrap();
+        assert_eq!(output, "Hello, World!");
     }
 }
