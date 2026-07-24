@@ -213,6 +213,7 @@ mod string_ref {
 
     sentence is_ready_to_finish {
         untuple 2
+        roll 1
         drop 0
         push idle
         equal

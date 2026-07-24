@@ -548,6 +548,7 @@ enum TopLevelItem {
         name: String,
         composer: String,
         args: Vec<ModuleExpr>,
+        is_test: bool,
     },
 }
 
@@ -667,7 +668,7 @@ fn parse_items(stream: &mut TokenStream, end_token: Option<Token>, base_dir: Opt
                         }
                         stream.expect(Token::RParen)?;
                         stream.expect(Token::Semicolon)?;
-                        items.push(TopLevelItem::Compose { name, composer, args });
+                        items.push(TopLevelItem::Compose { name, composer, args, is_test: is_test_mod });
                         continue;
                     }
                 }
@@ -1022,7 +1023,7 @@ fn build_module_tree_impl(
 
                 module.submodules.insert(name, submodule);
             }
-            TopLevelItem::Compose { name, composer, args } => {
+            TopLevelItem::Compose { name, composer, args, is_test } => {
                 if name == "crate" || name == "super" {
                     return Err(format!("Cannot use reserved keyword '{}' as name", name));
                 }
@@ -1065,6 +1066,22 @@ fn build_module_tree_impl(
                     test_machines,
                     anon_counter,
                 )?;
+
+                let mod_fq_path = current_path.join("::");
+                if is_test {
+                    let _init_idx = submodule.sentences.get("init")
+                        .copied()
+                        .ok_or_else(|| format!("Test mod '{}' must export an 'init' sentence", mod_fq_path))?;
+                    test_machines.insert(mod_fq_path.clone());
+
+                    for sentence_name in &["init", "accept", "emit", "process", "tau_reduce", "is_done", "is_ready_to_finish"] {
+                        if let Some(&s_idx) = submodule.sentences.get(*sentence_name) {
+                            let fq_sentence_name = format!("{}::{}", mod_fq_path, sentence_name);
+                            exports.insert(fq_sentence_name, s_idx);
+                        }
+                    }
+                }
+
                 current_path.pop();
 
                 module.submodules.insert(name, submodule);

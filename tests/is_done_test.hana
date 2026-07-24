@@ -2,8 +2,8 @@
 
 test sentence verify_is_done_basic_machines {
     # 1. string_ref: state (sym, idle) -> is_done = false
-    push super::string::string_ref::idle
     push ()
+    push super::string::string_ref::idle
     tuple 2 # state
     jump super::string::string_ref::is_done
     push false
@@ -46,8 +46,8 @@ test sentence verify_is_done_basic_machines {
 
 test sentence verify_is_ready_to_finish_basic_machines {
     # 1. string_ref: state (sym, idle) -> is_ready_to_finish = true
-    push super::string::string_ref::idle
     push ()
+    push super::string::string_ref::idle
     tuple 2 # state
     jump super::string::string_ref::is_ready_to_finish
     push true

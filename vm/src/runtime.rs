@@ -95,14 +95,16 @@ impl Environment for DefaultEnvironment {
                 print!("{}", ch);
                 let _ = std::io::stdout().flush();
             }
-            Ok(())
-        } else {
-            Err(format!("Unexpected event in DefaultEnvironment: {:?}", event))
         }
+        Ok(())
     }
 
     async fn wait_for_event(&mut self, accept_set: &ValueSet) -> Result<Value, String> {
-        Err(format!("DefaultEnvironment does not support waiting for events. Accept set: {:?}", accept_set))
+        match accept_set.choose() {
+            bytecode::ChooseResult::Found(val) => Ok(val),
+            bytecode::ChooseResult::Empty => Err("Cannot wait for event because accept set is empty".to_string()),
+            bytecode::ChooseResult::Unknown => Err("Cannot wait for event because accept set is complex or infinite".to_string()),
+        }
     }
 }
 
