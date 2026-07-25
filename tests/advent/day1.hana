@@ -1,11 +1,11 @@
 symbol input0 "39472"
 
 sentence sync_char_iterator_in {
-    push set_tuple(singleton(crate::string::char_iterator::in), universal_set)
+    push set_tuple(universal_set, singleton(crate::string::char_iterator::in))
 }
 
 sentence sync_parseint_in {
-    push set_tuple(singleton(crate::string::parseint::in), universal_set)
+    push set_tuple(universal_set, singleton(crate::string::parseint::in))
 }
 
 mod input0_hidden compose_hidden(
@@ -30,9 +30,9 @@ mod sut compose_hidden(
 mod harness compose_accept_static(
     crate::prelude::start,
     compose_emit_static(
-        (crate::string::parseint::out, (crate::string::copy, ())),
+        (((), crate::string::copy), crate::string::parseint::out),
         compose_accept_static(
-            (crate::string::parseint::out, (crate::string::value, (crate::string::ok, 39472))),
+            (((39472, crate::string::ok), crate::string::value), crate::string::parseint::out),
             compose_emit_static(
                 crate::prelude::pass,
                 compose_done()
@@ -43,14 +43,14 @@ mod harness compose_accept_static(
 
 sentence sync_set {
     push union(
-        singleton((crate::string::parseint::out, (crate::string::copy, ()))),
-        set_tuple(singleton(crate::string::parseint::out), universal_set)
+        singleton((((), crate::string::copy), crate::string::parseint::out)),
+        set_tuple(universal_set, singleton(crate::string::parseint::out))
     )
 }
 
 mod sut_and_harness compose_concurrent(sut, harness, sync_set);
 
-test mod test0 compose_hidden(sut_and_harness, sync_set);
+mod test0 compose_hidden(sut_and_harness, sync_set);
 
 sentence run_tau_reductions {
     # Stack: [state]

@@ -817,9 +817,9 @@ mod tests {
                 jump renamed::accept
                 # Stack: [state, AcceptSet]
                 
-                # Check that (to_sym, payload) is in AcceptSet
-                push to_sym
+                # Check that (payload, to_sym) is in AcceptSet
                 push payload
+                push to_sym
                 tuple 2
                 roll 1
                 set_contains
@@ -830,15 +830,15 @@ mod tests {
                 jump renamed::emit
                 untuple 2
                 assert
-                push to_sym
                 push payload
+                push to_sym
                 tuple 2
                 assert_eq
                 
-                # Process event (to_sym, payload) -> rewrites to (from_sym, payload)
+                # Process event (payload, to_sym) -> rewrites to (payload, from_sym)
                 # Stack has [0]
-                push to_sym
                 push payload
+                push to_sym
                 tuple 2
                 jump renamed::process
                 # Stack has [1] (new_state)

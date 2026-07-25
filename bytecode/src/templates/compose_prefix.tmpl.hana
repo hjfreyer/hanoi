@@ -6,7 +6,6 @@ sentence accept {
     jump {{target}}::accept
     push {{prefix}}
     set_singleton
-    roll 1
     set_tuple 2
 }
 
@@ -15,7 +14,6 @@ sentence emit {
     untuple 2
     branch {
         push {{prefix}}
-        roll 1
         tuple 2
         push true
         tuple 2
@@ -29,10 +27,8 @@ sentence emit {
 
 sentence process {
     untuple 2
-    pick 1
     push {{prefix}}
     assert_eq
-    drop 1
     jump {{target}}::process
 }
 

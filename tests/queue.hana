@@ -1,25 +1,26 @@
-# Queue CSP State Machine driven by tau reductions
+symbol idle      "Queue is idle"
+symbol descending "Element is descending in queue"
+symbol rebuilding "Queue is rebuilding after pop"
+symbol awaiting_push "Queue is empty and awaiting a push"
+symbol pop_front_resp "Popped element is ready to be emitted"
+symbol pop_front_resp_await "Popped element from await is ready"
+symbol awaiting_front_resp "Front element is ready for waiting listener"
 
-symbol push_back            "Push element event"
-symbol pop_front            "Pop element event"
-symbol pop_front_resp       "Pop response event"
-symbol await_front          "Await element event"
-
-symbol idle                 "Idle state"
-symbol descending           "Descending stage"
-symbol rebuilding           "Rebuilding stage"
-symbol awaiting_push        "Awaiting push stage"
-symbol awaiting_front_resp  "Awaiting front response state"
-symbol pop_front_resp_await "Pop response state while awaiting"
-symbol done                 "Done stage"
+symbol push_back "Push element to back of queue"
+symbol pop_front "Pop element from front of queue"
+symbol await_front "Wait for front element of queue"
 
 mod queue {
-    # init: takes no arguments and returns state [(idle, (), (), ())]
+    # State represents a queue of elements.
+    # It is a 4-tuple: (current, accumulator, new_el, tag)
+
+    # init: returns initial state
     sentence init {
+        # Initial state is ((), (), (), idle)
+        push ()
+        push ()
+        push ()
         push super::idle
-        push ()
-        push ()
-        push ()
         tuple 4
     }
 
@@ -27,85 +28,81 @@ mod queue {
     sentence accept {
         # Stack: [state]
         untuple 4
-        # Stack: [tag, current, accumulator, new_el]
+        # Stack: [current, accumulator, new_el, tag]
         
-        pick 3 # tag
+        pick 0
         push super::idle
         equal
         branch {
-            # Idle: accept push, pop, and await requests
             drop 0
             drop 0
             drop 0
-            push super::idle
-            assert_eq
+            drop 0
             
-            # push_back set: (push_back, val)
+            # push_back set: (val, push_back)
+            push universal_set
             push super::push_back
             set_singleton
-            push universal_set
             set_tuple 2
             
-            # pop_front.req set: (pop_front, (req, ()))
-            push super::pop_front
-            set_singleton
-            push super::super::prelude::req
+            # pop_front.req set: (((), req), pop_front)
             tuple 0
+            push super::super::prelude::req
             tuple 2
+            set_singleton
+            push super::pop_front
             set_singleton
             set_tuple 2
             set_union
             
-            # await_front.req set: (await_front, (req, ()))
-            push super::await_front
-            set_singleton
-            push super::super::prelude::req
+            # await_front.req set: (((), req), await_front)
             tuple 0
+            push super::super::prelude::req
             tuple 2
+            set_singleton
+            push super::await_front
             set_singleton
             set_tuple 2
             set_union
         } {
-            pick 3 # tag
+            pick 0 # tag
             push super::awaiting_push
             equal
             branch {
                 drop 0
                 drop 0
                 drop 0
-                push super::awaiting_push
-                assert_eq
+                drop 0
                 
-                # push_back set: (push_back, val)
+                # push_back set: (val, push_back)
+                push universal_set
                 push super::push_back
                 set_singleton
-                push universal_set
                 set_tuple 2
                 
-                # pop_front.req set: (pop_front, (req, ()))
-                push super::pop_front
-                set_singleton
-                push super::super::prelude::req
+                # pop_front.req set: (((), req), pop_front)
                 tuple 0
+                push super::super::prelude::req
                 tuple 2
+                set_singleton
+                push super::pop_front
                 set_singleton
                 set_tuple 2
                 set_union
             } {
-                # Check if tag is pop_front_resp, pop_front_resp_await, or awaiting_front_resp
-                pick 3 # tag
+                pick 0 # tag
                 push super::pop_front_resp
                 equal
-                pick 4 # tag
+                pick 1 # tag
                 push super::pop_front_resp_await
                 equal
                 or
-                pick 4 # tag
+                pick 1 # tag
                 push super::awaiting_front_resp
                 equal
                 or
                 branch {
-                    # In response states, we accept the exact response we emit
+                    # Stack: [current, accumulator, new_el, tag]
                     tuple 4 # [state]
                     jump super::queue::emit
                     untuple 2
@@ -130,63 +127,60 @@ mod queue {
     sentence emit {
         # Stack: [state]
         untuple 4
-        # Stack: [tag, current, accumulator, new_el]
+        # Stack: [current, accumulator, new_el, tag]
         
-        pick 3 # tag
+        pick 0 # tag
         push super::pop_front_resp
         equal
-        pick 4 # tag
+        pick 1 # tag
         push super::pop_front_resp_await
         equal
         or
         branch {
-            # Emit (pop_front, (resp, payload)) where payload is stored in accumulator
-            # Stack: [tag, current, accumulator, new_el]
-            pick 1 # accumulator
+            # Emit ((accumulator, resp), pop_front)
+            pick 2 # accumulator
             push super::super::prelude::resp
-            roll 1
-            tuple 2 # (resp, payload)
-            
+            tuple 2 # (accumulator, resp)
             push super::pop_front
-            roll 1
-            tuple 2 # (pop_front, (resp, payload))
+            tuple 2 # ((accumulator, resp), pop_front)
             push true
             tuple 2
             
+            # Clean up stack below top
             drop 1
             drop 1
             drop 1
-            drop 1 # Clean up
+            drop 1
         } {
-            pick 3 # tag
+            pick 0 # tag
             push super::awaiting_front_resp
             equal
             branch {
-                # Emit (await_front, (resp, payload)) where payload is stored in accumulator
-                # Stack: [tag, current, accumulator, new_el]
-                pick 1 # accumulator
+                # Emit ((accumulator, resp), await_front)
+                pick 2 # accumulator
                 push super::super::prelude::resp
-                roll 1
-                tuple 2 # (resp, payload)
-                
+                tuple 2 # (accumulator, resp)
                 push super::await_front
-                roll 1
-                tuple 2 # (await_front, (resp, payload))
+                tuple 2 # ((accumulator, resp), await_front)
                 push true
                 tuple 2
                 
+                # Clean up stack below top
                 drop 1
                 drop 1
                 drop 1
                 drop 1
             } {
-                drop 0
-                drop 0
-                drop 0
-                drop 0
+                # Emit nothing
                 tuple 0
                 push false
                 tuple 2
+                
+                # Clean up stack below top
+                drop 1
+                drop 1
+                drop 1
+                drop 1
             }
         }
     }
@@ -196,245 +190,180 @@ mod queue {
         # Stack: [state, event]
         roll 1 # Stack: [event, state]
         untuple 4
-        # Stack: [event, tag, current, accumulator, new_el]
+        # Stack: [event, current, accumulator, new_el, tag]
         
-        pick 3 # tag
+        pick 0 # tag
         push super::idle
         equal
         branch {
-            # Processing in idle state: event is (push, val), (pop, ()), or (await, ())
-            drop 3 # drop tag. Stack: [event, current, accumulator, new_el]
-            roll 3 # Stack: [current, accumulator, new_el, event]
-            untuple 2
-            # Stack: [current, accumulator, new_el, type, payload]
+            # Processing in idle state
+            drop 0 # drop tag. Stack: [event, current, accumulator, new_el]
+            drop 0 # drop new_el. Stack: [event, current, accumulator]
+            drop 0 # drop accumulator. Stack: [event, current]
             
-            pick 1 # type
+            roll 1 # Stack: [current, event]
+            untuple 2 # Stack: [current, payload, type]
+            
+            pick 0 # type
             push super::push_back
             equal
             branch {
                 # PUSH: payload is val
-                drop 1 # drop type. Stack: [current, accumulator, new_el, val]
-                drop 1 # drop new_el (which is ()). Stack: [current, accumulator, val]
-                drop 1 # drop accumulator (which is ()). Stack: [current, val]
-                
-                # We transition to descending stage
-                # State should be: (descending, current, (), val)
+                drop 0 # drop type. Stack: [current, val]
+                push ()
+                roll 1 # Stack: [val, (), current]
                 push super::descending
-                roll 2  # Stack: [val, descending, current]
-                roll 2  # Stack: [descending, current, val]
-                push () # Stack: [descending, current, val, ()]
-                roll 1  # Stack: [descending, current, (), val]
-                tuple 4 # [next_state]
+                tuple 4
             } {
-                pick 1 # type
+                pick 0 # type
                 push super::pop_front
                 equal
                 branch {
-                    # POP: payload is ()
-                    drop 1 # drop type
-                    push (super::super::prelude::req, ())
+                    # POP: payload is ((), req)
+                    drop 0 # drop type
+                    tuple 0
+                    push super::super::prelude::req
+                    tuple 2
                     assert_eq
                     
-                    # Check if current (queue) is ()
-                    pick 2 # current. Stack: [current, accumulator, new_el, current]
+                    pick 0 # current
                     push ()
                     equal
                     branch {
-                        # Queue is empty: transition to pop_front_resp with none option
-                        # State: (pop_front_resp, (), (none, ()), ())
-                        push ()
-                        assert_eq
-                        push ()
-                        assert_eq
-                        push ()
-                        assert_eq
-                        push super::pop_front_resp
-                        push ()
-                        
-                        # Construct (none, ())
+                        drop 0 # drop current
+                        push () # rest
+                        tuple 0
                         push super::super::prelude::none
-                        tuple 0
-                        tuple 2
-                        
-                        push ()
-                        tuple 4 # [next_state]
-                    } {
-                        # Queue is NOT empty: current is (head, rest)
-                        pick 2 # current. Stack: [current, accumulator, new_el, current]
-                        untuple 2 # Stack: [current, accumulator, new_el, head, rest]
-                        
-                        # Next state is (pop_front_resp, rest, (some, (head, ())), ())
-                        roll 1 # Stack: [..., rest, head]
-                        
-                        # Construct (some, (head, ()))
-                        push super::super::prelude::some
-                        roll 1
-                        tuple 0
-                        tuple 2
-                        tuple 2
-                        
-                        push ()
+                        tuple 2 # ((), none)
+                        push () # new_el
                         push super::pop_front_resp
-                        roll 3
-                        roll 3
-                        roll 3
-                        tuple 4 # [next_state]
-                        
-                        # Clean up
-                        drop 1
-                        drop 1
-                        drop 1
-                    }
-                } {
-                    # AWAIT: payload is ()
-                    drop 1 # drop type
-                    push (super::super::prelude::req, ())
-                    assert_eq
-                    
-                    # Check if current (queue) is ()
-                    pick 2 # current. Stack: [current, accumulator, new_el, current]
-                    push ()
-                    equal
-                    branch {
-                        # Queue is empty: transition to awaiting_push
-                        push ()
-                        assert_eq
-                        push ()
-                        assert_eq
-                        push ()
-                        assert_eq
-                        push super::awaiting_push
-                        push ()
-                        push ()
-                        push ()
                         tuple 4
                     } {
-                        # Queue is NOT empty: current is (head, rest)
-                        pick 2 # current. Stack: [current, accumulator, new_el, current]
-                        untuple 2 # Stack: [current, accumulator, new_el, head, rest]
-                        
-                        # Next state is (awaiting_front_resp, rest, (some, (head, ())), ())
-                        roll 1 # Stack: [..., rest, head]
-                        
-                        # Construct (some, (head, ()))
+                        untuple 2 # Stack: [head, rest]
+                        roll 1 # Stack: [rest, head]
+                        push ()
+                        tuple 2 # (head, ())
                         push super::super::prelude::some
-                        roll 1
-                        tuple 0
-                        tuple 2
-                        tuple 2
-                        
+                        tuple 2 # ((head, ()), some)
+                        push ()
+                        push super::pop_front_resp
+                        tuple 4
+                    }
+                } {
+                    # AWAIT: payload is ((), req)
+                    drop 0 # drop type
+                    tuple 0
+                    push super::super::prelude::req
+                    tuple 2
+                    assert_eq
+                    
+                    pick 0 # current
+                    push ()
+                    equal
+                    branch {
+                        drop 0
+                        push ()
+                        push ()
+                        push ()
+                        push super::awaiting_push
+                        tuple 4
+                    } {
+                        untuple 2 # Stack: [head, rest]
+                        roll 1 # Stack: [rest, head]
+                        push ()
+                        tuple 2 # (head, ())
+                        push super::super::prelude::some
+                        tuple 2 # ((head, ()), some)
                         push ()
                         push super::awaiting_front_resp
-                        roll 3
-                        roll 3
-                        roll 3
-                        tuple 4 # [next_state]
-                        
-                        # Clean up
-                        drop 1
-                        drop 1
-                        drop 1
+                        tuple 4
                     }
                 }
             }
         } {
-            pick 3 # tag
+            pick 0 # tag
             push super::awaiting_push
             equal
             branch {
-                # Processing in awaiting_push state: event is (push_back, val) or (pop_front, ())
-                drop 3 # drop tag. Stack: [event, current, accumulator, new_el]
-                roll 3 # Stack: [current, accumulator, new_el, event]
-                untuple 2
-                # Stack: [current, accumulator, new_el, type, payload]
+                # Processing in awaiting_push state
+                drop 0 # drop tag. Stack: [event, current, accumulator, new_el]
+                drop 0 # drop new_el
+                drop 0 # drop accumulator
                 
-                pick 1 # type
+                roll 1 # Stack: [current, event]
+                untuple 2 # Stack: [current, payload, type]
+                
+                pick 0 # type
                 push super::pop_front
                 equal
                 branch {
-                    # POP: payload is ()
-                    drop 1
-                    push (super::super::prelude::req, ())
-                    assert_eq
-                    push ()
-                    assert_eq
-                    push ()
-                    assert_eq
-                    push ()
-                    assert_eq
-                    
-                    push super::pop_front_resp_await
-                    push ()
-                    
-                    # Construct (none, ())
-                    push super::super::prelude::none
+                    drop 0 # type
                     tuple 0
+                    push super::super::prelude::req
                     tuple 2
+                    assert_eq
+                    drop 0 # current (which is ())
                     
                     push ()
-                    tuple 4 # [next_state]
+                    tuple 0
+                    push super::super::prelude::none
+                    tuple 2
+                    push ()
+                    push super::pop_front_resp_await
+                    tuple 4
                 } {
-                    # PUSH: payload is val
-                    drop 1 # drop type. Stack: [current, accumulator, new_el, val]
-                    drop 1 # drop new_el (which is ()). Stack: [current, accumulator, val]
-                    drop 1 # drop accumulator (which is ()). Stack: [current, val]
-                    drop 1 # drop current (which is ()). Stack: [val]
+                    drop 0 # type. Stack: [current, val]
+                    drop 1 # current (which is ()). Stack: [val]
                     
-                    # Transition directly to awaiting_front_resp
-                    push super::awaiting_front_resp
-                    roll 1
                     push ()
+                    tuple 2 # (val, ())
                     push super::super::prelude::some
-                    roll 2 # Stack: [awaiting_front_resp, (), some, val]
+                    tuple 2 # ((val, ()), some)
+                    
                     push ()
-                    tuple 2
-                    tuple 2
+                    roll 1 # Stack: [((val, ()), some), ()]
                     push ()
-                    tuple 4 # [next_state]
+                    push super::awaiting_front_resp
+                    tuple 4
                 }
             } {
-                # Check if it is a response state
-                pick 3 # tag
+                # Return to idle / awaiting_push state from response state
+                pick 0 # tag
                 push super::pop_front_resp
                 equal
-                pick 4 # tag
+                pick 1 # tag
                 push super::awaiting_front_resp
                 equal
                 or
                 branch {
-                    # Return to idle state: next state is (idle, current, (), ())
-                    push super::idle
                     pick 3 # current
                     push ()
                     push ()
-                    tuple 4 # next_state
+                    push super::idle
+                    tuple 4
                     
-                    # Clean up
                     drop 1
                     drop 1
                     drop 1
                     drop 1
                     drop 1
                 } {
-                    pick 3 # tag
+                    pick 0 # tag
                     push super::pop_front_resp_await
                     equal
                     branch {
-                        # Return to awaiting_push state: next state is (awaiting_push, (), (), ())
+                        push ()
+                        push ()
+                        push ()
                         push super::awaiting_push
-                        push ()
-                        push ()
-                        push ()
-                        tuple 4 # next_state
+                        tuple 4
                         
-                        # Clean up
                         drop 1
                         drop 1
                         drop 1
                         drop 1
                         drop 1
                     } {
-                        # No transition
                         drop 0
                         drop 0
                         drop 0
@@ -452,29 +381,28 @@ mod queue {
         # Stack: [state]
         pick 0 # duplicate state. Stack: [state, state]
         untuple 4
-        # Stack: [state, tag, current, accumulator, new_el]
+        # Stack: [state, current, accumulator, new_el, tag]
         
         # Check if tag is descending
-        pick 3 # tag
+        pick 0 # tag
         push super::descending
         equal
         branch {
             # Stage is descending:
-            pick 2 # current. Stack: [state, tag, current, accumulator, new_el, current]
+            pick 3 # current. Stack: [state, current, accumulator, new_el, current]
             push ()
             equal
             branch {
                 # current is ()
-                pick 0  # Stack: [state, tag, current, accumulator, new_el, new_el]
-                push () # Stack: [state, tag, current, accumulator, new_el, new_el, ()]
-                tuple 2 # Stack: [state, tag, current, accumulator, new_el, new_current]
+                pick 1 # Stack: [state, current, accumulator, new_el, new_el]
+                push ()
+                tuple 2 # Stack: [state, current, accumulator, new_el, (new_el, ())] (new_current)
+                pick 3 # Stack: [state, current, accumulator, new_el, new_current, accumulator]
+                push ()
                 push super::rebuilding
-                roll 1  # Stack: [state, tag, current, accumulator, new_el, rebuilding, new_current]
-                pick 3  # Stack: [state, tag, current, accumulator, new_el, rebuilding, new_current, accumulator]
-                pick 3  # Stack: [state, tag, current, accumulator, new_el, rebuilding, new_current, accumulator, new_el]
-                tuple 4 # Stack: [state, tag, current, accumulator, new_el, new_state]
+                tuple 4 # Stack: [state, current, accumulator, new_el, new_state]
                 push true
-                tuple 2 # Stack: [state, tag, current, accumulator, new_el, (new_state, true)]
+                tuple 2
                 drop 1
                 drop 1
                 drop 1
@@ -482,18 +410,16 @@ mod queue {
                 drop 1
             } {
                 # current is NOT ()
-                pick 2  # Stack: [state, tag, current, accumulator, new_el, current]
-                untuple 2 # Stack: [state, tag, current, accumulator, new_el, head, rest]
-                roll 1  # Stack: [state, tag, current, accumulator, new_el, rest, head]
-                pick 3  # Stack: [state, tag, current, accumulator, new_el, rest, head, accumulator]
-                tuple 2 # Stack: [state, tag, current, accumulator, new_el, rest, new_accumulator]
+                pick 3  # Stack: [state, current, accumulator, new_el, current]
+                untuple 2 # Stack: [state, current, accumulator, new_el, head, rest]
+                roll 1  # Stack: [state, current, accumulator, new_el, rest, head]
+                pick 4  # Stack: [state, current, accumulator, new_el, rest, head, accumulator]
+                tuple 2 # Stack: [state, current, accumulator, new_el, rest, new_accumulator]
+                pick 3  # Stack: [state, current, accumulator, new_el, rest, new_accumulator, new_el]
                 push super::descending
-                roll 2  # Stack: [state, tag, current, accumulator, new_el, new_accumulator, descending, rest]
-                roll 2  # Stack: [state, tag, current, accumulator, new_el, descending, rest, new_accumulator]
-                pick 3  # Stack: [state, tag, current, accumulator, new_el, descending, rest, new_accumulator, new_el]
-                tuple 4 # Stack: [state, tag, current, accumulator, new_el, new_state]
+                tuple 4 # Stack: [state, current, accumulator, new_el, new_state]
                 push true
-                tuple 2 # Stack: [state, tag, current, accumulator, new_el, (new_state, true)]
+                tuple 2
                 drop 1
                 drop 1
                 drop 1
@@ -502,23 +428,23 @@ mod queue {
             }
         } {
             # Check if tag is rebuilding
-            pick 3 # tag
+            pick 0 # tag
             push super::rebuilding
             equal
             branch {
                 # Stage is rebuilding:
-                pick 1 # accumulator. Stack: [state, tag, current, accumulator, new_el, accumulator]
+                pick 2 # accumulator
                 push ()
                 equal
                 branch {
                     # accumulator is () -> Transition to idle
+                    pick 3 # current
+                    push ()
+                    push ()
                     push super::idle
-                    pick 3  # Stack: [state, tag, current, accumulator, new_el, idle, current]
-                    push () # Stack: [state, tag, current, accumulator, new_el, idle, current, ()]
-                    push () # Stack: [state, tag, current, accumulator, new_el, idle, current, (), ()]
-                    tuple 4 # Stack: [state, tag, current, accumulator, new_el, new_state]
+                    tuple 4 # Stack: [state, current, accumulator, new_el, new_state]
                     push true
-                    tuple 2 # Stack: [state, tag, current, accumulator, new_el, (new_state, true)]
+                    tuple 2
                     drop 1
                     drop 1
                     drop 1
@@ -526,20 +452,18 @@ mod queue {
                     drop 1
                 } {
                     # accumulator is NOT ()
-                    pick 1  # Stack: [state, tag, current, accumulator, new_el, accumulator]
-                    untuple 2 # Stack: [state, tag, current, accumulator, new_el, head, rest_acc]
-                    pick 4  # Stack: [state, tag, current, accumulator, new_el, head, rest_acc, current]
-                    roll 2  # Stack: [state, tag, current, accumulator, new_el, rest_acc, current, head]
-                    roll 1  # Stack: [state, tag, current, accumulator, new_el, rest_acc, head, current]
-                    tuple 2 # Stack: [state, tag, current, accumulator, new_el, rest_acc, new_current]
+                    pick 2 # accumulator
+                    untuple 2 # Stack: [state, current, accumulator, new_el, head, rest_acc]
+                    pick 5 # current
+                    roll 2 # Stack: [state, current, accumulator, new_el, rest_acc, current, head]
+                    roll 1 # Stack: [state, current, accumulator, new_el, rest_acc, head, current]
+                    tuple 2 # Stack: [state, current, accumulator, new_el, rest_acc, new_current]
+                    roll 1 # Stack: [state, current, accumulator, new_el, new_current, rest_acc]
+                    pick 3 # new_el
                     push super::rebuilding
-                    roll 2
-                    roll 2
-                    roll 1
-                    pick 3
                     tuple 4 # [new_state]
                     push true
-                    tuple 2 # Stack: [state, tag, current, accumulator, new_el, (new_state, true)]
+                    tuple 2
                     drop 1
                     drop 1
                     drop 1
@@ -548,9 +472,9 @@ mod queue {
                 }
             } {
                 # Stage is idle / done / response (no transition):
-                pick 4 # get original state. Stack: [state, tag, current, accumulator, new_el, state]
+                pick 4 # get original state
                 push false
-                tuple 2 # Stack: [state, tag, current, accumulator, new_el, (state, false)]
+                tuple 2
                 drop 1
                 drop 1
                 drop 1
@@ -567,7 +491,7 @@ mod queue {
 
     sentence is_ready_to_finish {
         untuple 4
-        pick 3
+        pick 0
         push super::idle
         equal
         roll 4
@@ -601,34 +525,59 @@ test sentence verify_queue_machine {
     jump queue::init
     
     # 2. Push 10
-    push (push_back, 10)
+    push 10
+    push push_back
+    tuple 2
     jump queue::process
     jump drive_reductions
     
     # 3. Push 20
-    push (push_back, 20)
+    push 20
+    push push_back
+    tuple 2
     jump queue::process
     jump drive_reductions
     
     # 4. Pop (should yield 10)
-    push (pop_front, (super::prelude::req, ()))
+    tuple 0
+    push super::prelude::req
+    tuple 2 # ((), req)
+    push pop_front
+    tuple 2 # (((), req), pop_front)
     jump queue::process
     jump drive_reductions
     
-    # Check emitted event: (pop_front, (resp, (some, (10, ()))))
+    # Check emitted event: (pop_front, (resp, (some, (10, ())))) -> ((((10, ()), some), resp), pop_front)
     pick 0
     jump queue::emit
     untuple 2
     assert
-    push (pop_front, (super::prelude::resp, (super::prelude::some, (10, ()))))
+    
+    push (10, ())
+    push super::prelude::some
+    tuple 2 # ((10, ()), some)
+    push super::prelude::resp
+    tuple 2 # (((10, ()), some), resp)
+    push pop_front
+    tuple 2 # ((((10, ()), some), resp), pop_front)
     assert_eq
     
     # Process emitted event to return to idle
-    push (pop_front, (super::prelude::resp, (super::prelude::some, (10, ()))))
+    push (10, ())
+    push super::prelude::some
+    tuple 2
+    push super::prelude::resp
+    tuple 2
+    push pop_front
+    tuple 2
     jump queue::process
     
     # 5. Pop (should yield 20)
-    push (pop_front, (super::prelude::req, ()))
+    tuple 0
+    push super::prelude::req
+    tuple 2
+    push pop_front
+    tuple 2
     jump queue::process
     jump drive_reductions
     
@@ -636,14 +585,30 @@ test sentence verify_queue_machine {
     jump queue::emit
     untuple 2
     assert
-    push (pop_front, (super::prelude::resp, (super::prelude::some, (20, ()))))
+    push (20, ())
+    push super::prelude::some
+    tuple 2
+    push super::prelude::resp
+    tuple 2
+    push pop_front
+    tuple 2
     assert_eq
     
-    push (pop_front, (super::prelude::resp, (super::prelude::some, (20, ()))))
+    push (20, ())
+    push super::prelude::some
+    tuple 2
+    push super::prelude::resp
+    tuple 2
+    push pop_front
+    tuple 2
     jump queue::process
     
     # 6. Pop on empty queue (should yield pop_front.resp.none)
-    push (pop_front, (super::prelude::req, ()))
+    tuple 0
+    push super::prelude::req
+    tuple 2
+    push pop_front
+    tuple 2
     jump queue::process
     jump drive_reductions
     
@@ -651,43 +616,81 @@ test sentence verify_queue_machine {
     jump queue::emit
     untuple 2
     assert
-    push (pop_front, (super::prelude::resp, (super::prelude::none, ())))
+    tuple 0
+    push super::prelude::none
+    tuple 2
+    push super::prelude::resp
+    tuple 2
+    push pop_front
+    tuple 2
     assert_eq
     
-    push (pop_front, (super::prelude::resp, (super::prelude::none, ())))
+    tuple 0
+    push super::prelude::none
+    tuple 2
+    push super::prelude::resp
+    tuple 2
+    push pop_front
+    tuple 2
     jump queue::process
     
     # 7. Await front on empty queue (yields awaiting_push state)
-    push (await_front, (super::prelude::req, ()))
+    tuple 0
+    push super::prelude::req
+    tuple 2
+    push await_front
+    tuple 2
     jump queue::process
     
     # Check that we can pop even when awaiting!
     # Awaiting queue should accept pop_front.req
     pick 0
     jump queue::accept
-    push (pop_front, (super::prelude::req, ()))
+    tuple 0
+    push super::prelude::req
+    tuple 2
+    push pop_front
+    tuple 2
     roll 1
     set_contains
     assert
     
     # Process pop_front.req on awaiting queue (transitions to pop_front_resp_await)
-    push (pop_front, (super::prelude::req, ()))
+    tuple 0
+    push super::prelude::req
+    tuple 2
+    push pop_front
+    tuple 2
     jump queue::process
     
-    # Check emitted event: (pop_front, (resp, (none, ())))
+    # Check emitted event: (pop_front, (resp, (none, ()))) -> ((((), none), resp), pop_front)
     pick 0
     jump queue::emit
     untuple 2
     assert
-    push (pop_front, (super::prelude::resp, (super::prelude::none, ())))
+    tuple 0
+    push super::prelude::none
+    tuple 2
+    push super::prelude::resp
+    tuple 2
+    push pop_front
+    tuple 2
     assert_eq
     
     # Process emitted event to return to awaiting_push state
-    push (pop_front, (super::prelude::resp, (super::prelude::none, ())))
+    tuple 0
+    push super::prelude::none
+    tuple 2
+    push super::prelude::resp
+    tuple 2
+    push pop_front
+    tuple 2
     jump queue::process
     
     # Push 100 on the awaiting queue
-    push (push_back, 100)
+    push 100
+    push push_back
+    tuple 2
     jump queue::process
     jump drive_reductions
     
@@ -696,11 +699,23 @@ test sentence verify_queue_machine {
     jump queue::emit
     untuple 2
     assert
-    push (await_front, (super::prelude::resp, (super::prelude::some, (100, ()))))
+    push (100, ())
+    push super::prelude::some
+    tuple 2
+    push super::prelude::resp
+    tuple 2
+    push await_front
+    tuple 2
     assert_eq
     
     # Process await_front.resp to return to idle
-    push (await_front, (super::prelude::resp, (super::prelude::some, (100, ()))))
+    push (100, ())
+    push super::prelude::some
+    tuple 2
+    push super::prelude::resp
+    tuple 2
+    push await_front
+    tuple 2
     jump queue::process
     
     drop 0 # clean up state

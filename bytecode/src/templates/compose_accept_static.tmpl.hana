@@ -1,12 +1,11 @@
 sentence init {
-    push 0
     tuple 0
+    push 0
     tuple 2
 }
 
 sentence accept {
     untuple 2
-    roll 1
     push 0
     equal
     branch {
@@ -20,7 +19,7 @@ sentence accept {
 
 sentence tau_reduce {
     untuple 2
-    pick 1
+    pick 0
     push 0
     equal
     branch {
@@ -28,17 +27,17 @@ sentence tau_reduce {
         push false
         tuple 2
     } {
-        pick 0
+        pick 1
         jump {{machine}}::tau_reduce
         untuple 2
         branch {
+            roll 1
             roll 2
             drop 0
             tuple 2
             push true
             tuple 2
         } {
-            roll 2
             drop 0
             tuple 2
             push false
@@ -49,7 +48,7 @@ sentence tau_reduce {
 
 sentence emit {
     untuple 2
-    pick 1
+    pick 0
     push 0
     equal
     branch {
@@ -59,7 +58,6 @@ sentence emit {
         push false
         tuple 2
     } {
-        roll 1
         drop 0
         jump {{machine}}::emit
     }
@@ -68,11 +66,11 @@ sentence emit {
 sentence process {
     roll 1
     untuple 2
-    pick 1
+    pick 0
     push 0
     equal
     branch {
-        pick 2 # event
+        pick 2
         push {{val}}
         equal
         branch {
@@ -81,7 +79,6 @@ sentence process {
             drop 0
             jump {{machine}}::init
             push 1
-            roll 1
             tuple 2
         } {
             roll 2
@@ -89,38 +86,40 @@ sentence process {
             tuple 2
         }
     } {
-        roll 2
-        roll 2
         drop 0
+        roll 1
         jump {{machine}}::process
         push 1
-        roll 1
         tuple 2
     }
 }
 
 sentence is_done {
     untuple 2
-    roll 1
+    pick 0
     push 0
     equal
     branch {
         drop 0
+        drop 0
         push false
     } {
+        drop 0
         jump {{machine}}::is_done
     }
 }
 
 sentence is_ready_to_finish {
     untuple 2
-    roll 1
+    pick 0
     push 0
     equal
     branch {
         drop 0
+        drop 0
         push false
     } {
+        drop 0
         jump {{machine}}::is_ready_to_finish
     }
 }

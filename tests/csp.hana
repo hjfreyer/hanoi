@@ -1,50 +1,40 @@
-# CSP Customer and Barista interaction simulation with state machines
-# Modified to support multiple concurrent customers with preferred drinks
-# and a central queue to buffer customer orders for the barista.
+# Customer-Queue-Barista Coffee Shop CSP System
 
 mod customer_id {
-    symbol c1 "Customer 1"
-    symbol c2 "Customer 2"
+    symbol c1 "Customer 1 ID"
+    symbol c2 "Customer 2 ID"
 }
 
 mod event {
-    # Declare events
-    symbol order       "Order event"
-    symbol coffee      "Prepared coffee drink event"
-    symbol want_coffee "Customer wants coffee event"
-    symbol enjoy       "Customer enjoys coffee event"
-    symbol latte       "Latte drink"
-    symbol espresso    "Espresso drink"
+    symbol want_coffee  "Customer wants coffee"
+    symbol coffee       "Barista serves coffee"
+    symbol enjoy        "Customer enjoys coffee"
+    symbol latte        "Latte coffee type"
+    symbol espresso     "Espresso coffee type"
 }
 
 mod customer_impl {
     mod state {
-        # Declare Customer states
-        symbol idle        "Customer is idle"
-        symbol thirsty     "Customer is thirsty"
-        symbol ordered     "Customer ordered coffee"
-        symbol has_coffee  "Customer received coffee and has coffee"
+        symbol idle       "Customer is idle"
+        symbol thirsty    "Customer is thirsty"
+        symbol ordered    "Customer has ordered"
+        symbol has_coffee "Customer has coffee"
     }
 
+    # Initializes customer state: (id, preferred_drink, internal_state)
     sentence init {
     }
 
     # accept takes state: (id, preferred_drink, internal_state) and returns ValueSet of accepted events.
-    # The accepted events are:
-    # - If internal_state is idle: {(want_coffee, id)} (from environment)
-    # - If internal_state is ordered: {(coffee, id, preferred_drink)} (from barista)
-    # - If internal_state is has_coffee: {(enjoy, id)} (from environment)
     sentence accept {
         untuple 3 # Stack: [id, preferred_drink, internal_state]
         pick 0
         push state::idle
         equal
         branch {
-            # Customer accepts want_coffee from environment
             drop 0 # drop internal_state
             drop 0 # drop preferred_drink
             push super::event::want_coffee
-            roll 1 # Stack: [want_coffee, id]
             tuple 2
             set_singleton
         } {
@@ -52,11 +42,8 @@ mod customer_impl {
             push state::ordered
             equal
             branch {
-                # Customer accepts coffee from barista
                 drop 0 # drop internal_state
                 push super::event::coffee
-                roll 2 # Stack: [preferred_drink, coffee, id]
-                roll 2 # Stack: [coffee, id, preferred_drink]
                 tuple 3
                 set_singleton
             } {
@@ -64,11 +51,9 @@ mod customer_impl {
                 push state::has_coffee
                 equal
                 branch {
-                    # Customer accepts enjoy from environment
                     drop 0 # drop internal_state
                     drop 0 # drop preferred_drink
                     push super::event::enjoy
-                    roll 1 # Stack: [enjoy, id]
                     tuple 2
                     set_singleton
                 } {
@@ -76,7 +61,6 @@ mod customer_impl {
                     push state::thirsty
                     equal
                     branch {
-                        # Thirsty state does not accept any inputs (empty_set)
                         drop 0
                         drop 0
                         drop 0
@@ -95,8 +79,6 @@ mod customer_impl {
     }
 
     # emit takes state: (id, preferred_drink, internal_state) and returns ValueSet of emitted events.
-    # The emitted events are:
-    # - If internal_state is thirsty: {(push_back, (id, preferred_drink))} (request to queue)
     sentence emit {
         untuple 3 # Stack: [id, preferred_drink, internal_state]
         pick 0
@@ -107,8 +89,7 @@ mod customer_impl {
             drop 0 # drop internal_state. Stack: [id, preferred_drink]
             tuple 2 # (id, preferred_drink)
             push super::super::queue::push_back
-            roll 1
-            tuple 2 # (push_back, (id, preferred_drink))
+            tuple 2
             push true
             tuple 2
         } {
@@ -153,7 +134,6 @@ mod customer_impl {
     }
 
     # process takes [state, event] and returns next_state.
-    # state is (id, preferred_drink, internal_state)
     sentence process {
         # Stack: [(id, preferred_drink, internal_state), event]
         roll 1 # Stack: [event, (id, preferred_drink, internal_state)]
@@ -164,14 +144,13 @@ mod customer_impl {
         push state::idle
         equal
         branch {
-            # Transition from idle to thirsty
             push state::idle
             assert_eq
             roll 2
             untuple 2
-            drop 0
             push super::event::want_coffee
             assert_eq
+            drop 0
             push state::thirsty
             tuple 3
         } {
@@ -179,14 +158,13 @@ mod customer_impl {
             push state::thirsty
             equal
             branch {
-                # Transition from thirsty to ordered
                 push state::thirsty
                 assert_eq
                 roll 2
                 untuple 2
-                drop 0
                 push super::super::queue::push_back
                 assert_eq
+                drop 0
                 push state::ordered
                 tuple 3
             } {
@@ -194,15 +172,14 @@ mod customer_impl {
                 push state::ordered
                 equal
                 branch {
-                    # Transition from ordered to has_coffee
                     push state::ordered
                     assert_eq
                     roll 2
                     untuple 3
-                    drop 0
-                    drop 0
                     push super::event::coffee
                     assert_eq
+                    drop 0
+                    drop 0
                     push state::has_coffee
                     tuple 3
                 } {
@@ -210,14 +187,13 @@ mod customer_impl {
                     push state::has_coffee
                     equal
                     branch {
-                        # Transition from has_coffee to idle
                         push state::has_coffee
                         assert_eq
                         roll 2
                         untuple 2
-                        drop 0
                         push super::event::enjoy
                         assert_eq
+                        drop 0
                         push state::idle
                         tuple 3
                     } {
@@ -234,18 +210,81 @@ mod customer_impl {
     }
 
     sentence is_ready_to_finish {
+        untuple 3
+        pick 0
+        push state::idle
+        equal
+        roll 3
         drop 0
-        push false
+        roll 2
+        drop 0
+        roll 1
+        drop 0
     }
 }
 
-mod customer1 compose_static_closure(customer_impl, (super::customer_id::c1, super::event::latte, super::customer_impl::state::idle));
+test sentence verify_customer_logic {
+    push customer_id::c1
+    push event::latte
+    push customer_impl::state::idle
+    tuple 3
+    
+    # Idle state accepts want_coffee
+    pick 0
+    jump customer_impl::accept
+    push (customer_id::c1, event::want_coffee)
+    roll 1
+    set_contains
+    assert
+    
+    # Process want_coffee -> thirsty
+    push (customer_id::c1, event::want_coffee)
+    jump customer_impl::process
+    
+    # Thirsty state emits push_back
+    pick 0
+    jump customer_impl::emit
+    untuple 2
+    assert
+    push ((customer_id::c1, event::latte), super::queue::push_back)
+    assert_eq
+    
+    # Process push_back -> ordered
+    push ((customer_id::c1, event::latte), super::queue::push_back)
+    jump customer_impl::process
+    
+    # Ordered state accepts coffee
+    pick 0
+    jump customer_impl::accept
+    push (customer_id::c1, event::latte, event::coffee)
+    roll 1
+    set_contains
+    assert
+    
+    # Process coffee -> has_coffee
+    push (customer_id::c1, event::latte, event::coffee)
+    jump customer_impl::process
+    
+    # Has coffee accepts enjoy
+    pick 0
+    jump customer_impl::accept
+    push (customer_id::c1, event::enjoy)
+    roll 1
+    set_contains
+    assert
+    
+    # Process enjoy -> idle
+    push (customer_id::c1, event::enjoy)
+    jump customer_impl::process
+    
+    drop 0
+}
 
+mod customer1 compose_static_closure(customer_impl, (super::customer_id::c1, super::event::latte, super::customer_impl::state::idle));
 mod customer2 compose_static_closure(customer_impl, (super::customer_id::c2, super::event::espresso, super::customer_impl::state::idle));
 
 mod barista {
     mod state {
-        # Declare Barista states
         symbol idle             "Barista is idle"
         symbol awaiting_order   "Barista is awaiting order from queue"
         symbol brewing          "Barista is brewing coffee"
@@ -258,7 +297,6 @@ mod barista {
 
     # accept takes [state] and returns ValueSet.
     sentence accept {
-        # Stack: [state]
         pick 0
         push state::idle
         equal
@@ -272,25 +310,23 @@ mod barista {
             branch {
                 drop 0
                 # Construct set of await_front.resp response (some.val)
-                push super::super::queue::await_front
-                set_singleton
-                
-                push super::super::prelude::resp
-                set_singleton
-                
-                push super::super::prelude::some
-                set_singleton
-                
                 push universal_set
                 push ()
                 set_singleton
-                set_tuple 2 # (val, ())
+                set_tuple 2 # {(val, ())}
                 
-                set_tuple 2 # (some, (val, ()))
-                set_tuple 2 # (resp, (some, (val, ())))
-                set_tuple 2 # (await_front, (resp, (some, (val, ()))))
+                push super::super::prelude::some
+                set_singleton
+                set_tuple 2 # {((val, ()), some)}
+                
+                push super::super::prelude::resp
+                set_singleton
+                set_tuple 2 # {(((val, ()), some), resp)}
+                
+                push super::super::queue::await_front
+                set_singleton
+                set_tuple 2 # {((((val, ()), some), resp), await_front)}
             } {
-                # Must be brewing
                 drop 0
                 push empty_set
             }
@@ -303,8 +339,6 @@ mod barista {
     }
 
     # emit takes [state] and returns ValueSet.
-    # idle: emits await_front.req
-    # brewing: emits (coffee, id, drink)
     sentence emit {
         # Stack: [state]
         pick 0
@@ -312,11 +346,11 @@ mod barista {
         equal
         branch {
             drop 0
-            push super::super::queue::await_front
-            push super::super::prelude::req
             tuple 0
-            tuple 2
-            tuple 2
+            push super::super::prelude::req
+            tuple 2 # ((), req)
+            push super::super::queue::await_front
+            tuple 2 # (((), req), await_front)
             push true
             tuple 2
         } {
@@ -330,17 +364,14 @@ mod barista {
                 tuple 2
             } {
                 # Must be brewing
-                untuple 2 # Stack: [state_status, (id, drink)]
-                roll 1 # Stack: [(id, drink), state_status]
+                untuple 2 # Stack: [(id, drink), state_status]
                 push state::brewing
                 equal
                 branch {
                     # Stack: [(id, drink)]
                     untuple 2 # Stack: [id, drink]
                     push super::event::coffee # Stack: [id, drink, coffee]
-                    roll 2 # Stack: [drink, coffee, id]
-                    roll 2 # Stack: [coffee, id, drink]
-                    tuple 3 # Stack: [(coffee, id, drink)]
+                    tuple 3 # Stack: [(id, drink, coffee)]
                     push true
                     tuple 2
                 } {
@@ -358,7 +389,11 @@ mod barista {
         equal
         branch {
             # Transition from idle to awaiting_order
-            push (super::super::queue::await_front, (super::super::prelude::req, ()))
+            tuple 0
+            push super::super::prelude::req
+            tuple 2
+            push super::super::queue::await_front
+            tuple 2
             assert_eq
             push state::idle
             assert_eq
@@ -373,33 +408,37 @@ mod barista {
                 push state::awaiting_order
                 assert_eq
                 
-                # Destructure event: (await_front, (resp, (some, (val, ()))))
+                # Destructure event: ((((val, ()), some), resp), await_front)
                 untuple 2
-                drop 1 # drop await_front
-                untuple 2 # Stack: [resp, option]
-                drop 1 # drop resp. Stack: [option]
-                untuple 2 # Stack: [variant, payload]
-                drop 1 # drop variant (some)
-                untuple 2 # Stack: [val, ()]
+                push super::super::queue::await_front
+                assert_eq
+                
+                untuple 2
+                push super::super::prelude::resp
+                assert_eq
+                
+                untuple 2
+                push super::super::prelude::some
+                assert_eq
+                
+                untuple 2
                 push ()
                 assert_eq
                 
                 push state::brewing
-                roll 1
-                tuple 2 # (state::brewing, val)
+                tuple 2 # (val, state::brewing)
             } {
                 # Must be brewing. Transition to idle.
                 roll 1 # Stack: [event, state]
-                untuple 2 # Stack: [event, state_status, val]
-                roll 1 # Stack: [event, val, state_status]
+                untuple 2 # Stack: [event, state_status]
                 push state::brewing
                 assert_eq
-                drop 0 # drop val
-                untuple 3 # Stack: [coffee, id, drink]
-                drop 0 # drop drink
-                drop 0 # drop id
+                drop 0
+                untuple 3 # Stack: [id, drink, coffee]
                 push super::event::coffee
                 assert_eq
+                drop 0
+                drop 0
                 push state::idle
             }
         }
@@ -423,29 +462,29 @@ sentence customers_sync {
 mod customers compose_concurrent(customer1, customer2, customers_sync);
 
 sentence customers_queue_sync {
-    push set_tuple(singleton(super::queue::push_back), universal_set)
+    push set_tuple(universal_set, singleton(super::queue::push_back))
 }
 
 mod customers_and_queue compose_concurrent(customers, super::queue::queue, customers_queue_sync);
 
 sentence joint_sync {
     # Sync barista and queue on await_front
-    push set_tuple(singleton(super::queue::await_front), universal_set)
+    push set_tuple(universal_set, singleton(super::queue::await_front))
     
     # Sync customers and barista on coffee
-    push set_tuple(singleton(event::coffee), universal_set, universal_set)
+    push set_tuple(universal_set, universal_set, singleton(event::coffee))
     set_union
 }
 
 mod concurrent compose_concurrent(customers_and_queue, barista, joint_sync);
 
 sentence hidden_events {
-    push set_tuple(singleton(super::queue::push_back), universal_set)
+    push set_tuple(universal_set, singleton(super::queue::push_back))
     
-    push set_tuple(singleton(event::coffee), universal_set, universal_set)
+    push set_tuple(universal_set, universal_set, singleton(event::coffee))
     set_union
     
-    push set_tuple(singleton(super::queue::await_front), universal_set)
+    push set_tuple(universal_set, singleton(super::queue::await_front))
     set_union
 }
 
@@ -458,8 +497,7 @@ sentence drive_tau {
     jump hidden::tau_reduce
     untuple 2
     branch {
-        roll 1
-        drop 0
+        drop 1 # drop old state
         jump drive_tau
     } {
         drop 0
@@ -467,34 +505,31 @@ sentence drive_tau {
 }
 
 sentence drive_concurrent_tau {
-    # Stack: [state]
     pick 0
     jump concurrent::tau_reduce
     untuple 2
     branch {
-        roll 1
-        drop 0
+        drop 1
         jump drive_concurrent_tau
     } {
         drop 0
     }
 }
 
-# Test the hidden joint Customer-Queue-Barista system
 test sentence verify_hidden_system {
-    # 1. Initialize hidden joint state
+    # 1. Initialize joint state
     jump hidden::init
     
-    # customer 1 wants coffee. Let's verify it is accepted (from environment).
+    # 2. Trigger want_coffee for c1. Let's verify it is accepted.
     pick 0
     jump hidden::accept
-    push (event::want_coffee, customer_id::c1)
+    push (customer_id::c1, event::want_coffee)
     roll 1
     set_contains
     assert
     
     # 2. Trigger event::want_coffee for c1
-    push (event::want_coffee, customer_id::c1)
+    push (customer_id::c1, event::want_coffee)
     jump hidden::process
     
     # 3. Drive tau -> Barista serves Customer 1
@@ -514,10 +549,10 @@ test sentence verify_hidden_system {
     
     tuple 2 # customers
     
+    push ()
+    push ()
+    push ()
     push super::queue::awaiting_push
-    push ()
-    push ()
-    push ()
     tuple 4 # queue
     
     tuple 2 # customers and queue
@@ -531,13 +566,13 @@ test sentence verify_hidden_system {
     # customer 2 wants coffee. Let's verify it is accepted.
     pick 0
     jump hidden::accept
-    push (event::want_coffee, customer_id::c2)
+    push (customer_id::c2, event::want_coffee)
     roll 1
     set_contains
     assert
     
     # 4. Trigger event::want_coffee for c2
-    push (event::want_coffee, customer_id::c2)
+    push (customer_id::c2, event::want_coffee)
     jump hidden::process
     
     # 5. Drive tau -> Barista serves Customer 2
@@ -557,10 +592,10 @@ test sentence verify_hidden_system {
     
     tuple 2 # customers
     
+    push ()
+    push ()
+    push ()
     push super::queue::awaiting_push
-    push ()
-    push ()
-    push ()
     tuple 4 # queue
     
     tuple 2 # customers and queue
@@ -574,13 +609,13 @@ test sentence verify_hidden_system {
     # customer 1 enjoys coffee. Let's verify it is accepted.
     pick 0
     jump hidden::accept
-    push (event::enjoy, customer_id::c1)
+    push (customer_id::c1, event::enjoy)
     roll 1
     set_contains
     assert
     
     # 6. Trigger enjoy for c1
-    push (event::enjoy, customer_id::c1)
+    push (customer_id::c1, event::enjoy)
     jump hidden::process
     
     # Verify state: Customer 1 is idle, Customer 2 has coffee
@@ -597,10 +632,10 @@ test sentence verify_hidden_system {
     
     tuple 2 # customers
     
+    push ()
+    push ()
+    push ()
     push super::queue::awaiting_push
-    push ()
-    push ()
-    push ()
     tuple 4 # queue
     
     tuple 2 # customers and queue
@@ -614,13 +649,13 @@ test sentence verify_hidden_system {
     # customer 2 enjoys coffee. Let's verify it is accepted.
     pick 0
     jump hidden::accept
-    push (event::enjoy, customer_id::c2)
+    push (customer_id::c2, event::enjoy)
     roll 1
     set_contains
     assert
     
     # 7. Trigger enjoy for c2
-    push (event::enjoy, customer_id::c2)
+    push (customer_id::c2, event::enjoy)
     jump hidden::process
     
     # Verify state: both idle
@@ -637,10 +672,10 @@ test sentence verify_hidden_system {
     
     tuple 2 # customers
     
+    push ()
+    push ()
+    push ()
     push super::queue::awaiting_push
-    push ()
-    push ()
-    push ()
     tuple 4 # queue
     
     tuple 2 # customers and queue
@@ -664,32 +699,41 @@ test sentence verify_concurrent_system {
     jump concurrent::emit
     untuple 2
     assert
-    push (super::queue::await_front, (super::prelude::req, ()))
+    
+    tuple 0
+    push super::prelude::req
+    tuple 2
+    push super::queue::await_front
+    tuple 2
     assert_eq
     
-    push (super::queue::await_front, (super::prelude::req, ()))
+    tuple 0
+    push super::prelude::req
+    tuple 2
+    push super::queue::await_front
+    tuple 2
     jump concurrent::process
     
     # 3. Customer 1 wants coffee (accepted from environment)
     pick 0
     jump concurrent::accept
-    push (event::want_coffee, customer_id::c1)
+    push (customer_id::c1, event::want_coffee)
     roll 1
     set_contains
     assert
     
-    push (event::want_coffee, customer_id::c1)
+    push (customer_id::c1, event::want_coffee)
     jump concurrent::process
     
     # 4. Customer 2 wants coffee (accepted from environment)
     pick 0
     jump concurrent::accept
-    push (event::want_coffee, customer_id::c2)
+    push (customer_id::c2, event::want_coffee)
     roll 1
     set_contains
     assert
     
-    push (event::want_coffee, customer_id::c2)
+    push (customer_id::c2, event::want_coffee)
     jump concurrent::process
     
     # 5. Customer 1 orders coffee (emitted request from customer)
@@ -697,10 +741,14 @@ test sentence verify_concurrent_system {
     jump concurrent::emit
     untuple 2
     assert
-    push (super::queue::push_back, (customer_id::c1, event::latte))
+    push (customer_id::c1, event::latte)
+    push super::queue::push_back
+    tuple 2
     assert_eq
     
-    push (super::queue::push_back, (customer_id::c1, event::latte))
+    push (customer_id::c1, event::latte)
+    push super::queue::push_back
+    tuple 2
     jump concurrent::process
     jump drive_concurrent_tau
     
@@ -709,10 +757,27 @@ test sentence verify_concurrent_system {
     jump concurrent::emit
     untuple 2
     assert
-    push (super::queue::await_front, (super::prelude::resp, (super::prelude::some, ((customer_id::c1, event::latte), ()))))
+    
+    push (customer_id::c1, event::latte)
+    push ()
+    tuple 2
+    push super::prelude::some
+    tuple 2
+    push super::prelude::resp
+    tuple 2
+    push super::queue::await_front
+    tuple 2
     assert_eq
     
-    push (super::queue::await_front, (super::prelude::resp, (super::prelude::some, ((customer_id::c1, event::latte), ()))))
+    push (customer_id::c1, event::latte)
+    push ()
+    tuple 2
+    push super::prelude::some
+    tuple 2
+    push super::prelude::resp
+    tuple 2
+    push super::queue::await_front
+    tuple 2
     jump concurrent::process
     
     # 7. Customer 2 orders coffee (emitted request from customer)
@@ -720,10 +785,14 @@ test sentence verify_concurrent_system {
     jump concurrent::emit
     untuple 2
     assert
-    push (super::queue::push_back, (customer_id::c2, event::espresso))
+    push (customer_id::c2, event::espresso)
+    push super::queue::push_back
+    tuple 2
     assert_eq
     
-    push (super::queue::push_back, (customer_id::c2, event::espresso))
+    push (customer_id::c2, event::espresso)
+    push super::queue::push_back
+    tuple 2
     jump concurrent::process
     jump drive_concurrent_tau
     
@@ -732,21 +801,21 @@ test sentence verify_concurrent_system {
     jump concurrent::emit
     untuple 2
     assert
-    push (event::coffee, customer_id::c1, event::latte)
+    push (customer_id::c1, event::latte, event::coffee)
     assert_eq
     
-    push (event::coffee, customer_id::c1, event::latte)
+    push (customer_id::c1, event::latte, event::coffee)
     jump concurrent::process
     
     # 9. Customer 1 enjoys coffee
     pick 0
     jump concurrent::accept
-    push (event::enjoy, customer_id::c1)
+    push (customer_id::c1, event::enjoy)
     roll 1
     set_contains
     assert
     
-    push (event::enjoy, customer_id::c1)
+    push (customer_id::c1, event::enjoy)
     jump concurrent::process
     
     # 10. Barista requests await_front
@@ -754,10 +823,19 @@ test sentence verify_concurrent_system {
     jump concurrent::emit
     untuple 2
     assert
-    push (super::queue::await_front, (super::prelude::req, ()))
+    
+    tuple 0
+    push super::prelude::req
+    tuple 2
+    push super::queue::await_front
+    tuple 2
     assert_eq
     
-    push (super::queue::await_front, (super::prelude::req, ()))
+    tuple 0
+    push super::prelude::req
+    tuple 2
+    push super::queue::await_front
+    tuple 2
     jump concurrent::process
     
     # 11. Queue immediately responds to await_front request with the popped customer 2 value
@@ -765,10 +843,27 @@ test sentence verify_concurrent_system {
     jump concurrent::emit
     untuple 2
     assert
-    push (super::queue::await_front, (super::prelude::resp, (super::prelude::some, ((customer_id::c2, event::espresso), ()))))
+    
+    push (customer_id::c2, event::espresso)
+    push ()
+    tuple 2
+    push super::prelude::some
+    tuple 2
+    push super::prelude::resp
+    tuple 2
+    push super::queue::await_front
+    tuple 2
     assert_eq
     
-    push (super::queue::await_front, (super::prelude::resp, (super::prelude::some, ((customer_id::c2, event::espresso), ()))))
+    push (customer_id::c2, event::espresso)
+    push ()
+    tuple 2
+    push super::prelude::some
+    tuple 2
+    push super::prelude::resp
+    tuple 2
+    push super::queue::await_front
+    tuple 2
     jump concurrent::process
     
     # 12. Barista finishes brewing for Customer 2
@@ -776,21 +871,21 @@ test sentence verify_concurrent_system {
     jump concurrent::emit
     untuple 2
     assert
-    push (event::coffee, customer_id::c2, event::espresso)
+    push (customer_id::c2, event::espresso, event::coffee)
     assert_eq
     
-    push (event::coffee, customer_id::c2, event::espresso)
+    push (customer_id::c2, event::espresso, event::coffee)
     jump concurrent::process
     
     # 13. Customer 2 enjoys coffee
     pick 0
     jump concurrent::accept
-    push (event::enjoy, customer_id::c2)
+    push (customer_id::c2, event::enjoy)
     roll 1
     set_contains
     assert
     
-    push (event::enjoy, customer_id::c2)
+    push (customer_id::c2, event::enjoy)
     jump concurrent::process
     
     # Verify final states
@@ -807,10 +902,10 @@ test sentence verify_concurrent_system {
     
     tuple 2 # customers
     
+    push ()
+    push ()
+    push ()
     push super::queue::idle
-    push ()
-    push ()
-    push ()
     tuple 4 # queue
     
     tuple 2 # customers and queue
@@ -830,7 +925,7 @@ test sentence verify_barista_rejection {
     jump barista::init
     
     jump barista::accept
-    push (event::coffee, customer_id::c1, event::latte)
+    push (customer_id::c1, event::latte, event::coffee)
     roll 1
     set_contains
     push false
@@ -839,7 +934,7 @@ test sentence verify_barista_rejection {
     # 2. Test that barista in idle does NOT accept order directly (since orders are queued)
     jump barista::init
     jump barista::accept
-    push (super::queue::push_back, (customer_id::c1, event::latte))
+    push ((customer_id::c1, event::latte), super::queue::push_back)
     roll 1
     set_contains
     push false
@@ -850,23 +945,45 @@ test sentence verify_barista_rejection {
     jump barista::emit
     untuple 2
     assert
-    push (super::queue::await_front, (super::prelude::req, ()))
+    
+    tuple 0
+    push super::prelude::req
+    tuple 2
+    push super::queue::await_front
+    tuple 2
     assert_eq
     
     # 4. Test that barista in awaiting_order accepts await_front.resp.some.val
     jump barista::init
-    push (super::queue::await_front, (super::prelude::req, ()))
+    
+    tuple 0
+    push super::prelude::req
+    tuple 2
+    push super::queue::await_front
+    tuple 2
     jump barista::process # Transition to awaiting_order
     
     jump barista::accept
-    push (super::queue::await_front, (super::prelude::resp, (super::prelude::some, ((customer_id::c1, event::latte), ()))))
+    push (customer_id::c1, event::latte)
+    push ()
+    tuple 2
+    push super::prelude::some
+    tuple 2
+    push super::prelude::resp
+    tuple 2
+    push super::queue::await_front
+    tuple 2
     roll 1
     set_contains
     assert
     
     # 5. Test that barista in awaiting_order does NOT emit coffee
     jump barista::init
-    push (super::queue::await_front, (super::prelude::req, ()))
+    tuple 0
+    push super::prelude::req
+    tuple 2
+    push super::queue::await_front
+    tuple 2
     jump barista::process # Transition to awaiting_order
     
     jump barista::emit

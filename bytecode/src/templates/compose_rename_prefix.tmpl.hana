@@ -14,14 +14,12 @@ sentence emit {
     untuple 2
     branch {
         untuple 2
-        pick 1
+        pick 0
         push {{from_symbol}}
         equal
         branch {
-            roll 1
             drop 0
             push {{to_symbol}}
-            roll 1
             tuple 2
             push true
             tuple 2
@@ -40,14 +38,12 @@ sentence emit {
 
 sentence process {
     untuple 2
-    pick 1
+    pick 0
     push {{to_symbol}}
     equal
     branch {
-        roll 1
         drop 0
         push {{from_symbol}}
-        roll 1
         tuple 2
         jump {{target}}::process
     } {

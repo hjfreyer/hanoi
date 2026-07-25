@@ -396,25 +396,25 @@ mod tests {
         let renamed_standalone = standalone_set.rename_prefix(&from_sym, &to_sym);
         assert_eq!(renamed_standalone, standalone_set);
 
-        // 2. Tuple value: singleton((from, 42)) should be renamed to singleton((to, 42))
+        // 2. Tuple value: singleton((42, from)) should be renamed to singleton((42, to))
         let tuple_val_set = ValueSet::Singleton(Box::new(Value::Tuple(vec![
-            Value::Symbol(from_sym.clone()),
             Value::Int(42),
+            Value::Symbol(from_sym.clone()),
         ])));
         let expected_tuple_val_set = ValueSet::Singleton(Box::new(Value::Tuple(vec![
-            Value::Symbol(to_sym.clone()),
             Value::Int(42),
+            Value::Symbol(to_sym.clone()),
         ])));
         assert_eq!(tuple_val_set.rename_prefix(&from_sym, &to_sym), expected_tuple_val_set);
 
-        // 3. ValueSet::Tuple: set_tuple(singleton(from), universal_set) -> set_tuple(singleton(to), universal_set)
+        // 3. ValueSet::Tuple: set_tuple(universal_set, singleton(from)) -> set_tuple(universal_set, singleton(to))
         let set_tuple_set = ValueSet::Tuple(vec![
-            ValueSet::Singleton(Box::new(Value::Symbol(from_sym.clone()))),
             ValueSet::Universal,
+            ValueSet::Singleton(Box::new(Value::Symbol(from_sym.clone()))),
         ]);
         let expected_set_tuple = ValueSet::Tuple(vec![
-            ValueSet::Singleton(Box::new(Value::Symbol(to_sym.clone()))),
             ValueSet::Universal,
+            ValueSet::Singleton(Box::new(Value::Symbol(to_sym.clone()))),
         ]);
         assert_eq!(set_tuple_set.rename_prefix(&from_sym, &to_sym), expected_set_tuple);
     }
