@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use crate::library::{Library, SentenceIndex};
+use crate::library::{Library, SentenceIndex, Annotation};
 use crate::opcode::Instruction;
 use crate::value::{Value, Symbol, ValueSet};
 
@@ -29,6 +29,9 @@ enum Token {
     StringLiteral(String),
     LBrace,
     RBrace,
+    Hash,
+    LBracket,
+    RBracket,
     LParen,
     RParen,
     Comma,
@@ -74,6 +77,18 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
             }
             '}' => {
                 tokens.push(Token::RBrace);
+                chars.next();
+            }
+            '#' => {
+                tokens.push(Token::Hash);
+                chars.next();
+            }
+            '[' => {
+                tokens.push(Token::LBracket);
+                chars.next();
+            }
+            ']' => {
+                tokens.push(Token::RBracket);
                 chars.next();
             }
             '(' => {
@@ -562,6 +577,7 @@ struct TopLevelSentence {
     is_test: bool,
     name: String,
     body: ParsedSentence,
+    annotations: Vec<Annotation>,
 }
 
 fn is_composer_name(name: &str) -> bool {
@@ -621,6 +637,82 @@ fn parse_items(stream: &mut TokenStream, end_token: Option<Token>, base_dir: Opt
             if stream.peek() == Some(end) {
                 break;
             }
+        }
+
+        let mut annotations = Vec::new();
+        while stream.peek() == Some(&Token::Hash) {
+            stream.next(); // consume '#'
+            stream.expect(Token::LBracket)?;
+            let name = match stream.next() {
+                Some(Token::Identifier(name)) => name,
+                Some(other) => return Err(format!("Expected annotation name, found {:?}", other)),
+                None => return Err("Expected annotation name, found end of input".to_string()),
+            };
+
+            let ann = match name.as_str() {
+                "arity" => {
+                    stream.expect(Token::LParen)?;
+                    let n = match stream.next() {
+                        Some(Token::Int(val)) => val,
+                        Some(other) => return Err(format!("Expected integer for arity first argument, found {:?}", other)),
+                        None => return Err("Expected integer for arity first argument, found end of input".to_string()),
+                    };
+                    stream.expect(Token::Comma)?;
+                    let m = match stream.next() {
+                        Some(Token::Int(val)) => val,
+                        Some(other) => return Err(format!("Expected integer for arity second argument, found {:?}", other)),
+                        None => return Err("Expected integer for arity second argument, found end of input".to_string()),
+                    };
+                    stream.expect(Token::RParen)?;
+                    Annotation::Arity(n, m)
+                }
+                other => return Err(format!("Unsupported annotation '{}'", other)),
+            };
+            stream.expect(Token::RBracket)?;
+            annotations.push(ann);
+        }
+
+        if !annotations.is_empty() {
+            let mut is_exported = false;
+            let mut is_test = false;
+
+            loop {
+                if stream.peek() == Some(&Token::Export) {
+                    stream.next();
+                    is_exported = true;
+                } else if stream.peek() == Some(&Token::TestKeyword) {
+                    if stream.peek_at(1) == Some(&Token::ModKeyword) {
+                        return Err("Annotations are not supported on modules".to_string());
+                    }
+                    stream.next();
+                    is_test = true;
+                } else {
+                    break;
+                }
+            }
+
+            stream.expect(Token::SentenceKeyword)?;
+
+            let name = match stream.next() {
+                Some(Token::Identifier(name)) => name,
+                Some(other) => return Err(format!("Expected sentence name identifier, found {:?}", other)),
+                None => return Err("Expected sentence name identifier, found end of input".to_string()),
+            };
+
+            if stream.peek() == Some(&Token::Colon) {
+                stream.next();
+            }
+
+            let body = parse_sentence_body(stream)?;
+
+            items.push(TopLevelItem::Sentence(TopLevelSentence {
+                is_exported,
+                is_test,
+                name,
+                body,
+                annotations,
+            }));
+            continue;
         }
 
         if stream.peek() == Some(&Token::SymbolKeyword) {
@@ -738,6 +830,7 @@ fn parse_items(stream: &mut TokenStream, end_token: Option<Token>, base_dir: Opt
                 is_test,
                 name,
                 body,
+                annotations: Vec::new(),
             }));
         }
         }
@@ -1689,10 +1782,12 @@ pub fn assemble_with_path(input: &str, base_dir: Option<&std::path::Path>) -> Re
     // Pre-allocate space for all named sentences
     compiler.sentences.resize(sentence_counter, Vec::new());
 
+    let mut annotations = typed_index_collections::TiVec::new();
     // Compile instructions recursively
     for (idx, (path, sentence)) in flat_sentences.into_iter().enumerate() {
         let compiled_instructions = compiler.compile_sentence_body(&path, sentence.body.instructions)?;
         compiler.sentences[idx] = compiled_instructions;
+        annotations.push(sentence.annotations);
     }
 
     let mut library = Library::new();
@@ -1702,6 +1797,7 @@ pub fn assemble_with_path(input: &str, base_dir: Option<&std::path::Path>) -> Re
     library.exports = exports;
     library.tests = tests;
     library.test_machines = test_machines;
+    library.annotations = annotations;
 
     let mut symbols_map = HashMap::new();
     let mut path_tracker = Vec::new();

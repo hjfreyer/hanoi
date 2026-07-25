@@ -4,7 +4,7 @@ pub mod opcode;
 pub mod value;
 
 pub use assembly::{assemble, assemble_with_path};
-pub use library::{Library, Sentence, SentenceIndex};
+pub use library::{Library, Sentence, SentenceIndex, Annotation};
 pub use opcode::Instruction;
 pub use value::{Value, ValueSet, ChooseResult};
 
@@ -240,6 +240,35 @@ mod tests {
         assert_eq!(res.tests.get("my_exported_test"), Some(&SentenceIndex::from(1)));
         assert_eq!(res.exports.get("my_exported_test"), Some(&SentenceIndex::from(1)));
         assert_eq!(res.exports.get("my_test"), None);
+    }
+
+    #[test]
+    fn test_assemble_arity_annotation() {
+        let code = r#"
+            #[arity(1, 2)]
+            sentence with_arity {
+                push 1
+            }
+
+            sentence without_arity {
+                push 2
+            }
+
+            #[arity(3, 4)]
+            export test sentence both_arity {
+                push 3
+            }
+        "#;
+        let res = assemble(code).unwrap();
+        assert_eq!(res.sentences.len(), 3);
+
+        let idx_with = SentenceIndex::from(0);
+        let idx_without = SentenceIndex::from(1);
+        let idx_both = SentenceIndex::from(2);
+
+        assert_eq!(res.annotations[idx_with], vec![Annotation::Arity(1, 2)]);
+        assert_eq!(res.annotations[idx_without], vec![]);
+        assert_eq!(res.annotations[idx_both], vec![Annotation::Arity(3, 4)]);
     }
 
     #[test]
