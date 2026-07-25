@@ -1310,12 +1310,18 @@ fn compose_concurrent(args: &[Path]) -> Result<Vec<TopLevelItem>, String> {
                                                             ParsedInstruction::Equal,
                                                             ParsedInstruction::Branch(
                                                                 Target::Inline(ParsedSentence { instructions: return_e1() }), // equal -> return e1
-                                                                Target::Inline(check_e2.clone()), // not equal -> check e2
+                                                                Target::Inline(ParsedSentence {
+                                                                    instructions: {
+                                                                        let mut insts = Vec::new();
+                                                                        insts.extend(check_e2.instructions.clone());
+                                                                        insts
+                                                                    }
+                                                                }), // not equal -> check e2
                                                             ),
                                                         ],
                                                     }),
-                                                    // IF has_e2 is false: check e2
-                                                    Target::Inline(check_e2.clone()),
+                                                    // IF has_e2 is false: return none (since we already know e2 is not emit-ready or syncs incorrectly)
+                                                    Target::Inline(ParsedSentence { instructions: return_none() }),
                                                 ),
                                             ],
                                         }),
@@ -2477,10 +2483,10 @@ fn compose_emit_helper(val: Option<ParsedValue>, target: &Path) -> Result<Vec<To
         is_test: false,
         name: "init".to_string(),
         body: ParsedSentence {
-            instructions: if let Some(v) = val {
+            instructions: if let Some(v) = &val {
                 vec![
                     ParsedInstruction::Push(ParsedValue::Int(0)),
-                    ParsedInstruction::Push(v),
+                    ParsedInstruction::Push(v.clone()),
                     ParsedInstruction::Tuple(2),
                 ]
             } else {
@@ -2546,7 +2552,7 @@ fn compose_emit_helper(val: Option<ParsedValue>, target: &Path) -> Result<Vec<To
                             ParsedInstruction::Branch(
                                 Target::Inline(ParsedSentence {
                                     instructions: vec![
-                                        ParsedInstruction::Roll(1),
+                                        ParsedInstruction::Roll(2),
                                         ParsedInstruction::Drop(0),
                                         ParsedInstruction::Tuple(2),
                                         ParsedInstruction::Push(ParsedValue::Bool(true)),
@@ -2555,7 +2561,7 @@ fn compose_emit_helper(val: Option<ParsedValue>, target: &Path) -> Result<Vec<To
                                 }),
                                 Target::Inline(ParsedSentence {
                                     instructions: vec![
-                                        ParsedInstruction::Roll(1),
+                                        ParsedInstruction::Roll(2),
                                         ParsedInstruction::Drop(0),
                                         ParsedInstruction::Tuple(2),
                                         ParsedInstruction::Push(ParsedValue::Bool(false)),
@@ -2582,12 +2588,23 @@ fn compose_emit_helper(val: Option<ParsedValue>, target: &Path) -> Result<Vec<To
                 ParsedInstruction::Equal,
                 ParsedInstruction::Branch(
                     Target::Inline(ParsedSentence {
-                        instructions: vec![
-                            ParsedInstruction::Roll(1),
-                            ParsedInstruction::Drop(0),
-                            ParsedInstruction::Push(ParsedValue::Bool(true)),
-                            ParsedInstruction::Tuple(2),
-                        ],
+                        instructions: if let Some(v) = &val {
+                            vec![
+                                ParsedInstruction::Roll(1),
+                                ParsedInstruction::Drop(0),
+                                ParsedInstruction::Drop(0),
+                                ParsedInstruction::Push(v.clone()),
+                                ParsedInstruction::Push(ParsedValue::Bool(true)),
+                                ParsedInstruction::Tuple(2),
+                            ]
+                        } else {
+                            vec![
+                                ParsedInstruction::Roll(1),
+                                ParsedInstruction::Drop(0),
+                                ParsedInstruction::Push(ParsedValue::Bool(true)),
+                                ParsedInstruction::Tuple(2),
+                            ]
+                        },
                     }),
                     Target::Inline(ParsedSentence {
                         instructions: vec![
@@ -2705,7 +2722,7 @@ fn compose_emit_helper(val: Option<ParsedValue>, target: &Path) -> Result<Vec<To
     ])
 }
 
-fn compose_accept_helper(val: ParsedValue, target: &Path, is_static: bool) -> Result<Vec<TopLevelItem>, String> {
+fn compose_accept_helper(val_set_path: Path, target: &Path) -> Result<Vec<TopLevelItem>, String> {
     let machine = adjust_path(target);
     let mut machine_init = machine.clone(); machine_init.segments.push(PathSegment::Identifier("init".to_string()));
     let mut machine_accept = machine.clone(); machine_accept.segments.push(PathSegment::Identifier("accept".to_string()));
@@ -2728,12 +2745,6 @@ fn compose_accept_helper(val: ParsedValue, target: &Path, is_static: bool) -> Re
         },
     };
 
-    let accept_val = if is_static {
-        ParsedValue::SetSingleton(Box::new(val.clone()))
-    } else {
-        val.clone()
-    };
-
     let accept_sentence = TopLevelSentence {
         is_exported: false,
         is_test: false,
@@ -2748,7 +2759,7 @@ fn compose_accept_helper(val: ParsedValue, target: &Path, is_static: bool) -> Re
                     Target::Inline(ParsedSentence {
                         instructions: vec![
                             ParsedInstruction::Drop(0),
-                            ParsedInstruction::Push(accept_val),
+                            ParsedInstruction::Jump(Target::Label(val_set_path.clone())),
                         ],
                     }),
                     Target::Inline(ParsedSentence {
@@ -2787,7 +2798,7 @@ fn compose_accept_helper(val: ParsedValue, target: &Path, is_static: bool) -> Re
                             ParsedInstruction::Branch(
                                 Target::Inline(ParsedSentence {
                                     instructions: vec![
-                                        ParsedInstruction::Roll(1),
+                                        ParsedInstruction::Roll(2),
                                         ParsedInstruction::Drop(0),
                                         ParsedInstruction::Tuple(2),
                                         ParsedInstruction::Push(ParsedValue::Bool(true)),
@@ -2796,7 +2807,7 @@ fn compose_accept_helper(val: ParsedValue, target: &Path, is_static: bool) -> Re
                                 }),
                                 Target::Inline(ParsedSentence {
                                     instructions: vec![
-                                        ParsedInstruction::Roll(1),
+                                        ParsedInstruction::Roll(2),
                                         ParsedInstruction::Drop(0),
                                         ParsedInstruction::Tuple(2),
                                         ParsedInstruction::Push(ParsedValue::Bool(false)),
@@ -2856,26 +2867,282 @@ fn compose_accept_helper(val: ParsedValue, target: &Path, is_static: bool) -> Re
                 ParsedInstruction::Equal,
                 ParsedInstruction::Branch(
                     Target::Inline(ParsedSentence {
-                        instructions: if is_static {
-                            vec![
-                                ParsedInstruction::Drop(0),
-                                ParsedInstruction::Drop(0),
-                                ParsedInstruction::Drop(0),
-                                ParsedInstruction::Jump(Target::Label(machine_init)),
-                                ParsedInstruction::Push(ParsedValue::Int(1)),
-                                ParsedInstruction::Roll(1),
-                                ParsedInstruction::Tuple(2),
-                            ]
-                        } else {
-                            vec![
-                                ParsedInstruction::Drop(0),
-                                ParsedInstruction::Drop(0),
-                                ParsedInstruction::Jump(Target::Label(machine_init)),
-                                ParsedInstruction::Push(ParsedValue::Int(1)),
-                                ParsedInstruction::Roll(1),
-                                ParsedInstruction::Tuple(2),
-                            ]
-                        },
+                        instructions: vec![
+                            ParsedInstruction::Pick(2), // event
+                            ParsedInstruction::Jump(Target::Label(val_set_path.clone())),
+                            ParsedInstruction::SetContains,
+                            ParsedInstruction::Branch(
+                                Target::Inline(ParsedSentence {
+                                    instructions: vec![
+                                        ParsedInstruction::Drop(0),
+                                        ParsedInstruction::Drop(0),
+                                        ParsedInstruction::Jump(Target::Label(machine_init)),
+                                        ParsedInstruction::Push(ParsedValue::Int(1)),
+                                        ParsedInstruction::Roll(1),
+                                        ParsedInstruction::Tuple(2),
+                                    ],
+                                }),
+                                Target::Inline(ParsedSentence {
+                                    instructions: vec![
+                                        ParsedInstruction::Roll(2),
+                                        ParsedInstruction::Drop(0),
+                                        ParsedInstruction::Tuple(2),
+                                    ],
+                                }),
+                            ),
+                        ],
+                    }),
+                    Target::Inline(ParsedSentence {
+                        instructions: vec![
+                            ParsedInstruction::Roll(2),
+                            ParsedInstruction::Roll(2),
+                            ParsedInstruction::Drop(0),
+                            ParsedInstruction::Jump(Target::Label(machine_process)),
+                            ParsedInstruction::Push(ParsedValue::Int(1)),
+                            ParsedInstruction::Roll(1),
+                            ParsedInstruction::Tuple(2),
+                        ],
+                    }),
+                ),
+            ],
+        },
+    };
+
+    let is_done_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "is_done".to_string(),
+        body: ParsedSentence {
+            instructions: vec![
+                ParsedInstruction::Untuple(2),
+                ParsedInstruction::Roll(1),
+                ParsedInstruction::Push(ParsedValue::Int(0)),
+                ParsedInstruction::Equal,
+                ParsedInstruction::Branch(
+                    Target::Inline(ParsedSentence {
+                        instructions: vec![
+                            ParsedInstruction::Drop(0),
+                            ParsedInstruction::Push(ParsedValue::Bool(false)),
+                        ],
+                    }),
+                    Target::Inline(ParsedSentence {
+                        instructions: vec![
+                            ParsedInstruction::Jump(Target::Label(machine_is_done)),
+                        ],
+                    }),
+                ),
+            ],
+        },
+    };
+
+    let is_ready_to_finish_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "is_ready_to_finish".to_string(),
+        body: ParsedSentence {
+            instructions: vec![
+                ParsedInstruction::Untuple(2),
+                ParsedInstruction::Roll(1),
+                ParsedInstruction::Push(ParsedValue::Int(0)),
+                ParsedInstruction::Equal,
+                ParsedInstruction::Branch(
+                    Target::Inline(ParsedSentence {
+                        instructions: vec![
+                            ParsedInstruction::Drop(0),
+                            ParsedInstruction::Push(ParsedValue::Bool(false)),
+                        ],
+                    }),
+                    Target::Inline(ParsedSentence {
+                        instructions: vec![
+                            ParsedInstruction::Jump(Target::Label(machine_is_ready_to_finish)),
+                        ],
+                    }),
+                ),
+            ],
+        },
+    };
+
+    Ok(vec![
+        TopLevelItem::Sentence(init_sentence),
+        TopLevelItem::Sentence(accept_sentence),
+        TopLevelItem::Sentence(emit_sentence),
+        TopLevelItem::Sentence(process_sentence),
+        TopLevelItem::Sentence(tau_reduce_sentence),
+        TopLevelItem::Sentence(is_done_sentence),
+        TopLevelItem::Sentence(is_ready_to_finish_sentence),
+    ])
+}
+
+fn compose_accept_static_helper(val: ParsedValue, target: &Path) -> Result<Vec<TopLevelItem>, String> {
+    let machine = adjust_path(target);
+    let mut machine_init = machine.clone(); machine_init.segments.push(PathSegment::Identifier("init".to_string()));
+    let mut machine_accept = machine.clone(); machine_accept.segments.push(PathSegment::Identifier("accept".to_string()));
+    let mut machine_emit = machine.clone(); machine_emit.segments.push(PathSegment::Identifier("emit".to_string()));
+    let mut machine_process = machine.clone(); machine_process.segments.push(PathSegment::Identifier("process".to_string()));
+    let mut machine_tau_reduce = machine.clone(); machine_tau_reduce.segments.push(PathSegment::Identifier("tau_reduce".to_string()));
+    let mut machine_is_done = machine.clone(); machine_is_done.segments.push(PathSegment::Identifier("is_done".to_string()));
+    let mut machine_is_ready_to_finish = machine.clone(); machine_is_ready_to_finish.segments.push(PathSegment::Identifier("is_ready_to_finish".to_string()));
+
+    let init_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "init".to_string(),
+        body: ParsedSentence {
+            instructions: vec![
+                ParsedInstruction::Push(ParsedValue::Int(0)),
+                ParsedInstruction::Tuple(0),
+                ParsedInstruction::Tuple(2),
+            ],
+        },
+    };
+
+    let accept_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "accept".to_string(),
+        body: ParsedSentence {
+            instructions: vec![
+                ParsedInstruction::Untuple(2),
+                ParsedInstruction::Roll(1),
+                ParsedInstruction::Push(ParsedValue::Int(0)),
+                ParsedInstruction::Equal,
+                ParsedInstruction::Branch(
+                    Target::Inline(ParsedSentence {
+                        instructions: vec![
+                            ParsedInstruction::Drop(0),
+                            ParsedInstruction::Push(ParsedValue::SetSingleton(Box::new(val.clone()))),
+                        ],
+                    }),
+                    Target::Inline(ParsedSentence {
+                        instructions: vec![
+                            ParsedInstruction::Jump(Target::Label(machine_accept)),
+                        ],
+                    }),
+                ),
+            ],
+        },
+    };
+
+    let tau_reduce_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "tau_reduce".to_string(),
+        body: ParsedSentence {
+            instructions: vec![
+                ParsedInstruction::Untuple(2),
+                ParsedInstruction::Pick(1),
+                ParsedInstruction::Push(ParsedValue::Int(0)),
+                ParsedInstruction::Equal,
+                ParsedInstruction::Branch(
+                    Target::Inline(ParsedSentence {
+                        instructions: vec![
+                            ParsedInstruction::Tuple(2),
+                            ParsedInstruction::Push(ParsedValue::Bool(false)),
+                            ParsedInstruction::Tuple(2),
+                        ],
+                    }),
+                    Target::Inline(ParsedSentence {
+                        instructions: vec![
+                            ParsedInstruction::Pick(0),
+                            ParsedInstruction::Jump(Target::Label(machine_tau_reduce)),
+                            ParsedInstruction::Untuple(2),
+                            ParsedInstruction::Branch(
+                                Target::Inline(ParsedSentence {
+                                    instructions: vec![
+                                        ParsedInstruction::Roll(2),
+                                        ParsedInstruction::Drop(0),
+                                        ParsedInstruction::Tuple(2),
+                                        ParsedInstruction::Push(ParsedValue::Bool(true)),
+                                        ParsedInstruction::Tuple(2),
+                                    ],
+                                }),
+                                Target::Inline(ParsedSentence {
+                                    instructions: vec![
+                                        ParsedInstruction::Roll(2),
+                                        ParsedInstruction::Drop(0),
+                                        ParsedInstruction::Tuple(2),
+                                        ParsedInstruction::Push(ParsedValue::Bool(false)),
+                                        ParsedInstruction::Tuple(2),
+                                    ],
+                                }),
+                            ),
+                        ],
+                    }),
+                ),
+            ],
+        },
+    };
+
+    let emit_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "emit".to_string(),
+        body: ParsedSentence {
+            instructions: vec![
+                ParsedInstruction::Untuple(2),
+                ParsedInstruction::Pick(1),
+                ParsedInstruction::Push(ParsedValue::Int(0)),
+                ParsedInstruction::Equal,
+                ParsedInstruction::Branch(
+                    Target::Inline(ParsedSentence {
+                        instructions: vec![
+                            ParsedInstruction::Drop(0),
+                            ParsedInstruction::Drop(0),
+                            ParsedInstruction::Tuple(0),
+                            ParsedInstruction::Push(ParsedValue::Bool(false)),
+                            ParsedInstruction::Tuple(2),
+                        ],
+                    }),
+                    Target::Inline(ParsedSentence {
+                        instructions: vec![
+                            ParsedInstruction::Roll(1),
+                            ParsedInstruction::Drop(0),
+                            ParsedInstruction::Jump(Target::Label(machine_emit)),
+                        ],
+                    }),
+                ),
+            ],
+        },
+    };
+
+    let process_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "process".to_string(),
+        body: ParsedSentence {
+            instructions: vec![
+                ParsedInstruction::Roll(1),
+                ParsedInstruction::Untuple(2),
+                ParsedInstruction::Pick(1),
+                ParsedInstruction::Push(ParsedValue::Int(0)),
+                ParsedInstruction::Equal,
+                ParsedInstruction::Branch(
+                    Target::Inline(ParsedSentence {
+                        instructions: vec![
+                            ParsedInstruction::Pick(2), // event
+                            ParsedInstruction::Push(val.clone()),
+                            ParsedInstruction::Equal,
+                            ParsedInstruction::Branch(
+                                Target::Inline(ParsedSentence {
+                                    instructions: vec![
+                                        ParsedInstruction::Drop(0),
+                                        ParsedInstruction::Drop(0),
+                                        ParsedInstruction::Drop(0),
+                                        ParsedInstruction::Jump(Target::Label(machine_init)),
+                                        ParsedInstruction::Push(ParsedValue::Int(1)),
+                                        ParsedInstruction::Roll(1),
+                                        ParsedInstruction::Tuple(2),
+                                    ],
+                                }),
+                                Target::Inline(ParsedSentence {
+                                    instructions: vec![
+                                        ParsedInstruction::Roll(2),
+                                        ParsedInstruction::Drop(0),
+                                        ParsedInstruction::Tuple(2),
+                                    ],
+                                }),
+                            ),
+                        ],
                     }),
                     Target::Inline(ParsedSentence {
                         instructions: vec![
@@ -3008,12 +3275,12 @@ fn generate_composition_items(
             if args.len() != 2 {
                 return Err("compose_accept expects exactly 2 arguments: value_set and target_machine".to_string());
             }
-            let val = match &args[0] {
-                ResolvedArg::Value(val) => val.clone(),
-                ResolvedArg::Path(path) => ParsedValue::SymbolRef(adjust_path(path)),
+            let val_set_path = match &args[0] {
+                ResolvedArg::Path(path) => adjust_path(path),
+                _ => return Err("compose_accept: first argument must be a sentence path".to_string()),
             };
             let paths = extract_paths(&args[1..2], "compose_accept")?;
-            compose_accept_helper(val, &paths[0], false)
+            compose_accept_helper(val_set_path, &paths[0])
         }
         "compose_accept_static" => {
             if args.len() != 2 {
@@ -3024,7 +3291,7 @@ fn generate_composition_items(
                 ResolvedArg::Path(path) => ParsedValue::SymbolRef(adjust_path(path)),
             };
             let paths = extract_paths(&args[1..2], "compose_accept_static")?;
-            compose_accept_helper(val, &paths[0], true)
+            compose_accept_static_helper(val, &paths[0])
         }
         _ => Err(format!("Unknown composer: {}", composer)),
     }
