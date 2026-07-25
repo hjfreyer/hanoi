@@ -26,7 +26,7 @@ mod sut compose_hidden(
     sync_parseint_in
 );
 
-# Parameterized validator machine that receives SUT output event
+// Parameterized validator machine that receives SUT output event
 mod harness compose_accept_static(
     crate::prelude::start,
     compose_emit_static(
@@ -53,17 +53,17 @@ mod sut_and_harness compose_concurrent(sut, harness, sync_set);
 mod test0 compose_hidden(sut_and_harness, sync_set);
 
 sentence run_tau_reductions {
-    # Stack: [state]
+    // Stack: [state]
     pick 0
     jump test0::tau_reduce
-    untuple 2 # Stack: [state, next_state, did_change]
+    untuple 2 // Stack: [state, next_state, did_change]
     branch {
-        # did_change is true: drop the old state and loop with next_state
+        // did_change is true: drop the old state and loop with next_state
         roll 1
         drop 0
         jump run_tau_reductions
     } {
-        # did_change is false: drop the next_state, keep old state and return
+        // did_change is false: drop the next_state, keep old state and return
         drop 0
     }
 }
@@ -71,26 +71,26 @@ sentence run_tau_reductions {
 test sentence verify_day1_manually {
     jump test0::init
     
-    # Trigger start: process start event
+    // Trigger start: process start event
     push crate::prelude::start
     jump test0::process
     
-    # Run all tau reductions recursively
+    // Run all tau reductions recursively
     jump run_tau_reductions
     
-    # Assert that it emitted the pass event
+    // Assert that it emitted the pass event
     pick 0
     jump test0::emit
     untuple 2
-    assert # assert has_event is true
+    assert // assert has_event is true
     push crate::prelude::pass
     assert_eq
     
-    # Process the emitted event to transition to final state
+    // Process the emitted event to transition to final state
     push crate::prelude::pass
     jump test0::process
     
-    # Check is_done
+    // Check is_done
     pick 0
     jump test0::is_done
     assert

@@ -625,7 +625,7 @@ mod tests {
                 push 30
                 assert_eq
                 
-                # Test branching with inline targets
+                // Test branching with inline targets
                 push true
                 branch {
                     push 100
@@ -633,7 +633,7 @@ mod tests {
                     panic
                 }
                 
-                # Check that the branch returned and we continue here
+                // Check that the branch returned and we continue here
                 push 100
                 assert_eq
             }
@@ -658,12 +658,12 @@ mod tests {
             }
             
             sentence verify {
-                # Top of stack has the passed symbol. Compare it to status_ok.
+                // Top of stack has the passed symbol. Compare it to status_ok.
                 push status_ok
                 equal
                 assert
                 
-                # Compare it to status_error (should not be equal)
+                // Compare it to status_error (should not be equal)
                 push status_ok
                 push status_error
                 equal
@@ -783,7 +783,7 @@ mod tests {
                     tuple 2
                 }
                 export sentence process {
-                    # Stack: [state, event]
+                    // Stack: [state, event]
                     roll 1
                     push 1
                     add
@@ -808,16 +808,16 @@ mod tests {
             mod renamed compose_rename_prefix(from_sym, to_sym, prefixed);
 
             export sentence test_rename {
-                # Initialize state
+                // Initialize state
                 jump renamed::init
                 
-                # Stack: [state] (which is 0)
-                # Query accept set
+                // Stack: [state] (which is 0)
+                // Query accept set
                 pick 0
                 jump renamed::accept
-                # Stack: [state, AcceptSet]
+                // Stack: [state, AcceptSet]
                 
-                # Check that (payload, to_sym) is in AcceptSet
+                // Check that (payload, to_sym) is in AcceptSet
                 push payload
                 push to_sym
                 tuple 2
@@ -825,7 +825,7 @@ mod tests {
                 set_contains
                 assert
                 
-                # Query emit tuple
+                // Query emit tuple
                 pick 0
                 jump renamed::emit
                 untuple 2
@@ -835,17 +835,17 @@ mod tests {
                 tuple 2
                 assert_eq
                 
-                # Process event (payload, to_sym) -> rewrites to (payload, from_sym)
-                # Stack has [0]
+                // Process event (payload, to_sym) -> rewrites to (payload, from_sym)
+                // Stack has [0]
                 push payload
                 push to_sym
                 tuple 2
                 jump renamed::process
-                # Stack has [1] (new_state)
+                // Stack has [1] (new_state)
                 pick 0
                 push 1
                 assert_eq
-                # Query tau_reduce on state 1
+                // Query tau_reduce on state 1
                 pick 0
                 jump renamed::tau_reduce
                 untuple 2
@@ -854,7 +854,7 @@ mod tests {
                 assert
                 drop 0
 
-                # Assert state value is 1
+                // Assert state value is 1
                 push 1
                 assert_eq
             }
@@ -882,7 +882,7 @@ mod tests {
         let code = r#"
             mod base {
                 export sentence init {
-                    # Stack has the value pushed by the composer
+                    // Stack has the value pushed by the composer
                     push 10
                     add
                 }
@@ -915,13 +915,13 @@ mod tests {
             mod closed compose_static_closure(base, 42);
 
             export sentence test_closure {
-                # Initialize state: should push 42, then call base::init which adds 10 -> returns 52
+                // Initialize state: should push 42, then call base::init which adds 10 -> returns 52
                 jump closed::init
                 pick 0
                 push 52
                 assert_eq
 
-                # Call process: should push 100, then add -> 152
+                // Call process: should push 100, then add -> 152
                 jump closed::process
                 push 152
                 assert_eq
@@ -1003,7 +1003,7 @@ mod tests {
             }
 
             export sentence test_tau {
-                # Test m_no_tau
+                // Test m_no_tau
                 jump m_no_tau::init
                 jump m_no_tau::tau_reduce
                 untuple 2
@@ -1011,7 +1011,7 @@ mod tests {
                 assert
                 drop 0
 
-                # Test m_with_tau
+                // Test m_with_tau
                 jump m_with_tau::init
                 jump m_with_tau::tau_reduce
                 untuple 2
@@ -1146,7 +1146,7 @@ mod runtime_tests {
                 }
 
                 export sentence process {
-                    roll 1 # swap event and state
+                    roll 1 // swap event and state
                     push state::init
                     equal
                     branch {
@@ -1219,7 +1219,7 @@ mod runtime_tests {
                     symbol_len
                     less
                     branch {
-                        # Construct CSP tuple: (io, (stdout, (putch, (char, ()))))
+                        // Construct CSP tuple: (io, (stdout, (putch, (char, ()))))
                         push crate::std::io::io
                         
                         push crate::std::io::stdout::stdout
@@ -1227,17 +1227,17 @@ mod runtime_tests {
                         push crate::std::io::stdout::putch
                         
                         push hello
-                        pick 4 # index
+                        pick 4 // index
                         symbol_char_at
                         
                         push ()
-                        tuple 2 # (char, ())
-                        tuple 2 # (putch, (char, ()))
-                        tuple 2 # (stdout, (putch, (char, ())))
-                        tuple 2 # (io, (stdout, (putch, (char, ()))))
+                        tuple 2 // (char, ())
+                        tuple 2 // (putch, (char, ()))
+                        tuple 2 // (stdout, (putch, (char, ())))
+                        tuple 2 // (io, (stdout, (putch, (char, ()))))
                         
-                        # Stack is [index, event]
-                        # We swap to [event, index], drop index, then push true and wrap
+                        // Stack is [index, event]
+                        // We swap to [event, index], drop index, then push true and wrap
                         roll 1
                         drop 0
                         push true
@@ -1251,7 +1251,7 @@ mod runtime_tests {
                 }
 
                 export sentence process {
-                    drop 0 # drop event
+                    drop 0 // drop event
                     push 1
                     add
                 }

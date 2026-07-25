@@ -53,14 +53,19 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
             c if c.is_whitespace() => {
                 chars.next();
             }
-            '#' => {
-                // Comment, consume until end of line
+            '/' => {
                 chars.next();
-                while let Some(&next_c) = chars.peek() {
-                    if next_c == '\n' {
-                        break;
-                    }
+                if chars.peek() == Some(&'/') {
                     chars.next();
+                    // Comment, consume until end of line
+                    while let Some(&next_c) = chars.peek() {
+                        if next_c == '\n' {
+                            break;
+                        }
+                        chars.next();
+                    }
+                } else {
+                    return Err(format!("Line {}: Unexpected character '/'", line));
                 }
             }
             '{' => {

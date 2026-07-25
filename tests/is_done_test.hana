@@ -1,107 +1,107 @@
-# Integration tests for is_done and is_ready_to_finish state machine sentences
+// Integration tests for is_done and is_ready_to_finish state machine sentences
 
 test sentence verify_is_done_basic_machines {
-    # 1. string_ref: state (sym, idle) -> is_done = false
+    // 1. string_ref: state (sym, idle) -> is_done = false
     push ()
     push super::string::string_ref::idle
-    tuple 2 # state
+    tuple 2 // state
     jump super::string::string_ref::is_done
     push false
     assert_eq
 
-    # 2. queue: state ((), (), (), idle) -> is_done = false
+    // 2. queue: state ((), (), (), idle) -> is_done = false
     push ()
     push ()
     push ()
     push super::queue::idle
-    tuple 4 # state
+    tuple 4 // state
     jump super::queue::queue::is_done
     push false
     assert_eq
 
-    # 3. char_iterator: state (0, fetch) -> is_done = false
+    // 3. char_iterator: state (0, fetch) -> is_done = false
     push 0
     push super::string::char_iterator::fetch
-    tuple 2 # state
+    tuple 2 // state
     jump super::string::char_iterator::is_done
     push false
     assert_eq
 
-    # 4. char_iterator: state (5, done_state) -> is_done = true
+    // 4. char_iterator: state (5, done_state) -> is_done = true
     push 5
     push super::string::char_iterator::done_state
-    tuple 2 # state
+    tuple 2 // state
     jump super::string::char_iterator::is_done
     push true
     assert_eq
 
-    # 5. split: state (delim, state_done) -> is_done = true
+    // 5. split: state (delim, state_done) -> is_done = true
     push ()
     push super::string::split::state_done
-    tuple 2 # state
+    tuple 2 // state
     jump super::string::split::is_done
     push true
     assert_eq
 }
 
 test sentence verify_is_ready_to_finish_basic_machines {
-    # 1. string_ref: state (sym, idle) -> is_ready_to_finish = true
+    // 1. string_ref: state (sym, idle) -> is_ready_to_finish = true
     push ()
     push super::string::string_ref::idle
-    tuple 2 # state
+    tuple 2 // state
     jump super::string::string_ref::is_ready_to_finish
     push true
     assert_eq
 
-    # 2. queue: state ((), (), (), idle) -> is_ready_to_finish = true
+    // 2. queue: state ((), (), (), idle) -> is_ready_to_finish = true
     push ()
     push ()
     push ()
     push super::queue::idle
-    tuple 4 # state
+    tuple 4 // state
     jump super::queue::queue::is_ready_to_finish
     push true
     assert_eq
 
-    # 3. char_iterator: state (0, fetch) -> is_ready_to_finish = false
+    // 3. char_iterator: state (0, fetch) -> is_ready_to_finish = false
     push 0
     push super::string::char_iterator::fetch
-    tuple 2 # state
+    tuple 2 // state
     jump super::string::char_iterator::is_ready_to_finish
     push false
     assert_eq
 
-    # 4. char_iterator: state (5, done_state) -> is_ready_to_finish = true
+    // 4. char_iterator: state (5, done_state) -> is_ready_to_finish = true
     push 5
     push super::string::char_iterator::done_state
-    tuple 2 # state
+    tuple 2 // state
     jump super::string::char_iterator::is_ready_to_finish
     push true
     assert_eq
 
-    # 5. split: state (delim, state_done) -> is_ready_to_finish = true
+    // 5. split: state (delim, state_done) -> is_ready_to_finish = true
     push ()
     push super::string::split::state_done
-    tuple 2 # state
+    tuple 2 // state
     jump super::string::split::is_ready_to_finish
     push true
     assert_eq
 }
 
 test sentence verify_is_done_compositions {
-    # 1. compose_static_closure (using customer1)
+    // 1. compose_static_closure (using customer1)
     jump super::csp::customer1::init
     jump super::csp::customer1::is_done
     push false
     assert_eq
 
-    # 2. compose_concurrent (using customers)
+    // 2. compose_concurrent (using customers)
     jump super::csp::customers::init
     jump super::csp::customers::is_done
     push false
     assert_eq
 
-    # 3. compose_hidden (using hidden)
+    // 3. compose_hidden (using hidden)
     jump super::csp::hidden::init
     jump super::csp::hidden::is_done
     push false
@@ -109,13 +109,13 @@ test sentence verify_is_done_compositions {
 }
 
 test sentence verify_is_ready_to_finish_compositions {
-    # 1. compose_static_closure (using customer1)
+    // 1. compose_static_closure (using customer1)
     jump super::csp::customer1::init
     jump super::csp::customer1::is_ready_to_finish
     push true
     assert_eq
 
-    # 2. compose_concurrent (using customers)
+    // 2. compose_concurrent (using customers)
     jump super::csp::customers::init
     jump super::csp::customers::is_ready_to_finish
     push true

@@ -1,11 +1,11 @@
-# Tests for unique Symbols
+// Tests for unique Symbols
 
 symbol sym_a "A Symbol"
 symbol sym_b "B Symbol"
 symbol sym_c
 
 test sentence symbol_equality {
-    # Pushing the same symbol multiple times compares equal
+    // Pushing the same symbol multiple times compares equal
     push sym_a
     push sym_a
     equal
@@ -13,7 +13,7 @@ test sentence symbol_equality {
 }
 
 test sentence symbol_inequality {
-    # Distinct symbol definitions compare unequal
+    // Distinct symbol definitions compare unequal
     push sym_a
     push sym_b
     equal

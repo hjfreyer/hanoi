@@ -1,4 +1,4 @@
-# Tests for arithmetic operations
+// Tests for arithmetic operations
 
 test sentence add_numbers {
     push 10

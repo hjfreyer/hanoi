@@ -1,4 +1,4 @@
-# String manipulation machines and tests using the new (args, tag) tuple convention.
+// String manipulation machines and tests using the new (args, tag) tuple convention.
 
 symbol next "Next character event"
 symbol done "Iteration finished event"
@@ -12,38 +12,38 @@ mod string_ref {
     symbol some "some option variant"
     symbol none "none option variant"
 
-    # init: returns idle state of string_ref
-    # State is (sym, idle)
+    // init: returns idle state of string_ref
+    // State is (sym, idle)
     sentence init {
         push idle
         tuple 2
     }
     
-    # accept: takes state (sym, internal_state) and returns ValueSet of accepted events.
+    // accept: takes state (sym, internal_state) and returns ValueSet of accepted events.
     sentence accept {
-        untuple 2 # Stack: [sym, internal_state]
-        pick 0 # duplicate internal_state
+        untuple 2 // Stack: [sym, internal_state]
+        pick 0 // duplicate internal_state
         push idle
         equal
         branch {
-            drop 0 # drop internal_state
-            drop 0 # drop sym
+            drop 0 // drop internal_state
+            drop 0 // drop sym
             tuple 0
             push length
-            tuple 2 # ((), length)
+            tuple 2 // ((), length)
             set_singleton
             
-            # Accept (N, charat) for any N
+            // Accept (N, charat) for any N
             push universal_set
             push charat
             set_singleton
             set_tuple 2
             set_union
         } {
-            # In response state: accepts nothing (empty_set)
+            // In response state: accepts nothing (empty_set)
             pick 0
-            untuple 2 # Stack: [sym, internal_state, resp_val, resp_tag]
-            pick 0 # resp_tag
+            untuple 2 // Stack: [sym, internal_state, resp_val, resp_tag]
+            pick 0 // resp_tag
             push length_resp
             equal
             branch {
@@ -53,7 +53,7 @@ mod string_ref {
                 drop 0
                 push empty_set
             } {
-                pick 0 # resp_tag
+                pick 0 // resp_tag
                 push charat_resp
                 equal
                 branch {
@@ -74,23 +74,23 @@ mod string_ref {
         tuple 2
     }
 
-    # emit: takes state (sym, internal_state) and returns ValueSet of emitted events.
+    // emit: takes state (sym, internal_state) and returns ValueSet of emitted events.
     sentence emit {
-        untuple 2 # Stack: [sym, internal_state]
-        pick 0 # duplicate internal_state
+        untuple 2 // Stack: [sym, internal_state]
+        pick 0 // duplicate internal_state
         push idle
         equal
         branch {
-            drop 0 # drop internal_state
-            drop 0 # drop sym
+            drop 0 // drop internal_state
+            drop 0 // drop sym
             tuple 0
             push false
             tuple 2
         } {
-            drop 1 # drop sym. Stack: [internal_state]
+            drop 1 // drop sym. Stack: [internal_state]
             pick 0
-            untuple 2 # Stack: [internal_state, resp_val, resp_tag]
-            pick 0 # resp_tag
+            untuple 2 // Stack: [internal_state, resp_val, resp_tag]
+            pick 0 // resp_tag
             push length_resp
             equal
             branch {
@@ -99,7 +99,7 @@ mod string_ref {
                 push true
                 tuple 2
             } {
-                pick 0 # resp_tag
+                pick 0 // resp_tag
                 push charat_resp
                 equal
                 branch {
@@ -114,83 +114,83 @@ mod string_ref {
         }
     }
     
-    # process: takes state and event, returns next_state
+    // process: takes state and event, returns next_state
     sentence process {
-        # Stack: [state, event]
-        roll 1 # Stack: [event, state]
-        untuple 2 # Stack: [event, sym, internal_state]
+        // Stack: [state, event]
+        roll 1 // Stack: [event, state]
+        untuple 2 // Stack: [event, sym, internal_state]
         
         pick 0
         push idle
         equal
         branch {
-            # Case 1: internal_state is idle. We processed a query event ((), length) or (N, charat).
-            drop 0 # drop internal_state. Stack: [event, sym]
-            roll 1 # Stack: [sym, event]
-            untuple 2 # Stack: [sym, query_payload, query_type]
+            // Case 1: internal_state is idle. We processed a query event ((), length) or (N, charat).
+            drop 0 // drop internal_state. Stack: [event, sym]
+            roll 1 // Stack: [sym, event]
+            untuple 2 // Stack: [sym, query_payload, query_type]
             
-            pick 0 # query_type
+            pick 0 // query_type
             push length
             equal
             branch {
-                drop 0 # drop query_type
-                drop 0 # drop query_payload (which is ())
-                pick 0 # sym
-                symbol_len # len
+                drop 0 // drop query_type
+                drop 0 // drop query_payload (which is ())
+                pick 0 // sym
+                symbol_len // len
                 
                 push length_resp
-                tuple 2 # (len, length_resp)
+                tuple 2 // (len, length_resp)
                 
-                tuple 2 # (sym, (len, length_resp))
+                tuple 2 // (sym, (len, length_resp))
             } {
-                drop 0 # drop query_type. Stack: [sym, N]
+                drop 0 // drop query_type. Stack: [sym, N]
                 
-                # Check if N < len
-                pick 1 # sym
-                symbol_len # len
+                // Check if N < len
+                pick 1 // sym
+                symbol_len // len
                 
-                pick 1 # N
-                pick 1 # len
+                pick 1 // N
+                pick 1 // len
                 less
                 branch {
-                    # N < len: return character
-                    drop 0 # drop len
-                    pick 1 # sym
-                    pick 1 # N
-                    symbol_char_at # ch
+                    // N < len: return character
+                    drop 0 // drop len
+                    pick 1 // sym
+                    pick 1 // N
+                    symbol_char_at // ch
                     
                     push some
-                    tuple 2 # (ch, some)
+                    tuple 2 // (ch, some)
                     
                     push charat_resp
-                    tuple 2 # ((ch, some), charat_resp)
+                    tuple 2 // ((ch, some), charat_resp)
                     
-                    drop 1 # drop N
-                    tuple 2 # (sym, ((ch, some), charat_resp))
+                    drop 1 // drop N
+                    tuple 2 // (sym, ((ch, some), charat_resp))
                 } {
-                    # N >= len: return none
-                    drop 0 # drop len
-                    drop 0 # drop N. Stack: [sym]
+                    // N >= len: return none
+                    drop 0 // drop len
+                    drop 0 // drop N. Stack: [sym]
                     
                     tuple 0
                     push none
-                    tuple 2 # ((), none)
+                    tuple 2 // ((), none)
                     
                     push charat_resp
-                    tuple 2 # (((), none), charat_resp)
+                    tuple 2 // (((), none), charat_resp)
                     
-                    tuple 2 # (sym, (((), none), charat_resp))
+                    tuple 2 // (sym, (((), none), charat_resp))
                 }
             }
         } {
-            # Case 2: internal_state is not idle. We processed the response event.
-            # Transition back to idle.
-            drop 0 # drop internal_state
-            roll 1 # Stack: [sym, event]
-            drop 0 # drop event. Stack: [sym]
+            // Case 2: internal_state is not idle. We processed the response event.
+            // Transition back to idle.
+            drop 0 // drop internal_state
+            roll 1 // Stack: [sym, event]
+            drop 0 // drop event. Stack: [sym]
             
             push idle
-            tuple 2 # (sym, idle)
+            tuple 2 // (sym, idle)
         }
     }
 
@@ -217,51 +217,51 @@ mod char_iterator {
     symbol yield_done   "Yield done state"
     symbol done_state   "Finished iteration state"
 
-    # Initialize char_iterator state.
-    # Returns (0, fetch) state.
+    // Initialize char_iterator state.
+    // Returns (0, fetch) state.
     sentence init {
         push 0
         push fetch
         tuple 2
     }
     
-    # accept: takes state (payload, tag) and returns ValueSet of accepted events.
+    // accept: takes state (payload, tag) and returns ValueSet of accepted events.
     sentence accept {
-        untuple 2 # Stack: [payload, tag]
-        pick 0 # tag
+        untuple 2 // Stack: [payload, tag]
+        pick 0 // tag
         push await_charat
         equal
         branch {
-            drop 0 # drop tag
-            drop 0 # drop payload
+            drop 0 // drop tag
+            drop 0 // drop payload
             
-            # Construct set of (((ch, some), charat_resp), in)
+            // Construct set of (((ch, some), charat_resp), in)
             push universal_set
             push super::string_ref::some
             set_singleton
-            set_tuple 2 # {(ch, some)}
+            set_tuple 2 // {(ch, some)}
             
             push super::string_ref::charat_resp
             set_singleton
-            set_tuple 2 # {((ch, some), charat_resp)}
+            set_tuple 2 // {((ch, some), charat_resp)}
             
             push in
             set_singleton
-            set_tuple 2 # {(((ch, some), charat_resp), in)}
+            set_tuple 2 // {(((ch, some), charat_resp), in)}
             
-            # Construct set of ((((), none), charat_resp), in)
+            // Construct set of ((((), none), charat_resp), in)
             tuple 0
             push super::string_ref::none
-            tuple 2 # ((), none)
+            tuple 2 // ((), none)
             push super::string_ref::charat_resp
-            tuple 2 # (((), none), charat_resp)
+            tuple 2 // (((), none), charat_resp)
             push in
-            tuple 2 # ((((), none), charat_resp), in)
+            tuple 2 // ((((), none), charat_resp), in)
             set_singleton
             
             set_union
         } {
-            pick 0 # tag
+            pick 0 // tag
             push fetch
             equal
             branch {
@@ -269,7 +269,7 @@ mod char_iterator {
                 drop 0
                 push empty_set
             } {
-                pick 0 # tag
+                pick 0 // tag
                 push yield_next
                 equal
                 branch {
@@ -277,7 +277,7 @@ mod char_iterator {
                     drop 0
                     push empty_set
                 } {
-                    pick 0 # tag
+                    pick 0 // tag
                     push yield_done
                     equal
                     branch {
@@ -285,7 +285,7 @@ mod char_iterator {
                         drop 0
                         push empty_set
                     } {
-                        pick 0 # tag
+                        pick 0 // tag
                         push done_state
                         equal
                         branch {
@@ -306,60 +306,60 @@ mod char_iterator {
         tuple 2
     }
 
-    # emit: takes state (payload, tag) and returns ValueSet of emitted events.
+    // emit: takes state (payload, tag) and returns ValueSet of emitted events.
     sentence emit {
-        untuple 2 # Stack: [payload, tag]
+        untuple 2 // Stack: [payload, tag]
         
-        pick 0 # tag
+        pick 0 // tag
         push fetch
         equal
         branch {
-            # fetch state: emits (((idx, charat), in), true)
-            drop 0 # drop tag. Stack: [idx]
+            // fetch state: emits (((idx, charat), in), true)
+            drop 0 // drop tag. Stack: [idx]
             push super::string_ref::charat
-            tuple 2 # (idx, charat)
+            tuple 2 // (idx, charat)
             
             push in
-            tuple 2 # ((idx, charat), in)
+            tuple 2 // ((idx, charat), in)
             push true
             tuple 2
         } {
-            pick 0 # tag
+            pick 0 // tag
             push yield_next
             equal
             branch {
-                # yield_next state: payload is (idx, ch), emits (((ch, next), out), true)
-                drop 0 # drop tag. Stack: [(idx, ch)]
-                untuple 2 # Stack: [idx, ch]
-                roll 1 # Stack: [ch, idx]
-                drop 0 # drop idx. Stack: [ch]
+                // yield_next state: payload is (idx, ch), emits (((ch, next), out), true)
+                drop 0 // drop tag. Stack: [(idx, ch)]
+                untuple 2 // Stack: [idx, ch]
+                roll 1 // Stack: [ch, idx]
+                drop 0 // drop idx. Stack: [ch]
                 
                 push super::next
-                tuple 2 # (ch, next)
+                tuple 2 // (ch, next)
                 
                 push out
-                tuple 2 # ((ch, next), out)
+                tuple 2 // ((ch, next), out)
                 push true
                 tuple 2
             } {
-                pick 0 # tag
+                pick 0 // tag
                 push yield_done
                 equal
                 branch {
-                    # yield_done state: emits ((((), done), out), true)
-                    drop 0 # drop payload
-                    drop 0 # drop tag
+                    // yield_done state: emits ((((), done), out), true)
+                    drop 0 // drop payload
+                    drop 0 // drop tag
                     
                     tuple 0
                     push super::done
-                    tuple 2 # ((), done)
+                    tuple 2 // ((), done)
                     
                     push out
-                    tuple 2 # (((), done), out)
+                    tuple 2 // (((), done), out)
                     push true
                     tuple 2
                 } {
-                    pick 0 # tag
+                    pick 0 // tag
                     push await_charat
                     equal
                     branch {
@@ -369,7 +369,7 @@ mod char_iterator {
                         push false
                         tuple 2
                     } {
-                        pick 0 # tag
+                        pick 0 // tag
                         push done_state
                         equal
                         branch {
@@ -387,33 +387,33 @@ mod char_iterator {
         }
     }
     
-    # process: takes state (payload, tag) and event, returns next_state
+    // process: takes state (payload, tag) and event, returns next_state
     sentence process {
-        # Stack: [state, event]
-        roll 1 # Stack: [event, state]
-        untuple 2 # Stack: [event, payload, tag]
+        // Stack: [state, event]
+        roll 1 // Stack: [event, state]
+        untuple 2 // Stack: [event, payload, tag]
         
-        pick 0 # tag
+        pick 0 // tag
         push fetch
         equal
         branch {
-            # Transition from (idx, fetch) to (idx, await_charat)
-            drop 0 # drop tag
+            // Transition from (idx, fetch) to (idx, await_charat)
+            drop 0 // drop tag
             push await_charat
-            tuple 2 # (payload, await_charat)
+            tuple 2 // (payload, await_charat)
             
             roll 1
             drop 0
         } {
-            pick 0 # tag
+            pick 0 // tag
             push await_charat
             equal
             branch {
-                # Transition from (idx, await_charat) to ((idx, ch), yield_next) or (idx, yield_done)
-                drop 0 # drop tag. Stack: [event, idx]
-                roll 1 # Stack: [idx, event]
+                // Transition from (idx, await_charat) to ((idx, ch), yield_next) or (idx, yield_done)
+                drop 0 // drop tag. Stack: [event, idx]
+                roll 1 // Stack: [idx, event]
                 
-                # Destructure event: (((resp_event, charat_resp), in)
+                // Destructure event: (((resp_event, charat_resp), in)
                 untuple 2
                 push in
                 assert_eq
@@ -422,47 +422,47 @@ mod char_iterator {
                 push super::string_ref::charat_resp
                 assert_eq
                 
-                untuple 2 # Stack: [idx, val, variant]
+                untuple 2 // Stack: [idx, val, variant]
                 
-                pick 0 # variant
+                pick 0 // variant
                 push super::string_ref::some
                 equal
                 branch {
-                    drop 0 # drop variant
-                    tuple 2 # (idx, ch)
+                    drop 0 // drop variant
+                    tuple 2 // (idx, ch)
                     push yield_next
                     tuple 2
                 } {
-                    drop 0 # drop variant
-                    drop 0 # drop val (())
+                    drop 0 // drop variant
+                    drop 0 // drop val (())
                     push yield_done
                     tuple 2
                 }
             } {
-                pick 0 # tag
+                pick 0 // tag
                 push yield_next
                 equal
                 branch {
-                    # Transition from ((idx, ch), yield_next) to (idx + 1, fetch)
-                    drop 0 # drop tag
-                    untuple 2 # Stack: [event, idx, ch]
-                    drop 0 # drop ch
+                    // Transition from ((idx, ch), yield_next) to (idx + 1, fetch)
+                    drop 0 // drop tag
+                    untuple 2 // Stack: [event, idx, ch]
+                    drop 0 // drop ch
                     roll 1
-                    drop 0 # drop event
+                    drop 0 // drop event
                     
                     push 1
                     add
                     
                     push fetch
-                    tuple 2 # (idx + 1, fetch)
+                    tuple 2 // (idx + 1, fetch)
                 } {
-                    # Transition from (idx, yield_done) to (idx, done_state)
-                    drop 0 # drop tag. Stack: [event, idx]
+                    // Transition from (idx, yield_done) to (idx, done_state)
+                    drop 0 // drop tag. Stack: [event, idx]
                     roll 1
-                    drop 0 # drop event
+                    drop 0 // drop event
                     
                     push done_state
-                    tuple 2 # (idx, done_state)
+                    tuple 2 // (idx, done_state)
                 }
             }
         }
@@ -504,12 +504,12 @@ mod parseint {
     symbol yielding_ok  "Yielding ok result state"
     symbol yielding_err "Yielding err result state"
 
-    # init: returns idle state
+    // init: returns idle state
     sentence init {
         push idle
     }
 
-    # accept: takes [state] and returns ValueSet of accepted events.
+    // accept: takes [state] and returns ValueSet of accepted events.
     sentence accept {
         pick 0
         push idle
@@ -518,39 +518,39 @@ mod parseint {
             drop 0
             tuple 0
             push super::copy
-            tuple 2 # ((), copy)
+            tuple 2 // ((), copy)
             push out
-            tuple 2 # (((), copy), out)
+            tuple 2 // (((), copy), out)
             set_singleton
         } {
-            untuple 2 # Stack: [payload, tag]
-            pick 0 # tag
+            untuple 2 // Stack: [payload, tag]
+            pick 0 // tag
             push parsing
             equal
             branch {
-                drop 0 # drop tag
-                drop 0 # drop payload
+                drop 0 // drop tag
+                drop 0 // drop payload
                 
-                # Accepts ((ch, next), in) for any ch
+                // Accepts ((ch, next), in) for any ch
                 push universal_set
                 push super::next
                 set_singleton
-                set_tuple 2 # {(ch, next)}
+                set_tuple 2 // {(ch, next)}
                 push in
                 set_singleton
-                set_tuple 2 # {((ch, next), in)}
+                set_tuple 2 // {((ch, next), in)}
                 
-                # Accepts (((), done), in)
+                // Accepts (((), done), in)
                 tuple 0
                 push super::done
-                tuple 2 # ((), done)
+                tuple 2 // ((), done)
                 push in
-                tuple 2 # (((), done), in)
+                tuple 2 // (((), done), in)
                 set_singleton
                 
                 set_union
             } {
-                pick 0 # tag
+                pick 0 // tag
                 push yielding_ok
                 equal
                 branch {
@@ -558,7 +558,7 @@ mod parseint {
                     drop 0
                     push empty_set
                 } {
-                    pick 0 # tag
+                    pick 0 // tag
                     push yielding_err
                     equal
                     branch {
@@ -578,7 +578,7 @@ mod parseint {
         tuple 2
     }
 
-    # emit: takes [state] and returns ValueSet of emitted events.
+    // emit: takes [state] and returns ValueSet of emitted events.
     sentence emit {
         pick 0
         push idle
@@ -589,8 +589,8 @@ mod parseint {
             push false
             tuple 2
         } {
-            untuple 2 # Stack: [payload, tag]
-            pick 0 # tag
+            untuple 2 // Stack: [payload, tag]
+            pick 0 // tag
             push parsing
             equal
             branch {
@@ -600,42 +600,42 @@ mod parseint {
                 push false
                 tuple 2
             } {
-                pick 0 # tag
+                pick 0 // tag
                 push yielding_ok
                 equal
                 branch {
-                    # payload is N (the parsed integer)
-                    # Emits ((((N, ok), value), out), true)
-                    drop 0 # drop tag. Stack: [N]
+                    // payload is N (the parsed integer)
+                    // Emits ((((N, ok), value), out), true)
+                    drop 0 // drop tag. Stack: [N]
                     push super::ok
-                    tuple 2 # (N, ok)
+                    tuple 2 // (N, ok)
                     
                     push super::value
-                    tuple 2 # ((N, ok), value)
+                    tuple 2 // ((N, ok), value)
                     
                     push out
-                    tuple 2 # (((N, ok), value), out)
+                    tuple 2 // (((N, ok), value), out)
                     
                     push true
                     tuple 2
                 } {
-                    pick 0 # tag
+                    pick 0 // tag
                     push yielding_err
                     equal
                     branch {
-                        # Emits (((((), err), value), out), true)
-                        drop 0 # drop tag
-                        drop 0 # drop payload
+                        // Emits (((((), err), value), out), true)
+                        drop 0 // drop tag
+                        drop 0 // drop payload
                         
                         tuple 0
                         push super::err
-                        tuple 2 # ((), err)
+                        tuple 2 // ((), err)
                         
                         push super::value
-                        tuple 2 # (((), err), value)
+                        tuple 2 // (((), err), value)
                         
                         push out
-                        tuple 2 # ((((), err), value), out)
+                        tuple 2 // ((((), err), value), out)
                         
                         push true
                         tuple 2
@@ -647,14 +647,14 @@ mod parseint {
         }
     }
 
-    # process: takes [state, event] and returns next_state.
+    // process: takes [state, event] and returns next_state.
     sentence process {
-        # Stack: [state, event]
-        pick 1 # state
+        // Stack: [state, event]
+        pick 1 // state
         push idle
         equal
         branch {
-            # State is idle: event is (((), copy), out)
+            // State is idle: event is (((), copy), out)
             tuple 0
             push super::copy
             tuple 2
@@ -664,80 +664,80 @@ mod parseint {
             push idle
             assert_eq
             
-            # Init parsing state: ((0, 0), parsing)
+            // Init parsing state: ((0, 0), parsing)
             push 0
             push 0
-            tuple 2 # (acc=0, count=0)
+            tuple 2 // (acc=0, count=0)
             push parsing
             tuple 2
         } {
-            # State is (payload, tag)
-            roll 1 # Stack: [event, state]
-            untuple 2 # Stack: [event, payload, tag]
+            // State is (payload, tag)
+            roll 1 // Stack: [event, state]
+            untuple 2 // Stack: [event, payload, tag]
             
-            pick 0 # tag
+            pick 0 // tag
             push yielding_ok
             equal
             branch {
-                # Process emission of yielding_ok -> returns idle state
-                drop 0 # tag
-                drop 0 # payload
-                drop 0 # event
+                // Process emission of yielding_ok -> returns idle state
+                drop 0 // tag
+                drop 0 // payload
+                drop 0 // event
                 push idle
             } {
-                pick 0 # tag
+                pick 0 // tag
                 push yielding_err
                 equal
                 branch {
-                    # Process emission of yielding_err -> returns idle state
-                    drop 0 # tag
-                    drop 0 # payload
-                    drop 0 # event
+                    // Process emission of yielding_err -> returns idle state
+                    drop 0 // tag
+                    drop 0 // payload
+                    drop 0 // event
                     push idle
                 } {
-                    pick 0 # tag
+                    pick 0 // tag
                     push parsing
                     equal
                     branch {
-                        drop 0 # drop tag
-                        roll 1 # Stack: [payload, event]
+                        drop 0 // drop tag
+                        roll 1 // Stack: [payload, event]
                         
-                        untuple 2 # Stack: [payload, inner_event, in]
+                        untuple 2 // Stack: [payload, inner_event, in]
                         push in
                         assert_eq
                         
-                        untuple 2 # Stack: [payload, val, item_tag]
-                        roll 2 # Stack: [val, item_tag, payload]
-                        untuple 2 # Stack: [val, item_tag, acc, count]
+                        untuple 2 // Stack: [payload, val, item_tag]
+                        roll 2 // Stack: [val, item_tag, payload]
+                        untuple 2 // Stack: [val, item_tag, acc, count]
                         
-                        pick 2 # item_tag
+                        pick 2 // item_tag
                         push super::next
                         equal
                         branch {
-                            # item_tag == next: val is ch
-                            pick 2 # item_tag
+                            // item_tag == next: val is ch
+                            pick 2 // item_tag
                             push super::next
                             assert_eq
                             
-                            # Check if ch >= 48 && ch <= 57
-                            pick 3 # ch
+                            // Check if ch >= 48 && ch <= 57
+                            pick 3 // ch
                             push 48
                             less
                             branch {
-                                # ch < 48: non-digit error!
-                                drop 0 # count
-                                drop 0 # acc
-                                drop 0 # item_tag
-                                drop 0 # ch
-                                tuple 0 # ()
+                                // ch < 48: non-digit error!
+                                drop 0 // count
+                                drop 0 // acc
+                                drop 0 // item_tag
+                                drop 0 // ch
+                                tuple 0 // ()
                                 push yielding_err
                                 tuple 2
                             } {
-                                pick 3 # ch
+                                pick 3 // ch
                                 push 57
                                 greater
                                 branch {
-                                    # ch > 57: non-digit error!
+                                    // ch > 57: non-digit error!
                                     drop 0
                                     drop 0
                                     drop 0
@@ -746,55 +746,55 @@ mod parseint {
                                     push yielding_err
                                     tuple 2
                                 } {
-                                    # ch is a digit 0..9
-                                    roll 2 # pull item_tag
-                                    drop 0 # drop item_tag. Stack: [val, acc, count]
-                                    roll 2 # pull ch. Stack: [acc, count, ch]
+                                    // ch is a digit 0..9
+                                    roll 2 // pull item_tag
+                                    drop 0 // drop item_tag. Stack: [val, acc, count]
+                                    roll 2 // pull ch. Stack: [acc, count, ch]
                                     push 48
-                                    sub # digit
+                                    sub // digit
                                     
-                                    roll 2 # acc
+                                    roll 2 // acc
                                     push 10
                                     mul
-                                    add # acc' = acc * 10 + digit
+                                    add // acc' = acc * 10 + digit
                                     
-                                    roll 1 # acc', count
+                                    roll 1 // acc', count
                                     push 1
-                                    add # count'
+                                    add // count'
                                     
-                                    tuple 2 # (acc', count')
+                                    tuple 2 // (acc', count')
                                     push parsing
                                     tuple 2
                                 }
                             }
                         } {
-                            # Check if item_tag == done
-                            pick 2 # item_tag
+                            // Check if item_tag == done
+                            pick 2 // item_tag
                             push super::done
                             equal
                             branch {
-                                # Stack: [val, item_tag, acc, count]
-                                roll 2 # pull item_tag
+                                // Stack: [val, item_tag, acc, count]
+                                roll 2 // pull item_tag
                                 push super::done
                                 assert_eq
-                                roll 2 # pull val
+                                roll 2 // pull val
                                 push ()
                                 assert_eq
                                 
-                                # Check if count > 0
-                                pick 0 # count
+                                // Check if count > 0
+                                pick 0 // count
                                 push 0
                                 greater
                                 branch {
-                                    drop 0 # count. Stack: [acc]
+                                    drop 0 // count. Stack: [acc]
                                     push yielding_ok
-                                    tuple 2 # (acc, yielding_ok)
+                                    tuple 2 // (acc, yielding_ok)
                                 } {
-                                    drop 0 # count
-                                    drop 0 # acc
+                                    drop 0 // count
+                                    drop 0 // acc
                                     tuple 0
                                     push yielding_err
-                                    tuple 2 # ((), yielding_err)
+                                    tuple 2 // ((), yielding_err)
                                 }
                             } {
                                 panic
@@ -839,22 +839,22 @@ mod split {
     symbol state_yield_done     "yield_done"
     symbol state_done           "done"
 
-    # init: accepts delim on stack. Returns (delim, state_idle).
+    // init: accepts delim on stack. Returns (delim, state_idle).
     sentence init {
         push state_idle
         tuple 2
     }
 
-    # accept: takes [state] and returns ValueSet of accepted events.
+    // accept: takes [state] and returns ValueSet of accepted events.
     sentence accept {
-        untuple 2 # Stack: [payload, tag]
+        untuple 2 // Stack: [payload, tag]
         
-        pick 0 # tag
+        pick 0 // tag
         push state_idle
         equal
         branch {
-            drop 0 # drop tag
-            drop 0 # drop payload
+            drop 0 // drop tag
+            drop 0 // drop payload
             
             tuple 0
             push next
@@ -864,7 +864,7 @@ mod split {
             set_singleton
             set_tuple 2
         } {
-            pick 0 # tag
+            pick 0 // tag
             push state_idle_done
             equal
             branch {
@@ -879,7 +879,7 @@ mod split {
                 set_singleton
                 set_tuple 2
             } {
-                pick 0 # tag
+                pick 0 // tag
                 push state_await_start
                 equal
                 branch {
@@ -904,7 +904,7 @@ mod split {
                     
                     set_union
                 } {
-                    pick 0 # tag
+                    pick 0 // tag
                     push state_await_field
                     equal
                     branch {
@@ -943,38 +943,38 @@ mod split {
         tuple 2
     }
 
-    # emit: takes [state] and returns ValueSet of emitted events.
+    // emit: takes [state] and returns ValueSet of emitted events.
     sentence emit {
-        untuple 2 # Stack: [payload, tag]
+        untuple 2 // Stack: [payload, tag]
         
-        pick 0 # tag
+        pick 0 // tag
         push state_yield_start
         equal
         branch {
-            # yield_start: emits ((((), start), out), true)
+            // yield_start: emits ((((), start), out), true)
             drop 0
             drop 0
             
             tuple 0
             push start
-            tuple 2 # ((), start)
+            tuple 2 // ((), start)
             push out
             tuple 2
             push true
             tuple 2
         } {
-            pick 0 # tag
+            pick 0 // tag
             push state_yield_item
             equal
             branch {
-                # yield_item: payload is (delim, ch). Emits ((((ch, next), item), out), true)
-                drop 0 # tag. Stack: [(delim, ch)]
-                untuple 2 # Stack: [delim, ch]
-                roll 1 # Stack: [ch, delim]
-                drop 0 # drop delim. Stack: [ch]
+                // yield_item: payload is (delim, ch). Emits ((((ch, next), item), out), true)
+                drop 0 // tag. Stack: [(delim, ch)]
+                untuple 2 // Stack: [delim, ch]
+                roll 1 // Stack: [ch, delim]
+                drop 0 // drop delim. Stack: [ch]
                 
                 push super::next
-                tuple 2 # (ch, next)
+                tuple 2 // (ch, next)
                 push item
                 tuple 2
                 push out
@@ -982,11 +982,11 @@ mod split {
                 push true
                 tuple 2
             } {
-                pick 0 # tag
+                pick 0 // tag
                 push state_yield_end
                 equal
                 branch {
-                    # yield_end: emits ((((), end), out), true)
+                    // yield_end: emits ((((), end), out), true)
                     drop 0
                     drop 0
                     
@@ -998,11 +998,11 @@ mod split {
                     push true
                     tuple 2
                 } {
-                    pick 0 # tag
+                    pick 0 // tag
                     push state_yield_end_done
                     equal
                     branch {
-                        # yield_end_done: emits ((((), end), out), true)
+                        // yield_end_done: emits ((((), end), out), true)
                         drop 0
                         drop 0
                         
@@ -1014,11 +1014,11 @@ mod split {
                         push true
                         tuple 2
                     } {
-                        pick 0 # tag
+                        pick 0 // tag
                         push state_yield_done
                         equal
                         branch {
-                            # yield_done: emits ((((), done), out), true)
+                            // yield_done: emits ((((), done), out), true)
                             drop 0
                             drop 0
                             
@@ -1042,19 +1042,19 @@ mod split {
         }
     }
 
-    # process: takes [state, event] and returns next_state.
+    // process: takes [state, event] and returns next_state.
     sentence process {
-        # Stack: [state, event]
-        roll 1 # Stack: [event, state]
-        untuple 2 # Stack: [event, payload, tag]
+        // Stack: [state, event]
+        roll 1 // Stack: [event, state]
+        untuple 2 // Stack: [event, payload, tag]
         
-        pick 0 # tag
+        pick 0 // tag
         push state_idle
         equal
         branch {
-            # Transition from idle to await_start
-            drop 0 # tag. Stack: [event, delim]
-            roll 1 # Stack: [delim, event]
+            // Transition from idle to await_start
+            drop 0 // tag. Stack: [event, delim]
+            roll 1 // Stack: [delim, event]
             tuple 0
             push next
             tuple 2
@@ -1065,12 +1065,12 @@ mod split {
             push state_await_start
             tuple 2
         } {
-            pick 0 # tag
+            pick 0 // tag
             push state_idle_done
             equal
             branch {
-                # Transition from idle_done to yield_done
-                drop 0 # tag
+                // Transition from idle_done to yield_done
+                drop 0 // tag
                 roll 1
                 tuple 0
                 push next
@@ -1082,26 +1082,26 @@ mod split {
                 push state_yield_done
                 tuple 2
             } {
-                pick 0 # tag
+                pick 0 // tag
                 push state_await_start
                 equal
                 branch {
-                    drop 0 # tag
-                    roll 1 # Stack: [delim, event]
+                    drop 0 // tag
+                    roll 1 // Stack: [delim, event]
                     
                     untuple 2
                     push in
                     assert_eq
                     
-                    untuple 2 # Stack: [delim, val, iter_tag]
+                    untuple 2 // Stack: [delim, val, iter_tag]
                     
-                    pick 0 # iter_tag
+                    pick 0 // iter_tag
                     push super::next
                     equal
                     branch {
                         push super::next
                         assert_eq
-                        tuple 2 # (delim, ch)
+                        tuple 2 // (delim, ch)
                         push state_yield_start
                         tuple 2
                     } {
@@ -1113,12 +1113,12 @@ mod split {
                         tuple 2
                     }
                 } {
-                    pick 0 # tag
+                    pick 0 // tag
                     push state_yield_start
                     equal
                     branch {
-                        drop 0 # tag
-                        roll 1 # Stack: [payload, event]
+                        drop 0 // tag
+                        roll 1 // Stack: [payload, event]
                         tuple 0
                         push start
                         tuple 2
@@ -1126,40 +1126,40 @@ mod split {
                         tuple 2
                         assert_eq
                         
-                        pick 0 # payload: (delim, ch)
-                        untuple 2 # Stack: [(delim, ch), delim, ch]
-                        pick 0 # ch
-                        pick 2 # delim
+                        pick 0 // payload: (delim, ch)
+                        untuple 2 // Stack: [(delim, ch), delim, ch]
+                        pick 0 // ch
+                        pick 2 // delim
                         equal
                         branch {
-                            # ch == delim: empty field! Transition to yield_end
+                            // ch == delim: empty field! Transition to yield_end
                             drop 0
                             drop 0
                             untuple 2
-                            drop 0 # drop ch
+                            drop 0 // drop ch
                             push state_yield_end
                             tuple 2
                         } {
-                            # ch != delim: transition to yield_item
+                            // ch != delim: transition to yield_item
                             drop 0
-                            drop 0 # leaves (delim, ch)
+                            drop 0 // leaves (delim, ch)
                             push state_yield_item
                             tuple 2
                         }
                     } {
-                        pick 0 # tag
+                        pick 0 // tag
                         push state_yield_item
                         equal
                         branch {
                             drop 0
                             roll 1
-                            drop 0 # drop event. Stack: [(delim, ch)]
+                            drop 0 // drop event. Stack: [(delim, ch)]
                             untuple 2
-                            drop 0 # drop ch
+                            drop 0 // drop ch
                             push state_await_field
                             tuple 2
                         } {
-                            pick 0 # tag
+                            pick 0 // tag
                             push state_await_field
                             equal
                             branch {
@@ -1170,7 +1170,7 @@ mod split {
                                 push in
                                 assert_eq
                                 
-                                untuple 2 # Stack: [delim, val, iter_tag]
+                                untuple 2 // Stack: [delim, val, iter_tag]
                                 
                                 pick 0
                                 push super::next
@@ -1179,11 +1179,11 @@ mod split {
                                     push super::next
                                     assert_eq
                                     
-                                    pick 0 # ch
-                                    pick 2 # delim
+                                    pick 0 // ch
+                                    pick 2 // delim
                                     equal
                                     branch {
-                                        drop 0 # drop ch
+                                        drop 0 // drop ch
                                         push state_yield_end
                                         tuple 2
                                     } {
@@ -1248,7 +1248,7 @@ mod split {
                                             push state_done
                                             tuple 2
                                         } {
-                                            # state_done
+                                            // state_done
                                             drop 0
                                             roll 1
                                             drop 0
@@ -1344,20 +1344,20 @@ mod string_hidden compose_hidden(
 );
 
 test sentence iterate_string_ascii {
-    # Initialize system -> [((my_str, idle), (fetch, 0))]
+    // Initialize system -> [((my_str, idle), (fetch, 0))]
     jump string_hidden::init
     
-    # Step 0: drive tau (charat request)
+    // Step 0: drive tau (charat request)
     jump string_hidden::tau_reduce
     untuple 2
     assert
     
-    # drive tau (charat response)
+    // drive tau (charat response)
     jump string_hidden::tau_reduce
     untuple 2
     assert
     
-    # Check emitted iterator event: (char_iterator::out, (next, 97)) ('a')
+    // Check emitted iterator event: (char_iterator::out, (next, 97)) ('a')
     pick 0
     jump string_hidden::emit
     untuple 2
@@ -1369,7 +1369,7 @@ test sentence iterate_string_ascii {
     tuple 2
     assert_eq
     
-    # Process iterator event
+    // Process iterator event
     push 97
     push next
     tuple 2
@@ -1377,7 +1377,7 @@ test sentence iterate_string_ascii {
     tuple 2
     jump string_hidden::process
     
-    # Step 1: drive 2 taus for 'b' (98)
+    // Step 1: drive 2 taus for 'b' (98)
     jump string_hidden::tau_reduce
     untuple 2
     assert
@@ -1403,7 +1403,7 @@ test sentence iterate_string_ascii {
     tuple 2
     jump string_hidden::process
     
-    # Step 2: drive 2 taus for 'c' (99)
+    // Step 2: drive 2 taus for 'c' (99)
     jump string_hidden::tau_reduce
     untuple 2
     assert
@@ -1429,7 +1429,7 @@ test sentence iterate_string_ascii {
     tuple 2
     jump string_hidden::process
     
-    # Step 3: drive 2 taus for done
+    // Step 3: drive 2 taus for done
     jump string_hidden::tau_reduce
     untuple 2
     assert
@@ -1455,7 +1455,7 @@ test sentence iterate_string_ascii {
     tuple 2
     jump string_hidden::process
     
-    # Clean up state from stack
+    // Clean up state from stack
     drop 0
 }
 
@@ -1484,7 +1484,7 @@ mod parseint_123_system compose_hidden(
 test sentence parseint_valid_number {
     jump parseint_123_system::init
     
-    # 1. Verify idle parseint accepts (parseint::out, (copy, ()))
+    // 1. Verify idle parseint accepts (parseint::out, (copy, ()))
     pick 0
     jump parseint_123_system::accept
     tuple 0
@@ -1496,7 +1496,7 @@ test sentence parseint_valid_number {
     set_contains
     assert
     
-    # 2. Trigger (parseint::out, (copy, ())) -> transitions parseint to parsing
+    // 2. Trigger (parseint::out, (copy, ())) -> transitions parseint to parsing
     tuple 0
     push copy
     tuple 2
@@ -1504,7 +1504,7 @@ test sentence parseint_valid_number {
     tuple 2
     jump parseint_123_system::process
     
-    # 3. Drive 12 tau steps
+    // 3. Drive 12 tau steps
     jump parseint_123_system::tau_reduce
     untuple 2
     assert
@@ -1542,7 +1542,7 @@ test sentence parseint_valid_number {
     untuple 2
     assert
     
-    # 4. Check emitted result: (parseint::out, (value, (ok, 123)))
+    // 4. Check emitted result: (parseint::out, (value, (ok, 123)))
     pick 0
     jump parseint_123_system::emit
     untuple 2
@@ -1556,7 +1556,7 @@ test sentence parseint_valid_number {
     tuple 2
     assert_eq
     
-    # Process emission event -> transitions back to idle
+    // Process emission event -> transitions back to idle
     push 123
     push ok
     tuple 2
@@ -1590,7 +1590,7 @@ mod parseint_45a_system compose_hidden(
 test sentence parseint_invalid_char {
     jump parseint_45a_system::init
     
-    # Trigger copy
+    // Trigger copy
     tuple 0
     push copy
     tuple 2
@@ -1598,7 +1598,7 @@ test sentence parseint_invalid_char {
     tuple 2
     jump parseint_45a_system::process
     
-    # Drive 9 taus
+    // Drive 9 taus
     jump parseint_45a_system::tau_reduce
     untuple 2
     assert
@@ -1627,7 +1627,7 @@ test sentence parseint_invalid_char {
     untuple 2
     assert
     
-    # Check emitted result: (parseint::out, (value, (err, ())))
+    // Check emitted result: (parseint::out, (value, (err, ())))
     pick 0
     jump parseint_45a_system::emit
     untuple 2
@@ -1665,7 +1665,7 @@ mod parseint_empty_system compose_hidden(
 test sentence parseint_empty_string {
     jump parseint_empty_system::init
     
-    # Trigger copy
+    // Trigger copy
     tuple 0
     push copy
     tuple 2
@@ -1673,7 +1673,7 @@ test sentence parseint_empty_string {
     tuple 2
     jump parseint_empty_system::process
     
-    # Drive 3 taus for done
+    // Drive 3 taus for done
     jump parseint_empty_system::tau_reduce
     untuple 2
     assert
@@ -1684,7 +1684,7 @@ test sentence parseint_empty_string {
     untuple 2
     assert
     
-    # Check emitted result: (parseint::out, (value, (err, ())))
+    // Check emitted result: (parseint::out, (value, (err, ())))
     pick 0
     jump parseint_empty_system::emit
     untuple 2
@@ -1711,47 +1711,47 @@ test sentence parseint_empty_string {
 }
 
 test sentence verify_string_ref {
-    # Initialize base unprefixed string_ref with string xyz_str
+    // Initialize base unprefixed string_ref with string xyz_str
     push xyz_str
-    jump string_ref::init # Stack: [state]
+    jump string_ref::init // Stack: [state]
     
-    # 1. Test accept set at rest
+    // 1. Test accept set at rest
     pick 0
-    jump string_ref::accept # Stack: [state, accept_set]
+    jump string_ref::accept // Stack: [state, accept_set]
     
-    # Check that it accepts (length, ())
+    // Check that it accepts (length, ())
     push ((), string_ref::length)
     pick 1
     set_contains
     assert
     
-    # Check that it accepts (charat, 0)
+    // Check that it accepts (charat, 0)
     push (0, string_ref::charat)
     pick 1
     set_contains
     assert
     
-    # Check that it accepts (charat, 5)
+    // Check that it accepts (charat, 5)
     push (5, string_ref::charat)
     pick 1
     set_contains
     assert
     
-    drop 0 # drop accept_set
+    drop 0 // drop accept_set
     
-    # 2. Test emit set at rest
+    // 2. Test emit set at rest
     pick 0
     jump string_ref::emit
     untuple 2
     not
     assert
     drop 0
-        # 3. Query length -> [state] -> [next_state]
+        // 3. Query length -> [state] -> [next_state]
     push ((), string_ref::length)
     jump string_ref::process
     
-    # Now state should be ("xyz", (length_resp, 3))
-    # It should emit (length_resp, 3)
+    // Now state should be ("xyz", (length_resp, 3))
+    // It should emit (length_resp, 3)
     pick 0
     jump string_ref::emit
     untuple 2
@@ -1759,15 +1759,15 @@ test sentence verify_string_ref {
     push (3, string_ref::length_resp)
     assert_eq
     
-    # Process emission event -> transitions back to idle
+    // Process emission event -> transitions back to idle
     push (3, string_ref::length_resp)
     jump string_ref::process
     
-    # 4. Query charat 1 (in-bounds)
+    // 4. Query charat 1 (in-bounds)
     push (1, string_ref::charat)
     jump string_ref::process
     
-    # Now state should emit (charat_resp, (some, 121))
+    // Now state should emit (charat_resp, (some, 121))
     pick 0
     jump string_ref::emit
     untuple 2
@@ -1775,15 +1775,15 @@ test sentence verify_string_ref {
     push ((121, string_ref::some), string_ref::charat_resp)
     assert_eq
     
-    # Process emission event
+    // Process emission event
     push ((121, string_ref::some), string_ref::charat_resp)
     jump string_ref::process
     
-    # 5. Query charat 5 (out-of-bounds)
+    // 5. Query charat 5 (out-of-bounds)
     push (5, string_ref::charat)
     jump string_ref::process
     
-    # Now state should emit (charat_resp, (none, ()))
+    // Now state should emit (charat_resp, (none, ()))
     pick 0
     jump string_ref::emit
     untuple 2
@@ -1791,11 +1791,11 @@ test sentence verify_string_ref {
     push (((), string_ref::none), string_ref::charat_resp)
     assert_eq
     
-    # Process emission event
+    // Process emission event
     push (((), string_ref::none), string_ref::charat_resp)
     jump string_ref::process
     
-    # Verify final state is ("xyz", idle)
+    // Verify final state is ("xyz", idle)
     untuple 2
     push string_ref::idle
     assert_eq
@@ -1806,12 +1806,12 @@ test sentence verify_string_ref {
 mod xyz_string_ref_instance compose_prefix(compose_static_closure(string_ref, xyz_str), char_iterator::in);
 
 test sentence verify_prefixed_string_ref {
-    # Initialize xyz_string_ref_instance
-    jump xyz_string_ref_instance::init # Stack: [state]
+    // Initialize xyz_string_ref_instance
+    jump xyz_string_ref_instance::init // Stack: [state]
     
-    # 1. Test accept set at rest on channel char_iterator::in
+    // 1. Test accept set at rest on channel char_iterator::in
     pick 0
-    jump xyz_string_ref_instance::accept # Stack: [state, accept_set]
+    jump xyz_string_ref_instance::accept // Stack: [state, accept_set]
     
     push (((), string_ref::length), char_iterator::in)
     pick 1
@@ -1823,13 +1823,13 @@ test sentence verify_prefixed_string_ref {
     set_contains
     assert
     
-    drop 0 # drop accept_set
+    drop 0 // drop accept_set
     
-    # 2. Query charat 1
+    // 2. Query charat 1
     push ((1, string_ref::charat), char_iterator::in)
     jump xyz_string_ref_instance::process
     
-    # Verify emission of (char_iterator::in, (charat_resp, (some, 121)))
+    // Verify emission of (char_iterator::in, (charat_resp, (some, 121)))
     pick 0
     jump xyz_string_ref_instance::emit
     untuple 2
@@ -1837,11 +1837,11 @@ test sentence verify_prefixed_string_ref {
     push (((121, string_ref::some), string_ref::charat_resp), char_iterator::in)
     assert_eq
     
-    # Process emission back to idle
+    // Process emission back to idle
     push (((121, string_ref::some), string_ref::charat_resp), char_iterator::in)
     jump xyz_string_ref_instance::process
     
-    # Verify state is (xyz_str, idle)
+    // Verify state is (xyz_str, idle)
     untuple 2
     push string_ref::idle
     assert_eq
@@ -1861,7 +1861,7 @@ mod empty_string_hidden compose_hidden(
 test sentence iterate_empty {
     jump empty_string_hidden::init
     
-    # Drive 2 taus (charat query + charat_resp)
+    // Drive 2 taus (charat query + charat_resp)
     jump empty_string_hidden::tau_reduce
     untuple 2
     assert
@@ -1869,7 +1869,7 @@ test sentence iterate_empty {
     untuple 2
     assert
     
-    # Check emitted iterator event: (char_iterator::out, (done, ()))
+    // Check emitted iterator event: (char_iterator::out, (done, ()))
     pick 0
     jump empty_string_hidden::emit
     untuple 2
@@ -1903,7 +1903,7 @@ mod cafe_string_hidden compose_hidden(
 test sentence iterate_unicode {
     jump cafe_string_hidden::init
     
-    # 'c' (99)
+    // 'c' (99)
     jump cafe_string_hidden::tau_reduce
     untuple 2
     assert
@@ -1928,7 +1928,7 @@ test sentence iterate_unicode {
     tuple 2
     jump cafe_string_hidden::process
     
-    # 'a' (97)
+    // 'a' (97)
     jump cafe_string_hidden::tau_reduce
     untuple 2
     assert
@@ -1953,7 +1953,7 @@ test sentence iterate_unicode {
     tuple 2
     jump cafe_string_hidden::process
     
-    # 'f' (102)
+    // 'f' (102)
     jump cafe_string_hidden::tau_reduce
     untuple 2
     assert
@@ -1978,7 +1978,7 @@ test sentence iterate_unicode {
     tuple 2
     jump cafe_string_hidden::process
     
-    # 'é' (233)
+    // 'é' (233)
     jump cafe_string_hidden::tau_reduce
     untuple 2
     assert
@@ -2003,7 +2003,7 @@ test sentence iterate_unicode {
     tuple 2
     jump cafe_string_hidden::process
     
-    # done
+    // done
     jump cafe_string_hidden::tau_reduce
     untuple 2
     assert
@@ -2058,8 +2058,8 @@ mod split_system compose_hidden(
 test sentence split_string {
     jump split_system::init
     
-    # --- Field 1: "a" ---
-    # 1. Send (split::out, (split::next, ()))
+    // --- Field 1: "a" ---
+    // 1. Send (split::out, (split::next, ()))
     tuple 0
     push split::next
     tuple 2
@@ -2067,7 +2067,7 @@ test sentence split_string {
     tuple 2
     jump split_system::process
     
-    # 2. Drive 3 taus (charat request + charat_resp + split::in sync)
+    // 2. Drive 3 taus (charat request + charat_resp + split::in sync)
     jump split_system::tau_reduce
     untuple 2
     assert
@@ -2078,7 +2078,7 @@ test sentence split_string {
     untuple 2
     assert
     
-    # 3. Check emitted: (split::out, (split::start, ()))
+    // 3. Check emitted: (split::out, (split::start, ()))
     pick 0
     jump split_system::emit
     untuple 2
@@ -2090,7 +2090,7 @@ test sentence split_string {
     tuple 2
     assert_eq
     
-    # Process start event
+    // Process start event
     tuple 0
     push split::start
     tuple 2
@@ -2098,7 +2098,7 @@ test sentence split_string {
     tuple 2
     jump split_system::process
     
-    # 4. Check emitted: (split::out, (split::item, (next, 97))) ('a')
+    // 4. Check emitted: (split::out, (split::item, (next, 97))) ('a')
     pick 0
     jump split_system::emit
     untuple 2
@@ -2112,7 +2112,7 @@ test sentence split_string {
     tuple 2
     assert_eq
     
-    # Process item event
+    // Process item event
     push 97
     push next
     tuple 2
@@ -2122,7 +2122,7 @@ test sentence split_string {
     tuple 2
     jump split_system::process
     
-    # 5. Drive 3 taus for next char (',')
+    // 5. Drive 3 taus for next char (',')
     jump split_system::tau_reduce
     untuple 2
     assert
@@ -2133,7 +2133,7 @@ test sentence split_string {
     untuple 2
     assert
     
-    # 6. Check emitted: (split::out, (split::end, ()))
+    // 6. Check emitted: (split::out, (split::end, ()))
     pick 0
     jump split_system::emit
     untuple 2
@@ -2145,7 +2145,7 @@ test sentence split_string {
     tuple 2
     assert_eq
     
-    # Process end event
+    // Process end event
     tuple 0
     push split::end
     tuple 2
@@ -2153,8 +2153,8 @@ test sentence split_string {
     tuple 2
     jump split_system::process
     
-    # --- Field 2: "b" ---
-    # 7. Send (split::out, (split::next, ()))
+    // --- Field 2: "b" ---
+    // 7. Send (split::out, (split::next, ()))
     tuple 0
     push split::next
     tuple 2
@@ -2162,7 +2162,7 @@ test sentence split_string {
     tuple 2
     jump split_system::process
     
-    # 8. Drive 3 taus for 'b'
+    // 8. Drive 3 taus for 'b'
     jump split_system::tau_reduce
     untuple 2
     assert
@@ -2173,7 +2173,7 @@ test sentence split_string {
     untuple 2
     assert
     
-    # 9. Check emitted: (split::out, (split::start, ()))
+    // 9. Check emitted: (split::out, (split::start, ()))
     pick 0
     jump split_system::emit
     untuple 2
@@ -2192,7 +2192,7 @@ test sentence split_string {
     tuple 2
     jump split_system::process
     
-    # 10. Check emitted: (split::out, (split::item, (next, 98))) ('b')
+    // 10. Check emitted: (split::out, (split::item, (next, 98))) ('b')
     pick 0
     jump split_system::emit
     untuple 2
@@ -2215,7 +2215,7 @@ test sentence split_string {
     tuple 2
     jump split_system::process
     
-    # 11. Drive 3 taus for done
+    // 11. Drive 3 taus for done
     jump split_system::tau_reduce
     untuple 2
     assert
@@ -2226,7 +2226,7 @@ test sentence split_string {
     untuple 2
     assert
     
-    # 12. Check emitted: (split::out, (split::end, ()))
+    // 12. Check emitted: (split::out, (split::end, ()))
     pick 0
     jump split_system::emit
     untuple 2
@@ -2245,8 +2245,8 @@ test sentence split_string {
     tuple 2
     jump split_system::process
     
-    # --- Done ---
-    # 13. Send (split::out, (split::next, ()))
+    // --- Done ---
+    // 13. Send (split::out, (split::next, ()))
     tuple 0
     push split::next
     tuple 2
@@ -2254,7 +2254,7 @@ test sentence split_string {
     tuple 2
     jump split_system::process
     
-    # 14. Check emitted: (split::out, (split::done, ()))
+    // 14. Check emitted: (split::out, (split::done, ()))
     pick 0
     jump split_system::emit
     untuple 2

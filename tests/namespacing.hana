@@ -1,4 +1,4 @@
-# Tests for Hanoi Namespacing Mechanism
+// Tests for Hanoi Namespacing Mechanism
 
 mod foo {
     symbol inner_sym "Inner"
@@ -12,25 +12,25 @@ mod foo {
         symbol deepest_sym "Deepest"
 
         export test sentence check_deep {
-            # Reference sibling
+            // Reference sibling
             push deepest_sym
             push deepest_sym
             equal
             assert
             
-            # Reference parent's symbol using super::
+            // Reference parent's symbol using super::
             push super::inner_sym
             push super::inner_sym
             equal
             assert
             
-            # Reference root symbol using crate::
+            // Reference root symbol using crate::
             push crate::namespacing::root_sym
             push crate::namespacing::root_sym
             equal
             assert
 
-            # Jump to parent's sentence using super::target_sentence
+            // Jump to parent's sentence using super::target_sentence
             push 42
             jump super::target_sentence
         }
@@ -47,7 +47,7 @@ mod foo {
 symbol root_sym "Root"
 
 test sentence check_root {
-    # Reference nested symbol using path
+    // Reference nested symbol using path
     push foo::inner_sym
     push foo::inner_sym
     equal
@@ -58,7 +58,7 @@ test sentence check_root {
     equal
     assert
     
-    # Jump to nested sentence using path
+    // Jump to nested sentence using path
     push 42
     jump foo::target_sentence
 }

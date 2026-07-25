@@ -98,27 +98,27 @@ symbol next "Next character event"
 symbol done "Iteration finished event"
 
 mod char_iterator {
-    # init: takes a symbol, returns (sym, 0)
+    // init: takes a symbol, returns (sym, 0)
     init {
         push 0
         tuple 2
     }
     
-    # accept: returns {(next, ch)} if idx < len, {(done, ())} if idx == len, or empty_set
+    // accept: returns {(next, ch)} if idx < len, {(done, ())} if idx == len, or empty_set
     accept {
         pick 0
         untuple 2
         
-        pick 1 # sym
-        symbol_len # len
+        pick 1 // sym
+        symbol_len // len
         
-        pick 1 # idx
-        pick 1 # len
+        pick 1 // idx
+        pick 1 // len
         less
         branch {
-            # idx < len: Get character and return {(next, ch)}
-            pick 2 # sym
-            pick 2 # idx
+            // idx < len: Get character and return {(next, ch)}
+            pick 2 // sym
+            pick 2 // idx
             symbol_char_at
             
             push super::next
@@ -126,31 +126,31 @@ mod char_iterator {
             tuple 2
             set_singleton
             
-            # Clean up
+            // Clean up
             drop 4; drop 3; drop 2; drop 1
         } {
-            # idx >= len: Check if idx == len
-            pick 1 # idx
-            pick 1 # len
+            // idx >= len: Check if idx == len
+            pick 1 // idx
+            pick 1 // len
             equal
             branch {
-                # idx == len: Return {(done, ())}
+                // idx == len: Return {(done, ())}
                 push super::done
                 tuple 0
                 tuple 2
                 set_singleton
                 drop 4; drop 3; drop 2; drop 1
             } {
-                # idx > len: Return empty_set
+                // idx > len: Return empty_set
                 push empty_set
                 drop 4; drop 3; drop 2; drop 1
             }
         }
     }
     
-    # process: transitions (sym, idx) -> (sym, idx + 1)
+    // process: transitions (sym, idx) -> (sym, idx + 1)
     process {
-        drop 0 # Discard event
+        drop 0 // Discard event
         untuple 2
         push 1
         add

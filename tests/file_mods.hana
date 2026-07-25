@@ -1,4 +1,4 @@
-# Main file for file module tests
+// Main file for file module tests
 mod sub_module;
 
 test sentence verify_import {

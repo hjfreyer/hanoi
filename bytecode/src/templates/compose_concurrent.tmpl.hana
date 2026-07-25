@@ -38,18 +38,18 @@ sentence emit {
     jump {{p2}}::emit
     untuple 2
     
-    # check_e1
-    pick 3 # has_e1
+    // check_e1
+    pick 3 // has_e1
     branch {
-        pick 4 # e1
+        pick 4 // e1
         jump {{sync_fn}}
         set_contains
         branch {
-            pick 4 # e1
-            pick 3 # A2
+            pick 4 // e1
+            pick 3 // A2
             set_contains
             branch {
-                # return_e1
+                // return_e1
                 pick 4
                 push true
                 tuple 2
@@ -60,13 +60,13 @@ sentence emit {
                 drop 1
                 drop 1
             } {
-                pick 0 # has_e2
+                pick 0 // has_e2
                 branch {
-                    pick 1 # e2
-                    pick 5 # e1
+                    pick 1 // e2
+                    pick 5 // e1
                     equal
                     branch {
-                        # return_e1
+                        // return_e1
                         pick 4
                         push true
                         tuple 2
@@ -77,18 +77,18 @@ sentence emit {
                         drop 1
                         drop 1
                     } {
-                        # check_e2 (nested)
-                        pick 0 # has_e2
+                        // check_e2 (nested)
+                        pick 0 // has_e2
                         branch {
-                            pick 1 # e2
+                            pick 1 // e2
                             jump {{sync_fn}}
                             set_contains
                             branch {
-                                pick 1 # e2
-                                pick 6 # A1
+                                pick 1 // e2
+                                pick 6 // A1
                                 set_contains
                                 branch {
-                                    # return_e2
+                                    // return_e2
                                     pick 1
                                     push true
                                     tuple 2
@@ -99,7 +99,7 @@ sentence emit {
                                     drop 1
                                     drop 1
                                 } {
-                                    # return_none
+                                    // return_none
                                     tuple 0
                                     push false
                                     tuple 2
@@ -111,7 +111,7 @@ sentence emit {
                                     drop 1
                                 }
                             } {
-                                # return_e2
+                                // return_e2
                                 pick 1
                                 push true
                                 tuple 2
@@ -123,7 +123,7 @@ sentence emit {
                                 drop 1
                             }
                         } {
-                            # return_none
+                            // return_none
                             tuple 0
                             push false
                             tuple 2
@@ -136,7 +136,7 @@ sentence emit {
                         }
                     }
                 } {
-                    # return_none
+                    // return_none
                     tuple 0
                     push false
                     tuple 2
@@ -149,7 +149,7 @@ sentence emit {
                 }
             }
         } {
-            # return_e1
+            // return_e1
             pick 4
             push true
             tuple 2
@@ -161,18 +161,18 @@ sentence emit {
             drop 1
         }
     } {
-        # check_e2 (direct)
-        pick 0 # has_e2
+        // check_e2 (direct)
+        pick 0 // has_e2
         branch {
-            pick 1 # e2
+            pick 1 // e2
             jump {{sync_fn}}
             set_contains
             branch {
-                pick 1 # e2
-                pick 6 # A1
+                pick 1 // e2
+                pick 6 // A1
                 set_contains
                 branch {
-                    # return_e2
+                    // return_e2
                     pick 1
                     push true
                     tuple 2
@@ -183,7 +183,7 @@ sentence emit {
                     drop 1
                     drop 1
                 } {
-                    # return_none
+                    // return_none
                     tuple 0
                     push false
                     tuple 2
@@ -195,7 +195,7 @@ sentence emit {
                     drop 1
                 }
             } {
-                # return_e2
+                // return_e2
                 pick 1
                 push true
                 tuple 2
@@ -207,7 +207,7 @@ sentence emit {
                 drop 1
             }
         } {
-            # return_none
+            // return_none
             tuple 0
             push false
             tuple 2
@@ -240,7 +240,7 @@ sentence process {
         roll 1
         untuple 2
         
-        # Check P1 participation
+        // Check P1 participation
         pick 1
         jump {{p1}}::accept
         pick 3
@@ -261,7 +261,7 @@ sentence process {
             }
         }
         
-        # Check P2 participation
+        // Check P2 participation
         pick 1
         jump {{p2}}::accept
         pick 4

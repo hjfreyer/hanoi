@@ -1,4 +1,4 @@
-# Tests for tuples and nested tuples
+// Tests for tuples and nested tuples
 
 test sentence simple_tuple {
     push 1
@@ -19,10 +19,10 @@ test sentence nested_tuples {
     push (20, 30)
     tuple 2
     
-    # Destructure outer tuple
+    // Destructure outer tuple
     untuple 2
     
-    # Destructure inner tuple
+    // Destructure inner tuple
     untuple 2
     
     push 30
