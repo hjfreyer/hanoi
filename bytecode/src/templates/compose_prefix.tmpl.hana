@@ -1,0 +1,50 @@
+sentence init {
+    jump {{target}}::init
+}
+
+sentence accept {
+    jump {{target}}::accept
+    push {{prefix}}
+    set_singleton
+    roll 1
+    set_tuple 2
+}
+
+sentence emit {
+    jump {{target}}::emit
+    untuple 2
+    branch {
+        push {{prefix}}
+        roll 1
+        tuple 2
+        push true
+        tuple 2
+    } {
+        drop 0
+        tuple 0
+        push false
+        tuple 2
+    }
+}
+
+sentence process {
+    untuple 2
+    pick 1
+    push {{prefix}}
+    assert_eq
+    drop 1
+    jump {{target}}::process
+}
+
+sentence tau_reduce {
+    push false
+    tuple 2
+}
+
+sentence is_done {
+    jump {{target}}::is_done
+}
+
+sentence is_ready_to_finish {
+    jump {{target}}::is_ready_to_finish
+}

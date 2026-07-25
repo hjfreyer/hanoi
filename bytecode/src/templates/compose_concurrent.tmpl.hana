@@ -1,0 +1,380 @@
+sentence init {
+    jump {{p1}}::init
+    jump {{p2}}::init
+    tuple 2
+}
+
+sentence accept {
+    untuple 2
+    roll 1
+    jump {{p1}}::accept
+    roll 1
+    jump {{p2}}::accept
+    pick 1
+    pick 1
+    set_union
+    jump {{sync_fn}}
+    set_difference
+    roll 2
+    roll 2
+    set_intersection
+    jump {{sync_fn}}
+    set_intersection
+    set_union
+}
+
+sentence emit {
+    untuple 2
+    roll 1
+    pick 0
+    jump {{p1}}::accept
+    roll 1
+    jump {{p1}}::emit
+    untuple 2
+    roll 3
+    pick 0
+    jump {{p2}}::accept
+    roll 1
+    jump {{p2}}::emit
+    untuple 2
+    
+    # check_e1
+    pick 3 # has_e1
+    branch {
+        pick 4 # e1
+        jump {{sync_fn}}
+        set_contains
+        branch {
+            pick 4 # e1
+            pick 3 # A2
+            set_contains
+            branch {
+                # return_e1
+                pick 4
+                push true
+                tuple 2
+                drop 1
+                drop 1
+                drop 1
+                drop 1
+                drop 1
+                drop 1
+            } {
+                pick 0 # has_e2
+                branch {
+                    pick 1 # e2
+                    pick 5 # e1
+                    equal
+                    branch {
+                        # return_e1
+                        pick 4
+                        push true
+                        tuple 2
+                        drop 1
+                        drop 1
+                        drop 1
+                        drop 1
+                        drop 1
+                        drop 1
+                    } {
+                        # check_e2 (nested)
+                        pick 0 # has_e2
+                        branch {
+                            pick 1 # e2
+                            jump {{sync_fn}}
+                            set_contains
+                            branch {
+                                pick 1 # e2
+                                pick 6 # A1
+                                set_contains
+                                branch {
+                                    # return_e2
+                                    pick 1
+                                    push true
+                                    tuple 2
+                                    drop 1
+                                    drop 1
+                                    drop 1
+                                    drop 1
+                                    drop 1
+                                    drop 1
+                                } {
+                                    # return_none
+                                    tuple 0
+                                    push false
+                                    tuple 2
+                                    drop 1
+                                    drop 1
+                                    drop 1
+                                    drop 1
+                                    drop 1
+                                    drop 1
+                                }
+                            } {
+                                # return_e2
+                                pick 1
+                                push true
+                                tuple 2
+                                drop 1
+                                drop 1
+                                drop 1
+                                drop 1
+                                drop 1
+                                drop 1
+                            }
+                        } {
+                            # return_none
+                            tuple 0
+                            push false
+                            tuple 2
+                            drop 1
+                            drop 1
+                            drop 1
+                            drop 1
+                            drop 1
+                            drop 1
+                        }
+                    }
+                } {
+                    # return_none
+                    tuple 0
+                    push false
+                    tuple 2
+                    drop 1
+                    drop 1
+                    drop 1
+                    drop 1
+                    drop 1
+                    drop 1
+                }
+            }
+        } {
+            # return_e1
+            pick 4
+            push true
+            tuple 2
+            drop 1
+            drop 1
+            drop 1
+            drop 1
+            drop 1
+            drop 1
+        }
+    } {
+        # check_e2 (direct)
+        pick 0 # has_e2
+        branch {
+            pick 1 # e2
+            jump {{sync_fn}}
+            set_contains
+            branch {
+                pick 1 # e2
+                pick 6 # A1
+                set_contains
+                branch {
+                    # return_e2
+                    pick 1
+                    push true
+                    tuple 2
+                    drop 1
+                    drop 1
+                    drop 1
+                    drop 1
+                    drop 1
+                    drop 1
+                } {
+                    # return_none
+                    tuple 0
+                    push false
+                    tuple 2
+                    drop 1
+                    drop 1
+                    drop 1
+                    drop 1
+                    drop 1
+                    drop 1
+                }
+            } {
+                # return_e2
+                pick 1
+                push true
+                tuple 2
+                drop 1
+                drop 1
+                drop 1
+                drop 1
+                drop 1
+                drop 1
+            }
+        } {
+            # return_none
+            tuple 0
+            push false
+            tuple 2
+            drop 1
+            drop 1
+            drop 1
+            drop 1
+            drop 1
+            drop 1
+        }
+    }
+}
+
+sentence process {
+    pick 0
+    jump {{sync_fn}}
+    set_contains
+    branch {
+        roll 1
+        untuple 2
+        pick 2
+        roll 2
+        roll 1
+        jump {{p1}}::process
+        roll 1
+        roll 2
+        jump {{p2}}::process
+        tuple 2
+    } {
+        roll 1
+        untuple 2
+        
+        # Check P1 participation
+        pick 1
+        jump {{p1}}::accept
+        pick 3
+        roll 1
+        set_contains
+        branch {
+            push true
+        } {
+            pick 1
+            jump {{p1}}::emit
+            untuple 2
+            branch {
+                pick 3
+                equal
+            } {
+                drop 0
+                push false
+            }
+        }
+        
+        # Check P2 participation
+        pick 1
+        jump {{p2}}::accept
+        pick 4
+        roll 1
+        set_contains
+        branch {
+            push true
+        } {
+            pick 1
+            jump {{p2}}::emit
+            untuple 2
+            branch {
+                pick 4
+                equal
+            } {
+                drop 0
+                push false
+            }
+        }
+        
+        roll 1
+        branch {
+            drop 0
+            pick 2
+            roll 2
+            roll 1
+            jump {{p1}}::process
+            roll 2
+            drop 0
+            roll 1
+            tuple 2
+        } {
+            branch {
+                pick 2
+                jump {{p2}}::process
+                roll 2
+                drop 0
+                tuple 2
+            } {
+                panic
+            }
+        }
+    }
+}
+
+sentence tau_reduce {
+    untuple 2
+    pick 1
+    jump {{p1}}::tau_reduce
+    untuple 2
+    branch {
+        roll 2
+        drop 0
+        roll 1
+        tuple 2
+        push true
+        tuple 2
+    } {
+        roll 1
+        roll 2
+        drop 0
+        
+        pick 0
+        jump {{p2}}::tau_reduce
+        untuple 2
+        
+        roll 2
+        drop 0
+        roll 2
+        roll 2
+        tuple 2
+        roll 1
+        tuple 2
+    }
+}
+
+sentence is_done {
+    untuple 2
+    pick 1
+    jump {{p1}}::is_ready_to_finish
+    roll 2
+    jump {{p1}}::is_done
+    roll 2
+    pick 0
+    jump {{p2}}::is_ready_to_finish
+    roll 1
+    jump {{p2}}::is_done
+    
+    pick 3
+    pick 1
+    and
+    
+    pick 2
+    pick 4
+    and
+    
+    or
+    
+    roll 4
+    drop 0
+    roll 3
+    drop 0
+    roll 2
+    drop 0
+    roll 1
+    drop 0
+}
+
+sentence is_ready_to_finish {
+    untuple 2
+    roll 1
+    jump {{p1}}::is_ready_to_finish
+    roll 1
+    jump {{p2}}::is_ready_to_finish
+    or
+}

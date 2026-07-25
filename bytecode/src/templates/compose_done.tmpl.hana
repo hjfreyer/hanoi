@@ -1,0 +1,34 @@
+sentence init {
+    push 0
+}
+
+sentence accept {
+    drop 0
+    push empty_set
+}
+
+sentence emit {
+    drop 0
+    tuple 0
+    push false
+    tuple 2
+}
+
+sentence process {
+    drop 0
+}
+
+sentence tau_reduce {
+    push false
+    tuple 2
+}
+
+sentence is_done {
+    drop 0
+    push true
+}
+
+sentence is_ready_to_finish {
+    drop 0
+    push false
+}

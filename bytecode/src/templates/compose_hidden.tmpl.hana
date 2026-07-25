@@ -1,0 +1,89 @@
+sentence init {
+    jump {{concurrent}}::init
+}
+
+sentence set {
+    jump {{hidden_fn}}
+}
+
+sentence accept {
+    jump {{concurrent}}::accept
+    jump {{hidden_fn}}
+    set_difference
+}
+
+sentence emit {
+    pick 0
+    jump {{concurrent}}::emit
+    untuple 2
+    branch {
+        pick 0
+        jump {{hidden_fn}}
+        set_contains
+        branch {
+            drop 0
+            drop 0
+            tuple 0
+            push false
+            tuple 2
+        } {
+            roll 1
+            drop 0
+            push true
+            tuple 2
+        }
+    } {
+        drop 0
+        drop 0
+        tuple 0
+        push false
+        tuple 2
+    }
+}
+
+sentence process {
+    jump {{concurrent}}::process
+}
+
+sentence tau_reduce {
+    pick 0
+    jump {{concurrent}}::tau_reduce
+    untuple 2
+    branch {
+        roll 1
+        drop 0
+        push true
+        tuple 2
+    } {
+        drop 0
+        pick 0
+        jump {{concurrent}}::emit
+        untuple 2
+        branch {
+            pick 0
+            jump {{hidden_fn}}
+            set_contains
+            branch {
+                jump {{concurrent}}::process
+                push true
+                tuple 2
+            } {
+                drop 0
+                push false
+                tuple 2
+            }
+        } {
+            drop 0
+            push false
+            tuple 2
+        }
+    }
+}
+
+sentence is_done {
+    jump {{concurrent}}::is_done
+}
+
+sentence is_ready_to_finish {
+    jump {{concurrent}}::is_ready_to_finish
+}

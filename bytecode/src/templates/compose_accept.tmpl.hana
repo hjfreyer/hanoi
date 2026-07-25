@@ -1,0 +1,125 @@
+sentence init {
+    push 0
+    tuple 0
+    tuple 2
+}
+
+sentence accept {
+    untuple 2
+    roll 1
+    push 0
+    equal
+    branch {
+        drop 0
+        jump {{val_set_path}}
+    } {
+        jump {{machine}}::accept
+    }
+}
+
+sentence tau_reduce {
+    untuple 2
+    pick 1
+    push 0
+    equal
+    branch {
+        tuple 2
+        push false
+        tuple 2
+    } {
+        pick 0
+        jump {{machine}}::tau_reduce
+        untuple 2
+        branch {
+            roll 2
+            drop 0
+            tuple 2
+            push true
+            tuple 2
+        } {
+            roll 2
+            drop 0
+            tuple 2
+            push false
+            tuple 2
+        }
+    }
+}
+
+sentence emit {
+    untuple 2
+    pick 1
+    push 0
+    equal
+    branch {
+        drop 0
+        drop 0
+        tuple 0
+        push false
+        tuple 2
+    } {
+        roll 1
+        drop 0
+        jump {{machine}}::emit
+    }
+}
+
+sentence process {
+    roll 1
+    untuple 2
+    pick 1
+    push 0
+    equal
+    branch {
+        pick 2 # event
+        push {{val_set_path}}
+        set_contains
+        branch {
+            drop 0
+            drop 0
+            drop 0
+            jump {{machine}}::init
+            push 1
+            roll 1
+            tuple 2
+        } {
+            roll 2
+            drop 0
+            tuple 2
+        }
+    } {
+        roll 2
+        roll 2
+        drop 0
+        jump {{machine}}::process
+        push 1
+        roll 1
+        tuple 2
+    }
+}
+
+sentence is_done {
+    untuple 2
+    roll 1
+    push 0
+    equal
+    branch {
+        drop 0
+        push false
+    } {
+        jump {{machine}}::is_done
+    }
+}
+
+sentence is_ready_to_finish {
+    untuple 2
+    roll 1
+    push 0
+    equal
+    branch {
+        drop 0
+        push false
+    } {
+        jump {{machine}}::is_ready_to_finish
+    }
+}

@@ -1,0 +1,28 @@
+sentence init {
+    push {{val}}
+    jump {{machine}}::init
+}
+
+sentence accept {
+    jump {{machine}}::accept
+}
+
+sentence emit {
+    jump {{machine}}::emit
+}
+
+sentence process {
+    jump {{machine}}::process
+}
+
+sentence tau_reduce {
+    jump {{machine}}::tau_reduce
+}
+
+sentence is_done {
+    jump {{machine}}::is_done
+}
+
+sentence is_ready_to_finish {
+    jump {{machine}}::is_ready_to_finish
+}

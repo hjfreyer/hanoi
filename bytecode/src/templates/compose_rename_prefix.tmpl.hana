@@ -1,0 +1,69 @@
+sentence init {
+    jump {{target}}::init
+}
+
+sentence accept {
+    jump {{target}}::accept
+    push {{from_symbol}}
+    push {{to_symbol}}
+    set_rename_prefix
+}
+
+sentence emit {
+    jump {{target}}::emit
+    untuple 2
+    branch {
+        untuple 2
+        pick 1
+        push {{from_symbol}}
+        equal
+        branch {
+            roll 1
+            drop 0
+            push {{to_symbol}}
+            roll 1
+            tuple 2
+            push true
+            tuple 2
+        } {
+            tuple 2
+            push true
+            tuple 2
+        }
+    } {
+        drop 0
+        tuple 0
+        push false
+        tuple 2
+    }
+}
+
+sentence process {
+    untuple 2
+    pick 1
+    push {{to_symbol}}
+    equal
+    branch {
+        roll 1
+        drop 0
+        push {{from_symbol}}
+        roll 1
+        tuple 2
+        jump {{target}}::process
+    } {
+        tuple 2
+        jump {{target}}::process
+    }
+}
+
+sentence tau_reduce {
+    jump {{target}}::tau_reduce
+}
+
+sentence is_done {
+    jump {{target}}::is_done
+}
+
+sentence is_ready_to_finish {
+    jump {{target}}::is_ready_to_finish
+}
