@@ -1,9 +1,11 @@
+#[arity(0, 1)]
 sentence init {
     jump {{p1}}::init
     jump {{p2}}::init
     tuple 2
 }
 
+#[arity(1, 1)]
 sentence accept {
     untuple 2
     roll 1
@@ -23,6 +25,7 @@ sentence accept {
     set_union
 }
 
+#[arity(1, 1)]
 sentence emit {
     untuple 2
     roll 1
@@ -221,6 +224,7 @@ sentence emit {
     }
 }
 
+#[arity(2, 1)]
 sentence process {
     pick 0
     jump {{sync_fn}}
@@ -307,6 +311,7 @@ sentence process {
     }
 }
 
+#[arity(1, 1)]
 sentence tau_reduce {
     untuple 2
     pick 1
@@ -338,6 +343,7 @@ sentence tau_reduce {
     }
 }
 
+#[arity(1, 1)]
 sentence is_done {
     untuple 2
     pick 1
@@ -370,6 +376,7 @@ sentence is_done {
     drop 0
 }
 
+#[arity(1, 1)]
 sentence is_ready_to_finish {
     untuple 2
     roll 1

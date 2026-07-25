@@ -1,8 +1,10 @@
+pub mod arity;
 pub mod assembly;
 pub mod library;
 pub mod opcode;
 pub mod value;
 
+pub use arity::check_arities;
 pub use assembly::{assemble, assemble_with_path};
 pub use library::{Library, Sentence, SentenceIndex, Annotation};
 pub use opcode::Instruction;
@@ -269,6 +271,62 @@ mod tests {
         assert_eq!(res.annotations[idx_with], vec![Annotation::Arity(1, 2)]);
         assert_eq!(res.annotations[idx_without], vec![]);
         assert_eq!(res.annotations[idx_both], vec![Annotation::Arity(3, 4)]);
+    }
+
+    #[test]
+    fn test_arity_checker_errors() {
+        // 1. Sentence requires more inputs than annotated
+        let code = r#"
+            #[arity(1, 1)]
+            sentence bad_inputs {
+                add
+            }
+        "#;
+        let res = assemble(code);
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("requires 2 inputs, which exceeds its annotated arity 1"));
+
+        // 2. Net stack change is wrong
+        let code = r#"
+            #[arity(2, 2)]
+            sentence bad_net_change {
+                add
+            }
+        "#;
+        let res = assemble(code);
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("net stack change of -1, but annotated arity 2 -> 2 expects net change of 0"));
+
+        // 3. Mismatched branch arities
+        let code = r#"
+            #[arity(0, 1)]
+            sentence branch_then {
+                push 1
+            }
+            #[arity(0, 2)]
+            sentence branch_else {
+                push 1
+                push 2
+            }
+            #[arity(1, 1)]
+            sentence bad_branch {
+                branch branch_then branch_else
+            }
+        "#;
+        let res = assemble(code);
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("Branch targets have mismatched arities"));
+
+        // 4. Recursion detected
+        let code = r#"
+            #[arity(0, 0)]
+            sentence recursive_s {
+                jump recursive_s
+            }
+        "#;
+        let res = assemble(code);
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("Recursion/cycle detected"));
     }
 
     #[test]

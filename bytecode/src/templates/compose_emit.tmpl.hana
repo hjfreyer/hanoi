@@ -1,9 +1,11 @@
+#[arity(0, 1)]
 sentence init {
     tuple 0
     push 0
     tuple 2
 }
 
+#[arity(1, 1)]
 sentence accept {
     untuple 2
     push 0
@@ -16,6 +18,7 @@ sentence accept {
     }
 }
 
+#[arity(1, 1)]
 sentence tau_reduce {
     untuple 2
     pick 0
@@ -45,6 +48,7 @@ sentence tau_reduce {
     }
 }
 
+#[arity(1, 1)]
 sentence emit {
     untuple 2
     pick 0
@@ -62,6 +66,7 @@ sentence emit {
     }
 }
 
+#[arity(2, 1)]
 sentence process {
     roll 1
     untuple 2
@@ -84,6 +89,7 @@ sentence process {
     }
 }
 
+#[arity(1, 1)]
 sentence is_done {
     untuple 2
     pick 0
@@ -99,6 +105,7 @@ sentence is_done {
     }
 }
 
+#[arity(1, 1)]
 sentence is_ready_to_finish {
     untuple 2
     pick 0

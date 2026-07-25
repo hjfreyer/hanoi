@@ -1,0 +1,57 @@
+// Integration tests for sentence arity annotations
+
+#[arity(2, 1)]
+sentence add_two {
+    add
+}
+
+#[arity(0, 1)]
+sentence push_val {
+    push 100
+}
+
+#[arity(1, 1)]
+sentence double_val {
+    pick 0
+    add
+}
+
+test sentence test_arity_add_two {
+    push 40
+    push 2
+    jump add_two
+    push 42
+    assert_eq
+}
+
+test sentence test_arity_push_val {
+    jump push_val
+    push 100
+    assert_eq
+}
+
+test sentence test_arity_double {
+    push 21
+    jump double_val
+    push 42
+    assert_eq
+}
+
+#[arity(1, 1)]
+sentence recursive_helper {
+    push 1
+    add
+}
+
+#[arity(1, 1)]
+sentence nested_arity_calls {
+    jump recursive_helper
+    jump recursive_helper
+}
+
+test sentence test_arity_nested_calls {
+    push 10
+    jump nested_arity_calls
+    push 12
+    assert_eq
+}

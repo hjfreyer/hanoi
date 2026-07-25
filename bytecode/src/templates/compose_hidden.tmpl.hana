@@ -1,17 +1,21 @@
+#[arity(0, 1)]
 sentence init {
     jump {{concurrent}}::init
 }
 
+#[arity(0, 1)]
 sentence set {
     jump {{hidden_fn}}
 }
 
+#[arity(1, 1)]
 sentence accept {
     jump {{concurrent}}::accept
     jump {{hidden_fn}}
     set_difference
 }
 
+#[arity(1, 1)]
 sentence emit {
     pick 0
     jump {{concurrent}}::emit
@@ -41,10 +45,12 @@ sentence emit {
     }
 }
 
+#[arity(2, 1)]
 sentence process {
     jump {{concurrent}}::process
 }
 
+#[arity(1, 1)]
 sentence tau_reduce {
     pick 0
     jump {{concurrent}}::tau_reduce
@@ -80,10 +86,12 @@ sentence tau_reduce {
     }
 }
 
+#[arity(1, 1)]
 sentence is_done {
     jump {{concurrent}}::is_done
 }
 
+#[arity(1, 1)]
 sentence is_ready_to_finish {
     jump {{concurrent}}::is_ready_to_finish
 }

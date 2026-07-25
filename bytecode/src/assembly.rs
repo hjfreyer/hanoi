@@ -1504,6 +1504,7 @@ enum ResolvedItem {
 struct Compiler<'a> {
     root_module: &'a Module,
     sentences: Vec<Vec<Instruction>>,
+    names: Vec<String>,
 }
 
 impl<'a> Compiler<'a> {
@@ -1716,6 +1717,7 @@ impl<'a> Compiler<'a> {
             Target::Inline(parsed_sentence) => {
                 let new_idx = SentenceIndex::from(self.sentences.len());
                 self.sentences.push(Vec::new());
+                self.names.push("<inline>".to_string());
                 let compiled_body = self.compile_sentence_body(current_path, parsed_sentence.instructions)?;
                 let idx_usize: usize = new_idx.into();
                 self.sentences[idx_usize] = compiled_body;
@@ -1777,23 +1779,41 @@ pub fn assemble_with_path(input: &str, base_dir: Option<&std::path::Path>) -> Re
     let mut compiler = Compiler {
         root_module: &root_module,
         sentences: Vec::new(),
+        names: Vec::new(),
     };
 
     // Pre-allocate space for all named sentences
     compiler.sentences.resize(sentence_counter, Vec::new());
+    compiler.names.resize(sentence_counter, String::new());
 
     let mut annotations = typed_index_collections::TiVec::new();
+    annotations.resize(sentence_counter, Vec::new());
     // Compile instructions recursively
     for (idx, (path, sentence)) in flat_sentences.into_iter().enumerate() {
         let compiled_instructions = compiler.compile_sentence_body(&path, sentence.body.instructions)?;
         compiler.sentences[idx] = compiled_instructions;
-        annotations.push(sentence.annotations);
+        let fq_name = if path.is_empty() {
+            sentence.name.clone()
+        } else {
+            format!("{}::{}", path.join("::"), sentence.name)
+        };
+        compiler.names[idx] = fq_name;
+        if sentence.name != "init" {
+            annotations[SentenceIndex::from(idx)] = sentence.annotations;
+        }
     }
 
     let mut library = Library::new();
     for s in compiler.sentences {
         library.sentences.push(s);
     }
+    annotations.resize(library.sentences.len(), Vec::new());
+    
+    let mut final_names = typed_index_collections::TiVec::new();
+    for n in compiler.names {
+        final_names.push(n);
+    }
+    library.names = final_names;
     library.exports = exports;
     library.tests = tests;
     library.test_machines = test_machines;
@@ -1803,6 +1823,8 @@ pub fn assemble_with_path(input: &str, base_dir: Option<&std::path::Path>) -> Re
     let mut path_tracker = Vec::new();
     collect_symbols(&root_module, &mut path_tracker, &mut symbols_map);
     library.symbols = symbols_map;
+
+    crate::arity::check_arities(&library)?;
 
     Ok(library)
 }

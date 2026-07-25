@@ -25,6 +25,7 @@ pub struct Library {
     pub tests: HashMap<String, SentenceIndex>,
     pub test_machines: HashSet<String>,
     pub annotations: TiVec<SentenceIndex, Vec<Annotation>>,
+    pub names: TiVec<SentenceIndex, String>,
 }
 
 impl Library {
@@ -37,6 +38,7 @@ impl Library {
             tests: HashMap::new(),
             test_machines: HashSet::new(),
             annotations: TiVec::new(),
+            names: TiVec::new(),
         }
     }
 }

@@ -1,28 +1,35 @@
+#[arity(0, 1)]
 sentence init {
     push {{val}}
     jump {{machine}}::init
 }
 
+#[arity(1, 1)]
 sentence accept {
     jump {{machine}}::accept
 }
 
+#[arity(1, 1)]
 sentence emit {
     jump {{machine}}::emit
 }
 
+#[arity(2, 1)]
 sentence process {
     jump {{machine}}::process
 }
 
+#[arity(1, 1)]
 sentence tau_reduce {
     jump {{machine}}::tau_reduce
 }
 
+#[arity(1, 1)]
 sentence is_done {
     jump {{machine}}::is_done
 }
 
+#[arity(1, 1)]
 sentence is_ready_to_finish {
     jump {{machine}}::is_ready_to_finish
 }

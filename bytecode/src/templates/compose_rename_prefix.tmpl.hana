@@ -1,7 +1,9 @@
+#[arity(0, 1)]
 sentence init {
     jump {{target}}::init
 }
 
+#[arity(1, 1)]
 sentence accept {
     jump {{target}}::accept
     push {{from_symbol}}
@@ -9,6 +11,7 @@ sentence accept {
     set_rename_prefix
 }
 
+#[arity(1, 1)]
 sentence emit {
     jump {{target}}::emit
     untuple 2
@@ -36,6 +39,7 @@ sentence emit {
     }
 }
 
+#[arity(2, 1)]
 sentence process {
     untuple 2
     pick 0
@@ -52,14 +56,17 @@ sentence process {
     }
 }
 
+#[arity(1, 1)]
 sentence tau_reduce {
     jump {{target}}::tau_reduce
 }
 
+#[arity(1, 1)]
 sentence is_done {
     jump {{target}}::is_done
 }
 
+#[arity(1, 1)]
 sentence is_ready_to_finish {
     jump {{target}}::is_ready_to_finish
 }
