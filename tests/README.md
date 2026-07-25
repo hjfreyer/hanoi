@@ -70,19 +70,22 @@ Computes an internal/silent transition (tau step) on the state without interacti
 
 ## Design Patterns & Conventions
 
+Under the `(args, tag)` convention, the tag or state symbol is placed at the end of the tuple, placing it at the top of the stack after an `untuple 2` operation.
+
 ### State Representation
-Machine state is typically represented as a `Tuple` of variables:
-* **Customer State:** `(id, preferred_drink, internal_state_symbol)`
-* **Character Iterator State:** `(symbol, current_index)`
+Machine state is typically represented as a `Tuple` ending in the current state symbol:
+* **Customer State:** `((id, preferred_drink), internal_state_symbol)`
+* **Character Iterator State:** `(current_index, symbol)`
 
 ### Event Representation
-Events are usually represented as a `Tuple` consisting of an event identifier symbol followed by payload values:
-* **Coffee Order Event:** `(order, customer_id, drink_symbol)`
-* **Iterator Step Event:** `(next, character_unicode_codepoint)`
-* **Iterator Finished Event:** `(done, ())`
+Events are usually represented as a `Tuple` consisting of payload values followed by the event identifier symbol:
+* **Coffee Order Event:** `((customer_id, drink_symbol), order)`
+* **Iterator Step Event:** `(character_unicode_codepoint, next)`
+* **Iterator Finished Event:** `((), done)`
 
-Events can also be structured using **Path Notation** (dot notation), which maps to nested right-hand tuples terminating in unit `()`:
-* **Path Notation:** `foo.bar.baz` corresponds to `(foo, (bar, (baz, ())))`
+### Path Notation
+Events can also be structured using **Path Notation** (dot notation) to represent hierarchical namespaces. While written Left-To-Right (LTR) from outer to inner namespaces (e.g., `foo.bar.baz`), the compiled tuple nests the opposite way because tags reside on the right-hand side:
+* **Path Notation:** `foo.bar.baz` corresponds to `(((((), baz), bar), foo)` (where `foo` is the outermost tag and `baz` is the innermost event).
 
 ---
 
