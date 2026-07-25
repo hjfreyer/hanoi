@@ -146,7 +146,8 @@ test sentence dynamic_set_operations {
     assert
     
     # Clean up union
-    drop 0
+    push union(singleton(100), singleton(200))
+    assert_eq
 
     # Test set_intersection instruction
     push 1
@@ -169,7 +170,8 @@ test sentence dynamic_set_operations {
     not
     assert
     
-    drop 0
+    push intersection(union(singleton(1), singleton(2)), singleton(2))
+    assert_eq
     
     # Test set_tuple instruction
     push 10
@@ -189,7 +191,8 @@ test sentence dynamic_set_operations {
     not
     assert
     
-    drop 0
+    push set_tuple(singleton(10), singleton(20))
+    assert_eq
 
     # Test set_difference instruction
     push 1
@@ -212,7 +215,8 @@ test sentence dynamic_set_operations {
     not
     assert
 
-    drop 0
+    push difference(union(singleton(1), singleton(2)), singleton(1))
+    assert_eq
 }
 
 test sentence set_choose_empty {
@@ -258,7 +262,8 @@ test sentence set_choose_union {
     push 10
     equal
     branch {
-        drop 0
+        push 10
+        assert_eq
     } {
         push 20
         assert_eq
@@ -288,7 +293,8 @@ test sentence set_choose_tuple {
     push 10
     equal
     branch {
-        drop 0
+        push 10
+        assert_eq
     } {
         push 20
         assert_eq
@@ -338,5 +344,6 @@ test sentence set_complement_instruction {
     set_contains
     assert
 
-    drop 0
+    push complement(singleton(10))
+    assert_eq
 }

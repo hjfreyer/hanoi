@@ -37,7 +37,8 @@ mod queue {
             drop 0
             drop 0
             drop 0
-            drop 0 # Clean up
+            push super::idle
+            assert_eq
             
             # push_back set: (push_back, val)
             push super::push_back
@@ -72,7 +73,8 @@ mod queue {
                 drop 0
                 drop 0
                 drop 0
-                drop 0 # Clean up
+                push super::awaiting_push
+                assert_eq
                 
                 # push_back set: (push_back, val)
                 push super::push_back
@@ -176,7 +178,7 @@ mod queue {
                 drop 1
                 drop 1
                 drop 1
-                drop 1 # Clean up
+                drop 1
             } {
                 drop 0
                 drop 0
@@ -230,7 +232,8 @@ mod queue {
                 branch {
                     # POP: payload is ()
                     drop 1 # drop type
-                    drop 0 # drop payload (()). Stack: [current, accumulator, new_el]
+                    push (super::super::prelude::req, ())
+                    assert_eq
                     
                     # Check if current (queue) is ()
                     pick 2 # current. Stack: [current, accumulator, new_el, current]
@@ -239,9 +242,12 @@ mod queue {
                     branch {
                         # Queue is empty: transition to pop_front_resp with none option
                         # State: (pop_front_resp, (), (none, ()), ())
-                        drop 0
-                        drop 0
-                        drop 0 # drop current, accumulator, new_el
+                        push ()
+                        assert_eq
+                        push ()
+                        assert_eq
+                        push ()
+                        assert_eq
                         push super::pop_front_resp
                         push ()
                         
@@ -282,7 +288,8 @@ mod queue {
                 } {
                     # AWAIT: payload is ()
                     drop 1 # drop type
-                    drop 0 # drop payload (()). Stack: [current, accumulator, new_el]
+                    push (super::super::prelude::req, ())
+                    assert_eq
                     
                     # Check if current (queue) is ()
                     pick 2 # current. Stack: [current, accumulator, new_el, current]
@@ -290,9 +297,12 @@ mod queue {
                     equal
                     branch {
                         # Queue is empty: transition to awaiting_push
-                        drop 0
-                        drop 0
-                        drop 0
+                        push ()
+                        assert_eq
+                        push ()
+                        assert_eq
+                        push ()
+                        assert_eq
                         push super::awaiting_push
                         push ()
                         push ()
@@ -344,10 +354,14 @@ mod queue {
                 branch {
                     # POP: payload is ()
                     drop 1
-                    drop 0 # drop type and payload. Stack: [current, accumulator, new_el]
-                    drop 0
-                    drop 0
-                    drop 0 # drop current, accumulator, new_el
+                    push (super::super::prelude::req, ())
+                    assert_eq
+                    push ()
+                    assert_eq
+                    push ()
+                    assert_eq
+                    push ()
+                    assert_eq
                     
                     push super::pop_front_resp_await
                     push ()

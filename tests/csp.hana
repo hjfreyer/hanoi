@@ -165,9 +165,13 @@ mod customer_impl {
         equal
         branch {
             # Transition from idle to thirsty
-            drop 0
+            push state::idle
+            assert_eq
             roll 2
+            untuple 2
             drop 0
+            push super::event::want_coffee
+            assert_eq
             push state::thirsty
             tuple 3
         } {
@@ -176,9 +180,13 @@ mod customer_impl {
             equal
             branch {
                 # Transition from thirsty to ordered
-                drop 0
+                push state::thirsty
+                assert_eq
                 roll 2
+                untuple 2
                 drop 0
+                push super::super::queue::push_back
+                assert_eq
                 push state::ordered
                 tuple 3
             } {
@@ -187,9 +195,14 @@ mod customer_impl {
                 equal
                 branch {
                     # Transition from ordered to has_coffee
-                    drop 0
+                    push state::ordered
+                    assert_eq
                     roll 2
+                    untuple 3
                     drop 0
+                    drop 0
+                    push super::event::coffee
+                    assert_eq
                     push state::has_coffee
                     tuple 3
                 } {
@@ -198,9 +211,13 @@ mod customer_impl {
                     equal
                     branch {
                         # Transition from has_coffee to idle
-                        drop 0
+                        push state::has_coffee
+                        assert_eq
                         roll 2
+                        untuple 2
                         drop 0
+                        push super::event::enjoy
+                        assert_eq
                         push state::idle
                         tuple 3
                     } {
@@ -341,8 +358,10 @@ mod barista {
         equal
         branch {
             # Transition from idle to awaiting_order
-            drop 0
-            drop 0
+            push (super::super::queue::await_front, (super::super::prelude::req, ()))
+            assert_eq
+            push state::idle
+            assert_eq
             push state::awaiting_order
         } {
             pick 1 # state
@@ -351,7 +370,8 @@ mod barista {
             branch {
                 # Transition from awaiting_order to brewing.
                 roll 1 # Stack: [event, state]
-                drop 0 # drop state. Stack: [event]
+                push state::awaiting_order
+                assert_eq
                 
                 # Destructure event: (await_front, (resp, (some, (val, ()))))
                 untuple 2
@@ -361,15 +381,25 @@ mod barista {
                 untuple 2 # Stack: [variant, payload]
                 drop 1 # drop variant (some)
                 untuple 2 # Stack: [val, ()]
-                drop 0 # drop ()
+                push ()
+                assert_eq
                 
                 push state::brewing
                 roll 1
                 tuple 2 # (state::brewing, val)
             } {
                 # Must be brewing. Transition to idle.
-                drop 0
-                drop 0
+                roll 1 # Stack: [event, state]
+                untuple 2 # Stack: [event, state_status, val]
+                roll 1 # Stack: [event, val, state_status]
+                push state::brewing
+                assert_eq
+                drop 0 # drop val
+                untuple 3 # Stack: [coffee, id, drink]
+                drop 0 # drop drink
+                drop 0 # drop id
+                push super::event::coffee
+                assert_eq
                 push state::idle
             }
         }

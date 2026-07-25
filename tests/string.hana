@@ -527,7 +527,8 @@ mod parseint {
         equal
         branch {
             # idle: accepts (out, (copy, ()))
-            drop 0
+            push idle
+            assert_eq
             push out
             set_singleton
             push singleton((super::copy, ()))
@@ -539,7 +540,8 @@ mod parseint {
             equal
             branch {
                 drop 0 # drop payload
-                drop 0 # drop tag
+                push parsing
+                assert_eq
                 
                 # Accepts (in, (next, ch)) for any ch
                 push in
@@ -560,7 +562,8 @@ mod parseint {
                 equal
                 branch {
                     drop 0
-                    drop 0
+                    push yielding_ok
+                    assert_eq
                     push empty_set
                 } {
                     pick 1 # tag
@@ -568,7 +571,8 @@ mod parseint {
                     equal
                     branch {
                         drop 0
-                        drop 0
+                        push yielding_err
+                        assert_eq
                         push empty_set
                     } {
                         panic
@@ -590,7 +594,8 @@ mod parseint {
         push idle
         equal
         branch {
-            drop 0
+            push idle
+            assert_eq
             tuple 0
             push false
             tuple 2
@@ -601,7 +606,8 @@ mod parseint {
             equal
             branch {
                 drop 0
-                drop 0
+                push parsing
+                assert_eq
                 tuple 0
                 push false
                 tuple 2
@@ -634,7 +640,8 @@ mod parseint {
                     branch {
                         # Emits (out, (value, (err, ())))
                         drop 0 # drop payload
-                        drop 0 # drop tag
+                        push yielding_err
+                        assert_eq
                         
                         push super::err
                         tuple 0
@@ -666,8 +673,10 @@ mod parseint {
         equal
         branch {
             # State is idle: event is (out, (copy, ()))
-            drop 0 # drop event
-            drop 0 # drop state
+            push (out, (super::copy, ()))
+            assert_eq
+            push idle
+            assert_eq
             
             # Init parsing state: (parsing, (0, 0)) -> (acc = 0, count = 0)
             push parsing
@@ -685,9 +694,10 @@ mod parseint {
             equal
             branch {
                 # Process emission of yielding_ok -> returns idle state
-                drop 0 # drop payload
-                drop 0 # drop tag
-                drop 0 # drop event
+                drop 0
+                push yielding_ok
+                assert_eq
+                drop 0
                 push idle
             } {
                 pick 1 # tag
@@ -695,9 +705,12 @@ mod parseint {
                 equal
                 branch {
                     # Process emission of yielding_err -> returns idle state
-                    drop 0 # drop payload
-                    drop 0 # drop tag
-                    drop 0 # drop event
+                    push ()
+                    assert_eq
+                    push yielding_err
+                    assert_eq
+                    push (out, (super::value, (super::err, ())))
+                    assert_eq
                     push idle
                 } {
                     pick 1 # tag
@@ -724,7 +737,8 @@ mod parseint {
                         branch {
                             # item_tag == next: val is character codepoint (ch)
                             roll 3 # Stack: [val, acc, count, item_tag]
-                            drop 0 # drop item_tag. Stack: [ch, acc, count]
+                            push super::next
+                            assert_eq
                             
                             # Check if ch >= 48 && ch <= 57
                             pick 2 # ch
@@ -782,9 +796,11 @@ mod parseint {
                             branch {
                                 # Stack: [item_tag, val, acc, count]
                                 roll 3 # Stack: [val, acc, count, item_tag]
-                                drop 0 # Stack: [val, acc, count]
+                                push super::done
+                                assert_eq
                                 roll 2 # Stack: [acc, count, val]
-                                drop 0 # Stack: [acc, count]
+                                push ()
+                                assert_eq
                                 
                                 # Check if count > 0
                                 pick 0 # count
@@ -798,7 +814,8 @@ mod parseint {
                                     tuple 2 # (yielding_ok, acc)
                                 } {
                                     # count == 0: empty input error! Return (yielding_err, ())
-                                    drop 0 # drop count
+                                    push 0
+                                    assert_eq
                                     drop 0 # drop acc
                                     push yielding_err
                                     tuple 0
@@ -864,7 +881,8 @@ mod split {
         branch {
             # idle: accepts (out, (next, ()))
             drop 0 # drop payload
-            drop 0 # drop tag
+            push state_idle
+            assert_eq
             
             push out
             set_singleton
@@ -877,7 +895,8 @@ mod split {
             branch {
                 # idle_done: accepts (out, (next, ()))
                 drop 0
-                drop 0
+                push state_idle_done
+                assert_eq
                 
                 push out
                 set_singleton
@@ -890,7 +909,8 @@ mod split {
                 branch {
                     # await_start: accepts (in, (next, ch)) or (in, (done, ()))
                     drop 0
-                    drop 0
+                    push state_await_start
+                    assert_eq
                     
                     push in
                     set_singleton
@@ -910,7 +930,8 @@ mod split {
                     branch {
                         # await_field: accepts (in, (next, ch)) or (in, (done, ()))
                         drop 0
-                        drop 0
+                        push state_await_field
+                        assert_eq
                         
                         push in
                         set_singleton
@@ -948,7 +969,8 @@ mod split {
         branch {
             # yield_start: emits (out, (start, ()))
             drop 0 # drop payload
-            drop 0 # drop tag
+            push state_yield_start
+            assert_eq
             
             push start
             tuple 0
@@ -990,7 +1012,8 @@ mod split {
                 branch {
                     # yield_end: emits (out, (end, ()))
                     drop 0
-                    drop 0
+                    push state_yield_end
+                    assert_eq
                     
                     push end
                     tuple 0
@@ -1008,7 +1031,8 @@ mod split {
                     branch {
                         # yield_end_done: emits (out, (end, ()))
                         drop 0
-                        drop 0
+                        push state_yield_end_done
+                        assert_eq
                         
                         push end
                         tuple 0
@@ -1026,7 +1050,8 @@ mod split {
                         branch {
                             # yield_done: emits (out, (done, ()))
                             drop 0
-                            drop 0
+                            push state_yield_done
+                            assert_eq
                             
                             push done
                             tuple 0
@@ -1063,7 +1088,8 @@ mod split {
             # Transition from idle to await_start
             drop 1 # drop tag
             roll 1 # Stack: [delim, event]
-            drop 0 # drop event. Stack: [delim]
+            push (out, (next, ()))
+            assert_eq
             
             push state_await_start
             roll 1 # delim
@@ -1076,7 +1102,8 @@ mod split {
                 # Transition from idle_done to yield_done
                 drop 1 # drop tag
                 roll 1 # Stack: [delim, event]
-                drop 0 # drop event. Stack: [delim]
+                push (out, (next, ()))
+                assert_eq
                 
                 push state_yield_done
                 roll 1 # delim
@@ -1102,7 +1129,8 @@ mod split {
                         # iter_tag == next: val is ch
                         # Stack: [delim, iter_tag, ch]
                         roll 1 # Stack: [delim, ch, iter_tag]
-                        drop 0 # drop iter_tag. Stack: [delim, ch]
+                        push super::next
+                        assert_eq
                         tuple 2 # (delim, ch)
                         
                         push state_yield_start
@@ -1111,8 +1139,10 @@ mod split {
                     } {
                         # iter_tag == done: val is ()
                         # Stack: [delim, iter_tag, ()]
-                        drop 0 # drop ()
-                        drop 0 # drop iter_tag. Stack: [delim]
+                        push ()
+                        assert_eq
+                        push super::done
+                        assert_eq
                         
                         push state_yield_done
                         roll 1
@@ -1126,7 +1156,8 @@ mod split {
                         # Process emission of start
                         drop 1 # drop tag
                         roll 1 # Stack: [payload, event]
-                        drop 0 # drop event. Stack: [(delim, ch)]
+                        push (out, (start, ()))
+                        assert_eq
                         
                         pick 0
                         untuple 2 # Stack: [(delim, ch), delim, ch]
@@ -1188,7 +1219,8 @@ mod split {
                                     # iter_tag == next: val is ch
                                     # Stack: [delim, iter_tag, ch]
                                     roll 1 # Stack: [delim, ch, iter_tag]
-                                    drop 0 # drop iter_tag. Stack: [delim, ch]
+                                    push super::next
+                                    assert_eq
                                     
                                     # Check if ch == delim
                                     pick 0 # ch
@@ -1212,8 +1244,10 @@ mod split {
                                 } {
                                     # iter_tag == done: end of field (and stream)!
                                     # Stack: [delim, iter_tag, ()]
-                                    drop 0 # drop ()
-                                    drop 0 # drop iter_tag. Stack: [delim]
+                                    push ()
+                                    assert_eq
+                                    push super::done
+                                    assert_eq
                                     
                                     push state_yield_end_done
                                     roll 1
@@ -1227,7 +1261,8 @@ mod split {
                                     # Process emission of end -> transition to idle
                                     drop 1 # drop tag
                                     roll 1 # Stack: [delim, event]
-                                    drop 0 # drop event. Stack: [delim]
+                                    push (out, (end, ()))
+                                    assert_eq
                                     
                                     push state_idle
                                     roll 1
@@ -1240,7 +1275,8 @@ mod split {
                                         # Process emission of end -> transition to idle_done
                                         drop 1 # drop tag
                                         roll 1 # Stack: [delim, event]
-                                        drop 0 # drop event. Stack: [delim]
+                                        push (out, (end, ()))
+                                        assert_eq
                                         
                                         push state_idle_done
                                         roll 1
@@ -1253,7 +1289,8 @@ mod split {
                                             # Process emission of done -> transition to done
                                             drop 1 # drop tag
                                             roll 1 # Stack: [delim, event]
-                                            drop 0 # drop event. Stack: [delim]
+                                            push (out, (done, ()))
+                                            assert_eq
                                             
                                             push state_done
                                             roll 1
