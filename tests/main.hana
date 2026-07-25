@@ -22,3 +22,5 @@ mod queue;
 mod is_done_test;
 mod runtime_stdout;
 mod advent;
+mod machine_tests;
+

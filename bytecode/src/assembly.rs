@@ -560,7 +560,10 @@ struct TopLevelSentence {
 }
 
 fn is_composer_name(name: &str) -> bool {
-    name == "compose_concurrent" || name == "compose_hidden" || name == "compose_prefix" || name == "compose_rename_prefix" || name == "compose_static_closure"
+    name == "compose_concurrent" || name == "compose_hidden" || name == "compose_prefix" || 
+    name == "compose_rename_prefix" || name == "compose_static_closure" ||
+    name == "compose_done" || name == "compose_emit" || name == "compose_emit_static" ||
+    name == "compose_accept" || name == "compose_accept_static"
 }
 
 fn parse_module_expr(stream: &mut TokenStream) -> Result<ModuleExpr, String> {
@@ -2365,6 +2368,596 @@ fn compose_static_closure(args: &[ResolvedArg]) -> Result<Vec<TopLevelItem>, Str
     ])
 }
 
+fn compose_done() -> Result<Vec<TopLevelItem>, String> {
+    let init_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "init".to_string(),
+        body: ParsedSentence {
+            instructions: vec![ParsedInstruction::Push(ParsedValue::Int(0))],
+        },
+    };
+
+    let accept_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "accept".to_string(),
+        body: ParsedSentence {
+            instructions: vec![
+                ParsedInstruction::Drop(0),
+                ParsedInstruction::Push(ParsedValue::SetEmpty),
+            ],
+        },
+    };
+
+    let tau_reduce_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "tau_reduce".to_string(),
+        body: ParsedSentence {
+            instructions: vec![
+                ParsedInstruction::Push(ParsedValue::Bool(false)),
+                ParsedInstruction::Tuple(2),
+            ],
+        },
+    };
+
+    let emit_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "emit".to_string(),
+        body: ParsedSentence {
+            instructions: vec![
+                ParsedInstruction::Drop(0),
+                ParsedInstruction::Tuple(0),
+                ParsedInstruction::Push(ParsedValue::Bool(false)),
+                ParsedInstruction::Tuple(2),
+            ],
+        },
+    };
+
+    let process_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "process".to_string(),
+        body: ParsedSentence {
+            instructions: vec![
+                ParsedInstruction::Drop(0),
+            ],
+        },
+    };
+
+    let is_done_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "is_done".to_string(),
+        body: ParsedSentence {
+            instructions: vec![
+                ParsedInstruction::Drop(0),
+                ParsedInstruction::Push(ParsedValue::Bool(true)),
+            ],
+        },
+    };
+
+    let is_ready_to_finish_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "is_ready_to_finish".to_string(),
+        body: ParsedSentence {
+            instructions: vec![
+                ParsedInstruction::Drop(0),
+                ParsedInstruction::Push(ParsedValue::Bool(false)),
+            ],
+        },
+    };
+
+    Ok(vec![
+        TopLevelItem::Sentence(init_sentence),
+        TopLevelItem::Sentence(accept_sentence),
+        TopLevelItem::Sentence(emit_sentence),
+        TopLevelItem::Sentence(process_sentence),
+        TopLevelItem::Sentence(tau_reduce_sentence),
+        TopLevelItem::Sentence(is_done_sentence),
+        TopLevelItem::Sentence(is_ready_to_finish_sentence),
+    ])
+}
+
+fn compose_emit_helper(val: Option<ParsedValue>, target: &Path) -> Result<Vec<TopLevelItem>, String> {
+    let machine = adjust_path(target);
+    let mut machine_init = machine.clone(); machine_init.segments.push(PathSegment::Identifier("init".to_string()));
+    let mut machine_accept = machine.clone(); machine_accept.segments.push(PathSegment::Identifier("accept".to_string()));
+    let mut machine_emit = machine.clone(); machine_emit.segments.push(PathSegment::Identifier("emit".to_string()));
+    let mut machine_process = machine.clone(); machine_process.segments.push(PathSegment::Identifier("process".to_string()));
+    let mut machine_tau_reduce = machine.clone(); machine_tau_reduce.segments.push(PathSegment::Identifier("tau_reduce".to_string()));
+    let mut machine_is_done = machine.clone(); machine_is_done.segments.push(PathSegment::Identifier("is_done".to_string()));
+    let mut machine_is_ready_to_finish = machine.clone(); machine_is_ready_to_finish.segments.push(PathSegment::Identifier("is_ready_to_finish".to_string()));
+
+    let init_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "init".to_string(),
+        body: ParsedSentence {
+            instructions: if let Some(v) = val {
+                vec![
+                    ParsedInstruction::Push(ParsedValue::Int(0)),
+                    ParsedInstruction::Push(v),
+                    ParsedInstruction::Tuple(2),
+                ]
+            } else {
+                vec![
+                    ParsedInstruction::Push(ParsedValue::Int(0)),
+                    ParsedInstruction::Roll(1),
+                    ParsedInstruction::Tuple(2),
+                ]
+            },
+        },
+    };
+
+    let accept_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "accept".to_string(),
+        body: ParsedSentence {
+            instructions: vec![
+                ParsedInstruction::Untuple(2),
+                ParsedInstruction::Roll(1),
+                ParsedInstruction::Push(ParsedValue::Int(0)),
+                ParsedInstruction::Equal,
+                ParsedInstruction::Branch(
+                    Target::Inline(ParsedSentence {
+                        instructions: vec![
+                            ParsedInstruction::Drop(0),
+                            ParsedInstruction::Push(ParsedValue::SetEmpty),
+                        ],
+                    }),
+                    Target::Inline(ParsedSentence {
+                        instructions: vec![
+                            ParsedInstruction::Jump(Target::Label(machine_accept)),
+                        ],
+                    }),
+                ),
+            ],
+        },
+    };
+
+    let tau_reduce_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "tau_reduce".to_string(),
+        body: ParsedSentence {
+            instructions: vec![
+                ParsedInstruction::Untuple(2),
+                ParsedInstruction::Pick(1),
+                ParsedInstruction::Push(ParsedValue::Int(0)),
+                ParsedInstruction::Equal,
+                ParsedInstruction::Branch(
+                    Target::Inline(ParsedSentence {
+                        instructions: vec![
+                            ParsedInstruction::Tuple(2),
+                            ParsedInstruction::Push(ParsedValue::Bool(false)),
+                            ParsedInstruction::Tuple(2),
+                        ],
+                    }),
+                    Target::Inline(ParsedSentence {
+                        instructions: vec![
+                            ParsedInstruction::Pick(0),
+                            ParsedInstruction::Jump(Target::Label(machine_tau_reduce)),
+                            ParsedInstruction::Untuple(2),
+                            ParsedInstruction::Branch(
+                                Target::Inline(ParsedSentence {
+                                    instructions: vec![
+                                        ParsedInstruction::Roll(1),
+                                        ParsedInstruction::Drop(0),
+                                        ParsedInstruction::Tuple(2),
+                                        ParsedInstruction::Push(ParsedValue::Bool(true)),
+                                        ParsedInstruction::Tuple(2),
+                                    ],
+                                }),
+                                Target::Inline(ParsedSentence {
+                                    instructions: vec![
+                                        ParsedInstruction::Roll(1),
+                                        ParsedInstruction::Drop(0),
+                                        ParsedInstruction::Tuple(2),
+                                        ParsedInstruction::Push(ParsedValue::Bool(false)),
+                                        ParsedInstruction::Tuple(2),
+                                    ],
+                                }),
+                            ),
+                        ],
+                    }),
+                ),
+            ],
+        },
+    };
+
+    let emit_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "emit".to_string(),
+        body: ParsedSentence {
+            instructions: vec![
+                ParsedInstruction::Untuple(2),
+                ParsedInstruction::Pick(1),
+                ParsedInstruction::Push(ParsedValue::Int(0)),
+                ParsedInstruction::Equal,
+                ParsedInstruction::Branch(
+                    Target::Inline(ParsedSentence {
+                        instructions: vec![
+                            ParsedInstruction::Roll(1),
+                            ParsedInstruction::Drop(0),
+                            ParsedInstruction::Push(ParsedValue::Bool(true)),
+                            ParsedInstruction::Tuple(2),
+                        ],
+                    }),
+                    Target::Inline(ParsedSentence {
+                        instructions: vec![
+                            ParsedInstruction::Roll(1),
+                            ParsedInstruction::Drop(0),
+                            ParsedInstruction::Jump(Target::Label(machine_emit)),
+                        ],
+                    }),
+                ),
+            ],
+        },
+    };
+
+    let process_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "process".to_string(),
+        body: ParsedSentence {
+            instructions: vec![
+                ParsedInstruction::Roll(1),
+                ParsedInstruction::Untuple(2),
+                ParsedInstruction::Pick(1),
+                ParsedInstruction::Push(ParsedValue::Int(0)),
+                ParsedInstruction::Equal,
+                ParsedInstruction::Branch(
+                    Target::Inline(ParsedSentence {
+                        instructions: vec![
+                            ParsedInstruction::Drop(0),
+                            ParsedInstruction::Drop(0),
+                            ParsedInstruction::Drop(0),
+                            ParsedInstruction::Jump(Target::Label(machine_init)),
+                            ParsedInstruction::Push(ParsedValue::Int(1)),
+                            ParsedInstruction::Roll(1),
+                            ParsedInstruction::Tuple(2),
+                        ],
+                    }),
+                    Target::Inline(ParsedSentence {
+                        instructions: vec![
+                            ParsedInstruction::Roll(2),
+                            ParsedInstruction::Roll(2),
+                            ParsedInstruction::Drop(0),
+                            ParsedInstruction::Jump(Target::Label(machine_process)),
+                            ParsedInstruction::Push(ParsedValue::Int(1)),
+                            ParsedInstruction::Roll(1),
+                            ParsedInstruction::Tuple(2),
+                        ],
+                    }),
+                ),
+            ],
+        },
+    };
+
+    let is_done_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "is_done".to_string(),
+        body: ParsedSentence {
+            instructions: vec![
+                ParsedInstruction::Untuple(2),
+                ParsedInstruction::Roll(1),
+                ParsedInstruction::Push(ParsedValue::Int(0)),
+                ParsedInstruction::Equal,
+                ParsedInstruction::Branch(
+                    Target::Inline(ParsedSentence {
+                        instructions: vec![
+                            ParsedInstruction::Drop(0),
+                            ParsedInstruction::Push(ParsedValue::Bool(false)),
+                        ],
+                    }),
+                    Target::Inline(ParsedSentence {
+                        instructions: vec![
+                            ParsedInstruction::Jump(Target::Label(machine_is_done)),
+                        ],
+                    }),
+                ),
+            ],
+        },
+    };
+
+    let is_ready_to_finish_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "is_ready_to_finish".to_string(),
+        body: ParsedSentence {
+            instructions: vec![
+                ParsedInstruction::Untuple(2),
+                ParsedInstruction::Roll(1),
+                ParsedInstruction::Push(ParsedValue::Int(0)),
+                ParsedInstruction::Equal,
+                ParsedInstruction::Branch(
+                    Target::Inline(ParsedSentence {
+                        instructions: vec![
+                            ParsedInstruction::Drop(0),
+                            ParsedInstruction::Push(ParsedValue::Bool(false)),
+                        ],
+                    }),
+                    Target::Inline(ParsedSentence {
+                        instructions: vec![
+                            ParsedInstruction::Jump(Target::Label(machine_is_ready_to_finish)),
+                        ],
+                    }),
+                ),
+            ],
+        },
+    };
+
+    Ok(vec![
+        TopLevelItem::Sentence(init_sentence),
+        TopLevelItem::Sentence(accept_sentence),
+        TopLevelItem::Sentence(emit_sentence),
+        TopLevelItem::Sentence(process_sentence),
+        TopLevelItem::Sentence(tau_reduce_sentence),
+        TopLevelItem::Sentence(is_done_sentence),
+        TopLevelItem::Sentence(is_ready_to_finish_sentence),
+    ])
+}
+
+fn compose_accept_helper(val: ParsedValue, target: &Path, is_static: bool) -> Result<Vec<TopLevelItem>, String> {
+    let machine = adjust_path(target);
+    let mut machine_init = machine.clone(); machine_init.segments.push(PathSegment::Identifier("init".to_string()));
+    let mut machine_accept = machine.clone(); machine_accept.segments.push(PathSegment::Identifier("accept".to_string()));
+    let mut machine_emit = machine.clone(); machine_emit.segments.push(PathSegment::Identifier("emit".to_string()));
+    let mut machine_process = machine.clone(); machine_process.segments.push(PathSegment::Identifier("process".to_string()));
+    let mut machine_tau_reduce = machine.clone(); machine_tau_reduce.segments.push(PathSegment::Identifier("tau_reduce".to_string()));
+    let mut machine_is_done = machine.clone(); machine_is_done.segments.push(PathSegment::Identifier("is_done".to_string()));
+    let mut machine_is_ready_to_finish = machine.clone(); machine_is_ready_to_finish.segments.push(PathSegment::Identifier("is_ready_to_finish".to_string()));
+
+    let init_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "init".to_string(),
+        body: ParsedSentence {
+            instructions: vec![
+                ParsedInstruction::Push(ParsedValue::Int(0)),
+                ParsedInstruction::Tuple(0),
+                ParsedInstruction::Tuple(2),
+            ],
+        },
+    };
+
+    let accept_val = if is_static {
+        ParsedValue::SetSingleton(Box::new(val.clone()))
+    } else {
+        val.clone()
+    };
+
+    let accept_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "accept".to_string(),
+        body: ParsedSentence {
+            instructions: vec![
+                ParsedInstruction::Untuple(2),
+                ParsedInstruction::Roll(1),
+                ParsedInstruction::Push(ParsedValue::Int(0)),
+                ParsedInstruction::Equal,
+                ParsedInstruction::Branch(
+                    Target::Inline(ParsedSentence {
+                        instructions: vec![
+                            ParsedInstruction::Drop(0),
+                            ParsedInstruction::Push(accept_val),
+                        ],
+                    }),
+                    Target::Inline(ParsedSentence {
+                        instructions: vec![
+                            ParsedInstruction::Jump(Target::Label(machine_accept)),
+                        ],
+                    }),
+                ),
+            ],
+        },
+    };
+
+    let tau_reduce_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "tau_reduce".to_string(),
+        body: ParsedSentence {
+            instructions: vec![
+                ParsedInstruction::Untuple(2),
+                ParsedInstruction::Pick(1),
+                ParsedInstruction::Push(ParsedValue::Int(0)),
+                ParsedInstruction::Equal,
+                ParsedInstruction::Branch(
+                    Target::Inline(ParsedSentence {
+                        instructions: vec![
+                            ParsedInstruction::Tuple(2),
+                            ParsedInstruction::Push(ParsedValue::Bool(false)),
+                            ParsedInstruction::Tuple(2),
+                        ],
+                    }),
+                    Target::Inline(ParsedSentence {
+                        instructions: vec![
+                            ParsedInstruction::Pick(0),
+                            ParsedInstruction::Jump(Target::Label(machine_tau_reduce)),
+                            ParsedInstruction::Untuple(2),
+                            ParsedInstruction::Branch(
+                                Target::Inline(ParsedSentence {
+                                    instructions: vec![
+                                        ParsedInstruction::Roll(1),
+                                        ParsedInstruction::Drop(0),
+                                        ParsedInstruction::Tuple(2),
+                                        ParsedInstruction::Push(ParsedValue::Bool(true)),
+                                        ParsedInstruction::Tuple(2),
+                                    ],
+                                }),
+                                Target::Inline(ParsedSentence {
+                                    instructions: vec![
+                                        ParsedInstruction::Roll(1),
+                                        ParsedInstruction::Drop(0),
+                                        ParsedInstruction::Tuple(2),
+                                        ParsedInstruction::Push(ParsedValue::Bool(false)),
+                                        ParsedInstruction::Tuple(2),
+                                    ],
+                                }),
+                            ),
+                        ],
+                    }),
+                ),
+            ],
+        },
+    };
+
+    let emit_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "emit".to_string(),
+        body: ParsedSentence {
+            instructions: vec![
+                ParsedInstruction::Untuple(2),
+                ParsedInstruction::Pick(1),
+                ParsedInstruction::Push(ParsedValue::Int(0)),
+                ParsedInstruction::Equal,
+                ParsedInstruction::Branch(
+                    Target::Inline(ParsedSentence {
+                        instructions: vec![
+                            ParsedInstruction::Drop(0),
+                            ParsedInstruction::Drop(0),
+                            ParsedInstruction::Tuple(0),
+                            ParsedInstruction::Push(ParsedValue::Bool(false)),
+                            ParsedInstruction::Tuple(2),
+                        ],
+                    }),
+                    Target::Inline(ParsedSentence {
+                        instructions: vec![
+                            ParsedInstruction::Roll(1),
+                            ParsedInstruction::Drop(0),
+                            ParsedInstruction::Jump(Target::Label(machine_emit)),
+                        ],
+                    }),
+                ),
+            ],
+        },
+    };
+
+    let process_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "process".to_string(),
+        body: ParsedSentence {
+            instructions: vec![
+                ParsedInstruction::Roll(1),
+                ParsedInstruction::Untuple(2),
+                ParsedInstruction::Pick(1),
+                ParsedInstruction::Push(ParsedValue::Int(0)),
+                ParsedInstruction::Equal,
+                ParsedInstruction::Branch(
+                    Target::Inline(ParsedSentence {
+                        instructions: if is_static {
+                            vec![
+                                ParsedInstruction::Drop(0),
+                                ParsedInstruction::Drop(0),
+                                ParsedInstruction::Drop(0),
+                                ParsedInstruction::Jump(Target::Label(machine_init)),
+                                ParsedInstruction::Push(ParsedValue::Int(1)),
+                                ParsedInstruction::Roll(1),
+                                ParsedInstruction::Tuple(2),
+                            ]
+                        } else {
+                            vec![
+                                ParsedInstruction::Drop(0),
+                                ParsedInstruction::Drop(0),
+                                ParsedInstruction::Jump(Target::Label(machine_init)),
+                                ParsedInstruction::Push(ParsedValue::Int(1)),
+                                ParsedInstruction::Roll(1),
+                                ParsedInstruction::Tuple(2),
+                            ]
+                        },
+                    }),
+                    Target::Inline(ParsedSentence {
+                        instructions: vec![
+                            ParsedInstruction::Roll(2),
+                            ParsedInstruction::Roll(2),
+                            ParsedInstruction::Drop(0),
+                            ParsedInstruction::Jump(Target::Label(machine_process)),
+                            ParsedInstruction::Push(ParsedValue::Int(1)),
+                            ParsedInstruction::Roll(1),
+                            ParsedInstruction::Tuple(2),
+                        ],
+                    }),
+                ),
+            ],
+        },
+    };
+
+    let is_done_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "is_done".to_string(),
+        body: ParsedSentence {
+            instructions: vec![
+                ParsedInstruction::Untuple(2),
+                ParsedInstruction::Roll(1),
+                ParsedInstruction::Push(ParsedValue::Int(0)),
+                ParsedInstruction::Equal,
+                ParsedInstruction::Branch(
+                    Target::Inline(ParsedSentence {
+                        instructions: vec![
+                            ParsedInstruction::Drop(0),
+                            ParsedInstruction::Push(ParsedValue::Bool(false)),
+                        ],
+                    }),
+                    Target::Inline(ParsedSentence {
+                        instructions: vec![
+                            ParsedInstruction::Jump(Target::Label(machine_is_done)),
+                        ],
+                    }),
+                ),
+            ],
+        },
+    };
+
+    let is_ready_to_finish_sentence = TopLevelSentence {
+        is_exported: false,
+        is_test: false,
+        name: "is_ready_to_finish".to_string(),
+        body: ParsedSentence {
+            instructions: vec![
+                ParsedInstruction::Untuple(2),
+                ParsedInstruction::Roll(1),
+                ParsedInstruction::Push(ParsedValue::Int(0)),
+                ParsedInstruction::Equal,
+                ParsedInstruction::Branch(
+                    Target::Inline(ParsedSentence {
+                        instructions: vec![
+                            ParsedInstruction::Drop(0),
+                            ParsedInstruction::Push(ParsedValue::Bool(false)),
+                        ],
+                    }),
+                    Target::Inline(ParsedSentence {
+                        instructions: vec![
+                            ParsedInstruction::Jump(Target::Label(machine_is_ready_to_finish)),
+                        ],
+                    }),
+                ),
+            ],
+        },
+    };
+
+    Ok(vec![
+        TopLevelItem::Sentence(init_sentence),
+        TopLevelItem::Sentence(accept_sentence),
+        TopLevelItem::Sentence(emit_sentence),
+        TopLevelItem::Sentence(process_sentence),
+        TopLevelItem::Sentence(tau_reduce_sentence),
+        TopLevelItem::Sentence(is_done_sentence),
+        TopLevelItem::Sentence(is_ready_to_finish_sentence),
+    ])
+}
+
 fn generate_composition_items(
     composer: &str,
     args: &[ResolvedArg],
@@ -2387,6 +2980,52 @@ fn generate_composition_items(
             compose_rename_prefix(&paths)
         }
         "compose_static_closure" => compose_static_closure(args),
+        "compose_done" => {
+            if !args.is_empty() {
+                return Err("compose_done expects 0 arguments".to_string());
+            }
+            compose_done()
+        }
+        "compose_emit" => {
+            let paths = extract_paths(args, "compose_emit")?;
+            if paths.len() != 1 {
+                return Err("compose_emit expects exactly 1 target machine argument".to_string());
+            }
+            compose_emit_helper(None, &paths[0])
+        }
+        "compose_emit_static" => {
+            if args.len() != 2 {
+                return Err("compose_emit_static expects exactly 2 arguments: event and target_machine".to_string());
+            }
+            let val = match &args[0] {
+                ResolvedArg::Value(val) => val.clone(),
+                ResolvedArg::Path(path) => ParsedValue::SymbolRef(adjust_path(path)),
+            };
+            let paths = extract_paths(&args[1..2], "compose_emit_static")?;
+            compose_emit_helper(Some(val), &paths[0])
+        }
+        "compose_accept" => {
+            if args.len() != 2 {
+                return Err("compose_accept expects exactly 2 arguments: value_set and target_machine".to_string());
+            }
+            let val = match &args[0] {
+                ResolvedArg::Value(val) => val.clone(),
+                ResolvedArg::Path(path) => ParsedValue::SymbolRef(adjust_path(path)),
+            };
+            let paths = extract_paths(&args[1..2], "compose_accept")?;
+            compose_accept_helper(val, &paths[0], false)
+        }
+        "compose_accept_static" => {
+            if args.len() != 2 {
+                return Err("compose_accept_static expects exactly 2 arguments: event and target_machine".to_string());
+            }
+            let val = match &args[0] {
+                ResolvedArg::Value(val) => val.clone(),
+                ResolvedArg::Path(path) => ParsedValue::SymbolRef(adjust_path(path)),
+            };
+            let paths = extract_paths(&args[1..2], "compose_accept_static")?;
+            compose_accept_helper(val, &paths[0], true)
+        }
         _ => Err(format!("Unknown composer: {}", composer)),
     }
 }

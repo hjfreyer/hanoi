@@ -1,0 +1,4 @@
+test mod basic_immediate_pass compose_accept_static(
+    crate::prelude::start,
+    compose_emit_static(crate::prelude::pass, compose_done())
+);
