@@ -116,7 +116,35 @@ async fn main() {
             runtime.vm_mut().set_tracing(trace);
             runtime.vm_mut().set_gas_limit(Some(gas_limit));
 
-            match runtime.run().await {
+            let start_val = match res.symbols.get("prelude::start").cloned() {
+                Some(v) => v,
+                None => {
+                    let err = "prelude::start symbol not found";
+                    if trace { println!("result: FAILED ({})", err); } else { println!("FAILED ({})", err); }
+                    failed += 1;
+                    continue;
+                }
+            };
+            let pass_val = match res.symbols.get("prelude::pass").cloned() {
+                Some(v) => v,
+                None => {
+                    let err = "prelude::pass symbol not found";
+                    if trace { println!("result: FAILED ({})", err); } else { println!("FAILED ({})", err); }
+                    failed += 1;
+                    continue;
+                }
+            };
+            let fail_val = match res.symbols.get("prelude::fail").cloned() {
+                Some(v) => v,
+                None => {
+                    let err = "prelude::fail symbol not found";
+                    if trace { println!("result: FAILED ({})", err); } else { println!("FAILED ({})", err); }
+                    failed += 1;
+                    continue;
+                }
+            };
+
+            match runtime.run_test(&start_val, &pass_val, &fail_val).await {
                 Ok(()) => {
                     if runtime.vm().stack().is_empty() {
                         if trace {

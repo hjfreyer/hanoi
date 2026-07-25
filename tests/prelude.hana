@@ -3,5 +3,10 @@ symbol some "Some option variant"
 symbol req  "Request tag"
 symbol resp "Response tag"
 
+symbol start "Start test event"
+symbol pass "Pass test event"
+symbol fail "Fail test event"
+
 mod event {
 }
+

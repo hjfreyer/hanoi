@@ -17,7 +17,7 @@ mod input0_hidden compose_hidden(
     sync_char_iterator_in
 );
 
-test mod test0 compose_hidden(
+mod sut compose_hidden(
     compose_concurrent(
         crate::string::parseint,
         compose_rename_prefix(crate::string::char_iterator::out, crate::string::parseint::in, input0_hidden),
@@ -25,6 +25,246 @@ test mod test0 compose_hidden(
     ),
     sync_parseint_in
 );
+
+test mod test0 {
+    export sentence init {
+        push 0 # phase
+        push () # dummy sut_state
+        tuple 2
+    }
+
+    export sentence accept {
+        # Stack: [state]
+        untuple 2
+        # Stack: [phase, sut_state] (sut_state is index 0)
+        drop 0
+        # Stack: [phase]
+        push 0
+        equal
+        branch {
+            push singleton(crate::prelude::start)
+        } {
+            push empty_set
+        }
+    }
+
+    export sentence tau_reduce {
+        # Stack: [state]
+        untuple 2
+        # Stack: [phase, sut_state] (sut_state is index 0)
+        pick 1
+        push 1
+        equal
+        branch {
+            # Phase is 1. Run sut::tau_reduce on sut_state
+            pick 0
+            jump super::sut::tau_reduce
+            untuple 2
+            # Stack: [phase, sut_state, new_sut_state, did_reduce]
+            branch {
+                # SUT reduced. Return new state ((1, new_sut_state), true)
+                # Stack: [phase, sut_state, new_sut_state] (new_sut_state is index 0)
+                roll 1
+                drop 0 # drop old sut_state
+                # Stack: [phase, new_sut_state]
+                tuple 2
+                push true
+                tuple 2
+            } {
+                # SUT did not reduce. Check if SUT has an emit event.
+                # Stack: [phase, sut_state, new_sut_state]
+                roll 1
+                drop 0 # drop old sut_state
+                # Stack: [phase, new_sut_state] (new_sut_state is index 0)
+                pick 0
+                jump super::sut::emit
+                untuple 2
+                # Stack: [phase, new_sut_state, event, has_event]
+                branch {
+                    # SUT has emit event. Check if it's the expected one:
+                    # (crate::string::parseint::out, (crate::string::value, (crate::string::ok, 39472)))
+                    # Stack: [phase, new_sut_state, event] (event is index 0)
+                    push crate::string::parseint::out
+                    push crate::string::value
+                    push crate::string::ok
+                    push 39472
+                    tuple 2
+                    tuple 2
+                    tuple 2
+                    
+                    # Stack: [phase, new_sut_state, event, expected_event]
+                    equal
+                    branch {
+                        # Correct event! Transition to phase 2.
+                        # Stack: [phase, new_sut_state]
+                        drop 0
+                        drop 0
+                        push 2 # phase 2 (pass)
+                        push ()
+                        tuple 2
+                        push true
+                        tuple 2
+                    } {
+                        # Incorrect event! Transition to phase 3.
+                        # Stack: [phase, new_sut_state]
+                        drop 0
+                        drop 0
+                        push 3 # phase 3 (fail)
+                        push ()
+                        tuple 2
+                        push true
+                        tuple 2
+                    }
+                } {
+                    # SUT does not have emit event. Check if SUT is done.
+                    # Stack: [phase, new_sut_state, event] (event is () at index 0)
+                    drop 0 # drop event
+                    # Stack: [phase, new_sut_state]
+                    pick 0
+                    jump super::sut::is_done
+                    branch {
+                        # SUT is done but didn't emit the correct event. Fail!
+                        # Stack: [phase, new_sut_state]
+                        drop 0
+                        drop 0
+                        push 3 # phase 3 (fail)
+                        push ()
+                        tuple 2
+                        push true
+                        tuple 2
+                    } {
+                        # SUT is not done, and didn't reduce. No reduction for test0.
+                        # Stack: [phase, new_sut_state]
+                        tuple 2
+                        push false
+                        tuple 2
+                    }
+                }
+            }
+        } {
+            # Phase is not 1. No reduction.
+            tuple 2
+            push false
+            tuple 2
+        }
+    }
+
+    export sentence emit {
+        # Stack: [state]
+        untuple 2
+        # Stack: [phase, sut_state]
+        pick 1
+        push 2
+        equal
+        branch {
+            # Phase is 2. Emit pass.
+            drop 0
+            drop 0
+            push crate::prelude::pass
+            push true
+            tuple 2
+        } {
+            pick 1
+            push 3
+            equal
+            branch {
+                # Phase is 3. Emit fail.
+                drop 0
+                drop 0
+                push crate::prelude::fail
+                push true
+                tuple 2
+            } {
+                # Other phase, no emit.
+                drop 0
+                drop 0
+                tuple 0
+                push false
+                tuple 2
+            }
+        }
+    }
+
+    export sentence process {
+        # Stack: [state, event]
+        roll 1
+        untuple 2
+        # Stack: [event, phase, sut_state] (sut_state is index 0)
+        pick 1
+        push 0
+        equal
+        branch {
+            # Phase 0: expect start event. Initialize SUT.
+            roll 2 # event
+            push crate::prelude::start
+            assert_eq
+            drop 0 # drop sut_state
+            drop 0 # drop phase
+            
+            # sut_state = sut::init
+            jump super::sut::init
+            
+            # Transition SUT with start event: (crate::string::parseint::out, (crate::string::copy, ()))
+            push crate::string::parseint::out
+            push crate::string::copy
+            push ()
+            tuple 2
+            tuple 2
+            jump super::sut::process
+            
+            # Now we have [new_sut_state]
+            push 1 # phase
+            roll 1 # new_sut_state
+            tuple 2
+        } {
+            pick 1
+            push 2
+            equal
+            branch {
+                # Phase 2: expect pass event.
+                roll 2 # event
+                push crate::prelude::pass
+                assert_eq
+                drop 0 # drop sut_state
+                drop 0 # drop phase
+                push 4
+                push ()
+                tuple 2
+            } {
+                pick 1
+                push 3
+                equal
+                branch {
+                    # Phase 3: expect fail event.
+                    roll 2 # event
+                    push crate::prelude::fail
+                    assert_eq
+                    drop 0 # drop sut_state
+                    drop 0 # drop phase
+                    push 4
+                    push ()
+                    tuple 2
+                } {
+                    # Other phase, do nothing.
+                    roll 2
+                    drop 0
+                    tuple 2
+                }
+            }
+        }
+    }
+
+    export sentence is_done {
+        untuple 2
+        drop 0
+        push 4
+        equal
+    }
+
+    export sentence is_ready_to_finish {
+        push false
+    }
+}
 
 sentence run_tau_reductions {
     # Stack: [state]
@@ -45,23 +285,23 @@ sentence run_tau_reductions {
 test sentence verify_day1_manually {
     jump test0::init
     
-    # Trigger start: process copy event
-    push (crate::string::parseint::out, (crate::string::copy, ()))
+    # Trigger start: process start event
+    push crate::prelude::start
     jump test0::process
     
     # Run all tau reductions recursively
     jump run_tau_reductions
     
-    # Assert that it emitted the correct result
+    # Assert that it emitted the pass event
     pick 0
     jump test0::emit
     untuple 2
     assert # assert has_event is true
-    push (crate::string::parseint::out, (crate::string::value, (crate::string::ok, 39472)))
+    push crate::prelude::pass
     assert_eq
     
     # Process the emitted event to transition to final state
-    push (crate::string::parseint::out, (crate::string::value, (crate::string::ok, 39472)))
+    push crate::prelude::pass
     jump test0::process
     
     # Check is_done

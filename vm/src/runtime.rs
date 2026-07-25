@@ -220,6 +220,86 @@ impl<E: Environment> Runtime<E> {
         Ok(())
     }
 
+    /// Runs the coordinate execution loop for a test.
+    /// It sends the start_val event, runs the SUT, and checks if it emits pass_val or fail_val.
+    pub async fn run_test(
+        &mut self,
+        start_val: &Value,
+        pass_val: &Value,
+        fail_val: &Value,
+    ) -> Result<(), String> {
+        let mut state = self.execute_init()?;
+
+        // 1. Initial fixed-point tau reductions
+        loop {
+            let (new_state, did_reduce) = self.execute_tau_reduce(state.clone())?;
+            state = new_state;
+            if !did_reduce {
+                break;
+            }
+        }
+
+        // 2. Query accept set and check if start_val is accepted
+        let accept_set = self.execute_accept(state.clone())?;
+        if !accept_set.contains(start_val) {
+            return Err(format!(
+                "Test machine does not accept start event {:?}; accept set is {:?}",
+                start_val, accept_set
+            ));
+        }
+
+        // 3. Process the start event
+        state = self.execute_process(state, start_val.clone())?;
+
+        // 4. Run coordinated loop
+        loop {
+            // A. Fixed-point tau reductions
+            loop {
+                let (new_state, did_reduce) = self.execute_tau_reduce(state.clone())?;
+                state = new_state;
+                if !did_reduce {
+                    break;
+                }
+            }
+
+            // B. Check if the hanoi machine wants to emit an event
+            let (event, has_event) = self.execute_emit(state.clone())?;
+            if has_event {
+                if &event == pass_val {
+                    return Ok(());
+                } else if &event == fail_val {
+                    return Err("Test failed: emitted fail event".to_string());
+                }
+
+                // Pass event off to the environment
+                self.environment.handle_event(event.clone()).await?;
+                // Transition Main state
+                state = self.execute_process(state, event)?;
+                continue;
+            }
+
+            // C. Check if done (terminated without emitting pass or fail)
+            if self.execute_is_done(state.clone())? {
+                return Err("Test machine terminated without emitting pass or fail event".to_string());
+            }
+
+            // D. Query accepted events
+            let accept_set = self.execute_accept(state.clone())?;
+
+            // E. Asynchronously wait for the environment to pass an accepted event
+            let event = self.environment.wait_for_event(&accept_set).await?;
+            if !accept_set.contains(&event) {
+                return Err(format!(
+                    "Environment returned event {:?}, which is not in the accept set {:?}",
+                    event, accept_set
+                ));
+            }
+
+            // F. Transition Main state
+            state = self.execute_process(state, event)?;
+        }
+    }
+
     // Helper sentence execution wrappers
 
     fn execute_init(&mut self) -> Result<Value, String> {

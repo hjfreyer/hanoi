@@ -2,62 +2,175 @@ test mod verify_print_hello {
     symbol hello "Hello from Hanoi VM Async Runtime!\n"
 
     export sentence init {
-        push 0
-    }
-
-    export sentence accept {
-        drop 0
-        push empty_set
-    }
-
-    export sentence tau_reduce {
-        push false
+        push 0 # phase
+        push 0 # data (char index)
         tuple 2
     }
 
-    export sentence emit {
-        pick 0
-        push hello
-        symbol_len
-        less
+    export sentence accept {
+        # Stack: [state]
+        untuple 2
+        # Stack: [phase, data] (data is index 0)
+        drop 0
+        # Stack: [phase]
+        push 0
+        equal
         branch {
-            push crate::std::io::io
-            push crate::std::io::stdout::stdout
-            push crate::std::io::stdout::putch
-            
-            push hello
-            pick 4 # index
-            symbol_char_at
-            
-            push ()
-            tuple 2 # (char, ())
-            tuple 2 # (putch, (char, ()))
-            tuple 2 # (stdout, (putch, (char, ())))
-            tuple 2 # (io, (stdout, (putch, (char, ()))))
-            
-            roll 1
-            drop 0
-            push true
-            tuple 2
+            push singleton(crate::prelude::start)
         } {
-            drop 0
-            tuple 0
+            push empty_set
+        }
+    }
+
+    export sentence tau_reduce {
+        # Stack: [state]
+        untuple 2
+        # Stack: [phase, data]
+        pick 1
+        push 1
+        equal
+        branch {
+            # Phase is 1. Check if data == hello.len()
+            pick 0
+            push hello
+            symbol_len
+            equal
+            branch {
+                # data == hello.len(), transition to phase 2
+                drop 0
+                drop 0
+                push 2 # phase
+                push 0 # data
+                tuple 2
+                push true
+                tuple 2
+            } {
+                # data != hello.len(), no reduction
+                tuple 2
+                push false
+                tuple 2
+            }
+        } {
+            # Phase is not 1, no reduction
+            tuple 2
             push false
             tuple 2
         }
     }
 
-    export sentence process {
-        drop 0 # drop event
+    export sentence emit {
+        # Stack: [state]
+        untuple 2
+        # Stack: [phase, data]
+        pick 1
         push 1
-        add
+        equal
+        branch {
+            # Phase is 1. Emit print character.
+            push crate::std::io::io
+            push crate::std::io::stdout::stdout
+            push crate::std::io::stdout::putch
+            
+            push hello
+            pick 4 # data
+            symbol_char_at
+            
+            push ()
+            tuple 2
+            tuple 2
+            tuple 2
+            tuple 2
+            
+            # Stack: [phase, data, event]
+            roll 2
+            drop 0
+            roll 1
+            drop 0
+            # Stack: [event]
+            push true
+            tuple 2
+        } {
+            pick 1
+            push 2
+            equal
+            branch {
+                # Phase is 2. Emit pass.
+                drop 0
+                drop 0
+                push crate::prelude::pass
+                push true
+                tuple 2
+            } {
+                # Other phase, no emit.
+                drop 0
+                drop 0
+                tuple 0
+                push false
+                tuple 2
+            }
+        }
+    }
+
+    export sentence process {
+        # Stack: [state, event]
+        roll 1
+        untuple 2
+        # Stack: [event, phase, data] (data is index 0)
+        pick 1
+        push 0
+        equal
+        branch {
+            # Phase 0: expect start event.
+            roll 2 # event
+            push crate::prelude::start
+            assert_eq
+            drop 0 # drop data
+            drop 0 # drop phase
+            push 1 # phase 1
+            push 0 # data 0
+            tuple 2
+        } {
+            pick 1
+            push 1
+            equal
+            branch {
+                # Phase 1: expect print event to have been processed.
+                roll 2
+                drop 0 # drop event
+                # Stack: [phase, data] (data is index 0)
+                push 1
+                add
+                # Stack: [phase, data+1]
+                tuple 2
+            } {
+                pick 1
+                push 2
+                equal
+                branch {
+                    # Phase 2: expect pass event.
+                    roll 2
+                    push crate::prelude::pass
+                    assert_eq
+                    drop 0 # drop data
+                    drop 0 # drop phase
+                    push 3
+                    push 0
+                    tuple 2
+                } {
+                    # Phase 3 or other: do nothing.
+                    roll 2
+                    drop 0
+                    tuple 2
+                }
+            }
+        }
     }
 
     export sentence is_done {
-        push hello
-        symbol_len
-        less
-        not
+        untuple 2
+        drop 0
+        push 3
+        equal
     }
 
     export sentence is_ready_to_finish {
