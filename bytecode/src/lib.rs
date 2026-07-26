@@ -3,12 +3,14 @@ pub mod assembly;
 pub mod library;
 pub mod opcode;
 pub mod value;
+pub mod safety;
 
 pub use arity::check_arities;
 pub use assembly::{assemble, assemble_with_path};
 pub use library::{Library, Sentence, SentenceIndex, Annotation};
 pub use opcode::Instruction;
 pub use value::{Value, ValueSet, ChooseResult};
+pub use safety::check_safety;
 
 #[cfg(test)]
 mod tests {

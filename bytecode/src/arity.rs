@@ -9,7 +9,7 @@ pub fn check_arities(library: &Library) -> Result<(), String> {
     for (s_idx_raw, annotations) in library.annotations.iter().enumerate() {
         let s_idx = SentenceIndex::from(s_idx_raw);
         for ann in annotations {
-            let Annotation::Arity(n, m) = ann;
+            let Annotation::Arity(n, m) = ann else { continue; };
             let name = &library.names[s_idx];
             let mut in_progress = HashSet::new();
             let (inferred_n, inferred_m, is_panic) = get_or_infer_arity(s_idx, library, &mut memo, &mut in_progress)

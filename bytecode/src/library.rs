@@ -14,6 +14,8 @@ pub type Sentence = Vec<Instruction>;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Annotation {
     Arity(i64, i64),
+    Safety(String),
+    Behavior(String),
 }
 
 /// A Library contains a collection of sentences indexed type-safely using `SentenceIndex`.

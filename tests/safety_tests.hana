@@ -1,0 +1,50 @@
+// Safety and behavior contract checker integration tests
+
+#[arity(2, 1)]
+#[safety("is_numeric(in[0]) && is_numeric(in[1]) && in[0] != 0")]
+#[behavior("out[0] == in[1] / in[0]")]
+sentence safe_divide {
+    divide
+}
+
+#[arity(1, 2)]
+#[behavior("out[0] == in[0] && out[1] == in[0]")]
+sentence dup_val {
+    pick 0
+}
+
+#[arity(2, 0)]
+#[safety("in[0] == in[1]")]
+sentence safe_assert_eq {
+    assert_eq
+}
+
+// Check composed safety: dup then assert_eq should be statically proven safe
+#[arity(1, 0)]
+sentence test_dup_safety {
+    jump dup_val
+    jump safe_assert_eq
+}
+
+// Unannotated helper sentence (will be inlined by the safety checker)
+sentence unannotated_helper {
+    push 10
+    add
+}
+
+// Caller sentence that uses the unannotated helper
+#[arity(1, 1)]
+#[safety("in[0] == 20")]
+#[behavior("out[0] == 30")]
+sentence test_inlining {
+    jump unannotated_helper
+}
+
+// Tuple creation and destruction contract tests
+#[arity(2, 2)]
+#[safety("in[0] == in[1]")]
+#[behavior("out[0] == in[1] && out[1] == in[0]")]
+sentence swap_values {
+    tuple 2
+    untuple 2
+}
