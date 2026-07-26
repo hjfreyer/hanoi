@@ -25,9 +25,9 @@ test sentence nested_tuples {
     // Destructure inner tuple
     untuple 2
     
-    push 30
-    assert_eq
     push 20
+    assert_eq
+    push 30
     assert_eq
     push 10
     assert_eq

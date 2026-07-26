@@ -343,11 +343,11 @@ impl<E: Environment> Runtime<E> {
         }
         match res {
             Value::Tuple(mut elems) if elems.len() == 2 => {
+                let new_state = elems.pop().unwrap();
                 let did_reduce = match elems.pop().unwrap() {
                     Value::Bool(b) => b,
                     v => return Err(format!("Expected bool for did_reduce, found {:?}", v)),
                 };
-                let new_state = elems.pop().unwrap();
                 Ok((new_state, did_reduce))
             }
             other => Err(format!("Expected (new_state, did_reduce) tuple from tau_reduce, found {:?}", other))
@@ -366,11 +366,11 @@ impl<E: Environment> Runtime<E> {
         }
         match res {
             Value::Tuple(mut elems) if elems.len() == 2 => {
+                let event = elems.pop().unwrap();
                 let has_event = match elems.pop().unwrap() {
                     Value::Bool(b) => b,
                     v => return Err(format!("Expected bool for has_event, found {:?}", v)),
                 };
-                let event = elems.pop().unwrap();
                 Ok((event, has_event))
             }
             other => Err(format!("Expected (event, has_event) tuple from emit, found {:?}", other))
@@ -381,7 +381,7 @@ impl<E: Environment> Runtime<E> {
         if !self.vm.stack.is_empty() {
             return Err(format!("Stack not empty before process: {:?}", self.vm.stack));
         }
-        self.vm.stack.push(Value::Tuple(vec![state, event]));
+        self.vm.stack.push(Value::Tuple(vec![event, state]));
         self.vm.execute(self.main_process)?;
         let res = self.vm.pop()?;
         if !self.vm.stack.is_empty() {

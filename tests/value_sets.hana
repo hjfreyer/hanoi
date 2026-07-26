@@ -174,9 +174,9 @@ test sentence dynamic_set_operations {
     assert_eq
     
     // Test set_tuple instruction
-    push 10
-    set_singleton
     push 20
+    set_singleton
+    push 10
     set_singleton
     set_tuple 2
     
@@ -222,11 +222,11 @@ test sentence dynamic_set_operations {
 test sentence set_choose_empty {
     push empty_set
     set_choose
-    // Expected: ((), false)
+    // Expected: (false, ())
     untuple 2
     // Stack: [(), false]
     tuple 2
-    push ((), false)
+    push (false, ())
     assert_eq
 }
 
@@ -288,7 +288,9 @@ test sentence set_choose_tuple {
     assert
     // element should be a tuple (5, 10) or (5, 20).
     untuple 2
-    // has 10 or 20 on top, 5 below
+    // has 5 on top, 10 or 20 below
+    push 5
+    assert_eq
     pick 0
     push 10
     equal
@@ -299,8 +301,6 @@ test sentence set_choose_tuple {
         push 20
         assert_eq
     }
-    push 5
-    assert_eq
 }
 
 test sentence set_choose_difference {

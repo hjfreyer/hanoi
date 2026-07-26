@@ -86,11 +86,10 @@ impl ValueSet {
                 match v.as_ref() {
                     Value::Tuple(elems) => {
                         if !elems.is_empty() {
-                            let last_idx = elems.len() - 1;
-                            if let Value::Symbol(s) = &elems[last_idx] {
+                            if let Value::Symbol(s) = &elems[0] {
                                 if s == from {
                                     let mut new_elems = elems.clone();
-                                    new_elems[last_idx] = Value::Symbol(to.clone());
+                                    new_elems[0] = Value::Symbol(to.clone());
                                     return ValueSet::Singleton(Box::new(Value::Tuple(new_elems)));
                                 }
                             }
@@ -111,9 +110,8 @@ impl ValueSet {
             ValueSet::Complement(a) => ValueSet::Complement(Box::new(a.rename_prefix(from, to))),
             ValueSet::Tuple(sets) => {
                 if !sets.is_empty() {
-                    let last_idx = sets.len() - 1;
                     let mut new_sets = sets.clone();
-                    new_sets[last_idx] = Self::replace_symbol(&new_sets[last_idx], from, to);
+                    new_sets[0] = Self::replace_symbol(&new_sets[0], from, to);
                     ValueSet::Tuple(new_sets)
                 } else {
                     ValueSet::Tuple(sets.clone())

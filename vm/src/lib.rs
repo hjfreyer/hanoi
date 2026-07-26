@@ -327,7 +327,8 @@ impl VM {
                         return Err(format!("Stack underflow on Tuple: requested {} but stack size {}", n, self.stack.len()));
                     }
                     let index = self.stack.len() - n;
-                    let elements = self.stack.split_off(index);
+                    let mut elements = self.stack.split_off(index);
+                    elements.reverse();
                     self.stack.push(Value::Tuple(elements));
                 }
                 Instruction::Untuple(n) => {
@@ -336,7 +337,7 @@ impl VM {
                         if elements.len() != n {
                             return Err(format!("Tuple size mismatch on Untuple: expected {} but tuple has {}", n, elements.len()));
                         }
-                        for elem in elements {
+                        for elem in elements.into_iter().rev() {
                             self.stack.push(elem);
                         }
                     } else {
@@ -403,7 +404,8 @@ impl VM {
                         return Err(format!("Stack underflow on SetTuple: requested {} but stack size {}", n, self.stack.len()));
                     }
                     let index = self.stack.len() - n;
-                    let elements = self.stack.split_off(index);
+                    let mut elements = self.stack.split_off(index);
+                    elements.reverse();
                     let mut sets = Vec::new();
                     for elem in elements {
                         if let Value::Set(s) = elem {
@@ -419,10 +421,10 @@ impl VM {
                     if let Value::Set(set) = set_val {
                         match set.choose() {
                             ChooseResult::Found(elem) => {
-                                self.stack.push(Value::Tuple(vec![elem, Value::Bool(true)]));
+                                self.stack.push(Value::Tuple(vec![Value::Bool(true), elem]));
                             }
                             ChooseResult::Empty => {
-                                self.stack.push(Value::Tuple(vec![Value::Tuple(vec![]), Value::Bool(false)]));
+                                self.stack.push(Value::Tuple(vec![Value::Bool(false), Value::Tuple(vec![])]));
                             }
                             ChooseResult::Unknown => {
                                 panic!("Cannot choose from an infinite set: {:?}", set);
@@ -576,7 +578,7 @@ mod tests {
     #[test]
     fn test_tuples() {
         let mut library = Library::new();
-        // push 1, push 2, push 3, tuple(3) -> Tuple(1, 2, 3)
+        // push 1, push 2, push 3, tuple(3) -> Tuple(3, 2, 1)
         // untuple(3) -> pushes 1, 2, 3 back.
         let sentence = vec![
             Instruction::Push(Value::Int(1)),
@@ -1238,21 +1240,21 @@ mod runtime_tests {
                     symbol_len
                     less
                     branch {
-                        // Construct CSP tuple: (io, (stdout, (putch, (char, ()))))
-                        push crate::std::io::io
-                        
-                        push crate::std::io::stdout::stdout
-                        
-                        push crate::std::io::stdout::putch
+                        push ()
                         
                         push hello
-                        pick 4 // index
+                        pick 2 // index
                         symbol_char_at
                         
-                        push ()
                         tuple 2 // (char, ())
+                        
+                        push crate::std::io::stdout::putch
                         tuple 2 // (putch, (char, ()))
+                        
+                        push crate::std::io::stdout::stdout
                         tuple 2 // (stdout, (putch, (char, ())))
+                        
+                        push crate::std::io::io
                         tuple 2 // (io, (stdout, (putch, (char, ()))))
                         
                         // Stack is [index, event]

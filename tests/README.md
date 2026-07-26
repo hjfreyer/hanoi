@@ -70,22 +70,22 @@ Computes an internal/silent transition (tau step) on the state without interacti
 
 ## Design Patterns & Conventions
 
-Under the `(args, tag)` convention, the tag or state symbol is placed at the end of the tuple, placing it at the top of the stack after an `untuple 2` operation.
+Under the `(tag, args)` convention, the tag or state symbol is placed at the first index of the tuple (index 0). Symmetrically, calling `untuple(N)` on a tuple pushes elements onto the stack in reverse order of the tuple's elements, placing index 0 (the tag or state symbol) at the top of the stack.
 
 ### State Representation
-Machine state is typically represented as a `Tuple` ending in the current state symbol:
-* **Customer State:** `((id, preferred_drink), internal_state_symbol)`
-* **Character Iterator State:** `(current_index, symbol)`
+Machine state is typically represented as a `Tuple` starting with the current state symbol:
+* **Customer State:** `(internal_state_symbol, (preferred_drink, id))`
+* **Character Iterator State:** `(symbol, current_index)`
 
 ### Event Representation
-Events are usually represented as a `Tuple` consisting of payload values followed by the event identifier symbol:
-* **Coffee Order Event:** `((customer_id, drink_symbol), order)`
-* **Iterator Step Event:** `(character_unicode_codepoint, next)`
-* **Iterator Finished Event:** `((), done)`
+Events are usually represented as a `Tuple` starting with the event identifier symbol:
+* **Coffee Order Event:** `(order, (drink_symbol, customer_id))`
+* **Iterator Step Event:** `(next, character_unicode_codepoint)`
+* **Iterator Finished Event:** `(done, ())`
 
 ### Path Notation
-Events can also be structured using **Path Notation** (dot notation) to represent hierarchical namespaces. While written Left-To-Right (LTR) from outer to inner namespaces (e.g., `foo.bar.baz`), the compiled tuple nests the opposite way because tags reside on the right-hand side:
-* **Path Notation:** `foo.bar.baz` corresponds to `(((((), baz), bar), foo)` (where `foo` is the outermost tag and `baz` is the innermost event).
+Events can also be structured using **Path Notation** (dot notation) to represent hierarchical namespaces.
+* **Path Notation:** `foo.bar.baz` corresponds to `(foo, (bar, (baz, ())))` (where `foo` is the outermost tag and `baz` is the innermost event).
 
 ---
 
@@ -99,30 +99,30 @@ symbol done "Iteration finished event"
 
 mod char_iterator {
     // init: takes a symbol, returns (sym, 0)
-    init {
+    function init {
         push 0
+        roll 1
         tuple 2
     }
     
     // accept: returns {(next, ch)} if idx < len, {(done, ())} if idx == len, or empty_set
-    accept {
+    function accept {
         pick 0
         untuple 2
         
-        pick 1 // sym
+        pick 0 // sym
         symbol_len // len
         
-        pick 1 // idx
+        pick 2 // idx
         pick 1 // len
         less
         branch {
             // idx < len: Get character and return {(next, ch)}
-            pick 2 // sym
-            pick 2 // idx
+            pick 1 // sym
+            pick 3 // idx
             symbol_char_at
             
             push super::next
-            roll 1
             tuple 2
             set_singleton
             
@@ -130,13 +130,13 @@ mod char_iterator {
             drop 4; drop 3; drop 2; drop 1
         } {
             // idx >= len: Check if idx == len
-            pick 1 // idx
+            pick 2 // idx
             pick 1 // len
             equal
             branch {
                 // idx == len: Return {(done, ())}
+                push ()
                 push super::done
-                tuple 0
                 tuple 2
                 set_singleton
                 drop 4; drop 3; drop 2; drop 1
@@ -149,11 +149,13 @@ mod char_iterator {
     }
     
     // process: transitions (sym, idx) -> (sym, idx + 1)
-    process {
+    function process {
         drop 0 // Discard event
-        untuple 2
+        untuple 2 // Stack: [idx, sym]
+        roll 1 // Stack: [sym, idx]
         push 1
         add
+        roll 1 // Stack: [idx + 1, sym]
         tuple 2
     }
 }

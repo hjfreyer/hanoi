@@ -220,9 +220,9 @@ mod queue {
                 push super::pop_front
                 equal
                 branch {
-                    // POP: payload is ((), req)
+                    // POP: payload is (req, ())
                     drop 0 // drop type
-                    tuple 0
+                    push ()
                     push super::super::prelude::req
                     tuple 2
                     assert_eq
@@ -240,9 +240,9 @@ mod queue {
                         push super::pop_front_resp
                         tuple 4
                     } {
-                        untuple 2 // Stack: [head, rest]
-                        roll 1 // Stack: [rest, head]
+                        untuple 2 // Stack: [rest, head]
                         push ()
+                        roll 1 // Stack: [(), head]
                         tuple 2 // (head, ())
                         push super::super::prelude::some
                         tuple 2 // ((head, ()), some)
@@ -269,9 +269,9 @@ mod queue {
                         push super::awaiting_push
                         tuple 4
                     } {
-                        untuple 2 // Stack: [head, rest]
-                        roll 1 // Stack: [rest, head]
+                        untuple 2 // Stack: [rest, head]
                         push ()
+                        roll 1 // Stack: [(), head]
                         tuple 2 // (head, ())
                         push super::super::prelude::some
                         tuple 2 // ((head, ()), some)
@@ -317,6 +317,7 @@ mod queue {
                     drop 1 // current (which is ()). Stack: [val]
                     
                     push ()
+                    roll 1
                     tuple 2 // (val, ())
                     push super::super::prelude::some
                     tuple 2 // ((val, ()), some)
@@ -397,6 +398,7 @@ mod queue {
                 // current is ()
                 pick 1 // Stack: [state, current, accumulator, new_el, new_el]
                 push ()
+                roll 1
                 tuple 2 // Stack: [state, current, accumulator, new_el, (new_el, ())] (new_current)
                 pick 3 // Stack: [state, current, accumulator, new_el, new_current, accumulator]
                 push ()
@@ -412,9 +414,9 @@ mod queue {
             } {
                 // current is NOT ()
                 pick 3  // Stack: [state, current, accumulator, new_el, current]
-                untuple 2 // Stack: [state, current, accumulator, new_el, head, rest]
-                roll 1  // Stack: [state, current, accumulator, new_el, rest, head]
+                untuple 2 // Stack: [state, current, accumulator, new_el, rest, head]
                 pick 4  // Stack: [state, current, accumulator, new_el, rest, head, accumulator]
+                roll 1  // Stack: [state, current, accumulator, new_el, rest, accumulator, head]
                 tuple 2 // Stack: [state, current, accumulator, new_el, rest, new_accumulator]
                 pick 3  // Stack: [state, current, accumulator, new_el, rest, new_accumulator, new_el]
                 push super::descending
@@ -454,10 +456,9 @@ mod queue {
                 } {
                     // accumulator is NOT ()
                     pick 2 // accumulator
-                    untuple 2 // Stack: [state, current, accumulator, new_el, head, rest_acc]
+                    untuple 2 // Stack: [state, current, accumulator, new_el, rest_acc, head]
                     pick 5 // current
-                    roll 2 // Stack: [state, current, accumulator, new_el, rest_acc, current, head]
-                    roll 1 // Stack: [state, current, accumulator, new_el, rest_acc, head, current]
+                    roll 1 // Stack: [state, current, accumulator, new_el, rest_acc, current, head]
                     tuple 2 // Stack: [state, current, accumulator, new_el, rest_acc, new_current]
                     roll 1 // Stack: [state, current, accumulator, new_el, new_current, rest_acc]
                     pick 3 // new_el
@@ -543,11 +544,11 @@ test sentence verify_queue_machine {
     jump drive_reductions
     
     // 4. Pop (should yield 10)
-    tuple 0
+    push ()
     push super::prelude::req
-    tuple 2 // ((), req)
+    tuple 2
     push pop_front
-    tuple 2 // (((), req), pop_front)
+    tuple 2
     tuple 2
     jump queue::process
     jump drive_reductions
@@ -579,7 +580,7 @@ test sentence verify_queue_machine {
     jump queue::process
     
     // 5. Pop (should yield 20)
-    tuple 0
+    push ()
     push super::prelude::req
     tuple 2
     push pop_front
@@ -612,7 +613,7 @@ test sentence verify_queue_machine {
     jump queue::process
     
     // 6. Pop on empty queue (should yield pop_front.resp.none)
-    tuple 0
+    push ()
     push super::prelude::req
     tuple 2
     push pop_front
@@ -645,7 +646,7 @@ test sentence verify_queue_machine {
     jump queue::process
     
     // 7. Await front on empty queue (yields awaiting_push state)
-    tuple 0
+    push ()
     push super::prelude::req
     tuple 2
     push await_front
@@ -657,7 +658,7 @@ test sentence verify_queue_machine {
     // Awaiting queue should accept pop_front.req
     pick 0
     jump queue::accept
-    tuple 0
+    push ()
     push super::prelude::req
     tuple 2
     push pop_front
@@ -667,7 +668,7 @@ test sentence verify_queue_machine {
     assert
     
     // Process pop_front.req on awaiting queue (transitions to pop_front_resp_await)
-    tuple 0
+    push ()
     push super::prelude::req
     tuple 2
     push pop_front
