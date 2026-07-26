@@ -1,5 +1,8 @@
 // Formula AST, Tokenizer, and Parser for Safety contracts
 
+use std::collections::HashMap;
+use crate::value::Value;
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Formula {
     And(Box<Formula>, Box<Formula>),
@@ -118,7 +121,6 @@ enum FormulaToken {
     Out,
     Bool(bool),
     Int(i64),
-    Float(String),
     Ident(String),
     Comma,
 }
@@ -225,25 +227,13 @@ fn tokenize_formula(input: &str) -> Result<Vec<FormulaToken>, String> {
                         break;
                     }
                 }
-                if chars.peek() == Some(&'.') {
-                    num_str.push(chars.next().unwrap()); // consume '.'
-                    while let Some(&next_c) = chars.peek() {
-                        if next_c.is_ascii_digit() {
-                            num_str.push(chars.next().unwrap());
-                        } else {
-                            break;
-                        }
-                    }
-                    tokens.push(FormulaToken::Float(num_str));
-                } else {
-                    let val = num_str.parse::<i64>().map_err(|e| e.to_string())?;
-                    tokens.push(FormulaToken::Int(val));
-                }
+                let val = num_str.parse::<i64>().map_err(|e| e.to_string())?;
+                tokens.push(FormulaToken::Int(val));
             }
-            c if c.is_ascii_alphabetic() || c == '_' => {
+            c if c.is_ascii_alphabetic() || c == '_' || c == ':' => {
                 let mut ident = String::new();
                 while let Some(&next_c) = chars.peek() {
-                    if next_c.is_ascii_alphanumeric() || next_c == '_' {
+                    if next_c.is_ascii_alphanumeric() || next_c == '_' || next_c == ':' {
                         ident.push(chars.next().unwrap());
                     } else {
                         break;
@@ -387,6 +377,19 @@ fn parse_term(stream: &mut TokenStream) -> Result<Expr, String> {
 }
 
 fn parse_factor(stream: &mut TokenStream) -> Result<Expr, String> {
+    let mut base = parse_factor_base(stream)?;
+    while stream.peek() == Some(&FormulaToken::Dot) {
+        stream.next(); // consume '.'
+        let field = match stream.next() {
+            Some(FormulaToken::Int(i)) => *i as usize,
+            other => return Err(format!("Expected integer field index after '.', found {:?}", other)),
+        };
+        base = Expr::Field(Box::new(base), field);
+    }
+    Ok(base)
+}
+
+fn parse_factor_base(stream: &mut TokenStream) -> Result<Expr, String> {
     match stream.next().cloned() {
         Some(FormulaToken::Not) => {
             let inner = parse_factor(stream)?;
@@ -403,16 +406,7 @@ fn parse_factor(stream: &mut TokenStream) -> Result<Expr, String> {
                 other => return Err(format!("Expected integer index, found {:?}", other)),
             };
             stream.expect(FormulaToken::RBracket)?;
-            if stream.peek() == Some(&FormulaToken::Dot) {
-                stream.next();
-                let field = match stream.next() {
-                    Some(FormulaToken::Int(i)) => *i as usize,
-                    other => return Err(format!("Expected integer field, found {:?}", other)),
-                };
-                Ok(Expr::InField(idx, field))
-            } else {
-                Ok(Expr::In(idx))
-            }
+            Ok(Expr::In(idx))
         }
         Some(FormulaToken::Out) => {
             stream.expect(FormulaToken::LBracket)?;
@@ -421,20 +415,10 @@ fn parse_factor(stream: &mut TokenStream) -> Result<Expr, String> {
                 other => return Err(format!("Expected integer index, found {:?}", other)),
             };
             stream.expect(FormulaToken::RBracket)?;
-            if stream.peek() == Some(&FormulaToken::Dot) {
-                stream.next();
-                let field = match stream.next() {
-                    Some(FormulaToken::Int(i)) => *i as usize,
-                    other => return Err(format!("Expected integer field, found {:?}", other)),
-                };
-                Ok(Expr::OutField(idx, field))
-            } else {
-                Ok(Expr::Out(idx))
-            }
+            Ok(Expr::Out(idx))
         }
         Some(FormulaToken::Bool(b)) => Ok(Expr::Bool(b)),
         Some(FormulaToken::Int(i)) => Ok(Expr::Int(i)),
-        Some(FormulaToken::Float(f)) => Ok(Expr::Float(f.clone())),
         Some(FormulaToken::Ident(name)) => {
             if stream.peek() == Some(&FormulaToken::LParen) {
                 stream.next(); // consume '('
@@ -559,6 +543,114 @@ pub fn substitute_expr(e: &Expr, inputs: &[Expr], outputs: &[Expr]) -> Expr {
         Expr::Equal(a, b) => Expr::Equal(
             Box::new(substitute_expr(a, inputs, outputs)),
             Box::new(substitute_expr(b, inputs, outputs)),
+        ),
+        _ => e.clone(),
+    }
+}
+
+pub fn resolve_symbols_in_formula(f: &Formula, symbols: &HashMap<String, Value>, current_module: &str) -> Formula {
+    match f {
+        Formula::And(a, b) => Formula::And(
+            Box::new(resolve_symbols_in_formula(a, symbols, current_module)),
+            Box::new(resolve_symbols_in_formula(b, symbols, current_module)),
+        ),
+        Formula::Or(a, b) => Formula::Or(
+            Box::new(resolve_symbols_in_formula(a, symbols, current_module)),
+            Box::new(resolve_symbols_in_formula(b, symbols, current_module)),
+        ),
+        Formula::Implies(a, b) => Formula::Implies(
+            Box::new(resolve_symbols_in_formula(a, symbols, current_module)),
+            Box::new(resolve_symbols_in_formula(b, symbols, current_module)),
+        ),
+        Formula::Not(a) => Formula::Not(Box::new(resolve_symbols_in_formula(a, symbols, current_module))),
+        Formula::Equal(a, b) => Formula::Equal(
+            Box::new(resolve_symbols_in_expr(a, symbols, current_module)),
+            Box::new(resolve_symbols_in_expr(b, symbols, current_module)),
+        ),
+        Formula::NotEqual(a, b) => Formula::NotEqual(
+            Box::new(resolve_symbols_in_expr(a, symbols, current_module)),
+            Box::new(resolve_symbols_in_expr(b, symbols, current_module)),
+        ),
+        Formula::Expr(e) => Formula::Expr(resolve_symbols_in_expr(e, symbols, current_module)),
+    }
+}
+
+pub fn resolve_symbols_in_expr(e: &Expr, symbols: &HashMap<String, Value>, current_module: &str) -> Expr {
+    match e {
+        Expr::Var(name) => {
+            let mut name_clean = name.clone();
+            let mut parts: Vec<&str> = current_module.split("::").filter(|s| !s.is_empty()).collect();
+            while name_clean.starts_with("super::") {
+                name_clean = name_clean["super::".len()..].to_string();
+                if !parts.is_empty() {
+                    parts.pop();
+                }
+            }
+            loop {
+                let prefix = parts.join("::");
+                let fq_name = if prefix.is_empty() {
+                    name_clean.clone()
+                } else {
+                    format!("{}::{}", prefix, name_clean)
+                };
+                if let Some(Value::Symbol(sym)) = symbols.get(&fq_name) {
+                    return Expr::Call("symbol".to_string(), vec![Expr::Int(sym.id as i64)]);
+                }
+                if parts.is_empty() {
+                    break;
+                }
+                parts.pop();
+            }
+            e.clone()
+        }
+        Expr::Field(inner, field) => Expr::Field(Box::new(resolve_symbols_in_expr(inner, symbols, current_module)), *field),
+        Expr::Add(a, b) => Expr::Add(
+            Box::new(resolve_symbols_in_expr(a, symbols, current_module)),
+            Box::new(resolve_symbols_in_expr(b, symbols, current_module)),
+        ),
+        Expr::Sub(a, b) => Expr::Sub(
+            Box::new(resolve_symbols_in_expr(a, symbols, current_module)),
+            Box::new(resolve_symbols_in_expr(b, symbols, current_module)),
+        ),
+        Expr::Mul(a, b) => Expr::Mul(
+            Box::new(resolve_symbols_in_expr(a, symbols, current_module)),
+            Box::new(resolve_symbols_in_expr(b, symbols, current_module)),
+        ),
+        Expr::Div(a, b) => Expr::Div(
+            Box::new(resolve_symbols_in_expr(a, symbols, current_module)),
+            Box::new(resolve_symbols_in_expr(b, symbols, current_module)),
+        ),
+        Expr::Mod(a, b) => Expr::Mod(
+            Box::new(resolve_symbols_in_expr(a, symbols, current_module)),
+            Box::new(resolve_symbols_in_expr(b, symbols, current_module)),
+        ),
+        Expr::Neg(a) => Expr::Neg(Box::new(resolve_symbols_in_expr(a, symbols, current_module))),
+        Expr::Not(a) => Expr::Not(Box::new(resolve_symbols_in_expr(a, symbols, current_module))),
+        Expr::Call(name, args) => {
+            let res_args = args.iter().map(|arg| resolve_symbols_in_expr(arg, symbols, current_module)).collect();
+            Expr::Call(name.clone(), res_args)
+        }
+        Expr::Formula(f) => Expr::Formula(Box::new(resolve_symbols_in_formula(f, symbols, current_module))),
+        Expr::Tuple(elms) => {
+            let res_elms = elms.iter().map(|elm| resolve_symbols_in_expr(elm, symbols, current_module)).collect();
+            Expr::Tuple(res_elms)
+        }
+        Expr::Cond(c, t, el) => Expr::Cond(
+            Box::new(resolve_symbols_in_expr(c, symbols, current_module)),
+            Box::new(resolve_symbols_in_expr(t, symbols, current_module)),
+            Box::new(resolve_symbols_in_expr(el, symbols, current_module)),
+        ),
+        Expr::LessThan(a, b) => Expr::LessThan(
+            Box::new(resolve_symbols_in_expr(a, symbols, current_module)),
+            Box::new(resolve_symbols_in_expr(b, symbols, current_module)),
+        ),
+        Expr::LessThanEqual(a, b) => Expr::LessThanEqual(
+            Box::new(resolve_symbols_in_expr(a, symbols, current_module)),
+            Box::new(resolve_symbols_in_expr(b, symbols, current_module)),
+        ),
+        Expr::Equal(a, b) => Expr::Equal(
+            Box::new(resolve_symbols_in_expr(a, symbols, current_module)),
+            Box::new(resolve_symbols_in_expr(b, symbols, current_module)),
         ),
         _ => e.clone(),
     }

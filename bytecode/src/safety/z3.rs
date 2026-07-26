@@ -100,7 +100,13 @@ pub fn translate_expr(e: &Expr, float_to_id: &mut HashMap<String, usize>, tuple_
             let id = *float_to_id.entry(f.clone()).or_insert(next_id);
             format!("(ValFloat {})", id)
         }
-        Expr::Var(name) => name.clone(),
+        Expr::Var(name) => {
+            if name.contains("::") {
+                format!("|{}|", name)
+            } else {
+                name.clone()
+            }
+        }
         Expr::In(idx) => format!("in_{}", idx),
         Expr::Out(idx) => format!("out_{}", idx),
         Expr::InField(idx, field) => format!("(get_tuple_element in_{} {})", idx, field),
@@ -124,7 +130,13 @@ pub fn translate_expr(e: &Expr, float_to_id: &mut HashMap<String, usize>, tuple_
             } else if name == "is_int" {
                 format!("(is-ValInt {})", translate_expr(&args[0], float_to_id, tuple_to_id))
             } else if name == "is_tuple" {
-                format!("(is-ValTuple {})", translate_expr(&args[0], float_to_id, tuple_to_id))
+                let arg = translate_expr(&args[0], float_to_id, tuple_to_id);
+                if args.len() == 2 {
+                    let len_val = translate_expr(&args[1], float_to_id, tuple_to_id);
+                    format!("(and (is-ValTuple {}) (= (get_tuple_len {}) {}))", arg, arg, len_val)
+                } else {
+                    format!("(is-ValTuple {})", arg)
+                }
             } else if name == "len" {
                 format!("(get_tuple_len {})", translate_expr(&args[0], float_to_id, tuple_to_id))
             } else if name == "symbol_len" {
@@ -132,7 +144,10 @@ pub fn translate_expr(e: &Expr, float_to_id: &mut HashMap<String, usize>, tuple_
             } else if name == "char_at" {
                 format!("(get_char_at {} {})", translate_expr(&args[0], float_to_id, tuple_to_id), translate_expr(&args[1], float_to_id, tuple_to_id))
             } else if name == "symbol" {
-                format!("(ValSymbol {})", translate_expr(&args[0], float_to_id, tuple_to_id))
+                match &args[0] {
+                    Expr::Int(val) => format!("(ValSymbol {})", val),
+                    other => format!("(ValSymbol (getInt {}))", translate_expr(other, float_to_id, tuple_to_id)),
+                }
             } else {
                 let args_smt: Vec<String> = args.iter().map(|a| translate_expr(a, float_to_id, tuple_to_id)).collect();
                 format!("({} {})", name, args_smt.join(" "))
@@ -245,6 +260,10 @@ pub fn check_with_z3(pc: &Formula, query: &Formula) -> Result<bool, String> {
     let mut float_to_id = HashMap::new();
     let mut tuple_to_id = HashMap::new();
 
+    // Pre-insert empty tuple to ensure it gets an ID and has its assertions generated
+    let empty_expr = Expr::Tuple(Vec::new());
+    let empty_id = *tuple_to_id.entry(empty_expr.clone()).or_insert(0);
+
     let pc_smt = translate_formula(pc, &mut float_to_id, &mut tuple_to_id);
     let query_smt = translate_formula(query, &mut float_to_id, &mut tuple_to_id);
 
@@ -252,11 +271,24 @@ pub fn check_with_z3(pc: &Formula, query: &Formula) -> Result<bool, String> {
     collect_tuple_assertions_formula(pc, &mut tuple_to_id, &mut float_to_id, &mut assertions);
     collect_tuple_assertions_formula(query, &mut tuple_to_id, &mut float_to_id, &mut assertions);
 
+    // Explicitly add assertion for the empty tuple ID length
+    assertions.push(format!("(assert (= (get_tuple_len (ValTuple {})) (ValInt 0)))", empty_id));
+    // Add the empty tuple uniqueness axiom
+    assertions.push(format!(
+        "(assert (forall ((x Val)) (=> (and (is-ValTuple x) (= (get_tuple_len x) (ValInt 0))) (= x (ValTuple {})))))",
+        empty_id
+    ));
+
     let mut script = String::new();
     script.push_str(prelude);
     script.push_str("\n");
     for var in vars {
-        script.push_str(&format!("(declare-fun {} () Val)\n", var));
+        let decl_name = if var.contains("::") {
+            format!("|{}|", var)
+        } else {
+            var.clone()
+        };
+        script.push_str(&format!("(declare-fun {} () Val)\n", decl_name));
     }
     for assertion in assertions {
         script.push_str(&assertion);

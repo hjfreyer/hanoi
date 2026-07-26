@@ -13,6 +13,7 @@ pub struct SymbolicState {
     pub vcs: Vec<Formula>,
     pub inlining_stack: Vec<SentenceIndex>,
     pub var_counter: usize,
+    pub panicked: bool,
 }
 
 pub fn execute_instruction_symbolic(
@@ -20,6 +21,9 @@ pub fn execute_instruction_symbolic(
     library: &Library,
     state: &mut SymbolicState,
 ) -> Result<(), String> {
+    if state.panicked {
+        return Ok(());
+    }
     match inst {
         Instruction::Push(val) => {
             let expr = value_to_expr(val, &library.symbols)?;
@@ -138,6 +142,7 @@ pub fn execute_instruction_symbolic(
         Instruction::Panic => {
             // Unconditional panic path must be proven unreachable!
             state.vcs.push(Formula::Implies(Box::new(state.pc.clone()), Box::new(Formula::Expr(Expr::Bool(false)))));
+            state.panicked = true;
         }
         Instruction::Assert => {
             if state.stack.is_empty() {
@@ -189,7 +194,7 @@ pub fn execute_instruction_symbolic(
             let safety = Formula::And(Box::new(is_tup), Box::new(len_check));
             state.vcs.push(Formula::Implies(Box::new(state.pc.clone()), Box::new(safety)));
 
-            for i in 0..*n {
+            for i in (0..*n).rev() {
                 state.stack.push(Expr::Field(Box::new(tuple_expr.clone()), i));
             }
         }
@@ -247,9 +252,63 @@ pub fn execute_instruction_symbolic(
             };
             state.stack.push(res);
         }
-        Instruction::SetContains | Instruction::SetUnion | Instruction::SetIntersection |
-        Instruction::SetDifference | Instruction::SetComplement | Instruction::SetSingleton |
-        Instruction::SetTuple(_) | Instruction::SetChoose | Instruction::SetRenamePrefix => {
+        Instruction::SetContains => {
+            if state.stack.len() < 2 {
+                return Err(format!("Stack underflow on instruction {:?}", inst));
+            }
+            let set = state.stack.pop().unwrap();
+            let elem = state.stack.pop().unwrap();
+            state.stack.push(Expr::Call("set_contains".to_string(), vec![set, elem]));
+        }
+        Instruction::SetUnion | Instruction::SetIntersection | Instruction::SetDifference => {
+            if state.stack.len() < 2 {
+                return Err(format!("Stack underflow on instruction {:?}", inst));
+            }
+            let b = state.stack.pop().unwrap();
+            let a = state.stack.pop().unwrap();
+            let fn_name = match inst {
+                Instruction::SetUnion => "set_union",
+                Instruction::SetIntersection => "set_intersection",
+                Instruction::SetDifference => "set_difference",
+                _ => unreachable!(),
+            };
+            state.stack.push(Expr::Call(fn_name.to_string(), vec![a, b]));
+        }
+        Instruction::SetComplement => {
+            if state.stack.is_empty() {
+                return Err(format!("Stack underflow on instruction {:?}", inst));
+            }
+            let set = state.stack.pop().unwrap();
+            state.stack.push(Expr::Call("set_complement".to_string(), vec![set]));
+        }
+        Instruction::SetSingleton => {
+            if state.stack.is_empty() {
+                return Err(format!("Stack underflow on instruction {:?}", inst));
+            }
+            let elem = state.stack.pop().unwrap();
+            state.stack.push(Expr::Call("set_singleton".to_string(), vec![elem]));
+        }
+        Instruction::SetTuple(len) => {
+            if state.stack.len() < *len {
+                return Err(format!("Stack underflow on instruction {:?}", inst));
+            }
+            let mut elms = Vec::new();
+            for _ in 0..*len {
+                elms.push(state.stack.pop().unwrap());
+            }
+            elms.reverse();
+            state.stack.push(Expr::Call("set_tuple".to_string(), elms));
+        }
+        Instruction::SetRenamePrefix => {
+            if state.stack.len() < 3 {
+                return Err(format!("Stack underflow on instruction {:?}", inst));
+            }
+            let to_val = state.stack.pop().unwrap();
+            let from_val = state.stack.pop().unwrap();
+            let set_val = state.stack.pop().unwrap();
+            state.stack.push(Expr::Call("set_rename_prefix".to_string(), vec![set_val, from_val, to_val]));
+        }
+        Instruction::SetChoose => {
             return Err(format!("Unsupported deprecated set instruction {:?} encountered during safety checking", inst));
         }
     }
@@ -263,15 +322,30 @@ fn handle_jump(target_idx: SentenceIndex, library: &Library, state: &mut Symboli
     let mut safety_contract = Formula::Expr(Expr::Bool(true));
     let mut behavior_contract = Formula::Expr(Expr::Bool(true));
 
+    let name = &library.names[target_idx];
+    let current_module = if let Some(idx) = name.rfind("::") {
+        &name[..idx]
+    } else {
+        ""
+    };
+
     for ann in annotations {
         match ann {
             Annotation::Safety(s) => {
                 has_safety = true;
-                safety_contract = super::formula::parse_formula_string(s)?;
+                safety_contract = super::formula::resolve_symbols_in_formula(
+                    &super::formula::parse_formula_string(s)?,
+                    &library.symbols,
+                    current_module
+                );
             }
             Annotation::Behavior(b) => {
                 has_behavior = true;
-                behavior_contract = super::formula::parse_formula_string(b)?;
+                behavior_contract = super::formula::resolve_symbols_in_formula(
+                    &super::formula::parse_formula_string(b)?,
+                    &library.symbols,
+                    current_module
+                );
             }
             _ => {}
         }
@@ -361,7 +435,29 @@ fn handle_branch(then_idx: SentenceIndex, else_idx: SentenceIndex, library: &Lib
     );
     handle_jump(else_idx, library, &mut state_else)?;
 
-    // Both paths must return same stack size
+    // Merge states and check heights if neither panicked
+    if state_then.panicked && state_else.panicked {
+        state.panicked = true;
+        state.vcs.extend(state_then.vcs);
+        state.vcs.extend(state_else.vcs);
+        state.var_counter = std::cmp::max(state_then.var_counter, state_else.var_counter);
+        return Ok(());
+    } else if state_then.panicked {
+        state.stack = state_else.stack;
+        state.pc = state_else.pc;
+        state.vcs.extend(state_then.vcs);
+        state.vcs.extend(state_else.vcs);
+        state.var_counter = std::cmp::max(state_then.var_counter, state_else.var_counter);
+        return Ok(());
+    } else if state_else.panicked {
+        state.stack = state_then.stack;
+        state.pc = state_then.pc;
+        state.vcs.extend(state_then.vcs);
+        state.vcs.extend(state_else.vcs);
+        state.var_counter = std::cmp::max(state_then.var_counter, state_else.var_counter);
+        return Ok(());
+    }
+
     if state_then.stack.len() != state_else.stack.len() {
         return Err(format!(
             "Branch paths returned mismatched stack heights: then_branch={} else_branch={}",
@@ -414,6 +510,6 @@ fn value_to_expr(val: &Value, symbols: &HashMap<String, Value>) -> Result<Expr, 
             }
             Ok(Expr::Tuple(elms))
         }
-        Value::Set(_) => Err("Deprecated set value type encountered".to_string()),
+        Value::Set(_) => Ok(Expr::Call("set_val".to_string(), vec![])),
     }
 }

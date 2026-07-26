@@ -5,7 +5,7 @@ pub mod executor;
 pub mod z3;
 
 use crate::library::{Library, SentenceIndex, Annotation};
-use formula::{Formula, Expr, parse_formula_string, substitute_formula};
+use formula::{Formula, Expr, parse_formula_string, substitute_formula, resolve_symbols_in_formula};
 use executor::{SymbolicState, execute_instruction_symbolic};
 use z3::check_with_z3;
 
@@ -33,6 +33,11 @@ pub fn check_safety(library: &Library) -> Result<(), String> {
 fn check_sentence_safety(s_idx: SentenceIndex, library: &Library) -> Result<(), String> {
     let annotations = &library.annotations[s_idx];
     let name = &library.names[s_idx];
+    let current_module = if let Some(idx) = name.rfind("::") {
+        &name[..idx]
+    } else {
+        ""
+    };
 
     let mut arity_n = 0;
     let mut arity_m = 0;
@@ -46,10 +51,10 @@ fn check_sentence_safety(s_idx: SentenceIndex, library: &Library) -> Result<(), 
                 arity_m = *m as usize;
             }
             Annotation::Safety(s) => {
-                safety_contract = parse_formula_string(s)?;
+                safety_contract = resolve_symbols_in_formula(&parse_formula_string(s)?, &library.symbols, current_module);
             }
             Annotation::Behavior(b) => {
-                behavior_contract = parse_formula_string(b)?;
+                behavior_contract = resolve_symbols_in_formula(&parse_formula_string(b)?, &library.symbols, current_module);
             }
         }
     }
@@ -72,6 +77,7 @@ fn check_sentence_safety(s_idx: SentenceIndex, library: &Library) -> Result<(), 
         vcs: Vec::new(),
         inlining_stack: vec![s_idx],
         var_counter: 0,
+        panicked: false,
     };
 
     // Execute the instructions
@@ -96,7 +102,6 @@ fn check_sentence_safety(s_idx: SentenceIndex, library: &Library) -> Result<(), 
 
     let subst_behavior = substitute_formula(&behavior_contract, &initial_inputs, &outputs);
     state.vcs.push(Formula::Implies(Box::new(state.pc.clone()), Box::new(subst_behavior)));
-
     // Verify all collected VCs with Z3
     for vc in &state.vcs {
         match check_with_z3(&Formula::Expr(Expr::Bool(true)), vc) {
