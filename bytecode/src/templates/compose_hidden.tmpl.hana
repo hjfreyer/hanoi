@@ -1,5 +1,4 @@
-#[arity(0, 1)]
-sentence init {
+function init {
     jump {{concurrent}}::init
 }
 

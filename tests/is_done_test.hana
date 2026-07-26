@@ -90,18 +90,21 @@ test sentence verify_is_ready_to_finish_basic_machines {
 
 test sentence verify_is_done_compositions {
     // 1. compose_static_closure (using customer1)
+    tuple 0
     jump super::csp::customer1::init
     jump super::csp::customer1::is_done
     push false
     assert_eq
 
     // 2. compose_concurrent (using customers)
+    tuple 0
     jump super::csp::customers::init
     jump super::csp::customers::is_done
     push false
     assert_eq
 
     // 3. compose_hidden (using hidden)
+    tuple 0
     jump super::csp::hidden::init
     jump super::csp::hidden::is_done
     push false
@@ -110,12 +113,14 @@ test sentence verify_is_done_compositions {
 
 test sentence verify_is_ready_to_finish_compositions {
     // 1. compose_static_closure (using customer1)
+    tuple 0
     jump super::csp::customer1::init
     jump super::csp::customer1::is_ready_to_finish
     push true
     assert_eq
 
     // 2. compose_concurrent (using customers)
+    tuple 0
     jump super::csp::customers::init
     jump super::csp::customers::is_ready_to_finish
     push true

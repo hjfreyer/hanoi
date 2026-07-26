@@ -1,6 +1,5 @@
-#[arity(0, 1)]
-sentence init {
-    tuple 0
+function init {
+    jump {{machine}}::init
     push 0
     tuple 2
 }
@@ -78,6 +77,7 @@ sentence process {
             drop 0
             drop 0
             drop 0
+            tuple 0
             jump {{machine}}::init
             push 1
             tuple 2

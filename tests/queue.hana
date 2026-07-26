@@ -15,8 +15,8 @@ mod queue {
     // It is a 4-tuple: (current, accumulator, new_el, tag)
 
     // init: returns initial state
-    sentence init {
-        // Initial state is ((), (), (), idle)
+    function init {
+        untuple 0
         push ()
         push ()
         push ()
@@ -522,6 +522,7 @@ sentence drive_reductions {
 }
 
 test sentence verify_queue_machine {
+    tuple 0
     jump queue::init
     
     // 2. Push 10

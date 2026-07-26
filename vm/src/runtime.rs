@@ -306,6 +306,7 @@ impl<E: Environment> Runtime<E> {
         if !self.vm.stack.is_empty() {
             return Err(format!("Stack not empty before init: {:?}", self.vm.stack));
         }
+        self.vm.stack.push(Value::Tuple(Vec::new()));
         self.vm.execute(self.main_init)?;
         let res = self.vm.pop()?;
         if !self.vm.stack.is_empty() {

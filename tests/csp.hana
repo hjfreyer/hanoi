@@ -22,7 +22,7 @@ mod customer_impl {
     }
 
     // Initializes customer state: (id, preferred_drink, internal_state)
-    sentence init {
+    function init {
     }
 
     // accept takes state: (id, preferred_drink, internal_state) and returns ValueSet of accepted events.
@@ -291,7 +291,8 @@ mod barista {
     }
 
     // Initializes barista state
-    sentence init {
+    function init {
+        untuple 0
         push state::idle
     }
 
@@ -518,6 +519,7 @@ sentence drive_concurrent_tau {
 
 test sentence verify_hidden_system {
     // 1. Initialize joint state
+    tuple 0
     jump hidden::init
     
     // 2. Trigger want_coffee for c1. Let's verify it is accepted.
@@ -692,6 +694,7 @@ test sentence verify_hidden_system {
 // Test the concurrent joint Customer-Queue-Barista system
 test sentence verify_concurrent_system {
     // 1. Initialize joint state
+    tuple 0
     jump concurrent::init
     
     // 2. Barista requests await_front
@@ -922,6 +925,7 @@ test sentence verify_concurrent_system {
 // Test the rejection of invalid events for Barista
 test sentence verify_barista_rejection {
     // 1. Trigger invalid coffee event on idle (coffee is emit, not accept)
+    tuple 0
     jump barista::init
     
     jump barista::accept
@@ -932,6 +936,7 @@ test sentence verify_barista_rejection {
     assert_eq
 
     // 2. Test that barista in idle does NOT accept order directly (since orders are queued)
+    tuple 0
     jump barista::init
     jump barista::accept
     push ((customer_id::c1, event::latte), super::queue::push_back)
@@ -941,6 +946,7 @@ test sentence verify_barista_rejection {
     assert_eq
     
     // 3. Test that barista in idle emits await_front.req
+    tuple 0
     jump barista::init
     jump barista::emit
     untuple 2
@@ -954,6 +960,7 @@ test sentence verify_barista_rejection {
     assert_eq
     
     // 4. Test that barista in awaiting_order accepts await_front.resp.some.val
+    tuple 0
     jump barista::init
     
     tuple 0
@@ -978,6 +985,7 @@ test sentence verify_barista_rejection {
     assert
     
     // 5. Test that barista in awaiting_order does NOT emit coffee
+    tuple 0
     jump barista::init
     tuple 0
     push super::prelude::req

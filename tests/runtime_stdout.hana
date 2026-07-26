@@ -1,7 +1,8 @@
 test mod verify_print_hello {
     symbol hello "Hello from Hanoi VM Async Runtime!\n"
 
-    export sentence init {
+    export function init {
+        untuple 0
         push 0 // phase
         push 0 // data (char index)
         tuple 2

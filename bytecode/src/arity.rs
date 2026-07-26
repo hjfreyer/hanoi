@@ -49,11 +49,6 @@ fn get_or_infer_arity(
     }
 
     let name = &library.names[s_idx];
-    if name == "init" || name.ends_with("::init") {
-        let arity = (0, 1, false);
-        memo.insert(s_idx, arity);
-        return Ok(arity);
-    }
 
     if in_progress.contains(&s_idx) {
         return Err(format!("Recursion/cycle detected at sentence index {:?} ({})", s_idx, name));

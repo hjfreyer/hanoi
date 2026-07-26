@@ -1827,9 +1827,7 @@ pub fn assemble_with_path(input: &str, base_dir: Option<&std::path::Path>) -> Re
             format!("{}::{}", path.join("::"), sentence.name)
         };
         compiler.names[idx] = fq_name;
-        if sentence.name != "init" {
-            annotations[SentenceIndex::from(idx)] = sentence.annotations;
-        }
+        annotations[SentenceIndex::from(idx)] = sentence.annotations;
     }
 
     let mut library = Library::new();

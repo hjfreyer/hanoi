@@ -69,6 +69,7 @@ sentence run_tau_reductions {
 }
 
 test sentence verify_day1_manually {
+    tuple 0
     jump test0::init
     
     // Trigger start: process start event

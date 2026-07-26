@@ -767,9 +767,9 @@ mod tests {
             symbol from_sym "FromSymbol"
             symbol to_sym "ToSymbol"
             symbol payload "Payload"
-
             mod base {
-                export sentence init {
+                export function init {
+                    untuple 0
                     push 0
                 }
                 export sentence accept {
@@ -778,17 +778,42 @@ mod tests {
                 }
                 export sentence emit {
                     drop 0
-                    push crate::payload
-                    push true
-                    tuple 2
+                    untuple 2
+                    branch {
+                        untuple 2
+                        pick 0
+                        push crate::from_sym
+                        equal
+                        branch {
+                            drop 0
+                            push crate::to_sym
+                            tuple 2
+                            push true
+                            tuple 2
+                        } {
+                            tuple 2
+                            push true
+                            tuple 2
+                        }
+                    } {
+                        drop 0
+                        tuple 0
+                        push false
+                        tuple 2
+                    }
                 }
                 export sentence process {
-                    // Stack: [state, event]
-                    roll 1
-                    push 1
-                    add
-                    roll 1
-                    drop 0
+                    untuple 2
+                    pick 0
+                    push crate::to_sym
+                    equal
+                    branch {
+                        drop 0
+                        push crate::from_sym
+                        tuple 2
+                    } {
+                        tuple 2
+                    }
                 }
                 export sentence is_done {
                     drop 0
@@ -809,6 +834,7 @@ mod tests {
 
             export sentence test_rename {
                 // Initialize state
+                tuple 0
                 jump renamed::init
                 
                 // Stack: [state] (which is 0)
@@ -871,7 +897,7 @@ mod tests {
         let bad_code = r#"
             symbol a
             symbol b
-            mod m { export sentence init { push 0 } export sentence accept { drop 0 push empty_set } export sentence emit { drop 0 tuple 0 push false tuple 2 } export sentence process { } }
+            mod m { export function init { untuple 0 push 0 } export sentence accept { drop 0 push empty_set } export sentence emit { drop 0 tuple 0 push false tuple 2 } export sentence process { } }
             mod bad compose_rename_prefix(a, m);
         "#;
         assert!(bytecode::assemble(bad_code).is_err());
@@ -881,7 +907,7 @@ mod tests {
     fn test_compose_static_closure() {
         let code = r#"
             mod base {
-                export sentence init {
+                export function init {
                     // Stack has the value pushed by the composer
                     push 10
                     add
@@ -916,6 +942,7 @@ mod tests {
 
             export sentence test_closure {
                 // Initialize state: should push 42, then call base::init which adds 10 -> returns 52
+                tuple 0
                 jump closed::init
                 pick 0
                 push 52
@@ -940,7 +967,8 @@ mod tests {
     fn test_tau_reduce() {
         let code = r#"
             mod m_no_tau {
-                export sentence init {
+                export function init {
+                    untuple 0
                     push 0
                 }
                 export sentence accept {
@@ -971,7 +999,8 @@ mod tests {
             }
 
             mod m_with_tau {
-                export sentence init {
+                export function init {
+                    untuple 0
                     push 0
                 }
                 export sentence accept {
@@ -1004,6 +1033,7 @@ mod tests {
 
             export sentence test_tau {
                 // Test m_no_tau
+                tuple 0
                 jump m_no_tau::init
                 jump m_no_tau::tau_reduce
                 untuple 2
@@ -1012,6 +1042,7 @@ mod tests {
                 drop 0
 
                 // Test m_with_tau
+                tuple 0
                 jump m_with_tau::init
                 jump m_with_tau::tau_reduce
                 untuple 2
@@ -1111,7 +1142,8 @@ mod runtime_tests {
                     symbol pong "pong event"
                 }
 
-                export sentence init {
+                export function init {
+                    untuple 0
                     push state::init
                 }
 
@@ -1199,7 +1231,8 @@ mod runtime_tests {
             mod main {
                 symbol hello "Hello, World!"
 
-                export sentence init {
+                export function init {
+                    untuple 0
                     push 0
                 }
 
