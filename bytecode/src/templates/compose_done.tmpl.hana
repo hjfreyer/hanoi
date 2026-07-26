@@ -3,14 +3,12 @@ sentence init {
     push 0
 }
 
-#[arity(1, 1)]
-sentence accept {
+function accept {
     drop 0
     push empty_set
 }
 
-#[arity(1, 1)]
-sentence emit {
+function emit {
     drop 0
     tuple 0
     push false
@@ -22,20 +20,17 @@ sentence process {
     drop 0
 }
 
-#[arity(1, 1)]
-sentence tau_reduce {
+function tau_reduce {
     push false
     tuple 2
 }
 
-#[arity(1, 1)]
-sentence is_done {
+function is_done {
     drop 0
     push true
 }
 
-#[arity(1, 1)]
-sentence is_ready_to_finish {
+function is_ready_to_finish {
     drop 0
     push false
 }

@@ -23,6 +23,7 @@ enum Token {
     TestKeyword,
     ModKeyword,
     SentenceKeyword,
+    FunctionKeyword,
     DoubleColon,
     Semicolon,
     Identifier(String),
@@ -191,6 +192,7 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
                     "test" => tokens.push(Token::TestKeyword),
                     "mod" => tokens.push(Token::ModKeyword),
                     "sentence" => tokens.push(Token::SentenceKeyword),
+                    "function" => tokens.push(Token::FunctionKeyword),
                     "true" => tokens.push(Token::Bool(true)),
                     "false" => tokens.push(Token::Bool(false)),
                     _ => tokens.push(Token::Identifier(ident)),
@@ -691,7 +693,15 @@ fn parse_items(stream: &mut TokenStream, end_token: Option<Token>, base_dir: Opt
                 }
             }
 
-            stream.expect(Token::SentenceKeyword)?;
+            let is_function = if stream.peek() == Some(&Token::SentenceKeyword) {
+                stream.next();
+                false
+            } else if stream.peek() == Some(&Token::FunctionKeyword) {
+                stream.next();
+                true
+            } else {
+                return Err(format!("Expected 'sentence' or 'function', found {:?}", stream.peek()));
+            };
 
             let name = match stream.next() {
                 Some(Token::Identifier(name)) => name,
@@ -704,6 +714,11 @@ fn parse_items(stream: &mut TokenStream, end_token: Option<Token>, base_dir: Opt
             }
 
             let body = parse_sentence_body(stream)?;
+
+            let mut annotations = annotations;
+            if is_function {
+                annotations.push(Annotation::Arity(1, 1));
+            }
 
             items.push(TopLevelItem::Sentence(TopLevelSentence {
                 is_exported,
@@ -811,7 +826,15 @@ fn parse_items(stream: &mut TokenStream, end_token: Option<Token>, base_dir: Opt
                 }
             }
 
-            stream.expect(Token::SentenceKeyword)?;
+            let is_function = if stream.peek() == Some(&Token::SentenceKeyword) {
+                stream.next();
+                false
+            } else if stream.peek() == Some(&Token::FunctionKeyword) {
+                stream.next();
+                true
+            } else {
+                return Err(format!("Expected 'sentence' or 'function', found {:?}", stream.peek()));
+            };
 
             let name = match stream.next() {
                 Some(Token::Identifier(name)) => name,
@@ -825,12 +848,18 @@ fn parse_items(stream: &mut TokenStream, end_token: Option<Token>, base_dir: Opt
 
             let body = parse_sentence_body(stream)?;
 
+            let annotations = if is_function {
+                vec![Annotation::Arity(1, 1)]
+            } else {
+                Vec::new()
+            };
+
             items.push(TopLevelItem::Sentence(TopLevelSentence {
                 is_exported,
                 is_test,
                 name,
                 body,
-                annotations: Vec::new(),
+                annotations,
             }));
         }
         }

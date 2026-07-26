@@ -4,13 +4,11 @@ sentence init {
     jump {{machine}}::init
 }
 
-#[arity(1, 1)]
-sentence accept {
+function accept {
     jump {{machine}}::accept
 }
 
-#[arity(1, 1)]
-sentence emit {
+function emit {
     jump {{machine}}::emit
 }
 
@@ -19,17 +17,14 @@ sentence process {
     jump {{machine}}::process
 }
 
-#[arity(1, 1)]
-sentence tau_reduce {
+function tau_reduce {
     jump {{machine}}::tau_reduce
 }
 
-#[arity(1, 1)]
-sentence is_done {
+function is_done {
     jump {{machine}}::is_done
 }
 
-#[arity(1, 1)]
-sentence is_ready_to_finish {
+function is_ready_to_finish {
     jump {{machine}}::is_ready_to_finish
 }

@@ -3,16 +3,14 @@ sentence init {
     jump {{target}}::init
 }
 
-#[arity(1, 1)]
-sentence accept {
+function accept {
     jump {{target}}::accept
     push {{prefix}}
     set_singleton
     set_tuple 2
 }
 
-#[arity(1, 1)]
-sentence emit {
+function emit {
     jump {{target}}::emit
     untuple 2
     branch {
@@ -36,18 +34,15 @@ sentence process {
     jump {{target}}::process
 }
 
-#[arity(1, 1)]
-sentence tau_reduce {
+function tau_reduce {
     push false
     tuple 2
 }
 
-#[arity(1, 1)]
-sentence is_done {
+function is_done {
     jump {{target}}::is_done
 }
 
-#[arity(1, 1)]
-sentence is_ready_to_finish {
+function is_ready_to_finish {
     jump {{target}}::is_ready_to_finish
 }

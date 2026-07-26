@@ -8,15 +8,13 @@ sentence set {
     jump {{hidden_fn}}
 }
 
-#[arity(1, 1)]
-sentence accept {
+function accept {
     jump {{concurrent}}::accept
     jump {{hidden_fn}}
     set_difference
 }
 
-#[arity(1, 1)]
-sentence emit {
+function emit {
     pick 0
     jump {{concurrent}}::emit
     untuple 2
@@ -50,8 +48,7 @@ sentence process {
     jump {{concurrent}}::process
 }
 
-#[arity(1, 1)]
-sentence tau_reduce {
+function tau_reduce {
     pick 0
     jump {{concurrent}}::tau_reduce
     untuple 2
@@ -86,12 +83,10 @@ sentence tau_reduce {
     }
 }
 
-#[arity(1, 1)]
-sentence is_done {
+function is_done {
     jump {{concurrent}}::is_done
 }
 
-#[arity(1, 1)]
-sentence is_ready_to_finish {
+function is_ready_to_finish {
     jump {{concurrent}}::is_ready_to_finish
 }

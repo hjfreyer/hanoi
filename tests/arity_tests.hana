@@ -10,8 +10,7 @@ sentence push_val {
     push 100
 }
 
-#[arity(1, 1)]
-sentence double_val {
+function double_val {
     pick 0
     add
 }
@@ -37,14 +36,12 @@ test sentence test_arity_double {
     assert_eq
 }
 
-#[arity(1, 1)]
-sentence recursive_helper {
+function recursive_helper {
     push 1
     add
 }
 
-#[arity(1, 1)]
-sentence nested_arity_calls {
+function nested_arity_calls {
     jump recursive_helper
     jump recursive_helper
 }
@@ -53,5 +50,17 @@ test sentence test_arity_nested_calls {
     push 10
     jump nested_arity_calls
     push 12
+    assert_eq
+}
+
+function square {
+    pick 0
+    multiply
+}
+
+test sentence test_function_keyword {
+    push 6
+    jump square
+    push 36
     assert_eq
 }

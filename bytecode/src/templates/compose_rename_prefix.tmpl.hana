@@ -3,16 +3,14 @@ sentence init {
     jump {{target}}::init
 }
 
-#[arity(1, 1)]
-sentence accept {
+function accept {
     jump {{target}}::accept
     push {{from_symbol}}
     push {{to_symbol}}
     set_rename_prefix
 }
 
-#[arity(1, 1)]
-sentence emit {
+function emit {
     jump {{target}}::emit
     untuple 2
     branch {
@@ -56,17 +54,14 @@ sentence process {
     }
 }
 
-#[arity(1, 1)]
-sentence tau_reduce {
+function tau_reduce {
     jump {{target}}::tau_reduce
 }
 
-#[arity(1, 1)]
-sentence is_done {
+function is_done {
     jump {{target}}::is_done
 }
 
-#[arity(1, 1)]
-sentence is_ready_to_finish {
+function is_ready_to_finish {
     jump {{target}}::is_ready_to_finish
 }
