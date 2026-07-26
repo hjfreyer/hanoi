@@ -134,7 +134,8 @@ mod customer_impl {
     }
 
     // process takes [state, event] and returns next_state.
-    sentence process {
+    function process {
+        untuple 2
         // Stack: [(id, preferred_drink, internal_state), event]
         roll 1 // Stack: [event, (id, preferred_drink, internal_state)]
         untuple 3 // Stack: [event, id, preferred_drink, internal_state]
@@ -239,6 +240,7 @@ test sentence verify_customer_logic {
     
     // Process want_coffee -> thirsty
     push (customer_id::c1, event::want_coffee)
+    tuple 2
     jump customer_impl::process
     
     // Thirsty state emits push_back
@@ -251,6 +253,7 @@ test sentence verify_customer_logic {
     
     // Process push_back -> ordered
     push ((customer_id::c1, event::latte), super::queue::push_back)
+    tuple 2
     jump customer_impl::process
     
     // Ordered state accepts coffee
@@ -263,6 +266,7 @@ test sentence verify_customer_logic {
     
     // Process coffee -> has_coffee
     push (customer_id::c1, event::latte, event::coffee)
+    tuple 2
     jump customer_impl::process
     
     // Has coffee accepts enjoy
@@ -275,6 +279,7 @@ test sentence verify_customer_logic {
     
     // Process enjoy -> idle
     push (customer_id::c1, event::enjoy)
+    tuple 2
     jump customer_impl::process
     
     drop 0
@@ -383,7 +388,8 @@ mod barista {
     }
 
     // process takes [state, event] and returns next_state.
-    sentence process {
+    function process {
+        untuple 2
         // Inputs: [state, event]
         pick 1 // state
         push state::idle
@@ -532,6 +538,7 @@ test sentence verify_hidden_system {
     
     // 2. Trigger event::want_coffee for c1
     push (customer_id::c1, event::want_coffee)
+    tuple 2
     jump hidden::process
     
     // 3. Drive tau -> Barista serves Customer 1
@@ -575,6 +582,7 @@ test sentence verify_hidden_system {
     
     // 4. Trigger event::want_coffee for c2
     push (customer_id::c2, event::want_coffee)
+    tuple 2
     jump hidden::process
     
     // 5. Drive tau -> Barista serves Customer 2
@@ -618,6 +626,7 @@ test sentence verify_hidden_system {
     
     // 6. Trigger enjoy for c1
     push (customer_id::c1, event::enjoy)
+    tuple 2
     jump hidden::process
     
     // Verify state: Customer 1 is idle, Customer 2 has coffee
@@ -658,6 +667,7 @@ test sentence verify_hidden_system {
     
     // 7. Trigger enjoy for c2
     push (customer_id::c2, event::enjoy)
+    tuple 2
     jump hidden::process
     
     // Verify state: both idle
@@ -715,6 +725,7 @@ test sentence verify_concurrent_system {
     tuple 2
     push super::queue::await_front
     tuple 2
+    tuple 2
     jump concurrent::process
     
     // 3. Customer 1 wants coffee (accepted from environment)
@@ -726,6 +737,7 @@ test sentence verify_concurrent_system {
     assert
     
     push (customer_id::c1, event::want_coffee)
+    tuple 2
     jump concurrent::process
     
     // 4. Customer 2 wants coffee (accepted from environment)
@@ -737,6 +749,7 @@ test sentence verify_concurrent_system {
     assert
     
     push (customer_id::c2, event::want_coffee)
+    tuple 2
     jump concurrent::process
     
     // 5. Customer 1 orders coffee (emitted request from customer)
@@ -751,6 +764,7 @@ test sentence verify_concurrent_system {
     
     push (customer_id::c1, event::latte)
     push super::queue::push_back
+    tuple 2
     tuple 2
     jump concurrent::process
     jump drive_concurrent_tau
@@ -781,6 +795,7 @@ test sentence verify_concurrent_system {
     tuple 2
     push super::queue::await_front
     tuple 2
+    tuple 2
     jump concurrent::process
     
     // 7. Customer 2 orders coffee (emitted request from customer)
@@ -796,6 +811,7 @@ test sentence verify_concurrent_system {
     push (customer_id::c2, event::espresso)
     push super::queue::push_back
     tuple 2
+    tuple 2
     jump concurrent::process
     jump drive_concurrent_tau
     
@@ -808,6 +824,7 @@ test sentence verify_concurrent_system {
     assert_eq
     
     push (customer_id::c1, event::latte, event::coffee)
+    tuple 2
     jump concurrent::process
     
     // 9. Customer 1 enjoys coffee
@@ -819,6 +836,7 @@ test sentence verify_concurrent_system {
     assert
     
     push (customer_id::c1, event::enjoy)
+    tuple 2
     jump concurrent::process
     
     // 10. Barista requests await_front
@@ -838,6 +856,7 @@ test sentence verify_concurrent_system {
     push super::prelude::req
     tuple 2
     push super::queue::await_front
+    tuple 2
     tuple 2
     jump concurrent::process
     
@@ -867,6 +886,7 @@ test sentence verify_concurrent_system {
     tuple 2
     push super::queue::await_front
     tuple 2
+    tuple 2
     jump concurrent::process
     
     // 12. Barista finishes brewing for Customer 2
@@ -878,6 +898,7 @@ test sentence verify_concurrent_system {
     assert_eq
     
     push (customer_id::c2, event::espresso, event::coffee)
+    tuple 2
     jump concurrent::process
     
     // 13. Customer 2 enjoys coffee
@@ -889,6 +910,7 @@ test sentence verify_concurrent_system {
     assert
     
     push (customer_id::c2, event::enjoy)
+    tuple 2
     jump concurrent::process
     
     // Verify final states
@@ -968,6 +990,7 @@ test sentence verify_barista_rejection {
     tuple 2
     push super::queue::await_front
     tuple 2
+    tuple 2
     jump barista::process // Transition to awaiting_order
     
     jump barista::accept
@@ -991,6 +1014,7 @@ test sentence verify_barista_rejection {
     push super::prelude::req
     tuple 2
     push super::queue::await_front
+    tuple 2
     tuple 2
     jump barista::process // Transition to awaiting_order
     

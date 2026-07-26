@@ -36,8 +36,8 @@ function emit {
     }
 }
 
-#[arity(2, 1)]
-sentence process {
+function process {
+    untuple 2
     untuple 2
     pick 0
     push {{to_symbol}}
@@ -46,8 +46,10 @@ sentence process {
         drop 0
         push {{from_symbol}}
         tuple 2
+        tuple 2
         jump {{target}}::process
     } {
+        tuple 2
         tuple 2
         jump {{target}}::process
     }

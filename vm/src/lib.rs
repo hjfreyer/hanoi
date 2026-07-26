@@ -782,8 +782,8 @@ mod tests {
                     push true
                     tuple 2
                 }
-                #[arity(2, 1)]
-                export sentence process {
+                export function process {
+                    untuple 2
                     drop 0
                     drop 0
                     push 1
@@ -838,6 +838,7 @@ mod tests {
                 // Stack has [0]
                 push payload
                 push to_sym
+                tuple 2
                 tuple 2
                 jump renamed::process
                 // Stack has [1] (new_state)
@@ -895,8 +896,8 @@ mod tests {
                     push false
                     tuple 2
                 }
-                #[arity(2, 1)]
-                export sentence process {
+                export function process {
+                    untuple 2
                     drop 0
                     push 100
                     add
@@ -927,6 +928,7 @@ mod tests {
 
                 // Call process: should push 100, then add -> 152
                 push 0
+                tuple 2
                 jump closed::process
                 push 152
                 assert_eq
@@ -964,7 +966,9 @@ mod tests {
                     roll 1
                     tuple 2
                 }
-                export sentence process {
+                export function process {
+                    untuple 2
+                    drop 0
                 }
                 export function is_done {
                     drop 0
@@ -997,7 +1001,9 @@ mod tests {
                     push true
                     tuple 2
                 }
-                export sentence process {
+                export function process {
+                    untuple 2
+                    drop 0
                 }
                 export function is_done {
                     drop 0
@@ -1155,7 +1161,8 @@ mod runtime_tests {
                     }
                 }
 
-                export sentence process {
+                export function process {
+                    untuple 2
                     roll 1 // swap event and state
                     push state::init
                     equal
@@ -1262,7 +1269,8 @@ mod runtime_tests {
                     }
                 }
 
-                export sentence process {
+                export function process {
+                    untuple 2
                     drop 0 // drop event
                     push 1
                     add

@@ -12,8 +12,7 @@ function emit {
     jump {{machine}}::emit
 }
 
-#[arity(2, 1)]
-sentence process {
+function process {
     jump {{machine}}::process
 }
 

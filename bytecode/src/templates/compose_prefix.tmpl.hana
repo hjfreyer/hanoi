@@ -25,11 +25,12 @@ function emit {
     }
 }
 
-#[arity(2, 1)]
-sentence process {
+function process {
+    untuple 2
     untuple 2
     push {{prefix}}
     assert_eq
+    tuple 2
     jump {{target}}::process
 }
 

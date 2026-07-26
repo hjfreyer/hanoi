@@ -74,6 +74,7 @@ test sentence verify_day1_manually {
     
     // Trigger start: process start event
     push crate::prelude::start
+    tuple 2
     jump test0::process
     
     // Run all tau reductions recursively
@@ -89,6 +90,7 @@ test sentence verify_day1_manually {
     
     // Process the emitted event to transition to final state
     push crate::prelude::pass
+    tuple 2
     jump test0::process
     
     // Check is_done

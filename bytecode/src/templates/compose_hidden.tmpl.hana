@@ -42,8 +42,7 @@ function emit {
     }
 }
 
-#[arity(2, 1)]
-sentence process {
+function process {
     jump {{concurrent}}::process
 }
 
@@ -66,6 +65,7 @@ function tau_reduce {
             jump {{hidden_fn}}
             set_contains
             branch {
+                tuple 2
                 jump {{concurrent}}::process
                 push true
                 tuple 2

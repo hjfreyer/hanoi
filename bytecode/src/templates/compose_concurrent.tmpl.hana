@@ -223,8 +223,8 @@ function emit {
     }
 }
 
-#[arity(2, 1)]
-sentence process {
+function process {
+    untuple 2
     pick 0
     jump {{sync_fn}}
     set_contains
@@ -234,9 +234,11 @@ sentence process {
         pick 2
         roll 2
         roll 1
+        tuple 2
         jump {{p1}}::process
         roll 1
         roll 2
+        tuple 2
         jump {{p2}}::process
         tuple 2
     } {
@@ -291,6 +293,7 @@ sentence process {
             pick 2
             roll 2
             roll 1
+            tuple 2
             jump {{p1}}::process
             roll 2
             drop 0
@@ -299,6 +302,7 @@ sentence process {
         } {
             branch {
                 pick 2
+                tuple 2
                 jump {{p2}}::process
                 roll 2
                 drop 0

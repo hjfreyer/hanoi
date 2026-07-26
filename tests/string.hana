@@ -115,7 +115,8 @@ mod string_ref {
     }
     
     // process: takes state and event, returns next_state
-    sentence process {
+    function process {
+        untuple 2
         // Stack: [state, event]
         roll 1 // Stack: [event, state]
         untuple 2 // Stack: [event, sym, internal_state]
@@ -389,7 +390,8 @@ mod char_iterator {
     }
     
     // process: takes state (payload, tag) and event, returns next_state
-    sentence process {
+    function process {
+        untuple 2
         // Stack: [state, event]
         roll 1 // Stack: [event, state]
         untuple 2 // Stack: [event, payload, tag]
@@ -650,7 +652,8 @@ mod parseint {
     }
 
     // process: takes [state, event] and returns next_state.
-    sentence process {
+    function process {
+        untuple 2
         // Stack: [state, event]
         pick 1 // state
         push idle
@@ -1045,7 +1048,8 @@ mod split {
     }
 
     // process: takes [state, event] and returns next_state.
-    sentence process {
+    function process {
+        untuple 2
         // Stack: [state, event]
         roll 1 // Stack: [event, state]
         untuple 2 // Stack: [event, payload, tag]
@@ -1320,7 +1324,9 @@ mod string_ref_base {
     function emit {
         jump super::string_ref::emit
     }
-    sentence process {
+    function process {
+        untuple 2
+        tuple 2
         jump super::string_ref::process
     }
 
@@ -1379,6 +1385,7 @@ test sentence iterate_string_ascii {
     tuple 2
     push char_iterator::out
     tuple 2
+    tuple 2
     jump string_hidden::process
     
     // Step 1: drive 2 taus for 'b' (98)
@@ -1404,6 +1411,7 @@ test sentence iterate_string_ascii {
     push next
     tuple 2
     push char_iterator::out
+    tuple 2
     tuple 2
     jump string_hidden::process
     
@@ -1431,6 +1439,7 @@ test sentence iterate_string_ascii {
     tuple 2
     push char_iterator::out
     tuple 2
+    tuple 2
     jump string_hidden::process
     
     // Step 3: drive 2 taus for done
@@ -1456,6 +1465,7 @@ test sentence iterate_string_ascii {
     push done
     tuple 2
     push char_iterator::out
+    tuple 2
     tuple 2
     jump string_hidden::process
     
@@ -1506,6 +1516,7 @@ test sentence parseint_valid_number {
     push copy
     tuple 2
     push parseint::out
+    tuple 2
     tuple 2
     jump parseint_123_system::process
     
@@ -1569,6 +1580,7 @@ test sentence parseint_valid_number {
     tuple 2
     push parseint::out
     tuple 2
+    tuple 2
     jump parseint_123_system::process
     
     drop 0
@@ -1601,6 +1613,7 @@ test sentence parseint_invalid_char {
     push copy
     tuple 2
     push parseint::out
+    tuple 2
     tuple 2
     jump parseint_45a_system::process
     
@@ -1654,6 +1667,7 @@ test sentence parseint_invalid_char {
     tuple 2
     push parseint::out
     tuple 2
+    tuple 2
     jump parseint_45a_system::process
     
     drop 0
@@ -1677,6 +1691,7 @@ test sentence parseint_empty_string {
     push copy
     tuple 2
     push parseint::out
+    tuple 2
     tuple 2
     jump parseint_empty_system::process
     
@@ -1711,6 +1726,7 @@ test sentence parseint_empty_string {
     push value
     tuple 2
     push parseint::out
+    tuple 2
     tuple 2
     jump parseint_empty_system::process
     
@@ -1755,6 +1771,7 @@ test sentence verify_string_ref {
     drop 0
         // 3. Query length -> [state] -> [next_state]
     push ((), string_ref::length)
+    tuple 2
     jump string_ref::process
     
     // Now state should be ("xyz", (length_resp, 3))
@@ -1768,10 +1785,12 @@ test sentence verify_string_ref {
     
     // Process emission event -> transitions back to idle
     push (3, string_ref::length_resp)
+    tuple 2
     jump string_ref::process
     
     // 4. Query charat 1 (in-bounds)
     push (1, string_ref::charat)
+    tuple 2
     jump string_ref::process
     
     // Now state should emit (charat_resp, (some, 121))
@@ -1784,10 +1803,12 @@ test sentence verify_string_ref {
     
     // Process emission event
     push ((121, string_ref::some), string_ref::charat_resp)
+    tuple 2
     jump string_ref::process
     
     // 5. Query charat 5 (out-of-bounds)
     push (5, string_ref::charat)
+    tuple 2
     jump string_ref::process
     
     // Now state should emit (charat_resp, (none, ()))
@@ -1800,6 +1821,7 @@ test sentence verify_string_ref {
     
     // Process emission event
     push (((), string_ref::none), string_ref::charat_resp)
+    tuple 2
     jump string_ref::process
     
     // Verify final state is ("xyz", idle)
@@ -1835,6 +1857,7 @@ test sentence verify_prefixed_string_ref {
     
     // 2. Query charat 1
     push ((1, string_ref::charat), char_iterator::in)
+    tuple 2
     jump xyz_string_ref_instance::process
     
     // Verify emission of (char_iterator::in, (charat_resp, (some, 121)))
@@ -1847,6 +1870,7 @@ test sentence verify_prefixed_string_ref {
     
     // Process emission back to idle
     push (((121, string_ref::some), string_ref::charat_resp), char_iterator::in)
+    tuple 2
     jump xyz_string_ref_instance::process
     
     // Verify state is (xyz_str, idle)
@@ -1895,6 +1919,7 @@ test sentence iterate_empty {
     tuple 2
     push char_iterator::out
     tuple 2
+    tuple 2
     jump empty_string_hidden::process
     
     drop 0
@@ -1936,6 +1961,7 @@ test sentence iterate_unicode {
     tuple 2
     push char_iterator::out
     tuple 2
+    tuple 2
     jump cafe_string_hidden::process
     
     // 'a' (97)
@@ -1960,6 +1986,7 @@ test sentence iterate_unicode {
     push next
     tuple 2
     push char_iterator::out
+    tuple 2
     tuple 2
     jump cafe_string_hidden::process
     
@@ -1986,6 +2013,7 @@ test sentence iterate_unicode {
     tuple 2
     push char_iterator::out
     tuple 2
+    tuple 2
     jump cafe_string_hidden::process
     
     // 'é' (233)
@@ -2011,6 +2039,7 @@ test sentence iterate_unicode {
     tuple 2
     push char_iterator::out
     tuple 2
+    tuple 2
     jump cafe_string_hidden::process
     
     // done
@@ -2035,6 +2064,7 @@ test sentence iterate_unicode {
     push done
     tuple 2
     push char_iterator::out
+    tuple 2
     tuple 2
     jump cafe_string_hidden::process
     
@@ -2076,6 +2106,7 @@ test sentence split_string {
     tuple 2
     push split::out
     tuple 2
+    tuple 2
     jump split_system::process
     
     // 2. Drive 3 taus (charat request + charat_resp + split::in sync)
@@ -2107,6 +2138,7 @@ test sentence split_string {
     tuple 2
     push split::out
     tuple 2
+    tuple 2
     jump split_system::process
     
     // 4. Check emitted: (split::out, (split::item, (next, 97))) ('a')
@@ -2130,6 +2162,7 @@ test sentence split_string {
     push split::item
     tuple 2
     push split::out
+    tuple 2
     tuple 2
     jump split_system::process
     
@@ -2162,6 +2195,7 @@ test sentence split_string {
     tuple 2
     push split::out
     tuple 2
+    tuple 2
     jump split_system::process
     
     // --- Field 2: "b" ---
@@ -2170,6 +2204,7 @@ test sentence split_string {
     push split::next
     tuple 2
     push split::out
+    tuple 2
     tuple 2
     jump split_system::process
     
@@ -2201,6 +2236,7 @@ test sentence split_string {
     tuple 2
     push split::out
     tuple 2
+    tuple 2
     jump split_system::process
     
     // 10. Check emitted: (split::out, (split::item, (next, 98))) ('b')
@@ -2223,6 +2259,7 @@ test sentence split_string {
     push split::item
     tuple 2
     push split::out
+    tuple 2
     tuple 2
     jump split_system::process
     
@@ -2254,6 +2291,7 @@ test sentence split_string {
     tuple 2
     push split::out
     tuple 2
+    tuple 2
     jump split_system::process
     
     // --- Done ---
@@ -2262,6 +2300,7 @@ test sentence split_string {
     push split::next
     tuple 2
     push split::out
+    tuple 2
     tuple 2
     jump split_system::process
     
@@ -2281,6 +2320,7 @@ test sentence split_string {
     push split::done
     tuple 2
     push split::out
+    tuple 2
     tuple 2
     jump split_system::process
     

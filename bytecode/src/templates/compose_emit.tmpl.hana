@@ -62,8 +62,8 @@ function emit {
     }
 }
 
-#[arity(2, 1)]
-sentence process {
+function process {
+    untuple 2
     roll 1
     untuple 2
     pick 0
@@ -80,6 +80,7 @@ sentence process {
     } {
         drop 0
         roll 1
+        tuple 2
         jump {{machine}}::process
         push 1
         tuple 2

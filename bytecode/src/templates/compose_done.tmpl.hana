@@ -15,8 +15,8 @@ function emit {
     tuple 2
 }
 
-#[arity(2, 1)]
-sentence process {
+function process {
+    untuple 2
     drop 0
 }
 

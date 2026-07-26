@@ -112,7 +112,8 @@ test mod verify_print_hello {
         }
     }
 
-    export sentence process {
+    export function process {
+        untuple 2
         // Stack: [state, event]
         roll 1
         untuple 2
