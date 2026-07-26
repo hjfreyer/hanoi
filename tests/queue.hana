@@ -25,7 +25,7 @@ mod queue {
     }
 
     // accept: takes [state] and returns ValueSet of accepted events
-    sentence accept {
+    function accept {
         // Stack: [state]
         untuple 4
         // Stack: [current, accumulator, new_el, tag]
@@ -124,7 +124,7 @@ mod queue {
     }
 
     // emit: takes [state] and returns (event, has_event)
-    sentence emit {
+    function emit {
         // Stack: [state]
         untuple 4
         // Stack: [current, accumulator, new_el, tag]
@@ -377,7 +377,7 @@ mod queue {
     }
 
     // tau_reduce: takes [state] and returns (new_state, changed)
-    sentence tau_reduce {
+    function tau_reduce {
         // Stack: [state]
         pick 0 // duplicate state. Stack: [state, state]
         untuple 4
@@ -484,12 +484,12 @@ mod queue {
         }
     }
 
-    sentence is_done {
+    function is_done {
         drop 0
         push false
     }
 
-    sentence is_ready_to_finish {
+    function is_ready_to_finish {
         untuple 4
         pick 0
         push super::idle

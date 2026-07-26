@@ -772,58 +772,31 @@ mod tests {
                     untuple 0
                     push 0
                 }
-                export sentence accept {
+                export function accept {
                     drop 0
                     push singleton(crate::payload)
                 }
-                export sentence emit {
+                export function emit {
                     drop 0
-                    untuple 2
-                    branch {
-                        untuple 2
-                        pick 0
-                        push crate::from_sym
-                        equal
-                        branch {
-                            drop 0
-                            push crate::to_sym
-                            tuple 2
-                            push true
-                            tuple 2
-                        } {
-                            tuple 2
-                            push true
-                            tuple 2
-                        }
-                    } {
-                        drop 0
-                        tuple 0
-                        push false
-                        tuple 2
-                    }
+                    push crate::payload
+                    push true
+                    tuple 2
                 }
+                #[arity(2, 1)]
                 export sentence process {
-                    untuple 2
-                    pick 0
-                    push crate::to_sym
-                    equal
-                    branch {
-                        drop 0
-                        push crate::from_sym
-                        tuple 2
-                    } {
-                        tuple 2
-                    }
+                    drop 0
+                    drop 0
+                    push 1
                 }
-                export sentence is_done {
+                export function is_done {
                     drop 0
                     push false
                 }
-                export sentence is_ready_to_finish {
+                export function is_ready_to_finish {
                     drop 0
                     push false
                 }
-                export sentence tau_reduce {
+                export function tau_reduce {
                     push false
                     tuple 2
                 }
@@ -897,7 +870,7 @@ mod tests {
         let bad_code = r#"
             symbol a
             symbol b
-            mod m { export function init { untuple 0 push 0 } export sentence accept { drop 0 push empty_set } export sentence emit { drop 0 tuple 0 push false tuple 2 } export sentence process { } }
+            mod m { export function init { untuple 0 push 0 } export sentence accept { drop 0 push empty_set } export function emit { drop 0 tuple 0 push false tuple 2 } export sentence process { } }
             mod bad compose_rename_prefix(a, m);
         "#;
         assert!(bytecode::assemble(bad_code).is_err());
@@ -912,27 +885,31 @@ mod tests {
                     push 10
                     add
                 }
-                export sentence accept {
+                export function accept {
+                    drop 0
                     push empty_set
                 }
-                export sentence emit {
+                export function emit {
+                    drop 0
                     tuple 0
                     push false
                     tuple 2
                 }
+                #[arity(2, 1)]
                 export sentence process {
+                    drop 0
                     push 100
                     add
                 }
-                export sentence tau_reduce {
+                export function tau_reduce {
                     push false
                     tuple 2
                 }
-                export sentence is_done {
+                export function is_done {
                     drop 0
                     push false
                 }
-                export sentence is_ready_to_finish {
+                export function is_ready_to_finish {
                     drop 0
                     push false
                 }
@@ -949,6 +926,7 @@ mod tests {
                 assert_eq
 
                 // Call process: should push 100, then add -> 152
+                push 0
                 jump closed::process
                 push 152
                 assert_eq
@@ -975,24 +953,24 @@ mod tests {
                     drop 0
                     push empty_set
                 }
-                export sentence emit {
+                export function emit {
                     drop 0
                     tuple 0
                     push false
                     tuple 2
                 }
-                export sentence tau_reduce {
+                export function tau_reduce {
                     push false
                     roll 1
                     tuple 2
                 }
                 export sentence process {
                 }
-                export sentence is_done {
+                export function is_done {
                     drop 0
                     push false
                 }
-                export sentence is_ready_to_finish {
+                export function is_ready_to_finish {
                     drop 0
                     push false
                 }
@@ -1007,13 +985,13 @@ mod tests {
                     drop 0
                     push empty_set
                 }
-                export sentence emit {
+                export function emit {
                     drop 0
                     tuple 0
                     push false
                     tuple 2
                 }
-                export sentence tau_reduce {
+                export function tau_reduce {
                     drop 0
                     push 1
                     push true
@@ -1021,11 +999,11 @@ mod tests {
                 }
                 export sentence process {
                 }
-                export sentence is_done {
+                export function is_done {
                     drop 0
                     push false
                 }
-                export sentence is_ready_to_finish {
+                export function is_ready_to_finish {
                     drop 0
                     push false
                 }
@@ -1158,12 +1136,12 @@ mod runtime_tests {
                     }
                 }
 
-                export sentence tau_reduce {
+                export function tau_reduce {
                     push false
                     tuple 2
                 }
 
-                export sentence emit {
+                export function emit {
                     push state::init
                     equal
                     branch {
@@ -1192,12 +1170,13 @@ mod runtime_tests {
                     }
                 }
 
-                export sentence is_done {
+                export function is_done {
                     push state::done
                     equal
                 }
 
-                export sentence is_ready_to_finish {
+                export function is_ready_to_finish {
+                    drop 0
                     push false
                 }
             }
@@ -1241,12 +1220,12 @@ mod runtime_tests {
                     push empty_set
                 }
 
-                export sentence tau_reduce {
+                export function tau_reduce {
                     push false
                     tuple 2
                 }
 
-                export sentence emit {
+                export function emit {
                     pick 0
                     push hello
                     symbol_len
@@ -1289,14 +1268,15 @@ mod runtime_tests {
                     add
                 }
 
-                export sentence is_done {
+                export function is_done {
                     push hello
                     symbol_len
                     less
                     not
                 }
 
-                export sentence is_ready_to_finish {
+                export function is_ready_to_finish {
+                    drop 0
                     push false
                 }
             }

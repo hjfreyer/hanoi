@@ -315,7 +315,7 @@ mod tests {
         "#;
         let res = assemble(code);
         assert!(res.is_err());
-        assert!(res.unwrap_err().contains("Branch targets have mismatched arities"));
+        assert!(res.unwrap_err().contains("Branch targets have mismatched net stack changes"));
 
         // 4. Recursion detected
         let code = r#"

@@ -8,7 +8,7 @@ test mod verify_print_hello {
         tuple 2
     }
 
-    export sentence accept {
+    export function accept {
         // Stack: [state]
         untuple 2
         // Stack: [phase, data] (data is index 0)
@@ -23,7 +23,7 @@ test mod verify_print_hello {
         }
     }
 
-    export sentence tau_reduce {
+    export function tau_reduce {
         // Stack: [state]
         untuple 2
         // Stack: [phase, data]
@@ -59,7 +59,7 @@ test mod verify_print_hello {
         }
     }
 
-    export sentence emit {
+    export function emit {
         // Stack: [state]
         untuple 2
         // Stack: [phase, data]
@@ -167,14 +167,15 @@ test mod verify_print_hello {
         }
     }
 
-    export sentence is_done {
+    export function is_done {
         untuple 2
         drop 0
         push 3
         equal
     }
 
-    export sentence is_ready_to_finish {
+    export function is_ready_to_finish {
+        drop 0
         push false
     }
 }

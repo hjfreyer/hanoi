@@ -20,7 +20,7 @@ mod string_ref {
     }
     
     // accept: takes state (sym, internal_state) and returns ValueSet of accepted events.
-    sentence accept {
+    function accept {
         untuple 2 // Stack: [sym, internal_state]
         pick 0 // duplicate internal_state
         push idle
@@ -69,13 +69,13 @@ mod string_ref {
         }
     }
 
-    sentence tau_reduce {
+    function tau_reduce {
         push false
         tuple 2
     }
 
     // emit: takes state (sym, internal_state) and returns ValueSet of emitted events.
-    sentence emit {
+    function emit {
         untuple 2 // Stack: [sym, internal_state]
         pick 0 // duplicate internal_state
         push idle
@@ -194,12 +194,12 @@ mod string_ref {
         }
     }
 
-    sentence is_done {
+    function is_done {
         drop 0
         push false
     }
 
-    sentence is_ready_to_finish {
+    function is_ready_to_finish {
         untuple 2
         push idle
         equal
@@ -227,7 +227,7 @@ mod char_iterator {
     }
     
     // accept: takes state (payload, tag) and returns ValueSet of accepted events.
-    sentence accept {
+    function accept {
         untuple 2 // Stack: [payload, tag]
         pick 0 // tag
         push await_charat
@@ -302,13 +302,13 @@ mod char_iterator {
         }
     }
 
-    sentence tau_reduce {
+    function tau_reduce {
         push false
         tuple 2
     }
 
     // emit: takes state (payload, tag) and returns ValueSet of emitted events.
-    sentence emit {
+    function emit {
         untuple 2 // Stack: [payload, tag]
         
         pick 0 // tag
@@ -469,7 +469,7 @@ mod char_iterator {
         }
     }
 
-    sentence is_done {
+    function is_done {
         untuple 2
         pick 0
         push done_state
@@ -480,7 +480,7 @@ mod char_iterator {
         drop 0
     }
 
-    sentence is_ready_to_finish {
+    function is_ready_to_finish {
         untuple 2
         pick 0
         push done_state
@@ -512,7 +512,7 @@ mod parseint {
     }
 
     // accept: takes [state] and returns ValueSet of accepted events.
-    sentence accept {
+    function accept {
         pick 0
         push idle
         equal
@@ -575,13 +575,13 @@ mod parseint {
         }
     }
 
-    sentence tau_reduce {
+    function tau_reduce {
         push false
         tuple 2
     }
 
     // emit: takes [state] and returns ValueSet of emitted events.
-    sentence emit {
+    function emit {
         pick 0
         push idle
         equal
@@ -810,12 +810,12 @@ mod parseint {
         }
     }
 
-    sentence is_done {
+    function is_done {
         drop 0
         push false
     }
 
-    sentence is_ready_to_finish {
+    function is_ready_to_finish {
         push idle
         equal
     }
@@ -848,7 +848,7 @@ mod split {
     }
 
     // accept: takes [state] and returns ValueSet of accepted events.
-    sentence accept {
+    function accept {
         untuple 2 // Stack: [payload, tag]
         
         pick 0 // tag
@@ -940,13 +940,13 @@ mod split {
         }
     }
 
-    sentence tau_reduce {
+    function tau_reduce {
         push false
         tuple 2
     }
 
     // emit: takes [state] and returns ValueSet of emitted events.
-    sentence emit {
+    function emit {
         untuple 2 // Stack: [payload, tag]
         
         pick 0 // tag
@@ -1267,7 +1267,7 @@ mod split {
         }
     }
 
-    sentence is_done {
+    function is_done {
         untuple 2
         pick 0
         push state_done
@@ -1278,7 +1278,7 @@ mod split {
         drop 0
     }
 
-    sentence is_ready_to_finish {
+    function is_ready_to_finish {
         untuple 2
         pick 0
         push state_idle
@@ -1311,24 +1311,24 @@ mod string_ref_base {
         push super::my_str
         jump super::string_ref::init
     }
-    sentence accept {
+    function accept {
         jump super::string_ref::accept
     }
-    sentence tau_reduce {
+    function tau_reduce {
         jump super::string_ref::tau_reduce
     }
-    sentence emit {
+    function emit {
         jump super::string_ref::emit
     }
     sentence process {
         jump super::string_ref::process
     }
 
-    sentence is_done {
+    function is_done {
         jump super::string_ref::is_done
     }
 
-    sentence is_ready_to_finish {
+    function is_ready_to_finish {
         jump super::string_ref::is_ready_to_finish
     }
 }

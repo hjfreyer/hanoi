@@ -26,7 +26,7 @@ mod customer_impl {
     }
 
     // accept takes state: (id, preferred_drink, internal_state) and returns ValueSet of accepted events.
-    sentence accept {
+    function accept {
         untuple 3 // Stack: [id, preferred_drink, internal_state]
         pick 0
         push state::idle
@@ -73,13 +73,13 @@ mod customer_impl {
         }
     }
 
-    sentence tau_reduce {
+    function tau_reduce {
         push false
         tuple 2
     }
 
     // emit takes state: (id, preferred_drink, internal_state) and returns ValueSet of emitted events.
-    sentence emit {
+    function emit {
         untuple 3 // Stack: [id, preferred_drink, internal_state]
         pick 0
         push state::thirsty
@@ -204,12 +204,12 @@ mod customer_impl {
         }
     }
 
-    sentence is_done {
+    function is_done {
         drop 0
         push false
     }
 
-    sentence is_ready_to_finish {
+    function is_ready_to_finish {
         untuple 3
         pick 0
         push state::idle
@@ -297,7 +297,7 @@ mod barista {
     }
 
     // accept takes [state] and returns ValueSet.
-    sentence accept {
+    function accept {
         pick 0
         push state::idle
         equal
@@ -334,13 +334,13 @@ mod barista {
         }
     }
 
-    sentence tau_reduce {
+    function tau_reduce {
         push false
         tuple 2
     }
 
     // emit takes [state] and returns ValueSet.
-    sentence emit {
+    function emit {
         // Stack: [state]
         pick 0
         push state::idle
@@ -445,12 +445,12 @@ mod barista {
         }
     }
 
-    sentence is_done {
+    function is_done {
         drop 0
         push false
     }
 
-    sentence is_ready_to_finish {
+    function is_ready_to_finish {
         push state::idle
         equal
     }
