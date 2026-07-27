@@ -3,9 +3,15 @@ function init {
     push 0
 }
 
-function accept {
+function accept_inner {
     drop 0
     push empty_set
+}
+
+function accept {
+    untuple 2
+    jump accept_inner
+    set_contains
 }
 
 function emit {

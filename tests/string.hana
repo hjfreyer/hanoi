@@ -19,8 +19,8 @@ mod string_ref {
         tuple 2
     }
     
-    // accept: takes state (sym, internal_state) and returns ValueSet of accepted events.
-    function accept {
+    // accept_inner: takes state (sym, internal_state) and returns ValueSet of accepted events.
+    function accept_inner {
         untuple 2 // Stack: [sym, internal_state]
         pick 0 // duplicate internal_state
         push idle
@@ -67,6 +67,12 @@ mod string_ref {
                 }
             }
         }
+    }
+
+    function accept {
+        untuple 2
+        jump accept_inner
+        set_contains
     }
 
     function tau_reduce {
@@ -227,8 +233,8 @@ mod char_iterator {
         tuple 2
     }
     
-    // accept: takes state (payload, tag) and returns ValueSet of accepted events.
-    function accept {
+    // accept_inner: takes state (payload, tag) and returns ValueSet of accepted events.
+    function accept_inner {
         untuple 2 // Stack: [payload, tag]
         pick 0 // tag
         push await_charat
@@ -301,6 +307,12 @@ mod char_iterator {
                 }
             }
         }
+    }
+
+    function accept {
+        untuple 2
+        jump accept_inner
+        set_contains
     }
 
     function tau_reduce {
@@ -513,8 +525,8 @@ mod parseint {
         push idle
     }
 
-    // accept: takes [state] and returns ValueSet of accepted events.
-    function accept {
+    // accept_inner: takes [state] and returns ValueSet of accepted events.
+    function accept_inner {
         pick 0
         push idle
         equal
@@ -575,6 +587,12 @@ mod parseint {
                 }
             }
         }
+    }
+
+    function accept {
+        untuple 2
+        jump accept_inner
+        set_contains
     }
 
     function tau_reduce {
@@ -850,8 +868,8 @@ mod split {
         tuple 2
     }
 
-    // accept: takes [state] and returns ValueSet of accepted events.
-    function accept {
+    // accept_inner: takes [state] and returns ValueSet of accepted events.
+    function accept_inner {
         untuple 2 // Stack: [payload, tag]
         
         pick 0 // tag
@@ -941,6 +959,12 @@ mod split {
                 }
             }
         }
+    }
+
+    function accept {
+        untuple 2
+        jump accept_inner
+        set_contains
     }
 
     function tau_reduce {
@@ -1315,8 +1339,13 @@ mod string_ref_base {
         push super::my_str
         jump super::string_ref::init
     }
+    function accept_inner {
+        jump super::string_ref::accept_inner
+    }
     function accept {
-        jump super::string_ref::accept
+        untuple 2
+        jump accept_inner
+        set_contains
     }
     function tau_reduce {
         jump super::string_ref::tau_reduce
@@ -1501,7 +1530,7 @@ test sentence parseint_valid_number {
     
     // 1. Verify idle parseint accepts (parseint::out, (copy, ()))
     pick 0
-    jump parseint_123_system::accept
+    jump parseint_123_system::accept_inner
     tuple 0
     push copy
     tuple 2
@@ -1740,7 +1769,7 @@ test sentence verify_string_ref {
     
     // 1. Test accept set at rest
     pick 0
-    jump string_ref::accept // Stack: [state, accept_set]
+    jump string_ref::accept_inner // Stack: [state, accept_set]
     
     // Check that it accepts (length, ())
     push (string_ref::length, ())
@@ -1841,7 +1870,7 @@ test sentence verify_prefixed_string_ref {
     
     // 1. Test accept set at rest on channel char_iterator::in
     pick 0
-    jump xyz_string_ref_instance::accept // Stack: [state, accept_set]
+    jump xyz_string_ref_instance::accept_inner // Stack: [state, accept_set]
     
     push (char_iterator::in, (string_ref::length, ()))
     pick 1

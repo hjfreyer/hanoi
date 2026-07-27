@@ -774,9 +774,14 @@ mod tests {
                     untuple 0
                     push 0
                 }
-                export function accept {
+                export function accept_inner {
                     drop 0
                     push singleton(crate::payload)
+                }
+                export function accept {
+                    untuple 2
+                    jump accept_inner
+                    set_contains
                 }
                 export function emit {
                     drop 0
@@ -815,7 +820,7 @@ mod tests {
                 // Stack: [state] (which is 0)
                 // Query accept set
                 pick 0
-                jump renamed::accept
+                jump renamed::accept_inner
                 // Stack: [state, AcceptSet]
                 
                 // Check that (payload, to_sym) is in AcceptSet
@@ -873,7 +878,7 @@ mod tests {
         let bad_code = r#"
             symbol a
             symbol b
-            mod m { export function init { untuple 0 push 0 } export sentence accept { drop 0 push empty_set } export function emit { drop 0 tuple 0 push false tuple 2 } export sentence process { } }
+            mod m { export function init { untuple 0 push 0 } export sentence accept_inner { drop 0 push empty_set } export sentence accept { untuple 2 jump accept_inner set_contains } export function emit { drop 0 tuple 0 push false tuple 2 } export sentence process { } }
             mod bad compose_rename_prefix(a, m);
         "#;
         assert!(bytecode::assemble(bad_code).is_err());
@@ -888,9 +893,14 @@ mod tests {
                     push 10
                     add
                 }
-                export function accept {
+                export function accept_inner {
                     drop 0
                     push empty_set
+                }
+                export function accept {
+                    untuple 2
+                    jump accept_inner
+                    set_contains
                 }
                 export function emit {
                     drop 0
@@ -953,9 +963,14 @@ mod tests {
                     untuple 0
                     push 0
                 }
-                export sentence accept {
+                export sentence accept_inner {
                     drop 0
                     push empty_set
+                }
+                export sentence accept {
+                    untuple 2
+                    jump accept_inner
+                    set_contains
                 }
                 export function emit {
                     drop 0
@@ -987,9 +1002,14 @@ mod tests {
                     untuple 0
                     push 0
                 }
-                export sentence accept {
+                export sentence accept_inner {
                     drop 0
                     push empty_set
+                }
+                export sentence accept {
+                    untuple 2
+                    jump accept_inner
+                    set_contains
                 }
                 export function emit {
                     drop 0
@@ -1054,6 +1074,7 @@ mod runtime_tests {
     use bytecode::value::Symbol;
 
     struct TestEnv {
+        pong_symbol: Symbol,
         received_ping: bool,
     }
 
@@ -1071,45 +1092,11 @@ mod runtime_tests {
             }
         }
 
-        async fn wait_for_event(&mut self, accept_set: &ValueSet) -> Result<Value, String> {
+        async fn wait_for_event(&mut self) -> Result<Value, String> {
             if !self.received_ping {
                 return Err("wait_for_event called before ping!".to_string());
             }
-
-            fn find_symbol_in_set(set: &ValueSet, name: &str) -> Option<Symbol> {
-                match set {
-                    ValueSet::Singleton(box_val) => {
-                        if let Value::Symbol(sym) = &**box_val {
-                            if sym.name == name {
-                                return Some(sym.clone());
-                            }
-                        }
-                        None
-                    }
-                    ValueSet::Union(a, b) => {
-                        find_symbol_in_set(a, name).or_else(|| find_symbol_in_set(b, name))
-                    }
-                    ValueSet::Intersection(a, b) => {
-                        find_symbol_in_set(a, name).or_else(|| find_symbol_in_set(b, name))
-                    }
-                    ValueSet::Tuple(sets) => {
-                        for s in sets {
-                            if let Some(sym) = find_symbol_in_set(s, name) {
-                                return Some(sym);
-                            }
-                        }
-                        None
-                    }
-                    ValueSet::Complement(s) => find_symbol_in_set(s, name),
-                    _ => None,
-                }
-            }
-
-            if let Some(sym) = find_symbol_in_set(accept_set, "pong event") {
-                Ok(Value::Symbol(sym))
-            } else {
-                Err(format!("Environment expected pong to be accepted, but set is {:?}", accept_set))
-            }
+            Ok(Value::Symbol(self.pong_symbol.clone()))
         }
     }
 
@@ -1133,7 +1120,7 @@ mod runtime_tests {
                     push state::init
                 }
 
-                export sentence accept {
+                export sentence accept_inner {
                     push state::waiting
                     equal
                     branch {
@@ -1142,6 +1129,12 @@ mod runtime_tests {
                     } {
                         push empty_set
                     }
+                }
+
+                export sentence accept {
+                    untuple 2
+                    jump accept_inner
+                    set_contains
                 }
 
                 export function tau_reduce {
@@ -1192,7 +1185,13 @@ mod runtime_tests {
         "#;
 
         let res = assemble(code).unwrap();
-        let env = TestEnv { received_ping: false };
+        let pong_symbol = res.symbols.get("main::event::pong").cloned()
+            .and_then(|v| match v {
+                Value::Symbol(s) => Some(s),
+                _ => None,
+            })
+            .unwrap();
+        let env = TestEnv { pong_symbol, received_ping: false };
         let mut runtime = Runtime::new(res, "main", env).unwrap();
 
         let run_res = runtime.run().await;
@@ -1224,9 +1223,15 @@ mod runtime_tests {
                     push 0
                 }
 
-                export sentence accept {
+                export sentence accept_inner {
                     drop 0
                     push empty_set
+                }
+
+                export sentence accept {
+                    untuple 2
+                    jump accept_inner
+                    set_contains
                 }
 
                 export function tau_reduce {

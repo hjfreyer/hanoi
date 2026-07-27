@@ -8,7 +8,7 @@ test mod verify_print_hello {
         tuple 2
     }
 
-    export function accept {
+    export function accept_inner {
         // Stack: [state]
         untuple 2
         // Stack: [phase, data] (data is index 0)
@@ -21,6 +21,12 @@ test mod verify_print_hello {
         } {
             push empty_set
         }
+    }
+
+    export function accept {
+        untuple 2
+        jump accept_inner
+        set_contains
     }
 
     export function tau_reduce {

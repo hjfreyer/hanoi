@@ -24,8 +24,8 @@ mod queue {
         tuple 4
     }
 
-    // accept: takes [state] and returns ValueSet of accepted events
-    function accept {
+    // accept_inner: takes [state] and returns ValueSet of accepted events
+    function accept_inner {
         // Stack: [state]
         untuple 4
         // Stack: [current, accumulator, new_el, tag]
@@ -121,6 +121,12 @@ mod queue {
                 }
             }
         }
+    }
+
+    function accept {
+        untuple 2
+        jump accept_inner
+        set_contains
     }
 
     // emit: takes [state] and returns (event, has_event)
@@ -657,7 +663,7 @@ test sentence verify_queue_machine {
     // Check that we can pop even when awaiting!
     // Awaiting queue should accept pop_front.req
     pick 0
-    jump queue::accept
+    jump queue::accept_inner
     push ()
     push super::prelude::req
     tuple 2

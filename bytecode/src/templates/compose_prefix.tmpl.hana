@@ -2,11 +2,17 @@ function init {
     jump {{target}}::init
 }
 
-function accept {
-    jump {{target}}::accept
+function accept_inner {
+    jump {{target}}::accept_inner
     push {{prefix}}
     set_singleton
     set_tuple 2
+}
+
+function accept {
+    untuple 2
+    jump accept_inner
+    set_contains
 }
 
 function emit {

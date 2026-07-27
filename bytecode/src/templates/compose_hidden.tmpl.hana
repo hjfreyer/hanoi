@@ -7,10 +7,16 @@ sentence set {
     jump {{hidden_fn}}
 }
 
-function accept {
-    jump {{concurrent}}::accept
+function accept_inner {
+    jump {{concurrent}}::accept_inner
     jump {{hidden_fn}}
     set_difference
+}
+
+function accept {
+    untuple 2
+    jump accept_inner
+    set_contains
 }
 
 function emit {

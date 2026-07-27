@@ -1,4 +1,4 @@
-use bytecode::{Library, SentenceIndex, Value, ValueSet};
+use bytecode::{Library, SentenceIndex, Value};
 use crate::VM;
 
 /// An Environment is a Hanoi CSP machine implemented in async Rust.
@@ -7,10 +7,9 @@ pub trait Environment {
     /// Handles an event emitted by the main Hanoi machine.
     async fn handle_event(&mut self, event: Value) -> Result<(), String>;
 
-    /// Asynchronously waits for an event accepted by the main Hanoi machine.
-    /// The runtime passes the set of events the main machine is willing to accept.
-    /// The environment must return an event contained within the `accept_set`.
-    async fn wait_for_event(&mut self, accept_set: &ValueSet) -> Result<Value, String>;
+    /// Asynchronously waits for an event.
+    /// The runtime will verify whether the returned event is accepted by the main machine.
+    async fn wait_for_event(&mut self) -> Result<Value, String>;
 }
 
 pub fn extract_putch_char(
@@ -99,12 +98,8 @@ impl Environment for DefaultEnvironment {
         Ok(())
     }
 
-    async fn wait_for_event(&mut self, accept_set: &ValueSet) -> Result<Value, String> {
-        match accept_set.choose() {
-            bytecode::ChooseResult::Found(val) => Ok(val),
-            bytecode::ChooseResult::Empty => Err("Cannot wait for event because accept set is empty".to_string()),
-            bytecode::ChooseResult::Unknown => Err("Cannot wait for event because accept set is complex or infinite".to_string()),
-        }
+    async fn wait_for_event(&mut self) -> Result<Value, String> {
+        Err("DefaultEnvironment does not support input events".to_string())
     }
 }
 
@@ -201,15 +196,12 @@ impl<E: Environment> Runtime<E> {
                 continue;
             }
 
-            // 4. Query accepted events
-            let accept_set = self.execute_accept(state.clone())?;
-
-            // 5. Asynchronously wait for the environment to pass an accepted event
-            let event = self.environment.wait_for_event(&accept_set).await?;
-            if !accept_set.contains(&event) {
+            // 4. Asynchronously wait for the environment to pass an event
+            let event = self.environment.wait_for_event().await?;
+            if !self.execute_accept(state.clone(), event.clone())? {
                 return Err(format!(
-                    "Environment returned event {:?}, which is not in the accept set {:?}",
-                    event, accept_set
+                    "Environment returned event {:?}, which is not accepted by the machine",
+                    event
                 ));
             }
 
@@ -239,12 +231,11 @@ impl<E: Environment> Runtime<E> {
             }
         }
 
-        // 2. Query accept set and check if start_val is accepted
-        let accept_set = self.execute_accept(state.clone())?;
-        if !accept_set.contains(start_val) {
+        // 2. Check if start_val is accepted
+        if !self.execute_accept(state.clone(), start_val.clone())? {
             return Err(format!(
-                "Test machine does not accept start event {:?}; accept set is {:?}",
-                start_val, accept_set
+                "Test machine does not accept start event {:?}",
+                start_val
             ));
         }
 
@@ -283,15 +274,12 @@ impl<E: Environment> Runtime<E> {
                 return Err("Test machine terminated without emitting pass or fail event".to_string());
             }
 
-            // D. Query accepted events
-            let accept_set = self.execute_accept(state.clone())?;
-
-            // E. Asynchronously wait for the environment to pass an accepted event
-            let event = self.environment.wait_for_event(&accept_set).await?;
-            if !accept_set.contains(&event) {
+            // D. Asynchronously wait for the environment to pass an event
+            let event = self.environment.wait_for_event().await?;
+            if !self.execute_accept(state.clone(), event.clone())? {
                 return Err(format!(
-                    "Environment returned event {:?}, which is not in the accept set {:?}",
-                    event, accept_set
+                    "Environment returned event {:?}, which is not accepted by the machine",
+                    event
                 ));
             }
 
@@ -315,19 +303,20 @@ impl<E: Environment> Runtime<E> {
         Ok(res)
     }
 
-    fn execute_accept(&mut self, state: Value) -> Result<ValueSet, String> {
+    fn execute_accept(&mut self, state: Value, event: Value) -> Result<bool, String> {
         if !self.vm.stack.is_empty() {
             return Err(format!("Stack not empty before accept: {:?}", self.vm.stack));
         }
-        self.vm.stack.push(state);
+        let pair = Value::Tuple(vec![state, event]);
+        self.vm.stack.push(pair);
         self.vm.execute(self.main_accept)?;
         let res = self.vm.pop()?;
         if !self.vm.stack.is_empty() {
             return Err(format!("Stack not empty after accept: {:?}", self.vm.stack));
         }
         match res {
-            Value::Set(s) => Ok(s),
-            v => Err(format!("Expected Value::Set from accept, found {:?}", v)),
+            Value::Bool(b) => Ok(b),
+            v => Err(format!("Expected Value::Bool from accept, found {:?}", v)),
         }
     }
 
