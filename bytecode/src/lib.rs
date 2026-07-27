@@ -9,7 +9,7 @@ pub use arity::check_arities;
 pub use assembly::{assemble, assemble_with_path};
 pub use library::{Library, Sentence, SentenceIndex, Annotation};
 pub use opcode::Instruction;
-pub use value::{Value, ValueSet, ChooseResult};
+pub use value::Value;
 pub use safety::check_safety;
 
 #[cfg(test)]
@@ -23,77 +23,7 @@ mod tests {
         assert_eq!(format!("{}", Value::Float(3.14)), "3.14");
     }
 
-    #[test]
-    fn test_value_set_display() {
-        let empty = Value::Set(ValueSet::Empty);
-        let universal = Value::Set(ValueSet::Universal);
-        let singleton = Value::Set(ValueSet::Singleton(Box::new(Value::Int(42))));
-        let union_set = Value::Set(ValueSet::Union(
-            Box::new(ValueSet::Empty),
-            Box::new(ValueSet::Universal),
-        ));
-        let intersection_set = Value::Set(ValueSet::Intersection(
-            Box::new(ValueSet::Empty),
-            Box::new(ValueSet::Universal),
-        ));
-        let tuple_set = Value::Set(ValueSet::Tuple(vec![ValueSet::Empty, ValueSet::Universal]));
 
-        assert_eq!(format!("{}", empty), "empty_set");
-        assert_eq!(format!("{}", universal), "universal_set");
-        assert_eq!(format!("{}", singleton), "singleton(42)");
-        assert_eq!(format!("{}", union_set), "union(empty_set, universal_set)");
-        assert_eq!(format!("{}", intersection_set), "intersection(empty_set, universal_set)");
-        assert_eq!(format!("{}", tuple_set), "set_tuple(empty_set, universal_set)");
-    }
-
-    #[test]
-    fn test_value_set_choose() {
-        let empty = ValueSet::Empty;
-        let universal = ValueSet::Universal;
-        let singleton = ValueSet::Singleton(Box::new(Value::Int(42)));
-        let union_set = ValueSet::Union(
-            Box::new(ValueSet::Empty),
-            Box::new(ValueSet::Singleton(Box::new(Value::Int(100)))),
-        );
-        let intersection_set = ValueSet::Intersection(
-            Box::new(ValueSet::Union(
-                Box::new(ValueSet::Singleton(Box::new(Value::Int(10)))),
-                Box::new(ValueSet::Singleton(Box::new(Value::Int(20)))),
-            )),
-            Box::new(ValueSet::Singleton(Box::new(Value::Int(20)))),
-        );
-        let tuple_set = ValueSet::Tuple(vec![
-            ValueSet::Singleton(Box::new(Value::Int(5))),
-            ValueSet::Singleton(Box::new(Value::Int(6))),
-        ]);
-        let diff_set = ValueSet::Intersection(
-            Box::new(ValueSet::Union(
-                Box::new(ValueSet::Singleton(Box::new(Value::Int(10)))),
-                Box::new(ValueSet::Singleton(Box::new(Value::Int(20)))),
-            )),
-            Box::new(ValueSet::Complement(Box::new(ValueSet::Singleton(Box::new(Value::Int(10)))))),
-        );
-        let infinite_diff = ValueSet::Intersection(
-            Box::new(ValueSet::Universal),
-            Box::new(ValueSet::Complement(Box::new(ValueSet::Singleton(Box::new(Value::Int(10)))))),
-        );
-
-        assert_eq!(empty.choose(), ChooseResult::Empty);
-        assert_eq!(universal.choose(), ChooseResult::Found(Value::Tuple(vec![])));
-        assert_eq!(singleton.choose(), ChooseResult::Found(Value::Int(42)));
-        assert_eq!(union_set.choose(), ChooseResult::Found(Value::Int(100)));
-        assert_eq!(intersection_set.choose(), ChooseResult::Found(Value::Int(20)));
-        assert_eq!(tuple_set.choose(), ChooseResult::Found(Value::Tuple(vec![Value::Int(5), Value::Int(6)])));
-        assert_eq!(diff_set.choose(), ChooseResult::Found(Value::Int(20)));
-
-        let res = std::panic::catch_unwind(|| {
-            match infinite_diff.choose() {
-                ChooseResult::Unknown => panic!("Cannot choose from an infinite set"),
-                _ => {}
-            }
-        });
-        assert!(res.is_err());
-    }
 
     #[test]
     fn test_instruction_equality() {
@@ -425,86 +355,5 @@ mod tests {
         let _ = std::fs::remove_dir(tmp_dir);
     }
 
-    #[test]
-    fn test_value_set_dnf() {
-        // Union with Empty
-        let u_empty = ValueSet::Union(
-            Box::new(ValueSet::Empty),
-            Box::new(ValueSet::Singleton(Box::new(Value::Int(42)))),
-        );
-        assert_eq!(u_empty.to_dnf(), ValueSet::Singleton(Box::new(Value::Int(42))));
 
-        // Intersection of conflicting Singletons
-        let inter_conflict = ValueSet::Intersection(
-            Box::new(ValueSet::Singleton(Box::new(Value::Int(10)))),
-            Box::new(ValueSet::Singleton(Box::new(Value::Int(20)))),
-        );
-        assert_eq!(inter_conflict.to_dnf(), ValueSet::Empty);
-
-        // Intersection of Singleton and Complement (non-containing)
-        let inter_comp_ok = ValueSet::Intersection(
-            Box::new(ValueSet::Singleton(Box::new(Value::Int(10)))),
-            Box::new(ValueSet::Complement(Box::new(ValueSet::Singleton(Box::new(Value::Int(20)))))),
-        );
-        assert_eq!(inter_comp_ok.to_dnf(), ValueSet::Singleton(Box::new(Value::Int(10))));
-
-        // Intersection of Singleton and Complement (containing)
-        let inter_comp_bad = ValueSet::Intersection(
-            Box::new(ValueSet::Singleton(Box::new(Value::Int(10)))),
-            Box::new(ValueSet::Complement(Box::new(ValueSet::Singleton(Box::new(Value::Int(10)))))),
-        );
-        assert_eq!(inter_comp_bad.to_dnf(), ValueSet::Empty);
-
-        // Singleton of Tuple rewritten to Tuple of Singletons
-        let s_tuple = ValueSet::Singleton(Box::new(Value::Tuple(vec![Value::Int(10), Value::Int(20)])));
-        assert_eq!(
-            s_tuple.to_dnf(),
-            ValueSet::Tuple(vec![
-                ValueSet::Singleton(Box::new(Value::Int(10))),
-                ValueSet::Singleton(Box::new(Value::Int(20))),
-            ])
-        );
-
-        // Tuple containing Empty simplifies to Empty
-        let t_empty = ValueSet::Tuple(vec![
-            ValueSet::Singleton(Box::new(Value::Int(10))),
-            ValueSet::Empty,
-        ]);
-        assert_eq!(t_empty.to_dnf(), ValueSet::Empty);
-    }
-
-    #[test]
-    fn test_value_set_rename_prefix() {
-        use value::Symbol;
-
-        let from_sym = Symbol { id: 1, name: "from".to_string() };
-        let to_sym = Symbol { id: 2, name: "to".to_string() };
-
-        // 1. Standalone symbol: singleton(from) should NOT be renamed
-        let standalone_set = ValueSet::Singleton(Box::new(Value::Symbol(from_sym.clone())));
-        let renamed_standalone = standalone_set.rename_prefix(&from_sym, &to_sym);
-        assert_eq!(renamed_standalone, standalone_set);
-
-        // 2. Tuple value: singleton((from, 42)) should be renamed to singleton((to, 42))
-        let tuple_val_set = ValueSet::Singleton(Box::new(Value::Tuple(vec![
-            Value::Symbol(from_sym.clone()),
-            Value::Int(42),
-        ])));
-        let expected_tuple_val_set = ValueSet::Singleton(Box::new(Value::Tuple(vec![
-            Value::Symbol(to_sym.clone()),
-            Value::Int(42),
-        ])));
-        assert_eq!(tuple_val_set.rename_prefix(&from_sym, &to_sym), expected_tuple_val_set);
-
-        // 3. ValueSet::Tuple: set_tuple(singleton(from), universal_set) -> set_tuple(singleton(to), universal_set)
-        let set_tuple_set = ValueSet::Tuple(vec![
-            ValueSet::Singleton(Box::new(Value::Symbol(from_sym.clone()))),
-            ValueSet::Universal,
-        ]);
-        let expected_set_tuple = ValueSet::Tuple(vec![
-            ValueSet::Singleton(Box::new(Value::Symbol(to_sym.clone()))),
-            ValueSet::Universal,
-        ]);
-        assert_eq!(set_tuple_set.rename_prefix(&from_sym, &to_sym), expected_set_tuple);
-    }
 }

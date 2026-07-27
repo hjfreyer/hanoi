@@ -252,65 +252,7 @@ pub fn execute_instruction_symbolic(
             };
             state.stack.push(res);
         }
-        Instruction::SetContains => {
-            if state.stack.len() < 2 {
-                return Err(format!("Stack underflow on instruction {:?}", inst));
-            }
-            let set = state.stack.pop().unwrap();
-            let elem = state.stack.pop().unwrap();
-            state.stack.push(Expr::Call("set_contains".to_string(), vec![set, elem]));
-        }
-        Instruction::SetUnion | Instruction::SetIntersection | Instruction::SetDifference => {
-            if state.stack.len() < 2 {
-                return Err(format!("Stack underflow on instruction {:?}", inst));
-            }
-            let b = state.stack.pop().unwrap();
-            let a = state.stack.pop().unwrap();
-            let fn_name = match inst {
-                Instruction::SetUnion => "set_union",
-                Instruction::SetIntersection => "set_intersection",
-                Instruction::SetDifference => "set_difference",
-                _ => unreachable!(),
-            };
-            state.stack.push(Expr::Call(fn_name.to_string(), vec![a, b]));
-        }
-        Instruction::SetComplement => {
-            if state.stack.is_empty() {
-                return Err(format!("Stack underflow on instruction {:?}", inst));
-            }
-            let set = state.stack.pop().unwrap();
-            state.stack.push(Expr::Call("set_complement".to_string(), vec![set]));
-        }
-        Instruction::SetSingleton => {
-            if state.stack.is_empty() {
-                return Err(format!("Stack underflow on instruction {:?}", inst));
-            }
-            let elem = state.stack.pop().unwrap();
-            state.stack.push(Expr::Call("set_singleton".to_string(), vec![elem]));
-        }
-        Instruction::SetTuple(len) => {
-            if state.stack.len() < *len {
-                return Err(format!("Stack underflow on instruction {:?}", inst));
-            }
-            let mut elms = Vec::new();
-            for _ in 0..*len {
-                elms.push(state.stack.pop().unwrap());
-            }
-            elms.reverse();
-            state.stack.push(Expr::Call("set_tuple".to_string(), elms));
-        }
-        Instruction::SetRenamePrefix => {
-            if state.stack.len() < 3 {
-                return Err(format!("Stack underflow on instruction {:?}", inst));
-            }
-            let to_val = state.stack.pop().unwrap();
-            let from_val = state.stack.pop().unwrap();
-            let set_val = state.stack.pop().unwrap();
-            state.stack.push(Expr::Call("set_rename_prefix".to_string(), vec![set_val, from_val, to_val]));
-        }
-        Instruction::SetChoose => {
-            return Err(format!("Unsupported deprecated set instruction {:?} encountered during safety checking", inst));
-        }
+
     }
     Ok(())
 }
@@ -510,6 +452,6 @@ fn value_to_expr(val: &Value, symbols: &HashMap<String, Value>) -> Result<Expr, 
             }
             Ok(Expr::Tuple(elms))
         }
-        Value::Set(_) => Ok(Expr::Call("set_val".to_string(), vec![])),
+
     }
 }

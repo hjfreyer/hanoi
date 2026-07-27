@@ -190,17 +190,5 @@ mod tests {
         assert!(res.unwrap_err().contains("Recursion/cycle detected"));
     }
 
-    #[test]
-    fn test_deprecated_set_choose_error() {
-        let code = r#"
-            #[arity(1, 1)]
-            #[safety("true")]
-            sentence use_set_choose {
-                set_choose
-            }
-        "#;
-        let res = assemble(code);
-        assert!(res.is_err());
-        assert!(res.unwrap_err().contains("Unsupported deprecated set instruction"));
-    }
+
 }

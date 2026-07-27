@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use crate::library::{Library, SentenceIndex, Annotation};
 use crate::opcode::Instruction;
-use crate::value::{Value, Symbol, ValueSet};
+use crate::value::{Value, Symbol};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PathSegment {
@@ -247,123 +247,8 @@ fn parse_value(stream: &mut TokenStream) -> Result<ParsedValue, String> {
         Some(Token::Int(i)) => Ok(ParsedValue::Int(i)),
         Some(Token::Float(f)) => Ok(ParsedValue::Float(f)),
         Some(Token::Identifier(name)) => {
-            match name.as_str() {
-                "empty_set" => {
-                    if let Some(&Token::DoubleColon) = stream.peek() {
-                        let path = parse_path(stream, name)?;
-                        Ok(ParsedValue::SymbolRef(path))
-                    } else {
-                        Ok(ParsedValue::SetEmpty)
-                    }
-                }
-                "universal_set" => {
-                    if let Some(&Token::DoubleColon) = stream.peek() {
-                        let path = parse_path(stream, name)?;
-                        Ok(ParsedValue::SymbolRef(path))
-                    } else {
-                        Ok(ParsedValue::SetUniversal)
-                    }
-                }
-                "singleton" => {
-                    if stream.peek() == Some(&Token::LParen) {
-                        stream.expect(Token::LParen)?;
-                        let val = parse_value(stream)?;
-                        stream.expect(Token::RParen)?;
-                        Ok(ParsedValue::SetSingleton(Box::new(val)))
-                    } else {
-                        let path = parse_path(stream, name)?;
-                        Ok(ParsedValue::SymbolRef(path))
-                    }
-                }
-                "union" => {
-                    if stream.peek() == Some(&Token::LParen) {
-                        stream.expect(Token::LParen)?;
-                        let left = parse_value(stream)?;
-                        stream.expect(Token::Comma)?;
-                        let right = parse_value(stream)?;
-                        stream.expect(Token::RParen)?;
-                        Ok(ParsedValue::SetUnion(Box::new(left), Box::new(right)))
-                    } else {
-                        let path = parse_path(stream, name)?;
-                        Ok(ParsedValue::SymbolRef(path))
-                    }
-                }
-                "intersection" => {
-                    if stream.peek() == Some(&Token::LParen) {
-                        stream.expect(Token::LParen)?;
-                        let left = parse_value(stream)?;
-                        stream.expect(Token::Comma)?;
-                        let right = parse_value(stream)?;
-                        stream.expect(Token::RParen)?;
-                        Ok(ParsedValue::SetIntersection(Box::new(left), Box::new(right)))
-                    } else {
-                        let path = parse_path(stream, name)?;
-                        Ok(ParsedValue::SymbolRef(path))
-                    }
-                }
-                "difference" => {
-                    if stream.peek() == Some(&Token::LParen) {
-                        stream.expect(Token::LParen)?;
-                        let left = parse_value(stream)?;
-                        stream.expect(Token::Comma)?;
-                        let right = parse_value(stream)?;
-                        stream.expect(Token::RParen)?;
-                        Ok(ParsedValue::SetDifference(Box::new(left), Box::new(right)))
-                    } else {
-                        let path = parse_path(stream, name)?;
-                        Ok(ParsedValue::SymbolRef(path))
-                    }
-                }
-                "complement" => {
-                    if stream.peek() == Some(&Token::LParen) {
-                        stream.expect(Token::LParen)?;
-                        let val = parse_value(stream)?;
-                        stream.expect(Token::RParen)?;
-                        Ok(ParsedValue::SetComplement(Box::new(val)))
-                    } else {
-                        let path = parse_path(stream, name)?;
-                        Ok(ParsedValue::SymbolRef(path))
-                    }
-                }
-                "set_tuple" => {
-                    if stream.peek() == Some(&Token::LParen) {
-                        stream.expect(Token::LParen)?;
-                        let mut elements = Vec::new();
-                        if stream.peek() == Some(&Token::RParen) {
-                            stream.next(); // consume ')'
-                        } else {
-                            loop {
-                                let val = parse_value(stream)?;
-                                elements.push(val);
-                                match stream.peek() {
-                                    Some(&Token::Comma) => {
-                                        stream.next(); // consume ','
-                                        if stream.peek() == Some(&Token::RParen) {
-                                            stream.next(); // consume trailing comma and ')'
-                                            break;
-                                        }
-                                    }
-                                    Some(&Token::RParen) => {
-                                        stream.next(); // consume ')'
-                                        break;
-                                    }
-                                    other => {
-                                        return Err(format!("Expected ',' or ')', found {:?}", other));
-                                    }
-                                }
-                            }
-                        }
-                        Ok(ParsedValue::SetTuple(elements))
-                    } else {
-                        let path = parse_path(stream, name)?;
-                        Ok(ParsedValue::SymbolRef(path))
-                    }
-                }
-                _ => {
-                    let path = parse_path(stream, name)?;
-                    Ok(ParsedValue::SymbolRef(path))
-                }
-            }
+            let path = parse_path(stream, name)?;
+            Ok(ParsedValue::SymbolRef(path))
         }
         Some(Token::LParen) => {
             let mut elements = Vec::new();
@@ -521,20 +406,8 @@ fn parse_instruction(stream: &mut TokenStream) -> Result<ParsedInstruction, Stri
             let size = parse_usize(stream)?;
             Ok(ParsedInstruction::Untuple(size))
         }
-        "set_contains" => Ok(ParsedInstruction::SetContains),
-        "set_union" => Ok(ParsedInstruction::SetUnion),
-        "set_intersection" => Ok(ParsedInstruction::SetIntersection),
-        "set_difference" => Ok(ParsedInstruction::SetDifference),
-        "set_complement" => Ok(ParsedInstruction::SetComplement),
-        "set_singleton" => Ok(ParsedInstruction::SetSingleton),
-        "set_tuple" => {
-            let size = parse_usize(stream)?;
-            Ok(ParsedInstruction::SetTuple(size))
-        }
-        "set_choose" => Ok(ParsedInstruction::SetChoose),
         "symbol_len" => Ok(ParsedInstruction::SymbolLen),
         "symbol_char_at" => Ok(ParsedInstruction::SymbolCharAt),
-        "set_rename_prefix" => Ok(ParsedInstruction::SetRenamePrefix),
         other => Err(format!("Unknown instruction mnemonic: '{}'", other)),
     }
 }
@@ -895,14 +768,6 @@ pub enum ParsedValue {
     Float(f64),
     Tuple(Vec<ParsedValue>),
     SymbolRef(Path),
-    SetEmpty,
-    SetUniversal,
-    SetSingleton(Box<ParsedValue>),
-    SetUnion(Box<ParsedValue>, Box<ParsedValue>),
-    SetIntersection(Box<ParsedValue>, Box<ParsedValue>),
-    SetDifference(Box<ParsedValue>, Box<ParsedValue>),
-    SetComplement(Box<ParsedValue>),
-    SetTuple(Vec<ParsedValue>),
 }
 
 #[derive(Debug, Clone)]
@@ -942,17 +807,8 @@ enum ParsedInstruction {
     Untuple(usize),
     And,
     Or,
-    SetContains,
-    SetUnion,
-    SetIntersection,
-    SetDifference,
-    SetComplement,
-    SetSingleton,
-    SetTuple(usize),
-    SetChoose,
     SymbolLen,
     SymbolCharAt,
-    SetRenamePrefix,
 }
 
 
@@ -1292,23 +1148,6 @@ impl std::fmt::Display for ParsedValue {
                 write!(f, ")")
             }
             ParsedValue::SymbolRef(path) => write!(f, "{}", path),
-            ParsedValue::SetEmpty => write!(f, "empty_set"),
-            ParsedValue::SetUniversal => write!(f, "universal_set"),
-            ParsedValue::SetSingleton(v) => write!(f, "singleton({})", v),
-            ParsedValue::SetUnion(a, b) => write!(f, "union({}, {})", a, b),
-            ParsedValue::SetIntersection(a, b) => write!(f, "intersection({}, {})", a, b),
-            ParsedValue::SetDifference(a, b) => write!(f, "difference({}, {})", a, b),
-            ParsedValue::SetComplement(v) => write!(f, "complement({})", v),
-            ParsedValue::SetTuple(elements) => {
-                write!(f, "set_tuple(")?;
-                for (i, elem) in elements.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, ", ")?;
-                    }
-                    write!(f, "{}", elem)?;
-                }
-                write!(f, ")")
-            }
         }
     }
 }
@@ -1640,63 +1479,6 @@ impl<'a> Compiler<'a> {
                     ResolvedItem::Sentence(_) => Err(format!("Expected symbol, found sentence at path {:?}", path)),
                 }
             }
-            ParsedValue::SetEmpty => Ok(Value::Set(ValueSet::Empty)),
-            ParsedValue::SetUniversal => Ok(Value::Set(ValueSet::Universal)),
-            ParsedValue::SetSingleton(v) => {
-                let val = self.compile_value(current_path, *v)?;
-                Ok(Value::Set(ValueSet::Singleton(Box::new(val))))
-            }
-            ParsedValue::SetUnion(a, b) => {
-                let s1 = match self.compile_value(current_path, *a)? {
-                    Value::Set(s) => s,
-                    other => return Err(format!("Expected Set in union, found {:?}", other)),
-                };
-                let s2 = match self.compile_value(current_path, *b)? {
-                    Value::Set(s) => s,
-                    other => return Err(format!("Expected Set in union, found {:?}", other)),
-                };
-                Ok(Value::Set(ValueSet::Union(Box::new(s1), Box::new(s2))))
-            }
-            ParsedValue::SetIntersection(a, b) => {
-                let s1 = match self.compile_value(current_path, *a)? {
-                    Value::Set(s) => s,
-                    other => return Err(format!("Expected Set in intersection, found {:?}", other)),
-                };
-                let s2 = match self.compile_value(current_path, *b)? {
-                    Value::Set(s) => s,
-                    other => return Err(format!("Expected Set in intersection, found {:?}", other)),
-                };
-                Ok(Value::Set(ValueSet::Intersection(Box::new(s1), Box::new(s2))))
-            }
-            ParsedValue::SetDifference(a, b) => {
-                let s1 = match self.compile_value(current_path, *a)? {
-                    Value::Set(s) => s,
-                    other => return Err(format!("Expected Set in difference, found {:?}", other)),
-                };
-                let s2 = match self.compile_value(current_path, *b)? {
-                    Value::Set(s) => s,
-                    other => return Err(format!("Expected Set in difference, found {:?}", other)),
-                };
-                Ok(Value::Set(ValueSet::Intersection(Box::new(s1), Box::new(ValueSet::Complement(Box::new(s2))))))
-            }
-            ParsedValue::SetComplement(val) => {
-                let s = match self.compile_value(current_path, *val)? {
-                    Value::Set(s) => s,
-                    other => return Err(format!("Expected Set in complement, found {:?}", other)),
-                };
-                Ok(Value::Set(ValueSet::Complement(Box::new(s))))
-            }
-            ParsedValue::SetTuple(elements) => {
-                let mut compiled_elements = Vec::new();
-                for elem in elements {
-                    let s = match self.compile_value(current_path, elem)? {
-                        Value::Set(s) => s,
-                        other => return Err(format!("Expected Set in set_tuple, found {:?}", other)),
-                    };
-                    compiled_elements.push(s);
-                }
-                Ok(Value::Set(ValueSet::Tuple(compiled_elements)))
-            }
         }
     }
 
@@ -1729,17 +1511,8 @@ impl<'a> Compiler<'a> {
                 ParsedInstruction::Untuple(n) => Instruction::Untuple(n),
                 ParsedInstruction::And => Instruction::And,
                 ParsedInstruction::Or => Instruction::Or,
-                ParsedInstruction::SetContains => Instruction::SetContains,
-                ParsedInstruction::SetUnion => Instruction::SetUnion,
-                ParsedInstruction::SetIntersection => Instruction::SetIntersection,
-                ParsedInstruction::SetDifference => Instruction::SetDifference,
-                ParsedInstruction::SetComplement => Instruction::SetComplement,
-                ParsedInstruction::SetSingleton => Instruction::SetSingleton,
-                ParsedInstruction::SetTuple(n) => Instruction::SetTuple(n),
-                ParsedInstruction::SetChoose => Instruction::SetChoose,
                 ParsedInstruction::SymbolLen => Instruction::SymbolLen,
                 ParsedInstruction::SymbolCharAt => Instruction::SymbolCharAt,
-                ParsedInstruction::SetRenamePrefix => Instruction::SetRenamePrefix,
                 ParsedInstruction::Jump(target) => {
                     let target_idx = self.resolve_target(current_path, target)?;
                     Instruction::Jump(target_idx)

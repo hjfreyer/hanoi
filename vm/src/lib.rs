@@ -1,4 +1,4 @@
-use bytecode::{Instruction, Library, SentenceIndex, Value, ValueSet, ChooseResult};
+use bytecode::{Instruction, Library, SentenceIndex, Value};
 
 pub mod runtime;
 pub use runtime::{Runtime, Environment, DefaultEnvironment};
@@ -69,7 +69,7 @@ impl VM {
             Value::Float(x) => *x != 0.0 && !x.is_nan(),
             Value::Tuple(_) => true,
             Value::Symbol(_) => true,
-            Value::Set(_) => true,
+
         }
     }
 
@@ -344,96 +344,6 @@ impl VM {
                         return Err(format!("Expected Value::Tuple on Untuple, found {:?}", val));
                     }
                 }
-                Instruction::SetContains => {
-                    let set_val = self.pop()?;
-                    let elem_val = self.pop()?;
-                    if let Value::Set(set) = set_val {
-                        self.stack.push(Value::Bool(set.contains(&elem_val)));
-                    } else {
-                        return Err(format!("Expected Value::Set on set_contains, found {:?}", set_val));
-                    }
-                }
-                Instruction::SetUnion => {
-                    let b = self.pop()?;
-                    let a = self.pop()?;
-                    match (a, b) {
-                        (Value::Set(s1), Value::Set(s2)) => {
-                            self.stack.push(Value::Set(ValueSet::Union(Box::new(s1), Box::new(s2))));
-                        }
-                        (v1, v2) => return Err(format!("Cannot union non-set values {:?} and {:?}", v1, v2)),
-                    }
-                }
-                Instruction::SetIntersection => {
-                    let b = self.pop()?;
-                    let a = self.pop()?;
-                    match (a, b) {
-                        (Value::Set(s1), Value::Set(s2)) => {
-                            self.stack.push(Value::Set(ValueSet::Intersection(Box::new(s1), Box::new(s2))));
-                        }
-                        (v1, v2) => return Err(format!("Cannot intersect non-set values {:?} and {:?}", v1, v2)),
-                    }
-                }
-                Instruction::SetDifference => {
-                    let b = self.pop()?;
-                    let a = self.pop()?;
-                    match (a, b) {
-                        (Value::Set(s1), Value::Set(s2)) => {
-                            self.stack.push(Value::Set(ValueSet::Intersection(
-                                Box::new(s1),
-                                Box::new(ValueSet::Complement(Box::new(s2))),
-                            )));
-                        }
-                        (v1, v2) => return Err(format!("Cannot compute difference of non-set values {:?} and {:?}", v1, v2)),
-                    }
-                }
-                Instruction::SetComplement => {
-                    let a = self.pop()?;
-                    match a {
-                        Value::Set(s) => {
-                            self.stack.push(Value::Set(ValueSet::Complement(Box::new(s))));
-                        }
-                        v => return Err(format!("Cannot compute complement of non-set value {:?}", v)),
-                    }
-                }
-                Instruction::SetSingleton => {
-                    let val = self.pop()?;
-                    self.stack.push(Value::Set(ValueSet::Singleton(Box::new(val))));
-                }
-                Instruction::SetTuple(n) => {
-                    if self.stack.len() < n {
-                        return Err(format!("Stack underflow on SetTuple: requested {} but stack size {}", n, self.stack.len()));
-                    }
-                    let index = self.stack.len() - n;
-                    let mut elements = self.stack.split_off(index);
-                    elements.reverse();
-                    let mut sets = Vec::new();
-                    for elem in elements {
-                        if let Value::Set(s) = elem {
-                            sets.push(s);
-                        } else {
-                            return Err(format!("Expected Value::Set for SetTuple element, found {:?}", elem));
-                        }
-                    }
-                    self.stack.push(Value::Set(ValueSet::Tuple(sets)));
-                }
-                Instruction::SetChoose => {
-                    let set_val = self.pop()?;
-                    if let Value::Set(set) = set_val {
-                        match set.choose() {
-                            ChooseResult::Found(elem) => {
-                                self.stack.push(Value::Tuple(vec![Value::Bool(true), elem]));
-                            }
-                            ChooseResult::Empty => {
-                                self.stack.push(Value::Tuple(vec![Value::Bool(false), Value::Tuple(vec![])]));
-                            }
-                            ChooseResult::Unknown => {
-                                panic!("Cannot choose from an infinite set: {:?}", set);
-                            }
-                        }
-                    } else {
-                        return Err(format!("Expected Value::Set on set_choose, found {:?}", set_val));
-                    }
-                }
                 Instruction::SymbolLen => {
                     let val = self.pop()?;
                     if let Value::Symbol(sym) = val {
@@ -457,17 +367,6 @@ impl VM {
                         (s, i) => {
                             return Err(format!("Invalid arguments to symbol_char_at: expected Symbol, Int, found {:?}, {:?}", s, i));
                         }
-                    }
-                }
-                Instruction::SetRenamePrefix => {
-                    let to_val = self.pop()?;
-                    let from_val = self.pop()?;
-                    let set_val = self.pop()?;
-                    match (set_val, from_val, to_val) {
-                        (Value::Set(set), Value::Symbol(from_sym), Value::Symbol(to_sym)) => {
-                            self.stack.push(Value::Set(set.rename_prefix(&from_sym, &to_sym)));
-                        }
-                        (s, f, t) => return Err(format!("Invalid arguments to set_rename_prefix: expected Set, Symbol, Symbol, found {:?}, {:?}, {:?}", s, f, t)),
                     }
                 }
             }

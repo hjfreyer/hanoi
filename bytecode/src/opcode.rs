@@ -67,27 +67,8 @@ pub enum Instruction {
     /// Pop the top two values on the stack, evaluate logical OR on their truthiness, and push the result.
     Or,
     
-    /// Pop a ValueSet and a Value off the stack, check if the value is in the set, and push a Bool.
-    SetContains,
-    /// Pop two ValueSets off the stack, and push their union ValueSet.
-    SetUnion,
-    /// Pop two ValueSets off the stack, and push their intersection ValueSet.
-    SetIntersection,
-    /// Pop two ValueSets off the stack, and push their difference ValueSet.
-    SetDifference,
-    /// Pop a ValueSet off the stack, and push its complement ValueSet.
-    SetComplement,
-    /// Pop a Value off the stack, and push its singleton ValueSet.
-    SetSingleton,
-    /// Pop N ValueSets off the stack, and push a set tuple of those N sets.
-    SetTuple(usize),
-    /// Pop a ValueSet off the stack, select an arbitrary element, and push a tuple (has_element: bool, element: any).
-    SetChoose,
-    
     /// Pop a Symbol off the stack, and push its character length as an Int.
     SymbolLen,
     /// Pop an index (Int) and a Symbol off the stack, and push the Unicode code point of the character at that index as an Int.
     SymbolCharAt,
-    /// Pop a ValueSet, a 'from' Symbol, and a 'to' Symbol, and push a ValueSet where events starting with 'from' are rewritten to start with 'to'.
-    SetRenamePrefix,
 }

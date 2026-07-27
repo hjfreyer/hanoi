@@ -108,8 +108,7 @@ fn infer_arity_of_instructions(
             Instruction::Equal | Instruction::Greater | Instruction::Less |
             Instruction::Add | Instruction::Subtract | Instruction::Multiply |
             Instruction::Divide | Instruction::Modulo | Instruction::And | Instruction::Or |
-            Instruction::SetContains | Instruction::SetUnion | Instruction::SetIntersection |
-            Instruction::SetDifference | Instruction::SymbolCharAt => {
+            Instruction::SymbolCharAt => {
                 let req = 2;
                 if current_size < req {
                     let diff = req - current_size;
@@ -119,8 +118,7 @@ fn infer_arity_of_instructions(
                 current_size -= 1;
             }
             Instruction::Not | Instruction::Negate | Instruction::Print |
-            Instruction::SetComplement | Instruction::SetSingleton | Instruction::SymbolLen |
-            Instruction::SetChoose => {
+            Instruction::SymbolLen => {
                 let req = 1;
                 if current_size < req {
                     let diff = req - current_size;
@@ -180,25 +178,7 @@ fn infer_arity_of_instructions(
                 }
                 current_size = current_size - 1 + len;
             }
-            Instruction::SetTuple(len) => {
-                let len = *len as i64;
-                let req = len;
-                if current_size < req {
-                    let diff = req - current_size;
-                    initial_req += diff;
-                    current_size = req;
-                }
-                current_size = current_size - len + 1;
-            }
-            Instruction::SetRenamePrefix => {
-                let req = 3;
-                if current_size < req {
-                    let diff = req - current_size;
-                    initial_req += diff;
-                    current_size = req;
-                }
-                current_size -= 2;
-            }
+
             Instruction::Jump(target) => {
                 let (n_target, m_target, target_panic) = get_or_infer_arity(*target, library, memo, in_progress)?;
                 let req = n_target;

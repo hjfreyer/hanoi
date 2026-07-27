@@ -16,7 +16,6 @@ mod file_mods;
 mod namespacing;
 mod symbols;
 mod tuples;
-mod value_sets;
 mod string;
 mod queue;
 mod is_done_test;
