@@ -299,10 +299,10 @@ function process {
         
         // Check P1 participation
         pick 1
-        jump {{p1}}::accept_inner
         pick 3
         roll 1
-        set_contains
+        tuple 2
+        jump {{p1}}::accept
         branch {
             push true
         } {
@@ -320,10 +320,10 @@ function process {
         
         // Check P2 participation
         pick 1
-        jump {{p2}}::accept_inner
         pick 4
         roll 1
-        set_contains
+        tuple 2
+        jump {{p2}}::accept
         branch {
             push true
         } {

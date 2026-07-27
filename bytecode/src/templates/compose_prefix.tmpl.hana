@@ -12,16 +12,19 @@ function accept_inner {
 function accept {
     untuple 2
     pick 1
-    untuple 2
+    push universal_set
     push {{prefix}}
-    equal
+    set_singleton
+    set_tuple 2
+    set_contains
     branch {
-        drop 2
+        roll 1
+        untuple 2
+        drop 0
         roll 1
         tuple 2
         jump {{target}}::accept
     } {
-        drop 0
         drop 0
         drop 0
         push false
