@@ -11,8 +11,25 @@ function accept_inner {
 
 function accept {
     untuple 2
-    jump accept_inner
-    set_contains
+    pick 1
+    untuple 2
+    pick 1
+    push {{to_symbol}}
+    equal
+    branch {
+        drop 1
+        drop 2
+        push {{from_symbol}}
+        tuple 2
+        roll 1
+        tuple 2
+        jump {{target}}::accept
+    } {
+        drop 0
+        drop 0
+        tuple 2
+        jump {{target}}::accept
+    }
 }
 
 function emit {

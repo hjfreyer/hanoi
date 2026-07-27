@@ -81,7 +81,50 @@ mod customer_impl {
     #[arity(1, 1)]
     function accept {
         untuple 2
-        jump accept_inner
+        untuple 3 // Stack: [event, id, preferred_drink, internal_state]
+        pick 0
+        push state::idle
+        equal
+        branch {
+            drop 0 // drop internal_state
+            drop 0 // drop preferred_drink
+            push super::event::want_coffee
+            tuple 2
+            set_singleton
+        } {
+            pick 0
+            push state::ordered
+            equal
+            branch {
+                drop 0 // drop internal_state
+                push super::event::coffee
+                tuple 3
+                set_singleton
+            } {
+                pick 0
+                push state::has_coffee
+                equal
+                branch {
+                    drop 0 // drop internal_state
+                    drop 0 // drop preferred_drink
+                    push super::event::enjoy
+                    tuple 2
+                    set_singleton
+                } {
+                    pick 0
+                    push state::thirsty
+                    equal
+                    branch {
+                        drop 0
+                        drop 0
+                        drop 0
+                        push empty_set
+                    } {
+                        panic
+                    }
+                }
+            }
+        }
         set_contains
     }
 
@@ -371,7 +414,39 @@ mod barista {
     #[arity(1, 1)]
     function accept {
         untuple 2
-        jump accept_inner
+        pick 0
+        push state::idle
+        equal
+        branch {
+            drop 0
+            push empty_set
+        } {
+            pick 0
+            push state::awaiting_order
+            equal
+            branch {
+                drop 0
+                push ()
+                set_singleton
+                push universal_set
+                set_tuple 2 // {(val, ())}
+                
+                push super::super::prelude::some
+                set_singleton
+                set_tuple 2 // {((val, ()), some)}
+                
+                push super::super::prelude::resp
+                set_singleton
+                set_tuple 2 // {(((val, ()), some), resp)}
+                
+                push super::super::queue::await_front
+                set_singleton
+                set_tuple 2 // {((((val, ()), some), resp), await_front)}
+            } {
+                drop 0
+                push empty_set
+            }
+        }
         set_contains
     }
 
@@ -515,8 +590,8 @@ sentence customers_sync_inner {
     push empty_set
 }
 sentence customers_sync {
-    jump customers_sync_inner
-    set_contains
+    drop 0
+    push false
 }
 
 mod customers compose_concurrent(customer1, customer2, customers_sync, customers_sync_inner);
@@ -525,7 +600,7 @@ sentence customers_queue_sync_inner {
     push set_tuple(singleton(super::queue::push_back), universal_set)
 }
 sentence customers_queue_sync {
-    jump customers_queue_sync_inner
+    push set_tuple(singleton(super::queue::push_back), universal_set)
     set_contains
 }
 
@@ -540,7 +615,13 @@ sentence joint_sync_inner {
     set_union
 }
 sentence joint_sync {
-    jump joint_sync_inner
+    // Sync barista and queue on await_front
+    push set_tuple(singleton(super::queue::await_front), universal_set)
+    
+    // Sync customers and barista on coffee
+    push set_tuple(singleton(event::coffee), universal_set, universal_set)
+    set_union
+    
     set_contains
 }
 
@@ -556,7 +637,14 @@ sentence hidden_events_inner {
     set_union
 }
 sentence hidden_events {
-    jump hidden_events_inner
+    push set_tuple(singleton(super::queue::push_back), universal_set)
+    
+    push set_tuple(singleton(event::coffee), universal_set, universal_set)
+    set_union
+    
+    push set_tuple(singleton(super::queue::await_front), universal_set)
+    set_union
+    
     set_contains
 }
 

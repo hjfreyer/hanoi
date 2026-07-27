@@ -15,8 +15,16 @@ function accept_inner {
 
 function accept {
     untuple 2
-    jump accept_inner
-    set_contains
+    pick 1
+    jump {{hidden_fn}}
+    branch {
+        drop 0
+        drop 0
+        push false
+    } {
+        tuple 2
+        jump {{concurrent}}::accept
+    }
 }
 
 function emit {

@@ -71,7 +71,52 @@ mod string_ref {
 
     function accept {
         untuple 2
-        jump accept_inner
+        untuple 2 // Stack: [event, sym, internal_state]
+        pick 0 // duplicate internal_state
+        push idle
+        equal
+        branch {
+            drop 0 // drop internal_state
+            drop 0 // drop sym
+            tuple 0
+            push length
+            tuple 2 // ((), length)
+            set_singleton
+            
+            // Accept (N, charat) for any N
+            push universal_set
+            push charat
+            set_singleton
+            set_tuple 2
+            set_union
+        } {
+            // In response state: accepts nothing (empty_set)
+            pick 0
+            untuple 2 // Stack: [event, sym, internal_state, resp_val, resp_tag]
+            pick 0 // resp_tag
+            push length_resp
+            equal
+            branch {
+                drop 0
+                drop 0
+                drop 0
+                drop 0
+                push empty_set
+            } {
+                pick 0 // resp_tag
+                push charat_resp
+                equal
+                branch {
+                    drop 0
+                    drop 0
+                    drop 0
+                    drop 0
+                    push empty_set
+                } {
+                    panic
+                }
+            }
+        }
         set_contains
     }
 
@@ -311,7 +356,78 @@ mod char_iterator {
 
     function accept {
         untuple 2
-        jump accept_inner
+        untuple 2 // Stack: [event, payload, tag]
+        pick 0 // tag
+        push await_charat
+        equal
+        branch {
+            drop 0 // drop tag
+            drop 0 // drop payload
+            
+            // Construct set of (((ch, some), charat_resp), in)
+            push universal_set
+            push super::string_ref::some
+            set_singleton
+            set_tuple 2 // {(ch, some)}
+            
+            push super::string_ref::charat_resp
+            set_singleton
+            set_tuple 2 // {((ch, some), charat_resp)}
+            
+            push in
+            set_singleton
+            set_tuple 2 // {(((ch, some), charat_resp), in)}
+            
+            // Construct set of ((((), none), charat_resp), in)
+            tuple 0
+            push super::string_ref::none
+            tuple 2 // ((), none)
+            push super::string_ref::charat_resp
+            tuple 2 // (((), none), charat_resp)
+            push in
+            tuple 2 // ((((), none), charat_resp), in)
+            set_singleton
+            
+            set_union
+        } {
+            pick 0 // tag
+            push fetch
+            equal
+            branch {
+                drop 0
+                drop 0
+                push empty_set
+            } {
+                pick 0 // tag
+                push yield_next
+                equal
+                branch {
+                    drop 0
+                    drop 0
+                    push empty_set
+                } {
+                    pick 0 // tag
+                    push yield_done
+                    equal
+                    branch {
+                        drop 0
+                        drop 0
+                        push empty_set
+                    } {
+                        pick 0 // tag
+                        push done_state
+                        equal
+                        branch {
+                            drop 0
+                            drop 0
+                            push empty_set
+                        } {
+                            panic
+                        }
+                    }
+                }
+            }
+        }
         set_contains
     }
 
@@ -591,7 +707,66 @@ mod parseint {
 
     function accept {
         untuple 2
-        jump accept_inner
+        pick 0
+        push idle
+        equal
+        branch {
+            drop 0
+            tuple 0
+            push super::copy
+            tuple 2 // ((), copy)
+            push out
+            tuple 2 // (((), copy), out)
+            set_singleton
+        } {
+            untuple 2 // Stack: [event, payload, tag]
+            pick 0 // tag
+            push parsing
+            equal
+            branch {
+                drop 0 // drop tag
+                drop 0 // drop payload
+                
+                // Accepts ((ch, next), in) for any ch
+                push universal_set
+                push super::next
+                set_singleton
+                set_tuple 2 // {(ch, next)}
+                push in
+                set_singleton
+                set_tuple 2 // {((ch, next), in)}
+                
+                // Accepts (((), done), in)
+                tuple 0
+                push super::done
+                tuple 2 // ((), done)
+                push in
+                tuple 2 // ((((), done), in)
+                set_singleton
+                
+                set_union
+            } {
+                pick 0 // tag
+                push yielding_ok
+                equal
+                branch {
+                    drop 0
+                    drop 0
+                    push empty_set
+                } {
+                    pick 0 // tag
+                    push yielding_err
+                    equal
+                    branch {
+                        drop 0
+                        drop 0
+                        push empty_set
+                    } {
+                        panic
+                    }
+                }
+            }
+        }
         set_contains
     }
 
@@ -963,7 +1138,94 @@ mod split {
 
     function accept {
         untuple 2
-        jump accept_inner
+        untuple 2 // Stack: [event, payload, tag]
+        pick 0 // tag
+        push state_idle
+        equal
+        branch {
+            drop 0 // drop tag
+            drop 0 // drop payload
+            
+            tuple 0
+            push next
+            tuple 2
+            set_singleton
+            push out
+            set_singleton
+            set_tuple 2
+        } {
+            pick 0 // tag
+            push state_idle_done
+            equal
+            branch {
+                drop 0
+                drop 0
+                
+                tuple 0
+                push next
+                tuple 2
+                set_singleton
+                push out
+                set_singleton
+                set_tuple 2
+            } {
+                pick 0 // tag
+                push state_await_start
+                equal
+                branch {
+                    drop 0
+                    drop 0
+                    
+                    push universal_set
+                    push super::next
+                    set_singleton
+                    set_tuple 2
+                    push in
+                    set_singleton
+                    set_tuple 2
+                    
+                    tuple 0
+                    push super::done
+                    tuple 2
+                    set_singleton
+                    push in
+                    set_singleton
+                    set_tuple 2
+                    
+                    set_union
+                } {
+                    pick 0 // tag
+                    push state_await_field
+                    equal
+                    branch {
+                        drop 0
+                        drop 0
+                        
+                        push universal_set
+                        push super::next
+                        set_singleton
+                        set_tuple 2
+                        push in
+                        set_singleton
+                        set_tuple 2
+                        
+                        tuple 0
+                        push super::done
+                        tuple 2
+                        set_singleton
+                        push in
+                        set_singleton
+                        set_tuple 2
+                        
+                        set_union
+                    } {
+                        drop 0
+                        drop 0
+                        push empty_set
+                    }
+                }
+            }
+        }
         set_contains
     }
 
@@ -1343,9 +1605,7 @@ mod string_ref_base {
         jump super::string_ref::accept_inner
     }
     function accept {
-        untuple 2
-        jump accept_inner
-        set_contains
+        jump super::string_ref::accept
     }
     function tau_reduce {
         jump super::string_ref::tau_reduce

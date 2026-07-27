@@ -1459,12 +1459,13 @@ fn compose_emit_helper(val: Option<ParsedValue>, target: &Path) -> Result<Vec<To
     }
 }
 
-fn compose_accept_helper(val_set_path: Path, target: &Path) -> Result<Vec<TopLevelItem>, String> {
+fn compose_accept_helper(val_set_path: Path, val_set_path_inner: Path, target: &Path) -> Result<Vec<TopLevelItem>, String> {
     let machine = adjust_path(target);
 
     compile_template(TEMPLATE_ACCEPT, &[
         ("machine", &machine),
         ("val_set_path", &val_set_path),
+        ("val_set_path_inner", &val_set_path_inner),
     ])
 }
 
@@ -1524,15 +1525,19 @@ fn generate_composition_items(
             compose_emit_helper(Some(val), &paths[0])
         }
         "compose_accept" => {
-            if args.len() != 2 {
-                return Err("compose_accept expects exactly 2 arguments: value_set and target_machine".to_string());
+            if args.len() != 3 {
+                return Err("compose_accept expects exactly 3 arguments: value_set, value_set_inner, and target_machine".to_string());
             }
             let val_set_path = match &args[0] {
                 ResolvedArg::Path(path) => adjust_path(path),
                 _ => return Err("compose_accept: first argument must be a sentence path".to_string()),
             };
-            let paths = extract_paths(&args[1..2], "compose_accept")?;
-            compose_accept_helper(val_set_path, &paths[0])
+            let val_set_path_inner = match &args[1] {
+                ResolvedArg::Path(path) => adjust_path(path),
+                _ => return Err("compose_accept: second argument must be a sentence path".to_string()),
+            };
+            let paths = extract_paths(&args[2..3], "compose_accept")?;
+            compose_accept_helper(val_set_path, val_set_path_inner, &paths[0])
         }
         "compose_accept_static" => {
             if args.len() != 2 {

@@ -10,8 +10,9 @@ function accept_inner {
 
 function accept {
     untuple 2
-    jump accept_inner
-    set_contains
+    drop 0
+    drop 0
+    push false
 }
 
 function emit {

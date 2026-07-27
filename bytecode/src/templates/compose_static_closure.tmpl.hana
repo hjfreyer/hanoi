@@ -9,9 +9,7 @@ function accept_inner {
 }
 
 function accept {
-    untuple 2
-    jump accept_inner
-    set_contains
+    jump {{machine}}::accept
 }
 
 function emit {

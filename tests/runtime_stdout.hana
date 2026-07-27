@@ -25,7 +25,15 @@ test mod verify_print_hello {
 
     export function accept {
         untuple 2
-        jump accept_inner
+        untuple 2
+        drop 0
+        push 0
+        equal
+        branch {
+            push singleton(crate::prelude::start)
+        } {
+            push empty_set
+        }
         set_contains
     }
 
