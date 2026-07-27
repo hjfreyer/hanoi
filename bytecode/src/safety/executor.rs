@@ -176,7 +176,6 @@ pub fn execute_instruction_symbolic(
             for _ in 0..*n {
                 elms.push(state.stack.pop().unwrap());
             }
-            elms.reverse();
             state.stack.push(Expr::Tuple(elms));
         }
         Instruction::Untuple(n) => {

@@ -59,19 +59,7 @@ impl VM {
         Ok(&self.stack[self.stack.len() - 1 - offset])
     }
 
-    /// Helper to determine the truthiness of a value.
-    /// Bool(false) is falsey. Numbers equal to zero are falsey.
-    /// Tuples are always truthy. Everything else is truthy.
-    fn is_truthy(&self, value: &Value) -> bool {
-        match value {
-            Value::Bool(b) => *b,
-            Value::Int(x) => *x != 0,
-            Value::Float(x) => *x != 0.0 && !x.is_nan(),
-            Value::Tuple(_) => true,
-            Value::Symbol(_) => true,
 
-        }
-    }
 
     /// Executes sentences in the library starting with the given `start_sentence`.
     /// Reaching the end of a sentence pops the call stack to return to the caller.
@@ -262,19 +250,29 @@ impl VM {
                 }
                 Instruction::Not => {
                     let val = self.pop()?;
-                    self.stack.push(Value::Bool(!self.is_truthy(&val)));
+                    let b = match val {
+                        Value::Bool(b) => b,
+                        v => return Err(format!("Expected boolean operand on Not, found {:?}", v)),
+                    };
+                    self.stack.push(Value::Bool(!b));
                 }
                 Instruction::And => {
-                    let b = self.pop()?;
-                    let a = self.pop()?;
-                    let res = self.is_truthy(&a) && self.is_truthy(&b);
-                    self.stack.push(Value::Bool(res));
+                    let b_val = self.pop()?;
+                    let a_val = self.pop()?;
+                    let (a, b) = match (a_val, b_val) {
+                        (Value::Bool(a), Value::Bool(b)) => (a, b),
+                        (v1, v2) => return Err(format!("Expected boolean operands on And, found {:?} and {:?}", v1, v2)),
+                    };
+                    self.stack.push(Value::Bool(a && b));
                 }
                 Instruction::Or => {
-                    let b = self.pop()?;
-                    let a = self.pop()?;
-                    let res = self.is_truthy(&a) || self.is_truthy(&b);
-                    self.stack.push(Value::Bool(res));
+                    let b_val = self.pop()?;
+                    let a_val = self.pop()?;
+                    let (a, b) = match (a_val, b_val) {
+                        (Value::Bool(a), Value::Bool(b)) => (a, b),
+                        (v1, v2) => return Err(format!("Expected boolean operands on Or, found {:?} and {:?}", v1, v2)),
+                    };
+                    self.stack.push(Value::Bool(a || b));
                 }
                 Instruction::Negate => {
                     let val = self.pop()?;
@@ -297,9 +295,13 @@ impl VM {
                 }
                 Instruction::Branch(then_target, else_target) => {
                     let cond = self.pop()?;
+                    let b = match cond {
+                        Value::Bool(b) => b,
+                        v => return Err(format!("Expected boolean condition on Branch, found {:?}", v)),
+                    };
                     // Push the return address (the next instruction) to the call stack
                     self.call_stack.push((current_sentence, ip));
-                    if self.is_truthy(&cond) {
+                    if b {
                         current_sentence = then_target;
                     } else {
                         current_sentence = else_target;
@@ -311,8 +313,12 @@ impl VM {
                 }
                 Instruction::Assert => {
                     let val = self.pop()?;
-                    if !self.is_truthy(&val) {
-                        return Err(format!("Assertion failed: value {:?} is falsey", val));
+                    let b = match val {
+                        Value::Bool(b) => b,
+                        v => return Err(format!("Expected boolean operand on Assert, found {:?}", v)),
+                    };
+                    if !b {
+                        return Err(format!("Assertion failed: value is false"));
                     }
                 }
                 Instruction::AssertEqual => {
@@ -872,7 +878,6 @@ mod tests {
                 }
                 export function tau_reduce {
                     push false
-                    roll 1
                     tuple 2
                 }
                 export function process {
