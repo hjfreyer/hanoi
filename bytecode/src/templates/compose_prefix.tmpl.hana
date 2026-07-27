@@ -10,39 +10,47 @@ function accept {
     untuple 2
     // Stack: [event, state]
     pick 1
-    // Stack: [event, state, event]
-    push universal_set
-    // Stack: [event, state, event, universal_set]
-    push {{prefix}}
-    // Stack: [event, state, event, universal_set, {{prefix}}]
-    set_singleton
-    // Stack: [event, state, event, universal_set, singleton({{prefix}})]
-    set_tuple 2
-    // Stack: [event, state, event, set_tuple(singleton({{prefix}}), universal_set)]
-    set_contains
-    // Stack: [event, state, is_prefixed]
+    push crate::prelude::start
+    equal
+    pick 2
+    push crate::prelude::pass
+    equal
+    or
+    pick 2
+    push crate::prelude::fail
+    equal
+    or
     branch {
-        // Stack: [event, state]
-        roll 1
-        // Stack: [state, event]
-        untuple 2
-        // Stack: [state, payload, prefix]
         drop 0
-        // Stack: [state, payload]
-        roll 1
-        // Stack: [payload, state]
-        tuple 2
-        // Stack: [(state, payload)]
-        jump {{target}}::accept
-        // Stack: [Bool]
+        drop 0
+        push false
     } {
         // Stack: [event, state]
-        drop 0
-        // Stack: [event]
-        drop 0
-        // Stack: []
-        push false
-        // Stack: [false]
+        pick 1
+        // Stack: [event, state, event]
+        untuple 2
+        // Stack: [event, state, payload, prefix]
+        push {{prefix}}
+        // Stack: [event, state, payload, prefix, {{prefix}}]
+        equal
+        // Stack: [event, state, payload, is_prefixed]
+        branch {
+            // Stack: [event, state, payload]
+            drop 2
+            // Stack: [state, payload]
+            roll 1
+            // Stack: [payload, state]
+            tuple 2
+            // Stack: [(state, payload)]
+            jump {{target}}::accept
+            // Stack: [Bool]
+        } {
+            // Stack: [event, state, payload]
+            drop 0
+            drop 0
+            drop 0
+            push false
+        }
     }
 }
 

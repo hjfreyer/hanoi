@@ -29,17 +29,29 @@ mod string_ref {
         branch {
             drop 0 // drop internal_state
             drop 0 // drop sym
-            tuple 0
+            // Stack: [event]
+            untuple 2
+            // Stack: [payload, tag]
+            pick 0 // tag
             push length
-            tuple 2 // ((), length)
-            set_singleton
-            
-            // Accept (N, charat) for any N
-            push universal_set
-            push charat
-            set_singleton
-            set_tuple 2
-            set_union
+            equal
+            branch {
+                drop 0 // drop tag
+                // Stack: [payload]
+                tuple 0 // push ()
+                equal
+            } {
+                // Stack: [payload, tag]
+                push charat
+                equal
+                branch {
+                    drop 0 // drop payload
+                    push true
+                } {
+                    drop 0 // drop payload
+                    push false
+                }
+            }
         } {
             // In response state: accepts nothing (empty_set)
             pick 0
@@ -52,7 +64,8 @@ mod string_ref {
                 drop 0
                 drop 0
                 drop 0
-                push empty_set
+                drop 0 // drop event
+                push false
             } {
                 pick 0 // resp_tag
                 push charat_resp
@@ -62,13 +75,13 @@ mod string_ref {
                     drop 0
                     drop 0
                     drop 0
-                    push empty_set
+                    drop 0 // drop event
+                    push false
                 } {
                     panic
                 }
             }
         }
-        set_contains
     }
 
     function tau_reduce {
@@ -238,40 +251,69 @@ mod char_iterator {
         branch {
             drop 0 // drop tag
             drop 0 // drop payload
-            
-            // Construct set of (((ch, some), charat_resp), in)
-            push universal_set
-            push super::string_ref::some
-            set_singleton
-            set_tuple 2 // {(ch, some)}
-            
-            push super::string_ref::charat_resp
-            set_singleton
-            set_tuple 2 // {((ch, some), charat_resp)}
-            
+            // Stack: [event]
+            untuple 2
+            // Stack: [channel, inner]
             push in
-            set_singleton
-            set_tuple 2 // {(((ch, some), charat_resp), in)}
-            
-            // Construct set of ((((), none), charat_resp), in)
-            tuple 0
-            push super::string_ref::none
-            tuple 2 // ((), none)
-            push super::string_ref::charat_resp
-            tuple 2 // (((), none), charat_resp)
-            push in
-            tuple 2 // ((((), none), charat_resp), in)
-            set_singleton
-            
-            set_union
+            equal
+            branch {
+                // channel == in. Now check inner.
+                // Stack: [inner]
+                untuple 2
+                // Stack: [tag, option]
+                push super::string_ref::charat_resp
+                equal
+                branch {
+                    // tag == charat_resp. Now check option.
+                    // Stack: [option]
+                    untuple 2
+                    // Stack: [opt_tag, val]
+                    pick 0 // opt_tag
+                    push super::string_ref::some
+                    equal
+                    branch {
+                        // opt_tag == some. val can be anything.
+                        // Stack: [opt_tag, val]
+                        drop 0
+                        drop 0
+                        push true
+                    } {
+                        // opt_tag != some. Check if it is none.
+                        // Stack: [opt_tag, val]
+                        push super::string_ref::none
+                        equal
+                        branch {
+                            // opt_tag == none. val must be ().
+                            // Stack: [val]
+                            tuple 0 // push ()
+                            equal
+                        } {
+                            // opt_tag is neither.
+                            // Stack: [val]
+                            drop 0
+                            push false
+                        }
+                    }
+                } {
+                    // tag != charat_resp
+                    drop 0
+                    push false
+                }
+            } {
+                // channel != in
+                drop 0
+                push false
+            }
         } {
+            // Otherwise, returns false
             pick 0 // tag
             push fetch
             equal
             branch {
                 drop 0
                 drop 0
-                push empty_set
+                drop 0 // drop event
+                push false
             } {
                 pick 0 // tag
                 push yield_next
@@ -279,7 +321,8 @@ mod char_iterator {
                 branch {
                     drop 0
                     drop 0
-                    push empty_set
+                    drop 0 // drop event
+                    push false
                 } {
                     pick 0 // tag
                     push yield_done
@@ -287,7 +330,8 @@ mod char_iterator {
                     branch {
                         drop 0
                         drop 0
-                        push empty_set
+                        drop 0 // drop event
+                        push false
                     } {
                         pick 0 // tag
                         push done_state
@@ -295,7 +339,8 @@ mod char_iterator {
                         branch {
                             drop 0
                             drop 0
-                            push empty_set
+                            drop 0 // drop event
+                            push false
                         } {
                             panic
                         }
@@ -303,7 +348,6 @@ mod char_iterator {
                 }
             }
         }
-        set_contains
     }
 
     function tau_reduce {
@@ -522,13 +566,14 @@ mod parseint {
         push idle
         equal
         branch {
-            drop 0
+            drop 0 // drop state
+            // Stack: [event]
             tuple 0
             push super::copy
             tuple 2 // ((), copy)
             push out
             tuple 2 // (((), copy), out)
-            set_singleton
+            equal
         } {
             untuple 2 // Stack: [event, payload, tag]
             pick 0 // tag
@@ -537,33 +582,57 @@ mod parseint {
             branch {
                 drop 0 // drop tag
                 drop 0 // drop payload
-                
-                // Accepts ((ch, next), in) for any ch
-                push universal_set
-                push super::next
-                set_singleton
-                set_tuple 2 // {(ch, next)}
+                // Stack: [event]
+                untuple 2
+                // Stack: [channel, inner]
                 push in
-                set_singleton
-                set_tuple 2 // {((ch, next), in)}
-                
-                // Accepts (((), done), in)
-                tuple 0
-                push super::done
-                tuple 2 // ((), done)
-                push in
-                tuple 2 // ((((), done), in)
-                set_singleton
-                
-                set_union
+                equal
+                branch {
+                    // channel == in. Now check inner.
+                    // Stack: [inner]
+                    untuple 2
+                    // Stack: [msg_tag, msg_val]
+                    pick 0 // msg_tag
+                    push super::next
+                    equal
+                    branch {
+                        // msg_tag == next. msg_val can be anything.
+                        // Stack: [msg_tag, msg_val]
+                        drop 0
+                        drop 0
+                        push true
+                    } {
+                        // msg_tag != next. Check if it is done.
+                        // Stack: [msg_tag, msg_val]
+                        push super::done
+                        equal
+                        branch {
+                            // msg_tag == done. msg_val must be ().
+                            // Stack: [msg_val]
+                            tuple 0
+                            equal
+                        } {
+                            // msg_tag is neither.
+                            // Stack: [msg_val]
+                            drop 0
+                            push false
+                        }
+                    }
+                } {
+                    // channel != in
+                    drop 0
+                    push false
+                }
             } {
+                // Otherwise, returns false
                 pick 0 // tag
                 push yielding_ok
                 equal
                 branch {
                     drop 0
                     drop 0
-                    push empty_set
+                    drop 0 // drop event
+                    push false
                 } {
                     pick 0 // tag
                     push yielding_err
@@ -571,14 +640,14 @@ mod parseint {
                     branch {
                         drop 0
                         drop 0
-                        push empty_set
+                        drop 0 // drop event
+                        push false
                     } {
                         panic
                     }
                 }
             }
         }
-        set_contains
     }
 
     function tau_reduce {
@@ -861,91 +930,81 @@ mod split {
         pick 0 // tag
         push state_idle
         equal
+        pick 1 // tag
+        push state_idle_done
+        equal
+        or
         branch {
             drop 0 // drop tag
             drop 0 // drop payload
-            
+            // Stack: [event]
+            // We check if event == ((next, ()), out)
             tuple 0
             push next
             tuple 2
-            set_singleton
             push out
-            set_singleton
-            set_tuple 2
+            tuple 2
+            equal
         } {
             pick 0 // tag
-            push state_idle_done
+            push state_await_start
             equal
+            pick 1 // tag
+            push state_await_field
+            equal
+            or
             branch {
-                drop 0
-                drop 0
-                
-                tuple 0
-                push next
-                tuple 2
-                set_singleton
-                push out
-                set_singleton
-                set_tuple 2
-            } {
-                pick 0 // tag
-                push state_await_start
+                drop 0 // drop tag
+                drop 0 // drop payload
+                // Stack: [event]
+                untuple 2
+                // Stack: [channel, inner]
+                push in
                 equal
                 branch {
-                    drop 0
-                    drop 0
-                    
-                    push universal_set
+                    // channel == in. Now check inner.
+                    // Stack: [inner]
+                    untuple 2
+                    // Stack: [msg_tag, msg_val]
+                    pick 0 // msg_tag
                     push super::next
-                    set_singleton
-                    set_tuple 2
-                    push in
-                    set_singleton
-                    set_tuple 2
-                    
-                    tuple 0
-                    push super::done
-                    tuple 2
-                    set_singleton
-                    push in
-                    set_singleton
-                    set_tuple 2
-                    
-                    set_union
-                } {
-                    pick 0 // tag
-                    push state_await_field
                     equal
                     branch {
+                        // msg_tag == super::next. msg_val can be anything.
+                        // Stack: [msg_tag, msg_val]
                         drop 0
                         drop 0
-                        
-                        push universal_set
-                        push super::next
-                        set_singleton
-                        set_tuple 2
-                        push in
-                        set_singleton
-                        set_tuple 2
-                        
-                        tuple 0
-                        push super::done
-                        tuple 2
-                        set_singleton
-                        push in
-                        set_singleton
-                        set_tuple 2
-                        
-                        set_union
+                        push true
                     } {
-                        drop 0
-                        drop 0
-                        push empty_set
+                        // msg_tag != super::next. Check if it is super::done.
+                        // Stack: [msg_tag, msg_val]
+                        push super::done
+                        equal
+                        branch {
+                            // msg_tag == super::done. msg_val must be ().
+                            // Stack: [msg_val]
+                            tuple 0
+                            equal
+                        } {
+                            // msg_tag is neither.
+                            // Stack: [msg_val]
+                            drop 0
+                            push false
+                        }
                     }
+                } {
+                    // channel != in
+                    drop 0
+                    push false
                 }
+            } {
+                // Otherwise, returns false
+                drop 0 // drop tag
+                drop 0 // drop payload
+                drop 0 // drop event
+                push false
             }
         }
-        set_contains
     }
 
     function tau_reduce {
@@ -1342,8 +1401,26 @@ mod string_ref_base {
 }
 
 sentence sync_char_iterator_in {
-    push set_tuple(singleton(char_iterator::in), universal_set)
-    set_contains
+    pick 0
+    push crate::prelude::start
+    equal
+    pick 1
+    push crate::prelude::pass
+    equal
+    or
+    pick 1
+    push crate::prelude::fail
+    equal
+    or
+    branch {
+        drop 0
+        push false
+    } {
+        untuple 2
+        drop 1
+        push char_iterator::in
+        equal
+    }
 }
 
 mod string_hidden compose_hidden(
@@ -1490,8 +1567,26 @@ mod str_123_hidden compose_hidden(
 );
 
 sentence sync_parseint_in {
-    push set_tuple(singleton(parseint::in), universal_set)
-    set_contains
+    pick 0
+    push crate::prelude::start
+    equal
+    pick 1
+    push crate::prelude::pass
+    equal
+    or
+    pick 1
+    push crate::prelude::fail
+    equal
+    or
+    branch {
+        drop 0
+        push false
+    } {
+        untuple 2
+        drop 1
+        push parseint::in
+        equal
+    }
 }
 
 mod parseint_123_system compose_hidden(
@@ -2105,8 +2200,26 @@ mod comma_str_hidden compose_hidden(
 );
 
 sentence sync_split_in {
-    push set_tuple(singleton(split::in), universal_set)
-    set_contains
+    pick 0
+    push crate::prelude::start
+    equal
+    pick 1
+    push crate::prelude::pass
+    equal
+    or
+    pick 1
+    push crate::prelude::fail
+    equal
+    or
+    branch {
+        drop 0
+        push false
+    } {
+        untuple 2
+        drop 1
+        push split::in
+        equal
+    }
 }
 
 mod split_system compose_hidden(

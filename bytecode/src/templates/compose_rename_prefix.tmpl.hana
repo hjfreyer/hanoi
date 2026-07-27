@@ -10,41 +10,51 @@ function accept {
     untuple 2
     // Stack: [event, state]
     pick 1
-    // Stack: [event, state, event]
-    push universal_set
-    // Stack: [event, state, event, universal_set]
-    push {{to_symbol}}
-    // Stack: [event, state, event, universal_set, {{to_symbol}}]
-    set_singleton
-    // Stack: [event, state, event, universal_set, singleton({{to_symbol}})]
-    set_tuple 2
-    // Stack: [event, state, event, set_tuple(singleton({{to_symbol}}), universal_set)]
-    set_contains
-    // Stack: [event, state, is_renamed_prefix]
+    push crate::prelude::start
+    equal
+    pick 2
+    push crate::prelude::pass
+    equal
+    or
+    pick 2
+    push crate::prelude::fail
+    equal
+    or
     branch {
-        // Stack: [event, state]
-        roll 1
-        // Stack: [state, event]
-        untuple 2
-        // Stack: [state, payload, to_symbol]
         drop 0
-        // Stack: [state, payload]
-        push {{from_symbol}}
-        // Stack: [state, payload, {{from_symbol}}]
-        tuple 2
-        // Stack: [state, ({{from_symbol}}, payload)]
-        roll 1
-        // Stack: [({{from_symbol}}, payload), state]
-        tuple 2
-        // Stack: [(state, ({{from_symbol}}, payload))]
-        jump {{target}}::accept
-        // Stack: [Bool]
+        drop 0
+        push false
     } {
         // Stack: [event, state]
-        tuple 2
-        // Stack: [(state, event)]
-        jump {{target}}::accept
-        // Stack: [Bool]
+        pick 1 // duplicate event
+        untuple 2
+        // Stack: [event, state, payload, prefix]
+        push {{to_symbol}}
+        equal
+        // Stack: [event, state, payload, prefix == {{to_symbol}}]
+        branch {
+            // Stack: [event, state, payload]
+            push {{from_symbol}}
+            // Stack: [event, state, payload, {{from_symbol}}]
+            tuple 2
+            // Stack: [event, state, ({{from_symbol}}, payload)]
+            drop 2 // drops event
+            // Stack: [state, ({{from_symbol}}, payload)]
+            roll 1 // swap them
+            // Stack: [({{from_symbol}}, payload), state]
+            tuple 2
+            // Stack: [(state, ({{from_symbol}}, payload))]
+            jump {{target}}::accept
+            // Stack: [Bool]
+        } {
+            // Stack: [event, state, payload]
+            drop 0 // drop payload
+            // Stack: [event, state]
+            tuple 2
+            // Stack: [(state, event)]
+            jump {{target}}::accept
+            // Stack: [Bool]
+        }
     }
 }
 

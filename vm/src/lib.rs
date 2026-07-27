@@ -764,6 +764,9 @@ mod tests {
                 mod event {
                     symbol tau
                 }
+                symbol start "Start test event"
+                symbol pass "Pass test event"
+                symbol fail "Fail test event"
             }
 
             symbol from_sym "FromSymbol"

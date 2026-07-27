@@ -39,32 +39,38 @@ mod queue {
             drop 0
             drop 0
             drop 0
-            
-            // push_back set: (val, push_back)
-            push universal_set
+            // Stack: [event]
+            untuple 2
+            // Stack: [channel, val]
+            pick 0 // channel
             push super::push_back
-            set_singleton
-            set_tuple 2
-            
-            // pop_front.req set: (((), req), pop_front)
-            tuple 0
-            push super::super::prelude::req
-            tuple 2
-            set_singleton
-            push super::pop_front
-            set_singleton
-            set_tuple 2
-            set_union
-            
-            // await_front.req set: (((), req), await_front)
-            tuple 0
-            push super::super::prelude::req
-            tuple 2
-            set_singleton
-            push super::await_front
-            set_singleton
-            set_tuple 2
-            set_union
+            equal
+            branch {
+                drop 0
+                drop 0
+                push true
+            } {
+                tuple 2 // reconstruct event
+                // Stack: [event]
+                pick 0
+                tuple 0
+                push super::super::prelude::req
+                tuple 2
+                push super::pop_front
+                tuple 2
+                equal
+                branch {
+                    drop 0
+                    push true
+                } {
+                    tuple 0
+                    push super::super::prelude::req
+                    tuple 2
+                    push super::await_front
+                    tuple 2
+                    equal
+                }
+            }
         } {
             pick 0 // tag
             push super::awaiting_push
@@ -74,22 +80,25 @@ mod queue {
                 drop 0
                 drop 0
                 drop 0
-                
-                // push_back set: (val, push_back)
-                push universal_set
+                // Stack: [event]
+                untuple 2
+                // Stack: [channel, val]
+                pick 0 // channel
                 push super::push_back
-                set_singleton
-                set_tuple 2
-                
-                // pop_front.req set: (((), req), pop_front)
-                tuple 0
-                push super::super::prelude::req
-                tuple 2
-                set_singleton
-                push super::pop_front
-                set_singleton
-                set_tuple 2
-                set_union
+                equal
+                branch {
+                    drop 0
+                    drop 0
+                    push true
+                } {
+                    tuple 2 // reconstruct event
+                    tuple 0
+                    push super::super::prelude::req
+                    tuple 2
+                    push super::pop_front
+                    tuple 2
+                    equal
+                }
             } {
                 pick 0 // tag
                 push super::pop_front_resp
@@ -104,26 +113,54 @@ mod queue {
                 or
                 branch {
                     // Stack: [event, current, accumulator, new_el, tag]
-                    // Package state (excluding event at depth 4)
-                    tuple 4 // [event, state]
+                    pick 3
+                    pick 3
+                    pick 3
+                    pick 3
+                    tuple 4 // State
                     jump super::queue::emit
                     untuple 2
                     branch {
-                        set_singleton
+                        // Stack: [event, current, accumulator, new_el, tag, emitted_event]
+                        roll 5
+                        // Stack: [current, accumulator, new_el, tag, emitted_event, event]
+                        equal
+                        // Stack: [current, accumulator, new_el, tag, match]
+                        roll 4
+                        drop 0
+                        roll 3
+                        drop 0
+                        roll 2
+                        drop 0
+                        roll 1
+                        drop 0
                     } {
                         drop 0
-                        push empty_set
+                        roll 4
+                        drop 0
+                        roll 3
+                        drop 0
+                        roll 2
+                        drop 0
+                        roll 1
+                        drop 0
+                        drop 0
+                        push false
                     }
                 } {
+                    roll 4 // event
                     drop 0
+                    roll 3 // current
                     drop 0
+                    roll 2 // accumulator
                     drop 0
+                    roll 1 // new_el
                     drop 0
-                    push empty_set
+                    drop 0 // tag
+                    push false
                 }
             }
         }
-        set_contains
     }
 
     // emit: takes [state] and returns (event, has_event)

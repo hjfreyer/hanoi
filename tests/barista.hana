@@ -39,22 +39,24 @@ mod customer_impl {
         branch {
             drop 0 // drop internal_state
             drop 0 // drop preferred_drink
+            // Stack: [event, id]
             tuple 0
-            roll 1
-            tuple 2
+            roll 1 // Stack: [event, (), id]
+            tuple 2 // Stack: [event, (id, ())]
             push super::event::want_coffee
-            tuple 2
-            set_singleton
+            tuple 2 // Stack: [event, (want_coffee, (id, ()))]
+            equal
         } {
             pick 0
             push state::ordered
             equal
             branch {
                 drop 0 // drop internal_state
-                tuple 2
+                // Stack: [event, id, preferred_drink]
+                tuple 2 // Stack: [event, (preferred_drink, id)]
                 push super::event::coffee
-                tuple 2
-                set_singleton
+                tuple 2 // Stack: [event, (coffee, (preferred_drink, id))]
+                equal
             } {
                 pick 0
                 push state::has_coffee
@@ -62,12 +64,13 @@ mod customer_impl {
                 branch {
                     drop 0 // drop internal_state
                     drop 0 // drop preferred_drink
+                    // Stack: [event, id]
                     tuple 0
-                    roll 1
-                    tuple 2
+                    roll 1 // Stack: [event, (), id]
+                    tuple 2 // Stack: [event, (id, ())]
                     push super::event::enjoy
-                    tuple 2
-                    set_singleton
+                    tuple 2 // Stack: [event, (enjoy, (id, ()))]
+                    equal
                 } {
                     pick 0
                     push state::thirsty
@@ -76,14 +79,14 @@ mod customer_impl {
                         drop 0
                         drop 0
                         drop 0
-                        push empty_set
+                        drop 0 // drop event
+                        push false
                     } {
                         panic
                     }
                 }
             }
         }
-        set_contains
     }
 
     #[arity(1, 1)]
@@ -342,36 +345,64 @@ mod barista {
         push state::idle
         equal
         branch {
-            drop 0
-            push empty_set
+            drop 0 // drop state
+            drop 0 // drop event
+            push false
         } {
             pick 0
             push state::awaiting_order
             equal
             branch {
-                drop 0
-                push ()
-                set_singleton
-                push universal_set
-                set_tuple 2 // {(val, ())}
-                
-                push super::super::prelude::some
-                set_singleton
-                set_tuple 2 // {((val, ()), some)}
-                
-                push super::super::prelude::resp
-                set_singleton
-                set_tuple 2 // {(((val, ()), some), resp)}
-                
+                drop 0 // drop state
+                // Stack: [event]
+                untuple 2
+                // Stack: [channel, inner]
                 push super::super::queue::await_front
-                set_singleton
-                set_tuple 2 // {((((val, ()), some), resp), await_front)}
+                equal
+                branch {
+                    // channel == await_front
+                    // Stack: [inner]
+                    untuple 2
+                    // Stack: [resp_tag, option]
+                    push super::super::prelude::resp
+                    equal
+                    branch {
+                        // resp_tag == resp
+                        // Stack: [option]
+                        untuple 2
+                        // Stack: [some_tag, val_tuple]
+                        push super::super::prelude::some
+                        equal
+                        branch {
+                            // some_tag == some
+                            // Stack: [val_tuple]
+                            untuple 2
+                            // Stack: [empty_tuple, val]
+                            drop 0 // drop val (can be anything)
+                            // Stack: [empty_tuple]
+                            tuple 0 // push ()
+                            equal
+                        } {
+                            // some_tag != some
+                            drop 0
+                            push false
+                        }
+                    } {
+                        // resp_tag != resp
+                        drop 0
+                        push false
+                    }
+                } {
+                    // channel != await_front
+                    drop 0
+                    push false
+                }
             } {
-                drop 0
-                push empty_set
+                drop 0 // drop state
+                drop 0 // drop event
+                push false
             }
         }
-        set_contains
     }
 
     #[arity(1, 1)]
@@ -519,43 +550,100 @@ sentence customers_sync {
 mod customers compose_concurrent(customer1, customer2, customers_sync);
 
 sentence customers_queue_sync {
-    push set_tuple(singleton(super::queue::push_back), universal_set)
-    set_contains
+    pick 0
+    push crate::prelude::start
+    equal
+    pick 1
+    push crate::prelude::pass
+    equal
+    or
+    pick 1
+    push crate::prelude::fail
+    equal
+    or
+    branch {
+        drop 0
+        push false
+    } {
+        untuple 2
+        drop 1
+        push super::queue::push_back
+        equal
+    }
 }
 
 mod customers_and_queue compose_concurrent(customers, super::queue::queue, customers_queue_sync);
 
 sentence joint_sync {
-    // Sync barista and queue on await_front
-    push set_tuple(singleton(super::queue::await_front), universal_set)
-    
-    // Sync customers and barista on coffee
-    push universal_set
-    push universal_set
-    set_tuple 2
-    push singleton(event::coffee)
-    set_tuple 2
-    set_union
-    
-    set_contains
+    pick 0
+    push crate::prelude::start
+    equal
+    pick 1
+    push crate::prelude::pass
+    equal
+    or
+    pick 1
+    push crate::prelude::fail
+    equal
+    or
+    branch {
+        drop 0
+        push false
+    } {
+        untuple 2
+        drop 1 // drop payload
+        pick 0
+        push super::queue::await_front
+        equal
+        branch {
+            drop 0
+            push true
+        } {
+            push event::coffee
+            equal
+        }
+    }
 }
 
 mod concurrent compose_concurrent(customers_and_queue, barista, joint_sync);
 
 sentence hidden_events {
-    push set_tuple(singleton(super::queue::push_back), universal_set)
-    
-    push universal_set
-    push universal_set
-    set_tuple 2
-    push singleton(event::coffee)
-    set_tuple 2
-    set_union
-    
-    push set_tuple(singleton(super::queue::await_front), universal_set)
-    set_union
-    
-    set_contains
+    pick 0
+    push crate::prelude::start
+    equal
+    pick 1
+    push crate::prelude::pass
+    equal
+    or
+    pick 1
+    push crate::prelude::fail
+    equal
+    or
+    branch {
+        drop 0
+        push false
+    } {
+        untuple 2
+        drop 1 // drop payload
+        pick 0
+        push super::queue::push_back
+        equal
+        branch {
+            drop 0
+            push true
+        } {
+            pick 0
+            push event::coffee
+            equal
+            branch {
+                drop 0
+                push true
+            } {
+                push super::queue::await_front
+                equal
+            }
+        }
+    }
 }
 
 mod hidden compose_hidden(concurrent, hidden_events);

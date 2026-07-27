@@ -1,13 +1,49 @@
 symbol input0 "39472"
 
 sentence sync_char_iterator_in {
-    push set_tuple(singleton(crate::string::char_iterator::in), universal_set)
-    set_contains
+    pick 0
+    push crate::prelude::start
+    equal
+    pick 1
+    push crate::prelude::pass
+    equal
+    or
+    pick 1
+    push crate::prelude::fail
+    equal
+    or
+    branch {
+        drop 0
+        push false
+    } {
+        untuple 2
+        drop 1
+        push crate::string::char_iterator::in
+        equal
+    }
 }
 
 sentence sync_parseint_in {
-    push set_tuple(singleton(crate::string::parseint::in), universal_set)
-    set_contains
+    pick 0
+    push crate::prelude::start
+    equal
+    pick 1
+    push crate::prelude::pass
+    equal
+    or
+    pick 1
+    push crate::prelude::fail
+    equal
+    or
+    branch {
+        drop 0
+        push false
+    } {
+        untuple 2
+        drop 1
+        push crate::string::parseint::in
+        equal
+    }
 }
 
 mod input0_hidden compose_hidden(
@@ -44,11 +80,26 @@ mod harness compose_accept_static(
 );
 
 sentence sync_set {
-    push union(
-        singleton((crate::string::parseint::out, (crate::string::copy, ()))),
-        set_tuple(singleton(crate::string::parseint::out), universal_set)
-    )
-    set_contains
+    pick 0
+    push crate::prelude::start
+    equal
+    pick 1
+    push crate::prelude::pass
+    equal
+    or
+    pick 1
+    push crate::prelude::fail
+    equal
+    or
+    branch {
+        drop 0
+        push false
+    } {
+        untuple 2
+        drop 1
+        push crate::string::parseint::out
+        equal
+    }
 }
 
 mod sut_and_harness compose_concurrent(sut, harness, sync_set);
