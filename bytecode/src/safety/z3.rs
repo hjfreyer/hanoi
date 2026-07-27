@@ -68,26 +68,53 @@ pub fn collect_vars_expr(e: &Expr, vars: &mut HashSet<String>) {
 // SMT-LIB2 Translator
 // =============================================================================
 
+fn is_bool_expr(e: &Expr) -> bool {
+    match e {
+        Expr::Bool(_) => true,
+        Expr::LessThan(_, _) | Expr::LessThanEqual(_, _) | Expr::Equal(_, _) => true,
+        Expr::Call(name, _) => {
+            name == "is_numeric" || name == "is_bool" || name == "is_symbol" || name == "is_int" || name == "is_tuple"
+        }
+        Expr::Formula(_) => true,
+        Expr::Not(_) => true,
+        _ => false,
+    }
+}
+
+fn translate_expr_to_bool(e: &Expr, float_to_id: &mut HashMap<String, usize>, tuple_to_id: &mut HashMap<Expr, usize>) -> String {
+    match e {
+        Expr::LessThan(a, b) => format!("(< (getInt {}) (getInt {}))", translate_expr(a, float_to_id, tuple_to_id), translate_expr(b, float_to_id, tuple_to_id)),
+        Expr::LessThanEqual(a, b) => format!("(<= (getInt {}) (getInt {}))", translate_expr(a, float_to_id, tuple_to_id), translate_expr(b, float_to_id, tuple_to_id)),
+        Expr::Equal(a, b) => format!("(= {} {})", translate_expr(a, float_to_id, tuple_to_id), translate_expr(b, float_to_id, tuple_to_id)),
+        Expr::Call(name, _) if name == "is_numeric" || name == "is_bool" || name == "is_symbol" || name == "is_int" || name == "is_tuple" => {
+            translate_expr(e, float_to_id, tuple_to_id)
+        }
+        Expr::Bool(b) => b.to_string(),
+        _ => format!("(getBool {})", translate_expr(e, float_to_id, tuple_to_id)),
+    }
+}
+
 pub fn translate_formula(f: &Formula, float_to_id: &mut HashMap<String, usize>, tuple_to_id: &mut HashMap<Expr, usize>) -> String {
     match f {
         Formula::And(a, b) => format!("(and {} {})", translate_formula(a, float_to_id, tuple_to_id), translate_formula(b, float_to_id, tuple_to_id)),
         Formula::Or(a, b) => format!("(or {} {})", translate_formula(a, float_to_id, tuple_to_id), translate_formula(b, float_to_id, tuple_to_id)),
         Formula::Implies(a, b) => format!("(=> {} {})", translate_formula(a, float_to_id, tuple_to_id), translate_formula(b, float_to_id, tuple_to_id)),
         Formula::Not(a) => format!("(not {})", translate_formula(a, float_to_id, tuple_to_id)),
-        Formula::Equal(a, b) => format!("(= {} {})", translate_expr(a, float_to_id, tuple_to_id), translate_expr(b, float_to_id, tuple_to_id)),
-        Formula::NotEqual(a, b) => format!("(not (= {} {}))", translate_expr(a, float_to_id, tuple_to_id), translate_expr(b, float_to_id, tuple_to_id)),
-        Formula::Expr(e) => {
-            match e {
-                Expr::Bool(b) => b.to_string(),
-                Expr::Call(name, _) if name == "is_numeric" || name == "is_bool" || name == "is_symbol" || name == "is_int" || name == "is_tuple" => {
-                    translate_expr(e, float_to_id, tuple_to_id)
-                }
-                Expr::LessThan(_, _) | Expr::LessThanEqual(_, _) | Expr::Equal(_, _) => {
-                    translate_expr(e, float_to_id, tuple_to_id)
-                }
-                _ => format!("(getBool {})", translate_expr(e, float_to_id, tuple_to_id)),
+        Formula::Equal(a, b) => {
+            if is_bool_expr(a) || is_bool_expr(b) {
+                format!("(= {} {})", translate_expr_to_bool(a, float_to_id, tuple_to_id), translate_expr_to_bool(b, float_to_id, tuple_to_id))
+            } else {
+                format!("(= {} {})", translate_expr(a, float_to_id, tuple_to_id), translate_expr(b, float_to_id, tuple_to_id))
             }
         }
+        Formula::NotEqual(a, b) => {
+            if is_bool_expr(a) || is_bool_expr(b) {
+                format!("(not (= {} {}))", translate_expr_to_bool(a, float_to_id, tuple_to_id), translate_expr_to_bool(b, float_to_id, tuple_to_id))
+            } else {
+                format!("(not (= {} {}))", translate_expr(a, float_to_id, tuple_to_id), translate_expr(b, float_to_id, tuple_to_id))
+            }
+        }
+        Formula::Expr(e) => translate_expr_to_bool(e, float_to_id, tuple_to_id),
     }
 }
 

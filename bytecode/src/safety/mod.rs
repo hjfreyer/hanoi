@@ -190,5 +190,19 @@ mod tests {
         assert!(res.unwrap_err().contains("Recursion/cycle detected"));
     }
 
-
+    #[test]
+    fn test_comparison_operators() {
+        let code = r#"
+            #[arity(2, 1)]
+            #[safety("in[0] < in[1]")]
+            #[behavior("out[0] == (in[0] < in[1])")]
+            sentence check_less {
+                drop 0
+                drop 0
+                push true
+            }
+        "#;
+        let res = assemble(code);
+        assert!(res.is_ok(), "Failed to assemble check_less: {:?}", res.unwrap_err());
+    }
 }

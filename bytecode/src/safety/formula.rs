@@ -123,6 +123,8 @@ enum FormulaToken {
     Int(i64),
     Ident(String),
     Comma,
+    Lt,
+    Lte,
 }
 
 fn tokenize_formula(input: &str) -> Result<Vec<FormulaToken>, String> {
@@ -163,6 +165,15 @@ fn tokenize_formula(input: &str) -> Result<Vec<FormulaToken>, String> {
                     }
                 } else {
                     return Err("Expected == or ==>".to_string());
+                }
+            }
+            '<' => {
+                chars.next();
+                if chars.peek() == Some(&'=') {
+                    chars.next();
+                    tokens.push(FormulaToken::Lte);
+                } else {
+                    tokens.push(FormulaToken::Lt);
                 }
             }
             '!' => {
@@ -332,6 +343,26 @@ fn parse_comp(stream: &mut TokenStream) -> Result<Formula, String> {
 }
 
 fn parse_expr(stream: &mut TokenStream) -> Result<Expr, String> {
+    let mut left = parse_additive(stream)?;
+    while let Some(t) = stream.peek() {
+        match t {
+            FormulaToken::Lt => {
+                stream.next();
+                let right = parse_additive(stream)?;
+                left = Expr::LessThan(Box::new(left), Box::new(right));
+            }
+            FormulaToken::Lte => {
+                stream.next();
+                let right = parse_additive(stream)?;
+                left = Expr::LessThanEqual(Box::new(left), Box::new(right));
+            }
+            _ => break,
+        }
+    }
+    Ok(left)
+}
+
+fn parse_additive(stream: &mut TokenStream) -> Result<Expr, String> {
     let mut left = parse_term(stream)?;
     while let Some(t) = stream.peek() {
         match t {

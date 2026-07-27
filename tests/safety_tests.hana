@@ -48,3 +48,11 @@ sentence swap_values {
     tuple 2
     untuple 2
 }
+
+#[safety("true")]
+#[behavior("is_tuple(out[0], 0)")]
+function test_theorem {
+    pick 0
+    assert_eq
+    tuple 0
+}
