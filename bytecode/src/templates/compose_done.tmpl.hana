@@ -1,39 +1,64 @@
 function init {
+    // Stack: [()]
     untuple 0
+    // Stack: []
     push 0
+    // Stack: [0]
 }
 
 
 function accept {
+    // Stack: [(state, event)]
     untuple 2
+    // Stack: [event, state]
     drop 0
+    // Stack: [event]
     drop 0
+    // Stack: []
     push false
+    // Stack: [false]
 }
 
 function emit {
+    // Stack: [state]
     drop 0
+    // Stack: []
     tuple 0
+    // Stack: [()]
     push false
+    // Stack: [(), false]
     tuple 2
+    // Stack: [(false, ())]
 }
 
 function process {
+    // Stack: [(event, state)]
     untuple 2
+    // Stack: [state, event]
     drop 0
+    // Stack: [state]
 }
 
 function tau_reduce {
+    // Stack: [state]
     push false
+    // Stack: [state, false]
     tuple 2
+    // Stack: [(false, state)]
 }
 
 function is_done {
+    // Stack: [state]
     drop 0
+    // Stack: []
     push true
+    // Stack: [true]
 }
 
 function is_ready_to_finish {
+    // Stack: [state]
     drop 0
+    // Stack: []
     push false
+    // Stack: [false]
 }

@@ -1,129 +1,236 @@
 function init {
+    // Stack: [args]
     jump {{machine}}::init
+    // Stack: [machine_state]
     push 0
+    // Stack: [machine_state, 0]
     tuple 2
+    // Stack: [(0, machine_state)]
 }
 
 
 function accept {
+    // Stack: [(state, event)]
     untuple 2
+    // Stack: [event, state]
     untuple 2
+    // Stack: [event, machine_state, phase]
     push 0
+    // Stack: [event, machine_state, phase, 0]
     equal
+    // Stack: [event, machine_state, phase == 0]
     branch {
+        // Stack: [event, machine_state]
         drop 0
+        // Stack: [event]
         jump {{val_set_path}}
+        // Stack: [Bool]
     } {
+        // Stack: [event, machine_state]
         tuple 2
+        // Stack: [(machine_state, event)]
         jump {{machine}}::accept
+        // Stack: [Bool]
     }
 }
 
 function tau_reduce {
+    // Stack: [state]
     untuple 2
+    // Stack: [machine_state, phase]
     pick 0
+    // Stack: [machine_state, phase, phase]
     push 0
+    // Stack: [machine_state, phase, phase, 0]
     equal
+    // Stack: [machine_state, phase, phase == 0]
     branch {
+        // Stack: [machine_state, phase]
         tuple 2
+        // Stack: [(phase, machine_state)]
         push false
+        // Stack: [(phase, machine_state), false]
         tuple 2
+        // Stack: [(false, (phase, machine_state))]
     } {
+        // Stack: [machine_state, phase]
         pick 1
+        // Stack: [machine_state, phase, machine_state]
         jump {{machine}}::tau_reduce
+        // Stack: [machine_state, phase, (did_reduce, next_machine_state)]
         untuple 2
+        // Stack: [machine_state, phase, next_machine_state, did_reduce]
         branch {
+            // Stack: [machine_state, phase, next_machine_state]
             roll 1
+            // Stack: [machine_state, next_machine_state, phase]
             roll 2
+            // Stack: [next_machine_state, phase, machine_state]
             drop 0
+            // Stack: [next_machine_state, phase]
             tuple 2
+            // Stack: [(phase, next_machine_state)]
             push true
+            // Stack: [(phase, next_machine_state), true]
             tuple 2
+            // Stack: [(true, (phase, next_machine_state))]
         } {
+            // Stack: [machine_state, phase, next_machine_state]
             drop 0
+            // Stack: [machine_state, phase]
             tuple 2
+            // Stack: [(phase, machine_state)]
             push false
+            // Stack: [(phase, machine_state), false]
             tuple 2
+            // Stack: [(false, (phase, machine_state))]
         }
     }
 }
 
 function emit {
+    // Stack: [state]
     untuple 2
+    // Stack: [machine_state, phase]
     pick 0
+    // Stack: [machine_state, phase, phase]
     push 0
+    // Stack: [machine_state, phase, phase, 0]
     equal
+    // Stack: [machine_state, phase, phase == 0]
     branch {
+        // Stack: [machine_state, phase]
         drop 0
+        // Stack: [machine_state]
         drop 0
+        // Stack: []
         tuple 0
+        // Stack: [()]
         push false
+        // Stack: [(), false]
         tuple 2
+        // Stack: [(false, ())]
     } {
+        // Stack: [machine_state, phase]
         drop 0
+        // Stack: [machine_state]
         jump {{machine}}::emit
+        // Stack: [(has_event, event)]
     }
 }
 
 function process {
+    // Stack: [(event, state)]
     untuple 2
+    // Stack: [state, event]
     roll 1
+    // Stack: [event, state]
     untuple 2
+    // Stack: [event, machine_state, phase]
     pick 0
+    // Stack: [event, machine_state, phase, phase]
     push 0
+    // Stack: [event, machine_state, phase, phase, 0]
     equal
+    // Stack: [event, machine_state, phase, phase == 0]
     branch {
+        // Stack: [event, machine_state, phase]
         pick 2
+        // Stack: [event, machine_state, phase, event]
         jump {{val_set_path}}
+        // Stack: [event, machine_state, phase, matches_accept]
         branch {
+            // Stack: [event, machine_state, phase]
             drop 0
+            // Stack: [event, machine_state]
             drop 0
+            // Stack: [event]
             drop 0
+            // Stack: []
             tuple 0
+            // Stack: [()]
             jump {{machine}}::init
+            // Stack: [initial_machine_state]
             push 1
+            // Stack: [initial_machine_state, 1]
             tuple 2
+            // Stack: [(1, initial_machine_state)]
         } {
+            // Stack: [event, machine_state, phase]
             roll 2
+            // Stack: [machine_state, phase, event]
             drop 0
+            // Stack: [machine_state, phase]
             tuple 2
+            // Stack: [(phase, machine_state)]
         }
     } {
+        // Stack: [event, machine_state, phase]
         drop 0
+        // Stack: [event, machine_state]
         roll 1
+        // Stack: [machine_state, event]
         tuple 2
+        // Stack: [(event, machine_state)]
         jump {{machine}}::process
+        // Stack: [next_machine_state]
         push 1
+        // Stack: [next_machine_state, 1]
         tuple 2
+        // Stack: [(1, next_machine_state)]
     }
 }
 
 function is_done {
+    // Stack: [state]
     untuple 2
+    // Stack: [machine_state, phase]
     pick 0
+    // Stack: [machine_state, phase, phase]
     push 0
+    // Stack: [machine_state, phase, phase, 0]
     equal
+    // Stack: [machine_state, phase, phase == 0]
     branch {
+        // Stack: [machine_state, phase]
         drop 0
+        // Stack: [machine_state]
         drop 0
+        // Stack: []
         push false
+        // Stack: [false]
     } {
+        // Stack: [machine_state, phase]
         drop 0
+        // Stack: [machine_state]
         jump {{machine}}::is_done
+        // Stack: [Bool]
     }
 }
 
 function is_ready_to_finish {
+    // Stack: [state]
     untuple 2
+    // Stack: [machine_state, phase]
     pick 0
+    // Stack: [machine_state, phase, phase]
     push 0
+    // Stack: [machine_state, phase, phase, 0]
     equal
+    // Stack: [machine_state, phase, phase == 0]
     branch {
+        // Stack: [machine_state, phase]
         drop 0
+        // Stack: [machine_state]
         drop 0
+        // Stack: []
         push false
+        // Stack: [false]
     } {
+        // Stack: [machine_state, phase]
         drop 0
+        // Stack: [machine_state]
         jump {{machine}}::is_ready_to_finish
+        // Stack: [Bool]
     }
 }

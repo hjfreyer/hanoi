@@ -1,93 +1,166 @@
 function init {
+    // Stack: [args]
     jump {{concurrent}}::init
+    // Stack: [state]
 }
 
 
 function accept {
+    // Stack: [(state, event)]
     untuple 2
+    // Stack: [event, state]
     pick 1
+    // Stack: [event, state, event]
     jump {{hidden_fn}}
+    // Stack: [event, state, is_hidden]
     branch {
+        // Stack: [event, state]
         drop 0
+        // Stack: [event]
         drop 0
+        // Stack: []
         push false
+        // Stack: [false]
     } {
+        // Stack: [event, state]
         tuple 2
+        // Stack: [(state, event)]
         jump {{concurrent}}::accept
+        // Stack: [Bool]
     }
 }
 
 function emit {
+    // Stack: [state]
     pick 0
+    // Stack: [state, state]
     jump {{concurrent}}::emit
+    // Stack: [state, (has_event, event)]
     untuple 2
+    // Stack: [state, event, has_event]
     branch {
+        // Stack: [state, event]
         pick 0
+        // Stack: [state, event, event]
         jump {{hidden_fn}}
+        // Stack: [state, event, is_hidden]
         branch {
+            // Stack: [state, event]
             drop 0
+            // Stack: [state]
             drop 0
+            // Stack: []
             tuple 0
+            // Stack: [()]
             push false
+            // Stack: [(), false]
             tuple 2
+            // Stack: [(false, ())]
         } {
+            // Stack: [state, event]
             roll 1
+            // Stack: [event, state]
             drop 0
+            // Stack: [event]
             push true
+            // Stack: [event, true]
             tuple 2
+            // Stack: [(true, event)]
         }
     } {
+        // Stack: [state, event]
         drop 0
+        // Stack: [state]
         drop 0
+        // Stack: []
         tuple 0
+        // Stack: [()]
         push false
+        // Stack: [(), false]
         tuple 2
+        // Stack: [(false, ())]
     }
 }
 
 function process {
+    // Stack: [(event, state)]
     jump {{concurrent}}::process
+    // Stack: [next_state]
 }
 
 function tau_reduce {
+    // Stack: [state]
     pick 0
+    // Stack: [state, state]
     jump {{concurrent}}::tau_reduce
+    // Stack: [state, (did_reduce, next_state)]
     untuple 2
+    // Stack: [state, next_state, did_reduce]
     branch {
+        // Stack: [state, next_state]
         roll 1
+        // Stack: [next_state, state]
         drop 0
+        // Stack: [next_state]
         push true
+        // Stack: [next_state, true]
         tuple 2
+        // Stack: [(true, next_state)]
     } {
+        // Stack: [state, next_state]
         drop 0
+        // Stack: [state]
         pick 0
+        // Stack: [state, state]
         jump {{concurrent}}::emit
+        // Stack: [state, (has_event, event)]
         untuple 2
+        // Stack: [state, event, has_event]
         branch {
+            // Stack: [state, event]
             pick 0
+            // Stack: [state, event, event]
             jump {{hidden_fn}}
+            // Stack: [state, event, is_hidden]
             branch {
+                // Stack: [state, event]
                 tuple 2
+                // Stack: [(event, state)]
                 jump {{concurrent}}::process
+                // Stack: [next_state]
                 push true
+                // Stack: [next_state, true]
                 tuple 2
+                // Stack: [(true, next_state)]
             } {
+                // Stack: [state, event]
                 drop 0
+                // Stack: [state]
                 push false
+                // Stack: [state, false]
                 tuple 2
+                // Stack: [(false, state)]
             }
         } {
+            // Stack: [state, event]
             drop 0
+            // Stack: [state]
             push false
+            // Stack: [state, false]
             tuple 2
+            // Stack: [(false, state)]
         }
     }
 }
 
 function is_done {
+    // Stack: [state]
     jump {{concurrent}}::is_done
+    // Stack: [Bool]
 }
 
 function is_ready_to_finish {
+    // Stack: [state]
     jump {{concurrent}}::is_ready_to_finish
+    // Stack: [Bool]
 }

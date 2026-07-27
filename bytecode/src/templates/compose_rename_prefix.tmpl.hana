@@ -1,85 +1,152 @@
 function init {
+    // Stack: [args]
     jump {{target}}::init
+    // Stack: [state]
 }
 
 
 function accept {
+    // Stack: [(state, event)]
     untuple 2
+    // Stack: [event, state]
     pick 1
+    // Stack: [event, state, event]
     push universal_set
+    // Stack: [event, state, event, universal_set]
     push {{to_symbol}}
+    // Stack: [event, state, event, universal_set, {{to_symbol}}]
     set_singleton
+    // Stack: [event, state, event, universal_set, singleton({{to_symbol}})]
     set_tuple 2
+    // Stack: [event, state, event, set_tuple(singleton({{to_symbol}}), universal_set)]
     set_contains
+    // Stack: [event, state, is_renamed_prefix]
     branch {
+        // Stack: [event, state]
         roll 1
+        // Stack: [state, event]
         untuple 2
+        // Stack: [state, payload, to_symbol]
         drop 0
+        // Stack: [state, payload]
         push {{from_symbol}}
+        // Stack: [state, payload, {{from_symbol}}]
         tuple 2
+        // Stack: [state, ({{from_symbol}}, payload)]
         roll 1
+        // Stack: [({{from_symbol}}, payload), state]
         tuple 2
+        // Stack: [(state, ({{from_symbol}}, payload))]
         jump {{target}}::accept
+        // Stack: [Bool]
     } {
+        // Stack: [event, state]
         tuple 2
+        // Stack: [(state, event)]
         jump {{target}}::accept
+        // Stack: [Bool]
     }
 }
 
 function emit {
+    // Stack: [state]
     jump {{target}}::emit
+    // Stack: [(has_event, event)]
     untuple 2
+    // Stack: [event, has_event]
     branch {
+        // Stack: [event]
         untuple 2
+        // Stack: [payload, prefix]
         pick 0
+        // Stack: [payload, prefix, prefix]
         push {{from_symbol}}
+        // Stack: [payload, prefix, prefix, {{from_symbol}}]
         equal
+        // Stack: [payload, prefix, is_from_symbol]
         branch {
+            // Stack: [payload, prefix]
             drop 0
+            // Stack: [payload]
             push {{to_symbol}}
+            // Stack: [payload, {{to_symbol}}]
             tuple 2
+            // Stack: [({{to_symbol}}, payload)]
             push true
+            // Stack: [({{to_symbol}}, payload), true]
             tuple 2
+            // Stack: [(true, ({{to_symbol}}, payload))]
         } {
+            // Stack: [payload, prefix]
             tuple 2
+            // Stack: [(prefix, payload)]
             push true
+            // Stack: [(prefix, payload), true]
             tuple 2
+            // Stack: [(true, (prefix, payload))]
         }
     } {
+        // Stack: [event]
         drop 0
+        // Stack: []
         tuple 0
+        // Stack: [()]
         push false
+        // Stack: [(), false]
         tuple 2
+        // Stack: [(false, ())]
     }
 }
 
 function process {
+    // Stack: [(event, state)]
     untuple 2
+    // Stack: [state, event]
     untuple 2
+    // Stack: [state, payload, prefix]
     pick 0
+    // Stack: [state, payload, prefix, prefix]
     push {{to_symbol}}
+    // Stack: [state, payload, prefix, prefix, {{to_symbol}}]
     equal
+    // Stack: [state, payload, prefix, is_to_symbol]
     branch {
+        // Stack: [state, payload, prefix]
         drop 0
+        // Stack: [state, payload]
         push {{from_symbol}}
+        // Stack: [state, payload, {{from_symbol}}]
         tuple 2
+        // Stack: [state, ({{from_symbol}}, payload)]
         tuple 2
+        // Stack: [(({{from_symbol}}, payload), state)]
         jump {{target}}::process
+        // Stack: [next_state]
     } {
+        // Stack: [state, payload, prefix]
         tuple 2
+        // Stack: [state, (prefix, payload)]
         tuple 2
+        // Stack: [((prefix, payload), state)]
         jump {{target}}::process
+        // Stack: [next_state]
     }
 }
 
 function tau_reduce {
+    // Stack: [state]
     jump {{target}}::tau_reduce
+    // Stack: [(did_reduce, next_state)]
 }
 
 function is_done {
+    // Stack: [state]
     jump {{target}}::is_done
+    // Stack: [Bool]
 }
 
 function is_ready_to_finish {
+    // Stack: [state]
     jump {{target}}::is_ready_to_finish
+    // Stack: [Bool]
 }
