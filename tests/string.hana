@@ -1368,17 +1368,23 @@ mod string_ref_base {
     }
 }
 
-sentence sync_char_iterator_in {
+sentence sync_char_iterator_in_inner {
     push set_tuple(singleton(char_iterator::in), universal_set)
+}
+sentence sync_char_iterator_in {
+    jump sync_char_iterator_in_inner
+    set_contains
 }
 
 mod string_hidden compose_hidden(
     compose_concurrent(
         compose_prefix(string_ref_base, char_iterator::in),
         char_iterator,
-        sync_char_iterator_in
+        sync_char_iterator_in,
+        sync_char_iterator_in_inner
     ),
-    sync_char_iterator_in
+    sync_char_iterator_in,
+    sync_char_iterator_in_inner
 );
 
 test sentence iterate_string_ascii {
@@ -1506,22 +1512,30 @@ mod str_123_hidden compose_hidden(
     compose_concurrent(
         compose_prefix(compose_static_closure(string_ref, str_123), char_iterator::in),
         char_iterator,
-        sync_char_iterator_in
+        sync_char_iterator_in,
+        sync_char_iterator_in_inner
     ),
-    sync_char_iterator_in
+    sync_char_iterator_in,
+    sync_char_iterator_in_inner
 );
 
-sentence sync_parseint_in {
+sentence sync_parseint_in_inner {
     push set_tuple(singleton(parseint::in), universal_set)
+}
+sentence sync_parseint_in {
+    jump sync_parseint_in_inner
+    set_contains
 }
 
 mod parseint_123_system compose_hidden(
     compose_concurrent(
         parseint,
         compose_rename_prefix(char_iterator::out, parseint::in, str_123_hidden),
-        sync_parseint_in
+        sync_parseint_in,
+        sync_parseint_in_inner
     ),
-    sync_parseint_in
+    sync_parseint_in,
+    sync_parseint_in_inner
 );
 
 test sentence parseint_valid_number {
@@ -1619,18 +1633,22 @@ mod str_45a_hidden compose_hidden(
     compose_concurrent(
         compose_prefix(compose_static_closure(string_ref, str_45a), char_iterator::in),
         char_iterator,
-        sync_char_iterator_in
+        sync_char_iterator_in,
+        sync_char_iterator_in_inner
     ),
-    sync_char_iterator_in
+    sync_char_iterator_in,
+    sync_char_iterator_in_inner
 );
 
 mod parseint_45a_system compose_hidden(
     compose_concurrent(
         parseint,
         compose_rename_prefix(char_iterator::out, parseint::in, str_45a_hidden),
-        sync_parseint_in
+        sync_parseint_in,
+        sync_parseint_in_inner
     ),
-    sync_parseint_in
+    sync_parseint_in,
+    sync_parseint_in_inner
 );
 
 test sentence parseint_invalid_char {
@@ -1706,9 +1724,11 @@ mod parseint_empty_system compose_hidden(
     compose_concurrent(
         parseint,
         compose_rename_prefix(char_iterator::out, parseint::in, empty_string_hidden),
-        sync_parseint_in
+        sync_parseint_in,
+        sync_parseint_in_inner
     ),
-    sync_parseint_in
+    sync_parseint_in,
+    sync_parseint_in_inner
 );
 
 test sentence parseint_empty_string {
@@ -1914,9 +1934,11 @@ mod empty_string_hidden compose_hidden(
     compose_concurrent(
         compose_prefix(compose_static_closure(string_ref, empty_str), char_iterator::in),
         char_iterator,
-        sync_char_iterator_in
+        sync_char_iterator_in,
+        sync_char_iterator_in_inner
     ),
-    sync_char_iterator_in
+    sync_char_iterator_in,
+    sync_char_iterator_in_inner
 );
 
 test sentence iterate_empty {
@@ -1958,9 +1980,11 @@ mod cafe_string_hidden compose_hidden(
     compose_concurrent(
         compose_prefix(compose_static_closure(string_ref, cafe_str), char_iterator::in),
         char_iterator,
-        sync_char_iterator_in
+        sync_char_iterator_in,
+        sync_char_iterator_in_inner
     ),
-    sync_char_iterator_in
+    sync_char_iterator_in,
+    sync_char_iterator_in_inner
 );
 
 test sentence iterate_unicode {
@@ -2106,22 +2130,30 @@ mod comma_str_hidden compose_hidden(
     compose_concurrent(
         compose_prefix(compose_static_closure(string_ref, comma_str), char_iterator::in),
         char_iterator,
-        sync_char_iterator_in
+        sync_char_iterator_in,
+        sync_char_iterator_in_inner
     ),
-    sync_char_iterator_in
+    sync_char_iterator_in,
+    sync_char_iterator_in_inner
 );
 
-sentence sync_split_in {
+sentence sync_split_in_inner {
     push set_tuple(singleton(split::in), universal_set)
+}
+sentence sync_split_in {
+    jump sync_split_in_inner
+    set_contains
 }
 
 mod split_system compose_hidden(
     compose_concurrent(
         compose_static_closure(split, 44),
         compose_rename_prefix(char_iterator::out, split::in, comma_str_hidden),
-        sync_split_in
+        sync_split_in,
+        sync_split_in_inner
     ),
-    sync_split_in
+    sync_split_in,
+    sync_split_in_inner
 );
 
 test sentence split_string {

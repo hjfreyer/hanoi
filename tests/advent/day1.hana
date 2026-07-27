@@ -1,29 +1,41 @@
 symbol input0 "39472"
 
-sentence sync_char_iterator_in {
+sentence sync_char_iterator_in_inner {
     push set_tuple(singleton(crate::string::char_iterator::in), universal_set)
 }
+sentence sync_char_iterator_in {
+    jump sync_char_iterator_in_inner
+    set_contains
+}
 
-sentence sync_parseint_in {
+sentence sync_parseint_in_inner {
     push set_tuple(singleton(crate::string::parseint::in), universal_set)
+}
+sentence sync_parseint_in {
+    jump sync_parseint_in_inner
+    set_contains
 }
 
 mod input0_hidden compose_hidden(
     compose_concurrent(
         compose_prefix(compose_static_closure(crate::string::string_ref, input0), crate::string::char_iterator::in),
         crate::string::char_iterator,
-        sync_char_iterator_in
+        sync_char_iterator_in,
+        sync_char_iterator_in_inner
     ),
-    sync_char_iterator_in
+    sync_char_iterator_in,
+    sync_char_iterator_in_inner
 );
 
 mod sut compose_hidden(
     compose_concurrent(
         crate::string::parseint,
         compose_rename_prefix(crate::string::char_iterator::out, crate::string::parseint::in, input0_hidden),
-        sync_parseint_in
+        sync_parseint_in,
+        sync_parseint_in_inner
     ),
-    sync_parseint_in
+    sync_parseint_in,
+    sync_parseint_in_inner
 );
 
 // Parameterized validator machine that receives SUT output event
@@ -41,16 +53,20 @@ mod harness compose_accept_static(
     )
 );
 
-sentence sync_set {
+sentence sync_set_inner {
     push union(
         singleton((crate::string::parseint::out, (crate::string::copy, ()))),
         set_tuple(singleton(crate::string::parseint::out), universal_set)
     )
 }
+sentence sync_set {
+    jump sync_set_inner
+    set_contains
+}
 
-mod sut_and_harness compose_concurrent(sut, harness, sync_set);
+mod sut_and_harness compose_concurrent(sut, harness, sync_set, sync_set_inner);
 
-mod test0 compose_hidden(sut_and_harness, sync_set);
+mod test0 compose_hidden(sut_and_harness, sync_set, sync_set_inner);
 
 sentence run_tau_reductions {
     // Stack: [state]

@@ -1360,30 +1360,34 @@ const TEMPLATE_ACCEPT: &str = include_str!("templates/compose_accept.tmpl.hana")
 const TEMPLATE_ACCEPT_STATIC: &str = include_str!("templates/compose_accept_static.tmpl.hana");
 
 fn compose_concurrent(args: &[Path]) -> Result<Vec<TopLevelItem>, String> {
-    if args.len() != 3 {
-        return Err("compose_concurrent requires exactly 3 arguments".to_string());
+    if args.len() != 4 {
+        return Err("compose_concurrent requires exactly 4 arguments".to_string());
     }
     let p1 = adjust_path(&args[0]);
     let p2 = adjust_path(&args[1]);
     let sync_fn = adjust_path(&args[2]);
+    let sync_fn_inner = adjust_path(&args[3]);
 
     compile_template(TEMPLATE_CONCURRENT, &[
         ("p1", &p1),
         ("p2", &p2),
         ("sync_fn", &sync_fn),
+        ("sync_fn_inner", &sync_fn_inner),
     ])
 }
 
 fn compose_hidden(args: &[Path]) -> Result<Vec<TopLevelItem>, String> {
-    if args.len() != 2 {
-        return Err("compose_hidden requires exactly 2 arguments".to_string());
+    if args.len() != 3 {
+        return Err("compose_hidden requires exactly 3 arguments".to_string());
     }
     let concurrent = adjust_path(&args[0]);
     let hidden_fn = adjust_path(&args[1]);
+    let hidden_fn_inner = adjust_path(&args[2]);
 
     compile_template(TEMPLATE_HIDDEN, &[
         ("concurrent", &concurrent),
         ("hidden_fn", &hidden_fn),
+        ("hidden_fn_inner", &hidden_fn_inner),
     ])
 }
 

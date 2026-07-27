@@ -15,12 +15,12 @@ function accept_inner {
     pick 1
     pick 1
     set_union
-    jump {{sync_fn}}
+    jump {{sync_fn_inner}}
     set_difference
     roll 2
     roll 2
     set_intersection
-    jump {{sync_fn}}
+    jump {{sync_fn_inner}}
     set_intersection
     set_union
 }
@@ -51,7 +51,6 @@ function emit {
     branch {
         pick 4 // e1
         jump {{sync_fn}}
-        set_contains
         branch {
             pick 4 // e1
             pick 3 // A2
@@ -90,7 +89,6 @@ function emit {
                         branch {
                             pick 1 // e2
                             jump {{sync_fn}}
-                            set_contains
                             branch {
                                 pick 1 // e2
                                 pick 6 // A1
@@ -174,7 +172,6 @@ function emit {
         branch {
             pick 1 // e2
             jump {{sync_fn}}
-            set_contains
             branch {
                 pick 1 // e2
                 pick 6 // A1
@@ -233,7 +230,6 @@ function process {
     untuple 2
     pick 0
     jump {{sync_fn}}
-    set_contains
     branch {
         roll 1
         untuple 2

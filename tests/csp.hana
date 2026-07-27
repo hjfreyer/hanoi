@@ -511,19 +511,27 @@ mod barista {
     }
 }
 
-sentence customers_sync {
+sentence customers_sync_inner {
     push empty_set
 }
-
-mod customers compose_concurrent(customer1, customer2, customers_sync);
-
-sentence customers_queue_sync {
-    push set_tuple(singleton(super::queue::push_back), universal_set)
+sentence customers_sync {
+    jump customers_sync_inner
+    set_contains
 }
 
-mod customers_and_queue compose_concurrent(customers, super::queue::queue, customers_queue_sync);
+mod customers compose_concurrent(customer1, customer2, customers_sync, customers_sync_inner);
 
-sentence joint_sync {
+sentence customers_queue_sync_inner {
+    push set_tuple(singleton(super::queue::push_back), universal_set)
+}
+sentence customers_queue_sync {
+    jump customers_queue_sync_inner
+    set_contains
+}
+
+mod customers_and_queue compose_concurrent(customers, super::queue::queue, customers_queue_sync, customers_queue_sync_inner);
+
+sentence joint_sync_inner {
     // Sync barista and queue on await_front
     push set_tuple(singleton(super::queue::await_front), universal_set)
     
@@ -531,10 +539,14 @@ sentence joint_sync {
     push set_tuple(singleton(event::coffee), universal_set, universal_set)
     set_union
 }
+sentence joint_sync {
+    jump joint_sync_inner
+    set_contains
+}
 
-mod concurrent compose_concurrent(customers_and_queue, barista, joint_sync);
+mod concurrent compose_concurrent(customers_and_queue, barista, joint_sync, joint_sync_inner);
 
-sentence hidden_events {
+sentence hidden_events_inner {
     push set_tuple(singleton(super::queue::push_back), universal_set)
     
     push set_tuple(singleton(event::coffee), universal_set, universal_set)
@@ -543,8 +555,12 @@ sentence hidden_events {
     push set_tuple(singleton(super::queue::await_front), universal_set)
     set_union
 }
+sentence hidden_events {
+    jump hidden_events_inner
+    set_contains
+}
 
-mod hidden compose_hidden(concurrent, hidden_events);
+mod hidden compose_hidden(concurrent, hidden_events, hidden_events_inner);
 
 // Helpers to drive tau transitions in tests
 sentence drive_tau {
