@@ -2,12 +2,6 @@ function init {
     jump {{target}}::init
 }
 
-function accept_inner {
-    jump {{target}}::accept_inner
-    push {{from_symbol}}
-    push {{to_symbol}}
-    set_rename_prefix
-}
 
 function accept {
     untuple 2

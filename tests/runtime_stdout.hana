@@ -8,33 +8,19 @@ test mod verify_print_hello {
         tuple 2
     }
 
-    export function accept_inner {
-        // Stack: [state]
-        untuple 2
-        // Stack: [phase, data] (data is index 0)
-        drop 0
-        // Stack: [phase]
-        push 0
-        equal
-        branch {
-            push singleton(crate::prelude::start)
-        } {
-            push empty_set
-        }
-    }
-
     export function accept {
         untuple 2
         untuple 2
-        drop 0
+        drop 0 // drop data
         push 0
         equal
         branch {
-            push singleton(crate::prelude::start)
+            push crate::prelude::start
+            equal
         } {
-            push empty_set
+            drop 0
+            push false
         }
-        set_contains
     }
 
     export function tau_reduce {

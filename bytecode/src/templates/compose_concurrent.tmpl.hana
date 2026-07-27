@@ -6,24 +6,6 @@ function init {
     tuple 2
 }
 
-function accept_inner {
-    untuple 2
-    roll 1
-    jump {{p1}}::accept_inner
-    roll 1
-    jump {{p2}}::accept_inner
-    pick 1
-    pick 1
-    set_union
-    jump {{sync_fn_inner}}
-    set_difference
-    roll 2
-    roll 2
-    set_intersection
-    jump {{sync_fn_inner}}
-    set_intersection
-    set_union
-}
 
 function accept {
     untuple 2

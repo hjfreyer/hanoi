@@ -4,17 +4,6 @@ function init {
     tuple 2
 }
 
-function accept_inner {
-    untuple 2
-    push 0
-    equal
-    branch {
-        drop 0
-        jump {{val_set_path_inner}}
-    } {
-        jump {{machine}}::accept_inner
-    }
-}
 
 function accept {
     untuple 2

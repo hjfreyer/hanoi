@@ -28,55 +28,6 @@ mod customer_impl {
     function init {
     }
 
-    // accept_inner takes state: (id, preferred_drink, internal_state) and returns ValueSet of accepted events.
-    #[arity(1, 1)]
-    #[safety("is_tuple(in[0], 3) && (in[0].0 == state::idle || in[0].0 == state::thirsty || in[0].0 == state::ordered || in[0].0 == state::has_coffee)")]
-    function accept_inner {
-        untuple 3 // Stack: [id, preferred_drink, internal_state]
-        pick 0
-        push state::idle
-        equal
-        branch {
-            drop 0 // drop internal_state
-            drop 0 // drop preferred_drink
-            push super::event::want_coffee
-            tuple 2
-            set_singleton
-        } {
-            pick 0
-            push state::ordered
-            equal
-            branch {
-                drop 0 // drop internal_state
-                push super::event::coffee
-                tuple 3
-                set_singleton
-            } {
-                pick 0
-                push state::has_coffee
-                equal
-                branch {
-                    drop 0 // drop internal_state
-                    drop 0 // drop preferred_drink
-                    push super::event::enjoy
-                    tuple 2
-                    set_singleton
-                } {
-                    pick 0
-                    push state::thirsty
-                    equal
-                    branch {
-                        drop 0
-                        drop 0
-                        drop 0
-                        push empty_set
-                    } {
-                        panic
-                    }
-                }
-            }
-        }
-    }
 
     #[arity(1, 1)]
     function accept {
@@ -298,11 +249,10 @@ test sentence verify_customer_logic {
     tuple 3
     
     // Idle state accepts want_coffee
-    pick 0
-    jump customer_impl::accept_inner
     push (event::want_coffee, customer_id::c1)
-    roll 1
-    set_contains
+    pick 1
+    tuple 2
+    jump customer_impl::accept
     assert
     
     // Process want_coffee -> thirsty
@@ -324,11 +274,10 @@ test sentence verify_customer_logic {
     jump customer_impl::process
     
     // Ordered state accepts coffee
-    pick 0
-    jump customer_impl::accept_inner
     push (event::coffee, event::latte, customer_id::c1)
-    roll 1
-    set_contains
+    pick 1
+    tuple 2
+    jump customer_impl::accept
     assert
     
     // Process coffee -> has_coffee
@@ -337,11 +286,10 @@ test sentence verify_customer_logic {
     jump customer_impl::process
     
     // Has coffee accepts enjoy
-    pick 0
-    jump customer_impl::accept_inner
     push (event::enjoy, customer_id::c1)
-    roll 1
-    set_contains
+    pick 1
+    tuple 2
+    jump customer_impl::accept
     assert
     
     // Process enjoy -> idle
@@ -371,45 +319,6 @@ mod barista {
         push state::idle
     }
 
-    // accept_inner takes [state] and returns ValueSet.
-    #[arity(1, 1)]
-    #[safety("in[0] == state::idle || in[0] == state::awaiting_order || (is_tuple(in[0], 2) && in[0].0 == state::brewing && is_tuple(in[0].1, 2))")]
-    function accept_inner {
-        pick 0
-        push state::idle
-        equal
-        branch {
-            drop 0
-            push empty_set
-        } {
-            pick 0
-            push state::awaiting_order
-            equal
-            branch {
-                drop 0
-                // Construct set of await_front.resp response (some.val)
-                push ()
-                set_singleton
-                push universal_set
-                set_tuple 2 // {(val, ())}
-                
-                push super::super::prelude::some
-                set_singleton
-                set_tuple 2 // {((val, ()), some)}
-                
-                push super::super::prelude::resp
-                set_singleton
-                set_tuple 2 // {(((val, ()), some), resp)}
-                
-                push super::super::queue::await_front
-                set_singleton
-                set_tuple 2 // {((((val, ()), some), resp), await_front)}
-            } {
-                drop 0
-                push empty_set
-            }
-        }
-    }
 
     #[arity(1, 1)]
     function accept {
@@ -586,34 +495,20 @@ mod barista {
     }
 }
 
-sentence customers_sync_inner {
-    push empty_set
-}
 sentence customers_sync {
     drop 0
     push false
 }
 
-mod customers compose_concurrent(customer1, customer2, customers_sync, customers_sync_inner);
+mod customers compose_concurrent(customer1, customer2, customers_sync);
 
-sentence customers_queue_sync_inner {
-    push set_tuple(singleton(super::queue::push_back), universal_set)
-}
 sentence customers_queue_sync {
     push set_tuple(singleton(super::queue::push_back), universal_set)
     set_contains
 }
 
-mod customers_and_queue compose_concurrent(customers, super::queue::queue, customers_queue_sync, customers_queue_sync_inner);
+mod customers_and_queue compose_concurrent(customers, super::queue::queue, customers_queue_sync);
 
-sentence joint_sync_inner {
-    // Sync barista and queue on await_front
-    push set_tuple(singleton(super::queue::await_front), universal_set)
-    
-    // Sync customers and barista on coffee
-    push set_tuple(singleton(event::coffee), universal_set, universal_set)
-    set_union
-}
 sentence joint_sync {
     // Sync barista and queue on await_front
     push set_tuple(singleton(super::queue::await_front), universal_set)
@@ -625,17 +520,8 @@ sentence joint_sync {
     set_contains
 }
 
-mod concurrent compose_concurrent(customers_and_queue, barista, joint_sync, joint_sync_inner);
+mod concurrent compose_concurrent(customers_and_queue, barista, joint_sync);
 
-sentence hidden_events_inner {
-    push set_tuple(singleton(super::queue::push_back), universal_set)
-    
-    push set_tuple(singleton(event::coffee), universal_set, universal_set)
-    set_union
-    
-    push set_tuple(singleton(super::queue::await_front), universal_set)
-    set_union
-}
 sentence hidden_events {
     push set_tuple(singleton(super::queue::push_back), universal_set)
     
@@ -648,7 +534,7 @@ sentence hidden_events {
     set_contains
 }
 
-mod hidden compose_hidden(concurrent, hidden_events, hidden_events_inner);
+mod hidden compose_hidden(concurrent, hidden_events);
 
 // Helpers to drive tau transitions in tests
 sentence drive_tau {
@@ -682,11 +568,10 @@ test sentence verify_hidden_system {
     jump hidden::init
     
     // 2. Trigger want_coffee for c1. Let's verify it is accepted.
-    pick 0
-    jump hidden::accept_inner
     push (event::want_coffee, customer_id::c1)
-    roll 1
-    set_contains
+    pick 1
+    tuple 2
+    jump hidden::accept
     assert
     
     // 2. Trigger event::want_coffee for c1
@@ -726,11 +611,10 @@ test sentence verify_hidden_system {
     assert
     
     // customer 2 wants coffee. Let's verify it is accepted.
-    pick 0
-    jump hidden::accept_inner
     push (event::want_coffee, customer_id::c2)
-    roll 1
-    set_contains
+    pick 1
+    tuple 2
+    jump hidden::accept
     assert
     
     // 4. Trigger event::want_coffee for c2
@@ -770,11 +654,10 @@ test sentence verify_hidden_system {
     assert
     
     // customer 1 enjoys coffee. Let's verify it is accepted.
-    pick 0
-    jump hidden::accept_inner
     push (event::enjoy, customer_id::c1)
-    roll 1
-    set_contains
+    pick 1
+    tuple 2
+    jump hidden::accept
     assert
     
     // 6. Trigger enjoy for c1
@@ -811,11 +694,10 @@ test sentence verify_hidden_system {
     assert
     
     // customer 2 enjoys coffee. Let's verify it is accepted.
-    pick 0
-    jump hidden::accept_inner
     push (event::enjoy, customer_id::c2)
-    roll 1
-    set_contains
+    pick 1
+    tuple 2
+    jump hidden::accept
     assert
     
     // 7. Trigger enjoy for c2
@@ -882,11 +764,10 @@ test sentence verify_concurrent_system {
     jump concurrent::process
     
     // 3. Customer 1 wants coffee (accepted from environment)
-    pick 0
-    jump concurrent::accept_inner
     push (event::want_coffee, customer_id::c1)
-    roll 1
-    set_contains
+    pick 1
+    tuple 2
+    jump concurrent::accept
     assert
     
     push (event::want_coffee, customer_id::c1)
@@ -894,11 +775,10 @@ test sentence verify_concurrent_system {
     jump concurrent::process
     
     // 4. Customer 2 wants coffee (accepted from environment)
-    pick 0
-    jump concurrent::accept_inner
     push (event::want_coffee, customer_id::c2)
-    roll 1
-    set_contains
+    pick 1
+    tuple 2
+    jump concurrent::accept
     assert
     
     push (event::want_coffee, customer_id::c2)
@@ -981,11 +861,10 @@ test sentence verify_concurrent_system {
     jump concurrent::process
     
     // 9. Customer 1 enjoys coffee
-    pick 0
-    jump concurrent::accept_inner
     push (event::enjoy, customer_id::c1)
-    roll 1
-    set_contains
+    pick 1
+    tuple 2
+    jump concurrent::accept
     assert
     
     push (event::enjoy, customer_id::c1)
@@ -1055,11 +934,10 @@ test sentence verify_concurrent_system {
     jump concurrent::process
     
     // 13. Customer 2 enjoys coffee
-    pick 0
-    jump concurrent::accept_inner
     push (event::enjoy, customer_id::c2)
-    roll 1
-    set_contains
+    pick 1
+    tuple 2
+    jump concurrent::accept
     assert
     
     push (event::enjoy, customer_id::c2)
@@ -1103,20 +981,20 @@ test sentence verify_barista_rejection {
     tuple 0
     jump barista::init
     
-    jump barista::accept_inner
     push (event::coffee, event::latte, customer_id::c1)
     roll 1
-    set_contains
+    tuple 2
+    jump barista::accept
     push false
     assert_eq
 
     // 2. Test that barista in idle does NOT accept order directly (since orders are queued)
     tuple 0
     jump barista::init
-    jump barista::accept_inner
     push (super::queue::push_back, (event::latte, customer_id::c1))
     roll 1
-    set_contains
+    tuple 2
+    jump barista::accept
     push false
     assert_eq
     
@@ -1146,7 +1024,6 @@ test sentence verify_barista_rejection {
     tuple 2
     jump barista::process // Transition to awaiting_order
     
-    jump barista::accept_inner
     push ()
     push (event::latte, customer_id::c1)
     tuple 2
@@ -1157,7 +1034,8 @@ test sentence verify_barista_rejection {
     push super::queue::await_front
     tuple 2
     roll 1
-    set_contains
+    tuple 2
+    jump barista::accept
     assert
     
     // 5. Test that barista in awaiting_order does NOT emit coffee

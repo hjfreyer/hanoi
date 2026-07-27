@@ -774,14 +774,11 @@ mod tests {
                     untuple 0
                     push 0
                 }
-                export function accept_inner {
-                    drop 0
-                    push singleton(crate::payload)
-                }
                 export function accept {
                     untuple 2
-                    jump accept_inner
-                    set_contains
+                    drop 0
+                    push crate::payload
+                    equal
                 }
                 export function emit {
                     drop 0
@@ -818,17 +815,14 @@ mod tests {
                 jump renamed::init
                 
                 // Stack: [state] (which is 0)
-                // Query accept set
+                // Query accept
                 pick 0
-                jump renamed::accept_inner
-                // Stack: [state, AcceptSet]
-                
-                // Check that (payload, to_sym) is in AcceptSet
                 push payload
                 push to_sym
                 tuple 2
                 roll 1
-                set_contains
+                tuple 2
+                jump renamed::accept
                 assert
                 
                 // Query emit tuple
@@ -878,7 +872,7 @@ mod tests {
         let bad_code = r#"
             symbol a
             symbol b
-            mod m { export function init { untuple 0 push 0 } export sentence accept_inner { drop 0 push empty_set } export sentence accept { untuple 2 jump accept_inner set_contains } export function emit { drop 0 tuple 0 push false tuple 2 } export sentence process { } }
+            mod m { export function init { untuple 0 push 0 } export sentence accept { untuple 2 drop 0 drop 0 push false } export function emit { drop 0 tuple 0 push false tuple 2 } export sentence process { } }
             mod bad compose_rename_prefix(a, m);
         "#;
         assert!(bytecode::assemble(bad_code).is_err());
@@ -893,14 +887,11 @@ mod tests {
                     push 10
                     add
                 }
-                export function accept_inner {
-                    drop 0
-                    push empty_set
-                }
                 export function accept {
                     untuple 2
-                    jump accept_inner
-                    set_contains
+                    drop 0
+                    drop 0
+                    push false
                 }
                 export function emit {
                     drop 0
@@ -963,14 +954,11 @@ mod tests {
                     untuple 0
                     push 0
                 }
-                export sentence accept_inner {
-                    drop 0
-                    push empty_set
-                }
                 export sentence accept {
                     untuple 2
-                    jump accept_inner
-                    set_contains
+                    drop 0
+                    drop 0
+                    push false
                 }
                 export function emit {
                     drop 0
@@ -1002,14 +990,11 @@ mod tests {
                     untuple 0
                     push 0
                 }
-                export sentence accept_inner {
-                    drop 0
-                    push empty_set
-                }
                 export sentence accept {
                     untuple 2
-                    jump accept_inner
-                    set_contains
+                    drop 0
+                    drop 0
+                    push false
                 }
                 export function emit {
                     drop 0
@@ -1120,21 +1105,18 @@ mod runtime_tests {
                     push state::init
                 }
 
-                export sentence accept_inner {
+                export sentence accept {
+                    untuple 2
+                    // Stack: [event, state]
                     push state::waiting
                     equal
                     branch {
                         push event::pong
-                        set_singleton
+                        equal
                     } {
-                        push empty_set
+                        drop 0
+                        push false
                     }
-                }
-
-                export sentence accept {
-                    untuple 2
-                    jump accept_inner
-                    set_contains
                 }
 
                 export function tau_reduce {
@@ -1223,15 +1205,11 @@ mod runtime_tests {
                     push 0
                 }
 
-                export sentence accept_inner {
-                    drop 0
-                    push empty_set
-                }
-
                 export sentence accept {
                     untuple 2
-                    jump accept_inner
-                    set_contains
+                    drop 0
+                    drop 0
+                    push false
                 }
 
                 export function tau_reduce {

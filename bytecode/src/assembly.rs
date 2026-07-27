@@ -1360,34 +1360,30 @@ const TEMPLATE_ACCEPT: &str = include_str!("templates/compose_accept.tmpl.hana")
 const TEMPLATE_ACCEPT_STATIC: &str = include_str!("templates/compose_accept_static.tmpl.hana");
 
 fn compose_concurrent(args: &[Path]) -> Result<Vec<TopLevelItem>, String> {
-    if args.len() != 4 {
-        return Err("compose_concurrent requires exactly 4 arguments".to_string());
+    if args.len() != 3 {
+        return Err("compose_concurrent requires exactly 3 arguments".to_string());
     }
     let p1 = adjust_path(&args[0]);
     let p2 = adjust_path(&args[1]);
     let sync_fn = adjust_path(&args[2]);
-    let sync_fn_inner = adjust_path(&args[3]);
 
     compile_template(TEMPLATE_CONCURRENT, &[
         ("p1", &p1),
         ("p2", &p2),
         ("sync_fn", &sync_fn),
-        ("sync_fn_inner", &sync_fn_inner),
     ])
 }
 
 fn compose_hidden(args: &[Path]) -> Result<Vec<TopLevelItem>, String> {
-    if args.len() != 3 {
-        return Err("compose_hidden requires exactly 3 arguments".to_string());
+    if args.len() != 2 {
+        return Err("compose_hidden requires exactly 2 arguments".to_string());
     }
     let concurrent = adjust_path(&args[0]);
     let hidden_fn = adjust_path(&args[1]);
-    let hidden_fn_inner = adjust_path(&args[2]);
 
     compile_template(TEMPLATE_HIDDEN, &[
         ("concurrent", &concurrent),
         ("hidden_fn", &hidden_fn),
-        ("hidden_fn_inner", &hidden_fn_inner),
     ])
 }
 
@@ -1459,13 +1455,12 @@ fn compose_emit_helper(val: Option<ParsedValue>, target: &Path) -> Result<Vec<To
     }
 }
 
-fn compose_accept_helper(val_set_path: Path, val_set_path_inner: Path, target: &Path) -> Result<Vec<TopLevelItem>, String> {
+fn compose_accept_helper(val_set_path: Path, target: &Path) -> Result<Vec<TopLevelItem>, String> {
     let machine = adjust_path(target);
 
     compile_template(TEMPLATE_ACCEPT, &[
         ("machine", &machine),
         ("val_set_path", &val_set_path),
-        ("val_set_path_inner", &val_set_path_inner),
     ])
 }
 
@@ -1525,19 +1520,15 @@ fn generate_composition_items(
             compose_emit_helper(Some(val), &paths[0])
         }
         "compose_accept" => {
-            if args.len() != 3 {
-                return Err("compose_accept expects exactly 3 arguments: value_set, value_set_inner, and target_machine".to_string());
+            if args.len() != 2 {
+                return Err("compose_accept expects exactly 2 arguments: value_set and target_machine".to_string());
             }
             let val_set_path = match &args[0] {
                 ResolvedArg::Path(path) => adjust_path(path),
                 _ => return Err("compose_accept: first argument must be a sentence path".to_string()),
             };
-            let val_set_path_inner = match &args[1] {
-                ResolvedArg::Path(path) => adjust_path(path),
-                _ => return Err("compose_accept: second argument must be a sentence path".to_string()),
-            };
-            let paths = extract_paths(&args[2..3], "compose_accept")?;
-            compose_accept_helper(val_set_path, val_set_path_inner, &paths[0])
+            let paths = extract_paths(&args[1..2], "compose_accept")?;
+            compose_accept_helper(val_set_path, &paths[0])
         }
         "compose_accept_static" => {
             if args.len() != 2 {

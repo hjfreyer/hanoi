@@ -4,9 +4,6 @@ function init {
     jump {{machine}}::init
 }
 
-function accept_inner {
-    jump {{machine}}::accept_inner
-}
 
 function accept {
     jump {{machine}}::accept

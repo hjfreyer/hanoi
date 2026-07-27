@@ -2,16 +2,6 @@ function init {
     jump {{concurrent}}::init
 }
 
-#[arity(0, 1)]
-sentence set {
-    jump {{hidden_fn_inner}}
-}
-
-function accept_inner {
-    jump {{concurrent}}::accept_inner
-    jump {{hidden_fn_inner}}
-    set_difference
-}
 
 function accept {
     untuple 2

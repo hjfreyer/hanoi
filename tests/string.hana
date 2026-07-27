@@ -19,55 +19,6 @@ mod string_ref {
         tuple 2
     }
     
-    // accept_inner: takes state (sym, internal_state) and returns ValueSet of accepted events.
-    function accept_inner {
-        untuple 2 // Stack: [sym, internal_state]
-        pick 0 // duplicate internal_state
-        push idle
-        equal
-        branch {
-            drop 0 // drop internal_state
-            drop 0 // drop sym
-            tuple 0
-            push length
-            tuple 2 // ((), length)
-            set_singleton
-            
-            // Accept (N, charat) for any N
-            push universal_set
-            push charat
-            set_singleton
-            set_tuple 2
-            set_union
-        } {
-            // In response state: accepts nothing (empty_set)
-            pick 0
-            untuple 2 // Stack: [sym, internal_state, resp_val, resp_tag]
-            pick 0 // resp_tag
-            push length_resp
-            equal
-            branch {
-                drop 0
-                drop 0
-                drop 0
-                drop 0
-                push empty_set
-            } {
-                pick 0 // resp_tag
-                push charat_resp
-                equal
-                branch {
-                    drop 0
-                    drop 0
-                    drop 0
-                    drop 0
-                    push empty_set
-                } {
-                    panic
-                }
-            }
-        }
-    }
 
     function accept {
         untuple 2
@@ -278,81 +229,6 @@ mod char_iterator {
         tuple 2
     }
     
-    // accept_inner: takes state (payload, tag) and returns ValueSet of accepted events.
-    function accept_inner {
-        untuple 2 // Stack: [payload, tag]
-        pick 0 // tag
-        push await_charat
-        equal
-        branch {
-            drop 0 // drop tag
-            drop 0 // drop payload
-            
-            // Construct set of (((ch, some), charat_resp), in)
-            push universal_set
-            push super::string_ref::some
-            set_singleton
-            set_tuple 2 // {(ch, some)}
-            
-            push super::string_ref::charat_resp
-            set_singleton
-            set_tuple 2 // {((ch, some), charat_resp)}
-            
-            push in
-            set_singleton
-            set_tuple 2 // {(((ch, some), charat_resp), in)}
-            
-            // Construct set of ((((), none), charat_resp), in)
-            tuple 0
-            push super::string_ref::none
-            tuple 2 // ((), none)
-            push super::string_ref::charat_resp
-            tuple 2 // (((), none), charat_resp)
-            push in
-            tuple 2 // ((((), none), charat_resp), in)
-            set_singleton
-            
-            set_union
-        } {
-            pick 0 // tag
-            push fetch
-            equal
-            branch {
-                drop 0
-                drop 0
-                push empty_set
-            } {
-                pick 0 // tag
-                push yield_next
-                equal
-                branch {
-                    drop 0
-                    drop 0
-                    push empty_set
-                } {
-                    pick 0 // tag
-                    push yield_done
-                    equal
-                    branch {
-                        drop 0
-                        drop 0
-                        push empty_set
-                    } {
-                        pick 0 // tag
-                        push done_state
-                        equal
-                        branch {
-                            drop 0
-                            drop 0
-                            push empty_set
-                        } {
-                            panic
-                        }
-                    }
-                }
-            }
-        }
-    }
 
     function accept {
         untuple 2
@@ -641,69 +517,6 @@ mod parseint {
         push idle
     }
 
-    // accept_inner: takes [state] and returns ValueSet of accepted events.
-    function accept_inner {
-        pick 0
-        push idle
-        equal
-        branch {
-            drop 0
-            tuple 0
-            push super::copy
-            tuple 2 // ((), copy)
-            push out
-            tuple 2 // (((), copy), out)
-            set_singleton
-        } {
-            untuple 2 // Stack: [payload, tag]
-            pick 0 // tag
-            push parsing
-            equal
-            branch {
-                drop 0 // drop tag
-                drop 0 // drop payload
-                
-                // Accepts ((ch, next), in) for any ch
-                push universal_set
-                push super::next
-                set_singleton
-                set_tuple 2 // {(ch, next)}
-                push in
-                set_singleton
-                set_tuple 2 // {((ch, next), in)}
-                
-                // Accepts (((), done), in)
-                tuple 0
-                push super::done
-                tuple 2 // ((), done)
-                push in
-                tuple 2 // (((), done), in)
-                set_singleton
-                
-                set_union
-            } {
-                pick 0 // tag
-                push yielding_ok
-                equal
-                branch {
-                    drop 0
-                    drop 0
-                    push empty_set
-                } {
-                    pick 0 // tag
-                    push yielding_err
-                    equal
-                    branch {
-                        drop 0
-                        drop 0
-                        push empty_set
-                    } {
-                        panic
-                    }
-                }
-            }
-        }
-    }
 
     function accept {
         untuple 2
@@ -1043,98 +856,6 @@ mod split {
         tuple 2
     }
 
-    // accept_inner: takes [state] and returns ValueSet of accepted events.
-    function accept_inner {
-        untuple 2 // Stack: [payload, tag]
-        
-        pick 0 // tag
-        push state_idle
-        equal
-        branch {
-            drop 0 // drop tag
-            drop 0 // drop payload
-            
-            tuple 0
-            push next
-            tuple 2
-            set_singleton
-            push out
-            set_singleton
-            set_tuple 2
-        } {
-            pick 0 // tag
-            push state_idle_done
-            equal
-            branch {
-                drop 0
-                drop 0
-                
-                tuple 0
-                push next
-                tuple 2
-                set_singleton
-                push out
-                set_singleton
-                set_tuple 2
-            } {
-                pick 0 // tag
-                push state_await_start
-                equal
-                branch {
-                    drop 0
-                    drop 0
-                    
-                    push universal_set
-                    push super::next
-                    set_singleton
-                    set_tuple 2
-                    push in
-                    set_singleton
-                    set_tuple 2
-                    
-                    tuple 0
-                    push super::done
-                    tuple 2
-                    set_singleton
-                    push in
-                    set_singleton
-                    set_tuple 2
-                    
-                    set_union
-                } {
-                    pick 0 // tag
-                    push state_await_field
-                    equal
-                    branch {
-                        drop 0
-                        drop 0
-                        
-                        push universal_set
-                        push super::next
-                        set_singleton
-                        set_tuple 2
-                        push in
-                        set_singleton
-                        set_tuple 2
-                        
-                        tuple 0
-                        push super::done
-                        tuple 2
-                        set_singleton
-                        push in
-                        set_singleton
-                        set_tuple 2
-                        
-                        set_union
-                    } {
-                        drop 0
-                        drop 0
-                        push empty_set
-                    }
-                }
-            }
-        }
-    }
 
     function accept {
         untuple 2
@@ -1601,9 +1322,6 @@ mod string_ref_base {
         push super::my_str
         jump super::string_ref::init
     }
-    function accept_inner {
-        jump super::string_ref::accept_inner
-    }
     function accept {
         jump super::string_ref::accept
     }
@@ -1628,11 +1346,8 @@ mod string_ref_base {
     }
 }
 
-sentence sync_char_iterator_in_inner {
-    push set_tuple(singleton(char_iterator::in), universal_set)
-}
 sentence sync_char_iterator_in {
-    jump sync_char_iterator_in_inner
+    push set_tuple(singleton(char_iterator::in), universal_set)
     set_contains
 }
 
@@ -1640,11 +1355,9 @@ mod string_hidden compose_hidden(
     compose_concurrent(
         compose_prefix(string_ref_base, char_iterator::in),
         char_iterator,
-        sync_char_iterator_in,
-        sync_char_iterator_in_inner
+        sync_char_iterator_in
     ),
-    sync_char_iterator_in,
-    sync_char_iterator_in_inner
+    sync_char_iterator_in
 );
 
 test sentence iterate_string_ascii {
@@ -1772,18 +1485,13 @@ mod str_123_hidden compose_hidden(
     compose_concurrent(
         compose_prefix(compose_static_closure(string_ref, str_123), char_iterator::in),
         char_iterator,
-        sync_char_iterator_in,
-        sync_char_iterator_in_inner
+        sync_char_iterator_in
     ),
-    sync_char_iterator_in,
-    sync_char_iterator_in_inner
+    sync_char_iterator_in
 );
 
-sentence sync_parseint_in_inner {
-    push set_tuple(singleton(parseint::in), universal_set)
-}
 sentence sync_parseint_in {
-    jump sync_parseint_in_inner
+    push set_tuple(singleton(parseint::in), universal_set)
     set_contains
 }
 
@@ -1791,11 +1499,9 @@ mod parseint_123_system compose_hidden(
     compose_concurrent(
         parseint,
         compose_rename_prefix(char_iterator::out, parseint::in, str_123_hidden),
-        sync_parseint_in,
-        sync_parseint_in_inner
+        sync_parseint_in
     ),
-    sync_parseint_in,
-    sync_parseint_in_inner
+    sync_parseint_in
 );
 
 test sentence parseint_valid_number {
@@ -1803,15 +1509,14 @@ test sentence parseint_valid_number {
     jump parseint_123_system::init
     
     // 1. Verify idle parseint accepts (parseint::out, (copy, ()))
-    pick 0
-    jump parseint_123_system::accept_inner
     tuple 0
     push copy
     tuple 2
     push parseint::out
     tuple 2
-    roll 1
-    set_contains
+    pick 1
+    tuple 2
+    jump parseint_123_system::accept
     assert
     
     // 2. Trigger (parseint::out, (copy, ())) -> transitions parseint to parsing
@@ -1893,22 +1598,18 @@ mod str_45a_hidden compose_hidden(
     compose_concurrent(
         compose_prefix(compose_static_closure(string_ref, str_45a), char_iterator::in),
         char_iterator,
-        sync_char_iterator_in,
-        sync_char_iterator_in_inner
+        sync_char_iterator_in
     ),
-    sync_char_iterator_in,
-    sync_char_iterator_in_inner
+    sync_char_iterator_in
 );
 
 mod parseint_45a_system compose_hidden(
     compose_concurrent(
         parseint,
         compose_rename_prefix(char_iterator::out, parseint::in, str_45a_hidden),
-        sync_parseint_in,
-        sync_parseint_in_inner
+        sync_parseint_in
     ),
-    sync_parseint_in,
-    sync_parseint_in_inner
+    sync_parseint_in
 );
 
 test sentence parseint_invalid_char {
@@ -1984,11 +1685,9 @@ mod parseint_empty_system compose_hidden(
     compose_concurrent(
         parseint,
         compose_rename_prefix(char_iterator::out, parseint::in, empty_string_hidden),
-        sync_parseint_in,
-        sync_parseint_in_inner
+        sync_parseint_in
     ),
-    sync_parseint_in,
-    sync_parseint_in_inner
+    sync_parseint_in
 );
 
 test sentence parseint_empty_string {
@@ -2047,29 +1746,27 @@ test sentence verify_string_ref {
     push xyz_str
     jump string_ref::init // Stack: [state]
     
-    // 1. Test accept set at rest
-    pick 0
-    jump string_ref::accept_inner // Stack: [state, accept_set]
-    
+    // 1. Test accept at rest
     // Check that it accepts (length, ())
     push (string_ref::length, ())
     pick 1
-    set_contains
+    tuple 2
+    jump string_ref::accept
     assert
     
     // Check that it accepts (charat, 0)
     push (string_ref::charat, 0)
     pick 1
-    set_contains
+    tuple 2
+    jump string_ref::accept
     assert
     
     // Check that it accepts (charat, 5)
     push (string_ref::charat, 5)
     pick 1
-    set_contains
+    tuple 2
+    jump string_ref::accept
     assert
-    
-    drop 0 // drop accept_set
     
     // 2. Test emit set at rest
     pick 0
@@ -2148,21 +1845,18 @@ test sentence verify_prefixed_string_ref {
     tuple 0
     jump xyz_string_ref_instance::init // Stack: [state]
     
-    // 1. Test accept set at rest on channel char_iterator::in
-    pick 0
-    jump xyz_string_ref_instance::accept_inner // Stack: [state, accept_set]
-    
+    // 1. Test accept at rest on channel char_iterator::in
     push (char_iterator::in, (string_ref::length, ()))
     pick 1
-    set_contains
+    tuple 2
+    jump xyz_string_ref_instance::accept
     assert
     
     push (char_iterator::in, (string_ref::charat, 0))
     pick 1
-    set_contains
+    tuple 2
+    jump xyz_string_ref_instance::accept
     assert
-    
-    drop 0 // drop accept_set
     
     // 2. Query charat 1
     push (char_iterator::in, (string_ref::charat, 1))
@@ -2194,11 +1888,9 @@ mod empty_string_hidden compose_hidden(
     compose_concurrent(
         compose_prefix(compose_static_closure(string_ref, empty_str), char_iterator::in),
         char_iterator,
-        sync_char_iterator_in,
-        sync_char_iterator_in_inner
+        sync_char_iterator_in
     ),
-    sync_char_iterator_in,
-    sync_char_iterator_in_inner
+    sync_char_iterator_in
 );
 
 test sentence iterate_empty {
@@ -2240,11 +1932,9 @@ mod cafe_string_hidden compose_hidden(
     compose_concurrent(
         compose_prefix(compose_static_closure(string_ref, cafe_str), char_iterator::in),
         char_iterator,
-        sync_char_iterator_in,
-        sync_char_iterator_in_inner
+        sync_char_iterator_in
     ),
-    sync_char_iterator_in,
-    sync_char_iterator_in_inner
+    sync_char_iterator_in
 );
 
 test sentence iterate_unicode {
@@ -2390,18 +2080,13 @@ mod comma_str_hidden compose_hidden(
     compose_concurrent(
         compose_prefix(compose_static_closure(string_ref, comma_str), char_iterator::in),
         char_iterator,
-        sync_char_iterator_in,
-        sync_char_iterator_in_inner
+        sync_char_iterator_in
     ),
-    sync_char_iterator_in,
-    sync_char_iterator_in_inner
+    sync_char_iterator_in
 );
 
-sentence sync_split_in_inner {
-    push set_tuple(singleton(split::in), universal_set)
-}
 sentence sync_split_in {
-    jump sync_split_in_inner
+    push set_tuple(singleton(split::in), universal_set)
     set_contains
 }
 
@@ -2409,11 +2094,9 @@ mod split_system compose_hidden(
     compose_concurrent(
         compose_static_closure(split, 44),
         compose_rename_prefix(char_iterator::out, split::in, comma_str_hidden),
-        sync_split_in,
-        sync_split_in_inner
+        sync_split_in
     ),
-    sync_split_in,
-    sync_split_in_inner
+    sync_split_in
 );
 
 test sentence split_string {

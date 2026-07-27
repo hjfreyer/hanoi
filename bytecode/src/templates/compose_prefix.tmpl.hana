@@ -2,12 +2,6 @@ function init {
     jump {{target}}::init
 }
 
-function accept_inner {
-    jump {{target}}::accept_inner
-    push {{prefix}}
-    set_singleton
-    set_tuple 2
-}
 
 function accept {
     untuple 2
