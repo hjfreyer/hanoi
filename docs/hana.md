@@ -1,0 +1,118 @@
+# Hanoi Assembly (Hana) Reference Guide
+
+This document provides a detailed reference for Hanoi Assembly (`.hana` files), covering the execution model, syntax conventions, instruction set details, and key gotchas when writing stack-based assembly code.
+
+---
+
+## 1. Execution Model & Stack Mechanics
+
+Hanoi is a stack-oriented VM-executed language. Almost all instructions interact directly with a central value stack by pushing or popping elements.
+
+### Value Types
+The stack can contain elements of the following types:
+- **Bool**: `true` or `false`.
+- **Int**: Signed 64-bit integers (e.g., `42`, `-1`).
+- **Float**: 64-bit floating-point numbers (e.g., `3.14`).
+- **Symbol**: Unique identifiers associated with string descriptions (e.g., `symbol my_event "Event description"`).
+- **Tuple**: Nested structures grouping zero or more values (e.g., `(foo, (bar, 42))`).
+- **Set**: Deprecated or restricted collection types (see [README.md](../README.md) and [docs/machines.md](machines.md)).
+
+---
+
+## 2. Crucial Gotcha: Tuple and Untuple Ordering
+
+Because Hanoi is stack-based, constructing and destructuring tuples has a reversing effect on elements relative to their push order.
+
+### The Tuple Reversing Behavior
+When you call `tuple N` (where $N > 0$), the VM pops $N$ elements from the stack one by one. The **top of the stack** (which was pushed last) is popped first and becomes **index 0** of the tuple. The element below it becomes index 1, and so on.
+
+#### Example:
+```hana
+push bar
+push foo
+tuple 2
+```
+1. `push bar` puts `bar` on the stack.
+2. `push foo` puts `foo` on the stack (at the top).
+3. `tuple 2` pops two elements:
+   - First pop: `foo` (becomes index 0 of the tuple).
+   - Second pop: `bar` (becomes index 1 of the tuple).
+
+The resulting tuple on the stack is:
+`(foo, bar)`
+
+### Symmetrical Destructuring with Untuple
+To maintain symmetry, `untuple N` pops a tuple and pushes its elements back onto the stack in **reverse index order** (from index $N-1$ down to 0). This places **index 0 at the top of the stack**.
+
+#### Example:
+```hana
+// Stack: [(foo, bar)]
+untuple 2
+// Stack now: [bar, foo] (where foo is at the top of the stack)
+```
+
+This symmetry allows a sequence of `tuple N` followed by `untuple N` to restore the stack to its exact original state prior to tuple creation.
+
+> [!WARNING]
+> Always remember that the last item pushed before a `tuple N` instruction becomes the first item (index 0) in the resulting tuple, and it will be at the top of the stack after calling `untuple N`.
+
+---
+
+## 3. Sentences vs. Functions
+
+Hanoi distinguishes between two types of execution blocks:
+
+### Sentences
+Declared using the `sentence` keyword. A sentence is an arbitrary sequence of bytecode instructions. It has no default arity or structural constraints.
+```hana
+sentence my_sentence {
+    push 10
+    push 20
+    add
+}
+```
+
+### Functions
+Declared using the `function` keyword. A function is a specialized sentence representing a stack mapping that takes **exactly one input** and returns **exactly one output**. 
+```hana
+function double_value {
+    pick 0
+    add
+}
+```
+> [!IMPORTANT]
+> The parser automatically attaches an arity annotation of `#[arity(1, 1)]` to any block declared with the `function` keyword. If a function's instructions result in a different stack size transition, it will fail the arity check at compile time.
+
+---
+
+## 4. Contract Annotations
+
+Hanoi supports static assertion checking at compile time via attributes:
+
+- `#[arity(inputs, outputs)]`: Declares the stack arity (required for sentences that do not use the default `function` arity of `1 -> 1`).
+- `#[safety("precondition")]`: A logical precondition expression. The compiler validates that the function will not panic if the stack state before execution satisfies this precondition.
+- `#[behavior("postcondition")]`: A logical relationship relating input values (`in[k]`) to output values (`out[j]`).
+
+### Example
+```hana
+#[arity(2, 1)]
+#[safety("is_numeric(in[0]) && is_numeric(in[1]) && in[0] != 0")]
+#[behavior("out[0] == in[1] / in[0]")]
+sentence safe_divide {
+    divide
+}
+```
+
+---
+
+## 5. Control Flow and Subroutines
+
+- **Jumps**: Subroutine execution is initiated via `jump S`, which pushes the return address to a call stack and jumps to sentence `S`. Reaching the end of `S` pops the return address and returns control to the caller.
+- **Branches**: Conditional execution is implemented via `branch { then_block } { else_block }`. The VM pops the top stack element; if it is truthy, it executes `then_block`, otherwise it executes `else_block`.
+- **Panics**: If a condition fails, `panic` immediately halts VM execution. Safe assertion operations `assert` and `assert_eq` verify preconditions and abort the program on failure.
+
+---
+
+## 6. Complete Opcode Reference
+
+For a complete listing of all instructions available in Hanoi Assembly organized by functionality, please see the [Hanoi Assembly Opcode Reference](hana_reference.md).
