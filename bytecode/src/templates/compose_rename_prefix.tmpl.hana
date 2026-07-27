@@ -99,8 +99,10 @@ function emit {
 }
 
 function process {
-    // Stack: [(event, state)]
+    // Stack: [(state, event)]
     untuple 2
+    // Stack: [event, state]
+    roll 1
     // Stack: [state, event]
     untuple 2
     // Stack: [state, payload, prefix]
@@ -118,16 +120,20 @@ function process {
         // Stack: [state, payload, {{from_symbol}}]
         tuple 2
         // Stack: [state, ({{from_symbol}}, payload)]
+        roll 1
+        // Stack: [({{from_symbol}}, payload), state]
         tuple 2
-        // Stack: [(({{from_symbol}}, payload), state)]
+        // Stack: [(state, ({{from_symbol}}, payload))]
         jump {{target}}::process
         // Stack: [next_state]
     } {
         // Stack: [state, payload, prefix]
         tuple 2
         // Stack: [state, (prefix, payload)]
+        roll 1
+        // Stack: [(prefix, payload), state]
         tuple 2
-        // Stack: [((prefix, payload), state)]
+        // Stack: [(state, (prefix, payload))]
         jump {{target}}::process
         // Stack: [next_state]
     }

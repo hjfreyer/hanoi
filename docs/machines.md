@@ -53,7 +53,7 @@ Calculates and returns a single event that the machine proactively emits.
 
 ### 4. `process`
 Computes the next state of the machine after executing a chosen event.
-* **Stack Input:** A tuple `(event, state)` where index 0 is the executed `event` and index 1 is the current machine `state`.
+* **Stack Input:** A tuple `(state, event)` where index 0 is the current machine `state` and index 1 is the executed `event`.
 * **Stack Output:** Pushes the updated `next_state`.
 
 ### 5. `is_done`
@@ -170,11 +170,11 @@ mod char_iterator {
         }
     }
     
-    // process: takes (event, state) and transitions (sym, idx) -> (sym, idx + 1)
+    // process: takes (state, event) and transitions (sym, idx) -> (sym, idx + 1)
     function process {
         untuple 2
-        // Stack: [state, event]
-        drop 0 // Discard event
+        // Stack: [event, state]
+        drop 1 // Discard event
         untuple 2 // Stack: [idx, sym]
         roll 1 // Stack: [sym, idx]
         push 1

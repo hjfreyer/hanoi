@@ -119,8 +119,7 @@ mod string_ref {
     // process: takes state and event, returns next_state
     function process {
         untuple 2
-        // Stack: [state, event]
-        roll 1 // Stack: [event, state]
+        // Stack: [event, state]
         untuple 2 // Stack: [event, sym, internal_state]
         
         pick 0
@@ -396,8 +395,7 @@ mod char_iterator {
     // process: takes state (payload, tag) and event, returns next_state
     function process {
         untuple 2
-        // Stack: [state, event]
-        roll 1 // Stack: [event, state]
+        // Stack: [event, state]
         untuple 2 // Stack: [event, payload, tag]
         
         pick 0 // tag
@@ -660,19 +658,20 @@ mod parseint {
     // process: takes [state, event] and returns next_state.
     function process {
         untuple 2
-        // Stack: [state, event]
-        pick 1 // state
+        // Stack: [event, state]
+        pick 0 // state
         push idle
         equal
         branch {
             // State is idle: event is (((), copy), out)
+            push idle
+            assert_eq
+            
             tuple 0
             push super::copy
             tuple 2
             push out
             tuple 2
-            assert_eq
-            push idle
             assert_eq
             
             // Init parsing state: ((0, 0), parsing)
@@ -683,7 +682,6 @@ mod parseint {
             tuple 2
         } {
             // State is (payload, tag)
-            roll 1 // Stack: [event, state]
             untuple 2 // Stack: [event, payload, tag]
             
             pick 0 // tag
@@ -1057,8 +1055,7 @@ mod split {
     // process: takes [state, event] and returns next_state.
     function process {
         untuple 2
-        // Stack: [state, event]
-        roll 1 // Stack: [event, state]
+        // Stack: [event, state]
         untuple 2 // Stack: [event, payload, tag]
         
         pick 0 // tag
@@ -1332,8 +1329,6 @@ mod string_ref_base {
         jump super::string_ref::emit
     }
     function process {
-        untuple 2
-        tuple 2
         jump super::string_ref::process
     }
 
@@ -1393,6 +1388,7 @@ test sentence iterate_string_ascii {
     tuple 2
     push char_iterator::out
     tuple 2
+    roll 1
     tuple 2
     jump string_hidden::process
     
@@ -1420,6 +1416,7 @@ test sentence iterate_string_ascii {
     tuple 2
     push char_iterator::out
     tuple 2
+    roll 1
     tuple 2
     jump string_hidden::process
     
@@ -1447,6 +1444,7 @@ test sentence iterate_string_ascii {
     tuple 2
     push char_iterator::out
     tuple 2
+    roll 1
     tuple 2
     jump string_hidden::process
     
@@ -1474,6 +1472,7 @@ test sentence iterate_string_ascii {
     tuple 2
     push char_iterator::out
     tuple 2
+    roll 1
     tuple 2
     jump string_hidden::process
     
@@ -1525,6 +1524,7 @@ test sentence parseint_valid_number {
     tuple 2
     push parseint::out
     tuple 2
+    roll 1
     tuple 2
     jump parseint_123_system::process
     
@@ -1588,6 +1588,7 @@ test sentence parseint_valid_number {
     tuple 2
     push parseint::out
     tuple 2
+    roll 1
     tuple 2
     jump parseint_123_system::process
     
@@ -1622,6 +1623,7 @@ test sentence parseint_invalid_char {
     tuple 2
     push parseint::out
     tuple 2
+    roll 1
     tuple 2
     jump parseint_45a_system::process
     
@@ -1675,6 +1677,7 @@ test sentence parseint_invalid_char {
     tuple 2
     push parseint::out
     tuple 2
+    roll 1
     tuple 2
     jump parseint_45a_system::process
     
@@ -1700,6 +1703,7 @@ test sentence parseint_empty_string {
     tuple 2
     push parseint::out
     tuple 2
+    roll 1
     tuple 2
     jump parseint_empty_system::process
     
@@ -1735,6 +1739,7 @@ test sentence parseint_empty_string {
     tuple 2
     push parseint::out
     tuple 2
+    roll 1
     tuple 2
     jump parseint_empty_system::process
     
@@ -1777,6 +1782,7 @@ test sentence verify_string_ref {
     drop 0
         // 3. Query length -> [state] -> [next_state]
     push (string_ref::length, ())
+    roll 1
     tuple 2
     jump string_ref::process
     
@@ -1791,11 +1797,13 @@ test sentence verify_string_ref {
     
     // Process emission event -> transitions back to idle
     push (string_ref::length_resp, 3)
+    roll 1
     tuple 2
     jump string_ref::process
     
     // 4. Query charat 1 (in-bounds)
     push (string_ref::charat, 1)
+    roll 1
     tuple 2
     jump string_ref::process
     
@@ -1809,11 +1817,13 @@ test sentence verify_string_ref {
     
     // Process emission event
     push (string_ref::charat_resp, (string_ref::some, 121))
+    roll 1
     tuple 2
     jump string_ref::process
     
     // 5. Query charat 5 (out-of-bounds)
     push (string_ref::charat, 5)
+    roll 1
     tuple 2
     jump string_ref::process
     
@@ -1827,6 +1837,7 @@ test sentence verify_string_ref {
     
     // Process emission event
     push (string_ref::charat_resp, (string_ref::none, ()))
+    roll 1
     tuple 2
     jump string_ref::process
     
@@ -1860,6 +1871,7 @@ test sentence verify_prefixed_string_ref {
     
     // 2. Query charat 1
     push (char_iterator::in, (string_ref::charat, 1))
+    roll 1
     tuple 2
     jump xyz_string_ref_instance::process
     
@@ -1873,6 +1885,7 @@ test sentence verify_prefixed_string_ref {
     
     // Process emission back to idle
     push (char_iterator::in, (string_ref::charat_resp, (string_ref::some, 121)))
+    roll 1
     tuple 2
     jump xyz_string_ref_instance::process
     
@@ -1922,6 +1935,7 @@ test sentence iterate_empty {
     tuple 2
     push char_iterator::out
     tuple 2
+    roll 1
     tuple 2
     jump empty_string_hidden::process
     
@@ -1964,6 +1978,7 @@ test sentence iterate_unicode {
     tuple 2
     push char_iterator::out
     tuple 2
+    roll 1
     tuple 2
     jump cafe_string_hidden::process
     
@@ -1990,6 +2005,7 @@ test sentence iterate_unicode {
     tuple 2
     push char_iterator::out
     tuple 2
+    roll 1
     tuple 2
     jump cafe_string_hidden::process
     
@@ -2016,6 +2032,7 @@ test sentence iterate_unicode {
     tuple 2
     push char_iterator::out
     tuple 2
+    roll 1
     tuple 2
     jump cafe_string_hidden::process
     
@@ -2042,6 +2059,7 @@ test sentence iterate_unicode {
     tuple 2
     push char_iterator::out
     tuple 2
+    roll 1
     tuple 2
     jump cafe_string_hidden::process
     
@@ -2068,6 +2086,7 @@ test sentence iterate_unicode {
     tuple 2
     push char_iterator::out
     tuple 2
+    roll 1
     tuple 2
     jump cafe_string_hidden::process
     
@@ -2110,6 +2129,7 @@ test sentence split_string {
     tuple 2
     push split::out
     tuple 2
+    roll 1
     tuple 2
     jump split_system::process
     
@@ -2142,6 +2162,7 @@ test sentence split_string {
     tuple 2
     push split::out
     tuple 2
+    roll 1
     tuple 2
     jump split_system::process
     
@@ -2167,6 +2188,7 @@ test sentence split_string {
     tuple 2
     push split::out
     tuple 2
+    roll 1
     tuple 2
     jump split_system::process
     
@@ -2199,6 +2221,7 @@ test sentence split_string {
     tuple 2
     push split::out
     tuple 2
+    roll 1
     tuple 2
     jump split_system::process
     
@@ -2209,6 +2232,7 @@ test sentence split_string {
     tuple 2
     push split::out
     tuple 2
+    roll 1
     tuple 2
     jump split_system::process
     
@@ -2240,6 +2264,7 @@ test sentence split_string {
     tuple 2
     push split::out
     tuple 2
+    roll 1
     tuple 2
     jump split_system::process
     
@@ -2264,6 +2289,7 @@ test sentence split_string {
     tuple 2
     push split::out
     tuple 2
+    roll 1
     tuple 2
     jump split_system::process
     
@@ -2295,6 +2321,7 @@ test sentence split_string {
     tuple 2
     push split::out
     tuple 2
+    roll 1
     tuple 2
     jump split_system::process
     
@@ -2305,6 +2332,7 @@ test sentence split_string {
     tuple 2
     push split::out
     tuple 2
+    roll 1
     tuple 2
     jump split_system::process
     
@@ -2325,6 +2353,7 @@ test sentence split_string {
     tuple 2
     push split::out
     tuple 2
+    roll 1
     tuple 2
     jump split_system::process
     

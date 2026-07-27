@@ -840,6 +840,7 @@ mod tests {
                 push payload
                 push to_sym
                 tuple 2
+                roll 1
                 tuple 2
                 jump renamed::process
                 // Stack has [1] (new_state)
@@ -901,7 +902,7 @@ mod tests {
                 }
                 export function process {
                     untuple 2
-                    drop 0
+                    drop 1
                     push 100
                     add
                 }
@@ -931,6 +932,7 @@ mod tests {
 
                 // Call process: should push 100, then add -> 152
                 push 0
+                roll 1
                 tuple 2
                 jump closed::process
                 push 152
@@ -973,7 +975,7 @@ mod tests {
                 }
                 export function process {
                     untuple 2
-                    drop 0
+                    drop 1
                 }
                 export function is_done {
                     drop 0
@@ -1010,7 +1012,7 @@ mod tests {
                 }
                 export function process {
                     untuple 2
-                    drop 0
+                    drop 1
                 }
                 export function is_done {
                     drop 0
@@ -1140,7 +1142,6 @@ mod runtime_tests {
 
                 export function process {
                     untuple 2
-                    roll 1 // swap event and state
                     push state::init
                     equal
                     branch {
@@ -1256,7 +1257,7 @@ mod runtime_tests {
 
                 export function process {
                     untuple 2
-                    drop 0 // drop event
+                    drop 1 // drop event
                     push 1
                     add
                 }

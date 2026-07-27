@@ -76,8 +76,10 @@ function emit {
 }
 
 function process {
-    // Stack: [(event, state)]
+    // Stack: [(state, event)]
     untuple 2
+    // Stack: [event, state]
+    roll 1
     // Stack: [state, event]
     untuple 2
     // Stack: [state, payload, prefix]
@@ -85,8 +87,10 @@ function process {
     // Stack: [state, payload, prefix, {{prefix}}]
     assert_eq
     // Stack: [state, payload]
+    roll 1
+    // Stack: [payload, state]
     tuple 2
-    // Stack: [(payload, state)]
+    // Stack: [(state, payload)]
     jump {{target}}::process
     // Stack: [next_state]
 }

@@ -191,8 +191,7 @@ mod queue {
     // process: takes [state, event] and returns next_state
     function process {
         untuple 2
-        // Stack: [state, event]
-        roll 1 // Stack: [event, state]
+        // Stack: [event, state]
         untuple 4
         // Stack: [event, current, accumulator, new_el, tag]
         
@@ -534,6 +533,7 @@ test sentence verify_queue_machine {
     push 10
     push push_back
     tuple 2
+    roll 1
     tuple 2
     jump queue::process
     jump drive_reductions
@@ -542,6 +542,7 @@ test sentence verify_queue_machine {
     push 20
     push push_back
     tuple 2
+    roll 1
     tuple 2
     jump queue::process
     jump drive_reductions
@@ -552,6 +553,7 @@ test sentence verify_queue_machine {
     tuple 2
     push pop_front
     tuple 2
+    roll 1
     tuple 2
     jump queue::process
     jump drive_reductions
@@ -579,6 +581,7 @@ test sentence verify_queue_machine {
     tuple 2
     push pop_front
     tuple 2
+    roll 1
     tuple 2
     jump queue::process
     
@@ -588,6 +591,7 @@ test sentence verify_queue_machine {
     tuple 2
     push pop_front
     tuple 2
+    roll 1
     tuple 2
     jump queue::process
     jump drive_reductions
@@ -612,6 +616,7 @@ test sentence verify_queue_machine {
     tuple 2
     push pop_front
     tuple 2
+    roll 1
     tuple 2
     jump queue::process
     
@@ -621,6 +626,7 @@ test sentence verify_queue_machine {
     tuple 2
     push pop_front
     tuple 2
+    roll 1
     tuple 2
     jump queue::process
     jump drive_reductions
@@ -645,6 +651,7 @@ test sentence verify_queue_machine {
     tuple 2
     push pop_front
     tuple 2
+    roll 1
     tuple 2
     jump queue::process
     
@@ -654,6 +661,7 @@ test sentence verify_queue_machine {
     tuple 2
     push await_front
     tuple 2
+    roll 1
     tuple 2
     jump queue::process
     
@@ -675,6 +683,7 @@ test sentence verify_queue_machine {
     tuple 2
     push pop_front
     tuple 2
+    roll 1
     tuple 2
     jump queue::process
     
@@ -700,6 +709,7 @@ test sentence verify_queue_machine {
     tuple 2
     push pop_front
     tuple 2
+    roll 1
     tuple 2
     jump queue::process
     
@@ -707,6 +717,7 @@ test sentence verify_queue_machine {
     push 100
     push push_back
     tuple 2
+    roll 1
     tuple 2
     jump queue::process
     jump drive_reductions
@@ -733,6 +744,7 @@ test sentence verify_queue_machine {
     tuple 2
     push await_front
     tuple 2
+    roll 1
     tuple 2
     jump queue::process
     

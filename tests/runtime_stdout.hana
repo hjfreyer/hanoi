@@ -114,10 +114,9 @@ test mod verify_print_hello {
 
     export function process {
         untuple 2
-        // Stack: [state, event]
-        roll 1
+        // Stack: [event, state]
         untuple 2
-        // Stack: [event, phase, data] (data is index 0)
+        // Stack: [event, data, phase]
         pick 1
         push 0
         equal

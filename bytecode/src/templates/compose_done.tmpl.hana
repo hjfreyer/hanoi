@@ -32,10 +32,10 @@ function emit {
 }
 
 function process {
-    // Stack: [(event, state)]
+    // Stack: [(state, event)]
     untuple 2
-    // Stack: [state, event]
-    drop 0
+    // Stack: [event, state]
+    drop 1
     // Stack: [state]
 }
 

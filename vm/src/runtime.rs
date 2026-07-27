@@ -370,7 +370,7 @@ impl<E: Environment> Runtime<E> {
         if !self.vm.stack.is_empty() {
             return Err(format!("Stack not empty before process: {:?}", self.vm.stack));
         }
-        self.vm.stack.push(Value::Tuple(vec![event, state]));
+        self.vm.stack.push(Value::Tuple(vec![state, event]));
         self.vm.execute(self.main_process)?;
         let res = self.vm.pop()?;
         if !self.vm.stack.is_empty() {

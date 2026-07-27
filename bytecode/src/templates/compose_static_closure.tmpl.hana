@@ -22,7 +22,7 @@ function emit {
 }
 
 function process {
-    // Stack: [(event, state)]
+    // Stack: [(state, event)]
     jump {{machine}}::process
     // Stack: [next_state]
 }
