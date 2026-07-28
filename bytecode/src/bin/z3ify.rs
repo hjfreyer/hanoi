@@ -6,7 +6,7 @@ use std::process;
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
-        eprintln!("Usage: {} <directory_or_file.hana>", args[0]);
+        eprintln!("Usage: {} <directory>", args[0]);
         process::exit(1);
     }
 
@@ -18,18 +18,15 @@ fn main() {
         process::exit(1);
     }
 
-    let file_path = if path.is_dir() {
-        path.join("main.hana")
-    } else {
-        path.to_path_buf()
-    };
+    if !path.is_dir() {
+        eprintln!("Error: Path '{}' is not a directory. z3ify only supports directories containing 'main.hana'", path_arg);
+        process::exit(1);
+    }
+
+    let file_path = path.join("main.hana");
 
     if !file_path.exists() {
-        if path.is_dir() {
-            eprintln!("Error: Directory '{}' does not contain 'main.hana'", path_arg);
-        } else {
-            eprintln!("Error: File '{}' does not exist", path_arg);
-        }
+        eprintln!("Error: Directory '{}' does not contain 'main.hana'", path_arg);
         process::exit(1);
     }
 
