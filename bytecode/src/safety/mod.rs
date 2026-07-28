@@ -3,6 +3,7 @@
 pub mod formula;
 pub mod executor;
 pub mod z3;
+pub mod z3ify;
 
 use crate::library::{Library, SentenceIndex, Annotation};
 use formula::{Formula, Expr, parse_formula_string, substitute_formula, resolve_symbols_in_formula};
@@ -56,6 +57,7 @@ fn check_sentence_safety(s_idx: SentenceIndex, library: &Library) -> Result<(), 
             Annotation::Behavior(b) => {
                 behavior_contract = resolve_symbols_in_formula(&parse_formula_string(b)?, &library.symbols, current_module);
             }
+            Annotation::Z3ify => {}
         }
     }
 

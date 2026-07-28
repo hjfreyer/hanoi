@@ -16,6 +16,7 @@ pub enum Annotation {
     Arity(i64, i64),
     Safety(String),
     Behavior(String),
+    Z3ify,
 }
 
 /// A Library contains a collection of sentences indexed type-safely using `SentenceIndex`.

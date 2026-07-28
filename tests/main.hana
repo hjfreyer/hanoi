@@ -24,4 +24,5 @@ mod advent;
 mod machine_tests;
 mod arity_tests;
 mod safety_tests;
+mod z3ify_test;
 

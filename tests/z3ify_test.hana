@@ -1,0 +1,58 @@
+symbol latte "Latte"
+symbol espresso "Espresso"
+
+#[arity(2, 2)]
+#[z3ify]
+sentence test_swap {
+    pick 1
+    drop 2
+}
+
+#[arity(2, 1)]
+#[z3ify]
+sentence test_arith {
+    add
+    push 10
+    multiply
+}
+
+#[arity(1, 1)]
+#[z3ify]
+sentence test_branch {
+    push true
+    branch {
+        push 100
+    } {
+        push 200
+    }
+    add
+}
+
+#[arity(2, 1)]
+#[z3ify]
+sentence test_symbol {
+    symbol_char_at
+}
+
+#[arity(2, 1)]
+#[z3ify]
+sentence test_tuples {
+    tuple 2
+    untuple 2
+    add
+}
+
+#[arity(1, 1)]
+#[z3ify]
+sentence swap_pair {
+    untuple 2
+    roll 1
+    tuple 2
+}
+
+#[arity(1, 1)]
+#[z3ify]
+sentence test_double_swap {
+    jump swap_pair
+    jump swap_pair
+}

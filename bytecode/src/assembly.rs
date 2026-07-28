@@ -561,6 +561,9 @@ fn parse_items(stream: &mut TokenStream, end_token: Option<Token>, base_dir: Opt
                     stream.expect(Token::RParen)?;
                     Annotation::Behavior(formula_str)
                 }
+                "z3ify" => {
+                    Annotation::Z3ify
+                }
                 other => return Err(format!("Unsupported annotation '{}'", other)),
             };
             stream.expect(Token::RBracket)?;
