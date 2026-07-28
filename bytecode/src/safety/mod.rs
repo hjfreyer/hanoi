@@ -59,6 +59,7 @@ fn check_sentence_safety(s_idx: SentenceIndex, library: &Library) -> Result<(), 
             }
             Annotation::Z3ify => {}
             Annotation::Recursive => {}
+            Annotation::Safety2(_) => {}
         }
     }
 

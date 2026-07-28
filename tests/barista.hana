@@ -29,34 +29,6 @@ mod customer_impl {
     }
 
     #[arity(1, 1)]
-    function is_id {
-        pick 0
-        push super::customer_id::c1
-        equal
-        branch {
-            drop 0
-            push true
-        } {
-            push super::customer_id::c2
-            equal
-        }
-    }
-
-    #[arity(1, 1)]
-    function is_drink {
-        pick 0
-        push super::event::latte
-        equal
-        branch {
-            drop 0
-            push true
-        } {
-            push super::event::espresso
-            equal
-        }
-    }
-
-    #[arity(1, 1)]
     function is_internal_state {
         pick 0
         push state::idle
@@ -86,8 +58,6 @@ mod customer_impl {
         }
     }
 
-    #[arity(1, 1)]
-    #[z3ify]
     function is_state {
         pick 0
         is_tuple
@@ -99,12 +69,8 @@ mod customer_impl {
             branch {
                 untuple 3
                 jump is_internal_state
-                roll 2
-                jump is_id
-                roll 2
-                jump is_drink
-                and
-                and
+                drop 1
+                drop 1
             } {
                 drop 0
                 push false
@@ -115,9 +81,268 @@ mod customer_impl {
         }
     }
 
+    #[arity(1, 1)]
+    function is_event {
+        pick 0
+        is_tuple
+        branch {
+            pick 0
+            tuple_length
+            push 2
+            equal
+            branch {
+                untuple 2
+                // Stack: [payload, type]
+                pick 0
+                is_symbol
+                branch {
+                    pick 0
+                    push super::event::want_coffee
+                    equal
+                    branch {
+                        drop 0 // drop type
+                        // Check payload: (id, ())
+                        pick 0
+                        is_tuple
+                        branch {
+                            pick 0
+                            tuple_length
+                            push 2
+                            equal
+                            branch {
+                                untuple 2
+                                // Stack: [unit, id]
+                                pick 0
+                                is_symbol
+                                branch {
+                                    pick 1
+                                    is_tuple
+                                    branch {
+                                        pick 1
+                                        tuple_length
+                                        push 0
+                                        equal
+                                        branch {
+                                            drop 0
+                                            drop 0
+                                            push true
+                                        } {
+                                            drop 0
+                                            drop 0
+                                            push false
+                                        }
+                                    } {
+                                        drop 0
+                                        drop 0
+                                        push false
+                                    }
+                                } {
+                                    drop 0
+                                    drop 0
+                                    push false
+                                }
+                            } {
+                                drop 0
+                                push false
+                            }
+                        } {
+                            drop 0
+                            push false
+                        }
+                    } {
+                        pick 0
+                        push super::event::coffee
+                        equal
+                        branch {
+                            drop 0 // drop type
+                            // Check payload: (drink, id)
+                            pick 0
+                            is_tuple
+                            branch {
+                                pick 0
+                                tuple_length
+                                push 2
+                                equal
+                                branch {
+                                    untuple 2
+                                    // Stack: [id, drink]
+                                    pick 0
+                                    is_symbol
+                                    branch {
+                                        pick 1
+                                        is_symbol
+                                        branch {
+                                            drop 0
+                                            drop 0
+                                            push true
+                                        } {
+                                            drop 0
+                                            drop 0
+                                            push false
+                                        }
+                                    } {
+                                        drop 0
+                                        drop 0
+                                        push false
+                                    }
+                                } {
+                                    drop 0
+                                    push false
+                                }
+                            } {
+                                drop 0
+                                push false
+                            }
+                        } {
+                            pick 0
+                            push super::event::enjoy
+                            equal
+                            branch {
+                                drop 0 // drop type
+                                // Check payload: (id, ())
+                                pick 0
+                                is_tuple
+                                branch {
+                                    pick 0
+                                    tuple_length
+                                    push 2
+                                    equal
+                                    branch {
+                                        untuple 2
+                                        // Stack: [unit, id]
+                                        pick 0
+                                        is_symbol
+                                        branch {
+                                            pick 1
+                                            is_tuple
+                                            branch {
+                                                pick 1
+                                                tuple_length
+                                                push 0
+                                                equal
+                                                branch {
+                                                    drop 0
+                                                    drop 0
+                                                    push true
+                                                } {
+                                                    drop 0
+                                                    drop 0
+                                                    push false
+                                                }
+                                            } {
+                                                drop 0
+                                                drop 0
+                                                push false
+                                            }
+                                        } {
+                                            drop 0
+                                            drop 0
+                                            push false
+                                        }
+                                    } {
+                                        drop 0
+                                        push false
+                                    }
+                                } {
+                                    drop 0
+                                    push false
+                                }
+                            } {
+                                push super::super::queue::push_back
+                                equal
+                                branch {
+                                    // Check payload: (drink, id)
+                                    pick 0
+                                    is_tuple
+                                    branch {
+                                        pick 0
+                                        tuple_length
+                                        push 2
+                                        equal
+                                        branch {
+                                            untuple 2
+                                            // Stack: [id, drink]
+                                            pick 0
+                                            is_symbol
+                                            branch {
+                                                pick 1
+                                                is_symbol
+                                                branch {
+                                                    drop 0
+                                                    drop 0
+                                                    push true
+                                                } {
+                                                    drop 0
+                                                    drop 0
+                                                    push false
+                                                }
+                                            } {
+                                                drop 0
+                                                drop 0
+                                                push false
+                                            }
+                                        } {
+                                            drop 0
+                                            push false
+                                        }
+                                    } {
+                                        drop 0
+                                        push false
+                                    }
+                                } {
+                                    drop 0
+                                    push false
+                                }
+                            }
+                        }
+                    }
+                } {
+                    drop 0
+                    drop 0
+                    push false
+                }
+            } {
+                drop 0
+                push false
+            }
+        } {
+            drop 0
+            push false
+        }
+    }
+
+    function anything {
+        drop 0
+        push true
+    }
+
+    #[safety2(anything)]
+    function accept_type {
+        pick 0
+        is_tuple
+        branch {
+            pick 0
+            tuple_length
+            push 2
+            equal
+            branch {
+                untuple 2
+                jump is_state
+                roll 1
+                jump is_event
+                and
+            } {
+                drop 0
+                push false
+            }
+        } {
+            drop 0 
+            push false
+        }
+    }
 
     #[arity(1, 1)]
-    #[z3ify]
+    #[safety2(accept_type)]
     function accept {
         untuple 2
         untuple 3 // Stack: [event, id, preferred_drink, internal_state]
@@ -187,6 +412,7 @@ mod customer_impl {
     // emit takes state: (id, preferred_drink, internal_state) and returns ValueSet of emitted events.
     #[arity(1, 1)]
     #[safety("is_tuple(in[0], 3) && (in[0].0 == state::idle || in[0].0 == state::thirsty || in[0].0 == state::ordered || in[0].0 == state::has_coffee)")]
+    #[safety2(is_state)]
     function emit {
         untuple 3 // Stack: [id, preferred_drink, internal_state]
         pick 0
@@ -342,6 +568,39 @@ mod customer_impl {
         roll 1
         drop 0
     }
+}
+test sentence verify_customer_is_event {
+    // 1. Valid want_coffee event
+    push (event::want_coffee, (customer_id::c1, ()))
+    jump customer_impl::is_event
+    assert
+
+    // 2. Valid push_back event
+    push (super::queue::push_back, (event::latte, customer_id::c1))
+    jump customer_impl::is_event
+    assert
+
+    // 3. Valid coffee event
+    push (event::coffee, (event::latte, customer_id::c1))
+    jump customer_impl::is_event
+    assert
+
+    // 4. Valid enjoy event
+    push (event::enjoy, (customer_id::c1, ()))
+    jump customer_impl::is_event
+    assert
+
+    // 5. Invalid event (wrong type)
+    push 123
+    jump customer_impl::is_event
+    not
+    assert
+
+    // 6. Invalid event (missing payload nesting)
+    push (event::want_coffee, customer_id::c1)
+    jump customer_impl::is_event
+    not
+    assert
 }
 
 test sentence verify_customer_logic {

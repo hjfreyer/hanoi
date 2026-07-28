@@ -14,18 +14,74 @@ fn get_sentence_name(s_idx: SentenceIndex, library: &Library) -> String {
     }
 }
 
+fn resolve_safety_fn(
+    annotated_name: &str,
+    safety_fn_name: &str,
+    library: &Library,
+) -> Result<SentenceIndex, String> {
+    // 1. Try relative to the annotated sentence's module
+    let current_module = if let Some(idx) = annotated_name.rfind("::") {
+        &annotated_name[..idx]
+    } else {
+        ""
+    };
+
+    let fq_candidate = if current_module.is_empty() {
+        safety_fn_name.to_string()
+    } else {
+        format!("{}::{}", current_module, safety_fn_name)
+    };
+
+    if let Some(pos) = library.names.iter().position(|n| n == &fq_candidate) {
+        return Ok(SentenceIndex::from(pos));
+    }
+
+    // 2. Try absolute/as-is
+    if let Some(pos) = library.names.iter().position(|n| n == safety_fn_name) {
+        return Ok(SentenceIndex::from(pos));
+    }
+
+    Err(format!(
+        "Safety function '{}' not found in library",
+        safety_fn_name
+    ))
+}
+
 pub fn generate_z3ify(library: &Library) -> Result<String, String> {
-    // 1. Find all sentences annotated with #[z3ify]
+    // 1. Find all sentences annotated with #[z3ify] or #[safety2]
     let mut z3ify_targets = Vec::new();
+    let mut safety2_checks = Vec::new();
     for (s_idx_raw, annotations) in library.annotations.iter().enumerate() {
         let s_idx = SentenceIndex::from(s_idx_raw);
-        if annotations.iter().any(|ann| matches!(ann, Annotation::Z3ify)) {
+        let has_z3ify = annotations.iter().any(|ann| matches!(ann, Annotation::Z3ify));
+        let mut safety2_fn = None;
+        for ann in annotations {
+            if let Annotation::Safety2(s_fn) = ann {
+                safety2_fn = Some(s_fn.clone());
+            }
+        }
+
+        if has_z3ify {
             z3ify_targets.push(s_idx);
+        }
+
+        if let Some(s_fn) = safety2_fn {
+            let annotated_name = &library.names[s_idx];
+            let safety_fn_idx = resolve_safety_fn(annotated_name, &s_fn, library)?;
+            safety2_checks.push((s_idx, safety_fn_idx));
+            
+            // Implicitly add both functions to targets
+            z3ify_targets.push(s_idx);
+            z3ify_targets.push(safety_fn_idx);
         }
     }
 
+    // Deduplicate targets
+    z3ify_targets.sort();
+    z3ify_targets.dedup();
+
     if z3ify_targets.is_empty() {
-        return Err("No sentences annotated with #[z3ify] were found.".to_string());
+        return Err("No sentences annotated with #[z3ify] or #[safety2] were found.".to_string());
     }
 
     // 2. Cycle detection and transitive dependency collection
@@ -239,6 +295,54 @@ pub fn generate_z3ify(library: &Library) -> Result<String, String> {
         arity_map.insert(s_idx, (n, m));
         output.push_str(&def_smt);
         output.push_str("\n");
+    }
+
+    // 8. Generate Safety2 Check Sections
+    if !safety2_checks.is_empty() {
+        output.push_str(";; Safety2 Checks\n");
+        for (annotated_idx, safety_idx) in safety2_checks {
+            let annotated_name = get_sentence_name(annotated_idx, library);
+            let safety_name = get_sentence_name(safety_idx, library);
+
+            let (n_safety, m_safety) = arity_map[&safety_idx];
+            let (n_annotated, m_annotated) = arity_map[&annotated_idx];
+
+            if n_safety != 1 || m_safety != 1 {
+                return Err(format!(
+                    "Safety function '{}' must have arity 1 -> 1, but has {} -> {}",
+                    safety_name, n_safety, m_safety
+                ));
+            }
+            if n_annotated != 1 {
+                return Err(format!(
+                    "Annotated function '{}' must have 1 input, but has {}",
+                    annotated_name, n_annotated
+                ));
+            }
+            if m_annotated == 0 {
+                return Err(format!(
+                    "Annotated function '{}' must have at least 1 output to be verified via z3ify",
+                    annotated_name
+                ));
+            }
+
+            output.push_str(&format!(
+                ";; Verify that '{}' never panics when '{}' returns true\n",
+                annotated_name, safety_name
+            ));
+            output.push_str("(push)\n");
+            output.push_str(" (declare-const x Val)\n");
+            output.push_str(&format!(
+                " (assert (= (|{}_out_0| (Ok x)) (Ok (ValBool true))))\n",
+                safety_name
+            ));
+            output.push_str(&format!(
+                " (assert (is-Panic (|{}_out_0| (Ok x))))\n",
+                annotated_name
+            ));
+            output.push_str(" (check-sat)\n");
+            output.push_str("(pop)\n\n");
+        }
     }
 
     Ok(output)
@@ -770,5 +874,65 @@ fn expr_to_smt(expr: &Expr, float_to_id: &mut HashMap<String, usize>) -> String 
             )
         }
         _ => panic!("Internal error: unexpected AST expression in z3ify translation: {:?}", expr),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::assembly::assemble;
+
+    #[test]
+    fn test_safety2_z3ify_generation() {
+        let code = r#"
+            #[arity(1, 1)]
+            sentence safe_for_foo {
+                is_int
+            }
+
+            #[arity(1, 1)]
+            #[safety2(safe_for_foo)]
+            sentence foo {
+                push 1
+                add
+            }
+        "#;
+        let library = assemble(code).unwrap();
+        let smt = generate_z3ify(&library).unwrap();
+
+        // Check that both functions were translated
+        assert!(smt.contains("define-fun |safe_for_foo_out_0|"));
+        assert!(smt.contains("define-fun |foo_out_0|"));
+
+        // Check that the safety2 check block is present
+        assert!(smt.contains(";; Safety2 Checks"));
+        assert!(smt.contains("Verify that 'foo' never panics when 'safe_for_foo' returns true"));
+        assert!(smt.contains("(push)"));
+        assert!(smt.contains("(declare-const x Val)"));
+        assert!(smt.contains("(assert (= (|safe_for_foo_out_0| (Ok x)) (Ok (ValBool true))))"));
+        assert!(smt.contains("(assert (is-Panic (|foo_out_0| (Ok x))))"));
+        assert!(smt.contains("(check-sat)"));
+        assert!(smt.contains("(pop)"));
+    }
+
+    #[test]
+    fn test_safety2_invalid_arity() {
+        let code = r#"
+            #[arity(2, 1)]
+            sentence safe_invalid {
+                add
+            }
+
+            #[arity(1, 1)]
+            #[safety2(safe_invalid)]
+            sentence foo {
+                drop 0
+                push 1
+            }
+        "#;
+        let library = assemble(code).unwrap();
+        let res = generate_z3ify(&library);
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("Safety function 'safe_invalid' must have arity 1 -> 1"));
     }
 }

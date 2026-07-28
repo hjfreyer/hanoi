@@ -418,5 +418,42 @@ mod tests {
         let _ = std::fs::remove_dir(tmp_dir);
     }
 
+    #[test]
+    fn test_assemble_safety2_annotation() {
+        let code = r#"
+            #[arity(1, 1)]
+            sentence safe_fn {
+                drop 0
+                push true
+            }
 
+            #[arity(1, 1)]
+            #[safety2(safe_fn)]
+            sentence my_func {
+                drop 0
+                push false
+            }
+
+            #[arity(1, 1)]
+            #[safety2(super::safe_fn)]
+            sentence other_func {
+                drop 0
+                push false
+            }
+        "#;
+        let res = assemble(code).unwrap();
+        let safe_fn_idx = res.names.iter().position(|n| n == "safe_fn").map(SentenceIndex::from).unwrap();
+        let my_func_idx = res.names.iter().position(|n| n == "my_func").map(SentenceIndex::from).unwrap();
+        let other_func_idx = res.names.iter().position(|n| n == "other_func").map(SentenceIndex::from).unwrap();
+
+        assert_eq!(res.annotations[safe_fn_idx], vec![Annotation::Arity(1, 1)]);
+        assert_eq!(
+            res.annotations[my_func_idx],
+            vec![Annotation::Arity(1, 1), Annotation::Safety2("safe_fn".to_string())]
+        );
+        assert_eq!(
+            res.annotations[other_func_idx],
+            vec![Annotation::Arity(1, 1), Annotation::Safety2("super::safe_fn".to_string())]
+        );
+    }
 }

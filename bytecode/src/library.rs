@@ -18,6 +18,7 @@ pub enum Annotation {
     Behavior(String),
     Z3ify,
     Recursive,
+    Safety2(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
