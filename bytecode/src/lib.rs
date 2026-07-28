@@ -302,10 +302,10 @@ mod tests {
         assert_eq!(
             res3.instruction_arities[SentenceIndex::from(0)],
             Some(vec![
+                Arity::Normal { inputs: 0, outputs: 0 },
                 Arity::Normal { inputs: 0, outputs: 1 },
+                Arity::Normal { inputs: 0, outputs: 2 },
                 Arity::Normal { inputs: 0, outputs: 1 },
-                Arity::Normal { inputs: 2, outputs: 1 },
-                Arity::Normal { inputs: 1, outputs: 0 },
             ])
         );
 
@@ -321,7 +321,7 @@ mod tests {
         "#;
         let res4 = assemble(code4).unwrap();
         assert_eq!(res4.instruction_arities[SentenceIndex::from(0)], Some(vec![Arity::Panic { inputs: 0 }]));
-        assert_eq!(res4.instruction_arities[SentenceIndex::from(1)], Some(vec![Arity::Panic { inputs: 0 }]));
+        assert_eq!(res4.instruction_arities[SentenceIndex::from(1)], Some(vec![Arity::Panic { inputs: 2 }]));
     }
 
     #[test]

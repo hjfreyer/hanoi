@@ -26,6 +26,22 @@ pub enum Arity {
     Panic { inputs: i64 },
 }
 
+impl Arity {
+    pub fn inputs(&self) -> i64 {
+        match *self {
+            Arity::Normal { inputs, .. } => inputs,
+            Arity::Panic { inputs } => inputs,
+        }
+    }
+
+    pub fn outputs(&self) -> Option<i64> {
+        match *self {
+            Arity::Normal { outputs, .. } => Some(outputs),
+            Arity::Panic { .. } => None,
+        }
+    }
+}
+
 /// A Library contains a collection of sentences indexed type-safely using `SentenceIndex`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Library {

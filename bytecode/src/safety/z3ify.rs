@@ -47,6 +47,16 @@ pub fn generate_z3ify(library: &Library) -> Result<String, String> {
         topological_sort(s_idx, library, &mut visited_sort, &mut ordered_sentences);
     }
 
+    // Check that neither the targets nor any dependencies are annotated with #[recursive]
+    for &s_idx in &ordered_sentences {
+        if library.annotations[s_idx].iter().any(|ann| matches!(ann, Annotation::Recursive)) {
+            return Err(format!(
+                "Sentence '{}' is annotated with #[recursive] (or is a dependency of a target marked recursive), which is unsupported by z3ify.",
+                get_sentence_name(s_idx, library)
+            ));
+        }
+    }
+
     // 4. Collect tuple sizes used in the program
     let mut tuple_sizes = HashSet::new();
     for sentence in &library.sentences {
@@ -334,24 +344,25 @@ fn escape_smt_string(s: &str) -> String {
     escaped
 }
 
-#[derive(Clone)]
-struct SymbolicState {
-    stack: Vec<Expr>,
-    panic_cond: Expr,
-    inputs_needed: usize,
+struct Step {
+    bindings: Vec<(String, Expr)>,
 }
 
-fn ensure_stack_depth(
-    stack: &mut Vec<Expr>,
+fn ensure_stack_depth_ssa(
+    stack: &mut Vec<String>,
     required_depth: usize,
     inputs_needed: &mut usize,
+    step_0_bindings: &mut Vec<(String, Expr)>,
 ) {
     if stack.len() < required_depth {
         let diff = required_depth - stack.len();
         for _ in 0..diff {
             let var_name = format!("in_{}", *inputs_needed);
+            let stack_var = format!("s_0_{}", *inputs_needed);
             *inputs_needed += 1;
-            stack.insert(0, Expr::Var(var_name));
+            
+            step_0_bindings.push((stack_var.clone(), Expr::Var(var_name)));
+            stack.insert(0, stack_var);
         }
     }
 }
@@ -388,6 +399,24 @@ fn get_declared_arity(s_idx: SentenceIndex, library: &Library) -> Option<(usize,
     None
 }
 
+fn format_nested_lets(
+    steps: &[Step],
+    step_idx: usize,
+    final_body: &str,
+    float_to_id: &mut HashMap<String, usize>,
+) -> String {
+    if step_idx >= steps.len() {
+        return final_body.to_string();
+    }
+    let step = &steps[step_idx];
+    let mut bindings_str = String::new();
+    for (var, expr) in &step.bindings {
+        bindings_str.push_str(&format!("({} {}) ", var, expr_to_smt(expr, float_to_id)));
+    }
+    let inner = format_nested_lets(steps, step_idx + 1, final_body, float_to_id);
+    format!("(let ({}) {})", bindings_str.trim_end(), inner)
+}
+
 fn translate_sentence(
     s_idx: SentenceIndex,
     library: &Library,
@@ -397,43 +426,71 @@ fn translate_sentence(
     let name = get_sentence_name(s_idx, library);
     let sentence = &library.sentences[s_idx];
 
-    let (declared_in, _declared_out) = get_declared_arity(s_idx, library).unwrap_or((0, 0));
+    let (declared_in, _declared_out) = get_declared_arity(s_idx, library).unwrap_or_else(|| {
+        if let Some(Some(arities)) = library.instruction_arities.get(s_idx) {
+            if !arities.is_empty() {
+                return (arities[0].inputs() as usize, 0);
+            }
+        }
+        (0, 0)
+    });
 
-    let mut state = SymbolicState {
-        stack: Vec::new(),
-        panic_cond: Expr::Bool(true),
-        inputs_needed: declared_in,
-    };
-
+    let mut steps = Vec::new();
+    let mut stack = Vec::new();
+    
+    // Initial bindings for Step 0:
+    let mut initial_bindings = vec![("ok_0".to_string(), Expr::Bool(true))];
     for i in 0..declared_in {
-        state.stack.push(Expr::Var(format!("in_{}", i)));
+        let in_var = format!("in_{}", i);
+        let stack_var = format!("s_0_{}", i);
+        initial_bindings.push((stack_var.clone(), Expr::Var(in_var)));
+        stack.push(stack_var);
     }
+    steps.push(Step { bindings: initial_bindings });
+    
+    let mut ok_var = "ok_0".to_string();
+    let mut inputs_needed = declared_in;
+    let mut step_idx = 1;
 
     for inst in sentence {
+        let prev_ok = ok_var.clone();
+        ok_var = format!("ok_{}", step_idx);
+        let mut bindings = Vec::new();
+
         match inst {
             Instruction::Push(val) => {
-                state.stack.push(val_to_expr(val));
+                let stack_var = format!("s_{}_0", step_idx);
+                bindings.push((stack_var.clone(), val_to_expr(val)));
+                bindings.push((ok_var.clone(), Expr::Var(prev_ok)));
+                stack.push(stack_var);
             }
             Instruction::Drop(n) => {
-                ensure_stack_depth(&mut state.stack, n + 1, &mut state.inputs_needed);
-                state.stack.remove(state.stack.len() - 1 - n);
+                ensure_stack_depth_ssa(&mut stack, n + 1, &mut inputs_needed, &mut steps[0].bindings);
+                stack.remove(stack.len() - 1 - n);
+                bindings.push((ok_var.clone(), Expr::Var(prev_ok)));
             }
             Instruction::Pick(n) => {
-                ensure_stack_depth(&mut state.stack, n + 1, &mut state.inputs_needed);
-                let val = state.stack[state.stack.len() - 1 - n].clone();
-                state.stack.push(val);
+                ensure_stack_depth_ssa(&mut stack, n + 1, &mut inputs_needed, &mut steps[0].bindings);
+                let val_var = stack[stack.len() - 1 - n].clone();
+                let stack_var = format!("s_{}_0", step_idx);
+                bindings.push((stack_var.clone(), Expr::Var(val_var)));
+                bindings.push((ok_var.clone(), Expr::Var(prev_ok)));
+                stack.push(stack_var);
             }
             Instruction::Roll(n) => {
-                ensure_stack_depth(&mut state.stack, n + 1, &mut state.inputs_needed);
-                let val = state.stack.remove(state.stack.len() - 1 - n);
-                state.stack.push(val);
+                ensure_stack_depth_ssa(&mut stack, n + 1, &mut inputs_needed, &mut steps[0].bindings);
+                let val_var = stack.remove(stack.len() - 1 - n);
+                let stack_var = format!("s_{}_0", step_idx);
+                bindings.push((stack_var.clone(), Expr::Var(val_var)));
+                bindings.push((ok_var.clone(), Expr::Var(prev_ok)));
+                stack.push(stack_var);
             }
             Instruction::Equal | Instruction::Greater | Instruction::Less |
             Instruction::Add | Instruction::Subtract | Instruction::Multiply |
             Instruction::Divide | Instruction::Modulo | Instruction::And | Instruction::Or => {
-                ensure_stack_depth(&mut state.stack, 2, &mut state.inputs_needed);
-                let b = state.stack.pop().unwrap();
-                let a = state.stack.pop().unwrap();
+                ensure_stack_depth_ssa(&mut stack, 2, &mut inputs_needed, &mut steps[0].bindings);
+                let b_var = stack.pop().unwrap();
+                let a_var = stack.pop().unwrap();
                 let op = match inst {
                     Instruction::Equal => "val_equal",
                     Instruction::Greater => "val_greater",
@@ -447,201 +504,217 @@ fn translate_sentence(
                     Instruction::Or => "val_or",
                     _ => unreachable!(),
                 };
-                state.stack.push(Expr::Call(op.to_string(), vec![a, b]));
+                let stack_var = format!("s_{}_0", step_idx);
+                bindings.push((stack_var.clone(), Expr::Call(op.to_string(), vec![Expr::Var(a_var), Expr::Var(b_var)])));
+                bindings.push((ok_var.clone(), Expr::Var(prev_ok)));
+                stack.push(stack_var);
             }
             Instruction::Not | Instruction::Negate => {
-                ensure_stack_depth(&mut state.stack, 1, &mut state.inputs_needed);
-                let a = state.stack.pop().unwrap();
+                ensure_stack_depth_ssa(&mut stack, 1, &mut inputs_needed, &mut steps[0].bindings);
+                let a_var = stack.pop().unwrap();
                 let op = match inst {
                     Instruction::Not => "val_not",
                     Instruction::Negate => "val_neg",
                     _ => unreachable!(),
                 };
-                state.stack.push(Expr::Call(op.to_string(), vec![a]));
+                let stack_var = format!("s_{}_0", step_idx);
+                bindings.push((stack_var.clone(), Expr::Call(op.to_string(), vec![Expr::Var(a_var)])));
+                bindings.push((ok_var.clone(), Expr::Var(prev_ok)));
+                stack.push(stack_var);
             }
             Instruction::Print => {
-                ensure_stack_depth(&mut state.stack, 1, &mut state.inputs_needed);
-                state.stack.pop();
+                ensure_stack_depth_ssa(&mut stack, 1, &mut inputs_needed, &mut steps[0].bindings);
+                stack.pop();
+                bindings.push((ok_var.clone(), Expr::Var(prev_ok)));
             }
             Instruction::Panic => {
-                state.panic_cond = Expr::Bool(false);
+                bindings.push((ok_var.clone(), Expr::Bool(false)));
             }
             Instruction::Assert => {
-                ensure_stack_depth(&mut state.stack, 1, &mut state.inputs_needed);
-                let cond = state.stack.pop().unwrap();
-                state.panic_cond = Expr::Call("and".to_string(), vec![state.panic_cond.clone(), Expr::Call("val_is_true".to_string(), vec![cond])]);
+                ensure_stack_depth_ssa(&mut stack, 1, &mut inputs_needed, &mut steps[0].bindings);
+                let cond_var = stack.pop().unwrap();
+                bindings.push((
+                    ok_var.clone(),
+                    Expr::Call(
+                        "and".to_string(),
+                        vec![
+                            Expr::Var(prev_ok),
+                            Expr::Call("val_is_true".to_string(), vec![Expr::Var(cond_var)]),
+                        ],
+                    ),
+                ));
             }
             Instruction::AssertEqual => {
-                ensure_stack_depth(&mut state.stack, 2, &mut state.inputs_needed);
-                let b = state.stack.pop().unwrap();
-                let a = state.stack.pop().unwrap();
-                let eq = Expr::Call("val_equal".to_string(), vec![a, b]);
-                state.panic_cond = Expr::Call("and".to_string(), vec![state.panic_cond.clone(), Expr::Call("val_is_true".to_string(), vec![eq])]);
+                ensure_stack_depth_ssa(&mut stack, 2, &mut inputs_needed, &mut steps[0].bindings);
+                let b_var = stack.pop().unwrap();
+                let a_var = stack.pop().unwrap();
+                let eq = Expr::Call("val_equal".to_string(), vec![Expr::Var(a_var), Expr::Var(b_var)]);
+                bindings.push((
+                    ok_var.clone(),
+                    Expr::Call(
+                        "and".to_string(),
+                        vec![
+                            Expr::Var(prev_ok),
+                            Expr::Call("val_is_true".to_string(), vec![eq]),
+                        ],
+                    ),
+                ));
             }
             Instruction::Tuple(n) => {
-                ensure_stack_depth(&mut state.stack, *n, &mut state.inputs_needed);
+                ensure_stack_depth_ssa(&mut stack, *n, &mut inputs_needed, &mut steps[0].bindings);
                 let mut elms = Vec::new();
                 for _ in 0..*n {
-                    elms.push(state.stack.pop().unwrap());
+                    elms.push(Expr::Var(stack.pop().unwrap()));
                 }
-                elms.reverse();
-                if *n == 0 {
-                    state.stack.push(Expr::Call("val_tuple0".to_string(), vec![]));
+                let stack_var = format!("s_{}_0", step_idx);
+                let op = if *n == 0 {
+                    Expr::Call("val_tuple0".to_string(), vec![])
                 } else {
-                    state.stack.push(Expr::Call(format!("val_tuple{}", n), elms));
-                }
+                    Expr::Call(format!("val_tuple{}", n), elms)
+                };
+                bindings.push((stack_var.clone(), op));
+                bindings.push((ok_var.clone(), Expr::Var(prev_ok)));
+                stack.push(stack_var);
             }
             Instruction::Untuple(n) => {
-                ensure_stack_depth(&mut state.stack, 1, &mut state.inputs_needed);
-                let t = state.stack.pop().unwrap();
+                ensure_stack_depth_ssa(&mut stack, 1, &mut inputs_needed, &mut steps[0].bindings);
+                let t_var = stack.pop().unwrap();
                 for i in (0..*n).rev() {
-                    state.stack.push(Expr::Call(format!("val_getTuple{}_{}", n, i), vec![t.clone()]));
+                    let stack_var = format!("s_{}_{}", step_idx, i);
+                    let op = Expr::Call(format!("val_getTuple{}_{}", n, i), vec![Expr::Var(t_var.clone())]);
+                    bindings.push((stack_var.clone(), op));
+                    stack.push(stack_var);
                 }
+                bindings.push((ok_var.clone(), Expr::Var(prev_ok)));
             }
             Instruction::SymbolLen => {
-                ensure_stack_depth(&mut state.stack, 1, &mut state.inputs_needed);
-                let sym = state.stack.pop().unwrap();
-                state.stack.push(Expr::Call("val_symbol_len".to_string(), vec![sym]));
+                ensure_stack_depth_ssa(&mut stack, 1, &mut inputs_needed, &mut steps[0].bindings);
+                let sym_var = stack.pop().unwrap();
+                let stack_var = format!("s_{}_0", step_idx);
+                bindings.push((stack_var.clone(), Expr::Call("val_symbol_len".to_string(), vec![Expr::Var(sym_var)])));
+                bindings.push((ok_var.clone(), Expr::Var(prev_ok)));
+                stack.push(stack_var);
             }
-            Instruction::IsInt => {
-                ensure_stack_depth(&mut state.stack, 1, &mut state.inputs_needed);
-                let val = state.stack.pop().unwrap();
-                state.stack.push(Expr::Call("val_is_int".to_string(), vec![val]));
-            }
-            Instruction::IsBool => {
-                ensure_stack_depth(&mut state.stack, 1, &mut state.inputs_needed);
-                let val = state.stack.pop().unwrap();
-                state.stack.push(Expr::Call("val_is_bool".to_string(), vec![val]));
-            }
-            Instruction::IsFloat => {
-                ensure_stack_depth(&mut state.stack, 1, &mut state.inputs_needed);
-                let val = state.stack.pop().unwrap();
-                state.stack.push(Expr::Call("val_is_float".to_string(), vec![val]));
-            }
-            Instruction::IsSymbol => {
-                ensure_stack_depth(&mut state.stack, 1, &mut state.inputs_needed);
-                let val = state.stack.pop().unwrap();
-                state.stack.push(Expr::Call("val_is_symbol".to_string(), vec![val]));
-            }
-            Instruction::IsTuple => {
-                ensure_stack_depth(&mut state.stack, 1, &mut state.inputs_needed);
-                let val = state.stack.pop().unwrap();
-                state.stack.push(Expr::Call("val_is_tuple".to_string(), vec![val]));
-            }
-            Instruction::TupleLength => {
-                ensure_stack_depth(&mut state.stack, 1, &mut state.inputs_needed);
-                let val = state.stack.pop().unwrap();
-                state.stack.push(Expr::Call("val_tuple_length".to_string(), vec![val]));
+            Instruction::IsInt | Instruction::IsBool | Instruction::IsFloat |
+            Instruction::IsSymbol | Instruction::IsTuple | Instruction::TupleLength => {
+                ensure_stack_depth_ssa(&mut stack, 1, &mut inputs_needed, &mut steps[0].bindings);
+                let val_var = stack.pop().unwrap();
+                let stack_var = format!("s_{}_0", step_idx);
+                let op = match inst {
+                    Instruction::IsInt => "val_is_int",
+                    Instruction::IsBool => "val_is_bool",
+                    Instruction::IsFloat => "val_is_float",
+                    Instruction::IsSymbol => "val_is_symbol",
+                    Instruction::IsTuple => "val_is_tuple",
+                    Instruction::TupleLength => "val_tuple_length",
+                    _ => unreachable!(),
+                };
+                bindings.push((stack_var.clone(), Expr::Call(op.to_string(), vec![Expr::Var(val_var)])));
+                bindings.push((ok_var.clone(), Expr::Var(prev_ok)));
+                stack.push(stack_var);
             }
             Instruction::SymbolCharAt => {
-                ensure_stack_depth(&mut state.stack, 2, &mut state.inputs_needed);
-                let idx = state.stack.pop().unwrap();
-                let sym = state.stack.pop().unwrap();
-                state.stack.push(Expr::Call("val_symbol_char_at".to_string(), vec![sym, idx]));
+                ensure_stack_depth_ssa(&mut stack, 2, &mut inputs_needed, &mut steps[0].bindings);
+                let idx_var = stack.pop().unwrap();
+                let sym_var = stack.pop().unwrap();
+                let stack_var = format!("s_{}_0", step_idx);
+                bindings.push((stack_var.clone(), Expr::Call("val_symbol_char_at".to_string(), vec![Expr::Var(sym_var), Expr::Var(idx_var)])));
+                bindings.push((ok_var.clone(), Expr::Var(prev_ok)));
+                stack.push(stack_var);
             }
             Instruction::Jump(target) => {
                 let &(n_t, m_t) = arity_map.get(target).ok_or_else(|| {
                     format!("Internal error: dependency sentence arity not found for jump to target {:?}", target)
                 })?;
-                ensure_stack_depth(&mut state.stack, n_t, &mut state.inputs_needed);
+                ensure_stack_depth_ssa(&mut stack, n_t, &mut inputs_needed, &mut steps[0].bindings);
                 let mut args = Vec::new();
                 for _ in 0..n_t {
-                    args.push(state.stack.pop().unwrap());
+                    args.push(Expr::Var(stack.pop().unwrap()));
                 }
+                args.reverse();
                 let target_name = get_sentence_name(*target, library);
                 for i in (0..m_t).rev() {
-                    state.stack.push(Expr::Call(format!("|{}_out_{}|", target_name, i), args.clone()));
+                    let stack_var = format!("s_{}_{}", step_idx, i);
+                    let op = Expr::Call(format!("|{}_out_{}|", target_name, i), args.clone());
+                    bindings.push((stack_var.clone(), op));
+                    stack.push(stack_var);
                 }
+                bindings.push((ok_var.clone(), Expr::Var(prev_ok)));
             }
             Instruction::Branch(then_t, else_t) => {
-                ensure_stack_depth(&mut state.stack, 1, &mut state.inputs_needed);
-                let cond = state.stack.pop().unwrap();
+                ensure_stack_depth_ssa(&mut stack, 1, &mut inputs_needed, &mut steps[0].bindings);
+                let cond_var = stack.pop().unwrap();
 
-                // Symbolically execute then branch
-                let mut state_then = state.clone();
                 let &(n_then, m_then) = arity_map.get(then_t).ok_or_else(|| {
-                    format!("Internal error: dependency sentence arity not found for branch to target {:?}", then_t)
+                    format!("Internal error: dependency sentence arity not found for branch target {:?}", then_t)
                 })?;
-                ensure_stack_depth(&mut state_then.stack, n_then, &mut state_then.inputs_needed);
-                let mut args_then = Vec::new();
-                for _ in 0..n_then {
-                    args_then.push(state_then.stack.pop().unwrap());
-                }
-                let then_name = get_sentence_name(*then_t, library);
-                for i in (0..m_then).rev() {
-                    state_then.stack.push(Expr::Call(format!("|{}_out_{}|", then_name, i), args_then.clone()));
-                }
-
-                // Symbolically execute else branch
-                let mut state_else = state.clone();
                 let &(n_else, m_else) = arity_map.get(else_t).ok_or_else(|| {
-                    format!("Internal error: dependency sentence arity not found for branch to target {:?}", else_t)
+                    format!("Internal error: dependency sentence arity not found for branch target {:?}", else_t)
                 })?;
-                ensure_stack_depth(&mut state_else.stack, n_else, &mut state_else.inputs_needed);
-                let mut args_else = Vec::new();
-                for _ in 0..n_else {
-                    args_else.push(state_else.stack.pop().unwrap());
+
+                let max_n = std::cmp::max(n_then, n_else);
+                ensure_stack_depth_ssa(&mut stack, max_n, &mut inputs_needed, &mut steps[0].bindings);
+
+                let mut then_args = Vec::new();
+                for i in (stack.len() - n_then)..stack.len() {
+                    then_args.push(Expr::Var(stack[i].clone()));
                 }
+
+                let mut else_args = Vec::new();
+                for i in (stack.len() - n_else)..stack.len() {
+                    else_args.push(Expr::Var(stack[i].clone()));
+                }
+
+                for _ in 0..max_n {
+                    stack.pop();
+                }
+
+                let then_name = get_sentence_name(*then_t, library);
                 let else_name = get_sentence_name(*else_t, library);
-                for i in (0..m_else).rev() {
-                    state_else.stack.push(Expr::Call(format!("|{}_out_{}|", else_name, i), args_else.clone()));
+
+                let max_m = std::cmp::max(m_then, m_else);
+
+                for i in (0..max_m).rev() {
+                    let stack_var = format!("s_{}_{}", step_idx, i);
+                    let then_expr = if i < m_then {
+                        Expr::Call(format!("|{}_out_{}|", then_name, i), then_args.clone())
+                    } else {
+                        Expr::Call("Panic".to_string(), vec![])
+                    };
+                    let else_expr = if i < m_else {
+                        Expr::Call(format!("|{}_out_{}|", else_name, i), else_args.clone())
+                    } else {
+                        Expr::Call("Panic".to_string(), vec![])
+                    };
+                    let cond_expr = Expr::Cond(
+                        Box::new(Expr::Var(cond_var.clone())),
+                        Box::new(then_expr),
+                        Box::new(else_expr)
+                    );
+                    bindings.push((stack_var.clone(), cond_expr));
+                    stack.push(stack_var);
                 }
 
-                // Synchronize stack depths and input variables between the branches
-                let max_inputs = std::cmp::max(state_then.inputs_needed, state_else.inputs_needed);
-                ensure_stack_depth(&mut state_then.stack, max_inputs, &mut state_then.inputs_needed);
-                ensure_stack_depth(&mut state_else.stack, max_inputs, &mut state_else.inputs_needed);
-                state.inputs_needed = max_inputs;
-
-                if state_then.stack.len() != state_else.stack.len() {
-                    return Err(format!(
-                        "Branch targets '{}' and '{}' returned mismatched stack heights (then_height={}, else_height={})",
-                        then_name, else_name, state_then.stack.len(), state_else.stack.len()
-                    ));
-                }
-
-                // Merge stack states using Cond
-                let mut merged_stack = Vec::new();
-                for i in 0..state_then.stack.len() {
-                    let t_val = state_then.stack[i].clone();
-                    let e_val = state_else.stack[i].clone();
-                    merged_stack.push(Expr::Cond(Box::new(cond.clone()), Box::new(t_val), Box::new(e_val)));
-                }
-                state.stack = merged_stack;
-
-                // Merge panic conditions
-                let ite_panic = Expr::Call(
-                    "ite".to_string(),
-                    vec![
-                        Expr::Call("val_is_true".to_string(), vec![cond.clone()]),
-                        state_then.panic_cond.clone(),
-                        state_else.panic_cond.clone(),
-                    ],
-                );
-                state.panic_cond = Expr::Call(
-                    "and".to_string(),
-                    vec![Expr::Call("is-Ok".to_string(), vec![cond]), ite_panic],
-                );
+                bindings.push((
+                    ok_var.clone(),
+                    Expr::Call(
+                        "and".to_string(),
+                        vec![
+                            Expr::Var(prev_ok),
+                            Expr::Call("is-Ok".to_string(), vec![Expr::Var(cond_var)]),
+                        ],
+                    ),
+                ));
             }
         }
+
+        steps.push(Step { bindings });
+        step_idx += 1;
     }
 
-    let n = state.inputs_needed;
-    let m = state.stack.len();
+    let n = inputs_needed;
+    let m = stack.len();
 
-    // Check if we need to wrap outputs in case of panic/assertions
-    let mut final_stack = state.stack;
-    if state.panic_cond != Expr::Bool(true) {
-        for elem in &mut final_stack {
-            *elem = Expr::Call("ite".to_string(), vec![
-                state.panic_cond.clone(),
-                elem.clone(),
-                Expr::Call("Panic".to_string(), vec![]),
-            ]);
-        }
-    }
-
-    // Build the function arguments: (in_0 Result) (in_1 Result) ...
     let mut args_str = String::new();
     for i in 0..n {
         args_str.push_str(&format!("(in_{} Result) ", i));
@@ -650,12 +723,13 @@ fn translate_sentence(
 
     let mut definitions = String::new();
     for i in 0..m {
-        // Output elements are 0-indexed from top of stack
-        let expr = &final_stack[final_stack.len() - 1 - i];
-        let body_smt = expr_to_smt(expr, float_to_id);
+        let expr_var = &stack[stack.len() - 1 - i];
+        let final_body = format!("(ite {} {} Panic)", ok_var, expr_var);
+        let nested_body = format_nested_lets(&steps, 0, &final_body, float_to_id);
+
         definitions.push_str(&format!(
             "(define-fun |{}_out_{}| ({}) Result {})\n",
-            name, i, args_str, body_smt
+            name, i, args_str, nested_body
         ));
     }
 

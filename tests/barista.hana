@@ -117,6 +117,7 @@ mod customer_impl {
 
 
     #[arity(1, 1)]
+    #[z3ify]
     function accept {
         untuple 2
         untuple 3 // Stack: [event, id, preferred_drink, internal_state]

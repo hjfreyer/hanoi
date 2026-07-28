@@ -122,13 +122,13 @@ fn infer_arity_of_instructions(
     let sentence = &library.sentences[s_idx];
     let mut initial_req = 0i64;
     let mut current_size = 0i64;
-    let mut arities = Vec::new();
+    let mut depths = Vec::new();
 
     for inst in sentence {
-        let inst_arity = match inst {
+        depths.push(current_size);
+        match inst {
             Instruction::Push(_) => {
                 current_size += 1;
-                Arity::Normal { inputs: 0, outputs: 1 }
             }
             Instruction::Drop(depth) => {
                 let depth = *depth as i64;
@@ -139,7 +139,6 @@ fn infer_arity_of_instructions(
                     current_size = req;
                 }
                 current_size -= 1;
-                Arity::Normal { inputs: depth + 1, outputs: depth }
             }
             Instruction::Pick(depth) => {
                 let depth = *depth as i64;
@@ -150,7 +149,6 @@ fn infer_arity_of_instructions(
                     current_size = req;
                 }
                 current_size += 1;
-                Arity::Normal { inputs: depth + 1, outputs: depth + 2 }
             }
             Instruction::Roll(depth) => {
                 let depth = *depth as i64;
@@ -160,7 +158,6 @@ fn infer_arity_of_instructions(
                     initial_req += diff;
                     current_size = req;
                 }
-                Arity::Normal { inputs: depth + 1, outputs: depth + 1 }
             }
             Instruction::Equal | Instruction::Greater | Instruction::Less |
             Instruction::Add | Instruction::Subtract | Instruction::Multiply |
@@ -173,7 +170,6 @@ fn infer_arity_of_instructions(
                     current_size = req;
                 }
                 current_size -= 1;
-                Arity::Normal { inputs: 2, outputs: 1 }
             }
             Instruction::Not | Instruction::Negate | Instruction::Print |
             Instruction::SymbolLen | Instruction::IsInt | Instruction::IsBool |
@@ -185,7 +181,6 @@ fn infer_arity_of_instructions(
                     initial_req += diff;
                     current_size = req;
                 }
-                Arity::Normal { inputs: 1, outputs: 1 }
             }
             Instruction::Assert => {
                 let req = 1;
@@ -195,7 +190,6 @@ fn infer_arity_of_instructions(
                     current_size = req;
                 }
                 current_size -= 1;
-                Arity::Normal { inputs: 1, outputs: 0 }
             }
             Instruction::AssertEqual => {
                 let req = 2;
@@ -205,7 +199,6 @@ fn infer_arity_of_instructions(
                     current_size = req;
                 }
                 current_size -= 2;
-                Arity::Normal { inputs: 2, outputs: 0 }
             }
             Instruction::Panic => {
                 let mut annotated_arity = None;
@@ -227,7 +220,12 @@ fn infer_arity_of_instructions(
                 } else {
                     Arity::Panic { inputs: initial_req }
                 };
-                arities.push(Arity::Panic { inputs: 0 });
+                let n = sentence_arity.inputs();
+                let mut arities: Vec<Arity> = depths.into_iter().map(|d| Arity::Normal { inputs: n, outputs: d }).collect();
+                if !arities.is_empty() {
+                    let last_idx = arities.len() - 1;
+                    arities[last_idx] = Arity::Panic { inputs: n };
+                }
                 return Ok((sentence_arity, arities));
             }
             Instruction::Tuple(len) => {
@@ -239,7 +237,6 @@ fn infer_arity_of_instructions(
                     current_size = req;
                 }
                 current_size = current_size - len + 1;
-                Arity::Normal { inputs: len, outputs: 1 }
             }
             Instruction::Untuple(len) => {
                 let len = *len as i64;
@@ -250,7 +247,6 @@ fn infer_arity_of_instructions(
                     current_size = req;
                 }
                 current_size = current_size - 1 + len;
-                Arity::Normal { inputs: 1, outputs: len }
             }
             Instruction::Jump(target) => {
                 if is_recursive(*target, library) {
@@ -278,10 +274,11 @@ fn infer_arity_of_instructions(
                 }
                 current_size = current_size - n_target + m_target;
                 if is_panic_target {
-                    arities.push(Arity::Panic { inputs: n_target });
-                    return Ok((Arity::Panic { inputs: initial_req }, arities));
+                    let sentence_arity = Arity::Panic { inputs: initial_req };
+                    let n = sentence_arity.inputs();
+                    let arities = depths.into_iter().map(|d| Arity::Normal { inputs: n, outputs: d }).collect();
+                    return Ok((sentence_arity, arities));
                 }
-                Arity::Normal { inputs: n_target, outputs: m_target }
             }
             Instruction::Branch(then_t, else_t) => {
                 if is_recursive(*then_t, library) {
@@ -338,16 +335,19 @@ fn infer_arity_of_instructions(
                 }
                 current_size = current_size - n_branch + m_branch;
                 if is_panic_branch {
-                    arities.push(Arity::Panic { inputs: 1 + n_branch });
-                    return Ok((Arity::Panic { inputs: initial_req }, arities));
+                    let sentence_arity = Arity::Panic { inputs: initial_req };
+                    let n = sentence_arity.inputs();
+                    let arities = depths.into_iter().map(|d| Arity::Normal { inputs: n, outputs: d }).collect();
+                    return Ok((sentence_arity, arities));
                 }
-                Arity::Normal { inputs: 1 + n_branch, outputs: m_branch }
             }
-        };
-        arities.push(inst_arity);
+        }
     }
 
-    Ok((Arity::Normal { inputs: initial_req, outputs: current_size }, arities))
+    let sentence_arity = Arity::Normal { inputs: initial_req, outputs: current_size };
+    let n = sentence_arity.inputs();
+    let arities = depths.into_iter().map(|d| Arity::Normal { inputs: n, outputs: d }).collect();
+    Ok((sentence_arity, arities))
 }
 
 fn combine_branch_arities(then: Arity, el: Arity) -> Result<Arity, String> {

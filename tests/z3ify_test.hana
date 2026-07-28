@@ -39,7 +39,7 @@ sentence test_symbol {
 sentence test_tuples {
     tuple 2
     untuple 2
-    add
+    subtract
 }
 
 #[arity(1, 1)]
