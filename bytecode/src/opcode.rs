@@ -71,4 +71,17 @@ pub enum Instruction {
     SymbolLen,
     /// Pop an index (Int) and a Symbol off the stack, and push the Unicode code point of the character at that index as an Int.
     SymbolCharAt,
+    
+    /// Pop the top value and push true if it is an Int, else false.
+    IsInt,
+    /// Pop the top value and push true if it is a Bool, else false.
+    IsBool,
+    /// Pop the top value and push true if it is a Float, else false.
+    IsFloat,
+    /// Pop the top value and push true if it is a Symbol, else false.
+    IsSymbol,
+    /// Pop the top value and push true if it is a Tuple, else false.
+    IsTuple,
+    /// Pop the top value (must be a Tuple) and push its length as an Int.
+    TupleLength,
 }

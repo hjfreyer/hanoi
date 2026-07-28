@@ -350,6 +350,34 @@ impl VM {
                         return Err(format!("Expected Value::Tuple on Untuple, found {:?}", val));
                     }
                 }
+                Instruction::IsInt => {
+                    let val = self.pop()?;
+                    self.stack.push(Value::Bool(matches!(val, Value::Int(_))));
+                }
+                Instruction::IsBool => {
+                    let val = self.pop()?;
+                    self.stack.push(Value::Bool(matches!(val, Value::Bool(_))));
+                }
+                Instruction::IsFloat => {
+                    let val = self.pop()?;
+                    self.stack.push(Value::Bool(matches!(val, Value::Float(_))));
+                }
+                Instruction::IsSymbol => {
+                    let val = self.pop()?;
+                    self.stack.push(Value::Bool(matches!(val, Value::Symbol(_))));
+                }
+                Instruction::IsTuple => {
+                    let val = self.pop()?;
+                    self.stack.push(Value::Bool(matches!(val, Value::Tuple(_))));
+                }
+                Instruction::TupleLength => {
+                    let val = self.pop()?;
+                    if let Value::Tuple(elements) = val {
+                        self.stack.push(Value::Int(elements.len() as i64));
+                    } else {
+                        return Err(format!("Expected Value::Tuple on tuple_length, found {:?}", val));
+                    }
+                }
                 Instruction::SymbolLen => {
                     let val = self.pop()?;
                     if let Value::Symbol(sym) = val {
@@ -496,6 +524,57 @@ mod tests {
             Instruction::Push(Value::Int(2)),
             Instruction::AssertEqual,
             Instruction::Push(Value::Int(1)),
+            Instruction::AssertEqual,
+        ];
+        library.sentences.push(sentence);
+        let idx = SentenceIndex::from(0);
+
+        let mut vm = VM::new(library);
+        assert!(vm.execute(idx).is_ok());
+        assert!(vm.stack().is_empty());
+    }
+
+    #[test]
+    fn test_type_checks_and_tuple_length() {
+        let mut library = Library::new();
+        let sentence = vec![
+            // test is_int
+            Instruction::Push(Value::Int(42)),
+            Instruction::IsInt,
+            Instruction::Push(Value::Bool(true)),
+            Instruction::AssertEqual,
+            
+            Instruction::Push(Value::Bool(true)),
+            Instruction::IsInt,
+            Instruction::Push(Value::Bool(false)),
+            Instruction::AssertEqual,
+
+            // test is_bool
+            Instruction::Push(Value::Bool(true)),
+            Instruction::IsBool,
+            Instruction::Push(Value::Bool(true)),
+            Instruction::AssertEqual,
+
+            // test is_float
+            Instruction::Push(Value::Float(3.14)),
+            Instruction::IsFloat,
+            Instruction::Push(Value::Bool(true)),
+            Instruction::AssertEqual,
+
+            // test is_tuple
+            Instruction::Push(Value::Int(1)),
+            Instruction::Push(Value::Int(2)),
+            Instruction::Tuple(2),
+            Instruction::IsTuple,
+            Instruction::Push(Value::Bool(true)),
+            Instruction::AssertEqual,
+
+            // test tuple_length
+            Instruction::Push(Value::Int(1)),
+            Instruction::Push(Value::Int(2)),
+            Instruction::Tuple(2),
+            Instruction::TupleLength,
+            Instruction::Push(Value::Int(2)),
             Instruction::AssertEqual,
         ];
         library.sentences.push(sentence);

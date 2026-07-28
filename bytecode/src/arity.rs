@@ -118,7 +118,9 @@ fn infer_arity_of_instructions(
                 current_size -= 1;
             }
             Instruction::Not | Instruction::Negate | Instruction::Print |
-            Instruction::SymbolLen => {
+            Instruction::SymbolLen | Instruction::IsInt | Instruction::IsBool |
+            Instruction::IsFloat | Instruction::IsSymbol | Instruction::IsTuple |
+            Instruction::TupleLength => {
                 let req = 1;
                 if current_size < req {
                     let diff = req - current_size;

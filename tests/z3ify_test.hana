@@ -56,3 +56,39 @@ sentence test_double_swap {
     jump swap_pair
     jump swap_pair
 }
+
+#[arity(1, 1)]
+#[z3ify]
+sentence test_is_int {
+    is_int
+}
+
+#[arity(1, 1)]
+#[z3ify]
+sentence test_is_bool {
+    is_bool
+}
+
+#[arity(1, 1)]
+#[z3ify]
+sentence test_is_float {
+    is_float
+}
+
+#[arity(1, 1)]
+#[z3ify]
+sentence test_is_symbol {
+    is_symbol
+}
+
+#[arity(1, 1)]
+#[z3ify]
+sentence test_is_tuple {
+    is_tuple
+}
+
+#[arity(1, 1)]
+#[z3ify]
+sentence test_tuple_length {
+    tuple_length
+}

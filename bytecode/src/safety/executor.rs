@@ -197,6 +197,50 @@ pub fn execute_instruction_symbolic(
                 state.stack.push(Expr::Field(Box::new(tuple_expr.clone()), i));
             }
         }
+        Instruction::IsInt => {
+            if state.stack.is_empty() {
+                return Err(format!("Stack underflow on instruction {:?}", inst));
+            }
+            let val = state.stack.pop().unwrap();
+            state.stack.push(Expr::Call("is_int".to_string(), vec![val]));
+        }
+        Instruction::IsBool => {
+            if state.stack.is_empty() {
+                return Err(format!("Stack underflow on instruction {:?}", inst));
+            }
+            let val = state.stack.pop().unwrap();
+            state.stack.push(Expr::Call("is_bool".to_string(), vec![val]));
+        }
+        Instruction::IsFloat => {
+            if state.stack.is_empty() {
+                return Err(format!("Stack underflow on instruction {:?}", inst));
+            }
+            let val = state.stack.pop().unwrap();
+            state.stack.push(Expr::Call("is_float".to_string(), vec![val]));
+        }
+        Instruction::IsSymbol => {
+            if state.stack.is_empty() {
+                return Err(format!("Stack underflow on instruction {:?}", inst));
+            }
+            let val = state.stack.pop().unwrap();
+            state.stack.push(Expr::Call("is_symbol".to_string(), vec![val]));
+        }
+        Instruction::IsTuple => {
+            if state.stack.is_empty() {
+                return Err(format!("Stack underflow on instruction {:?}", inst));
+            }
+            let val = state.stack.pop().unwrap();
+            state.stack.push(Expr::Call("is_tuple".to_string(), vec![val]));
+        }
+        Instruction::TupleLength => {
+            if state.stack.is_empty() {
+                return Err(format!("Stack underflow on instruction {:?}", inst));
+            }
+            let val = state.stack.pop().unwrap();
+            let is_tup = Formula::Expr(Expr::Call("is_tuple".to_string(), vec![val.clone()]));
+            state.vcs.push(Formula::Implies(Box::new(state.pc.clone()), Box::new(is_tup)));
+            state.stack.push(Expr::Call("len".to_string(), vec![val]));
+        }
         Instruction::SymbolLen => {
             if state.stack.is_empty() {
                 return Err(format!("Stack underflow on instruction {:?}", inst));

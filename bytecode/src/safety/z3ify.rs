@@ -189,6 +189,31 @@ pub fn generate_z3ify(library: &Library) -> Result<String, String> {
     output.push_str("(define-fun val_is_symbol ((a Result)) Result (ite (is-Ok a) (Ok (ValBool (is-ValSymbol (getVal a)))) Panic))\n");
     output.push_str("(define-fun val_is_float ((a Result)) Result (ite (is-Ok a) (Ok (ValBool (is-ValFloat (getVal a)))) Panic))\n");
     output.push_str("(define-fun val_is_numeric ((a Result)) Result (ite (is-Ok a) (Ok (ValBool (or (is-ValInt (getVal a)) (is-ValFloat (getVal a))))) Panic))\n");
+
+    let mut tuple_checks = vec!["(is-ValTuple0 (getVal a))".to_string()];
+    let mut length_cases = vec!["(ite (is-ValTuple0 (getVal a)) 0".to_string()];
+    for &n in &tuple_sizes {
+        if n == 0 { continue; }
+        tuple_checks.push(format!("(is-ValTuple{} (getVal a))", n));
+        length_cases.push(format!("(ite (is-ValTuple{} (getVal a)) {}", n, n));
+    }
+    let is_tuple_or_chain = if tuple_checks.len() == 1 {
+        tuple_checks[0].clone()
+    } else {
+        format!("(or {})", tuple_checks.join(" "))
+    };
+    let mut length_ite = "0".to_string();
+    for case in length_cases.iter().rev() {
+        length_ite = format!("{} {})", case, length_ite);
+    }
+    output.push_str(&format!(
+        "(define-fun val_is_tuple ((a Result)) Result (ite (is-Ok a) (Ok (ValBool {})) Panic))\n",
+        is_tuple_or_chain
+    ));
+    output.push_str(&format!(
+        "(define-fun val_tuple_length ((a Result)) Result (ite (and (is-Ok a) (is-Ok (val_is_tuple a)) (getBool (getVal (val_is_tuple a)))) (Ok (ValInt {})) Panic))\n",
+        length_ite
+    ));
     output.push_str("(define-fun val_symbol_len ((a Result)) Result (ite (and (is-Ok a) (is-ValSymbol (getVal a))) (Ok (ValInt (str.len (symbol_to_string (getSymbol (getVal a)))))) Panic))\n");
     output.push_str("(define-fun val_symbol_char_at ((sym Result) (idx Result)) Result (ite (and (is-Ok sym) (is-Ok idx) (is-ValSymbol (getVal sym)) (is-ValInt (getVal idx))) (Ok (ValInt (str.to_code (str.at (symbol_to_string (getSymbol (getVal sym))) (getInt (getVal idx)))))) Panic))\n");
     output.push_str("(define-fun val_cond ((c Result) (t Result) (e Result)) Result (ite (and (is-Ok c) (is-ValBool (getVal c))) (ite (getBool (getVal c)) t e) Panic))\n");
@@ -477,6 +502,36 @@ fn translate_sentence(
                 ensure_stack_depth(&mut state.stack, 1, &mut state.inputs_needed);
                 let sym = state.stack.pop().unwrap();
                 state.stack.push(Expr::Call("val_symbol_len".to_string(), vec![sym]));
+            }
+            Instruction::IsInt => {
+                ensure_stack_depth(&mut state.stack, 1, &mut state.inputs_needed);
+                let val = state.stack.pop().unwrap();
+                state.stack.push(Expr::Call("val_is_int".to_string(), vec![val]));
+            }
+            Instruction::IsBool => {
+                ensure_stack_depth(&mut state.stack, 1, &mut state.inputs_needed);
+                let val = state.stack.pop().unwrap();
+                state.stack.push(Expr::Call("val_is_bool".to_string(), vec![val]));
+            }
+            Instruction::IsFloat => {
+                ensure_stack_depth(&mut state.stack, 1, &mut state.inputs_needed);
+                let val = state.stack.pop().unwrap();
+                state.stack.push(Expr::Call("val_is_float".to_string(), vec![val]));
+            }
+            Instruction::IsSymbol => {
+                ensure_stack_depth(&mut state.stack, 1, &mut state.inputs_needed);
+                let val = state.stack.pop().unwrap();
+                state.stack.push(Expr::Call("val_is_symbol".to_string(), vec![val]));
+            }
+            Instruction::IsTuple => {
+                ensure_stack_depth(&mut state.stack, 1, &mut state.inputs_needed);
+                let val = state.stack.pop().unwrap();
+                state.stack.push(Expr::Call("val_is_tuple".to_string(), vec![val]));
+            }
+            Instruction::TupleLength => {
+                ensure_stack_depth(&mut state.stack, 1, &mut state.inputs_needed);
+                let val = state.stack.pop().unwrap();
+                state.stack.push(Expr::Call("val_tuple_length".to_string(), vec![val]));
             }
             Instruction::SymbolCharAt => {
                 ensure_stack_depth(&mut state.stack, 2, &mut state.inputs_needed);

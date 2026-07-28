@@ -28,6 +28,93 @@ mod customer_impl {
     function init {
     }
 
+    #[arity(1, 1)]
+    function is_id {
+        pick 0
+        push super::customer_id::c1
+        equal
+        branch {
+            drop 0
+            push true
+        } {
+            push super::customer_id::c2
+            equal
+        }
+    }
+
+    #[arity(1, 1)]
+    function is_drink {
+        pick 0
+        push super::event::latte
+        equal
+        branch {
+            drop 0
+            push true
+        } {
+            push super::event::espresso
+            equal
+        }
+    }
+
+    #[arity(1, 1)]
+    function is_internal_state {
+        pick 0
+        push state::idle
+        equal
+        branch {
+            drop 0
+            push true
+        } {
+            pick 0
+            push state::thirsty
+            equal
+            branch {
+                drop 0
+                push true
+            } {
+                pick 0
+                push state::ordered
+                equal
+                branch {
+                    drop 0
+                    push true
+                } {
+                    push state::has_coffee
+                    equal
+                }
+            }
+        }
+    }
+
+    #[arity(1, 1)]
+    #[z3ify]
+    function is_state {
+        pick 0
+        is_tuple
+        branch {
+            pick 0
+            tuple_length
+            push 3
+            equal
+            branch {
+                untuple 3
+                jump is_internal_state
+                roll 2
+                jump is_id
+                roll 2
+                jump is_drink
+                and
+                and
+            } {
+                drop 0
+                push false
+            }
+        } {
+            drop 0
+            push false
+        }
+    }
+
 
     #[arity(1, 1)]
     function accept {

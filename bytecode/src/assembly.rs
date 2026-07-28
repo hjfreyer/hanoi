@@ -408,6 +408,12 @@ fn parse_instruction(stream: &mut TokenStream) -> Result<ParsedInstruction, Stri
         }
         "symbol_len" => Ok(ParsedInstruction::SymbolLen),
         "symbol_char_at" => Ok(ParsedInstruction::SymbolCharAt),
+        "is_int" => Ok(ParsedInstruction::IsInt),
+        "is_bool" => Ok(ParsedInstruction::IsBool),
+        "is_float" => Ok(ParsedInstruction::IsFloat),
+        "is_symbol" => Ok(ParsedInstruction::IsSymbol),
+        "is_tuple" => Ok(ParsedInstruction::IsTuple),
+        "tuple_length" => Ok(ParsedInstruction::TupleLength),
         other => Err(format!("Unknown instruction mnemonic: '{}'", other)),
     }
 }
@@ -812,6 +818,12 @@ enum ParsedInstruction {
     Or,
     SymbolLen,
     SymbolCharAt,
+    IsInt,
+    IsBool,
+    IsFloat,
+    IsSymbol,
+    IsTuple,
+    TupleLength,
 }
 
 
@@ -1516,6 +1528,12 @@ impl<'a> Compiler<'a> {
                 ParsedInstruction::Or => Instruction::Or,
                 ParsedInstruction::SymbolLen => Instruction::SymbolLen,
                 ParsedInstruction::SymbolCharAt => Instruction::SymbolCharAt,
+                ParsedInstruction::IsInt => Instruction::IsInt,
+                ParsedInstruction::IsBool => Instruction::IsBool,
+                ParsedInstruction::IsFloat => Instruction::IsFloat,
+                ParsedInstruction::IsSymbol => Instruction::IsSymbol,
+                ParsedInstruction::IsTuple => Instruction::IsTuple,
+                ParsedInstruction::TupleLength => Instruction::TupleLength,
                 ParsedInstruction::Jump(target) => {
                     let target_idx = self.resolve_target(current_path, target)?;
                     Instruction::Jump(target_idx)
