@@ -47,13 +47,14 @@ fn main() {
         }
     };
 
-    match bytecode::safety::z3ify::generate_z3ify(&library) {
-        Ok(smt_script) => {
-            print!("{}", smt_script);
+    println!("Checking safety2 annotations for '{}'...", path_arg);
+    match bytecode::safety::z3ify::check_safety2(&library) {
+        Ok(()) => {
+            println!("Verification PASSED.");
             process::exit(0);
         }
         Err(err) => {
-            eprintln!("z3ify translation FAILED for '{}':\n{}", file_path.display(), err);
+            eprintln!("Verification FAILED:\n{}", err);
             process::exit(1);
         }
     }

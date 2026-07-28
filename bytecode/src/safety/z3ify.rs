@@ -1,7 +1,6 @@
 use crate::library::{Library, SentenceIndex, Annotation};
 use crate::opcode::Instruction;
 use crate::value::Value;
-use crate::safety::formula::Expr;
 use std::collections::{HashSet, HashMap};
 
 fn get_sentence_name(s_idx: SentenceIndex, library: &Library) -> String {
@@ -47,13 +46,34 @@ fn resolve_safety_fn(
     ))
 }
 
-pub fn generate_z3ify(library: &Library) -> Result<String, String> {
-    // 1. Find all sentences annotated with #[z3ify] or #[safety2]
-    let mut z3ify_targets = Vec::new();
+fn check_recursive_annotations(library: &Library) -> Result<(), String> {
+    for s_idx_raw in 0..library.sentences.len() {
+        let s_idx = SentenceIndex::from(s_idx_raw);
+        let has_annotation = library.annotations[s_idx].iter().any(|ann| matches!(ann, Annotation::Recursive));
+        
+        let mut visited = HashSet::new();
+        let mut rec_stack = HashSet::new();
+        let reachable_cycle = has_cycle(s_idx, library, &mut visited, &mut rec_stack);
+        
+        if reachable_cycle && !has_annotation {
+            return Err(format!(
+                "Sentence '{}' is recursive or calls a recursive sentence but is not annotated with #[recursive]",
+                get_sentence_name(s_idx, library)
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub fn check_safety2(library: &Library) -> Result<(), String> {
+    // 0. Verify that all recursive sentences in the library are correctly annotated with #[recursive]
+    check_recursive_annotations(library)?;
+
+    // 1. Collect safety2 checks
     let mut safety2_checks = Vec::new();
     for (s_idx_raw, annotations) in library.annotations.iter().enumerate() {
         let s_idx = SentenceIndex::from(s_idx_raw);
-        let has_z3ify = annotations.iter().any(|ann| matches!(ann, Annotation::Z3ify));
+        let is_recursive = annotations.iter().any(|ann| matches!(ann, Annotation::Recursive));
         let mut safety2_fn = None;
         for ann in annotations {
             if let Annotation::Safety2(s_fn) = ann {
@@ -61,55 +81,35 @@ pub fn generate_z3ify(library: &Library) -> Result<String, String> {
             }
         }
 
-        if has_z3ify {
-            z3ify_targets.push(s_idx);
-        }
-
         if let Some(s_fn) = safety2_fn {
             let annotated_name = &library.names[s_idx];
             let safety_fn_idx = resolve_safety_fn(annotated_name, &s_fn, library)?;
-            safety2_checks.push((s_idx, safety_fn_idx));
+            let safety_is_recursive = library.annotations[safety_fn_idx].iter().any(|ann| matches!(ann, Annotation::Recursive));
             
-            // Implicitly add both functions to targets
-            z3ify_targets.push(s_idx);
-            z3ify_targets.push(safety_fn_idx);
+            if is_recursive || safety_is_recursive {
+                println!(
+                    "Skipping safety2 check for '{}' (precondition '{}') because it is marked as recursive.",
+                    get_sentence_name(s_idx, library),
+                    get_sentence_name(safety_fn_idx, library)
+                );
+            } else {
+                safety2_checks.push((s_idx, safety_fn_idx));
+            }
         }
     }
 
-    // Deduplicate targets
-    z3ify_targets.sort();
-    z3ify_targets.dedup();
-
-    if z3ify_targets.is_empty() {
-        return Err("No sentences annotated with #[z3ify] or #[safety2] were found.".to_string());
+    if safety2_checks.is_empty() {
+        println!("No safety2 annotations found.");
+        return Ok(());
     }
 
-    // 2. Cycle detection and transitive dependency collection
-    let mut visited = HashSet::new();
-    let mut rec_stack = HashSet::new();
-    for &s_idx in &z3ify_targets {
-        if has_cycle(s_idx, library, &mut visited, &mut rec_stack) {
-            return Err(format!(
-                "Recursion or cycle detected in dependencies of sentence '{}'. Recursion is not supported by z3ify.",
-                get_sentence_name(s_idx, library)
-            ));
-        }
-    }
-
-    // 3. Topological sorting to order dependencies first (DFS post-order)
+    // 2. Collect all non-recursive sentences in the library to translate
     let mut ordered_sentences = Vec::new();
-    let mut visited_sort = HashSet::new();
-    for &s_idx in &z3ify_targets {
-        topological_sort(s_idx, library, &mut visited_sort, &mut ordered_sentences);
-    }
-
-    // Check that neither the targets nor any dependencies are annotated with #[recursive]
-    for &s_idx in &ordered_sentences {
-        if library.annotations[s_idx].iter().any(|ann| matches!(ann, Annotation::Recursive)) {
-            return Err(format!(
-                "Sentence '{}' is annotated with #[recursive] (or is a dependency of a target marked recursive), which is unsupported by z3ify.",
-                get_sentence_name(s_idx, library)
-            ));
+    for s_idx_raw in 0..library.sentences.len() {
+        let s_idx = SentenceIndex::from(s_idx_raw);
+        let is_rec = library.annotations[s_idx].iter().any(|ann| matches!(ann, Annotation::Recursive));
+        if !is_rec {
+            ordered_sentences.push(s_idx);
         }
     }
 
@@ -146,206 +146,791 @@ pub fn generate_z3ify(library: &Library) -> Result<String, String> {
     let mut symbols_list: Vec<(usize, String)> = symbols_map.into_iter().collect();
     symbols_list.sort_by_key(|&(id, _)| id);
 
-    // 6. Generate the Z3 SMT-LIB2 prelude
-    let mut output = String::new();
-    output.push_str(";; Hanoi SMT-LIB2 Prelude generated by z3ify\n\n");
-
-    // Val and Result datatype definition
-    output.push_str("(declare-datatypes () (\n");
-    output.push_str("  (Val\n");
-    output.push_str("    (ValInt (getInt Int))\n");
-    output.push_str("    (ValBool (getBool Bool))\n");
-    output.push_str("    (ValFloat (getFloat Int))\n");
-    output.push_str("    (ValSymbol (getSymbol Int))\n");
-    output.push_str("    (ValTuple0)\n");
-    for &n in &tuple_sizes {
-        if n == 0 {
-            continue;
-        }
-        output.push_str(&format!("    (ValTuple{} ", n));
-        for i in 0..n {
-            output.push_str(&format!("(getTuple{}_{} Val) ", n, i));
-        }
-        output.push_str(")\n");
-    }
-    output.push_str("  )\n");
-    output.push_str("  (Result\n");
-    output.push_str("    (Ok (getVal Val))\n");
-    output.push_str("    (Panic)\n");
-    output.push_str("  )\n");
-    output.push_str("))\n\n");
-
-    // Symbol to string mapping function
-    output.push_str(";; Symbol to string mapping function\n");
-    if symbols_list.is_empty() {
-        output.push_str("(define-fun symbol_to_string ((sym_id Int)) String \"\")\n\n");
-    } else {
-        let mut body = String::new();
-        let mut close_parens = 0;
-        for (id, name) in &symbols_list {
-            body.push_str(&format!(
-                "(ite (= sym_id {}) \"{}\" ",
-                id,
-                escape_smt_string(name)
-            ));
-            close_parens += 1;
-        }
-        body.push_str("\"\""); // fallback string
-        for _ in 0..close_parens {
-            body.push_str(")");
-        }
-        output.push_str(&format!(
-            "(define-fun symbol_to_string ((sym_id Int)) String {})\n\n",
-            body
-        ));
+    let mut symbol_ids = HashMap::new();
+    for (id, name) in &symbols_list {
+        symbol_ids.insert(name.clone(), *id);
     }
 
-    output.push_str(";; Tuple helpers for Result\n");
-    output.push_str("(define-fun val_tuple0 () Result (Ok ValTuple0))\n");
-    for &n in &tuple_sizes {
-        if n == 0 {
-            continue;
-        }
-        let mut args_decl = String::new();
-        let mut condition = String::new();
-        let mut val_args = String::new();
-        for i in 0..n {
-            args_decl.push_str(&format!("(e{} Result) ", i));
-            if i > 0 {
-                condition.push_str(" ");
-            }
-            condition.push_str(&format!("(is-Ok e{})", i));
-            val_args.push_str(&format!("(getVal e{}) ", i));
-        }
-        let condition_wrap = if n == 1 {
-            condition
-        } else {
-            format!("(and {})", condition)
-        };
-        output.push_str(&format!(
-            "(define-fun val_tuple{} ({}) Result (ite {} (Ok (ValTuple{} {})) Panic))\n",
-            n, args_decl.trim_end(), condition_wrap, n, val_args.trim_end()
-        ));
-
-        for i in 0..n {
-            output.push_str(&format!(
-                "(define-fun val_getTuple{}_{} ((t Result)) Result (ite (and (is-Ok t) (is-ValTuple{} (getVal t))) (Ok (getTuple{}_{} (getVal t))) Panic))\n",
-                n, i, n, n, i
-            ));
-        }
-    }
-    output.push_str("\n");
-
-    // Hanoi Primitive Mappings
-    output.push_str(";; Primitive Operations\n");
-    output.push_str("(define-fun val_add ((a Result) (b Result)) Result (ite (and (is-Ok a) (is-Ok b) (is-ValInt (getVal a)) (is-ValInt (getVal b))) (Ok (ValInt (+ (getInt (getVal a)) (getInt (getVal b))))) Panic))\n");
-    output.push_str("(define-fun val_sub ((a Result) (b Result)) Result (ite (and (is-Ok a) (is-Ok b) (is-ValInt (getVal a)) (is-ValInt (getVal b))) (Ok (ValInt (- (getInt (getVal a)) (getInt (getVal b))))) Panic))\n");
-    output.push_str("(define-fun val_mul ((a Result) (b Result)) Result (ite (and (is-Ok a) (is-Ok b) (is-ValInt (getVal a)) (is-ValInt (getVal b))) (Ok (ValInt (* (getInt (getVal a)) (getInt (getVal b))))) Panic))\n");
-    output.push_str("(define-fun val_div ((a Result) (b Result)) Result (ite (and (is-Ok a) (is-Ok b) (is-ValInt (getVal a)) (is-ValInt (getVal b))) (Ok (ValInt (div (getInt (getVal a)) (getInt (getVal b))))) Panic))\n");
-    output.push_str("(define-fun val_mod ((a Result) (b Result)) Result (ite (and (is-Ok a) (is-Ok b) (is-ValInt (getVal a)) (is-ValInt (getVal b))) (Ok (ValInt (mod (getInt (getVal a)) (getInt (getVal b))))) Panic))\n");
-    output.push_str("(define-fun val_neg ((a Result)) Result (ite (and (is-Ok a) (is-ValInt (getVal a))) (Ok (ValInt (- (getInt (getVal a))))) Panic))\n");
-    output.push_str("(define-fun val_not ((a Result)) Result (ite (and (is-Ok a) (is-ValBool (getVal a))) (Ok (ValBool (not (getBool (getVal a))))) Panic))\n");
-    output.push_str("(define-fun val_equal ((a Result) (b Result)) Result (ite (and (is-Ok a) (is-Ok b)) (Ok (ValBool (= (getVal a) (getVal b)))) Panic))\n");
-    output.push_str("(define-fun val_less ((a Result) (b Result)) Result (ite (and (is-Ok a) (is-Ok b) (is-ValInt (getVal a)) (is-ValInt (getVal b))) (Ok (ValBool (< (getInt (getVal a)) (getInt (getVal b))))) Panic))\n");
-    output.push_str("(define-fun val_greater ((a Result) (b Result)) Result (ite (and (is-Ok a) (is-Ok b) (is-ValInt (getVal a)) (is-ValInt (getVal b))) (Ok (ValBool (> (getInt (getVal a)) (getInt (getVal b))))) Panic))\n");
-    output.push_str("(define-fun val_and ((a Result) (b Result)) Result (ite (and (is-Ok a) (is-Ok b) (is-ValBool (getVal a)) (is-ValBool (getVal b))) (Ok (ValBool (and (getBool (getVal a)) (getBool (getVal b))))) Panic))\n");
-    output.push_str("(define-fun val_or ((a Result) (b Result)) Result (ite (and (is-Ok a) (is-Ok b) (is-ValBool (getVal a)) (is-ValBool (getVal b))) (Ok (ValBool (or (getBool (getVal a)) (getBool (getVal b))))) Panic))\n");
-    output.push_str("(define-fun val_is_int ((a Result)) Result (ite (is-Ok a) (Ok (ValBool (is-ValInt (getVal a)))) Panic))\n");
-    output.push_str("(define-fun val_is_bool ((a Result)) Result (ite (is-Ok a) (Ok (ValBool (is-ValBool (getVal a)))) Panic))\n");
-    output.push_str("(define-fun val_is_symbol ((a Result)) Result (ite (is-Ok a) (Ok (ValBool (is-ValSymbol (getVal a)))) Panic))\n");
-    output.push_str("(define-fun val_is_float ((a Result)) Result (ite (is-Ok a) (Ok (ValBool (is-ValFloat (getVal a)))) Panic))\n");
-    output.push_str("(define-fun val_is_numeric ((a Result)) Result (ite (is-Ok a) (Ok (ValBool (or (is-ValInt (getVal a)) (is-ValFloat (getVal a))))) Panic))\n");
-
-    let mut tuple_checks = vec!["(is-ValTuple0 (getVal a))".to_string()];
-    let mut length_cases = vec!["(ite (is-ValTuple0 (getVal a)) 0".to_string()];
-    for &n in &tuple_sizes {
-        if n == 0 { continue; }
-        tuple_checks.push(format!("(is-ValTuple{} (getVal a))", n));
-        length_cases.push(format!("(ite (is-ValTuple{} (getVal a)) {}", n, n));
-    }
-    let is_tuple_or_chain = if tuple_checks.len() == 1 {
-        tuple_checks[0].clone()
-    } else {
-        format!("(or {})", tuple_checks.join(" "))
-    };
-    let mut length_ite = "0".to_string();
-    for case in length_cases.iter().rev() {
-        length_ite = format!("{} {})", case, length_ite);
-    }
-    output.push_str(&format!(
-        "(define-fun val_is_tuple ((a Result)) Result (ite (is-Ok a) (Ok (ValBool {})) Panic))\n",
-        is_tuple_or_chain
-    ));
-    output.push_str(&format!(
-        "(define-fun val_tuple_length ((a Result)) Result (ite (and (is-Ok a) (is-Ok (val_is_tuple a)) (getBool (getVal (val_is_tuple a)))) (Ok (ValInt {})) Panic))\n",
-        length_ite
-    ));
-    output.push_str("(define-fun val_symbol_len ((a Result)) Result (ite (and (is-Ok a) (is-ValSymbol (getVal a))) (Ok (ValInt (str.len (symbol_to_string (getSymbol (getVal a)))))) Panic))\n");
-    output.push_str("(define-fun val_symbol_char_at ((sym Result) (idx Result)) Result (ite (and (is-Ok sym) (is-Ok idx) (is-ValSymbol (getVal sym)) (is-ValInt (getVal idx))) (Ok (ValInt (str.to_code (str.at (symbol_to_string (getSymbol (getVal sym))) (getInt (getVal idx)))))) Panic))\n");
-    output.push_str("(define-fun val_cond ((c Result) (t Result) (e Result)) Result (ite (and (is-Ok c) (is-ValBool (getVal c))) (ite (getBool (getVal c)) t e) Panic))\n");
-    output.push_str("(define-fun val_is_true ((c Result)) Bool (and (is-Ok c) (is-ValBool (getVal c)) (getBool (getVal c))))\n\n");
-
-    // 7. Translate sentences in topological order
+    // 6. Compute arity map by simulating the stack
     let mut arity_map = HashMap::new();
+    for &s_idx in &ordered_sentences {
+        let arity = get_sentence_arity(s_idx, library, &arity_map)?;
+        arity_map.insert(s_idx, arity);
+    }
+
+    // 7. Validate safety2 arities
+    for &(annotated_idx, safety_idx) in &safety2_checks {
+        let annotated_name = get_sentence_name(annotated_idx, library);
+        let safety_name = get_sentence_name(safety_idx, library);
+
+        let (n_safety, m_safety) = arity_map[&safety_idx];
+        let (n_annotated, m_annotated) = arity_map[&annotated_idx];
+
+        if n_safety != 1 || m_safety != 1 {
+            return Err(format!(
+                "Safety function '{}' must have arity 1 -> 1, but has {} -> {}",
+                safety_name, n_safety, m_safety
+            ));
+        }
+        if n_annotated != 1 {
+            return Err(format!(
+                "Annotated function '{}' must have 1 input, but has {}",
+                annotated_name, n_annotated
+            ));
+        }
+        if m_annotated == 0 {
+            return Err(format!(
+                "Annotated function '{}' must have at least 1 output to be verified via z3ify",
+                annotated_name
+            ));
+        }
+    }
+
+    use z3::{Config, Solver, SatResult, Sort, RecFuncDecl, with_z3_config};
+    use z3::{DatatypeBuilder, DatatypeAccessor};
+    use z3::datatype_builder::create_datatypes;
+    use z3::ast::{Ast, Bool, Int, Dynamic};
+
+    let cfg = Config::new();
     let mut float_to_id = HashMap::new();
 
-    output.push_str(";; Translated Sentences\n");
-    for s_idx in ordered_sentences {
-        let (def_smt, (n, m)) = translate_sentence(s_idx, library, &arity_map, &mut float_to_id)?;
-        arity_map.insert(s_idx, (n, m));
-        output.push_str(&def_smt);
-        output.push_str("\n");
-    }
+    with_z3_config(&cfg, || {
+        // Build Datatype sorts programmatically
+        let mut val_builder = DatatypeBuilder::new("Val")
+            .variant("ValInt", vec![("getInt", DatatypeAccessor::sort(Sort::int()))])
+            .variant("ValBool", vec![("getBool", DatatypeAccessor::sort(Sort::bool()))])
+            .variant("ValFloat", vec![("getFloat", DatatypeAccessor::sort(Sort::int()))])
+            .variant("ValSymbol", vec![("getSymbol", DatatypeAccessor::sort(Sort::int()))])
+            .variant("ValTuple0", vec![]);
 
-    // 8. Generate Safety2 Check Sections
-    if !safety2_checks.is_empty() {
-        output.push_str(";; Safety2 Checks\n");
+        let mut field_names_store = Vec::new();
+        for &n in &tuple_sizes {
+            if n == 0 { continue; }
+            for i in 0..n {
+                field_names_store.push(format!("getTuple{}_{}", n, i));
+            }
+        }
+
+        let mut store_idx = 0;
+        let mut val_tuple_variant_indices = Vec::new();
+        for &n in &tuple_sizes {
+            if n == 0 { continue; }
+            let mut fields = Vec::new();
+            for _ in 0..n {
+                fields.push((field_names_store[store_idx].as_str(), DatatypeAccessor::datatype("Val")));
+                store_idx += 1;
+            }
+            let variant_name = format!("ValTuple{}", n);
+            val_builder = val_builder.variant(&variant_name, fields);
+        }
+
+        let result_builder = DatatypeBuilder::new("Result")
+            .variant("Ok", vec![("getVal", DatatypeAccessor::datatype("Val"))])
+            .variant("Panic", vec![]);
+
+        let sorts = create_datatypes(vec![val_builder, result_builder]);
+        let val_sort = &sorts[0].sort;
+        let result_sort = &sorts[1].sort;
+
+        let ok_con = &sorts[1].variants[0].constructor;
+        let panic_val = sorts[1].variants[1].constructor.apply(&[]);
+
+        // Store mappings for tuple variants
+        let mut tuple_variants = HashMap::new();
+        tuple_variants.insert(0, &sorts[0].variants[4]);
+        
+        let mut idx = 5;
+        for &n in &tuple_sizes {
+            if n == 0 { continue; }
+            tuple_variants.insert(n, &sorts[0].variants[idx]);
+            val_tuple_variant_indices.push((idx, n));
+            idx += 1;
+        }
+
+        // Define Primitive RecFuncDecls
+        let val_is_tuple_decl = RecFuncDecl::new("val_is_tuple", &[result_sort], result_sort);
+        let val_tuple_length_decl = RecFuncDecl::new("val_tuple_length", &[result_sort], result_sort);
+        let val_cond_decl = RecFuncDecl::new("val_cond", &[result_sort, result_sort, result_sort], result_sort);
+        let val_is_true_decl = RecFuncDecl::new("val_is_true", &[result_sort], &Sort::bool());
+        let val_equal_decl = RecFuncDecl::new("val_equal", &[result_sort, result_sort], result_sort);
+
+        let val_add_decl = RecFuncDecl::new("val_add", &[result_sort, result_sort], result_sort);
+        let val_sub_decl = RecFuncDecl::new("val_sub", &[result_sort, result_sort], result_sort);
+        let val_mul_decl = RecFuncDecl::new("val_mul", &[result_sort, result_sort], result_sort);
+        let val_div_decl = RecFuncDecl::new("val_div", &[result_sort, result_sort], result_sort);
+        let val_mod_decl = RecFuncDecl::new("val_mod", &[result_sort, result_sort], result_sort);
+        let val_neg_decl = RecFuncDecl::new("val_neg", &[result_sort], result_sort);
+        let val_not_decl = RecFuncDecl::new("val_not", &[result_sort], result_sort);
+
+        let val_less_decl = RecFuncDecl::new("val_less", &[result_sort, result_sort], result_sort);
+        let val_greater_decl = RecFuncDecl::new("val_greater", &[result_sort, result_sort], result_sort);
+        let val_and_decl = RecFuncDecl::new("val_and", &[result_sort, result_sort], result_sort);
+        let val_or_decl = RecFuncDecl::new("val_or", &[result_sort, result_sort], result_sort);
+
+        let val_is_int_decl = RecFuncDecl::new("val_is_int", &[result_sort], result_sort);
+        let val_is_bool_decl = RecFuncDecl::new("val_is_bool", &[result_sort], result_sort);
+        let val_is_symbol_decl = RecFuncDecl::new("val_is_symbol", &[result_sort], result_sort);
+        let val_is_float_decl = RecFuncDecl::new("val_is_float", &[result_sort], result_sort);
+        let val_is_numeric_decl = RecFuncDecl::new("val_is_numeric", &[result_sort], result_sort);
+
+        let val_symbol_len_decl = RecFuncDecl::new("val_symbol_len", &[result_sort], result_sort);
+        let val_symbol_char_at_decl = RecFuncDecl::new("val_symbol_char_at", &[result_sort, result_sort], result_sort);
+
+        // Define bodies of Primitive RecFuncDecls
+        {
+            // 1. val_is_tuple
+            let a = Dynamic::new_const("a", result_sort);
+            let is_ok = sorts[1].variants[0].tester.apply(&[&a]).as_bool().unwrap();
+            let get_val = sorts[1].variants[0].accessors[0].apply(&[&a]);
+
+            let mut is_tuple_expr = sorts[0].variants[4].tester.apply(&[&get_val]).as_bool().unwrap();
+            for &(variant_idx, _) in &val_tuple_variant_indices {
+                let tester = &sorts[0].variants[variant_idx].tester;
+                is_tuple_expr = Bool::or(&[&is_tuple_expr, &tester.apply(&[&get_val]).as_bool().unwrap()]);
+            }
+            let val_bool = sorts[0].variants[1].constructor.apply(&[&is_tuple_expr]);
+            let ok_val_bool = sorts[1].variants[0].constructor.apply(&[&val_bool]);
+            val_is_tuple_decl.add_def(&[&a], &is_ok.ite(&ok_val_bool, &panic_val));
+
+            // 2. val_tuple_length
+            let a = Dynamic::new_const("a", result_sort);
+            let is_ok = sorts[1].variants[0].tester.apply(&[&a]).as_bool().unwrap();
+            let is_tuple_res = val_is_tuple_decl.apply(&[&a]);
+            let is_tuple_ok = sorts[1].variants[0].tester.apply(&[&is_tuple_res]).as_bool().unwrap();
+            let is_tuple_val = sorts[1].variants[0].accessors[0].apply(&[&is_tuple_res]);
+            let is_tuple_bool = sorts[0].variants[1].accessors[0].apply(&[&is_tuple_val]).as_bool().unwrap();
+            let cond = Bool::and(&[&is_ok, &is_tuple_ok, &is_tuple_bool]);
+
+            let get_val = sorts[1].variants[0].accessors[0].apply(&[&a]);
+            let mut length_expr = Int::from_i64(0);
+            for &(variant_idx, n) in val_tuple_variant_indices.iter().rev() {
+                let tester = &sorts[0].variants[variant_idx].tester;
+                let is_n = tester.apply(&[&get_val]).as_bool().unwrap();
+                length_expr = is_n.ite(&Int::from_i64(n as i64), &length_expr);
+            }
+            let val_int = sorts[0].variants[0].constructor.apply(&[&length_expr]);
+            let ok_val_int = sorts[1].variants[0].constructor.apply(&[&val_int]);
+            val_tuple_length_decl.add_def(&[&a], &cond.ite(&ok_val_int, &panic_val));
+
+            // 3. val_cond
+            let c = Dynamic::new_const("c", result_sort);
+            let t = Dynamic::new_const("t", result_sort);
+            let e = Dynamic::new_const("e", result_sort);
+            let c_is_ok = sorts[1].variants[0].tester.apply(&[&c]).as_bool().unwrap();
+            let c_val = sorts[1].variants[0].accessors[0].apply(&[&c]);
+            let c_is_bool = sorts[0].variants[1].tester.apply(&[&c_val]).as_bool().unwrap();
+            let cond = Bool::and(&[&c_is_ok, &c_is_bool]);
+            let c_bool_val = sorts[0].variants[1].accessors[0].apply(&[&c_val]).as_bool().unwrap();
+            val_cond_decl.add_def(&[&c, &t, &e], &cond.ite(&c_bool_val.ite(&t, &e), &panic_val));
+
+            // 4. val_is_true
+            let c = Dynamic::new_const("c", result_sort);
+            let c_is_ok = sorts[1].variants[0].tester.apply(&[&c]).as_bool().unwrap();
+            let c_val = sorts[1].variants[0].accessors[0].apply(&[&c]);
+            let c_is_bool = sorts[0].variants[1].tester.apply(&[&c_val]).as_bool().unwrap();
+            let c_bool_val = sorts[0].variants[1].accessors[0].apply(&[&c_val]).as_bool().unwrap();
+            val_is_true_decl.add_def(&[&c], &Bool::and(&[&c_is_ok, &c_is_bool, &c_bool_val]));
+
+            // 5. val_equal
+            let a = Dynamic::new_const("a", result_sort);
+            let b = Dynamic::new_const("b", result_sort);
+            let a_is_ok = sorts[1].variants[0].tester.apply(&[&a]).as_bool().unwrap();
+            let b_is_ok = sorts[1].variants[0].tester.apply(&[&b]).as_bool().unwrap();
+            let cond = Bool::and(&[&a_is_ok, &b_is_ok]);
+            let a_val = sorts[1].variants[0].accessors[0].apply(&[&a]);
+            let b_val = sorts[1].variants[0].accessors[0].apply(&[&b]);
+            let val_bool = sorts[0].variants[1].constructor.apply(&[&a_val.eq(&b_val)]);
+            let ok_val_bool = sorts[1].variants[0].constructor.apply(&[&val_bool]);
+            val_equal_decl.add_def(&[&a, &b], &cond.ite(&ok_val_bool, &panic_val));
+
+            // Helper macro-like function to construct binary arithmetic/logical definitions
+            let define_binary = |decl: &RecFuncDecl, make_op: fn(&Int, &Int) -> Int| {
+                let a = Dynamic::new_const("a", result_sort);
+                let b = Dynamic::new_const("b", result_sort);
+                let a_is_ok = sorts[1].variants[0].tester.apply(&[&a]).as_bool().unwrap();
+                let b_is_ok = sorts[1].variants[0].tester.apply(&[&b]).as_bool().unwrap();
+                let a_val = sorts[1].variants[0].accessors[0].apply(&[&a]);
+                let b_val = sorts[1].variants[0].accessors[0].apply(&[&b]);
+                let a_is_int = sorts[0].variants[0].tester.apply(&[&a_val]).as_bool().unwrap();
+                let b_is_int = sorts[0].variants[0].tester.apply(&[&b_val]).as_bool().unwrap();
+                let cond = Bool::and(&[&a_is_ok, &b_is_ok, &a_is_int, &b_is_int]);
+                let a_int = sorts[0].variants[0].accessors[0].apply(&[&a_val]).as_int().unwrap();
+                let b_int = sorts[0].variants[0].accessors[0].apply(&[&b_val]).as_int().unwrap();
+                let val_int = sorts[0].variants[0].constructor.apply(&[&make_op(&a_int, &b_int)]);
+                let ok_val_int = sorts[1].variants[0].constructor.apply(&[&val_int]);
+                decl.add_def(&[&a, &b], &cond.ite(&ok_val_int, &panic_val));
+            };
+
+            define_binary(&val_add_decl, |x, y| Int::add(&[x, y]));
+            define_binary(&val_sub_decl, |x, y| Int::sub(&[x, y]));
+            define_binary(&val_mul_decl, |x, y| Int::mul(&[x, y]));
+            define_binary(&val_div_decl, |x, y| x.div(y));
+            define_binary(&val_mod_decl, |x, y| x.modulo(y));
+
+            // val_neg
+            let a = Dynamic::new_const("a", result_sort);
+            let a_is_ok = sorts[1].variants[0].tester.apply(&[&a]).as_bool().unwrap();
+            let a_val = sorts[1].variants[0].accessors[0].apply(&[&a]);
+            let a_is_int = sorts[0].variants[0].tester.apply(&[&a_val]).as_bool().unwrap();
+            let cond = Bool::and(&[&a_is_ok, &a_is_int]);
+            let a_int = sorts[0].variants[0].accessors[0].apply(&[&a_val]).as_int().unwrap();
+            let val_int = sorts[0].variants[0].constructor.apply(&[&a_int.unary_minus()]);
+            let ok_val_int = sorts[1].variants[0].constructor.apply(&[&val_int]);
+            val_neg_decl.add_def(&[&a], &cond.ite(&ok_val_int, &panic_val));
+
+            // val_not
+            let a = Dynamic::new_const("a", result_sort);
+            let a_is_ok = sorts[1].variants[0].tester.apply(&[&a]).as_bool().unwrap();
+            let a_val = sorts[1].variants[0].accessors[0].apply(&[&a]);
+            let a_is_bool = sorts[0].variants[1].tester.apply(&[&a_val]).as_bool().unwrap();
+            let cond = Bool::and(&[&a_is_ok, &a_is_bool]);
+            let a_bool = sorts[0].variants[1].accessors[0].apply(&[&a_val]).as_bool().unwrap();
+            let val_bool = sorts[0].variants[1].constructor.apply(&[&a_bool.not()]);
+            let ok_val_bool = sorts[1].variants[0].constructor.apply(&[&val_bool]);
+            val_not_decl.add_def(&[&a], &cond.ite(&ok_val_bool, &panic_val));
+
+            // Helper for binary boolean relations
+            let define_binary_rel = |decl: &RecFuncDecl, make_op: fn(&Int, &Int) -> Bool| {
+                let a = Dynamic::new_const("a", result_sort);
+                let b = Dynamic::new_const("b", result_sort);
+                let a_is_ok = sorts[1].variants[0].tester.apply(&[&a]).as_bool().unwrap();
+                let b_is_ok = sorts[1].variants[0].tester.apply(&[&b]).as_bool().unwrap();
+                let a_val = sorts[1].variants[0].accessors[0].apply(&[&a]);
+                let b_val = sorts[1].variants[0].accessors[0].apply(&[&b]);
+                let a_is_int = sorts[0].variants[0].tester.apply(&[&a_val]).as_bool().unwrap();
+                let b_is_int = sorts[0].variants[0].tester.apply(&[&b_val]).as_bool().unwrap();
+                let cond = Bool::and(&[&a_is_ok, &b_is_ok, &a_is_int, &b_is_int]);
+                let a_int = sorts[0].variants[0].accessors[0].apply(&[&a_val]).as_int().unwrap();
+                let b_int = sorts[0].variants[0].accessors[0].apply(&[&b_val]).as_int().unwrap();
+                let val_bool = sorts[0].variants[1].constructor.apply(&[&make_op(&a_int, &b_int)]);
+                let ok_val_bool = sorts[1].variants[0].constructor.apply(&[&val_bool]);
+                decl.add_def(&[&a, &b], &cond.ite(&ok_val_bool, &panic_val));
+            };
+
+            define_binary_rel(&val_less_decl, |x, y| x.lt(y));
+            define_binary_rel(&val_greater_decl, |x, y| x.gt(y));
+
+            // val_and, val_or
+            let define_binary_logical = |decl: &RecFuncDecl, make_op: fn(&Bool, &Bool) -> Bool| {
+                let a = Dynamic::new_const("a", result_sort);
+                let b = Dynamic::new_const("b", result_sort);
+                let a_is_ok = sorts[1].variants[0].tester.apply(&[&a]).as_bool().unwrap();
+                let b_is_ok = sorts[1].variants[0].tester.apply(&[&b]).as_bool().unwrap();
+                let a_val = sorts[1].variants[0].accessors[0].apply(&[&a]);
+                let b_val = sorts[1].variants[0].accessors[0].apply(&[&b]);
+                let a_is_bool = sorts[0].variants[1].tester.apply(&[&a_val]).as_bool().unwrap();
+                let b_is_bool = sorts[0].variants[1].tester.apply(&[&b_val]).as_bool().unwrap();
+                let cond = Bool::and(&[&a_is_ok, &b_is_ok, &a_is_bool, &b_is_bool]);
+                let a_bool = sorts[0].variants[1].accessors[0].apply(&[&a_val]).as_bool().unwrap();
+                let b_bool = sorts[0].variants[1].accessors[0].apply(&[&b_val]).as_bool().unwrap();
+                let val_bool = sorts[0].variants[1].constructor.apply(&[&make_op(&a_bool, &b_bool)]);
+                let ok_val_bool = sorts[1].variants[0].constructor.apply(&[&val_bool]);
+                decl.add_def(&[&a, &b], &cond.ite(&ok_val_bool, &panic_val));
+            };
+
+            define_binary_logical(&val_and_decl, |x, y| Bool::and(&[x, y]));
+            define_binary_logical(&val_or_decl, |x, y| Bool::or(&[x, y]));
+
+            // Type testers
+            let define_tester = |decl: &RecFuncDecl, variant_idx: usize| {
+                let a = Dynamic::new_const("a", result_sort);
+                let a_is_ok = sorts[1].variants[0].tester.apply(&[&a]).as_bool().unwrap();
+                let a_val = sorts[1].variants[0].accessors[0].apply(&[&a]);
+                let tester = &sorts[0].variants[variant_idx].tester;
+                let is_type = tester.apply(&[&a_val]).as_bool().unwrap();
+                let val_bool = sorts[0].variants[1].constructor.apply(&[&is_type]);
+                let ok_val_bool = sorts[1].variants[0].constructor.apply(&[&val_bool]);
+                decl.add_def(&[&a], &a_is_ok.ite(&ok_val_bool, &panic_val));
+            };
+
+            define_tester(&val_is_int_decl, 0);
+            define_tester(&val_is_bool_decl, 1);
+            define_tester(&val_is_symbol_decl, 3);
+            define_tester(&val_is_float_decl, 2);
+
+            // val_is_numeric
+            {
+                let a = Dynamic::new_const("a", result_sort);
+                let a_is_ok = sorts[1].variants[0].tester.apply(&[&a]).as_bool().unwrap();
+                let a_val = sorts[1].variants[0].accessors[0].apply(&[&a]);
+                let a_is_int = sorts[0].variants[0].tester.apply(&[&a_val]).as_bool().unwrap();
+                let a_is_float = sorts[0].variants[2].tester.apply(&[&a_val]).as_bool().unwrap();
+                let is_num = Bool::or(&[&a_is_int, &a_is_float]);
+                let val_bool = sorts[0].variants[1].constructor.apply(&[&is_num]);
+                let ok_val_bool = sorts[1].variants[0].constructor.apply(&[&val_bool]);
+                val_is_numeric_decl.add_def(&[&a], &a_is_ok.ite(&ok_val_bool, &panic_val));
+            }
+
+            // Static symbol length & char_at handlers
+            {
+                // val_symbol_len
+                let a = Dynamic::new_const("a", result_sort);
+                let a_is_ok = sorts[1].variants[0].tester.apply(&[&a]).as_bool().unwrap();
+                let a_val = sorts[1].variants[0].accessors[0].apply(&[&a]);
+                let a_is_sym = sorts[0].variants[3].tester.apply(&[&a_val]).as_bool().unwrap();
+                let cond = Bool::and(&[&a_is_ok, &a_is_sym]);
+
+                let sym_id = sorts[0].variants[3].accessors[0].apply(&[&a_val]).as_int().unwrap();
+                let mut len_expr = Int::from_i64(0);
+                for &(id, ref name) in &symbols_list {
+                    let is_id = sym_id.eq(&Int::from_i64(id as i64));
+                    len_expr = is_id.ite(&Int::from_i64(name.len() as i64), &len_expr);
+                }
+                let val_int = sorts[0].variants[0].constructor.apply(&[&len_expr]);
+                let ok_val_int = sorts[1].variants[0].constructor.apply(&[&val_int]);
+                val_symbol_len_decl.add_def(&[&a], &cond.ite(&ok_val_int, &panic_val));
+
+                // val_symbol_char_at
+                let sym = Dynamic::new_const("sym", result_sort);
+                let idx = Dynamic::new_const("idx", result_sort);
+                let sym_is_ok = sorts[1].variants[0].tester.apply(&[&sym]).as_bool().unwrap();
+                let idx_is_ok = sorts[1].variants[0].tester.apply(&[&idx]).as_bool().unwrap();
+                let sym_val = sorts[1].variants[0].accessors[0].apply(&[&sym]);
+                let idx_val = sorts[1].variants[0].accessors[0].apply(&[&idx]);
+                let sym_is_sym = sorts[0].variants[3].tester.apply(&[&sym_val]).as_bool().unwrap();
+                let idx_is_int = sorts[0].variants[0].tester.apply(&[&idx_val]).as_bool().unwrap();
+                let cond = Bool::and(&[&sym_is_ok, &idx_is_ok, &sym_is_sym, &idx_is_int]);
+
+                let sym_id = sorts[0].variants[3].accessors[0].apply(&[&sym_val]).as_int().unwrap();
+                let idx_int = sorts[0].variants[0].accessors[0].apply(&[&idx_val]).as_int().unwrap();
+                let mut char_code_expr = Int::from_i64(-1);
+                for &(id, ref name) in &symbols_list {
+                    let is_id = sym_id.eq(&Int::from_i64(id as i64));
+                    let mut inner_expr = Int::from_i64(-1);
+                    for j in 0..name.len() {
+                        let is_j = idx_int.eq(&Int::from_i64(j as i64));
+                        let char_code = name.as_bytes()[j] as i64;
+                        inner_expr = is_j.ite(&Int::from_i64(char_code), &inner_expr);
+                    }
+                    char_code_expr = is_id.ite(&inner_expr, &char_code_expr);
+                }
+                
+                // Panic if idx is out of bounds or negative
+                let char_ok_cond = char_code_expr.ge(&Int::from_i64(0));
+                let final_cond = Bool::and(&[&cond, &char_ok_cond]);
+                
+                let val_int = sorts[0].variants[0].constructor.apply(&[&char_code_expr]);
+                let ok_val_int = sorts[1].variants[0].constructor.apply(&[&val_int]);
+                val_symbol_char_at_decl.add_def(&[&sym, &idx], &final_cond.ite(&ok_val_int, &panic_val));
+            }
+        }
+
+        let mut val_tuple_decls = HashMap::new();
+        let mut val_get_tuple_decls = HashMap::new();
+
+        for &n in &tuple_sizes {
+            if n == 0 { continue; }
+            
+            // val_tuple{n}
+            let tuple_domain = vec![result_sort; n];
+            let val_tuple_decl = RecFuncDecl::new(format!("val_tuple{}", n), &tuple_domain, result_sort);
+            
+            let mut inputs = Vec::new();
+            for i in 0..n {
+                inputs.push(Dynamic::new_const(format!("e{}", i), result_sort));
+            }
+            let inputs_refs: Vec<&dyn Ast> = inputs.iter().map(|v| v as &dyn Ast).collect();
+
+            let mut is_ok_cond = Bool::from_bool(true);
+            let mut val_args = Vec::new();
+            for i in 0..n {
+                let e = &inputs[i];
+                let e_is_ok = sorts[1].variants[0].tester.apply(&[e]).as_bool().unwrap();
+                is_ok_cond = Bool::and(&[&is_ok_cond, &e_is_ok]);
+                let e_val = sorts[1].variants[0].accessors[0].apply(&[e]);
+                val_args.push(e_val);
+            }
+            
+            let val_args_refs: Vec<&dyn Ast> = val_args.iter().map(|v| v as &dyn Ast).collect();
+            let variant = tuple_variants[&n];
+            let tuple_val = variant.constructor.apply(&val_args_refs);
+            let ok_tuple_val = sorts[1].variants[0].constructor.apply(&[&tuple_val]);
+            
+            val_tuple_decl.add_def(&inputs_refs, &is_ok_cond.ite(&ok_tuple_val, &panic_val));
+            val_tuple_decls.insert(n, val_tuple_decl);
+
+            // val_getTuple{n}_{i}
+            for i in 0..n {
+                let val_get_tuple_decl = RecFuncDecl::new(format!("val_getTuple{}_{}", n, i), &[result_sort], result_sort);
+                let t = Dynamic::new_const("t", result_sort);
+                
+                let t_is_ok = sorts[1].variants[0].tester.apply(&[&t]).as_bool().unwrap();
+                let t_val = sorts[1].variants[0].accessors[0].apply(&[&t]);
+                let t_is_tuple = variant.tester.apply(&[&t_val]).as_bool().unwrap();
+                let cond = Bool::and(&[&t_is_ok, &t_is_tuple]);
+
+                let field_val = variant.accessors[i].apply(&[&t_val]);
+                let ok_field_val = sorts[1].variants[0].constructor.apply(&[&field_val]);
+                
+                val_get_tuple_decl.add_def(&[&t], &cond.ite(&ok_field_val, &panic_val));
+                val_get_tuple_decls.insert((n, i), val_get_tuple_decl);
+            }
+        }
+
+        // Pass 1: Declare all target/dependency sentences
+        let mut sentence_decls = HashMap::new();
+        for &s_idx in &ordered_sentences {
+            let name = get_sentence_name(s_idx, library);
+            let (n_inputs, n_outputs) = arity_map[&s_idx];
+            
+            let mut decls = Vec::new();
+            for i in 0..n_outputs {
+                let decl_name = format!("{}_out_{}", name, i);
+                let domain = vec![result_sort; n_inputs];
+                let decl = RecFuncDecl::new(decl_name, &domain, result_sort);
+                decls.push(decl);
+            }
+            sentence_decls.insert(s_idx, decls);
+        }
+
+        // Pass 2: Define all sentence bodies
+        for &s_idx in &ordered_sentences {
+            let (n_inputs, n_outputs) = arity_map[&s_idx];
+            let sentence = &library.sentences[s_idx];
+
+            let mut args = Vec::new();
+            for i in 0..n_inputs {
+                args.push(Dynamic::new_const(format!("in_{}", i), result_sort));
+            }
+            let args_refs: Vec<&dyn Ast> = args.iter().map(|a| a as &dyn Ast).collect();
+
+            let mut stack = args.clone();
+            let mut ok = Bool::from_bool(true);
+
+            for inst in sentence {
+                match inst {
+                    Instruction::Push(val) => {
+                        let res = match val {
+                            Value::Int(v) => {
+                                let int_val = sorts[0].variants[0].constructor.apply(&[&Int::from_i64(*v)]);
+                                sorts[1].variants[0].constructor.apply(&[&int_val])
+                            }
+                            Value::Bool(b) => {
+                                let bool_val = sorts[0].variants[1].constructor.apply(&[&Bool::from_bool(*b)]);
+                                sorts[1].variants[0].constructor.apply(&[&bool_val])
+                            }
+                            Value::Float(f) => {
+                                let next_id = float_to_id.len();
+                                let f_id = *float_to_id.entry(f.to_string()).or_insert(next_id);
+                                let float_val = sorts[0].variants[2].constructor.apply(&[&Int::from_i64(f_id as i64)]);
+                                sorts[1].variants[0].constructor.apply(&[&float_val])
+                            }
+                            Value::Symbol(s) => {
+                                let s_id = symbol_ids[&s.name];
+                                let sym_val = sorts[0].variants[3].constructor.apply(&[&Int::from_i64(s_id as i64)]);
+                                sorts[1].variants[0].constructor.apply(&[&sym_val])
+                            }
+                            Value::Tuple(_) => {
+                                fn construct_tuple_val(
+                                    val: &Value,
+                                    sorts: &[z3::DatatypeSort],
+                                    tuple_variants: &HashMap<usize, &z3::DatatypeVariant>,
+                                    float_to_id: &mut HashMap<String, usize>,
+                                    symbol_ids: &HashMap<String, usize>,
+                                ) -> Dynamic {
+                                    match val {
+                                        Value::Int(v) => sorts[0].variants[0].constructor.apply(&[&Int::from_i64(*v)]),
+                                        Value::Bool(b) => sorts[0].variants[1].constructor.apply(&[&Bool::from_bool(*b)]),
+                                        Value::Float(f) => {
+                                            let next_id = float_to_id.len();
+                                            let f_id = *float_to_id.entry(f.to_string()).or_insert(next_id);
+                                            sorts[0].variants[2].constructor.apply(&[&Int::from_i64(f_id as i64)])
+                                        }
+                                        Value::Symbol(s) => {
+                                            let s_id = symbol_ids[&s.name];
+                                            sorts[0].variants[3].constructor.apply(&[&Int::from_i64(s_id as i64)])
+                                        }
+                                        Value::Tuple(elements) => {
+                                            let mut args = Vec::new();
+                                            for elem in elements {
+                                                args.push(construct_tuple_val(elem, sorts, tuple_variants, float_to_id, symbol_ids));
+                                            }
+                                            let args_refs: Vec<&dyn Ast> = args.iter().map(|v| v as &dyn Ast).collect();
+                                            let variant = tuple_variants[&elements.len()];
+                                            variant.constructor.apply(&args_refs)
+                                        }
+                                    }
+                                }
+                                let tuple_val = construct_tuple_val(val, &sorts, &tuple_variants, &mut float_to_id, &symbol_ids);
+                                sorts[1].variants[0].constructor.apply(&[&tuple_val])
+                            }
+                        };
+                        stack.push(res);
+                    }
+                    Instruction::Drop(n) => {
+                        stack.remove(stack.len() - 1 - n);
+                    }
+                    Instruction::Pick(n) => {
+                        stack.push(stack[stack.len() - 1 - n].clone());
+                    }
+                    Instruction::Roll(n) => {
+                        let val = stack.remove(stack.len() - 1 - n);
+                        stack.push(val);
+                    }
+                    Instruction::Tuple(n) => {
+                        let n = *n;
+                        let mut tuple_args = Vec::new();
+                        for _ in 0..n {
+                            tuple_args.push(stack.pop().unwrap());
+                        }
+                        tuple_args.reverse();
+
+                        let tuple_res = if n == 0 {
+                            let tuple_val = tuple_variants[&0].constructor.apply(&[]);
+                            sorts[1].variants[0].constructor.apply(&[&tuple_val])
+                        } else {
+                            let args_refs: Vec<&dyn Ast> = tuple_args.iter().map(|v| v as &dyn Ast).collect();
+                            val_tuple_decls[&n].apply(&args_refs)
+                        };
+                        stack.push(tuple_res);
+                    }
+                    Instruction::Untuple(n) => {
+                        let n = *n;
+                        let val = stack.pop().unwrap();
+                        let mut unpacked = Vec::new();
+                        for i in 0..n {
+                            let get_fn = &val_get_tuple_decls[&(n, i)];
+                            let component = get_fn.apply(&[&val]);
+                            unpacked.push(component);
+                        }
+                        for component in &unpacked {
+                            let comp_is_ok = sorts[1].variants[0].tester.apply(&[component]).as_bool().unwrap();
+                            ok = Bool::and(&[&ok, &comp_is_ok]);
+                        }
+                        stack.extend(unpacked);
+                    }
+                    Instruction::Jump(target) => {
+                        let (n_t, m_t) = arity_map[target];
+                        let mut jump_args = Vec::new();
+                        for _ in 0..n_t {
+                            jump_args.push(stack.pop().unwrap());
+                        }
+                        jump_args.reverse();
+
+                        let target_decls = &sentence_decls[target];
+                        let mut results = Vec::new();
+                        for i in 0..m_t {
+                            let args_refs: Vec<&dyn Ast> = jump_args.iter().map(|v| v as &dyn Ast).collect();
+                            results.push(target_decls[i].apply(&args_refs));
+                        }
+                        for res in &results {
+                            let res_is_ok = sorts[1].variants[0].tester.apply(&[res]).as_bool().unwrap();
+                            ok = Bool::and(&[&ok, &res_is_ok]);
+                        }
+                        stack.extend(results);
+                    }
+                    Instruction::Branch(then_t, else_t) => {
+                        let cond_var = stack.pop().unwrap();
+                        let (n_then, m_then) = arity_map[then_t];
+                        let (n_else, m_else) = arity_map[else_t];
+                        let max_n = std::cmp::max(n_then, n_else);
+                        let max_m = std::cmp::max(m_then, m_else);
+
+                        let mut branch_inputs = Vec::new();
+                        for _ in 0..max_n {
+                            branch_inputs.push(stack.pop().unwrap());
+                        }
+                        branch_inputs.reverse();
+
+                        let mut then_args = Vec::new();
+                        for i in (max_n - n_then)..max_n {
+                            then_args.push(branch_inputs[i].clone());
+                        }
+                        let mut else_args = Vec::new();
+                        for i in (max_n - n_else)..max_n {
+                            else_args.push(branch_inputs[i].clone());
+                        }
+
+                        let cond_valid = val_is_bool_decl.apply(&[&cond_var]);
+                        let cond_valid_bool = sorts[1].variants[0].tester.apply(&[&cond_valid]).as_bool().unwrap();
+                        ok = Bool::and(&[&ok, &cond_valid_bool]);
+
+                        let cond_is_true = val_is_true_decl.apply(&[&cond_var]).as_bool().unwrap();
+                        let then_decls = &sentence_decls[then_t];
+                        let else_decls = &sentence_decls[else_t];
+
+                        let mut results = Vec::new();
+                        for i in 0..max_m {
+                            let then_args_refs: Vec<&dyn Ast> = then_args.iter().map(|v| v as &dyn Ast).collect();
+                            let else_args_refs: Vec<&dyn Ast> = else_args.iter().map(|v| v as &dyn Ast).collect();
+                            let then_expr = if i < then_decls.len() {
+                                then_decls[i].apply(&then_args_refs)
+                            } else {
+                                panic_val.clone()
+                            };
+                            let else_expr = if i < else_decls.len() {
+                                else_decls[i].apply(&else_args_refs)
+                            } else {
+                                panic_val.clone()
+                            };
+                            results.push(cond_is_true.ite(&then_expr, &else_expr));
+                        }
+                        for res in &results {
+                            let res_is_ok = sorts[1].variants[0].tester.apply(&[res]).as_bool().unwrap();
+                            ok = Bool::and(&[&ok, &res_is_ok]);
+                        }
+                        stack.extend(results);
+                    }
+                    Instruction::Add | Instruction::Subtract | Instruction::Multiply | Instruction::Divide | Instruction::Modulo |
+                    Instruction::Equal | Instruction::Less | Instruction::Greater | Instruction::And | Instruction::Or => {
+                        let b = stack.pop().unwrap();
+                        let a = stack.pop().unwrap();
+                        let res = match inst {
+                            Instruction::Add => val_add_decl.apply(&[&a, &b]),
+                            Instruction::Subtract => val_sub_decl.apply(&[&a, &b]),
+                            Instruction::Multiply => val_mul_decl.apply(&[&a, &b]),
+                            Instruction::Divide => val_div_decl.apply(&[&a, &b]),
+                            Instruction::Modulo => val_mod_decl.apply(&[&a, &b]),
+                            Instruction::Equal => val_equal_decl.apply(&[&a, &b]),
+                            Instruction::Less => val_less_decl.apply(&[&a, &b]),
+                            Instruction::Greater => val_greater_decl.apply(&[&a, &b]),
+                            Instruction::And => val_and_decl.apply(&[&a, &b]),
+                            Instruction::Or => val_or_decl.apply(&[&a, &b]),
+                            _ => unreachable!(),
+                        };
+                        let res_is_ok = sorts[1].variants[0].tester.apply(&[&res]).as_bool().unwrap();
+                        ok = Bool::and(&[&ok, &res_is_ok]);
+                        stack.push(res);
+                    }
+                    Instruction::Negate | Instruction::Not | Instruction::IsInt | Instruction::IsBool |
+                    Instruction::IsSymbol | Instruction::IsFloat | Instruction::IsTuple |
+                    Instruction::TupleLength | Instruction::SymbolLen | Instruction::SymbolCharAt => {
+                        let res = match inst {
+                            Instruction::SymbolCharAt => {
+                                let idx = stack.pop().unwrap();
+                                let sym = stack.pop().unwrap();
+                                val_symbol_char_at_decl.apply(&[&sym, &idx])
+                            }
+                            _ => {
+                                let a = stack.pop().unwrap();
+                                match inst {
+                                    Instruction::Negate => val_neg_decl.apply(&[&a]),
+                                    Instruction::Not => val_not_decl.apply(&[&a]),
+                                    Instruction::IsInt => val_is_int_decl.apply(&[&a]),
+                                    Instruction::IsBool => val_is_bool_decl.apply(&[&a]),
+                                    Instruction::IsSymbol => val_is_symbol_decl.apply(&[&a]),
+                                    Instruction::IsFloat => val_is_float_decl.apply(&[&a]),
+                                    Instruction::IsTuple => val_is_tuple_decl.apply(&[&a]),
+                                    Instruction::TupleLength => val_tuple_length_decl.apply(&[&a]),
+                                    Instruction::SymbolLen => val_symbol_len_decl.apply(&[&a]),
+                                    _ => unreachable!(),
+                                }
+                            }
+                        };
+                        let res_is_ok = sorts[1].variants[0].tester.apply(&[&res]).as_bool().unwrap();
+                        ok = Bool::and(&[&ok, &res_is_ok]);
+                        stack.push(res);
+                    }
+                    Instruction::Panic => {
+                        ok = Bool::from_bool(false);
+                    }
+                    Instruction::Assert => {
+                        let cond_var = stack.pop().unwrap();
+                        let cond_is_true = val_is_true_decl.apply(&[&cond_var]).as_bool().unwrap();
+                        ok = Bool::and(&[&ok, &cond_is_true]);
+                    }
+                    Instruction::AssertEqual => {
+                        let b = stack.pop().unwrap();
+                        let a = stack.pop().unwrap();
+                        let eq_res = val_equal_decl.apply(&[&a, &b]);
+                        let eq_is_true = val_is_true_decl.apply(&[&eq_res]).as_bool().unwrap();
+                        ok = Bool::and(&[&ok, &eq_is_true]);
+                    }
+                    Instruction::Print => {
+                        stack.pop();
+                    }
+                }
+            }
+
+            // Define each output function body
+            let decls = &sentence_decls[&s_idx];
+            for i in 0..n_outputs {
+                let final_expr = &stack[stack.len() - 1 - i];
+                let body = ok.ite(final_expr, &panic_val);
+                decls[i].add_def(&args_refs, &body);
+            }
+        }
+
+        // 8. Solve safety2 verification checks programmatically
+        let mut failed_checks = Vec::new();
+
         for (annotated_idx, safety_idx) in safety2_checks {
             let annotated_name = get_sentence_name(annotated_idx, library);
             let safety_name = get_sentence_name(safety_idx, library);
 
-            let (n_safety, m_safety) = arity_map[&safety_idx];
-            let (n_annotated, m_annotated) = arity_map[&annotated_idx];
+            let solver = Solver::new();
 
-            if n_safety != 1 || m_safety != 1 {
-                return Err(format!(
-                    "Safety function '{}' must have arity 1 -> 1, but has {} -> {}",
-                    safety_name, n_safety, m_safety
-                ));
-            }
-            if n_annotated != 1 {
-                return Err(format!(
-                    "Annotated function '{}' must have 1 input, but has {}",
-                    annotated_name, n_annotated
-                ));
-            }
-            if m_annotated == 0 {
-                return Err(format!(
-                    "Annotated function '{}' must have at least 1 output to be verified via z3ify",
-                    annotated_name
-                ));
-            }
+            // Build programmatic safety2 check logic
+            let x = Dynamic::new_const("x", val_sort);
+            
+            // ok_x = Ok(x)
+            let ok_x = ok_con.apply(&[&x]);
 
-            output.push_str(&format!(
-                ";; Verify that '{}' never panics when '{}' returns true\n",
-                annotated_name, safety_name
-            ));
-            output.push_str("(push)\n");
-            output.push_str(" (declare-const x Val)\n");
-            output.push_str(&format!(
-                " (assert (= (|{}_out_0| (Ok x)) (Ok (ValBool true))))\n",
-                safety_name
-            ));
-            output.push_str(&format!(
-                " (assert (is-Panic (|{}_out_0| (Ok x))))\n",
-                annotated_name
-            ));
-            output.push_str(" (check-sat)\n");
-            output.push_str("(pop)\n\n");
+            // safety_app = safety_decl[0].apply(&[ok_x])
+            let safety_decl = &sentence_decls[&safety_idx][0];
+            let safety_app = safety_decl.apply(&[&ok_x]);
+
+            // True Result value: Ok(ValBool(true))
+            let val_bool_con = &sorts[0].variants[1].constructor;
+            let val_bool_true = val_bool_con.apply(&[&Bool::from_bool(true)]);
+            let ok_val_bool_true = ok_con.apply(&[&val_bool_true]);
+
+            // Assert safety_app == Ok(ValBool(true))
+            solver.assert(&safety_app.eq(&ok_val_bool_true));
+
+            // annotated_app = annotated_decl[0].apply(&[ok_x])
+            let annotated_decl = &sentence_decls[&annotated_idx][0];
+            let annotated_app = annotated_decl.apply(&[&ok_x]);
+
+            // Assert is_panic(annotated_app)
+            let is_panic_tester = &sorts[1].variants[1].tester;
+            let is_panic_bool = is_panic_tester.apply(&[&annotated_app]).as_bool().unwrap();
+            solver.assert(&is_panic_bool);
+
+            match solver.check() {
+                SatResult::Unsat => {
+                    println!(
+                        "[PASS] '{}' never panics when '{}' returns true",
+                        annotated_name, safety_name
+                    );
+                }
+                SatResult::Sat => {
+                    let mut error_msg = format!(
+                        "'{}' can panic when '{}' returns true",
+                        annotated_name, safety_name
+                    );
+                    let mut counterexample = String::new();
+                    if let Some(model) = solver.get_model() {
+                        if let Some(val) = model.eval(&x, true) {
+                            counterexample = format!(" (Counterexample: x = {})", val);
+                        }
+                    }
+                    error_msg.push_str(&counterexample);
+                    failed_checks.push(error_msg);
+                    println!(
+                        "[FAIL] '{}' can panic when '{}' returns true!{}",
+                        annotated_name, safety_name, counterexample
+                    );
+                }
+                SatResult::Unknown => {
+                    return Err(format!(
+                        "Z3 solver returned Unknown for safety2 check between '{}' and '{}'",
+                        annotated_name, safety_name
+                    ));
+                }
+            }
         }
-    }
 
-    Ok(output)
+        if !failed_checks.is_empty() {
+            return Err(format!(
+                "Safety2 verification failed for {} check(s):\n - {}",
+                failed_checks.len(),
+                failed_checks.join("\n - ")
+            ));
+        }
+
+        Ok(())
+    })
 }
 
 fn has_cycle(
@@ -384,30 +969,6 @@ fn has_cycle(
     false
 }
 
-fn topological_sort(
-    s_idx: SentenceIndex,
-    library: &Library,
-    visited: &mut HashSet<SentenceIndex>,
-    order: &mut Vec<SentenceIndex>,
-) {
-    if visited.contains(&s_idx) {
-        return;
-    }
-    visited.insert(s_idx);
-    for inst in &library.sentences[s_idx] {
-        match inst {
-            Instruction::Jump(target) => {
-                topological_sort(*target, library, visited, order);
-            }
-            Instruction::Branch(then_t, else_t) => {
-                topological_sort(*then_t, library, visited, order);
-                topological_sort(*else_t, library, visited, order);
-            }
-            _ => {}
-        }
-    }
-    order.push(s_idx);
-}
 
 fn collect_tuple_sizes_from_value(val: &Value, sizes: &mut HashSet<usize>) {
     if let Value::Tuple(elements) = val {
@@ -432,68 +993,6 @@ fn collect_symbols_from_value(val: &Value, map: &mut HashMap<usize, String>) {
     }
 }
 
-fn escape_smt_string(s: &str) -> String {
-    let mut escaped = String::new();
-    for c in s.chars() {
-        if c == '"' {
-            escaped.push_str("\"\"");
-        } else if c == '\\' {
-            escaped.push_str("\\u{5c}");
-        } else if c.is_ascii() && !c.is_ascii_control() {
-            escaped.push(c);
-        } else {
-            escaped.push_str(&format!("\\u{{{:x}}}", c as u32));
-        }
-    }
-    escaped
-}
-
-struct Step {
-    bindings: Vec<(String, Expr)>,
-}
-
-fn ensure_stack_depth_ssa(
-    stack: &mut Vec<String>,
-    required_depth: usize,
-    inputs_needed: &mut usize,
-    step_0_bindings: &mut Vec<(String, Expr)>,
-) {
-    if stack.len() < required_depth {
-        let diff = required_depth - stack.len();
-        for _ in 0..diff {
-            let var_name = format!("in_{}", *inputs_needed);
-            let stack_var = format!("s_0_{}", *inputs_needed);
-            *inputs_needed += 1;
-            
-            step_0_bindings.push((stack_var.clone(), Expr::Var(var_name)));
-            stack.insert(0, stack_var);
-        }
-    }
-}
-
-fn val_to_expr(val: &Value) -> Expr {
-    let val_expr = val_to_expr_raw(val);
-    Expr::Call("Ok".to_string(), vec![val_expr])
-}
-
-fn val_to_expr_raw(val: &Value) -> Expr {
-    match val {
-        Value::Bool(b) => Expr::Call("ValBool".to_string(), vec![Expr::Bool(*b)]),
-        Value::Int(i) => Expr::Call("ValInt".to_string(), vec![Expr::Int(*i)]),
-        Value::Float(f) => Expr::Call("ValFloat".to_string(), vec![Expr::Float(f.to_string())]),
-        Value::Symbol(sym) => Expr::Call("ValSymbol".to_string(), vec![Expr::Int(sym.id as i64)]),
-        Value::Tuple(elements) => {
-            let elms = elements.iter().map(val_to_expr_raw).collect();
-            let n = elements.len();
-            if n == 0 {
-                Expr::Call("ValTuple0".to_string(), vec![])
-            } else {
-                Expr::Call(format!("ValTuple{}", n), elms)
-            }
-        }
-    }
-}
-
 fn get_declared_arity(s_idx: SentenceIndex, library: &Library) -> Option<(usize, usize)> {
     for ann in &library.annotations[s_idx] {
         if let Annotation::Arity(n, m) = ann {
@@ -503,33 +1002,11 @@ fn get_declared_arity(s_idx: SentenceIndex, library: &Library) -> Option<(usize,
     None
 }
 
-fn format_nested_lets(
-    steps: &[Step],
-    step_idx: usize,
-    final_body: &str,
-    float_to_id: &mut HashMap<String, usize>,
-) -> String {
-    if step_idx >= steps.len() {
-        return final_body.to_string();
-    }
-    let step = &steps[step_idx];
-    let mut bindings_str = String::new();
-    for (var, expr) in &step.bindings {
-        bindings_str.push_str(&format!("({} {}) ", var, expr_to_smt(expr, float_to_id)));
-    }
-    let inner = format_nested_lets(steps, step_idx + 1, final_body, float_to_id);
-    format!("(let ({}) {})", bindings_str.trim_end(), inner)
-}
-
-fn translate_sentence(
+fn get_sentence_arity(
     s_idx: SentenceIndex,
     library: &Library,
     arity_map: &HashMap<SentenceIndex, (usize, usize)>,
-    float_to_id: &mut HashMap<String, usize>,
-) -> Result<(String, (usize, usize)), String> {
-    let name = get_sentence_name(s_idx, library);
-    let sentence = &library.sentences[s_idx];
-
+) -> Result<(usize, usize), String> {
     let (declared_in, _declared_out) = get_declared_arity(s_idx, library).unwrap_or_else(|| {
         if let Some(Some(arities)) = library.instruction_arities.get(s_idx) {
             if !arities.is_empty() {
@@ -539,215 +1016,79 @@ fn translate_sentence(
         (0, 0)
     });
 
-    let mut steps = Vec::new();
     let mut stack = Vec::new();
-    
-    // Initial bindings for Step 0:
-    let mut initial_bindings = vec![("ok_0".to_string(), Expr::Bool(true))];
     for i in 0..declared_in {
-        let in_var = format!("in_{}", i);
-        let stack_var = format!("s_0_{}", i);
-        initial_bindings.push((stack_var.clone(), Expr::Var(in_var)));
-        stack.push(stack_var);
+        stack.push(format!("in_{}", i));
     }
-    steps.push(Step { bindings: initial_bindings });
     
-    let mut ok_var = "ok_0".to_string();
     let mut inputs_needed = declared_in;
-    let mut step_idx = 1;
 
-    for inst in sentence {
-        let prev_ok = ok_var.clone();
-        ok_var = format!("ok_{}", step_idx);
-        let mut bindings = Vec::new();
-
+    for inst in &library.sentences[s_idx] {
         match inst {
-            Instruction::Push(val) => {
-                let stack_var = format!("s_{}_0", step_idx);
-                bindings.push((stack_var.clone(), val_to_expr(val)));
-                bindings.push((ok_var.clone(), Expr::Var(prev_ok)));
-                stack.push(stack_var);
+            Instruction::Push(_) => {
+                stack.push("val".to_string());
             }
             Instruction::Drop(n) => {
-                ensure_stack_depth_ssa(&mut stack, n + 1, &mut inputs_needed, &mut steps[0].bindings);
+                let n = *n;
+                while stack.len() < n + 1 {
+                    stack.insert(0, format!("in_inferred_{}", inputs_needed));
+                    inputs_needed += 1;
+                }
                 stack.remove(stack.len() - 1 - n);
-                bindings.push((ok_var.clone(), Expr::Var(prev_ok)));
             }
             Instruction::Pick(n) => {
-                ensure_stack_depth_ssa(&mut stack, n + 1, &mut inputs_needed, &mut steps[0].bindings);
-                let val_var = stack[stack.len() - 1 - n].clone();
-                let stack_var = format!("s_{}_0", step_idx);
-                bindings.push((stack_var.clone(), Expr::Var(val_var)));
-                bindings.push((ok_var.clone(), Expr::Var(prev_ok)));
-                stack.push(stack_var);
+                let n = *n;
+                while stack.len() < n + 1 {
+                    stack.insert(0, format!("in_inferred_{}", inputs_needed));
+                    inputs_needed += 1;
+                }
+                let val = stack[stack.len() - 1 - n].clone();
+                stack.push(val);
             }
             Instruction::Roll(n) => {
-                ensure_stack_depth_ssa(&mut stack, n + 1, &mut inputs_needed, &mut steps[0].bindings);
-                let val_var = stack.remove(stack.len() - 1 - n);
-                let stack_var = format!("s_{}_0", step_idx);
-                bindings.push((stack_var.clone(), Expr::Var(val_var)));
-                bindings.push((ok_var.clone(), Expr::Var(prev_ok)));
-                stack.push(stack_var);
-            }
-            Instruction::Equal | Instruction::Greater | Instruction::Less |
-            Instruction::Add | Instruction::Subtract | Instruction::Multiply |
-            Instruction::Divide | Instruction::Modulo | Instruction::And | Instruction::Or => {
-                ensure_stack_depth_ssa(&mut stack, 2, &mut inputs_needed, &mut steps[0].bindings);
-                let b_var = stack.pop().unwrap();
-                let a_var = stack.pop().unwrap();
-                let op = match inst {
-                    Instruction::Equal => "val_equal",
-                    Instruction::Greater => "val_greater",
-                    Instruction::Less => "val_less",
-                    Instruction::Add => "val_add",
-                    Instruction::Subtract => "val_sub",
-                    Instruction::Multiply => "val_mul",
-                    Instruction::Divide => "val_div",
-                    Instruction::Modulo => "val_mod",
-                    Instruction::And => "val_and",
-                    Instruction::Or => "val_or",
-                    _ => unreachable!(),
-                };
-                let stack_var = format!("s_{}_0", step_idx);
-                bindings.push((stack_var.clone(), Expr::Call(op.to_string(), vec![Expr::Var(a_var), Expr::Var(b_var)])));
-                bindings.push((ok_var.clone(), Expr::Var(prev_ok)));
-                stack.push(stack_var);
-            }
-            Instruction::Not | Instruction::Negate => {
-                ensure_stack_depth_ssa(&mut stack, 1, &mut inputs_needed, &mut steps[0].bindings);
-                let a_var = stack.pop().unwrap();
-                let op = match inst {
-                    Instruction::Not => "val_not",
-                    Instruction::Negate => "val_neg",
-                    _ => unreachable!(),
-                };
-                let stack_var = format!("s_{}_0", step_idx);
-                bindings.push((stack_var.clone(), Expr::Call(op.to_string(), vec![Expr::Var(a_var)])));
-                bindings.push((ok_var.clone(), Expr::Var(prev_ok)));
-                stack.push(stack_var);
-            }
-            Instruction::Print => {
-                ensure_stack_depth_ssa(&mut stack, 1, &mut inputs_needed, &mut steps[0].bindings);
-                stack.pop();
-                bindings.push((ok_var.clone(), Expr::Var(prev_ok)));
-            }
-            Instruction::Panic => {
-                bindings.push((ok_var.clone(), Expr::Bool(false)));
-            }
-            Instruction::Assert => {
-                ensure_stack_depth_ssa(&mut stack, 1, &mut inputs_needed, &mut steps[0].bindings);
-                let cond_var = stack.pop().unwrap();
-                bindings.push((
-                    ok_var.clone(),
-                    Expr::Call(
-                        "and".to_string(),
-                        vec![
-                            Expr::Var(prev_ok),
-                            Expr::Call("val_is_true".to_string(), vec![Expr::Var(cond_var)]),
-                        ],
-                    ),
-                ));
-            }
-            Instruction::AssertEqual => {
-                ensure_stack_depth_ssa(&mut stack, 2, &mut inputs_needed, &mut steps[0].bindings);
-                let b_var = stack.pop().unwrap();
-                let a_var = stack.pop().unwrap();
-                let eq = Expr::Call("val_equal".to_string(), vec![Expr::Var(a_var), Expr::Var(b_var)]);
-                bindings.push((
-                    ok_var.clone(),
-                    Expr::Call(
-                        "and".to_string(),
-                        vec![
-                            Expr::Var(prev_ok),
-                            Expr::Call("val_is_true".to_string(), vec![eq]),
-                        ],
-                    ),
-                ));
+                let n = *n;
+                while stack.len() < n + 1 {
+                    stack.insert(0, format!("in_inferred_{}", inputs_needed));
+                    inputs_needed += 1;
+                }
+                let val = stack.remove(stack.len() - 1 - n);
+                stack.push(val);
             }
             Instruction::Tuple(n) => {
-                ensure_stack_depth_ssa(&mut stack, *n, &mut inputs_needed, &mut steps[0].bindings);
-                let mut elms = Vec::new();
-                for _ in 0..*n {
-                    elms.push(Expr::Var(stack.pop().unwrap()));
+                let n = *n;
+                for _ in 0..n {
+                    stack.pop();
                 }
-                let stack_var = format!("s_{}_0", step_idx);
-                let op = if *n == 0 {
-                    Expr::Call("val_tuple0".to_string(), vec![])
-                } else {
-                    Expr::Call(format!("val_tuple{}", n), elms)
-                };
-                bindings.push((stack_var.clone(), op));
-                bindings.push((ok_var.clone(), Expr::Var(prev_ok)));
-                stack.push(stack_var);
+                stack.push("tuple".to_string());
             }
             Instruction::Untuple(n) => {
-                ensure_stack_depth_ssa(&mut stack, 1, &mut inputs_needed, &mut steps[0].bindings);
-                let t_var = stack.pop().unwrap();
-                for i in (0..*n).rev() {
-                    let stack_var = format!("s_{}_{}", step_idx, i);
-                    let op = Expr::Call(format!("val_getTuple{}_{}", n, i), vec![Expr::Var(t_var.clone())]);
-                    bindings.push((stack_var.clone(), op));
-                    stack.push(stack_var);
+                let n = *n;
+                stack.pop();
+                for _ in 0..n {
+                    stack.push("component".to_string());
                 }
-                bindings.push((ok_var.clone(), Expr::Var(prev_ok)));
-            }
-            Instruction::SymbolLen => {
-                ensure_stack_depth_ssa(&mut stack, 1, &mut inputs_needed, &mut steps[0].bindings);
-                let sym_var = stack.pop().unwrap();
-                let stack_var = format!("s_{}_0", step_idx);
-                bindings.push((stack_var.clone(), Expr::Call("val_symbol_len".to_string(), vec![Expr::Var(sym_var)])));
-                bindings.push((ok_var.clone(), Expr::Var(prev_ok)));
-                stack.push(stack_var);
-            }
-            Instruction::IsInt | Instruction::IsBool | Instruction::IsFloat |
-            Instruction::IsSymbol | Instruction::IsTuple | Instruction::TupleLength => {
-                ensure_stack_depth_ssa(&mut stack, 1, &mut inputs_needed, &mut steps[0].bindings);
-                let val_var = stack.pop().unwrap();
-                let stack_var = format!("s_{}_0", step_idx);
-                let op = match inst {
-                    Instruction::IsInt => "val_is_int",
-                    Instruction::IsBool => "val_is_bool",
-                    Instruction::IsFloat => "val_is_float",
-                    Instruction::IsSymbol => "val_is_symbol",
-                    Instruction::IsTuple => "val_is_tuple",
-                    Instruction::TupleLength => "val_tuple_length",
-                    _ => unreachable!(),
-                };
-                bindings.push((stack_var.clone(), Expr::Call(op.to_string(), vec![Expr::Var(val_var)])));
-                bindings.push((ok_var.clone(), Expr::Var(prev_ok)));
-                stack.push(stack_var);
-            }
-            Instruction::SymbolCharAt => {
-                ensure_stack_depth_ssa(&mut stack, 2, &mut inputs_needed, &mut steps[0].bindings);
-                let idx_var = stack.pop().unwrap();
-                let sym_var = stack.pop().unwrap();
-                let stack_var = format!("s_{}_0", step_idx);
-                bindings.push((stack_var.clone(), Expr::Call("val_symbol_char_at".to_string(), vec![Expr::Var(sym_var), Expr::Var(idx_var)])));
-                bindings.push((ok_var.clone(), Expr::Var(prev_ok)));
-                stack.push(stack_var);
             }
             Instruction::Jump(target) => {
                 let &(n_t, m_t) = arity_map.get(target).ok_or_else(|| {
                     format!("Internal error: dependency sentence arity not found for jump to target {:?}", target)
                 })?;
-                ensure_stack_depth_ssa(&mut stack, n_t, &mut inputs_needed, &mut steps[0].bindings);
-                let mut args = Vec::new();
+                while stack.len() < n_t {
+                    stack.insert(0, format!("in_inferred_{}", inputs_needed));
+                    inputs_needed += 1;
+                }
                 for _ in 0..n_t {
-                    args.push(Expr::Var(stack.pop().unwrap()));
+                    stack.pop();
                 }
-                args.reverse();
-                let target_name = get_sentence_name(*target, library);
-                for i in (0..m_t).rev() {
-                    let stack_var = format!("s_{}_{}", step_idx, i);
-                    let op = Expr::Call(format!("|{}_out_{}|", target_name, i), args.clone());
-                    bindings.push((stack_var.clone(), op));
-                    stack.push(stack_var);
+                for _ in 0..m_t {
+                    stack.push("result".to_string());
                 }
-                bindings.push((ok_var.clone(), Expr::Var(prev_ok)));
             }
             Instruction::Branch(then_t, else_t) => {
-                ensure_stack_depth_ssa(&mut stack, 1, &mut inputs_needed, &mut steps[0].bindings);
-                let cond_var = stack.pop().unwrap();
+                while stack.len() < 1 {
+                    stack.insert(0, format!("in_inferred_{}", inputs_needed));
+                    inputs_needed += 1;
+                }
+                stack.pop(); // cond
 
                 let &(n_then, m_then) = arity_map.get(then_t).ok_or_else(|| {
                     format!("Internal error: dependency sentence arity not found for branch target {:?}", then_t)
@@ -757,124 +1098,73 @@ fn translate_sentence(
                 })?;
 
                 let max_n = std::cmp::max(n_then, n_else);
-                ensure_stack_depth_ssa(&mut stack, max_n, &mut inputs_needed, &mut steps[0].bindings);
-
-                let mut then_args = Vec::new();
-                for i in (stack.len() - n_then)..stack.len() {
-                    then_args.push(Expr::Var(stack[i].clone()));
+                while stack.len() < max_n {
+                    stack.insert(0, format!("in_inferred_{}", inputs_needed));
+                    inputs_needed += 1;
                 }
-
-                let mut else_args = Vec::new();
-                for i in (stack.len() - n_else)..stack.len() {
-                    else_args.push(Expr::Var(stack[i].clone()));
-                }
-
                 for _ in 0..max_n {
                     stack.pop();
                 }
-
-                let then_name = get_sentence_name(*then_t, library);
-                let else_name = get_sentence_name(*else_t, library);
-
                 let max_m = std::cmp::max(m_then, m_else);
-
-                for i in (0..max_m).rev() {
-                    let stack_var = format!("s_{}_{}", step_idx, i);
-                    let then_expr = if i < m_then {
-                        Expr::Call(format!("|{}_out_{}|", then_name, i), then_args.clone())
-                    } else {
-                        Expr::Call("Panic".to_string(), vec![])
-                    };
-                    let else_expr = if i < m_else {
-                        Expr::Call(format!("|{}_out_{}|", else_name, i), else_args.clone())
-                    } else {
-                        Expr::Call("Panic".to_string(), vec![])
-                    };
-                    let cond_expr = Expr::Cond(
-                        Box::new(Expr::Var(cond_var.clone())),
-                        Box::new(then_expr),
-                        Box::new(else_expr)
-                    );
-                    bindings.push((stack_var.clone(), cond_expr));
-                    stack.push(stack_var);
+                for _ in 0..max_m {
+                    stack.push("branch_result".to_string());
                 }
-
-                bindings.push((
-                    ok_var.clone(),
-                    Expr::Call(
-                        "and".to_string(),
-                        vec![
-                            Expr::Var(prev_ok),
-                            Expr::Call("is-Ok".to_string(), vec![Expr::Var(cond_var)]),
-                        ],
-                    ),
-                ));
+            }
+            Instruction::Add | Instruction::Subtract | Instruction::Multiply | Instruction::Divide | Instruction::Modulo |
+            Instruction::Equal | Instruction::Less | Instruction::Greater | Instruction::And | Instruction::Or => {
+                while stack.len() < 2 {
+                    stack.insert(0, format!("in_inferred_{}", inputs_needed));
+                    inputs_needed += 1;
+                }
+                stack.pop();
+                stack.pop();
+                stack.push("op_result".to_string());
+            }
+            Instruction::Negate | Instruction::Not | Instruction::IsInt | Instruction::IsBool |
+            Instruction::IsSymbol | Instruction::IsFloat | Instruction::IsTuple |
+            Instruction::TupleLength | Instruction::SymbolLen | Instruction::SymbolCharAt => {
+                let n_ops = match inst {
+                    Instruction::SymbolCharAt => 2,
+                    _ => 1,
+                };
+                while stack.len() < n_ops {
+                    stack.insert(0, format!("in_inferred_{}", inputs_needed));
+                    inputs_needed += 1;
+                }
+                for _ in 0..n_ops {
+                    stack.pop();
+                }
+                stack.push("op_result".to_string());
+            }
+            Instruction::Panic => {
+                // Aborts execution, doesn't affect stack layout
+            }
+            Instruction::Assert => {
+                while stack.len() < 1 {
+                    stack.insert(0, format!("in_inferred_{}", inputs_needed));
+                    inputs_needed += 1;
+                }
+                stack.pop();
+            }
+            Instruction::AssertEqual => {
+                while stack.len() < 2 {
+                    stack.insert(0, format!("in_inferred_{}", inputs_needed));
+                    inputs_needed += 1;
+                }
+                stack.pop();
+                stack.pop();
+            }
+            Instruction::Print => {
+                while stack.len() < 1 {
+                    stack.insert(0, format!("in_inferred_{}", inputs_needed));
+                    inputs_needed += 1;
+                }
+                stack.pop();
             }
         }
-
-        steps.push(Step { bindings });
-        step_idx += 1;
     }
-
-    let n = inputs_needed;
-    let m = stack.len();
-
-    let mut args_str = String::new();
-    for i in 0..n {
-        args_str.push_str(&format!("(in_{} Result) ", i));
-    }
-    let args_str = args_str.trim_end();
-
-    let mut definitions = String::new();
-    for i in 0..m {
-        let expr_var = &stack[stack.len() - 1 - i];
-        let final_body = format!("(ite {} {} Panic)", ok_var, expr_var);
-        let nested_body = format_nested_lets(&steps, 0, &final_body, float_to_id);
-
-        definitions.push_str(&format!(
-            "(define-fun |{}_out_{}| ({}) Result {})\n",
-            name, i, args_str, nested_body
-        ));
-    }
-
-    Ok((definitions, (n, m)))
-}
-
-fn expr_to_smt(expr: &Expr, float_to_id: &mut HashMap<String, usize>) -> String {
-    match expr {
-        Expr::Int(val) => format!("{}", val),
-        Expr::Bool(val) => format!("{}", val),
-        Expr::Float(f) => {
-            let next_id = float_to_id.len();
-            let id = *float_to_id.entry(f.clone()).or_insert(next_id);
-            format!("{}", id)
-        }
-        Expr::Var(name) => {
-            if name.contains("::") {
-                format!("|{}|", name)
-            } else {
-                name.clone()
-            }
-        }
-        Expr::Call(name, args) => {
-            let args_smt: Vec<String> = args.iter().map(|arg| expr_to_smt(arg, float_to_id)).collect();
-            if args_smt.is_empty() {
-                name.clone()
-            } else {
-                format!("({} {})", name, args_smt.join(" "))
-            }
-        }
-        Expr::Cond(c, t, e) => {
-            // (val_cond c t e)
-            format!(
-                "(val_cond {} {} {})",
-                expr_to_smt(c, float_to_id),
-                expr_to_smt(t, float_to_id),
-                expr_to_smt(e, float_to_id)
-            )
-        }
-        _ => panic!("Internal error: unexpected AST expression in z3ify translation: {:?}", expr),
-    }
+    
+    Ok((inputs_needed, stack.len()))
 }
 
 #[cfg(test)]
@@ -883,7 +1173,7 @@ mod tests {
     use crate::assembly::assemble;
 
     #[test]
-    fn test_safety2_z3ify_generation() {
+    fn test_safety2_verification() {
         let code = r#"
             #[arity(1, 1)]
             sentence safe_for_foo {
@@ -898,21 +1188,8 @@ mod tests {
             }
         "#;
         let library = assemble(code).unwrap();
-        let smt = generate_z3ify(&library).unwrap();
-
-        // Check that both functions were translated
-        assert!(smt.contains("define-fun |safe_for_foo_out_0|"));
-        assert!(smt.contains("define-fun |foo_out_0|"));
-
-        // Check that the safety2 check block is present
-        assert!(smt.contains(";; Safety2 Checks"));
-        assert!(smt.contains("Verify that 'foo' never panics when 'safe_for_foo' returns true"));
-        assert!(smt.contains("(push)"));
-        assert!(smt.contains("(declare-const x Val)"));
-        assert!(smt.contains("(assert (= (|safe_for_foo_out_0| (Ok x)) (Ok (ValBool true))))"));
-        assert!(smt.contains("(assert (is-Panic (|foo_out_0| (Ok x))))"));
-        assert!(smt.contains("(check-sat)"));
-        assert!(smt.contains("(pop)"));
+        let res = check_safety2(&library);
+        assert!(res.is_ok());
     }
 
     #[test]
@@ -931,7 +1208,7 @@ mod tests {
             }
         "#;
         let library = assemble(code).unwrap();
-        let res = generate_z3ify(&library);
+        let res = check_safety2(&library);
         assert!(res.is_err());
         assert!(res.unwrap_err().contains("Safety function 'safe_invalid' must have arity 1 -> 1"));
     }
