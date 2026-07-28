@@ -10,7 +10,6 @@ pub use assembly::{assemble, assemble_with_path};
 pub use library::{Library, Sentence, SentenceIndex, Annotation, Arity};
 pub use opcode::Instruction;
 pub use value::Value;
-pub use safety::check_safety;
 
 #[cfg(test)]
 mod tests {

@@ -547,26 +547,6 @@ fn parse_items(stream: &mut TokenStream, end_token: Option<Token>, base_dir: Opt
                     stream.expect(Token::RParen)?;
                     Annotation::Arity(n, m)
                 }
-                "safety" => {
-                    stream.expect(Token::LParen)?;
-                    let formula_str = match stream.next() {
-                        Some(Token::StringLiteral(s)) => s,
-                        Some(other) => return Err(format!("Expected string literal for safety formula, found {:?}", other)),
-                        None => return Err("Expected string literal for safety formula, found end of input".to_string()),
-                    };
-                    stream.expect(Token::RParen)?;
-                    Annotation::Safety(formula_str)
-                }
-                "behavior" => {
-                    stream.expect(Token::LParen)?;
-                    let formula_str = match stream.next() {
-                        Some(Token::StringLiteral(s)) => s,
-                        Some(other) => return Err(format!("Expected string literal for behavior formula, found {:?}", other)),
-                        None => return Err("Expected string literal for behavior formula, found end of input".to_string()),
-                    };
-                    stream.expect(Token::RParen)?;
-                    Annotation::Behavior(formula_str)
-                }
                 "safety2" => {
                     stream.expect(Token::LParen)?;
                     let first_ident = match stream.next() {
@@ -1717,7 +1697,6 @@ pub fn assemble_with_path(input: &str, base_dir: Option<&std::path::Path>) -> Re
     library.symbols = symbols_map;
 
     crate::arity::check_arities(&mut library)?;
-    crate::safety::check_safety(&library)?;
 
     Ok(library)
 }

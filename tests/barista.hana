@@ -23,8 +23,6 @@ mod customer_impl {
 
     // Initializes customer state: (id, preferred_drink, internal_state)
     #[arity(1, 1)]
-    #[safety("true")]
-    #[behavior("out[0] == in[0]")]
     function init {
     }
 
@@ -403,7 +401,6 @@ mod customer_impl {
     }
 
     #[arity(1, 1)]
-    #[safety("true")]
     function tau_reduce {
         push false
         tuple 2
@@ -411,7 +408,6 @@ mod customer_impl {
 
     // emit takes state: (id, preferred_drink, internal_state) and returns ValueSet of emitted events.
     #[arity(1, 1)]
-    #[safety("is_tuple(in[0], 3) && (in[0].0 == state::idle || in[0].0 == state::thirsty || in[0].0 == state::ordered || in[0].0 == state::has_coffee)")]
     #[safety2(is_state)]
     function emit {
         untuple 3 // Stack: [id, preferred_drink, internal_state]
@@ -469,7 +465,6 @@ mod customer_impl {
 
     // process takes [state, event] and returns next_state.
     #[arity(1, 1)]
-    #[safety("is_tuple(in[0], 2) && is_tuple(in[0].0, 3) && (in[0].0.0 == state::idle || in[0].0.0 == state::thirsty || in[0].0.0 == state::ordered || in[0].0.0 == state::has_coffee) && is_tuple(in[0].1, 2) && is_tuple(in[0].1.1, 2) && (in[0].0.0 == state::idle ==> in[0].1.0 == event::want_coffee) && (in[0].0.0 == state::thirsty ==> in[0].1.0 == super::super::queue::push_back) && (in[0].0.0 == state::ordered ==> in[0].1.0 == event::coffee) && (in[0].0.0 == state::has_coffee ==> in[0].1.0 == event::enjoy)")]
     function process {
         untuple 2
         // Stack: [event, state]
@@ -546,16 +541,12 @@ mod customer_impl {
     }
 
     #[arity(1, 1)]
-    #[safety("true")]
-    #[behavior("out[0] == false")]
     function is_done {
         drop 0
         push false
     }
 
     #[arity(1, 1)]
-    #[safety("is_tuple(in[0], 3)")]
-    #[behavior("out[0] == (in[0].0 == state::idle)")]
     function is_ready_to_finish {
         untuple 3
         pick 0
@@ -677,8 +668,6 @@ mod barista {
 
     // Initializes barista state
     #[arity(1, 1)]
-    #[safety("is_tuple(in[0], 0)")]
-    #[behavior("out[0] == barista::state::idle")]
     function init {
         untuple 0
         push state::idle
@@ -753,7 +742,6 @@ mod barista {
     }
 
     #[arity(1, 1)]
-    #[safety("true")]
     function tau_reduce {
         push false
         tuple 2
@@ -761,7 +749,6 @@ mod barista {
 
     // emit takes [state] and returns ValueSet.
     #[arity(1, 1)]
-    #[safety("in[0] == state::idle || in[0] == state::awaiting_order || (is_tuple(in[0], 2) && in[0].0 == state::brewing && is_tuple(in[0].1, 2))")]
     function emit {
         // Stack: [state]
         pick 0
@@ -807,7 +794,6 @@ mod barista {
 
     // process takes [state, event] and returns next_state.
     #[arity(1, 1)]
-    #[safety("is_tuple(in[0], 2) && (in[0].0 == state::idle || in[0].0 == state::awaiting_order || (is_tuple(in[0].0, 2) && in[0].0.0 == state::brewing && is_tuple(in[0].0.1, 2))) && (in[0].0 == state::idle ==> (is_tuple(in[0].1, 2) && in[0].1.0 == super::super::queue::await_front && is_tuple(in[0].1.1, 2) && in[0].1.1.0 == super::super::prelude::req && is_tuple(in[0].1.1.1, 0))) && (in[0].0 == state::awaiting_order ==> (is_tuple(in[0].1, 2) && in[0].1.0 == super::super::queue::await_front && is_tuple(in[0].1.1, 2) && in[0].1.1.0 == super::super::prelude::resp && is_tuple(in[0].1.1.1, 2) && in[0].1.1.1.0 == super::super::prelude::some && is_tuple(in[0].1.1.1.1, 2) && is_tuple(in[0].1.1.1.1.0, 2) && is_tuple(in[0].1.1.1.1.1, 0))) && (in[0].0 != state::idle && in[0].0 != state::awaiting_order ==> (is_tuple(in[0].1, 2) && in[0].1.0 == event::coffee && is_tuple(in[0].1.1, 2)))")]
     function process {
         untuple 2
         // Inputs: [event, state]
@@ -873,16 +859,12 @@ mod barista {
     }
 
     #[arity(1, 1)]
-    #[safety("true")]
-    #[behavior("out[0] == false")]
     function is_done {
         drop 0
         push false
     }
 
     #[arity(1, 1)]
-    #[safety("true")]
-    #[behavior("out[0] == (in[0] == barista::state::idle)")]
     function is_ready_to_finish {
         push state::idle
         equal

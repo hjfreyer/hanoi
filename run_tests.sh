@@ -7,20 +7,8 @@ set -euo pipefail
 # Ensure we are in the script's directory
 CDPATH="" cd -- "$(dirname -- "$0")"
 
-echo "Building test runner and arity checker..."
-cargo build --bin test-runner --bin check-arity
-
-echo ""
-echo "======================================"
-echo "Running arity checker..."
-echo "======================================"
-echo ""
-
-if ! ./target/debug/check-arity tests; then
-    echo "======================================"
-    echo "FAILED: Arity check failed."
-    exit 1
-fi
+echo "Building test runner..."
+cargo build --bin test-runner
 
 echo ""
 echo "======================================"

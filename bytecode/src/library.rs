@@ -14,8 +14,6 @@ pub type Sentence = Vec<Instruction>;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Annotation {
     Arity(i64, i64),
-    Safety(String),
-    Behavior(String),
     Z3ify,
     Recursive,
     Safety2(String),
