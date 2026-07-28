@@ -58,6 +58,7 @@ fn check_sentence_safety(s_idx: SentenceIndex, library: &Library) -> Result<(), 
                 behavior_contract = resolve_symbols_in_formula(&parse_formula_string(b)?, &library.symbols, current_module);
             }
             Annotation::Z3ify => {}
+            Annotation::Recursive => {}
         }
     }
 

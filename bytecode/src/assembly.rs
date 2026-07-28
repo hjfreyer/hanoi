@@ -570,6 +570,9 @@ fn parse_items(stream: &mut TokenStream, end_token: Option<Token>, base_dir: Opt
                 "z3ify" => {
                     Annotation::Z3ify
                 }
+                "recursive" => {
+                    Annotation::Recursive
+                }
                 other => return Err(format!("Unsupported annotation '{}'", other)),
             };
             stream.expect(Token::RBracket)?;
@@ -1408,6 +1411,8 @@ struct Compiler<'a> {
     root_module: &'a Module,
     sentences: Vec<Vec<Instruction>>,
     names: Vec<String>,
+    annotations: Vec<Vec<Annotation>>,
+    current_parent_idx: Option<SentenceIndex>,
 }
 
 impl<'a> Compiler<'a> {
@@ -1561,7 +1566,24 @@ impl<'a> Compiler<'a> {
                 let new_idx = SentenceIndex::from(self.sentences.len());
                 self.sentences.push(Vec::new());
                 self.names.push("<inline>".to_string());
-                let compiled_body = self.compile_sentence_body(current_path, parsed_sentence.instructions)?;
+
+                let mut inline_anns = Vec::new();
+                if let Some(parent_idx) = self.current_parent_idx {
+                    let parent_idx_usize: usize = parent_idx.into();
+                    if parent_idx_usize < self.annotations.len() {
+                        if self.annotations[parent_idx_usize].iter().any(|ann| matches!(ann, Annotation::Recursive)) {
+                            inline_anns.push(Annotation::Recursive);
+                        }
+                    }
+                }
+                self.annotations.push(inline_anns);
+
+                let prev_parent = self.current_parent_idx;
+                self.current_parent_idx = Some(new_idx);
+                let compiled_body = self.compile_sentence_body(current_path, parsed_sentence.instructions);
+                self.current_parent_idx = prev_parent;
+
+                let compiled_body = compiled_body?;
                 let idx_usize: usize = new_idx.into();
                 self.sentences[idx_usize] = compiled_body;
                 Ok(new_idx)
@@ -1623,16 +1645,19 @@ pub fn assemble_with_path(input: &str, base_dir: Option<&std::path::Path>) -> Re
         root_module: &root_module,
         sentences: Vec::new(),
         names: Vec::new(),
+        annotations: Vec::new(),
+        current_parent_idx: None,
     };
 
     // Pre-allocate space for all named sentences
     compiler.sentences.resize(sentence_counter, Vec::new());
     compiler.names.resize(sentence_counter, String::new());
+    compiler.annotations.resize(sentence_counter, Vec::new());
 
-    let mut annotations = typed_index_collections::TiVec::new();
-    annotations.resize(sentence_counter, Vec::new());
     // Compile instructions recursively
     for (idx, (path, sentence)) in flat_sentences.into_iter().enumerate() {
+        compiler.annotations[idx] = sentence.annotations.clone();
+        compiler.current_parent_idx = Some(SentenceIndex::from(idx));
         let compiled_instructions = compiler.compile_sentence_body(&path, sentence.body.instructions)?;
         compiler.sentences[idx] = compiled_instructions;
         let fq_name = if path.is_empty() {
@@ -1641,15 +1666,19 @@ pub fn assemble_with_path(input: &str, base_dir: Option<&std::path::Path>) -> Re
             format!("{}::{}", path.join("::"), sentence.name)
         };
         compiler.names[idx] = fq_name;
-        annotations[SentenceIndex::from(idx)] = sentence.annotations;
     }
 
     let mut library = Library::new();
     for s in compiler.sentences {
         library.sentences.push(s);
     }
-    annotations.resize(library.sentences.len(), Vec::new());
-    
+
+    let mut final_annotations = typed_index_collections::TiVec::new();
+    for ann in compiler.annotations {
+        final_annotations.push(ann);
+    }
+    final_annotations.resize(library.sentences.len(), Vec::new());
+
     let mut final_names = typed_index_collections::TiVec::new();
     for n in compiler.names {
         final_names.push(n);
@@ -1658,14 +1687,14 @@ pub fn assemble_with_path(input: &str, base_dir: Option<&std::path::Path>) -> Re
     library.exports = exports;
     library.tests = tests;
     library.test_machines = test_machines;
-    library.annotations = annotations;
+    library.annotations = final_annotations;
 
     let mut symbols_map = HashMap::new();
     let mut path_tracker = Vec::new();
     collect_symbols(&root_module, &mut path_tracker, &mut symbols_map);
     library.symbols = symbols_map;
 
-    crate::arity::check_arities(&library)?;
+    crate::arity::check_arities(&mut library)?;
     crate::safety::check_safety(&library)?;
 
     Ok(library)

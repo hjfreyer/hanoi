@@ -106,6 +106,7 @@ mod sut_and_harness compose_concurrent(sut, harness, sync_set);
 
 mod test0 compose_hidden(sut_and_harness, sync_set);
 
+#[recursive]
 sentence run_tau_reductions {
     // Stack: [state]
     pick 0
@@ -122,6 +123,7 @@ sentence run_tau_reductions {
     }
 }
 
+#[recursive]
 test sentence verify_day1_manually {
     tuple 0
     jump test0::init

@@ -547,6 +547,7 @@ mod queue {
 }
 
 // Helper to drive the queue's tau reductions in tests
+#[recursive]
 sentence drive_reductions {
     // Stack: [state]
     pick 0
@@ -562,6 +563,7 @@ sentence drive_reductions {
     }
 }
 
+#[recursive]
 test sentence verify_queue_machine {
     tuple 0
     jump queue::init

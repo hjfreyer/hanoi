@@ -736,6 +736,7 @@ sentence hidden_events {
 mod hidden compose_hidden(concurrent, hidden_events);
 
 // Helpers to drive tau transitions in tests
+#[recursive]
 sentence drive_tau {
     // Stack: [state]
     pick 0
@@ -749,6 +750,7 @@ sentence drive_tau {
     }
 }
 
+#[recursive]
 sentence drive_concurrent_tau {
     pick 0
     jump concurrent::tau_reduce
@@ -761,6 +763,7 @@ sentence drive_concurrent_tau {
     }
 }
 
+#[recursive]
 test sentence verify_hidden_system {
     // 1. Initialize joint state
     tuple 0
@@ -940,6 +943,7 @@ test sentence verify_hidden_system {
 }
 
 // Test the concurrent joint Customer-Queue-Barista system
+#[recursive]
 test sentence verify_concurrent_system {
     // 1. Initialize joint state
     tuple 0

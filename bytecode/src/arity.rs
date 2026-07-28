@@ -1,49 +1,93 @@
 use std::collections::{HashMap, HashSet};
-use crate::library::{Library, SentenceIndex, Annotation};
+use crate::library::{Library, SentenceIndex, Annotation, Arity};
 use crate::opcode::Instruction;
 
-/// Checks whether all annotated sentences in the library obey their declared arity.
-pub fn check_arities(library: &Library) -> Result<(), String> {
+/// Checks whether all sentences in the library obey their declared arity,
+/// and populates the instruction_arities field in Library.
+pub fn check_arities(library: &mut Library) -> Result<(), String> {
     let mut memo = HashMap::new();
+    let mut instruction_arities = HashMap::new();
 
-    for (s_idx_raw, annotations) in library.annotations.iter().enumerate() {
+    // 1. Check/infer all non-recursive sentences
+    for s_idx_raw in 0..library.sentences.len() {
         let s_idx = SentenceIndex::from(s_idx_raw);
-        for ann in annotations {
-            let Annotation::Arity(n, m) = ann else { continue; };
-            let name = &library.names[s_idx];
-            let mut in_progress = HashSet::new();
-            let (inferred_n, inferred_m, is_panic) = get_or_infer_arity(s_idx, library, &mut memo, &mut in_progress)
-                .map_err(|e| format!("Error checking arity for sentence '{}': {}", name, e))?;
+        if is_recursive(s_idx, library) {
+            continue;
+        }
+        let mut in_progress = HashSet::new();
+        let inferred = get_or_infer_arity(
+            s_idx,
+            library,
+            &mut memo,
+            &mut in_progress,
+            &mut instruction_arities,
+        )?;
 
-            if inferred_n > *n {
-                return Err(format!(
-                    "Sentence '{}' (index {:?}) requires {} inputs, which exceeds its annotated arity {}",
-                    name, s_idx, inferred_n, n
-                ));
-            }
+        // Verify matches for #[arity(n, m)] annotations
+        for ann in &library.annotations[s_idx] {
+            if let Annotation::Arity(n, m) = ann {
+                let name = &library.names[s_idx];
+                match inferred {
+                    Arity::Panic { inputs: inferred_n } => {
+                        if inferred_n > *n {
+                            return Err(format!(
+                                "Sentence '{}' (index {:?}) requires {} inputs, which exceeds its annotated arity {}",
+                                name, s_idx, inferred_n, n
+                            ));
+                        }
+                    }
+                    Arity::Normal { inputs: inferred_n, outputs: inferred_m } => {
+                        if inferred_n > *n {
+                            return Err(format!(
+                                "Sentence '{}' (index {:?}) requires {} inputs, which exceeds its annotated arity {}",
+                                name, s_idx, inferred_n, n
+                            ));
+                        }
 
-            if !is_panic {
-                let net_change = inferred_m - inferred_n;
-                let expected_net_change = m - n;
-                if net_change != expected_net_change {
-                    return Err(format!(
-                        "Sentence '{}' (index {:?}) has net stack change of {}, but annotated arity {} -> {} expects net change of {}",
-                        name, s_idx, net_change, n, m, expected_net_change
-                    ));
+                        let net_change = inferred_m - inferred_n;
+                        let expected_net_change = m - n;
+                        if net_change != expected_net_change {
+                            return Err(format!(
+                                "Sentence '{}' (index {:?}) has net stack change of {}, but annotated arity {} -> {} expects net change of {}",
+                                name, s_idx, net_change, n, m, expected_net_change
+                            ));
+                        }
+                    }
                 }
             }
         }
     }
 
+    // 2. Store final instruction arities into library.instruction_arities.
+    // Recursive/opted-out sentences receive None, while checked ones receive Some(vec).
+    let mut final_arities = typed_index_collections::TiVec::with_capacity(library.sentences.len());
+    for s_idx_raw in 0..library.sentences.len() {
+        let s_idx = SentenceIndex::from(s_idx_raw);
+        if is_recursive(s_idx, library) {
+            final_arities.push(None);
+        } else {
+            let arities = instruction_arities.remove(&s_idx);
+            final_arities.push(arities);
+        }
+    }
+    library.instruction_arities = final_arities;
+
     Ok(())
+}
+
+fn is_recursive(s_idx: SentenceIndex, library: &Library) -> bool {
+    library.annotations[s_idx]
+        .iter()
+        .any(|ann| matches!(ann, Annotation::Recursive))
 }
 
 fn get_or_infer_arity(
     s_idx: SentenceIndex,
     library: &Library,
-    memo: &mut HashMap<SentenceIndex, (i64, i64, bool)>,
+    memo: &mut HashMap<SentenceIndex, Arity>,
     in_progress: &mut HashSet<SentenceIndex>,
-) -> Result<(i64, i64, bool), String> {
+    instruction_arities: &mut HashMap<SentenceIndex, Vec<Arity>>,
+) -> Result<Arity, String> {
     if let Some(&arity) = memo.get(&s_idx) {
         return Ok(arity);
     }
@@ -55,26 +99,36 @@ fn get_or_infer_arity(
     }
 
     in_progress.insert(s_idx);
-    let result = infer_arity_of_instructions(s_idx, library, memo, in_progress)?;
+    let (result, arities) = infer_arity_of_instructions(
+        s_idx,
+        library,
+        memo,
+        in_progress,
+        instruction_arities,
+    )?;
     in_progress.remove(&s_idx);
     memo.insert(s_idx, result);
+    instruction_arities.insert(s_idx, arities);
     Ok(result)
 }
 
 fn infer_arity_of_instructions(
     s_idx: SentenceIndex,
     library: &Library,
-    memo: &mut HashMap<SentenceIndex, (i64, i64, bool)>,
+    memo: &mut HashMap<SentenceIndex, Arity>,
     in_progress: &mut HashSet<SentenceIndex>,
-) -> Result<(i64, i64, bool), String> {
+    instruction_arities: &mut HashMap<SentenceIndex, Vec<Arity>>,
+) -> Result<(Arity, Vec<Arity>), String> {
     let sentence = &library.sentences[s_idx];
     let mut initial_req = 0i64;
     let mut current_size = 0i64;
+    let mut arities = Vec::new();
 
     for inst in sentence {
-        match inst {
+        let inst_arity = match inst {
             Instruction::Push(_) => {
                 current_size += 1;
+                Arity::Normal { inputs: 0, outputs: 1 }
             }
             Instruction::Drop(depth) => {
                 let depth = *depth as i64;
@@ -85,6 +139,7 @@ fn infer_arity_of_instructions(
                     current_size = req;
                 }
                 current_size -= 1;
+                Arity::Normal { inputs: depth + 1, outputs: depth }
             }
             Instruction::Pick(depth) => {
                 let depth = *depth as i64;
@@ -95,6 +150,7 @@ fn infer_arity_of_instructions(
                     current_size = req;
                 }
                 current_size += 1;
+                Arity::Normal { inputs: depth + 1, outputs: depth + 2 }
             }
             Instruction::Roll(depth) => {
                 let depth = *depth as i64;
@@ -104,6 +160,7 @@ fn infer_arity_of_instructions(
                     initial_req += diff;
                     current_size = req;
                 }
+                Arity::Normal { inputs: depth + 1, outputs: depth + 1 }
             }
             Instruction::Equal | Instruction::Greater | Instruction::Less |
             Instruction::Add | Instruction::Subtract | Instruction::Multiply |
@@ -116,6 +173,7 @@ fn infer_arity_of_instructions(
                     current_size = req;
                 }
                 current_size -= 1;
+                Arity::Normal { inputs: 2, outputs: 1 }
             }
             Instruction::Not | Instruction::Negate | Instruction::Print |
             Instruction::SymbolLen | Instruction::IsInt | Instruction::IsBool |
@@ -127,6 +185,7 @@ fn infer_arity_of_instructions(
                     initial_req += diff;
                     current_size = req;
                 }
+                Arity::Normal { inputs: 1, outputs: 1 }
             }
             Instruction::Assert => {
                 let req = 1;
@@ -136,6 +195,7 @@ fn infer_arity_of_instructions(
                     current_size = req;
                 }
                 current_size -= 1;
+                Arity::Normal { inputs: 1, outputs: 0 }
             }
             Instruction::AssertEqual => {
                 let req = 2;
@@ -145,20 +205,30 @@ fn infer_arity_of_instructions(
                     current_size = req;
                 }
                 current_size -= 2;
+                Arity::Normal { inputs: 2, outputs: 0 }
             }
             Instruction::Panic => {
-                // If annotated, check if initial_req <= N. If so, return annotated arity.
-                if let Some(Annotation::Arity(n, m)) = library.annotations[s_idx].first() {
-                    if initial_req <= *n {
-                        return Ok((*n, *m, true));
+                let mut annotated_arity = None;
+                for ann in &library.annotations[s_idx] {
+                    if let Annotation::Arity(n, _) = ann {
+                        annotated_arity = Some(*n);
+                        break;
+                    }
+                }
+                let sentence_arity = if let Some(n) = annotated_arity {
+                    if initial_req <= n {
+                        Arity::Panic { inputs: n }
                     } else {
                         return Err(format!(
                             "Sentence '{}' (index {:?}) requires {} inputs up to panic, which exceeds annotated arity {}",
                             library.names[s_idx], s_idx, initial_req, n
                         ));
                     }
-                }
-                return Ok((initial_req, current_size, true));
+                } else {
+                    Arity::Panic { inputs: initial_req }
+                };
+                arities.push(Arity::Panic { inputs: 0 });
+                return Ok((sentence_arity, arities));
             }
             Instruction::Tuple(len) => {
                 let len = *len as i64;
@@ -169,6 +239,7 @@ fn infer_arity_of_instructions(
                     current_size = req;
                 }
                 current_size = current_size - len + 1;
+                Arity::Normal { inputs: len, outputs: 1 }
             }
             Instruction::Untuple(len) => {
                 let len = *len as i64;
@@ -179,10 +250,26 @@ fn infer_arity_of_instructions(
                     current_size = req;
                 }
                 current_size = current_size - 1 + len;
+                Arity::Normal { inputs: 1, outputs: len }
             }
-
             Instruction::Jump(target) => {
-                let (n_target, m_target, target_panic) = get_or_infer_arity(*target, library, memo, in_progress)?;
+                if is_recursive(*target, library) {
+                    return Err(format!(
+                        "Sentence '{}' calls recursive sentence '{}' but is not annotated with #[recursive]",
+                        library.names[s_idx], library.names[*target]
+                    ));
+                }
+                let target_arity = get_or_infer_arity(
+                    *target,
+                    library,
+                    memo,
+                    in_progress,
+                    instruction_arities,
+                )?;
+                let (n_target, m_target, is_panic_target) = match target_arity {
+                    Arity::Normal { inputs, outputs } => (inputs, outputs, false),
+                    Arity::Panic { inputs } => (inputs, 0, true),
+                };
                 let req = n_target;
                 if current_size < req {
                     let diff = req - current_size;
@@ -190,11 +277,25 @@ fn infer_arity_of_instructions(
                     current_size = req;
                 }
                 current_size = current_size - n_target + m_target;
-                if target_panic {
-                    return Ok((initial_req, current_size, true));
+                if is_panic_target {
+                    arities.push(Arity::Panic { inputs: n_target });
+                    return Ok((Arity::Panic { inputs: initial_req }, arities));
                 }
+                Arity::Normal { inputs: n_target, outputs: m_target }
             }
             Instruction::Branch(then_t, else_t) => {
+                if is_recursive(*then_t, library) {
+                    return Err(format!(
+                        "Sentence '{}' calls recursive sentence '{}' but is not annotated with #[recursive]",
+                        library.names[s_idx], library.names[*then_t]
+                    ));
+                }
+                if is_recursive(*else_t, library) {
+                    return Err(format!(
+                        "Sentence '{}' calls recursive sentence '{}' but is not annotated with #[recursive]",
+                        library.names[s_idx], library.names[*else_t]
+                    ));
+                }
                 let req_cond = 1;
                 if current_size < req_cond {
                     let diff = req_cond - current_size;
@@ -203,35 +304,30 @@ fn infer_arity_of_instructions(
                 }
                 current_size -= 1;
 
-                let (n_then, m_then, panic_then) = get_or_infer_arity(*then_t, library, memo, in_progress)?;
-                let (n_else, m_else, panic_else) = get_or_infer_arity(*else_t, library, memo, in_progress)?;
+                let arity_then = get_or_infer_arity(
+                    *then_t,
+                    library,
+                    memo,
+                    in_progress,
+                    instruction_arities,
+                )?;
+                let arity_else = get_or_infer_arity(
+                    *else_t,
+                    library,
+                    memo,
+                    in_progress,
+                    instruction_arities,
+                )?;
 
-                let (n_branch, m_branch, panic_branch) = match (panic_then, panic_else) {
-                    (true, true) => {
-                        (std::cmp::max(n_then, n_else), 0, true)
-                    }
-                    (true, false) => {
-                        let net_else = m_else - n_else;
-                        let n_b = std::cmp::max(n_then, n_else);
-                        (n_b, n_b + net_else, false)
-                    }
-                    (false, true) => {
-                        let net_then = m_then - n_then;
-                        let n_b = std::cmp::max(n_then, n_else);
-                        (n_b, n_b + net_then, false)
-                    }
-                    (false, false) => {
-                        let net_then = m_then - n_then;
-                        let net_else = m_else - n_else;
-                        if net_then != net_else {
-                            return Err(format!(
-                                "Branch targets have mismatched net stack changes: '{}' (index {:?}) has net change {}, '{}' (index {:?}) has net change {}",
-                                library.names[*then_t], then_t, net_then, library.names[*else_t], else_t, net_else
-                            ));
-                        }
-                        let n_b = std::cmp::max(n_then, n_else);
-                        (n_b, n_b + net_then, false)
-                    }
+                let combined = combine_branch_arities(arity_then, arity_else)
+                    .map_err(|e| format!(
+                        "Branch targets have mismatched net stack changes: {} (then target '{}', else target '{}')",
+                        e, library.names[*then_t], library.names[*else_t]
+                    ))?;
+
+                let (n_branch, m_branch, is_panic_branch) = match combined {
+                    Arity::Normal { inputs, outputs } => (inputs, outputs, false),
+                    Arity::Panic { inputs } => (inputs, 0, true),
                 };
 
                 let req_branch = n_branch;
@@ -241,12 +337,45 @@ fn infer_arity_of_instructions(
                     current_size = req_branch;
                 }
                 current_size = current_size - n_branch + m_branch;
-                if panic_branch {
-                    return Ok((initial_req, current_size, true));
+                if is_panic_branch {
+                    arities.push(Arity::Panic { inputs: 1 + n_branch });
+                    return Ok((Arity::Panic { inputs: initial_req }, arities));
                 }
+                Arity::Normal { inputs: 1 + n_branch, outputs: m_branch }
             }
-        }
+        };
+        arities.push(inst_arity);
     }
 
-    Ok((initial_req, current_size, false))
+    Ok((Arity::Normal { inputs: initial_req, outputs: current_size }, arities))
+}
+
+fn combine_branch_arities(then: Arity, el: Arity) -> Result<Arity, String> {
+    match (then, el) {
+        (Arity::Panic { inputs: n_then }, Arity::Panic { inputs: n_else }) => {
+            Ok(Arity::Panic { inputs: std::cmp::max(n_then, n_else) })
+        }
+        (Arity::Panic { inputs: n_then }, Arity::Normal { inputs: n_else, outputs: m_else }) => {
+            let net_else = m_else - n_else;
+            let n_b = std::cmp::max(n_then, n_else);
+            Ok(Arity::Normal { inputs: n_b, outputs: n_b + net_else })
+        }
+        (Arity::Normal { inputs: n_then, outputs: m_then }, Arity::Panic { inputs: n_else }) => {
+            let net_then = m_then - n_then;
+            let n_b = std::cmp::max(n_then, n_else);
+            Ok(Arity::Normal { inputs: n_b, outputs: n_b + net_then })
+        }
+        (Arity::Normal { inputs: n_then, outputs: m_then }, Arity::Normal { inputs: n_else, outputs: m_else }) => {
+            let net_then = m_then - n_then;
+            let net_else = m_else - n_else;
+            if net_then != net_else {
+                return Err(format!(
+                    "then has net change {}, else has net change {}",
+                    net_then, net_else
+                ));
+            }
+            let n_b = std::cmp::max(n_then, n_else);
+            Ok(Arity::Normal { inputs: n_b, outputs: n_b + net_then })
+        }
+    }
 }

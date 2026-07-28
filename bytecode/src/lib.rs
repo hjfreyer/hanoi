@@ -7,7 +7,7 @@ pub mod safety;
 
 pub use arity::check_arities;
 pub use assembly::{assemble, assemble_with_path};
-pub use library::{Library, Sentence, SentenceIndex, Annotation};
+pub use library::{Library, Sentence, SentenceIndex, Annotation, Arity};
 pub use opcode::Instruction;
 pub use value::Value;
 pub use safety::check_safety;
@@ -86,6 +86,7 @@ mod tests {
     #[test]
     fn test_assemble_nested_branching() {
         let code = r#"
+            #[recursive]
             sentence entry {
                 push true
                 branch {
@@ -259,6 +260,68 @@ mod tests {
         let res = assemble(code);
         assert!(res.is_err());
         assert!(res.unwrap_err().contains("Recursion/cycle detected"));
+    }
+
+    #[test]
+    fn test_recursive_annotation_and_instruction_arities() {
+        // 1. Recursive sentence annotated with #[recursive] compiles successfully
+        let code = r#"
+            #[recursive]
+            sentence rec {
+                jump rec
+            }
+        "#;
+        let res = assemble(code).unwrap();
+        assert_eq!(res.sentences.len(), 1);
+        assert_eq!(res.instruction_arities[SentenceIndex::from(0)], None);
+
+        // 2. Caller of recursive sentence must be annotated with #[recursive]
+        let code2 = r#"
+            #[recursive]
+            sentence rec {
+                jump rec
+            }
+            sentence caller {
+                jump rec
+            }
+        "#;
+        let res2 = assemble(code2);
+        assert!(res2.is_err());
+        assert!(res2.unwrap_err().contains("calls recursive sentence 'rec' but is not annotated with #[recursive]"));
+
+        // 3. Verifying instruction arities are correctly populated for standard instructions
+        let code3 = r#"
+            sentence standard {
+                push 10
+                push 20
+                add
+                drop 0
+            }
+        "#;
+        let res3 = assemble(code3).unwrap();
+        assert_eq!(
+            res3.instruction_arities[SentenceIndex::from(0)],
+            Some(vec![
+                Arity::Normal { inputs: 0, outputs: 1 },
+                Arity::Normal { inputs: 0, outputs: 1 },
+                Arity::Normal { inputs: 2, outputs: 1 },
+                Arity::Normal { inputs: 1, outputs: 0 },
+            ])
+        );
+
+        // 4. Verifying panic arity and _just_ panic sentence arity
+        let code4 = r#"
+            sentence just_panic {
+                panic
+            }
+            #[arity(2, 0)]
+            sentence annotated_panic {
+                panic
+            }
+        "#;
+        let res4 = assemble(code4).unwrap();
+        assert_eq!(res4.instruction_arities[SentenceIndex::from(0)], Some(vec![Arity::Panic { inputs: 0 }]));
+        assert_eq!(res4.instruction_arities[SentenceIndex::from(1)], Some(vec![Arity::Panic { inputs: 0 }]));
     }
 
     #[test]

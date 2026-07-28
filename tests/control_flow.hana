@@ -22,11 +22,13 @@ test sentence conditional_branch {
     assert_eq
 }
 
+#[recursive]
 test sentence recursion_and_returns {
     push 10
     jump recursive_helper
 }
 
+#[recursive]
 sentence recursive_helper {
     // top of stack is decrement counter
     pick 0

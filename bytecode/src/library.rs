@@ -17,6 +17,13 @@ pub enum Annotation {
     Safety(String),
     Behavior(String),
     Z3ify,
+    Recursive,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Arity {
+    Normal { inputs: i64, outputs: i64 },
+    Panic { inputs: i64 },
 }
 
 /// A Library contains a collection of sentences indexed type-safely using `SentenceIndex`.
@@ -29,6 +36,7 @@ pub struct Library {
     pub test_machines: HashSet<String>,
     pub annotations: TiVec<SentenceIndex, Vec<Annotation>>,
     pub names: TiVec<SentenceIndex, String>,
+    pub instruction_arities: TiVec<SentenceIndex, Option<Vec<Arity>>>,
 }
 
 impl Library {
@@ -42,6 +50,7 @@ impl Library {
             test_machines: HashSet::new(),
             annotations: TiVec::new(),
             names: TiVec::new(),
+            instruction_arities: TiVec::new(),
         }
     }
 }
