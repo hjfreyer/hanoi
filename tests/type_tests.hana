@@ -14,6 +14,12 @@ type SimpleTuple (int, bool);
 type NestedTuple (SimpleTuple, float | test_sym);
 type EmptyTuple ();
 
+enum MyEnum {
+    Case1(int, bool),
+    Case2(symbol),
+    Case3(),
+}
+
 test sentence test_primitive_checks {
     // Test int
     push 42
@@ -153,6 +159,69 @@ test sentence test_tuple_checks {
 
     push 42
     jump EmptyTuple::check
+    not
+    assert
+}
+
+test sentence test_enum_checks {
+    // Test MyEnum::Case1
+    push (MyEnum::Case1::tag, (42, true))
+    jump MyEnum::check
+    assert
+
+    push (MyEnum::Case1::tag, (42, true))
+    jump MyEnum::Case1::check
+    assert
+
+    push (42, true)
+    jump MyEnum::Case1::Body::check
+    assert
+
+    // Test MyEnum::Case2
+    push (MyEnum::Case2::tag, (test_sym))
+    jump MyEnum::check
+    assert
+
+    push (MyEnum::Case2::tag, (test_sym))
+    jump MyEnum::Case2::check
+    assert
+
+    push (test_sym)
+    jump MyEnum::Case2::Body::check
+    assert
+
+    // Test MyEnum::Case3
+    push (MyEnum::Case3::tag, ())
+    jump MyEnum::check
+    assert
+
+    push (MyEnum::Case3::tag, ())
+    jump MyEnum::Case3::check
+    assert
+
+    push ()
+    jump MyEnum::Case3::Body::check
+    assert
+
+    // Test invalid variant
+    push (MyEnum::Case1::tag, ())
+    jump MyEnum::Case1::check
+    not
+    assert
+
+    push (MyEnum::Case2::tag, (42))
+    jump MyEnum::Case2::check
+    not
+    assert
+
+    push (MyEnum::Case3::tag, (1))
+    jump MyEnum::Case3::check
+    not
+    assert
+
+    // Test invalid tags
+    push (test_sym, (42, true))
+    jump MyEnum::check
     not
     assert
 }

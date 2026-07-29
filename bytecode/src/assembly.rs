@@ -25,6 +25,7 @@ enum Token {
     SentenceKeyword,
     FunctionKeyword,
     TypeKeyword,
+    EnumKeyword,
     DoubleColon,
     Semicolon,
     Identifier(String),
@@ -201,6 +202,7 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
                     "sentence" => tokens.push(Token::SentenceKeyword),
                     "function" => tokens.push(Token::FunctionKeyword),
                     "type" => tokens.push(Token::TypeKeyword),
+                    "enum" => tokens.push(Token::EnumKeyword),
                     "true" => tokens.push(Token::Bool(true)),
                     "false" => tokens.push(Token::Bool(false)),
                     _ => tokens.push(Token::Identifier(ident)),
@@ -734,6 +736,12 @@ fn parse_items(stream: &mut TokenStream, end_token: Option<Token>, base_dir: Opt
                 continue;
             }
 
+            if stream.peek() == Some(&Token::EnumKeyword) {
+                let enum_item = parse_enum_decl(stream, annotations)?;
+                items.push(enum_item);
+                continue;
+            }
+
             let is_function = if stream.peek() == Some(&Token::SentenceKeyword) {
                 stream.next();
                 false
@@ -887,6 +895,12 @@ fn parse_items(stream: &mut TokenStream, end_token: Option<Token>, base_dir: Opt
                 continue;
             }
 
+            if stream.peek() == Some(&Token::EnumKeyword) {
+                let enum_item = parse_enum_decl(stream, Vec::new())?;
+                items.push(enum_item);
+                continue;
+            }
+
             let is_function = if stream.peek() == Some(&Token::SentenceKeyword) {
                 stream.next();
                 false
@@ -928,6 +942,120 @@ fn parse_items(stream: &mut TokenStream, end_token: Option<Token>, base_dir: Opt
     }
 
     Ok(items)
+}
+
+fn parse_enum_decl(
+    stream: &mut TokenStream,
+    annotations: Vec<Annotation>,
+) -> Result<TopLevelItem, String> {
+    stream.expect(Token::EnumKeyword)?;
+    let enum_name = match stream.next() {
+        Some(Token::Identifier(name)) => name,
+        Some(other) => return Err(format!("Expected enum name identifier, found {:?}", other)),
+        None => return Err("Expected enum name identifier, found end of input".to_string()),
+    };
+
+    stream.expect(Token::LBrace)?;
+
+    let mut mod_items = Vec::new();
+    let mut variant_paths = Vec::new();
+
+    while stream.peek() != Some(&Token::RBrace) {
+        let variant_name = match stream.next() {
+            Some(Token::Identifier(v)) => v,
+            Some(other) => return Err(format!("Expected variant name identifier, found {:?}", other)),
+            None => return Err("Expected variant name identifier, found end of input".to_string()),
+        };
+
+        // Require parameter list (e.g., Case1(int, bool) or Case3())
+        stream.expect(Token::LParen)?;
+        let mut elements = Vec::new();
+        if stream.peek() != Some(&Token::RParen) {
+            loop {
+                elements.push(parse_type_spec(stream)?);
+                match stream.peek() {
+                    Some(&Token::Comma) => {
+                        stream.next();
+                        if stream.peek() == Some(&Token::RParen) {
+                            break;
+                        }
+                    }
+                    Some(&Token::RParen) => {
+                        break;
+                    }
+                    other => return Err(format!("Expected ',' or ')', found {:?}", other)),
+                }
+            }
+        }
+        stream.expect(Token::RParen)?;
+
+        let payload_spec = TypeSpec::Tuple(elements);
+
+        // 1. Symbol declaration: tag
+        let tag_decl = TopLevelItem::SymbolDecl {
+            name: "tag".to_string(),
+            debug_desc: None,
+        };
+
+        // 2. Type module: Body
+        let body_check_sentence = compile_type_to_sentence("check".to_string(), payload_spec, true, Vec::new())?;
+        let body_decl = TopLevelItem::Mod {
+            name: "Body".to_string(),
+            items: vec![TopLevelItem::Sentence(body_check_sentence)],
+            is_test: false,
+        };
+
+        // 3. Variant check: type check (tag, Body);
+        let variant_spec = TypeSpec::Tuple(vec![
+            TypeSpec::Path(Path { segments: vec![
+                PathSegment::Identifier(variant_name.clone()),
+                PathSegment::Identifier("tag".to_string()),
+            ] }),
+            TypeSpec::Path(Path { segments: vec![
+                PathSegment::Identifier(variant_name.clone()),
+                PathSegment::Identifier("Body".to_string()),
+            ] }),
+        ]);
+        let variant_check_sentence = compile_type_to_sentence("check".to_string(), variant_spec, true, Vec::new())?;
+
+        // Wrap them into a submodule variant_name
+        let variant_mod = TopLevelItem::Mod {
+            name: variant_name.clone(),
+            items: vec![
+                tag_decl,
+                body_decl,
+                TopLevelItem::Sentence(variant_check_sentence),
+            ],
+            is_test: false,
+        };
+        mod_items.push(variant_mod);
+
+        // Overall check path relative to grandparent (i.e. MyEnum::Case1)
+        let variant_path = Path {
+            segments: vec![
+                PathSegment::Identifier(enum_name.clone()),
+                PathSegment::Identifier(variant_name.clone()),
+            ],
+        };
+        variant_paths.push(TypeSpec::Path(variant_path));
+
+        // Variants can be optionally followed by comma
+        if stream.peek() == Some(&Token::Comma) {
+            stream.next();
+        }
+    }
+    stream.expect(Token::RBrace)?;
+
+    // Overall check: type check MyEnum::Case1 | MyEnum::Case2 | MyEnum::Case3;
+    let overall_spec = TypeSpec::Union(variant_paths);
+    let overall_check_sentence = compile_type_to_sentence("check".to_string(), overall_spec, true, annotations)?;
+    mod_items.push(TopLevelItem::Sentence(overall_check_sentence));
+
+    Ok(TopLevelItem::Mod {
+        name: enum_name,
+        items: mod_items,
+        is_test: false,
+    })
 }
 
 fn compile_type_to_sentence(

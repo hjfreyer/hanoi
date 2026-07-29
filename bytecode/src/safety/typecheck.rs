@@ -18,26 +18,44 @@ fn resolve_safety_fn(
     safety_fn_name: &str,
     library: &Library,
 ) -> Result<SentenceIndex, String> {
-    // 1. Try relative to the annotated sentence's module
-    let current_module = if let Some(idx) = annotated_name.rfind("::") {
-        &annotated_name[..idx]
+    let mut resolved_segments: Vec<String> = if let Some(idx) = annotated_name.rfind("::") {
+        annotated_name[..idx].split("::").map(|s| s.to_string()).collect()
     } else {
-        ""
+        Vec::new()
     };
 
-    let fq_candidate = if current_module.is_empty() {
-        safety_fn_name.to_string()
-    } else {
-        format!("{}::{}", current_module, safety_fn_name)
-    };
+    let target_segments: Vec<&str> = safety_fn_name.split("::").collect();
+    let mut is_absolute = false;
+
+    for (i, seg) in target_segments.iter().enumerate() {
+        if *seg == "crate" {
+            if i == 0 {
+                resolved_segments.clear();
+                is_absolute = true;
+            } else {
+                return Err("Path segment 'crate' must be at the beginning".to_string());
+            }
+        } else if *seg == "super" {
+            if resolved_segments.is_empty() {
+                return Err("Cannot use 'super' on the root module".to_string());
+            }
+            resolved_segments.pop();
+        } else {
+            resolved_segments.push(seg.to_string());
+        }
+    }
+
+    let fq_candidate = resolved_segments.join("::");
 
     if let Some(pos) = library.names.iter().position(|n| n == &fq_candidate) {
         return Ok(SentenceIndex::from(pos));
     }
 
-    // 2. Try absolute/as-is
-    if let Some(pos) = library.names.iter().position(|n| n == safety_fn_name) {
-        return Ok(SentenceIndex::from(pos));
+    // Fallback: Try absolute/as-is if not already parsed as absolute
+    if !is_absolute {
+        if let Some(pos) = library.names.iter().position(|n| n == safety_fn_name) {
+            return Ok(SentenceIndex::from(pos));
+        }
     }
 
     Err(format!(
