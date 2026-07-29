@@ -69,18 +69,23 @@ pub fn check_precondition(library: &Library) -> Result<(), String> {
     // 0. Verify that all recursive sentences in the library are correctly annotated with #[recursive]
     check_recursive_annotations(library)?;
 
-    // 1. Collect precondition checks
+    // 1. Collect precondition and postcondition checks
     let mut precondition_checks = Vec::new();
+    let mut postcondition_checks = Vec::new();
     for (s_idx_raw, annotations) in library.annotations.iter().enumerate() {
         let s_idx = SentenceIndex::from(s_idx_raw);
         let is_recursive = annotations.iter().any(|ann| matches!(ann, Annotation::Recursive));
         let mut precondition_fn = None;
+        let mut postcondition_fn = None;
         for ann in annotations {
-            if let Annotation::Precondition(s_fn) = ann {
-                precondition_fn = Some(s_fn.clone());
+            match ann {
+                Annotation::Precondition(s_fn) => precondition_fn = Some(s_fn.clone()),
+                Annotation::Postcondition(s_fn) => postcondition_fn = Some(s_fn.clone()),
+                _ => {}
             }
         }
 
+        let mut pre_idx_opt = None;
         if let Some(s_fn) = precondition_fn {
             let annotated_name = &library.names[s_idx];
             let safety_fn_idx = resolve_safety_fn(annotated_name, &s_fn, library)?;
@@ -94,12 +99,29 @@ pub fn check_precondition(library: &Library) -> Result<(), String> {
                 );
             } else {
                 precondition_checks.push((s_idx, safety_fn_idx));
+                pre_idx_opt = Some(safety_fn_idx);
+            }
+        }
+
+        if let Some(s_fn) = postcondition_fn {
+            let annotated_name = &library.names[s_idx];
+            let post_fn_idx = resolve_safety_fn(annotated_name, &s_fn, library)?;
+            let post_is_recursive = library.annotations[post_fn_idx].iter().any(|ann| matches!(ann, Annotation::Recursive));
+            
+            if is_recursive || post_is_recursive {
+                println!(
+                    "Skipping postcondition check for '{}' (postcondition '{}') because it is marked as recursive.",
+                    get_sentence_name(s_idx, library),
+                    get_sentence_name(post_fn_idx, library)
+                );
+            } else {
+                postcondition_checks.push((s_idx, pre_idx_opt, post_fn_idx));
             }
         }
     }
 
-    if precondition_checks.is_empty() {
-        println!("No precondition annotations found.");
+    if precondition_checks.is_empty() && postcondition_checks.is_empty() {
+        println!("No precondition or postcondition annotations found.");
         return Ok(());
     }
 
@@ -183,6 +205,38 @@ pub fn check_precondition(library: &Library) -> Result<(), String> {
                 "Annotated function '{}' must have at least 1 output to be verified via typecheck",
                 annotated_name
             ));
+        }
+    }
+
+    // Validate postcondition arities
+    for &(annotated_idx, pre_idx_opt, post_idx) in &postcondition_checks {
+        let annotated_name = get_sentence_name(annotated_idx, library);
+        let post_name = get_sentence_name(post_idx, library);
+
+        let (n_post, m_post) = arity_map[&post_idx];
+        let (n_annotated, m_annotated) = arity_map[&annotated_idx];
+
+        if n_annotated != 1 || m_annotated != 1 {
+            return Err(format!(
+                "Annotated function '{}' must have arity 1 -> 1, but has {} -> {}",
+                annotated_name, n_annotated, m_annotated
+            ));
+        }
+        if n_post != 1 || m_post != 1 {
+            return Err(format!(
+                "Postcondition function '{}' must have arity 1 -> 1, but has {} -> {}",
+                post_name, n_post, m_post
+            ));
+        }
+        if let Some(pre_idx) = pre_idx_opt {
+            let safety_name = get_sentence_name(pre_idx, library);
+            let (n_safety, m_safety) = arity_map[&pre_idx];
+            if n_safety != 1 || m_safety != 1 {
+                return Err(format!(
+                    "Safety function '{}' must have arity 1 -> 1, but has {} -> {}",
+                    safety_name, n_safety, m_safety
+                ));
+            }
         }
     }
 
@@ -921,9 +975,108 @@ pub fn check_precondition(library: &Library) -> Result<(), String> {
             }
         }
 
+        // 9. Solve postcondition verification checks programmatically
+        for (annotated_idx, pre_idx_opt, post_idx) in postcondition_checks {
+            let annotated_name = get_sentence_name(annotated_idx, library);
+            let post_name = get_sentence_name(post_idx, library);
+
+            let solver = Solver::new();
+
+            // Build programmatic postcondition check logic
+            let x = Dynamic::new_const("x", val_sort);
+            
+            // ok_x = Ok(x)
+            let ok_x = ok_con.apply(&[&x]);
+
+            // If there's a precondition P, assert P(Ok(x)) == Ok(ValBool(true))
+            if let Some(pre_idx) = pre_idx_opt {
+                let safety_decl = &sentence_decls[&pre_idx][0];
+                let safety_app = safety_decl.apply(&[&ok_x]);
+
+                let val_bool_con = &sorts[0].variants[1].constructor;
+                let val_bool_true = val_bool_con.apply(&[&Bool::from_bool(true)]);
+                let ok_val_bool_true = ok_con.apply(&[&val_bool_true]);
+
+                solver.assert(&safety_app.eq(&ok_val_bool_true));
+            }
+
+            // Apply annotated function F to get output: y = F_out_0(ok_x)
+            let annotated_decl = &sentence_decls[&annotated_idx][0];
+            let y = annotated_decl.apply(&[&ok_x]);
+
+            // Apply postcondition function Q to output: Q_out_0(y)
+            let post_decl = &sentence_decls[&post_idx][0];
+            let post_app = post_decl.apply(&[&y]);
+
+            // True Result value: Ok(ValBool(true))
+            let val_bool_con = &sorts[0].variants[1].constructor;
+            let val_bool_true = val_bool_con.apply(&[&Bool::from_bool(true)]);
+            let ok_val_bool_true = ok_con.apply(&[&val_bool_true]);
+
+            // We assert post_app != Ok(ValBool(true)) to find a counterexample.
+            solver.assert(&post_app.eq(&ok_val_bool_true).not());
+
+            match solver.check() {
+                SatResult::Unsat => {
+                    if let Some(pre_idx) = pre_idx_opt {
+                        let safety_name = get_sentence_name(pre_idx, library);
+                        println!(
+                            "[PASS] '{}' postcondition '{}' holds when precondition '{}' returns true",
+                            annotated_name, post_name, safety_name
+                        );
+                    } else {
+                        println!(
+                            "[PASS] '{}' postcondition '{}' holds",
+                            annotated_name, post_name
+                        );
+                    }
+                }
+                SatResult::Sat => {
+                    let mut error_msg = if let Some(pre_idx) = pre_idx_opt {
+                        let safety_name = get_sentence_name(pre_idx, library);
+                        format!(
+                            "'{}' postcondition '{}' can fail when precondition '{}' returns true",
+                            annotated_name, post_name, safety_name
+                        )
+                    } else {
+                        format!(
+                            "'{}' postcondition '{}' can fail",
+                            annotated_name, post_name
+                        )
+                    };
+                    let mut counterexample = String::new();
+                    if let Some(model) = solver.get_model() {
+                        if let Some(val) = model.eval(&x, true) {
+                            counterexample = format!(" (Counterexample: x = {})", val);
+                        }
+                    }
+                    error_msg.push_str(&counterexample);
+                    failed_checks.push(error_msg);
+                    if let Some(pre_idx) = pre_idx_opt {
+                        let safety_name = get_sentence_name(pre_idx, library);
+                        println!(
+                            "[FAIL] '{}' postcondition '{}' can fail when precondition '{}' returns true!{}",
+                            annotated_name, post_name, safety_name, counterexample
+                        );
+                    } else {
+                        println!(
+                            "[FAIL] '{}' postcondition '{}' can fail!{}",
+                            annotated_name, post_name, counterexample
+                        );
+                    }
+                }
+                SatResult::Unknown => {
+                    return Err(format!(
+                        "Z3 solver returned Unknown for postcondition check between '{}' and '{}'",
+                        annotated_name, post_name
+                    ));
+                }
+            }
+        }
+
         if !failed_checks.is_empty() {
             return Err(format!(
-                "Precondition verification failed for {} check(s):\n - {}",
+                "Precondition/Postcondition verification failed for {} check(s):\n - {}",
                 failed_checks.len(),
                 failed_checks.join("\n - ")
             ));
@@ -1213,5 +1366,46 @@ mod tests {
         let res = check_precondition(&library);
         assert!(res.is_err());
         assert!(res.unwrap_err().contains("Safety function 'safe_invalid' must have arity 1 -> 1"));
+    }
+
+    #[test]
+    fn test_postcondition_verification() {
+        let code = r#"
+            function is_int_fn {
+                is_int
+            }
+
+            #[precondition(is_int_fn)]
+            #[postcondition(is_int_fn)]
+            function identity {
+                // returns the input, which is checked to be an int
+            }
+        "#;
+        let library = assemble(code).unwrap();
+        let res = check_precondition(&library);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_postcondition_verification_fails() {
+        let code = r#"
+            function is_int_fn {
+                is_int
+            }
+            
+            function is_bool_fn {
+                is_bool
+            }
+
+            #[precondition(is_int_fn)]
+            #[postcondition(is_bool_fn)]
+            function identity {
+                // returns an int (due to precondition), but postcondition expects a bool
+            }
+        "#;
+        let library = assemble(code).unwrap();
+        let res = check_precondition(&library);
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("postcondition 'is_bool_fn' can fail"));
     }
 }

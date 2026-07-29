@@ -569,6 +569,28 @@ fn parse_items(stream: &mut TokenStream, end_token: Option<Token>, base_dir: Opt
                     stream.expect(Token::RParen)?;
                     Annotation::Precondition(path_str)
                 }
+                "postcondition" => {
+                    stream.expect(Token::LParen)?;
+                    let first_ident = match stream.next() {
+                        Some(Token::Identifier(s)) => s,
+                        Some(other) => return Err(format!("Expected identifier for postcondition function, found {:?}", other)),
+                        None => return Err("Expected identifier for postcondition function, found end of input".to_string()),
+                    };
+                    let path = parse_path(stream, first_ident)?;
+                    let mut path_str = String::new();
+                    for (i, seg) in path.segments.iter().enumerate() {
+                        if i > 0 {
+                            path_str.push_str("::");
+                        }
+                        match seg {
+                            PathSegment::Crate => path_str.push_str("crate"),
+                            PathSegment::Super => path_str.push_str("super"),
+                            PathSegment::Identifier(name) => path_str.push_str(name),
+                        }
+                    }
+                    stream.expect(Token::RParen)?;
+                    Annotation::Postcondition(path_str)
+                }
                 "recursive" => {
                     Annotation::Recursive
                 }

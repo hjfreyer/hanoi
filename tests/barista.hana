@@ -65,8 +65,22 @@ mod customer_impl {
             branch {
                 untuple 3
                 jump is_internal_state
-                drop 1
-                drop 1
+                branch {
+                    pick 0
+                    is_symbol
+                    branch {
+                        drop 0
+                        is_symbol
+                    } {
+                        drop 0
+                        drop 0
+                        push false
+                    }
+                } {
+                    drop 0
+                    drop 0
+                    push false
+                }
             } {
                 drop 0
                 push false
@@ -401,8 +415,27 @@ mod customer_impl {
         tuple 2
     }
 
+    function emit_postcondition {
+        untuple 2
+        pick 0
+        is_bool
+        branch {
+            branch {
+                jump is_event
+            } {
+                drop 0
+                push true
+            }
+        } {
+            drop 0
+            drop 0
+            push false
+        }
+    }
+
     // emit takes state: (id, preferred_drink, internal_state) and returns ValueSet of emitted events.
     #[precondition(is_state)]
+    #[postcondition(emit_postcondition)]
     function emit {
         untuple 3 // Stack: [id, preferred_drink, internal_state]
         pick 0

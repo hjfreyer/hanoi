@@ -6,8 +6,9 @@ Rather than exporting SMT-LIB2 code, Typecheck compiles Hanoi sentences directly
 
 ---
 
-## 1. Syntax: The `#[precondition]` Attribute
+## 1. Syntax: The `#[precondition]` and `#[postcondition]` Attributes
 
+### Preconditions
 Any `sentence` or `function` in a `.hana` file can be verified by annotating it with the `#[precondition]` attribute, specifying a safety check function:
 
 ```hana
@@ -27,6 +28,32 @@ When Typecheck runs:
 2. It compiles all non-recursive sentences in the library into programmatic Z3 recursive function definitions.
 3. It asserts that the safety precondition function (`safe_for_foo`) evaluates to `true`.
 4. It checks whether the target function (`foo`) can evaluate to `Panic` under that precondition.
+
+### Postconditions
+You can also annotate a function with `#[postcondition(Q)]`. A postcondition asserts that the function's output value satisfies the check function `Q`, assuming the function's input satisfies its precondition (if any).
+
+All three involved functions (the target function, the precondition, and the postcondition) must have arity `1 -> 1`.
+
+```hana
+function is_int_fn {
+    is_int
+}
+
+#[precondition(is_int_fn)]
+#[postcondition(is_int_fn)]
+function identity {
+    // returns input
+}
+```
+
+To prove the postcondition holds, Typecheck uses Z3 to prove that:
+$$\forall x. P(x) = \text{true} \implies Q(F(x)) = \text{true}$$
+
+It does this by searching for a counterexample $x$ where:
+1. $P(x) = \text{true}$
+2. $Q(F(x)) \neq \text{true}$ (or $F(x)$ panics, or $Q$ panics)
+
+If no such counterexample is found, the postcondition is proven.
 
 ---
 

@@ -452,4 +452,40 @@ mod tests {
             vec![Annotation::Precondition("super::safe_fn".to_string()), Annotation::Arity(1, 1)]
         );
     }
+
+    #[test]
+    fn test_assemble_postcondition_annotation() {
+        let code = r#"
+            function post_fn {
+                drop 0
+                push true
+            }
+
+            #[postcondition(post_fn)]
+            function my_func {
+                drop 0
+                push false
+            }
+
+            #[postcondition(super::post_fn)]
+            function other_func {
+                drop 0
+                push false
+            }
+        "#;
+        let res = assemble(code).unwrap();
+        let post_fn_idx = res.names.iter().position(|n| n == "post_fn").map(SentenceIndex::from).unwrap();
+        let my_func_idx = res.names.iter().position(|n| n == "my_func").map(SentenceIndex::from).unwrap();
+        let other_func_idx = res.names.iter().position(|n| n == "other_func").map(SentenceIndex::from).unwrap();
+
+        assert_eq!(res.annotations[post_fn_idx], vec![Annotation::Arity(1, 1)]);
+        assert_eq!(
+            res.annotations[my_func_idx],
+            vec![Annotation::Postcondition("post_fn".to_string()), Annotation::Arity(1, 1)]
+        );
+        assert_eq!(
+            res.annotations[other_func_idx],
+            vec![Annotation::Postcondition("super::post_fn".to_string()), Annotation::Arity(1, 1)]
+        );
+    }
 }

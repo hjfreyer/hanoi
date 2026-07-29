@@ -16,6 +16,7 @@ pub enum Annotation {
     Arity(i64, i64),
     Recursive,
     Precondition(String),
+    Postcondition(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
