@@ -55,6 +55,18 @@ It does this by searching for a counterexample $x$ where:
 
 If no such counterexample is found, the postcondition is proven.
 
+### Total Functions
+You can also annotate a function with `#[total]`. A total function assertion ensures that the function never triggers a runtime panic on *any* possible input.
+
+```hana
+#[total]
+function identity {
+    // returns input (never panics)
+}
+```
+
+To prove totality, Typecheck attempts to find any input $x$ that causes $F(x) = \text{Panic}$. If no such input exists (the assertion is Unsat), the function is proven to be total.
+
 ---
 
 ## 2. Type Representation in Z3

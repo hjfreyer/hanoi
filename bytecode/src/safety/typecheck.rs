@@ -69,18 +69,21 @@ pub fn check_precondition(library: &Library) -> Result<(), String> {
     // 0. Verify that all recursive sentences in the library are correctly annotated with #[recursive]
     check_recursive_annotations(library)?;
 
-    // 1. Collect precondition and postcondition checks
+    // 1. Collect precondition, postcondition, and total checks
     let mut precondition_checks = Vec::new();
     let mut postcondition_checks = Vec::new();
+    let mut total_checks = Vec::new();
     for (s_idx_raw, annotations) in library.annotations.iter().enumerate() {
         let s_idx = SentenceIndex::from(s_idx_raw);
         let is_recursive = annotations.iter().any(|ann| matches!(ann, Annotation::Recursive));
         let mut precondition_fn = None;
         let mut postcondition_fn = None;
+        let mut has_total = false;
         for ann in annotations {
             match ann {
                 Annotation::Precondition(s_fn) => precondition_fn = Some(s_fn.clone()),
                 Annotation::Postcondition(s_fn) => postcondition_fn = Some(s_fn.clone()),
+                Annotation::Total => has_total = true,
                 _ => {}
             }
         }
@@ -118,10 +121,21 @@ pub fn check_precondition(library: &Library) -> Result<(), String> {
                 postcondition_checks.push((s_idx, pre_idx_opt, post_fn_idx));
             }
         }
+
+        if has_total {
+            if is_recursive {
+                println!(
+                    "Skipping total check for '{}' because it is marked as recursive.",
+                    get_sentence_name(s_idx, library)
+                );
+            } else {
+                total_checks.push(s_idx);
+            }
+        }
     }
 
-    if precondition_checks.is_empty() && postcondition_checks.is_empty() {
-        println!("No precondition or postcondition annotations found.");
+    if precondition_checks.is_empty() && postcondition_checks.is_empty() && total_checks.is_empty() {
+        println!("No precondition, postcondition, or total annotations found.");
         return Ok(());
     }
 
@@ -237,6 +251,24 @@ pub fn check_precondition(library: &Library) -> Result<(), String> {
                     safety_name, n_safety, m_safety
                 ));
             }
+        }
+    }
+
+    // Validate total arities
+    for &annotated_idx in &total_checks {
+        let annotated_name = get_sentence_name(annotated_idx, library);
+        let (n_annotated, m_annotated) = arity_map[&annotated_idx];
+        if n_annotated != 1 {
+            return Err(format!(
+                "Annotated function '{}' must have 1 input, but has {}",
+                annotated_name, n_annotated
+            ));
+        }
+        if m_annotated == 0 {
+            return Err(format!(
+                "Annotated function '{}' must have at least 1 output to be verified via typecheck",
+                annotated_name
+            ));
         }
     }
 
@@ -1074,9 +1106,63 @@ pub fn check_precondition(library: &Library) -> Result<(), String> {
             }
         }
 
+        // 10. Solve total verification checks programmatically
+        for annotated_idx in total_checks {
+            let annotated_name = get_sentence_name(annotated_idx, library);
+            let solver = Solver::new();
+
+            // Build programmatic total check logic: assert F(Ok(x)) == Panic
+            let x = Dynamic::new_const("x", val_sort);
+            
+            // ok_x = Ok(x)
+            let ok_x = ok_con.apply(&[&x]);
+
+            // annotated_app = F_out_0(ok_x)
+            let annotated_decl = &sentence_decls[&annotated_idx][0];
+            let annotated_app = annotated_decl.apply(&[&ok_x]);
+
+            // Assert is_panic(annotated_app)
+            let is_panic_tester = &sorts[1].variants[1].tester;
+            let is_panic_bool = is_panic_tester.apply(&[&annotated_app]).as_bool().unwrap();
+            solver.assert(&is_panic_bool);
+
+            match solver.check() {
+                SatResult::Unsat => {
+                    println!(
+                        "[PASS] '{}' is total (never panics)",
+                        annotated_name
+                    );
+                }
+                SatResult::Sat => {
+                    let mut error_msg = format!(
+                        "'{}' is not total (can panic)",
+                        annotated_name
+                    );
+                    let mut counterexample = String::new();
+                    if let Some(model) = solver.get_model() {
+                        if let Some(val) = model.eval(&x, true) {
+                            counterexample = format!(" (Counterexample: x = {})", val);
+                        }
+                    }
+                    error_msg.push_str(&counterexample);
+                    failed_checks.push(error_msg);
+                    println!(
+                        "[FAIL] '{}' is not total (can panic)!{}",
+                        annotated_name, counterexample
+                    );
+                }
+                SatResult::Unknown => {
+                    return Err(format!(
+                        "Z3 solver returned Unknown for total check on '{}'",
+                        annotated_name
+                    ));
+                }
+            }
+        }
+
         if !failed_checks.is_empty() {
             return Err(format!(
-                "Precondition/Postcondition verification failed for {} check(s):\n - {}",
+                "Precondition/Postcondition/Total verification failed for {} check(s):\n - {}",
                 failed_checks.len(),
                 failed_checks.join("\n - ")
             ));
@@ -1407,5 +1493,33 @@ mod tests {
         let res = check_precondition(&library);
         assert!(res.is_err());
         assert!(res.unwrap_err().contains("postcondition 'is_bool_fn' can fail"));
+    }
+
+    #[test]
+    fn test_total_verification() {
+        let code = r#"
+            #[total]
+            function identity {
+                // returns input (no panicking operations)
+            }
+        "#;
+        let library = assemble(code).unwrap();
+        let res = check_precondition(&library);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_total_verification_fails() {
+        let code = r#"
+            #[total]
+            function add_one {
+                push 1
+                add // panics if input is not int/float
+            }
+        "#;
+        let library = assemble(code).unwrap();
+        let res = check_precondition(&library);
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("is not total (can panic)"));
     }
 }

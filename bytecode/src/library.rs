@@ -17,6 +17,7 @@ pub enum Annotation {
     Recursive,
     Precondition(String),
     Postcondition(String),
+    Total,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

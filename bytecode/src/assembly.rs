@@ -594,6 +594,9 @@ fn parse_items(stream: &mut TokenStream, end_token: Option<Token>, base_dir: Opt
                 "recursive" => {
                     Annotation::Recursive
                 }
+                "total" => {
+                    Annotation::Total
+                }
                 other => return Err(format!("Unsupported annotation '{}'", other)),
             };
             stream.expect(Token::RBracket)?;

@@ -488,4 +488,22 @@ mod tests {
             vec![Annotation::Postcondition("super::post_fn".to_string()), Annotation::Arity(1, 1)]
         );
     }
+
+    #[test]
+    fn test_assemble_total_annotation() {
+        let code = r#"
+            #[total]
+            function my_func {
+                drop 0
+                push false
+            }
+        "#;
+        let res = assemble(code).unwrap();
+        let my_func_idx = res.names.iter().position(|n| n == "my_func").map(SentenceIndex::from).unwrap();
+
+        assert_eq!(
+            res.annotations[my_func_idx],
+            vec![Annotation::Total, Annotation::Arity(1, 1)]
+        );
+    }
 }
