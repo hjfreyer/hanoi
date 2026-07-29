@@ -47,8 +47,8 @@ fn main() {
         }
     };
 
-    println!("Checking safety2 annotations for '{}'...", path_arg);
-    match bytecode::safety::typecheck::check_safety2(&library) {
+    println!("Checking precondition annotations for '{}'...", path_arg);
+    match bytecode::safety::typecheck::check_precondition(&library) {
         Ok(()) => {
             println!("Verification PASSED.");
             process::exit(0);

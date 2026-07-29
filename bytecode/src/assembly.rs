@@ -547,12 +547,12 @@ fn parse_items(stream: &mut TokenStream, end_token: Option<Token>, base_dir: Opt
                     stream.expect(Token::RParen)?;
                     Annotation::Arity(n, m)
                 }
-                "safety2" => {
+                "precondition" => {
                     stream.expect(Token::LParen)?;
                     let first_ident = match stream.next() {
                         Some(Token::Identifier(s)) => s,
-                        Some(other) => return Err(format!("Expected identifier for safety2 function, found {:?}", other)),
-                        None => return Err("Expected identifier for safety2 function, found end of input".to_string()),
+                        Some(other) => return Err(format!("Expected identifier for precondition function, found {:?}", other)),
+                        None => return Err("Expected identifier for precondition function, found end of input".to_string()),
                     };
                     let path = parse_path(stream, first_ident)?;
                     let mut path_str = String::new();
@@ -567,10 +567,7 @@ fn parse_items(stream: &mut TokenStream, end_token: Option<Token>, base_dir: Opt
                         }
                     }
                     stream.expect(Token::RParen)?;
-                    Annotation::Safety2(path_str)
-                }
-                "typecheck" => {
-                    Annotation::Typecheck
+                    Annotation::Precondition(path_str)
                 }
                 "recursive" => {
                     Annotation::Recursive

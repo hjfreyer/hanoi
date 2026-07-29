@@ -6,18 +6,16 @@ Rather than exporting SMT-LIB2 code, Typecheck compiles Hanoi sentences directly
 
 ---
 
-## 1. Syntax: The `#[safety2]` Attribute
+## 1. Syntax: The `#[precondition]` Attribute
 
-Any `sentence` or `function` in a `.hana` file can be verified by annotating it with the `#[safety2]` attribute, specifying a safety check function:
+Any `sentence` or `function` in a `.hana` file can be verified by annotating it with the `#[precondition]` attribute, specifying a safety check function:
 
 ```hana
-#[arity(1, 1)]
 function safe_for_foo {
     is_int
 }
 
-#[arity(1, 1)]
-#[safety2(safe_for_foo)]
+#[precondition(safe_for_foo)]
 function foo {
     push 1
     add
@@ -66,7 +64,7 @@ cargo run --bin typecheck tests/
 ### Verification Output
 If verification succeeds:
 ```
-Checking safety2 annotations for 'tests'...
+Checking precondition annotations for 'tests'...
 [PASS] 'barista::customer_impl::accept_type' never panics when 'barista::customer_impl::anything' returns true
 [PASS] 'barista::customer_impl::accept' never panics when 'barista::customer_impl::accept_type' returns true
 [PASS] 'barista::customer_impl::emit' never panics when 'barista::customer_impl::is_state' returns true
@@ -75,7 +73,7 @@ Verification PASSED.
 
 If verification fails (e.g. if the precondition is too weak or an operation can panic), Typecheck extracts the model and prints the counterexample:
 ```
-Checking safety2 annotations for 'tests'...
+Checking precondition annotations for 'tests'...
 [FAIL] 'foo' can panic when 'safe_for_foo' returns true! (Counterexample: x = (ValInt 0))
 Verification FAILED:
 'foo' can panic when 'safe_for_foo' returns true (Counterexample: x = (ValInt 0))

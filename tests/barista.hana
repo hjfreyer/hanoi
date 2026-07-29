@@ -22,11 +22,9 @@ mod customer_impl {
     }
 
     // Initializes customer state: (id, preferred_drink, internal_state)
-    #[arity(1, 1)]
     function init {
     }
 
-    #[arity(1, 1)]
     function is_internal_state {
         pick 0
         push state::idle
@@ -79,7 +77,6 @@ mod customer_impl {
         }
     }
 
-    #[arity(1, 1)]
     function is_event {
         pick 0
         is_tuple
@@ -314,7 +311,7 @@ mod customer_impl {
         push true
     }
 
-    #[safety2(anything)]
+    #[precondition(anything)]
     function accept_type {
         pick 0
         is_tuple
@@ -339,8 +336,7 @@ mod customer_impl {
         }
     }
 
-    #[arity(1, 1)]
-    #[safety2(accept_type)]
+    #[precondition(accept_type)]
     function accept {
         untuple 2
         untuple 3 // Stack: [event, id, preferred_drink, internal_state]
@@ -400,15 +396,13 @@ mod customer_impl {
         }
     }
 
-    #[arity(1, 1)]
     function tau_reduce {
         push false
         tuple 2
     }
 
     // emit takes state: (id, preferred_drink, internal_state) and returns ValueSet of emitted events.
-    #[arity(1, 1)]
-    #[safety2(is_state)]
+    #[precondition(is_state)]
     function emit {
         untuple 3 // Stack: [id, preferred_drink, internal_state]
         pick 0
@@ -464,7 +458,6 @@ mod customer_impl {
     }
 
     // process takes [state, event] and returns next_state.
-    #[arity(1, 1)]
     function process {
         untuple 2
         // Stack: [event, state]
@@ -540,13 +533,11 @@ mod customer_impl {
         }
     }
 
-    #[arity(1, 1)]
     function is_done {
         drop 0
         push false
     }
 
-    #[arity(1, 1)]
     function is_ready_to_finish {
         untuple 3
         pick 0
@@ -667,14 +658,12 @@ mod barista {
     }
 
     // Initializes barista state
-    #[arity(1, 1)]
     function init {
         untuple 0
         push state::idle
     }
 
 
-    #[arity(1, 1)]
     function accept {
         untuple 2
         pick 0
@@ -741,14 +730,12 @@ mod barista {
         }
     }
 
-    #[arity(1, 1)]
     function tau_reduce {
         push false
         tuple 2
     }
 
     // emit takes [state] and returns ValueSet.
-    #[arity(1, 1)]
     function emit {
         // Stack: [state]
         pick 0
@@ -793,7 +780,6 @@ mod barista {
     }
 
     // process takes [state, event] and returns next_state.
-    #[arity(1, 1)]
     function process {
         untuple 2
         // Inputs: [event, state]
@@ -858,13 +844,11 @@ mod barista {
         }
     }
 
-    #[arity(1, 1)]
     function is_done {
         drop 0
         push false
     }
 
-    #[arity(1, 1)]
     function is_ready_to_finish {
         push state::idle
         equal

@@ -65,41 +65,41 @@ fn check_recursive_annotations(library: &Library) -> Result<(), String> {
     Ok(())
 }
 
-pub fn check_safety2(library: &Library) -> Result<(), String> {
+pub fn check_precondition(library: &Library) -> Result<(), String> {
     // 0. Verify that all recursive sentences in the library are correctly annotated with #[recursive]
     check_recursive_annotations(library)?;
 
-    // 1. Collect safety2 checks
-    let mut safety2_checks = Vec::new();
+    // 1. Collect precondition checks
+    let mut precondition_checks = Vec::new();
     for (s_idx_raw, annotations) in library.annotations.iter().enumerate() {
         let s_idx = SentenceIndex::from(s_idx_raw);
         let is_recursive = annotations.iter().any(|ann| matches!(ann, Annotation::Recursive));
-        let mut safety2_fn = None;
+        let mut precondition_fn = None;
         for ann in annotations {
-            if let Annotation::Safety2(s_fn) = ann {
-                safety2_fn = Some(s_fn.clone());
+            if let Annotation::Precondition(s_fn) = ann {
+                precondition_fn = Some(s_fn.clone());
             }
         }
 
-        if let Some(s_fn) = safety2_fn {
+        if let Some(s_fn) = precondition_fn {
             let annotated_name = &library.names[s_idx];
             let safety_fn_idx = resolve_safety_fn(annotated_name, &s_fn, library)?;
             let safety_is_recursive = library.annotations[safety_fn_idx].iter().any(|ann| matches!(ann, Annotation::Recursive));
             
             if is_recursive || safety_is_recursive {
                 println!(
-                    "Skipping safety2 check for '{}' (precondition '{}') because it is marked as recursive.",
+                    "Skipping precondition check for '{}' (precondition '{}') because it is marked as recursive.",
                     get_sentence_name(s_idx, library),
                     get_sentence_name(safety_fn_idx, library)
                 );
             } else {
-                safety2_checks.push((s_idx, safety_fn_idx));
+                precondition_checks.push((s_idx, safety_fn_idx));
             }
         }
     }
 
-    if safety2_checks.is_empty() {
-        println!("No safety2 annotations found.");
+    if precondition_checks.is_empty() {
+        println!("No precondition annotations found.");
         return Ok(());
     }
 
@@ -158,8 +158,8 @@ pub fn check_safety2(library: &Library) -> Result<(), String> {
         get_sentence_arity(s_idx, library, &mut arity_map, &mut in_progress)?;
     }
 
-    // 7. Validate safety2 arities
-    for &(annotated_idx, safety_idx) in &safety2_checks {
+    // 7. Validate precondition arities
+    for &(annotated_idx, safety_idx) in &precondition_checks {
         let annotated_name = get_sentence_name(annotated_idx, library);
         let safety_name = get_sentence_name(safety_idx, library);
 
@@ -851,16 +851,16 @@ pub fn check_safety2(library: &Library) -> Result<(), String> {
             }
         }
 
-        // 8. Solve safety2 verification checks programmatically
+        // 8. Solve precondition verification checks programmatically
         let mut failed_checks = Vec::new();
 
-        for (annotated_idx, safety_idx) in safety2_checks {
+        for (annotated_idx, safety_idx) in precondition_checks {
             let annotated_name = get_sentence_name(annotated_idx, library);
             let safety_name = get_sentence_name(safety_idx, library);
 
             let solver = Solver::new();
 
-            // Build programmatic safety2 check logic
+            // Build programmatic precondition check logic
             let x = Dynamic::new_const("x", val_sort);
             
             // ok_x = Ok(x)
@@ -914,7 +914,7 @@ pub fn check_safety2(library: &Library) -> Result<(), String> {
                 }
                 SatResult::Unknown => {
                     return Err(format!(
-                        "Z3 solver returned Unknown for safety2 check between '{}' and '{}'",
+                        "Z3 solver returned Unknown for precondition check between '{}' and '{}'",
                         annotated_name, safety_name
                     ));
                 }
@@ -923,7 +923,7 @@ pub fn check_safety2(library: &Library) -> Result<(), String> {
 
         if !failed_checks.is_empty() {
             return Err(format!(
-                "Safety2 verification failed for {} check(s):\n - {}",
+                "Precondition verification failed for {} check(s):\n - {}",
                 failed_checks.len(),
                 failed_checks.join("\n - ")
             ));
@@ -1178,42 +1178,39 @@ mod tests {
     use crate::assembly::assemble;
 
     #[test]
-    fn test_safety2_verification() {
+    fn test_precondition_verification() {
         let code = r#"
-            #[arity(1, 1)]
-            sentence safe_for_foo {
+            function safe_for_foo {
                 is_int
             }
 
-            #[arity(1, 1)]
-            #[safety2(safe_for_foo)]
-            sentence foo {
+            #[precondition(safe_for_foo)]
+            function foo {
                 push 1
                 add
             }
         "#;
         let library = assemble(code).unwrap();
-        let res = check_safety2(&library);
+        let res = check_precondition(&library);
         assert!(res.is_ok());
     }
 
     #[test]
-    fn test_safety2_invalid_arity() {
+    fn test_precondition_invalid_arity() {
         let code = r#"
             #[arity(2, 1)]
             sentence safe_invalid {
                 add
             }
 
-            #[arity(1, 1)]
-            #[safety2(safe_invalid)]
-            sentence foo {
+            #[precondition(safe_invalid)]
+            function foo {
                 drop 0
                 push 1
             }
         "#;
         let library = assemble(code).unwrap();
-        let res = check_safety2(&library);
+        let res = check_precondition(&library);
         assert!(res.is_err());
         assert!(res.unwrap_err().contains("Safety function 'safe_invalid' must have arity 1 -> 1"));
     }

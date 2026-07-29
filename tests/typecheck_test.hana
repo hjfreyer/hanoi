@@ -2,23 +2,19 @@ symbol latte "Latte"
 symbol espresso "Espresso"
 
 #[arity(2, 2)]
-#[typecheck]
 sentence test_swap {
     pick 1
     drop 2
 }
 
 #[arity(2, 1)]
-#[typecheck]
 sentence test_arith {
     add
     push 10
     multiply
 }
 
-#[arity(1, 1)]
-#[typecheck]
-sentence test_branch {
+function test_branch {
     push true
     branch {
         push 100
@@ -29,66 +25,48 @@ sentence test_branch {
 }
 
 #[arity(2, 1)]
-#[typecheck]
 sentence test_symbol {
     symbol_char_at
 }
 
 #[arity(2, 1)]
-#[typecheck]
 sentence test_tuples {
     tuple 2
     untuple 2
     subtract
 }
 
-#[arity(1, 1)]
-#[typecheck]
-sentence swap_pair {
+function swap_pair {
     untuple 2
     roll 1
     tuple 2
 }
 
-#[arity(1, 1)]
-#[typecheck]
-sentence test_double_swap {
+function test_double_swap {
     jump swap_pair
     jump swap_pair
 }
 
-#[arity(1, 1)]
-#[typecheck]
-sentence test_is_int {
+function test_is_int {
     is_int
 }
 
-#[arity(1, 1)]
-#[typecheck]
-sentence test_is_bool {
+function test_is_bool {
     is_bool
 }
 
-#[arity(1, 1)]
-#[typecheck]
-sentence test_is_float {
+function test_is_float {
     is_float
 }
 
-#[arity(1, 1)]
-#[typecheck]
-sentence test_is_symbol {
+function test_is_symbol {
     is_symbol
 }
 
-#[arity(1, 1)]
-#[typecheck]
-sentence test_is_tuple {
+function test_is_tuple {
     is_tuple
 }
 
-#[arity(1, 1)]
-#[typecheck]
-sentence test_tuple_length {
+function test_tuple_length {
     tuple_length
 }
