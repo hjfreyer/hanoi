@@ -20,10 +20,21 @@ fi
 
 echo ""
 echo "======================================"
-echo "Running Hanoi integration tests..."
+echo "Running Hanoi typechecker..."
 echo "======================================"
 echo ""
 
+if ! cargo run --bin typecheck tests; then
+    echo "======================================"
+    echo "FAILED: Hanoi typechecker failed."
+    exit 1
+fi
+
+echo ""
+echo "======================================"
+echo "Running Hanoi integration tests..."
+echo "======================================"
+echo ""
 if ! ./run_tests.sh "$@"; then
     echo "======================================"
     echo "FAILED: Hanoi integration tests failed."
