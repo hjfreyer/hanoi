@@ -15,7 +15,6 @@ The stack can contain elements of the following types:
 - **Float**: 64-bit floating-point numbers (e.g., `3.14`).
 - **Symbol**: Unique identifiers associated with string descriptions (e.g., `symbol my_event "Event description"`).
 - **Tuple**: Nested structures grouping zero or more values (e.g., `(foo, (bar, 42))`).
-- **Set**: Deprecated or restricted collection types (see [README.md](../README.md) and [docs/machines.md](machines.md)).
 
 ---
 
@@ -87,19 +86,38 @@ function double_value {
 
 ## 4. Contract Annotations
 
-Hanoi supports static assertion checking at compile time via attributes:
+Hanoi supports static assertion checking at compile time via attributes, verified by the `typecheck` tool (see [docs/typecheck.md](typecheck.md) for the full verification model):
 
 - `#[arity(inputs, outputs)]`: Declares the stack arity (required for sentences that do not use the default `function` arity of `1 -> 1`).
-- `#[safety("precondition")]`: A logical precondition expression. The compiler validates that the function will not panic if the stack state before execution satisfies this precondition.
-- `#[behavior("postcondition")]`: A logical relationship relating input values (`in[k]`) to output values (`out[j]`).
+- `#[precondition(fn_name)]`: Names a `1 -> 1` function that must evaluate to `true` on the input for the annotated function to be considered safe to call.
+- `#[postcondition(fn_name)]`: Names a `1 -> 1` function that must evaluate to `true` on the output, given the precondition (if any) held on the input.
+- `#[total]`: Asserts the function never panics on *any* input.
+- `#[recursive]`: Marks a sentence participating in a recursive call cycle so the verifier can model it.
+
+Precondition/postcondition functions are ordinary `1 -> 1` functions, but they are commonly generated with the `type`/`enum` sugar rather than written by hand:
+
+- `type Name <spec>;` declares a value predicate from a spec of primitive type names (`int`, `bool`, `float`, `symbol`, `tuple`), literal values, tuples (`(spec, spec, ...)`), `|`-separated unions, or paths to other `type`/`enum` checks or `symbol`s. It expands to `mod Name { sentence check { ... } }`, exported and automatically annotated `#[total]`.
+- `enum Name { Variant(spec, ...), ... }` declares a tagged union: each `Variant` gets its own submodule with a fresh `tag` symbol and a `Body::check` for its payload tuple, and `Name::check` accepts any `(tag, payload)` pair matching one of the variants.
 
 ### Example
 ```hana
-#[arity(2, 1)]
-#[safety("is_numeric(in[0]) && is_numeric(in[1]) && in[0] != 0")]
-#[behavior("out[0] == in[1] / in[0]")]
-sentence safe_divide {
-    divide
+function is_int_fn {
+    is_int
+}
+
+#[precondition(is_int_fn)]
+#[postcondition(is_int_fn)]
+function identity {
+    // returns input unchanged
+}
+
+type TestInt int;
+type IntOrBool int | bool;
+
+enum MyEnum {
+    Case1(int, bool),
+    Case2(symbol),
+    Case3(),
 }
 ```
 

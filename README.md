@@ -11,7 +11,8 @@ Hanoi is a stack-oriented, VM-executed language designed to explore static analy
 
 - **Stack-Oriented Execution**: A clean, instruction-driven virtual machine that uses a stack for operations, featuring standard manipulations (`drop`, `pick`, `roll`), arithmetic, and tuple structuring.
 - **CSP State Machine Modeling**: Fully implements Communicating Sequential Processes (CSP) state machines. State machines are represented as modules with standardized hooks for managing state transitions, internal execution steps, and termination. See the [CSP Machines Documentation](docs/machines.md) for details.
-- **Static Safety & Behavior Contracts**: Annotate functions with preconditions (`#[safety("...")]`) and postconditions (`#[behavior("...")]`). Hanoi uses symbolic execution to generate verification conditions and proves them using the Z3 SMT solver at compile time to guarantee panic-free execution.
+- **Static Safety & Behavior Contracts**: Annotate functions with a precondition (`#[precondition(fn_name)]`), a postcondition (`#[postcondition(fn_name)]`), or a totality claim (`#[total]`). Hanoi compiles sentences directly into Z3 recursive function definitions and proves the contracts hold for all inputs at compile time. See [docs/typecheck.md](docs/typecheck.md) for details.
+- **`type` / `enum` Predicate Sugar**: Declare reusable value predicates with `type Name <spec>;` (primitives, literals, tuples, and `|`-unions) or `enum Name { Variant(spec, ...), ... }`, which expand into `Name::check` sentences usable directly as preconditions/postconditions.
 - **Static Arity Verification**: An arity checker runs before execution to ensure that stack push/pop operations match function signatures, avoiding runtime stack underflows.
 - **Namespacing & Modularity**: Hierarchical module declarations (`mod name { ... }` or `mod name;`) with file-import support, relative/absolute path routing, and name visibility exports.
 
@@ -27,41 +28,56 @@ Hanoi supports two keywords to define execution blocks:
 - `function`: Represents a specialized sentence that takes exactly one input and returns exactly one output (implicitly annotated with an arity of `#[arity(1, 1)]`).
 
 ### Annotations
-Functions can be annotated with metadata used by the compiler and static verification tools:
-- `#[arity(inputs, outputs)]`: Declares the expected stack transition.
-- `#[safety("precondition")]`: Declares a logical precondition under which the function is guaranteed not to panic.
-- `#[behavior("postcondition")]`: Declares the logical relationship between input stack elements (`in[k]`) and output stack elements (`out[j]`).
+Sentences and functions can be annotated with metadata used by the compiler and static verification tools:
+- `#[arity(inputs, outputs)]`: Declares the expected stack transition (implicit `#[arity(1, 1)]` for `function`).
+- `#[precondition(fn_name)]`: Names a `1 -> 1` function that must evaluate to `true` on the input for the annotated function to be considered safe to call.
+- `#[postcondition(fn_name)]`: Names a `1 -> 1` function that must evaluate to `true` on the output, given the precondition (if any) held on the input.
+- `#[total]`: Asserts the function never panics on *any* input.
+- `#[recursive]`: Marks a sentence that participates in a recursive call cycle, required by the verifier before it can model it.
 
 ### Example: Contract Annotation & Verification
 ```hana
-// A division wrapper that is statically guaranteed to never panic.
-#[arity(2, 1)]
-#[safety("is_numeric(in[0]) && is_numeric(in[1]) && in[0] != 0")]
-#[behavior("out[0] == in[1] / in[0]")]
-sentence safe_divide {
-    divide
+function is_int_fn {
+    is_int
 }
 
-// Composed safety check:
-// Pushing a value and duplicating it, then asserting equality, is statically proven safe.
-#[arity(1, 2)]
-#[behavior("out[0] == in[0] && out[1] == in[0]")]
-sentence dup_val {
+#[precondition(is_int_fn)]
+#[postcondition(is_int_fn)]
+function identity {
+    // returns input unchanged
+}
+
+#[total]
+function noop {
     pick 0
-}
-
-#[arity(2, 0)]
-#[safety("in[0] == in[1]")]
-sentence safe_assert_eq {
-    assert_eq
-}
-
-#[arity(1, 0)]
-sentence test_dup_safety {
-    jump dup_val
-    jump safe_assert_eq
+    drop 1
 }
 ```
+
+### Example: `type` / `enum` Predicate Sugar
+```hana
+type TestInt int;
+type IntOrBool int | bool;
+type SimpleTuple (int, bool);
+
+enum MyEnum {
+    Case1(int, bool),
+    Case2(symbol),
+    Case3(),
+}
+
+#[arity(0, 0)]
+sentence test_type_and_enum {
+    push 42
+    jump TestInt::check
+    assert
+
+    push (MyEnum::Case1::tag, (42, true))
+    jump MyEnum::check
+    assert
+}
+```
+Each `type`/`enum` declaration expands into a module with a `check` sentence (`Name::check`) that consumes a value and pushes a `Bool`, so it can be used directly as a `#[precondition(...)]` or `#[postcondition(...)]`. See [docs/typecheck.md](docs/typecheck.md) for the full verification model and [docs/hana.md](docs/hana.md) for the complete `type`/`enum` grammar.
 
 ---
 
@@ -74,8 +90,8 @@ The Hanoi VM supports a rich instruction set categorized into five main domains:
 | **Stack Ops** | `Push(V)`, `Drop(d)`, `Pick(d)`, `Roll(d)` | Standard stack push, drop at depth, copy/peek at depth, and rotate. |
 | **Arithmetic & Logic** | `Add`, `Subtract`, `Multiply`, `Divide`, `Modulo`, `Negate`, `Equal`, `Greater`, `Less`, `Not`, `And`, `Or` | Basic mathematical and Boolean logic operations. |
 | **Control Flow** | `Jump(S)`, `Branch(S1, S2)`, `Panic`, `Assert`, `AssertEqual` | Subroutine execution, conditional branching, and explicit panics. |
-| **Composite Types** | `Tuple(n)`, `Untuple(n)`, `SymbolLen`, `SymbolCharAt` | Constructing and destructuring tuples, and analyzing symbols (immutable strings). |
-| **Value Sets** | `SetContains`, `SetUnion`, `SetIntersection`, `SetDifference`, `SetComplement`, `SetSingleton`, `SetTuple(n)`, `SetRenamePrefix`, `SetChoose` | Comprehensive mathematical set operations. |
+| **Composite Types** | `Tuple(n)`, `Untuple(n)`, `SymbolLen`, `SymbolCharAt`, `TupleLength` | Constructing and destructuring tuples, and analyzing symbols (immutable strings). |
+| **Type Predicates** | `IsInt`, `IsBool`, `IsFloat`, `IsSymbol`, `IsTuple` | Runtime type tests, also used internally to compile `type`/`enum` predicates. |
 
 ---
 
@@ -128,7 +144,7 @@ Use the helper shell scripts at the project root to execute test suites:
 
 ## Documentation
 
-- [docs/hana.md](docs/hana.md): Detailed guide for Hanoi Assembly syntax, stack behavior, and key gotchas.
+- [docs/hana.md](docs/hana.md): Detailed guide for Hanoi Assembly syntax, stack behavior, contract annotations, and key gotchas.
 - [docs/hana_reference.md](docs/hana_reference.md): Complete reference of all available opcodes, organized by functionality.
-- [SAFETY_CHECKER_DESIGN.md](SAFETY_CHECKER_DESIGN.md): Detailed SMT verification and symbolic execution design specification.
+- [docs/typecheck.md](docs/typecheck.md): Detailed SMT verification and symbolic execution design for the `typecheck` tool.
 - [docs/machines.md](docs/machines.md): Specification of Hanoi's Communicating Sequential Processes (CSP) state machine semantics.

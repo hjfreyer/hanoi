@@ -79,24 +79,18 @@ These operations construct, destructure, or query structured data types.
 | `untuple` | `untuple <size>` | `[..., (v_0, ..., v_{N-1})] -> [..., v_{N-1}, ..., v_0]` | Pops a tuple of size $N$ and pushes its elements back onto the stack in reverse index order, leaving index 0 ($v_0$) at the top. |
 | `symbol_len` | `symbol_len` | `[..., sym] -> [..., len]` | Pops a symbol and pushes its character length as an Int. |
 | `symbol_char_at`| `symbol_char_at` | `[..., sym, idx] -> [..., char]` | Pops index $idx$ and symbol $sym$, then pushes the Unicode code point of the character at that index as an Int. |
+| `tuple_length` | `tuple_length` | `[..., tup] -> [..., len]` | Pops a Tuple and pushes its element count as an Int. |
 
 ---
 
-## 6. Mathematical Sets
+## 6. Type Predicates
 
-These instructions manipulate mathematical sets of values (`ValueSet`).
-
-> [!WARNING]
-> Set operations are deprecated/restricted in compile-time safety checker specifications, but are fully implemented and supported by the runtime VM.
+These instructions test the runtime type of the top stack value, pushing a Bool. They are also used internally by the compiler to implement `type`/`enum` declarations (see [docs/hana.md](hana.md#4-contract-annotations)).
 
 | Mnemonic | Syntax | Stack Transition | Description |
 | :--- | :--- | :--- | :--- |
-| `set_contains` | `set_contains` | `[..., val, set] -> [..., is_member]` | Pops member value $val$ and set $set$, and pushes a Bool indicating membership. |
-| `set_union` | `set_union` | `[..., set_a, set_b] -> [..., union_set]` | Pops two sets and pushes their union set. |
-| `set_intersection`| `set_intersection`| `[..., set_a, set_b] -> [..., intersection_set]`| Pops two sets and pushes their intersection set. |
-| `set_difference` | `set_difference` | `[..., set_a, set_b] -> [..., diff_set]` | Pops two sets and pushes their difference ($set\_a \setminus set\_b$). |
-| `set_complement` | `set_complement` | `[..., set] -> [..., complement_set]` | Pops a set and pushes its complement set. |
-| `set_singleton` | `set_singleton` | `[..., val] -> [..., singleton_set]` | Pops a value and pushes a singleton set containing that value. |
-| `set_tuple` | `set_tuple <size>` | `[..., s_{N-1}, ..., s_0] -> [..., set_tuple]` | Pops $N$ sets and pushes a set tuple representing their Cartesian product. |
-| `set_choose` | `set_choose` | `[..., set] -> [..., (has_element, element)]` | Pops a set, chooses an arbitrary member, and pushes a tuple `(has_element: bool, element)`. |
-| `set_rename_prefix`| `set_rename_prefix`| `[..., set, from, to]` -> `[..., renamed_set]` | Pops a set and two symbols (`from`, `to`), and rewrites all events in `set` starting with `from` to start with `to`. |
+| `is_int` | `is_int` | `[..., v] -> [..., is_int]` | Pops a value and pushes `true` if it is an Int, else `false`. |
+| `is_bool` | `is_bool` | `[..., v] -> [..., is_bool]` | Pops a value and pushes `true` if it is a Bool, else `false`. |
+| `is_float` | `is_float` | `[..., v] -> [..., is_float]` | Pops a value and pushes `true` if it is a Float, else `false`. |
+| `is_symbol` | `is_symbol` | `[..., v] -> [..., is_symbol]` | Pops a value and pushes `true` if it is a Symbol, else `false`. |
+| `is_tuple` | `is_tuple` | `[..., v] -> [..., is_tuple]` | Pops a value and pushes `true` if it is a Tuple, else `false`. |
