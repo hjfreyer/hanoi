@@ -2,14 +2,14 @@ symbol latte "Latte"
 symbol espresso "Espresso"
 
 #[arity(2, 2)]
-#[z3ify]
+#[typecheck]
 sentence test_swap {
     pick 1
     drop 2
 }
 
 #[arity(2, 1)]
-#[z3ify]
+#[typecheck]
 sentence test_arith {
     add
     push 10
@@ -17,7 +17,7 @@ sentence test_arith {
 }
 
 #[arity(1, 1)]
-#[z3ify]
+#[typecheck]
 sentence test_branch {
     push true
     branch {
@@ -29,13 +29,13 @@ sentence test_branch {
 }
 
 #[arity(2, 1)]
-#[z3ify]
+#[typecheck]
 sentence test_symbol {
     symbol_char_at
 }
 
 #[arity(2, 1)]
-#[z3ify]
+#[typecheck]
 sentence test_tuples {
     tuple 2
     untuple 2
@@ -43,7 +43,7 @@ sentence test_tuples {
 }
 
 #[arity(1, 1)]
-#[z3ify]
+#[typecheck]
 sentence swap_pair {
     untuple 2
     roll 1
@@ -51,44 +51,44 @@ sentence swap_pair {
 }
 
 #[arity(1, 1)]
-#[z3ify]
+#[typecheck]
 sentence test_double_swap {
     jump swap_pair
     jump swap_pair
 }
 
 #[arity(1, 1)]
-#[z3ify]
+#[typecheck]
 sentence test_is_int {
     is_int
 }
 
 #[arity(1, 1)]
-#[z3ify]
+#[typecheck]
 sentence test_is_bool {
     is_bool
 }
 
 #[arity(1, 1)]
-#[z3ify]
+#[typecheck]
 sentence test_is_float {
     is_float
 }
 
 #[arity(1, 1)]
-#[z3ify]
+#[typecheck]
 sentence test_is_symbol {
     is_symbol
 }
 
 #[arity(1, 1)]
-#[z3ify]
+#[typecheck]
 sentence test_is_tuple {
     is_tuple
 }
 
 #[arity(1, 1)]
-#[z3ify]
+#[typecheck]
 sentence test_tuple_length {
     tuple_length
 }

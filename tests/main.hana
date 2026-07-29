@@ -23,5 +23,5 @@ mod runtime_stdout;
 mod advent;
 mod machine_tests;
 mod arity_tests;
-mod z3ify_test;
+mod typecheck_test;
 

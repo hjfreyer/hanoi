@@ -1,4 +1,4 @@
 // Core module for Hanoi Static Safety and Behavior Contract Checker
 
 pub mod formula;
-pub mod z3ify;
+pub mod typecheck;

@@ -19,7 +19,7 @@ fn main() {
     }
 
     if !path.is_dir() {
-        eprintln!("Error: Path '{}' is not a directory. z3ify only supports directories containing 'main.hana'", path_arg);
+        eprintln!("Error: Path '{}' is not a directory. typecheck only supports directories containing 'main.hana'", path_arg);
         process::exit(1);
     }
 
@@ -48,7 +48,7 @@ fn main() {
     };
 
     println!("Checking safety2 annotations for '{}'...", path_arg);
-    match bytecode::safety::z3ify::check_safety2(&library) {
+    match bytecode::safety::typecheck::check_safety2(&library) {
         Ok(()) => {
             println!("Verification PASSED.");
             process::exit(0);

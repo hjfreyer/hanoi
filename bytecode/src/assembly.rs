@@ -569,8 +569,8 @@ fn parse_items(stream: &mut TokenStream, end_token: Option<Token>, base_dir: Opt
                     stream.expect(Token::RParen)?;
                     Annotation::Safety2(path_str)
                 }
-                "z3ify" => {
-                    Annotation::Z3ify
+                "typecheck" => {
+                    Annotation::Typecheck
                 }
                 "recursive" => {
                     Annotation::Recursive

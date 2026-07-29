@@ -153,9 +153,9 @@ pub fn check_safety2(library: &Library) -> Result<(), String> {
 
     // 6. Compute arity map by simulating the stack
     let mut arity_map = HashMap::new();
+    let mut in_progress = HashSet::new();
     for &s_idx in &ordered_sentences {
-        let arity = get_sentence_arity(s_idx, library, &arity_map)?;
-        arity_map.insert(s_idx, arity);
+        get_sentence_arity(s_idx, library, &mut arity_map, &mut in_progress)?;
     }
 
     // 7. Validate safety2 arities
@@ -180,7 +180,7 @@ pub fn check_safety2(library: &Library) -> Result<(), String> {
         }
         if m_annotated == 0 {
             return Err(format!(
-                "Annotated function '{}' must have at least 1 output to be verified via z3ify",
+                "Annotated function '{}' must have at least 1 output to be verified via typecheck",
                 annotated_name
             ));
         }
@@ -1005,8 +1005,16 @@ fn get_declared_arity(s_idx: SentenceIndex, library: &Library) -> Option<(usize,
 fn get_sentence_arity(
     s_idx: SentenceIndex,
     library: &Library,
-    arity_map: &HashMap<SentenceIndex, (usize, usize)>,
+    arity_map: &mut HashMap<SentenceIndex, (usize, usize)>,
+    in_progress: &mut HashSet<SentenceIndex>,
 ) -> Result<(usize, usize), String> {
+    if let Some(&arity) = arity_map.get(&s_idx) {
+        return Ok(arity);
+    }
+    if !in_progress.insert(s_idx) {
+        return Err(format!("Recursion detected for sentence: {}", get_sentence_name(s_idx, library)));
+    }
+
     let (declared_in, _declared_out) = get_declared_arity(s_idx, library).unwrap_or_else(|| {
         if let Some(Some(arities)) = library.instruction_arities.get(s_idx) {
             if !arities.is_empty() {
@@ -1069,9 +1077,7 @@ fn get_sentence_arity(
                 }
             }
             Instruction::Jump(target) => {
-                let &(n_t, m_t) = arity_map.get(target).ok_or_else(|| {
-                    format!("Internal error: dependency sentence arity not found for jump to target {:?}", target)
-                })?;
+                let (n_t, m_t) = get_sentence_arity(*target, library, arity_map, in_progress)?;
                 while stack.len() < n_t {
                     stack.insert(0, format!("in_inferred_{}", inputs_needed));
                     inputs_needed += 1;
@@ -1090,12 +1096,8 @@ fn get_sentence_arity(
                 }
                 stack.pop(); // cond
 
-                let &(n_then, m_then) = arity_map.get(then_t).ok_or_else(|| {
-                    format!("Internal error: dependency sentence arity not found for branch target {:?}", then_t)
-                })?;
-                let &(n_else, m_else) = arity_map.get(else_t).ok_or_else(|| {
-                    format!("Internal error: dependency sentence arity not found for branch target {:?}", else_t)
-                })?;
+                let (n_then, m_then) = get_sentence_arity(*then_t, library, arity_map, in_progress)?;
+                let (n_else, m_else) = get_sentence_arity(*else_t, library, arity_map, in_progress)?;
 
                 let max_n = std::cmp::max(n_then, n_else);
                 while stack.len() < max_n {
@@ -1164,7 +1166,10 @@ fn get_sentence_arity(
         }
     }
     
-    Ok((inputs_needed, stack.len()))
+    let res = (inputs_needed, stack.len());
+    arity_map.insert(s_idx, res);
+    in_progress.remove(&s_idx);
+    Ok(res)
 }
 
 #[cfg(test)]
