@@ -24,6 +24,7 @@ enum Token {
     ModKeyword,
     SentenceKeyword,
     FunctionKeyword,
+    TypeKeyword,
     DoubleColon,
     Semicolon,
     Identifier(String),
@@ -37,6 +38,7 @@ enum Token {
     RParen,
     Comma,
     Colon,
+    Pipe,
     Int(i64),
     Float(f64),
     Bool(bool),
@@ -117,6 +119,11 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
                     tokens.push(Token::Colon);
                 }
             }
+
+            '|' => {
+                tokens.push(Token::Pipe);
+                chars.next();
+            }
             '"' => {
                 chars.next(); // consume '"'
                 let mut string_val = String::new();
@@ -193,6 +200,7 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
                     "mod" => tokens.push(Token::ModKeyword),
                     "sentence" => tokens.push(Token::SentenceKeyword),
                     "function" => tokens.push(Token::FunctionKeyword),
+                    "type" => tokens.push(Token::TypeKeyword),
                     "true" => tokens.push(Token::Bool(true)),
                     "false" => tokens.push(Token::Bool(false)),
                     _ => tokens.push(Token::Identifier(ident)),
@@ -305,6 +313,90 @@ fn parse_segment(name: &str) -> PathSegment {
         "crate" => PathSegment::Crate,
         "super" => PathSegment::Super,
         other => PathSegment::Identifier(other.to_string()),
+    }
+}
+
+fn parse_type_spec(stream: &mut TokenStream) -> Result<TypeSpec, String> {
+    parse_type_disjunction(stream)
+}
+
+fn parse_type_disjunction(stream: &mut TokenStream) -> Result<TypeSpec, String> {
+    let mut left = parse_type_primary(stream)?;
+    while stream.peek() == Some(&Token::Pipe) {
+        stream.next(); // consume '|'
+        let right = parse_type_primary(stream)?;
+        match left {
+            TypeSpec::Union(ref mut variants) => {
+                variants.push(right);
+            }
+            _ => {
+                left = TypeSpec::Union(vec![left, right]);
+            }
+        }
+    }
+    Ok(left)
+}
+
+fn parse_type_primary(stream: &mut TokenStream) -> Result<TypeSpec, String> {
+    match stream.peek() {
+        Some(&Token::LParen) => {
+            stream.next(); // consume '('
+            let mut elements = Vec::new();
+            if stream.peek() != Some(&Token::RParen) {
+                loop {
+                    elements.push(parse_type_spec(stream)?);
+                    match stream.peek() {
+                        Some(&Token::Comma) => {
+                            stream.next();
+                            if stream.peek() == Some(&Token::RParen) {
+                                break;
+                            }
+                        }
+                        Some(&Token::RParen) => {
+                            break;
+                        }
+                        other => return Err(format!("Expected ',' or ')', found {:?}", other)),
+                    }
+                }
+            }
+            stream.expect(Token::RParen)?;
+            Ok(TypeSpec::Tuple(elements))
+        }
+        Some(&Token::Bool(b)) => {
+            stream.next();
+            Ok(TypeSpec::Literal(ParsedValue::Bool(b)))
+        }
+        Some(&Token::Int(i)) => {
+            stream.next();
+            Ok(TypeSpec::Literal(ParsedValue::Int(i)))
+        }
+        Some(&Token::Float(f)) => {
+            stream.next();
+            Ok(TypeSpec::Literal(ParsedValue::Float(f)))
+        }
+        Some(&Token::SymbolKeyword) => {
+            stream.next();
+            Ok(TypeSpec::Primitive(PrimitiveType::Symbol))
+        }
+        Some(Token::Identifier(name)) => {
+            let name_cloned = name.clone();
+            stream.next(); // consume identifier
+            
+            // Check if it's a primitive type keyword (lowercase only)
+            match name_cloned.as_str() {
+                "int" => Ok(TypeSpec::Primitive(PrimitiveType::Int)),
+                "bool" => Ok(TypeSpec::Primitive(PrimitiveType::Bool)),
+                "float" => Ok(TypeSpec::Primitive(PrimitiveType::Float)),
+                "symbol" => Ok(TypeSpec::Primitive(PrimitiveType::Symbol)),
+                "tuple" => Ok(TypeSpec::Primitive(PrimitiveType::Tuple)),
+                _ => {
+                    // Otherwise, parse it as a path (which could be a user-defined type or a symbol reference)
+                    let path = parse_path(stream, name_cloned)?;
+                    Ok(TypeSpec::Path(path))
+                }
+            }
+        }
+        other => Err(format!("Expected type specification, found {:?}", other)),
     }
 }
 
@@ -459,6 +551,7 @@ struct TopLevelSentence {
     name: String,
     body: ParsedSentence,
     annotations: Vec<Annotation>,
+    is_type_check: bool,
 }
 
 fn is_composer_name(name: &str) -> bool {
@@ -622,6 +715,25 @@ fn parse_items(stream: &mut TokenStream, end_token: Option<Token>, base_dir: Opt
                 }
             }
 
+            if stream.peek() == Some(&Token::TypeKeyword) {
+                stream.next(); // consume 'type'
+                let name = match stream.next() {
+                    Some(Token::Identifier(name)) => name,
+                    Some(other) => return Err(format!("Expected type name identifier, found {:?}", other)),
+                    None => return Err("Expected type name identifier, found end of input".to_string()),
+                };
+                let spec = parse_type_spec(stream)?;
+                stream.expect(Token::Semicolon)?;
+
+                let check_sentence = compile_type_to_sentence("check".to_string(), spec, true, annotations)?;
+                items.push(TopLevelItem::Mod {
+                    name,
+                    items: vec![TopLevelItem::Sentence(check_sentence)],
+                    is_test: false,
+                });
+                continue;
+            }
+
             let is_function = if stream.peek() == Some(&Token::SentenceKeyword) {
                 stream.next();
                 false
@@ -629,7 +741,7 @@ fn parse_items(stream: &mut TokenStream, end_token: Option<Token>, base_dir: Opt
                 stream.next();
                 true
             } else {
-                return Err(format!("Expected 'sentence' or 'function', found {:?}", stream.peek()));
+                return Err(format!("Expected 'sentence', 'function', or 'type', found {:?}", stream.peek()));
             };
 
             let name = match stream.next() {
@@ -655,6 +767,7 @@ fn parse_items(stream: &mut TokenStream, end_token: Option<Token>, base_dir: Opt
                 name,
                 body,
                 annotations,
+                is_type_check: false,
             }));
             continue;
         }
@@ -755,6 +868,25 @@ fn parse_items(stream: &mut TokenStream, end_token: Option<Token>, base_dir: Opt
                 }
             }
 
+            if stream.peek() == Some(&Token::TypeKeyword) {
+                stream.next(); // consume 'type'
+                let name = match stream.next() {
+                    Some(Token::Identifier(name)) => name,
+                    Some(other) => return Err(format!("Expected type name identifier, found {:?}", other)),
+                    None => return Err("Expected type name identifier, found end of input".to_string()),
+                };
+                let spec = parse_type_spec(stream)?;
+                stream.expect(Token::Semicolon)?;
+
+                let check_sentence = compile_type_to_sentence("check".to_string(), spec, true, Vec::new())?;
+                items.push(TopLevelItem::Mod {
+                    name,
+                    items: vec![TopLevelItem::Sentence(check_sentence)],
+                    is_test: false,
+                });
+                continue;
+            }
+
             let is_function = if stream.peek() == Some(&Token::SentenceKeyword) {
                 stream.next();
                 false
@@ -762,7 +894,7 @@ fn parse_items(stream: &mut TokenStream, end_token: Option<Token>, base_dir: Opt
                 stream.next();
                 true
             } else {
-                return Err(format!("Expected 'sentence' or 'function', found {:?}", stream.peek()));
+                return Err(format!("Expected 'sentence', 'function', or 'type', found {:?}", stream.peek()));
             };
 
             let name = match stream.next() {
@@ -789,12 +921,156 @@ fn parse_items(stream: &mut TokenStream, end_token: Option<Token>, base_dir: Opt
                 name,
                 body,
                 annotations,
+                is_type_check: false,
             }));
         }
         }
     }
 
     Ok(items)
+}
+
+fn compile_type_to_sentence(
+    name: String,
+    spec: TypeSpec,
+    is_exported: bool,
+    mut annotations: Vec<Annotation>,
+) -> Result<TopLevelSentence, String> {
+    if !annotations.iter().any(|ann| matches!(ann, Annotation::Total)) {
+        annotations.push(Annotation::Total);
+    }
+
+    let instructions = compile_type_spec(&spec)?;
+
+    Ok(TopLevelSentence {
+        is_exported,
+        is_test: false,
+        name,
+        body: ParsedSentence { instructions },
+        annotations,
+        is_type_check: true,
+    })
+}
+
+fn compile_type_spec(spec: &TypeSpec) -> Result<Vec<ParsedInstruction>, String> {
+    match spec {
+        TypeSpec::Primitive(prim) => {
+            match prim {
+                PrimitiveType::Int => Ok(vec![ParsedInstruction::IsInt]),
+                PrimitiveType::Bool => Ok(vec![ParsedInstruction::IsBool]),
+                PrimitiveType::Float => Ok(vec![ParsedInstruction::IsFloat]),
+                PrimitiveType::Symbol => Ok(vec![ParsedInstruction::IsSymbol]),
+                PrimitiveType::Tuple => Ok(vec![ParsedInstruction::IsTuple]),
+            }
+        }
+        TypeSpec::Literal(val) => {
+            Ok(vec![
+                ParsedInstruction::Push(val.clone()),
+                ParsedInstruction::Equal,
+            ])
+        }
+        TypeSpec::Path(path) => {
+            Ok(vec![ParsedInstruction::TypeCheckPath(path.clone())])
+        }
+        TypeSpec::Union(variants) => {
+            compile_union(variants)
+        }
+        TypeSpec::Tuple(elements) => {
+            let n = elements.len();
+            let else_len_mismatches = ParsedSentence {
+                instructions: vec![
+                    ParsedInstruction::Drop(0),
+                    ParsedInstruction::Push(ParsedValue::Bool(false)),
+                ],
+            };
+            let then_len_matches = if n == 0 {
+                ParsedSentence {
+                    instructions: vec![
+                        ParsedInstruction::Drop(0),
+                        ParsedInstruction::Push(ParsedValue::Bool(true)),
+                    ],
+                }
+            } else {
+                let mut insts = vec![ParsedInstruction::Untuple(n)];
+                
+                let first_check = compile_type_spec(&elements[0])?;
+                insts.extend(first_check);
+                
+                for elem in elements.iter().skip(1) {
+                    insts.push(ParsedInstruction::Roll(1));
+                    let elem_check = compile_type_spec(elem)?;
+                    insts.extend(elem_check);
+                    insts.push(ParsedInstruction::And);
+                }
+                
+                ParsedSentence { instructions: insts }
+            };
+            
+            let then_is_tuple = ParsedSentence {
+                instructions: vec![
+                    ParsedInstruction::Pick(0),
+                    ParsedInstruction::TupleLength,
+                    ParsedInstruction::Push(ParsedValue::Int(n as i64)),
+                    ParsedInstruction::Equal,
+                    ParsedInstruction::Branch(
+                        Target::Inline(then_len_matches),
+                        Target::Inline(else_len_mismatches),
+                    ),
+                ],
+            };
+            
+            let else_not_tuple = ParsedSentence {
+                instructions: vec![
+                    ParsedInstruction::Drop(0),
+                    ParsedInstruction::Push(ParsedValue::Bool(false)),
+                ],
+            };
+            
+            Ok(vec![
+                ParsedInstruction::Pick(0),
+                ParsedInstruction::IsTuple,
+                ParsedInstruction::Branch(
+                    Target::Inline(then_is_tuple),
+                    Target::Inline(else_not_tuple),
+                ),
+            ])
+        }
+    }
+}
+
+fn compile_union(variants: &[TypeSpec]) -> Result<Vec<ParsedInstruction>, String> {
+    if variants.is_empty() {
+        return Ok(vec![
+            ParsedInstruction::Drop(0),
+            ParsedInstruction::Push(ParsedValue::Bool(false)),
+        ]);
+    }
+    if variants.len() == 1 {
+        return compile_type_spec(&variants[0]);
+    }
+    
+    let first = &variants[0];
+    let rest = &variants[1..];
+    
+    let then_true = ParsedSentence {
+        instructions: vec![
+            ParsedInstruction::Drop(0),
+            ParsedInstruction::Push(ParsedValue::Bool(true)),
+        ],
+    };
+    
+    let else_false = ParsedSentence {
+        instructions: compile_union(rest)?,
+    };
+    
+    let mut insts = vec![ParsedInstruction::Pick(0)];
+    insts.extend(compile_type_spec(first)?);
+    insts.push(ParsedInstruction::Branch(
+        Target::Inline(then_true),
+        Target::Inline(else_false),
+    ));
+    
+    Ok(insts)
 }
 
 #[derive(Debug, Clone)]
@@ -851,6 +1127,25 @@ enum ParsedInstruction {
     IsSymbol,
     IsTuple,
     TupleLength,
+    TypeCheckPath(Path),
+}
+
+#[derive(Debug, Clone)]
+pub enum TypeSpec {
+    Primitive(PrimitiveType),
+    Literal(ParsedValue),
+    Path(Path),
+    Tuple(Vec<TypeSpec>),
+    Union(Vec<TypeSpec>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrimitiveType {
+    Int,
+    Bool,
+    Float,
+    Symbol,
+    Tuple,
 }
 
 
@@ -1572,6 +1867,26 @@ impl<'a> Compiler<'a> {
                     let idx2 = self.resolve_target(current_path, t2)?;
                     Instruction::Branch(idx1, idx2)
                 }
+                ParsedInstruction::TypeCheckPath(path) => {
+                    let resolved = match self.resolve_path(current_path, &path) {
+                        Ok(res) => res,
+                        Err(e) => {
+                            let mut check_path = path.clone();
+                            check_path.segments.push(PathSegment::Identifier("check".to_string()));
+                            self.resolve_path(current_path, &check_path)
+                                .map_err(|_| format!("Could not resolve type path '{}': {}", path, e))?
+                        }
+                    };
+                    match resolved {
+                        ResolvedItem::Sentence(idx) => {
+                            Instruction::Jump(idx)
+                        }
+                        ResolvedItem::Symbol(val) => {
+                            compiled.push(Instruction::Push(val));
+                            Instruction::Equal
+                        }
+                    }
+                }
             };
             compiled.push(c_inst);
         }
@@ -1682,7 +1997,15 @@ pub fn assemble_with_path(input: &str, base_dir: Option<&std::path::Path>) -> Re
     for (idx, (path, sentence)) in flat_sentences.into_iter().enumerate() {
         compiler.annotations[idx] = sentence.annotations.clone();
         compiler.current_parent_idx = Some(SentenceIndex::from(idx));
-        let compiled_instructions = compiler.compile_sentence_body(&path, sentence.body.instructions)?;
+        let resolve_path = if sentence.is_type_check {
+            if path.is_empty() {
+                return Err("Internal error: type check sentence path is empty".to_string());
+            }
+            &path[..path.len() - 1]
+        } else {
+            &path
+        };
+        let compiled_instructions = compiler.compile_sentence_body(resolve_path, sentence.body.instructions)?;
         compiler.sentences[idx] = compiled_instructions;
         let fq_name = if path.is_empty() {
             sentence.name.clone()

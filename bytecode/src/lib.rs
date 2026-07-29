@@ -506,4 +506,52 @@ mod tests {
             vec![Annotation::Total, Annotation::Arity(1, 1)]
         );
     }
+
+    #[test]
+    fn test_type_definitions_primitives() {
+        let code = r#"
+            type MyInt int;
+            type MyBool bool;
+            type MyFloat float;
+            type MySymbol symbol;
+            type MyTuple tuple;
+        "#;
+        let res = assemble(code).unwrap();
+        assert_eq!(res.sentences.len(), 5);
+
+        for idx in 0..5 {
+            let s_idx = SentenceIndex::from(idx);
+            assert!(res.annotations[s_idx].contains(&Annotation::Total));
+        }
+
+        // uppercase 'Int' should fail because it is case-sensitive
+        let bad_code = r#"
+            type BadInt Int;
+        "#;
+        assert!(assemble(bad_code).is_err());
+    }
+
+    #[test]
+    fn test_type_definitions_unions_and_tuples() {
+        let code = r#"
+            type IntOrBool int | bool;
+            type Pair (int, bool);
+            type Nested (IntOrBool, Pair | float);
+            type Empty ();
+        "#;
+        let res = assemble(code).unwrap();
+        assert_eq!(res.sentences.len(), 20);
+    }
+
+    #[test]
+    fn test_type_definitions_literals() {
+        let code = r#"
+            symbol my_sym "some symbol"
+            type OnlySym my_sym;
+            type Only42 42;
+            type TrueOr314 true | 3.14;
+        "#;
+        let res = assemble(code).unwrap();
+        assert_eq!(res.sentences.len(), 5);
+    }
 }

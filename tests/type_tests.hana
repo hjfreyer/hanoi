@@ -1,0 +1,158 @@
+symbol test_sym "my_test_symbol"
+symbol other_sym "some_other"
+
+type TestInt int;
+type TestBool bool;
+type TestFloat float;
+type TestSymbol symbol;
+type TestTuple tuple;
+
+type IntOrBool int | bool;
+type SymOr42 test_sym | 42;
+
+type SimpleTuple (int, bool);
+type NestedTuple (SimpleTuple, float | test_sym);
+type EmptyTuple ();
+
+test sentence test_primitive_checks {
+    // Test int
+    push 42
+    jump TestInt::check
+    assert
+
+    push true
+    jump TestInt::check
+    not
+    assert
+
+    // Test bool
+    push true
+    jump TestBool::check
+    assert
+
+    push 42.0
+    jump TestBool::check
+    not
+    assert
+
+    // Test float
+    push 3.14
+    jump TestFloat::check
+    assert
+
+    push 42
+    jump TestFloat::check
+    not
+    assert
+
+    // Test symbol
+    push test_sym
+    jump TestSymbol::check
+    assert
+
+    push other_sym
+    jump TestSymbol::check
+    assert
+
+    push 42
+    jump TestSymbol::check
+    not
+    assert
+
+    // Test tuple
+    push (1, 2)
+    jump TestTuple::check
+    assert
+
+    push 42
+    jump TestTuple::check
+    not
+    assert
+}
+
+test sentence test_union_checks {
+    push 42
+    jump IntOrBool::check
+    assert
+
+    push false
+    jump IntOrBool::check
+    assert
+
+    push 3.14
+    jump IntOrBool::check
+    not
+    assert
+
+    push test_sym
+    jump SymOr42::check
+    assert
+
+    push 42
+    jump SymOr42::check
+    assert
+
+    push other_sym
+    jump SymOr42::check
+    not
+    assert
+
+    push 43
+    jump SymOr42::check
+    not
+    assert
+}
+
+test sentence test_tuple_checks {
+    // SimpleTuple = (int, bool)
+    push (42, true)
+    jump SimpleTuple::check
+    assert
+
+    // Wrong types
+    push (42, 43)
+    jump SimpleTuple::check
+    not
+    assert
+
+    // Wrong length
+    push (42, true, 44)
+    jump SimpleTuple::check
+    not
+    assert
+
+    // Not a tuple
+    push 42
+    jump SimpleTuple::check
+    not
+    assert
+
+    // NestedTuple = (SimpleTuple, float | test_sym)
+    push ((10, false), 3.14)
+    jump NestedTuple::check
+    assert
+
+    push ((10, false), test_sym)
+    jump NestedTuple::check
+    assert
+
+    push ((10, false), other_sym)
+    jump NestedTuple::check
+    not
+    assert
+
+    // EmptyTuple = ()
+    push ()
+    jump EmptyTuple::check
+    assert
+
+    push (1)
+    jump EmptyTuple::check
+    not
+    assert
+
+    push 42
+    jump EmptyTuple::check
+    not
+    assert
+}
