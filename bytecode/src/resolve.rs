@@ -8,6 +8,9 @@
 
 use std::collections::HashMap;
 
+use derive_more::{From, Into};
+use typed_index_collections::TiVec;
+
 use crate::library::SentenceIndex;
 use crate::value::Value;
 
@@ -40,8 +43,8 @@ impl std::fmt::Display for Path {
     }
 }
 
-/// Identifies a module within a [`ModuleTree`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// A type-safe index wrapper for indexing a `Module` in a [`ModuleTree`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, From, Into)]
 pub struct ModuleId(usize);
 
 /// The crate root, which every [`ModuleTree`] has from the moment it is created.
@@ -80,29 +83,29 @@ struct Module {
 }
 
 pub struct ModuleTree {
-    modules: Vec<Module>,
+    modules: TiVec<ModuleId, Module>,
 }
 
 impl ModuleTree {
     pub fn new() -> Self {
         Self {
-            modules: vec![Module {
+            modules: TiVec::from(vec![Module {
                 name: "crate".to_string(),
                 parent: None,
                 items: HashMap::new(),
-            }],
+            }]),
         }
     }
 
     pub fn parent(&self, id: ModuleId) -> Option<ModuleId> {
-        self.modules[id.0].parent
+        self.modules[id].parent
     }
 
     /// The module `up` levels above `id`, or `None` if that walks past the root.
     fn ancestor(&self, id: ModuleId, up: usize) -> Option<ModuleId> {
         let mut cur = id;
         for _ in 0..up {
-            cur = self.modules[cur.0].parent?;
+            cur = self.modules[cur].parent?;
         }
         Some(cur)
     }
@@ -111,8 +114,8 @@ impl ModuleTree {
     pub fn path_of(&self, id: ModuleId) -> Vec<String> {
         let mut segments = Vec::new();
         let mut cur = id;
-        while let Some(parent) = self.modules[cur.0].parent {
-            segments.push(self.modules[cur.0].name.clone());
+        while let Some(parent) = self.modules[cur].parent {
+            segments.push(self.modules[cur].name.clone());
             cur = parent;
         }
         segments.reverse();
@@ -122,7 +125,7 @@ impl ModuleTree {
     fn depth(&self, id: ModuleId) -> usize {
         let mut depth = 0;
         let mut cur = id;
-        while let Some(parent) = self.modules[cur.0].parent {
+        while let Some(parent) = self.modules[cur].parent {
             depth += 1;
             cur = parent;
         }
@@ -154,11 +157,11 @@ impl ModuleTree {
         if name == "crate" || name == "super" {
             return Err(format!("Cannot use reserved keyword '{}' as name", name));
         }
-        if let Some(existing) = self.modules[scope.0].items.get(name) {
+        if let Some(existing) = self.modules[scope].items.get(name) {
             return Err(format!(
                 "Duplicate declaration of name '{}' in module '{}': already declared as a {}",
                 name,
-                self.modules[scope.0].name,
+                self.modules[scope].name,
                 existing.describe()
             ));
         }
@@ -168,26 +171,26 @@ impl ModuleTree {
     /// Binds `name` in `scope`, rejecting reserved words and redeclarations.
     pub fn declare(&mut self, scope: ModuleId, name: String, item: ModuleItem) -> Result<(), String> {
         self.check_declarable(scope, &name)?;
-        self.modules[scope.0].items.insert(name, item);
+        self.modules[scope].items.insert(name, item);
         Ok(())
     }
 
     /// Creates a submodule of `scope` and binds it there.
     pub fn declare_module(&mut self, scope: ModuleId, name: String) -> Result<ModuleId, String> {
         self.check_declarable(scope, &name)?;
-        let id = ModuleId(self.modules.len());
+        let id = self.modules.next_key();
         self.modules.push(Module {
             name: name.clone(),
             parent: Some(scope),
             items: HashMap::new(),
         });
-        self.modules[scope.0].items.insert(name, ModuleItem::Mod(id));
+        self.modules[scope].items.insert(name, ModuleItem::Mod(id));
         Ok(id)
     }
 
     /// The sentence bound to `name` directly in `scope`, if `name` is one.
     pub fn sentence(&self, scope: ModuleId, name: &str) -> Option<SentenceIndex> {
-        match self.modules[scope.0].items.get(name) {
+        match self.modules[scope].items.get(name) {
             Some(ModuleItem::Sentence(idx)) => Some(*idx),
             _ => None,
         }
@@ -196,8 +199,7 @@ impl ModuleTree {
     /// Every symbol in the tree, keyed by fully qualified name.
     pub fn symbol_map(&self) -> HashMap<String, Value> {
         let mut symbols = HashMap::new();
-        for (raw, module) in self.modules.iter().enumerate() {
-            let id = ModuleId(raw);
+        for (id, module) in self.modules.iter_enumerated() {
             for (name, item) in &module.items {
                 if let ModuleItem::Symbol(val) = item {
                     symbols.insert(self.fq_name(id, name), val.clone());
@@ -229,7 +231,7 @@ impl ModuleTree {
 
         for seg in intermediate {
             let name = expect_identifier(seg)?;
-            cur = match self.modules[cur.0].items.get(name) {
+            cur = match self.modules[cur].items.get(name) {
                 Some(ModuleItem::Mod(id)) => *id,
                 Some(other) => {
                     return Err(format!(
@@ -250,7 +252,7 @@ impl ModuleTree {
         }
 
         let name = expect_identifier(last)?;
-        self.modules[cur.0].items.get(name).ok_or_else(|| {
+        self.modules[cur].items.get(name).ok_or_else(|| {
             format!("Item '{}' not found in module '{}'", name, self.describe(cur))
         })
     }
