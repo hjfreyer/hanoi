@@ -5,11 +5,11 @@ NAME=$(echo "$PAYLOAD" | jq -r '.name')
 CWD=$(echo "$PAYLOAD" | jq -r '.cwd')
 
 # Define where the jj workspace should be created
-WORKSPACE_DIR="$CWD/.claude/workspaces/$NAME"
+WORKSPACE_BASE="$CWD/.claude/workspaces/"
+mkdir -p "$WORKSPACE_BASE"
+WORKSPACE_DIR="$WORKSPACE_BASE/$NAME"
 
 # Create the jj workspace (redirect output to keep stdout clean)
 jj workspace add "$WORKSPACE_DIR" > /dev/null 2>&1
 
-# Claude Code expects the absolute path to the new workspace on stdout
-ABS_PATH=$(cd "$WORKSPACE_DIR" && pwd)
-echo "$ABS_PATH"
+echo "$WORKSPACE_DIR"
