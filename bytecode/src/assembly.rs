@@ -1,19 +1,10 @@
 use std::collections::{HashMap, HashSet};
 use crate::library::{Library, SentenceIndex, Annotation};
 use crate::opcode::Instruction;
+use crate::resolve::{ModuleId, ModuleItem, ModuleTree, ResolvedItem};
 use crate::value::{Value, Symbol};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PathSegment {
-    Crate,
-    Super,
-    Identifier(String),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Path {
-    pub segments: Vec<PathSegment>,
-}
+pub use crate::resolve::{Path, PathSegment};
 
 /// Token types for the assembly lexer.
 #[derive(Debug, Clone, PartialEq)]
@@ -1278,288 +1269,159 @@ pub enum PrimitiveType {
 
 
 
-struct Module {
-    name: String,
-    symbols: HashMap<String, Value>,
-    sentences: HashMap<String, SentenceIndex>,
-    submodules: HashMap<String, Module>,
+/// Everything the tree-building pass accumulates alongside the module tree
+/// itself: the flat sentence list to compile, and the library's lookup maps.
+struct TreeBuilder {
+    tree: ModuleTree,
+    symbol_counter: usize,
+    sentence_counter: usize,
+    /// Each sentence paired with the module its paths resolve against.
+    flat_sentences: Vec<(ModuleId, TopLevelSentence)>,
+    exports: HashMap<String, SentenceIndex>,
+    tests: HashMap<String, SentenceIndex>,
+    test_machines: HashSet<String>,
+    anon_counter: usize,
 }
 
-impl Module {
-    fn new(name: String) -> Self {
+/// Sentences a test machine module exposes to the runtime.
+const MACHINE_SENTENCES: [&str; 7] = [
+    "init",
+    "accept",
+    "emit",
+    "process",
+    "tau_reduce",
+    "is_done",
+    "is_ready_to_finish",
+];
+
+impl TreeBuilder {
+    fn new() -> Self {
         Self {
-            name,
-            symbols: HashMap::new(),
-            sentences: HashMap::new(),
-            submodules: HashMap::new(),
+            tree: ModuleTree::new(),
+            symbol_counter: 0,
+            sentence_counter: 0,
+            flat_sentences: Vec::new(),
+            exports: HashMap::new(),
+            tests: HashMap::new(),
+            test_machines: HashSet::new(),
+            anon_counter: 0,
         }
     }
-}
 
-fn build_module_tree(
-    items: Vec<TopLevelItem>,
-    current_path: &mut Vec<String>,
-    symbol_counter: &mut usize,
-    sentence_counter: &mut usize,
-    module: &mut Module,
-    flat_sentences: &mut Vec<(Vec<String>, TopLevelSentence)>,
-    exports: &mut HashMap<String, SentenceIndex>,
-    tests: &mut HashMap<String, SentenceIndex>,
-    test_machines: &mut HashSet<String>,
-) -> Result<(), String> {
-    let mut anon_counter = 0;
-    build_module_tree_impl(
-        items,
-        current_path,
-        symbol_counter,
-        sentence_counter,
-        module,
-        flat_sentences,
-        exports,
-        tests,
-        test_machines,
-        &mut anon_counter,
-    )
-}
+    fn build(&mut self, items: Vec<TopLevelItem>, scope: ModuleId) -> Result<(), String> {
+        for item in items {
+            match item {
+                TopLevelItem::SymbolDecl { name, debug_desc } => {
+                    let desc = debug_desc.unwrap_or_else(|| self.tree.fq_name(scope, &name));
+                    let symbol = Value::Symbol(Symbol {
+                        id: self.symbol_counter,
+                        name: desc,
+                    });
+                    self.symbol_counter += 1;
 
-fn resolve_module_expr(
-    expr: &ModuleExpr,
-    current_path: &mut Vec<String>,
-    symbol_counter: &mut usize,
-    sentence_counter: &mut usize,
-    parent_module: &mut Module,
-    flat_sentences: &mut Vec<(Vec<String>, TopLevelSentence)>,
-    exports: &mut HashMap<String, SentenceIndex>,
-    tests: &mut HashMap<String, SentenceIndex>,
-    test_machines: &mut HashSet<String>,
-    anon_counter: &mut usize,
-) -> Result<ResolvedArg, String> {
-    match expr {
-        ModuleExpr::Named(path) => Ok(ResolvedArg::Path(path.clone())),
-        ModuleExpr::Value(val) => Ok(ResolvedArg::Value(val.clone())),
-        ModuleExpr::Composer { composer, args } => {
-            let mut resolved_args = Vec::new();
-            for arg in args {
-                resolved_args.push(resolve_module_expr(
-                    arg,
-                    current_path,
-                    symbol_counter,
-                    sentence_counter,
-                    parent_module,
-                    flat_sentences,
-                    exports,
-                    tests,
-                    test_machines,
-                    anon_counter,
-                )?);
-            }
-            let generated_items = generate_composition_items(composer, &resolved_args)?;
-            let anon_name = format!("__anon_mod_{}", anon_counter);
-            *anon_counter += 1;
-
-            let mut anon_submodule = Module::new(anon_name.clone());
-            current_path.push(anon_name.clone());
-            build_module_tree_impl(
-                generated_items,
-                current_path,
-                symbol_counter,
-                sentence_counter,
-                &mut anon_submodule,
-                flat_sentences,
-                exports,
-                tests,
-                test_machines,
-                anon_counter,
-            )?;
-            current_path.pop();
-
-            parent_module.submodules.insert(anon_name.clone(), anon_submodule);
-
-            Ok(ResolvedArg::Path(Path {
-                segments: vec![PathSegment::Identifier(anon_name)],
-            }))
-        }
-    }
-}
-
-fn build_module_tree_impl(
-    items: Vec<TopLevelItem>,
-    current_path: &mut Vec<String>,
-    symbol_counter: &mut usize,
-    sentence_counter: &mut usize,
-    module: &mut Module,
-    flat_sentences: &mut Vec<(Vec<String>, TopLevelSentence)>,
-    exports: &mut HashMap<String, SentenceIndex>,
-    tests: &mut HashMap<String, SentenceIndex>,
-    test_machines: &mut HashSet<String>,
-    anon_counter: &mut usize,
-) -> Result<(), String> {
-    for item in items {
-        match item {
-            TopLevelItem::SymbolDecl { name, debug_desc } => {
-                if name == "crate" || name == "super" {
-                    return Err(format!("Cannot use reserved keyword '{}' as name", name));
+                    self.tree.declare(scope, name, ModuleItem::Symbol(symbol))?;
                 }
+                TopLevelItem::Sentence(s) => {
+                    let s_idx = SentenceIndex::from(self.sentence_counter);
+                    self.sentence_counter += 1;
 
-                if module.symbols.contains_key(&name)
-                    || module.sentences.contains_key(&name)
-                    || module.submodules.contains_key(&name)
-                {
-                    return Err(format!("Duplicate declaration of name '{}' in module '{}'", name, module.name));
+                    self.tree
+                        .declare(scope, s.name.clone(), ModuleItem::Sentence(s_idx))?;
+
+                    let fq_name = self.tree.fq_name(scope, &s.name);
+                    if s.is_exported {
+                        self.exports.insert(fq_name.clone(), s_idx);
+                    }
+                    if s.is_test {
+                        self.tests.insert(fq_name, s_idx);
+                    }
+
+                    self.flat_sentences.push((scope, s));
                 }
-
-                let fq_name = if current_path.is_empty() {
-                    name.clone()
-                } else {
-                    format!("{}::{}", current_path.join("::"), name)
-                };
-
-                let desc = debug_desc.unwrap_or(fq_name);
-                let symbol = Value::Symbol(Symbol {
-                    id: *symbol_counter,
-                    name: desc,
-                });
-                *symbol_counter += 1;
-
-                module.symbols.insert(name, symbol);
-            }
-            TopLevelItem::Sentence(s) => {
-                if s.name == "crate" || s.name == "super" {
-                    return Err(format!("Cannot use reserved keyword '{}' as name", s.name));
-                }
-
-                if module.symbols.contains_key(&s.name)
-                    || module.sentences.contains_key(&s.name)
-                    || module.submodules.contains_key(&s.name)
-                {
-                    return Err(format!("Duplicate declaration of name '{}' in module '{}'", s.name, module.name));
-                }
-
-                let s_idx = SentenceIndex::from(*sentence_counter);
-                *sentence_counter += 1;
-
-                module.sentences.insert(s.name.clone(), s_idx);
-
-                let fq_name = if current_path.is_empty() {
-                    s.name.clone()
-                } else {
-                    format!("{}::{}", current_path.join("::"), s.name)
-                };
-
-                if s.is_exported {
-                    exports.insert(fq_name.clone(), s_idx);
-                }
-                if s.is_test {
-                    tests.insert(fq_name.clone(), s_idx);
-                }
-
-                flat_sentences.push((current_path.clone(), s));
-            }
-            TopLevelItem::Mod { name, items: mod_items, is_test } => {
-                if name == "crate" || name == "super" {
-                    return Err(format!("Cannot use reserved keyword '{}' as name", name));
-                }
-
-                if module.symbols.contains_key(&name)
-                    || module.sentences.contains_key(&name)
-                    || module.submodules.contains_key(&name)
-                {
-                    return Err(format!("Duplicate declaration of name '{}' in module '{}'", name, module.name));
-                }
-
-                let mut submodule = Module::new(name.clone());
-                current_path.push(name.clone());
-                build_module_tree_impl(
-                    mod_items,
-                    current_path,
-                    symbol_counter,
-                    sentence_counter,
-                    &mut submodule,
-                    flat_sentences,
-                    exports,
-                    tests,
-                    test_machines,
-                    anon_counter,
-                )?;
-
-                let mod_fq_path = current_path.join("::");
-                if is_test {
-                    let _init_idx = submodule.sentences.get("init")
-                        .copied()
-                        .ok_or_else(|| format!("Test mod '{}' must export an 'init' sentence", mod_fq_path))?;
-                    test_machines.insert(mod_fq_path);
-                }
-
-                current_path.pop();
-
-                module.submodules.insert(name, submodule);
-            }
-            TopLevelItem::Compose { name, composer, args, is_test } => {
-                if name == "crate" || name == "super" {
-                    return Err(format!("Cannot use reserved keyword '{}' as name", name));
-                }
-
-                if module.symbols.contains_key(&name)
-                    || module.sentences.contains_key(&name)
-                    || module.submodules.contains_key(&name)
-                {
-                    return Err(format!("Duplicate declaration of name '{}' in module '{}'", name, module.name));
-                }
-
-                let mut resolved_args = Vec::new();
-                for arg in &args {
-                    resolved_args.push(resolve_module_expr(
-                        arg,
-                        current_path,
-                        symbol_counter,
-                        sentence_counter,
-                        module,
-                        flat_sentences,
-                        exports,
-                        tests,
-                        test_machines,
-                        anon_counter,
-                    )?);
-                }
-
-                let generated_items = generate_composition_items(&composer, &resolved_args)?;
-                let mut submodule = Module::new(name.clone());
-                current_path.push(name.clone());
-                build_module_tree_impl(
-                    generated_items,
-                    current_path,
-                    symbol_counter,
-                    sentence_counter,
-                    &mut submodule,
-                    flat_sentences,
-                    exports,
-                    tests,
-                    test_machines,
-                    anon_counter,
-                )?;
-
-                let mod_fq_path = current_path.join("::");
-                if is_test {
-                    let _init_idx = submodule.sentences.get("init")
-                        .copied()
-                        .ok_or_else(|| format!("Test mod '{}' must export an 'init' sentence", mod_fq_path))?;
-                    test_machines.insert(mod_fq_path.clone());
-
-                    for sentence_name in &["init", "accept", "emit", "process", "tau_reduce", "is_done", "is_ready_to_finish"] {
-                        if let Some(&s_idx) = submodule.sentences.get(*sentence_name) {
-                            let fq_sentence_name = format!("{}::{}", mod_fq_path, sentence_name);
-                            exports.insert(fq_sentence_name, s_idx);
-                        }
+                TopLevelItem::Mod { name, items: mod_items, is_test } => {
+                    let sub_id = self.tree.declare_module(scope, name)?;
+                    self.build(mod_items, sub_id)?;
+                    if is_test {
+                        self.register_test_machine(sub_id, false)?;
                     }
                 }
+                TopLevelItem::Compose { name, composer, args, is_test } => {
+                    let sub_id = self.tree.declare_module(scope, name)?;
 
-                current_path.pop();
+                    // Argument expressions are relative to the enclosing module,
+                    // not to the module being composed.
+                    let mut resolved_args = Vec::new();
+                    for arg in &args {
+                        resolved_args.push(self.resolve_module_expr(arg, scope)?);
+                    }
+                    let generated_items = generate_composition_items(&composer, &resolved_args)?;
 
-                module.submodules.insert(name, submodule);
+                    self.build(generated_items, sub_id)?;
+                    if is_test {
+                        self.register_test_machine(sub_id, true)?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Registers a `test mod` as a machine the runtime can drive. Composed
+    /// machines additionally export their machine sentences, since the generated
+    /// bodies have no `export` markers of their own.
+    fn register_test_machine(
+        &mut self,
+        module: ModuleId,
+        export_machine_sentences: bool,
+    ) -> Result<(), String> {
+        let fq_path = self.tree.path_of(module).join("::");
+        if self.tree.sentence(module, "init").is_none() {
+            return Err(format!("Test mod '{}' must export an 'init' sentence", fq_path));
+        }
+        self.test_machines.insert(fq_path);
+
+        if export_machine_sentences {
+            for name in MACHINE_SENTENCES {
+                if let Some(s_idx) = self.tree.sentence(module, name) {
+                    self.exports.insert(self.tree.fq_name(module, name), s_idx);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Reduces a module expression to something a composer template can name.
+    /// Nested composers are materialized as anonymous submodules of `scope`.
+    fn resolve_module_expr(
+        &mut self,
+        expr: &ModuleExpr,
+        scope: ModuleId,
+    ) -> Result<ResolvedArg, String> {
+        match expr {
+            ModuleExpr::Named(path) => Ok(ResolvedArg::Path(path.clone())),
+            ModuleExpr::Value(val) => Ok(ResolvedArg::Value(val.clone())),
+            ModuleExpr::Composer { composer, args } => {
+                let mut resolved_args = Vec::new();
+                for arg in args {
+                    resolved_args.push(self.resolve_module_expr(arg, scope)?);
+                }
+                let generated_items = generate_composition_items(composer, &resolved_args)?;
+
+                // The name has to be a legal identifier: composer templates are
+                // rendered as text and re-tokenized, so it round-trips through
+                // the lexer.
+                let anon_name = format!("__anon_mod_{}", self.anon_counter);
+                self.anon_counter += 1;
+
+                let anon_id = self.tree.declare_module(scope, anon_name.clone())?;
+                self.build(generated_items, anon_id)?;
+
+                Ok(ResolvedArg::Path(Path {
+                    segments: vec![PathSegment::Identifier(anon_name)],
+                }))
             }
         }
     }
-    Ok(())
 }
 
 fn adjust_path(path: &Path) -> Path {
@@ -1574,23 +1436,6 @@ fn adjust_path(path: &Path) -> Path {
         }
     }
     Path { segments }
-}
-
-impl std::fmt::Display for PathSegment {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            PathSegment::Crate => write!(f, "crate"),
-            PathSegment::Super => write!(f, "super"),
-            PathSegment::Identifier(name) => write!(f, "{}", name),
-        }
-    }
-}
-
-impl std::fmt::Display for Path {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let segs: Vec<String> = self.segments.iter().map(|s| s.to_string()).collect();
-        write!(f, "{}", segs.join("::"))
-    }
 }
 
 impl std::fmt::Display for ParsedValue {
@@ -1849,13 +1694,8 @@ fn generate_composition_items(
     }
 }
 
-enum ResolvedItem {
-    Symbol(Value),
-    Sentence(SentenceIndex),
-}
-
 struct Compiler<'a> {
-    root_module: &'a Module,
+    tree: &'a ModuleTree,
     sentences: Vec<Vec<Instruction>>,
     names: Vec<String>,
     annotations: Vec<Vec<Annotation>>,
@@ -1863,72 +1703,7 @@ struct Compiler<'a> {
 }
 
 impl<'a> Compiler<'a> {
-    fn resolve_path(&self, current_path: &[String], path: &Path) -> Result<ResolvedItem, String> {
-        let mut curr_node = self.root_module;
-        let mut segments_iter = path.segments.iter().peekable();
-
-        if let Some(first) = segments_iter.peek() {
-            match first {
-                PathSegment::Crate => {
-                    segments_iter.next();
-                    // curr_node is already root_module
-                }
-                PathSegment::Super => {
-                    let mut up_count = 0;
-                    while let Some(PathSegment::Super) = segments_iter.peek() {
-                        segments_iter.next();
-                        up_count += 1;
-                    }
-                    if up_count > current_path.len() {
-                        return Err(format!("Path goes up too many levels (current path depth: {})", current_path.len()));
-                    }
-                    let target_depth = current_path.len() - up_count;
-                    let target_path = &current_path[..target_depth];
-                    for name in target_path {
-                        curr_node = curr_node.submodules.get(name)
-                            .ok_or_else(|| format!("Internal error: submodule '{}' not found in path navigation", name))?;
-                    }
-                }
-                PathSegment::Identifier(_) => {
-                    for name in current_path {
-                        curr_node = curr_node.submodules.get(name)
-                            .ok_or_else(|| format!("Internal error: submodule '{}' not found in path navigation", name))?;
-                    }
-                }
-            }
-        }
-
-        let mut last_name: Option<&str> = None;
-        while let Some(seg) = segments_iter.next() {
-            match seg {
-                PathSegment::Crate => return Err("'crate' can only appear at the beginning of a path".to_string()),
-                PathSegment::Super => return Err("'super' can only appear at the beginning of a path".to_string()),
-                PathSegment::Identifier(name) => {
-                    if segments_iter.peek().is_none() {
-                        last_name = Some(name);
-                    } else {
-                        if let Some(sub) = curr_node.submodules.get(name) {
-                            curr_node = sub;
-                        } else {
-                            return Err(format!("Module '{}' not found in '{}'", name, curr_node.name));
-                        }
-                    }
-                }
-            }
-        }
-
-        let last_name = last_name.ok_or_else(|| "Empty path after navigation".to_string())?;
-
-        if let Some(val) = curr_node.symbols.get(last_name) {
-            Ok(ResolvedItem::Symbol(val.clone()))
-        } else if let Some(&idx) = curr_node.sentences.get(last_name) {
-            Ok(ResolvedItem::Sentence(idx))
-        } else {
-            Err(format!("Item '{}' not found in module '{}'", last_name, curr_node.name))
-        }
-    }
-
-    fn compile_value(&self, current_path: &[String], parsed: ParsedValue) -> Result<Value, String> {
+    fn compile_value(&self, scope: ModuleId, parsed: ParsedValue) -> Result<Value, String> {
         match parsed {
             ParsedValue::Bool(b) => Ok(Value::Bool(b)),
             ParsedValue::Int(i) => Ok(Value::Int(i)),
@@ -1936,12 +1711,12 @@ impl<'a> Compiler<'a> {
             ParsedValue::Tuple(elements) => {
                 let mut compiled_elements = Vec::new();
                 for elem in elements {
-                    compiled_elements.push(self.compile_value(current_path, elem)?);
+                    compiled_elements.push(self.compile_value(scope, elem)?);
                 }
                 Ok(Value::Tuple(compiled_elements))
             }
             ParsedValue::SymbolRef(path) => {
-                match self.resolve_path(current_path, &path)? {
+                match self.tree.resolve(scope, &path)? {
                     ResolvedItem::Symbol(val) => Ok(val),
                     ResolvedItem::Sentence(_) => Err(format!("Expected symbol, found sentence at path {:?}", path)),
                 }
@@ -1949,12 +1724,12 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    fn compile_sentence_body(&mut self, current_path: &[String], instructions: Vec<ParsedInstruction>) -> Result<Vec<Instruction>, String> {
+    fn compile_sentence_body(&mut self, scope: ModuleId, instructions: Vec<ParsedInstruction>) -> Result<Vec<Instruction>, String> {
         let mut compiled = Vec::new();
         for inst in instructions {
             let c_inst = match inst {
                 ParsedInstruction::Push(v) => {
-                    let compiled_val = self.compile_value(current_path, v)?;
+                    let compiled_val = self.compile_value(scope, v)?;
                     Instruction::Push(compiled_val)
                 }
                 ParsedInstruction::Drop(d) => Instruction::Drop(d),
@@ -1987,21 +1762,21 @@ impl<'a> Compiler<'a> {
                 ParsedInstruction::IsTuple => Instruction::IsTuple,
                 ParsedInstruction::TupleLength => Instruction::TupleLength,
                 ParsedInstruction::Jump(target) => {
-                    let target_idx = self.resolve_target(current_path, target)?;
+                    let target_idx = self.resolve_target(scope, target)?;
                     Instruction::Jump(target_idx)
                 }
                 ParsedInstruction::Branch(t1, t2) => {
-                    let idx1 = self.resolve_target(current_path, t1)?;
-                    let idx2 = self.resolve_target(current_path, t2)?;
+                    let idx1 = self.resolve_target(scope, t1)?;
+                    let idx2 = self.resolve_target(scope, t2)?;
                     Instruction::Branch(idx1, idx2)
                 }
                 ParsedInstruction::TypeCheckPath(path) => {
-                    let resolved = match self.resolve_path(current_path, &path) {
+                    let resolved = match self.tree.resolve(scope, &path) {
                         Ok(res) => res,
                         Err(e) => {
                             let mut check_path = path.clone();
                             check_path.segments.push(PathSegment::Identifier("check".to_string()));
-                            self.resolve_path(current_path, &check_path)
+                            self.tree.resolve(scope, &check_path)
                                 .map_err(|_| format!("Could not resolve type path '{}': {}", path, e))?
                         }
                     };
@@ -2021,10 +1796,10 @@ impl<'a> Compiler<'a> {
         Ok(compiled)
     }
 
-    fn resolve_target(&mut self, current_path: &[String], target: Target) -> Result<SentenceIndex, String> {
+    fn resolve_target(&mut self, scope: ModuleId, target: Target) -> Result<SentenceIndex, String> {
         match target {
             Target::Label(path) => {
-                match self.resolve_path(current_path, &path).map_err(|e| format!("Unresolved label target: {}", e))? {
+                match self.tree.resolve(scope, &path).map_err(|e| format!("Unresolved label target: {}", e))? {
                     ResolvedItem::Sentence(idx) => Ok(idx),
                     ResolvedItem::Symbol(_) => Err(format!("Expected sentence, found symbol at path {:?}", path)),
                 }
@@ -2047,7 +1822,7 @@ impl<'a> Compiler<'a> {
 
                 let prev_parent = self.current_parent_idx;
                 self.current_parent_idx = Some(new_idx);
-                let compiled_body = self.compile_sentence_body(current_path, parsed_sentence.instructions);
+                let compiled_body = self.compile_sentence_body(scope, parsed_sentence.instructions);
                 self.current_parent_idx = prev_parent;
 
                 let compiled_body = compiled_body?;
@@ -2064,52 +1839,27 @@ pub fn assemble(input: &str) -> Result<Library, String> {
     assemble_with_path(input, None)
 }
 
-fn collect_symbols(module: &Module, current_path: &mut Vec<String>, symbols_map: &mut HashMap<String, Value>) {
-    for (name, symbol) in &module.symbols {
-        let fq_name = if current_path.is_empty() {
-            name.clone()
-        } else {
-            format!("{}::{}", current_path.join("::"), name)
-        };
-        symbols_map.insert(fq_name, symbol.clone());
-    }
-
-    for (sub_name, sub_module) in &module.submodules {
-        current_path.push(sub_name.clone());
-        collect_symbols(sub_module, current_path, symbols_map);
-        current_path.pop();
-    }
-}
-
 /// Assembles the input text with an optional base directory context for resolving external modules.
 pub fn assemble_with_path(input: &str, base_dir: Option<&std::path::Path>) -> Result<Library, String> {
     let tokens = tokenize(input)?;
     let mut stream = TokenStream { tokens, position: 0 };
     let items = parse_top_level(&mut stream, base_dir)?;
 
-    let mut root_module = Module::new("crate".to_string());
-    let mut symbol_counter = 0;
-    let mut sentence_counter = 0;
-    let mut flat_sentences = Vec::new();
-    let mut exports = HashMap::new();
-    let mut tests = HashMap::new();
-    let mut test_machines = HashSet::new();
+    let mut builder = TreeBuilder::new();
+    builder.build(items, crate::resolve::ROOT)?;
 
-    let mut current_path = Vec::new();
-    build_module_tree(
-        items,
-        &mut current_path,
-        &mut symbol_counter,
-        &mut sentence_counter,
-        &mut root_module,
-        &mut flat_sentences,
-        &mut exports,
-        &mut tests,
-        &mut test_machines,
-    )?;
+    let TreeBuilder {
+        tree,
+        sentence_counter,
+        flat_sentences,
+        exports,
+        tests,
+        test_machines,
+        ..
+    } = builder;
 
     let mut compiler = Compiler {
-        root_module: &root_module,
+        tree: &tree,
         sentences: Vec::new(),
         names: Vec::new(),
         annotations: Vec::new(),
@@ -2122,25 +1872,20 @@ pub fn assemble_with_path(input: &str, base_dir: Option<&std::path::Path>) -> Re
     compiler.annotations.resize(sentence_counter, Vec::new());
 
     // Compile instructions recursively
-    for (idx, (path, sentence)) in flat_sentences.into_iter().enumerate() {
+    for (idx, (scope, sentence)) in flat_sentences.into_iter().enumerate() {
         compiler.annotations[idx] = sentence.annotations.clone();
         compiler.current_parent_idx = Some(SentenceIndex::from(idx));
-        let resolve_path = if sentence.is_type_check {
-            if path.is_empty() {
-                return Err("Internal error: type check sentence path is empty".to_string());
-            }
-            &path[..path.len() - 1]
+        // A `type`/`enum` check is declared inside the module named after the
+        // type, but its body names sibling types, so it resolves one level up.
+        let resolve_scope = if sentence.is_type_check {
+            tree.parent(scope)
+                .ok_or_else(|| "Internal error: type check sentence declared at the crate root".to_string())?
         } else {
-            &path
+            scope
         };
-        let compiled_instructions = compiler.compile_sentence_body(resolve_path, sentence.body.instructions)?;
+        let compiled_instructions = compiler.compile_sentence_body(resolve_scope, sentence.body.instructions)?;
         compiler.sentences[idx] = compiled_instructions;
-        let fq_name = if path.is_empty() {
-            sentence.name.clone()
-        } else {
-            format!("{}::{}", path.join("::"), sentence.name)
-        };
-        compiler.names[idx] = fq_name;
+        compiler.names[idx] = tree.fq_name(scope, &sentence.name);
     }
 
     let mut library = Library::new();
@@ -2164,10 +1909,7 @@ pub fn assemble_with_path(input: &str, base_dir: Option<&std::path::Path>) -> Re
     library.test_machines = test_machines;
     library.annotations = final_annotations;
 
-    let mut symbols_map = HashMap::new();
-    let mut path_tracker = Vec::new();
-    collect_symbols(&root_module, &mut path_tracker, &mut symbols_map);
-    library.symbols = symbols_map;
+    library.symbols = tree.symbol_map();
 
     crate::arity::check_arities(&mut library)?;
 

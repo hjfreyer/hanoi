@@ -2,6 +2,7 @@ pub mod arity;
 pub mod assembly;
 pub mod library;
 pub mod opcode;
+pub mod resolve;
 pub mod value;
 pub mod safety;
 
@@ -342,7 +343,82 @@ mod tests {
             symbol foo
             mod foo {}
         "#;
-        assert!(assemble(code).is_err());
+        let res = assemble(code);
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("Duplicate declaration of name 'foo'"));
+
+        // Symbols, sentences and modules share one namespace, so a sentence
+        // collides with a symbol of the same name too.
+        let code2 = r#"
+            symbol foo
+            sentence foo {}
+        "#;
+        assert!(assemble(code2).is_err());
+    }
+
+    #[test]
+    fn test_assemble_path_resolution_errors() {
+        // A module is not an item: it can be navigated through, not pushed.
+        let code = r#"
+            mod m { symbol s }
+            sentence entry {
+                push m
+            }
+        "#;
+        let res = assemble(code);
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("names a module"));
+
+        // A non-module cannot appear as an intermediate segment.
+        let code2 = r#"
+            symbol s
+            sentence entry {
+                push s::inner
+            }
+        "#;
+        let res2 = assemble(code2);
+        assert!(res2.is_err());
+        assert!(res2.unwrap_err().contains("is a symbol, not a module"));
+
+        // 'crate' and 'super' are only meaningful as a path prefix.
+        let code3 = r#"
+            mod a { symbol s }
+            sentence entry {
+                push a::crate
+            }
+        "#;
+        let res3 = assemble(code3);
+        assert!(res3.is_err());
+        assert!(res3.unwrap_err().contains("'crate' can only appear at the beginning"));
+
+        let code4 = r#"
+            mod a { mod b { symbol s } }
+            sentence entry {
+                push crate::a::super::b
+            }
+        "#;
+        let res4 = assemble(code4);
+        assert!(res4.is_err());
+        assert!(res4.unwrap_err().contains("'super' can only appear at the beginning"));
+    }
+
+    #[test]
+    fn test_assemble_super_run_resolves_through_ancestors() {
+        let code = r#"
+            symbol s
+            mod a {
+                mod b {
+                    export test sentence entry {
+                        push super::super::s
+                        push crate::s
+                        equal
+                        assert
+                    }
+                }
+            }
+        "#;
+        let res = assemble(code).unwrap();
+        assert!(res.tests.contains_key("a::b::entry"));
     }
 
     #[test]
