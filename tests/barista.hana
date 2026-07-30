@@ -36,7 +36,7 @@ mod customer_impl {
         (super::event::want_coffee, want_coffee_payload) |
         (super::event::coffee, coffee_payload) |
         (super::event::enjoy, want_coffee_payload) |
-        (super::super::queue::push_back, coffee_payload);
+        (super::super::queue::Event::PushBack::tag, (coffee_payload));
 
     function anything {
         drop 0
@@ -140,7 +140,8 @@ mod customer_impl {
             // Customer emits order request to queue (push_back event)
             drop 0 // drop internal_state. Stack: [id, preferred_drink]
             tuple 2 // (id, preferred_drink)
-            push super::super::queue::push_back
+            tuple 1
+            push super::super::queue::Event::PushBack::tag
             tuple 2
             push true
             tuple 2
@@ -216,7 +217,7 @@ mod customer_impl {
                 assert_eq
                 roll 2
                 untuple 2
-                push super::super::queue::push_back
+                push super::super::queue::Event::PushBack::tag
                 assert_eq
                 drop 0
                 push state::ordered
@@ -286,7 +287,7 @@ test sentence verify_customer_is_event {
     assert
 
     // 2. Valid push_back event
-    push (super::queue::push_back, (event::latte, customer_id::c1))
+    push (super::queue::Event::PushBack::tag, ((event::latte, customer_id::c1)))
     jump customer_impl::is_event::check
     assert
 
@@ -337,11 +338,11 @@ test sentence verify_customer_logic {
     jump customer_impl::emit
     untuple 2
     assert
-    push (super::queue::push_back, (event::latte, customer_id::c1))
+    push (super::queue::Event::PushBack::tag, ((event::latte, customer_id::c1)))
     assert_eq
     
     // Process push_back -> ordered
-    push (super::queue::push_back, (event::latte, customer_id::c1))
+    push (super::queue::Event::PushBack::tag, ((event::latte, customer_id::c1)))
     roll 1
     tuple 2
     jump customer_impl::process
@@ -410,11 +411,13 @@ mod barista {
                 // Stack: [event]
                 untuple 2
                 // Stack: [channel, inner]
-                push super::super::queue::await_front
+                push super::super::queue::Event::AwaitFront::tag
                 equal
                 branch {
                     // channel == await_front
-                    // Stack: [inner]
+                    // Stack: [Body]
+                    untuple 1
+                    // Stack: [reqresp]
                     untuple 2
                     // Stack: [resp_tag, option]
                     push super::super::prelude::resp
@@ -474,7 +477,8 @@ mod barista {
             push ()
             push super::super::prelude::req
             tuple 2
-            push super::super::queue::await_front
+            tuple 1
+            push super::super::queue::Event::AwaitFront::tag
             tuple 2
             push true
             tuple 2
@@ -522,7 +526,8 @@ mod barista {
             push ()
             push super::super::prelude::req
             tuple 2
-            push super::super::queue::await_front
+            tuple 1
+            push super::super::queue::Event::AwaitFront::tag
             tuple 2
             assert_eq
             push state::awaiting_order
@@ -535,11 +540,12 @@ mod barista {
                 push state::awaiting_order
                 assert_eq
                 
-                // Destructure event: ((((val, ()), some), resp), await_front)
+                // Destructure event: (await_front, (((val, ()), some), resp))
                 untuple 2
-                push super::super::queue::await_front
+                push super::super::queue::Event::AwaitFront::tag
                 assert_eq
-                
+                untuple 1
+
                 untuple 2
                 push super::super::prelude::resp
                 assert_eq
@@ -608,7 +614,7 @@ sentence customers_queue_sync {
     } {
         untuple 2
         drop 1
-        push super::queue::push_back
+        push super::queue::Event::PushBack::tag
         equal
     }
 }
@@ -634,7 +640,7 @@ sentence joint_sync {
         untuple 2
         drop 1 // drop payload
         pick 0
-        push super::queue::await_front
+        push super::queue::Event::AwaitFront::tag
         equal
         branch {
             drop 0
@@ -667,7 +673,7 @@ sentence hidden_events {
         untuple 2
         drop 1 // drop payload
         pick 0
-        push super::queue::push_back
+        push super::queue::Event::PushBack::tag
         equal
         branch {
             drop 0
@@ -680,7 +686,7 @@ sentence hidden_events {
                 drop 0
                 push true
             } {
-                push super::queue::await_front
+                push super::queue::Event::AwaitFront::tag
                 equal
             }
         }
@@ -753,11 +759,7 @@ test sentence verify_hidden_system {
     
     tuple 2 // customers
     
-    push ()
-    push ()
-    push ()
-    push super::queue::awaiting_push
-    tuple 4 // queue
+    push (super::queue::State::AwaitingPush::tag, ()) // queue
     
     tuple 2 // customers and queue
     
@@ -797,11 +799,7 @@ test sentence verify_hidden_system {
     
     tuple 2 // customers
     
-    push ()
-    push ()
-    push ()
-    push super::queue::awaiting_push
-    tuple 4 // queue
+    push (super::queue::State::AwaitingPush::tag, ()) // queue
     
     tuple 2 // customers and queue
     
@@ -838,11 +836,7 @@ test sentence verify_hidden_system {
     
     tuple 2 // customers
     
-    push ()
-    push ()
-    push ()
-    push super::queue::awaiting_push
-    tuple 4 // queue
+    push (super::queue::State::AwaitingPush::tag, ()) // queue
     
     tuple 2 // customers and queue
     
@@ -879,11 +873,7 @@ test sentence verify_hidden_system {
     
     tuple 2 // customers
     
-    push ()
-    push ()
-    push ()
-    push super::queue::awaiting_push
-    tuple 4 // queue
+    push (super::queue::State::AwaitingPush::tag, ()) // queue
     
     tuple 2 // customers and queue
     
@@ -912,14 +902,16 @@ test sentence verify_concurrent_system {
     push ()
     push super::prelude::req
     tuple 2
-    push super::queue::await_front
+    tuple 1
+    push super::queue::Event::AwaitFront::tag
     tuple 2
     assert_eq
     
     push ()
     push super::prelude::req
     tuple 2
-    push super::queue::await_front
+    tuple 1
+    push super::queue::Event::AwaitFront::tag
     tuple 2
     roll 1
     tuple 2
@@ -955,12 +947,14 @@ test sentence verify_concurrent_system {
     untuple 2
     assert
     push (event::latte, customer_id::c1)
-    push super::queue::push_back
+    tuple 1
+    push super::queue::Event::PushBack::tag
     tuple 2
     assert_eq
     
     push (event::latte, customer_id::c1)
-    push super::queue::push_back
+    tuple 1
+    push super::queue::Event::PushBack::tag
     tuple 2
     roll 1
     tuple 2
@@ -980,7 +974,8 @@ test sentence verify_concurrent_system {
     tuple 2
     push super::prelude::resp
     tuple 2
-    push super::queue::await_front
+    tuple 1
+    push super::queue::Event::AwaitFront::tag
     tuple 2
     assert_eq
     
@@ -991,7 +986,8 @@ test sentence verify_concurrent_system {
     tuple 2
     push super::prelude::resp
     tuple 2
-    push super::queue::await_front
+    tuple 1
+    push super::queue::Event::AwaitFront::tag
     tuple 2
     roll 1
     tuple 2
@@ -1003,12 +999,14 @@ test sentence verify_concurrent_system {
     untuple 2
     assert
     push (event::espresso, customer_id::c2)
-    push super::queue::push_back
+    tuple 1
+    push super::queue::Event::PushBack::tag
     tuple 2
     assert_eq
     
     push (event::espresso, customer_id::c2)
-    push super::queue::push_back
+    tuple 1
+    push super::queue::Event::PushBack::tag
     tuple 2
     roll 1
     tuple 2
@@ -1049,14 +1047,16 @@ test sentence verify_concurrent_system {
     push ()
     push super::prelude::req
     tuple 2
-    push super::queue::await_front
+    tuple 1
+    push super::queue::Event::AwaitFront::tag
     tuple 2
     assert_eq
     
     push ()
     push super::prelude::req
     tuple 2
-    push super::queue::await_front
+    tuple 1
+    push super::queue::Event::AwaitFront::tag
     tuple 2
     roll 1
     tuple 2
@@ -1075,7 +1075,8 @@ test sentence verify_concurrent_system {
     tuple 2
     push super::prelude::resp
     tuple 2
-    push super::queue::await_front
+    tuple 1
+    push super::queue::Event::AwaitFront::tag
     tuple 2
     assert_eq
     
@@ -1086,7 +1087,8 @@ test sentence verify_concurrent_system {
     tuple 2
     push super::prelude::resp
     tuple 2
-    push super::queue::await_front
+    tuple 1
+    push super::queue::Event::AwaitFront::tag
     tuple 2
     roll 1
     tuple 2
@@ -1131,11 +1133,7 @@ test sentence verify_concurrent_system {
     
     tuple 2 // customers
     
-    push ()
-    push ()
-    push ()
-    push super::queue::idle
-    tuple 4 // queue
+    push (super::queue::State::Idle::tag, (())) // queue
     
     tuple 2 // customers and queue
     
@@ -1164,7 +1162,7 @@ test sentence verify_barista_rejection {
     // 2. Test that barista in idle does NOT accept order directly (since orders are queued)
     tuple 0
     jump barista::init
-    push (super::queue::push_back, (event::latte, customer_id::c1))
+    push (super::queue::Event::PushBack::tag, ((event::latte, customer_id::c1)))
     roll 1
     tuple 2
     jump barista::accept
@@ -1181,7 +1179,8 @@ test sentence verify_barista_rejection {
     tuple 0
     push super::prelude::req
     tuple 2
-    push super::queue::await_front
+    tuple 1
+    push super::queue::Event::AwaitFront::tag
     tuple 2
     assert_eq
     
@@ -1192,7 +1191,8 @@ test sentence verify_barista_rejection {
     tuple 0
     push super::prelude::req
     tuple 2
-    push super::queue::await_front
+    tuple 1
+    push super::queue::Event::AwaitFront::tag
     tuple 2
     roll 1
     tuple 2
@@ -1205,7 +1205,8 @@ test sentence verify_barista_rejection {
     tuple 2
     push super::prelude::resp
     tuple 2
-    push super::queue::await_front
+    tuple 1
+    push super::queue::Event::AwaitFront::tag
     tuple 2
     roll 1
     tuple 2
@@ -1218,7 +1219,8 @@ test sentence verify_barista_rejection {
     push ()
     push super::prelude::req
     tuple 2
-    push super::queue::await_front
+    tuple 1
+    push super::queue::Event::AwaitFront::tag
     tuple 2
     roll 1
     tuple 2
