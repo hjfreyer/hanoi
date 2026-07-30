@@ -148,3 +148,4 @@ Use the helper shell scripts at the project root to execute test suites:
 - [docs/hana_reference.md](docs/hana_reference.md): Complete reference of all available opcodes, organized by functionality.
 - [docs/typecheck.md](docs/typecheck.md): Detailed SMT verification and symbolic execution design for the `typecheck` tool.
 - [docs/machines.md](docs/machines.md): Specification of Hanoi's Communicating Sequential Processes (CSP) state machine semantics.
+- [docs/compilation.md](docs/compilation.md): The compilation pipeline — the sugar and core ASTs, and what each phase from tokens to bytecode may assume.
