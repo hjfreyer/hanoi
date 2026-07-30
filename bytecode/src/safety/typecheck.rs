@@ -773,11 +773,13 @@ pub fn check_precondition(library: &Library) -> Result<(), String> {
                     }
                     Instruction::Tuple(n) => {
                         let n = *n;
+                        // Per the language spec (docs/hana_reference.md), `tuple N` pops N
+                        // elements and the TOS element (popped first) becomes index 0 of the
+                        // tuple, so the popped order is already the correct field order.
                         let mut tuple_args = Vec::new();
                         for _ in 0..n {
                             tuple_args.push(stack.pop().unwrap());
                         }
-                        tuple_args.reverse();
 
                         let tuple_res = if n == 0 {
                             let tuple_val = tuple_variants[&0].constructor.apply(&[]);
@@ -791,8 +793,10 @@ pub fn check_precondition(library: &Library) -> Result<(), String> {
                     Instruction::Untuple(n) => {
                         let n = *n;
                         let val = stack.pop().unwrap();
+                        // Symmetric with `Tuple`: index 0 must end up on top of the stack, so
+                        // fields are pushed in reverse index order (N-1 down to 0).
                         let mut unpacked = Vec::new();
-                        for i in 0..n {
+                        for i in (0..n).rev() {
                             let get_fn = &val_get_tuple_decls[&(n, i)];
                             let component = get_fn.apply(&[&val]);
                             unpacked.push(component);
@@ -955,6 +959,96 @@ pub fn check_precondition(library: &Library) -> Result<(), String> {
             }
         }
 
+        // Build reverse lookup tables so counterexamples can be rendered with real
+        // symbol names and tuple field order instead of raw Z3 datatype terms.
+        let symbol_names: HashMap<i64, String> = symbols_list
+            .iter()
+            .map(|(id, name)| (*id as i64, name.clone()))
+            .collect();
+        let float_values: HashMap<i64, String> = float_to_id
+            .iter()
+            .map(|(s, id)| (*id as i64, s.clone()))
+            .collect();
+        let mut tuple_arities: HashMap<usize, usize> = HashMap::new();
+        tuple_arities.insert(4, 0);
+        for &(variant_idx, n) in &val_tuple_variant_indices {
+            tuple_arities.insert(variant_idx, n);
+        }
+
+        // Recursively decode a model value for the `Val` datatype into a
+        // human-readable string matching `Value`'s Display format (correct tuple
+        // field order, symbols resolved by name instead of raw id).
+        fn format_model_val(
+            val: &Dynamic,
+            model: &z3::Model,
+            sorts: &[z3::DatatypeSort],
+            tuple_arities: &HashMap<usize, usize>,
+            symbol_names: &HashMap<i64, String>,
+            float_values: &HashMap<i64, String>,
+        ) -> String {
+            for (variant_idx, variant) in sorts[0].variants.iter().enumerate() {
+                let tester_bool = variant.tester.apply(&[val]).as_bool().unwrap();
+                let matches = model
+                    .eval(&tester_bool, true)
+                    .and_then(|b| b.as_bool())
+                    .unwrap_or(false);
+                if !matches {
+                    continue;
+                }
+
+                return match variant_idx {
+                    0 => {
+                        let field = model.eval(&variant.accessors[0].apply(&[val]), true).unwrap();
+                        field.as_int().unwrap().as_i64().unwrap().to_string()
+                    }
+                    1 => {
+                        let field = model.eval(&variant.accessors[0].apply(&[val]), true).unwrap();
+                        field.as_bool().unwrap().as_bool().unwrap().to_string()
+                    }
+                    2 => {
+                        let field = model.eval(&variant.accessors[0].apply(&[val]), true).unwrap();
+                        let id = field.as_int().unwrap().as_i64().unwrap();
+                        float_values
+                            .get(&id)
+                            .cloned()
+                            .unwrap_or_else(|| format!("<float#{}>", id))
+                    }
+                    3 => {
+                        let field = model.eval(&variant.accessors[0].apply(&[val]), true).unwrap();
+                        let id = field.as_int().unwrap().as_i64().unwrap();
+                        let name = symbol_names
+                            .get(&id)
+                            .cloned()
+                            .unwrap_or_else(|| format!("#{}", id));
+                        format!("symbol({})", name)
+                    }
+                    _ => {
+                        let n = tuple_arities.get(&variant_idx).copied().unwrap_or(0);
+                        let mut parts = Vec::with_capacity(n);
+                        for k in 0..n {
+                            let field = model.eval(&variant.accessors[k].apply(&[val]), true).unwrap();
+                            parts.push(format_model_val(
+                                &field,
+                                model,
+                                sorts,
+                                tuple_arities,
+                                symbol_names,
+                                float_values,
+                            ));
+                        }
+                        let mut s = format!("({}", parts.join(", "));
+                        if n == 1 {
+                            s.push(',');
+                        }
+                        s.push(')');
+                        s
+                    }
+                };
+            }
+
+            "<unknown>".to_string()
+        }
+
         // 8. Solve precondition verification checks programmatically
         let mut failed_checks = Vec::new();
 
@@ -1006,7 +1100,15 @@ pub fn check_precondition(library: &Library) -> Result<(), String> {
                     let mut counterexample = String::new();
                     if let Some(model) = solver.get_model() {
                         if let Some(val) = model.eval(&x, true) {
-                            counterexample = format!(" (Counterexample: x = {})", val);
+                            let rendered = format_model_val(
+                                &val,
+                                &model,
+                                &sorts,
+                                &tuple_arities,
+                                &symbol_names,
+                                &float_values,
+                            );
+                            counterexample = format!(" (Counterexample: x = {})", rendered);
                         }
                     }
                     error_msg.push_str(&counterexample);
@@ -1097,7 +1199,15 @@ pub fn check_precondition(library: &Library) -> Result<(), String> {
                     let mut counterexample = String::new();
                     if let Some(model) = solver.get_model() {
                         if let Some(val) = model.eval(&x, true) {
-                            counterexample = format!(" (Counterexample: x = {})", val);
+                            let rendered = format_model_val(
+                                &val,
+                                &model,
+                                &sorts,
+                                &tuple_arities,
+                                &symbol_names,
+                                &float_values,
+                            );
+                            counterexample = format!(" (Counterexample: x = {})", rendered);
                         }
                     }
                     error_msg.push_str(&counterexample);
@@ -1159,7 +1269,15 @@ pub fn check_precondition(library: &Library) -> Result<(), String> {
                     let mut counterexample = String::new();
                     if let Some(model) = solver.get_model() {
                         if let Some(val) = model.eval(&x, true) {
-                            counterexample = format!(" (Counterexample: x = {})", val);
+                            let rendered = format_model_val(
+                                &val,
+                                &model,
+                                &sorts,
+                                &tuple_arities,
+                                &symbol_names,
+                                &float_values,
+                            );
+                            counterexample = format!(" (Counterexample: x = {})", rendered);
                         }
                     }
                     error_msg.push_str(&counterexample);
