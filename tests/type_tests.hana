@@ -225,3 +225,64 @@ test sentence test_enum_checks {
     not
     assert
 }
+
+// A variant payload naming a sibling by a *relative* path. The check for this
+// lands three modules deep (RelEnum / Variant / Body), so the path has to be
+// shifted by three during lowering; getting that wrong resolves to the wrong
+// item or fails outright.
+type Small int | bool;
+
+enum RelEnum {
+    Wraps(Small),
+    Pair(Small, other_sym),
+}
+
+mod nested {
+    // Same, but reaching back out of an enclosing module.
+    enum Outer {
+        Holds(super::Small),
+    }
+}
+
+test sentence test_enum_relative_payload_paths {
+    push (RelEnum::Wraps::tag, (42))
+    jump RelEnum::check
+    assert
+
+    push (RelEnum::Wraps::tag, (true))
+    jump RelEnum::check
+    assert
+
+    // A float is not `Small`, so the payload check must reject it.
+    push (RelEnum::Wraps::tag, (1.5))
+    jump RelEnum::check
+    not
+    assert
+
+    push (RelEnum::Pair::tag, (42, other_sym))
+    jump RelEnum::check
+    assert
+
+    push (RelEnum::Pair::tag, (42, test_sym))
+    jump RelEnum::check
+    not
+    assert
+
+    push (42)
+    jump RelEnum::Wraps::Body::check
+    assert
+
+    push (1.5)
+    jump RelEnum::Wraps::Body::check
+    not
+    assert
+
+    push (nested::Outer::Holds::tag, (true))
+    jump nested::Outer::check
+    assert
+
+    push (nested::Outer::Holds::tag, (1.5))
+    jump nested::Outer::check
+    not
+    assert
+}

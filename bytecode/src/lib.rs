@@ -1,6 +1,8 @@
 pub mod arity;
 pub mod assembly;
+pub mod ast;
 pub mod library;
+pub mod lower;
 pub mod opcode;
 pub mod resolve;
 pub mod value;

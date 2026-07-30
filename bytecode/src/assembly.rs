@@ -1,4 +1,10 @@
 use std::collections::{HashMap, HashSet};
+use crate::ast::core;
+use crate::ast::sugar::{self, Composer, ModuleExpr};
+use crate::ast::{
+    ParsedInstruction, ParsedSentence, ParsedValue, PrimitiveType, SentenceDecl, SymbolDecl, Target,
+    TypeSpec,
+};
 use crate::library::{Library, SentenceIndex, Annotation};
 use crate::opcode::Instruction;
 use crate::resolve::{ModuleId, ModuleItem, ModuleTree, ResolvedItem};
@@ -503,75 +509,12 @@ fn parse_instruction(stream: &mut TokenStream) -> Result<ParsedInstruction, Stri
     }
 }
 
-#[derive(Debug, Clone)]
-pub enum ModuleExpr {
-    Named(Path),
-    Composer {
-        composer: String,
-        args: Vec<ModuleExpr>,
-    },
-    Value(ParsedValue),
-}
-
-#[derive(Debug, Clone)]
-pub enum ResolvedArg {
-    Path(Path),
-    Value(ParsedValue),
-}
-
-enum TopLevelItem {
-    SymbolDecl {
-        name: String,
-        debug_desc: Option<String>,
-    },
-    Sentence(TopLevelSentence),
-    Mod {
-        name: String,
-        items: Vec<TopLevelItem>,
-        is_test: bool,
-    },
-    Compose {
-        name: String,
-        composer: String,
-        args: Vec<ModuleExpr>,
-        is_test: bool,
-    },
-}
-
-struct TopLevelSentence {
-    is_exported: bool,
-    is_test: bool,
-    name: String,
-    body: ParsedSentence,
-    annotations: Vec<Annotation>,
-    is_type_check: bool,
-}
-
-fn is_composer_name(name: &str) -> bool {
-    name == "compose_concurrent" || name == "compose_hidden" || name == "compose_prefix" || 
-    name == "compose_rename_prefix" || name == "compose_static_closure" ||
-    name == "compose_done" || name == "compose_emit" || name == "compose_emit_static" ||
-    name == "compose_accept" || name == "compose_accept_static"
-}
-
 fn parse_module_expr(stream: &mut TokenStream) -> Result<ModuleExpr, String> {
     if let Some(Token::Identifier(ident)) = stream.peek().cloned() {
-        if is_composer_name(&ident) {
+        if let Some(composer) = Composer::from_name(&ident) {
             stream.next(); // consume composer name
-            stream.expect(Token::LParen)?;
-            let mut args = Vec::new();
-            if stream.peek() != Some(&Token::RParen) {
-                loop {
-                    args.push(parse_module_expr(stream)?);
-                    if stream.peek() == Some(&Token::Comma) {
-                        stream.next();
-                    } else {
-                        break;
-                    }
-                }
-            }
-            stream.expect(Token::RParen)?;
-            return Ok(ModuleExpr::Composer { composer: ident, args });
+            let args = parse_composer_args(stream)?;
+            return Ok(ModuleExpr::Composed { composer, args });
         }
     }
 
@@ -592,11 +535,119 @@ fn parse_module_expr(stream: &mut TokenStream) -> Result<ModuleExpr, String> {
     }
 }
 
-fn parse_top_level(stream: &mut TokenStream, base_dir: Option<&std::path::Path>) -> Result<Vec<TopLevelItem>, String> {
-    parse_items(stream, None, base_dir)
+fn parse_composer_args(stream: &mut TokenStream) -> Result<Vec<ModuleExpr>, String> {
+    stream.expect(Token::LParen)?;
+    let mut args = Vec::new();
+    if stream.peek() != Some(&Token::RParen) {
+        loop {
+            args.push(parse_module_expr(stream)?);
+            if stream.peek() == Some(&Token::Comma) {
+                stream.next();
+            } else {
+                break;
+            }
+        }
+    }
+    stream.expect(Token::RParen)?;
+    Ok(args)
 }
 
-fn parse_items(stream: &mut TokenStream, end_token: Option<Token>, base_dir: Option<&std::path::Path>) -> Result<Vec<TopLevelItem>, String> {
+/// Phase 1: tokenize and parse. Performs no desugaring; the only non-syntactic
+/// work is reading the files named by `mod name;`.
+pub(crate) fn parse_source(
+    input: &str,
+    base_dir: Option<&std::path::Path>,
+) -> Result<Vec<sugar::Item>, String> {
+    let tokens = tokenize(input)?;
+    let mut stream = TokenStream { tokens, position: 0 };
+    parse_items(&mut stream, None, base_dir)
+}
+
+fn parse_annotations(stream: &mut TokenStream) -> Result<Vec<Annotation>, String> {
+    let mut annotations = Vec::new();
+    while stream.peek() == Some(&Token::Hash) {
+        stream.next(); // consume '#'
+        stream.expect(Token::LBracket)?;
+        let name = match stream.next() {
+            Some(Token::Identifier(name)) => name,
+            Some(other) => return Err(format!("Expected annotation name, found {:?}", other)),
+            None => return Err("Expected annotation name, found end of input".to_string()),
+        };
+
+        let ann = match name.as_str() {
+            "arity" => {
+                stream.expect(Token::LParen)?;
+                let n = match stream.next() {
+                    Some(Token::Int(val)) => val,
+                    Some(other) => return Err(format!("Expected integer for arity first argument, found {:?}", other)),
+                    None => return Err("Expected integer for arity first argument, found end of input".to_string()),
+                };
+                stream.expect(Token::Comma)?;
+                let m = match stream.next() {
+                    Some(Token::Int(val)) => val,
+                    Some(other) => return Err(format!("Expected integer for arity second argument, found {:?}", other)),
+                    None => return Err("Expected integer for arity second argument, found end of input".to_string()),
+                };
+                stream.expect(Token::RParen)?;
+                Annotation::Arity(n, m)
+            }
+            "precondition" => Annotation::Precondition(parse_annotation_path(stream, "precondition")?),
+            "postcondition" => Annotation::Postcondition(parse_annotation_path(stream, "postcondition")?),
+            "recursive" => Annotation::Recursive,
+            "total" => Annotation::Total,
+            other => return Err(format!("Unsupported annotation '{}'", other)),
+        };
+        stream.expect(Token::RBracket)?;
+        annotations.push(ann);
+    }
+    Ok(annotations)
+}
+
+/// Contract annotations still carry their target as a string; giving them a
+/// `Path` and resolving them like every other path is a separate change.
+fn parse_annotation_path(stream: &mut TokenStream, kind: &str) -> Result<String, String> {
+    stream.expect(Token::LParen)?;
+    let first_ident = match stream.next() {
+        Some(Token::Identifier(s)) => s,
+        Some(other) => return Err(format!("Expected identifier for {} function, found {:?}", kind, other)),
+        None => return Err(format!("Expected identifier for {} function, found end of input", kind)),
+    };
+    let path = parse_path(stream, first_ident)?;
+    stream.expect(Token::RParen)?;
+    Ok(path.to_string())
+}
+
+/// Consumes any `export` / `test` markers preceding an item.
+fn parse_modifiers(stream: &mut TokenStream) -> (bool, bool) {
+    let mut is_exported = false;
+    let mut is_test = false;
+    loop {
+        if stream.peek() == Some(&Token::Export) {
+            stream.next();
+            is_exported = true;
+        } else if stream.peek() == Some(&Token::TestKeyword) {
+            stream.next();
+            is_test = true;
+        } else {
+            break;
+        }
+    }
+    (is_exported, is_test)
+}
+
+fn expect_name(stream: &mut TokenStream, what: &str) -> Result<String, String> {
+    match stream.next() {
+        Some(Token::Identifier(name)) => Ok(name),
+        Some(other) => Err(format!("Expected {} identifier, found {:?}", what, other)),
+        None => Err(format!("Expected {} identifier, found end of input", what)),
+    }
+}
+
+fn parse_items(
+    stream: &mut TokenStream,
+    end_token: Option<Token>,
+    base_dir: Option<&std::path::Path>,
+) -> Result<Vec<sugar::Item>, String> {
     let mut items = Vec::new();
 
     while stream.peek().is_some() {
@@ -606,359 +657,155 @@ fn parse_items(stream: &mut TokenStream, end_token: Option<Token>, base_dir: Opt
             }
         }
 
-        let mut annotations = Vec::new();
-        while stream.peek() == Some(&Token::Hash) {
-            stream.next(); // consume '#'
-            stream.expect(Token::LBracket)?;
-            let name = match stream.next() {
-                Some(Token::Identifier(name)) => name,
-                Some(other) => return Err(format!("Expected annotation name, found {:?}", other)),
-                None => return Err("Expected annotation name, found end of input".to_string()),
+        let annotations = parse_annotations(stream)?;
+
+        // Symbols take no modifiers, so they are recognized before them.
+        if annotations.is_empty() && stream.peek() == Some(&Token::SymbolKeyword) {
+            stream.next(); // consume 'symbol'
+            let name = expect_name(stream, "symbol name")?;
+            let debug_desc = match stream.peek() {
+                Some(Token::StringLiteral(_)) => match stream.next() {
+                    Some(Token::StringLiteral(desc)) => Some(desc),
+                    _ => unreachable!(),
+                },
+                _ => None,
             };
-
-            let ann = match name.as_str() {
-                "arity" => {
-                    stream.expect(Token::LParen)?;
-                    let n = match stream.next() {
-                        Some(Token::Int(val)) => val,
-                        Some(other) => return Err(format!("Expected integer for arity first argument, found {:?}", other)),
-                        None => return Err("Expected integer for arity first argument, found end of input".to_string()),
-                    };
-                    stream.expect(Token::Comma)?;
-                    let m = match stream.next() {
-                        Some(Token::Int(val)) => val,
-                        Some(other) => return Err(format!("Expected integer for arity second argument, found {:?}", other)),
-                        None => return Err("Expected integer for arity second argument, found end of input".to_string()),
-                    };
-                    stream.expect(Token::RParen)?;
-                    Annotation::Arity(n, m)
-                }
-                "precondition" => {
-                    stream.expect(Token::LParen)?;
-                    let first_ident = match stream.next() {
-                        Some(Token::Identifier(s)) => s,
-                        Some(other) => return Err(format!("Expected identifier for precondition function, found {:?}", other)),
-                        None => return Err("Expected identifier for precondition function, found end of input".to_string()),
-                    };
-                    let path = parse_path(stream, first_ident)?;
-                    let mut path_str = String::new();
-                    for (i, seg) in path.segments.iter().enumerate() {
-                        if i > 0 {
-                            path_str.push_str("::");
-                        }
-                        match seg {
-                            PathSegment::Crate => path_str.push_str("crate"),
-                            PathSegment::Super => path_str.push_str("super"),
-                            PathSegment::Identifier(name) => path_str.push_str(name),
-                        }
-                    }
-                    stream.expect(Token::RParen)?;
-                    Annotation::Precondition(path_str)
-                }
-                "postcondition" => {
-                    stream.expect(Token::LParen)?;
-                    let first_ident = match stream.next() {
-                        Some(Token::Identifier(s)) => s,
-                        Some(other) => return Err(format!("Expected identifier for postcondition function, found {:?}", other)),
-                        None => return Err("Expected identifier for postcondition function, found end of input".to_string()),
-                    };
-                    let path = parse_path(stream, first_ident)?;
-                    let mut path_str = String::new();
-                    for (i, seg) in path.segments.iter().enumerate() {
-                        if i > 0 {
-                            path_str.push_str("::");
-                        }
-                        match seg {
-                            PathSegment::Crate => path_str.push_str("crate"),
-                            PathSegment::Super => path_str.push_str("super"),
-                            PathSegment::Identifier(name) => path_str.push_str(name),
-                        }
-                    }
-                    stream.expect(Token::RParen)?;
-                    Annotation::Postcondition(path_str)
-                }
-                "recursive" => {
-                    Annotation::Recursive
-                }
-                "total" => {
-                    Annotation::Total
-                }
-                other => return Err(format!("Unsupported annotation '{}'", other)),
-            };
-            stream.expect(Token::RBracket)?;
-            annotations.push(ann);
-        }
-
-        if !annotations.is_empty() {
-            let mut is_exported = false;
-            let mut is_test = false;
-
-            loop {
-                if stream.peek() == Some(&Token::Export) {
-                    stream.next();
-                    is_exported = true;
-                } else if stream.peek() == Some(&Token::TestKeyword) {
-                    if stream.peek_at(1) == Some(&Token::ModKeyword) {
-                        return Err("Annotations are not supported on modules".to_string());
-                    }
-                    stream.next();
-                    is_test = true;
-                } else {
-                    break;
-                }
-            }
-
-            if stream.peek() == Some(&Token::TypeKeyword) {
-                stream.next(); // consume 'type'
-                let name = match stream.next() {
-                    Some(Token::Identifier(name)) => name,
-                    Some(other) => return Err(format!("Expected type name identifier, found {:?}", other)),
-                    None => return Err("Expected type name identifier, found end of input".to_string()),
-                };
-                let spec = parse_type_spec(stream)?;
-                stream.expect(Token::Semicolon)?;
-
-                let check_sentence = compile_type_to_sentence("check".to_string(), spec, true, annotations)?;
-                items.push(TopLevelItem::Mod {
-                    name,
-                    items: vec![TopLevelItem::Sentence(check_sentence)],
-                    is_test: false,
-                });
-                continue;
-            }
-
-            if stream.peek() == Some(&Token::EnumKeyword) {
-                let enum_item = parse_enum_decl(stream, annotations)?;
-                items.push(enum_item);
-                continue;
-            }
-
-            let is_function = if stream.peek() == Some(&Token::SentenceKeyword) {
-                stream.next();
-                false
-            } else if stream.peek() == Some(&Token::FunctionKeyword) {
-                stream.next();
-                true
-            } else {
-                return Err(format!("Expected 'sentence', 'function', or 'type', found {:?}", stream.peek()));
-            };
-
-            let name = match stream.next() {
-                Some(Token::Identifier(name)) => name,
-                Some(other) => return Err(format!("Expected sentence name identifier, found {:?}", other)),
-                None => return Err("Expected sentence name identifier, found end of input".to_string()),
-            };
-
-            if stream.peek() == Some(&Token::Colon) {
-                stream.next();
-            }
-
-            let body = parse_sentence_body(stream)?;
-
-            let mut annotations = annotations;
-            if is_function {
-                annotations.push(Annotation::Arity(1, 1));
-            }
-
-            items.push(TopLevelItem::Sentence(TopLevelSentence {
-                is_exported,
-                is_test,
-                name,
-                body,
-                annotations,
-                is_type_check: false,
-            }));
+            items.push(sugar::Item::Symbol(SymbolDecl { name, debug_desc }));
             continue;
         }
 
-        if stream.peek() == Some(&Token::SymbolKeyword) {
-            stream.next(); // consume 'symbol'
-            let name = match stream.next() {
-                Some(Token::Identifier(name)) => name,
-                Some(other) => return Err(format!("Expected symbol name identifier, found {:?}", other)),
-                None => return Err("Expected symbol name identifier, found end of input".to_string()),
-            };
-
-            let debug_desc = if let Some(Token::StringLiteral(_)) = stream.peek() {
-                if let Some(Token::StringLiteral(desc)) = stream.next() {
-                    Some(desc)
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-
-            items.push(TopLevelItem::SymbolDecl { name, debug_desc });
-        } else {
-            let is_test_mod = stream.peek() == Some(&Token::TestKeyword) && stream.peek_at(1) == Some(&Token::ModKeyword);
-
-            if is_test_mod || stream.peek() == Some(&Token::ModKeyword) {
-                if is_test_mod {
-                    stream.next(); // consume 'test'
-                }
-                stream.next(); // consume 'mod'
-                let name = match stream.next() {
-                    Some(Token::Identifier(name)) => name,
-                    Some(other) => return Err(format!("Expected module name identifier, found {:?}", other)),
-                    None => return Err("Expected module name identifier, found end of input".to_string()),
-                };
-                
-                if let Some(&Token::Identifier(ref ident)) = stream.peek() {
-                    if is_composer_name(ident) {
-                        let composer = match stream.next() {
-                            Some(Token::Identifier(id)) => id,
-                            _ => unreachable!(),
-                        };
-                        stream.expect(Token::LParen)?;
-                        let mut args = Vec::new();
-                        if stream.peek() != Some(&Token::RParen) {
-                            loop {
-                                args.push(parse_module_expr(stream)?);
-                                if stream.peek() == Some(&Token::Comma) {
-                                    stream.next();
-                                } else {
-                                    break;
-                                }
-                            }
-                        }
-                        stream.expect(Token::RParen)?;
-                        stream.expect(Token::Semicolon)?;
-                        items.push(TopLevelItem::Compose { name, composer, args, is_test: is_test_mod });
-                        continue;
-                    }
-                }
-                
-                if stream.peek() == Some(&Token::Semicolon) {
-                    stream.next(); // consume ';'
-                    let base = base_dir.ok_or_else(|| {
-                        format!("Cannot load external module '{}' because no base directory context was provided", name)
-                    })?;
-                    let file_name = format!("{}.hana", name);
-                    let file_path = base.join(&file_name);
-                    let file_content = std::fs::read_to_string(&file_path)
-                        .map_err(|e| format!("Failed to read module file '{}' at {:?}: {}", file_name, file_path, e))?;
-                    
-                    let tokens = tokenize(&file_content)?;
-                    let mut sub_stream = TokenStream { tokens, position: 0 };
-                    let new_base = base.join(&name);
-                    let mod_items = parse_items(&mut sub_stream, None, Some(&new_base))?;
-                    items.push(TopLevelItem::Mod { name, items: mod_items, is_test: is_test_mod });
-                } else {
-                    stream.expect(Token::LBrace)?;
-                    let new_base = base_dir.map(|b| b.join(&name));
-                    let mod_items = parse_items(stream, Some(Token::RBrace), new_base.as_deref())?;
-                    stream.expect(Token::RBrace)?;
-                    items.push(TopLevelItem::Mod { name, items: mod_items, is_test: is_test_mod });
-                }
-            } else {
-            let mut is_exported = false;
-            let mut is_test = false;
-
-            loop {
-                if stream.peek() == Some(&Token::Export) {
-                    stream.next();
-                    is_exported = true;
-                } else if stream.peek() == Some(&Token::TestKeyword) {
-                    stream.next();
-                    is_test = true;
-                } else {
-                    break;
-                }
+        // `test mod` is a test machine, not a test sentence, so it is matched
+        // before the modifier loop would swallow the `test`.
+        let is_test_mod = stream.peek() == Some(&Token::TestKeyword)
+            && stream.peek_at(1) == Some(&Token::ModKeyword);
+        if is_test_mod || stream.peek() == Some(&Token::ModKeyword) {
+            if !annotations.is_empty() {
+                return Err("Annotations are not supported on modules".to_string());
             }
-
-            if stream.peek() == Some(&Token::TypeKeyword) {
-                stream.next(); // consume 'type'
-                let name = match stream.next() {
-                    Some(Token::Identifier(name)) => name,
-                    Some(other) => return Err(format!("Expected type name identifier, found {:?}", other)),
-                    None => return Err("Expected type name identifier, found end of input".to_string()),
-                };
-                let spec = parse_type_spec(stream)?;
-                stream.expect(Token::Semicolon)?;
-
-                let check_sentence = compile_type_to_sentence("check".to_string(), spec, true, Vec::new())?;
-                items.push(TopLevelItem::Mod {
-                    name,
-                    items: vec![TopLevelItem::Sentence(check_sentence)],
-                    is_test: false,
-                });
-                continue;
+            if is_test_mod {
+                stream.next(); // consume 'test'
             }
+            stream.next(); // consume 'mod'
+            items.push(parse_mod_item(stream, is_test_mod, base_dir)?);
+            continue;
+        }
 
-            if stream.peek() == Some(&Token::EnumKeyword) {
-                let enum_item = parse_enum_decl(stream, Vec::new())?;
-                items.push(enum_item);
-                continue;
-            }
+        let (is_exported, is_test) = parse_modifiers(stream);
 
-            let is_function = if stream.peek() == Some(&Token::SentenceKeyword) {
+        if stream.peek() == Some(&Token::TypeKeyword) {
+            stream.next(); // consume 'type'
+            let name = expect_name(stream, "type name")?;
+            let spec = parse_type_spec(stream)?;
+            stream.expect(Token::Semicolon)?;
+            items.push(sugar::Item::Type(sugar::TypeDecl { name, spec, annotations }));
+            continue;
+        }
+
+        if stream.peek() == Some(&Token::EnumKeyword) {
+            items.push(sugar::Item::Enum(parse_enum_decl(stream, annotations)?));
+            continue;
+        }
+
+        let is_function = match stream.peek() {
+            Some(&Token::SentenceKeyword) => {
                 stream.next();
                 false
-            } else if stream.peek() == Some(&Token::FunctionKeyword) {
+            }
+            Some(&Token::FunctionKeyword) => {
                 stream.next();
                 true
-            } else {
-                return Err(format!("Expected 'sentence', 'function', or 'type', found {:?}", stream.peek()));
-            };
-
-            let name = match stream.next() {
-                Some(Token::Identifier(name)) => name,
-                Some(other) => return Err(format!("Expected sentence name identifier, found {:?}", other)),
-                None => return Err("Expected sentence name identifier, found end of input".to_string()),
-            };
-
-            if stream.peek() == Some(&Token::Colon) {
-                stream.next();
             }
+            other => {
+                return Err(format!(
+                    "Expected 'sentence', 'function', or 'type', found {:?}",
+                    other
+                ))
+            }
+        };
 
-            let body = parse_sentence_body(stream)?;
-
-            let annotations = if is_function {
-                vec![Annotation::Arity(1, 1)]
-            } else {
-                Vec::new()
-            };
-
-            items.push(TopLevelItem::Sentence(TopLevelSentence {
-                is_exported,
-                is_test,
-                name,
-                body,
-                annotations,
-                is_type_check: false,
-            }));
+        let name = expect_name(stream, "sentence name")?;
+        if stream.peek() == Some(&Token::Colon) {
+            stream.next();
         }
+        let body = parse_sentence_body(stream)?;
+
+        let mut annotations = annotations;
+        if is_function {
+            annotations.push(Annotation::Arity(1, 1));
         }
+
+        items.push(sugar::Item::Sentence(SentenceDecl {
+            name,
+            body,
+            annotations,
+            is_exported,
+            is_test,
+        }));
     }
 
     Ok(items)
 }
 
+/// Parses what follows `mod`: a composition, an external file, or a block.
+fn parse_mod_item(
+    stream: &mut TokenStream,
+    is_test: bool,
+    base_dir: Option<&std::path::Path>,
+) -> Result<sugar::Item, String> {
+    let name = expect_name(stream, "module name")?;
+
+    if let Some(Token::Identifier(ident)) = stream.peek() {
+        if let Some(composer) = Composer::from_name(ident) {
+            stream.next(); // consume composer name
+            let args = parse_composer_args(stream)?;
+            stream.expect(Token::Semicolon)?;
+            return Ok(sugar::Item::Compose(sugar::ComposeDecl {
+                name,
+                composer,
+                args,
+                is_test,
+            }));
+        }
+    }
+
+    if stream.peek() == Some(&Token::Semicolon) {
+        stream.next(); // consume ';'
+        let base = base_dir.ok_or_else(|| {
+            format!(
+                "Cannot load external module '{}' because no base directory context was provided",
+                name
+            )
+        })?;
+        let file_name = format!("{}.hana", name);
+        let file_path = base.join(&file_name);
+        let file_content = std::fs::read_to_string(&file_path).map_err(|e| {
+            format!("Failed to read module file '{}' at {:?}: {}", file_name, file_path, e)
+        })?;
+
+        let items = parse_source(&file_content, Some(&base.join(&name)))?;
+        return Ok(sugar::Item::Mod(sugar::ModDecl { name, items, is_test }));
+    }
+
+    stream.expect(Token::LBrace)?;
+    let new_base = base_dir.map(|b| b.join(&name));
+    let items = parse_items(stream, Some(Token::RBrace), new_base.as_deref())?;
+    stream.expect(Token::RBrace)?;
+    Ok(sugar::Item::Mod(sugar::ModDecl { name, items, is_test }))
+}
+
 fn parse_enum_decl(
     stream: &mut TokenStream,
     annotations: Vec<Annotation>,
-) -> Result<TopLevelItem, String> {
+) -> Result<sugar::EnumDecl, String> {
     stream.expect(Token::EnumKeyword)?;
-    let enum_name = match stream.next() {
-        Some(Token::Identifier(name)) => name,
-        Some(other) => return Err(format!("Expected enum name identifier, found {:?}", other)),
-        None => return Err("Expected enum name identifier, found end of input".to_string()),
-    };
-
+    let name = expect_name(stream, "enum name")?;
     stream.expect(Token::LBrace)?;
 
-    let mut mod_items = Vec::new();
-    let mut variant_paths = Vec::new();
-
+    let mut variants = Vec::new();
     while stream.peek() != Some(&Token::RBrace) {
-        let variant_name = match stream.next() {
-            Some(Token::Identifier(v)) => v,
-            Some(other) => return Err(format!("Expected variant name identifier, found {:?}", other)),
-            None => return Err("Expected variant name identifier, found end of input".to_string()),
-        };
+        let variant_name = expect_name(stream, "variant name")?;
 
-        // Require parameter list (e.g., Case1(int, bool) or Case3())
+        // The parameter list is required, even when empty: `Case3()`.
         stream.expect(Token::LParen)?;
         let mut elements = Vec::new();
         if stream.peek() != Some(&Token::RParen) {
@@ -971,316 +818,39 @@ fn parse_enum_decl(
                             break;
                         }
                     }
-                    Some(&Token::RParen) => {
-                        break;
-                    }
+                    Some(&Token::RParen) => break,
                     other => return Err(format!("Expected ',' or ')', found {:?}", other)),
                 }
             }
         }
         stream.expect(Token::RParen)?;
 
-        let payload_spec = TypeSpec::Tuple(elements);
+        variants.push(sugar::EnumVariant { name: variant_name, elements });
 
-        // 1. Symbol declaration: tag
-        let tag_decl = TopLevelItem::SymbolDecl {
-            name: "tag".to_string(),
-            debug_desc: None,
-        };
-
-        // 2. Type module: Body
-        let body_check_sentence = compile_type_to_sentence("check".to_string(), payload_spec, true, Vec::new())?;
-        let body_decl = TopLevelItem::Mod {
-            name: "Body".to_string(),
-            items: vec![TopLevelItem::Sentence(body_check_sentence)],
-            is_test: false,
-        };
-
-        // 3. Variant check: type check (tag, Body);
-        let variant_spec = TypeSpec::Tuple(vec![
-            TypeSpec::Path(Path { segments: vec![
-                PathSegment::Identifier(variant_name.clone()),
-                PathSegment::Identifier("tag".to_string()),
-            ] }),
-            TypeSpec::Path(Path { segments: vec![
-                PathSegment::Identifier(variant_name.clone()),
-                PathSegment::Identifier("Body".to_string()),
-            ] }),
-        ]);
-        let variant_check_sentence = compile_type_to_sentence("check".to_string(), variant_spec, true, Vec::new())?;
-
-        // Wrap them into a submodule variant_name
-        let variant_mod = TopLevelItem::Mod {
-            name: variant_name.clone(),
-            items: vec![
-                tag_decl,
-                body_decl,
-                TopLevelItem::Sentence(variant_check_sentence),
-            ],
-            is_test: false,
-        };
-        mod_items.push(variant_mod);
-
-        // Overall check path relative to grandparent (i.e. MyEnum::Case1)
-        let variant_path = Path {
-            segments: vec![
-                PathSegment::Identifier(enum_name.clone()),
-                PathSegment::Identifier(variant_name.clone()),
-            ],
-        };
-        variant_paths.push(TypeSpec::Path(variant_path));
-
-        // Variants can be optionally followed by comma
+        // Variants may be followed by an optional comma.
         if stream.peek() == Some(&Token::Comma) {
             stream.next();
         }
     }
     stream.expect(Token::RBrace)?;
 
-    // Overall check: type check MyEnum::Case1 | MyEnum::Case2 | MyEnum::Case3;
-    let overall_spec = TypeSpec::Union(variant_paths);
-    let overall_check_sentence = compile_type_to_sentence("check".to_string(), overall_spec, true, annotations)?;
-    mod_items.push(TopLevelItem::Sentence(overall_check_sentence));
-
-    Ok(TopLevelItem::Mod {
-        name: enum_name,
-        items: mod_items,
-        is_test: false,
-    })
+    Ok(sugar::EnumDecl { name, variants, annotations })
 }
-
-fn compile_type_to_sentence(
-    name: String,
-    spec: TypeSpec,
-    is_exported: bool,
-    mut annotations: Vec<Annotation>,
-) -> Result<TopLevelSentence, String> {
-    if !annotations.iter().any(|ann| matches!(ann, Annotation::Total)) {
-        annotations.push(Annotation::Total);
-    }
-
-    let instructions = compile_type_spec(&spec)?;
-
-    Ok(TopLevelSentence {
-        is_exported,
-        is_test: false,
-        name,
-        body: ParsedSentence { instructions },
-        annotations,
-        is_type_check: true,
-    })
-}
-
-fn compile_type_spec(spec: &TypeSpec) -> Result<Vec<ParsedInstruction>, String> {
-    match spec {
-        TypeSpec::Primitive(prim) => {
-            match prim {
-                PrimitiveType::Int => Ok(vec![ParsedInstruction::IsInt]),
-                PrimitiveType::Bool => Ok(vec![ParsedInstruction::IsBool]),
-                PrimitiveType::Float => Ok(vec![ParsedInstruction::IsFloat]),
-                PrimitiveType::Symbol => Ok(vec![ParsedInstruction::IsSymbol]),
-                PrimitiveType::Tuple => Ok(vec![ParsedInstruction::IsTuple]),
-            }
-        }
-        TypeSpec::Literal(val) => {
-            Ok(vec![
-                ParsedInstruction::Push(val.clone()),
-                ParsedInstruction::Equal,
-            ])
-        }
-        TypeSpec::Path(path) => {
-            Ok(vec![ParsedInstruction::TypeCheckPath(path.clone())])
-        }
-        TypeSpec::Union(variants) => {
-            compile_union(variants)
-        }
-        TypeSpec::Tuple(elements) => {
-            let n = elements.len();
-            let else_len_mismatches = ParsedSentence {
-                instructions: vec![
-                    ParsedInstruction::Drop(0),
-                    ParsedInstruction::Push(ParsedValue::Bool(false)),
-                ],
-            };
-            let then_len_matches = if n == 0 {
-                ParsedSentence {
-                    instructions: vec![
-                        ParsedInstruction::Drop(0),
-                        ParsedInstruction::Push(ParsedValue::Bool(true)),
-                    ],
-                }
-            } else {
-                let mut insts = vec![ParsedInstruction::Untuple(n)];
-                
-                let first_check = compile_type_spec(&elements[0])?;
-                insts.extend(first_check);
-                
-                for elem in elements.iter().skip(1) {
-                    insts.push(ParsedInstruction::Roll(1));
-                    let elem_check = compile_type_spec(elem)?;
-                    insts.extend(elem_check);
-                    insts.push(ParsedInstruction::And);
-                }
-                
-                ParsedSentence { instructions: insts }
-            };
-            
-            let then_is_tuple = ParsedSentence {
-                instructions: vec![
-                    ParsedInstruction::Pick(0),
-                    ParsedInstruction::TupleLength,
-                    ParsedInstruction::Push(ParsedValue::Int(n as i64)),
-                    ParsedInstruction::Equal,
-                    ParsedInstruction::Branch(
-                        Target::Inline(then_len_matches),
-                        Target::Inline(else_len_mismatches),
-                    ),
-                ],
-            };
-            
-            let else_not_tuple = ParsedSentence {
-                instructions: vec![
-                    ParsedInstruction::Drop(0),
-                    ParsedInstruction::Push(ParsedValue::Bool(false)),
-                ],
-            };
-            
-            Ok(vec![
-                ParsedInstruction::Pick(0),
-                ParsedInstruction::IsTuple,
-                ParsedInstruction::Branch(
-                    Target::Inline(then_is_tuple),
-                    Target::Inline(else_not_tuple),
-                ),
-            ])
-        }
-    }
-}
-
-fn compile_union(variants: &[TypeSpec]) -> Result<Vec<ParsedInstruction>, String> {
-    if variants.is_empty() {
-        return Ok(vec![
-            ParsedInstruction::Drop(0),
-            ParsedInstruction::Push(ParsedValue::Bool(false)),
-        ]);
-    }
-    if variants.len() == 1 {
-        return compile_type_spec(&variants[0]);
-    }
-    
-    let first = &variants[0];
-    let rest = &variants[1..];
-    
-    let then_true = ParsedSentence {
-        instructions: vec![
-            ParsedInstruction::Drop(0),
-            ParsedInstruction::Push(ParsedValue::Bool(true)),
-        ],
-    };
-    
-    let else_false = ParsedSentence {
-        instructions: compile_union(rest)?,
-    };
-    
-    let mut insts = vec![ParsedInstruction::Pick(0)];
-    insts.extend(compile_type_spec(first)?);
-    insts.push(ParsedInstruction::Branch(
-        Target::Inline(then_true),
-        Target::Inline(else_false),
-    ));
-    
-    Ok(insts)
-}
-
-#[derive(Debug, Clone)]
-pub enum ParsedValue {
-    Bool(bool),
-    Int(i64),
-    Float(f64),
-    Tuple(Vec<ParsedValue>),
-    SymbolRef(Path),
-}
-
-#[derive(Debug, Clone)]
-struct ParsedSentence {
-    instructions: Vec<ParsedInstruction>,
-}
-
-#[derive(Debug, Clone)]
-enum Target {
-    Label(Path),
-    Inline(ParsedSentence),
-}
-
-#[derive(Debug, Clone)]
-enum ParsedInstruction {
-    Push(ParsedValue),
-    Drop(usize),
-    Pick(usize),
-    Roll(usize),
-    Equal,
-    Greater,
-    Less,
-    Add,
-    Subtract,
-    Multiply,
-    Divide,
-    Modulo,
-    Not,
-    Negate,
-    Print,
-    Jump(Target),
-    Branch(Target, Target),
-    Panic,
-    Assert,
-    AssertEqual,
-    Tuple(usize),
-    Untuple(usize),
-    And,
-    Or,
-    SymbolLen,
-    SymbolCharAt,
-    IsInt,
-    IsBool,
-    IsFloat,
-    IsSymbol,
-    IsTuple,
-    TupleLength,
-    TypeCheckPath(Path),
-}
-
-#[derive(Debug, Clone)]
-pub enum TypeSpec {
-    Primitive(PrimitiveType),
-    Literal(ParsedValue),
-    Path(Path),
-    Tuple(Vec<TypeSpec>),
-    Union(Vec<TypeSpec>),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PrimitiveType {
-    Int,
-    Bool,
-    Float,
-    Symbol,
-    Tuple,
-}
-
-
 
 /// Everything the tree-building pass accumulates alongside the module tree
 /// itself: the flat sentence list to compile, and the library's lookup maps.
+/// Phase 3: declare. Walks the core tree assigning module ids and sentence
+/// indices, binding every name, and collecting the library's lookup maps.
 struct TreeBuilder {
     tree: ModuleTree,
     symbol_counter: usize,
     sentence_counter: usize,
-    /// Each sentence paired with the module its paths resolve against.
-    flat_sentences: Vec<(ModuleId, TopLevelSentence)>,
+    /// Each sentence paired with the module its paths resolve against, which
+    /// is always simply the module it is declared in.
+    flat_sentences: Vec<(ModuleId, SentenceDecl)>,
     exports: HashMap<String, SentenceIndex>,
     tests: HashMap<String, SentenceIndex>,
     test_machines: HashSet<String>,
-    anon_counter: usize,
 }
 
 /// Sentences a test machine module exposes to the runtime.
@@ -1304,61 +874,47 @@ impl TreeBuilder {
             exports: HashMap::new(),
             tests: HashMap::new(),
             test_machines: HashSet::new(),
-            anon_counter: 0,
         }
     }
 
-    fn build(&mut self, items: Vec<TopLevelItem>, scope: ModuleId) -> Result<(), String> {
+    fn build(&mut self, items: Vec<core::Item>, scope: ModuleId) -> Result<(), String> {
         for item in items {
             match item {
-                TopLevelItem::SymbolDecl { name, debug_desc } => {
-                    let desc = debug_desc.unwrap_or_else(|| self.tree.fq_name(scope, &name));
+                core::Item::Symbol(decl) => {
+                    let desc = decl
+                        .debug_desc
+                        .unwrap_or_else(|| self.tree.fq_name(scope, &decl.name));
                     let symbol = Value::Symbol(Symbol {
                         id: self.symbol_counter,
                         name: desc,
                     });
                     self.symbol_counter += 1;
 
-                    self.tree.declare(scope, name, ModuleItem::Symbol(symbol))?;
+                    self.tree
+                        .declare(scope, decl.name, ModuleItem::Symbol(symbol))?;
                 }
-                TopLevelItem::Sentence(s) => {
+                core::Item::Sentence(decl) => {
                     let s_idx = SentenceIndex::from(self.sentence_counter);
                     self.sentence_counter += 1;
 
                     self.tree
-                        .declare(scope, s.name.clone(), ModuleItem::Sentence(s_idx))?;
+                        .declare(scope, decl.name.clone(), ModuleItem::Sentence(s_idx))?;
 
-                    let fq_name = self.tree.fq_name(scope, &s.name);
-                    if s.is_exported {
+                    let fq_name = self.tree.fq_name(scope, &decl.name);
+                    if decl.is_exported {
                         self.exports.insert(fq_name.clone(), s_idx);
                     }
-                    if s.is_test {
+                    if decl.is_test {
                         self.tests.insert(fq_name, s_idx);
                     }
 
-                    self.flat_sentences.push((scope, s));
+                    self.flat_sentences.push((scope, decl));
                 }
-                TopLevelItem::Mod { name, items: mod_items, is_test } => {
-                    let sub_id = self.tree.declare_module(scope, name)?;
-                    self.build(mod_items, sub_id)?;
-                    if is_test {
-                        self.register_test_machine(sub_id, false)?;
-                    }
-                }
-                TopLevelItem::Compose { name, composer, args, is_test } => {
-                    let sub_id = self.tree.declare_module(scope, name)?;
-
-                    // Argument expressions are relative to the enclosing module,
-                    // not to the module being composed.
-                    let mut resolved_args = Vec::new();
-                    for arg in &args {
-                        resolved_args.push(self.resolve_module_expr(arg, scope)?);
-                    }
-                    let generated_items = generate_composition_items(&composer, &resolved_args)?;
-
-                    self.build(generated_items, sub_id)?;
-                    if is_test {
-                        self.register_test_machine(sub_id, true)?;
+                core::Item::Mod(decl) => {
+                    let sub_id = self.tree.declare_module(scope, decl.name)?;
+                    self.build(decl.items, sub_id)?;
+                    if decl.is_test {
+                        self.register_test_machine(sub_id, decl.exports_machine_sentences)?;
                     }
                 }
             }
@@ -1388,309 +944,6 @@ impl TreeBuilder {
             }
         }
         Ok(())
-    }
-
-    /// Reduces a module expression to something a composer template can name.
-    /// Nested composers are materialized as anonymous submodules of `scope`.
-    fn resolve_module_expr(
-        &mut self,
-        expr: &ModuleExpr,
-        scope: ModuleId,
-    ) -> Result<ResolvedArg, String> {
-        match expr {
-            ModuleExpr::Named(path) => Ok(ResolvedArg::Path(path.clone())),
-            ModuleExpr::Value(val) => Ok(ResolvedArg::Value(val.clone())),
-            ModuleExpr::Composer { composer, args } => {
-                let mut resolved_args = Vec::new();
-                for arg in args {
-                    resolved_args.push(self.resolve_module_expr(arg, scope)?);
-                }
-                let generated_items = generate_composition_items(composer, &resolved_args)?;
-
-                // The name has to be a legal identifier: composer templates are
-                // rendered as text and re-tokenized, so it round-trips through
-                // the lexer.
-                let anon_name = format!("__anon_mod_{}", self.anon_counter);
-                self.anon_counter += 1;
-
-                let anon_id = self.tree.declare_module(scope, anon_name.clone())?;
-                self.build(generated_items, anon_id)?;
-
-                Ok(ResolvedArg::Path(Path {
-                    segments: vec![PathSegment::Identifier(anon_name)],
-                }))
-            }
-        }
-    }
-}
-
-fn adjust_path(path: &Path) -> Path {
-    let mut segments = Vec::new();
-    if let Some(first) = path.segments.first() {
-        match first {
-            PathSegment::Crate => segments = path.segments.clone(),
-            _ => {
-                segments.push(PathSegment::Super);
-                segments.extend(path.segments.clone());
-            }
-        }
-    }
-    Path { segments }
-}
-
-impl std::fmt::Display for ParsedValue {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ParsedValue::Bool(b) => write!(f, "{}", b),
-            ParsedValue::Int(i) => write!(f, "{}", i),
-            ParsedValue::Float(fl) => write!(f, "{}", fl),
-            ParsedValue::Tuple(elements) => {
-                write!(f, "(")?;
-                for (i, elem) in elements.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, ", ")?;
-                    }
-                    write!(f, "{}", elem)?;
-                }
-                if elements.len() == 1 {
-                    write!(f, ",")?;
-                }
-                write!(f, ")")
-            }
-            ParsedValue::SymbolRef(path) => write!(f, "{}", path),
-        }
-    }
-}
-
-impl std::fmt::Display for ResolvedArg {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ResolvedArg::Path(p) => write!(f, "{}", p),
-            ResolvedArg::Value(v) => write!(f, "{}", v),
-        }
-    }
-}
-
-fn compile_template(template_str: &str, vars: &[(&str, &dyn std::fmt::Display)]) -> Result<Vec<TopLevelItem>, String> {
-    let mut rendered = template_str.to_string();
-    for (name, val) in vars {
-        rendered = rendered.replace(&format!("{{{{{}}}}}", name), &val.to_string());
-    }
-    let tokens = tokenize(&rendered)?;
-    let mut stream = TokenStream { tokens, position: 0 };
-    parse_top_level(&mut stream, None)
-}
-
-fn extract_paths(args: &[ResolvedArg], composer_name: &str) -> Result<Vec<Path>, String> {
-    let mut paths = Vec::new();
-    for arg in args {
-        match arg {
-            ResolvedArg::Path(p) => paths.push(p.clone()),
-            ResolvedArg::Value(_) => {
-                return Err(format!(
-                    "{} expects path arguments, found a literal value",
-                    composer_name
-                ));
-            }
-        }
-    }
-    Ok(paths)
-}
-
-const TEMPLATE_CONCURRENT: &str = include_str!("templates/compose_concurrent.tmpl.hana");
-const TEMPLATE_HIDDEN: &str = include_str!("templates/compose_hidden.tmpl.hana");
-const TEMPLATE_PREFIX: &str = include_str!("templates/compose_prefix.tmpl.hana");
-const TEMPLATE_RENAME_PREFIX: &str = include_str!("templates/compose_rename_prefix.tmpl.hana");
-const TEMPLATE_STATIC_CLOSURE: &str = include_str!("templates/compose_static_closure.tmpl.hana");
-const TEMPLATE_DONE: &str = include_str!("templates/compose_done.tmpl.hana");
-const TEMPLATE_EMIT: &str = include_str!("templates/compose_emit.tmpl.hana");
-const TEMPLATE_EMIT_STATIC: &str = include_str!("templates/compose_emit_static.tmpl.hana");
-const TEMPLATE_ACCEPT: &str = include_str!("templates/compose_accept.tmpl.hana");
-const TEMPLATE_ACCEPT_STATIC: &str = include_str!("templates/compose_accept_static.tmpl.hana");
-
-fn compose_concurrent(args: &[Path]) -> Result<Vec<TopLevelItem>, String> {
-    if args.len() != 3 {
-        return Err("compose_concurrent requires exactly 3 arguments".to_string());
-    }
-    let p1 = adjust_path(&args[0]);
-    let p2 = adjust_path(&args[1]);
-    let sync_fn = adjust_path(&args[2]);
-
-    compile_template(TEMPLATE_CONCURRENT, &[
-        ("p1", &p1),
-        ("p2", &p2),
-        ("sync_fn", &sync_fn),
-    ])
-}
-
-fn compose_hidden(args: &[Path]) -> Result<Vec<TopLevelItem>, String> {
-    if args.len() != 2 {
-        return Err("compose_hidden requires exactly 2 arguments".to_string());
-    }
-    let concurrent = adjust_path(&args[0]);
-    let hidden_fn = adjust_path(&args[1]);
-
-    compile_template(TEMPLATE_HIDDEN, &[
-        ("concurrent", &concurrent),
-        ("hidden_fn", &hidden_fn),
-    ])
-}
-
-fn compose_prefix(args: &[Path]) -> Result<Vec<TopLevelItem>, String> {
-    if args.len() != 2 {
-        return Err("compose_prefix requires exactly 2 arguments: target_machine and prefix_symbol".to_string());
-    }
-    let target = adjust_path(&args[0]);
-    let prefix = adjust_path(&args[1]);
-
-    compile_template(TEMPLATE_PREFIX, &[
-        ("target", &target),
-        ("prefix", &prefix),
-    ])
-}
-
-fn compose_rename_prefix(args: &[Path]) -> Result<Vec<TopLevelItem>, String> {
-    if args.len() != 3 {
-        return Err("compose_rename_prefix requires exactly 3 arguments: from_symbol, to_symbol, and target_machine".to_string());
-    }
-    let from_symbol = adjust_path(&args[0]);
-    let to_symbol = adjust_path(&args[1]);
-    let target = adjust_path(&args[2]);
-
-    compile_template(TEMPLATE_RENAME_PREFIX, &[
-        ("from_symbol", &from_symbol),
-        ("to_symbol", &to_symbol),
-        ("target", &target),
-    ])
-}
-
-fn compose_static_closure(args: &[ResolvedArg]) -> Result<Vec<TopLevelItem>, String> {
-    if args.len() != 2 {
-        return Err("compose_static_closure requires exactly 2 arguments: target_machine and a value".to_string());
-    }
-    let machine = match &args[0] {
-        ResolvedArg::Path(path) => adjust_path(path),
-        _ => return Err("compose_static_closure: first argument must be a machine module path".to_string()),
-    };
-    let val = match &args[1] {
-        ResolvedArg::Value(val) => val.clone(),
-        ResolvedArg::Path(path) => ParsedValue::SymbolRef(adjust_path(path)),
-    };
-
-    compile_template(TEMPLATE_STATIC_CLOSURE, &[
-        ("machine", &machine),
-        ("val", &val),
-    ])
-}
-
-fn compose_done() -> Result<Vec<TopLevelItem>, String> {
-    compile_template(TEMPLATE_DONE, &[])
-}
-
-fn compose_emit_helper(val: Option<ParsedValue>, target: &Path) -> Result<Vec<TopLevelItem>, String> {
-    let machine = adjust_path(target);
-    match val {
-        Some(v) => {
-            compile_template(TEMPLATE_EMIT_STATIC, &[
-                ("machine", &machine),
-                ("val", &v),
-            ])
-        }
-        None => {
-            compile_template(TEMPLATE_EMIT, &[
-                ("machine", &machine),
-            ])
-        }
-    }
-}
-
-fn compose_accept_helper(val_set_path: Path, target: &Path) -> Result<Vec<TopLevelItem>, String> {
-    let machine = adjust_path(target);
-
-    compile_template(TEMPLATE_ACCEPT, &[
-        ("machine", &machine),
-        ("val_set_path", &val_set_path),
-    ])
-}
-
-fn compose_accept_static_helper(val: ParsedValue, target: &Path) -> Result<Vec<TopLevelItem>, String> {
-    let machine = adjust_path(target);
-
-    compile_template(TEMPLATE_ACCEPT_STATIC, &[
-        ("machine", &machine),
-        ("val", &val),
-    ])
-}
-
-fn generate_composition_items(
-    composer: &str,
-    args: &[ResolvedArg],
-) -> Result<Vec<TopLevelItem>, String> {
-    match composer {
-        "compose_concurrent" => {
-            let paths = extract_paths(args, "compose_concurrent")?;
-            compose_concurrent(&paths)
-        }
-        "compose_hidden" => {
-            let paths = extract_paths(args, "compose_hidden")?;
-            compose_hidden(&paths)
-        }
-        "compose_prefix" => {
-            let paths = extract_paths(args, "compose_prefix")?;
-            compose_prefix(&paths)
-        }
-        "compose_rename_prefix" => {
-            let paths = extract_paths(args, "compose_rename_prefix")?;
-            compose_rename_prefix(&paths)
-        }
-        "compose_static_closure" => compose_static_closure(args),
-        "compose_done" => {
-            if !args.is_empty() {
-                return Err("compose_done expects 0 arguments".to_string());
-            }
-            compose_done()
-        }
-        "compose_emit" => {
-            let paths = extract_paths(args, "compose_emit")?;
-            if paths.len() != 1 {
-                return Err("compose_emit expects exactly 1 target machine argument".to_string());
-            }
-            compose_emit_helper(None, &paths[0])
-        }
-        "compose_emit_static" => {
-            if args.len() != 2 {
-                return Err("compose_emit_static expects exactly 2 arguments: event and target_machine".to_string());
-            }
-            let val = match &args[0] {
-                ResolvedArg::Value(val) => val.clone(),
-                ResolvedArg::Path(path) => ParsedValue::SymbolRef(adjust_path(path)),
-            };
-            let paths = extract_paths(&args[1..2], "compose_emit_static")?;
-            compose_emit_helper(Some(val), &paths[0])
-        }
-        "compose_accept" => {
-            if args.len() != 2 {
-                return Err("compose_accept expects exactly 2 arguments: value_set and target_machine".to_string());
-            }
-            let val_set_path = match &args[0] {
-                ResolvedArg::Path(path) => adjust_path(path),
-                _ => return Err("compose_accept: first argument must be a sentence path".to_string()),
-            };
-            let paths = extract_paths(&args[1..2], "compose_accept")?;
-            compose_accept_helper(val_set_path, &paths[0])
-        }
-        "compose_accept_static" => {
-            if args.len() != 2 {
-                return Err("compose_accept_static expects exactly 2 arguments: event and target_machine".to_string());
-            }
-            let val = match &args[0] {
-                ResolvedArg::Value(val) => val.clone(),
-                ResolvedArg::Path(path) => ParsedValue::SymbolRef(adjust_path(path)),
-            };
-            let paths = extract_paths(&args[1..2], "compose_accept_static")?;
-            compose_accept_static_helper(val, &paths[0])
-        }
-        _ => Err(format!("Unknown composer: {}", composer)),
     }
 }
 
@@ -1841,9 +1094,8 @@ pub fn assemble(input: &str) -> Result<Library, String> {
 
 /// Assembles the input text with an optional base directory context for resolving external modules.
 pub fn assemble_with_path(input: &str, base_dir: Option<&std::path::Path>) -> Result<Library, String> {
-    let tokens = tokenize(input)?;
-    let mut stream = TokenStream { tokens, position: 0 };
-    let items = parse_top_level(&mut stream, base_dir)?;
+    let parsed = parse_source(input, base_dir)?;
+    let items = crate::lower::lower_items(parsed)?;
 
     let mut builder = TreeBuilder::new();
     builder.build(items, crate::resolve::ROOT)?;
@@ -1875,15 +1127,7 @@ pub fn assemble_with_path(input: &str, base_dir: Option<&std::path::Path>) -> Re
     for (idx, (scope, sentence)) in flat_sentences.into_iter().enumerate() {
         compiler.annotations[idx] = sentence.annotations.clone();
         compiler.current_parent_idx = Some(SentenceIndex::from(idx));
-        // A `type`/`enum` check is declared inside the module named after the
-        // type, but its body names sibling types, so it resolves one level up.
-        let resolve_scope = if sentence.is_type_check {
-            tree.parent(scope)
-                .ok_or_else(|| "Internal error: type check sentence declared at the crate root".to_string())?
-        } else {
-            scope
-        };
-        let compiled_instructions = compiler.compile_sentence_body(resolve_scope, sentence.body.instructions)?;
+        let compiled_instructions = compiler.compile_sentence_body(scope, sentence.body.instructions)?;
         compiler.sentences[idx] = compiled_instructions;
         compiler.names[idx] = tree.fq_name(scope, &sentence.name);
     }
