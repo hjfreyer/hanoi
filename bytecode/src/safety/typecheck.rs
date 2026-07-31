@@ -706,8 +706,8 @@ pub fn check_precondition(library: &Library) -> Result<(), String> {
                         };
                         stack.push(res);
                     }
-                    Instruction::Drop(n) => {
-                        stack.remove(stack.len() - 1 - n);
+                    Instruction::Drop => {
+                        stack.pop();
                     }
                     Instruction::Pick(n) => {
                         stack.push(stack[stack.len() - 1 - n].clone());
@@ -1362,13 +1362,12 @@ fn get_sentence_arity(
             Instruction::Push(_) => {
                 stack.push("val".to_string());
             }
-            Instruction::Drop(n) => {
-                let n = *n;
-                while stack.len() < n + 1 {
+            Instruction::Drop => {
+                while stack.is_empty() {
                     stack.insert(0, format!("in_inferred_{}", inputs_needed));
                     inputs_needed += 1;
                 }
-                stack.remove(stack.len() - 1 - n);
+                stack.pop();
             }
             Instruction::Pick(n) => {
                 let n = *n;

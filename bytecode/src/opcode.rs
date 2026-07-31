@@ -6,9 +6,12 @@ use crate::value::Value;
 pub enum Instruction {
     /// Push a constant value onto the stack.
     Push(Value),
-    /// Discards a value at the given depth from the top (0-indexed) of the stack.
-    /// (e.g., depth=0 is equivalent to Pop).
-    Drop(usize),
+    /// Discards the value at the top of the stack.
+    ///
+    /// The surface language's `drop <depth>` reaches deeper than this; phase 4
+    /// expands it into a `Dip` around this instruction, so that nothing in the
+    /// ISA but `Pick` and `Roll` addresses below the top of the stack.
+    Drop,
     /// Copies a value at the given depth from the top (0-indexed) of the stack and pushes it to the top.
     /// (e.g., depth=0 is equivalent to Dup, depth=1 is equivalent to Over).
     Pick(usize),
@@ -100,7 +103,7 @@ impl std::fmt::Display for Instruction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Instruction::Push(v) => write!(f, "push {}", v),
-            Instruction::Drop(d) => write!(f, "drop {}", d),
+            Instruction::Drop => write!(f, "drop"),
             Instruction::Pick(d) => write!(f, "pick {}", d),
             Instruction::Roll(d) => write!(f, "roll {}", d),
             Instruction::Equal => write!(f, "equal"),

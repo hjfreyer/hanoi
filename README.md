@@ -88,9 +88,9 @@ The Hanoi VM supports a rich instruction set categorized into five main domains:
 
 | Category | Instructions | Description |
 | :--- | :--- | :--- |
-| **Stack Ops** | `Push(V)`, `Drop(d)`, `Pick(d)`, `Roll(d)` | Standard stack push, drop at depth, copy/peek at depth, and rotate. |
+| **Stack Ops** | `Push(V)`, `Drop`, `Pick(d)`, `Roll(d)` | Standard stack push, pop, copy/peek at depth, and rotate. `Pick` and `Roll` are the only instructions that address below the top of the stack. |
 | **Arithmetic & Logic** | `Add`, `Subtract`, `Multiply`, `Divide`, `Modulo`, `Negate`, `Equal`, `Greater`, `Less`, `Not`, `And`, `Or` | Basic mathematical and Boolean logic operations. |
-| **Control Flow** | `Jump(S)`, `Dip(n, S)`, `Branch(S1, S2)`, `Panic`, `Assert`, `AssertEqual` | Subroutine execution, calls under a hidden region of the stack, conditional branching, and explicit panics. |
+| **Control Flow** | `Dip(n, S)`, `Branch(S1, S2)`, `Panic`, `Assert`, `AssertEqual` | Subroutine execution under a hidden region of the stack (a plain `jump` is `Dip(0, S)`), conditional branching, and explicit panics. |
 | **Composite Types** | `Tuple(n)`, `Untuple(n)`, `SymbolLen`, `SymbolCharAt`, `TupleLength` | Constructing and destructuring tuples, and analyzing symbols (immutable strings). |
 | **Type Predicates** | `IsInt`, `IsBool`, `IsFloat`, `IsSymbol`, `IsTuple` | Runtime type tests, also used internally to compile `type`/`enum` predicates. |
 

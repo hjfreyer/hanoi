@@ -128,12 +128,11 @@ impl VM {
                 Instruction::Push(value) => {
                     self.stack.push(value);
                 }
-                Instruction::Drop(depth) => {
-                    if self.stack.len() <= depth {
-                        return Err(format!("Stack underflow on Drop: depth {} but stack size {}", depth, self.stack.len()));
+                Instruction::Drop => {
+                    if self.stack.is_empty() {
+                        return Err("Stack underflow on Drop".to_string());
                     }
-                    let index = self.stack.len() - 1 - depth;
-                    self.stack.remove(index);
+                    self.stack.pop();
                 }
                 Instruction::Pick(depth) => {
                     if self.stack.len() <= depth {

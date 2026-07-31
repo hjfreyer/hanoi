@@ -1057,7 +1057,15 @@ impl<'a> Compiler<'a> {
                     let compiled_val = self.compile_value(scope, v)?;
                     Instruction::Push(compiled_val)
                 }
-                ParsedInstruction::Drop(d) => Instruction::Drop(d),
+                ParsedInstruction::Drop(0) => Instruction::Drop,
+                ParsedInstruction::Drop(d) => {
+                    // Reaching below the top is a dip around a plain drop.
+                    let target = Target::Inline(ParsedSentence {
+                        instructions: vec![ParsedInstruction::Drop(0)],
+                    });
+                    let target_idx = self.resolve_target(scope, target)?;
+                    Instruction::Dip(d, target_idx)
+                }
                 ParsedInstruction::Pick(d) => Instruction::Pick(d),
                 ParsedInstruction::Roll(d) => Instruction::Roll(d),
                 ParsedInstruction::Equal => Instruction::Equal,

@@ -31,7 +31,7 @@ mod tests {
     fn test_instruction_equality() {
         let inst1 = Instruction::Push(Value::Int(42));
         let inst2 = Instruction::Push(Value::Int(42));
-        let inst3 = Instruction::Drop(0);
+        let inst3 = Instruction::Drop;
 
         assert_eq!(inst1, inst2);
         assert_ne!(inst1, inst3);
@@ -42,11 +42,11 @@ mod tests {
         let mut library = Library::new();
         let sentence1 = vec![
             Instruction::Push(Value::Int(10)),
-            Instruction::Drop(0),
+            Instruction::Drop,
         ];
         let sentence2 = vec![
             Instruction::Push(Value::Int(20)),
-            Instruction::Drop(0),
+            Instruction::Drop,
         ];
 
         library.sentences.push(sentence1.clone());
@@ -70,7 +70,9 @@ mod tests {
         "#;
         let res = assemble(code).unwrap();
         assert_eq!(res.exports.get("entry"), Some(&SentenceIndex::from(0)));
-        assert_eq!(res.sentences.len(), 1);
+        // `drop 1` expands into a dip around a plain drop, which gets its own
+        // sentence.
+        assert_eq!(res.sentences.len(), 2);
         assert_eq!(
             res.sentences[SentenceIndex::from(0)],
             vec![
@@ -80,8 +82,25 @@ mod tests {
                     Value::Int(2),
                     Value::Tuple(vec![Value::Int(3), Value::Bool(false)])
                 ])),
-                Instruction::Drop(1),
+                Instruction::Dip(1, SentenceIndex::from(1)),
             ]
+        );
+        assert_eq!(res.sentences[SentenceIndex::from(1)], vec![Instruction::Drop]);
+    }
+
+    #[test]
+    fn test_drop_zero_does_not_expand() {
+        let code = r#"
+            #[arity(1, 0)]
+            sentence entry {
+                drop 0
+            }
+        "#;
+        let res = assemble(code).unwrap();
+        assert_eq!(res.sentences.len(), 1);
+        assert_eq!(
+            res.sentences[SentenceIndex::from(0)],
+            vec![Instruction::Drop]
         );
     }
 

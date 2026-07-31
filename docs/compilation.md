@@ -25,7 +25,9 @@ write a `SentenceIndex`, so bytecode is not core.
 | references | `Path` (names) | `SentenceIndex` (indices) |
 | symbols | `SymbolRef(Path)` | `Value::Symbol { id, name }` |
 | branch targets | `Target::Label` or inline block | `SentenceIndex` |
-| type checks | `TypeCheckPath(Path)` | `Jump(idx)`, or `Push(v); Equal` |
+| type checks | `TypeCheckPath(Path)` | `Dip(0, idx)`, or `Push(v); Equal` |
+| calls | `Jump`, `Dip` | `Dip` only — `jump` is `Dip(0, idx)` |
+| deep drops | `Drop(d)` | `Dip(d, idx)` around a plain `Drop` |
 | declarations | `symbol`, `mod` | erased |
 | annotations | attached to the sentence | side table keyed by `SentenceIndex` |
 
@@ -217,7 +219,7 @@ sentence is declared in* — no special case for type checks.
 - `ParsedValue::SymbolRef(path)` resolves to a `Value`,
 - `Target::Label(path)` resolves to a `SentenceIndex`,
 - `Target::Inline(body)` is flattened into a freshly allocated sentence,
-- `TypeCheckPath(path)` resolves to `Jump(idx)` for a predicate sentence, or
+- `TypeCheckPath(path)` resolves to `Dip(0, idx)` for a predicate sentence, or
   `Push(v); Equal` for a symbol.
 
 Resolution is `ModuleTree::resolve(scope, path)` — one entry point, one set of
@@ -248,6 +250,32 @@ construct.
 Being core, `dip` needs nothing from phase 2 — sentence bodies pass through
 lowering untouched — and phase 4 resolves its target exactly as it resolves
 `jump`'s, including flattening an inline block into a fresh sentence.
+
+### What phase 4 folds into it
+
+Two core instructions have no bytecode of their own; phase 4 emits a `Dip` for
+each. Note this is the *other* direction from `TypeCheckPath`, which is one
+core instruction with two bytecode forms — there was never a rule that the two
+vocabularies correspond one to one.
+
+- **`jump S` becomes `Dip(0, idx)`.** A plain call is a dip whose hidden region
+  is empty. The point is not the saved variant, it is that a traversal of the
+  ISA can no longer handle one call instruction and silently miss the other —
+  and the traversal that would have missed it, `has_cycle`, is the one gating
+  `#[recursive]`.
+- **`drop d` for `d > 0` becomes `Dip(d, idx)` around a plain `Drop`.** Dropping
+  at a depth was the only instruction that removed a value from the *middle* of
+  the stack. With it gone, `Pick` and `Roll` are the only instructions that
+  address below the top, which makes "this instruction crosses a frame" a
+  two-case question rather than a four-case one.
+
+`pick d` and `roll d` decompose the same way — `roll d` is
+`dip { roll (d-1) }; roll 1`, and `pick d` is `dip { pick (d-1) }; roll 1`, so
+`{dup, swap, drop, dip}` generates every shuffle in the language. **Do not take
+that trade.** It replaces one instruction with `O(d)` instructions and `O(d)`
+calls, and each expansion still bottoms out in a frame-crossing `roll 1`, so
+the hard case is multiplied rather than removed. A minimal primitive set makes
+the metatheory smaller and the analysis larger; here the analysis is the point.
 
 ## Where `use` fits
 

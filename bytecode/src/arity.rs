@@ -130,16 +130,6 @@ fn infer_arity_of_instructions(
             Instruction::Push(_) => {
                 current_size += 1;
             }
-            Instruction::Drop(depth) => {
-                let depth = *depth as i64;
-                let req = depth + 1;
-                if current_size < req {
-                    let diff = req - current_size;
-                    initial_req += diff;
-                    current_size = req;
-                }
-                current_size -= 1;
-            }
             Instruction::Pick(depth) => {
                 let depth = *depth as i64;
                 let req = depth + 1;
@@ -182,7 +172,7 @@ fn infer_arity_of_instructions(
                     current_size = req;
                 }
             }
-            Instruction::Assert => {
+            Instruction::Drop | Instruction::Assert => {
                 let req = 1;
                 if current_size < req {
                     let diff = req - current_size;
