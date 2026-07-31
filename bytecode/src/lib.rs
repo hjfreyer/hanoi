@@ -840,7 +840,29 @@ mod tests {
             type Empty ();
         "#;
         let res = assemble(code).unwrap();
-        assert_eq!(res.sentences.len(), 20);
+        // Each tuple spec past its first element contributes one dip block,
+        // which is flattened into a sentence of its own: one for `Pair`, one
+        // for `Nested`.
+        assert_eq!(res.sentences.len(), 22);
+    }
+
+    #[test]
+    fn test_generated_type_checks_contain_no_roll() {
+        // Element checks are dipped under the accumulated result rather than
+        // rolled around it, so lowering no longer emits any roll at all.
+        let code = r#"
+            type Triple (int, bool, float);
+            type Nested (int, (bool, float), symbol);
+            enum E { A(int, bool), B(symbol, symbol, int) }
+        "#;
+        let res = assemble(code).unwrap();
+        for sentence in res.sentences.iter() {
+            assert!(
+                !sentence.iter().any(|i| matches!(i, Instruction::Roll(_))),
+                "generated check should contain no roll: {:?}",
+                sentence
+            );
+        }
     }
 
     #[test]

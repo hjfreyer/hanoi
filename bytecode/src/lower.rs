@@ -447,8 +447,16 @@ fn compile_type_spec(spec: &TypeSpec) -> Result<Vec<ParsedInstruction>, String> 
                 insts.extend(compile_type_spec(&elements[0])?);
 
                 for elem in elements.iter().skip(1) {
-                    insts.push(ParsedInstruction::Roll(1));
-                    insts.extend(compile_type_spec(elem)?);
+                    // The result accumulated so far sits on top of the elements
+                    // still to check. Hide it rather than rolling it out of the
+                    // way, so each element's check runs in a frame that cannot
+                    // reach it.
+                    insts.push(ParsedInstruction::Dip(
+                        1,
+                        Target::Inline(ParsedSentence {
+                            instructions: compile_type_spec(elem)?,
+                        }),
+                    ));
                     insts.push(ParsedInstruction::And);
                 }
 
