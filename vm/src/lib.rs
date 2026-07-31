@@ -3,11 +3,21 @@ use bytecode::{Instruction, Library, SentenceIndex, Value};
 pub mod runtime;
 pub use runtime::{Runtime, Environment, DefaultEnvironment};
 
+/// A pending return: where to resume, plus any values `Dip` hid from the callee.
+///
+/// `hidden` is empty for `Jump` and `Branch`, which give the callee the top of
+/// the stack. It is restored above whatever the callee leaves behind.
+struct Frame {
+    sentence: SentenceIndex,
+    ip: usize,
+    hidden: Vec<Value>,
+}
+
 /// The virtual machine that executes sentences from a loaded library.
 pub struct VM {
     library: Library,
     stack: Vec<Value>,
-    call_stack: Vec<(SentenceIndex, usize)>,
+    call_stack: Vec<Frame>,
     tracing: bool,
     gas_limit: Option<u64>,
     steps_executed: u64,
@@ -76,15 +86,17 @@ impl VM {
 
             if ip >= sentence.len() {
                 // Return to the caller if there's an address on the call stack
-                if let Some((caller_sentence, caller_ip)) = self.call_stack.pop() {
+                if let Some(frame) = self.call_stack.pop() {
                     if self.tracing {
                         println!(
                             "[TRACE] Returning to Sentence: {:?}, IP: {}",
-                            caller_sentence, caller_ip
+                            frame.sentence, frame.ip
                         );
                     }
-                    current_sentence = caller_sentence;
-                    ip = caller_ip;
+                    // Values hidden by Dip go back above the callee's results.
+                    self.stack.extend(frame.hidden);
+                    current_sentence = frame.sentence;
+                    ip = frame.ip;
                     continue;
                 } else {
                     if self.tracing {
@@ -289,7 +301,17 @@ impl VM {
                 }
                 Instruction::Jump(target) => {
                     // Push the return address (the next instruction) to the call stack
-                    self.call_stack.push((current_sentence, ip));
+                    self.call_stack.push(Frame { sentence: current_sentence, ip, hidden: Vec::new() });
+                    current_sentence = target;
+                    ip = 0;
+                }
+                Instruction::Dip(depth, target) => {
+                    if self.stack.len() < depth {
+                        return Err(format!("Stack underflow on Dip: depth {} but stack size {}", depth, self.stack.len()));
+                    }
+                    // Withhold the top `depth` values for the duration of the call.
+                    let hidden = self.stack.split_off(self.stack.len() - depth);
+                    self.call_stack.push(Frame { sentence: current_sentence, ip, hidden });
                     current_sentence = target;
                     ip = 0;
                 }
@@ -300,7 +322,7 @@ impl VM {
                         v => return Err(format!("Expected boolean condition on Branch, found {:?}", v)),
                     };
                     // Push the return address (the next instruction) to the call stack
-                    self.call_stack.push((current_sentence, ip));
+                    self.call_stack.push(Frame { sentence: current_sentence, ip, hidden: Vec::new() });
                     if b {
                         current_sentence = then_target;
                     } else {
@@ -506,6 +528,89 @@ mod tests {
         let mut vm = VM::new(library);
         assert!(vm.execute(SentenceIndex::from(0)).is_ok());
         assert!(vm.stack().is_empty());
+    }
+
+    #[test]
+    fn test_dip_hides_the_top_of_stack() {
+        let mut library = Library::new();
+
+        // sentence 0: [1, 2, 99], dip past 99 and add, expecting [3, 99].
+        let s0 = vec![
+            Instruction::Push(Value::Int(1)),
+            Instruction::Push(Value::Int(2)),
+            Instruction::Push(Value::Int(99)),
+            Instruction::Dip(1, SentenceIndex::from(1)),
+        ];
+        let s1 = vec![Instruction::Add];
+
+        library.sentences.push(s0);
+        library.sentences.push(s1);
+
+        let mut vm = VM::new(library);
+        assert!(vm.execute(SentenceIndex::from(0)).is_ok());
+        assert_eq!(vm.stack(), &[Value::Int(3), Value::Int(99)]);
+    }
+
+    #[test]
+    fn test_dip_zero_is_jump() {
+        let mut library = Library::new();
+
+        let s0 = vec![
+            Instruction::Push(Value::Int(1)),
+            Instruction::Push(Value::Int(2)),
+            Instruction::Dip(0, SentenceIndex::from(1)),
+        ];
+        let s1 = vec![Instruction::Add];
+
+        library.sentences.push(s0);
+        library.sentences.push(s1);
+
+        let mut vm = VM::new(library);
+        assert!(vm.execute(SentenceIndex::from(0)).is_ok());
+        assert_eq!(vm.stack(), &[Value::Int(3)]);
+    }
+
+    #[test]
+    fn test_dip_nests() {
+        let mut library = Library::new();
+
+        // The hidden regions accumulate: dip 1 { dip 1 { add } } over
+        // [1, 2, 8, 9] reaches the 1 and 2 and leaves the 8 and 9 in place.
+        let s0 = vec![
+            Instruction::Push(Value::Int(1)),
+            Instruction::Push(Value::Int(2)),
+            Instruction::Push(Value::Int(8)),
+            Instruction::Push(Value::Int(9)),
+            Instruction::Dip(1, SentenceIndex::from(1)),
+        ];
+        let s1 = vec![Instruction::Dip(1, SentenceIndex::from(2))];
+        let s2 = vec![Instruction::Add];
+
+        library.sentences.push(s0);
+        library.sentences.push(s1);
+        library.sentences.push(s2);
+
+        let mut vm = VM::new(library);
+        assert!(vm.execute(SentenceIndex::from(0)).is_ok());
+        assert_eq!(vm.stack(), &[Value::Int(3), Value::Int(8), Value::Int(9)]);
+    }
+
+    #[test]
+    fn test_dip_underflow() {
+        let mut library = Library::new();
+
+        let s0 = vec![
+            Instruction::Push(Value::Int(1)),
+            Instruction::Dip(3, SentenceIndex::from(1)),
+        ];
+        let s1 = vec![];
+
+        library.sentences.push(s0);
+        library.sentences.push(s1);
+
+        let mut vm = VM::new(library);
+        let res = vm.execute(SentenceIndex::from(0));
+        assert!(res.unwrap_err().contains("Stack underflow on Dip"));
     }
 
     #[test]

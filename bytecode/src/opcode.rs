@@ -45,6 +45,13 @@ pub enum Instruction {
     
     /// Unconditionally jump to the start of the sentence at the target SentenceIndex.
     Jump(SentenceIndex),
+    /// Hide the top `depth` values, call the sentence at the target SentenceIndex,
+    /// then restore the hidden values on top of its results.
+    ///
+    /// This generalizes `Jump` with an offset into the stack: `Dip(0, s)` is
+    /// exactly `Jump(s)`. The hidden values are inaccessible to the callee, so
+    /// analyses may treat them as unchanged across the call.
+    Dip(usize, SentenceIndex),
     /// Conditionally branch: if the top value on the stack is truthy, jump to the first SentenceIndex;
     /// otherwise, jump to the second SentenceIndex.
     Branch(SentenceIndex, SentenceIndex),
