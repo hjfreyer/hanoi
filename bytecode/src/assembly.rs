@@ -1088,7 +1088,8 @@ impl<'a> Compiler<'a> {
                 ParsedInstruction::TupleLength => Instruction::TupleLength,
                 ParsedInstruction::Jump(target) => {
                     let target_idx = self.resolve_target(scope, target)?;
-                    Instruction::Jump(target_idx)
+                    // A plain call is a dip with an empty hidden region.
+                    Instruction::Dip(0, target_idx)
                 }
                 ParsedInstruction::Dip(depth, target) => {
                     let target_idx = self.resolve_target(scope, target)?;
@@ -1111,7 +1112,7 @@ impl<'a> Compiler<'a> {
                     };
                     match resolved {
                         ResolvedItem::Sentence(idx) => {
-                            Instruction::Jump(idx)
+                            Instruction::Dip(0, idx)
                         }
                         ResolvedItem::Symbol(val) => {
                             compiled.push(Instruction::Push(val));

@@ -248,38 +248,6 @@ fn infer_arity_of_instructions(
                 }
                 current_size = current_size - 1 + len;
             }
-            Instruction::Jump(target) => {
-                if is_recursive(*target, library) {
-                    return Err(format!(
-                        "Sentence '{}' calls recursive sentence '{}' but is not annotated with #[recursive]",
-                        library.names[s_idx], library.names[*target]
-                    ));
-                }
-                let target_arity = get_or_infer_arity(
-                    *target,
-                    library,
-                    memo,
-                    in_progress,
-                    instruction_arities,
-                )?;
-                let (n_target, m_target, is_panic_target) = match target_arity {
-                    Arity::Normal { inputs, outputs } => (inputs, outputs, false),
-                    Arity::Panic { inputs } => (inputs, 0, true),
-                };
-                let req = n_target;
-                if current_size < req {
-                    let diff = req - current_size;
-                    initial_req += diff;
-                    current_size = req;
-                }
-                current_size = current_size - n_target + m_target;
-                if is_panic_target {
-                    let sentence_arity = Arity::Panic { inputs: initial_req };
-                    let n = sentence_arity.inputs();
-                    let arities = depths.into_iter().map(|d| Arity::Normal { inputs: n, outputs: d }).collect();
-                    return Ok((sentence_arity, arities));
-                }
-            }
             Instruction::Dip(depth, target) => {
                 if is_recursive(*target, library) {
                     return Err(format!(

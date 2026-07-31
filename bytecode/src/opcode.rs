@@ -43,14 +43,12 @@ pub enum Instruction {
     /// Print the top value on the stack (useful for debugging/IO).
     Print,
     
-    /// Unconditionally jump to the start of the sentence at the target SentenceIndex.
-    Jump(SentenceIndex),
     /// Hide the top `depth` values, call the sentence at the target SentenceIndex,
     /// then restore the hidden values on top of its results.
     ///
-    /// This generalizes `Jump` with an offset into the stack: `Dip(0, s)` is
-    /// exactly `Jump(s)`. The hidden values are inaccessible to the callee, so
-    /// analyses may treat them as unchanged across the call.
+    /// This is the only call instruction: a plain `jump` is `Dip(0, s)`, whose
+    /// hidden region is empty. The hidden values are inaccessible to the
+    /// callee, so analyses may treat them as unchanged across the call.
     Dip(usize, SentenceIndex),
     /// Conditionally branch: if the top value on the stack is truthy, jump to the first SentenceIndex;
     /// otherwise, jump to the second SentenceIndex.
@@ -91,4 +89,49 @@ pub enum Instruction {
     IsTuple,
     /// Pop the top value (must be a Tuple) and push its length as an Int.
     TupleLength,
+}
+
+/// Renders an instruction in source mnemonic form, for traces and dumps.
+///
+/// A zero-width dip prints as `jump`, which is how it was written and how it
+/// behaves; the derived `Debug` is still available where the distinction
+/// between the two spellings matters.
+impl std::fmt::Display for Instruction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Instruction::Push(v) => write!(f, "push {}", v),
+            Instruction::Drop(d) => write!(f, "drop {}", d),
+            Instruction::Pick(d) => write!(f, "pick {}", d),
+            Instruction::Roll(d) => write!(f, "roll {}", d),
+            Instruction::Equal => write!(f, "equal"),
+            Instruction::Greater => write!(f, "greater"),
+            Instruction::Less => write!(f, "less"),
+            Instruction::Add => write!(f, "add"),
+            Instruction::Subtract => write!(f, "subtract"),
+            Instruction::Multiply => write!(f, "multiply"),
+            Instruction::Divide => write!(f, "divide"),
+            Instruction::Modulo => write!(f, "modulo"),
+            Instruction::Not => write!(f, "not"),
+            Instruction::Negate => write!(f, "negate"),
+            Instruction::Print => write!(f, "print"),
+            Instruction::Dip(0, s) => write!(f, "jump {:?}", s),
+            Instruction::Dip(d, s) => write!(f, "dip {} {:?}", d, s),
+            Instruction::Branch(t, e) => write!(f, "branch {:?} {:?}", t, e),
+            Instruction::Panic => write!(f, "panic"),
+            Instruction::Assert => write!(f, "assert"),
+            Instruction::AssertEqual => write!(f, "assert_eq"),
+            Instruction::Tuple(n) => write!(f, "tuple {}", n),
+            Instruction::Untuple(n) => write!(f, "untuple {}", n),
+            Instruction::And => write!(f, "and"),
+            Instruction::Or => write!(f, "or"),
+            Instruction::SymbolLen => write!(f, "symbol_len"),
+            Instruction::SymbolCharAt => write!(f, "symbol_char_at"),
+            Instruction::IsInt => write!(f, "is_int"),
+            Instruction::IsBool => write!(f, "is_bool"),
+            Instruction::IsFloat => write!(f, "is_float"),
+            Instruction::IsSymbol => write!(f, "is_symbol"),
+            Instruction::IsTuple => write!(f, "is_tuple"),
+            Instruction::TupleLength => write!(f, "tuple_length"),
+        }
+    }
 }

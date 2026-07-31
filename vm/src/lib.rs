@@ -111,7 +111,7 @@ impl VM {
             let instruction = sentence[ip].clone();
             if self.tracing {
                 println!(
-                    "[TRACE] Sentence: {:?}, IP: {}, Instruction: {:?} | Stack: {:?}",
+                    "[TRACE] Sentence: {:?}, IP: {}, Instruction: {} | Stack: {:?}",
                     current_sentence, ip, instruction, self.stack
                 );
             }
@@ -298,12 +298,6 @@ impl VM {
                 Instruction::Print => {
                     let val = self.peek(0)?;
                     println!("{}", val);
-                }
-                Instruction::Jump(target) => {
-                    // Push the return address (the next instruction) to the call stack
-                    self.call_stack.push(Frame { sentence: current_sentence, ip, hidden: Vec::new() });
-                    current_sentence = target;
-                    ip = 0;
                 }
                 Instruction::Dip(depth, target) => {
                     if self.stack.len() < depth {
@@ -510,10 +504,10 @@ mod tests {
     fn test_call_stack_return() {
         let mut library = Library::new();
 
-        // sentence 0: Push 10, Jump to sentence 1, then AssertEqual (verifying that sentence 1 ran and returned to s0)
+        // sentence 0: Push 10, call sentence 1, then AssertEqual (verifying that sentence 1 ran and returned to s0)
         let s0 = vec![
             Instruction::Push(Value::Int(10)),
-            Instruction::Jump(SentenceIndex::from(1)),
+            Instruction::Dip(0, SentenceIndex::from(1)),
             Instruction::AssertEqual,
         ];
         

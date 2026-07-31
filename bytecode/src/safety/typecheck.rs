@@ -752,26 +752,6 @@ pub fn check_precondition(library: &Library) -> Result<(), String> {
                         }
                         stack.extend(unpacked);
                     }
-                    Instruction::Jump(target) => {
-                        let (n_t, m_t) = arity_map[target];
-                        let mut jump_args = Vec::new();
-                        for _ in 0..n_t {
-                            jump_args.push(stack.pop().unwrap());
-                        }
-                        jump_args.reverse();
-
-                        let target_decls = &sentence_decls[target];
-                        let mut results = Vec::new();
-                        for i in 0..m_t {
-                            let args_refs: Vec<&dyn Ast> = jump_args.iter().map(|v| v as &dyn Ast).collect();
-                            results.push(target_decls[i].apply(&args_refs));
-                        }
-                        for res in &results {
-                            let res_is_ok = sorts[1].variants[0].tester.apply(&[res]).as_bool().unwrap();
-                            ok = Bool::and(&[&ok, &res_is_ok]);
-                        }
-                        stack.extend(results);
-                    }
                     Instruction::Dip(depth, target) => {
                         let (n_t, m_t) = arity_map[target];
                         // The hidden terms are threaded through untouched: no new
@@ -1295,7 +1275,7 @@ fn has_cycle(
     rec_stack.insert(s_idx);
     for inst in &library.sentences[s_idx] {
         match inst {
-            Instruction::Jump(target) | Instruction::Dip(_, target) => {
+            Instruction::Dip(_, target) => {
                 if has_cycle(*target, library, visited, rec_stack) {
                     return true;
                 }
@@ -1420,19 +1400,6 @@ fn get_sentence_arity(
                 stack.pop();
                 for _ in 0..n {
                     stack.push("component".to_string());
-                }
-            }
-            Instruction::Jump(target) => {
-                let (n_t, m_t) = get_sentence_arity(*target, library, arity_map, in_progress)?;
-                while stack.len() < n_t {
-                    stack.insert(0, format!("in_inferred_{}", inputs_needed));
-                    inputs_needed += 1;
-                }
-                for _ in 0..n_t {
-                    stack.pop();
-                }
-                for _ in 0..m_t {
-                    stack.push("result".to_string());
                 }
             }
             Instruction::Dip(depth, target) => {

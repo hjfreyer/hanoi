@@ -216,7 +216,7 @@ mod tests {
         );
         assert_eq!(
             res.sentences[SentenceIndex::from(2)],
-            vec![Instruction::Jump(SentenceIndex::from(0))]
+            vec![Instruction::Dip(0, SentenceIndex::from(0))]
         );
     }
 
