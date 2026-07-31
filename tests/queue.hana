@@ -172,11 +172,9 @@ mod queue {
         }
     }
 
-    type EmitResult (bool, super::Event);
-
-    // emit: takes [state] and returns (has_event, event)
+    // emit: takes [state] and returns (has_event, event), where event is ()
+    // when has_event is false -- so the result is not a plain (bool, Event).
     #[precondition(super::State::check)]
-    #[precondition(EmitResult::check)]
     function emit {
         // Stack: [state]
         untuple 2

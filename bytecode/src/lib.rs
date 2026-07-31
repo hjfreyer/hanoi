@@ -495,8 +495,18 @@ mod tests {
         let _ = std::fs::remove_dir(tmp_dir);
     }
 
+    fn sentence_named(lib: &Library, name: &str) -> SentenceIndex {
+        lib.names
+            .iter()
+            .position(|n| n == name)
+            .map(SentenceIndex::from)
+            .unwrap_or_else(|| panic!("no sentence named '{}'", name))
+    }
+
     #[test]
     fn test_assemble_precondition_annotation() {
+        // Contract paths resolve against the module the annotated sentence is
+        // declared in, so `inner` reaches its parent's `safe_fn` with `super::`.
         let code = r#"
             function safe_fn {
                 drop 0
@@ -509,26 +519,120 @@ mod tests {
                 push false
             }
 
-            #[precondition(super::safe_fn)]
-            function other_func {
+            mod inner {
+                #[precondition(super::safe_fn)]
+                function other_func {
+                    drop 0
+                    push false
+                }
+            }
+        "#;
+        let res = assemble(code).unwrap();
+        let safe_fn_idx = sentence_named(&res, "safe_fn");
+
+        assert_eq!(res.annotations[safe_fn_idx], vec![Annotation::Arity(1, 1)]);
+        assert_eq!(
+            res.annotations[sentence_named(&res, "my_func")],
+            vec![Annotation::Precondition(safe_fn_idx), Annotation::Arity(1, 1)]
+        );
+        assert_eq!(
+            res.annotations[sentence_named(&res, "inner::other_func")],
+            vec![Annotation::Precondition(safe_fn_idx), Annotation::Arity(1, 1)]
+        );
+    }
+
+    #[test]
+    fn test_assemble_contract_annotation_errors() {
+        // Unresolvable target.
+        let code = r#"
+            #[precondition(nope)]
+            function my_func {
                 drop 0
                 push false
             }
         "#;
-        let res = assemble(code).unwrap();
-        let safe_fn_idx = res.names.iter().position(|n| n == "safe_fn").map(SentenceIndex::from).unwrap();
-        let my_func_idx = res.names.iter().position(|n| n == "my_func").map(SentenceIndex::from).unwrap();
-        let other_func_idx = res.names.iter().position(|n| n == "other_func").map(SentenceIndex::from).unwrap();
+        let res = assemble(code);
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("unresolved precondition 'nope'"));
 
-        assert_eq!(res.annotations[safe_fn_idx], vec![Annotation::Arity(1, 1)]);
-        assert_eq!(
-            res.annotations[my_func_idx],
-            vec![Annotation::Precondition("safe_fn".to_string()), Annotation::Arity(1, 1)]
-        );
-        assert_eq!(
-            res.annotations[other_func_idx],
-            vec![Annotation::Precondition("super::safe_fn".to_string()), Annotation::Arity(1, 1)]
-        );
+        // A contract must name a sentence, not a symbol.
+        let code2 = r#"
+            symbol s
+            #[postcondition(s)]
+            function my_func {
+                drop 0
+                push false
+            }
+        "#;
+        let res2 = assemble(code2);
+        assert!(res2.is_err());
+        assert!(res2.unwrap_err().contains("names a symbol, but must name a sentence"));
+
+        // `super::` from the crate root walks off the top of the tree. This used
+        // to be stored verbatim and only fail later, if the typechecker ran.
+        let code3 = r#"
+            function safe_fn {
+                drop 0
+                push true
+            }
+            #[precondition(super::safe_fn)]
+            function my_func {
+                drop 0
+                push false
+            }
+        "#;
+        let res3 = assemble(code3);
+        assert!(res3.is_err());
+        assert!(res3.unwrap_err().contains("goes up too many levels"));
+    }
+
+    #[test]
+    fn test_assemble_rejects_duplicate_contracts() {
+        // Verification reads one precondition and one postcondition, so a second
+        // would be silently dropped rather than conjoined.
+        let code = r#"
+            function a { drop 0 push true }
+            function b { drop 0 push true }
+
+            #[precondition(a)]
+            #[precondition(b)]
+            function my_func {
+                drop 0
+                push false
+            }
+        "#;
+        let res = assemble(code);
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("Duplicate #[precondition]"));
+
+        let code2 = r#"
+            function a { drop 0 push true }
+            function b { drop 0 push true }
+
+            #[postcondition(a)]
+            #[postcondition(b)]
+            function my_func {
+                drop 0
+                push false
+            }
+        "#;
+        let res2 = assemble(code2);
+        assert!(res2.is_err());
+        assert!(res2.unwrap_err().contains("Duplicate #[postcondition]"));
+
+        // One of each is fine, and `arity` may still repeat: every one is checked.
+        let code3 = r#"
+            function a { drop 0 push true }
+
+            #[precondition(a)]
+            #[postcondition(a)]
+            #[arity(1, 1)]
+            sentence my_func {
+                drop 0
+                push false
+            }
+        "#;
+        assert!(assemble(code3).is_ok());
     }
 
     #[test]
@@ -545,25 +649,25 @@ mod tests {
                 push false
             }
 
-            #[postcondition(super::post_fn)]
-            function other_func {
-                drop 0
-                push false
+            mod inner {
+                #[postcondition(super::post_fn)]
+                function other_func {
+                    drop 0
+                    push false
+                }
             }
         "#;
         let res = assemble(code).unwrap();
-        let post_fn_idx = res.names.iter().position(|n| n == "post_fn").map(SentenceIndex::from).unwrap();
-        let my_func_idx = res.names.iter().position(|n| n == "my_func").map(SentenceIndex::from).unwrap();
-        let other_func_idx = res.names.iter().position(|n| n == "other_func").map(SentenceIndex::from).unwrap();
+        let post_fn_idx = sentence_named(&res, "post_fn");
 
         assert_eq!(res.annotations[post_fn_idx], vec![Annotation::Arity(1, 1)]);
         assert_eq!(
-            res.annotations[my_func_idx],
-            vec![Annotation::Postcondition("post_fn".to_string()), Annotation::Arity(1, 1)]
+            res.annotations[sentence_named(&res, "my_func")],
+            vec![Annotation::Postcondition(post_fn_idx), Annotation::Arity(1, 1)]
         );
         assert_eq!(
-            res.annotations[other_func_idx],
-            vec![Annotation::Postcondition("super::post_fn".to_string()), Annotation::Arity(1, 1)]
+            res.annotations[sentence_named(&res, "inner::other_func")],
+            vec![Annotation::Postcondition(post_fn_idx), Annotation::Arity(1, 1)]
         );
     }
 

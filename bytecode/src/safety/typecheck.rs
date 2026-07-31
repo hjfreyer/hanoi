@@ -13,57 +13,6 @@ fn get_sentence_name(s_idx: SentenceIndex, library: &Library) -> String {
     }
 }
 
-fn resolve_safety_fn(
-    annotated_name: &str,
-    safety_fn_name: &str,
-    library: &Library,
-) -> Result<SentenceIndex, String> {
-    let mut resolved_segments: Vec<String> = if let Some(idx) = annotated_name.rfind("::") {
-        annotated_name[..idx].split("::").map(|s| s.to_string()).collect()
-    } else {
-        Vec::new()
-    };
-
-    let target_segments: Vec<&str> = safety_fn_name.split("::").collect();
-    let mut is_absolute = false;
-
-    for (i, seg) in target_segments.iter().enumerate() {
-        if *seg == "crate" {
-            if i == 0 {
-                resolved_segments.clear();
-                is_absolute = true;
-            } else {
-                return Err("Path segment 'crate' must be at the beginning".to_string());
-            }
-        } else if *seg == "super" {
-            if resolved_segments.is_empty() {
-                return Err("Cannot use 'super' on the root module".to_string());
-            }
-            resolved_segments.pop();
-        } else {
-            resolved_segments.push(seg.to_string());
-        }
-    }
-
-    let fq_candidate = resolved_segments.join("::");
-
-    if let Some(pos) = library.names.iter().position(|n| n == &fq_candidate) {
-        return Ok(SentenceIndex::from(pos));
-    }
-
-    // Fallback: Try absolute/as-is if not already parsed as absolute
-    if !is_absolute {
-        if let Some(pos) = library.names.iter().position(|n| n == safety_fn_name) {
-            return Ok(SentenceIndex::from(pos));
-        }
-    }
-
-    Err(format!(
-        "Safety function '{}' not found in library",
-        safety_fn_name
-    ))
-}
-
 fn check_recursive_annotations(library: &Library) -> Result<(), String> {
     for s_idx_raw in 0..library.sentences.len() {
         let s_idx = SentenceIndex::from(s_idx_raw);
@@ -99,19 +48,17 @@ pub fn check_precondition(library: &Library) -> Result<(), String> {
         let mut has_total = false;
         for ann in annotations {
             match ann {
-                Annotation::Precondition(s_fn) => precondition_fn = Some(s_fn.clone()),
-                Annotation::Postcondition(s_fn) => postcondition_fn = Some(s_fn.clone()),
+                Annotation::Precondition(idx) => precondition_fn = Some(*idx),
+                Annotation::Postcondition(idx) => postcondition_fn = Some(*idx),
                 Annotation::Total => has_total = true,
                 _ => {}
             }
         }
 
         let mut pre_idx_opt = None;
-        if let Some(s_fn) = precondition_fn {
-            let annotated_name = &library.names[s_idx];
-            let safety_fn_idx = resolve_safety_fn(annotated_name, &s_fn, library)?;
+        if let Some(safety_fn_idx) = precondition_fn {
             let safety_is_recursive = library.annotations[safety_fn_idx].iter().any(|ann| matches!(ann, Annotation::Recursive));
-            
+
             if is_recursive || safety_is_recursive {
                 println!(
                     "Skipping precondition check for '{}' (precondition '{}') because it is marked as recursive.",
@@ -124,11 +71,9 @@ pub fn check_precondition(library: &Library) -> Result<(), String> {
             }
         }
 
-        if let Some(s_fn) = postcondition_fn {
-            let annotated_name = &library.names[s_idx];
-            let post_fn_idx = resolve_safety_fn(annotated_name, &s_fn, library)?;
+        if let Some(post_fn_idx) = postcondition_fn {
             let post_is_recursive = library.annotations[post_fn_idx].iter().any(|ann| matches!(ann, Annotation::Recursive));
-            
+
             if is_recursive || post_is_recursive {
                 println!(
                     "Skipping postcondition check for '{}' (postcondition '{}') because it is marked as recursive.",

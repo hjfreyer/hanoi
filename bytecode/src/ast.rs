@@ -12,6 +12,9 @@
 use crate::library::Annotation;
 use crate::resolve::Path;
 
+/// An annotation as written in source: it names its target by path.
+pub type SourceAnnotation = Annotation<Path>;
+
 /// A value as written in source. Symbol references are still paths here; they
 /// become [`crate::value::Value`]s only once resolution has run.
 #[derive(Debug, Clone)]
@@ -96,7 +99,7 @@ pub struct SymbolDecl {
 pub struct SentenceDecl {
     pub name: String,
     pub body: ParsedSentence,
-    pub annotations: Vec<Annotation>,
+    pub annotations: Vec<SourceAnnotation>,
     pub is_exported: bool,
     pub is_test: bool,
 }
@@ -146,8 +149,7 @@ impl std::fmt::Display for ParsedValue {
 
 /// The surface language, as parsed. No desugaring has happened yet.
 pub mod sugar {
-    use super::{ParsedValue, SentenceDecl, SymbolDecl, TypeSpec};
-    use crate::library::Annotation;
+    use super::{ParsedValue, SentenceDecl, SourceAnnotation, SymbolDecl, TypeSpec};
     use crate::resolve::Path;
 
     #[derive(Debug, Clone)]
@@ -171,14 +173,14 @@ pub mod sugar {
     pub struct TypeDecl {
         pub name: String,
         pub spec: TypeSpec,
-        pub annotations: Vec<Annotation>,
+        pub annotations: Vec<SourceAnnotation>,
     }
 
     #[derive(Debug, Clone)]
     pub struct EnumDecl {
         pub name: String,
         pub variants: Vec<EnumVariant>,
-        pub annotations: Vec<Annotation>,
+        pub annotations: Vec<SourceAnnotation>,
     }
 
     #[derive(Debug, Clone)]

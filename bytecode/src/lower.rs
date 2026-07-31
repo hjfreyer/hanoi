@@ -22,8 +22,8 @@
 use crate::ast::core;
 use crate::ast::sugar::{self, Composer};
 use crate::ast::{
-    ParsedInstruction, ParsedSentence, ParsedValue, PrimitiveType, SentenceDecl, SymbolDecl, Target,
-    TypeSpec,
+    ParsedInstruction, ParsedSentence, ParsedValue, PrimitiveType, SentenceDecl, SourceAnnotation,
+    SymbolDecl, Target, TypeSpec,
 };
 use crate::library::Annotation;
 use crate::resolve::{Path, PathSegment};
@@ -395,7 +395,7 @@ fn lower_enum(decl: sugar::EnumDecl) -> Result<core::Item, String> {
 /// Builds the exported, total `check` predicate for a spec.
 fn check_sentence(
     spec: &TypeSpec,
-    mut annotations: Vec<Annotation>,
+    mut annotations: Vec<SourceAnnotation>,
 ) -> Result<SentenceDecl, String> {
     if !annotations.iter().any(|ann| matches!(ann, Annotation::Total)) {
         annotations.push(Annotation::Total);

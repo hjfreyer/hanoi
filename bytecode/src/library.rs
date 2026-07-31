@@ -11,14 +11,22 @@ pub struct SentenceIndex(usize);
 /// A Sentence is a sequence of instructions.
 pub type Sentence = Vec<Instruction>;
 
+/// A declaration annotation, parameterized by how it names another sentence.
+///
+/// The AST uses `Annotation<Path>`, since names are all it has. Resolution turns
+/// those into `Annotation<SentenceIndex>` for the library, the same
+/// names-to-indices erasure the instructions undergo.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Annotation {
+pub enum Annotation<Ref> {
     Arity(i64, i64),
     Recursive,
-    Precondition(String),
-    Postcondition(String),
+    Precondition(Ref),
+    Postcondition(Ref),
     Total,
 }
+
+/// An annotation as it appears in a compiled [`Library`].
+pub type SentenceAnnotation = Annotation<SentenceIndex>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Arity {
@@ -50,7 +58,7 @@ pub struct Library {
     pub symbols: HashMap<String, Value>,
     pub tests: HashMap<String, SentenceIndex>,
     pub test_machines: HashSet<String>,
-    pub annotations: TiVec<SentenceIndex, Vec<Annotation>>,
+    pub annotations: TiVec<SentenceIndex, Vec<SentenceAnnotation>>,
     pub names: TiVec<SentenceIndex, String>,
     pub instruction_arities: TiVec<SentenceIndex, Option<Vec<Arity>>>,
 }

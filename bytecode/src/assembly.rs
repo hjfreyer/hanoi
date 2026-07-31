@@ -2,10 +2,10 @@ use std::collections::{HashMap, HashSet};
 use crate::ast::core;
 use crate::ast::sugar::{self, Composer, ModuleExpr};
 use crate::ast::{
-    ParsedInstruction, ParsedSentence, ParsedValue, PrimitiveType, SentenceDecl, SymbolDecl, Target,
-    TypeSpec,
+    ParsedInstruction, ParsedSentence, ParsedValue, PrimitiveType, SentenceDecl, SourceAnnotation,
+    SymbolDecl, Target, TypeSpec,
 };
-use crate::library::{Library, SentenceIndex, Annotation};
+use crate::library::{Annotation, Library, SentenceAnnotation, SentenceIndex};
 use crate::opcode::Instruction;
 use crate::resolve::{ModuleId, ModuleItem, ModuleTree, ResolvedItem};
 use crate::value::{Value, Symbol};
@@ -563,7 +563,7 @@ pub(crate) fn parse_source(
     parse_items(&mut stream, None, base_dir)
 }
 
-fn parse_annotations(stream: &mut TokenStream) -> Result<Vec<Annotation>, String> {
+fn parse_annotations(stream: &mut TokenStream) -> Result<Vec<SourceAnnotation>, String> {
     let mut annotations = Vec::new();
     while stream.peek() == Some(&Token::Hash) {
         stream.next(); // consume '#'
@@ -598,14 +598,32 @@ fn parse_annotations(stream: &mut TokenStream) -> Result<Vec<Annotation>, String
             other => return Err(format!("Unsupported annotation '{}'", other)),
         };
         stream.expect(Token::RBracket)?;
+
+        // A declaration carries at most one of each contract. Verification reads
+        // a single precondition and a single postcondition, so a second would be
+        // silently ignored rather than conjoined. `arity` is exempt because every
+        // one of those is checked, and `recursive`/`total` are idempotent flags.
+        let has = |f: fn(&SourceAnnotation) -> bool| annotations.iter().any(f);
+        let duplicate = match &ann {
+            Annotation::Precondition(_)
+                if has(|a| matches!(a, Annotation::Precondition(_))) => Some("precondition"),
+            Annotation::Postcondition(_)
+                if has(|a| matches!(a, Annotation::Postcondition(_))) => Some("postcondition"),
+            _ => None,
+        };
+        if let Some(kind) = duplicate {
+            return Err(format!(
+                "Duplicate #[{}] on one declaration; only one is allowed",
+                kind
+            ));
+        }
+
         annotations.push(ann);
     }
     Ok(annotations)
 }
 
-/// Contract annotations still carry their target as a string; giving them a
-/// `Path` and resolving them like every other path is a separate change.
-fn parse_annotation_path(stream: &mut TokenStream, kind: &str) -> Result<String, String> {
+fn parse_annotation_path(stream: &mut TokenStream, kind: &str) -> Result<Path, String> {
     stream.expect(Token::LParen)?;
     let first_ident = match stream.next() {
         Some(Token::Identifier(s)) => s,
@@ -614,7 +632,7 @@ fn parse_annotation_path(stream: &mut TokenStream, kind: &str) -> Result<String,
     };
     let path = parse_path(stream, first_ident)?;
     stream.expect(Token::RParen)?;
-    Ok(path.to_string())
+    Ok(path)
 }
 
 /// Consumes any `export` / `test` markers preceding an item.
@@ -795,7 +813,7 @@ fn parse_mod_item(
 
 fn parse_enum_decl(
     stream: &mut TokenStream,
-    annotations: Vec<Annotation>,
+    annotations: Vec<SourceAnnotation>,
 ) -> Result<sugar::EnumDecl, String> {
     stream.expect(Token::EnumKeyword)?;
     let name = expect_name(stream, "enum name")?;
@@ -951,11 +969,55 @@ struct Compiler<'a> {
     tree: &'a ModuleTree,
     sentences: Vec<Vec<Instruction>>,
     names: Vec<String>,
-    annotations: Vec<Vec<Annotation>>,
+    annotations: Vec<Vec<SentenceAnnotation>>,
     current_parent_idx: Option<SentenceIndex>,
 }
 
 impl<'a> Compiler<'a> {
+    /// Resolves the paths a sentence's contract annotations name, against the
+    /// module the sentence is declared in — the same scope its body uses.
+    fn resolve_annotations(
+        &self,
+        scope: ModuleId,
+        annotations: &[SourceAnnotation],
+    ) -> Result<Vec<SentenceAnnotation>, String> {
+        annotations
+            .iter()
+            .map(|ann| {
+                Ok(match ann {
+                    Annotation::Precondition(path) => {
+                        Annotation::Precondition(self.resolve_contract_fn("precondition", scope, path)?)
+                    }
+                    Annotation::Postcondition(path) => {
+                        Annotation::Postcondition(self.resolve_contract_fn("postcondition", scope, path)?)
+                    }
+                    Annotation::Arity(n, m) => Annotation::Arity(*n, *m),
+                    Annotation::Recursive => Annotation::Recursive,
+                    Annotation::Total => Annotation::Total,
+                })
+            })
+            .collect()
+    }
+
+    fn resolve_contract_fn(
+        &self,
+        kind: &str,
+        scope: ModuleId,
+        path: &Path,
+    ) -> Result<SentenceIndex, String> {
+        match self
+            .tree
+            .resolve(scope, path)
+            .map_err(|e| format!("unresolved {} '{}': {}", kind, path, e))?
+        {
+            ResolvedItem::Sentence(idx) => Ok(idx),
+            ResolvedItem::Symbol(_) => Err(format!(
+                "{} '{}' names a symbol, but must name a sentence",
+                kind, path
+            )),
+        }
+    }
+
     fn compile_value(&self, scope: ModuleId, parsed: ParsedValue) -> Result<Value, String> {
         match parsed {
             ParsedValue::Bool(b) => Ok(Value::Bool(b)),
@@ -1125,7 +1187,9 @@ pub fn assemble_with_path(input: &str, base_dir: Option<&std::path::Path>) -> Re
 
     // Compile instructions recursively
     for (idx, (scope, sentence)) in flat_sentences.into_iter().enumerate() {
-        compiler.annotations[idx] = sentence.annotations.clone();
+        compiler.annotations[idx] = compiler
+            .resolve_annotations(scope, &sentence.annotations)
+            .map_err(|e| format!("In '{}': {}", tree.fq_name(scope, &sentence.name), e))?;
         compiler.current_parent_idx = Some(SentenceIndex::from(idx));
         let compiled_instructions = compiler.compile_sentence_body(scope, sentence.body.instructions)?;
         compiler.sentences[idx] = compiled_instructions;
