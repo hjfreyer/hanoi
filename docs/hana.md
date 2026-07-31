@@ -126,8 +126,43 @@ enum MyEnum {
 ## 5. Control Flow and Subroutines
 
 - **Jumps**: Subroutine execution is initiated via `jump S`, which pushes the return address to a call stack and jumps to sentence `S`. Reaching the end of `S` pops the return address and returns control to the caller.
+- **Dips**: `dip N { block }` (or `dip N S`) runs a block with the top `N` stack values hidden from it, restoring them on top of whatever the block leaves behind. `N` may be omitted, in which case it is 1. This is `jump` with an offset into the stack: `dip 0 S` and `jump S` are the same instruction.
 - **Branches**: Conditional execution is implemented via `branch { then_block } { else_block }`. The VM pops the top stack element; if it is truthy, it executes `then_block`, otherwise it executes `else_block`.
 - **Panics**: If a condition fails, `panic` immediately halts VM execution. Safe assertion operations `assert` and `assert_eq` verify preconditions and abort the program on failure.
+
+### Why `dip` and not `roll`
+
+`pick` and `roll` take depths measured from the top of the stack, so what they
+name depends on everything sitting above them. A block written against a
+particular stack layout breaks as soon as a caller leaves an extra value
+behind, and the checkers must reason about the whole stack to know what a
+block touched.
+
+`dip` states the layout instead of working around it. Because the hidden
+values are inaccessible to the block, they are *provably* unchanged across it:
+the arity checker charges them to the requirement but not to the net change,
+and the Z3 encoding threads them through as the same terms rather than
+rebuilding them.
+
+The alternative — `tuple N`, shuffle, `untuple N` — is worse than it looks
+under verification. `untuple` is partial: it panics when its argument is not a
+tuple of exactly that size. Saving and restoring `N` values that way adds `N`
+panic branches the solver has to rule out, purely as an artifact of the
+encoding. `dip` makes them impossible to write.
+
+```hana
+// Reach past a value you want to keep:
+push 1
+push 2
+push 99
+dip { add }     // Stack: [3, 99]
+
+// Hide more than one:
+dip 2 { add }
+
+// Nested dips accumulate their hidden regions:
+dip { dip { add } }
+```
 
 ---
 

@@ -61,6 +61,7 @@ These instructions control execution flow, jumps, and validation assertions.
 | Mnemonic | Syntax | Stack Transition | Description |
 | :--- | :--- | :--- | :--- |
 | `jump` | `jump <target>` | `[...] -> [...]` | Pushes the return address onto the call stack and transfers execution to the subroutine `<target>`. |
+| `dip` | `dip <count>? <target>` | `[..., v_{k-1}, ..., v_0] -> [..., v_{k-1}, ..., v_0]` | Hides the top `<count>` values (default 1), runs `<target>` on what remains, then restores the hidden values on top of its results. `dip 0 <target>` is exactly `jump <target>`. |
 | `branch` | `branch { then } { else }` | `[..., cond] -> [...]` | Pops $cond$. If $cond$ is truthy, executes the `then` block; otherwise, executes the `else` block. |
 | `panic` | `panic` | `[...] -> [halt]` | Halts VM execution immediately with a failure status. |
 | `assert` | `assert` | `[..., cond] -> [...]` | Pops $cond$. Halts and panics if $cond$ is falsey. |

@@ -31,7 +31,7 @@ pub struct ParsedSentence {
     pub instructions: Vec<ParsedInstruction>,
 }
 
-/// Where a `jump` or `branch` goes: a named sentence, or an anonymous block.
+/// Where a `jump`, `dip` or `branch` goes: a named sentence, or an anonymous block.
 ///
 /// Inline blocks survive lowering and are flattened into their own sentences
 /// during resolution, where sentence indices are already being allocated.
@@ -64,6 +64,8 @@ pub enum ParsedInstruction {
     Negate,
     Print,
     Jump(Target),
+    /// Run the target with the top `usize` values of the stack hidden from it.
+    Dip(usize, Target),
     Branch(Target, Target),
     Panic,
     Assert,

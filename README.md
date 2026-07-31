@@ -10,6 +10,7 @@ Hanoi is a stack-oriented, VM-executed language designed to explore static analy
 ## Key Features
 
 - **Stack-Oriented Execution**: A clean, instruction-driven virtual machine that uses a stack for operations, featuring standard manipulations (`drop`, `pick`, `roll`), arithmetic, and tuple structuring.
+- **Scoped Stack Frames**: `dip N { ... }` runs a block with the top `N` stack values hidden from it, so both the arity checker and the SMT encoding can treat those values as unchanged across the call rather than tracking them through it.
 - **CSP State Machine Modeling**: Fully implements Communicating Sequential Processes (CSP) state machines. State machines are represented as modules with standardized hooks for managing state transitions, internal execution steps, and termination. See the [CSP Machines Documentation](docs/machines.md) for details.
 - **Static Safety & Behavior Contracts**: Annotate functions with a precondition (`#[precondition(fn_name)]`), a postcondition (`#[postcondition(fn_name)]`), or a totality claim (`#[total]`). Hanoi compiles sentences directly into Z3 recursive function definitions and proves the contracts hold for all inputs at compile time. See [docs/typecheck.md](docs/typecheck.md) for details.
 - **`type` / `enum` Predicate Sugar**: Declare reusable value predicates with `type Name <spec>;` (primitives, literals, tuples, and `|`-unions) or `enum Name { Variant(spec, ...), ... }`, which expand into `Name::check` sentences usable directly as preconditions/postconditions.
@@ -89,7 +90,7 @@ The Hanoi VM supports a rich instruction set categorized into five main domains:
 | :--- | :--- | :--- |
 | **Stack Ops** | `Push(V)`, `Drop(d)`, `Pick(d)`, `Roll(d)` | Standard stack push, drop at depth, copy/peek at depth, and rotate. |
 | **Arithmetic & Logic** | `Add`, `Subtract`, `Multiply`, `Divide`, `Modulo`, `Negate`, `Equal`, `Greater`, `Less`, `Not`, `And`, `Or` | Basic mathematical and Boolean logic operations. |
-| **Control Flow** | `Jump(S)`, `Branch(S1, S2)`, `Panic`, `Assert`, `AssertEqual` | Subroutine execution, conditional branching, and explicit panics. |
+| **Control Flow** | `Jump(S)`, `Dip(n, S)`, `Branch(S1, S2)`, `Panic`, `Assert`, `AssertEqual` | Subroutine execution, calls under a hidden region of the stack, conditional branching, and explicit panics. |
 | **Composite Types** | `Tuple(n)`, `Untuple(n)`, `SymbolLen`, `SymbolCharAt`, `TupleLength` | Constructing and destructuring tuples, and analyzing symbols (immutable strings). |
 | **Type Predicates** | `IsInt`, `IsBool`, `IsFloat`, `IsSymbol`, `IsTuple` | Runtime type tests, also used internally to compile `type`/`enum` predicates. |
 

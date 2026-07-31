@@ -11,6 +11,7 @@ mod std {
 mod prelude;
 mod arithmetic;
 mod control_flow;
+mod dip;
 mod barista;
 mod file_mods;
 mod namespacing;

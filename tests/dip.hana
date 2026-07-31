@@ -1,0 +1,139 @@
+// Tests for the `dip` combinator, which runs a block with the top of the
+// stack hidden from it and restores it afterwards.
+
+test sentence dip_hides_one_value {
+    push 1
+    push 2
+    push 99
+    dip { add }
+    // Stack: [3, 99]
+    push 99
+    assert_eq
+    push 3
+    assert_eq
+}
+
+// The count is optional and defaults to 1.
+test sentence dip_explicit_count_of_one {
+    push 1
+    push 2
+    push 99
+    dip 1 { add }
+    push 99
+    assert_eq
+    push 3
+    assert_eq
+}
+
+test sentence dip_hides_several_values {
+    push 1
+    push 2
+    push 8
+    push 9
+    dip 2 { add }
+    // Stack: [3, 8, 9]
+    push 9
+    assert_eq
+    push 8
+    assert_eq
+    push 3
+    assert_eq
+}
+
+// dip 0 gives the callee the whole top of stack, exactly like jump.
+test sentence dip_zero_is_jump {
+    push 20
+    push 22
+    dip 0 { add }
+    push 42
+    assert_eq
+}
+
+// An empty hidden region and an empty block are both no-ops.
+test sentence dip_of_nothing {
+    push 42
+    dip { }
+    push 42
+    assert_eq
+}
+
+#[arity(2, 1)]
+sentence add_two {
+    add
+}
+
+// A dip target may be a named sentence rather than an inline block.
+test sentence dip_to_label {
+    push 1
+    push 2
+    push 99
+    dip add_two
+    push 99
+    assert_eq
+    push 3
+    assert_eq
+}
+
+// Hidden regions accumulate as dips nest.
+test sentence dip_nests {
+    push 1
+    push 2
+    push 8
+    push 9
+    dip { dip { add } }
+    push 9
+    assert_eq
+    push 8
+    assert_eq
+    push 3
+    assert_eq
+}
+
+// The block sees the stack below the hidden region as its own top, so it can
+// reach values with the same depths it would use if the hidden values were
+// not there at all.
+test sentence dip_block_indexes_below_the_hidden_region {
+    push 7
+    push 99
+    dip { pick 0 }
+    // Stack: [7, 7, 99]
+    push 99
+    assert_eq
+    push 7
+    assert_eq
+    push 7
+    assert_eq
+}
+
+// dip composes with branch: the condition is taken from below the hidden
+// region, since branch runs inside the dipped block.
+test sentence dip_over_branch {
+    push true
+    push 99
+    dip {
+        branch { push 10 } { push 20 }
+    }
+    push 99
+    assert_eq
+    push 10
+    assert_eq
+}
+
+// A value hidden by dip is untouched even when the block replaces everything
+// beneath it.
+test sentence dip_preserves_hidden_across_rewrite {
+    push 1
+    push 2
+    push 3
+    push 77
+    dip {
+        drop 0
+        drop 0
+        drop 0
+        push 42
+    }
+    push 77
+    assert_eq
+    push 42
+    assert_eq
+}

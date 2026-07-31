@@ -226,6 +226,29 @@ rules, for every path in the language.
 Phase 5 then runs `check_arities` over the resulting `Library`; the z3
 precondition/postcondition/total checks run separately via `bin/typecheck`.
 
+## Where `dip` fits
+
+`dip` is **core**, and the reason is worth recording because it is the first
+construct where the "could a user have written this by hand?" test gives the
+wrong answer on its own.
+
+A user *can* write the longhand — `tuple k`, roll the block's arguments over
+the packed value, run the block, roll the packed value back, `untuple k` — so
+the test appears to say sugar. But the roll counts depend on the block's own
+arity, and arity inference does not run until phase 5, two phases after
+lowering. A lowering that needs information phase 2 cannot have is not a
+lowering.
+
+The semantics are not expressible either. The longhand routes the hidden
+values through an ADT constructor and a *partial* accessor, so it introduces
+panic branches the verifier has to discharge; `dip` cannot. What a user can
+write by hand is something with the same stack transition, not the same
+construct.
+
+Being core, `dip` needs nothing from phase 2 — sentence bodies pass through
+lowering untouched — and phase 4 resolves its target exactly as it resolves
+`jump`'s, including flattening an inline block into a fresh sentence.
+
 ## Where `use` fits
 
 `use` is **core**, not sugar: it introduces a binding that cannot be expressed
@@ -240,11 +263,11 @@ declaration-order rules.
 
 ## Open questions
 
-- **Inline blocks.** `branch { … } { … }` is surface syntax and could be
-  lowered in phase 2 into named sentences. Recommendation: keep it in core and
-  flatten in phase 4. Lowering it early requires inventing names in the module
-  namespace for something that is genuinely anonymous; phase 4 already allocates
-  sentence indices and handles it naturally.
+- **Inline blocks.** `branch { … } { … }` and `dip N { … }` are surface syntax
+  and could be lowered in phase 2 into named sentences. Recommendation: keep
+  them in core and flatten in phase 4. Lowering them early requires inventing
+  names in the module namespace for something that is genuinely anonymous;
+  phase 4 already allocates sentence indices and handles it naturally.
 - **`TypeCheckPath` and the `::check` fallback.** Phase 4 currently tries the
   path, then retries with `::check` appended, discarding the first error. This
   should be one explicit rule — "a path in type position denotes its `check` if

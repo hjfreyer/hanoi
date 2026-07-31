@@ -1645,4 +1645,45 @@ mod tests {
         assert!(res.is_err());
         assert!(res.unwrap_err().contains("is not total (can panic)"));
     }
+
+    #[test]
+    fn test_total_verification_through_dip() {
+        // The dipped block never sees the input, so nothing it does can make
+        // the function partial.
+        let code = r#"
+            #[total]
+            function push_beneath {
+                dip {
+                    push 1
+                    push 2
+                    add
+                    drop 0
+                }
+            }
+        "#;
+        let library = assemble(code).unwrap();
+        let res = check_precondition(&library);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_dip_does_not_hide_panics() {
+        // The `add` runs below the hidden value, so it can still panic on the
+        // function's own input.
+        let code = r#"
+            #[total]
+            function add_under {
+                push 99
+                dip {
+                    push 1
+                    add
+                }
+                drop 0
+            }
+        "#;
+        let library = assemble(code).unwrap();
+        let res = check_precondition(&library);
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("is not total (can panic)"));
+    }
 }

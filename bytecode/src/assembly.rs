@@ -481,6 +481,16 @@ fn parse_instruction(stream: &mut TokenStream) -> Result<ParsedInstruction, Stri
             let target = parse_target(stream)?;
             Ok(ParsedInstruction::Jump(target))
         }
+        "dip" => {
+            // The count is optional; bare `dip` hides one value, as the
+            // classic combinator does.
+            let depth = match stream.peek() {
+                Some(&Token::Int(_)) => parse_usize(stream)?,
+                _ => 1,
+            };
+            let target = parse_target(stream)?;
+            Ok(ParsedInstruction::Dip(depth, target))
+        }
         "branch" => {
             let target_true = parse_target(stream)?;
             let target_false = parse_target(stream)?;
@@ -1079,6 +1089,10 @@ impl<'a> Compiler<'a> {
                 ParsedInstruction::Jump(target) => {
                     let target_idx = self.resolve_target(scope, target)?;
                     Instruction::Jump(target_idx)
+                }
+                ParsedInstruction::Dip(depth, target) => {
+                    let target_idx = self.resolve_target(scope, target)?;
+                    Instruction::Dip(depth, target_idx)
                 }
                 ParsedInstruction::Branch(t1, t2) => {
                     let idx1 = self.resolve_target(scope, t1)?;

@@ -86,6 +86,105 @@ mod tests {
     }
 
     #[test]
+    fn test_assemble_dip() {
+        let code = r#"
+            #[arity(3, 2)]
+            sentence entry {
+                dip 1 {
+                    add
+                }
+            }
+        "#;
+        let res = assemble(code).unwrap();
+        // The inline block is flattened into its own sentence, as for branch.
+        assert_eq!(res.sentences.len(), 2);
+        assert_eq!(
+            res.sentences[SentenceIndex::from(0)],
+            vec![Instruction::Dip(1, SentenceIndex::from(1))]
+        );
+        assert_eq!(
+            res.sentences[SentenceIndex::from(1)],
+            vec![Instruction::Add]
+        );
+    }
+
+    #[test]
+    fn test_assemble_dip_count_defaults_to_one() {
+        let code = r#"
+            #[arity(3, 2)]
+            sentence entry {
+                dip { add }
+            }
+        "#;
+        let res = assemble(code).unwrap();
+        assert_eq!(
+            res.sentences[SentenceIndex::from(0)],
+            vec![Instruction::Dip(1, SentenceIndex::from(1))]
+        );
+    }
+
+    #[test]
+    fn test_assemble_dip_to_label() {
+        let code = r#"
+            #[arity(2, 1)]
+            sentence add_two {
+                add
+            }
+            #[arity(4, 3)]
+            sentence entry {
+                dip 2 add_two
+            }
+        "#;
+        let res = assemble(code).unwrap();
+        assert_eq!(res.sentences.len(), 2);
+        assert_eq!(
+            res.sentences[SentenceIndex::from(1)],
+            vec![Instruction::Dip(2, SentenceIndex::from(0))]
+        );
+    }
+
+    #[test]
+    fn test_dip_arity_counts_the_hidden_region() {
+        // `dip 1 { add }` needs two values for the add plus one to hide, and
+        // leaves the hidden value on top of the sum.
+        let code = r#"
+            #[arity(1, 1)]
+            sentence bad_dip {
+                dip { add }
+            }
+        "#;
+        let res = assemble(code);
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("requires 3 inputs, which exceeds its annotated arity 1"));
+
+        // The same body checks out against the arity it actually has.
+        let code = r#"
+            #[arity(3, 2)]
+            sentence good_dip {
+                dip { add }
+            }
+        "#;
+        assert!(assemble(code).is_ok());
+    }
+
+    #[test]
+    fn test_dip_through_recursive_target_is_rejected() {
+        let code = r#"
+            #[recursive]
+            sentence loops {
+                dip { jump loops }
+            }
+            #[arity(2, 2)]
+            sentence caller {
+                dip { jump loops }
+            }
+        "#;
+        let res = assemble(code);
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("but is not annotated with #[recursive]"));
+    }
+
+    #[test]
     fn test_assemble_nested_branching() {
         let code = r#"
             #[recursive]
