@@ -112,6 +112,53 @@ fn get_or_infer_arity(
     Ok(result)
 }
 
+/// What one instruction takes off the top of the stack and leaves there.
+///
+/// `None` where the effect is not local to the instruction: `Panic` ends
+/// execution, and `Dip`/`Branch` depend on the sentences they call.
+///
+/// This is the single source of truth for per-instruction stack effects, and it
+/// is deliberately public: `bin/rewrite` needs the same numbers to decide
+/// whether a dip may move past an instruction. A second copy over there is a
+/// silent hazard rather than a duplication — the interchange rule's side
+/// condition is computed from `m`, so one wrong entry permits an unsound
+/// rewrite with nothing to catch it.
+pub fn op_arity(inst: &Instruction) -> Option<(i64, i64)> {
+    Some(match inst {
+        Instruction::Push(_) => (0, 1),
+        Instruction::Drop | Instruction::Assert => (1, 0),
+        // Pick reads at `d` and copies it to the top, so it touches everything
+        // down to that depth even though it consumes nothing.
+        Instruction::Pick(d) => (*d as i64 + 1, *d as i64 + 2),
+        Instruction::Roll(d) => (*d as i64 + 1, *d as i64 + 1),
+        Instruction::Equal
+        | Instruction::Greater
+        | Instruction::Less
+        | Instruction::Add
+        | Instruction::Subtract
+        | Instruction::Multiply
+        | Instruction::Divide
+        | Instruction::Modulo
+        | Instruction::And
+        | Instruction::Or
+        | Instruction::SymbolCharAt => (2, 1),
+        Instruction::Not
+        | Instruction::Negate
+        | Instruction::Print
+        | Instruction::SymbolLen
+        | Instruction::IsInt
+        | Instruction::IsBool
+        | Instruction::IsFloat
+        | Instruction::IsSymbol
+        | Instruction::IsTuple
+        | Instruction::TupleLength => (1, 1),
+        Instruction::AssertEqual => (2, 0),
+        Instruction::Tuple(n) => (*n as i64, 1),
+        Instruction::Untuple(n) => (1, *n as i64),
+        Instruction::Panic | Instruction::Dip(..) | Instruction::Branch(..) => return None,
+    })
+}
+
 fn infer_arity_of_instructions(
     s_idx: SentenceIndex,
     library: &Library,
@@ -127,69 +174,6 @@ fn infer_arity_of_instructions(
     for inst in sentence {
         depths.push(current_size);
         match inst {
-            Instruction::Push(_) => {
-                current_size += 1;
-            }
-            Instruction::Pick(depth) => {
-                let depth = *depth as i64;
-                let req = depth + 1;
-                if current_size < req {
-                    let diff = req - current_size;
-                    initial_req += diff;
-                    current_size = req;
-                }
-                current_size += 1;
-            }
-            Instruction::Roll(depth) => {
-                let depth = *depth as i64;
-                let req = depth + 1;
-                if current_size < req {
-                    let diff = req - current_size;
-                    initial_req += diff;
-                    current_size = req;
-                }
-            }
-            Instruction::Equal | Instruction::Greater | Instruction::Less |
-            Instruction::Add | Instruction::Subtract | Instruction::Multiply |
-            Instruction::Divide | Instruction::Modulo | Instruction::And | Instruction::Or |
-            Instruction::SymbolCharAt => {
-                let req = 2;
-                if current_size < req {
-                    let diff = req - current_size;
-                    initial_req += diff;
-                    current_size = req;
-                }
-                current_size -= 1;
-            }
-            Instruction::Not | Instruction::Negate | Instruction::Print |
-            Instruction::SymbolLen | Instruction::IsInt | Instruction::IsBool |
-            Instruction::IsFloat | Instruction::IsSymbol | Instruction::IsTuple |
-            Instruction::TupleLength => {
-                let req = 1;
-                if current_size < req {
-                    let diff = req - current_size;
-                    initial_req += diff;
-                    current_size = req;
-                }
-            }
-            Instruction::Drop | Instruction::Assert => {
-                let req = 1;
-                if current_size < req {
-                    let diff = req - current_size;
-                    initial_req += diff;
-                    current_size = req;
-                }
-                current_size -= 1;
-            }
-            Instruction::AssertEqual => {
-                let req = 2;
-                if current_size < req {
-                    let diff = req - current_size;
-                    initial_req += diff;
-                    current_size = req;
-                }
-                current_size -= 2;
-            }
             Instruction::Panic => {
                 let mut annotated_arity = None;
                 for ann in &library.annotations[s_idx] {
@@ -217,26 +201,6 @@ fn infer_arity_of_instructions(
                     arities[last_idx] = Arity::Panic { inputs: n };
                 }
                 return Ok((sentence_arity, arities));
-            }
-            Instruction::Tuple(len) => {
-                let len = *len as i64;
-                let req = len;
-                if current_size < req {
-                    let diff = req - current_size;
-                    initial_req += diff;
-                    current_size = req;
-                }
-                current_size = current_size - len + 1;
-            }
-            Instruction::Untuple(len) => {
-                let len = *len as i64;
-                let req = 1;
-                if current_size < req {
-                    let diff = req - current_size;
-                    initial_req += diff;
-                    current_size = req;
-                }
-                current_size = current_size - 1 + len;
             }
             Instruction::Dip(depth, target) => {
                 if is_recursive(*target, library) {
@@ -332,6 +296,19 @@ fn infer_arity_of_instructions(
                     let arities = depths.into_iter().map(|d| Arity::Normal { inputs: n, outputs: d }).collect();
                     return Ok((sentence_arity, arities));
                 }
+            }
+            // Everything else has a local effect, taken from the shared table.
+            // A requirement discovered here grows the sentence's input count
+            // retroactively, which is why `depths` records the size *before*
+            // the growth rather than the true stack depth.
+            local => {
+                let (n, m) = op_arity(local)
+                    .expect("Panic, Dip and Branch are handled above");
+                if current_size < n {
+                    initial_req += n - current_size;
+                    current_size = n;
+                }
+                current_size = current_size - n + m;
             }
         }
     }
