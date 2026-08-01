@@ -128,6 +128,18 @@ mod customer_impl {
         }
     }
 
+    function emit_does_pre_and_post {
+        pick 0
+        jump is_state::check
+        branch {
+            jump emit
+            jump emit_postcondition
+        } {
+            drop 0
+            push true
+        }
+    }
+
     // emit takes state: (id, preferred_drink, internal_state) and returns ValueSet of emitted events.
     #[precondition(is_state::check)]
     #[postcondition(emit_postcondition)]
