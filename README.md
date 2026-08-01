@@ -150,3 +150,4 @@ Use the helper shell scripts at the project root to execute test suites:
 - [docs/typecheck.md](docs/typecheck.md): Detailed SMT verification and symbolic execution design for the `typecheck` tool.
 - [docs/machines.md](docs/machines.md): Specification of Hanoi's Communicating Sequential Processes (CSP) state machine semantics.
 - [docs/compilation.md](docs/compilation.md): The compilation pipeline — the sugar and core ASTs, and what each phase from tokens to bytecode may assume.
+- [docs/tactics.md](docs/tactics.md): The tactic language `bin/rewrite` uses to rewrite compiled bytecode — the rule set, the combinators, and the laws they obey.

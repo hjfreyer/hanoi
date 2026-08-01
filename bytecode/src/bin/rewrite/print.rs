@@ -5,23 +5,23 @@ use std::collections::HashSet;
 
 use crate::arity::{node_arity, seq_arity};
 use crate::ir::{build, Node};
-use crate::passes::{expand_to_unary_dips, rewrite, Passes};
+use crate::tactic::{apply, Env, Tactic, TacticError};
 
-
-pub(crate) fn print_sentence(library: &Library, root: SentenceIndex, passes: Passes) {
+pub(crate) fn print_sentence(
+    library: &Library,
+    root: SentenceIndex,
+    tactic: &Tactic,
+    env: &Env,
+    source: &str,
+) -> Result<(), TacticError> {
     println!("#{} {}", usize::from(root), library.names[root]);
     for ann in &library.annotations[root] {
         println!("  {:?}", ann);
     }
 
     let mut in_progress = HashSet::new();
-    let mut body = build(library, root, &mut in_progress);
-    rewrite(&mut body, passes);
-    if passes.dip_normalize {
-        // Presentation only, and deliberately outside the fixpoint: see
-        // `collapse_nested_dips`.
-        expand_to_unary_dips(&mut body);
-    }
+    let body = build(library, root, &mut in_progress);
+    let body = apply(tactic, env, body)?.into_nodes();
 
     // A sentence whose reckoning breaks immediately — a #[recursive] one, whose
     // body is a cut edge — has no knowable entry depth. Counting from zero
@@ -30,8 +30,8 @@ pub(crate) fn print_sentence(library: &Library, root: SentenceIndex, passes: Pas
     let relative = outputs.is_none() && inputs == 0;
 
     println!();
-    if passes.any() {
-        println!("  ({})", passes.names().join("; "));
+    if source != "id" {
+        println!("  tactic: {}", source);
     }
     if relative {
         println!("  offset │ instruction   (entry depth unknown)");
@@ -42,6 +42,7 @@ pub(crate) fn print_sentence(library: &Library, root: SentenceIndex, passes: Pas
     }
 
     print_seq(&body, 0, Some(inputs), relative);
+    Ok(())
 }
 
 pub(crate) fn print_seq(nodes: &[Node], indent: usize, entry: Option<i64>, relative: bool) {

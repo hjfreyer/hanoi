@@ -10,7 +10,7 @@
 //! whatever drives the rules, and is written once in [`crate::tactic`] rather
 //! than open-coded inside each of them.
 
-use bytecode::Instruction;
+use bytecode::{Instruction, Value};
 
 use crate::arity::node_arity;
 use crate::ir::{same_effect, Node};
@@ -20,7 +20,7 @@ use crate::ir::{same_effect, Node};
 /// Implementors must guarantee that firing strictly decreases some measure of
 /// the term, since that is the only reason a fixpoint over them terminates.
 /// Each states its own below.
-pub(crate) trait Rule: Sync {
+pub(crate) trait Rule: Sync + std::fmt::Debug {
     fn name(&self) -> &'static str;
 
     /// How many adjacent nodes the rule matches on. The driver only ever hands
@@ -29,6 +29,27 @@ pub(crate) trait Rule: Sync {
 
     /// Rewrites the window, or fails. Must not return the window unchanged.
     fn rewrite(&self, window: &[Node]) -> Option<Vec<Node>>;
+}
+
+/// Every rule, by name. Rules are a fixed instruction set in their own
+/// namespace: a tactic expression can order and place them, but cannot alias
+/// or define one.
+pub(crate) const ALL_RULES: &[&dyn Rule] = &[
+    &AnnihilateDrop,
+    &Collapse,
+    &Expand,
+    &DistributeBranch,
+    &FactorBranch,
+    &FlattenCall,
+    &FoldBranch,
+    &Fuse,
+    &NoOp,
+    &PickDropToRoll,
+    &Sink,
+];
+
+pub(crate) fn rule_by_name(name: &str) -> Option<&'static dyn Rule> {
+    ALL_RULES.iter().copied().find(|r| r.name() == name)
 }
 
 // ---------------------------------------------------------------------------
@@ -47,6 +68,7 @@ pub(crate) trait Rule: Sync {
 /// lets you diagnose.
 ///
 /// Measure: node count.
+#[derive(Debug)]
 pub(crate) struct Collapse;
 
 impl Rule for Collapse {
@@ -95,6 +117,7 @@ impl Rule for Collapse {
 ///
 /// Measure: none. This rule *increases* the node count and is the one rule
 /// that must not share a fixpoint with its inverse.
+#[derive(Debug)]
 pub(crate) struct Expand;
 
 impl Rule for Expand {
@@ -139,6 +162,7 @@ impl Rule for Expand {
 /// identical blocks compiled to different sentences still count as shared.
 ///
 /// Measure: nodes held inside branch arms.
+#[derive(Debug)]
 pub(crate) struct FactorBranch;
 
 impl Rule for FactorBranch {
@@ -193,6 +217,7 @@ impl Rule for FactorBranch {
 /// `pick d` (d+1→d+2), `roll d` (d+1→d+1), and a nested dip alike.
 ///
 /// Measure: the summed positions of dips.
+#[derive(Debug)]
 pub(crate) struct Sink;
 
 impl Rule for Sink {
@@ -238,6 +263,7 @@ impl Rule for Sink {
 /// stay hidden across both.
 ///
 /// Measure: node count.
+#[derive(Debug)]
 pub(crate) struct Fuse;
 
 impl Rule for Fuse {
@@ -289,6 +315,7 @@ impl Rule for Fuse {
 /// rather than have this tool assert an equivalence the verifier would not.
 ///
 /// Measure: node count.
+#[derive(Debug)]
 pub(crate) struct AnnihilateDrop;
 
 /// What cancelling a `drop` against the instruction before it leaves behind.
@@ -330,6 +357,146 @@ fn annihilation(inst: &Instruction) -> Option<Annihilation> {
         | Instruction::IsSymbol
         | Instruction::IsTuple => Some(Annihilation::Predecessor),
         _ => None,
+    }
+}
+
+/// `branch { A } { B } ; X` becomes `branch { A X } { B X }`.
+///
+/// X runs after whichever arm was taken, so moving it inside both is no change
+/// at all. The point is to put X somewhere a rule can see it in context: a
+/// simplification that only holds on one side of the branch cannot fire while
+/// X sits outside.
+///
+/// The inverse of [`FactorBranch`] in spirit but not in fact — that one hoists
+/// a shared *prefix* out of the front, this one pushes a *suffix* in at the
+/// back, so the two do not undo each other. They meet only when both arms are
+/// empty, and there they converge rather than oscillate.
+///
+/// Measure: nodes following a branch in the same sequence. Node count *grows*,
+/// so this rule does not belong in a fixpoint that assumes otherwise.
+#[derive(Debug)]
+pub(crate) struct DistributeBranch;
+
+impl Rule for DistributeBranch {
+    fn name(&self) -> &'static str {
+        "distribute_branch"
+    }
+    fn width(&self) -> usize {
+        2
+    }
+    fn rewrite(&self, window: &[Node]) -> Option<Vec<Node>> {
+        let [
+            Node::Branch {
+                then_origin,
+                then_body,
+                else_origin,
+                else_body,
+            },
+            next,
+        ] = window
+        else {
+            return None;
+        };
+
+        let mut then_body = then_body.clone();
+        then_body.push(next.clone());
+        let mut else_body = else_body.clone();
+        else_body.push(next.clone());
+
+        Some(vec![Node::Branch {
+            then_origin: then_origin.clone(),
+            then_body,
+            else_origin: else_origin.clone(),
+            else_body,
+        }])
+    }
+}
+
+/// `push true ; branch { A } { B }` becomes `A`, and `push false` takes `B`.
+///
+/// Only a literal `Bool` counts. The VM rejects a non-boolean condition, so
+/// folding `push 1 ; branch …` would erase a panic rather than preserve one —
+/// which is the same reason [`AnnihilateDrop`] will not touch `add`.
+///
+/// Measure: branch count. The node count can grow, since the chosen arm may be
+/// longer than the two nodes it replaces, but a branch is gone for good.
+#[derive(Debug)]
+pub(crate) struct FoldBranch;
+
+impl Rule for FoldBranch {
+    fn name(&self) -> &'static str {
+        "fold_branch"
+    }
+    fn width(&self) -> usize {
+        2
+    }
+    fn rewrite(&self, window: &[Node]) -> Option<Vec<Node>> {
+        let [
+            Node::Op(Instruction::Push(Value::Bool(cond))),
+            Node::Branch {
+                then_body,
+                else_body,
+                ..
+            },
+        ] = window
+        else {
+            return None;
+        };
+        Some(if *cond {
+            then_body.clone()
+        } else {
+            else_body.clone()
+        })
+    }
+}
+
+/// `dip 0 { P }` becomes `P`, spliced into the enclosing sequence.
+///
+/// A plain call hides nothing, so its body runs on exactly the stack the call
+/// site had; the frame is bookkeeping the listing shows but the semantics does
+/// not need.
+///
+/// This is the rule that lets the others reach across a call. Rules only ever
+/// see the sequence they are handed — that is the invariant which keeps them
+/// unit-testable and position-independent — so a branch one frame down and an
+/// instruction outside it are simply not in the same window. Flattening puts
+/// them there:
+///
+/// ```text
+/// jump S ; add        where S = branch { A } { B }
+///   flatten_call  ->  branch { A } { B } ; add
+///   distribute_branch -> branch { A add } { B add }
+/// ```
+///
+/// It discards the call's origin, so the listing stops saying which sentence
+/// the code came from. That is why it is not in `all`.
+///
+/// Measure: node count.
+#[derive(Debug)]
+pub(crate) struct FlattenCall;
+
+impl Rule for FlattenCall {
+    fn name(&self) -> &'static str {
+        "flatten_call"
+    }
+    fn width(&self) -> usize {
+        1
+    }
+    fn rewrite(&self, window: &[Node]) -> Option<Vec<Node>> {
+        let Node::Dip {
+            depth: 0,
+            body,
+            ..
+        } = &window[0]
+        else {
+            return None;
+        };
+        // An empty body would make this the identity on the sequence; `noop`
+        // owns that case, and returning it here would not terminate.
+        if body.is_empty() {
+            return None;
+        }
+        Some(body.clone())
     }
 }
 
@@ -499,6 +666,173 @@ mod tests {
     }
 
     #[test]
+    fn flatten_splices_a_plain_call_into_its_call_site() {
+        let w = [dip(0, vec![op(Instruction::Add), op(Instruction::Drop)])];
+        assert_eq!(
+            FlattenCall.rewrite(&w),
+            Some(vec![op(Instruction::Add), op(Instruction::Drop)])
+        );
+    }
+
+    #[test]
+    fn flatten_declines_a_dip_that_actually_hides_something() {
+        // At depth 1 the body runs below a hidden value; splicing it in would
+        // hand it that value instead.
+        assert_eq!(
+            FlattenCall.rewrite(&[dip(1, vec![op(Instruction::Add)])]),
+            None
+        );
+    }
+
+    #[test]
+    fn flatten_leaves_the_empty_call_to_noop() {
+        // Returning the empty body here would be the identity on the sequence,
+        // and a rule that returns its input does not terminate.
+        assert_eq!(FlattenCall.rewrite(&[dip(0, vec![])]), None);
+        assert_eq!(NoOp.rewrite(&[dip(0, vec![])]), Some(vec![]));
+    }
+
+    #[test]
+    fn distribute_pushes_the_next_node_into_both_arms() {
+        let w = [
+            branch(
+                vec![op(Instruction::Push(Value::Int(1)))],
+                vec![op(Instruction::Push(Value::Int(2)))],
+            ),
+            op(Instruction::Add),
+        ];
+        assert_eq!(
+            DistributeBranch.rewrite(&w),
+            Some(vec![branch(
+                vec![op(Instruction::Push(Value::Int(1))), op(Instruction::Add)],
+                vec![op(Instruction::Push(Value::Int(2))), op(Instruction::Add)],
+            )])
+        );
+    }
+
+    #[test]
+    fn distribute_declines_with_nothing_to_push_in() {
+        // Width 2, so a branch at the end of a sequence never matches.
+        assert_eq!(
+            DistributeBranch.rewrite(&[op(Instruction::Add), branch(vec![], vec![])]),
+            None
+        );
+    }
+
+    #[test]
+    fn a_constant_condition_selects_its_arm() {
+        let arms = || {
+            branch(
+                vec![op(Instruction::Push(Value::Int(10)))],
+                vec![op(Instruction::Push(Value::Int(20)))],
+            )
+        };
+        assert_eq!(
+            FoldBranch.rewrite(&[op(Instruction::Push(Value::Bool(true))), arms()]),
+            Some(vec![op(Instruction::Push(Value::Int(10)))])
+        );
+        assert_eq!(
+            FoldBranch.rewrite(&[op(Instruction::Push(Value::Bool(false))), arms()]),
+            Some(vec![op(Instruction::Push(Value::Int(20)))])
+        );
+    }
+
+    #[test]
+    fn folding_an_empty_arm_leaves_nothing() {
+        assert_eq!(
+            FoldBranch.rewrite(&[
+                op(Instruction::Push(Value::Bool(true))),
+                branch(vec![], vec![op(Instruction::Add)])
+            ]),
+            Some(vec![])
+        );
+    }
+
+    #[test]
+    fn only_a_literal_bool_folds_a_branch() {
+        // The VM rejects a non-boolean condition, so folding `push 1; branch`
+        // would erase a panic instead of preserving one.
+        assert_eq!(
+            FoldBranch.rewrite(&[
+                op(Instruction::Push(Value::Int(1))),
+                branch(vec![], vec![])
+            ]),
+            None
+        );
+        // And a condition that is computed rather than pushed is not constant.
+        assert_eq!(
+            FoldBranch.rewrite(&[op(Instruction::IsInt), branch(vec![], vec![])]),
+            None
+        );
+    }
+
+    #[test]
+    fn pick_then_dropping_the_original_is_a_roll() {
+        // After `pick 2` the original sits at depth 3, so dipping past three
+        // and dropping leaves the copy on top with the original gone.
+        let w = [
+            op(Instruction::Pick(2)),
+            dip(3, vec![op(Instruction::Drop)]),
+        ];
+        assert_eq!(
+            PickDropToRoll.rewrite(&w),
+            Some(vec![op(Instruction::Roll(2))])
+        );
+    }
+
+    #[test]
+    fn pick_drop_to_roll_needs_exactly_the_original_s_depth() {
+        // One too shallow drops the copy instead; one too deep drops a
+        // bystander. Neither is a roll.
+        for depth in [2, 4] {
+            assert_eq!(
+                PickDropToRoll.rewrite(&[
+                    op(Instruction::Pick(2)),
+                    dip(depth, vec![op(Instruction::Drop)])
+                ]),
+                None,
+                "depth {} should not match a pick 2",
+                depth
+            );
+        }
+        // And the body has to be a lone drop.
+        assert_eq!(
+            PickDropToRoll.rewrite(&[
+                op(Instruction::Pick(0)),
+                dip(1, vec![op(Instruction::Drop), op(Instruction::Drop)])
+            ]),
+            None
+        );
+    }
+
+    #[test]
+    fn pick_drop_to_roll_leaves_the_degenerate_case_to_noop() {
+        // At d = 0 the answer is `roll 0`, which does nothing — but this rule
+        // states one law and lets `noop` state the other.
+        assert_eq!(
+            PickDropToRoll.rewrite(&[
+                op(Instruction::Pick(0)),
+                dip(1, vec![op(Instruction::Drop)])
+            ]),
+            Some(vec![op(Instruction::Roll(0))])
+        );
+        assert_eq!(NoOp.rewrite(&[op(Instruction::Roll(0))]), Some(vec![]));
+    }
+
+    #[test]
+    fn noop_removes_an_empty_dip_at_any_depth() {
+        assert_eq!(NoOp.rewrite(&[dip(0, vec![])]), Some(vec![]));
+        assert_eq!(NoOp.rewrite(&[dip(3, vec![])]), Some(vec![]));
+    }
+
+    #[test]
+    fn noop_declines_anything_that_does_something() {
+        assert_eq!(NoOp.rewrite(&[op(Instruction::Roll(1))]), None);
+        assert_eq!(NoOp.rewrite(&[dip(1, vec![op(Instruction::Add)])]), None);
+        assert_eq!(NoOp.rewrite(&[op(Instruction::Drop)]), None);
+    }
+
+    #[test]
     fn annihilate_declines_a_partial_producer() {
         // `add; drop` is not `drop; drop`: the add still rejects non-numeric
         // operands, and cancelling it would discard that check.
@@ -512,5 +846,69 @@ mod tests {
             AnnihilateDrop.rewrite(&[op(Instruction::Equal), op(Instruction::Drop)]),
             None
         );
+    }
+}
+
+/// `pick d ; dip (d+1) { drop }` becomes `roll d`.
+///
+/// After `pick d` the original sits one deeper than the copy, so dipping past
+/// `d + 1` and dropping removes the original and leaves the copy on top — which
+/// is a roll. At `d = 0` the result is `roll 0`, which does nothing; [`NoOp`]
+/// clears that up, rather than this rule special-casing it.
+///
+/// [`Sink`] cannot help here and should not: the dip deliberately reaches at
+/// the value the pick just produced, which is precisely the interference the
+/// interchange rule exists to forbid. `pick d` has arity `(d+1 -> d+2)`, so
+/// `k >= m` is `d+1 >= d+2` and always false.
+///
+/// Measure: node count.
+#[derive(Debug)]
+pub(crate) struct PickDropToRoll;
+
+impl Rule for PickDropToRoll {
+    fn name(&self) -> &'static str {
+        "pick_drop_to_roll"
+    }
+    fn width(&self) -> usize {
+        2
+    }
+    fn rewrite(&self, window: &[Node]) -> Option<Vec<Node>> {
+        let [Node::Op(Instruction::Pick(d)), Node::Dip { depth, body, .. }] = window else {
+            return None;
+        };
+        if *depth != d + 1 {
+            return None;
+        }
+        let [Node::Op(Instruction::Drop)] = &body[..] else {
+            return None;
+        };
+        Some(vec![Node::Op(Instruction::Roll(*d))])
+    }
+}
+
+/// Removes a node that does nothing at all.
+///
+/// `roll 0` moves the top of the stack to the top. An empty `dip` hides a
+/// region and hands it straight back. Neither is something a person writes;
+/// they turn up after another rule has contracted a shuffle or emptied a body,
+/// which is why this rule earns its place by composing rather than on its own.
+///
+/// Measure: node count.
+#[derive(Debug)]
+pub(crate) struct NoOp;
+
+impl Rule for NoOp {
+    fn name(&self) -> &'static str {
+        "noop"
+    }
+    fn width(&self) -> usize {
+        1
+    }
+    fn rewrite(&self, window: &[Node]) -> Option<Vec<Node>> {
+        match &window[0] {
+            Node::Op(Instruction::Roll(0)) => Some(Vec::new()),
+            Node::Dip { body, .. } if body.is_empty() => Some(Vec::new()),
+            _ => None,
+        }
     }
 }

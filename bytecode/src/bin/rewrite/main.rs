@@ -2,12 +2,11 @@
 //! targets (which includes plain jumps, since `jump` is `Dip(0, s)`) and both
 //! arms of every `branch`.
 //!
-//! Optional rewrite passes then run to a fixpoint over the result:
-//! `--dip-normalize` pushes dips left, fuses them, and splits them into nests
-//! of unary `dip 1`s; `--factor-branches` hoists a run shared by both arms of
-//! a branch out in front of it; `--annihilate` cancels a drop against the
-//! instruction that produced what it drops. These are the rewrites an
-//! optimizer would want to do, and this tool exists to let you eyeball them.
+//! A tactic expression then rewrites the result. Tactics are built from six
+//! rules and a handful of combinators for control and traversal, so which
+//! rewrites run, in what order, where in the tree, and how many times are all
+//! things you say rather than things the tool decides. `--list-rules` and
+//! `--list-tactics` enumerate what is available.
 //!
 //! This is a debugging aid, not a source generator: the output does not parse,
 //! because a dipped block operates below its hidden region and so cannot be
@@ -17,9 +16,9 @@
 
 mod arity;
 mod ir;
-mod passes;
 mod print;
 mod rules;
+mod script;
 mod tactic;
 #[cfg(test)]
 mod tests;
@@ -32,41 +31,122 @@ use std::process;
 use bytecode::{Library, SentenceIndex};
 
 use crate::print::print_sentence;
-use crate::passes::Passes;
+use crate::script::{rule_names, Definitions, PRELUDE};
+use crate::tactic::Env;
+
+/// Rule firings allowed per run before the tool gives up and shows its work.
+const DEFAULT_FUEL: u64 = 1_000_000;
+
+struct Options {
+    tactic: String,
+    fuel: u64,
+    trace: bool,
+    check: bool,
+}
 
 fn main() {
-    let mut passes = Passes::default();
+    let mut opts = Options {
+        tactic: "id".to_string(),
+        fuel: DEFAULT_FUEL,
+        trace: false,
+        check: false,
+    };
+    let mut tactic_files: Vec<String> = Vec::new();
     let mut positional: Vec<String> = Vec::new();
-    for arg in env::args().skip(1) {
-        match arg.as_str() {
-            "--dip-normalize" => passes.dip_normalize = true,
-            "--factor-branches" => passes.factor_branches = true,
-            "--annihilate" => passes.annihilate = true,
-            flag if flag.starts_with("--") => {
+    let mut list_rules = false;
+    let mut list_tactics = false;
+
+    let args: Vec<String> = env::args().skip(1).collect();
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i].as_str();
+        let mut value = |name: &str| -> String {
+            i += 1;
+            match args.get(i) {
+                Some(v) => v.clone(),
+                None => {
+                    eprintln!("{} needs a value", name);
+                    process::exit(1);
+                }
+            }
+        };
+        match arg {
+            "-t" | "--tactic" => opts.tactic = value("-t"),
+            "--tactics" => tactic_files.push(value("--tactics")),
+            "--fuel" => {
+                let raw = value("--fuel");
+                opts.fuel = match raw.parse() {
+                    Ok(v) => v,
+                    Err(_) => {
+                        eprintln!("--fuel needs a number, found '{}'", raw);
+                        process::exit(1);
+                    }
+                };
+            }
+            "--trace" => opts.trace = true,
+            "--check" => opts.check = true,
+            "--list-rules" => list_rules = true,
+            "--list-tactics" => list_tactics = true,
+            flag if flag.starts_with('-') => {
                 eprintln!("Unknown flag: {}", flag);
+                usage();
                 process::exit(1);
             }
-            _ => positional.push(arg),
+            other => positional.push(other.to_string()),
+        }
+        i += 1;
+    }
+
+    let mut defs = Definitions::new();
+    if let Err(err) = defs.load(PRELUDE) {
+        eprintln!("{}", err.render(PRELUDE));
+        eprintln!("(this is a bug in the built-in prelude)");
+        process::exit(1);
+    }
+    for path in &tactic_files {
+        let source = match fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(err) => {
+                eprintln!("Error reading '{}': {}", path, err);
+                process::exit(1);
+            }
+        };
+        if let Err(err) = defs.load(&source) {
+            eprint!("{}", err.render(&source));
+            process::exit(1);
         }
     }
 
+    if list_rules {
+        println!("rules (place them with `each(...)` or `once(...)`):");
+        for name in rule_names() {
+            println!("  {}", name);
+        }
+        return;
+    }
+    if list_tactics {
+        println!("tactics:");
+        for name in defs.names() {
+            println!("  {}", name);
+        }
+        println!();
+        println!("combinators: each, once, try, repeat, repeat_n, children, bu, id, fail");
+        println!("operators:   `a; b` in sequence, `a | b` first that applies");
+        return;
+    }
+
     if positional.len() != 2 {
-        eprintln!("Usage: rewrite <directory> <sentence> [passes...]");
-        eprintln!();
-        eprintln!("  <sentence> is a fully qualified name (queue::queue::accept), a");
-        eprintln!("  unique trailing part of one (queue::accept), or an index (#12).");
-        eprintln!();
-        eprintln!("  --dip-normalize   move dips as far left as they will go, fuse");
-        eprintln!("                    adjacent dips that end up at the same depth,");
-        eprintln!("                    then split each one into a nest of `dip 1`s.");
-        eprintln!("  --factor-branches hoist a run of instructions shared by both");
-        eprintln!("                    arms of a branch out in front of it.");
-        eprintln!("  --annihilate      cancel a drop against the instruction that");
-        eprintln!("                    produced the value it drops.");
-        eprintln!();
-        eprintln!("  Passes compose: each one's output is fed back to the others.");
+        usage();
         process::exit(1);
     }
+
+    let tactic = match defs.compile(&opts.tactic) {
+        Ok(t) => t,
+        Err(err) => {
+            eprint!("{}", err.render(&opts.tactic));
+            process::exit(1);
+        }
+    };
 
     let library = load(&positional[0]);
     let root = match resolve_sentence(&library, &positional[1]) {
@@ -77,7 +157,45 @@ fn main() {
         }
     };
 
-    print_sentence(&library, root, passes);
+    let env = Env::new(opts.fuel, opts.check);
+    if let Err(err) = print_sentence(&library, root, &tactic, &env, &opts.tactic) {
+        eprintln!("error: {}", err);
+        process::exit(1);
+    }
+
+    if opts.trace {
+        println!();
+        println!("  rule firings");
+        println!("  ────────────");
+        let histogram = env.histogram();
+        if histogram.is_empty() {
+            println!("  (none)");
+        }
+        for (rule, count) in histogram {
+            println!("  {:<18} {}", rule, count);
+        }
+    }
+}
+
+fn usage() {
+    eprintln!("Usage: rewrite <directory> <sentence> [-t <tactic>] [options]");
+    eprintln!();
+    eprintln!("  <sentence> is a fully qualified name (queue::queue::accept), a");
+    eprintln!("  unique trailing part of one (queue::accept), or an index (#12).");
+    eprintln!();
+    eprintln!("  -t, --tactic <expr>  the rewrite to apply; default `id`, which");
+    eprintln!("                       inlines the sentence and changes nothing.");
+    eprintln!("  --tactics <file>     load `tactic NAME = expr;` definitions.");
+    eprintln!("  --list-rules         the rules a tactic can place.");
+    eprintln!("  --list-tactics       the named tactics currently defined.");
+    eprintln!("  --fuel <n>           rule firings before giving up.");
+    eprintln!("  --trace              print how often each rule fired.");
+    eprintln!("  --check              verify every rule preserves net stack effect.");
+    eprintln!();
+    eprintln!("Examples:");
+    eprintln!("  rewrite tests 'Pair::check' -t dip_normalize");
+    eprintln!("  rewrite tests foo -t 'repeat(bu(each(sink, fuse)))'");
+    eprintln!("  rewrite tests foo -t 'annihilate | factoring'");
 }
 
 fn load(dir_arg: &str) -> Library {
