@@ -1053,6 +1053,53 @@ fn one_fact_is_all_that_separates_the_two_untuples() {
 }
 
 #[test]
+fn a_reconstruction_proves_the_shape_that_an_assertion_would_have_claimed() {
+    // The way out of needing the fact at all.
+    //
+    // `one_fact_is_all_that_separates_the_two_untuples` shows the sharing
+    // closes once something establishes that the value is a 3-tuple. Nothing
+    // local can establish that — but nothing has to, because the fact is
+    // already in the program and is merely being thrown away.
+    //
+    // Carry the *parts* forward instead of the value, and rebuild the value
+    // where it is wanted. `tuple 3` is total, so the rebuild needs no
+    // justification; `unfactor_branch` pushes it into both arms because it is
+    // total; and in the arm that takes it apart again, `cancel_tuple` removes
+    // both. The construction is the proof: a window sees `tuple 3; untuple 3`
+    // and needs to know nothing about where the value came from.
+    let (prog, before) = tree_of(
+        r#"
+        #[arity(1, 1)]
+        sentence via_reconstruct {
+            untuple 3
+            pick 2  pick 2  pick 2
+            is_symbol
+            dip 1 { is_symbol }
+            and
+            dip 1 { is_symbol }
+            and
+            dip 1 { tuple 3 }
+            branch { untuple 3  is_symbol  dip 1 { drop 0 }  dip 1 { drop 0 } }
+                   { drop 0  push true }
+        }
+    "#,
+        NOTHING,
+    );
+    assert_eq!(untuples(&before), 2);
+    let after = run(
+        prog,
+        before,
+        "repeat(bu(each(unfactor_branch); each(cancel_tuple); \
+         each(annihilate_drop, noop, pick_drop_to_roll)))",
+    );
+    assert_eq!(
+        untuples(&after),
+        1,
+        "the rebuild should cancel against the arm's untuple"
+    );
+}
+
+#[test]
 fn a_later_step_finding_nothing_does_not_discard_an_earlier_one() {
     // Regression. `each(sink)` rewrites; `each(annihilate_drop)` then matches
     // nowhere. The sequence has to keep the sinking — it used to roll the
