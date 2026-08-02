@@ -1,8 +1,10 @@
 # Tactics
 
 `bin/rewrite` turns one sentence's compiled bytecode into a tree and prints it.
-A **tactic** says how to rewrite that tree before printing — including how much
-of the call graph to expand in the first place.
+A **tactic** says how to rewrite that tree before printing.
+
+Nothing is expanded unless you ask. The default listing shows one sentence,
+naming every call it makes on a single line; `inline` is how you open one up.
 
 ```bash
 cargo run --bin rewrite -- tests 'SimpleTuple::check' -t dip_normalize
@@ -33,7 +35,7 @@ and returns a replacement, or fails. `--list-rules` prints them.
 | `flatten_call` | `dip 0 { P }` | `P`, spliced in |
 | `distribute_branch` | `branch { A } { B } ; X` | `branch { A X } { B X }` |
 | `fold_branch` | `push true \| false ; branch { A } { B }` | the arm it selects |
-| `inline` | a call | the block it names |
+| `inline` | a call | the block it names, spliced in |
 
 `sink` is the interchange rule, and its side condition is the one piece of real
 arithmetic here: writing `X`'s arity as `(n -> m)`, the dip's window must sit
@@ -70,38 +72,32 @@ then fold".
 condition, so folding `push 1 ; branch …` would erase a panic rather than
 preserve one — the same reason `annihilate_drop` will not touch `add`.
 
-`inline` is why the language exists. Nothing is expanded before you see it, so
-how much of the call graph you are looking at is a thing you say:
+`inline` **splices**: the callee's body lands in the caller's sequence, with no
+frame left behind. That matters more than it sounds, because rules only ever
+see one sequence — leaving a `dip 0` wrapper would put the expanded code
+somewhere no other rule could reach it, and `inline` would compose with almost
+nothing. A `dip k` call for `k > 0` does keep its frame, since there the frame
+is what the instruction means.
+
+The cost is provenance: spliced code no longer says which sentence it came
+from. That is exactly why nothing inlines by default — the un-expanded listing
+names every call on one line, and you flatten only what you mean to.
 
 ```
-$ rewrite tests 'State::check' -t id                          #   49 lines
-$ rewrite tests 'State::check' -t 'each(inline)'              #   71
-$ rewrite tests 'State::check' -t 'repeat_n(2, bu(each(inline)))'  #  217
-$ rewrite tests 'State::check'                                # 1148
+$ rewrite tests 'State::check'                    #   48 lines, every call named
+$ rewrite tests 'State::check' -t 'once(inline)'  #   69, one call opened
+$ rewrite tests 'State::check' -t inline_all      # 1085, one flat sentence
 ```
 
-The traversal is what bounds it, and not in the direction you might guess.
-`td` expands a call and then descends into the body it just created, so **one
-`td` pass goes all the way down** — that is what `inline_all` is. `bu` visits
-children before this level, so a newly created body waits for the next pass,
-which makes `repeat_n(k, bu(each(inline)))` mean k levels of call graph.
+Because splicing rescans where it landed, `each(inline)` already expands a
+whole sequence transitively; `bu` is what additionally reaches into branch
+arms. To expand *less*, use `once`, which takes a single call — and note that
+it works on one sequence, so `repeat_n(k, once(inline))` counts calls at the
+level you are looking at rather than descending into arms.
 
-`flatten_call` is what lets the other rules reach across a call. Because a rule
-only ever sees the sequence it is handed, a branch one frame down and the
-instruction after the call are simply not in the same window:
-
-```
-$ rewrite … caller -t distribute --trace     # jump chooser ; add
-  (none)
-$ rewrite … caller -t 'flatten; distribute' --trace
-  distribute_branch  1
-  flatten_call       1
-```
-
-A plain call hides nothing, so splicing its body in is an identity — but it
-discards the origin, and the listing stops saying which sentence the code came
-from. That is a real loss for a tool whose job is showing you that, so
-`flatten` is opt-in rather than part of `all`.
+`flatten_call` does for a stray `dip 0` what `inline` does for a call. It is no
+longer needed after inlining, which splices directly, but `sink` can still
+produce one: `push 1; dip 1 { X }` becomes `dip 0 { X }; push 1`.
 
 **Rules are not tactics.** They live in their own namespace and cannot be
 aliased or defined; a rule has to be *placed* by `each` or `once`. Writing a
@@ -139,7 +135,8 @@ backstop rule oscillation only, never arbitrary user loops.
 
 The built-in prelude defines `inline_all`, `default`, `dips`, `unary`,
 `factoring`, `annihilate`, `cleanup`, `distribute`, `flatten`, `all` and
-`dip_normalize`. With no `-t` you get `default`, which is `inline_all`. The first four plus
+`dip_normalize`. With no `-t` you get `default`, which is `id` — nothing is
+expanded and nothing is rewritten. The first four plus
 `dip_normalize` reproduce what the old `--dip-normalize`, `--factor-branches`
 and `--annihilate` flags did.
 

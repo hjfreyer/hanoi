@@ -26,18 +26,18 @@ use crate::tactic::Tactic;
 /// Reproduces what the old `--dip-normalize`, `--factor-branches` and
 /// `--annihilate` flags did, as named tactics that can be recombined.
 pub(crate) const PRELUDE: &str = r#"
-// Expand every call that can be expanded. `build` no longer inlines anything,
-// so this is what turns a sentence into the whole call tree.
+// Splice every call into its caller, all the way down, leaving one flat
+// sentence. `each` alone already expands a whole sequence transitively, since
+// a spliced body is rescanned where it landed; the `bu` is what reaches into
+// branch arms as well.
 //
-// Top-down, which for a rule that creates children means one pass goes all the
-// way down: `td` descends into the body it just produced. For *less* than all
-// of it use `bu`, which reaches new bodies only on the next pass, so
-// `repeat_n(2, bu(each(inline)))` is two levels. Sentences that can reach
-// themselves are refused outright, so there is nothing here to guard against.
-tactic inline_all = td(each(inline));
+// For less than all of it, `once(inline)` takes the first call only, and
+// `repeat_n(k, once(inline))` takes k of them.
+tactic inline_all = repeat(bu(each(inline)));
 
-// What you get with no -t at all.
-tactic default = inline_all;
+// Nothing is expanded unless you ask. The listing names every call on one
+// line, and you inline the ones you care about.
+tactic default = id;
 
 // Move dips left, fuse the ones that meet, and keep nested dips collapsed so
 // the interchange rule sees a dip's true hidden depth.

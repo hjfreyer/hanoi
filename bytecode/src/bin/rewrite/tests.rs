@@ -251,21 +251,6 @@ fn a_deep_dip_becomes_a_nest_of_unary_dips() {
 }
 
 #[test]
-fn expansion_leaves_plain_calls_alone() {
-    // `dip 0` hides nothing, so there is no unary nest to write it as.
-    let body = tree_unary(
-        r#"
-        sentence probe {
-            push 1
-            push 2
-            dip 0 { add }
-        }
-    "#,
-    );
-    assert_eq!(shape(&body), vec!["push 1", "push 2", "dip 0 { add }"]);
-}
-
-#[test]
 fn expansion_preserves_arity() {
     let code = r#"
         sentence probe {
@@ -917,11 +902,11 @@ fn distributing_then_folding_reaches_what_neither_does_alone() {
 }
 
 #[test]
-fn a_branch_one_frame_down_is_out_of_reach_until_the_frame_is_gone() {
-    // `jump chooser` compiles to Dip(0, ..), so the branch sits in the call's
-    // body while the `add` sits outside it. Rules only ever see one sequence,
-    // so no window holds both — distribution cannot fire, and should not be
-    // given the context that would let it.
+fn inlining_puts_the_callee_in_reach_of_the_callers_rules() {
+    // Rules only ever see one sequence. An unexpanded call is opaque, so there
+    // is nothing for distribution to move into; splicing on inline is what puts
+    // the callee's branch and the caller's `add` in the same sequence. Leaving
+    // a `dip 0` frame behind would have kept them apart.
     let code = r#"
         sentence chooser {
             branch { push 1 } { push 2 }
@@ -932,29 +917,23 @@ fn a_branch_one_frame_down_is_out_of_reach_until_the_frame_is_gone() {
         }
     "#;
     let prog = program_of(code);
-    let library = prog.library();
-    let caller = library
+    let caller = prog
+        .library()
         .exports
         .get("caller")
         .copied()
         .unwrap_or(SentenceIndex::from(1));
-    let body = run(
-        prog,
-        build(library, caller, &mut HashSet::new()),
-        "inline_all",
-    );
+    let body = build(prog.library(), caller, &mut HashSet::new());
 
     assert_eq!(
         shape(&run(prog, body.clone(), "distribute")),
-        vec!["dip 0 { branch }", "add"],
-        "distribution should not reach through a call frame"
+        vec!["call 0 #0", "add"],
+        "an unexpanded call is opaque, so distribution has nothing to enter"
     );
-
-    // Flattening the frame puts them in one sequence, and then it does.
     assert_eq!(
-        shape(&run(prog, body, "flatten; distribute")),
+        shape(&run(prog, body, "inline_all; distribute")),
         vec!["branch"],
-        "with the frame gone the add should have moved into both arms"
+        "once the callee is spliced in, the add moves into both arms"
     );
 }
 
@@ -1018,32 +997,37 @@ fn build_no_longer_expands_anything() {
 }
 
 #[test]
-fn inlining_is_bounded_by_how_many_bottom_up_passes_you_ask_for() {
-    // `bu` reaches a body only on the pass after the one that created it, so
-    // the pass count is the depth of call graph you get.
+fn inlining_a_call_splices_it_into_the_caller() {
+    // No frame left behind: the callee's code lands in the caller's sequence,
+    // which is the only place other rules can act on it.
     let (prog, body) = raw(CALLS, "outer");
     assert_eq!(
-        shape(&run(prog, body.clone(), "repeat_n(1, bu(each(inline)))")),
-        vec!["dip 0 { call 0 #0 call 0 #0 }"]
-    );
-    assert_eq!(
-        shape(&run(prog, body, "repeat_n(2, bu(each(inline)))")),
-        vec!["dip 0 { dip 0 { add } dip 0 { add } }"]
+        shape(&run(prog, body, "once(inline)")),
+        vec!["call 0 #0", "call 0 #0"]
     );
 }
 
 #[test]
-fn one_top_down_pass_expands_the_whole_call_graph() {
-    // `td` descends into the body it just created, so it does not stop.
+fn inlining_is_bounded_one_call_at_a_time() {
+    // Splicing rescans where it landed, so `each(inline)` expands a whole
+    // sequence transitively. `once` is what takes a single call, and
+    // `repeat_n` counts them.
     let (prog, body) = raw(CALLS, "outer");
     assert_eq!(
-        shape(&run(prog, body.clone(), "td(each(inline))")),
-        vec!["dip 0 { dip 0 { add } dip 0 { add } }"]
+        shape(&run(prog, body.clone(), "repeat_n(2, once(inline))")),
+        vec!["add", "call 0 #0"]
     );
     assert_eq!(
-        shape(&run(prog, body, "inline_all")),
-        vec!["dip 0 { dip 0 { add } dip 0 { add } }"]
+        shape(&run(prog, body, "repeat_n(3, once(inline))")),
+        vec!["add", "add"]
     );
+}
+
+#[test]
+fn each_inline_expands_a_sequence_all_the_way_down() {
+    let (prog, body) = raw(CALLS, "outer");
+    assert_eq!(shape(&run(prog, body.clone(), "each(inline)")), vec!["add", "add"]);
+    assert_eq!(shape(&run(prog, body, "inline_all")), vec!["add", "add"]);
 }
 
 const LOOPS: &str = r#"

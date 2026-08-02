@@ -101,15 +101,21 @@ pub(crate) fn child_bodies(node: &mut Node) -> Vec<&mut Vec<Node>> {
     }
 }
 
-/// Expands a call into the dip it stands for.
+/// The nodes a call stands for.
 ///
-/// Shared by the `inline` and `unroll` rules, which differ only in whether they
-/// consult [`Program::is_cyclic`] first.
-pub(crate) fn expand_call(prog: &Program, depth: usize, target: SentenceIndex) -> Node {
-    Node::Dip {
-        depth,
-        origins: vec![prog.label(target)],
-        body: build(prog.library(), target, &mut HashSet::new()),
+/// A plain call — `depth == 0` — hides nothing, so its body is spliced straight
+/// into the caller's sequence. Anything deeper keeps its frame, since there the
+/// frame is what the instruction means.
+pub(crate) fn expand_call(prog: &Program, depth: usize, target: SentenceIndex) -> Vec<Node> {
+    let body = build(prog.library(), target, &mut HashSet::new());
+    if depth == 0 {
+        body
+    } else {
+        vec![Node::Dip {
+            depth,
+            origins: vec![prog.label(target)],
+            body,
+        }]
     }
 }
 

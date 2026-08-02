@@ -502,12 +502,20 @@ impl Rule for FlattenCall {
     }
 }
 
-/// Replaces a call with the block it names.
+/// Replaces a call with the block it names, spliced into the caller.
 ///
-/// This is the rule the whole language was for. `build` no longer expands
-/// anything, so how much of the call graph you are looking at is something you
-/// say — `inline_all` for all of it, `repeat_n(2, bu(each(inline)))` for two
-/// levels — rather than something the tool decided before you saw it.
+/// Nothing is expanded until you ask, and asking gets you the real thing: a
+/// plain call hides nothing, so its body belongs in the caller's sequence
+/// rather than in a frame of its own. Leaving a `dip 0` behind would put the
+/// callee's code in a sequence of its own, where no rule could see it next to
+/// the caller's — which made `inline` compose with almost nothing.
+///
+/// A `dip k` call for `k > 0` keeps its frame, because there the frame is the
+/// point: the body runs below `k` hidden values.
+///
+/// The cost is provenance. A spliced body no longer says which sentence it
+/// came from, which is why nothing inlines by default — the un-expanded
+/// listing names every call on one line, and you flatten only what you mean to.
 ///
 /// Declines a `#[recursive]` target. That is a single annotation lookup, not
 /// an analysis: `check_arities` will not let a sentence call a recursive one
@@ -539,7 +547,7 @@ impl Rule for Inline {
         if prog.is_recursive(*target) {
             return None;
         }
-        Some(vec![expand_call(prog, *depth, *target)])
+        Some(expand_call(prog, *depth, *target))
     }
 }
 
