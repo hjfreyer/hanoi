@@ -41,7 +41,7 @@ tactic default = id;
 
 // Move dips left, fuse the ones that meet, and keep nested dips collapsed so
 // the interchange rule sees a dip's true hidden depth.
-tactic dips = repeat(bu(try(each(collapse)); try(each(sink)); try(each(fuse))));
+tactic dips = repeat(bu(each(collapse); each(sink); each(fuse)));
 
 // Split every dip into a nest of unary `dip 1`s. Presentation only, and the
 // exact inverse of `collapse` — never put both in one `repeat`.
@@ -68,10 +68,9 @@ tactic distribute = repeat(bu(each(distribute_branch)));
 tactic flatten = repeat(bu(each(flatten_call)));
 
 // Everything at once, which is what passing all three flags used to mean.
-tactic all = repeat(bu(try(each(annihilate_drop, pick_drop_to_roll, noop,
-                                fold_branch));
-                       try(each(factor_branch));
-                       try(each(collapse)); try(each(sink)); try(each(fuse))));
+tactic all = repeat(bu(each(annihilate_drop, pick_drop_to_roll, noop, fold_branch);
+                       each(factor_branch);
+                       each(collapse); each(sink); each(fuse)));
 
 // What `--dip-normalize` was.
 tactic dip_normalize = dips; unary;

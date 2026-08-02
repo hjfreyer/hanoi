@@ -670,11 +670,33 @@ fn a_failed_tactic_hands_back_exactly_what_it_got() {
         panic!("`fail` should fail")
     };
     assert_eq!(before, after);
+}
 
-    let Outcome::Failed(after) = outcome(prog, "each(annihilate_drop)", before.clone()).unwrap() else {
-        panic!("nothing to annihilate here, so it should fail")
+#[test]
+fn a_rule_that_matches_nowhere_is_a_no_op_not_a_failure() {
+    // There is nothing to annihilate in this sample. Reporting that as failure
+    // is what used to make a sequence discard everything before it.
+    let (prog, before) = sample();
+    let Outcome::Unchanged(after) = outcome(prog, "each(annihilate_drop)", before.clone()).unwrap()
+    else {
+        panic!("having found no work is not a failure")
     };
     assert_eq!(before, after);
+}
+
+#[test]
+fn a_later_step_finding_nothing_does_not_discard_an_earlier_one() {
+    // Regression. `each(sink)` rewrites; `each(annihilate_drop)` then matches
+    // nowhere. The sequence has to keep the sinking — it used to roll the
+    // whole thing back, silently, while --trace still reported `sink` firing.
+    let (prog, before) = sample();
+    let sunk = run(prog, before.clone(), "each(sink)");
+    assert_ne!(shape(&before), shape(&sunk), "expected sinking to do something");
+    assert_eq!(
+        shape(&run(prog, before, "each(sink); each(annihilate_drop)")),
+        shape(&sunk),
+        "the second step found nothing, which must not undo the first"
+    );
 }
 
 #[test]

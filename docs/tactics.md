@@ -109,14 +109,14 @@ bare rule name where a tactic belongs is an error that tells you so.
 |---|---|
 | `each(r, ...)` | apply the rules at every position, to exhaustion |
 | `once(r, ...)` | apply the first rule that matches, at the first position |
-| `a; b` | in sequence; fails if either does |
+| `a; b` | in sequence |
 | `a \| b` | the first branch that changes something |
 | `try(t)` | `t`, treating failure as "changed nothing" |
 | `repeat(t)` | until `t` stops making progress |
 | `repeat_n(k, t)` | at most `k` times, stopping early if it settles |
 | `children(t)` | to every child sequence, one level down |
 | `bu(t)` | children first, then here |
-| `id`, `fail` | succeed changing nothing; fail |
+| `id`, `fail` | succeed changing nothing; fail (the only thing that does) |
 
 `;` binds tighter than `|`, so `a; b | c` is `(a; b) | c`.
 
@@ -156,6 +156,13 @@ pass even though a child had changed.
 `repeat` stopped only on failure and `bu` never fails, `repeat(bu(X))` would
 diverge for every `X`. A tactic that succeeds without changing anything is
 `Unchanged`, and `repeat` treats that as done.
+
+**A rule that matches nowhere is a no-op, not a failure.** `each` and `once`
+report "unchanged" when they find no work, so `a; b` keeps everything `a` did
+even if `b` has nothing to do. Reporting it as failure meant a sequence
+silently discarded its own progress — `each(inline); each(flatten_call)` gave
+back the original tree while `--trace` still said `inline` fired. Only an
+explicit `fail` fails, which is also why `try` is almost never needed.
 
 **`|` falls through on "did nothing", not just on failure.** The two coincide
 for `each`, which only ever reports changed-or-failed. But every total tactic —

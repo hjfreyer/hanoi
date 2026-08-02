@@ -25,8 +25,13 @@ const TRACE_WINDOW: usize = 24;
 /// What applying a tactic did.
 ///
 /// `Failed` carries the sequence back out untouched. That is a contract, not a
-/// convention: `Seq` and `Choice` rely on it to avoid cloning, and a
-/// `debug_assert` checks it.
+/// convention: `Seq` and `Choice` rely on it to avoid cloning.
+///
+/// Note what *does not* fail: a rule that matches nowhere reports `Unchanged`.
+/// Scanning a sequence and finding no work is a successful no-op, not an
+/// error, and treating it as one made `a; b` throw away everything `a` did
+/// whenever `b` had nothing to do — silently, while the trace still reported
+/// `a` firing. `Failed` now comes only from an explicit `fail`.
 #[derive(Debug)]
 pub(crate) enum Outcome {
     Changed(Vec<Node>),
@@ -186,11 +191,12 @@ pub(crate) enum Tactic {
 /// Whether a tactic can report `Failed`.
 ///
 /// Used to decide whether `Seq` and `Choice` need to save a copy for rollback.
-/// In practice the prelude is all `try(a); try(b); try(c)`, which never can, so
-/// nothing is ever cloned.
+/// Since only an explicit `fail` can fail, nothing built from rules ever
+/// clones.
 fn can_fail(t: &Tactic) -> bool {
     match t {
-        Tactic::Each(_) | Tactic::Once(_) | Tactic::Fail => true,
+        Tactic::Fail => true,
+        Tactic::Each(_) | Tactic::Once(_) => false,
         Tactic::Try(_)
         | Tactic::Repeat(_)
         | Tactic::Children(_)
@@ -408,7 +414,10 @@ fn each(rules: &[&'static dyn Rule], env: &Env, mut nodes: Vec<Node>) -> Result<
     Ok(if fired {
         Outcome::Changed(nodes)
     } else {
-        Outcome::Failed(nodes)
+        // Not `Failed`: having looked everywhere and found nothing to do is a
+        // no-op, and reporting it as failure would abort any sequence this
+        // appears in.
+        Outcome::Unchanged(nodes)
     })
 }
 
@@ -419,7 +428,7 @@ fn once(rules: &[&'static dyn Rule], env: &Env, mut nodes: Vec<Node>) -> Result<
             return Ok(Outcome::Changed(nodes));
         }
     }
-    Ok(Outcome::Failed(nodes))
+    Ok(Outcome::Unchanged(nodes))
 }
 
 /// Tries every rule at one position. On a hit, splices and returns where the
