@@ -31,7 +31,8 @@ operand came from. It either matches and returns a replacement, or fails.
 | `collapse` | `dip k { dip j { B } }` | `dip (k+j) { B }` |
 | `expand` | `dip k { B }`, `k >= 2` | `dip 1 { dip (k-1) { B } }` |
 | `factor_branch` | `branch { X A } { X B }` | `dip 1 { X }; branch { A } { B }` |
-| `sink` | `X ; dip k { S }` | `dip (k-m+n) { S } ; X` |
+| `sink` | `X ; dip k { S }`, `k >= m` | `dip (k-m+n) { S } ; X` |
+| `float` | `dip j { S } ; X`, `j >= n` | `X ; dip (j-n+m) { S }` |
 | `fuse` | `dip k { A }; dip k { B }` | `dip k { A B }` |
 | `annihilate_drop` | `X ; drop` | nothing, or `drop` |
 | `pick_drop_to_roll` | `pick d ; dip (d+1) { drop }` | `roll d` |
@@ -55,6 +56,16 @@ entirely below everything `X` leaves behind — that is `k >= m` — and the sam
 window is `k - m + n` deep on the other side. One formula covers `push` (0→1),
 `drop` (1→0), arithmetic (2→1), `pick d` (d+1→d+2), `roll d` (d+1→d+1) and a
 nested dip alike.
+
+`float` is the same law read from the other side, and its arithmetic is the
+dual: swap `n` and `m` and each rule becomes the other. Where `sink` needs the
+window to clear everything `X` *leaves behind*, `float` needs it to clear
+everything `X` *consumes* — `j >= n` — so that `X`'s operands are entirely
+inside the hidden region and `S` cannot be what produced them. The two are
+inverses, so they must never share a `repeat`; `sink` is the normalizing
+direction and `float` has no measure at all. It earns its place when a total
+computation has to be delivered *to* somewhere rather than gathered up — see
+"a construction is a proof" below.
 
 `annihilate_drop` only fires for instructions that cannot panic: `push` and
 `pick` cancel entirely, and the five `is_*` predicates leave the drop behind
@@ -300,9 +311,43 @@ So `unfactor_branch` goes the other way — pushing context *into* both arms,
 which is always sound — and is the direction available today. It is the exact
 inverse of `factor_branch`; never put the two in one `repeat`.
 
-The gap this leaves is sharp, and worth stating precisely, because it says what
-any future work has to supply: **the sharing law is local, but making its two
-occurrences adjacent needs a totality fact that is not.**
+## A construction is a proof
+
+The gap above looks like it needs a fact: *this value is a 3-tuple here*, known
+several branches out and long since consumed. Supplying it by hand is enough —
+`factor_branch` hoists the now-shared `untuple`, `sink` walks it back, and
+`dup_natural` merges the two. But no window-local rule can establish it, and a
+search that simply asserted it would be a rule saying *trust me*.
+
+It does not have to. **The fact is already in the program and is merely being
+thrown away.** Carry the *parts* forward instead of the value, and rebuild the
+value where it is wanted:
+
+```
+pick 0; untuple n   ==   untuple n; pick (n-1) ^n; tuple n; roll n ^n
+```
+
+Sound unconditionally — both sides panic on exactly the same inputs — and worth
+checking against the VM rather than arguing. Now the value arriving at the
+branch is a `tuple n` node. `tuple n` is **total**, so `unfactor_branch` may push
+it into both arms without inventing anything, and in the arm that takes it apart
+again `cancel_tuple` removes both. `float` is what delivers it there.
+
+Two `untuple`s become one, and **no rule ever needed to know the value's shape**.
+A window that sees `tuple 3; untuple 3` needs to know nothing about where the
+value came from: the shape is evident because the code in front of it built that
+shape.
+
+This is the shape of the bargain between a clever search and a dumb rewriter.
+The search does not communicate a *fact*, which the rewriter would have to take
+on faith — it communicates a *construction*, which the rewriter checks for
+itself. If the search is wrong the rewrite simply does not fire; there is no way
+to talk the rewriter into an unsound step.
+
+The cost is that `float` and the rebuild both make the term worse on their own.
+Neither belongs in a normalizing pass, and neither has a measure. That is the
+right place for the division to fall: aiming them is the search's job, and
+`once` and `repeat_n` are how it says so.
 
 **Rules are not tactics.** They live in their own namespace and cannot be
 aliased or defined; a rule has to be *placed* by `each` or `once`. Writing a

@@ -45,6 +45,7 @@ pub(crate) const ALL_RULES: &[&dyn Rule] = &[
     &Expand,
     &FactorBranch,
     &FlattenCall,
+    &Float,
     &FoldBranch,
     &FoldConst,
     &FoldConstUnary,
@@ -294,6 +295,50 @@ impl Rule for Sink {
         let shifted = usize::try_from(k - m + n).ok()?;
 
         Some(vec![with_frame_depth(dip, shifted)?, prev.clone()])
+    }
+}
+
+/// `dip j { S } ; X` becomes `X ; dip (j - n + m) { S }`, where X has arity
+/// `(n -> m)` and `j >= n`.
+///
+/// The exact inverse of [`Sink`], and the same interchange law read from the
+/// other side. `sink` needs the dip's window to sit below everything `X` leaves
+/// behind (`k >= m`); `float` needs it to sit below everything `X` *consumes*
+/// (`j >= n`), so that `X`'s operands are entirely inside the hidden region and
+/// `S` cannot disturb them. Swap `n` and `m` and each rule's arithmetic is the
+/// other's.
+///
+/// `sink` is the normalizing direction and this one is not, which is why it has
+/// no measure and why the two must never share a `repeat` — they are inverses in
+/// the same way `collapse` and `expand` are. It exists for the case where a
+/// total computation has to be delivered *to* somewhere rather than gathered up:
+/// rebuilding a value with `tuple n` earns nothing until the rebuild reaches the
+/// branch whose arm takes it apart again.
+///
+/// Measure: none. Termination is the caller's problem, which is what `once` and
+/// `repeat_n` are for.
+#[derive(Debug)]
+pub(crate) struct Float;
+
+impl Rule for Float {
+    fn name(&self) -> &'static str {
+        "float"
+    }
+    fn width(&self) -> usize {
+        2
+    }
+    fn rewrite(&self, prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
+        let [dip, next] = window else { return None };
+        let depth = frame_depth(dip)?;
+
+        let (n, m) = node_arity(prog, next)?;
+        let j = depth as i64;
+        if j < n {
+            return None;
+        }
+        let shifted = usize::try_from(j - n + m).ok()?;
+
+        Some(vec![next.clone(), with_frame_depth(dip, shifted)?])
     }
 }
 
@@ -1339,6 +1384,64 @@ mod tests {
                 op(Instruction::Pick(2)),
             ])
         );
+    }
+
+    #[test]
+    fn float_and_sink_are_inverse_on_everything_that_moves() {
+        // The arithmetic is dual -- `sink` needs `k >= m` and shifts by
+        // `-m + n`, `float` needs `j >= n` and shifts by `-n + m` -- so
+        // round-tripping is the honest way to check both at once. One entry per
+        // arity the instruction table can produce.
+        let xs = [
+            op(Instruction::Push(Value::Int(1))), // 0 -> 1
+            op(Instruction::Drop),                // 1 -> 0
+            op(Instruction::IsTuple),             // 1 -> 1
+            op(Instruction::Add),                 // 2 -> 1
+            op(Instruction::Pick(2)),             // 3 -> 4
+            op(Instruction::Roll(2)),             // 3 -> 3
+            op(Instruction::Untuple(3)),          // 1 -> 3
+            op(Instruction::Tuple(3)),            // 3 -> 1
+        ];
+        for x in xs {
+            let (n, m) = node_arity(&prog(), &x).expect("arity should be known");
+            for k in 0..8usize {
+                let sunk = Sink.rewrite(&prog(), &[x.clone(), dip(k, vec![op(Instruction::Add)])]);
+                // `sink` fires exactly when the dip clears X's outputs.
+                assert_eq!(sunk.is_some(), k as i64 >= m, "sink at k={} for {:?}", k, x);
+                let Some(sunk) = sunk else { continue };
+
+                // And `float` takes it straight back.
+                assert_eq!(
+                    Float.rewrite(&prog(), &sunk),
+                    Some(vec![x.clone(), dip(k, vec![op(Instruction::Add)])]),
+                    "float should invert sink at k={} for {:?} (arity {}->{})",
+                    k,
+                    x,
+                    n,
+                    m
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn float_declines_when_x_reaches_under_the_hidden_window() {
+        // `dip 1 { S }; add` cannot become `add; dip _ { S }`: the add's second
+        // operand is below the hidden region, so `S` may well have produced it.
+        assert_eq!(
+            Float.rewrite(
+                &prog(),
+                &[dip(1, vec![op(Instruction::Push(Value::Int(1)))]), op(Instruction::Add)]
+            ),
+            None
+        );
+        // With the window deep enough, both operands are hidden and it moves.
+        assert!(Float
+            .rewrite(
+                &prog(),
+                &[dip(2, vec![op(Instruction::Push(Value::Int(1)))]), op(Instruction::Add)]
+            )
+            .is_some());
     }
 
     #[test]

@@ -1100,6 +1100,50 @@ fn a_reconstruction_proves_the_shape_that_an_assertion_would_have_claimed() {
 }
 
 #[test]
+fn float_delivers_the_rebuild_to_the_branch_that_undoes_it() {
+    // The same chain with nothing hand-placed. The rebuild sits where the
+    // rewrite would leave it — straight after the picks — and `float` has to
+    // carry it down past the checks before `unfactor_branch` can push it into
+    // the arms and `cancel_tuple` can finish.
+    //
+    // This is the whole answer to how an untrusted oracle talks to the
+    // rewriter: every step is a local equivalence the rewriter verifies. The
+    // oracle only chose *where*.
+    let (prog, before) = tree_of(
+        r#"
+        #[arity(1, 1)]
+        sentence needs_float {
+            untuple 3
+            pick 2  pick 2  pick 2
+            dip 3 { tuple 3 }
+            is_symbol
+            dip 1 { is_symbol }
+            and
+            dip 1 { is_symbol }
+            and
+            branch { untuple 3  is_symbol  dip 1 { drop 0 }  dip 1 { drop 0 } }
+                   { drop 0  push true }
+        }
+    "#,
+        NOTHING,
+    );
+    assert_eq!(untuples(&before), 2);
+    let after = run(
+        prog,
+        before.clone(),
+        "repeat(bu(each(float))); \
+         repeat(bu(each(unfactor_branch); each(cancel_tuple); \
+                   each(annihilate_drop, noop, pick_drop_to_roll)))",
+    );
+    assert_eq!(untuples(&after), 1);
+    assert_eq!(
+        seq_arity(prog, &before),
+        seq_arity(prog, &after),
+        "the whole derivation should preserve arity"
+    );
+}
+
+#[test]
 fn a_later_step_finding_nothing_does_not_discard_an_earlier_one() {
     // Regression. `each(sink)` rewrites; `each(annihilate_drop)` then matches
     // nowhere. The sequence has to keep the sinking — it used to roll the
