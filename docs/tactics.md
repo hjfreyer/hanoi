@@ -46,7 +46,8 @@ operand came from. It either matches and returns a replacement, or fails.
 | `bool_identity` | `B ; push true ; and` | `B`, and the three other unit laws |
 | `cancel_tuple` | `tuple n ; untuple n` | nothing |
 | `retain_condition` | `pick 0 ; branch { A } { B }` | `branch { push true; A } { push false; B }` |
-| `specialize_equal` | `pick 0; push c; equal; branch { A } { B }` | the same, with A as `drop; push c; A` |
+| `specialize_equal` | `pick d; push c; equal; branch { A } { B }` | the same, with A as `dip d { drop; push c }; A` |
+| `copy_const` | `push c ; pick 0` | `push c ; push c` |
 | `dup_natural` | `pick 0 ; X ; dip m { X }`, `X : 1 -> m` | `X ; (pick (m-1))^m` |
 | `unfactor_branch` | `dip k { X } ; branch { A } { B }`, `k >= 1` | `branch { dip (k-1) { X }; A } { … }` |
 | `rebuild_copy` | `pick 0 ; untuple n` | `untuple n ; (pick (n-1))^n ; dip n { tuple n }` |
@@ -247,7 +248,10 @@ into arms, which would break the governing invariant below and would need every
 reordering rule to fix up whatever the hypotheses were keyed to. Here the fact
 rides in the sequence, and every rule that folds literals can already use it.
 
-`specialize_equal` is the same idea for the shape that actually occurs.
+`specialize_equal` is the same idea for the shape that actually occurs, and it
+refines at whatever depth the test looked: `pick d; push c; equal` leaves the
+original `d` deep once the branch has popped the boolean, so the refinement dips
+to exactly there.
 Predicates in this language are written `pick 0; jump P::check; branch {...}`,
 and the `type` sugar's decision trees are built out of
 `pick 0; push <symbol>; equal; branch` — a *computed* condition, not a

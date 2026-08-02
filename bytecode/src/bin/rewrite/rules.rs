@@ -41,6 +41,7 @@ pub(crate) const ALL_RULES: &[&dyn Rule] = &[
     &CancelTuple,
     &Collapse,
     &CopyAssoc,
+    &CopyConst,
     &DistributeBranch,
     &DupNatural,
     &Expand,
@@ -1284,6 +1285,63 @@ mod tests {
     }
 
     #[test]
+    fn specialize_equal_refines_at_the_depth_the_test_looked() {
+        // `pick d; push c; equal` leaves the original `d` deep once the branch
+        // has popped the boolean, so the refinement dips to exactly there.
+        assert_eq!(
+            SpecializeEqual.rewrite(
+                &prog(),
+                &[
+                    op(Instruction::Pick(2)),
+                    push(sym(1)),
+                    op(Instruction::Equal),
+                    branch(vec![op(Instruction::IsSymbol)], vec![]),
+                ]
+            ),
+            Some(vec![
+                op(Instruction::Pick(2)),
+                push(sym(1)),
+                op(Instruction::Equal),
+                branch(
+                    vec![
+                        dip(2, vec![op(Instruction::Drop), push(sym(1))]),
+                        op(Instruction::IsSymbol),
+                    ],
+                    vec![],
+                ),
+            ])
+        );
+    }
+
+    #[test]
+    fn copy_const_turns_a_pick_back_into_a_literal() {
+        // What makes a refinement pay: downstream code reads the refined slot
+        // with `pick`, and a `pick` is opaque to every rule that folds
+        // literals.
+        assert_eq!(
+            CopyConst.rewrite(&prog(), &[push(sym(1)), op(Instruction::Pick(0))]),
+            Some(vec![push(sym(1)), push(sym(1))])
+        );
+        // Only the top copy: `pick 1` reads past the literal.
+        assert_eq!(
+            CopyConst.rewrite(&prog(), &[push(sym(1)), op(Instruction::Pick(1))]),
+            None
+        );
+        // And it composes with folding, which is the whole point.
+        let folded = CopyConst
+            .rewrite(&prog(), &[push(sym(1)), op(Instruction::Pick(0))])
+            .expect("should fire");
+        assert_eq!(
+            FoldConst.rewrite(
+                &prog(),
+                &[folded[1].clone(), push(sym(2)), op(Instruction::Equal)]
+            ),
+            Some(vec![push(Value::Bool(false))]),
+            "the recovered literal should decide the comparison"
+        );
+    }
+
+    #[test]
     fn specialize_equal_settles_instead_of_oscillating() {
         // Regression. The obvious guard -- "the arm already begins with
         // `drop; push c`" -- does not survive its neighbours: the `push c` is
@@ -2125,9 +2183,10 @@ impl Rule for SpecializeEqual {
         let [pick, lit, eq, br] = window else {
             return None;
         };
-        if !matches!(pick, Node::Op(Instruction::Pick(0)))
-            || !matches!(eq, Node::Op(Instruction::Equal))
-        {
+        let Node::Op(Instruction::Pick(d)) = pick else {
+            return None;
+        };
+        if !matches!(eq, Node::Op(Instruction::Equal)) {
             return None;
         }
         let c = pushed(lit)?;
@@ -2144,17 +2203,43 @@ impl Rule for SpecializeEqual {
             return None;
         };
 
-        if matches!(then_body.first(), Some(Node::Op(Instruction::Drop))) {
-            // Either already refined, or an arm that discards the value
-            // anyway. See the measure: this is what makes the rule settle.
+        // Replacing the value the test accepted, wherever the test found it.
+        // `pick d; push c; equal` leaves the original `d` deep once the branch
+        // has popped the boolean, so the refinement dips to exactly there.
+        let refine = |rest: &[Node]| {
+            let mut inner = vec![
+                Node::Op(Instruction::Drop),
+                Node::Op(Instruction::Push(c.clone())),
+            ];
+            let mut out = if *d == 0 {
+                // No frame to keep, and splicing puts the literal where the
+                // arm's own rules can reach it.
+                std::mem::take(&mut inner)
+            } else {
+                vec![Node::Dip {
+                    depth: *d,
+                    origins: Vec::new(),
+                    body: inner,
+                }]
+            };
+            out.extend(rest.iter().cloned());
+            out
+        };
+
+        // Already refined, or an arm that discards the value anyway. See the
+        // measure: this is what makes the rule settle.
+        let settled = match (*d, then_body.first()) {
+            (0, Some(Node::Op(Instruction::Drop))) => true,
+            (d, Some(Node::Dip { depth, body, .. })) if d > 0 && *depth == d => {
+                matches!(body.first(), Some(Node::Op(Instruction::Drop)))
+            }
+            _ => false,
+        };
+        if settled {
             return None;
         }
 
-        let mut body = vec![
-            Node::Op(Instruction::Drop),
-            Node::Op(Instruction::Push(c.clone())),
-        ];
-        body.extend(then_body.iter().cloned());
+        let body = refine(then_body);
         Some(vec![
             pick.clone(),
             lit.clone(),
@@ -2302,6 +2387,42 @@ impl Rule for CopyAssoc {
                 origins: Vec::new(),
                 body: vec![Node::Op(Instruction::Pick(*d))],
             },
+        ])
+    }
+}
+
+/// `push c ; pick 0` becomes `push c ; push c`.
+///
+/// Copying a constant is pushing it again — the naturality of duplication over
+/// a constant, `Δ ∘ c = c ⊗ c`, and the last member of the comonoid family
+/// [`CopyAssoc`] names.
+///
+/// It is what makes a refinement pay. [`SpecializeEqual`] turns the value a test
+/// accepted into a literal, but the code downstream reads that slot with `pick`,
+/// and a `pick` is opaque to every rule that folds literals. Rewriting it back
+/// into a `push` is what lets `fold_const` see two constants and decide the
+/// comparison — which is how one branch of a decision tree rules out the others.
+///
+/// Measure: the number of `push c; pick 0` adjacencies, which this strictly
+/// decreases — its own output contains none.
+#[derive(Debug)]
+pub(crate) struct CopyConst;
+
+impl Rule for CopyConst {
+    fn name(&self) -> &'static str {
+        "copy_const"
+    }
+    fn width(&self) -> usize {
+        2
+    }
+    fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
+        let [lit, Node::Op(Instruction::Pick(0))] = window else {
+            return None;
+        };
+        let c = pushed(lit)?;
+        Some(vec![
+            Node::Op(Instruction::Push(c.clone())),
+            Node::Op(Instruction::Push(c.clone())),
         ])
     }
 }
