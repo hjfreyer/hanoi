@@ -924,14 +924,19 @@ fn dup_natural_shares_a_predicates_work_with_its_callers() {
 
 #[test]
 fn the_sharing_law_cannot_reach_across_a_branch() {
-    // The crux, stated as a test so it fails when someone fixes it.
+    // Why the direct route does not work — and it still does not.
     //
     // This is the shape every predicate in the corpus actually has: the check
     // consumes a *copy* and the real work destructures the *original*, with a
     // branch in between. `dup_natural` relates the two occurrences only when
-    // they are in one sequence, and no rule here moves the inner `untuple` out
-    // of the arm — hoisting it would run it on the path that did not take the
+    // they are in one sequence, and no rule moves the inner `untuple` out of
+    // the arm — hoisting it would run it on the path that did not take the
     // arm, and `untuple` is partial, so that invents a panic.
+    //
+    // The resolution is not to find such a rule but to stop needing one:
+    // `rebuild_copy` makes the value arrive already built, and `tuple n` is
+    // total where `untuple n` is not. See
+    // `the_whole_derivation_runs_on_the_blocked_shape`.
     let (prog, before) = tree_of(
         r#"
         #[arity(1, 1)]
@@ -1096,6 +1101,39 @@ fn a_reconstruction_proves_the_shape_that_an_assertion_would_have_claimed() {
         untuples(&after),
         1,
         "the rebuild should cancel against the arm's untuple"
+    );
+}
+
+#[test]
+fn the_whole_derivation_runs_on_the_blocked_shape() {
+    // End to end, from the shape `the_sharing_law_cannot_reach_across_a_branch`
+    // shows is out of reach, with nothing hand-placed:
+    //
+    //   rebuild_copy     the value arrives built rather than carried
+    //   float            delivers the rebuild down to the branch
+    //   unfactor_branch  pushes it into both arms (sound: `tuple n` is total)
+    //   cancel_tuple     annihilates it against the arm's `untuple`
+    //
+    // Every step is a local equivalence the rewriter checks for itself. No rule
+    // is ever told that the value is a 3-tuple.
+    let (prog, before) = probe("blocked");
+    assert_eq!(untuples(&before), 2);
+    let after = run(
+        prog,
+        before.clone(),
+        "once(rebuild_copy); repeat(bu(each(float))); \
+         repeat(bu(each(unfactor_branch); each(cancel_tuple); \
+                   each(annihilate_drop, noop, pick_drop_to_roll)))",
+    );
+    assert_eq!(
+        untuples(&after),
+        1,
+        "the two occurrences should have become one"
+    );
+    assert_eq!(
+        seq_arity(prog, &before),
+        seq_arity(prog, &after),
+        "the whole derivation should preserve arity"
     );
 }
 

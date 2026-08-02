@@ -49,6 +49,7 @@ operand came from. It either matches and returns a replacement, or fails.
 | `specialize_equal` | `pick 0; push c; equal; branch { A } { B }` | the same, with A as `drop; push c; A` |
 | `dup_natural` | `pick 0 ; X ; dip m { X }`, `X : 1 -> m` | `X ; (pick (m-1))^m` |
 | `unfactor_branch` | `dip 1 { X } ; branch { A } { B }` | `branch { X; A } { X; B }` |
+| `rebuild_copy` | `pick 0 ; untuple n` | `untuple n ; (pick (n-1))^n ; dip n { tuple n }` |
 
 `sink` is the interchange rule, and its side condition is the one piece of real
 arithmetic here: writing `X`'s arity as `(n -> m)`, the dip's window must sit
@@ -321,17 +322,33 @@ search that simply asserted it would be a rule saying *trust me*.
 
 It does not have to. **The fact is already in the program and is merely being
 thrown away.** Carry the *parts* forward instead of the value, and rebuild the
-value where it is wanted:
+value where it is wanted. That is `rebuild_copy`:
 
 ```
-pick 0; untuple n   ==   untuple n; pick (n-1) ^n; tuple n; roll n ^n
+pick 0; untuple n   ==   untuple n; (pick (n-1))^n; dip n { tuple n }
 ```
 
-Sound unconditionally — both sides panic on exactly the same inputs — and worth
-checking against the VM rather than arguing. Now the value arriving at the
-branch is a `tuple n` node. `tuple n` is **total**, so `unfactor_branch` may push
-it into both arms without inventing anything, and in the arm that takes it apart
-again `cancel_tuple` removes both. `float` is what delivers it there.
+Instead of keeping the value and taking a copy apart, take the value apart and
+rebuild the copy. Both sides leave `[x, e(n-1) .. e0]` and both panic on exactly
+the inputs where `x` is not an n-tuple, so the rewrite asks nothing of `x` — but
+it changes what the surviving `x` *is*, from an opaque value into a `tuple n`
+applied to parts now on the stack. The rebuild is framed as `dip n { tuple n }`
+rather than emitted with rolls because that rebuilds the lower copy where it
+already sits, and arrives in the form `float` can move.
+
+Now the value reaching the branch is a `tuple n` node. `tuple n` is **total**,
+so `unfactor_branch` may push it into both arms without inventing anything, and
+in the arm that takes it apart again `cancel_tuple` removes both. `float` is
+what delivers it there:
+
+```
+$ rewrite … -t 'once(rebuild_copy); repeat(bu(each(float)));
+              repeat(bu(each(unfactor_branch); each(cancel_tuple); cleanup))' --trace
+  float              5
+  cancel_tuple       1
+  rebuild_copy       1
+  unfactor_branch    1
+```
 
 Two `untuple`s become one, and **no rule ever needed to know the value's shape**.
 A window that sees `tuple 3; untuple 3` needs to know nothing about where the
@@ -344,10 +361,15 @@ on faith — it communicates a *construction*, which the rewriter checks for
 itself. If the search is wrong the rewrite simply does not fire; there is no way
 to talk the rewriter into an unsound step.
 
-The cost is that `float` and the rebuild both make the term worse on their own.
-Neither belongs in a normalizing pass, and neither has a measure. That is the
-right place for the division to fall: aiming them is the search's job, and
-`once` and `repeat_n` are how it says so.
+The cost is that `float`, `rebuild_copy` and `unfactor_branch` all make the term
+worse on their own. None belongs in a normalizing pass, and none is in `all` or
+`cleanup`. That is the right place for the division to fall: aiming them is the
+search's job, and `once` and `repeat_n` are how it says so.
+
+Note also what this does *not* need. There is no `assume` node, no hypothesis
+threaded through the traversal, and no rule that reads a fact off its context.
+The governing invariant below is untouched — every rule involved still depends
+only on the sequence it is handed.
 
 **Rules are not tactics.** They live in their own namespace and cannot be
 aliased or defined; a rule has to be *placed* by `each` or `once`. Writing a

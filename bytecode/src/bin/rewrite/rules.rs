@@ -53,6 +53,7 @@ pub(crate) const ALL_RULES: &[&dyn Rule] = &[
     &Inline,
     &NoOp,
     &PickDropToRoll,
+    &RebuildCopy,
     &RetainCondition,
     &Sink,
     &SpecializeEqual,
@@ -1387,6 +1388,66 @@ mod tests {
     }
 
     #[test]
+    fn rebuild_copy_destructures_the_value_and_rebuilds_the_copy() {
+        assert_eq!(
+            RebuildCopy.rewrite(
+                &prog(),
+                &[op(Instruction::Pick(0)), op(Instruction::Untuple(3))]
+            ),
+            Some(vec![
+                op(Instruction::Untuple(3)),
+                op(Instruction::Pick(2)),
+                op(Instruction::Pick(2)),
+                op(Instruction::Pick(2)),
+                dip(3, vec![op(Instruction::Tuple(3))]),
+            ])
+        );
+        // n = 1 is the degenerate but real case.
+        assert_eq!(
+            RebuildCopy.rewrite(
+                &prog(),
+                &[op(Instruction::Pick(0)), op(Instruction::Untuple(1))]
+            ),
+            Some(vec![
+                op(Instruction::Untuple(1)),
+                op(Instruction::Pick(0)),
+                dip(1, vec![op(Instruction::Tuple(1))]),
+            ])
+        );
+        // A 0-tuple has no parts to share.
+        assert_eq!(
+            RebuildCopy.rewrite(
+                &prog(),
+                &[op(Instruction::Pick(0)), op(Instruction::Untuple(0))]
+            ),
+            None
+        );
+        // The copy has to be of the value being taken apart.
+        assert_eq!(
+            RebuildCopy.rewrite(
+                &prog(),
+                &[op(Instruction::Pick(1)), op(Instruction::Untuple(3))]
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn rebuild_copy_settles() {
+        // Its own output contains no `pick 0; untuple n`, so `each` terminates
+        // rather than growing the term forever.
+        let out = RebuildCopy
+            .rewrite(
+                &prog(),
+                &[op(Instruction::Pick(0)), op(Instruction::Untuple(2))],
+            )
+            .expect("should fire");
+        for w in out.windows(2) {
+            assert_eq!(RebuildCopy.rewrite(&prog(), w), None, "re-fired on {:?}", w);
+        }
+    }
+
+    #[test]
     fn float_and_sink_are_inverse_on_everything_that_moves() {
         // The arithmetic is dual -- `sink` needs `k >= m` and shifts by
         // `-m + n`, `float` needs `j >= n` and shifts by `-n + m` -- so
@@ -2084,6 +2145,68 @@ impl Rule for DupNatural {
         if let Some(d) = reach {
             out.extend((0..m).map(|_| Node::Op(Instruction::Pick(d))));
         }
+        Some(out)
+    }
+}
+
+/// `pick 0 ; untuple n` becomes `untuple n ; (pick (n-1))^n ; dip n { tuple n }`.
+///
+/// Instead of keeping the value and taking a copy apart, take the value apart
+/// and **rebuild** the copy. Both sides leave `[x, e(n-1) .. e0]` and both panic
+/// on exactly the inputs where `x` is not an n-tuple, so the rewrite asks
+/// nothing of `x` — but it changes what the surviving `x` *is*, from an opaque
+/// value into a `tuple n` applied to parts that are now on the stack.
+///
+/// That is the whole point, and it is worth being clear that it is a proof
+/// technique rather than a simplification. The problem it addresses is that a
+/// predicate consumes a copy while the real work destructures the original, with
+/// a branch in between that nothing can hoist across, because `untuple` is
+/// partial and hoisting it would run it on the path that did not take the arm.
+/// Knowing that path is safe needs a fact several branches out — but no fact is
+/// needed if the value arrives at the branch *already built*: `tuple n` is
+/// total, so [`UnfactorBranch`] may push it into both arms, and in the arm that
+/// takes it apart again [`CancelTuple`] removes both. A window that sees
+/// `tuple n; untuple n` needs to know nothing about where the value came from.
+/// **The construction is the proof.**
+///
+/// The rebuild is framed as `dip n { tuple n }` rather than emitted with rolls
+/// for two reasons: it rebuilds the lower copy where it already sits, and it
+/// arrives in the form [`Float`] can move, which is what delivers it to the
+/// branch.
+///
+/// This makes the term bigger and belongs in no normalizing pass. Aiming it is
+/// a caller's job.
+///
+/// Measure: the number of `pick 0; untuple n` adjacencies, which this strictly
+/// decreases — its own output contains none.
+#[derive(Debug)]
+pub(crate) struct RebuildCopy;
+
+impl Rule for RebuildCopy {
+    fn name(&self) -> &'static str {
+        "rebuild_copy"
+    }
+    fn width(&self) -> usize {
+        2
+    }
+    fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
+        let [Node::Op(Instruction::Pick(0)), Node::Op(Instruction::Untuple(n))] = window else {
+            return None;
+        };
+        // A 0-tuple has no parts to share, so there would be nothing to gain.
+        if *n == 0 {
+            return None;
+        }
+
+        let mut out = vec![Node::Op(Instruction::Untuple(*n))];
+        // Copy all `n` parts, each reaching back past the copies already made.
+        out.extend((0..*n).map(|_| Node::Op(Instruction::Pick(*n - 1))));
+        // Rebuild the lower copy in place, under the parts just copied.
+        out.push(Node::Dip {
+            depth: *n,
+            origins: Vec::new(),
+            body: vec![Node::Op(Instruction::Tuple(*n))],
+        });
         Some(out)
     }
 }
