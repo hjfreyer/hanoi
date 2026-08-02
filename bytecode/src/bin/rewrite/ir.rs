@@ -32,13 +32,30 @@ pub(crate) enum Node {
     },
 }
 
+/// The name phase 4 gives a block that was written inline rather than called.
+///
+/// Both branch arms and `dip N { ... }` bodies get a `SentenceIndex` only
+/// because the compiler needs somewhere to put them; nobody jumps to either by
+/// name.
+const INLINE_BLOCK: &str = "<inline>";
+
+fn is_inline_block(library: &Library, target: SentenceIndex) -> bool {
+    library.names[target] == INLINE_BLOCK
+}
+
 /// Turns a sentence into a tree, expanding nothing that `inline` could expand.
 ///
-/// Branch arms *are* expanded, because an arm is a block rather than a call —
-/// phase 4 gives it a `SentenceIndex` only because it needs somewhere to put
-/// it, and nobody jumps to it by name. An arm that would recurse is left as the
-/// `Call` it is, which is also exactly what the branch does at run time: pop
-/// the condition, then call the arm with the rest of the stack.
+/// Blocks written inline *are* expanded, because a block is not a call. Phase 4
+/// gives a branch arm and a `dip N { ... }` body a `SentenceIndex` alike, purely
+/// because it needs somewhere to put them, and neither is reachable by name — so
+/// there is no call site for `inline` to open and nothing for the un-expanded
+/// listing to name on one line. Leaving them closed only meant that a rule
+/// wanting to look inside a dip had to ask for an expansion that expands nothing.
+///
+/// A `dip N` or a `jump` naming a real sentence stays a [`Node::Call`]: there the
+/// callee exists independently, `inline` is a real choice, and the label is worth
+/// keeping. An inline block that would recurse also stays a `Call`, which is what
+/// it becomes at run time anyway.
 pub(crate) fn build(
     library: &Library,
     s_idx: SentenceIndex,
@@ -49,10 +66,7 @@ pub(crate) fn build(
     let out = library.sentences[s_idx]
         .iter()
         .map(|inst| match inst {
-            Instruction::Dip(depth, target) => Node::Call {
-                depth: *depth,
-                target: *target,
-            },
+            Instruction::Dip(depth, target) => build_dip(library, *depth, *target, in_progress),
             Instruction::Branch(then_t, else_t) => Node::Branch {
                 then_origin: label(library, *then_t),
                 then_body: build_arm(library, *then_t, in_progress),
@@ -65,6 +79,23 @@ pub(crate) fn build(
 
     in_progress.remove(&s_idx);
     out
+}
+
+fn build_dip(
+    library: &Library,
+    depth: usize,
+    target: SentenceIndex,
+    in_progress: &mut HashSet<SentenceIndex>,
+) -> Node {
+    if is_inline_block(library, target) && !in_progress.contains(&target) {
+        Node::Dip {
+            depth,
+            origins: vec![label(library, target)],
+            body: build(library, target, in_progress),
+        }
+    } else {
+        Node::Call { depth, target }
+    }
 }
 
 fn build_arm(

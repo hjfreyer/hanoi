@@ -260,11 +260,15 @@ fn with_frame_depth(node: &Node, depth: usize) -> Option<Node> {
 /// of it. One rule covers every X: push (0→1), drop (1→0), arithmetic (2→1),
 /// `pick d` (d+1→d+2), `roll d` (d+1→d+1), and a nested dip alike.
 ///
-/// The moved node may be an un-expanded `dip k → S` as readily as an expanded
-/// one: the side condition is about the frame, and the callee's body has no say
-/// in it. Requiring the expanded form would have made `sink` demand an `inline`
-/// it does not need — and on a term where the whole art is expanding as little
-/// as possible, that is the difference between 38 lines and 49408.
+/// The moved node may be an un-expanded `dip k → S` naming a real sentence as
+/// readily as a spelled-out one: the side condition is about the frame, and the
+/// callee's body has no say in it. Requiring the expanded form would make `sink`
+/// demand an `inline` it does not need, which matters on a term where the whole
+/// art is expanding as little as possible.
+///
+/// (A `dip N { ... }` written inline is spelled out by `build` and was never
+/// affected by this — see `ir::build`. The case this covers is a `dip N` whose
+/// target is a sentence somebody could also call by name.)
 ///
 /// Measure: the summed positions of dips.
 #[derive(Debug)]

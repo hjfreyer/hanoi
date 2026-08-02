@@ -753,10 +753,8 @@ fn the_three_selectors_partition_children() {
     // `then(t); else(t); body(t)`. It only holds because the three decline
     // each other's nodes, so the fixture needs a branch *and* a dip for the
     // test to have any force.
-    // Inlined first, because `dip 1 { ... }` builds as a `Call` and only
-    // becomes a `Dip` with a body once something expands it — so an
-    // un-expanded fixture would give `body` nothing to find and the test would
-    // pass without testing anything.
+    // `dip 1 { ... }` is an inline block, so `build` spells it out and `body`
+    // has a real body to find without anything being expanded first.
     let (prog, before) = tree_of(
         r#"
         #[arity(2, 1)]
@@ -815,6 +813,55 @@ fn body_reaches_a_dip_and_not_a_branch_arm() {
         shape(&before),
         shape(&after),
         "`body` should have reached inside the dip"
+    );
+}
+
+#[test]
+fn an_inline_block_is_spelled_out_and_a_real_call_is_not() {
+    // A block written inline has a SentenceIndex only because the compiler
+    // needed somewhere to put it, so there is no call site to open and nothing
+    // for the un-expanded listing to name. A `jump` to a real sentence is a
+    // different thing and stays closed until asked.
+    let prog = program_of(
+        r#"
+        #[arity(2, 2)]
+        sentence probe {
+            dip 1 { is_tuple }
+            jump named
+        }
+        #[arity(1, 1)]
+        sentence named { push 1 add }
+    "#,
+    );
+    let body = build(prog.library(), SentenceIndex::from(0), &mut HashSet::new());
+    assert_eq!(
+        shape(&body),
+        vec!["dip 1 { is_tuple }", "call 0 #1"],
+        "the inline block should have a body; the named call should not"
+    );
+}
+
+#[test]
+fn a_recursive_inline_block_stays_a_call() {
+    // The same guard branch arms already had: expanding a block that reaches
+    // itself would not terminate, and a call is what it becomes at run time.
+    let prog = program_of(
+        r#"
+        #[recursive]
+        #[arity(1, 1)]
+        sentence loops {
+            pick 0
+            is_tuple
+            branch { dip 0 { jump loops } } { }
+        }
+    "#,
+    );
+    let body = build(prog.library(), SentenceIndex::from(0), &mut HashSet::new());
+    // The point is only that building terminated and left a call behind.
+    assert!(
+        format!("{:?}", body).contains("Call"),
+        "expected the recursive edge to stay a call, got {:?}",
+        body
     );
 }
 

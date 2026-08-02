@@ -3,8 +3,10 @@
 `bin/rewrite` turns one sentence's compiled bytecode into a tree and prints it.
 A **tactic** says how to rewrite that tree before printing.
 
-Nothing is expanded unless you ask. The default listing shows one sentence,
+No *call* is expanded unless you ask. The default listing shows one sentence,
 naming every call it makes on a single line; `inline` is how you open one up.
+Blocks written inline — branch arms and `dip N { ... }` bodies — are always
+spelled out, because they are not calls.
 
 ```bash
 cargo run --bin rewrite -- tests 'SimpleTuple::check' -t dip_normalize
@@ -20,9 +22,9 @@ second and third of them things you say rather than things the tool decides:
 ## Rules
 
 Every rule is a local splice on a window of a fixed small number of adjacent
-nodes — two for most of them, three where a rule has to see where its operand
-came from. It either matches
-and returns a replacement, or fails. `--list-rules` prints them.
+nodes — two for most of them, three or four where a rule has to see where its
+operand came from. It either matches and returns a replacement, or fails.
+`--list-rules` prints them.
 
 | rule | window | replacement |
 |---|---|---|
@@ -93,9 +95,30 @@ The cost is provenance: spliced code no longer says which sentence it came
 from. That is exactly why nothing inlines by default — the un-expanded listing
 names every call on one line, and you flatten only what you mean to.
 
+## A block is not a call
+
+Phase 4 gives a branch arm and a `dip N { ... }` body a `SentenceIndex` alike,
+purely because it needs somewhere to put them. Neither is reachable by name, so
+neither is a call: there is no call site for `inline` to open, and nothing for
+the un-expanded listing to usefully name on one line. Both are therefore spelled
+out by `build`, before any tactic runs.
+
+```
+      4 │ dip 1 → #676 <inline> {
+      4 │   is_symbol
+        │ }
+```
+
+Leaving these closed only meant that a rule wanting to look inside a dip had to
+ask for an expansion that expands nothing — and worse, that `sink` would decline
+to move one until you had. A `dip N` or `jump` naming a real sentence is a
+different thing and stays a call: there the callee exists independently, `inline`
+is a real choice, and the label is worth keeping. An inline block that would
+recurse also stays a call, which is what it becomes at run time anyway.
+
 ```
 $ rewrite tests 'State::check'                    #   48 lines, every call named
-$ rewrite tests 'State::check' -t 'once(inline)'  #   69, one call opened
+$ rewrite tests 'State::check' -t 'once(inline)'  #   71, one call opened
 $ rewrite tests 'State::check' -t inline_all      # 1085, one flat sentence
 ```
 
@@ -113,9 +136,9 @@ inlining eagerly does not:
 
 ```
 $ rewrite tests emit_does_pre_and_post -t 'inline_all; distribute; cleanup'
-49408 lines
+49376 lines
 $ rewrite tests emit_does_pre_and_post -t 'repeat_n(3, once(inline); distribute; cleanup)'
-   38 lines
+   42 lines
 ```
 
 Same sentence, same rules, three orders of magnitude apart. The staging is what
@@ -141,8 +164,8 @@ sequence, so the moment the only remaining calls are inside branch arms it has
 nothing left to find, and no amount of `repeat_n` gets further:
 
 ```
-$ rewrite tests emit_does_pre_and_post -t 'repeat_n(3,  once(inline); distribute; cleanup)'  # 38
-$ rewrite tests emit_does_pre_and_post -t 'repeat_n(19, once(inline); distribute; cleanup)'  # 38
+$ rewrite tests emit_does_pre_and_post -t 'repeat_n(3,  once(inline); distribute; cleanup)'  # 42
+$ rewrite tests emit_does_pre_and_post -t 'repeat_n(19, once(inline); distribute; cleanup)'  # 42
 ```
 
 `then(once(inline))` is how you say which arm to open next, and it is the whole
