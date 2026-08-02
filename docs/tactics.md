@@ -569,3 +569,44 @@ the tool itself never runs it.
   inlined tree is where it actually lives. And `fold_branch` fires nowhere at
   all until `distribute` has run, then 31 times.
 - `--fuel <n>` raises the budget when the work is genuinely large.
+- `--stack` shows what each slot holds, with equal values sharing a name. See
+  below.
+
+## Seeing which slots hold the same value
+
+The rules deliberately know nothing about values. Reading a derivation by hand
+is a different job — the whole question is which slots hold the same value and
+which hold a known one, and a column of depths cannot say. `--stack` adds a
+symbolic view:
+
+```
+                             stack │ depth │ instruction
+  ─────────────────────────────────┼─────────────────────────
+                                 a │      1 │   untuple 3
+                             e f g │      3 │   pick 2
+                           e f g e │      4 │   pick 2
+                         e f g e f │      5 │   pick 2
+                       e f g e f g │      6 │   push symbol(Customer is idle)
+                 e f g e f g 'idle │      7 │   equal
+                       e f g e f h │      6 │   branch then → #668 {
+
+  where
+      e = a.2
+      f = a.1
+      g = a.0
+      h = g == 'idle
+```
+
+`e f g e f g` is the sharing, visible at a glance: the check's copy and the
+caller's parts are the same three slots. Constants show themselves, so a literal
+that has reached a slot is obvious.
+
+**A shared label means the values are equal.** The converse does not hold — two
+slots that happen to be equal may show different labels, because the
+interpretation lost track (a call's result is opaque, and where two branch arms
+disagree the slots go fresh). Being vague is fine; being wrong is not, so the
+view never merges two things it has not actually followed.
+
+It is an abstract interpretation run *after* all rewriting, and no rule ever
+consults it. That is why it is allowed to be as clever as it likes without
+touching the governing invariant — it decides what to print, nothing else.

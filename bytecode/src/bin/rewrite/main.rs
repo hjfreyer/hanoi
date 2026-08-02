@@ -20,6 +20,7 @@ mod print;
 mod program;
 mod rules;
 mod script;
+mod stack;
 mod tactic;
 #[cfg(test)]
 mod tests;
@@ -44,6 +45,7 @@ struct Options {
     fuel: u64,
     trace: bool,
     check: bool,
+    stack: bool,
 }
 
 fn main() {
@@ -52,6 +54,7 @@ fn main() {
         fuel: DEFAULT_FUEL,
         trace: false,
         check: false,
+        stack: false,
     };
     let mut tactic_files: Vec<String> = Vec::new();
     let mut positional: Vec<String> = Vec::new();
@@ -86,6 +89,7 @@ fn main() {
                 };
             }
             "--trace" => opts.trace = true,
+            "--stack" => opts.stack = true,
             "--check" => opts.check = true,
             "--list-rules" => list_rules = true,
             "--list-tactics" => list_tactics = true,
@@ -172,7 +176,7 @@ fn main() {
     }
 
     let env = Env::new(&prog, opts.fuel, opts.check);
-    if let Err(err) = print_sentence(root, &tactic, &env, &opts.tactic) {
+    if let Err(err) = print_sentence(root, &tactic, &env, &opts.tactic, opts.stack) {
         eprintln!("error: {}", err);
         process::exit(1);
     }
@@ -205,6 +209,7 @@ fn usage() {
     eprintln!("  --fuel <n>           rule firings before giving up.");
     eprintln!("  --trace              print how often each rule fired.");
     eprintln!("  --check              verify every rule preserves net stack effect.");
+    eprintln!("  --stack              show what each slot holds, with equal values sharing a name.");
     eprintln!();
     eprintln!("Examples:");
     eprintln!("  rewrite tests 'Pair::check' -t dip_normalize");

@@ -1240,6 +1240,159 @@ fn float_delivers_the_rebuild_to_the_branch_that_undoes_it() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// The symbolic stack view
+//
+// It only decides what to print, so it cannot make a rewrite unsound — but a
+// wrong view silently misleads whoever is reading a derivation, which is worse
+// than no view. The direction that matters: two slots showing the same label
+// must really hold the same value.
+// ---------------------------------------------------------------------------
+
+use crate::stack::{self, Fresh, Names};
+
+/// The stack after `code`'s first sentence, rendered, plus the legend.
+fn stack_after(code: &str) -> (Vec<String>, Vec<(String, String)>) {
+    stack_of(code, true)
+}
+
+/// `inline` controls whether calls are expanded first; leaving them closed is
+/// how to test what the view does with a result it cannot see into.
+fn stack_of(code: &str, inline: bool) -> (Vec<String>, Vec<(String, String)>) {
+    let (prog, body) = if inline {
+        tree_of(code, NOTHING)
+    } else {
+        let prog = program_of(code);
+        let body = build(prog.library(), SentenceIndex::from(0), &mut HashSet::new());
+        (prog, body)
+    };
+    let mut fresh = Fresh::new();
+    let mut names = Names::new();
+    let entry = stack::entry(seq_arity(prog, &body).0, &mut fresh);
+    let out = stack::run(prog, entry, &body, &mut fresh);
+    let rendered = names.render(&out, 500);
+    let slots = rendered.split(' ').map(str::to_string).collect();
+    (slots, names.legend().to_vec())
+}
+
+/// What a label stands for, from the legend.
+fn meaning(legend: &[(String, String)], label: &str) -> String {
+    legend
+        .iter()
+        .find(|(l, _)| l == label)
+        .map(|(_, d)| d.clone())
+        .unwrap_or_else(|| panic!("no legend entry for {} in {:?}", label, legend))
+}
+
+#[test]
+fn a_copy_shows_the_same_label_as_its_original() {
+    let (s, _) = stack_after(
+        r#"
+        #[arity(1, 3)]
+        sentence probe { pick 0  pick 0 }
+    "#,
+    );
+    assert_eq!(s.len(), 3);
+    assert!(
+        s.iter().all(|l| *l == s[0]),
+        "three slots holding one value should share a label, got {:?}",
+        s
+    );
+}
+
+#[test]
+fn untupling_names_the_parts_and_a_later_copy_matches_them() {
+    // The case the view exists for: after sharing, the check's parts and the
+    // caller's parts must be visibly the same slots.
+    let (s, legend) = stack_after(
+        r#"
+        #[arity(1, 6)]
+        sentence probe { untuple 3  pick 2  pick 2  pick 2 }
+    "#,
+    );
+    assert_eq!(s.len(), 6);
+    assert_eq!(s[..3], s[3..], "the three copies should match the parts");
+    // And each part should say which projection of the input it is.
+    let parts: Vec<_> = s[..3].iter().map(|l| meaning(&legend, l)).collect();
+    let root = parts[0].split('.').next().unwrap().to_string();
+    assert_eq!(
+        parts,
+        vec![
+            format!("{}.2", root),
+            format!("{}.1", root),
+            format!("{}.0", root)
+        ],
+        "index 0 should end up on top"
+    );
+    assert_eq!(meaning(&legend, &root), "input 0");
+}
+
+#[test]
+fn rebuilding_a_tuple_recovers_the_value_it_came_from() {
+    // `rebuild_copy`'s output should show the rebuilt slot as a tuple of the
+    // parts, which is what makes `cancel_tuple` legible in the listing.
+    let (s, legend) = stack_after(
+        r#"
+        #[arity(1, 4)]
+        sentence probe { untuple 3  pick 2  pick 2  pick 2  dip 3 { tuple 3 } }
+    "#,
+    );
+    // The rebuilt value sits under the three parts it was built from.
+    assert_eq!(s.len(), 4);
+    let (rebuilt, parts) = (&s[0], &s[1..]);
+    assert_eq!(
+        meaning(&legend, rebuilt),
+        format!("({}, {}, {})", parts[2], parts[1], parts[0]),
+        "the rebuilt slot should show as a tuple of the parts, top first"
+    );
+}
+
+#[test]
+fn comparing_a_value_with_itself_is_decided() {
+    // Where the whole point lives: two slots holding the same term hold the
+    // same value, so the comparison is already known.
+    let (s, _) = stack_after(
+        r#"
+        #[arity(1, 1)]
+        sentence probe { pick 0  equal }
+    "#,
+    );
+    assert_eq!(s, vec!["true"]);
+}
+
+#[test]
+fn comparing_two_different_literals_is_decided_too() {
+    let (s, _) = stack_after(
+        r#"
+        #[arity(0, 1)]
+        sentence probe { push 1  push 2  equal }
+    "#,
+    );
+    assert_eq!(s, vec!["false"]);
+}
+
+#[test]
+fn a_call_makes_its_result_opaque_rather_than_wrong() {
+    // The view must not claim two call results are the same value just because
+    // the calls look alike. Losing track is allowed; claiming a false equality
+    // is not, since the whole contract is that a shared label means equal.
+    let (s, _) = stack_of(
+        r#"
+        #[arity(1, 2)]
+        sentence probe { pick 0  dip 1 { jump named }  jump named }
+        #[arity(1, 1)]
+        sentence named { push 1  add }
+    "#,
+        false,
+    );
+    assert_eq!(s.len(), 2);
+    assert_ne!(
+        s[0], s[1],
+        "two separate call results must not share a label: {:?}",
+        s
+    );
+}
+
 #[test]
 fn a_later_step_finding_nothing_does_not_discard_an_earlier_one() {
     // Regression. `each(sink)` rewrites; `each(annihilate_drop)` then matches
