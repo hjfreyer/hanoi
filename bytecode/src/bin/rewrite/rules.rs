@@ -1342,6 +1342,33 @@ mod tests {
     }
 
     #[test]
+    fn dup_natural_takes_either_orientation() {
+        // `sink` decides which one you get. Written by hand it is
+        // `pick 0; X; dip m { X }`, but once anything hoists the second
+        // occurrence out of a branch, `sink` walks it left past the first and
+        // it lands as `pick 0; dip 1 { X }; X`. Both compute X twice on the
+        // same value and both collapse the same way.
+        let hand_written = [
+            op(Instruction::Pick(0)),
+            op(Instruction::Untuple(3)),
+            dip(3, vec![op(Instruction::Untuple(3))]),
+        ];
+        let after_sinking = [
+            op(Instruction::Pick(0)),
+            dip(1, vec![op(Instruction::Untuple(3))]),
+            op(Instruction::Untuple(3)),
+        ];
+        let shared = Some(vec![
+            op(Instruction::Untuple(3)),
+            op(Instruction::Pick(2)),
+            op(Instruction::Pick(2)),
+            op(Instruction::Pick(2)),
+        ]);
+        assert_eq!(DupNatural.rewrite(&prog(), &hand_written), shared);
+        assert_eq!(DupNatural.rewrite(&prog(), &after_sinking), shared);
+    }
+
+    #[test]
     fn dup_natural_needs_the_frame_to_match_what_the_first_copy_produced() {
         // `untuple 3` leaves three values, so the second occurrence has to sit
         // under exactly three. At any other depth the two are not looking at
@@ -1913,21 +1940,42 @@ impl Rule for DupNatural {
             return None;
         }
 
-        let Node::Dip { depth, body, .. } = framed else {
-            return None;
+        // Two orientations, because `sink` decides which one you get.
+        //
+        // Written by hand the shape is `pick 0; X; dip m { X }`: the copy is
+        // consumed on top and the original is reached under the `m` results.
+        // But once anything has hoisted the second occurrence out of a branch,
+        // `sink` walks it left as far as the arithmetic allows — which is past
+        // the first occurrence, landing on `pick 0; dip 1 { X }; X`, where the
+        // *original* is consumed under the single copy and the copy on top.
+        // Both compute `X` twice on the same value and both collapse the same
+        // way, so the rule takes either rather than making a caller stop `sink`
+        // at exactly the right moment.
+        let (plain, framed) = match (first, framed) {
+            (Node::Dip { depth: 1, body, .. }, second) => (second, &body[..]),
+            (first, Node::Dip { depth, body, .. }) => {
+                // The second occurrence has to sit exactly over what the first
+                // one produced.
+                let (_, m) = node_arity(prog, first)?;
+                if m != *depth as i64 {
+                    return None;
+                }
+                (first, &body[..])
+            }
+            _ => return None,
         };
-        // The second occurrence has to be the same computation, and has to sit
-        // exactly over what the first one produced.
-        let [second] = &body[..] else { return None };
-        if !same_effect(first, second) {
+
+        // Whichever way round, it has to be the same computation.
+        let [inner] = framed else { return None };
+        if !same_effect(plain, inner) || matches!(plain, Node::Op(Instruction::Print)) {
             return None;
         }
-        let (n, m) = node_arity(prog, first)?;
-        if n != 1 || m != *depth as i64 {
+        let (n, m) = node_arity(prog, plain)?;
+        if n != 1 {
             return None;
         }
 
-        let mut out = vec![first.clone()];
+        let mut out = vec![plain.clone()];
         // `m` copies, each reaching back past the ones already made.
         let reach = usize::try_from(m - 1).ok();
         if let Some(d) = reach {

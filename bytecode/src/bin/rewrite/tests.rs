@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use bytecode::{assemble, Library, SentenceIndex};
+use bytecode::{assemble, Instruction, Library, SentenceIndex};
 use std::fs;
 use std::path::Path;
 
@@ -952,6 +952,103 @@ fn the_sharing_law_cannot_reach_across_a_branch() {
         shape(&before),
         shape(&after),
         "nothing in the current rule set relates the two occurrences"
+    );
+}
+
+/// The rewriting half of the sharing problem, with the one missing fact
+/// supplied by hand.
+///
+/// Both sentences have the shape `emit_does_pre_and_post` has: a check
+/// destructures a *copy* and consumes the parts, and the real work
+/// destructures the *original*, behind a branch on a condition — here
+/// `is_symbol && is_symbol` — that has nothing to do with the tuple's shape.
+///
+/// They differ in one thing. In `given_the_fact` the else arm also untuples,
+/// which is equivalent only because the value really is a 3-tuple at that
+/// point. That is precisely the fact no window-local rule can establish, and
+/// supplying it is enough: `factor_branch` hoists the shared `untuple`,
+/// `sink` walks it back to the first one, and `dup_natural` merges the two.
+const SHARING_PROBE: &str = r#"
+    #[arity(1, 1)]
+    sentence blocked {
+        pick 0
+        untuple 3
+        is_symbol
+        dip 1 { is_symbol }
+        and
+        dip 1 { is_symbol }
+        and
+        branch { untuple 3  is_symbol  dip 1 { drop 0 }  dip 1 { drop 0 } }
+               { drop 0  push true }
+    }
+    #[arity(1, 1)]
+    sentence given_the_fact {
+        pick 0
+        untuple 3
+        is_symbol
+        dip 1 { is_symbol }
+        and
+        dip 1 { is_symbol }
+        and
+        branch { untuple 3  is_symbol  dip 1 { drop 0 }  dip 1 { drop 0 } }
+               { untuple 3  drop 0  drop 0  drop 0  push true }
+    }
+"#;
+
+/// `factor_branch`, then `sink`, then `dup_natural`.
+const SHARE: &str = "repeat(bu(each(factor_branch); each(sink); each(collapse); \
+                     each(dup_natural); each(annihilate_drop, noop, pick_drop_to_roll)))";
+
+fn untuples(nodes: &[Node]) -> usize {
+    nodes
+        .iter()
+        .map(|n| match n {
+            Node::Op(Instruction::Untuple(_)) => 1,
+            Node::Dip { body, .. } => untuples(body),
+            Node::Branch {
+                then_body,
+                else_body,
+                ..
+            } => untuples(then_body) + untuples(else_body),
+            _ => 0,
+        })
+        .sum()
+}
+
+fn probe(name: &str) -> (&'static Program<'static>, Vec<Node>) {
+    let prog = program_of(SHARING_PROBE);
+    let idx = prog
+        .library()
+        .names
+        .iter()
+        .position(|n| n == name)
+        .map(SentenceIndex::from)
+        .expect("sentence should exist");
+    let body = build(prog.library(), idx, &mut HashSet::new());
+    (prog, body)
+}
+
+#[test]
+fn one_fact_is_all_that_separates_the_two_untuples() {
+    let (prog, blocked) = probe("blocked");
+    assert_eq!(untuples(&blocked), 2);
+    assert_eq!(
+        untuples(&run(prog, blocked, SHARE)),
+        2,
+        "without the fact, the else arm shares nothing and the two stay apart"
+    );
+
+    // Three to start with, the extra one being the fact stated by hand in the
+    // else arm. `factor_branch` merges the two arms' copies into one hoisted
+    // `dip 1 { untuple }`, `sink` walks that back to the check's, and
+    // `dup_natural` merges those — leaving a single `untuple` for a value that
+    // three separate occurrences used to take apart.
+    let (prog, given) = probe("given_the_fact");
+    assert_eq!(untuples(&given), 3);
+    assert_eq!(
+        untuples(&run(prog, given, SHARE)),
+        1,
+        "with the fact, the existing rules merge them -- nothing else is missing"
     );
 }
 
