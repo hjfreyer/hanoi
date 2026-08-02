@@ -42,6 +42,8 @@ and returns a replacement, or fails. `--list-rules` prints them.
 | `fold_const_unary` | `push a ; op` | `push (op a)` |
 | `bool_identity` | `B ; push true ; and` | `B`, and the three other unit laws |
 | `cancel_tuple` | `tuple n ; untuple n` | nothing |
+| `retain_condition` | `pick 0 ; branch { A } { B }` | `branch { push true; A } { push false; B }` |
+| `specialize_equal` | `pick 0; push c; equal; branch { A } { B }` | the same, with A as `drop; push c; A` |
 
 `sink` is the interchange rule, and its side condition is the one piece of real
 arithmetic here: writing `X`'s arity as `(n -> m)`, the dip's window must sit
@@ -193,6 +195,44 @@ same reason the unit case needs `B` at all: `B` may panic, and `a && false` is
 where it started, but `untuple n; tuple n` is **not** a no-op — `untuple` is
 the instruction that checks the shape, so cancelling that pair would accept
 values the original rejected.
+
+## A path condition can be a value
+
+A branch may tell its arms what its condition was, and doing so needs no
+context at all. The VM rejects a non-boolean condition, so an arm that runs at
+all ran because the value was exactly `true` or exactly `false` — which is a
+literal, and the arm can push it for itself. That is `retain_condition`.
+
+This matters more than it sounds, because it is what lets a **path condition
+travel as a value**. The alternative is a traversal that carries hypotheses
+into arms, which would break the governing invariant below and would need every
+reordering rule to fix up whatever the hypotheses were keyed to. Here the fact
+rides in the sequence, and every rule that folds literals can already use it.
+
+`specialize_equal` is the same idea for the shape that actually occurs.
+Predicates in this language are written `pick 0; jump P::check; branch {...}`,
+and the `type` sugar's decision trees are built out of
+`pick 0; push <symbol>; equal; branch` — a *computed* condition, not a
+duplicated one. The then-arm runs exactly when the copy compares equal to `c`,
+so inside it the value on top **is** `c`. The else arm learns a disequality,
+which has no literal form and is left alone.
+
+The guard on `specialize_equal` is worth reading if you plan to write a rule
+that refines something. The obvious statement of "already refined" — the arm
+begins with `drop; push c` — oscillates, because the `push c` it introduces is
+live code: `annihilate_drop` cancels it against a following `drop` and
+`fold_const_unary` rewrites it into a different literal, after which the arm no
+longer matches the guard and the rule fires again. **A guard survives its
+neighbours only if it names something they cannot remove.** Guarding on the
+leading `drop` works, because that is the arm's first node and the two-node
+rules have nothing to pair it with — and it says the right thing anyway, since
+an arm that opens by discarding the value has no use for a refinement of it.
+
+One limitation to be clear about: `specialize_equal` refines the value *the
+check is holding*, not the one the caller kept. Where a predicate consumes a
+copy and the real code later destructures the original, those are different
+stack slots and no refinement relates them. Sharing the two is a separate
+problem.
 
 **Rules are not tactics.** They live in their own namespace and cannot be
 aliased or defined; a rule has to be *placed* by `each` or `once`. Writing a

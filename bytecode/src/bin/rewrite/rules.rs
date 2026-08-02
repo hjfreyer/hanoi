@@ -51,7 +51,9 @@ pub(crate) const ALL_RULES: &[&dyn Rule] = &[
     &Inline,
     &NoOp,
     &PickDropToRoll,
+    &RetainCondition,
     &Sink,
+    &SpecializeEqual,
 ];
 
 pub(crate) fn rule_by_name(name: &str) -> Option<&'static dyn Rule> {
@@ -1145,6 +1147,164 @@ mod tests {
     }
 
     #[test]
+    fn retain_condition_hands_each_arm_its_own_literal() {
+        let w = [
+            op(Instruction::Pick(0)),
+            branch(vec![op(Instruction::Add)], vec![op(Instruction::Drop)]),
+        ];
+        assert_eq!(
+            RetainCondition.rewrite(&prog(), &w),
+            Some(vec![branch(
+                vec![push(Value::Bool(true)), op(Instruction::Add)],
+                vec![push(Value::Bool(false)), op(Instruction::Drop)],
+            )])
+        );
+    }
+
+    #[test]
+    fn retain_condition_needs_the_copy_to_be_of_the_condition() {
+        // `pick 1` copies something else, so the value the arm would see is
+        // not the one the branch tested.
+        assert_eq!(
+            RetainCondition.rewrite(
+                &prog(),
+                &[op(Instruction::Pick(1)), branch(vec![], vec![])]
+            ),
+            None
+        );
+        // And with no copy at all there is nothing left on the stack to name.
+        assert_eq!(
+            RetainCondition.rewrite(
+                &prog(),
+                &[op(Instruction::IsTuple), branch(vec![], vec![])]
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn retain_condition_composes_with_folding() {
+        // The point of the rule. `pick 0; branch` puts a literal at the head of
+        // each arm, and a `branch` nested at that head is then something
+        // `fold_branch` can decide -- which is how a path condition reaches the
+        // code that re-tests it.
+        let inner = branch(vec![op(Instruction::Add)], vec![op(Instruction::Drop)]);
+        let w = [
+            op(Instruction::Pick(0)),
+            branch(vec![inner.clone()], vec![]),
+        ];
+        let Some(out) = RetainCondition.rewrite(&prog(), &w) else {
+            panic!("expected retain_condition to fire")
+        };
+        let [Node::Branch { then_body, .. }] = &out[..] else {
+            panic!("expected a branch")
+        };
+        assert_eq!(
+            FoldBranch.rewrite(&prog(), &then_body[..2]),
+            Some(vec![op(Instruction::Add)]),
+            "the literal the arm now carries should decide the branch inside it"
+        );
+    }
+
+    #[test]
+    fn specialize_equal_gives_the_then_arm_the_literal() {
+        let w = [
+            op(Instruction::Pick(0)),
+            push(sym(1)),
+            op(Instruction::Equal),
+            branch(vec![op(Instruction::IsSymbol)], vec![op(Instruction::Add)]),
+        ];
+        assert_eq!(
+            SpecializeEqual.rewrite(&prog(), &w),
+            Some(vec![
+                op(Instruction::Pick(0)),
+                push(sym(1)),
+                op(Instruction::Equal),
+                branch(
+                    vec![op(Instruction::Drop), push(sym(1)), op(Instruction::IsSymbol)],
+                    // The else arm learns only a disequality, which has no
+                    // literal form.
+                    vec![op(Instruction::Add)],
+                ),
+            ])
+        );
+    }
+
+    #[test]
+    fn specialize_equal_settles_instead_of_oscillating() {
+        // Regression. The obvious guard -- "the arm already begins with
+        // `drop; push c`" -- does not survive its neighbours: the `push c` is
+        // live code, so `annihilate_drop` cancels it against a following drop
+        // and the arm stops matching the guard, forever. Guarding on the
+        // leading `drop` works because it is the arm's first node, which the
+        // two-node rules have nothing to pair it with.
+        let once = [
+            op(Instruction::Pick(0)),
+            push(sym(1)),
+            op(Instruction::Equal),
+            branch(
+                vec![op(Instruction::Drop), push(sym(1)), op(Instruction::Drop)],
+                vec![],
+            ),
+        ];
+        assert_eq!(SpecializeEqual.rewrite(&prog(), &once), None);
+
+        // An arm that opens by discarding the value has no use for a
+        // refinement of it, which is the same condition read forwards.
+        let discards = [
+            op(Instruction::Pick(0)),
+            push(sym(1)),
+            op(Instruction::Equal),
+            branch(vec![op(Instruction::Drop), op(Instruction::Add)], vec![]),
+        ];
+        assert_eq!(SpecializeEqual.rewrite(&prog(), &discards), None);
+    }
+
+    #[test]
+    fn specialize_equal_declines_a_float_because_equal_is_not_identity() {
+        // `0.0 == -0.0` holds while the two remain distinguishable, so
+        // substituting the literal would not be invisible.
+        let w = [
+            op(Instruction::Pick(0)),
+            push(Value::Float(0.0)),
+            op(Instruction::Equal),
+            branch(vec![op(Instruction::IsFloat)], vec![]),
+        ];
+        assert_eq!(SpecializeEqual.rewrite(&prog(), &w), None);
+
+        // And through a tuple, since tuples compare elementwise.
+        let nested = [
+            op(Instruction::Pick(0)),
+            push(Value::Tuple(vec![Value::Int(1), Value::Float(0.0)])),
+            op(Instruction::Equal),
+            branch(vec![op(Instruction::IsTuple)], vec![]),
+        ];
+        assert_eq!(SpecializeEqual.rewrite(&prog(), &nested), None);
+
+        // A float-free tuple is fine.
+        let ok = [
+            op(Instruction::Pick(0)),
+            push(Value::Tuple(vec![Value::Int(1), sym(2)])),
+            op(Instruction::Equal),
+            branch(vec![op(Instruction::IsTuple)], vec![]),
+        ];
+        assert!(SpecializeEqual.rewrite(&prog(), &ok).is_some());
+    }
+
+    #[test]
+    fn specialize_equal_needs_the_copy() {
+        // Without `pick 0` the value is consumed by the `equal`, so there is
+        // nothing left in the arm to refine.
+        let w = [
+            op(Instruction::IsSymbol),
+            push(sym(1)),
+            op(Instruction::Equal),
+            branch(vec![op(Instruction::Add)], vec![]),
+        ];
+        assert_eq!(SpecializeEqual.rewrite(&prog(), &w), None);
+    }
+
+    #[test]
     fn cancel_tuple_goes_one_way_only() {
         assert_eq!(
             CancelTuple.rewrite(
@@ -1429,6 +1589,171 @@ impl Rule for FoldConstUnary {
             _ => return None,
         };
         Some(vec![Node::Op(Instruction::Push(out))])
+    }
+}
+
+/// `pick 0 ; branch { A } { B }` becomes `branch { push true; A } { push false; B }`.
+///
+/// A branch may tell its arms what its condition was. The VM rejects a
+/// non-boolean condition, so an arm that runs at all ran because the value was
+/// exactly `true` or exactly `false` — and the copy `pick 0` left behind is
+/// therefore a literal, which the arm can push for itself.
+///
+/// This is how a **path condition becomes a value**, and it is worth being
+/// precise about why that matters. A predicate in this language is written
+/// `pick 0; jump P::check; branch { ... }`: the check consumes a copy and the
+/// arm gets a bare `true` that says nothing about what was established. Once
+/// the arm holds the literal, every rule that folds literals can use it, and
+/// the fact travels by the ordinary movement rules rather than by a traversal
+/// that carries hypotheses around. Nothing here needs to know where in the tree
+/// it is — the governing invariant is untouched, because the fact rides in the
+/// sequence.
+///
+/// Measure: the number of branches immediately preceded by `pick 0`. Firing
+/// removes one, and the arms it rewrites begin with a `push`, so no rule in
+/// this set can hand one back.
+#[derive(Debug)]
+pub(crate) struct RetainCondition;
+
+impl Rule for RetainCondition {
+    fn name(&self) -> &'static str {
+        "retain_condition"
+    }
+    fn width(&self) -> usize {
+        2
+    }
+    fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
+        let [Node::Op(Instruction::Pick(0)), Node::Branch {
+            then_origin,
+            then_body,
+            else_origin,
+            else_body,
+        }] = window
+        else {
+            return None;
+        };
+
+        let arm = |lit: bool, body: &Vec<Node>| {
+            let mut out = vec![Node::Op(Instruction::Push(Value::Bool(lit)))];
+            out.extend(body.iter().cloned());
+            out
+        };
+
+        Some(vec![Node::Branch {
+            then_origin: then_origin.clone(),
+            then_body: arm(true, then_body),
+            else_origin: else_origin.clone(),
+            else_body: arm(false, else_body),
+        }])
+    }
+}
+
+/// Whether substituting this literal for a value `equal` accepted is invisible.
+///
+/// `equal` answers with Rust's `PartialEq` on `Value`, and on floats that is
+/// not identity: `0.0 == -0.0` is true while the two are distinguishable, and
+/// tuples inherit the problem through their elements. Symbols, ints and bools
+/// have no such gap — comparing equal means indistinguishable — so the
+/// refinement rule takes those and declines anything with a float in it.
+fn float_free(v: &Value) -> bool {
+    match v {
+        Value::Float(_) => false,
+        Value::Tuple(elems) => elems.iter().all(float_free),
+        _ => true,
+    }
+}
+
+/// `pick 0; push c; equal; branch { A } { B }` gives A the literal: its arm
+/// becomes `drop; push c; A`.
+///
+/// The then-arm runs exactly when the copy `pick 0` left behind compares equal
+/// to `c`, so inside that arm the value on top *is* `c` and may be replaced by
+/// it. This is the refinement the `type` sugar's decision trees are built out
+/// of — every union arm is `pick 0; push <symbol>; equal; branch` — and it is
+/// what turns a test against an opaque value into a literal the folding rules
+/// can act on.
+///
+/// The else arm learns a disequality, which has no literal form and is left
+/// alone.
+///
+/// Note what this does *not* do. It refines the value the check is holding, not
+/// the one the caller kept: where a predicate consumes a copy and the real code
+/// later destructures the original, these are different stack slots and no
+/// refinement relates them. Sharing the two is a separate problem.
+///
+/// Measure: the number of such branches whose then-arm does not begin with
+/// `drop`. Firing takes one, because the arm it produces begins with exactly
+/// that.
+///
+/// The guard has to be about `drop` rather than about the literal, and finding
+/// out why is instructive. Guarding on "the arm already starts with `drop; push
+/// c`" is the obvious statement of "already refined", and it oscillates: the
+/// `push c` this rule introduces is live code that the other rules will act on,
+/// so `annihilate_drop` cancels it against a following `drop` and
+/// `fold_const_unary` rewrites it into a different literal — after which the
+/// arm no longer matches the guard and the rule fires again, forever.
+///
+/// A guard survives its neighbours only if it names something they cannot
+/// remove. The leading `drop` is the first node of the arm, so the two-node
+/// rules have nothing to pair it with, and every path that consumes the
+/// literal leaves it in place. It also says the right thing on its own terms:
+/// an arm that opens by discarding the value has no use for a refinement of
+/// it.
+#[derive(Debug)]
+pub(crate) struct SpecializeEqual;
+
+impl Rule for SpecializeEqual {
+    fn name(&self) -> &'static str {
+        "specialize_equal"
+    }
+    fn width(&self) -> usize {
+        4
+    }
+    fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
+        let [pick, lit, eq, br] = window else {
+            return None;
+        };
+        if !matches!(pick, Node::Op(Instruction::Pick(0)))
+            || !matches!(eq, Node::Op(Instruction::Equal))
+        {
+            return None;
+        }
+        let c = pushed(lit)?;
+        if !float_free(c) {
+            return None;
+        }
+        let Node::Branch {
+            then_origin,
+            then_body,
+            else_origin,
+            else_body,
+        } = br
+        else {
+            return None;
+        };
+
+        if matches!(then_body.first(), Some(Node::Op(Instruction::Drop))) {
+            // Either already refined, or an arm that discards the value
+            // anyway. See the measure: this is what makes the rule settle.
+            return None;
+        }
+
+        let mut body = vec![
+            Node::Op(Instruction::Drop),
+            Node::Op(Instruction::Push(c.clone())),
+        ];
+        body.extend(then_body.iter().cloned());
+        Some(vec![
+            pick.clone(),
+            lit.clone(),
+            eq.clone(),
+            Node::Branch {
+                then_origin: then_origin.clone(),
+                then_body: body,
+                else_origin: else_origin.clone(),
+                else_body: else_body.clone(),
+            },
+        ])
     }
 }
 
