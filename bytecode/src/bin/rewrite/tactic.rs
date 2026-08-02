@@ -14,7 +14,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
 
 use crate::arity::seq_arity;
-use crate::ir::{child_bodies, Node};
+use crate::ir::{child_bodies, selected_bodies, Node, Selector};
 use crate::program::Program;
 use crate::rules::Rule;
 
@@ -174,6 +174,14 @@ pub(crate) enum Tactic {
     RepeatN(usize, Box<Tactic>),
     /// Apply to every child sequence, one level down. Never fails.
     Children(Box<Tactic>),
+    /// Apply to one *kind* of child sequence, one level down. Never fails.
+    ///
+    /// `children` is this with every selector at once. Splitting them out is
+    /// what lets a script open one branch arm and leave the other alone —
+    /// without it, staged inlining stops dead as soon as the remaining calls
+    /// live inside arms, since `once` works on a single sequence and `children`
+    /// cannot be aimed.
+    Into(Selector, Box<Tactic>),
     /// Children first, then here. Never fails.
     Bu(Box<Tactic>),
     /// Here first, then children. Never fails.
@@ -200,6 +208,7 @@ fn can_fail(t: &Tactic) -> bool {
         Tactic::Try(_)
         | Tactic::Repeat(_)
         | Tactic::Children(_)
+        | Tactic::Into(..)
         | Tactic::Bu(_)
         | Tactic::Td(_)
         | Tactic::Id => false,
@@ -330,6 +339,16 @@ pub(crate) fn apply(t: &Tactic, env: &Env, nodes: Vec<Node>) -> Result<Outcome, 
             })
         }
 
+        Tactic::Into(sel, inner) => {
+            let (nodes, changed) =
+                map_selected_seqs(nodes, *sel, &mut |n| apply(inner, env, n))?;
+            Ok(if changed {
+                Outcome::Changed(nodes)
+            } else {
+                Outcome::Unchanged(nodes)
+            })
+        }
+
         Tactic::Bu(inner) => bottom_up(inner, env, nodes),
 
         Tactic::Td(inner) => top_down(inner, env, nodes),
@@ -370,6 +389,28 @@ fn top_down(t: &Tactic, env: &Env, nodes: Vec<Node>) -> Result<Outcome, TacticEr
     } else {
         Outcome::Unchanged(nodes)
     })
+}
+
+/// Runs `f` over the child sequences `sel` picks out, in order.
+///
+/// The same walk as `map_child_seqs` with a narrower notion of "child", so a
+/// node with no child of that kind is simply skipped.
+fn map_selected_seqs(
+    mut nodes: Vec<Node>,
+    sel: Selector,
+    f: &mut dyn FnMut(Vec<Node>) -> Result<Outcome, TacticError>,
+) -> Result<(Vec<Node>, bool), TacticError> {
+    let mut changed = false;
+
+    for node in nodes.iter_mut() {
+        for body in selected_bodies(node, sel) {
+            let outcome = f(std::mem::take(body))?;
+            changed |= outcome.changed();
+            *body = outcome.into_nodes();
+        }
+    }
+
+    Ok((nodes, changed))
 }
 
 /// Runs `f` over every child sequence of every node, in order.

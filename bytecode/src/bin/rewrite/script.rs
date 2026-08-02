@@ -21,6 +21,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::rules::{rule_by_name, Rule, ALL_RULES};
+use crate::ir::Selector;
 use crate::tactic::Tactic;
 
 /// Reproduces what the old `--dip-normalize`, `--factor-branches` and
@@ -50,11 +51,23 @@ tactic unary = repeat(bu(each(expand)));
 tactic factoring  = repeat(bu(each(factor_branch)));
 tactic annihilate = repeat(bu(each(annihilate_drop)));
 
+// Evaluate what is already decided. Every rule here answers a question about
+// values rather than about shape, and each declines the cases where the
+// instruction it would remove is really a check: `fold_const` folds `equal` on
+// any pair but `and` only on two booleans, and `bool_identity` needs to see
+// where its operand came from before it will drop a unit `and`.
+tactic values = repeat(bu(each(fold_const, fold_const_unary, bool_identity,
+                               cancel_tuple)));
+
 // Throw away work that does nothing. `pick_drop_to_roll` leaves a `roll 0`
 // behind when d is 0, and `annihilate_drop` can empty a dip body; `noop`
-// clears up after both, which is why these three belong together.
+// clears up after both, which is why these three belong together. The value
+// rules join them because folding is what exposes the literal `fold_branch`
+// needs, and dropping a branch is what exposes the next thing to fold.
 tactic cleanup = repeat(bu(each(annihilate_drop, pick_drop_to_roll, noop,
-                                fold_branch)));
+                                fold_branch);
+                           each(fold_const, fold_const_unary, bool_identity,
+                                cancel_tuple)));
 
 // Push what follows a branch into both of its arms, so a rule that only holds
 // on one side can see it. Kept out of `all` and `cleanup`: it duplicates code
@@ -69,6 +82,7 @@ tactic flatten = repeat(bu(each(flatten_call)));
 
 // Everything at once, which is what passing all three flags used to mean.
 tactic all = repeat(bu(each(annihilate_drop, pick_drop_to_roll, noop, fold_branch);
+                       each(fold_const, fold_const_unary, bool_identity, cancel_tuple);
                        each(factor_branch);
                        each(collapse); each(sink); each(fuse)));
 
@@ -629,6 +643,9 @@ impl Definitions {
                     "try" => Tactic::Try(inner),
                     "repeat" => Tactic::Repeat(inner),
                     "children" => Tactic::Children(inner),
+                    "then" => Tactic::Into(Selector::Then, inner),
+                    "else" => Tactic::Into(Selector::Else, inner),
+                    "body" => Tactic::Into(Selector::Body, inner),
                     "bu" => Tactic::Bu(inner),
                     _ => Tactic::Td(inner),
                 })
@@ -668,6 +685,11 @@ const COMBINATORS: &[(&str, Shape)] = &[
     ("try", Shape::One),
     ("repeat", Shape::One),
     ("children", Shape::One),
+    // `children` narrowed to one kind of child. `then`/`else` are the pair that
+    // makes a branch addressable at all.
+    ("then", Shape::One),
+    ("else", Shape::One),
+    ("body", Shape::One),
     ("bu", Shape::One),
     ("td", Shape::One),
     ("repeat_n", Shape::CountAndOne),

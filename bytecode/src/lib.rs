@@ -12,7 +12,7 @@ pub use arity::check_arities;
 pub use assembly::{assemble, assemble_with_path};
 pub use library::{Library, Sentence, SentenceIndex, Annotation, Arity};
 pub use opcode::Instruction;
-pub use value::Value;
+pub use value::{Symbol, Value};
 
 #[cfg(test)]
 mod tests {

@@ -132,7 +132,8 @@ fn main() {
             println!("  {}", name);
         }
         println!();
-        println!("combinators: each, once, try, repeat, repeat_n, children, bu, id, fail");
+        println!("combinators: each, once, try, repeat, repeat_n, id, fail");
+        println!("traversals:  children, then, else, body, bu, td");
         println!("operators:   `a; b` in sequence, `a | b` first that applies");
         return;
     }

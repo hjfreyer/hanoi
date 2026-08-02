@@ -19,7 +19,9 @@ second and third of them things you say rather than things the tool decides:
 
 ## Rules
 
-Every rule is a local splice on a window of at most two nodes. It either matches
+Every rule is a local splice on a window of a fixed small number of adjacent
+nodes — two for most of them, three where a rule has to see where its operand
+came from. It either matches
 and returns a replacement, or fails. `--list-rules` prints them.
 
 | rule | window | replacement |
@@ -36,6 +38,10 @@ and returns a replacement, or fails. `--list-rules` prints them.
 | `distribute_branch` | `branch { A } { B } ; X` | `branch { A X } { B X }` |
 | `fold_branch` | `push true \| false ; branch { A } { B }` | the arm it selects |
 | `inline` | a call | the block it names, spliced in |
+| `fold_const` | `push a ; push b ; op` | `push (a op b)` |
+| `fold_const_unary` | `push a ; op` | `push (op a)` |
+| `bool_identity` | `B ; push true ; and` | `B`, and the three other unit laws |
+| `cancel_tuple` | `tuple n ; untuple n` | nothing |
 
 `sink` is the interchange rule, and its side condition is the one piece of real
 arithmetic here: writing `X`'s arity as `(n -> m)`, the dip's window must sit
@@ -95,9 +101,98 @@ arms. To expand *less*, use `once`, which takes a single call — and note that
 it works on one sequence, so `repeat_n(k, once(inline))` counts calls at the
 level you are looking at rather than descending into arms.
 
+## Don't expand more than you are about to cancel
+
+The size of an expansion is not a property of the callee. Opening one layer and
+*folding what that exposed* before opening the next keeps a term small that
+inlining eagerly does not:
+
+```
+$ rewrite tests emit_does_pre_and_post -t 'inline_all; distribute; cleanup'
+49408 lines
+$ rewrite tests emit_does_pre_and_post -t 'repeat_n(3, once(inline); distribute; cleanup)'
+   38 lines
+```
+
+Same sentence, same rules, three orders of magnitude apart. The staging is what
+does it: `distribute_branch` duplicates the continuation into both arms, so
+every call still un-expanded when it fires gets copied along with everything
+else, and expanding first means paying that cost on the largest term rather
+than the smallest.
+
+Note that `repeat(bu(each(inline); ...))` does *not* buy this, and neither does
+`td` — both expand every call they can see before the folding rules get a turn,
+which is the situation the interleaving was meant to avoid. Staging needs a
+tactic that opens a bounded number of calls, which means `once` or `repeat_n`.
+
+## Reaching one arm: `then`, `else`, `body`
+
+`children` visits every child of every node. That is what a normalizing pass
+wants and the opposite of what a targeted one wants, so it comes in narrower
+flavours: `then` and `else` take a branch's arms one at a time, and `body`
+takes dip bodies.
+
+Staged inlining is what makes the difference concrete. `once` works on one
+sequence, so the moment the only remaining calls are inside branch arms it has
+nothing left to find, and no amount of `repeat_n` gets further:
+
+```
+$ rewrite tests emit_does_pre_and_post -t 'repeat_n(3,  once(inline); distribute; cleanup)'  # 38
+$ rewrite tests emit_does_pre_and_post -t 'repeat_n(19, once(inline); distribute; cleanup)'  # 38
+```
+
+`then(once(inline))` is how you say which arm to open next, and it is the whole
+difference between a plateau and a derivation.
+
+These three partition `children` rather than overlapping it: `body` declines a
+branch arm and `then`/`else` decline a dip, so `children(t)` is exactly
+`then(t); else(t); body(t)`. A selector that finds nothing to descend into
+reports "unchanged", the same stance `each` takes towards a rule that matches
+nowhere — `then(t)` on a sequence with no branch is a no-op, not an error.
+
 `flatten_call` does for a stray `dip 0` what `inline` does for a call. It is no
 longer needed after inlining, which splices directly, but `sink` can still
 produce one: `push 1; dip 1 { X }` becomes `dip 0 { X }; push 1`.
+
+## Values, and why a literal is special
+
+Everything above rearranges code without asking what a value *is*. The last four
+rules do ask, and they all answer to one constraint: **an instruction that
+rejects an operand is a check, and removing the check changes the program even
+when it does not change the result.**
+
+That is why `annihilate_drop` will not touch `equal; drop` while `fold_const`
+folds `equal` happily. The objection in the first case is that an operand may
+itself be a panic, which `equal` propagates and `drop; drop` would not — an
+operator's panic branch is reachable whenever its operands are arbitrary. **A
+literal is never a panic.** With both operands pushed right there the branch
+cannot be taken, so the fold is an equality in the Z3 encoding and in the VM
+alike, and the rule needs no view on which of the two is the real semantics.
+
+The operators that reject ordinary values are still restricted: `and`/`or` fold
+only on two booleans and the comparisons only on two numbers, because
+`push 1; push 2; and` is a panic and `push false` is not. `equal` rejects
+nothing, so it folds on any pair — which is what decides
+`push idle; push thirsty; equal` and collapses a whole symbol decision tree,
+since distinct symbols are already distinct structurally.
+
+`bool_identity` is the one that needs a three-node window, and the reason says
+something about how far two nodes can get you. `a && true = a` is a rewrite of
+*this* program only when `a` is known to be a boolean, since `and` rejects
+anything else; the two-node view `push true; and` cannot tell whether the value
+underneath was ever checked. Seeing the node that produced it can. That test is
+deliberately syntactic — a call to a sentence that happens to return a bool does
+not count, because that is a fact about the library rather than about the node,
+and `inline` is how you make the operator underneath visible.
+
+Its absorbing cases go to `B; drop; push c` rather than to `push c`, for the
+same reason the unit case needs `B` at all: `B` may panic, and `a && false` is
+`false` only on the runs where `a` happened.
+
+`cancel_tuple` goes one way only. `tuple n; untuple n` returns the stack to
+where it started, but `untuple n; tuple n` is **not** a no-op — `untuple` is
+the instruction that checks the shape, so cancelling that pair would accept
+values the original rejected.
 
 **Rules are not tactics.** They live in their own namespace and cannot be
 aliased or defined; a rule has to be *placed* by `each` or `once`. Writing a
@@ -115,7 +210,10 @@ bare rule name where a tactic belongs is an error that tells you so.
 | `repeat(t)` | until `t` stops making progress |
 | `repeat_n(k, t)` | at most `k` times, stopping early if it settles |
 | `children(t)` | to every child sequence, one level down |
+| `then(t)`, `else(t)` | to one branch arm, one level down |
+| `body(t)` | to every dip body, one level down |
 | `bu(t)` | children first, then here |
+| `td(t)` | here first, then children |
 | `id`, `fail` | succeed changing nothing; fail (the only thing that does) |
 
 `;` binds tighter than `|`, so `a; b | c` is `(a; b) | c`.
@@ -134,11 +232,16 @@ Definitions may not recurse, directly or mutually. That is deliberate: it makes
 backstop rule oscillation only, never arbitrary user loops.
 
 The built-in prelude defines `inline_all`, `default`, `dips`, `unary`,
-`factoring`, `annihilate`, `cleanup`, `distribute`, `flatten`, `all` and
-`dip_normalize`. With no `-t` you get `default`, which is `id` — nothing is
+`factoring`, `annihilate`, `values`, `cleanup`, `distribute`, `flatten`, `all`
+and `dip_normalize`. With no `-t` you get `default`, which is `id` — nothing is
 expanded and nothing is rewritten. The first four plus
 `dip_normalize` reproduce what the old `--dip-normalize`, `--factor-branches`
 and `--annihilate` flags did.
+
+`values` is the four value rules on their own. They are also folded into
+`cleanup` and `all`, because folding and branch-elimination feed each other:
+folding is what exposes the literal `fold_branch` needs, and dropping a branch
+is what exposes the next thing to fold.
 
 `distribute` and `flatten` are deliberately **not** part of `all` or `cleanup`: it makes the
 listing bigger, which is the opposite of what those are for. Reach for it

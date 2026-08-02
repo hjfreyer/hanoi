@@ -1,6 +1,6 @@
 //! The rewrite rules.
 //!
-//! Every rule is a **local splice on a window of at most two nodes**, expressed
+//! Every rule is a **local splice on a window of a fixed width**, expressed
 //! as a pure function on a read-only slice. It either matches and returns the
 //! replacement, or fails. It cannot mutate, cannot see the rest of the
 //! sequence, and cannot see where in the tree it is being applied.
@@ -37,12 +37,16 @@ pub(crate) trait Rule: Sync + std::fmt::Debug {
 /// or define one.
 pub(crate) const ALL_RULES: &[&dyn Rule] = &[
     &AnnihilateDrop,
+    &BoolIdentity,
+    &CancelTuple,
     &Collapse,
     &DistributeBranch,
     &Expand,
     &FactorBranch,
     &FlattenCall,
     &FoldBranch,
+    &FoldConst,
+    &FoldConstUnary,
     &Fuse,
     &Inline,
     &NoOp,
@@ -210,6 +214,40 @@ impl Rule for FactorBranch {
     }
 }
 
+/// How deep a node's hidden window is, if it has one.
+///
+/// A `Dip { depth: k }` and a `Call { depth: k }` mean the same thing — a block
+/// running below `k` hidden values — and differ only in whether the block is
+/// part of this tree. Every rule that reasons about the *frame* rather than the
+/// body should therefore accept both, or it would silently demand that you
+/// inline a callee just to move it, which is exactly the expansion the tool
+/// exists to let you avoid.
+///
+/// `Call { depth: 0 }` is a plain jump and has no frame, so it reports `None`.
+fn frame_depth(node: &Node) -> Option<usize> {
+    match node {
+        Node::Dip { depth, .. } => Some(*depth),
+        Node::Call { depth, .. } if *depth > 0 => Some(*depth),
+        _ => None,
+    }
+}
+
+/// The same node with its frame set to `depth`.
+fn with_frame_depth(node: &Node, depth: usize) -> Option<Node> {
+    match node {
+        Node::Dip { origins, body, .. } => Some(Node::Dip {
+            depth,
+            origins: origins.clone(),
+            body: body.clone(),
+        }),
+        Node::Call { target, .. } => Some(Node::Call {
+            depth,
+            target: *target,
+        }),
+        _ => None,
+    }
+}
+
 /// `X ; dip k { S }` becomes `dip (k - m + n) { S } ; X`, where X has arity
 /// `(n -> m)` and `k >= m`.
 ///
@@ -217,6 +255,12 @@ impl Rule for FactorBranch {
 /// that is `k >= m` — and the same window is `k - m + n` deep on the other side
 /// of it. One rule covers every X: push (0→1), drop (1→0), arithmetic (2→1),
 /// `pick d` (d+1→d+2), `roll d` (d+1→d+1), and a nested dip alike.
+///
+/// The moved node may be an un-expanded `dip k → S` as readily as an expanded
+/// one: the side condition is about the frame, and the callee's body has no say
+/// in it. Requiring the expanded form would have made `sink` demand an `inline`
+/// it does not need — and on a term where the whole art is expanding as little
+/// as possible, that is the difference between 38 lines and 49408.
 ///
 /// Measure: the summed positions of dips.
 #[derive(Debug)]
@@ -231,31 +275,17 @@ impl Rule for Sink {
     }
     fn rewrite(&self, prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
         let [prev, dip] = window else { return None };
-        let Node::Dip {
-            depth,
-            origins,
-            body,
-        } = dip
-        else {
-            return None;
-        };
+        let depth = frame_depth(dip)?;
 
         let (n, m) = node_arity(prog, prev)?;
-        let k = *depth as i64;
+        let k = depth as i64;
         if k < m {
             return None;
         }
         // The arity table keeps this non-negative, but do not trust it blindly.
         let shifted = usize::try_from(k - m + n).ok()?;
 
-        Some(vec![
-            Node::Dip {
-                depth: shifted,
-                origins: origins.clone(),
-                body: body.clone(),
-            },
-            prev.clone(),
-        ])
+        Some(vec![with_frame_depth(dip, shifted)?, prev.clone()])
     }
 }
 
@@ -905,6 +935,243 @@ mod tests {
             None
         );
     }
+
+    // -----------------------------------------------------------------------
+    // Value rules
+    // -----------------------------------------------------------------------
+
+    fn push(v: Value) -> Node {
+        op(Instruction::Push(v))
+    }
+
+    /// Symbols compare by id, so distinct ids are distinct symbols.
+    fn sym(id: usize) -> Value {
+        Value::Symbol(bytecode::Symbol {
+            id,
+            name: format!("s{}", id),
+        })
+    }
+
+    #[test]
+    fn fold_const_decides_equal_on_any_pair() {
+        // The case the whole symbol decision tree turns on. Two distinct
+        // symbols are distinct structurally, so no extra disjointness fact is
+        // needed anywhere.
+        assert_eq!(
+            FoldConst.rewrite(
+                &prog(),
+                &[push(sym(1)), push(sym(2)), op(Instruction::Equal)]
+            ),
+            Some(vec![push(Value::Bool(false))])
+        );
+        assert_eq!(
+            FoldConst.rewrite(
+                &prog(),
+                &[push(sym(1)), push(sym(1)), op(Instruction::Equal)]
+            ),
+            Some(vec![push(Value::Bool(true))])
+        );
+        // Different types compare too, and compare unequal.
+        assert_eq!(
+            FoldConst.rewrite(
+                &prog(),
+                &[
+                    push(Value::Int(1)),
+                    push(Value::Bool(true)),
+                    op(Instruction::Equal)
+                ]
+            ),
+            Some(vec![push(Value::Bool(false))])
+        );
+    }
+
+    #[test]
+    fn fold_const_declines_an_operator_that_would_panic() {
+        // `push 1; push 2; and` is a panic, and `push false` is not one. The
+        // literals make the operands known, which is exactly what makes it
+        // knowable that this one must *not* fold.
+        assert_eq!(
+            FoldConst.rewrite(
+                &prog(),
+                &[push(Value::Int(1)), push(Value::Int(2)), op(Instruction::And)]
+            ),
+            None
+        );
+        assert_eq!(
+            FoldConst.rewrite(
+                &prog(),
+                &[push(sym(1)), push(sym(2)), op(Instruction::Less)]
+            ),
+            None
+        );
+        // Two booleans are fine.
+        assert_eq!(
+            FoldConst.rewrite(
+                &prog(),
+                &[
+                    push(Value::Bool(true)),
+                    push(Value::Bool(false)),
+                    op(Instruction::And)
+                ]
+            ),
+            Some(vec![push(Value::Bool(false))])
+        );
+    }
+
+    #[test]
+    fn fold_const_needs_both_operands_literal() {
+        assert_eq!(
+            FoldConst.rewrite(
+                &prog(),
+                &[op(Instruction::Pick(0)), push(sym(1)), op(Instruction::Equal)]
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn fold_const_unary_answers_the_is_family_but_not_a_rejecting_one() {
+        assert_eq!(
+            FoldConstUnary.rewrite(&prog(), &[push(sym(1)), op(Instruction::IsSymbol)]),
+            Some(vec![push(Value::Bool(true))])
+        );
+        assert_eq!(
+            FoldConstUnary.rewrite(&prog(), &[push(Value::Int(3)), op(Instruction::IsSymbol)]),
+            Some(vec![push(Value::Bool(false))])
+        );
+        // `not` rejects a non-boolean, so it must not fold on one.
+        assert_eq!(
+            FoldConstUnary.rewrite(&prog(), &[push(sym(1)), op(Instruction::Not)]),
+            None
+        );
+        assert_eq!(
+            FoldConstUnary.rewrite(&prog(), &[push(Value::Bool(true)), op(Instruction::Not)]),
+            Some(vec![push(Value::Bool(false))])
+        );
+    }
+
+    #[test]
+    fn bool_identity_drops_a_unit_and_only_when_the_operand_is_known_boolean() {
+        // `is_symbol` answers with a Bool or panics, so `&& true` adds nothing.
+        assert_eq!(
+            BoolIdentity.rewrite(
+                &prog(),
+                &[
+                    op(Instruction::IsSymbol),
+                    push(Value::Bool(true)),
+                    op(Instruction::And)
+                ]
+            ),
+            Some(vec![op(Instruction::IsSymbol)])
+        );
+        // `pick 0` says nothing about the value, so the `and` is still the only
+        // thing rejecting a non-boolean and has to stay.
+        assert_eq!(
+            BoolIdentity.rewrite(
+                &prog(),
+                &[
+                    op(Instruction::Pick(0)),
+                    push(Value::Bool(true)),
+                    op(Instruction::And)
+                ]
+            ),
+            None
+        );
+        // A call is not enough either, even to a sentence that does return a
+        // bool: that is a fact about the library, not about this node.
+        assert_eq!(
+            BoolIdentity.rewrite(
+                &prog(),
+                &[
+                    Node::Call {
+                        depth: 0,
+                        target: bytecode::SentenceIndex::from(0)
+                    },
+                    push(Value::Bool(true)),
+                    op(Instruction::And)
+                ]
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn bool_identity_keeps_the_operand_in_the_absorbing_case() {
+        // `a && false` is `false` only on the runs where `a` happened at all,
+        // so the operand stays and a `drop` takes its place.
+        assert_eq!(
+            BoolIdentity.rewrite(
+                &prog(),
+                &[
+                    op(Instruction::IsSymbol),
+                    push(Value::Bool(false)),
+                    op(Instruction::And)
+                ]
+            ),
+            Some(vec![
+                op(Instruction::IsSymbol),
+                op(Instruction::Drop),
+                push(Value::Bool(false))
+            ])
+        );
+        // The dual: `a || true` is `true`.
+        assert_eq!(
+            BoolIdentity.rewrite(
+                &prog(),
+                &[
+                    op(Instruction::IsTuple),
+                    push(Value::Bool(true)),
+                    op(Instruction::Or)
+                ]
+            ),
+            Some(vec![
+                op(Instruction::IsTuple),
+                op(Instruction::Drop),
+                push(Value::Bool(true))
+            ])
+        );
+        // And `a || false` is `a`.
+        assert_eq!(
+            BoolIdentity.rewrite(
+                &prog(),
+                &[
+                    op(Instruction::IsTuple),
+                    push(Value::Bool(false)),
+                    op(Instruction::Or)
+                ]
+            ),
+            Some(vec![op(Instruction::IsTuple)])
+        );
+    }
+
+    #[test]
+    fn cancel_tuple_goes_one_way_only() {
+        assert_eq!(
+            CancelTuple.rewrite(
+                &prog(),
+                &[op(Instruction::Tuple(2)), op(Instruction::Untuple(2))]
+            ),
+            Some(Vec::new())
+        );
+        // `untuple n; tuple n` is *not* a no-op: `untuple` is the instruction
+        // that checks the shape, so removing the pair would accept values the
+        // original rejected.
+        assert_eq!(
+            CancelTuple.rewrite(
+                &prog(),
+                &[op(Instruction::Untuple(2)), op(Instruction::Tuple(2))]
+            ),
+            None
+        );
+        // Mismatched widths are a panic, not a cancellation.
+        assert_eq!(
+            CancelTuple.rewrite(
+                &prog(),
+                &[op(Instruction::Tuple(2)), op(Instruction::Untuple(3))]
+            ),
+            None
+        );
+    }
 }
 
 /// `pick d ; dip (d+1) { drop }` becomes `roll d`.
@@ -968,5 +1235,226 @@ impl Rule for NoOp {
             Node::Dip { body, .. } if body.is_empty() => Some(Vec::new()),
             _ => None,
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Values
+//
+// Everything above rearranges code without ever asking what a value *is*. The
+// rules below are the ones that do, and they all answer to the same
+// constraint: an instruction that rejects an operand is a check, and a rewrite
+// that removes the check has changed the program even when it has not changed
+// the result. `equal` is total and folds freely; `and` is not and does not.
+// ---------------------------------------------------------------------------
+
+/// The literal a node pushes, if it pushes one.
+fn pushed(node: &Node) -> Option<&Value> {
+    match node {
+        Node::Op(Instruction::Push(v)) => Some(v),
+        _ => None,
+    }
+}
+
+/// Whether this node always leaves a `Bool` on top, or panics.
+///
+/// The point of the "or panics" is that a caller may then treat the value as a
+/// boolean without having to keep `and`'s type check alive separately: on every
+/// path where the check would have mattered, the node already failed.
+///
+/// Deliberately syntactic. A call to a sentence that happens to return a bool
+/// does not count — that is a fact about the library rather than about this
+/// node, and reading it here would make the rule's answer depend on which
+/// sentence a name currently resolves to. Inline the callee and the operator
+/// underneath becomes visible on its own.
+fn yields_bool(node: &Node) -> bool {
+    matches!(
+        node,
+        Node::Op(
+            Instruction::IsInt
+                | Instruction::IsBool
+                | Instruction::IsFloat
+                | Instruction::IsSymbol
+                | Instruction::IsTuple
+                | Instruction::Equal
+                | Instruction::Greater
+                | Instruction::Less
+                | Instruction::And
+                | Instruction::Or
+                | Instruction::Not
+                | Instruction::Push(Value::Bool(_))
+        )
+    )
+}
+
+/// `B ; push true ; and` becomes `B`, and the three other unit laws.
+///
+/// `a && true = a` is only a rewrite of *this program* when `a` is known to be
+/// a boolean, because `and` rejects anything else and dropping it would erase
+/// that rejection. `B` supplying the operand is what licenses it, which is why
+/// the window is three wide: the two-node view `push true; and` cannot tell
+/// whether the value underneath was ever checked.
+///
+/// The absorbing cases go to `B; drop; push c` rather than to `push c`, for the
+/// same reason — `B` may panic, and `a && false` is only `false` on the runs
+/// where `a` existed.
+///
+/// Measure: node count, counting the absorbing cases as level (2 nodes for 2)
+/// and relying on the `drop` they expose to be cancelled by `annihilate_drop`.
+#[derive(Debug)]
+pub(crate) struct BoolIdentity;
+
+impl Rule for BoolIdentity {
+    fn name(&self) -> &'static str {
+        "bool_identity"
+    }
+    fn width(&self) -> usize {
+        3
+    }
+    fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
+        let [b, lit, op] = window else { return None };
+        if !yields_bool(b) {
+            return None;
+        }
+        let Some(Value::Bool(k)) = pushed(lit) else {
+            return None;
+        };
+        let unit = match (op, k) {
+            // a && true = a, a || false = a
+            (Node::Op(Instruction::And), true) | (Node::Op(Instruction::Or), false) => true,
+            // a && false = false, a || true = true
+            (Node::Op(Instruction::And), false) | (Node::Op(Instruction::Or), true) => false,
+            _ => return None,
+        };
+        Some(if unit {
+            vec![b.clone()]
+        } else {
+            vec![
+                b.clone(),
+                Node::Op(Instruction::Drop),
+                Node::Op(Instruction::Push(Value::Bool(*k))),
+            ]
+        })
+    }
+}
+
+/// Evaluates an operator whose operands are already literals.
+///
+/// Note carefully why this is allowed to fold `equal` when [`AnnihilateDrop`]
+/// is not. The objection there is that an operand may itself be a panic, which
+/// `equal` propagates and `drop; drop` would not — an operator's panic branch is
+/// reachable whenever its operands are arbitrary. **A literal is never a
+/// panic**, so with both operands pushed right here that branch cannot be
+/// taken, and the fold is an equality in the Z3 encoding and in the VM alike.
+/// The rule needs no view on which of the two is the real semantics.
+///
+/// That still leaves the operators that reject perfectly ordinary values:
+/// `and`/`or` fold only on two booleans and the comparisons only on two
+/// numbers, since `push 1; push 2; and` is a panic and `push false` is not.
+/// `equal` rejects nothing, so it folds on any pair — which is what decides
+/// `push idle; push thirsty; equal` and collapses a symbol decision tree.
+///
+/// Measure: node count.
+#[derive(Debug)]
+pub(crate) struct FoldConst;
+
+impl Rule for FoldConst {
+    fn name(&self) -> &'static str {
+        "fold_const"
+    }
+    fn width(&self) -> usize {
+        3
+    }
+    fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
+        let [x, y, op] = window else { return None };
+        let (a, b) = (pushed(x)?, pushed(y)?);
+        let Node::Op(inst) = op else { return None };
+
+        let out = match inst {
+            // Rejects nothing: any two values compare.
+            Instruction::Equal => Value::Bool(a == b),
+            Instruction::And | Instruction::Or => match (a, b) {
+                (Value::Bool(p), Value::Bool(q)) => Value::Bool(match inst {
+                    Instruction::And => *p && *q,
+                    _ => *p || *q,
+                }),
+                // Anything else is a panic, and a panic is not a value.
+                _ => return None,
+            },
+            Instruction::Greater | Instruction::Less => match (a, b) {
+                (Value::Int(p), Value::Int(q)) => Value::Bool(match inst {
+                    Instruction::Greater => p > q,
+                    _ => p < q,
+                }),
+                _ => return None,
+            },
+            _ => return None,
+        };
+        Some(vec![Node::Op(Instruction::Push(out))])
+    }
+}
+
+/// Evaluates a one-operand operator applied to a literal.
+///
+/// Same licence as [`FoldConst`]: the operand is a literal, so it is not a
+/// panic, so nothing the operator would propagate is in reach. The `is_*`
+/// family additionally rejects nothing — it asks a question about the value it
+/// is given rather than demanding a particular one — so it folds on any
+/// literal, while `not` and `tuple_length` fold only on the shape they accept.
+///
+/// Measure: node count.
+#[derive(Debug)]
+pub(crate) struct FoldConstUnary;
+
+impl Rule for FoldConstUnary {
+    fn name(&self) -> &'static str {
+        "fold_const_unary"
+    }
+    fn width(&self) -> usize {
+        2
+    }
+    fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
+        let [x, op] = window else { return None };
+        let a = pushed(x)?;
+        let Node::Op(inst) = op else { return None };
+
+        let out = match (inst, a) {
+            (Instruction::IsInt, _) => Value::Bool(matches!(a, Value::Int(_))),
+            (Instruction::IsBool, _) => Value::Bool(matches!(a, Value::Bool(_))),
+            (Instruction::IsFloat, _) => Value::Bool(matches!(a, Value::Float(_))),
+            (Instruction::IsSymbol, _) => Value::Bool(matches!(a, Value::Symbol(_))),
+            (Instruction::IsTuple, _) => Value::Bool(matches!(a, Value::Tuple(_))),
+            (Instruction::Not, Value::Bool(p)) => Value::Bool(!p),
+            (Instruction::TupleLength, Value::Tuple(t)) => Value::Int(t.len() as i64),
+            _ => return None,
+        };
+        Some(vec![Node::Op(Instruction::Push(out))])
+    }
+}
+
+/// `tuple n ; untuple n` becomes nothing.
+///
+/// Building a tuple and immediately taking it apart returns the stack to
+/// exactly where it started, and `untuple n` cannot reject what `tuple n` just
+/// built. The converse — `untuple n; tuple n` — is *not* a no-op and is not
+/// included: `untuple` is the instruction that checks the shape, so removing
+/// the pair would accept values the original rejected.
+///
+/// Measure: node count.
+#[derive(Debug)]
+pub(crate) struct CancelTuple;
+
+impl Rule for CancelTuple {
+    fn name(&self) -> &'static str {
+        "cancel_tuple"
+    }
+    fn width(&self) -> usize {
+        2
+    }
+    fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
+        let [Node::Op(Instruction::Tuple(n)), Node::Op(Instruction::Untuple(m))] = window else {
+            return None;
+        };
+        (n == m).then(Vec::new)
     }
 }

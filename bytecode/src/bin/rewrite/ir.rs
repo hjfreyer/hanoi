@@ -101,6 +101,36 @@ pub(crate) fn child_bodies(node: &mut Node) -> Vec<&mut Vec<Node>> {
     }
 }
 
+/// Which child sequences a traversal should descend into.
+///
+/// `children` and its relatives take every child of every node; this names a
+/// subset. The distinction is not cosmetic: a tactic that has to open one
+/// branch arm and leave the other alone cannot be written without it, and
+/// staged inlining stalls the moment the remaining calls sit inside arms.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Selector {
+    /// The `then` arm of every branch.
+    Then,
+    /// The `else` arm of every branch.
+    Else,
+    /// The body of every dip.
+    Body,
+}
+
+/// The child sequences of a node that `sel` picks out.
+///
+/// A node with no child of that kind contributes nothing, so `then(t)` applied
+/// to a sequence with no branches is a no-op rather than an error — the same
+/// stance `each` takes towards a rule that matches nowhere.
+pub(crate) fn selected_bodies(node: &mut Node, sel: Selector) -> Vec<&mut Vec<Node>> {
+    match (node, sel) {
+        (Node::Branch { then_body, .. }, Selector::Then) => vec![then_body],
+        (Node::Branch { else_body, .. }, Selector::Else) => vec![else_body],
+        (Node::Dip { body, .. }, Selector::Body) => vec![body],
+        _ => Vec::new(),
+    }
+}
+
 /// The nodes a call stands for.
 ///
 /// A plain call — `depth == 0` — hides nothing, so its body is spliced straight

@@ -684,6 +684,170 @@ fn a_rule_that_matches_nowhere_is_a_no_op_not_a_failure() {
     assert_eq!(before, after);
 }
 
+// ---------------------------------------------------------------------------
+// Selective descent: then, else, body
+//
+// `children` reaches every child of every node, which is fine for a
+// normalizing pass and useless for a targeted one. These are the narrowed
+// versions, and the point of them is that a script can open one branch arm
+// while leaving the other alone.
+// ---------------------------------------------------------------------------
+
+/// A sentence whose two arms each contain a call, plus a call inside a dip.
+fn arms() -> &'static str {
+    r#"
+        #[arity(1, 1)]
+        sentence probe {
+            pick 0
+            is_tuple
+            branch { jump left } { jump right }
+        }
+        #[arity(1, 1)]
+        sentence left { push 1 add }
+        #[arity(1, 1)]
+        sentence right { push 2 add }
+    "#
+}
+
+/// The `shape` of each branch arm of the first branch in `nodes`.
+fn arm_shapes(nodes: &[Node]) -> (Vec<String>, Vec<String>) {
+    nodes
+        .iter()
+        .find_map(|n| match n {
+            Node::Branch {
+                then_body,
+                else_body,
+                ..
+            } => Some((shape(then_body), shape(else_body))),
+            _ => None,
+        })
+        .expect("expected a branch")
+}
+
+/// Builds `arms()` without inlining anything, so the arms still hold calls.
+fn unexpanded_arms() -> (&'static Program<'static>, Vec<Node>) {
+    let prog = program_of(arms());
+    let body = build(prog.library(), SentenceIndex::from(0), &mut HashSet::new());
+    (prog, body)
+}
+
+#[test]
+fn then_and_else_each_reach_one_arm_and_leave_the_other() {
+    let (prog, before) = unexpanded_arms();
+    let (then_before, else_before) = arm_shapes(&before);
+
+    let opened_then = run(prog, before.clone(), "then(each(inline))");
+    let (t, e) = arm_shapes(&opened_then);
+    assert_ne!(t, then_before, "`then` should have opened the then arm");
+    assert_eq!(e, else_before, "`then` must not touch the else arm");
+
+    let opened_else = run(prog, before, "else(each(inline))");
+    let (t, e) = arm_shapes(&opened_else);
+    assert_eq!(t, then_before, "`else` must not touch the then arm");
+    assert_ne!(e, else_before, "`else` should have opened the else arm");
+}
+
+#[test]
+fn the_three_selectors_partition_children() {
+    // The claim documented in docs/tactics.md: `children(t)` is exactly
+    // `then(t); else(t); body(t)`. It only holds because the three decline
+    // each other's nodes, so the fixture needs a branch *and* a dip for the
+    // test to have any force.
+    // Inlined first, because `dip 1 { ... }` builds as a `Call` and only
+    // becomes a `Dip` with a body once something expands it — so an
+    // un-expanded fixture would give `body` nothing to find and the test would
+    // pass without testing anything.
+    let (prog, before) = tree_of(
+        r#"
+        #[arity(2, 1)]
+        sentence probe {
+            pick 0
+            is_tuple
+            branch { push 1 drop 0 } { push 2 drop 0 }
+            dip 1 { jump inner }
+            drop 0
+        }
+        #[arity(1, 1)]
+        sentence inner { push 3 drop 0 }
+    "#,
+        NOTHING,
+    );
+
+    let via_children = run(prog, before.clone(), "children(each(annihilate_drop))");
+    let via_parts = run(
+        prog,
+        before.clone(),
+        "then(each(annihilate_drop)); else(each(annihilate_drop)); body(each(annihilate_drop))",
+    );
+    assert_ne!(
+        shape(&before),
+        shape(&via_children),
+        "expected the fixture to have children worth descending into"
+    );
+    assert_eq!(shape(&via_children), shape(&via_parts));
+    assert_eq!(arm_shapes(&via_children), arm_shapes(&via_parts));
+}
+
+#[test]
+fn body_reaches_a_dip_and_not_a_branch_arm() {
+    // `body` is the dip-shaped selector, so it must decline the branch arms
+    // that `then`/`else` own — otherwise the three would not partition
+    // `children` and a script could not say which it meant.
+    let (prog, before) = unexpanded_arms();
+    let after = run(prog, before.clone(), "body(each(inline))");
+    assert_eq!(
+        arm_shapes(&before),
+        arm_shapes(&after),
+        "`body` must not descend into branch arms"
+    );
+
+    let (prog, before) = tree_of(
+        r#"
+        #[arity(1, 1)]
+        sentence probe {
+            dip 1 { push 1 drop 0 }
+        }
+    "#,
+        NOTHING,
+    );
+    let after = run(prog, before.clone(), "body(each(annihilate_drop))");
+    assert_ne!(
+        shape(&before),
+        shape(&after),
+        "`body` should have reached inside the dip"
+    );
+}
+
+#[test]
+fn selective_descent_is_total() {
+    // Same contract as `children`: a selector that picks out nothing is a
+    // no-op, not a failure. `sample()` has no branch at all, so `then`/`else`
+    // find nowhere to go.
+    never_fails("then(each(annihilate_drop))");
+    never_fails("else(each(annihilate_drop))");
+    never_fails("body(each(annihilate_drop))");
+    never_fails("then(fail)");
+}
+
+#[test]
+fn selective_descent_breaks_the_staged_inlining_plateau() {
+    // The motivating case. `once(inline)` works on one sequence, so staged
+    // inlining stops dead once the only remaining calls are inside branch
+    // arms — no amount of `repeat_n` gets further, because there is nothing
+    // left to find at the level it is looking at.
+    let (prog, before) = unexpanded_arms();
+
+    let stalled = run(prog, before.clone(), "repeat_n(9, once(inline))");
+    assert_eq!(
+        arm_shapes(&before),
+        arm_shapes(&stalled),
+        "root-level staging cannot reach into arms; that is the plateau"
+    );
+
+    let past = run(prog, before.clone(), "repeat_n(9, once(inline)); then(once(inline))");
+    assert_ne!(arm_shapes(&before), arm_shapes(&past), "`then` gets past it");
+}
+
 #[test]
 fn a_later_step_finding_nothing_does_not_discard_an_earlier_one() {
     // Regression. `each(sink)` rewrites; `each(annihilate_drop)` then matches
