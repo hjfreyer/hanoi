@@ -1138,6 +1138,65 @@ fn the_whole_derivation_runs_on_the_blocked_shape() {
 }
 
 #[test]
+fn the_sharing_chain_runs_on_the_real_corpus_sentence() {
+    // Not a probe: `barista::customer_impl::emit_does_pre_and_post` itself,
+    // where the copy is made at the top of the caller and the `untuple` it
+    // pairs with is two branches and several guards away.
+    //
+    //   copy_assoc       frames one copy so it can travel
+    //   float            walks it past each guard instruction
+    //   unfactor_branch  carries it through each branch
+    //   rebuild_copy     fires once the copy finally sits on the untuple
+    //   cancel_tuple     annihilates the rebuild against the later untuples
+    // Tests run with the package root as the working directory. Not finding
+    // the corpus is not a failure: the crate should still be testable alone.
+    let main = Path::new("../tests/main.hana");
+    let Ok(code) = fs::read_to_string(main) else {
+        return;
+    };
+    let library: &'static Library =
+        Box::leak(Box::new(bytecode::assemble_with_path(&code, main.parent()).unwrap()));
+    let prog: &'static Program<'static> = Box::leak(Box::new(Program::new(library)));
+    let idx = prog
+        .library()
+        .names
+        .iter()
+        .position(|n| n == "barista::customer_impl::emit_does_pre_and_post")
+        .map(SentenceIndex::from)
+        .expect("sentence should exist in the corpus");
+
+    let opened = run(
+        prog,
+        build(prog.library(), idx, &mut HashSet::new()),
+        "once(inline); children(once(inline)); then(then(once(inline))); distribute",
+    );
+    let before = untuples(&opened);
+    assert!(
+        before > 3,
+        "expected several unshared untuples to start with, got {}",
+        before
+    );
+
+    let after = run(
+        prog,
+        opened.clone(),
+        "repeat(bu(each(copy_assoc); each(float); each(unfactor_branch); \
+                   each(flatten_call); each(rebuild_copy); each(cancel_tuple)))",
+    );
+    assert!(
+        untuples(&after) < before,
+        "the chain should have shared some untuples: {} -> {}",
+        before,
+        untuples(&after)
+    );
+    assert_eq!(
+        seq_arity(prog, &opened),
+        seq_arity(prog, &after),
+        "and preserved arity while doing it"
+    );
+}
+
+#[test]
 fn float_delivers_the_rebuild_to_the_branch_that_undoes_it() {
     // The same chain with nothing hand-placed. The rebuild sits where the
     // rewrite would leave it — straight after the picks — and `float` has to

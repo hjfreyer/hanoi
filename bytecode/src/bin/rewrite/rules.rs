@@ -40,6 +40,7 @@ pub(crate) const ALL_RULES: &[&dyn Rule] = &[
     &BoolIdentity,
     &CancelTuple,
     &Collapse,
+    &CopyAssoc,
     &DistributeBranch,
     &DupNatural,
     &Expand,
@@ -1388,6 +1389,79 @@ mod tests {
     }
 
     #[test]
+    fn copy_assoc_frames_one_of_the_two_copies() {
+        // Holds at every depth, not just 0: the second copy comes from the
+        // original instead of from the copy, and they are the same value.
+        for d in [0usize, 1, 2, 5] {
+            assert_eq!(
+                CopyAssoc.rewrite(
+                    &prog(),
+                    &[op(Instruction::Pick(d)), op(Instruction::Pick(0))]
+                ),
+                Some(vec![
+                    op(Instruction::Pick(d)),
+                    dip(1, vec![op(Instruction::Pick(d))]),
+                ]),
+                "at d = {}",
+                d
+            );
+        }
+    }
+
+    #[test]
+    fn copy_assoc_needs_the_second_pick_to_be_of_the_copy() {
+        // `pick 1` reads past the copy the first pick made, so the two are not
+        // copies of one value and the law does not apply.
+        assert_eq!(
+            CopyAssoc.rewrite(
+                &prog(),
+                &[op(Instruction::Pick(0)), op(Instruction::Pick(1))]
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn copy_assoc_settles() {
+        // Its output holds no `pick d; pick 0`, so `each` terminates.
+        let out = CopyAssoc
+            .rewrite(
+                &prog(),
+                &[op(Instruction::Pick(2)), op(Instruction::Pick(0))],
+            )
+            .expect("should fire");
+        for w in out.windows(2) {
+            assert_eq!(CopyAssoc.rewrite(&prog(), w), None, "re-fired on {:?}", w);
+        }
+    }
+
+    #[test]
+    fn copy_assoc_is_what_float_cannot_do() {
+        // `float` declines this, and correctly: its `j >= n` is sufficient but
+        // not necessary, and here the two windows overlap even though the
+        // values do not differ. A general rule failing to see a special case is
+        // the usual reason a specific law earns its own entry.
+        assert_eq!(
+            Float.rewrite(
+                &prog(),
+                &[dip(0, vec![op(Instruction::Pick(0))]), op(Instruction::Pick(0))]
+            ),
+            None
+        );
+        // But once `copy_assoc` has framed it at depth 1, `float` carries it.
+        assert_eq!(
+            Float.rewrite(
+                &prog(),
+                &[dip(1, vec![op(Instruction::Pick(0))]), op(Instruction::IsTuple)]
+            ),
+            Some(vec![
+                op(Instruction::IsTuple),
+                dip(1, vec![op(Instruction::Pick(0))]),
+            ])
+        );
+    }
+
+    #[test]
     fn rebuild_copy_destructures_the_value_and_rebuilds_the_copy() {
         assert_eq!(
             RebuildCopy.rewrite(
@@ -1603,6 +1677,42 @@ mod tests {
         assert_eq!(
             FactorBranch.rewrite(&prog(), &unfactored),
             Some(factored.to_vec())
+        );
+    }
+
+    #[test]
+    fn unfactor_branch_pushes_a_deeper_window_in_one_shallower() {
+        // The case that matters in practice: `float` almost never leaves a
+        // computation at exactly depth 1. The branch pops the condition, so
+        // the same window is one shallower inside the arm.
+        assert_eq!(
+            UnfactorBranch.rewrite(
+                &prog(),
+                &[
+                    dip(4, vec![op(Instruction::Tuple(3))]),
+                    branch(vec![op(Instruction::Add)], vec![op(Instruction::Drop)]),
+                ]
+            ),
+            Some(vec![branch(
+                vec![dip(3, vec![op(Instruction::Tuple(3))]), op(Instruction::Add)],
+                vec![dip(3, vec![op(Instruction::Tuple(3))]), op(Instruction::Drop)],
+            )])
+        );
+    }
+
+    #[test]
+    fn unfactor_branch_needs_the_window_to_contain_the_condition() {
+        // At depth 0 the dip's block operates on the condition itself, so the
+        // branch would be popping something the block could have produced.
+        assert_eq!(
+            UnfactorBranch.rewrite(
+                &prog(),
+                &[
+                    dip(0, vec![op(Instruction::Tuple(3))]),
+                    branch(vec![op(Instruction::Add)], vec![]),
+                ]
+            ),
+            None
         );
     }
 
@@ -2149,6 +2259,53 @@ impl Rule for DupNatural {
     }
 }
 
+/// `pick d ; pick 0` becomes `pick d ; dip 1 { pick d }`.
+///
+/// **Duplication is coassociative.** Making a third copy from the copy and
+/// making it from the original are the same thing, because they are the same
+/// value; `Δ;(Δ⊗id) = Δ;(id⊗Δ)` in the notation where `pick` is the comonoid's
+/// comultiplication. `annihilate_drop`'s treatment of `pick; drop` is the counit
+/// law of the same comonoid, and `pick 0; roll 1` becoming `pick 0` — swapping
+/// two copies of one value — would be its cocommutativity.
+///
+/// What makes it worth having is not simplification: both sides are three nodes
+/// and neither is smaller. It is that the right-hand side puts one of the copies
+/// **in a frame**, and a framed computation is one [`Float`] can carry. A bare
+/// `pick` cannot travel at all, so the copy a downstream rule needs is stranded
+/// wherever the source happened to make it.
+///
+/// `float` declines this move itself, and correctly: its side condition `j >= n`
+/// is sufficient but not necessary, and two picks of the same slot commute even
+/// though their windows overlap. That the general interchange rule cannot see a
+/// special case is the usual reason a specific law earns its own entry.
+///
+/// Measure: the number of `pick d; pick 0` adjacencies, which this strictly
+/// decreases — its own output contains none.
+#[derive(Debug)]
+pub(crate) struct CopyAssoc;
+
+impl Rule for CopyAssoc {
+    fn name(&self) -> &'static str {
+        "copy_assoc"
+    }
+    fn width(&self) -> usize {
+        2
+    }
+    fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
+        let [Node::Op(Instruction::Pick(d)), Node::Op(Instruction::Pick(0))] = window else {
+            return None;
+        };
+        Some(vec![
+            Node::Op(Instruction::Pick(*d)),
+            Node::Dip {
+                depth: 1,
+                origins: Vec::new(),
+                body: vec![Node::Op(Instruction::Pick(*d))],
+            },
+        ])
+    }
+}
+
 /// `pick 0 ; untuple n` becomes `untuple n ; (pick (n-1))^n ; dip n { tuple n }`.
 ///
 /// Instead of keeping the value and taking a copy apart, take the value apart
@@ -2211,12 +2368,19 @@ impl Rule for RebuildCopy {
     }
 }
 
-/// `dip 1 { X } ; branch { A } { B }` becomes `branch { X; A } { X; B }`.
+/// `dip k { X } ; branch { A } { B }` becomes
+/// `branch { dip (k-1) { X }; A } { dip (k-1) { X }; B }`, for `k >= 1`.
 ///
-/// The exact inverse of [`FactorBranch`], and sound for the reason that rule is:
-/// the dip hides the condition, so `X` runs on the values below it either way,
-/// and running it once before the split is running it once on whichever side
-/// the split takes.
+/// At `k = 1` this is the exact inverse of [`FactorBranch`] — the dip hides
+/// exactly the condition, so `X` runs on the values below it either way, and
+/// the body splices straight into each arm.
+///
+/// Deeper windows work the same way and are the case that matters in practice.
+/// A `dip k` hides the condition *and* `k - 1` values above whatever `X`
+/// touches; the branch pops the condition, so inside the arm the same window is
+/// one shallower. Restricting this to `k = 1` would mean a computation could
+/// only be pushed into a branch it happened to sit immediately beneath, which
+/// is almost never where `float` leaves one.
 ///
 /// It duplicates on purpose, the way [`DistributeBranch`] does, and for the same
 /// reason — a rule that only holds inside an arm cannot see anything outside
@@ -2241,7 +2405,11 @@ impl Rule for UnfactorBranch {
         2
     }
     fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
-        let [Node::Dip { depth: 1, body, .. }, Node::Branch {
+        let [Node::Dip {
+            depth,
+            origins,
+            body,
+        }, Node::Branch {
             then_origin,
             then_body,
             else_origin,
@@ -2250,14 +2418,30 @@ impl Rule for UnfactorBranch {
         else {
             return None;
         };
+        // The window has to contain the condition, or the branch would be
+        // popping something the dip's block could have produced.
+        if *depth < 1 {
+            return None;
+        }
         if body.is_empty() {
             // `noop` removes an empty dip; pushing nothing into both arms would
             // report a change without making one.
             return None;
         }
 
+        let inner = depth - 1;
         let prefixed = |arm: &Vec<Node>| {
-            let mut out = body.clone();
+            let mut out = if inner == 0 {
+                // No frame left to keep, and splicing is what lets the arm's
+                // own rules reach what just landed.
+                body.clone()
+            } else {
+                vec![Node::Dip {
+                    depth: inner,
+                    origins: origins.clone(),
+                    body: body.clone(),
+                }]
+            };
             out.extend(arm.iter().cloned());
             out
         };

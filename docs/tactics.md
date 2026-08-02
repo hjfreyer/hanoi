@@ -48,8 +48,9 @@ operand came from. It either matches and returns a replacement, or fails.
 | `retain_condition` | `pick 0 ; branch { A } { B }` | `branch { push true; A } { push false; B }` |
 | `specialize_equal` | `pick 0; push c; equal; branch { A } { B }` | the same, with A as `drop; push c; A` |
 | `dup_natural` | `pick 0 ; X ; dip m { X }`, `X : 1 -> m` | `X ; (pick (m-1))^m` |
-| `unfactor_branch` | `dip 1 { X } ; branch { A } { B }` | `branch { X; A } { X; B }` |
+| `unfactor_branch` | `dip k { X } ; branch { A } { B }`, `k >= 1` | `branch { dip (k-1) { X }; A } { … }` |
 | `rebuild_copy` | `pick 0 ; untuple n` | `untuple n ; (pick (n-1))^n ; dip n { tuple n }` |
+| `copy_assoc` | `pick d ; pick 0` | `pick d ; dip 1 { pick d }` |
 
 `sink` is the interchange rule, and its side condition is the one piece of real
 arithmetic here: writing `X`'s arity as `(n -> m)`, the dip's window must sit
@@ -361,8 +362,39 @@ on faith — it communicates a *construction*, which the rewriter checks for
 itself. If the search is wrong the rewrite simply does not fire; there is no way
 to talk the rewriter into an unsound step.
 
-The cost is that `float`, `rebuild_copy` and `unfactor_branch` all make the term
-worse on their own. None belongs in a normalizing pass, and none is in `all` or
+### Getting the copy to where it is needed
+
+`rebuild_copy` wants `pick 0; untuple n` adjacent, and in real code they are not:
+the copy is made at the top of the caller and the `untuple` happens several
+guards and two branches later. So the copy has to travel, and a bare `pick`
+cannot travel at all — only a framed computation is something `float` can carry.
+
+`copy_assoc` is what puts it in a frame:
+
+```
+pick d; pick 0   ==   pick d; dip 1 { pick d }
+```
+
+**Duplication is coassociative.** Making a third copy from the copy and making
+it from the original are the same thing, because they are the same value.
+`annihilate_drop`'s treatment of `pick; drop` is the counit law of the same
+comonoid, and `pick 0; roll 1` becoming `pick 0` would be its cocommutativity.
+Neither side is smaller — the point is purely that one of the copies is now
+framed.
+
+`float` declines to do this itself, and correctly: its side condition `j >= n`
+is sufficient but not necessary, and two picks of the same slot commute even
+though their windows overlap. A general rule failing to see a special case is
+the usual reason a specific law earns its own entry.
+
+From there the copy walks: `float` past each guard instruction,
+`unfactor_branch` through each branch. That last one is why `unfactor_branch`
+takes any `k >= 1` rather than only `k = 1` — `float` essentially never leaves a
+computation at exactly depth 1, and restricting it would mean a computation
+could only enter a branch it happened to sit immediately beneath.
+
+The cost is that `float`, `rebuild_copy`, `copy_assoc` and `unfactor_branch` all
+make the term worse on their own. None belongs in a normalizing pass, and none is in `all` or
 `cleanup`. That is the right place for the division to fall: aiming them is the
 search's job, and `once` and `repeat_n` are how it says so.
 
