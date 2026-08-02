@@ -17,6 +17,7 @@
 mod arity;
 mod ir;
 mod print;
+mod program;
 mod rules;
 mod script;
 mod tactic;
@@ -31,6 +32,7 @@ use std::process;
 use bytecode::{Library, SentenceIndex};
 
 use crate::print::print_sentence;
+use crate::program::Program;
 use crate::script::{rule_names, Definitions, PRELUDE};
 use crate::tactic::Env;
 
@@ -46,7 +48,7 @@ struct Options {
 
 fn main() {
     let mut opts = Options {
-        tactic: "id".to_string(),
+        tactic: "default".to_string(),
         fuel: DEFAULT_FUEL,
         trace: false,
         check: false,
@@ -157,8 +159,19 @@ fn main() {
         }
     };
 
-    let env = Env::new(opts.fuel, opts.check);
-    if let Err(err) = print_sentence(&library, root, &tactic, &env, &opts.tactic) {
+    let prog = Program::new(&library);
+    if prog.is_recursive(root) {
+        eprintln!("error: '{}' is #[recursive]", library.names[root]);
+        eprintln!();
+        eprintln!("  This tool expands calls, and a recursive sentence has no finite");
+        eprintln!("  expansion. hanoi requires the annotation on every caller of a");
+        eprintln!("  recursive sentence, so its absence is what proves expanding a");
+        eprintln!("  sentence terminates — and its presence is where that proof stops.");
+        process::exit(1);
+    }
+
+    let env = Env::new(&prog, opts.fuel, opts.check);
+    if let Err(err) = print_sentence(root, &tactic, &env, &opts.tactic) {
         eprintln!("error: {}", err);
         process::exit(1);
     }
@@ -183,8 +196,8 @@ fn usage() {
     eprintln!("  <sentence> is a fully qualified name (queue::queue::accept), a");
     eprintln!("  unique trailing part of one (queue::accept), or an index (#12).");
     eprintln!();
-    eprintln!("  -t, --tactic <expr>  the rewrite to apply; default `id`, which");
-    eprintln!("                       inlines the sentence and changes nothing.");
+    eprintln!("  -t, --tactic <expr>  the rewrite to apply. Default `default`,");
+    eprintln!("                       which expands every call it safely can.");
     eprintln!("  --tactics <file>     load `tactic NAME = expr;` definitions.");
     eprintln!("  --list-rules         the rules a tactic can place.");
     eprintln!("  --list-tactics       the named tactics currently defined.");

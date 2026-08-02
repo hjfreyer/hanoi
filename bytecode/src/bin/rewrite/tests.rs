@@ -2,12 +2,13 @@
 
 use std::collections::HashSet;
 
-use bytecode::{assemble, SentenceIndex};
+use bytecode::{assemble, Library, SentenceIndex};
 use std::fs;
 use std::path::Path;
 
 use crate::arity::{node_arity, seq_arity};
 use crate::ir::{build, Node};
+use crate::program::Program;
 use crate::script::{Definitions, PRELUDE};
 use crate::tactic::{apply, Env, Tactic};
 
@@ -19,8 +20,8 @@ const ALL: &str = "all";
 const NOTHING: &str = "id";
 
 /// Net stack change, which every rule must preserve exactly.
-fn net(nodes: &[Node]) -> Option<i64> {
-    let (inputs, outputs) = seq_arity(nodes);
+fn net(prog: &Program, nodes: &[Node]) -> Option<i64> {
+    let (inputs, outputs) = seq_arity(prog, nodes);
     outputs.map(|o| o - inputs)
 }
 
@@ -34,26 +35,46 @@ fn compile(src: &str) -> Tactic {
 
 /// Runs a tactic, with `--check` on: every test therefore also asserts that
 /// each rule preserved the net stack effect of the window it rewrote.
-fn run(nodes: Vec<Node>, src: &str) -> Vec<Node> {
-    let env = Env::new(1_000_000, true);
+fn run(prog: &Program, nodes: Vec<Node>, src: &str) -> Vec<Node> {
+    let env = Env::new(prog, 1_000_000, true);
     apply(&compile(src), &env, nodes)
         .unwrap_or_else(|e| panic!("{}", e))
         .into_nodes()
 }
 
+/// Assembles `code` and returns a program for it.
+///
+/// Leaked, so the borrow is `'static` and a test can hand it around without
+/// threading a lifetime through every helper. Test libraries are small and the
+/// process is short.
+fn program_of(code: &str) -> &'static Program<'static> {
+    let library: &'static Library = Box::leak(Box::new(assemble(code).unwrap()));
+    Box::leak(Box::new(Program::new(library)))
+}
+
+/// The first sentence of `code`, inlined, then rewritten by `src`.
+///
+/// Inlining first because these tests are about rewriting rather than about
+/// expansion — `build` itself no longer expands anything, so without this
+/// every call would still be a `Call` node.
+fn tree_of(code: &str, src: &str) -> (&'static Program<'static>, Vec<Node>) {
+    let prog = program_of(code);
+    let body = build(prog.library(), SentenceIndex::from(0), &mut HashSet::new());
+    let body = run(prog, body, &format!("inline_all; {}", src));
+    (prog, body)
+}
+
 fn tree(code: &str, src: &str) -> Vec<Node> {
-    let library = assemble(code).unwrap();
-    let body = build(&library, SentenceIndex::from(0), &mut HashSet::new());
-    run(body, src)
+    tree_of(code, src).1
 }
 
 /// The depth before each instruction of a sequence, entered at its inputs.
-fn depths(nodes: &[Node]) -> Vec<Option<i64>> {
-    let mut depth = Some(seq_arity(nodes).0);
+fn depths(prog: &Program, nodes: &[Node]) -> Vec<Option<i64>> {
+    let mut depth = Some(seq_arity(prog, nodes).0);
     let mut out = Vec::new();
     for node in nodes {
         out.push(depth);
-        depth = match (depth, node_arity(node)) {
+        depth = match (depth, node_arity(prog, node)) {
             (Some(d), Some((n, m))) => Some(d - n + m),
             _ => None,
         };
@@ -70,7 +91,7 @@ fn shape(nodes: &[Node]) -> Vec<String> {
                 format!("dip {} {{ {} }}", depth, shape(body).join(" "))
             }
             Node::Branch { .. } => "branch".to_string(),
-            Node::Cut(_) => "cut".to_string(),
+            Node::Call { depth, target } => format!("call {} #{}", depth, usize::from(*target)),
         })
         .collect()
 }
@@ -81,7 +102,7 @@ fn depth_counts_inputs_once() {
     // per-instruction size, which already includes the inputs found so far,
     // and added the total back on — reporting `is_tuple` one deeper than it
     // runs.
-    let body = tree(
+    let (prog, body) = tree_of(
         r#"
         #[arity(1, 1)]
         sentence probe {
@@ -92,12 +113,12 @@ fn depth_counts_inputs_once() {
     "#,
         NOTHING,
     );
-    assert_eq!(depths(&body), vec![Some(1), Some(2), Some(2)]);
+    assert_eq!(depths(prog, &body), vec![Some(1), Some(2), Some(2)]);
 }
 
 #[test]
 fn dip_contributes_only_its_targets_net_change() {
-    let body = tree(
+    let (prog, body) = tree_of(
         r#"
         #[arity(3, 1)]
         sentence probe {
@@ -107,15 +128,15 @@ fn dip_contributes_only_its_targets_net_change() {
     "#,
         NOTHING,
     );
-    assert_eq!(depths(&body), vec![Some(3), Some(2)]);
+    assert_eq!(depths(prog, &body), vec![Some(3), Some(2)]);
     // The dip itself takes three and leaves two: two consumed by the add,
     // plus the one it holds out of the way.
-    assert_eq!(node_arity(&body[0]), Some((3, 2)));
+    assert_eq!(node_arity(prog, &body[0]), Some((3, 2)));
 }
 
 #[test]
 fn depth_stops_being_known_after_a_panic() {
-    let body = tree(
+    let (prog, body) = tree_of(
         r#"
         #[arity(0, 0)]
         sentence probe {
@@ -126,7 +147,7 @@ fn depth_stops_being_known_after_a_panic() {
     "#,
         NOTHING,
     );
-    assert_eq!(depths(&body), vec![Some(0), Some(1), None]);
+    assert_eq!(depths(prog, &body), vec![Some(0), Some(1), None]);
 }
 
 #[test]
@@ -135,7 +156,7 @@ fn factoring_looks_past_provenance() {
     // sentences, so they carry different labels — but the labels are for
     // the listing, not for deciding what the code does, and the prefix has
     // to factor anyway.
-    let body = tree(
+    let (_prog, body) = tree_of(
         r#"
         sentence probe {
             branch { dip 1 { add } push 1 } { dip 1 { add } push 2 }
@@ -152,7 +173,7 @@ fn factoring_looks_past_provenance() {
 
 #[test]
 fn a_cycle_has_no_static_arity() {
-    let body = tree(
+    let (prog, body) = tree_of(
         r#"
         #[recursive]
         sentence loops {
@@ -162,7 +183,7 @@ fn a_cycle_has_no_static_arity() {
     "#,
         NOTHING,
     );
-    assert_eq!(seq_arity(&body).1, None);
+    assert_eq!(seq_arity(prog, &body).1, None);
 }
 
 #[test]
@@ -170,7 +191,7 @@ fn dips_sink_past_pushes_and_arithmetic() {
     // The dip starts at the end hiding one value. Moving it past `add`
     // widens it to two operands, and past each push narrows it again, so it
     // arrives at the front hiding nothing at all.
-    let body = tree(
+    let (_prog, body) = tree_of(
         r#"
         #[arity(2, 2)]
         sentence probe {
@@ -190,7 +211,7 @@ fn dips_sink_past_pushes_and_arithmetic() {
 
 #[test]
 fn dips_fuse_when_they_meet_at_the_same_depth() {
-    let body = tree(
+    let (_prog, body) = tree_of(
         r#"
         #[arity(3, 3)]
         sentence probe {
@@ -252,10 +273,10 @@ fn expansion_preserves_arity() {
             dip 2 { add }
         }
     "#;
-    let normalized = tree(code, DIPS);
+    let (prog, normalized) = tree_of(code, DIPS);
     let unary = tree_unary(code);
     assert_ne!(shape(&normalized), shape(&unary), "expected an expansion");
-    assert_eq!(seq_arity(&normalized), seq_arity(&unary));
+    assert_eq!(seq_arity(prog, &normalized), seq_arity(prog, &unary));
 }
 
 #[test]
@@ -267,7 +288,7 @@ fn nested_dips_collapse_and_then_keep_sinking() {
     // plain call taking its argument off the top — exactly the value that
     // push put there. That is the rule's `k >= m` biting, and it is the
     // point at which the dip has reached the values it actually operates on.
-    let body = tree(
+    let (_prog, body) = tree_of(
         r#"
         sentence probe {
             push 1
@@ -287,7 +308,7 @@ fn nested_dips_collapse_and_then_keep_sinking() {
 
 #[test]
 fn fusing_records_every_origin() {
-    let body = tree(
+    let (_prog, body) = tree_of(
         r#"
         sentence probe {
             push 1
@@ -316,7 +337,7 @@ fn fusing_records_every_origin() {
 fn a_dip_stops_at_a_pick_that_reaches_into_it() {
     // `pick 2` reads three deep, so a dip hiding only one value would be
     // rewriting the very slot the pick copies from. It has to stay put.
-    let body = tree(
+    let (_prog, body) = tree_of(
         r#"
         sentence probe {
             pick 2
@@ -332,7 +353,7 @@ fn a_dip_stops_at_a_pick_that_reaches_into_it() {
 fn a_dip_sinks_past_a_pick_it_clears() {
     // Same shape, but hiding four values puts the whole pick above the
     // window, so the move is sound.
-    let body = tree(
+    let (_prog, body) = tree_of(
         r#"
         sentence probe {
             pick 2
@@ -348,7 +369,7 @@ fn a_dip_sinks_past_a_pick_it_clears() {
 fn a_shared_branch_prefix_is_hoisted_under_a_dip() {
     // The `push 7` runs either way, so it can run before the condition is
     // consumed — under a dip, since the condition is still on top.
-    let body = tree(
+    let (_prog, body) = tree_of(
         r#"
         sentence probe {
             branch { push 7 push 1 } { push 7 push 2 }
@@ -361,7 +382,7 @@ fn a_shared_branch_prefix_is_hoisted_under_a_dip() {
 
 #[test]
 fn factoring_takes_the_whole_shared_run() {
-    let body = tree(
+    let (_prog, body) = tree_of(
         r#"
         sentence probe {
             branch { push 7 is_int push 1 } { push 7 is_int push 2 }
@@ -377,7 +398,7 @@ fn factoring_stops_where_the_arms_diverge() {
     // Both arms also end with `push 5`, but only the prefix is hoistable:
     // what runs before the branch has to run before *both* arms, and the
     // trailing pushes are separated by instructions that differ.
-    let body = tree(
+    let (_prog, body) = tree_of(
         r#"
         sentence probe {
             branch { push 7 push 1 push 5 } { push 7 push 2 push 5 }
@@ -400,7 +421,7 @@ fn factoring_stops_where_the_arms_diverge() {
 
 #[test]
 fn a_push_and_a_drop_cancel() {
-    let body = tree(
+    let (_prog, body) = tree_of(
         r#"
         sentence probe {
             push 1
@@ -417,7 +438,7 @@ fn a_push_and_a_drop_cancel() {
 
 #[test]
 fn a_pick_and_a_drop_cancel() {
-    let body = tree(
+    let (_prog, body) = tree_of(
         r#"
         sentence probe {
             pick 1
@@ -434,7 +455,7 @@ fn a_pick_and_a_drop_cancel() {
 fn a_type_test_leaves_the_drop_behind() {
     // `is_int` consumes a value to make the one being dropped, so the drop
     // still has to happen — it just takes the input instead.
-    let body = tree(
+    let (_prog, body) = tree_of(
         r#"
         sentence probe {
             is_int
@@ -450,7 +471,7 @@ fn a_type_test_leaves_the_drop_behind() {
 fn a_partial_instruction_is_not_annihilated() {
     // `add; drop` is not `drop; drop`: the add still rejects non-numeric
     // operands, and cancelling it would discard that check.
-    let body = tree(
+    let (_prog, body) = tree_of(
         r#"
         sentence probe {
             add
@@ -504,18 +525,25 @@ fn rewrites_preserve_arity_across_the_corpus() {
         Err(_) => return,
     };
     let library = bytecode::assemble_with_path(&code, main.parent()).unwrap();
+    let prog = Program::new(&library);
 
     let mut checked = 0;
     for (s_idx, _) in library.names.iter_enumerated() {
-        let plain = build(&library, s_idx, &mut HashSet::new());
+        // Inline first: `build` expands nothing now, so an un-inlined tree
+        // would exercise almost none of the rules.
+        let plain = run(
+            &prog,
+            build(&library, s_idx, &mut HashSet::new()),
+            "inline_all",
+        );
         let name = || format!("#{} {}", usize::from(s_idx), library.names[s_idx]);
 
         // The dip tactics and factoring preserve arity outright.
         for tac in [DIPS, FACTOR] {
-            let rewritten = run(plain.clone(), tac);
+            let rewritten = run(&prog, plain.clone(), tac);
             assert_eq!(
-                seq_arity(&plain),
-                seq_arity(&rewritten),
+                seq_arity(&prog, &plain),
+                seq_arity(&prog, &rewritten),
                 "`{}` changed the arity of {}",
                 tac,
                 name()
@@ -524,10 +552,15 @@ fn rewrites_preserve_arity_across_the_corpus() {
 
         // Everything together preserves net change, and never asks for
         // more inputs than the original did.
-        let all = run(plain.clone(), ALL);
-        assert_eq!(net(&plain), net(&all), "net change changed for {}", name());
+        let all = run(&prog, plain.clone(), ALL);
+        assert_eq!(
+            net(&prog, &plain),
+            net(&prog, &all),
+            "net change changed for {}",
+            name()
+        );
         assert!(
-            seq_arity(&all).0 <= seq_arity(&plain).0,
+            seq_arity(&prog, &all).0 <= seq_arity(&prog, &plain).0,
             "rewriting raised the input requirement of {}",
             name()
         );
@@ -536,13 +569,13 @@ fn rewrites_preserve_arity_across_the_corpus() {
         // nothing left to do. The flags guaranteed this by construction; now
         // that the search is separable from the rules it is worth asserting,
         // since a non-confluent rule set would show up here first.
-        let twice = run(all.clone(), ALL);
+        let twice = run(&prog, all.clone(), ALL);
         assert_eq!(all, twice, "rewriting {} was not idempotent", name());
 
-        let unary = run(all.clone(), "unary");
+        let unary = run(&prog, all.clone(), "unary");
         assert_eq!(
-            seq_arity(&all),
-            seq_arity(&unary),
+            seq_arity(&prog, &all),
+            seq_arity(&prog, &unary),
             "unary expansion changed the arity of {}",
             name()
         );
@@ -566,7 +599,7 @@ fn unary_only(nodes: &[Node]) -> bool {
             else_body,
             ..
         } => unary_only(then_body) && unary_only(else_body),
-        Node::Op(_) | Node::Cut(_) => true,
+        Node::Op(_) | Node::Call { .. } => true,
     })
 }
 
@@ -583,10 +616,10 @@ fn normalization_preserves_arity() {
             add
         }
     "#;
-    let plain = tree(code, NOTHING);
+    let (prog, plain) = tree_of(code, NOTHING);
     let normalized = tree(code, DIPS);
     assert_ne!(shape(&plain), shape(&normalized), "expected some rewriting");
-    assert_eq!(seq_arity(&plain), seq_arity(&normalized));
+    assert_eq!(seq_arity(prog, &plain), seq_arity(prog, &normalized));
 }
 
 
@@ -600,8 +633,8 @@ fn normalization_preserves_arity() {
 
 use crate::tactic::{Outcome, TacticError};
 
-fn sample() -> Vec<Node> {
-    tree(
+fn sample() -> (&'static Program<'static>, Vec<Node>) {
+    tree_of(
         r#"
         #[arity(2, 2)]
         sentence probe {
@@ -615,12 +648,17 @@ fn sample() -> Vec<Node> {
     )
 }
 
-fn outcome(src: &str, nodes: Vec<Node>) -> Result<Outcome, TacticError> {
-    apply(&compile(src), &Env::new(1_000_000, true), nodes)
+fn outcome(
+    prog: &Program,
+    src: &str,
+    nodes: Vec<Node>,
+) -> Result<Outcome, TacticError> {
+    apply(&compile(src), &Env::new(prog, 1_000_000, true), nodes)
 }
 
 fn never_fails(src: &str) {
-    let got = outcome(src, sample()).unwrap();
+    let (prog, nodes) = sample();
+    let got = outcome(prog, src, nodes).unwrap();
     assert!(
         !matches!(got, Outcome::Failed(_)),
         "`{}` reported Failed, but must be total",
@@ -642,13 +680,13 @@ fn try_repeat_bu_and_children_are_total() {
 #[test]
 fn a_failed_tactic_hands_back_exactly_what_it_got() {
     // The contract Seq and Choice rely on to avoid cloning.
-    let before = sample();
-    let Outcome::Failed(after) = outcome("fail", before.clone()).unwrap() else {
+    let (prog, before) = sample();
+    let Outcome::Failed(after) = outcome(prog, "fail", before.clone()).unwrap() else {
         panic!("`fail` should fail")
     };
     assert_eq!(before, after);
 
-    let Outcome::Failed(after) = outcome("each(annihilate_drop)", before.clone()).unwrap() else {
+    let Outcome::Failed(after) = outcome(prog, "each(annihilate_drop)", before.clone()).unwrap() else {
         panic!("nothing to annihilate here, so it should fail")
     };
     assert_eq!(before, after);
@@ -658,8 +696,8 @@ fn a_failed_tactic_hands_back_exactly_what_it_got() {
 fn a_failing_step_rolls_the_whole_sequence_back() {
     // `each(sink)` succeeds and rewrites; `fail` then aborts. The sequence has
     // to report the *original*, not the half-rewritten intermediate.
-    let before = sample();
-    let Outcome::Failed(after) = outcome("each(sink); fail", before.clone()).unwrap() else {
+    let (prog, before) = sample();
+    let Outcome::Failed(after) = outcome(prog, "each(sink); fail", before.clone()).unwrap() else {
         panic!("the sequence should fail")
     };
     assert_eq!(before, after, "a failed sequence must not leak its progress");
@@ -667,12 +705,12 @@ fn a_failing_step_rolls_the_whole_sequence_back() {
 
 #[test]
 fn choice_takes_the_first_branch_that_applies() {
-    let before = sample();
+    let (prog, before) = sample();
     // The first fails, so the second decides the result.
-    let first = outcome("each(annihilate_drop) | each(sink)", before.clone())
+    let first = outcome(prog, "each(annihilate_drop) | each(sink)", before.clone())
         .unwrap()
         .into_nodes();
-    let alone = run(before, "each(sink)");
+    let alone = run(prog, before, "each(sink)");
     assert_eq!(first, alone);
 }
 
@@ -683,7 +721,7 @@ fn choice_falls_through_a_branch_that_did_nothing() {
     // Failed when it had no work — so a choice over them always stopped at the
     // first branch and the second was dead. `annihilate` never fires on this
     // corpus, so `annihilate | factoring` has to reach `factoring`.
-    let body = tree(
+    let (prog, body) = tree_of(
         r#"
         sentence probe {
             branch { push 7 push 1 } { push 7 push 2 }
@@ -692,32 +730,32 @@ fn choice_falls_through_a_branch_that_did_nothing() {
         NOTHING,
     );
     assert_eq!(
-        run(body.clone(), "annihilate | factoring"),
-        run(body, FACTOR),
+        run(prog, body.clone(), "annihilate | factoring"),
+        run(prog, body, FACTOR),
         "the choice should have fallen through to factoring"
     );
 }
 
 #[test]
 fn fail_is_the_identity_of_choice_and_id_of_sequence() {
-    let before = sample();
+    let (prog, before) = sample();
     assert_eq!(
-        outcome("fail | each(sink)", before.clone()).unwrap().into_nodes(),
-        run(before.clone(), "each(sink)")
+        outcome(prog, "fail | each(sink)", before.clone()).unwrap().into_nodes(),
+        run(prog, before.clone(), "each(sink)")
     );
     assert_eq!(
-        outcome("each(sink); id", before.clone()).unwrap().into_nodes(),
-        run(before, "each(sink)")
+        outcome(prog, "each(sink); id", before.clone()).unwrap().into_nodes(),
+        run(prog, before, "each(sink)")
     );
 }
 
 #[test]
 fn repeat_n_stops_early_when_there_is_nothing_left() {
     // Ten rounds of a tactic that settles after one must equal one round.
-    let before = sample();
+    let (prog, before) = sample();
     assert_eq!(
-        run(before.clone(), "repeat_n(10, bu(each(collapse)))"),
-        run(before, "repeat_n(1, bu(each(collapse)))")
+        run(prog, before.clone(), "repeat_n(10, bu(each(collapse)))"),
+        run(prog, before, "repeat_n(1, bu(each(collapse)))")
     );
 }
 
@@ -725,7 +763,7 @@ fn repeat_n_stops_early_when_there_is_nothing_left() {
 fn inverse_rules_in_one_repeat_run_out_of_fuel_legibly() {
     // `collapse` and `expand` undo each other. The language lets you write
     // that; the budget is what makes it diagnosable rather than a hang.
-    let body = tree(
+    let (prog, body) = tree_of(
         r#"
         sentence probe {
             untuple 3
@@ -736,7 +774,7 @@ fn inverse_rules_in_one_repeat_run_out_of_fuel_legibly() {
     );
     let err = apply(
         &compile("repeat(bu(each(collapse, expand)))"),
-        &Env::new(50, false),
+        &Env::new(prog, 50, false),
         body,
     )
     .expect_err("an inverse pair should exhaust the budget");
@@ -760,7 +798,7 @@ fn duplicating_a_value_then_discarding_the_original_vanishes() {
     //
     // `sink` cannot help and should not — the dip reaches at the value the
     // pick just produced, which is exactly the interference it forbids.
-    let body = tree(
+    let (_prog, body) = tree_of(
         r#"
         sentence probe {
             pick 0
@@ -774,7 +812,7 @@ fn duplicating_a_value_then_discarding_the_original_vanishes() {
 
 #[test]
 fn a_deeper_copy_and_discard_becomes_a_roll() {
-    let body = tree(
+    let (_prog, body) = tree_of(
         r#"
         sentence probe {
             pick 2
@@ -794,12 +832,12 @@ fn distributing_a_suffix_into_both_arms_preserves_arity() {
             add
         }
     "#;
-    let plain = tree(code, NOTHING);
+    let (prog, plain) = tree_of(code, NOTHING);
     let spread = tree(code, "distribute");
     assert_eq!(shape(&spread), vec!["branch"], "the add should have moved in");
     assert_eq!(
-        seq_arity(&plain),
-        seq_arity(&spread),
+        seq_arity(prog, &plain),
+        seq_arity(prog, &spread),
         "distributing must not change what the sentence takes or leaves"
     );
 }
@@ -808,7 +846,7 @@ fn distributing_a_suffix_into_both_arms_preserves_arity() {
 fn distribution_absorbs_every_following_node_and_then_stops() {
     // The measure is "nodes after a branch", so it runs out rather than
     // running forever, even though node count grows.
-    let body = tree(
+    let (_prog, body) = tree_of(
         r#"
         sentence probe {
             branch { push 1 } { push 2 }
@@ -893,19 +931,28 @@ fn a_branch_one_frame_down_is_out_of_reach_until_the_frame_is_gone() {
             add
         }
     "#;
-    let library = assemble(code).unwrap();
-    let caller = library.exports.get("caller").copied().unwrap_or(SentenceIndex::from(1));
-    let body = build(&library, caller, &mut HashSet::new());
+    let prog = program_of(code);
+    let library = prog.library();
+    let caller = library
+        .exports
+        .get("caller")
+        .copied()
+        .unwrap_or(SentenceIndex::from(1));
+    let body = run(
+        prog,
+        build(library, caller, &mut HashSet::new()),
+        "inline_all",
+    );
 
     assert_eq!(
-        shape(&run(body.clone(), "distribute")),
+        shape(&run(prog, body.clone(), "distribute")),
         vec!["dip 0 { branch }", "add"],
         "distribution should not reach through a call frame"
     );
 
     // Flattening the frame puts them in one sequence, and then it does.
     assert_eq!(
-        shape(&run(body, "flatten; distribute")),
+        shape(&run(prog, body, "flatten; distribute")),
         vec!["branch"],
         "with the frame gone the add should have moved into both arms"
     );
@@ -923,11 +970,136 @@ fn flattening_preserves_arity() {
             jump helper
         }
     "#;
-    let library = assemble(code).unwrap();
-    let probe = library.exports.get("probe").copied().unwrap_or(SentenceIndex::from(1));
-    let body = build(&library, probe, &mut HashSet::new());
-    let flat = run(body.clone(), "flatten");
+    let prog = program_of(code);
+    let library = prog.library();
+    let probe = library
+        .exports
+        .get("probe")
+        .copied()
+        .unwrap_or(SentenceIndex::from(1));
+    let body = run(
+        prog,
+        build(library, probe, &mut HashSet::new()),
+        "inline_all",
+    );
+    let flat = run(prog, body.clone(), "flatten");
 
     assert_eq!(shape(&flat), vec!["push 1", "add", "push 1", "add"]);
-    assert_eq!(seq_arity(&body), seq_arity(&flat));
+    assert_eq!(seq_arity(prog, &body), seq_arity(prog, &flat));
+}
+
+// ---------------------------------------------------------------------------
+// Inlining as a rule
+// ---------------------------------------------------------------------------
+
+/// Builds a named sentence without inlining, so a test can watch it happen.
+fn raw(code: &str, name: &str) -> (&'static Program<'static>, Vec<Node>) {
+    let prog = program_of(code);
+    let idx = prog
+        .library()
+        .names
+        .iter_enumerated()
+        .find(|(_, n)| *n == name)
+        .map(|(i, _)| i)
+        .unwrap_or_else(|| panic!("no sentence named {}", name));
+    (prog, build(prog.library(), idx, &mut HashSet::new()))
+}
+
+const CALLS: &str = r#"
+    sentence inner { add }
+    sentence middle { jump inner jump inner }
+    sentence outer { jump middle }
+"#;
+
+#[test]
+fn build_no_longer_expands_anything() {
+    let (_prog, body) = raw(CALLS, "outer");
+    assert_eq!(shape(&body), vec!["call 0 #1"]);
+}
+
+#[test]
+fn inlining_is_bounded_by_how_many_bottom_up_passes_you_ask_for() {
+    // `bu` reaches a body only on the pass after the one that created it, so
+    // the pass count is the depth of call graph you get.
+    let (prog, body) = raw(CALLS, "outer");
+    assert_eq!(
+        shape(&run(prog, body.clone(), "repeat_n(1, bu(each(inline)))")),
+        vec!["dip 0 { call 0 #0 call 0 #0 }"]
+    );
+    assert_eq!(
+        shape(&run(prog, body, "repeat_n(2, bu(each(inline)))")),
+        vec!["dip 0 { dip 0 { add } dip 0 { add } }"]
+    );
+}
+
+#[test]
+fn one_top_down_pass_expands_the_whole_call_graph() {
+    // `td` descends into the body it just created, so it does not stop.
+    let (prog, body) = raw(CALLS, "outer");
+    assert_eq!(
+        shape(&run(prog, body.clone(), "td(each(inline))")),
+        vec!["dip 0 { dip 0 { add } dip 0 { add } }"]
+    );
+    assert_eq!(
+        shape(&run(prog, body, "inline_all")),
+        vec!["dip 0 { dip 0 { add } dip 0 { add } }"]
+    );
+}
+
+const LOOPS: &str = r#"
+    #[recursive]
+    #[arity(1, 1)]
+    sentence countdown {
+        pick 0
+        push 0
+        equal
+        branch { } { push 1 subtract jump countdown }
+    }
+    #[recursive]
+    sentence entry { push 5 jump countdown }
+"#;
+
+#[test]
+fn the_recursive_annotation_is_all_it_takes_to_spot_recursion() {
+    // No graph analysis: `check_arities` refuses to let a sentence call a
+    // recursive one without being recursive itself, so the annotation has
+    // already propagated up the call graph by the time the tool sees it.
+    // `program::invariant` checks that against the whole corpus.
+    let prog = program_of(LOOPS);
+    for name in ["countdown", "entry"] {
+        let idx = prog
+            .library()
+            .names
+            .iter_enumerated()
+            .find(|(_, n)| *n == name)
+            .map(|(i, _)| i)
+            .unwrap();
+        assert!(prog.is_recursive(idx), "{} should be refused", name);
+    }
+}
+
+#[test]
+fn a_call_to_a_recursive_sentence_still_reports_its_arity() {
+    // Reachable only from a recursive root, which the tool refuses — but the
+    // arity is what deleting `Cut` bought, so it is worth pinning that a
+    // `Call` carries one rather than poisoning everything after it.
+    let (prog, body) = raw(LOOPS, "entry");
+    assert_eq!(depths(prog, &body), vec![Some(0), Some(1)]);
+    assert_eq!(seq_arity(prog, &body), (0, Some(1)));
+}
+
+#[test]
+fn an_unannotated_recursive_call_is_still_unknown() {
+    // Honest rather than wrong: without an #[arity] there is nothing to report.
+    let (prog, body) = raw(
+        r#"
+        #[recursive]
+        sentence loops { jump loops }
+        #[recursive]
+        sentence entry { push 1 jump loops }
+    "#,
+        "entry",
+    );
+    assert_eq!(depths(prog, &body), vec![Some(0), Some(1)]);
+    assert_eq!(seq_arity(prog, &body).1, None);
 }

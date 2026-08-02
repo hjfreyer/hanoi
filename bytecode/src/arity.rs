@@ -112,6 +112,45 @@ fn get_or_infer_arity(
     Ok(result)
 }
 
+/// What a whole sentence takes off the stack and leaves on it.
+///
+/// Inference first, which is what [`check_arities`] itself uses when it meets a
+/// `Dip` — a sentence's declared `#[arity]` may ask for more inputs than it
+/// touches, and a caller cares about what is actually consumed.
+///
+/// A `#[recursive]` sentence is skipped by inference entirely, so there the
+/// annotation is the only thing that can answer; without one the arity is
+/// genuinely unknown and this returns `None`.
+///
+/// Public for `bin/rewrite`, whose `Call` nodes need their target's arity to
+/// decide whether a dip may move past them.
+pub fn sentence_arity(library: &Library, s_idx: SentenceIndex) -> Option<Arity> {
+    if is_recursive(s_idx, library) {
+        return declared_arity(library, s_idx);
+    }
+    let mut memo = HashMap::new();
+    let mut in_progress = HashSet::new();
+    let mut instruction_arities = HashMap::new();
+    get_or_infer_arity(
+        s_idx,
+        library,
+        &mut memo,
+        &mut in_progress,
+        &mut instruction_arities,
+    )
+    .ok()
+}
+
+fn declared_arity(library: &Library, s_idx: SentenceIndex) -> Option<Arity> {
+    library.annotations[s_idx].iter().find_map(|ann| match ann {
+        Annotation::Arity(inputs, outputs) => Some(Arity::Normal {
+            inputs: *inputs,
+            outputs: *outputs,
+        }),
+        _ => None,
+    })
+}
+
 /// What one instruction takes off the top of the stack and leaves there.
 ///
 /// `None` where the effect is not local to the instruction: `Panic` ends
@@ -346,5 +385,88 @@ fn combine_branch_arities(then: Arity, el: Arity) -> Result<Arity, String> {
             let n_b = std::cmp::max(n_then, n_else);
             Ok(Arity::Normal { inputs: n_b, outputs: n_b + net_then })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::assemble;
+
+    fn arity_of(code: &str, name: &str) -> Option<Arity> {
+        let library = assemble(code).unwrap();
+        let idx = library
+            .names
+            .iter_enumerated()
+            .find(|(_, n)| *n == name)
+            .map(|(i, _)| i)
+            .unwrap_or_else(|| panic!("no sentence named {}", name));
+        sentence_arity(&library, idx)
+    }
+
+    #[test]
+    fn an_ordinary_sentence_is_inferred() {
+        let got = arity_of("sentence probe { add }", "probe");
+        assert_eq!(
+            got,
+            Some(Arity::Normal {
+                inputs: 2,
+                outputs: 1
+            })
+        );
+    }
+
+    #[test]
+    fn inference_wins_over_a_wider_annotation() {
+        // The checker permits an annotation that asks for more than the body
+        // touches, but a caller only loses what is actually consumed — which is
+        // what `check_arities` itself uses when it meets a Dip.
+        let got = arity_of(
+            r#"
+            #[arity(5, 4)]
+            sentence probe { add }
+        "#,
+            "probe",
+        );
+        assert_eq!(
+            got,
+            Some(Arity::Normal {
+                inputs: 2,
+                outputs: 1
+            })
+        );
+    }
+
+    #[test]
+    fn a_recursive_sentence_falls_back_to_its_annotation() {
+        // Inference skips #[recursive] entirely, so the annotation is the only
+        // thing left that can answer.
+        let got = arity_of(
+            r#"
+            #[recursive]
+            #[arity(1, 1)]
+            sentence loops { jump loops }
+        "#,
+            "loops",
+        );
+        assert_eq!(
+            got,
+            Some(Arity::Normal {
+                inputs: 1,
+                outputs: 1
+            })
+        );
+    }
+
+    #[test]
+    fn an_unannotated_recursive_sentence_has_no_knowable_arity() {
+        let got = arity_of(
+            r#"
+            #[recursive]
+            sentence loops { jump loops }
+        "#,
+            "loops",
+        );
+        assert_eq!(got, None);
     }
 }

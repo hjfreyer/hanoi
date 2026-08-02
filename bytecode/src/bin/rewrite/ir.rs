@@ -1,22 +1,26 @@
-//! The inlined tree the tool rewrites and prints.
+//! The tree the tool rewrites and prints.
 
 use std::collections::HashSet;
 
 use bytecode::{Instruction, Library, SentenceIndex};
 
+use crate::program::Program;
 
-/// One step of an inlined listing.
-///
-/// Calls have already been resolved into nested bodies, so nothing here refers
-/// to a `SentenceIndex` except as a label. That is what lets arities be
-/// computed structurally and dips be moved around without consulting the
-/// library.
+/// One step of a listing.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Node {
     Op(Instruction),
+    /// A call that has not been expanded. `depth == 0` is a plain jump.
+    ///
+    /// This is what `Cut` used to be, generalized: a cut edge was always a call
+    /// somebody declined to expand. Making it the same node means a recursive
+    /// call has a real arity — from its target's `#[arity]` — where a `Cut` had
+    /// none and poisoned the reckoning of everything after it.
+    Call { depth: usize, target: SentenceIndex },
+    /// An expanded call: a block running below `depth` hidden values.
     Dip {
         depth: usize,
-        /// Where this dip came from; more than one entry after a fusion.
+        /// Where this came from; more than one entry after a fusion.
         origins: Vec<String>,
         body: Vec<Node>,
     },
@@ -26,43 +30,52 @@ pub(crate) enum Node {
         else_origin: String,
         else_body: Vec<Node>,
     },
-    /// A call that would not terminate if expanded.
-    Cut(String),
 }
 
-pub(crate) fn build(library: &Library, s_idx: SentenceIndex, in_progress: &mut HashSet<SentenceIndex>) -> Vec<Node> {
+/// Turns a sentence into a tree, expanding nothing that `inline` could expand.
+///
+/// Branch arms *are* expanded, because an arm is a block rather than a call —
+/// phase 4 gives it a `SentenceIndex` only because it needs somewhere to put
+/// it, and nobody jumps to it by name. An arm that would recurse is left as the
+/// `Call` it is, which is also exactly what the branch does at run time: pop
+/// the condition, then call the arm with the rest of the stack.
+pub(crate) fn build(
+    library: &Library,
+    s_idx: SentenceIndex,
+    in_progress: &mut HashSet<SentenceIndex>,
+) -> Vec<Node> {
     in_progress.insert(s_idx);
-    let mut out = Vec::new();
 
-    for inst in &library.sentences[s_idx] {
-        let node = match inst {
-            Instruction::Dip(k, target) => Node::Dip {
-                depth: *k,
-                origins: vec![label(library, *target)],
-                body: build_target(library, *target, in_progress),
+    let out = library.sentences[s_idx]
+        .iter()
+        .map(|inst| match inst {
+            Instruction::Dip(depth, target) => Node::Call {
+                depth: *depth,
+                target: *target,
             },
             Instruction::Branch(then_t, else_t) => Node::Branch {
                 then_origin: label(library, *then_t),
-                then_body: build_target(library, *then_t, in_progress),
+                then_body: build_arm(library, *then_t, in_progress),
                 else_origin: label(library, *else_t),
-                else_body: build_target(library, *else_t, in_progress),
+                else_body: build_arm(library, *else_t, in_progress),
             },
             other => Node::Op(other.clone()),
-        };
-        out.push(node);
-    }
+        })
+        .collect();
 
     in_progress.remove(&s_idx);
     out
 }
 
-pub(crate) fn build_target(
+fn build_arm(
     library: &Library,
     target: SentenceIndex,
     in_progress: &mut HashSet<SentenceIndex>,
 ) -> Vec<Node> {
     if in_progress.contains(&target) {
-        vec![Node::Cut(label(library, target))]
+        // A branch arm is entered with the condition already popped, which is
+        // what `Dip(0, arm)` means.
+        vec![Node::Call { depth: 0, target }]
     } else {
         build(library, target, in_progress)
     }
@@ -72,6 +85,34 @@ pub(crate) fn label(library: &Library, target: SentenceIndex) -> String {
     format!("#{} {}", usize::from(target), library.names[target])
 }
 
+/// The child sequences of a node, for traversal.
+///
+/// A `Call` has none: its body is a sentence in the library, not part of this
+/// tree, and reaching it is what `inline` is for.
+pub(crate) fn child_bodies(node: &mut Node) -> Vec<&mut Vec<Node>> {
+    match node {
+        Node::Dip { body, .. } => vec![body],
+        Node::Branch {
+            then_body,
+            else_body,
+            ..
+        } => vec![then_body, else_body],
+        Node::Op(_) | Node::Call { .. } => Vec::new(),
+    }
+}
+
+/// Expands a call into the dip it stands for.
+///
+/// Shared by the `inline` and `unroll` rules, which differ only in whether they
+/// consult [`Program::is_cyclic`] first.
+pub(crate) fn expand_call(prog: &Program, depth: usize, target: SentenceIndex) -> Node {
+    Node::Dip {
+        depth,
+        origins: vec![prog.label(target)],
+        body: build(prog.library(), target, &mut HashSet::new()),
+    }
+}
+
 /// Whether two nodes do the same thing.
 ///
 /// Deliberately *not* the derived `PartialEq`. `Dip::origins` and a branch's
@@ -79,14 +120,25 @@ pub(crate) fn label(library: &Library, target: SentenceIndex) -> String {
 /// nothing about what the code does — and phase 4 allocates a fresh
 /// `SentenceIndex` for every inline block, so two identical blocks written in
 /// different places never share a label. Comparing those would make provenance
-/// part of term identity, which is how `factor_branches` used to miss every
+/// part of term identity, which is how `factor_branch` used to miss every
 /// shared prefix that contained a call.
 ///
-/// A `Cut` is opaque: it stands for a body that was never expanded, so two of
-/// them naming the same sentence still say nothing about the code inside.
+/// A `Call` is compared by target: two calls to the same sentence do the same
+/// thing, and two calls to different sentences might, but nothing here can tell
+/// without expanding them.
 pub(crate) fn same_effect(a: &Node, b: &Node) -> bool {
     match (a, b) {
         (Node::Op(x), Node::Op(y)) => x == y,
+        (
+            Node::Call {
+                depth: da,
+                target: ta,
+            },
+            Node::Call {
+                depth: db,
+                target: tb,
+            },
+        ) => da == db && ta == tb,
         (
             Node::Dip {
                 depth: da,
@@ -115,7 +167,6 @@ pub(crate) fn same_effect(a: &Node, b: &Node) -> bool {
     }
 }
 
-pub(crate) fn same_effect_seq(a: &[Node], b: &[Node]) -> bool {
+fn same_effect_seq(a: &[Node], b: &[Node]) -> bool {
     a.len() == b.len() && a.iter().zip(b).all(|(x, y)| same_effect(x, y))
 }
-

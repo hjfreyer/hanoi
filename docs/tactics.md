@@ -1,7 +1,8 @@
 # Tactics
 
-`bin/rewrite` inlines one sentence's compiled bytecode into a tree and prints
-it. A **tactic** says how to rewrite that tree before printing.
+`bin/rewrite` turns one sentence's compiled bytecode into a tree and prints it.
+A **tactic** says how to rewrite that tree before printing — including how much
+of the call graph to expand in the first place.
 
 ```bash
 cargo run --bin rewrite -- tests 'SimpleTuple::check' -t dip_normalize
@@ -32,6 +33,7 @@ and returns a replacement, or fails. `--list-rules` prints them.
 | `flatten_call` | `dip 0 { P }` | `P`, spliced in |
 | `distribute_branch` | `branch { A } { B } ; X` | `branch { A X } { B X }` |
 | `fold_branch` | `push true \| false ; branch { A } { B }` | the arm it selects |
+| `inline` | a call | the block it names |
 
 `sink` is the interchange rule, and its side condition is the one piece of real
 arithmetic here: writing `X`'s arity as `(n -> m)`, the dip's window must sit
@@ -67,6 +69,22 @@ then fold".
 `fold_branch` matches only a literal `Bool`. The VM rejects a non-boolean
 condition, so folding `push 1 ; branch …` would erase a panic rather than
 preserve one — the same reason `annihilate_drop` will not touch `add`.
+
+`inline` is why the language exists. Nothing is expanded before you see it, so
+how much of the call graph you are looking at is a thing you say:
+
+```
+$ rewrite tests 'State::check' -t id                          #   49 lines
+$ rewrite tests 'State::check' -t 'each(inline)'              #   71
+$ rewrite tests 'State::check' -t 'repeat_n(2, bu(each(inline)))'  #  217
+$ rewrite tests 'State::check'                                # 1148
+```
+
+The traversal is what bounds it, and not in the direction you might guess.
+`td` expands a call and then descends into the body it just created, so **one
+`td` pass goes all the way down** — that is what `inline_all` is. `bu` visits
+children before this level, so a newly created body waits for the next pass,
+which makes `repeat_n(k, bu(each(inline)))` mean k levels of call graph.
 
 `flatten_call` is what lets the other rules reach across a call. Because a rule
 only ever sees the sequence it is handed, a branch one frame down and the
@@ -119,8 +137,9 @@ Definitions may not recurse, directly or mutually. That is deliberate: it makes
 `repeat` the only unbounded construct in the language, so the fuel budget has to
 backstop rule oscillation only, never arbitrary user loops.
 
-The built-in prelude defines `dips`, `unary`, `factoring`, `annihilate`,
-`cleanup`, `distribute`, `flatten`, `all` and `dip_normalize`. The first four plus
+The built-in prelude defines `inline_all`, `default`, `dips`, `unary`,
+`factoring`, `annihilate`, `cleanup`, `distribute`, `flatten`, `all` and
+`dip_normalize`. With no `-t` you get `default`, which is `inline_all`. The first four plus
 `dip_normalize` reproduce what the old `--dip-normalize`, `--factor-branches`
 and `--annihilate` flags did.
 
@@ -178,15 +197,46 @@ Two consequences worth knowing: a rule cannot express a condition about its
 context (`this dip begins a branch arm` is not sayable), and the entry stack
 depth is tracked only by the printer, never by a rule.
 
+Facts about the *library* are a different matter and do not break this — a
+sentence's arity and its annotations are properties of the whole program, the
+same wherever a rule meets them.
+
 The invariant is also why nothing reaches across a frame. When you want that,
 the answer is to remove the frame with `flatten_call` rather than to give a
 rule the context — one rule that erases a boundary composes with everything,
 whereas context-aware rules would each need their own notion of it.
 
+## Recursion is refused, and no analysis is needed to spot it
+
+The tool will not open a `#[recursive]` sentence:
+
+```
+$ rewrite tests recursion_and_returns
+error: 'control_flow::recursion_and_returns' is #[recursive]
+```
+
+Deciding that takes **one annotation lookup, not a graph traversal**, and the
+reason is worth knowing because it is a property of hanoi rather than of this
+tool. `check_arities` refuses to compile a sentence that calls a `#[recursive]`
+one without being `#[recursive]` itself, and a sentence inside a cycle cannot
+escape the annotation either, since arity inference would detect the cycle and
+refuse. So the annotation has already propagated transitively up the call graph
+by the time anything here runs, and its *absence on a root is a proof that
+expanding that root terminates*.
+
+That claim is load-bearing, so it is checked rather than assumed:
+`program::invariant::reaching_a_cycle_implies_the_recursive_annotation` computes
+the real cycles over the whole test corpus and asserts every sentence reaching
+one carries the annotation. The graph traversal survives only as that check —
+the tool itself never runs it.
+
 ## Checking and tracing
 
 - `--check` verifies that every rule preserves the net stack effect of the
-  window it rewrote, and aborts naming the rule if not. It checks *net change*
+  window it rewrote, and aborts naming the rule if not. Learning an arity that
+  was previously unknown is allowed — `inline` does exactly that, since a
+  `#[recursive]`-annotated sentence has no inferable arity as a call while its
+  expanded body may well have one — but changing or losing one is a bug. It checks *net change*
   rather than full arity, because `annihilate_drop` legitimately lowers the
   input requirement: dropping `pick 2; drop` also drops the demand for three
   values that only the pick made.

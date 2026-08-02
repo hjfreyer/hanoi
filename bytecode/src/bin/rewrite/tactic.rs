@@ -14,7 +14,8 @@ use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
 
 use crate::arity::seq_arity;
-use crate::ir::Node;
+use crate::ir::{child_bodies, Node};
+use crate::program::Program;
 use crate::rules::Rule;
 
 /// How many rule firings the trace remembers. Enough to read an oscillation
@@ -84,14 +85,17 @@ impl std::fmt::Display for TacticError {
             } => write!(
                 f,
                 "rule '{}' changed the net stack effect of the window it rewrote \
-                 ({:?} -> {:?}). This is a bug in the rule, not in the script.",
+                 ({:?} -> {:?}). Learning an arity that was previously unknown is \
+                 allowed; changing or losing one is a bug in the rule, not in the \
+                 script.",
                 rule, before, after
             ),
         }
     }
 }
 
-pub(crate) struct Env {
+pub(crate) struct Env<'a> {
+    prog: &'a Program<'a>,
     fuel: Cell<u64>,
     spent: Cell<u64>,
     recent: RefCell<VecDeque<String>>,
@@ -99,9 +103,10 @@ pub(crate) struct Env {
     check: bool,
 }
 
-impl Env {
-    pub(crate) fn new(fuel: u64, check: bool) -> Self {
+impl<'a> Env<'a> {
+    pub(crate) fn new(prog: &'a Program<'a>, fuel: u64, check: bool) -> Self {
         Env {
+            prog,
             fuel: Cell::new(fuel),
             spent: Cell::new(0),
             recent: RefCell::new(VecDeque::new()),
@@ -139,6 +144,10 @@ impl Env {
         recent.push_back(format!("{}@{}", rule, at));
     }
 
+    pub(crate) fn program(&self) -> &Program<'a> {
+        self.prog
+    }
+
     /// Rule firing counts, most frequent first.
     pub(crate) fn histogram(&self) -> Vec<(&'static str, usize)> {
         let mut out: Vec<_> = self.hits.borrow().iter().map(|(k, v)| (*k, *v)).collect();
@@ -162,6 +171,14 @@ pub(crate) enum Tactic {
     Children(Box<Tactic>),
     /// Children first, then here. Never fails.
     Bu(Box<Tactic>),
+    /// Here first, then children. Never fails.
+    ///
+    /// The direction matters most for `inline`, and not in the way you might
+    /// guess. `td` expands a call and then immediately descends into the body
+    /// it just created, so **one `td` pass expands the whole call graph**.
+    /// `bu` reaches the newly created bodies only on the next pass, so
+    /// `repeat_n(k, bu(each(inline)))` is what gives you k levels.
+    Td(Box<Tactic>),
     Id,
     Fail,
 }
@@ -174,9 +191,12 @@ pub(crate) enum Tactic {
 fn can_fail(t: &Tactic) -> bool {
     match t {
         Tactic::Each(_) | Tactic::Once(_) | Tactic::Fail => true,
-        Tactic::Try(_) | Tactic::Repeat(_) | Tactic::Children(_) | Tactic::Bu(_) | Tactic::Id => {
-            false
-        }
+        Tactic::Try(_)
+        | Tactic::Repeat(_)
+        | Tactic::Children(_)
+        | Tactic::Bu(_)
+        | Tactic::Td(_)
+        | Tactic::Id => false,
         Tactic::RepeatN(_, t) => can_fail(t),
         Tactic::Seq(ts) => ts.iter().any(can_fail),
         // A choice reports whatever the branch it ends on reported, so it can
@@ -305,6 +325,8 @@ pub(crate) fn apply(t: &Tactic, env: &Env, nodes: Vec<Node>) -> Result<Outcome, 
         }
 
         Tactic::Bu(inner) => bottom_up(inner, env, nodes),
+
+        Tactic::Td(inner) => top_down(inner, env, nodes),
     }
 }
 
@@ -325,6 +347,25 @@ fn bottom_up(t: &Tactic, env: &Env, nodes: Vec<Node>) -> Result<Outcome, TacticE
     })
 }
 
+/// `td(t) = try(t); children(td(t))`.
+///
+/// Total for the same reason `bu` is, and the mirror of it. Note what that
+/// means for a rule that *creates* children: `td` descends into the body it
+/// just produced, so one pass runs all the way down. `bu` visits children
+/// before touching this level, so anything it creates waits for the next pass.
+/// That is the whole difference between `inline_all` and bounded inlining.
+fn top_down(t: &Tactic, env: &Env, nodes: Vec<Node>) -> Result<Outcome, TacticError> {
+    let outcome = apply(t, env, nodes)?;
+    let here_changed = outcome.changed();
+    let nodes = outcome.into_nodes();
+    let (nodes, children_changed) = map_child_seqs(nodes, &mut |n| top_down(t, env, n))?;
+    Ok(if here_changed || children_changed {
+        Outcome::Changed(nodes)
+    } else {
+        Outcome::Unchanged(nodes)
+    })
+}
+
 /// Runs `f` over every child sequence of every node, in order.
 fn map_child_seqs(
     mut nodes: Vec<Node>,
@@ -333,16 +374,7 @@ fn map_child_seqs(
     let mut changed = false;
 
     for node in nodes.iter_mut() {
-        let bodies: Vec<&mut Vec<Node>> = match node {
-            Node::Dip { body, .. } => vec![body],
-            Node::Branch {
-                then_body,
-                else_body,
-                ..
-            } => vec![then_body, else_body],
-            Node::Op(_) | Node::Cut(_) => Vec::new(),
-        };
-        for body in bodies {
+        for body in child_bodies(node) {
             let outcome = f(std::mem::take(body))?;
             changed |= outcome.changed();
             *body = outcome.into_nodes();
@@ -404,7 +436,7 @@ fn step(
             continue;
         }
         let window = &nodes[w..w + width];
-        let Some(replacement) = rule.rewrite(window) else {
+        let Some(replacement) = rule.rewrite(env.prog, window) else {
             continue;
         };
         env.spend()?;
@@ -415,9 +447,19 @@ fn step(
         );
 
         if env.check {
-            let before = net(window);
-            let after = net(&replacement);
-            if before != after {
+            // Learning an arity is fine; changing one is not. `inline` can
+            // turn `None` into a number, because a `#[recursive]`-annotated
+            // sentence has no inferable arity as a call but its expanded body
+            // may well have one. What must never happen is two different
+            // answers, or a rule making a known arity unknowable.
+            let before = net(env, window);
+            let after = net(env, &replacement);
+            let broke = match (before, after) {
+                (Some(a), Some(b)) => a != b,
+                (Some(_), None) => true,
+                (None, _) => false,
+            };
+            if broke {
                 return Err(TacticError::NetChanged {
                     rule: rule.name(),
                     before,
@@ -438,7 +480,7 @@ fn step(
 /// Deliberately *not* full arity: annihilating `pick 2; drop` legitimately
 /// drops the demand for three values that only the pick made, so the input
 /// requirement may fall. Net change may not move at all.
-fn net(nodes: &[Node]) -> Option<i64> {
-    let (inputs, outputs) = seq_arity(nodes);
+fn net(env: &Env, nodes: &[Node]) -> Option<i64> {
+    let (inputs, outputs) = seq_arity(env.prog, nodes);
     outputs.map(|o| o - inputs)
 }

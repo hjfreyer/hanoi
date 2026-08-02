@@ -1,19 +1,20 @@
 //! The depth-gutter listing.
 
-use bytecode::{Library, SentenceIndex};
+use bytecode::SentenceIndex;
 use std::collections::HashSet;
 
 use crate::arity::{node_arity, seq_arity};
 use crate::ir::{build, Node};
+use crate::program::Program;
 use crate::tactic::{apply, Env, Tactic, TacticError};
 
 pub(crate) fn print_sentence(
-    library: &Library,
     root: SentenceIndex,
     tactic: &Tactic,
     env: &Env,
     source: &str,
 ) -> Result<(), TacticError> {
+    let library = env.program().library();
     println!("#{} {}", usize::from(root), library.names[root]);
     for ann in &library.annotations[root] {
         println!("  {:?}", ann);
@@ -26,11 +27,11 @@ pub(crate) fn print_sentence(
     // A sentence whose reckoning breaks immediately — a #[recursive] one, whose
     // body is a cut edge — has no knowable entry depth. Counting from zero
     // still shows every step's effect; the `+` marks the numbers as offsets.
-    let (inputs, outputs) = seq_arity(&body);
+    let (inputs, outputs) = seq_arity(env.program(), &body);
     let relative = outputs.is_none() && inputs == 0;
 
     println!();
-    if source != "id" {
+    if source != "default" {
         println!("  tactic: {}", source);
     }
     if relative {
@@ -41,11 +42,17 @@ pub(crate) fn print_sentence(
         println!("  ──────┼────────────");
     }
 
-    print_seq(&body, 0, Some(inputs), relative);
+    print_seq(env.program(), &body, 0, Some(inputs), relative);
     Ok(())
 }
 
-pub(crate) fn print_seq(nodes: &[Node], indent: usize, entry: Option<i64>, relative: bool) {
+pub(crate) fn print_seq(
+    prog: &Program,
+    nodes: &[Node],
+    indent: usize,
+    entry: Option<i64>,
+    relative: bool,
+) {
     let mut depth = entry;
     let blank = " ".repeat(7);
 
@@ -81,7 +88,7 @@ pub(crate) fn print_seq(nodes: &[Node], indent: usize, entry: Option<i64>, relat
                 // still on the stack, so the inner frame's entry depth is the
                 // same number the dip itself was printed with — which is what
                 // makes the hidden region visible.
-                print_seq(body, indent + 1, depth, relative);
+                print_seq(prog, body, indent + 1, depth, relative);
                 println!("{} │ {}}}", blank, pad);
             }
             Node::Branch {
@@ -93,17 +100,22 @@ pub(crate) fn print_seq(nodes: &[Node], indent: usize, entry: Option<i64>, relat
                 // Both arms run on the stack with the condition popped.
                 let arm_entry = depth.map(|d| d - 1);
                 println!("{} │ {}branch then → {} {{", gutter, pad, then_origin);
-                print_seq(then_body, indent + 1, arm_entry, relative);
+                print_seq(prog, then_body, indent + 1, arm_entry, relative);
                 println!("{} │ {}}} else → {} {{", blank, pad, else_origin);
-                print_seq(else_body, indent + 1, arm_entry, relative);
+                print_seq(prog, else_body, indent + 1, arm_entry, relative);
                 println!("{} │ {}}}", blank, pad);
             }
-            Node::Cut(origin) => {
-                println!("{} │ {}⟲ {} recursive, not inlined", gutter, pad, origin)
+            Node::Call { depth: k, target } => {
+                let verb = if *k == 0 {
+                    "jump".to_string()
+                } else {
+                    format!("dip {}", k)
+                };
+                println!("{} │ {}{} → {}", gutter, pad, verb, prog.label(*target));
             }
         }
 
-        depth = match (depth, node_arity(node)) {
+        depth = match (depth, node_arity(prog, node)) {
             (Some(d), Some((n, m))) => Some(d - n + m),
             _ => None,
         };

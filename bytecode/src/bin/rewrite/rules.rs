@@ -13,7 +13,8 @@
 use bytecode::{Instruction, Value};
 
 use crate::arity::node_arity;
-use crate::ir::{same_effect, Node};
+use crate::ir::{expand_call, same_effect, Node};
+use crate::program::Program;
 
 /// A local rewrite.
 ///
@@ -28,7 +29,7 @@ pub(crate) trait Rule: Sync + std::fmt::Debug {
     fn width(&self) -> usize;
 
     /// Rewrites the window, or fails. Must not return the window unchanged.
-    fn rewrite(&self, window: &[Node]) -> Option<Vec<Node>>;
+    fn rewrite(&self, prog: &Program, window: &[Node]) -> Option<Vec<Node>>;
 }
 
 /// Every rule, by name. Rules are a fixed instruction set in their own
@@ -37,12 +38,13 @@ pub(crate) trait Rule: Sync + std::fmt::Debug {
 pub(crate) const ALL_RULES: &[&dyn Rule] = &[
     &AnnihilateDrop,
     &Collapse,
-    &Expand,
     &DistributeBranch,
+    &Expand,
     &FactorBranch,
     &FlattenCall,
     &FoldBranch,
     &Fuse,
+    &Inline,
     &NoOp,
     &PickDropToRoll,
     &Sink,
@@ -78,7 +80,7 @@ impl Rule for Collapse {
     fn width(&self) -> usize {
         1
     }
-    fn rewrite(&self, window: &[Node]) -> Option<Vec<Node>> {
+    fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
         let Node::Dip {
             depth,
             origins,
@@ -127,7 +129,7 @@ impl Rule for Expand {
     fn width(&self) -> usize {
         1
     }
-    fn rewrite(&self, window: &[Node]) -> Option<Vec<Node>> {
+    fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
         let Node::Dip {
             depth,
             origins,
@@ -172,7 +174,7 @@ impl Rule for FactorBranch {
     fn width(&self) -> usize {
         1
     }
-    fn rewrite(&self, window: &[Node]) -> Option<Vec<Node>> {
+    fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
         let Node::Branch {
             then_origin,
             then_body,
@@ -227,7 +229,7 @@ impl Rule for Sink {
     fn width(&self) -> usize {
         2
     }
-    fn rewrite(&self, window: &[Node]) -> Option<Vec<Node>> {
+    fn rewrite(&self, prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
         let [prev, dip] = window else { return None };
         let Node::Dip {
             depth,
@@ -238,7 +240,7 @@ impl Rule for Sink {
             return None;
         };
 
-        let (n, m) = node_arity(prev)?;
+        let (n, m) = node_arity(prog, prev)?;
         let k = *depth as i64;
         if k < m {
             return None;
@@ -273,7 +275,7 @@ impl Rule for Fuse {
     fn width(&self) -> usize {
         2
     }
-    fn rewrite(&self, window: &[Node]) -> Option<Vec<Node>> {
+    fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
         let [
             Node::Dip {
                 depth: da,
@@ -334,7 +336,7 @@ impl Rule for AnnihilateDrop {
     fn width(&self) -> usize {
         2
     }
-    fn rewrite(&self, window: &[Node]) -> Option<Vec<Node>> {
+    fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
         let [Node::Op(prev), Node::Op(Instruction::Drop)] = window else {
             return None;
         };
@@ -384,7 +386,7 @@ impl Rule for DistributeBranch {
     fn width(&self) -> usize {
         2
     }
-    fn rewrite(&self, window: &[Node]) -> Option<Vec<Node>> {
+    fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
         let [
             Node::Branch {
                 then_origin,
@@ -430,7 +432,7 @@ impl Rule for FoldBranch {
     fn width(&self) -> usize {
         2
     }
-    fn rewrite(&self, window: &[Node]) -> Option<Vec<Node>> {
+    fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
         let [
             Node::Op(Instruction::Push(Value::Bool(cond))),
             Node::Branch {
@@ -482,7 +484,7 @@ impl Rule for FlattenCall {
     fn width(&self) -> usize {
         1
     }
-    fn rewrite(&self, window: &[Node]) -> Option<Vec<Node>> {
+    fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
         let Node::Dip {
             depth: 0,
             body,
@@ -500,10 +502,58 @@ impl Rule for FlattenCall {
     }
 }
 
+/// Replaces a call with the block it names.
+///
+/// This is the rule the whole language was for. `build` no longer expands
+/// anything, so how much of the call graph you are looking at is something you
+/// say — `inline_all` for all of it, `repeat_n(2, bu(each(inline)))` for two
+/// levels — rather than something the tool decided before you saw it.
+///
+/// Declines a `#[recursive]` target. That is a single annotation lookup, not
+/// an analysis: `check_arities` will not let a sentence call a recursive one
+/// without being recursive itself, so the annotation has already propagated up
+/// the call graph and its absence means the target cannot reach a cycle.
+///
+/// The tool also refuses to open a recursive sentence at all, which makes this
+/// check unreachable in practice. It is here anyway because a rule should be
+/// safe on its own terms — the alternative failure is a stack overflow rather
+/// than something diagnosable, and rules are used directly by tests.
+///
+/// Measure: none in general. Inlining a diamond-shaped call graph duplicates
+/// bodies. It terminates because the reachable call graph is finite and, by the
+/// above, acyclic.
+#[derive(Debug)]
+pub(crate) struct Inline;
+
+impl Rule for Inline {
+    fn name(&self) -> &'static str {
+        "inline"
+    }
+    fn width(&self) -> usize {
+        1
+    }
+    fn rewrite(&self, prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
+        let Node::Call { depth, target } = &window[0] else {
+            return None;
+        };
+        if prog.is_recursive(*target) {
+            return None;
+        }
+        Some(vec![expand_call(prog, *depth, *target)])
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bytecode::Value;
+    use bytecode::{Library, Value};
+
+    /// Most rules never consult the library; the ones that do get their own
+    /// tests over a real one.
+    fn prog() -> Program<'static> {
+        // Leaked so the borrow is 'static and every test can just call `prog()`.
+        Program::new(Box::leak(Box::new(Library::new())))
+    }
 
     fn op(i: Instruction) -> Node {
         Node::Op(i)
@@ -530,7 +580,7 @@ mod tests {
     fn collapse_merges_a_dip_whose_body_is_one_dip() {
         let w = [dip(2, vec![dip(3, vec![op(Instruction::Add)])])];
         assert_eq!(
-            Collapse.rewrite(&w),
+            Collapse.rewrite(&prog(), &w),
             Some(vec![dip(5, vec![op(Instruction::Add)])])
         );
     }
@@ -538,22 +588,22 @@ mod tests {
     #[test]
     fn collapse_declines_a_body_that_is_more_than_one_dip() {
         let w = [dip(2, vec![dip(1, vec![]), op(Instruction::Add)])];
-        assert_eq!(Collapse.rewrite(&w), None);
+        assert_eq!(Collapse.rewrite(&prog(), &w), None);
     }
 
     #[test]
     fn expand_peels_exactly_one_level() {
         let w = [dip(3, vec![op(Instruction::Add)])];
         assert_eq!(
-            Expand.rewrite(&w),
+            Expand.rewrite(&prog(), &w),
             Some(vec![dip(1, vec![dip(2, vec![op(Instruction::Add)])])])
         );
     }
 
     #[test]
     fn expand_leaves_a_plain_call_and_a_unary_dip_alone() {
-        assert_eq!(Expand.rewrite(&[dip(0, vec![])]), None);
-        assert_eq!(Expand.rewrite(&[dip(1, vec![])]), None);
+        assert_eq!(Expand.rewrite(&prog(), &[dip(0, vec![])]), None);
+        assert_eq!(Expand.rewrite(&prog(), &[dip(1, vec![])]), None);
     }
 
     #[test]
@@ -562,7 +612,7 @@ mod tests {
         // 1 - 1 + 2 = 2 deep on the other side.
         let w = [op(Instruction::Add), dip(1, vec![])];
         assert_eq!(
-            Sink.rewrite(&w),
+            Sink.rewrite(&prog(), &w),
             Some(vec![dip(2, vec![]), op(Instruction::Add)])
         );
     }
@@ -572,7 +622,7 @@ mod tests {
         // `push` is (0 -> 1), so the dip loses the value it was hiding.
         let w = [op(Instruction::Push(Value::Int(1))), dip(1, vec![])];
         assert_eq!(
-            Sink.rewrite(&w),
+            Sink.rewrite(&prog(), &w),
             Some(vec![dip(0, vec![]), op(Instruction::Push(Value::Int(1)))])
         );
     }
@@ -582,12 +632,12 @@ mod tests {
         // `untuple 3` is (1 -> 3); a dip hiding only two would be rewriting a
         // slot the untuple just filled.
         assert_eq!(
-            Sink.rewrite(&[op(Instruction::Untuple(3)), dip(2, vec![])]),
+            Sink.rewrite(&prog(), &[op(Instruction::Untuple(3)), dip(2, vec![])]),
             None
         );
         // Hiding three clears it, and the window is 3 - 3 + 1 = 1 deep before.
         assert_eq!(
-            Sink.rewrite(&[op(Instruction::Untuple(3)), dip(3, vec![])]),
+            Sink.rewrite(&prog(), &[op(Instruction::Untuple(3)), dip(3, vec![])]),
             Some(vec![dip(1, vec![]), op(Instruction::Untuple(3))])
         );
     }
@@ -595,7 +645,7 @@ mod tests {
     #[test]
     fn sink_declines_past_a_panic() {
         // Nothing after a panic runs, so there is no interchange to make.
-        assert_eq!(Sink.rewrite(&[op(Instruction::Panic), dip(9, vec![])]), None);
+        assert_eq!(Sink.rewrite(&prog(), &[op(Instruction::Panic), dip(9, vec![])]), None);
     }
 
     #[test]
@@ -603,13 +653,13 @@ mod tests {
         let a = dip(2, vec![op(Instruction::Add)]);
         let b = dip(2, vec![op(Instruction::Drop)]);
         assert_eq!(
-            Fuse.rewrite(&[a, b]),
+            Fuse.rewrite(&prog(), &[a, b]),
             Some(vec![dip(
                 2,
                 vec![op(Instruction::Add), op(Instruction::Drop)]
             )])
         );
-        assert_eq!(Fuse.rewrite(&[dip(1, vec![]), dip(2, vec![])]), None);
+        assert_eq!(Fuse.rewrite(&prog(), &[dip(1, vec![]), dip(2, vec![])]), None);
     }
 
     #[test]
@@ -620,7 +670,7 @@ mod tests {
             vec![shared.clone(), op(Instruction::Push(Value::Int(2)))],
         )];
         assert_eq!(
-            FactorBranch.rewrite(&w),
+            FactorBranch.rewrite(&prog(), &w),
             Some(vec![
                 dip(1, vec![shared]),
                 branch(
@@ -637,20 +687,20 @@ mod tests {
             vec![op(Instruction::Push(Value::Int(1)))],
             vec![op(Instruction::Push(Value::Int(2)))],
         )];
-        assert_eq!(FactorBranch.rewrite(&w), None);
+        assert_eq!(FactorBranch.rewrite(&prog(), &w), None);
     }
 
     #[test]
     fn annihilate_cancels_a_total_producer_against_its_drop() {
         assert_eq!(
-            AnnihilateDrop.rewrite(&[
+            AnnihilateDrop.rewrite(&prog(), &[
                 op(Instruction::Push(Value::Int(1))),
                 op(Instruction::Drop)
             ]),
             Some(vec![])
         );
         assert_eq!(
-            AnnihilateDrop.rewrite(&[op(Instruction::Pick(3)), op(Instruction::Drop)]),
+            AnnihilateDrop.rewrite(&prog(), &[op(Instruction::Pick(3)), op(Instruction::Drop)]),
             Some(vec![])
         );
     }
@@ -660,7 +710,7 @@ mod tests {
         // `is_int` consumes a value to make the dropped one, so the drop still
         // has to happen — it just takes the input instead.
         assert_eq!(
-            AnnihilateDrop.rewrite(&[op(Instruction::IsInt), op(Instruction::Drop)]),
+            AnnihilateDrop.rewrite(&prog(), &[op(Instruction::IsInt), op(Instruction::Drop)]),
             Some(vec![op(Instruction::Drop)])
         );
     }
@@ -669,7 +719,7 @@ mod tests {
     fn flatten_splices_a_plain_call_into_its_call_site() {
         let w = [dip(0, vec![op(Instruction::Add), op(Instruction::Drop)])];
         assert_eq!(
-            FlattenCall.rewrite(&w),
+            FlattenCall.rewrite(&prog(), &w),
             Some(vec![op(Instruction::Add), op(Instruction::Drop)])
         );
     }
@@ -679,7 +729,7 @@ mod tests {
         // At depth 1 the body runs below a hidden value; splicing it in would
         // hand it that value instead.
         assert_eq!(
-            FlattenCall.rewrite(&[dip(1, vec![op(Instruction::Add)])]),
+            FlattenCall.rewrite(&prog(), &[dip(1, vec![op(Instruction::Add)])]),
             None
         );
     }
@@ -688,8 +738,8 @@ mod tests {
     fn flatten_leaves_the_empty_call_to_noop() {
         // Returning the empty body here would be the identity on the sequence,
         // and a rule that returns its input does not terminate.
-        assert_eq!(FlattenCall.rewrite(&[dip(0, vec![])]), None);
-        assert_eq!(NoOp.rewrite(&[dip(0, vec![])]), Some(vec![]));
+        assert_eq!(FlattenCall.rewrite(&prog(), &[dip(0, vec![])]), None);
+        assert_eq!(NoOp.rewrite(&prog(), &[dip(0, vec![])]), Some(vec![]));
     }
 
     #[test]
@@ -702,7 +752,7 @@ mod tests {
             op(Instruction::Add),
         ];
         assert_eq!(
-            DistributeBranch.rewrite(&w),
+            DistributeBranch.rewrite(&prog(), &w),
             Some(vec![branch(
                 vec![op(Instruction::Push(Value::Int(1))), op(Instruction::Add)],
                 vec![op(Instruction::Push(Value::Int(2))), op(Instruction::Add)],
@@ -714,7 +764,7 @@ mod tests {
     fn distribute_declines_with_nothing_to_push_in() {
         // Width 2, so a branch at the end of a sequence never matches.
         assert_eq!(
-            DistributeBranch.rewrite(&[op(Instruction::Add), branch(vec![], vec![])]),
+            DistributeBranch.rewrite(&prog(), &[op(Instruction::Add), branch(vec![], vec![])]),
             None
         );
     }
@@ -728,11 +778,11 @@ mod tests {
             )
         };
         assert_eq!(
-            FoldBranch.rewrite(&[op(Instruction::Push(Value::Bool(true))), arms()]),
+            FoldBranch.rewrite(&prog(), &[op(Instruction::Push(Value::Bool(true))), arms()]),
             Some(vec![op(Instruction::Push(Value::Int(10)))])
         );
         assert_eq!(
-            FoldBranch.rewrite(&[op(Instruction::Push(Value::Bool(false))), arms()]),
+            FoldBranch.rewrite(&prog(), &[op(Instruction::Push(Value::Bool(false))), arms()]),
             Some(vec![op(Instruction::Push(Value::Int(20)))])
         );
     }
@@ -740,7 +790,7 @@ mod tests {
     #[test]
     fn folding_an_empty_arm_leaves_nothing() {
         assert_eq!(
-            FoldBranch.rewrite(&[
+            FoldBranch.rewrite(&prog(), &[
                 op(Instruction::Push(Value::Bool(true))),
                 branch(vec![], vec![op(Instruction::Add)])
             ]),
@@ -753,7 +803,7 @@ mod tests {
         // The VM rejects a non-boolean condition, so folding `push 1; branch`
         // would erase a panic instead of preserving one.
         assert_eq!(
-            FoldBranch.rewrite(&[
+            FoldBranch.rewrite(&prog(), &[
                 op(Instruction::Push(Value::Int(1))),
                 branch(vec![], vec![])
             ]),
@@ -761,7 +811,7 @@ mod tests {
         );
         // And a condition that is computed rather than pushed is not constant.
         assert_eq!(
-            FoldBranch.rewrite(&[op(Instruction::IsInt), branch(vec![], vec![])]),
+            FoldBranch.rewrite(&prog(), &[op(Instruction::IsInt), branch(vec![], vec![])]),
             None
         );
     }
@@ -775,7 +825,7 @@ mod tests {
             dip(3, vec![op(Instruction::Drop)]),
         ];
         assert_eq!(
-            PickDropToRoll.rewrite(&w),
+            PickDropToRoll.rewrite(&prog(), &w),
             Some(vec![op(Instruction::Roll(2))])
         );
     }
@@ -786,7 +836,7 @@ mod tests {
         // bystander. Neither is a roll.
         for depth in [2, 4] {
             assert_eq!(
-                PickDropToRoll.rewrite(&[
+                PickDropToRoll.rewrite(&prog(), &[
                     op(Instruction::Pick(2)),
                     dip(depth, vec![op(Instruction::Drop)])
                 ]),
@@ -797,7 +847,7 @@ mod tests {
         }
         // And the body has to be a lone drop.
         assert_eq!(
-            PickDropToRoll.rewrite(&[
+            PickDropToRoll.rewrite(&prog(), &[
                 op(Instruction::Pick(0)),
                 dip(1, vec![op(Instruction::Drop), op(Instruction::Drop)])
             ]),
@@ -810,26 +860,26 @@ mod tests {
         // At d = 0 the answer is `roll 0`, which does nothing — but this rule
         // states one law and lets `noop` state the other.
         assert_eq!(
-            PickDropToRoll.rewrite(&[
+            PickDropToRoll.rewrite(&prog(), &[
                 op(Instruction::Pick(0)),
                 dip(1, vec![op(Instruction::Drop)])
             ]),
             Some(vec![op(Instruction::Roll(0))])
         );
-        assert_eq!(NoOp.rewrite(&[op(Instruction::Roll(0))]), Some(vec![]));
+        assert_eq!(NoOp.rewrite(&prog(), &[op(Instruction::Roll(0))]), Some(vec![]));
     }
 
     #[test]
     fn noop_removes_an_empty_dip_at_any_depth() {
-        assert_eq!(NoOp.rewrite(&[dip(0, vec![])]), Some(vec![]));
-        assert_eq!(NoOp.rewrite(&[dip(3, vec![])]), Some(vec![]));
+        assert_eq!(NoOp.rewrite(&prog(), &[dip(0, vec![])]), Some(vec![]));
+        assert_eq!(NoOp.rewrite(&prog(), &[dip(3, vec![])]), Some(vec![]));
     }
 
     #[test]
     fn noop_declines_anything_that_does_something() {
-        assert_eq!(NoOp.rewrite(&[op(Instruction::Roll(1))]), None);
-        assert_eq!(NoOp.rewrite(&[dip(1, vec![op(Instruction::Add)])]), None);
-        assert_eq!(NoOp.rewrite(&[op(Instruction::Drop)]), None);
+        assert_eq!(NoOp.rewrite(&prog(), &[op(Instruction::Roll(1))]), None);
+        assert_eq!(NoOp.rewrite(&prog(), &[dip(1, vec![op(Instruction::Add)])]), None);
+        assert_eq!(NoOp.rewrite(&prog(), &[op(Instruction::Drop)]), None);
     }
 
     #[test]
@@ -837,13 +887,13 @@ mod tests {
         // `add; drop` is not `drop; drop`: the add still rejects non-numeric
         // operands, and cancelling it would discard that check.
         assert_eq!(
-            AnnihilateDrop.rewrite(&[op(Instruction::Add), op(Instruction::Drop)]),
+            AnnihilateDrop.rewrite(&prog(), &[op(Instruction::Add), op(Instruction::Drop)]),
             None
         );
         // `equal` is total in the VM, but the Z3 model gives it a panic branch,
         // so the tool does not assert an equivalence the verifier would not.
         assert_eq!(
-            AnnihilateDrop.rewrite(&[op(Instruction::Equal), op(Instruction::Drop)]),
+            AnnihilateDrop.rewrite(&prog(), &[op(Instruction::Equal), op(Instruction::Drop)]),
             None
         );
     }
@@ -872,7 +922,7 @@ impl Rule for PickDropToRoll {
     fn width(&self) -> usize {
         2
     }
-    fn rewrite(&self, window: &[Node]) -> Option<Vec<Node>> {
+    fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
         let [Node::Op(Instruction::Pick(d)), Node::Dip { depth, body, .. }] = window else {
             return None;
         };
@@ -904,7 +954,7 @@ impl Rule for NoOp {
     fn width(&self) -> usize {
         1
     }
-    fn rewrite(&self, window: &[Node]) -> Option<Vec<Node>> {
+    fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
         match &window[0] {
             Node::Op(Instruction::Roll(0)) => Some(Vec::new()),
             Node::Dip { body, .. } if body.is_empty() => Some(Vec::new()),

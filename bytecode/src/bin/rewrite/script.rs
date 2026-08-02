@@ -26,6 +26,19 @@ use crate::tactic::Tactic;
 /// Reproduces what the old `--dip-normalize`, `--factor-branches` and
 /// `--annihilate` flags did, as named tactics that can be recombined.
 pub(crate) const PRELUDE: &str = r#"
+// Expand every call that can be expanded. `build` no longer inlines anything,
+// so this is what turns a sentence into the whole call tree.
+//
+// Top-down, which for a rule that creates children means one pass goes all the
+// way down: `td` descends into the body it just produced. For *less* than all
+// of it use `bu`, which reaches new bodies only on the next pass, so
+// `repeat_n(2, bu(each(inline)))` is two levels. Sentences that can reach
+// themselves are refused outright, so there is nothing here to guard against.
+tactic inline_all = td(each(inline));
+
+// What you get with no -t at all.
+tactic default = inline_all;
+
 // Move dips left, fuse the ones that meet, and keep nested dips collapsed so
 // the interchange rule sees a dip's true hidden depth.
 tactic dips = repeat(bu(try(each(collapse)); try(each(sink)); try(each(fuse))));
@@ -617,7 +630,8 @@ impl Definitions {
                     "try" => Tactic::Try(inner),
                     "repeat" => Tactic::Repeat(inner),
                     "children" => Tactic::Children(inner),
-                    _ => Tactic::Bu(inner),
+                    "bu" => Tactic::Bu(inner),
+                    _ => Tactic::Td(inner),
                 })
             }
             Shape::CountAndOne => {
@@ -656,6 +670,7 @@ const COMBINATORS: &[(&str, Shape)] = &[
     ("repeat", Shape::One),
     ("children", Shape::One),
     ("bu", Shape::One),
+    ("td", Shape::One),
     ("repeat_n", Shape::CountAndOne),
 ];
 
