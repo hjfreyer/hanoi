@@ -41,6 +41,7 @@ pub(crate) const ALL_RULES: &[&dyn Rule] = &[
     &CancelTuple,
     &Collapse,
     &DistributeBranch,
+    &DupNatural,
     &Expand,
     &FactorBranch,
     &FlattenCall,
@@ -54,6 +55,7 @@ pub(crate) const ALL_RULES: &[&dyn Rule] = &[
     &RetainCondition,
     &Sink,
     &SpecializeEqual,
+    &UnfactorBranch,
 ];
 
 pub(crate) fn rule_by_name(name: &str) -> Option<&'static dyn Rule> {
@@ -1305,6 +1307,111 @@ mod tests {
     }
 
     #[test]
+    fn dup_natural_shares_a_computation_done_on_a_copy_and_the_original() {
+        // The m = 1 case: one result, so one copy.
+        let w = [
+            op(Instruction::Pick(0)),
+            op(Instruction::IsTuple),
+            dip(1, vec![op(Instruction::IsTuple)]),
+        ];
+        assert_eq!(
+            DupNatural.rewrite(&prog(), &w),
+            Some(vec![op(Instruction::IsTuple), op(Instruction::Pick(0))])
+        );
+
+        // The case the crux turns on: the value came apart into three, so
+        // three copies, each reaching past the ones already made.
+        let w = [
+            op(Instruction::Pick(0)),
+            op(Instruction::Untuple(3)),
+            dip(3, vec![op(Instruction::Untuple(3))]),
+        ];
+        assert_eq!(
+            DupNatural.rewrite(&prog(), &w),
+            Some(vec![
+                op(Instruction::Untuple(3)),
+                op(Instruction::Pick(2)),
+                op(Instruction::Pick(2)),
+                op(Instruction::Pick(2)),
+            ])
+        );
+    }
+
+    #[test]
+    fn dup_natural_needs_the_frame_to_match_what_the_first_copy_produced() {
+        // `untuple 3` leaves three values, so the second occurrence has to sit
+        // under exactly three. At any other depth the two are not looking at
+        // the same thing.
+        for depth in [1, 2, 4] {
+            assert_eq!(
+                DupNatural.rewrite(
+                    &prog(),
+                    &[
+                        op(Instruction::Pick(0)),
+                        op(Instruction::Untuple(3)),
+                        dip(depth, vec![op(Instruction::Untuple(3))]),
+                    ]
+                ),
+                None,
+                "depth {} should not match",
+                depth
+            );
+        }
+        // And it has to be the same computation.
+        assert_eq!(
+            DupNatural.rewrite(
+                &prog(),
+                &[
+                    op(Instruction::Pick(0)),
+                    op(Instruction::Untuple(3)),
+                    dip(3, vec![op(Instruction::Untuple(2))]),
+                ]
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn dup_natural_declines_print() {
+        // The one instruction where running twice and running once differ in
+        // something other than the stack.
+        assert_eq!(
+            DupNatural.rewrite(
+                &prog(),
+                &[
+                    op(Instruction::Pick(0)),
+                    op(Instruction::Print),
+                    dip(1, vec![op(Instruction::Print)]),
+                ]
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn unfactor_branch_inverts_factor_branch() {
+        let factored = [
+            dip(1, vec![op(Instruction::IsTuple)]),
+            branch(vec![op(Instruction::Add)], vec![op(Instruction::Drop)]),
+        ];
+        let Some(unfactored) = UnfactorBranch.rewrite(&prog(), &factored) else {
+            panic!("expected unfactor_branch to fire")
+        };
+        assert_eq!(
+            unfactored,
+            vec![branch(
+                vec![op(Instruction::IsTuple), op(Instruction::Add)],
+                vec![op(Instruction::IsTuple), op(Instruction::Drop)],
+            )]
+        );
+        // Round trip: factor_branch takes it straight back.
+        assert_eq!(
+            FactorBranch.rewrite(&prog(), &unfactored),
+            Some(factored.to_vec())
+        );
+    }
+
+    #[test]
     fn cancel_tuple_goes_one_way_only() {
         assert_eq!(
             CancelTuple.rewrite(
@@ -1754,6 +1861,134 @@ impl Rule for SpecializeEqual {
                 else_body: else_body.clone(),
             },
         ])
+    }
+}
+
+/// `pick 0 ; X ; dip m { X }` becomes `X ; (pick (m-1))^m`, for `X : 1 -> m`.
+///
+/// Duplication is natural: computing `X` on a copy and then on the original
+/// gives the same thing as computing it once and copying all `m` results. The
+/// left-hand side is what a caller looks like when it hands a value to a
+/// predicate and then takes the value apart itself; the right-hand side is that
+/// same program with the work shared.
+///
+/// At `m = 1` this is `pick 0; X; dip 1 { X }` becoming `X; pick 0`. At
+/// `X = untuple 3` it is `pick 0; untuple 3; dip 3 { untuple 3 }` becoming
+/// `untuple 3; pick 2; pick 2; pick 2` — three copies because the value came
+/// apart into three. At `m = 0` there are no picks at all and `X; dip 0 { X }`
+/// simply loses its first copy.
+///
+/// Panic behaviour is preserved rather than merely respected: `X` runs on the
+/// copy first, so where the left side panics it does so on exactly the value
+/// the right side hands to its single `X`. `print` is excluded, since it is the
+/// one instruction for which running twice and running once differ in something
+/// other than the stack.
+///
+/// Measure: node count, since `m` picks and one `X` replace two `X`s and a
+/// `pick` only when `m <= 1`; for larger `m` the measure is the number of
+/// duplicated computations, which is what the rule exists to reduce.
+#[derive(Debug)]
+pub(crate) struct DupNatural;
+
+impl Rule for DupNatural {
+    fn name(&self) -> &'static str {
+        "dup_natural"
+    }
+    fn width(&self) -> usize {
+        3
+    }
+    fn rewrite(&self, prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
+        let [pick, first, framed] = window else {
+            return None;
+        };
+        if !matches!(pick, Node::Op(Instruction::Pick(0))) {
+            return None;
+        }
+        // Running it twice has to mean what running it once means.
+        if matches!(first, Node::Op(Instruction::Print)) {
+            return None;
+        }
+
+        let Node::Dip { depth, body, .. } = framed else {
+            return None;
+        };
+        // The second occurrence has to be the same computation, and has to sit
+        // exactly over what the first one produced.
+        let [second] = &body[..] else { return None };
+        if !same_effect(first, second) {
+            return None;
+        }
+        let (n, m) = node_arity(prog, first)?;
+        if n != 1 || m != *depth as i64 {
+            return None;
+        }
+
+        let mut out = vec![first.clone()];
+        // `m` copies, each reaching back past the ones already made.
+        let reach = usize::try_from(m - 1).ok();
+        if let Some(d) = reach {
+            out.extend((0..m).map(|_| Node::Op(Instruction::Pick(d))));
+        }
+        Some(out)
+    }
+}
+
+/// `dip 1 { X } ; branch { A } { B }` becomes `branch { X; A } { X; B }`.
+///
+/// The exact inverse of [`FactorBranch`], and sound for the reason that rule is:
+/// the dip hides the condition, so `X` runs on the values below it either way,
+/// and running it once before the split is running it once on whichever side
+/// the split takes.
+///
+/// It duplicates on purpose, the way [`DistributeBranch`] does, and for the same
+/// reason — a rule that only holds inside an arm cannot see anything outside
+/// one. Note that the reverse direction, hoisting an `X` *out* of a single arm,
+/// is **not** available and is not merely missing: it would run `X` on the path
+/// that did not take that arm, and where `X` is partial — `untuple n` is — that
+/// invents a panic the original did not have.
+///
+/// Never put this and `factor_branch` in one `repeat`; they are inverses in the
+/// same way `collapse` and `expand` are.
+///
+/// Measure: none. It grows the term, and its termination is the caller's
+/// problem, which is what `repeat_n` and `once` are for.
+#[derive(Debug)]
+pub(crate) struct UnfactorBranch;
+
+impl Rule for UnfactorBranch {
+    fn name(&self) -> &'static str {
+        "unfactor_branch"
+    }
+    fn width(&self) -> usize {
+        2
+    }
+    fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
+        let [Node::Dip { depth: 1, body, .. }, Node::Branch {
+            then_origin,
+            then_body,
+            else_origin,
+            else_body,
+        }] = window
+        else {
+            return None;
+        };
+        if body.is_empty() {
+            // `noop` removes an empty dip; pushing nothing into both arms would
+            // report a change without making one.
+            return None;
+        }
+
+        let prefixed = |arm: &Vec<Node>| {
+            let mut out = body.clone();
+            out.extend(arm.iter().cloned());
+            out
+        };
+        Some(vec![Node::Branch {
+            then_origin: then_origin.clone(),
+            then_body: prefixed(then_body),
+            else_origin: else_origin.clone(),
+            else_body: prefixed(else_body),
+        }])
     }
 }
 

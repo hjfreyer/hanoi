@@ -44,6 +44,8 @@ and returns a replacement, or fails. `--list-rules` prints them.
 | `cancel_tuple` | `tuple n ; untuple n` | nothing |
 | `retain_condition` | `pick 0 ; branch { A } { B }` | `branch { push true; A } { push false; B }` |
 | `specialize_equal` | `pick 0; push c; equal; branch { A } { B }` | the same, with A as `drop; push c; A` |
+| `dup_natural` | `pick 0 ; X ; dip m { X }`, `X : 1 -> m` | `X ; (pick (m-1))^m` |
+| `unfactor_branch` | `dip 1 { X } ; branch { A } { B }` | `branch { X; A } { X; B }` |
 
 `sink` is the interchange rule, and its side condition is the one piece of real
 arithmetic here: writing `X`'s arity as `(n -> m)`, the dip's window must sit
@@ -233,6 +235,51 @@ check is holding*, not the one the caller kept. Where a predicate consumes a
 copy and the real code later destructures the original, those are different
 stack slots and no refinement relates them. Sharing the two is a separate
 problem.
+
+## Sharing, and the one thing that is still missing
+
+`dup_natural` is duplication-naturality: computing `X` on a copy and then on the
+original is computing it once and copying all `m` results.
+
+```
+pick 0; untuple 3; dip 3 { untuple 3 }   ==   untuple 3; pick 2; pick 2; pick 2
+```
+
+Three copies because the value came apart into three. At `m = 1` it is the
+familiar `pick 0; X; dip 1 { X }` → `X; pick 0`. Panic behaviour is preserved
+rather than merely respected: `X` runs on the copy first, so where the left side
+panics it does so on exactly the value the right side hands to its single `X`.
+`print` is excluded, being the one instruction for which running twice differs
+in something other than the stack.
+
+This is the law that ought to close the gap between a predicate and its caller,
+because every predicate here is written `pick 0; jump P::check; branch {...}` —
+the check consumes a *copy* and the real work destructures the *original*. And
+it does close it, whenever the two occurrences are in one sequence.
+
+**They are not.** There is a branch in between, and nothing in this rule set
+moves code *out* of a branch arm except `factor_branch`, which needs both arms
+to share it. Hoisting from a single arm is not merely missing:
+
+```
+branch { untuple 3; A } { B }   →   dip 1 { untuple 3 }; branch { A } { tuple 3; B }
+```
+
+would run `untuple 3` on the path that took the *other* arm, and `untuple` is
+partial — so the rewrite invents a panic the original did not have. The
+`untuple n ⊣ tuple n` pair looks like an iso and is only a *partial* one, and
+the case that matters is exactly where the partiality bites. Whether the hoist
+is safe depends on a guard several branches further out having already
+established that the value is a 3-tuple, and that is a fact about a path, not
+about a window.
+
+So `unfactor_branch` goes the other way — pushing context *into* both arms,
+which is always sound — and is the direction available today. It is the exact
+inverse of `factor_branch`; never put the two in one `repeat`.
+
+The gap this leaves is sharp, and worth stating precisely, because it says what
+any future work has to supply: **the sharing law is local, but making its two
+occurrences adjacent needs a totality fact that is not.**
 
 **Rules are not tactics.** They live in their own namespace and cannot be
 aliased or defined; a rule has to be *placed* by `each` or `once`. Writing a

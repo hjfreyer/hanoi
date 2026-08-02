@@ -849,6 +849,66 @@ fn selective_descent_breaks_the_staged_inlining_plateau() {
 }
 
 #[test]
+fn dup_natural_shares_a_predicates_work_with_its_callers() {
+    // End to end through the driver, on the idiom the sharing law exists for:
+    // a value handed to a check and then taken apart again.
+    let (prog, before) = tree_of(
+        r#"
+        #[arity(1, 6)]
+        sentence probe {
+            pick 0
+            untuple 3
+            dip 3 { untuple 3 }
+        }
+    "#,
+        NOTHING,
+    );
+    let after = run(prog, before.clone(), "each(dup_natural)");
+    assert_eq!(
+        shape(&after),
+        vec!["untuple 3", "pick 2", "pick 2", "pick 2"],
+        "one untuple and three copies should replace two untuples"
+    );
+    // The driver ran with --check on, so the net effect is already known to
+    // match; assert the full arity too, since this rule reshapes the stack
+    // more than most.
+    assert_eq!(seq_arity(prog, &before), seq_arity(prog, &after));
+}
+
+#[test]
+fn the_sharing_law_cannot_reach_across_a_branch() {
+    // The crux, stated as a test so it fails when someone fixes it.
+    //
+    // This is the shape every predicate in the corpus actually has: the check
+    // consumes a *copy* and the real work destructures the *original*, with a
+    // branch in between. `dup_natural` relates the two occurrences only when
+    // they are in one sequence, and no rule here moves the inner `untuple` out
+    // of the arm — hoisting it would run it on the path that did not take the
+    // arm, and `untuple` is partial, so that invents a panic.
+    let (prog, before) = tree_of(
+        r#"
+        #[arity(1, 1)]
+        sentence probe {
+            pick 0
+            is_tuple
+            branch { untuple 3  drop 0  drop 0 } { drop 0  push true }
+        }
+    "#,
+        NOTHING,
+    );
+    let after = run(
+        prog,
+        before.clone(),
+        "repeat(bu(each(dup_natural); each(sink); each(collapse); each(flatten_call)))",
+    );
+    assert_eq!(
+        shape(&before),
+        shape(&after),
+        "nothing in the current rule set relates the two occurrences"
+    );
+}
+
+#[test]
 fn a_later_step_finding_nothing_does_not_discard_an_earlier_one() {
     // Regression. `each(sink)` rewrites; `each(annihilate_drop)` then matches
     // nowhere. The sequence has to keep the sinking — it used to roll the
