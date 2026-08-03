@@ -53,9 +53,22 @@ operand came from. It either matches and returns a replacement, or fails.
 | `rebuild_copy` | `pick 0 ; untuple n` | `untuple n ; (pick (n-1))^n ; dip n { tuple n }` |
 | `copy_assoc` | `pick d ; pick 0` | `pick d ; dip 1 { pick d }` |
 | `copy_comm` | `pick d ; pick d`, `d >= 1` | `pick (d-1) ; dip 1 { pick d }` |
+| `copy_comm_inv` | `pick (d-1) ; dip 1 { pick d }` | `pick d ; pick d` |
 | `merge_branch` | `B ; branch { A } { A }`, B yields bool | `B ; drop ; A` |
 | `probe_tuple` | `tuple n ; pick 0 ; is_tuple` | `tuple n ; push true` |
 | `probe_length` | `tuple n ; pick 0 ; tuple_length` | `tuple n ; push n` |
+| `shortcut_and` | `dip 1 { P } ; and ; branch { A } { B }` | `dip 1 { P } ; branch { branch { A } { B } } { push true; and; drop; B }` |
+| `fold_and_branch` | `push true ; and ; branch { A } { B }` | `branch { A } { B }`, and the `false` case decides `B` |
+| `annihilate_and` | `P1 ; dip 1 { P2 } ; and ; drop`, both yield bool | `P1 ; drop ; P2 ; drop`, either dip order |
+| `annihilate_equal` | `equal ; drop` | `drop ; drop` |
+| `distribute_drop` | `branch { A } { B } ; drop` | `branch { A drop } { B drop }` |
+| `float_drop` | `dip 1 { S } ; drop` | `drop ; S`, spliced |
+| `discharge_length` | `pick 0; is_tuple; branch { pick 0; tuple_length; drop; A } …` | the re-check erased |
+| `discharge_untuple` | `pick 0; tuple_length; push n; equal; branch { untuple n; drop^n; A } …` | the arm becomes `drop; A` |
+| `hoist_probe` | a branch whose arm heads with a total probe, framed or not | the probe outside, a drop in the other arm |
+| `probe_split` | `P ; branch`, P a total probe | `pick 0 ; P ; dip 1 { drop } ; branch` |
+| `sink_probe` | `pick d ; dip k { pick j; P }`, `k >= 1` | `dip (k-1) { pick j; P } ; pick d'` |
+| `dup_probe` | `pick d ; P ; pick (d+1) ; P` | `pick d ; P ; pick 0` |
 
 `sink` is the interchange rule, and its side condition is the one piece of real
 arithmetic here: writing `X`'s arity as `(n -> m)`, the dip's window must sit
@@ -437,34 +450,39 @@ only on the sequence it is handed.
 ### How far the constructions reach: the emit derivation
 
 The standing goal is `emit_does_pre_and_post ≡ drop; push true`, derived by
-nothing but the rules above, and the corpus test
-`the_derivation_discharges_three_of_emits_four_panics` records how far that
-currently gets. The staged derivation opens `is_state::check`, shares the
-caller's copy through it, walks the union's decision tree with the
-`copy_assoc`/`float`/`unfactor_branch` dance so `specialize_equal` refines the
-*original*, and then opens `emit` everywhere: on the three refined symbol
-paths `emit`'s decision tree folds on literals and its `panic` arm folds away
-with it; on the idle and ordered paths the postcondition then collapses to
-`push true` — `probe_tuple` and `probe_length` answer the `type` guards on
-`emit`'s built output, `cancel_tuple` eats its `untuple`s — and `merge_branch`
-removes the conjunction branch whose arms have agreed. Three of the four
-distributed panics are discharged, and every rule firing passes `--check`.
+nothing but the rules above, and two corpus tests record how far that
+currently gets. `the_derivation_discharges_three_of_emits_four_panics` is the
+first act: open `is_state::check`, share the caller's copy through it, walk
+the union's decision tree with the `copy_assoc`/`float`/`unfactor_branch`
+dance so `specialize_equal` refines the *original*, then open `emit`
+everywhere — on the three refined symbol paths `emit`'s decision tree folds
+on literals and its `panic` arm folds away with it.
 
-What survives says precisely what is still missing, and both pieces are
-window-local laws rather than facts:
+`the_derivation_reaches_a_panic_free_form` is the second: `shortcut_and`
+expands one conjunction layer per round — never more than the round's folding
+can cancel — which finally gives the union's *last* variant (compiled without
+a branch of its own) an arm to learn in, and the fourth panic folds like the
+others. The decided skeletons then drain: `fold_and_branch` takes the arm a
+folded test chose, `merge_branch` removes branches whose arms have agreed
+(`yields_bool` looks through a whole tree of arms for this), the annihilate
+family peels retained check chains apart, and the discharge pair erases a
+guard's re-check inside the window that holds the guard. **No panic survives**,
+every firing passes `--check`, and the whole run is under a second.
 
-- The `has_coffee` path keeps its panic because `compile_union` compiles the
-  *last* variant without a branch — the test's result feeds the `and` chain
-  directly, so there is no arm for `specialize_equal` to refine. Discharging
-  it wants Boolean shortcut as a rule: `dip 1 { P }; and; branch { A } { B }`
-  expanding to nested branches, sound when `P` yields a bool, which gives
-  every conjunct its own arm to learn in.
-- The thirsty path's postcondition recomputes `is_symbol` on values the
-  precondition already checked, and the recomputation sits inside a branch on
-  the first computation's result. Merging them is `dup_natural`'s job, but the
-  two occurrences are separated by that branch, and moving a *total*
-  computation out of one arm (with a `drop` in the other) is a law this set
-  does not yet state.
+What still stands between the panic-free form and `drop; push true` is one
+residue, on the thirsty path: the postcondition re-checks `is_symbol` on
+values whose *copies* the precondition checked, across branches on those
+checks' results. The travelling rules exist and each step is sound —
+`probe_split` turns a consuming check into a pick-probe with a deferred drop,
+`hoist_probe` carries a probe out of either arm, `sink_probe` walks it left
+past copy creations, `dup_probe` fuses two probes of one slot — and probes
+demonstrably climb from the innermost arm to the sequence top. What has not
+been found is a *composition* of phases that aims them without the phases
+undoing each other: `unfactor_branch` re-buries what `hoist_probe` surfaced,
+`sink` reassembles what `probe_split` opened, and the `n -> m` interchange
+arithmetic is too coarse to walk a frame past a dead refinement that writes
+into its window. The missing piece is orchestration — a search that aims what
+exists — not a fact, and not a new kind of rule.
 
 **Rules are not tactics.** They live in their own namespace and cannot be
 aliased or defined; a rule has to be *placed* by `each` or `once`. Writing a

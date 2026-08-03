@@ -1294,6 +1294,141 @@ fn the_derivation_discharges_three_of_emits_four_panics() {
     );
 }
 
+/// The full staged derivation of `emit_does_pre_and_post`, as named tactics.
+/// Every stage is a composition of the rules; nothing here is trusted.
+const DERIVATION: &str = r#"
+tactic open = repeat_n(3, once(inline); distribute; cleanup);
+tactic share = repeat(bu(each(copy_assoc); each(float); each(unfactor_branch);
+                         each(flatten_call); each(rebuild_copy); each(cancel_tuple)));
+tactic redirect = repeat(bu(each(copy_assoc); each(float); each(unfactor_branch);
+                            each(flatten_call);
+                            each(annihilate_drop, noop, pick_drop_to_roll)));
+tactic deliver = repeat(bu(each(copy_assoc, copy_comm); each(rebuild_copy); each(float);
+                           each(unfactor_branch); each(flatten_call);
+                           each(annihilate_drop, noop, pick_drop_to_roll);
+                           each(copy_const, cancel_tuple, probe_tuple, probe_length)));
+tactic drain = repeat(bu(each(discharge_untuple); each(discharge_length);
+                         each(merge_branch, annihilate_equal, annihilate_and,
+                              annihilate_drop, pick_drop_to_roll, noop);
+                         each(fold_const, fold_const_unary, bool_identity,
+                              cancel_tuple, probe_tuple, probe_length)));
+tactic opened = open; share; cleanup;
+                then(then(once(inline); distribute; cleanup));
+                then(then(redirect; bu(each(specialize_equal)); cleanup));
+                repeat(bu(each(inline); each(flatten_call)));
+                repeat(bu(each(sink); each(collapse); each(flatten_call))); cleanup;
+                repeat_n(12, distribute; deliver; bu(each(specialize_equal)); cleanup);
+tactic round = bu(each(shortcut_and));
+               repeat_n(3, distribute; deliver; bu(each(specialize_equal)); cleanup);
+               drain;
+tactic splice = repeat(bu(each(sink); each(collapse); each(flatten_call);
+                          each(fold_and_branch); each(distribute_drop); each(float_drop);
+                          each(annihilate_and);
+                          each(annihilate_drop, pick_drop_to_roll, noop,
+                               fold_branch, merge_branch, annihilate_equal);
+                          each(discharge_untuple); each(discharge_length);
+                          each(fold_const, fold_const_unary, bool_identity,
+                               cancel_tuple, probe_tuple, probe_length,
+                               copy_const, copy_comm)));
+tactic endgame = repeat_n(8, round); repeat_n(6, splice; drain; round);
+"#;
+
+/// Runs an expression against the prelude plus [`DERIVATION`].
+fn run_derivation(prog: &Program, nodes: Vec<Node>, src: &str) -> Vec<Node> {
+    let mut defs = Definitions::new();
+    defs.load(PRELUDE)
+        .unwrap_or_else(|e| panic!("{}", e.render(PRELUDE)));
+    defs.load(DERIVATION)
+        .unwrap_or_else(|e| panic!("{}", e.render(DERIVATION)));
+    let tactic = defs
+        .compile(src)
+        .unwrap_or_else(|e| panic!("{}", e.render(src)));
+    let env = Env::new(prog, 10_000_000, true);
+    apply(&tactic, &env, nodes)
+        .unwrap_or_else(|e| panic!("{}", e))
+        .into_nodes()
+}
+
+/// The furthest the rules currently reach on the standing goal, past the
+/// staged derivation above: `emit_does_pre_and_post` becomes **panic-free**.
+///
+/// Beyond `the_derivation_discharges_three_of_emits_four_panics`, the
+/// endgame's rounds expand one conjunction layer at a time (`shortcut_and`),
+/// refine the union's last variant, and drain the decided skeletons
+/// (`fold_and_branch`, `merge_branch`, the annihilate family, the discharge
+/// pair) — after which no `panic` remains anywhere and the term is under a
+/// dozen branches.
+///
+/// What still stands between this and `drop; push true` is one shape: the
+/// thirsty path's postcondition re-checks `is_symbol` on values whose copies
+/// the precondition checked, across the branches on those checks' results.
+/// The travelling rules (`probe_split`, `hoist_probe`, `sink_probe`,
+/// `dup_probe`) each walk their step soundly, but the phases that aim them
+/// interfere with the phases that aim the rest, and the composition has not
+/// yet been found. It is an orchestration problem, not a missing fact.
+#[test]
+fn the_derivation_reaches_a_panic_free_form() {
+    let main = Path::new("../tests/main.hana");
+    let Ok(code) = fs::read_to_string(main) else {
+        return;
+    };
+    let library: &'static Library =
+        Box::leak(Box::new(bytecode::assemble_with_path(&code, main.parent()).unwrap()));
+    let prog: &'static Program<'static> = Box::leak(Box::new(Program::new(library)));
+    let idx = prog
+        .library()
+        .names
+        .iter()
+        .position(|n| n == "barista::customer_impl::emit_does_pre_and_post")
+        .map(SentenceIndex::from)
+        .expect("sentence should exist in the corpus");
+
+    let opened = run_derivation(
+        prog,
+        build(prog.library(), idx, &mut HashSet::new()),
+        "opened",
+    );
+    assert_eq!(
+        panics(&opened),
+        1,
+        "the staged opening should already have discharged three of the four \
+         distributed panics, leaving the union's branchless last variant"
+    );
+
+    let after = run_derivation(prog, opened.clone(), "endgame");
+    assert_eq!(
+        panics(&after),
+        0,
+        "every panic should have been discharged by a local derivation"
+    );
+    assert!(
+        branches(&after) <= 10,
+        "the term should be down to the guard skeleton and the sym residue, \
+         got {} branches",
+        branches(&after)
+    );
+    assert_eq!(
+        seq_arity(prog, &opened),
+        seq_arity(prog, &after),
+        "and the whole derivation should preserve arity"
+    );
+}
+
+fn branches(nodes: &[Node]) -> usize {
+    nodes
+        .iter()
+        .map(|n| match n {
+            Node::Dip { body, .. } => branches(body),
+            Node::Branch {
+                then_body,
+                else_body,
+                ..
+            } => 1 + branches(then_body) + branches(else_body),
+            _ => 0,
+        })
+        .sum()
+}
+
 fn panics(nodes: &[Node]) -> usize {
     nodes
         .iter()
@@ -1865,6 +2000,351 @@ fn rotating_a_copy_chain_exposes_the_top_read() {
         "repeat(bu(each(copy_comm); each(copy_const)))",
     );
     assert_eq!(shape(&body), vec!["push 5", "push 5", "dip 1 { pick 1 }"]);
+}
+
+#[test]
+fn shortcut_gives_each_conjunct_its_own_arm() {
+    // `is_bool && is_symbol` branched on as one value becomes nested branches,
+    // which is what lets a refinement rule learn from the individual tests.
+    let body = tree(
+        r#"
+        #[arity(2, 1)]
+        sentence probe {
+            is_bool
+            dip 1 { is_symbol }
+            and
+            branch { push 1 } { push 2 }
+        }
+    "#,
+        "repeat(bu(each(shortcut_and); each(unfactor_branch); each(flatten_call); \
+                   each(bool_identity); each(annihilate_drop)))",
+    );
+    // Outer branch on the bool test's answer (it was on top), inner on the
+    // symbol test's, delivered into the arms by unfactor. The else path's
+    // `push true; and; drop` residue — the retained check — folds because the
+    // conjunct is visibly boolean once it arrives.
+    assert_eq!(shape(&body), vec!["is_bool", "branch"]);
+    let Node::Branch {
+        then_body,
+        else_body,
+        ..
+    } = &body[1]
+    else {
+        panic!("expected a branch")
+    };
+    assert_eq!(shape(then_body), vec!["is_symbol", "branch"]);
+    assert_eq!(
+        shape(else_body),
+        vec!["drop", "push 2"],
+        "the else path discards the value the second conjunct would have tested"
+    );
+}
+
+#[test]
+fn a_dropped_conjunction_drains_through_its_producers() {
+    // `merge_branch` leaves `...; and; drop` behind when a conjunction's
+    // branch had agreeing arms. `and` alone cannot annihilate — it is a check
+    // — but with both producers in view the chain peels apart.
+    let body = tree(
+        r#"
+        #[arity(2, 0)]
+        sentence probe {
+            is_bool
+            dip 1 { is_symbol }
+            and
+            drop 0
+        }
+    "#,
+        "repeat(bu(each(annihilate_and); each(annihilate_drop)))",
+    );
+    assert_eq!(shape(&body), vec!["drop", "drop"]);
+}
+
+#[test]
+fn equal_annihilates_against_a_drop() {
+    // `equal` rejects nothing in the VM, so dropping its answer is dropping
+    // its operands.
+    let body = tree(
+        r#"
+        #[arity(2, 0)]
+        sentence probe {
+            equal
+            drop 0
+        }
+    "#,
+        "repeat(bu(each(annihilate_equal)))",
+    );
+    assert_eq!(shape(&body), vec!["drop", "drop"]);
+}
+
+#[test]
+fn a_total_probe_hoists_out_of_one_arm() {
+    let body = tree(
+        r#"
+        #[arity(2, 2)]
+        sentence probe {
+            is_bool
+            branch { pick 0  is_symbol } { push false }
+        }
+    "#,
+        "repeat(bu(each(hoist_probe)))",
+    );
+    assert_eq!(
+        shape(&body),
+        vec!["is_bool", "dip 1 { pick 0 is_symbol }", "branch"]
+    );
+    let Node::Branch {
+        then_body,
+        else_body,
+        ..
+    } = &body[2]
+    else {
+        panic!("expected a branch")
+    };
+    assert_eq!(shape(then_body), Vec::<String>::new());
+    assert_eq!(
+        shape(else_body),
+        vec!["drop", "push false"],
+        "the else arm discards the answer it did not ask for"
+    );
+}
+
+#[test]
+fn a_probe_run_twice_on_one_slot_runs_once() {
+    let body = tree(
+        r#"
+        #[arity(1, 3)]
+        sentence probe {
+            pick 0
+            is_symbol
+            pick 1
+            is_symbol
+        }
+    "#,
+        "repeat(bu(each(dup_probe)))",
+    );
+    assert_eq!(shape(&body), vec!["pick 0", "is_symbol", "pick 0"]);
+}
+
+#[test]
+fn a_guard_skeleton_drains_once_its_arms_agree() {
+    // The exact residue a fully folded `type` check leaves: every arm has
+    // become `drop; push true`, but the then-arms still hold the partial
+    // re-checks — `tuple_length` behind `is_tuple`, `untuple` behind the
+    // length test — which no two-node rule may cancel against a drop. The
+    // discharge rules erase each re-check inside the window that holds its
+    // guard, and the merge/annihilate cascade does the rest.
+    let body = tree(
+        r#"
+        #[arity(1, 1)]
+        sentence probe {
+            pick 0
+            is_tuple
+            branch {
+                pick 0
+                tuple_length
+                push 3
+                equal
+                branch {
+                    untuple 3
+                    drop 0
+                    drop 0
+                    drop 0
+                    push true
+                } {
+                    drop 0
+                    push true
+                }
+            } {
+                drop 0
+                push true
+            }
+        }
+    "#,
+        "repeat(bu(each(discharge_untuple); each(discharge_length); \
+                   each(merge_branch, annihilate_equal, annihilate_drop, \
+                        pick_drop_to_roll, noop)))",
+    );
+    assert_eq!(shape(&body), vec!["drop", "push true"]);
+}
+
+#[test]
+fn a_literal_conjunct_meets_its_branch() {
+    // `true && x` handed to a branch loses no check — the branch rejects a
+    // non-boolean x exactly as the `and` did.
+    let body = tree(
+        r#"
+        #[arity(1, 1)]
+        sentence probe {
+            push true
+            and
+            branch { push 1 } { push 2 }
+        }
+    "#,
+        "repeat(bu(each(fold_and_branch)))",
+    );
+    assert_eq!(shape(&body), vec!["branch"]);
+
+    // `false && x` is decided, and the retained `push true; and` is the check
+    // on the discarded x.
+    let body = tree(
+        r#"
+        #[arity(1, 1)]
+        sentence probe {
+            push false
+            and
+            branch { push 1 } { push 2 }
+        }
+    "#,
+        "repeat(bu(each(fold_and_branch)))",
+    );
+    assert_eq!(
+        shape(&body),
+        vec!["push true", "and", "drop", "push 2"]
+    );
+}
+
+#[test]
+fn a_drop_distributes_into_a_branch_and_nothing_else_does() {
+    let body = tree(
+        r#"
+        #[arity(2, 1)]
+        sentence probe {
+            is_bool
+            branch { push 1 } { push 2 }
+            drop 0
+        }
+    "#,
+        "repeat(bu(each(distribute_drop); each(annihilate_drop); each(merge_branch)))",
+    );
+    assert_eq!(shape(&body), vec!["drop"]);
+}
+
+#[test]
+fn a_shallow_dip_floats_past_the_drop_of_its_hidden_value() {
+    let body = tree(
+        r#"
+        #[arity(2, 1)]
+        sentence probe {
+            dip 1 { push 5  add }
+            drop 0
+        }
+    "#,
+        "repeat(bu(each(float_drop)))",
+    );
+    assert_eq!(shape(&body), vec!["drop", "push 5", "add"]);
+}
+
+#[test]
+fn a_framed_probe_sinks_past_a_copys_creation() {
+    // The frame hides the fresh copy, so the probe reads a slot that existed
+    // before the copy did; commuting is re-indexing. Walked to the end, the
+    // probe sits where `copy_assoc` family rules can redirect it.
+    let (prog, before) = tree_of(
+        r#"
+        #[arity(3, 5)]
+        sentence probe {
+            pick 1
+            dip 2 { pick 0  is_symbol }
+        }
+    "#,
+        NOTHING,
+    );
+    let after = run(prog, before.clone(), "repeat(bu(each(sink_probe)))");
+    assert_eq!(shape(&after), vec!["dip 1 { pick 0 is_symbol }", "pick 2"]);
+    assert_eq!(seq_arity(prog, &before), seq_arity(prog, &after));
+}
+
+#[test]
+fn copy_comm_and_its_inverse_are_a_round_trip() {
+    let rotated = tree(
+        r#"
+        #[arity(2, 4)]
+        sentence probe { pick 1  pick 1 }
+    "#,
+        "repeat(bu(each(copy_comm)))",
+    );
+    assert_eq!(shape(&rotated), vec!["pick 0", "dip 1 { pick 1 }"]);
+    let back = tree(
+        r#"
+        #[arity(2, 4)]
+        sentence probe { pick 1  pick 1 }
+    "#,
+        "repeat(bu(each(copy_comm))); repeat(bu(each(copy_comm_inv)))",
+    );
+    assert_eq!(shape(&back), vec!["pick 1", "pick 1"]);
+}
+
+#[test]
+fn a_condition_splits_into_a_probe_and_a_deferred_drop() {
+    let body = tree(
+        r#"
+        #[arity(1, 1)]
+        sentence probe {
+            is_symbol
+            branch { push 1 } { push 2 }
+        }
+    "#,
+        "repeat(bu(each(probe_split)))",
+    );
+    assert_eq!(
+        shape(&body),
+        vec!["pick 0", "is_symbol", "dip 1 { drop }", "branch"]
+    );
+}
+
+#[test]
+fn hoisting_reaches_either_arm_and_consuming_probes_too() {
+    // A consuming probe at an arm head hoists with its drop deferred into
+    // the arm; the else side mirrors.
+    let body = tree(
+        r#"
+        #[arity(2, 1)]
+        sentence probe {
+            is_bool
+            branch { is_symbol } { drop 0  push false }
+        }
+    "#,
+        "repeat(bu(each(hoist_probe)))",
+    );
+    assert_eq!(
+        shape(&body),
+        vec!["is_bool", "dip 1 { pick 0 is_symbol }", "branch"]
+    );
+
+    let body = tree(
+        r#"
+        #[arity(2, 1)]
+        sentence probe {
+            is_bool
+            branch { drop 0  push false } { is_symbol }
+        }
+    "#,
+        "repeat(bu(each(hoist_probe)))",
+    );
+    assert_eq!(
+        shape(&body),
+        vec!["is_bool", "dip 1 { pick 0 is_symbol }", "branch"]
+    );
+}
+
+#[test]
+fn a_dropped_conjunction_drains_with_the_dip_on_either_side() {
+    // The mirrored window: the framed conjunct comes first, the plain one
+    // second. Both bools drop, and the frame stays for the delivery rules.
+    let body = tree(
+        r#"
+        #[arity(2, 0)]
+        sentence probe {
+            dip 1 { is_symbol }
+            is_bool
+            and
+            drop 0
+        }
+    "#,
+        "repeat(bu(each(annihilate_and); each(float_drop); each(annihilate_drop)))",
+    );
+    assert_eq!(shape(&body), vec!["drop", "drop"]);
 }
 
 #[test]

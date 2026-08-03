@@ -36,32 +36,45 @@ pub(crate) trait Rule: Sync + std::fmt::Debug {
 /// namespace: a tactic expression can order and place them, but cannot alias
 /// or define one.
 pub(crate) const ALL_RULES: &[&dyn Rule] = &[
+    &AnnihilateAnd,
     &AnnihilateDrop,
+    &AnnihilateEqual,
     &BoolIdentity,
     &CancelTuple,
     &Collapse,
     &CopyAssoc,
     &CopyComm,
+    &CopyCommInv,
     &CopyConst,
+    &DischargeLength,
+    &DischargeUntuple,
     &DistributeBranch,
+    &DistributeDrop,
     &DupNatural,
+    &DupProbe,
     &Expand,
     &FactorBranch,
     &FlattenCall,
     &Float,
+    &FloatDrop,
+    &FoldAndBranch,
     &FoldBranch,
     &FoldConst,
     &FoldConstUnary,
     &Fuse,
+    &HoistProbe,
     &Inline,
     &MergeBranch,
     &NoOp,
     &PickDropToRoll,
     &ProbeLength,
+    &ProbeSplit,
     &ProbeTuple,
     &RebuildCopy,
     &RetainCondition,
+    &ShortcutAnd,
     &Sink,
+    &SinkProbe,
     &SpecializeEqual,
     &UnfactorBranch,
 ];
@@ -1963,23 +1976,35 @@ fn pushed(node: &Node) -> Option<&Value> {
 /// sentence a name currently resolves to. Inline the callee and the operator
 /// underneath becomes visible on its own.
 fn yields_bool(node: &Node) -> bool {
-    matches!(
-        node,
+    match node {
         Node::Op(
             Instruction::IsInt
-                | Instruction::IsBool
-                | Instruction::IsFloat
-                | Instruction::IsSymbol
-                | Instruction::IsTuple
-                | Instruction::Equal
-                | Instruction::Greater
-                | Instruction::Less
-                | Instruction::And
-                | Instruction::Or
-                | Instruction::Not
-                | Instruction::Push(Value::Bool(_))
-        )
-    )
+            | Instruction::IsBool
+            | Instruction::IsFloat
+            | Instruction::IsSymbol
+            | Instruction::IsTuple
+            | Instruction::Equal
+            | Instruction::Greater
+            | Instruction::Less
+            | Instruction::And
+            | Instruction::Or
+            | Instruction::Not
+            | Instruction::Push(Value::Bool(_)),
+        ) => true,
+        // A branch leaves a bool on top when every arm does: whichever arm
+        // ran, its last node had the final word. An empty arm leaves whatever
+        // was underneath the condition, about which nothing is known. This is
+        // still the deliberately syntactic stance — the tree is entirely
+        // inside the window that asked.
+        Node::Branch {
+            then_body,
+            else_body,
+            ..
+        } => {
+            then_body.last().is_some_and(yields_bool) && else_body.last().is_some_and(yields_bool)
+        }
+        _ => false,
+    }
 }
 
 /// `B ; push true ; and` becomes `B`, and the three other unit laws.
@@ -2498,6 +2523,43 @@ impl Rule for CopyComm {
     }
 }
 
+/// `pick (d-1) ; dip 1 { pick d }` becomes `pick d ; pick d` — the exact
+/// inverse of [`CopyComm`], and never in one `repeat` with it.
+///
+/// The rotated form is what the paying rules want next to a literal or a
+/// construction; the *bare chain* is what [`SinkProbe`] can walk a probe
+/// through, since a framed creation deposits inside a passing frame's window
+/// where the `n -> m` interchange arithmetic cannot follow. Each direction is
+/// a normal form for a different journey.
+///
+/// Measure: framed copy-creations; the output has none.
+#[derive(Debug)]
+pub(crate) struct CopyCommInv;
+
+impl Rule for CopyCommInv {
+    fn name(&self) -> &'static str {
+        "copy_comm_inv"
+    }
+    fn width(&self) -> usize {
+        2
+    }
+    fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
+        let [Node::Op(Instruction::Pick(d1)), Node::Dip { depth: 1, body, .. }] = window else {
+            return None;
+        };
+        let [Node::Op(Instruction::Pick(d))] = &body[..] else {
+            return None;
+        };
+        if *d != d1 + 1 {
+            return None;
+        }
+        Some(vec![
+            Node::Op(Instruction::Pick(*d)),
+            Node::Op(Instruction::Pick(*d)),
+        ])
+    }
+}
+
 /// `push c ; pick 0` becomes `push c ; push c`.
 ///
 /// Copying a constant is pushing it again — the naturality of duplication over
@@ -2664,6 +2726,745 @@ impl Rule for ProbeLength {
         Some(vec![
             build.clone(),
             Node::Op(Instruction::Push(Value::Int(*n as i64))),
+        ])
+    }
+}
+
+/// The five shape predicates: total, `1 -> 1`, and yielding a bool.
+///
+/// [`yields_bool`] is the weaker claim — it admits `and`, `not` and the
+/// comparisons, which reject operands. A rule that *runs* a predicate
+/// somewhere the original program did not ([`HoistProbe`]), or skips a run the
+/// original program had ([`DupProbe`]), needs all three properties at once:
+/// `not` yields a bool but rejects everything else, so moving it across a
+/// branch would invent a panic on the path that did not take the arm.
+fn total_probe(node: &Node) -> bool {
+    matches!(
+        node,
+        Node::Op(
+            Instruction::IsInt
+                | Instruction::IsBool
+                | Instruction::IsFloat
+                | Instruction::IsSymbol
+                | Instruction::IsTuple
+        )
+    )
+}
+
+/// `dip 1 { S } ; and ; branch { A } { B }` becomes
+/// `dip 1 { S } ; branch { branch { A } { B } } { push true; and; drop; B }`.
+///
+/// Boolean shortcut as a rewrite: a branch on a conjunction is a branch on the
+/// first conjunct whose then-arm branches on the second. This is what gives
+/// **each conjunct its own arm to learn in** — a decision tree's last variant
+/// test feeds its `and` chain directly (`compile_union` emits no branch for
+/// it), so until the chain is expanded there is no arm for `specialize_equal`
+/// to refine, and a fact the program tests for is thrown away.
+///
+/// Soundness is an accounting of checks, the same ledger `fold_branch` and
+/// `merge_branch` keep, and this statement of the law erases none, which is
+/// why it needs no condition on `S` at all. The `and` checked both operands
+/// were bools. On the right, the outer branch checks the first; the inner
+/// branch checks the second on the then-path; and on the else-path the second
+/// feeds `push true; and` — the unit law read as a check, `true && x = x`
+/// with the rejection kept — before being dropped. Where `S`'s output is
+/// visibly boolean, `bool_identity` removes that residue; where it is not,
+/// the residue *is* the check and stays.
+///
+/// The dip is deliberately left in place: what follows it is now a branch, so
+/// [`UnfactorBranch`] can carry `S` into the arms, where its own tree meets
+/// the continuation — the same delivery every other framed computation uses.
+///
+/// It duplicates `B` and belongs in no normalizing pass; aiming it is the
+/// search's job. The single-node restriction on the dip's body is the same
+/// economics: a body that is a whole check tree would copy `B` — often the
+/// rest of a union — behind every leaf of it, which is expansion no round of
+/// folding pays back. One conjunct at a time is the affordable layer.
+#[derive(Debug)]
+pub(crate) struct ShortcutAnd;
+
+impl Rule for ShortcutAnd {
+    fn name(&self) -> &'static str {
+        "shortcut_and"
+    }
+    fn width(&self) -> usize {
+        3
+    }
+    fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
+        let [
+            dip @ Node::Dip { depth: 1, body, .. },
+            Node::Op(Instruction::And),
+            Node::Branch {
+                then_origin,
+                then_body,
+                else_origin,
+                else_body,
+            },
+        ] = window
+        else {
+            return None;
+        };
+        if body.len() != 1 {
+            return None;
+        }
+
+        let mut shortcut_else = vec![
+            Node::Op(Instruction::Push(Value::Bool(true))),
+            Node::Op(Instruction::And),
+            Node::Op(Instruction::Drop),
+        ];
+        shortcut_else.extend(else_body.iter().cloned());
+
+        Some(vec![
+            dip.clone(),
+            Node::Branch {
+                then_origin: then_origin.clone(),
+                then_body: vec![Node::Branch {
+                    then_origin: then_origin.clone(),
+                    then_body: then_body.clone(),
+                    else_origin: else_origin.clone(),
+                    else_body: else_body.clone(),
+                }],
+                else_origin: else_origin.clone(),
+                else_body: shortcut_else,
+            },
+        ])
+    }
+}
+
+/// `branch { A } { B } ; drop` becomes `branch { A drop } { B drop }`.
+///
+/// [`DistributeBranch`] restricted to a single `drop`. The general rule
+/// absorbs whatever follows, one node per firing to exhaustion — which is the
+/// right tool for aiming a computation into arms and the wrong one for a
+/// normalizing pass, since it will happily copy the rest of a union chain
+/// behind every leaf. A `drop`, by contrast, is where a chain of
+/// cancellations *ends*: pushing it into the arms is what lets each arm's
+/// producer annihilate it, and it cannot drag anything else along.
+///
+/// Measure: `drop`s immediately following a branch; each firing consumes one
+/// and its output ends in a branch, creating none.
+#[derive(Debug)]
+pub(crate) struct DistributeDrop;
+
+impl Rule for DistributeDrop {
+    fn name(&self) -> &'static str {
+        "distribute_drop"
+    }
+    fn width(&self) -> usize {
+        2
+    }
+    fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
+        let [
+            Node::Branch {
+                then_origin,
+                then_body,
+                else_origin,
+                else_body,
+            },
+            Node::Op(Instruction::Drop),
+        ] = window
+        else {
+            return None;
+        };
+        let mut then_body = then_body.clone();
+        then_body.push(Node::Op(Instruction::Drop));
+        let mut else_body = else_body.clone();
+        else_body.push(Node::Op(Instruction::Drop));
+        Some(vec![Node::Branch {
+            then_origin: then_origin.clone(),
+            then_body,
+            else_origin: else_origin.clone(),
+            else_body,
+        }])
+    }
+}
+
+/// `push true ; and ; branch { A } { B }` becomes `branch { A } { B }`, and
+/// `push false ; and ; branch { A } { B }` becomes `push true ; and ; drop ; B`.
+///
+/// [`BoolIdentity`]'s unit and absorbing laws, in the one position where no
+/// producer needs to vouch for the other operand: a branch checks its
+/// condition, so `true && x` handing `x` straight to the branch loses no
+/// rejection — the check moves from the `and` to the `branch`. The absorbing
+/// case keeps the check instead, as the same `push true; and` residue
+/// [`ShortcutAnd`] leaves: the conjunction is decided but the discarded
+/// operand was still checked, and saying so costs two nodes.
+///
+/// This is what decides a union variant whose test folded: the chain
+/// `push false; and; branch` — test failed, payload check framed above —
+/// takes the else arm without anything having to prove the payload check
+/// boolean.
+///
+/// Measure: `push <literal bool>; and` adjacencies; neither output contains
+/// one.
+#[derive(Debug)]
+pub(crate) struct FoldAndBranch;
+
+impl Rule for FoldAndBranch {
+    fn name(&self) -> &'static str {
+        "fold_and_branch"
+    }
+    fn width(&self) -> usize {
+        3
+    }
+    fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
+        let [
+            Node::Op(Instruction::Push(Value::Bool(k))),
+            Node::Op(Instruction::And),
+            branch @ Node::Branch { else_body, .. },
+        ] = window
+        else {
+            return None;
+        };
+        Some(if *k {
+            vec![branch.clone()]
+        } else {
+            let mut out = vec![
+                Node::Op(Instruction::Push(Value::Bool(true))),
+                Node::Op(Instruction::And),
+                Node::Op(Instruction::Drop),
+            ];
+            out.extend(else_body.iter().cloned());
+            out
+        })
+    }
+}
+
+/// `P1 ; dip 1 { P2 } ; and ; drop` becomes `P1 ; drop ; P2 ; drop`.
+///
+/// [`AnnihilateDrop`] cannot touch `and; drop` alone: `and` rejects non-boolean
+/// operands, and a two-node window cannot tell whether the values underneath
+/// were ever checked. Seeing both producers can — the same reason
+/// [`BoolIdentity`] widens its window — and with both known boolean the `and`
+/// cannot panic, so dropping its output is dropping its inputs. Both producers
+/// still run, in the same order, so their own panics are preserved;
+/// [`yields_bool`] is all that is demanded of them.
+///
+/// This is what lets a *retained check chain* drain: a conjunction whose
+/// branch [`MergeBranch`] removed leaves `... and; drop` behind, the window
+/// here peels one conjunct off it, and the exposed `is_*; drop` pairs are
+/// [`AnnihilateDrop`]'s to finish.
+///
+/// Measure: `and` count.
+#[derive(Debug)]
+pub(crate) struct AnnihilateAnd;
+
+impl Rule for AnnihilateAnd {
+    fn name(&self) -> &'static str {
+        "annihilate_and"
+    }
+    fn width(&self) -> usize {
+        4
+    }
+    fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
+        // The dip may hold either operand: the accumulated result rides on
+        // top while the next conjunct computes underneath, or the other way
+        // around. Both windows drop both bools. The dip's body may be a whole
+        // sequence — its last node is the one that speaks for the value it
+        // leaves on top.
+        match window {
+            [
+                p1,
+                Node::Dip { depth: 1, body, .. },
+                Node::Op(Instruction::And),
+                Node::Op(Instruction::Drop),
+            ] if !matches!(p1, Node::Dip { .. }) => {
+                if !yields_bool(p1) || !body.last().is_some_and(yields_bool) {
+                    return None;
+                }
+                let mut out = vec![p1.clone(), Node::Op(Instruction::Drop)];
+                out.extend(body.iter().cloned());
+                out.push(Node::Op(Instruction::Drop));
+                Some(out)
+            }
+            [
+                dip @ Node::Dip { depth: 1, body, .. },
+                p1,
+                Node::Op(Instruction::And),
+                Node::Op(Instruction::Drop),
+            ] => {
+                if !yields_bool(p1) || !body.last().is_some_and(yields_bool) {
+                    return None;
+                }
+                Some(vec![
+                    dip.clone(),
+                    p1.clone(),
+                    Node::Op(Instruction::Drop),
+                    Node::Op(Instruction::Drop),
+                ])
+            }
+            _ => None,
+        }
+    }
+}
+
+/// `dip 1 { S } ; drop` becomes `drop ; S`, spliced.
+///
+/// The drop takes exactly the one value the dip was protecting, and `S` never
+/// touched it — so discard it first and run `S` in the open. This is `float`
+/// at `X = drop`, restricted to depth 1: there the leftover frame is `dip 0`,
+/// which splices away, leaving no window for `sink` to carry back — which is
+/// what lets this one live in the same pass as `sink` when the general
+/// `float` cannot.
+///
+/// Measure: dips at depth 1 followed by a drop; the output has none and `S`
+/// is spliced bare, creating none.
+#[derive(Debug)]
+pub(crate) struct FloatDrop;
+
+impl Rule for FloatDrop {
+    fn name(&self) -> &'static str {
+        "float_drop"
+    }
+    fn width(&self) -> usize {
+        2
+    }
+    fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
+        let [Node::Dip { depth: 1, body, .. }, Node::Op(Instruction::Drop)] = window else {
+            return None;
+        };
+        let mut out = vec![Node::Op(Instruction::Drop)];
+        out.extend(body.iter().cloned());
+        Some(out)
+    }
+}
+
+/// `equal ; drop` becomes `drop ; drop`.
+///
+/// `equal` rejects nothing in the VM — it compares any pair — so dropping its
+/// answer is dropping its operands, and no check is erased. This is stated as
+/// its own rule rather than folded into [`AnnihilateDrop`]'s table because it
+/// is the one annihilation that leans on `equal`'s totality being part of the
+/// language's semantics: the removed Z3 model gave `equal` a panic branch, and
+/// if a verifier with that stance returns, this is the rule to revisit.
+///
+/// Measure: `equal` count.
+#[derive(Debug)]
+pub(crate) struct AnnihilateEqual;
+
+impl Rule for AnnihilateEqual {
+    fn name(&self) -> &'static str {
+        "annihilate_equal"
+    }
+    fn width(&self) -> usize {
+        2
+    }
+    fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
+        let [Node::Op(Instruction::Equal), Node::Op(Instruction::Drop)] = window else {
+            return None;
+        };
+        Some(vec![Node::Op(Instruction::Drop), Node::Op(Instruction::Drop)])
+    }
+}
+
+/// `branch { dip k { pick d; P }; A } { B }` becomes
+/// `dip (k+1) { pick d; P }; branch { A } { dip k { drop }; B }`, and the
+/// unframed arm head `pick d; P` is the `k = 0` case.
+///
+/// Hoisting out of a *single* arm is unsound in general — the computation runs
+/// on the path that did not take the arm — and `pick d; P` for a total `P` is
+/// the exception that proves the rule: it consumes nothing and panics never,
+/// so running it on the other path is unobservable beyond the one value it
+/// leaves, which the else-arm's new `dip k { drop }` discards. This is the
+/// inverse direction of [`UnfactorBranch`] for exactly the shapes where the
+/// inverse is sound; never put the two in one `repeat`.
+///
+/// It exists to give [`DupProbe`] its window. A postcondition that re-checks
+/// what a precondition established re-computes `P` on the same slot, but
+/// inside a branch on the first computation's result, where no window can
+/// hold both. Total probes are the piece of the recomputation that may cross
+/// the branch; hoisted far enough, the duplicate meets its original.
+///
+/// The pick's depth needs no adjustment: the hoisted frame hides the
+/// condition *and* everything the arm's own frame hid, so the slot the pick
+/// names is the same one it named inside.
+#[derive(Debug)]
+pub(crate) struct HoistProbe;
+
+impl Rule for HoistProbe {
+    fn name(&self) -> &'static str {
+        "hoist_probe"
+    }
+    fn width(&self) -> usize {
+        1
+    }
+    fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
+        let Node::Branch {
+            then_origin,
+            then_body,
+            else_origin,
+            else_body,
+        } = &window[0]
+        else {
+            return None;
+        };
+
+        let framed_drop = |depth: usize| {
+            if depth == 0 {
+                Node::Op(Instruction::Drop)
+            } else {
+                Node::Dip {
+                    depth,
+                    origins: Vec::new(),
+                    body: vec![Node::Op(Instruction::Drop)],
+                }
+            }
+        };
+
+        // An arm's head, as (frame depth, pick, probe, nodes consumed, and
+        // what that arm keeps in the probe's place). A pick-form head
+        // `pick d; P` needs nothing kept; a consuming head `P` still has to
+        // discard its operand, so the deferred `drop` stays behind — one
+        // frame deeper than the probe ran, since the hoisted answer now sits
+        // on top of it.
+        let head = |arm: &[Node]| -> Option<(usize, Node, Node, usize, Option<Node>)> {
+            match arm.first() {
+                Some(pick @ Node::Op(Instruction::Pick(_))) => {
+                    let p = arm.get(1)?;
+                    if !total_probe(p) {
+                        return None;
+                    }
+                    Some((0, pick.clone(), p.clone(), 2, None))
+                }
+                Some(p) if total_probe(p) => Some((
+                    0,
+                    Node::Op(Instruction::Pick(0)),
+                    p.clone(),
+                    1,
+                    Some(framed_drop(1)),
+                )),
+                Some(Node::Dip { depth, body, .. }) => match &body[..] {
+                    [pick @ Node::Op(Instruction::Pick(_)), p] => {
+                        if !total_probe(p) {
+                            return None;
+                        }
+                        Some((*depth, pick.clone(), p.clone(), 1, None))
+                    }
+                    [p] if total_probe(p) => Some((
+                        *depth,
+                        Node::Op(Instruction::Pick(0)),
+                        p.clone(),
+                        1,
+                        Some(framed_drop(depth + 1)),
+                    )),
+                    _ => None,
+                },
+                _ => None,
+            }
+        };
+
+        // Either arm can be the one holding the probe; the other gets the
+        // drop for the answer it did not ask for.
+        let (k, pick, probe, hoisted_then, hoisted_else) =
+            if let Some((k, pick, probe, consumed, kept)) = head(then_body) {
+                let mut t: Vec<Node> = kept.into_iter().collect();
+                t.extend(then_body[consumed..].iter().cloned());
+                let mut e = vec![framed_drop(k)];
+                e.extend(else_body.iter().cloned());
+                (k, pick, probe, t, e)
+            } else if let Some((k, pick, probe, consumed, kept)) = head(else_body) {
+                let mut t = vec![framed_drop(k)];
+                t.extend(then_body.iter().cloned());
+                let mut e: Vec<Node> = kept.into_iter().collect();
+                e.extend(else_body[consumed..].iter().cloned());
+                (k, pick, probe, t, e)
+            } else {
+                return None;
+            };
+
+        Some(vec![
+            Node::Dip {
+                depth: k + 1,
+                origins: Vec::new(),
+                body: vec![pick, probe],
+            },
+            Node::Branch {
+                then_origin: then_origin.clone(),
+                then_body: hoisted_then,
+                else_origin: else_origin.clone(),
+                else_body: hoisted_else,
+            },
+        ])
+    }
+}
+
+/// `pick d ; dip k { pick j; P } ; …` becomes `dip (k-1) { pick j; P } ; pick d'`,
+/// for `k >= 1`, where `d'` is `d + 1` when `d >= k - 1` and `d` otherwise.
+///
+/// A framed probe walks left past a copy's creation. [`Sink`] declines this
+/// window — its side condition asks the frame to clear everything the pick
+/// leaves, which a small frame cannot — but the general rule is guarding
+/// against a dependency this shape cannot have: the frame hides the top `k`
+/// values and the fresh copy is the top value, so the probe reads a slot that
+/// existed before the copy did. Commuting is then pure re-indexing: the frame
+/// gets one level shallower (the copy is no longer above it) and the pick
+/// steps over the probe's answer when the source sits at or below it.
+///
+/// This is the walk that ends at [`CopyAssoc`]'s doorstep. Sinking to `k = 1`
+/// leaves a bare `pick j; P` beside the creation, and where `j` lands on the
+/// copy itself, `pick d; pick 0` is coassociativity's window — the probe gets
+/// re-derived from the *source*, after which nothing consumes the copy but
+/// its own deferred drop. That is how a check of a copy, hoisted out of
+/// however many branches, becomes a check of the original with a window-local
+/// derivation at every step.
+///
+/// Measure: the number of pick-creations to the left of each probe frame,
+/// summed; each firing moves one frame past one creation. Keep it away from
+/// [`Float`], which is licensed to carry the frame straight back.
+#[derive(Debug)]
+pub(crate) struct SinkProbe;
+
+impl Rule for SinkProbe {
+    fn name(&self) -> &'static str {
+        "sink_probe"
+    }
+    fn width(&self) -> usize {
+        2
+    }
+    fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
+        let [Node::Op(Instruction::Pick(d)), Node::Dip { depth: k, body, .. }] = window else {
+            return None;
+        };
+        if *k < 1 {
+            return None;
+        }
+        let [Node::Op(Instruction::Pick(j)), p] = &body[..] else {
+            return None;
+        };
+        if !total_probe(p) {
+            return None;
+        }
+        let d_after = if *d >= k - 1 { d + 1 } else { *d };
+        Some(vec![
+            Node::Dip {
+                depth: k - 1,
+                origins: Vec::new(),
+                body: vec![Node::Op(Instruction::Pick(*j)), p.clone()],
+            },
+            Node::Op(Instruction::Pick(d_after)),
+        ])
+    }
+}
+
+/// `P ; branch { A } { B }` becomes
+/// `pick 0 ; P ; dip 1 { drop } ; branch { A } { B }`, for a total probe `P`.
+///
+/// A consuming check is a pick-form check plus a deferred drop — the operand
+/// was going to disappear into the probe; now it disappears next to it. This
+/// is the expansion that puts a branch's own condition into the shape the
+/// travelling rules speak: the `pick 0; P` pair is what [`SinkProbe`] walks
+/// and [`CopyAssoc`] redirects, and the `dip 1 { drop }` is left for the
+/// delivery machinery to cancel against whatever created the operand.
+///
+/// Restricted to a probe that feeds a branch directly, both because that is
+/// the shape whose redirection pays — the condition of a decision — and
+/// because the guard is what keeps the rule from meeting its own output: the
+/// probe it emits is followed by the deferred drop, not a branch.
+#[derive(Debug)]
+pub(crate) struct ProbeSplit;
+
+impl Rule for ProbeSplit {
+    fn name(&self) -> &'static str {
+        "probe_split"
+    }
+    fn width(&self) -> usize {
+        2
+    }
+    fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
+        let [p, branch @ Node::Branch { .. }] = window else {
+            return None;
+        };
+        if !total_probe(p) {
+            return None;
+        }
+        Some(vec![
+            Node::Op(Instruction::Pick(0)),
+            p.clone(),
+            Node::Dip {
+                depth: 1,
+                origins: Vec::new(),
+                body: vec![Node::Op(Instruction::Drop)],
+            },
+            branch.clone(),
+        ])
+    }
+}
+
+/// `pick d ; P ; pick (d+1) ; P` becomes `pick d ; P ; pick 0`.
+///
+/// The two probes read the same slot — the second pick reaches one deeper
+/// because the first answer is now on top — and a probe is a pure function of
+/// its operand, so the second run can only repeat the first. This is
+/// duplication-naturality again, [`DupNatural`]'s law, in the window that a
+/// hoisted recomputation actually lands in: [`HoistProbe`] carries the
+/// re-check up out of its branch, [`Float`] walks it the rest of the way, and
+/// this is the fusion waiting at the top.
+///
+/// `P` must be a [`total_probe`]: the right side skips the second run, so a
+/// `P` that could reject its operand would have its panic erased — though a
+/// probe that ran once without panicking would not panic again on the same
+/// value, which is why the totality demand could in principle be relaxed to
+/// determinism. Total is what the five probes are, and it keeps the argument
+/// one line.
+///
+/// Measure: node count.
+#[derive(Debug)]
+pub(crate) struct DupProbe;
+
+impl Rule for DupProbe {
+    fn name(&self) -> &'static str {
+        "dup_probe"
+    }
+    fn width(&self) -> usize {
+        4
+    }
+    fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
+        let [Node::Op(Instruction::Pick(d)), p1, Node::Op(Instruction::Pick(d2)), p2] = window
+        else {
+            return None;
+        };
+        if !total_probe(p1) || !same_effect(p1, p2) || *d2 != d + 1 {
+            return None;
+        }
+        Some(vec![
+            Node::Op(Instruction::Pick(*d)),
+            p1.clone(),
+            Node::Op(Instruction::Pick(0)),
+        ])
+    }
+}
+
+/// `pick 0; is_tuple; branch { pick 0; tuple_length; drop; A } { B }` drops
+/// the re-check: the then-arm becomes `A`.
+///
+/// The window holds the guard *and* the re-check it guards, which is
+/// [`SpecializeEqual`]'s shape of argument: the then-arm runs exactly when the
+/// value on top is a tuple, and `tuple_length` on a tuple cannot panic, so
+/// computing a length only to drop it is running nothing at all. The `drop` in
+/// the matched arm head is load-bearing — with the length's *result* consumed
+/// by real code the re-check computes something, and with it dropped the
+/// re-check *is* only the panic branch the guard just closed.
+///
+/// This and [`DischargeUntuple`] are how a guard skeleton drains once
+/// everything inside it has folded to the same thing: the branch's arms
+/// cannot agree while one still holds the re-check, and no two-node rule may
+/// cancel a partial instruction against a `drop`.
+///
+/// Measure: `tuple_length` count.
+#[derive(Debug)]
+pub(crate) struct DischargeLength;
+
+impl Rule for DischargeLength {
+    fn name(&self) -> &'static str {
+        "discharge_length"
+    }
+    fn width(&self) -> usize {
+        3
+    }
+    fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
+        let [
+            pick @ Node::Op(Instruction::Pick(0)),
+            probe @ Node::Op(Instruction::IsTuple),
+            Node::Branch {
+                then_origin,
+                then_body,
+                else_origin,
+                else_body,
+            },
+        ] = window
+        else {
+            return None;
+        };
+        let [
+            Node::Op(Instruction::Pick(0)),
+            Node::Op(Instruction::TupleLength),
+            Node::Op(Instruction::Drop),
+            rest @ ..,
+        ] = &then_body[..]
+        else {
+            return None;
+        };
+        Some(vec![
+            pick.clone(),
+            probe.clone(),
+            Node::Branch {
+                then_origin: then_origin.clone(),
+                then_body: rest.to_vec(),
+                else_origin: else_origin.clone(),
+                else_body: else_body.clone(),
+            },
+        ])
+    }
+}
+
+/// `pick 0; tuple_length; push n; equal; branch { untuple n; drop^n; A } { B }`
+/// discharges the destructuring: the then-arm becomes `drop; A`.
+///
+/// The companion to [`DischargeLength`], one guard further in. The then-arm
+/// runs exactly when the value's length compared equal to the literal `n`, and
+/// `untuple n` on an n-tuple cannot panic — so taking the value apart and
+/// dropping every part is dropping the value. The `n` drops in the matched arm
+/// are what license it, exactly as in [`DischargeLength`]: parts that real
+/// code consumed would make the `untuple` a computation, and parts all
+/// dropped make it a re-check of what the guard established.
+///
+/// Measure: `untuple` count.
+#[derive(Debug)]
+pub(crate) struct DischargeUntuple;
+
+impl Rule for DischargeUntuple {
+    fn name(&self) -> &'static str {
+        "discharge_untuple"
+    }
+    fn width(&self) -> usize {
+        5
+    }
+    fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
+        let [
+            pick @ Node::Op(Instruction::Pick(0)),
+            len @ Node::Op(Instruction::TupleLength),
+            lit @ Node::Op(Instruction::Push(Value::Int(n))),
+            eq @ Node::Op(Instruction::Equal),
+            Node::Branch {
+                then_origin,
+                then_body,
+                else_origin,
+                else_body,
+            },
+        ] = window
+        else {
+            return None;
+        };
+        let Ok(n) = usize::try_from(*n) else {
+            return None;
+        };
+        let [Node::Op(Instruction::Untuple(m)), rest @ ..] = &then_body[..] else {
+            return None;
+        };
+        if *m != n || rest.len() < n {
+            return None;
+        }
+        if !rest[..n]
+            .iter()
+            .all(|node| matches!(node, Node::Op(Instruction::Drop)))
+        {
+            return None;
+        }
+
+        let mut arm = vec![Node::Op(Instruction::Drop)];
+        arm.extend(rest[n..].iter().cloned());
+        Some(vec![
+            pick.clone(),
+            len.clone(),
+            lit.clone(),
+            eq.clone(),
+            Node::Branch {
+                then_origin: then_origin.clone(),
+                then_body: arm,
+                else_origin: else_origin.clone(),
+                else_body: else_body.clone(),
+            },
         ])
     }
 }
