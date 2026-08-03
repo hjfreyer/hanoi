@@ -1,6 +1,6 @@
 # Hanoi (Hana)
 
-Hanoi is a stack-oriented, VM-executed language designed to explore static analysis, algebraic effects, and formal verification in the context of stateful concurrency. Program source is written in **Hanoi Assembly** (with the `.hana` extension). Hanoi models concurrent systems via **Communicating Sequential Processes (CSP)** style state machines and uses an integrated static safety checker backed by the Z3 SMT solver to guarantee correctness.
+Hanoi is a stack-oriented, VM-executed language designed to explore static analysis, algebraic effects, and formal verification in the context of stateful concurrency. Program source is written in **Hanoi Assembly** (with the `.hana` extension). Hanoi models concurrent systems via **Communicating Sequential Processes (CSP)** style state machines.
 
 > [!NOTE]
 > This project is a research workspace containing the compiler/assembler, virtual machine runtime, testing tools, and a suite of formal contract verification experiments.
@@ -10,9 +10,9 @@ Hanoi is a stack-oriented, VM-executed language designed to explore static analy
 ## Key Features
 
 - **Stack-Oriented Execution**: A clean, instruction-driven virtual machine that uses a stack for operations, featuring standard manipulations (`drop`, `pick`, `roll`), arithmetic, and tuple structuring.
-- **Scoped Stack Frames**: `dip N { ... }` runs a block with the top `N` stack values hidden from it, so both the arity checker and the SMT encoding can treat those values as unchanged across the call rather than tracking them through it.
+- **Scoped Stack Frames**: `dip N { ... }` runs a block with the top `N` stack values hidden from it, so the arity checker can treat those values as unchanged across the call rather than tracking them through it.
 - **CSP State Machine Modeling**: Fully implements Communicating Sequential Processes (CSP) state machines. State machines are represented as modules with standardized hooks for managing state transitions, internal execution steps, and termination. See the [CSP Machines Documentation](docs/machines.md) for details.
-- **Static Safety & Behavior Contracts**: Annotate functions with a precondition (`#[precondition(fn_name)]`), a postcondition (`#[postcondition(fn_name)]`), or a totality claim (`#[total]`). Hanoi compiles sentences directly into Z3 recursive function definitions and proves the contracts hold for all inputs at compile time. See [docs/typecheck.md](docs/typecheck.md) for details.
+- **Static Safety & Behavior Contracts** *(annotations only — verifier temporarily removed)*: Functions can be annotated with a precondition (`#[precondition(fn_name)]`), a postcondition (`#[postcondition(fn_name)]`), or a totality claim (`#[total]`). These annotations are parsed and preserved, but the Z3-backed static verifier that proved them has been removed for now. See [docs/typecheck.md](docs/typecheck.md) for the design.
 - **`type` / `enum` Predicate Sugar**: Declare reusable value predicates with `type Name <spec>;` (primitives, literals, tuples, and `|`-unions) or `enum Name { Variant(spec, ...), ... }`, which expand into `Name::check` sentences usable directly as preconditions/postconditions.
 - **Static Arity Verification**: An arity checker runs before execution to ensure that stack push/pop operations match function signatures, avoiding runtime stack underflows.
 - **Namespacing & Modularity**: Hierarchical module declarations (`mod name { ... }` or `mod name;`) with file-import support, relative/absolute path routing, and name visibility exports.
@@ -78,7 +78,7 @@ sentence test_type_and_enum {
     assert
 }
 ```
-Each `type`/`enum` declaration expands into a module with a `check` sentence (`Name::check`) that consumes a value and pushes a `Bool`, so it can be used directly as a `#[precondition(...)]` or `#[postcondition(...)]`. See [docs/typecheck.md](docs/typecheck.md) for the full verification model and [docs/hana.md](docs/hana.md) for the complete `type`/`enum` grammar.
+Each `type`/`enum` declaration expands into a module with a `check` sentence (`Name::check`) that consumes a value and pushes a `Bool`, so it can be used directly as a `#[precondition(...)]` or `#[postcondition(...)]`. See [docs/typecheck.md](docs/typecheck.md) for the verification model design (currently unimplemented) and [docs/hana.md](docs/hana.md) for the complete `type`/`enum` grammar.
 
 ---
 
@@ -103,7 +103,6 @@ The Hanoi codebase is structured as a cargo workspace with several key packages:
 - **[bytecode](bytecode)**: The compiler frontend and validation pipeline.
   - [bytecode/src/assembly.rs](bytecode/src/assembly.rs): Parser and assembler that turns `.hana` source code into VM bytecode.
   - [bytecode/src/arity.rs](bytecode/src/arity.rs): Static arity checker for validating stack depths.
-  - [bytecode/src/safety](bytecode/src/safety): SMT-based safety contract checker that integrates with Z3.
 - **[vm](vm)**: The virtual machine execution engine.
   - [vm/src/lib.rs](vm/src/lib.rs): Core interpreter, instruction dispatch loop, and stack representation.
   - [vm/src/runtime.rs](vm/src/runtime.rs): Asynchronous CSP coordinator that drives state machine step cycles.
@@ -117,9 +116,6 @@ The Hanoi codebase is structured as a cargo workspace with several key packages:
 ### Prerequisites
 
 1. **Rust**: Install the latest stable Rust toolchain (2024 edition is used).
-2. **Z3 SMT Solver**: Install Z3 to run the safety checker.
-   - On Debian/Ubuntu: `sudo apt-get install z3`
-   - On macOS (Homebrew): `brew install z3`
 
 ### Building the Project
 
@@ -147,7 +143,7 @@ Use the helper shell scripts at the project root to execute test suites:
 
 - [docs/hana.md](docs/hana.md): Detailed guide for Hanoi Assembly syntax, stack behavior, contract annotations, and key gotchas.
 - [docs/hana_reference.md](docs/hana_reference.md): Complete reference of all available opcodes, organized by functionality.
-- [docs/typecheck.md](docs/typecheck.md): Detailed SMT verification and symbolic execution design for the `typecheck` tool.
+- [docs/typecheck.md](docs/typecheck.md): Detailed SMT verification and symbolic execution design for the `typecheck` tool (currently removed from the codebase; kept as a design reference).
 - [docs/machines.md](docs/machines.md): Specification of Hanoi's Communicating Sequential Processes (CSP) state machine semantics.
 - [docs/compilation.md](docs/compilation.md): The compilation pipeline — the sugar and core ASTs, and what each phase from tokens to bytecode may assume.
 - [docs/tactics.md](docs/tactics.md): The tactic language `bin/rewrite` uses to inline and rewrite compiled bytecode — the rule set, the combinators, and the laws they obey.

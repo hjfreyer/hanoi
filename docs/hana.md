@@ -86,7 +86,7 @@ function double_value {
 
 ## 4. Contract Annotations
 
-Hanoi supports static assertion checking at compile time via attributes, verified by the `typecheck` tool (see [docs/typecheck.md](typecheck.md) for the full verification model):
+Hanoi supports static assertion checking at compile time via attributes, intended to be verified by the `typecheck` tool (currently removed from the codebase along with its Z3 dependency; see [docs/typecheck.md](typecheck.md) for the design):
 
 - `#[arity(inputs, outputs)]`: Declares the stack arity (required for sentences that do not use the default `function` arity of `1 -> 1`).
 - `#[precondition(fn_name)]`: Names a `1 -> 1` function that must evaluate to `true` on the input for the annotated function to be considered safe to call.

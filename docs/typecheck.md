@@ -1,5 +1,8 @@
 # Typecheck: Static Safety Verification Tool for Hanoi
 
+> [!NOTE]
+> The `typecheck` tool and its Z3 dependency have been removed from the codebase for now (it was restricting other development). The `#[precondition]`, `#[postcondition]`, `#[total]`, and `#[recursive]` annotations described below are still parsed and preserved in the `Library`, but nothing currently verifies them. This document is kept as a design reference for a future reimplementation.
+
 Typecheck is a static analysis and formal safety verification tool for Hanoi. It allows developers to prove that specific functions never trigger a runtime panic under designated precondition checks. 
 
 Rather than exporting SMT-LIB2 code, Typecheck compiles Hanoi sentences directly into Z3 recursive function definitions (`RecFuncDecl`) and solves the safety assertions programmatically using the Z3 solver API.
