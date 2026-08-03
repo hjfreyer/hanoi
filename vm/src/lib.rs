@@ -5,12 +5,10 @@ pub use runtime::{Runtime, Environment, DefaultEnvironment};
 
 use bytecode::value::numeric_cmp;
 
-/// The junk value the untupling instructions hand back: `()`.
-fn unit() -> Value {
-    Value::unit()
-}
-
 /// The junk value the numeric instructions hand back.
+///
+/// Its counterpart for the untupling instructions is [`Value::unit`], which
+/// lives in `bytecode` because the rewriter builds one too.
 fn zero() -> Value {
     Value::Int(0)
 }
@@ -344,7 +342,7 @@ impl VM {
                                 self.stack.push(elem);
                             }
                         }
-                        _ => self.stack.extend(std::iter::repeat(unit()).take(n)),
+                        _ => self.stack.extend(std::iter::repeat(Value::unit()).take(n)),
                     }
                 }
                 Instruction::IsInt => {
@@ -1163,7 +1161,7 @@ mod totality_tests {
     }
 
     fn unit() -> Value {
-        Value::Tuple(Vec::new())
+        Value::unit()
     }
 
     /// One value of each shape, plus a couple of edge cases. Anything claimed

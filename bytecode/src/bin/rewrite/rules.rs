@@ -1687,7 +1687,7 @@ mod tests {
     }
 
     fn unit() -> Value {
-        Value::Tuple(Vec::new())
+        Value::unit()
     }
 
     #[test]
@@ -2777,7 +2777,7 @@ impl Rule for RebuildCopy {
         // Off the guard, untupling gives n copies of `()` and the value is
         // untouched, so the arm can say that outright.
         let junk = (0..n)
-            .map(|_| Node::Op(Instruction::Push(Value::Tuple(Vec::new()))))
+            .map(|_| Node::Op(Instruction::Push(Value::unit())))
             .collect();
 
         Some(vec![
