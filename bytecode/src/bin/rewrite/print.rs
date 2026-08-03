@@ -18,13 +18,16 @@ struct View<'a> {
     fresh: &'a mut Fresh,
 }
 
+/// Prints the listing. `Ok(true)` means the tactic *failed* — an aimed step
+/// missed — and the listing shows the term as the rollback contract left it.
 pub(crate) fn print_sentence(
     root: SentenceIndex,
     tactic: &Tactic,
     env: &Env,
     source: &str,
     show_stack: bool,
-) -> Result<(), TacticError> {
+    positions: bool,
+) -> Result<bool, TacticError> {
     let library = env.program().library();
     println!("#{} {}", usize::from(root), library.names[root]);
     for ann in &library.annotations[root] {
@@ -33,7 +36,9 @@ pub(crate) fn print_sentence(
 
     let mut in_progress = HashSet::new();
     let body = build(library, root, &mut in_progress);
-    let body = apply(tactic, env, body)?.into_nodes();
+    let outcome = apply(tactic, env, body)?;
+    let failed = matches!(outcome, crate::tactic::Outcome::Failed(_));
+    let body = outcome.into_nodes();
 
     // A sentence whose reckoning breaks immediately — a #[recursive] one, whose
     // body is a cut edge — has no knowable entry depth. Counting from zero
@@ -52,6 +57,8 @@ pub(crate) fn print_sentence(
 
     let head = if relative {
         "offset │ instruction   (entry depth unknown)"
+    } else if positions {
+        "depth │  at │ instruction"
     } else {
         "depth │ instruction"
     };
@@ -75,6 +82,7 @@ pub(crate) fn print_sentence(
         relative,
         stack,
         view.as_mut(),
+        positions,
     );
 
     if show_stack && !names.legend().is_empty() {
@@ -84,9 +92,10 @@ pub(crate) fn print_sentence(
             println!("    {:>3} = {}", label, desc);
         }
     }
-    Ok(())
+    Ok(failed)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn print_seq(
     prog: &Program,
     nodes: &[Node],
@@ -95,16 +104,26 @@ fn print_seq(
     relative: bool,
     entry_stack: Stack,
     mut view: Option<&mut View>,
+    positions: bool,
 ) {
     let mut depth = entry;
     let mut stack = entry_stack;
     let blank = " ".repeat(7);
 
-    for node in nodes {
+    let pos_blank = if positions { " │    " } else { "" };
+
+    for (ix, node) in nodes.iter().enumerate() {
         let gutter = match (depth, relative) {
             (Some(d), true) => format!("{:>7}", format!("{:+}", d)),
             (Some(d), false) => format!("{:>7}", d),
             (None, _) => format!("{:>7}", "?"),
+        };
+        // The index the aimed combinators speak: this node's position in its
+        // own sequence, which is all `at(i, ...)` and `then_at(i, ...)` see.
+        let gutter = if positions {
+            format!("{} │ {:>3}", gutter, ix)
+        } else {
+            gutter
         };
         // The stack *before* this instruction, matching what `depth` means.
         let gutter = match view.as_deref_mut() {
@@ -153,8 +172,9 @@ fn print_seq(
                     relative,
                     inner,
                     view.as_deref_mut(),
+                    positions,
                 );
-                println!("{}{} │ {}}}", stack_blank(&view), blank, pad);
+                println!("{}{}{} │ {}}}", stack_blank(&view), blank, pos_blank, pad);
             }
             Node::Branch {
                 then_origin,
@@ -176,11 +196,13 @@ fn print_seq(
                     relative,
                     arm_stack.clone(),
                     view.as_deref_mut(),
+                    positions,
                 );
                 println!(
-                    "{}{} │ {}}} else → {} {{",
+                    "{}{}{} │ {}}} else → {} {{",
                     stack_blank(&view),
                     blank,
+                    pos_blank,
                     pad,
                     else_origin
                 );
@@ -192,8 +214,9 @@ fn print_seq(
                     relative,
                     arm_stack,
                     view.as_deref_mut(),
+                    positions,
                 );
-                println!("{}{} │ {}}}", stack_blank(&view), blank, pad);
+                println!("{}{}{} │ {}}}", stack_blank(&view), blank, pos_blank, pad);
             }
             Node::Call { depth: k, target } => {
                 let verb = if *k == 0 {

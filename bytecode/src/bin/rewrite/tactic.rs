@@ -31,7 +31,11 @@ const TRACE_WINDOW: usize = 24;
 /// Scanning a sequence and finding no work is a successful no-op, not an
 /// error, and treating it as one made `a; b` throw away everything `a` did
 /// whenever `b` had nothing to do — silently, while the trace still reported
-/// `a` firing. `Failed` now comes only from an explicit `fail`.
+/// `a` firing. `Failed` comes only from an explicit `fail` and from the aimed
+/// combinators (`at`, `then_at`, `else_at`, `body_at`): a sweep that finds
+/// nothing has looked everywhere and is done, but an aimed step that misses
+/// points at the wrong place, and continuing would let every later step of a
+/// script fire somewhere it was not aimed.
 #[derive(Debug)]
 pub(crate) enum Outcome {
     Changed(Vec<Node>),
@@ -167,6 +171,15 @@ pub(crate) enum Tactic {
     Each(Vec<&'static dyn Rule>),
     /// Apply the first rule that matches, at the first position it matches.
     Once(Vec<&'static dyn Rule>),
+    /// Apply the first of these rules whose window matches anchored exactly
+    /// at the given index — once, with no cascade rescan. A miss is `Failed`:
+    /// an aimed step that does not fire was aimed at the wrong place.
+    At(usize, Vec<&'static dyn Rule>),
+    /// Apply to one child sequence of the node at the given index. `Failed`
+    /// when that node has no child of the selected kind — where `then(t)`
+    /// visits every branch in the sequence and skipping is the point, an
+    /// aimed descent through the wrong node is a script error.
+    IntoAt(Selector, usize, Box<Tactic>),
     Seq(Vec<Tactic>),
     Choice(Vec<Tactic>),
     Try(Box<Tactic>),
@@ -203,7 +216,7 @@ pub(crate) enum Tactic {
 /// clones.
 fn can_fail(t: &Tactic) -> bool {
     match t {
-        Tactic::Fail => true,
+        Tactic::Fail | Tactic::At(..) | Tactic::IntoAt(..) => true,
         Tactic::Each(_) | Tactic::Once(_) => false,
         Tactic::Try(_)
         | Tactic::Repeat(_)
@@ -226,6 +239,43 @@ pub(crate) fn apply(t: &Tactic, env: &Env, nodes: Vec<Node>) -> Result<Outcome, 
         Tactic::Fail => Ok(Outcome::Failed(nodes)),
         Tactic::Each(rules) => each(rules, env, nodes),
         Tactic::Once(rules) => once(rules, env, nodes),
+
+        Tactic::At(i, rules) => {
+            let mut nodes = nodes;
+            Ok(if step(rules, env, &mut nodes, *i)?.is_some() {
+                Outcome::Changed(nodes)
+            } else {
+                Outcome::Failed(nodes)
+            })
+        }
+
+        Tactic::IntoAt(sel, i, inner) => {
+            let mut nodes = nodes;
+            let Some(node) = nodes.get_mut(*i) else {
+                return Ok(Outcome::Failed(nodes));
+            };
+            let bodies = selected_bodies(node, *sel);
+            if bodies.is_empty() {
+                return Ok(Outcome::Failed(nodes));
+            }
+            let mut changed = false;
+            let mut failed = false;
+            for body in bodies {
+                let outcome = apply(inner, env, std::mem::take(body))?;
+                changed |= outcome.changed();
+                failed |= matches!(outcome, Outcome::Failed(_));
+                *body = outcome.into_nodes();
+            }
+            Ok(if failed {
+                // The inner tactic's rollback contract already handed each
+                // body back untouched, so the whole sequence is intact.
+                Outcome::Failed(nodes)
+            } else if changed {
+                Outcome::Changed(nodes)
+            } else {
+                Outcome::Unchanged(nodes)
+            })
+        }
 
         Tactic::Try(inner) => Ok(match apply(inner, env, nodes)? {
             Outcome::Failed(n) => Outcome::Unchanged(n),

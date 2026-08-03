@@ -46,6 +46,7 @@ struct Options {
     trace: bool,
     check: bool,
     stack: bool,
+    positions: bool,
 }
 
 fn main() {
@@ -55,6 +56,7 @@ fn main() {
         trace: false,
         check: false,
         stack: false,
+        positions: false,
     };
     let mut tactic_files: Vec<String> = Vec::new();
     let mut positional: Vec<String> = Vec::new();
@@ -91,6 +93,7 @@ fn main() {
             "--trace" => opts.trace = true,
             "--stack" => opts.stack = true,
             "--check" => opts.check = true,
+            "--positions" => opts.positions = true,
             "--list-rules" => list_rules = true,
             "--list-tactics" => list_tactics = true,
             flag if flag.starts_with('-') => {
@@ -138,6 +141,7 @@ fn main() {
         println!();
         println!("combinators: each, once, try, repeat, repeat_n, id, fail");
         println!("traversals:  children, then, else, body, bu, td");
+        println!("aimed:       at(i, rules...), then_at(i, t), else_at(i, t), body_at(i, t)");
         println!("operators:   `a; b` in sequence, `a | b` first that applies");
         return;
     }
@@ -176,8 +180,20 @@ fn main() {
     }
 
     let env = Env::new(&prog, opts.fuel, opts.check);
-    if let Err(err) = print_sentence(root, &tactic, &env, &opts.tactic, opts.stack) {
-        eprintln!("error: {}", err);
+    let failed = match print_sentence(root, &tactic, &env, &opts.tactic, opts.stack, opts.positions)
+    {
+        Ok(failed) => failed,
+        Err(err) => {
+            eprintln!("error: {}", err);
+            process::exit(1);
+        }
+    };
+    if failed {
+        eprintln!();
+        eprintln!("error: the tactic failed — an aimed step (`at`, `then_at`, `else_at`,");
+        eprintln!("  `body_at`, or an explicit `fail`) missed. The listing above shows the");
+        eprintln!("  term rolled back to before the failing sequence; use --positions to");
+        eprintln!("  read off where the step should aim.");
         process::exit(1);
     }
 
@@ -210,6 +226,7 @@ fn usage() {
     eprintln!("  --trace              print how often each rule fired.");
     eprintln!("  --check              verify every rule preserves net stack effect.");
     eprintln!("  --stack              show what each slot holds, with equal values sharing a name.");
+    eprintln!("  --positions          number each sequence's nodes, for aiming `at(i, ...)`.");
     eprintln!();
     eprintln!("Examples:");
     eprintln!("  rewrite tests 'Pair::check' -t dip_normalize");

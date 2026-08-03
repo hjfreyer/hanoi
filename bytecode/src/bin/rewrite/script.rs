@@ -660,10 +660,48 @@ impl Definitions {
                     )
                     .with_help(format!("for example `{}(2, each(sink))`", name)));
                 };
-                Ok(Tactic::RepeatN(
-                    *n,
-                    Box::new(self.resolve(inner, visiting)?),
-                ))
+                let inner = Box::new(self.resolve(inner, visiting)?);
+                Ok(match name {
+                    "repeat_n" => Tactic::RepeatN(*n, inner),
+                    "then_at" => Tactic::IntoAt(Selector::Then, *n, inner),
+                    "else_at" => Tactic::IntoAt(Selector::Else, *n, inner),
+                    _ => Tactic::IntoAt(Selector::Body, *n, inner),
+                })
+            }
+            Shape::IndexAndRules => {
+                let [Arg::Int(i), rule_args @ ..] = args else {
+                    return Err(ScriptError::new(
+                        format!("`{}` takes an index and at least one rule", name),
+                        span,
+                    )
+                    .with_help(format!("for example `{}(3, sink)`", name)));
+                };
+                if rule_args.is_empty() {
+                    return Err(ScriptError::new(
+                        format!("`{}` takes an index and at least one rule", name),
+                        span,
+                    )
+                    .with_help(format!("for example `{}(3, sink)`", name)));
+                }
+                let mut rules: Vec<&'static dyn Rule> = Vec::new();
+                for arg in rule_args {
+                    let Arg::Expr(Expr::Name(rule_name, rule_span)) = arg else {
+                        return Err(ScriptError::new(
+                            format!("`{}` takes rule names after the index, not tactics", name),
+                            span,
+                        )
+                        .with_help(format!("rules: {}", rule_names().join(", "))));
+                    };
+                    let Some(rule) = rule_by_name(rule_name) else {
+                        return Err(ScriptError::new(
+                            format!("unknown rule '{}'", rule_name),
+                            *rule_span,
+                        )
+                        .with_help(format!("rules: {}", rule_names().join(", "))));
+                    };
+                    rules.push(rule);
+                }
+                Ok(Tactic::At(*i, rules))
             }
         }
     }
@@ -679,6 +717,9 @@ enum Shape {
     Rules,
     One,
     CountAndOne,
+    /// An index, then rule names — `at`'s shape, with the same parse-time
+    /// stance on rules as [`Shape::Rules`].
+    IndexAndRules,
 }
 
 const COMBINATORS: &[(&str, Shape)] = &[
@@ -695,6 +736,13 @@ const COMBINATORS: &[(&str, Shape)] = &[
     ("bu", Shape::One),
     ("td", Shape::One),
     ("repeat_n", Shape::CountAndOne),
+    // The aimed family: a rule anchored at exactly one window, and descent
+    // into one node's child rather than every node's. These are the ones
+    // that fail on a miss — see the note on `Outcome` in tactic.rs.
+    ("at", Shape::IndexAndRules),
+    ("then_at", Shape::CountAndOne),
+    ("else_at", Shape::CountAndOne),
+    ("body_at", Shape::CountAndOne),
 ];
 
 pub(crate) fn rule_names() -> Vec<&'static str> {

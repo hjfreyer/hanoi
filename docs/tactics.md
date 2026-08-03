@@ -502,11 +502,42 @@ bare rule name where a tactic belongs is an error that tells you so.
 | `children(t)` | to every child sequence, one level down |
 | `then(t)`, `else(t)` | to one branch arm, one level down |
 | `body(t)` | to every dip body, one level down |
+| `at(i, r, ...)` | the first rule whose window matches anchored exactly at index `i`, once |
+| `then_at(i, t)`, `else_at(i, t)` | to one arm of the branch *at index `i`* |
+| `body_at(i, t)` | to the body of the dip at index `i` |
 | `bu(t)` | children first, then here |
 | `td(t)` | here first, then children |
 | `id`, `fail` | succeed changing nothing; fail (the only thing that does) |
 
 `;` binds tighter than `|`, so `a; b | c` is `(a; b) | c`.
+
+## Aiming
+
+The sweep combinators answer "everywhere this matches"; the aimed family
+answers "this window, and nowhere else". `at(i, r)` fires `r` with its window
+anchored at exactly node `i` of the current sequence — once, with no cascade
+rescan — and `then_at(i, t)`/`else_at(i, t)`/`body_at(i, t)` descend into one
+child of the node at `i` rather than of every node. `--positions` adds the
+index gutter the arguments are read from.
+
+Two things distinguish an aimed step from a sweep. **It composes into a
+path**: `then_at(2, else_at(5, at(0, probe_split)))` names one window in the
+whole tree, using nothing but sequence indices — the governing invariant is
+untouched, because an index is a fact about the sequence the tactic was
+handed. And **a miss fails** where a sweep's miss is a no-op: a sweep that
+finds nothing has looked everywhere and is done, but an aimed step that does
+not fire was aimed at the wrong place, and letting the script continue would
+let every later step fire somewhere it was not aimed. The failure rolls the
+enclosing sequence back to its start (the same contract `fail` has), and the
+CLI reports it rather than printing a half-applied term as if it were the
+result.
+
+This is what turns a tactic file into a **derivation script**: a sequence of
+aimed steps is a proof whose every inference the rewriter checks — `--check`
+and the fuel budget apply to aimed firings exactly as to swept ones — and
+whose failure mode is a loud pointer at the step that no longer matches. The
+indices are brittle under edits to earlier steps, deliberately so; a
+derivation is finished once, and from then on it is a regression test.
 
 ## Named tactics
 
@@ -554,8 +585,9 @@ diverge for every `X`. A tactic that succeeds without changing anything is
 report "unchanged" when they find no work, so `a; b` keeps everything `a` did
 even if `b` has nothing to do. Reporting it as failure meant a sequence
 silently discarded its own progress — `each(inline); each(flatten_call)` gave
-back the original tree while `--trace` still said `inline` fired. Only an
-explicit `fail` fails, which is also why `try` is almost never needed.
+back the original tree while `--trace` still said `inline` fired. Failure
+comes from an explicit `fail` and from the aimed combinators — which is also
+why `try` is almost never needed outside of scripts that aim.
 
 **`|` falls through on "did nothing", not just on failure.** The two coincide
 for `each`, which only ever reports changed-or-failed. But every total tactic —

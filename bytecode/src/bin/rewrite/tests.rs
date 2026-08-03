@@ -685,6 +685,99 @@ fn a_rule_that_matches_nowhere_is_a_no_op_not_a_failure() {
 }
 
 // ---------------------------------------------------------------------------
+// Aiming: at, then_at, else_at, body_at
+//
+// The sweep combinators answer "everywhere this matches"; these answer "this
+// window, and nowhere else". An aimed step that misses fails, because every
+// later step of a script would otherwise fire somewhere it was not aimed.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn an_aimed_rule_fires_at_its_index_and_nowhere_else() {
+    // `push 1; pick 0` matches copy_const at 0 and at 2. Aimed at 2, the
+    // first pair must be left alone.
+    let (prog, before) = tree_of(
+        r#"
+        #[arity(0, 4)]
+        sentence probe {
+            push 1
+            pick 0
+            push 2
+            pick 0
+        }
+    "#,
+        NOTHING,
+    );
+    let after = run(prog, before, "at(2, copy_const)");
+    assert_eq!(
+        shape(&after),
+        vec!["push 1", "pick 0", "push 2", "push 2"]
+    );
+}
+
+#[test]
+fn an_aimed_rule_that_misses_fails_and_rolls_back() {
+    let (prog, before) = tree_of(
+        r#"
+        #[arity(0, 4)]
+        sentence probe {
+            push 1
+            pick 0
+            push 2
+            pick 0
+        }
+    "#,
+        NOTHING,
+    );
+    // Position 1 holds `pick 0; push 2` — not copy_const's window.
+    let Outcome::Failed(after) = outcome(prog, "at(1, copy_const)", before.clone()).unwrap()
+    else {
+        panic!("an aimed step that misses should fail, not no-op")
+    };
+    assert_eq!(before, after);
+
+    // And a sequence containing the miss hands back its input, undoing the
+    // aimed step that did fire before it.
+    let Outcome::Failed(after) =
+        outcome(prog, "at(0, copy_const); at(1, copy_const)", before.clone()).unwrap()
+    else {
+        panic!("the missed step should fail the whole sequence")
+    };
+    assert_eq!(before, after, "rollback should undo the first step too");
+}
+
+#[test]
+fn aimed_descent_reaches_one_branch_and_leaves_its_twin_alone() {
+    // Two identical branches; the aimed path rewrites inside the second only.
+    let code = r#"
+        #[arity(2, 4)]
+        sentence probe {
+            is_bool
+            branch { push 1  pick 0 } { push 1  pick 0 }
+            is_bool
+            branch { push 1  pick 0 } { push 1  pick 0 }
+        }
+    "#;
+    let (prog, before) = tree_of(code, NOTHING);
+    let after = run(prog, before, "then_at(3, at(0, copy_const))");
+    let branches: Vec<_> = after
+        .iter()
+        .filter_map(|n| match n {
+            Node::Branch { then_body, .. } => Some(shape(then_body)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(branches[0], vec!["push 1", "pick 0"], "first branch untouched");
+    assert_eq!(branches[1], vec!["push 1", "push 1"], "second branch rewritten");
+
+    // Descending through a node that is not a branch fails.
+    let (prog, before) = tree_of(code, NOTHING);
+    let Outcome::Failed(_) = outcome(prog, "then_at(0, id)", before).unwrap() else {
+        panic!("`then_at` through a non-branch should fail")
+    };
+}
+
+// ---------------------------------------------------------------------------
 // Selective descent: then, else, body
 //
 // `children` reaches every child of every node, which is fine for a
