@@ -475,14 +475,23 @@ values whose *copies* the precondition checked, across branches on those
 checks' results. The travelling rules exist and each step is sound —
 `probe_split` turns a consuming check into a pick-probe with a deferred drop,
 `hoist_probe` carries a probe out of either arm, `sink_probe` walks it left
-past copy creations, `dup_probe` fuses two probes of one slot — and probes
-demonstrably climb from the innermost arm to the sequence top. What has not
-been found is a *composition* of phases that aims them without the phases
-undoing each other: `unfactor_branch` re-buries what `hoist_probe` surfaced,
-`sink` reassembles what `probe_split` opened, and the `n -> m` interchange
-arithmetic is too coarse to walk a frame past a dead refinement that writes
-into its window. The missing piece is orchestration — a search that aims what
-exists — not a fact, and not a new kind of rule.
+past copy creations, `dup_probe` and `dup_probe_frame` fuse two probes of one
+slot. With the aimed combinators, the walk itself is now *demonstrated*:
+`the_aimed_walk_lands_every_step_on_the_real_corpus_sentence` carries both
+re-checks out of three nested branches to the top of the state sequence in
+thirty-odd aimed steps, each landing exactly where the script says, each
+preserving its window's net effect. Sweeps could not do this — the phases
+that aim the travelling rules undo each other's placements — and a script
+can.
+
+The one move the walk still lacks is the fusion at the top. The walked
+frames read the original components; the precondition's probes read the
+*copies*; and the dup rules rightly demand the same slot. Redirecting a
+probe-of-a-copy into a probe-of-its-source is `copy_assoc`'s job, but the
+probe arrives at its copy's creation in consuming form rather than pick
+form, and re-splitting it there re-enters the shapes the walk just left.
+That bridge — one more comonoid-flavoured law, or a smarter walk order — is
+the precisely-stated remaining distance. Nothing in it calls for a fact.
 
 **Rules are not tactics.** They live in their own namespace and cannot be
 aliased or defined; a rule has to be *placed* by `each` or `once`. Writing a

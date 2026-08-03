@@ -52,6 +52,7 @@ pub(crate) const ALL_RULES: &[&dyn Rule] = &[
     &DistributeDrop,
     &DupNatural,
     &DupProbe,
+    &DupProbeFrame,
     &Expand,
     &FactorBranch,
     &FlattenCall,
@@ -3331,6 +3332,61 @@ impl Rule for DupProbe {
             Node::Op(Instruction::Pick(*d)),
             p1.clone(),
             Node::Op(Instruction::Pick(0)),
+        ])
+    }
+}
+
+/// `dip k { pick j; P } ; dip (k+1) { pick j; P }` becomes
+/// `dip k { pick j; P } ; dip k { pick 0 }`.
+///
+/// [`DupProbe`] in the frames that two *walked* probes actually meet in: the
+/// first deposits its answer at depth `k`, which shifts the shared slot one
+/// deeper for the second, so equal frame picks at depths `k` and `k + 1`
+/// read the same slot — and the second run of a total probe on the same
+/// value can only repeat the first. Its replacement copies the first answer
+/// in place, which is one `pick` and no probe at all.
+///
+/// Measure: probe count.
+#[derive(Debug)]
+pub(crate) struct DupProbeFrame;
+
+impl Rule for DupProbeFrame {
+    fn name(&self) -> &'static str {
+        "dup_probe_frame"
+    }
+    fn width(&self) -> usize {
+        2
+    }
+    fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
+        let [
+            f1 @ Node::Dip {
+                depth: k, body: b1, ..
+            },
+            Node::Dip {
+                depth: k2,
+                body: b2,
+                ..
+            },
+        ] = window
+        else {
+            return None;
+        };
+        let [Node::Op(Instruction::Pick(j)), p1] = &b1[..] else {
+            return None;
+        };
+        let [Node::Op(Instruction::Pick(j2)), p2] = &b2[..] else {
+            return None;
+        };
+        if !total_probe(p1) || !same_effect(p1, p2) || *k2 != k + 1 || j2 != j {
+            return None;
+        }
+        Some(vec![
+            f1.clone(),
+            Node::Dip {
+                depth: *k,
+                origins: Vec::new(),
+                body: vec![Node::Op(Instruction::Pick(0))],
+            },
         ])
     }
 }

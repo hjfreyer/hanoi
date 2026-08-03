@@ -1424,10 +1424,36 @@ tactic splice = repeat(bu(each(sink); each(collapse); each(flatten_call);
                                cancel_tuple, probe_tuple, probe_length,
                                copy_const, copy_comm)));
 tactic endgame = repeat_n(8, round); repeat_n(6, splice; drain; round);
+
+// The aimed walk over the panic-free residue: both is_symbol re-checks of
+// the thirsty postcondition travel out of three nested branches to the top
+// of the state sequence, one checked step at a time. Every `at` that misses
+// fails the whole script, so this running at all is the assertion.
+tactic walk =
+  then_at(2, then_at(4, at(1, copy_comm_inv)));
+  then_at(2, then_at(4, else_at(6, then_at(3,
+    at(1, probe_split);
+    then_at(4, at(0, probe_split); at(3, factor_branch); at(4, hoist_probe);
+               then_at(5, at(0, sink)); at(5, hoist_probe))))));
+  then_at(2, then_at(4, else_at(6, then_at(3, then_at(4,
+    at(3, sink); at(2, sink); at(1, sink); at(0, sink_probe))))));
+  then_at(2, then_at(4, else_at(6, then_at(3, at(4, hoist_probe)))));
+  then_at(2, then_at(4,
+    else_at(6,
+      then_at(3, at(3, sink); at(2, sink); at(1, sink_probe); at(0, sink));
+      at(3, hoist_probe);
+      at(2, sink); at(1, sink); at(0, sink_probe));
+    at(6, hoist_probe)));
+  then_at(2, then_at(4,
+    else_at(7,
+      then_at(3, at(0, float); at(1, float));
+      at(3, hoist_probe);
+      at(2, sink); at(1, sink); at(0, sink_probe); at(0, flatten_call));
+    at(7, hoist_probe)));
 "#;
 
 /// Runs an expression against the prelude plus [`DERIVATION`].
-fn run_derivation(prog: &Program, nodes: Vec<Node>, src: &str) -> Vec<Node> {
+fn derivation_outcome(prog: &Program, nodes: Vec<Node>, src: &str) -> Outcome {
     let mut defs = Definitions::new();
     defs.load(PRELUDE)
         .unwrap_or_else(|e| panic!("{}", e.render(PRELUDE)));
@@ -1437,9 +1463,11 @@ fn run_derivation(prog: &Program, nodes: Vec<Node>, src: &str) -> Vec<Node> {
         .compile(src)
         .unwrap_or_else(|e| panic!("{}", e.render(src)));
     let env = Env::new(prog, 10_000_000, true);
-    apply(&tactic, &env, nodes)
-        .unwrap_or_else(|e| panic!("{}", e))
-        .into_nodes()
+    apply(&tactic, &env, nodes).unwrap_or_else(|e| panic!("{}", e))
+}
+
+fn run_derivation(prog: &Program, nodes: Vec<Node>, src: &str) -> Vec<Node> {
+    derivation_outcome(prog, nodes, src).into_nodes()
 }
 
 /// The furthest the rules currently reach on the standing goal, past the
@@ -1504,6 +1532,72 @@ fn the_derivation_reaches_a_panic_free_form() {
         seq_arity(prog, &opened),
         seq_arity(prog, &after),
         "and the whole derivation should preserve arity"
+    );
+}
+
+/// The aimed walk over the panic-free residue runs to completion.
+///
+/// This is the strongest kind of assertion the aimed combinators allow: a
+/// `walk` in which any step that misses fails the whole tactic, so the
+/// outcome being `Changed` means all thirty-odd aimed firings landed exactly
+/// where the script says, on the real corpus sentence, each preserving the
+/// window's net stack effect under `--check`. It carries both of the thirsty
+/// postcondition's `is_symbol` re-checks out of three nested branches to the
+/// top of the state sequence — the two `dip { pick 0; is_symbol }` frames the
+/// final shape assertion looks for.
+///
+/// What it does *not* yet do is fuse them with the precondition's checks:
+/// the walked frames read the original components while the precondition's
+/// probes still read the copies, and `dup_probe`/`dup_probe_frame` rightly
+/// demand the same slot. Bridging that — redirecting a probe of a copy into
+/// a probe of its source across the creation — is the one remaining
+/// choreography between this form and `drop; push true`.
+#[test]
+fn the_aimed_walk_lands_every_step_on_the_real_corpus_sentence() {
+    let main = Path::new("../tests/main.hana");
+    let Ok(code) = fs::read_to_string(main) else {
+        return;
+    };
+    let library: &'static Library =
+        Box::leak(Box::new(bytecode::assemble_with_path(&code, main.parent()).unwrap()));
+    let prog: &'static Program<'static> = Box::leak(Box::new(Program::new(library)));
+    let idx = prog
+        .library()
+        .names
+        .iter()
+        .position(|n| n == "barista::customer_impl::emit_does_pre_and_post")
+        .map(SentenceIndex::from)
+        .expect("sentence should exist in the corpus");
+
+    let residue = run_derivation(
+        prog,
+        build(prog.library(), idx, &mut HashSet::new()),
+        "opened; endgame",
+    );
+    let outcome = derivation_outcome(prog, residue.clone(), "walk");
+    let Outcome::Changed(after) = outcome else {
+        panic!("an aimed step missed: {:?}", outcome);
+    };
+
+    // Navigate to the state sequence and check both frames arrived.
+    let Node::Branch { then_body, .. } = &after[2] else {
+        panic!("expected the is_tuple branch at 2")
+    };
+    let Node::Branch { then_body: s, .. } = &then_body[4] else {
+        panic!("expected the length branch at 4")
+    };
+    assert_eq!(
+        &shape(s)[6..=7],
+        &[
+            "dip 4 { pick 0 is_symbol }".to_string(),
+            "dip 1 { pick 0 is_symbol }".to_string(),
+        ],
+        "both walked re-checks should sit at the top of the state sequence"
+    );
+    assert_eq!(
+        seq_arity(prog, &residue),
+        seq_arity(prog, &after),
+        "and the walk should preserve arity"
     );
 }
 
@@ -2217,6 +2311,24 @@ fn a_probe_run_twice_on_one_slot_runs_once() {
         "repeat(bu(each(dup_probe)))",
     );
     assert_eq!(shape(&body), vec!["pick 0", "is_symbol", "pick 0"]);
+
+    // The framed form, which is how two walked probes actually meet: equal
+    // frame picks at depths k and k+1 read the same slot, so the second
+    // frame is an in-place copy of the first's answer.
+    let body = tree(
+        r#"
+        #[arity(2, 4)]
+        sentence probe {
+            dip 1 { pick 0  is_symbol }
+            dip 2 { pick 0  is_symbol }
+        }
+    "#,
+        "repeat(bu(each(dup_probe_frame)))",
+    );
+    assert_eq!(
+        shape(&body),
+        vec!["dip 1 { pick 0 is_symbol }", "dip 1 { pick 0 }"]
+    );
 }
 
 #[test]
