@@ -1203,15 +1203,19 @@ mod tests {
     #[test]
     fn retain_condition_hands_each_arm_its_own_literal() {
         let w = [
+            op(Instruction::IsTuple),
             op(Instruction::Pick(0)),
             branch(vec![op(Instruction::Add)], vec![op(Instruction::Drop)]),
         ];
         assert_eq!(
             RetainCondition.rewrite(&prog(), &w),
-            Some(vec![branch(
-                vec![push(Value::Bool(true)), op(Instruction::Add)],
-                vec![push(Value::Bool(false)), op(Instruction::Drop)],
-            )])
+            Some(vec![
+                op(Instruction::IsTuple),
+                branch(
+                    vec![push(Value::Bool(true)), op(Instruction::Add)],
+                    vec![push(Value::Bool(false)), op(Instruction::Drop)],
+                )
+            ])
         );
     }
 
@@ -1222,7 +1226,11 @@ mod tests {
         assert_eq!(
             RetainCondition.rewrite(
                 &prog(),
-                &[op(Instruction::Pick(1)), branch(vec![], vec![])]
+                &[
+                    op(Instruction::IsTuple),
+                    op(Instruction::Pick(1)),
+                    branch(vec![], vec![])
+                ]
             ),
             None
         );
@@ -1230,7 +1238,45 @@ mod tests {
         assert_eq!(
             RetainCondition.rewrite(
                 &prog(),
-                &[op(Instruction::IsTuple), branch(vec![], vec![])]
+                &[
+                    op(Instruction::IsTuple),
+                    op(Instruction::IsTuple),
+                    branch(vec![], vec![])
+                ]
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn retain_condition_needs_the_condition_to_be_a_boolean() {
+        // A branch decides on any value, taking the else arm on anything that
+        // is not `Bool(true)`. `pick 0` says nothing about what the value is,
+        // so the else arm cannot be told it held `false`.
+        assert_eq!(
+            RetainCondition.rewrite(
+                &prog(),
+                &[
+                    op(Instruction::Pick(3)),
+                    op(Instruction::Pick(0)),
+                    branch(vec![], vec![])
+                ]
+            ),
+            None
+        );
+        // A call to a sentence that does return a bool is not enough either:
+        // that is a fact about the library, not about this node.
+        assert_eq!(
+            RetainCondition.rewrite(
+                &prog(),
+                &[
+                    Node::Call {
+                        depth: 0,
+                        target: bytecode::SentenceIndex::from(0)
+                    },
+                    op(Instruction::Pick(0)),
+                    branch(vec![], vec![])
+                ]
             ),
             None
         );
@@ -1244,13 +1290,14 @@ mod tests {
         // code that re-tests it.
         let inner = branch(vec![op(Instruction::Add)], vec![op(Instruction::Drop)]);
         let w = [
+            op(Instruction::IsTuple),
             op(Instruction::Pick(0)),
             branch(vec![inner.clone()], vec![]),
         ];
         let Some(out) = RetainCondition.rewrite(&prog(), &w) else {
             panic!("expected retain_condition to fire")
         };
-        let [Node::Branch { then_body, .. }] = &out[..] else {
+        let [_, Node::Branch { then_body, .. }] = &out[..] else {
             panic!("expected a branch")
         };
         assert_eq!(
@@ -2062,12 +2109,22 @@ impl Rule for FoldConstUnary {
     }
 }
 
-/// `pick 0 ; branch { A } { B }` becomes `branch { push true; A } { push false; B }`.
+/// `Y ; pick 0 ; branch { A } { B }` becomes
+/// `Y ; branch { push true; A } { push false; B }`, where `Y` yields a `Bool`.
 ///
-/// A branch may tell its arms what its condition was. The VM rejects a
-/// non-boolean condition, so an arm that runs at all ran because the value was
-/// exactly `true` or exactly `false` — and the copy `pick 0` left behind is
-/// therefore a literal, which the arm can push for itself.
+/// A branch may tell its arms what its condition was. `branch` takes the then
+/// arm exactly when the condition is `Bool(true)`, so *if the condition is
+/// known to be a boolean at all*, the copy `pick 0` left behind is `true` in
+/// one arm and `false` in the other — a literal, which the arm can push for
+/// itself.
+///
+/// The window is three wide because of that "if". A branch decides on any
+/// value, taking the else arm on anything that is not literally `Bool(true)`
+/// (see `docs/totality.md`), so an else arm may run holding a `42` or a
+/// symbol, and telling it the value was `false` would be a lie. [`BoolIdentity`]
+/// needs the same three-node view for the same reason and answers it with the
+/// same [`yields_bool`] predicate: two nodes cannot tell you what the value
+/// underneath is, and the node that produced it can.
 ///
 /// This is how a **path condition becomes a value**, and it is worth being
 /// precise about why that matters. A predicate in this language is written
@@ -2090,10 +2147,10 @@ impl Rule for RetainCondition {
         "retain_condition"
     }
     fn width(&self) -> usize {
-        2
+        3
     }
     fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
-        let [Node::Op(Instruction::Pick(0)), Node::Branch {
+        let [y, Node::Op(Instruction::Pick(0)), Node::Branch {
             then_origin,
             then_body,
             else_origin,
@@ -2102,6 +2159,11 @@ impl Rule for RetainCondition {
         else {
             return None;
         };
+        // Without this the else arm would be told `false` about a value that
+        // merely failed to be `true`.
+        if !yields_bool(y) {
+            return None;
+        }
 
         let arm = |lit: bool, body: &Vec<Node>| {
             let mut out = vec![Node::Op(Instruction::Push(Value::Bool(lit)))];
@@ -2109,12 +2171,15 @@ impl Rule for RetainCondition {
             out
         };
 
-        Some(vec![Node::Branch {
-            then_origin: then_origin.clone(),
-            then_body: arm(true, then_body),
-            else_origin: else_origin.clone(),
-            else_body: arm(false, else_body),
-        }])
+        Some(vec![
+            y.clone(),
+            Node::Branch {
+                then_origin: then_origin.clone(),
+                then_body: arm(true, then_body),
+                else_origin: else_origin.clone(),
+                else_body: arm(false, else_body),
+            },
+        ])
     }
 }
 
