@@ -3,19 +3,11 @@ use bytecode::{Instruction, Library, SentenceIndex, Value};
 pub mod runtime;
 pub use runtime::{Runtime, Environment, DefaultEnvironment};
 
-/// Whether a value counts as true.
-///
-/// Exactly `Bool(true)` and nothing else, applied per operand. Every
-/// boolean-shaped instruction — `not`, `and`, `or`, `branch`, `assert` — is
-/// defined through this, which is what makes De Morgan hold on all values
-/// rather than only on booleans. See `docs/totality.md`.
-fn truthy(v: &Value) -> bool {
-    *v == Value::Bool(true)
-}
+use bytecode::value::numeric_cmp;
 
 /// The junk value the untupling instructions hand back: `()`.
 fn unit() -> Value {
-    Value::Tuple(Vec::new())
+    Value::unit()
 }
 
 /// The junk value the numeric instructions hand back.
@@ -175,29 +167,20 @@ impl VM {
                     self.stack.push(Value::Bool(a == b));
                 }
                 Instruction::Greater => {
+                    // A non-numeric pair is not greater, and neither is a pair
+                    // holding a NaN — `numeric_cmp` reports both as unordered.
                     let b = self.pop()?;
                     let a = self.pop()?;
-                    let is_greater = match (a, b) {
-                        (Value::Int(x), Value::Int(y)) => x > y,
-                        (Value::Float(x), Value::Float(y)) => x > y,
-                        (Value::Int(x), Value::Float(y)) => (x as f64) > y,
-                        (Value::Float(x), Value::Int(y)) => x > (y as f64),
-                        // A non-numeric pair is not greater.
-                        _ => false,
-                    };
-                    self.stack.push(Value::Bool(is_greater));
+                    let ord = numeric_cmp(&a, &b);
+                    self.stack
+                        .push(Value::Bool(ord == Some(std::cmp::Ordering::Greater)));
                 }
                 Instruction::Less => {
                     let b = self.pop()?;
                     let a = self.pop()?;
-                    let is_less = match (a, b) {
-                        (Value::Int(x), Value::Int(y)) => x < y,
-                        (Value::Float(x), Value::Float(y)) => x < y,
-                        (Value::Int(x), Value::Float(y)) => (x as f64) < y,
-                        (Value::Float(x), Value::Int(y)) => x < (y as f64),
-                        _ => false,
-                    };
-                    self.stack.push(Value::Bool(is_less));
+                    let ord = numeric_cmp(&a, &b);
+                    self.stack
+                        .push(Value::Bool(ord == Some(std::cmp::Ordering::Less)));
                 }
                 Instruction::Add => {
                     let b = self.pop()?;
@@ -269,17 +252,17 @@ impl VM {
                 }
                 Instruction::Not => {
                     let val = self.pop()?;
-                    self.stack.push(Value::Bool(!truthy(&val)));
+                    self.stack.push(Value::Bool(!val.truthy()));
                 }
                 Instruction::And => {
                     let b = self.pop()?;
                     let a = self.pop()?;
-                    self.stack.push(Value::Bool(truthy(&a) && truthy(&b)));
+                    self.stack.push(Value::Bool(a.truthy() && b.truthy()));
                 }
                 Instruction::Or => {
                     let b = self.pop()?;
                     let a = self.pop()?;
-                    self.stack.push(Value::Bool(truthy(&a) || truthy(&b)));
+                    self.stack.push(Value::Bool(a.truthy() || b.truthy()));
                 }
                 Instruction::Negate => {
                     let val = self.pop()?;
@@ -309,7 +292,7 @@ impl VM {
                     // The then arm is reached by `Bool(true)` and nothing else;
                     // every other value takes the else arm, agreeing with junk
                     // being falsy everywhere.
-                    let b = truthy(&cond);
+                    let b = cond.truthy();
                     // Push the return address (the next instruction) to the call stack
                     self.call_stack.push(Frame { sentence: current_sentence, ip, hidden: Vec::new() });
                     if b {
@@ -328,7 +311,7 @@ impl VM {
                     // non-boolean is a failed assertion rather than a
                     // separate kind of error.
                     let val = self.pop()?;
-                    if !truthy(&val) {
+                    if !val.truthy() {
                         return Err(format!("Assertion failed: {:?} is not true", val));
                     }
                 }

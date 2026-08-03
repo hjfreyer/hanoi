@@ -453,9 +453,10 @@ fn a_type_test_leaves_the_drop_behind() {
 }
 
 #[test]
-fn a_partial_instruction_is_not_annihilated() {
-    // `add; drop` is not `drop; drop`: the add still rejects non-numeric
-    // operands, and cancelling it would discard that check.
+fn an_operator_takes_its_operands_with_it() {
+    // `add; drop` *is* `drop; drop`. It was not, while the add still rejected
+    // non-numeric operands and cancelling it would have discarded that check;
+    // with every data operation total there is no check left to discard.
     let (_prog, body) = tree_of(
         r#"
         sentence probe {
@@ -465,7 +466,23 @@ fn a_partial_instruction_is_not_annihilated() {
     "#,
         ANNIHILATE,
     );
-    assert_eq!(shape(&body), vec!["add", "drop"]);
+    assert_eq!(shape(&body), vec!["drop", "drop"]);
+}
+
+#[test]
+fn print_is_the_one_thing_a_drop_cannot_cancel() {
+    // Not a panic argument — running `print` and not running it differ in
+    // something other than the stack, which no amount of totality changes.
+    let (_prog, body) = tree_of(
+        r#"
+        sentence probe {
+            print
+            drop 0
+        }
+    "#,
+        ANNIHILATE,
+    );
+    assert_eq!(shape(&body), vec!["print", "drop"]);
 }
 
 #[test]
@@ -573,6 +590,58 @@ fn rewrites_preserve_arity_across_the_corpus() {
     }
 
     assert!(checked > 500, "expected the full corpus, saw {}", checked);
+}
+
+/// How often each rule of `all` fires across the whole corpus.
+///
+/// `docs/tactics.md` makes claims of the form "this rule fires on none of the
+/// corpus" and "this one fires on a third of it", and those are exactly the
+/// claims that go stale when a rule is generalized. Totalizing the VM widened
+/// `annihilate_drop` from a five-instruction whitelist to every single-output
+/// operator but `print`, so the interesting question is whether that reaches
+/// real code or only the tests written for it.
+///
+/// The assertion is one-sided on purpose: an exact count would be a tripwire
+/// on the corpus rather than on the rules.
+#[test]
+fn the_widened_annihilate_drop_reaches_real_code() {
+    let main = Path::new("../tests/main.hana");
+    let Ok(code) = fs::read_to_string(main) else {
+        return;
+    };
+    let library = bytecode::assemble_with_path(&code, main.parent()).unwrap();
+    let prog = Program::new(&library);
+
+    let mut fired = 0usize;
+    let mut sentences = 0usize;
+    for (s_idx, _) in library.names.iter_enumerated() {
+        let env = Env::new(&prog, 1_000_000, true);
+        let plain = run(
+            &prog,
+            build(&library, s_idx, &mut HashSet::new()),
+            "inline_all",
+        );
+        apply(&compile(ALL), &env, plain).unwrap();
+        let hits = env
+            .histogram()
+            .into_iter()
+            .find(|(name, _)| *name == "annihilate_drop")
+            .map_or(0, |(_, n)| n);
+        if hits > 0 {
+            sentences += 1;
+        }
+        fired += hits;
+    }
+
+    assert!(
+        fired > 0,
+        "annihilate_drop fired nowhere in the corpus, which is what it did \
+         before the whitelist was removed -- the generalization bought nothing"
+    );
+    println!(
+        "annihilate_drop: {} firings across {} sentences",
+        fired, sentences
+    );
 }
 
 /// Whether every dip in the tree hides at most one value.
@@ -931,12 +1000,17 @@ fn the_sharing_law_cannot_reach_across_a_branch() {
     // branch in between. `dup_natural` relates the two occurrences only when
     // they are in one sequence, and no rule moves the inner `untuple` out of
     // the arm — hoisting it would run it on the path that did not take the
-    // arm, and `untuple` is partial, so that invents a panic.
+    // arm, where it junk-normalizes a value that path goes on to use.
+    //
+    // Totalizing the VM did not unblock this. It changed the argument: the
+    // hoist used to invent a panic and now loses information instead. What
+    // would have closed it is a tagged junk value, and `docs/totality.md` says
+    // why there is not one.
     //
     // The resolution is not to find such a rule but to stop needing one:
     // `rebuild_copy` makes the value arrive already built, and `tuple n` is
-    // total where `untuple n` is not. See
-    // `the_whole_derivation_runs_on_the_blocked_shape`.
+    // total on the nose where `untuple n` is only total up to normalization.
+    // See `the_whole_derivation_runs_on_the_blocked_shape`.
     let (prog, before) = tree_of(
         r#"
         #[arity(1, 1)]

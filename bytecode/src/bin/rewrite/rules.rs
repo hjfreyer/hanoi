@@ -10,6 +10,8 @@
 //! whatever drives the rules, and is written once in [`crate::tactic`] rather
 //! than open-coded inside each of them.
 
+use bytecode::arity::op_arity;
+use bytecode::value::numeric_cmp;
 use bytecode::{Instruction, Value};
 
 use crate::arity::node_arity;
@@ -394,26 +396,32 @@ impl Rule for Fuse {
     }
 }
 
-/// Cancels a drop against the instruction that produced the value it drops.
+/// `X ; drop` becomes `drop^n`, where X has arity `(n -> 1)`.
 ///
-/// Only instructions that cannot panic qualify. `add` also leaves one value on
-/// top, but `add; drop` is not `drop; drop` — the add still rejects non-numeric
-/// operands, and cancelling it would throw that check away. `equal` is total in
-/// the VM but the Z3 model gives it a panic branch, so it is excluded too
-/// rather than have this tool assert an equivalence the verifier would not.
+/// Computing a value and throwing it away is throwing away the operands
+/// instead. That used to be true only of a whitelist — `push` and `pick`
+/// cancelled outright, the five `is_*` predicates left the drop behind, and
+/// `add; drop` was deliberately *not* `drop; drop`, because the add still
+/// rejected non-numeric operands and cancelling it would have discarded that
+/// check. Now that every data operation is total there is no check to discard,
+/// and one arity condition covers the lot (see `docs/totality.md`).
 ///
-/// Measure: node count.
+/// Two exceptions, and neither is about panics:
+///
+/// - `print` leaves one value on top like any other unary operator, but
+///   running it and not running it differ in something other than the stack.
+/// - `pick d` has arity `(d+1 -> d+2)`, so it is not of this shape at all. It
+///   gets its own answer — no drops, since it consumed nothing — which is the
+///   counit law of the comonoid [`CopyAssoc`] names.
+///
+/// `assert` and `assert_eq` fall out on their own: they leave nothing on top,
+/// so there is no drop to pair them with, and the rule cannot reach the three
+/// instructions that can still fail.
+///
+/// Measure: non-drop node count. The replacement is all drops, so firing takes
+/// one node out of the count even when it puts several in.
 #[derive(Debug)]
 pub(crate) struct AnnihilateDrop;
-
-/// What cancelling a `drop` against the instruction before it leaves behind.
-enum Annihilation {
-    /// Both go: the predecessor produced exactly what was dropped.
-    Both,
-    /// Only the predecessor goes: it consumed a value to make the dropped one,
-    /// so the drop stays and takes its input instead.
-    Predecessor,
-}
 
 impl Rule for AnnihilateDrop {
     fn name(&self) -> &'static str {
@@ -426,25 +434,24 @@ impl Rule for AnnihilateDrop {
         let [Node::Op(prev), Node::Op(Instruction::Drop)] = window else {
             return None;
         };
-        match annihilation(prev)? {
-            Annihilation::Both => Some(Vec::new()),
-            Annihilation::Predecessor => Some(vec![Node::Op(Instruction::Drop)]),
-        }
+        let drops = annihilation(prev)?;
+        Some(vec![Node::Op(Instruction::Drop); drops])
     }
 }
 
-fn annihilation(inst: &Instruction) -> Option<Annihilation> {
+/// How many drops replace `inst; drop`, or `None` if the pair does not cancel.
+fn annihilation(inst: &Instruction) -> Option<usize> {
     match inst {
-        // Neither can fail once the arity checker has passed, and each leaves
-        // exactly the value the drop removes.
-        Instruction::Push(_) | Instruction::Pick(_) => Some(Annihilation::Both),
-        // Total, but each consumes a value to produce the dropped one.
-        Instruction::IsInt
-        | Instruction::IsBool
-        | Instruction::IsFloat
-        | Instruction::IsSymbol
-        | Instruction::IsTuple => Some(Annihilation::Predecessor),
-        _ => None,
+        // Copying a value and discarding the copy: neither happened.
+        Instruction::Pick(_) => Some(0),
+        // The one operator for which running twice is not running once.
+        Instruction::Print => None,
+        // Everything that leaves exactly one value takes its inputs with it.
+        // `push` lands here too, at zero drops.
+        _ => match op_arity(inst) {
+            Some((n, 1)) => usize::try_from(n).ok(),
+            _ => None,
+        },
     }
 }
 
@@ -500,11 +507,17 @@ impl Rule for DistributeBranch {
     }
 }
 
-/// `push true ; branch { A } { B }` becomes `A`, and `push false` takes `B`.
+/// `push c ; branch { A } { B }` becomes the arm `c` selects.
 ///
-/// Only a literal `Bool` counts. The VM rejects a non-boolean condition, so
-/// folding `push 1 ; branch …` would erase a panic rather than preserve one —
-/// which is the same reason [`AnnihilateDrop`] will not touch `add`.
+/// **Any** literal folds, not only a `Bool`. A branch takes the then arm on
+/// `Bool(true)` and the else arm on everything else, so `push 1; branch` is
+/// decided just as firmly as `push false; branch` — it goes to the else arm.
+/// This used to be restricted to booleans because the VM rejected any other
+/// condition and folding would have erased a panic rather than preserved one;
+/// with the condition total there is nothing left to erase.
+///
+/// A *computed* condition still declines, which is the real content of the
+/// rule: it folds what is already decided, and a `pick` or an `is_int` is not.
 ///
 /// Measure: branch count. The node count can grow, since the chosen arm may be
 /// longer than the two nodes it replaces, but a branch is gone for good.
@@ -520,7 +533,7 @@ impl Rule for FoldBranch {
     }
     fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
         let [
-            Node::Op(Instruction::Push(Value::Bool(cond))),
+            cond,
             Node::Branch {
                 then_body,
                 else_body,
@@ -530,7 +543,7 @@ impl Rule for FoldBranch {
         else {
             return None;
         };
-        Some(if *cond {
+        Some(if pushed(cond)?.truthy() {
             then_body.clone()
         } else {
             else_body.clone()
@@ -785,7 +798,7 @@ mod tests {
     }
 
     #[test]
-    fn annihilate_cancels_a_total_producer_against_its_drop() {
+    fn annihilate_cancels_a_producer_against_its_drop() {
         assert_eq!(
             AnnihilateDrop.rewrite(&prog(), &[
                 op(Instruction::Push(Value::Int(1))),
@@ -800,13 +813,52 @@ mod tests {
     }
 
     #[test]
-    fn annihilate_leaves_the_drop_behind_for_a_type_test() {
+    fn annihilate_leaves_one_drop_per_input_the_operator_consumed() {
         // `is_int` consumes a value to make the dropped one, so the drop still
         // has to happen — it just takes the input instead.
         assert_eq!(
             AnnihilateDrop.rewrite(&prog(), &[op(Instruction::IsInt), op(Instruction::Drop)]),
             Some(vec![op(Instruction::Drop)])
         );
+        // A two-operand operator leaves two.
+        assert_eq!(
+            AnnihilateDrop.rewrite(&prog(), &[op(Instruction::Add), op(Instruction::Drop)]),
+            Some(vec![op(Instruction::Drop), op(Instruction::Drop)])
+        );
+        // And `tuple n` leaves n, which is where the count stops being one or
+        // two and the arity has to be looked up rather than remembered.
+        assert_eq!(
+            AnnihilateDrop.rewrite(&prog(), &[op(Instruction::Tuple(3)), op(Instruction::Drop)]),
+            Some(vec![
+                op(Instruction::Drop),
+                op(Instruction::Drop),
+                op(Instruction::Drop)
+            ])
+        );
+    }
+
+    #[test]
+    fn annihilate_declines_what_is_not_one_value_on_top() {
+        // `untuple 3` leaves three, so the drop takes only one of them.
+        assert_eq!(
+            AnnihilateDrop.rewrite(&prog(), &[op(Instruction::Untuple(3)), op(Instruction::Drop)]),
+            None
+        );
+        // `roll 2` leaves the same three values it took, rearranged.
+        assert_eq!(
+            AnnihilateDrop.rewrite(&prog(), &[op(Instruction::Roll(2)), op(Instruction::Drop)]),
+            None
+        );
+        // `assert` leaves nothing on top, so the three instructions that can
+        // still fail are out of this rule's reach on their own terms.
+        for inst in [Instruction::Assert, Instruction::AssertEqual, Instruction::Panic] {
+            assert_eq!(
+                AnnihilateDrop.rewrite(&prog(), &[op(inst.clone()), op(Instruction::Drop)]),
+                None,
+                "{:?} should not cancel",
+                inst
+            );
+        }
     }
 
     #[test]
@@ -893,17 +945,25 @@ mod tests {
     }
 
     #[test]
-    fn only_a_literal_bool_folds_a_branch() {
-        // The VM rejects a non-boolean condition, so folding `push 1; branch`
-        // would erase a panic instead of preserving one.
-        assert_eq!(
-            FoldBranch.rewrite(&prog(), &[
-                op(Instruction::Push(Value::Int(1))),
-                branch(vec![], vec![])
-            ]),
-            None
-        );
-        // And a condition that is computed rather than pushed is not constant.
+    fn any_literal_folds_a_branch_and_only_true_takes_the_then_arm() {
+        let arms = || {
+            branch(
+                vec![op(Instruction::Push(Value::Int(10)))],
+                vec![op(Instruction::Push(Value::Int(20)))],
+            )
+        };
+        // A non-boolean condition is decided rather than rejected: it goes to
+        // the else arm, along with everything that is not `Bool(true)`.
+        for v in [Value::Int(1), sym(1), Value::Tuple(Vec::new()), Value::Bool(false)] {
+            assert_eq!(
+                FoldBranch.rewrite(&prog(), &[push(v.clone()), arms()]),
+                Some(vec![op(Instruction::Push(Value::Int(20)))]),
+                "{:?} should take the else arm",
+                v
+            );
+        }
+        // And a condition that is computed rather than pushed is not constant,
+        // which is the part of the rule that was ever really about knowing.
         assert_eq!(
             FoldBranch.rewrite(&prog(), &[op(Instruction::IsInt), branch(vec![], vec![])]),
             None
@@ -977,19 +1037,29 @@ mod tests {
     }
 
     #[test]
-    fn annihilate_declines_a_partial_producer() {
-        // `add; drop` is not `drop; drop`: the add still rejects non-numeric
-        // operands, and cancelling it would discard that check.
+    fn annihilate_declines_only_print() {
+        // The whitelist is gone: `add; drop` *is* `drop; drop` now, since the
+        // add has no non-numeric operand left to reject. What survives is the
+        // one operator whose second run differs in something other than the
+        // stack.
         assert_eq!(
-            AnnihilateDrop.rewrite(&prog(), &[op(Instruction::Add), op(Instruction::Drop)]),
+            AnnihilateDrop.rewrite(&prog(), &[op(Instruction::Print), op(Instruction::Drop)]),
             None
         );
-        // `equal` is total in the VM, but the Z3 model gives it a panic branch,
-        // so the tool does not assert an equivalence the verifier would not.
-        assert_eq!(
-            AnnihilateDrop.rewrite(&prog(), &[op(Instruction::Equal), op(Instruction::Drop)]),
-            None
-        );
+        for inst in [
+            Instruction::Add,
+            Instruction::Equal,
+            Instruction::Divide,
+            Instruction::And,
+            Instruction::SymbolCharAt,
+        ] {
+            assert_eq!(
+                AnnihilateDrop.rewrite(&prog(), &[op(inst.clone()), op(Instruction::Drop)]),
+                Some(vec![op(Instruction::Drop), op(Instruction::Drop)]),
+                "{:?} should cancel into two drops",
+                inst
+            );
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -1042,25 +1112,33 @@ mod tests {
     }
 
     #[test]
-    fn fold_const_declines_an_operator_that_would_panic() {
-        // `push 1; push 2; and` is a panic, and `push false` is not one. The
-        // literals make the operands known, which is exactly what makes it
-        // knowable that this one must *not* fold.
+    fn fold_const_evaluates_rather_than_declining() {
+        // `push 1; push 2; and` used to be a panic and is now `false`: neither
+        // operand is `Bool(true)`, and `and` coerces each separately.
         assert_eq!(
             FoldConst.rewrite(
                 &prog(),
                 &[push(Value::Int(1)), push(Value::Int(2)), op(Instruction::And)]
             ),
-            None
+            Some(vec![push(Value::Bool(false))])
         );
         assert_eq!(
             FoldConst.rewrite(
                 &prog(),
-                &[push(sym(1)), push(sym(2)), op(Instruction::Less)]
+                &[push(Value::Int(1)), push(Value::Bool(true)), op(Instruction::Or)]
             ),
-            None
+            Some(vec![push(Value::Bool(true))])
         );
-        // Two booleans are fine.
+        // A non-numeric pair is not less, and not greater either.
+        for inst in [Instruction::Less, Instruction::Greater] {
+            assert_eq!(
+                FoldConst.rewrite(&prog(), &[push(sym(1)), push(sym(2)), op(inst.clone())]),
+                Some(vec![push(Value::Bool(false))]),
+                "{:?} on two symbols",
+                inst
+            );
+        }
+        // Two booleans still fold the obvious way.
         assert_eq!(
             FoldConst.rewrite(
                 &prog(),
@@ -1071,6 +1149,14 @@ mod tests {
                 ]
             ),
             Some(vec![push(Value::Bool(false))])
+        );
+        // And a mixed numeric pair compares, the way the VM does.
+        assert_eq!(
+            FoldConst.rewrite(
+                &prog(),
+                &[push(Value::Int(1)), push(Value::Float(1.5)), op(Instruction::Less)]
+            ),
+            Some(vec![push(Value::Bool(true))])
         );
     }
 
@@ -1086,7 +1172,7 @@ mod tests {
     }
 
     #[test]
-    fn fold_const_unary_answers_the_is_family_but_not_a_rejecting_one() {
+    fn fold_const_unary_answers_on_every_literal() {
         assert_eq!(
             FoldConstUnary.rewrite(&prog(), &[push(sym(1)), op(Instruction::IsSymbol)]),
             Some(vec![push(Value::Bool(true))])
@@ -1095,20 +1181,42 @@ mod tests {
             FoldConstUnary.rewrite(&prog(), &[push(Value::Int(3)), op(Instruction::IsSymbol)]),
             Some(vec![push(Value::Bool(false))])
         );
-        // `not` rejects a non-boolean, so it must not fold on one.
+        // The deliberate oddity, and the reason it is deliberate: a symbol is
+        // not `true`, so it is falsy, so `not` answers `true`.
         assert_eq!(
             FoldConstUnary.rewrite(&prog(), &[push(sym(1)), op(Instruction::Not)]),
-            None
+            Some(vec![push(Value::Bool(true))])
         );
         assert_eq!(
             FoldConstUnary.rewrite(&prog(), &[push(Value::Bool(true)), op(Instruction::Not)]),
             Some(vec![push(Value::Bool(false))])
         );
+        // `tuple_length` of a non-tuple is zero, which is what makes
+        // `rebuild_copy`'s guard decidable on a literal.
+        assert_eq!(
+            FoldConstUnary.rewrite(&prog(), &[push(sym(1)), op(Instruction::TupleLength)]),
+            Some(vec![push(Value::Int(0))])
+        );
+        assert_eq!(
+            FoldConstUnary.rewrite(
+                &prog(),
+                &[
+                    push(Value::Tuple(vec![Value::Int(1), Value::Int(2)])),
+                    op(Instruction::TupleLength)
+                ]
+            ),
+            Some(vec![push(Value::Int(2))])
+        );
+        // A computed operand is still not a literal.
+        assert_eq!(
+            FoldConstUnary.rewrite(&prog(), &[op(Instruction::Pick(0)), op(Instruction::Not)]),
+            None
+        );
     }
 
     #[test]
     fn bool_identity_drops_a_unit_and_only_when_the_operand_is_known_boolean() {
-        // `is_symbol` answers with a Bool or panics, so `&& true` adds nothing.
+        // `is_symbol` answers with a Bool, so `&& true` adds nothing.
         assert_eq!(
             BoolIdentity.rewrite(
                 &prog(),
@@ -1120,8 +1228,9 @@ mod tests {
             ),
             Some(vec![op(Instruction::IsSymbol)])
         );
-        // `pick 0` says nothing about the value, so the `and` is still the only
-        // thing rejecting a non-boolean and has to stay.
+        // `pick 0` says nothing about the value, so the `and` is still the
+        // only thing coercing it and has to stay: on a junk operand it answers
+        // `false`, which is not the operand.
         assert_eq!(
             BoolIdentity.rewrite(
                 &prog(),
@@ -1153,8 +1262,9 @@ mod tests {
 
     #[test]
     fn bool_identity_keeps_the_operand_in_the_absorbing_case() {
-        // `a && false` is `false` only on the runs where `a` happened at all,
-        // so the operand stays and a `drop` takes its place.
+        // `a && false` is `false` only on the runs where `a` happened at all
+        // -- `a` may be an `assert` -- so the operand stays and a `drop` takes
+        // its place.
         assert_eq!(
             BoolIdentity.rewrite(
                 &prog(),
@@ -1905,9 +2015,9 @@ mod tests {
             ),
             Some(Vec::new())
         );
-        // `untuple n; tuple n` is *not* a no-op: `untuple` is the instruction
-        // that checks the shape, so removing the pair would accept values the
-        // original rejected.
+        // `untuple n; tuple n` is *not* a no-op: it junk-normalizes, mapping
+        // every non-n-tuple to `((), ...)`. A real function, and not the
+        // identity, so the pair does not come out.
         assert_eq!(
             CancelTuple.rewrite(
                 &prog(),
@@ -1915,7 +2025,7 @@ mod tests {
             ),
             None
         );
-        // Mismatched widths are a panic, not a cancellation.
+        // Mismatched widths junk-normalize rather than cancelling.
         assert_eq!(
             CancelTuple.rewrite(
                 &prog(),
@@ -1994,10 +2104,16 @@ impl Rule for NoOp {
 // Values
 //
 // Everything above rearranges code without ever asking what a value *is*. The
-// rules below are the ones that do, and they all answer to the same
-// constraint: an instruction that rejects an operand is a check, and a rewrite
-// that removes the check has changed the program even when it has not changed
-// the result. `equal` is total and folds freely; `and` is not and does not.
+// rules below are the ones that do, and since every data operation is total
+// (see `docs/totality.md`) their job is arithmetic rather than negotiation:
+// folding a window of literals is running it, and the obligation is to agree
+// with the interpreter exactly — on junk as much as on anything else.
+//
+// What survives is a different constraint, and a sharper one. `truthy` is not
+// injective: `and`, `or` and `branch` collapse every non-`true` value onto one
+// answer, so a rule that hands a value *back* has to know it was a boolean to
+// begin with. That is what `yields_bool` is for, and why `bool_identity` and
+// `retain_condition` both take a three-node window.
 // ---------------------------------------------------------------------------
 
 /// The literal a node pushes, if it pushes one.
@@ -2008,11 +2124,13 @@ fn pushed(node: &Node) -> Option<&Value> {
     }
 }
 
-/// Whether this node always leaves a `Bool` on top, or panics.
+/// Whether this node always leaves a `Bool` on top.
 ///
-/// The point of the "or panics" is that a caller may then treat the value as a
-/// boolean without having to keep `and`'s type check alive separately: on every
-/// path where the check would have mattered, the node already failed.
+/// Every instruction listed is total and answers with a `Bool`, so a caller may
+/// treat what it produced as a boolean rather than as a value that merely
+/// happens to be falsy — which is the difference between `a && true = a` and
+/// `a && true = false`, and between an else arm learning `false` and an else
+/// arm being told a lie.
 ///
 /// Deliberately syntactic. A call to a sentence that happens to return a bool
 /// does not count — that is a fact about the library rather than about this
@@ -2042,14 +2160,16 @@ fn yields_bool(node: &Node) -> bool {
 /// `B ; push true ; and` becomes `B`, and the three other unit laws.
 ///
 /// `a && true = a` is only a rewrite of *this program* when `a` is known to be
-/// a boolean, because `and` rejects anything else and dropping it would erase
-/// that rejection. `B` supplying the operand is what licenses it, which is why
-/// the window is three wide: the two-node view `push true; and` cannot tell
-/// whether the value underneath was ever checked.
+/// a boolean. `and` no longer rejects anything, but it does *coerce*: on a
+/// junk `a` it answers `Bool(false)`, which is a different value from `a` even
+/// though it is the same truth. `B` supplying the operand is what licenses the
+/// rewrite, which is why the window is three wide — the two-node view
+/// `push true; and` cannot tell what the value underneath is.
 ///
-/// The absorbing cases go to `B; drop; push c` rather than to `push c`, for the
-/// same reason — `B` may panic, and `a && false` is only `false` on the runs
-/// where `a` existed.
+/// This is the shape of what totality did *not* buy. The absorbing cases still
+/// go to `B; drop; push c` rather than to `push c`, because `B` may be a
+/// `panic` or an `assert`, and `a && false` is only `false` on the runs where
+/// `a` happened at all.
 ///
 /// Measure: node count, counting the absorbing cases as level (2 nodes for 2)
 /// and relying on the `drop` they expose to be cancelled by `annihilate_drop`.
@@ -2092,19 +2212,22 @@ impl Rule for BoolIdentity {
 
 /// Evaluates an operator whose operands are already literals.
 ///
-/// Note carefully why this is allowed to fold `equal` when [`AnnihilateDrop`]
-/// is not. The objection there is that an operand may itself be a panic, which
-/// `equal` propagates and `drop; drop` would not — an operator's panic branch is
-/// reachable whenever its operands are arbitrary. **A literal is never a
-/// panic**, so with both operands pushed right here that branch cannot be
-/// taken, and the fold is an equality in the Z3 encoding and in the VM alike.
-/// The rule needs no view on which of the two is the real semantics.
+/// **Folding is evaluation.** Every operator here is a total function, so
+/// running it on two known values and pushing the answer is the same program;
+/// there is no operand it could have rejected and no check the fold could
+/// throw away. What the rule needs is not a licence but an obligation — to
+/// agree with the interpreter exactly, on junk as much as on anything else,
+/// which is why `and`/`or` go through [`Value::truthy`] and the comparisons
+/// through [`numeric_cmp`] rather than through a second reading of the same
+/// rules. Both live in `bytecode::value` for that reason.
 ///
-/// That still leaves the operators that reject perfectly ordinary values:
-/// `and`/`or` fold only on two booleans and the comparisons only on two
-/// numbers, since `push 1; push 2; and` is a panic and `push false` is not.
-/// `equal` rejects nothing, so it folds on any pair — which is what decides
+/// So `push 1; push 2; and` folds to `push false` (neither operand is
+/// `Bool(true)`), and `push idle; push thirsty; less` folds to `push false`
+/// (neither is a number). `equal` folds on any pair, which is what decides
 /// `push idle; push thirsty; equal` and collapses a symbol decision tree.
+///
+/// The arithmetic operators are simply not listed. Adding them would be a
+/// straightforward extension now, not a question about semantics.
 ///
 /// Measure: node count.
 #[derive(Debug)]
@@ -2123,23 +2246,15 @@ impl Rule for FoldConst {
         let Node::Op(inst) = op else { return None };
 
         let out = match inst {
-            // Rejects nothing: any two values compare.
             Instruction::Equal => Value::Bool(a == b),
-            Instruction::And | Instruction::Or => match (a, b) {
-                (Value::Bool(p), Value::Bool(q)) => Value::Bool(match inst {
-                    Instruction::And => *p && *q,
-                    _ => *p || *q,
-                }),
-                // Anything else is a panic, and a panic is not a value.
-                _ => return None,
-            },
-            Instruction::Greater | Instruction::Less => match (a, b) {
-                (Value::Int(p), Value::Int(q)) => Value::Bool(match inst {
-                    Instruction::Greater => p > q,
-                    _ => p < q,
-                }),
-                _ => return None,
-            },
+            Instruction::And => Value::Bool(a.truthy() && b.truthy()),
+            Instruction::Or => Value::Bool(a.truthy() || b.truthy()),
+            // Unordered covers both a non-numeric operand and a NaN, and both
+            // answer `false` to either comparison.
+            Instruction::Greater => {
+                Value::Bool(numeric_cmp(a, b) == Some(std::cmp::Ordering::Greater))
+            }
+            Instruction::Less => Value::Bool(numeric_cmp(a, b) == Some(std::cmp::Ordering::Less)),
             _ => return None,
         };
         Some(vec![Node::Op(Instruction::Push(out))])
@@ -2148,11 +2263,14 @@ impl Rule for FoldConst {
 
 /// Evaluates a one-operand operator applied to a literal.
 ///
-/// Same licence as [`FoldConst`]: the operand is a literal, so it is not a
-/// panic, so nothing the operator would propagate is in reach. The `is_*`
-/// family additionally rejects nothing — it asks a question about the value it
-/// is given rather than demanding a particular one — so it folds on any
-/// literal, while `not` and `tuple_length` fold only on the shape they accept.
+/// Same story as [`FoldConst`]: these are total functions, so folding is
+/// running them. Every case answers on every literal — `not` through
+/// [`Value::truthy`], which makes `push sym; not` fold to `push true`, and
+/// `tuple_length` to zero on anything that is not a tuple, which is what lets
+/// [`RebuildCopy`]'s guard be decided when its subject is a literal.
+///
+/// `symbol_len` and `negate` are simply not listed, the same way the
+/// arithmetic operators are absent from `fold_const`.
 ///
 /// Measure: node count.
 #[derive(Debug)]
@@ -2170,14 +2288,17 @@ impl Rule for FoldConstUnary {
         let a = pushed(x)?;
         let Node::Op(inst) = op else { return None };
 
-        let out = match (inst, a) {
-            (Instruction::IsInt, _) => Value::Bool(matches!(a, Value::Int(_))),
-            (Instruction::IsBool, _) => Value::Bool(matches!(a, Value::Bool(_))),
-            (Instruction::IsFloat, _) => Value::Bool(matches!(a, Value::Float(_))),
-            (Instruction::IsSymbol, _) => Value::Bool(matches!(a, Value::Symbol(_))),
-            (Instruction::IsTuple, _) => Value::Bool(matches!(a, Value::Tuple(_))),
-            (Instruction::Not, Value::Bool(p)) => Value::Bool(!p),
-            (Instruction::TupleLength, Value::Tuple(t)) => Value::Int(t.len() as i64),
+        let out = match inst {
+            Instruction::IsInt => Value::Bool(matches!(a, Value::Int(_))),
+            Instruction::IsBool => Value::Bool(matches!(a, Value::Bool(_))),
+            Instruction::IsFloat => Value::Bool(matches!(a, Value::Float(_))),
+            Instruction::IsSymbol => Value::Bool(matches!(a, Value::Symbol(_))),
+            Instruction::IsTuple => Value::Bool(matches!(a, Value::Tuple(_))),
+            Instruction::Not => Value::Bool(!a.truthy()),
+            Instruction::TupleLength => Value::Int(match a {
+                Value::Tuple(t) => t.len() as i64,
+                _ => 0,
+            }),
             _ => return None,
         };
         Some(vec![Node::Op(Instruction::Push(out))])
@@ -2408,11 +2529,10 @@ impl Rule for SpecializeEqual {
 /// apart into three. At `m = 0` there are no picks at all and `X; dip 0 { X }`
 /// simply loses its first copy.
 ///
-/// Panic behaviour is preserved rather than merely respected: `X` runs on the
-/// copy first, so where the left side panics it does so on exactly the value
-/// the right side hands to its single `X`. `print` is excluded, since it is the
-/// one instruction for which running twice and running once differ in something
-/// other than the stack.
+/// `X` runs on the copy first, so where the left side fails — `X` may contain
+/// an `assert` — it does so on exactly the value the right side hands to its
+/// single `X`. `print` is excluded, since it is the one instruction for which
+/// running twice and running once differ in something other than the stack.
 ///
 /// Measure: node count, since `m` picks and one `X` replace two `X`s and a
 /// `pick` only when `m <= 1`; for larger `m` the measure is the number of
@@ -2693,8 +2813,10 @@ impl Rule for RebuildCopy {
 /// reason — a rule that only holds inside an arm cannot see anything outside
 /// one. Note that the reverse direction, hoisting an `X` *out* of a single arm,
 /// is **not** available and is not merely missing: it would run `X` on the path
-/// that did not take that arm, and where `X` is partial — `untuple n` is — that
-/// invents a panic the original did not have.
+/// that did not take that arm, and `untuple n` junk-normalizes what it is
+/// given, so the other path would go on with a value the original left alone.
+/// Totality changed the argument here without changing the conclusion — it used
+/// to be that the hoist invented a panic.
 ///
 /// Never put this and `factor_branch` in one `repeat`; they are inverses in the
 /// same way `collapse` and `expand` are.
@@ -2764,10 +2886,11 @@ impl Rule for UnfactorBranch {
 /// `tuple n ; untuple n` becomes nothing.
 ///
 /// Building a tuple and immediately taking it apart returns the stack to
-/// exactly where it started, and `untuple n` cannot reject what `tuple n` just
-/// built. The converse — `untuple n; tuple n` — is *not* a no-op and is not
-/// included: `untuple` is the instruction that checks the shape, so removing
-/// the pair would accept values the original rejected.
+/// exactly where it started. The converse — `untuple n; tuple n` — is *not* a
+/// no-op and is not included, and totalizing the VM did not change that: it
+/// used to reject every value that was not an n-tuple, and now it maps each of
+/// them to `((), …, ())` instead. Still a real function, still not the
+/// identity.
 ///
 /// Measure: node count.
 #[derive(Debug)]

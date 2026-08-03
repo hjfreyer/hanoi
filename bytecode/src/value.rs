@@ -28,6 +28,45 @@ pub enum Value {
     Symbol(Symbol),
 }
 
+impl Value {
+    /// Whether this value counts as true: exactly `Bool(true)` and nothing
+    /// else.
+    ///
+    /// Every boolean-shaped instruction — `not`, `and`, `or`, `branch`,
+    /// `assert` — is defined through this, applied **per operand**. That is
+    /// what makes De Morgan hold on all values rather than only on booleans,
+    /// and it is why `not junk` is `true`. See `docs/totality.md`.
+    ///
+    /// It lives here rather than in the VM because `bin/rewrite` folds the
+    /// same operators and has to agree with the interpreter exactly; a second
+    /// copy of the definition would be a silent hazard rather than a
+    /// duplication, in the same way [`crate::arity::op_arity`] is shared.
+    pub fn truthy(&self) -> bool {
+        *self == Value::Bool(true)
+    }
+
+    /// The empty tuple, which is the junk the untupling instructions hand
+    /// back.
+    pub fn unit() -> Value {
+        Value::Tuple(Vec::new())
+    }
+}
+
+/// Compares two values numerically, promoting a mixed `Int`/`Float` pair.
+///
+/// `None` covers both reasons an ordering may not exist — an operand that is
+/// not a number at all, and a NaN — because `greater` and `less` answer
+/// `false` in either case and have no need to tell them apart.
+pub fn numeric_cmp(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
+    match (a, b) {
+        (Value::Int(x), Value::Int(y)) => Some(x.cmp(y)),
+        (Value::Float(x), Value::Float(y)) => x.partial_cmp(y),
+        (Value::Int(x), Value::Float(y)) => (*x as f64).partial_cmp(y),
+        (Value::Float(x), Value::Int(y)) => x.partial_cmp(&(*y as f64)),
+        _ => None,
+    }
+}
+
 impl fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
