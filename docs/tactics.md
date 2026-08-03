@@ -476,10 +476,16 @@ family peels retained check chains apart, and the discharge pair erases a
 guard's re-check inside the window that holds the guard.
 
 `emit_does_pre_and_post_reduces_to_constant_true` is the whole theorem, and
-its `qed` script is the proof — an aimed derivation in which any step that
-misses fails the whole tactic, so the test passing means every firing landed
+its proof is checked in at the repository root as **`emit_theorem.tac`** — an
+aimed derivation in which any step that misses fails the whole tactic, so the
+test (which includes the file verbatim) passing means every firing landed
 exactly where the script says and the final term is literally
-`drop; push true`. The endgame it scripts is the sharing the doc long called
+`drop; push true`. Replay it yourself:
+
+```
+cargo run --bin rewrite -- tests emit_does_pre_and_post \
+    --tactics emit_theorem.tac -t 'opened; endgame; qed' --check
+``` The endgame it scripts is the sharing the doc long called
 "a separate problem": the thirsty postcondition re-checks `is_symbol` on
 values whose *copies* the precondition checked, across branches on those
 checks' results. The resolution is all construction, no facts. `copy_comm`
