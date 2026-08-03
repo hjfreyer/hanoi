@@ -6,7 +6,6 @@ pub mod lower;
 pub mod opcode;
 pub mod resolve;
 pub mod value;
-pub mod safety;
 
 pub use arity::check_arities;
 pub use assembly::{assemble, assemble_with_path};

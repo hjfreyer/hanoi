@@ -225,8 +225,10 @@ sentence is declared in* — no special case for type checks.
 Resolution is `ModuleTree::resolve(scope, path)` — one entry point, one set of
 rules, for every path in the language.
 
-Phase 5 then runs `check_arities` over the resulting `Library`; the z3
-precondition/postcondition/total checks run separately via `bin/typecheck`.
+Phase 5 then runs `check_arities` over the resulting `Library`. A Z3-backed
+precondition/postcondition/total checker previously ran separately via
+`bin/typecheck`; it has been removed from the codebase for now (see
+[docs/typecheck.md](typecheck.md) for the design).
 
 ## Where `dip` fits
 
