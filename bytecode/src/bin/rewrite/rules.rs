@@ -1566,34 +1566,61 @@ mod tests {
         );
     }
 
+    /// The guard `rebuild_copy` puts in front of its payload.
+    fn tuple_guard(n: usize) -> Vec<Node> {
+        vec![
+            op(Instruction::Pick(0)),
+            op(Instruction::TupleLength),
+            push(Value::Int(n as i64)),
+            op(Instruction::Equal),
+        ]
+    }
+
+    fn unit() -> Value {
+        Value::Tuple(Vec::new())
+    }
+
     #[test]
     fn rebuild_copy_destructures_the_value_and_rebuilds_the_copy() {
-        assert_eq!(
-            RebuildCopy.rewrite(
-                &prog(),
-                &[op(Instruction::Pick(0)), op(Instruction::Untuple(3))]
-            ),
-            Some(vec![
+        let mut want = tuple_guard(3);
+        want.push(branch(
+            vec![
                 op(Instruction::Untuple(3)),
                 op(Instruction::Pick(2)),
                 op(Instruction::Pick(2)),
                 op(Instruction::Pick(2)),
                 dip(3, vec![op(Instruction::Tuple(3))]),
-            ])
-        );
+            ],
+            vec![push(unit()), push(unit()), push(unit())],
+        ));
+        let Some(got) = RebuildCopy.rewrite(
+            &prog(),
+            &[op(Instruction::Pick(0)), op(Instruction::Untuple(3))],
+        ) else {
+            panic!("expected rebuild_copy to fire")
+        };
+        assert_eq!(shape_of(&got), shape_of(&want));
+
         // n = 1 is the degenerate but real case.
-        assert_eq!(
-            RebuildCopy.rewrite(
-                &prog(),
-                &[op(Instruction::Pick(0)), op(Instruction::Untuple(1))]
-            ),
-            Some(vec![
+        let mut want = tuple_guard(1);
+        want.push(branch(
+            vec![
                 op(Instruction::Untuple(1)),
                 op(Instruction::Pick(0)),
                 dip(1, vec![op(Instruction::Tuple(1))]),
-            ])
-        );
-        // A 0-tuple has no parts to share.
+            ],
+            vec![push(unit())],
+        ));
+        let Some(got) = RebuildCopy.rewrite(
+            &prog(),
+            &[op(Instruction::Pick(0)), op(Instruction::Untuple(1))],
+        ) else {
+            panic!("expected rebuild_copy to fire")
+        };
+        assert_eq!(shape_of(&got), shape_of(&want));
+
+        // A 0-tuple has no parts to share, and the guard could not tell one
+        // from junk anyway.
         assert_eq!(
             RebuildCopy.rewrite(
                 &prog(),
@@ -1613,17 +1640,65 @@ mod tests {
 
     #[test]
     fn rebuild_copy_settles() {
-        // Its own output contains no `pick 0; untuple n`, so `each` terminates
-        // rather than growing the term forever.
+        // Its own output contains no `pick 0; untuple n` -- neither at the top
+        // level nor in an arm, which is what the `push ()`s in the else arm buy
+        // over restating the input there. So `each` terminates rather than
+        // growing the term forever.
         let out = RebuildCopy
             .rewrite(
                 &prog(),
                 &[op(Instruction::Pick(0)), op(Instruction::Untuple(2))],
             )
             .expect("should fire");
-        for w in out.windows(2) {
-            assert_eq!(RebuildCopy.rewrite(&prog(), w), None, "re-fired on {:?}", w);
+        for nodes in sequences(&out) {
+            for w in nodes.windows(2) {
+                assert_eq!(RebuildCopy.rewrite(&prog(), w), None, "re-fired on {:?}", w);
+            }
         }
+    }
+
+    /// Every sequence in a tree: the top level, plus each arm and dip body.
+    fn sequences(nodes: &[Node]) -> Vec<Vec<Node>> {
+        let mut out = vec![nodes.to_vec()];
+        for node in nodes {
+            match node {
+                Node::Dip { body, .. } => out.extend(sequences(body)),
+                Node::Branch {
+                    then_body,
+                    else_body,
+                    ..
+                } => {
+                    out.extend(sequences(then_body));
+                    out.extend(sequences(else_body));
+                }
+                _ => {}
+            }
+        }
+        out
+    }
+
+    /// A tree rendered as text, so a mismatch reads as one.
+    fn shape_of(nodes: &[Node]) -> String {
+        nodes
+            .iter()
+            .map(|node| match node {
+                Node::Op(i) => format!("{}", i),
+                Node::Dip { depth, body, .. } => {
+                    format!("dip {} {{ {} }}", depth, shape_of(body))
+                }
+                Node::Branch {
+                    then_body,
+                    else_body,
+                    ..
+                } => format!(
+                    "branch {{ {} }} {{ {} }}",
+                    shape_of(then_body),
+                    shape_of(else_body)
+                ),
+                Node::Call { depth, target } => format!("call {} #{}", depth, usize::from(*target)),
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 
     #[test]
@@ -2492,25 +2567,49 @@ impl Rule for CopyConst {
     }
 }
 
-/// `pick 0 ; untuple n` becomes `untuple n ; (pick (n-1))^n ; dip n { tuple n }`.
+/// `pick 0 ; untuple n` becomes, for `n >= 1`,
+///
+/// ```text
+/// pick 0; tuple_length; push n; equal;
+/// branch { untuple n; (pick (n-1))^n; dip n { tuple n } }
+///        { (push ())^n }
+/// ```
 ///
 /// Instead of keeping the value and taking a copy apart, take the value apart
-/// and **rebuild** the copy. Both sides leave `[x, e(n-1) .. e0]` and both panic
-/// on exactly the inputs where `x` is not an n-tuple, so the rewrite asks
-/// nothing of `x` — but it changes what the surviving `x` *is*, from an opaque
-/// value into a `tuple n` applied to parts that are now on the stack.
+/// and **rebuild** the copy. That changes what the surviving `x` *is*, from an
+/// opaque value into a `tuple n` applied to parts that are now on the stack.
 ///
-/// That is the whole point, and it is worth being clear that it is a proof
-/// technique rather than a simplification. The problem it addresses is that a
-/// predicate consumes a copy while the real work destructures the original, with
-/// a branch in between that nothing can hoist across, because `untuple` is
-/// partial and hoisting it would run it on the path that did not take the arm.
-/// Knowing that path is safe needs a fact several branches out — but no fact is
-/// needed if the value arrives at the branch *already built*: `tuple n` is
-/// total, so [`UnfactorBranch`] may push it into both arms, and in the arm that
-/// takes it apart again [`CancelTuple`] removes both. A window that sees
+/// It is a proof technique rather than a simplification. The problem it
+/// addresses is that a predicate consumes a copy while the real work
+/// destructures the original, with a branch in between that nothing can hoist
+/// across. Knowing the hoist is safe needs a fact several branches out — but no
+/// fact is needed if the value arrives at the branch *already built*: `tuple n`
+/// is total, so [`UnfactorBranch`] may push it into both arms, and in the arm
+/// that takes it apart again [`CancelTuple`] removes both. A window that sees
 /// `tuple n; untuple n` needs to know nothing about where the value came from.
 /// **The construction is the proof.**
+///
+/// ## Why the guard
+///
+/// The rule used to be the bare equation `pick 0; untuple n` ==
+/// `untuple n; (pick (n-1))^n; dip n { tuple n }`, justified by both sides
+/// panicking on exactly the inputs where `x` is not an n-tuple. There is no
+/// panic left to agree about (see `docs/totality.md`), and without it the two
+/// sides visibly differ: the left keeps `x`, and the right hands back
+/// `untuple n; tuple n` of `x`, which on junk is `((), …, ())`. The old rule
+/// was *relying* on partiality to hide a normalization, and is unsound the
+/// moment the operators become total.
+///
+/// Untupling junk is untagged, so nothing recovers `x` from the parts and the
+/// rule has to test instead. The guard needs no `is_tuple` in front of it:
+/// `tuple_length` of a non-tuple is `Int 0`, which fails `= n` for every
+/// `n >= 1` — and `n = 0` is declined anyway, a 0-tuple having no parts to
+/// share.
+///
+/// The else arm needs no `untuple` either. In that arm the answer is *known* to
+/// be n copies of `()`, which is the totality contract paying for the guard it
+/// just demanded — and it is what keeps the measure below true, since an else
+/// arm holding `pick 0; untuple n` would hand the rule its own input back.
 ///
 /// The rebuild is framed as `dip n { tuple n }` rather than emitted with rolls
 /// for two reasons: it rebuilds the lower copy where it already sits, and it
@@ -2518,7 +2617,9 @@ impl Rule for CopyConst {
 /// branch.
 ///
 /// This makes the term bigger and belongs in no normalizing pass. Aiming it is
-/// a caller's job.
+/// a caller's job — and now more than before, since the payload sits inside an
+/// arm and something has to bring the consumer in beside it. That something is
+/// [`DistributeBranch`].
 ///
 /// Measure: the number of `pick 0; untuple n` adjacencies, which this strictly
 /// decreases — its own output contains none.
@@ -2536,21 +2637,41 @@ impl Rule for RebuildCopy {
         let [Node::Op(Instruction::Pick(0)), Node::Op(Instruction::Untuple(n))] = window else {
             return None;
         };
-        // A 0-tuple has no parts to share, so there would be nothing to gain.
+        // A 0-tuple has no parts to share, so there would be nothing to gain —
+        // and the guard below could not tell one from junk anyway.
         if *n == 0 {
             return None;
         }
+        let n = *n;
 
-        let mut out = vec![Node::Op(Instruction::Untuple(*n))];
+        let mut rebuilt = vec![Node::Op(Instruction::Untuple(n))];
         // Copy all `n` parts, each reaching back past the copies already made.
-        out.extend((0..*n).map(|_| Node::Op(Instruction::Pick(*n - 1))));
+        rebuilt.extend((0..n).map(|_| Node::Op(Instruction::Pick(n - 1))));
         // Rebuild the lower copy in place, under the parts just copied.
-        out.push(Node::Dip {
-            depth: *n,
+        rebuilt.push(Node::Dip {
+            depth: n,
             origins: Vec::new(),
-            body: vec![Node::Op(Instruction::Tuple(*n))],
+            body: vec![Node::Op(Instruction::Tuple(n))],
         });
-        Some(out)
+
+        // Off the guard, untupling gives n copies of `()` and the value is
+        // untouched, so the arm can say that outright.
+        let junk = (0..n)
+            .map(|_| Node::Op(Instruction::Push(Value::Tuple(Vec::new()))))
+            .collect();
+
+        Some(vec![
+            Node::Op(Instruction::Pick(0)),
+            Node::Op(Instruction::TupleLength),
+            Node::Op(Instruction::Push(Value::Int(n as i64))),
+            Node::Op(Instruction::Equal),
+            Node::Branch {
+                then_origin: "is an n-tuple".to_string(),
+                then_body: rebuilt,
+                else_origin: "is not".to_string(),
+                else_body: junk,
+            },
+        ])
     }
 }
 

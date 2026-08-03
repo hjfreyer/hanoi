@@ -3,6 +3,26 @@ use bytecode::{Instruction, Library, SentenceIndex, Value};
 pub mod runtime;
 pub use runtime::{Runtime, Environment, DefaultEnvironment};
 
+/// Whether a value counts as true.
+///
+/// Exactly `Bool(true)` and nothing else, applied per operand. Every
+/// boolean-shaped instruction — `not`, `and`, `or`, `branch`, `assert` — is
+/// defined through this, which is what makes De Morgan hold on all values
+/// rather than only on booleans. See `docs/totality.md`.
+fn truthy(v: &Value) -> bool {
+    *v == Value::Bool(true)
+}
+
+/// The junk value the untupling instructions hand back: `()`.
+fn unit() -> Value {
+    Value::Tuple(Vec::new())
+}
+
+/// The junk value the numeric instructions hand back.
+fn zero() -> Value {
+    Value::Int(0)
+}
+
 /// A pending return: where to resume, plus any values `Dip` hid from the callee.
 ///
 /// `hidden` is empty for `Jump` and `Branch`, which give the callee the top of
@@ -68,7 +88,6 @@ impl VM {
         }
         Ok(&self.stack[self.stack.len() - 1 - offset])
     }
-
 
 
     /// Executes sentences in the library starting with the given `start_sentence`.
@@ -163,7 +182,8 @@ impl VM {
                         (Value::Float(x), Value::Float(y)) => x > y,
                         (Value::Int(x), Value::Float(y)) => (x as f64) > y,
                         (Value::Float(x), Value::Int(y)) => x > (y as f64),
-                        (v1, v2) => return Err(format!("Cannot compare Greater between non-numeric values {} and {}", v1, v2)),
+                        // A non-numeric pair is not greater.
+                        _ => false,
                     };
                     self.stack.push(Value::Bool(is_greater));
                 }
@@ -175,7 +195,7 @@ impl VM {
                         (Value::Float(x), Value::Float(y)) => x < y,
                         (Value::Int(x), Value::Float(y)) => (x as f64) < y,
                         (Value::Float(x), Value::Int(y)) => x < (y as f64),
-                        (v1, v2) => return Err(format!("Cannot compare Less between non-numeric values {} and {}", v1, v2)),
+                        _ => false,
                     };
                     self.stack.push(Value::Bool(is_less));
                 }
@@ -187,7 +207,7 @@ impl VM {
                         (Value::Float(x), Value::Float(y)) => Value::Float(x + y),
                         (Value::Int(x), Value::Float(y)) => Value::Float((x as f64) + y),
                         (Value::Float(x), Value::Int(y)) => Value::Float(x + (y as f64)),
-                        (v1, v2) => return Err(format!("Cannot add non-numeric values {} and {}", v1, v2)),
+                        _ => zero(),
                     };
                     self.stack.push(res);
                 }
@@ -199,7 +219,7 @@ impl VM {
                         (Value::Float(x), Value::Float(y)) => Value::Float(x - y),
                         (Value::Int(x), Value::Float(y)) => Value::Float((x as f64) - y),
                         (Value::Float(x), Value::Int(y)) => Value::Float(x - (y as f64)),
-                        (v1, v2) => return Err(format!("Cannot subtract non-numeric values {} and {}", v1, v2)),
+                        _ => zero(),
                     };
                     self.stack.push(res);
                 }
@@ -211,7 +231,7 @@ impl VM {
                         (Value::Float(x), Value::Float(y)) => Value::Float(x * y),
                         (Value::Int(x), Value::Float(y)) => Value::Float((x as f64) * y),
                         (Value::Float(x), Value::Int(y)) => Value::Float(x * (y as f64)),
-                        (v1, v2) => return Err(format!("Cannot multiply non-numeric values {} and {}", v1, v2)),
+                        _ => zero(),
                     };
                     self.stack.push(res);
                 }
@@ -219,21 +239,18 @@ impl VM {
                     let b = self.pop()?;
                     let a = self.pop()?;
                     let res = match (a, b) {
-                        (Value::Int(x), Value::Int(y)) => {
-                            if y == 0 {
-                                return Err("Division by zero".to_string());
-                            }
-                            Value::Int(x / y)
-                        }
+                        // Integer division by zero is zero, following Lean.
+                        // `wrapping_div` additionally keeps `i64::MIN / -1`
+                        // from being a host-level overflow.
+                        (Value::Int(_), Value::Int(0)) => zero(),
+                        (Value::Int(x), Value::Int(y)) => Value::Int(x.wrapping_div(y)),
+                        // The float world is uniformly IEEE: an `Int` divisor
+                        // coerces like any other mixed operand rather than
+                        // being an excuse to leave it.
                         (Value::Float(x), Value::Float(y)) => Value::Float(x / y),
                         (Value::Int(x), Value::Float(y)) => Value::Float((x as f64) / y),
-                        (Value::Float(x), Value::Int(y)) => {
-                            if y == 0 {
-                                return Err("Division by zero".to_string());
-                            }
-                            Value::Float(x / (y as f64))
-                        }
-                        (v1, v2) => return Err(format!("Cannot divide non-numeric values {} by {}", v1, v2)),
+                        (Value::Float(x), Value::Int(y)) => Value::Float(x / (y as f64)),
+                        _ => zero(),
                     };
                     self.stack.push(res);
                 }
@@ -241,56 +258,35 @@ impl VM {
                     let b = self.pop()?;
                     let a = self.pop()?;
                     let res = match (a, b) {
-                        (Value::Int(x), Value::Int(y)) => {
-                            if y == 0 {
-                                return Err("Modulo by zero".to_string());
-                            }
-                            Value::Int(x % y)
-                        }
+                        (Value::Int(_), Value::Int(0)) => zero(),
+                        (Value::Int(x), Value::Int(y)) => Value::Int(x.wrapping_rem(y)),
                         (Value::Float(x), Value::Float(y)) => Value::Float(x % y),
                         (Value::Int(x), Value::Float(y)) => Value::Float((x as f64) % y),
-                        (Value::Float(x), Value::Int(y)) => {
-                            if y == 0 {
-                                return Err("Modulo by zero".to_string());
-                            }
-                            Value::Float(x % (y as f64))
-                        }
-                        (v1, v2) => return Err(format!("Cannot modulo non-numeric values {} by {}", v1, v2)),
+                        (Value::Float(x), Value::Int(y)) => Value::Float(x % (y as f64)),
+                        _ => zero(),
                     };
                     self.stack.push(res);
                 }
                 Instruction::Not => {
                     let val = self.pop()?;
-                    let b = match val {
-                        Value::Bool(b) => b,
-                        v => return Err(format!("Expected boolean operand on Not, found {:?}", v)),
-                    };
-                    self.stack.push(Value::Bool(!b));
+                    self.stack.push(Value::Bool(!truthy(&val)));
                 }
                 Instruction::And => {
-                    let b_val = self.pop()?;
-                    let a_val = self.pop()?;
-                    let (a, b) = match (a_val, b_val) {
-                        (Value::Bool(a), Value::Bool(b)) => (a, b),
-                        (v1, v2) => return Err(format!("Expected boolean operands on And, found {:?} and {:?}", v1, v2)),
-                    };
-                    self.stack.push(Value::Bool(a && b));
+                    let b = self.pop()?;
+                    let a = self.pop()?;
+                    self.stack.push(Value::Bool(truthy(&a) && truthy(&b)));
                 }
                 Instruction::Or => {
-                    let b_val = self.pop()?;
-                    let a_val = self.pop()?;
-                    let (a, b) = match (a_val, b_val) {
-                        (Value::Bool(a), Value::Bool(b)) => (a, b),
-                        (v1, v2) => return Err(format!("Expected boolean operands on Or, found {:?} and {:?}", v1, v2)),
-                    };
-                    self.stack.push(Value::Bool(a || b));
+                    let b = self.pop()?;
+                    let a = self.pop()?;
+                    self.stack.push(Value::Bool(truthy(&a) || truthy(&b)));
                 }
                 Instruction::Negate => {
                     let val = self.pop()?;
                     let res = match val {
                         Value::Int(x) => Value::Int(x.wrapping_neg()),
                         Value::Float(x) => Value::Float(-x),
-                        v => return Err(format!("Cannot negate non-numeric value: {}", v)),
+                        _ => zero(),
                     };
                     self.stack.push(res);
                 }
@@ -310,10 +306,10 @@ impl VM {
                 }
                 Instruction::Branch(then_target, else_target) => {
                     let cond = self.pop()?;
-                    let b = match cond {
-                        Value::Bool(b) => b,
-                        v => return Err(format!("Expected boolean condition on Branch, found {:?}", v)),
-                    };
+                    // The then arm is reached by `Bool(true)` and nothing else;
+                    // every other value takes the else arm, agreeing with junk
+                    // being falsy everywhere.
+                    let b = truthy(&cond);
                     // Push the return address (the next instruction) to the call stack
                     self.call_stack.push(Frame { sentence: current_sentence, ip, hidden: Vec::new() });
                     if b {
@@ -327,13 +323,13 @@ impl VM {
                     return Err("Panic instruction executed".to_string());
                 }
                 Instruction::Assert => {
+                    // One of the three instructions that may still fail, and
+                    // it fails on anything that is not `Bool(true)` — a
+                    // non-boolean is a failed assertion rather than a
+                    // separate kind of error.
                     let val = self.pop()?;
-                    let b = match val {
-                        Value::Bool(b) => b,
-                        v => return Err(format!("Expected boolean operand on Assert, found {:?}", v)),
-                    };
-                    if !b {
-                        return Err(format!("Assertion failed: value is false"));
+                    if !truthy(&val) {
+                        return Err(format!("Assertion failed: {:?} is not true", val));
                     }
                 }
                 Instruction::AssertEqual => {
@@ -353,16 +349,19 @@ impl VM {
                     self.stack.push(Value::Tuple(elements));
                 }
                 Instruction::Untuple(n) => {
+                    // Anything that is not an n-tuple comes apart into n
+                    // copies of `()`. The junk is untagged on purpose: `Tuple`
+                    // stays a free constructor, at the cost of `untuple n;
+                    // tuple n` being a junk-normalization rather than the
+                    // identity. See `docs/totality.md`.
                     let val = self.pop()?;
-                    if let Value::Tuple(elements) = val {
-                        if elements.len() != n {
-                            return Err(format!("Tuple size mismatch on Untuple: expected {} but tuple has {}", n, elements.len()));
+                    match val {
+                        Value::Tuple(elements) if elements.len() == n => {
+                            for elem in elements.into_iter().rev() {
+                                self.stack.push(elem);
+                            }
                         }
-                        for elem in elements.into_iter().rev() {
-                            self.stack.push(elem);
-                        }
-                    } else {
-                        return Err(format!("Expected Value::Tuple on Untuple, found {:?}", val));
+                        _ => self.stack.extend(std::iter::repeat(unit()).take(n)),
                     }
                 }
                 Instruction::IsInt => {
@@ -386,37 +385,39 @@ impl VM {
                     self.stack.push(Value::Bool(matches!(val, Value::Tuple(_))));
                 }
                 Instruction::TupleLength => {
+                    // Zero for a non-tuple. That is what lets a guard read
+                    // `tuple_length; push n; equal` as "is an n-tuple" without
+                    // an `is_tuple` in front of it, for every n >= 1.
                     let val = self.pop()?;
-                    if let Value::Tuple(elements) = val {
-                        self.stack.push(Value::Int(elements.len() as i64));
-                    } else {
-                        return Err(format!("Expected Value::Tuple on tuple_length, found {:?}", val));
-                    }
+                    let len = match val {
+                        Value::Tuple(elements) => elements.len() as i64,
+                        _ => 0,
+                    };
+                    self.stack.push(Value::Int(len));
                 }
                 Instruction::SymbolLen => {
                     let val = self.pop()?;
-                    if let Value::Symbol(sym) = val {
-                        self.stack.push(Value::Int(sym.name.chars().count() as i64));
-                    } else {
-                        return Err(format!("Expected Value::Symbol on symbol_len, found {:?}", val));
-                    }
+                    let len = match val {
+                        Value::Symbol(sym) => sym.name.chars().count() as i64,
+                        _ => 0,
+                    };
+                    self.stack.push(Value::Int(len));
                 }
                 Instruction::SymbolCharAt => {
                     let idx_val = self.pop()?;
                     let sym_val = self.pop()?;
-                    match (sym_val, idx_val) {
-                        (Value::Symbol(sym), Value::Int(idx)) => {
-                            let char_count = sym.name.chars().count() as i64;
-                            if idx < 0 || idx >= char_count {
-                                return Err(format!("Symbol index out of bounds: index {} on symbol '{}' of length {}", idx, sym.name, char_count));
-                            }
-                            let ch = sym.name.chars().nth(idx as usize).unwrap();
-                            self.stack.push(Value::Int(ch as i64));
-                        }
-                        (s, i) => {
-                            return Err(format!("Invalid arguments to symbol_char_at: expected Symbol, Int, found {:?}, {:?}", s, i));
-                        }
-                    }
+                    // Wrong types and an out-of-range index answer alike: an
+                    // index is in range or it is not, and there is nothing for
+                    // a caller to learn from telling the two apart.
+                    let ch = match (sym_val, idx_val) {
+                        (Value::Symbol(sym), Value::Int(idx)) => usize::try_from(idx)
+                            .ok()
+                            .and_then(|idx| sym.name.chars().nth(idx))
+                            .map(|ch| ch as i64)
+                            .unwrap_or(0),
+                        _ => 0,
+                    };
+                    self.stack.push(Value::Int(ch));
                 }
             }
         }
@@ -799,6 +800,8 @@ mod tests {
                 push unicode_sym
                 push 4
                 symbol_char_at
+                push 0
+                assert_eq
             }
         "#;
         let res = bytecode::assemble(code).unwrap();
@@ -815,12 +818,12 @@ mod tests {
         assert!(vm.execute(test_char_idx).is_ok());
         assert!(vm.stack().is_empty());
         
-        // Run test_out_of_bounds (should fail)
+        // Run test_out_of_bounds: an index past the end answers 0 rather than
+        // failing, and the sentence asserts exactly that.
         let oob_idx = *res.exports.get("test_out_of_bounds").unwrap();
         let mut vm = VM::new(res);
-        let run_res = vm.execute(oob_idx);
-        assert!(run_res.is_err());
-        assert!(run_res.unwrap_err().contains("Symbol index out of bounds"));
+        assert!(vm.execute(oob_idx).is_ok());
+        assert!(vm.stack().is_empty());
     }
 
     #[test]
@@ -1134,6 +1137,428 @@ mod tests {
         let mut vm = VM::new(res);
         if let Err(e) = vm.execute(test_idx) {
             panic!("Execution failed: {}", e);
+        }
+    }
+}
+
+/// The executable mirror of the junk table in `docs/totality.md`.
+///
+/// One test per group of rows, and between them every data instruction is
+/// applied to at least one operand it was not written for. The table is the
+/// spec and this is what holds the VM to it, so a row changed in one place and
+/// not the other is a test failure rather than a silent divergence.
+#[cfg(test)]
+mod totality_tests {
+    use super::*;
+    use bytecode::value::Symbol;
+
+    /// Runs `body` on an empty stack and hands back what it left.
+    fn run(body: Vec<Instruction>) -> Result<Vec<Value>, String> {
+        let mut library = Library::new();
+        library.sentences.push(body);
+        let mut vm = VM::new(library);
+        vm.execute(SentenceIndex::from(0))?;
+        Ok(vm.stack().to_vec())
+    }
+
+    /// Pushes `operands` left to right, then runs `inst`.
+    ///
+    /// Panics if the instruction failed, which is the point: a data
+    /// instruction is total, so `apply` having a `Result` at all would be
+    /// admitting the thing under test.
+    fn apply(operands: &[Value], inst: Instruction) -> Vec<Value> {
+        let mut body: Vec<Instruction> = operands.iter().cloned().map(Instruction::Push).collect();
+        body.push(inst.clone());
+        run(body).unwrap_or_else(|e| panic!("{:?} on {:?} failed: {}", inst, operands, e))
+    }
+
+    fn sym(name: &str) -> Value {
+        Value::Symbol(Symbol {
+            id: 7,
+            name: name.to_string(),
+        })
+    }
+
+    fn unit() -> Value {
+        Value::Tuple(Vec::new())
+    }
+
+    /// One value of each shape, plus a couple of edge cases. Anything claimed
+    /// to hold "on every value" is checked against all of these.
+    fn every_shape() -> Vec<Value> {
+        vec![
+            Value::Bool(true),
+            Value::Bool(false),
+            Value::Int(0),
+            Value::Int(-3),
+            Value::Float(1.5),
+            sym("s"),
+            unit(),
+            Value::Tuple(vec![Value::Int(1), Value::Int(2)]),
+        ]
+    }
+
+    // -- Truthiness ---------------------------------------------------------
+
+    #[test]
+    fn only_bool_true_is_true() {
+        for v in every_shape() {
+            let expected = v == Value::Bool(true);
+            assert_eq!(
+                apply(&[v.clone()], Instruction::Not),
+                vec![Value::Bool(!expected)],
+                "not {:?}",
+                v
+            );
+        }
+        // The deliberate oddity: junk is not true, so its negation is.
+        assert_eq!(
+            apply(&[Value::Int(42)], Instruction::Not),
+            vec![Value::Bool(true)]
+        );
+    }
+
+    #[test]
+    fn and_and_or_coerce_each_operand_separately() {
+        for a in every_shape() {
+            for b in every_shape() {
+                let (p, q) = (a == Value::Bool(true), b == Value::Bool(true));
+                assert_eq!(
+                    apply(&[a.clone(), b.clone()], Instruction::And),
+                    vec![Value::Bool(p && q)],
+                    "{:?} and {:?}",
+                    a,
+                    b
+                );
+                assert_eq!(
+                    apply(&[a.clone(), b.clone()], Instruction::Or),
+                    vec![Value::Bool(p || q)],
+                    "{:?} or {:?}",
+                    a,
+                    b
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn de_morgan_holds_on_every_value() {
+        // What per-operand coercion is for. Coercing the pair jointly, or
+        // having `and` return one of its operands, would both break this.
+        for a in every_shape() {
+            for b in every_shape() {
+                let lhs = run(vec![
+                    Instruction::Push(a.clone()),
+                    Instruction::Push(b.clone()),
+                    Instruction::And,
+                    Instruction::Not,
+                ])
+                .unwrap();
+                let rhs = run(vec![
+                    Instruction::Push(a.clone()),
+                    Instruction::Not,
+                    Instruction::Push(b.clone()),
+                    Instruction::Not,
+                    Instruction::Or,
+                ])
+                .unwrap();
+                assert_eq!(lhs, rhs, "de Morgan on {:?}, {:?}", a, b);
+            }
+        }
+    }
+
+    #[test]
+    fn a_branch_takes_the_else_arm_on_anything_but_true() {
+        for v in every_shape() {
+            let mut library = Library::new();
+            library.sentences.push(vec![
+                Instruction::Push(v.clone()),
+                Instruction::Branch(SentenceIndex::from(1), SentenceIndex::from(2)),
+            ]);
+            library.sentences.push(vec![Instruction::Push(Value::Int(1))]);
+            library.sentences.push(vec![Instruction::Push(Value::Int(2))]);
+
+            let mut vm = VM::new(library);
+            vm.execute(SentenceIndex::from(0))
+                .unwrap_or_else(|e| panic!("branch on {:?} failed: {}", v, e));
+            let taken = if v == Value::Bool(true) { 1 } else { 2 };
+            assert_eq!(vm.stack(), &[Value::Int(taken)], "branch on {:?}", v);
+        }
+    }
+
+    // -- Numbers ------------------------------------------------------------
+
+    #[test]
+    fn arithmetic_on_a_non_numeric_pair_is_zero() {
+        for inst in [
+            Instruction::Add,
+            Instruction::Subtract,
+            Instruction::Multiply,
+            Instruction::Divide,
+            Instruction::Modulo,
+        ] {
+            for operands in [
+                [sym("s"), Value::Int(1)],
+                [Value::Int(1), sym("s")],
+                [Value::Bool(true), Value::Bool(false)],
+                [unit(), Value::Float(1.0)],
+            ] {
+                assert_eq!(
+                    apply(&operands, inst.clone()),
+                    vec![Value::Int(0)],
+                    "{:?} on {:?}",
+                    inst,
+                    operands
+                );
+            }
+        }
+        assert_eq!(
+            apply(&[sym("s")], Instruction::Negate),
+            vec![Value::Int(0)]
+        );
+    }
+
+    #[test]
+    fn integer_division_by_zero_is_zero() {
+        assert_eq!(
+            apply(&[Value::Int(7), Value::Int(0)], Instruction::Divide),
+            vec![Value::Int(0)]
+        );
+        assert_eq!(
+            apply(&[Value::Int(7), Value::Int(0)], Instruction::Modulo),
+            vec![Value::Int(0)]
+        );
+        // And the other host-level overflow that used to be reachable.
+        assert_eq!(
+            apply(&[Value::Int(i64::MIN), Value::Int(-1)], Instruction::Divide),
+            vec![Value::Int(i64::MIN)]
+        );
+        assert_eq!(
+            apply(&[Value::Int(i64::MIN), Value::Int(-1)], Instruction::Modulo),
+            vec![Value::Int(0)]
+        );
+    }
+
+    #[test]
+    fn the_float_world_stays_ieee_even_with_an_int_divisor() {
+        // An `Int` zero coerces like any other mixed operand rather than
+        // dragging the expression back into the integer convention.
+        let [Value::Float(q)] = apply(&[Value::Float(1.0), Value::Int(0)], Instruction::Divide)[..]
+        else {
+            panic!("expected a float")
+        };
+        assert!(q.is_infinite() && q > 0.0, "1.0 / 0 should be inf, got {}", q);
+
+        let [Value::Float(r)] = apply(&[Value::Float(1.0), Value::Int(0)], Instruction::Modulo)[..]
+        else {
+            panic!("expected a float")
+        };
+        assert!(r.is_nan(), "1.0 % 0 should be NaN, got {}", r);
+    }
+
+    #[test]
+    fn comparisons_of_a_non_numeric_pair_are_false() {
+        for inst in [Instruction::Greater, Instruction::Less] {
+            for operands in [
+                [sym("a"), sym("b")],
+                [Value::Int(1), Value::Bool(true)],
+                [unit(), unit()],
+            ] {
+                assert_eq!(
+                    apply(&operands, inst.clone()),
+                    vec![Value::Bool(false)],
+                    "{:?} on {:?}",
+                    inst,
+                    operands
+                );
+            }
+        }
+        // Numbers still compare, mixed pairs included.
+        assert_eq!(
+            apply(&[Value::Int(1), Value::Float(1.5)], Instruction::Less),
+            vec![Value::Bool(true)]
+        );
+    }
+
+    // -- Tuples and symbols -------------------------------------------------
+
+    #[test]
+    fn untupling_a_non_tuple_yields_units() {
+        for v in [sym("s"), Value::Int(3), Value::Tuple(vec![Value::Int(1)])] {
+            assert_eq!(
+                apply(&[v.clone()], Instruction::Untuple(3)),
+                vec![unit(), unit(), unit()],
+                "untuple 3 on {:?}",
+                v
+            );
+        }
+        // Including the degenerate widths.
+        assert_eq!(apply(&[Value::Int(3)], Instruction::Untuple(0)), vec![]);
+        assert_eq!(
+            apply(&[Value::Int(3)], Instruction::Untuple(1)),
+            vec![unit()]
+        );
+    }
+
+    #[test]
+    fn untupling_then_retupling_normalizes_rather_than_panicking() {
+        // Why `cancel_tuple` is still one-way: this is a real function, and
+        // not the identity.
+        assert_eq!(
+            run(vec![
+                Instruction::Push(sym("s")),
+                Instruction::Untuple(2),
+                Instruction::Tuple(2),
+            ])
+            .unwrap(),
+            vec![Value::Tuple(vec![unit(), unit()])]
+        );
+        // But it is idempotent through a second untuple, which is what makes
+        // the normalization invisible to anything that takes it apart again.
+        assert_eq!(
+            run(vec![
+                Instruction::Push(sym("s")),
+                Instruction::Untuple(2),
+                Instruction::Tuple(2),
+                Instruction::Untuple(2),
+            ])
+            .unwrap(),
+            apply(&[sym("s")], Instruction::Untuple(2))
+        );
+    }
+
+    #[test]
+    fn tuple_length_of_a_non_tuple_is_zero() {
+        for v in [sym("s"), Value::Int(3), Value::Bool(true)] {
+            assert_eq!(
+                apply(&[v.clone()], Instruction::TupleLength),
+                vec![Value::Int(0)],
+                "tuple_length of {:?}",
+                v
+            );
+        }
+        // The guard `rebuild_copy` relies on: zero is not a width any real
+        // n-tuple reports for n >= 1.
+        assert_eq!(apply(&[unit()], Instruction::TupleLength), vec![Value::Int(0)]);
+    }
+
+    #[test]
+    fn symbol_length_of_a_non_symbol_is_zero() {
+        for v in [Value::Int(3), unit(), Value::Bool(false)] {
+            assert_eq!(
+                apply(&[v.clone()], Instruction::SymbolLen),
+                vec![Value::Int(0)],
+                "symbol_len of {:?}",
+                v
+            );
+        }
+    }
+
+    #[test]
+    fn symbol_char_at_answers_zero_off_the_end_and_off_the_type() {
+        let s = sym("hi");
+        for idx in [-1i64, 2, 9999] {
+            assert_eq!(
+                apply(&[s.clone(), Value::Int(idx)], Instruction::SymbolCharAt),
+                vec![Value::Int(0)],
+                "index {}",
+                idx
+            );
+        }
+        assert_eq!(
+            apply(&[Value::Int(1), Value::Int(0)], Instruction::SymbolCharAt),
+            vec![Value::Int(0)]
+        );
+        assert_eq!(
+            apply(&[s.clone(), sym("nope")], Instruction::SymbolCharAt),
+            vec![Value::Int(0)]
+        );
+        // In range still answers.
+        assert_eq!(
+            apply(&[s, Value::Int(0)], Instruction::SymbolCharAt),
+            vec![Value::Int('h' as i64)]
+        );
+    }
+
+    #[test]
+    fn equality_and_the_type_tests_answer_on_every_pair() {
+        for a in every_shape() {
+            for b in every_shape() {
+                assert_eq!(
+                    apply(&[a.clone(), b.clone()], Instruction::Equal),
+                    vec![Value::Bool(a == b)],
+                    "{:?} == {:?}",
+                    a,
+                    b
+                );
+            }
+            for (inst, want) in [
+                (Instruction::IsInt, matches!(a, Value::Int(_))),
+                (Instruction::IsBool, matches!(a, Value::Bool(_))),
+                (Instruction::IsFloat, matches!(a, Value::Float(_))),
+                (Instruction::IsSymbol, matches!(a, Value::Symbol(_))),
+                (Instruction::IsTuple, matches!(a, Value::Tuple(_))),
+            ] {
+                assert_eq!(
+                    apply(&[a.clone()], inst.clone()),
+                    vec![Value::Bool(want)],
+                    "{:?} of {:?}",
+                    inst,
+                    a
+                );
+            }
+        }
+    }
+
+    // -- What is still partial ----------------------------------------------
+
+    #[test]
+    fn assert_fails_on_anything_that_is_not_true() {
+        for v in every_shape() {
+            let got = run(vec![Instruction::Push(v.clone()), Instruction::Assert]);
+            assert_eq!(
+                got.is_ok(),
+                v == Value::Bool(true),
+                "assert on {:?} gave {:?}",
+                v,
+                got
+            );
+        }
+    }
+
+    #[test]
+    fn assert_eq_and_panic_are_the_other_two() {
+        assert!(run(vec![
+            Instruction::Push(Value::Int(1)),
+            Instruction::Push(Value::Int(2)),
+            Instruction::AssertEqual,
+        ])
+        .is_err());
+        assert!(run(vec![
+            Instruction::Push(Value::Int(1)),
+            Instruction::Push(Value::Int(1)),
+            Instruction::AssertEqual,
+        ])
+        .is_ok());
+        assert!(run(vec![Instruction::Panic]).is_err());
+    }
+
+    #[test]
+    fn underflow_is_still_an_error_because_it_is_structural() {
+        // Ruled out by arity checking rather than by a junk value: a sentence
+        // that would underflow does not assemble in the first place.
+        for body in [
+            vec![Instruction::Drop],
+            vec![Instruction::Pick(0)],
+            vec![Instruction::Roll(2)],
+            vec![Instruction::Tuple(1)],
+            vec![Instruction::Add],
+        ] {
+            assert!(
+                run(body.clone()).is_err(),
+                "{:?} on an empty stack should underflow",
+                body
+            );
         }
     }
 }

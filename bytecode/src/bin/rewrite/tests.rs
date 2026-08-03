@@ -1110,20 +1110,35 @@ fn the_whole_derivation_runs_on_the_blocked_shape() {
     // shows is out of reach, with nothing hand-placed:
     //
     //   rebuild_copy     the value arrives built rather than carried
+    //   distribute       brings the consumer into the guard's arms
     //   float            delivers the rebuild down to the branch
     //   unfactor_branch  pushes it into both arms (sound: `tuple n` is total)
     //   cancel_tuple     annihilates it against the arm's `untuple`
+    //   folding          decides the off-guard arm outright
     //
     // Every step is a local equivalence the rewriter checks for itself. No rule
     // is ever told that the value is a 3-tuple.
+    //
+    // `distribute` is what totalizing the VM added to this derivation.
+    // `rebuild_copy` now guards its payload, so the reconstruction lands inside
+    // an arm and the `untuple` it has to meet is still outside; distributing
+    // puts them back in one sequence. The off-guard arm is then *decided*
+    // rather than merely carried: it holds three literal `()`s, so
+    // `fold_const_unary` answers each `is_symbol` with `false`, `fold_const`
+    // collapses the `and`s, and `fold_branch` picks the arm that never untuples
+    // at all. Under the old semantics none of those three folds was available.
     let (prog, before) = probe("blocked");
     assert_eq!(untuples(&before), 2);
     let after = run(
         prog,
         before.clone(),
-        "once(rebuild_copy); repeat(bu(each(float))); \
+        "once(rebuild_copy); distribute; \
+         repeat(bu(each(float))); \
          repeat(bu(each(unfactor_branch); each(cancel_tuple); \
-                   each(annihilate_drop, noop, pick_drop_to_roll)))",
+                   each(annihilate_drop, noop, pick_drop_to_roll))); \
+         repeat(bu(each(collapse); each(sink); each(fuse); each(flatten_call); \
+                   each(fold_const, fold_const_unary, bool_identity, cancel_tuple); \
+                   each(annihilate_drop, pick_drop_to_roll, noop, fold_branch)))",
     );
     assert_eq!(
         untuples(&after),
@@ -1147,7 +1162,15 @@ fn the_sharing_chain_runs_on_the_real_corpus_sentence() {
     //   float            walks it past each guard instruction
     //   unfactor_branch  carries it through each branch
     //   rebuild_copy     fires once the copy finally sits on the untuple
+    //   distribute_branch  brings the consumer into the guard's arms
     //   cancel_tuple     annihilates the rebuild against the later untuples
+    //   folding          decides the off-guard arm, which distribution copied
+    //
+    // The last two lines are what totalizing the VM added. `rebuild_copy`
+    // guards its payload now, so distribution has to carry the consumer into
+    // both arms — and that duplicates every `untuple` downstream of it unless
+    // something decides the off-guard arm, where the parts are literal `()`s.
+    // The folding rules do, and end up doing rather better than before.
     // Tests run with the package root as the working directory. Not finding
     // the corpus is not a failure: the crate should still be testable alone.
     let main = Path::new("../tests/main.hana");
@@ -1181,7 +1204,10 @@ fn the_sharing_chain_runs_on_the_real_corpus_sentence() {
         prog,
         opened.clone(),
         "repeat(bu(each(copy_assoc); each(float); each(unfactor_branch); \
-                   each(flatten_call); each(rebuild_copy); each(cancel_tuple)))",
+                   each(flatten_call); each(rebuild_copy); each(distribute_branch); \
+                   each(cancel_tuple); \
+                   each(fold_const, fold_const_unary, bool_identity, copy_const); \
+                   each(annihilate_drop, pick_drop_to_roll, noop, fold_branch)))",
     );
     assert!(
         untuples(&after) < before,
