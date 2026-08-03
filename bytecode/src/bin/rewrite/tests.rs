@@ -1208,11 +1208,8 @@ fn the_whole_derivation_runs_on_the_blocked_shape() {
         before.clone(),
         "once(rebuild_copy); distribute; \
          repeat(bu(each(float))); \
-         repeat(bu(each(unfactor_branch); each(cancel_tuple); \
-                   each(annihilate_drop, noop, pick_drop_to_roll))); \
-         repeat(bu(each(collapse); each(sink); each(fuse); each(flatten_call); \
-                   each(fold_const, fold_const_unary, bool_identity, cancel_tuple); \
-                   each(annihilate_drop, pick_drop_to_roll, noop, fold_branch)))",
+         repeat(bu(each(unfactor_branch); each(cancel_tuple); cleanup)); \
+         all; flatten; cleanup",
     );
     assert_eq!(
         untuples(&after),
