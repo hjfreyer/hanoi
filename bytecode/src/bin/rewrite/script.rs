@@ -57,7 +57,7 @@ tactic annihilate = repeat(bu(each(annihilate_drop)));
 // any pair but `and` only on two booleans, and `bool_identity` needs to see
 // where its operand came from before it will drop a unit `and`.
 tactic values = repeat(bu(each(fold_const, fold_const_unary, bool_identity,
-                               cancel_tuple)));
+                               cancel_tuple, probe_tuple, probe_length)));
 
 // Throw away work that does nothing. `pick_drop_to_roll` leaves a `roll 0`
 // behind when d is 0, and `annihilate_drop` can empty a dip body; `noop`
@@ -65,9 +65,9 @@ tactic values = repeat(bu(each(fold_const, fold_const_unary, bool_identity,
 // rules join them because folding is what exposes the literal `fold_branch`
 // needs, and dropping a branch is what exposes the next thing to fold.
 tactic cleanup = repeat(bu(each(annihilate_drop, pick_drop_to_roll, noop,
-                                fold_branch);
+                                fold_branch, merge_branch);
                            each(fold_const, fold_const_unary, bool_identity,
-                                cancel_tuple)));
+                                cancel_tuple, probe_tuple, probe_length)));
 
 // Push what follows a branch into both of its arms, so a rule that only holds
 // on one side can see it. Kept out of `all` and `cleanup`: it duplicates code
@@ -81,8 +81,10 @@ tactic distribute = repeat(bu(each(distribute_branch)));
 tactic flatten = repeat(bu(each(flatten_call)));
 
 // Everything at once, which is what passing all three flags used to mean.
-tactic all = repeat(bu(each(annihilate_drop, pick_drop_to_roll, noop, fold_branch);
-                       each(fold_const, fold_const_unary, bool_identity, cancel_tuple);
+tactic all = repeat(bu(each(annihilate_drop, pick_drop_to_roll, noop, fold_branch,
+                            merge_branch);
+                       each(fold_const, fold_const_unary, bool_identity, cancel_tuple,
+                            probe_tuple, probe_length);
                        each(factor_branch);
                        each(collapse); each(sink); each(fuse)));
 

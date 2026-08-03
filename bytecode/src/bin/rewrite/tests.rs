@@ -1196,6 +1196,120 @@ fn the_sharing_chain_runs_on_the_real_corpus_sentence() {
     );
 }
 
+/// The furthest the local rules currently drive
+/// `emit_does_pre_and_post` — the sentence whose reduction to constant `true`
+/// is the standing goal for this rule set.
+///
+/// The derivation stages, each of which is a plain composition of the rules:
+///
+/// 1. Open `is_state::check`, distribute the final branch into its guard
+///    leaves, and fold the leaves that decide it (`false` leaves take the
+///    `push true` arm without ever running `emit`).
+/// 2. The sharing chain: the caller's copy travels down to the check's
+///    `untuple 3`, `rebuild_copy` re-derives it from the parts, and the
+///    rebuilt `tuple 3` rides into both arms of the condition.
+/// 3. Open `is_internal_state::check` and distribute into its four symbol
+///    paths. Each test's copy is then re-derived from the *original* part
+///    (`copy_assoc`, `float`, `unfactor_branch`), which is what lets
+///    `specialize_equal` refine the value `emit` will actually destructure —
+///    the sharing limitation `docs/tactics.md` records is closed by exactly
+///    this dance.
+/// 4. Open `emit` and `emit_postcondition` everywhere and let the refined
+///    literals decide `emit`'s decision tree: on the three refined paths its
+///    `panic` arm folds away, and on the idle/ordered paths the whole
+///    emit-and-postcondition collapses to `push true`, whose conjunction
+///    branch `merge_branch` then removes.
+///
+/// What survives, and why, is the honest frontier: the `has_coffee` path
+/// keeps its `panic` because the union compiles its *last* variant without a
+/// branch (`compile_union`), so there is no arm for `specialize_equal` to
+/// refine — discharging it needs a rule that expands `and` into nested
+/// branches (Boolean shortcut). And the thirsty path's postcondition
+/// recomputes `is_symbol` on values the precondition already checked, which
+/// needs recomputation sharing across a branch. Both are statable as local
+/// window rules; neither needs a fact.
+#[test]
+fn the_derivation_discharges_three_of_emits_four_panics() {
+    let main = Path::new("../tests/main.hana");
+    let Ok(code) = fs::read_to_string(main) else {
+        return;
+    };
+    let library: &'static Library =
+        Box::leak(Box::new(bytecode::assemble_with_path(&code, main.parent()).unwrap()));
+    let prog: &'static Program<'static> = Box::leak(Box::new(Program::new(library)));
+    let idx = prog
+        .library()
+        .names
+        .iter()
+        .position(|n| n == "barista::customer_impl::emit_does_pre_and_post")
+        .map(SentenceIndex::from)
+        .expect("sentence should exist in the corpus");
+
+    let opened = run(
+        prog,
+        build(prog.library(), idx, &mut HashSet::new()),
+        // Stages 1-3, then open everything that remains (stage 4's opening).
+        "repeat_n(3, once(inline); distribute; cleanup); \
+         repeat(bu(each(copy_assoc); each(float); each(unfactor_branch); \
+                   each(flatten_call); each(rebuild_copy); each(cancel_tuple))); \
+         cleanup; \
+         then(then(once(inline); distribute; cleanup)); \
+         then(then(repeat(bu(each(copy_assoc); each(float); each(unfactor_branch); \
+                             each(flatten_call); \
+                             each(annihilate_drop, noop, pick_drop_to_roll))); \
+                   bu(each(specialize_equal)); cleanup)); \
+         repeat(bu(each(inline); each(flatten_call))); \
+         repeat(bu(each(sink); each(collapse); each(flatten_call))); cleanup",
+    );
+    assert_eq!(
+        panics(&opened),
+        4,
+        "distribution should have put a copy of emit's panic in all four paths"
+    );
+
+    let after = run(
+        prog,
+        opened.clone(),
+        // Stage 4's payoff, iterated: distribute, deliver copies and
+        // refinements rightward, pay them off, plant the next refinements,
+        // fold what is decided.
+        "repeat_n(12, distribute; \
+           repeat(bu(each(copy_assoc, copy_comm); each(rebuild_copy); each(float); \
+                     each(unfactor_branch); each(flatten_call); \
+                     each(annihilate_drop, noop, pick_drop_to_roll); \
+                     each(copy_const, cancel_tuple, probe_tuple, probe_length))); \
+           bu(each(specialize_equal)); \
+           cleanup)",
+    );
+    assert_eq!(
+        panics(&after),
+        1,
+        "the three refined paths should have folded their panic away; only \
+         the has_coffee path — the union's branchless last variant — keeps one"
+    );
+    assert_eq!(
+        seq_arity(prog, &opened),
+        seq_arity(prog, &after),
+        "and the whole derivation should preserve arity"
+    );
+}
+
+fn panics(nodes: &[Node]) -> usize {
+    nodes
+        .iter()
+        .map(|n| match n {
+            Node::Op(Instruction::Panic) => 1,
+            Node::Dip { body, .. } => panics(body),
+            Node::Branch {
+                then_body,
+                else_body,
+                ..
+            } => panics(then_body) + panics(else_body),
+            _ => 0,
+        })
+        .sum()
+}
+
 #[test]
 fn float_delivers_the_rebuild_to_the_branch_that_undoes_it() {
     // The same chain with nothing hand-placed. The rebuild sits where the
@@ -1598,6 +1712,159 @@ fn a_constant_condition_folds_to_the_arm_it_selects() {
         "cleanup",
     );
     assert_eq!(shape(&else_arm), vec!["push 20"]);
+}
+
+#[test]
+fn a_branch_whose_arms_agree_drops_its_condition() {
+    // `fold_branch` needs a literal condition; here there is none, and there
+    // does not need to be — the arms agree, so the branch decides nothing.
+    // The producer in front is what licenses the `drop`: the VM rejects a
+    // non-boolean condition, and `is_bool` either yields a boolean or panics
+    // first.
+    let body = tree(
+        r#"
+        #[arity(1, 1)]
+        sentence probe {
+            is_bool
+            branch { push 10 } { push 10 }
+        }
+    "#,
+        "repeat(bu(each(merge_branch)))",
+    );
+    assert_eq!(shape(&body), vec!["is_bool", "drop", "push 10"]);
+}
+
+#[test]
+fn merge_branch_compares_arms_by_effect_not_provenance() {
+    // Each arm's dip body is a separate inline block with its own
+    // `SentenceIndex`, so derived equality would call them different. They do
+    // the same thing, which is the comparison that matters.
+    let body = tree(
+        r#"
+        #[arity(2, 2)]
+        sentence probe {
+            is_int
+            branch { dip 1 { push 1 } } { dip 1 { push 1 } }
+        }
+    "#,
+        "repeat(bu(each(merge_branch)))",
+    );
+    assert_eq!(shape(&body), vec!["is_int", "drop", "dip 1 { push 1 }"]);
+}
+
+#[test]
+fn merge_branch_declines_without_a_boolean_producer() {
+    // `pick 0` copies whatever is there; nothing says it is a boolean, so
+    // dropping the branch would erase the VM's condition check. Inlining is
+    // how a call that happens to return a bool becomes visible — same stance
+    // as `bool_identity`.
+    let (_prog, body) = tree_of(
+        r#"
+        #[arity(1, 2)]
+        sentence probe {
+            pick 0
+            branch { push 10 } { push 10 }
+        }
+    "#,
+        NOTHING,
+    );
+    let after = run(_prog, body.clone(), "repeat(bu(each(merge_branch)))");
+    assert_eq!(shape(&body), shape(&after));
+}
+
+#[test]
+fn merge_branch_declines_when_the_arms_differ() {
+    let (_prog, body) = tree_of(
+        r#"
+        #[arity(1, 1)]
+        sentence probe {
+            is_bool
+            branch { push 10 } { push 20 }
+        }
+    "#,
+        NOTHING,
+    );
+    let after = run(_prog, body.clone(), "repeat(bu(each(merge_branch)))");
+    assert_eq!(shape(&body), shape(&after));
+}
+
+#[test]
+fn a_construction_answers_the_type_checks_probes() {
+    // `type`-sugar guards are exactly `pick 0; is_tuple` and
+    // `pick 0; tuple_length; push n; equal`. On a value the window watched
+    // being built, both questions are already answered by the code in front.
+    let body = tree(
+        r#"
+        #[arity(2, 2)]
+        sentence probe {
+            tuple 2
+            pick 0
+            is_tuple
+        }
+    "#,
+        "repeat(bu(each(probe_tuple)))",
+    );
+    assert_eq!(shape(&body), vec!["tuple 2", "push true"]);
+
+    let body = tree(
+        r#"
+        #[arity(2, 2)]
+        sentence probe {
+            tuple 2
+            pick 0
+            tuple_length
+        }
+    "#,
+        "repeat(bu(each(probe_length)))",
+    );
+    assert_eq!(shape(&body), vec!["tuple 2", "push 2"]);
+}
+
+#[test]
+fn dropping_a_built_tuple_is_dropping_its_parts() {
+    let body = tree(
+        r#"
+        #[arity(2, 0)]
+        sentence probe {
+            tuple 2
+            drop 0
+        }
+    "#,
+        "annihilate",
+    );
+    assert_eq!(shape(&body), vec!["drop", "drop"]);
+}
+
+#[test]
+fn rotating_a_copy_chain_exposes_the_top_read() {
+    // `pick d; pick d` copies two adjacent slots, deepest first, which strands
+    // the shallow slot's read behind the deep one. Rotated, the shallow read
+    // comes first — and when the slot holds a literal, `copy_const` can then
+    // pay it off, which is the point.
+    let body = tree(
+        r#"
+        #[arity(2, 4)]
+        sentence probe {
+            pick 1
+            pick 1
+        }
+    "#,
+        "repeat(bu(each(copy_comm)))",
+    );
+    assert_eq!(shape(&body), vec!["pick 0", "dip 1 { pick 1 }"]);
+
+    let body = tree(
+        r#"
+        #[arity(1, 4)]
+        sentence probe {
+            push 5
+            pick 1
+            pick 1
+        }
+    "#,
+        "repeat(bu(each(copy_comm); each(copy_const)))",
+    );
+    assert_eq!(shape(&body), vec!["push 5", "push 5", "dip 1 { pick 1 }"]);
 }
 
 #[test]

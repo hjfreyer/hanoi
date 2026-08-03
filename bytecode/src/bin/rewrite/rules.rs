@@ -13,7 +13,7 @@
 use bytecode::{Instruction, Value};
 
 use crate::arity::node_arity;
-use crate::ir::{expand_call, same_effect, Node};
+use crate::ir::{expand_call, same_effect, same_effect_seq, Node};
 use crate::program::Program;
 
 /// A local rewrite.
@@ -41,6 +41,7 @@ pub(crate) const ALL_RULES: &[&dyn Rule] = &[
     &CancelTuple,
     &Collapse,
     &CopyAssoc,
+    &CopyComm,
     &CopyConst,
     &DistributeBranch,
     &DupNatural,
@@ -53,8 +54,11 @@ pub(crate) const ALL_RULES: &[&dyn Rule] = &[
     &FoldConstUnary,
     &Fuse,
     &Inline,
+    &MergeBranch,
     &NoOp,
     &PickDropToRoll,
+    &ProbeLength,
+    &ProbeTuple,
     &RebuildCopy,
     &RetainCondition,
     &Sink,
@@ -413,6 +417,9 @@ enum Annihilation {
     /// Only the predecessor goes: it consumed a value to make the dropped one,
     /// so the drop stays and takes its input instead.
     Predecessor,
+    /// The predecessor consumed `n` values to make the dropped one, so the
+    /// drop becomes `n` drops.
+    Spread(usize),
 }
 
 impl Rule for AnnihilateDrop {
@@ -429,6 +436,7 @@ impl Rule for AnnihilateDrop {
         match annihilation(prev)? {
             Annihilation::Both => Some(Vec::new()),
             Annihilation::Predecessor => Some(vec![Node::Op(Instruction::Drop)]),
+            Annihilation::Spread(n) => Some(vec![Node::Op(Instruction::Drop); n]),
         }
     }
 }
@@ -444,6 +452,11 @@ fn annihilation(inst: &Instruction) -> Option<Annihilation> {
         | Instruction::IsFloat
         | Instruction::IsSymbol
         | Instruction::IsTuple => Some(Annihilation::Predecessor),
+        // Total, and dropping the built tuple is dropping its parts. Note that
+        // the node count is level at `n = 2` and grows past it; what strictly
+        // decreases is the tuple count, and nothing else in a normalizing pass
+        // builds one.
+        Instruction::Tuple(n) => Some(Annihilation::Spread(*n)),
         _ => None,
     }
 }
@@ -535,6 +548,58 @@ impl Rule for FoldBranch {
         } else {
             else_body.clone()
         })
+    }
+}
+
+/// `B ; branch { A } { A }` becomes `B ; drop ; A` — a branch whose arms agree
+/// does not depend on its condition.
+///
+/// This is the codiagonal to [`FactorBranch`]'s shared prefix: factoring to
+/// exhaustion leaves a branch with two empty arms, which is this rule at
+/// `A = []`. It is what finishes a derivation whose leaves have all become the
+/// same thing — `fold_branch` needs a literal condition and here there is none.
+///
+/// The naive one-node statement `branch { A } { A } → drop; A` erases a check:
+/// the VM rejects a non-boolean condition, and the `drop` it leaves accepts
+/// anything. Seeing the node that produced the condition is what licenses the
+/// drop — the same reason [`BoolIdentity`] needs its extra node — so the window
+/// is two wide and the guard is [`yields_bool`].
+///
+/// Arms are compared with [`same_effect_seq`], not derived equality: origin
+/// labels record where code came from, and two arms that do the same thing
+/// rarely share a provenance.
+///
+/// Measure: branch count. The node count can grow, since the surviving arm is
+/// spliced where the branch stood, but the branch itself is gone and the arm's
+/// own branches existed before — in both copies.
+#[derive(Debug)]
+pub(crate) struct MergeBranch;
+
+impl Rule for MergeBranch {
+    fn name(&self) -> &'static str {
+        "merge_branch"
+    }
+    fn width(&self) -> usize {
+        2
+    }
+    fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
+        let [
+            b,
+            Node::Branch {
+                then_body,
+                else_body,
+                ..
+            },
+        ] = window
+        else {
+            return None;
+        };
+        if !yields_bool(b) || !same_effect_seq(then_body, else_body) {
+            return None;
+        }
+        let mut out = vec![b.clone(), Node::Op(Instruction::Drop)];
+        out.extend(then_body.iter().cloned());
+        Some(out)
     }
 }
 
@@ -2391,6 +2456,48 @@ impl Rule for CopyAssoc {
     }
 }
 
+/// `pick d ; pick d` becomes `pick (d-1) ; dip 1 { pick d }`, for `d >= 1`.
+///
+/// Another face of the comonoid [`CopyAssoc`] names. `pick d; pick d` copies a
+/// window of two adjacent slots, deepest first; the right-hand side copies the
+/// shallower one first and re-derives the deeper one under it. Same two values,
+/// same order — the point is which read comes *first*. A copy chain like
+/// `(pick (n-1))^n` — [`RebuildCopy`]'s output — reads the deepest slot first,
+/// which strands the top slot's read behind `n - 1` other picks; rotated, the
+/// top slot's read lands directly against whatever produced that slot, which is
+/// where [`CopyConst`] and the probe rules want it.
+///
+/// Measure: the number of `pick d; pick d` adjacencies at `d >= 1`. The output
+/// contains none and cannot recreate one: the surviving bare pick got
+/// shallower, and the other went into a frame.
+#[derive(Debug)]
+pub(crate) struct CopyComm;
+
+impl Rule for CopyComm {
+    fn name(&self) -> &'static str {
+        "copy_comm"
+    }
+    fn width(&self) -> usize {
+        2
+    }
+    fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
+        let [Node::Op(Instruction::Pick(d)), Node::Op(Instruction::Pick(d2))] = window else {
+            return None;
+        };
+        if d != d2 || *d < 1 {
+            return None;
+        }
+        Some(vec![
+            Node::Op(Instruction::Pick(*d - 1)),
+            Node::Dip {
+                depth: 1,
+                origins: Vec::new(),
+                body: vec![Node::Op(Instruction::Pick(*d))],
+            },
+        ])
+    }
+}
+
 /// `push c ; pick 0` becomes `push c ; push c`.
 ///
 /// Copying a constant is pushing it again — the naturality of duplication over
@@ -2486,6 +2593,78 @@ impl Rule for RebuildCopy {
             body: vec![Node::Op(Instruction::Tuple(*n))],
         });
         Some(out)
+    }
+}
+
+/// `tuple n ; pick 0 ; is_tuple` becomes `tuple n ; push true`.
+///
+/// The same bargain as [`RebuildCopy`], one step later: once a value arrives
+/// *built*, the code in front of the probe already proves what the probe asks.
+/// `is_tuple` consumes the copy to answer a question whose answer is evident —
+/// the construction is right there in the window — so the copy need never be
+/// made. This is what lets a `type` check's guards fold on a value that
+/// `rebuild_copy` delivered: the guards are exactly `pick 0; is_tuple` and
+/// [`ProbeLength`]'s window, and no rule needs to know the value's shape beyond
+/// the node that built it.
+///
+/// `pick 0` and `is_tuple` are both total here, so nothing checked is lost:
+/// the probe could not have panicked on a value `tuple n` just made.
+///
+/// Measure: node count.
+#[derive(Debug)]
+pub(crate) struct ProbeTuple;
+
+impl Rule for ProbeTuple {
+    fn name(&self) -> &'static str {
+        "probe_tuple"
+    }
+    fn width(&self) -> usize {
+        3
+    }
+    fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
+        let [
+            build @ Node::Op(Instruction::Tuple(_)),
+            Node::Op(Instruction::Pick(0)),
+            Node::Op(Instruction::IsTuple),
+        ] = window
+        else {
+            return None;
+        };
+        Some(vec![build.clone(), Node::Op(Instruction::Push(Value::Bool(true)))])
+    }
+}
+
+/// `tuple n ; pick 0 ; tuple_length` becomes `tuple n ; push n`.
+///
+/// [`ProbeTuple`]'s sibling: the length of a value the window watched being
+/// built is not a question. `tuple_length` rejects a non-tuple, and the reason
+/// the fold may still discard it is the same as [`ProbeTuple`]'s — the operand
+/// is a tuple by construction, so the rejecting path cannot be taken.
+///
+/// Measure: node count.
+#[derive(Debug)]
+pub(crate) struct ProbeLength;
+
+impl Rule for ProbeLength {
+    fn name(&self) -> &'static str {
+        "probe_length"
+    }
+    fn width(&self) -> usize {
+        3
+    }
+    fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
+        let [
+            build @ Node::Op(Instruction::Tuple(n)),
+            Node::Op(Instruction::Pick(0)),
+            Node::Op(Instruction::TupleLength),
+        ] = window
+        else {
+            return None;
+        };
+        Some(vec![
+            build.clone(),
+            Node::Op(Instruction::Push(Value::Int(*n as i64))),
+        ])
     }
 }
 

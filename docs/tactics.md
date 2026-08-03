@@ -52,6 +52,10 @@ operand came from. It either matches and returns a replacement, or fails.
 | `unfactor_branch` | `dip k { X } ; branch { A } { B }`, `k >= 1` | `branch { dip (k-1) { X }; A } { … }` |
 | `rebuild_copy` | `pick 0 ; untuple n` | `untuple n ; (pick (n-1))^n ; dip n { tuple n }` |
 | `copy_assoc` | `pick d ; pick 0` | `pick d ; dip 1 { pick d }` |
+| `copy_comm` | `pick d ; pick d`, `d >= 1` | `pick (d-1) ; dip 1 { pick d }` |
+| `merge_branch` | `B ; branch { A } { A }`, B yields bool | `B ; drop ; A` |
+| `probe_tuple` | `tuple n ; pick 0 ; is_tuple` | `tuple n ; push true` |
+| `probe_length` | `tuple n ; pick 0 ; tuple_length` | `tuple n ; push n` |
 
 `sink` is the interchange rule, and its side condition is the one piece of real
 arithmetic here: writing `X`'s arity as `(n -> m)`, the dip's window must sit
@@ -71,10 +75,11 @@ computation has to be delivered *to* somewhere rather than gathered up — see
 "a construction is a proof" below.
 
 `annihilate_drop` only fires for instructions that cannot panic: `push` and
-`pick` cancel entirely, and the five `is_*` predicates leave the drop behind
-(they consume a value to make the dropped one). `add; drop` is deliberately not
-`drop; drop` — the add still rejects non-numeric operands, and cancelling it
-would discard that check.
+`pick` cancel entirely, the five `is_*` predicates leave the drop behind
+(they consume a value to make the dropped one), and `tuple n` spreads the drop
+into `n` drops — dropping a built tuple is dropping its parts. `add; drop` is
+deliberately not `drop; drop` — the add still rejects non-numeric operands, and
+cancelling it would discard that check.
 
 `pick_drop_to_roll` is where copying a value and then discarding the original
 turns back into the roll it always was. `sink` cannot reach this one and should
@@ -97,6 +102,16 @@ then fold".
 `fold_branch` matches only a literal `Bool`. The VM rejects a non-boolean
 condition, so folding `push 1 ; branch …` would erase a panic rather than
 preserve one — the same reason `annihilate_drop` will not touch `add`.
+
+`merge_branch` is the other way a branch dies: not because its condition is
+known but because its arms agree, so the branch decides nothing. It is what
+finishes a derivation whose leaves have all become the same thing, and the
+naive one-node statement `branch { A } { A } → drop; A` is unsound for the
+same reason folding `push 1; branch` is — the `drop` it leaves accepts the
+non-boolean the branch would have rejected. Seeing the node that produced the
+condition is what licenses it, the same stance `bool_identity` takes, and the
+arms are compared by effect rather than provenance, since two arms that do the
+same thing rarely share an origin.
 
 `inline` **splices**: the callee's body lands in the caller's sequence, with no
 frame left behind. That matters more than it sounds, because rules only ever
@@ -273,8 +288,20 @@ an arm that opens by discarding the value has no use for a refinement of it.
 One limitation to be clear about: `specialize_equal` refines the value *the
 check is holding*, not the one the caller kept. Where a predicate consumes a
 copy and the real code later destructures the original, those are different
-stack slots and no refinement relates them. Sharing the two is a separate
-problem.
+stack slots and no refinement relates them. This looked like a separate
+problem and turns out not to be one — the existing rules close it, by making
+the test look at the original instead. Where the copy's creation is adjacent
+to the test that consumes it — `pick 2; pick 0; push c; equal; branch` —
+`copy_assoc` reframes the test's copy as a re-derivation from the original,
+`float` walks that frame past the comparison (so the comparison consumes the
+*created* copy), and `unfactor_branch` delivers the re-derivation into the
+arms, where the then-arm's leading `drop` annihilates it. What remains is
+`pick 2; push c; equal; branch` — the test now names the original's depth,
+and the refinement lands on the slot the caller will actually destructure.
+The else arm's head becomes the next test's `pick`, which re-forms the same
+window one level down, so the dance walks a whole decision tree by itself.
+`the_derivation_discharges_three_of_emits_four_panics` runs it on the real
+corpus.
 
 ## Sharing, and the one thing that is still missing
 
@@ -406,6 +433,38 @@ Note also what this does *not* need. There is no `assume` node, no hypothesis
 threaded through the traversal, and no rule that reads a fact off its context.
 The governing invariant below is untouched — every rule involved still depends
 only on the sequence it is handed.
+
+### How far the constructions reach: the emit derivation
+
+The standing goal is `emit_does_pre_and_post ≡ drop; push true`, derived by
+nothing but the rules above, and the corpus test
+`the_derivation_discharges_three_of_emits_four_panics` records how far that
+currently gets. The staged derivation opens `is_state::check`, shares the
+caller's copy through it, walks the union's decision tree with the
+`copy_assoc`/`float`/`unfactor_branch` dance so `specialize_equal` refines the
+*original*, and then opens `emit` everywhere: on the three refined symbol
+paths `emit`'s decision tree folds on literals and its `panic` arm folds away
+with it; on the idle and ordered paths the postcondition then collapses to
+`push true` — `probe_tuple` and `probe_length` answer the `type` guards on
+`emit`'s built output, `cancel_tuple` eats its `untuple`s — and `merge_branch`
+removes the conjunction branch whose arms have agreed. Three of the four
+distributed panics are discharged, and every rule firing passes `--check`.
+
+What survives says precisely what is still missing, and both pieces are
+window-local laws rather than facts:
+
+- The `has_coffee` path keeps its panic because `compile_union` compiles the
+  *last* variant without a branch — the test's result feeds the `and` chain
+  directly, so there is no arm for `specialize_equal` to refine. Discharging
+  it wants Boolean shortcut as a rule: `dip 1 { P }; and; branch { A } { B }`
+  expanding to nested branches, sound when `P` yields a bool, which gives
+  every conjunct its own arm to learn in.
+- The thirsty path's postcondition recomputes `is_symbol` on values the
+  precondition already checked, and the recomputation sits inside a branch on
+  the first computation's result. Merging them is `dup_natural`'s job, but the
+  two occurrences are separated by that branch, and moving a *total*
+  computation out of one arm (with a `drop` in the other) is a law this set
+  does not yet state.
 
 **Rules are not tactics.** They live in their own namespace and cannot be
 aliased or defined; a rule has to be *placed* by `each` or `once`. Writing a

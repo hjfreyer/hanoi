@@ -234,6 +234,6 @@ pub(crate) fn same_effect(a: &Node, b: &Node) -> bool {
     }
 }
 
-fn same_effect_seq(a: &[Node], b: &[Node]) -> bool {
+pub(crate) fn same_effect_seq(a: &[Node], b: &[Node]) -> bool {
     a.len() == b.len() && a.iter().zip(b).all(|(x, y)| same_effect(x, y))
 }
