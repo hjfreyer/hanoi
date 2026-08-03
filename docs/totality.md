@@ -192,18 +192,51 @@ the answer is *known* to be `n` copies of `()`, which is the totality contract
 paying for the guard it just required. The "construction is the proof" payload
 lives in the then arm, where it always did.
 
-### The single-arm hoist is still impossible
+### The single-arm hoist, which totality *did* buy
+
+This is the payoff the whole change was for, and it arrives by a different road
+than expected. The obvious hoist
 
 ```
 branch { untuple 3; A } { B }   →   dip 1 { untuple 3 }; branch { A } { tuple 3; B }
 ```
 
-was blocked because `untuple` was partial and the hoist invented a panic on the
-path that took the other arm. It is still blocked, for a new reason: on that
-path the hoisted `untuple 3` now *junk-normalizes* a value that `B` may go on to
-use, and `tuple 3` does not put it back. Totality removed the panic, not the
-information loss. A tagged junk value would have closed this; the table above
-chose not to have one.
+does **not** work, and totality does not make it work. It used to invent a panic
+on the path that took the other arm; now it *junk-normalizes* a value that `B`
+may go on to use, and `tuple 3` does not put it back. Untagged junk is what
+costs us this, and it is the one place the choice above is felt. A tagged junk
+value — `J_n^i(x)`, with `tuple n` recognizing a complete family and returning
+`x` — would make `untuple n` a genuine iso and license it. The price is that
+`tuple n` stops being a free constructor and can return a non-tuple, so
+`tuple 3; is_tuple` becomes false on some inputs.
+
+None of that is needed, because **the hoist does not need an inverse — it needs
+a copy**:
+
+```
+branch { X; A } { B }
+  ==
+dip 1 { (pick (n-1))^n; X };  branch { dip m { drop^n }; A } { drop^m; B }
+```
+
+for `X : n -> m`. Run `X` speculatively on a *copy* before the branch, and let
+each arm discard the half it did not want. The losing path never gives up its
+own values, so nothing has to be reconstructed and `untuple n` is asked nothing
+that `add` is not asked.
+
+What this needs is exactly what this document establishes:
+
+- `X` must be **total**, or the speculation fails on a path the original left
+  alone. This is the whole reason the rule is possible; under the old semantics
+  it was unsound for precisely the `untuple` case that matters.
+- `X` must have **no effect but the stack**, which excludes `print`.
+- `X`'s arity must be **known locally**, which excludes calls — their bodies may
+  hold an `assert`.
+
+That is `speculate_branch` in `bin/rewrite`, and
+`the_direct_route_closes_by_speculating` runs the whole derivation the sharing
+problem was stuck on: hoist the arm's `untuple`, `sink` it back onto the check's,
+`dup_natural` merges the two. No reconstruction, no guard, no imaginary values.
 
 ## What is not covered
 

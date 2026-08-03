@@ -61,6 +61,7 @@ pub(crate) const ALL_RULES: &[&dyn Rule] = &[
     &RetainCondition,
     &Sink,
     &SpecializeEqual,
+    &SpeculateBranch,
     &UnfactorBranch,
 ];
 
@@ -2007,6 +2008,241 @@ mod tests {
     }
 
     #[test]
+    fn speculate_branch_runs_one_arms_head_on_a_copy() {
+        // `untuple 3` is (1 -> 3): copy the one operand, untuple the copy, and
+        // let the then arm drop the original from under the three results
+        // while the else arm drops the three results.
+        let w = [branch(
+            vec![op(Instruction::Untuple(3)), op(Instruction::Add)],
+            vec![op(Instruction::Push(Value::Int(9)))],
+        )];
+        assert_eq!(
+            SpeculateBranch.rewrite(&prog(), &w),
+            Some(vec![
+                dip(
+                    1,
+                    vec![op(Instruction::Pick(0)), op(Instruction::Untuple(3))]
+                ),
+                branch(
+                    vec![
+                        dip(3, vec![op(Instruction::Drop)]),
+                        op(Instruction::Add)
+                    ],
+                    vec![
+                        op(Instruction::Drop),
+                        op(Instruction::Drop),
+                        op(Instruction::Drop),
+                        op(Instruction::Push(Value::Int(9))),
+                    ],
+                ),
+            ])
+        );
+    }
+
+    #[test]
+    fn speculate_branch_reaches_the_else_arm_too() {
+        // Same construction mirrored. The then arm opens with a call, whose
+        // body this rule will not look into -- otherwise the rule would take
+        // that arm, since it prefers the one it meets first.
+        let call = Node::Call {
+            depth: 0,
+            target: bytecode::SentenceIndex::from(0),
+        };
+        let w = [branch(vec![call.clone()], vec![op(Instruction::Untuple(2))])];
+        assert_eq!(
+            SpeculateBranch.rewrite(&prog(), &w),
+            Some(vec![
+                dip(
+                    1,
+                    vec![op(Instruction::Pick(0)), op(Instruction::Untuple(2))]
+                ),
+                branch(
+                    vec![op(Instruction::Drop), op(Instruction::Drop), call],
+                    vec![dip(2, vec![op(Instruction::Drop)])],
+                ),
+            ])
+        );
+    }
+
+    #[test]
+    fn speculate_branch_lifts_a_whole_block_not_just_one_op() {
+        // What lets a speculation climb out of nested branches: the rule's own
+        // output is a dip, so if a dip could not be lifted the second branch
+        // out would strand it. `dip 1 { untuple 2 }` is (2 -> 3).
+        let w = [branch(
+            vec![dip(1, vec![op(Instruction::Untuple(2))])],
+            vec![op(Instruction::Push(Value::Int(9)))],
+        )];
+        assert_eq!(
+            SpeculateBranch.rewrite(&prog(), &w),
+            Some(vec![
+                dip(
+                    1,
+                    vec![
+                        op(Instruction::Pick(1)),
+                        op(Instruction::Pick(1)),
+                        dip(1, vec![op(Instruction::Untuple(2))]),
+                    ]
+                ),
+                branch(
+                    vec![dip(
+                        3,
+                        vec![op(Instruction::Drop), op(Instruction::Drop)]
+                    )],
+                    vec![
+                        op(Instruction::Drop),
+                        op(Instruction::Drop),
+                        op(Instruction::Drop),
+                        op(Instruction::Push(Value::Int(9))),
+                    ],
+                ),
+            ])
+        );
+    }
+
+    #[test]
+    fn speculate_branch_looks_all_the_way_into_a_block() {
+        // A dip qualifies only if its whole body does, however deep. One
+        // `assert` anywhere inside is enough to disqualify it, since running
+        // the block on the losing path would then fail where the original did
+        // not.
+        for body in [
+            vec![op(Instruction::Assert)],
+            vec![op(Instruction::Add), op(Instruction::Assert)],
+            vec![dip(1, vec![op(Instruction::Panic)])],
+            vec![op(Instruction::Print)],
+            // A call is opaque, so a block containing one is too.
+            vec![Node::Call {
+                depth: 0,
+                target: bytecode::SentenceIndex::from(0),
+            }],
+        ] {
+            assert_eq!(
+                SpeculateBranch.rewrite(&prog(), &[branch(vec![dip(1, body.clone())], vec![])]),
+                None,
+                "a block containing {:?} should not be speculated",
+                body
+            );
+        }
+    }
+
+    #[test]
+    fn speculate_branch_copies_every_operand_a_wider_x_reads() {
+        // `add` is (2 -> 1), so both operands are copied and the then arm drops
+        // two originals from under the single result.
+        let w = [branch(
+            vec![op(Instruction::Add)],
+            vec![op(Instruction::Push(Value::Int(9)))],
+        )];
+        assert_eq!(
+            SpeculateBranch.rewrite(&prog(), &w),
+            Some(vec![
+                dip(
+                    1,
+                    vec![
+                        op(Instruction::Pick(1)),
+                        op(Instruction::Pick(1)),
+                        op(Instruction::Add)
+                    ]
+                ),
+                branch(
+                    vec![dip(
+                        1,
+                        vec![op(Instruction::Drop), op(Instruction::Drop)]
+                    )],
+                    vec![
+                        op(Instruction::Drop),
+                        op(Instruction::Push(Value::Int(9)))
+                    ],
+                ),
+            ])
+        );
+    }
+
+    #[test]
+    fn speculate_branch_declines_what_must_not_run_on_the_losing_path() {
+        // Each of these would do something on the path that skipped the arm:
+        // print an extra line, or fail where the original did not. The other
+        // arm is left empty, since the rule takes whichever arm offers a head
+        // and would otherwise fire on that one instead.
+        for inst in [
+            Instruction::Print,
+            Instruction::Assert,
+            Instruction::AssertEqual,
+            Instruction::Panic,
+            // Sound, but excluded to keep the measure honest.
+            Instruction::Drop,
+        ] {
+            assert_eq!(
+                SpeculateBranch.rewrite(&prog(), &[branch(vec![op(inst.clone())], vec![])]),
+                None,
+                "{:?} should not be speculated",
+                inst
+            );
+        }
+        // A call may hold one of those several frames down, and this rule does
+        // not open callees to find out.
+        assert_eq!(
+            SpeculateBranch.rewrite(
+                &prog(),
+                &[branch(
+                    vec![Node::Call {
+                        depth: 0,
+                        target: bytecode::SentenceIndex::from(0)
+                    }],
+                    vec![]
+                )]
+            ),
+            None
+        );
+        // And an empty arm has no head to take.
+        assert_eq!(
+            SpeculateBranch.rewrite(&prog(), &[branch(vec![], vec![])]),
+            None
+        );
+    }
+
+    #[test]
+    fn speculate_branch_leaves_a_shared_prefix_to_factor_branch() {
+        // `factor_branch` does this case strictly better -- no copies and no
+        // drops, because a prefix both arms run needs no speculation.
+        let w = [branch(
+            vec![op(Instruction::Untuple(3)), op(Instruction::Add)],
+            vec![op(Instruction::Untuple(3)), op(Instruction::Drop)],
+        )];
+        assert_eq!(SpeculateBranch.rewrite(&prog(), &w), None);
+        assert!(FactorBranch.rewrite(&prog(), &w).is_some());
+    }
+
+    #[test]
+    fn speculate_branch_settles() {
+        // The measure is non-`drop` Ops inside arms: firing takes one out and
+        // puts back only drops and a dip, neither of which it will match.
+        let start = branch(
+            vec![op(Instruction::Untuple(3)), op(Instruction::Add)],
+            vec![op(Instruction::IsInt)],
+        );
+        let mut nodes = vec![start];
+        for round in 0..8 {
+            let Some(next) = nodes
+                .iter()
+                .position(|n| matches!(n, Node::Branch { .. }))
+                .and_then(|i| {
+                    SpeculateBranch
+                        .rewrite(&prog(), &nodes[i..i + 1])
+                        .map(|out| (i, out))
+                })
+            else {
+                assert!(round > 0, "expected at least one firing");
+                return;
+            };
+            let (i, out) = next;
+            nodes.splice(i..i + 1, out);
+        }
+        panic!("speculate_branch did not settle: {:?}", nodes);
+    }
+
+    #[test]
     fn cancel_tuple_goes_one_way_only() {
         assert_eq!(
             CancelTuple.rewrite(
@@ -2584,8 +2820,21 @@ impl Rule for DupNatural {
             _ => return None,
         };
 
-        // Whichever way round, it has to be the same computation.
-        let [inner] = framed else { return None };
+        // The frame may also carry a `pick 0` of its own, which is what
+        // [`SpeculateBranch`] leaves behind: speculating `X` out of one arm has
+        // to copy `X`'s operand, because the arm that did *not* want `X` still
+        // wants the value. So the law runs under a retained copy —
+        //
+        //   pick 0; dip 1 { pick 0; X }; X  ==  pick 0; X; (pick (m-1))^m
+        //
+        // — which is the same statement with `x` surviving on the left of both
+        // sides. Without this the sharing stops one step short of closing,
+        // since `sink` delivers the speculation in exactly this shape.
+        let (retained, inner) = match framed {
+            [inner] => (false, inner),
+            [Node::Op(Instruction::Pick(0)), inner] => (true, inner),
+            _ => return None,
+        };
         if !same_effect(plain, inner) || matches!(plain, Node::Op(Instruction::Print)) {
             return None;
         }
@@ -2594,7 +2843,11 @@ impl Rule for DupNatural {
             return None;
         }
 
-        let mut out = vec![plain.clone()];
+        let mut out = Vec::new();
+        if retained {
+            out.push(Node::Op(Instruction::Pick(0)));
+        }
+        out.push(plain.clone());
         // `m` copies, each reaching back past the ones already made.
         let reach = usize::try_from(m - 1).ok();
         if let Some(d) = reach {
@@ -2880,6 +3133,184 @@ impl Rule for UnfactorBranch {
             else_origin: else_origin.clone(),
             else_body: prefixed(else_body),
         }])
+    }
+}
+
+/// Hoists an operator out of **one** branch arm, by running it speculatively
+/// on a copy and letting each arm discard the half it did not want.
+///
+/// For `X : n -> m` at the head of the then arm:
+///
+/// ```text
+/// branch { X; A } { B }
+///   ==
+/// dip 1 { (pick (n-1))^n; X };
+/// branch { dip m { drop^n }; A } { drop^m; B }
+/// ```
+///
+/// and symmetrically for the else arm. The `dip 1` is because the condition is
+/// still on top and `X` must not be handed it; the `(pick (n-1))^n` copies `X`'s
+/// operands in place, the same way [`RebuildCopy`] and [`DupNatural`] do.
+///
+/// **This is the direction that used to be impossible.** `factor_branch` hoists
+/// a prefix only when *both* arms share it, and taking one from a single arm
+/// would run it on the path that did not take that arm. While `untuple n` could
+/// reject a value, that invented a panic; while its junk was untagged, it
+/// junk-normalized a value the other path went on to use. Neither objection
+/// survives here, because **the other path never gives up its own values** — the
+/// speculation runs on a copy, and the losing arm drops the results and carries
+/// on with what it always had. No inverse for `X` is needed, so this asks
+/// nothing of `untuple n` that it asks of `add`.
+///
+/// What it does need is exactly what `docs/totality.md` established:
+///
+/// - `X` must be **total**, or the speculation invents a failure on the losing
+///   path. Every data operation now is, which is what makes the rule possible
+///   at all; `assert`, `assert_eq` and `panic` are excluded, and fall out of
+///   [`op_arity`] or the match below.
+/// - `X` must have **no effect but the stack**, which excludes `print`.
+/// - `X` must have a **local arity**, which excludes `Dip`, `Branch` and `Call`
+///   nodes. Their bodies may hold an `assert` several frames down, and a
+///   window-local rule has no business guessing. `inline` and `flatten_call`
+///   are how you make the operator underneath visible, as usual.
+///
+/// `drop` is excluded too, for the measure rather than for soundness: the rule
+/// prepends drops to the arms, and hoisting those again would let it chase its
+/// own tail. Hoisting a `drop` is pure loss anyway — there is nothing to its
+/// left for it to cancel against that it could not have cancelled against
+/// inside the arm.
+///
+/// It also declines when **both** arms open with the same effect, which is
+/// [`FactorBranch`]'s case and which that rule does strictly better: no copies
+/// and no drops, because a shared prefix needs no speculation.
+///
+/// The term gets bigger — n copies and n + m drops to move one node — so this
+/// pays only when the hoisted `X` reaches something to its left that cancels
+/// it. Aiming it is the search's job, as with `float` and `rebuild_copy`.
+///
+/// Measure: the number of non-`drop` `Op` nodes inside branch arms. Firing
+/// removes exactly one and puts back only drops and a dip, so `each` settles
+/// even though the node count grows.
+#[derive(Debug)]
+pub(crate) struct SpeculateBranch;
+
+/// Whether `node` may be run on a path that would not have run it.
+///
+/// Total and effect-free, decided syntactically and recursively. A `Dip`
+/// qualifies when its whole body does, which is what lets a speculation climb
+/// out of nested branches: the rule's own output is a dip, and without this it
+/// would strand itself at the next branch out.
+///
+/// A `Call` never qualifies. Its body may hold an `assert` several frames down,
+/// and `inline` is how you make that visible — the same stance [`YieldsBool`]
+/// takes towards a call that happens to return a boolean.
+///
+/// [`YieldsBool`]: yields_bool
+fn speculable(node: &Node) -> bool {
+    match node {
+        Node::Op(inst) => match inst {
+            // Running these on the losing path would print something the
+            // original did not, or fail where the original did not.
+            Instruction::Print | Instruction::Assert | Instruction::AssertEqual => false,
+            // Sound to speculate, but excluded so that the rule cannot match
+            // what it just emitted. See the measure.
+            Instruction::Drop => false,
+            // `Panic`, `Dip` and `Branch` have no local arity and stop here.
+            _ => op_arity(inst).is_some(),
+        },
+        // An empty body is `noop`'s business, and hoisting it would report a
+        // change without making one.
+        Node::Dip { body, .. } => !body.is_empty() && body.iter().all(speculable),
+        Node::Branch { .. } | Node::Call { .. } => false,
+    }
+}
+
+impl Rule for SpeculateBranch {
+    fn name(&self) -> &'static str {
+        "speculate_branch"
+    }
+    fn width(&self) -> usize {
+        1
+    }
+    fn rewrite(&self, prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
+        let Node::Branch {
+            then_origin,
+            then_body,
+            else_origin,
+            else_body,
+        } = &window[0]
+        else {
+            return None;
+        };
+
+        // A shared prefix is `factor_branch`'s, and it hoists one without
+        // paying for any of this.
+        if let (Some(a), Some(b)) = (then_body.first(), else_body.first()) {
+            if same_effect(a, b) {
+                return None;
+            }
+        }
+
+        // Whichever arm offers a head that may run on the other path.
+        fn head(arm: &[Node]) -> Option<&Node> {
+            arm.first().filter(|n| speculable(n))
+        }
+        let (from_then, x) = match head(then_body) {
+            Some(x) => (true, x.clone()),
+            None => (false, head(else_body)?.clone()),
+        };
+        let (n, m) = node_arity(prog, &x)?;
+        let (n, m) = (usize::try_from(n).ok()?, usize::try_from(m).ok()?);
+
+        // Copy `X`'s operands in place, then run it on the copies. Each pick
+        // reaches back past the copies already made, so the block lands in the
+        // same order it was read.
+        let mut speculated: Vec<Node> = (0..n)
+            .map(|_| Node::Op(Instruction::Pick(n - 1)))
+            .collect();
+        speculated.push(x);
+
+        // The arm that asked for `X` keeps its results and drops the originals,
+        // which sit underneath them.
+        let winner = |rest: &[Node]| {
+            let mut out = Vec::new();
+            if n > 0 {
+                out.push(Node::Dip {
+                    depth: m,
+                    origins: Vec::new(),
+                    body: vec![Node::Op(Instruction::Drop); n],
+                });
+            }
+            out.extend(rest.iter().cloned());
+            out
+        };
+        // The other arm drops the results and goes on with the values it always
+        // had. This is the whole reason no inverse is needed.
+        let loser = |rest: &[Node]| {
+            let mut out = vec![Node::Op(Instruction::Drop); m];
+            out.extend(rest.iter().cloned());
+            out
+        };
+
+        let (then_body, else_body) = if from_then {
+            (winner(&then_body[1..]), loser(else_body))
+        } else {
+            (loser(then_body), winner(&else_body[1..]))
+        };
+
+        Some(vec![
+            Node::Dip {
+                depth: 1,
+                origins: Vec::new(),
+                body: speculated,
+            },
+            Node::Branch {
+                then_origin: then_origin.clone(),
+                then_body,
+                else_origin: else_origin.clone(),
+                else_body,
+            },
+        ])
     }
 }
 

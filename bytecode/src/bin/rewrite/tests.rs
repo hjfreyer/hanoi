@@ -992,25 +992,18 @@ fn dup_natural_shares_a_predicates_work_with_its_callers() {
 }
 
 #[test]
-fn the_sharing_law_cannot_reach_across_a_branch() {
-    // Why the direct route does not work — and it still does not.
+fn the_movement_rules_alone_cannot_reach_across_a_branch() {
+    // Why the *movement* rules do not get there on their own.
     //
     // This is the shape every predicate in the corpus actually has: the check
     // consumes a *copy* and the real work destructures the *original*, with a
     // branch in between. `dup_natural` relates the two occurrences only when
-    // they are in one sequence, and no rule moves the inner `untuple` out of
-    // the arm — hoisting it would run it on the path that did not take the
-    // arm, where it junk-normalizes a value that path goes on to use.
+    // they are in one sequence, and nothing in this tactic moves the inner
+    // `untuple` out of the arm — `factor_branch` needs both arms to share it,
+    // and `sink` cannot cross a branch at all.
     //
-    // Totalizing the VM did not unblock this. It changed the argument: the
-    // hoist used to invent a panic and now loses information instead. What
-    // would have closed it is a tagged junk value, and `docs/totality.md` says
-    // why there is not one.
-    //
-    // The resolution is not to find such a rule but to stop needing one:
-    // `rebuild_copy` makes the value arrive already built, and `tuple n` is
-    // total on the nose where `untuple n` is only total up to normalization.
-    // See `the_whole_derivation_runs_on_the_blocked_shape`.
+    // `speculate_branch` is what moves it, and it is not in this tactic. See
+    // `the_direct_route_closes_by_speculating`.
     let (prog, before) = tree_of(
         r#"
         #[arity(1, 1)]
@@ -1176,6 +1169,72 @@ fn a_reconstruction_proves_the_shape_that_an_assertion_would_have_claimed() {
         1,
         "the rebuild should cancel against the arm's untuple"
     );
+}
+
+/// The direct route: hoist the arm's `untuple` out and merge it with the
+/// check's, with no reconstruction anywhere.
+///
+/// This is the derivation `the_movement_rules_alone_cannot_reach_across_a_branch`
+/// shows the movement rules cannot find, and it is shorter than the
+/// `rebuild_copy` one it replaces:
+///
+///   speculate_branch  runs the arm's `untuple` on a copy, before the branch
+///   sink              walks it left to sit on the check's `untuple`
+///   dup_natural       merges the two
+///
+/// **`speculate_branch` is sound only because the data operations are total.**
+/// Running `untuple 3` on the path that took the *other* arm used to invent a
+/// panic; what makes it harmless is not that untupling became reversible — it
+/// did not, see `docs/totality.md` — but that the losing arm never gives up its
+/// own value. The speculation runs on a copy and its results are dropped.
+///
+/// `vm::totality_tests` is the executable check on the semantics; this is the
+/// check that the semantics bought the rewrite it was supposed to.
+#[test]
+fn the_direct_route_closes_by_speculating() {
+    let (prog, before) = probe("blocked");
+    assert_eq!(untuples(&before), 2);
+    let after = run(
+        prog,
+        before.clone(),
+        "once(speculate_branch); \
+         repeat(bu(each(collapse); each(sink); each(fuse))); \
+         repeat(bu(each(dup_natural)))",
+    );
+    assert_eq!(
+        untuples(&after),
+        1,
+        "the two occurrences should have become one"
+    );
+    assert_eq!(
+        seq_arity(prog, &before),
+        seq_arity(prog, &after),
+        "the whole derivation should preserve arity"
+    );
+    // And no reconstruction was involved: this route never builds a tuple.
+    assert_eq!(
+        tuples(&after),
+        0,
+        "expected no rebuild, got {:?}",
+        shape(&after)
+    );
+}
+
+/// `tuple n` nodes anywhere in the tree, the counterpart of [`untuples`].
+fn tuples(nodes: &[Node]) -> usize {
+    nodes
+        .iter()
+        .map(|n| match n {
+            Node::Op(Instruction::Tuple(_)) => 1,
+            Node::Dip { body, .. } => tuples(body),
+            Node::Branch {
+                then_body,
+                else_body,
+                ..
+            } => tuples(then_body) + tuples(else_body),
+            _ => 0,
+        })
+        .sum()
 }
 
 #[test]

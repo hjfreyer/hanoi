@@ -48,10 +48,11 @@ operand came from. It either matches and returns a replacement, or fails.
 | `retain_condition` | `Y ; pick 0 ; branch { A } { B }`, `Y` yields a bool | `Y ; branch { push true; A } { push false; B }` |
 | `specialize_equal` | `pick d; push c; equal; branch { A } { B }` | the same, with A as `dip d { drop; push c }; A` |
 | `copy_const` | `push c ; pick 0` | `push c ; push c` |
-| `dup_natural` | `pick 0 ; X ; dip m { X }`, `X : 1 -> m` | `X ; (pick (m-1))^m` |
+| `dup_natural` | `pick 0 ; X ; dip m { X }`, `X : 1 -> m` | `X ; (pick (m-1))^m` (also under a retained copy) |
 | `unfactor_branch` | `dip k { X } ; branch { A } { B }`, `k >= 1` | `branch { dip (k-1) { X }; A } { … }` |
 | `rebuild_copy` | `pick 0 ; untuple n`, `n >= 1` | a guard, then `untuple n ; (pick (n-1))^n ; dip n { tuple n }` |
 | `copy_assoc` | `pick d ; pick 0` | `pick d ; dip 1 { pick d }` |
+| `speculate_branch` | `branch { X; A } { B }`, `X : n -> m` total | `dip 1 { (pick (n-1))^n; X }; branch { dip m { drop^n }; A } { drop^m; B }` |
 
 `sink` is the interchange rule, and its side condition is the one piece of real
 arithmetic here: writing `X`'s arity as `(n -> m)`, the dip's window must sit
@@ -322,9 +323,11 @@ because every predicate here is written `pick 0; jump P::check; branch {...}` �
 the check consumes a *copy* and the real work destructures the *original*. And
 it does close it, whenever the two occurrences are in one sequence.
 
-**They are not.** There is a branch in between, and nothing in this rule set
-moves code *out* of a branch arm except `factor_branch`, which needs both arms
-to share it. Hoisting from a single arm is not merely missing:
+**They are not.** There is a branch in between, and `factor_branch` — the only
+rule that moves code *out* of an arm — needs both arms to share it.
+
+The obvious hoist from a single arm does not work, and totality does not make it
+work:
 
 ```
 branch { untuple 3; A } { B }   →   dip 1 { untuple 3 }; branch { A } { tuple 3; B }
@@ -332,17 +335,70 @@ branch { untuple 3; A } { B }   →   dip 1 { untuple 3 }; branch { A } { tuple 
 
 would run `untuple 3` on the path that took the *other* arm, where it
 junk-normalizes a value that `B` then goes on to use — and `tuple 3` does not
-put it back. The `untuple n ⊣ tuple n` pair looks like an iso and is not one,
-and the case that matters is exactly where the gap bites. Whether the hoist is
-safe depends on a guard several branches further out having already established
-that the value is a 3-tuple, and that is a fact about a path, not about a
-window.
+put it back. The `untuple n ⊣ tuple n` pair looks like an iso and is not one.
+It used to invent a panic there instead; the argument changed and the
+conclusion did not.
 
-**Totalizing the VM did not unblock this.** It only changed the argument: the
-hoist used to invent a panic and now loses information instead. What would have
-closed it is a *tagged* junk value, one that remembers what it was untupled
-from; [totality.md](totality.md) says why there is not one, and what that choice
-bought elsewhere.
+## Speculation is cheaper than an inverse
+
+**The hoist does not need an inverse. It needs a copy.** That is
+`speculate_branch`:
+
+```
+branch { X; A } { B }
+  ==
+dip 1 { (pick (n-1))^n; X };  branch { dip m { drop^n }; A } { drop^m; B }
+```
+
+Run `X` on a *copy* before the branch, and let each arm throw away the half it
+did not want. The losing path never gives up its own values, so nothing has to
+be reconstructed and `untuple n` is asked nothing that `add` is not asked. The
+`dip 1` is because the condition is still on top and `X` must not be handed it.
+
+**This is what totalizing the VM actually bought.** The rule is sound only
+because `X` cannot fail on the path that skipped it — which, for the `untuple`
+case the sharing problem is entirely about, was false a week ago. Beyond that it
+asks only that `X` have no effect but the stack (excluding `print`) and a
+locally known arity (excluding calls, whose bodies may hold an `assert` several
+frames down; `inline` is how you make that visible). A `dip` qualifies when its
+whole body does, which is what lets a speculation climb out of *nested*
+branches — the rule's own output is a dip, and it would otherwise strand itself
+at the next branch out.
+
+It declines when both arms open with the same effect: that is `factor_branch`'s
+case, and it does it strictly better, with no copies and no drops.
+
+So the direct route through the sharing problem is open:
+
+```
+speculate_branch   runs the arm's `untuple` on a copy, before the branch
+sink               walks it left to sit on the check's `untuple`
+dup_natural        merges the two
+```
+
+`dup_natural` learned one thing to close this. `sink` delivers the speculation
+as `pick 0; dip 1 { pick 0; X }; X` — the frame carries a `pick 0` of its own,
+because speculating had to copy — so the law is stated under a retained copy:
+
+```
+pick 0; dip 1 { pick 0; X }; X   ==   pick 0; X; (pick (m-1))^m
+```
+
+which is the same statement with the value surviving on the left of both sides.
+
+### How far it actually gets
+
+On the probe shape, all the way:
+`the_direct_route_closes_by_speculating` takes two `untuple`s to one with no
+reconstruction anywhere.
+
+On `emit_does_pre_and_post` — where the copy is made at the top of the caller
+and the `untuple` is two branches and several guards away — it does **not**
+close. The speculation climbs out correctly, but each level wraps the previous
+one in another frame, and `dup_natural` cannot see two occurrences through that
+nesting. There the `rebuild_copy` chain is still the one that pays, taking seven
+`untuple`s to two. Which route wins is a property of the shape, not of the
+rules, and picking one is the search's job.
 
 So `unfactor_branch` goes the other way — pushing context *into* both arms,
 which is always sound — and is the direction available today. It is the exact
