@@ -1401,8 +1401,9 @@ tactic deliver = repeat(bu(each(copy_assoc, copy_comm); each(rebuild_copy); each
                            each(annihilate_drop, noop, pick_drop_to_roll);
                            each(copy_const, cancel_tuple, probe_tuple, probe_length)));
 tactic drain = repeat(bu(each(discharge_untuple); each(discharge_length);
-                         each(merge_branch, annihilate_equal, annihilate_and,
-                              annihilate_drop, pick_drop_to_roll, noop);
+                         each(merge_branch, merge_copied_branch, annihilate_equal,
+                              annihilate_and, annihilate_drop, pick_drop_to_roll, noop);
+                         each(commute_framed_lit); each(float_lit);
                          each(fold_const, fold_const_unary, bool_identity,
                               cancel_tuple, probe_tuple, probe_length)));
 tactic opened = open; share; cleanup;
@@ -1425,31 +1426,58 @@ tactic splice = repeat(bu(each(sink); each(collapse); each(flatten_call);
                                copy_const, copy_comm)));
 tactic endgame = repeat_n(8, round); repeat_n(6, splice; drain; round);
 
-// The aimed walk over the panic-free residue: both is_symbol re-checks of
-// the thirsty postcondition travel out of three nested branches to the top
-// of the state sequence, one checked step at a time. Every `at` that misses
-// fails the whole script, so this running at all is the assertion.
-tactic walk =
-  then_at(2, then_at(4, at(1, copy_comm_inv)));
-  then_at(2, then_at(4, else_at(6, then_at(3,
-    at(1, probe_split);
-    then_at(4, at(0, probe_split); at(3, factor_branch); at(4, hoist_probe);
-               then_at(5, at(0, sink)); at(5, hoist_probe))))));
-  then_at(2, then_at(4, else_at(6, then_at(3, then_at(4,
-    at(3, sink); at(2, sink); at(1, sink); at(0, sink_probe))))));
-  then_at(2, then_at(4, else_at(6, then_at(3, at(4, hoist_probe)))));
+// The whole proof of `emit_does_pre_and_post == drop; push true`, from the
+// panic-free form. Deliveries walk each copy's creation to its consumer;
+// the postcondition's re-checks hoist out of their branches and fuse with
+// the precondition's checks (`dup_probe_mixed`); `retain_condition` pays
+// each fused copy off as a literal in the arms; the sweeps fold what is
+// decided and the guard skeleton discharges. Every `at` that misses fails
+// the whole script, so this running at all is most of the theorem — and the
+// final shape is the rest.
+tactic qed =
+  then_at(2, then_at(4, at(1, copy_comm_inv); at(2, copy_comm);
+                        at(3, float); at(4, float)));
+  then_at(2, then_at(4, at(5, unfactor_branch)));
+  then_at(2, then_at(4, else_at(5,
+    at(0, copy_comm); at(1, float); at(2, float); at(3, unfactor_branch);
+    then_at(3, at(1, float)))));
+  then_at(2, then_at(4, else_at(5, then_at(3,
+    at(2, unfactor_branch);
+    then_at(2, at(0, float); at(1, unfactor_branch);
+               then_at(1, at(1, annihilate_drop));
+               else_at(1, at(1, annihilate_drop)));
+    else_at(2, at(0, float_drop); at(2, annihilate_drop))))));
   then_at(2, then_at(4,
-    else_at(6,
-      then_at(3, at(3, sink); at(2, sink); at(1, sink_probe); at(0, sink));
-      at(3, hoist_probe);
-      at(2, sink); at(1, sink); at(0, sink_probe));
-    at(6, hoist_probe)));
-  then_at(2, then_at(4,
-    else_at(7,
-      then_at(3, at(0, float); at(1, float));
-      at(3, hoist_probe);
-      at(2, sink); at(1, sink); at(0, sink_probe); at(0, flatten_call));
-    at(7, hoist_probe)));
+    at(1, copy_swap); at(2, float); at(3, float); at(4, unfactor_branch);
+    else_at(4,
+      at(0, copy_swap); at(1, float); at(2, float); at(3, unfactor_branch);
+      then_at(3, at(0, copy_comm); at(1, float); at(2, unfactor_branch);
+                 else_at(2, at(0, annihilate_drop))))));
+  then_at(2, then_at(4, else_at(4, then_at(3, then_at(2,
+    at(2, factor_branch); at(3, hoist_probe);
+    then_at(4, at(0, sink)); at(4, hoist_probe);
+    at(2, sink); at(1, sink); at(0, sink_probe))))));
+  then_at(2, then_at(4, else_at(4, then_at(3,
+    at(2, hoist_probe); at(1, sink); at(0, sink_probe);
+    at(0, dup_probe_mixed); at(1, retain_condition)))));
+  then_at(2, then_at(4, else_at(4, then_at(3, then_at(2,
+    at(3, sink); at(2, sink); at(1, sink_probe))))));
+  then_at(2, then_at(4, else_at(4, then_at(3, then_at(2,
+    at(1, dup_probe_mixed); at(3, unfactor_branch); at(2, retain_condition))))));
+  repeat_n(6, repeat(bu(each(fission))); splice; drain; round); drain;
+  then_at(2, then_at(4, else_at(4, then_at(3,
+    at(3, retain_condition);
+    then_at(3, at(4, retain_condition))))));
+  repeat_n(6, repeat(bu(each(fission))); splice; drain; round); drain;
+  then_at(2, then_at(4, else_at(4, then_at(3, then_at(3, then_at(3, at(2, sink)))))));
+  repeat_n(4, splice; drain);
+  then_at(2, then_at(4, else_at(4, then_at(3, then_at(3, then_at(3,
+    at(0, float); at(1, float_drop)))))));
+  repeat_n(4, splice; drain);
+  then_at(2, then_at(4, else_at(4, else_at(3,
+    then_at(5, at(0, float); at(1, float_drop); at(3, annihilate_drop));
+    else_at(5, then_at(3, at(0, float); at(1, float_drop); at(3, annihilate_drop)))))));
+  repeat_n(4, splice; drain);
 "#;
 
 /// Runs an expression against the prelude plus [`DERIVATION`].
@@ -1535,25 +1563,20 @@ fn the_derivation_reaches_a_panic_free_form() {
     );
 }
 
-/// The aimed walk over the panic-free residue runs to completion.
+/// **The theorem.** `emit_does_pre_and_post` reduces to exactly
+/// `drop; push true` — the constant-true program — by window-local rewrites
+/// alone.
 ///
-/// This is the strongest kind of assertion the aimed combinators allow: a
-/// `walk` in which any step that misses fails the whole tactic, so the
-/// outcome being `Changed` means all thirty-odd aimed firings landed exactly
-/// where the script says, on the real corpus sentence, each preserving the
-/// window's net stack effect under `--check`. It carries both of the thirsty
-/// postcondition's `is_symbol` re-checks out of three nested branches to the
-/// top of the state sequence — the two `dip { pick 0; is_symbol }` frames the
-/// final shape assertion looks for.
-///
-/// What it does *not* yet do is fuse them with the precondition's checks:
-/// the walked frames read the original components while the precondition's
-/// probes still read the copies, and `dup_probe`/`dup_probe_frame` rightly
-/// demand the same slot. Bridging that — redirecting a probe of a copy into
-/// a probe of its source across the creation — is the one remaining
-/// choreography between this form and `drop; push true`.
+/// The `qed` script is the proof, and this is the strongest kind of
+/// assertion the aimed combinators allow: any aimed step that misses fails
+/// the whole tactic, so the outcome being `Changed` means every firing
+/// landed exactly where the script says, on the real corpus sentence, each
+/// preserving its window's net stack effect under `--check` — and the final
+/// shape assertion is the equality itself. No rule was ever told a fact; the
+/// sharing the theorem needs is carried entirely by constructions the
+/// rewriter checks for itself.
 #[test]
-fn the_aimed_walk_lands_every_step_on_the_real_corpus_sentence() {
+fn emit_does_pre_and_post_reduces_to_constant_true() {
     let main = Path::new("../tests/main.hana");
     let Ok(code) = fs::read_to_string(main) else {
         return;
@@ -1574,30 +1597,14 @@ fn the_aimed_walk_lands_every_step_on_the_real_corpus_sentence() {
         build(prog.library(), idx, &mut HashSet::new()),
         "opened; endgame",
     );
-    let outcome = derivation_outcome(prog, residue.clone(), "walk");
+    let outcome = derivation_outcome(prog, residue, "qed");
     let Outcome::Changed(after) = outcome else {
         panic!("an aimed step missed: {:?}", outcome);
     };
-
-    // Navigate to the state sequence and check both frames arrived.
-    let Node::Branch { then_body, .. } = &after[2] else {
-        panic!("expected the is_tuple branch at 2")
-    };
-    let Node::Branch { then_body: s, .. } = &then_body[4] else {
-        panic!("expected the length branch at 4")
-    };
     assert_eq!(
-        &shape(s)[6..=7],
-        &[
-            "dip 4 { pick 0 is_symbol }".to_string(),
-            "dip 1 { pick 0 is_symbol }".to_string(),
-        ],
-        "both walked re-checks should sit at the top of the state sequence"
-    );
-    assert_eq!(
-        seq_arity(prog, &residue),
-        seq_arity(prog, &after),
-        "and the walk should preserve arity"
+        shape(&after),
+        vec!["drop", "push true"],
+        "the whole sentence should be the constant-true program"
     );
 }
 
@@ -2550,6 +2557,118 @@ fn a_dropped_conjunction_drains_with_the_dip_on_either_side() {
         "repeat(bu(each(annihilate_and); each(float_drop); each(annihilate_drop)))",
     );
     assert_eq!(shape(&body), vec!["drop", "drop"]);
+}
+
+#[test]
+fn a_framed_probe_meets_a_bare_check_of_its_slot() {
+    // The mixed dup: the frame reads the slot k+j deep and deposits at k, so
+    // a bare pick of k+j+1 reads the same value, and its probe can only
+    // repeat the frame's answer.
+    let body = tree(
+        r#"
+        #[arity(2, 4)]
+        sentence probe {
+            dip 1 { pick 0  is_symbol }
+            pick 2
+            is_symbol
+        }
+    "#,
+        "repeat(bu(each(dup_probe_mixed)))",
+    );
+    assert_eq!(
+        shape(&body),
+        vec!["dip 1 { pick 0 is_symbol }", "pick 1"]
+    );
+}
+
+#[test]
+fn any_two_copies_commute_when_aimed() {
+    let body = tree(
+        r#"
+        #[arity(3, 5)]
+        sentence probe {
+            pick 2
+            pick 1
+        }
+    "#,
+        "at(0, copy_swap)",
+    );
+    assert_eq!(shape(&body), vec!["pick 0", "dip 1 { pick 2 }"]);
+}
+
+#[test]
+fn a_framed_literal_travels_past_picks_and_pays_off_at_its_slot() {
+    // Commuting past a pick that reads elsewhere re-indexes; a pick of the
+    // deposited slot is the literal.
+    let body = tree(
+        r#"
+        #[arity(2, 4)]
+        sentence probe {
+            dip 1 { push 7 }
+            pick 2
+        }
+    "#,
+        "repeat(bu(each(float_lit)))",
+    );
+    assert_eq!(shape(&body), vec!["pick 1", "dip 2 { push 7 }"]);
+
+    let body = tree(
+        r#"
+        #[arity(1, 3)]
+        sentence probe {
+            dip 1 { push 7 }
+            pick 1
+        }
+    "#,
+        "repeat(bu(each(float_lit)))",
+    );
+    assert_eq!(shape(&body), vec!["dip 1 { push 7 }", "push 7"]);
+}
+
+#[test]
+fn a_framed_literal_operand_commutes_into_the_open() {
+    let body = tree(
+        r#"
+        #[arity(1, 1)]
+        sentence probe {
+            dip 1 { push true }
+            and
+        }
+    "#,
+        "repeat(bu(each(commute_framed_lit)))",
+    );
+    assert_eq!(shape(&body), vec!["push true", "and"]);
+}
+
+#[test]
+fn a_dip_splits_at_its_first_node_when_aimed() {
+    let body = tree(
+        r#"
+        #[arity(3, 3)]
+        sentence probe {
+            dip 1 { drop 0  push 7 }
+        }
+    "#,
+        "at(0, fission)",
+    );
+    assert_eq!(shape(&body), vec!["dip 1 { drop }", "dip 1 { push 7 }"]);
+}
+
+#[test]
+fn a_branch_on_a_copied_answer_merges_through_the_copy() {
+    let body = tree(
+        r#"
+        #[arity(2, 1)]
+        sentence probe {
+            dip 1 { is_symbol }
+            pick 1
+            branch { drop 0  drop 0  push 5 } { drop 0  drop 0  push 5 }
+        }
+    "#,
+        "repeat(bu(each(merge_copied_branch); each(annihilate_drop); \
+                   each(float_drop)))",
+    );
+    assert_eq!(shape(&body), vec!["drop", "drop", "push 5"]);
 }
 
 #[test]

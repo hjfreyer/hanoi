@@ -69,6 +69,13 @@ operand came from. It either matches and returns a replacement, or fails.
 | `probe_split` | `P ; branch`, P a total probe | `pick 0 ; P ; dip 1 { drop } ; branch` |
 | `sink_probe` | `pick d ; dip k { pick j; P }`, `k >= 1` | `dip (k-1) { pick j; P } ; pick d'` |
 | `dup_probe` | `pick d ; P ; pick (d+1) ; P` | `pick d ; P ; pick 0` |
+| `dup_probe_frame` | `dip k { pick j; P } ; dip (k+1) { pick j; P }` | the second becomes `dip k { pick 0 }` |
+| `dup_probe_mixed` | `dip k { pick j; P } ; pick (k+j+1) ; P` | `dip k { pick j; P } ; pick k` |
+| `copy_swap` | `pick a ; pick b`, `b >= 1` | `pick (b-1) ; dip 1 { pick a }` |
+| `float_lit` | `dip k { push c } ; pick d` | commutes, or `push c` when `d = k` |
+| `commute_framed_lit` | `dip 1 { push c } ; op`, op commutative | `push c ; op` |
+| `fission` | `dip k { A B ... }` | `dip k { A } ; dip k { B ... }` |
+| `merge_copied_branch` | a bool producer, a pick of its answer, `branch { A } { A }` | producer ; pick ; drop ; A |
 
 `sink` is the interchange rule, and its side condition is the one piece of real
 arithmetic here: writing `X`'s arity as `(n -> m)`, the dip's window must sit
@@ -447,16 +454,16 @@ threaded through the traversal, and no rule that reads a fact off its context.
 The governing invariant below is untouched — every rule involved still depends
 only on the sequence it is handed.
 
-### How far the constructions reach: the emit derivation
+### The emit theorem
 
-The standing goal is `emit_does_pre_and_post ≡ drop; push true`, derived by
-nothing but the rules above, and two corpus tests record how far that
-currently gets. `the_derivation_discharges_three_of_emits_four_panics` is the
-first act: open `is_state::check`, share the caller's copy through it, walk
-the union's decision tree with the `copy_assoc`/`float`/`unfactor_branch`
-dance so `specialize_equal` refines the *original*, then open `emit`
-everywhere — on the three refined symbol paths `emit`'s decision tree folds
-on literals and its `panic` arm folds away with it.
+`emit_does_pre_and_post ≡ drop; push true`, derived by nothing but the rules
+above, and three corpus tests are the record.
+`the_derivation_discharges_three_of_emits_four_panics` is the first act: open
+`is_state::check`, share the caller's copy through it, walk the union's
+decision tree with the `copy_assoc`/`float`/`unfactor_branch` dance so
+`specialize_equal` refines the *original*, then open `emit` everywhere — on
+the three refined symbol paths `emit`'s decision tree folds on literals and
+its `panic` arm folds away with it.
 
 `the_derivation_reaches_a_panic_free_form` is the second: `shortcut_and`
 expands one conjunction layer per round — never more than the round's folding
@@ -466,32 +473,33 @@ others. The decided skeletons then drain: `fold_and_branch` takes the arm a
 folded test chose, `merge_branch` removes branches whose arms have agreed
 (`yields_bool` looks through a whole tree of arms for this), the annihilate
 family peels retained check chains apart, and the discharge pair erases a
-guard's re-check inside the window that holds the guard. **No panic survives**,
-every firing passes `--check`, and the whole run is under a second.
+guard's re-check inside the window that holds the guard.
 
-What still stands between the panic-free form and `drop; push true` is one
-residue, on the thirsty path: the postcondition re-checks `is_symbol` on
+`emit_does_pre_and_post_reduces_to_constant_true` is the whole theorem, and
+its `qed` script is the proof — an aimed derivation in which any step that
+misses fails the whole tactic, so the test passing means every firing landed
+exactly where the script says and the final term is literally
+`drop; push true`. The endgame it scripts is the sharing the doc long called
+"a separate problem": the thirsty postcondition re-checks `is_symbol` on
 values whose *copies* the precondition checked, across branches on those
-checks' results. The travelling rules exist and each step is sound —
-`probe_split` turns a consuming check into a pick-probe with a deferred drop,
-`hoist_probe` carries a probe out of either arm, `sink_probe` walks it left
-past copy creations, `dup_probe` and `dup_probe_frame` fuse two probes of one
-slot. With the aimed combinators, the walk itself is now *demonstrated*:
-`the_aimed_walk_lands_every_step_on_the_real_corpus_sentence` carries both
-re-checks out of three nested branches to the top of the state sequence in
-thirty-odd aimed steps, each landing exactly where the script says, each
-preserving its window's net effect. Sweeps could not do this — the phases
-that aim the travelling rules undo each other's placements — and a script
-can.
+checks' results. The resolution is all construction, no facts. `copy_comm`
+and `copy_swap` frame a copy's *creation*, and `float`/`unfactor_branch`
+deliver it down the tree to its consumer, which turns the precondition's
+checks into pick-probes of the originals in place. `probe_split`,
+`factor_branch` and `hoist_probe` carry the postcondition's re-checks out of
+their branches; `sink` and `sink_probe` walk them left until
+`dup_probe_mixed` fuses each with the precondition probe of the same slot —
+the re-check becomes a *copy of the first answer*. A branch whose condition
+is a copy is then `retain_condition`'s window, generalized to any depth: the
+arms learn the answer's literal, `float_lit` and `commute_framed_lit` carry
+the literal to the operators that consume it, and everything folds. The
+guard skeleton discharges, `merge_copied_branch` closes the branches whose
+conditions were copies, and what remains is the constant-true program.
 
-The one move the walk still lacks is the fusion at the top. The walked
-frames read the original components; the precondition's probes read the
-*copies*; and the dup rules rightly demand the same slot. Redirecting a
-probe-of-a-copy into a probe-of-its-source is `copy_assoc`'s job, but the
-probe arrives at its copy's creation in consuming form rather than pick
-form, and re-splitting it there re-enters the shapes the walk just left.
-That bridge — one more comonoid-flavoured law, or a smarter walk order — is
-the precisely-stated remaining distance. Nothing in it calls for a fact.
+No rule was ever told a fact. Every hypothesis the proof needed travelled as
+a construction — a copy's creation, a check's answer, a retained literal —
+that the rewriter verified window by window, `--check` on every one of the
+firings, sweeps and aimed steps alike.
 
 **Rules are not tactics.** They live in their own namespace and cannot be
 aliased or defined; a rule has to be *placed* by `each` or `once`. Writing a

@@ -41,11 +41,13 @@ pub(crate) const ALL_RULES: &[&dyn Rule] = &[
     &AnnihilateEqual,
     &BoolIdentity,
     &CancelTuple,
+    &CommuteFramedLit,
     &Collapse,
     &CopyAssoc,
     &CopyComm,
     &CopyCommInv,
     &CopyConst,
+    &CopySwap,
     &DischargeLength,
     &DischargeUntuple,
     &DistributeBranch,
@@ -53,9 +55,12 @@ pub(crate) const ALL_RULES: &[&dyn Rule] = &[
     &DupNatural,
     &DupProbe,
     &DupProbeFrame,
+    &DupProbeMixed,
     &Expand,
     &FactorBranch,
+    &Fission,
     &FlattenCall,
+    &FloatLit,
     &Float,
     &FloatDrop,
     &FoldAndBranch,
@@ -66,6 +71,7 @@ pub(crate) const ALL_RULES: &[&dyn Rule] = &[
     &HoistProbe,
     &Inline,
     &MergeBranch,
+    &MergeCopiedBranch,
     &NoOp,
     &PickDropToRoll,
     &ProbeLength,
@@ -1295,15 +1301,27 @@ mod tests {
     }
 
     #[test]
-    fn retain_condition_needs_the_copy_to_be_of_the_condition() {
-        // `pick 1` copies something else, so the value the arm would see is
-        // not the one the branch tested.
+    fn retain_condition_refines_the_slot_the_copy_came_from() {
+        // `pick 1` copies the value one deep, so that is the slot each arm
+        // may refine — kept in place, one dip down, since removing the pick
+        // would hand the branch the wrong value.
+        let refined = |lit: bool| Node::Dip {
+            depth: 1,
+            origins: Vec::new(),
+            body: vec![
+                op(Instruction::Drop),
+                op(Instruction::Push(Value::Bool(lit))),
+            ],
+        };
         assert_eq!(
             RetainCondition.rewrite(
                 &prog(),
                 &[op(Instruction::Pick(1)), branch(vec![], vec![])]
             ),
-            None
+            Some(vec![
+                op(Instruction::Pick(1)),
+                branch(vec![refined(true)], vec![refined(false)]),
+            ])
         );
         // And with no copy at all there is nothing left on the stack to name.
         assert_eq!(
@@ -2153,11 +2171,13 @@ impl Rule for FoldConstUnary {
     }
 }
 
-/// `pick 0 ; branch { A } { B }` becomes `branch { push true; A } { push false; B }`.
+/// `pick 0 ; branch { A } { B }` becomes `branch { push true; A } { push false; B }`,
+/// and `pick d ; branch { A } { B }` for `d >= 1` refines in place: the arms
+/// become `dip d { drop; push true }; A` and `dip d { drop; push false }; B`.
 ///
 /// A branch may tell its arms what its condition was. The VM rejects a
 /// non-boolean condition, so an arm that runs at all ran because the value was
-/// exactly `true` or exactly `false` — and the copy `pick 0` left behind is
+/// exactly `true` or exactly `false` — and the copy `pick d` left behind is
 /// therefore a literal, which the arm can push for itself.
 ///
 /// This is how a **path condition becomes a value**, and it is worth being
@@ -2170,9 +2190,18 @@ impl Rule for FoldConstUnary {
 /// it is — the governing invariant is untouched, because the fact rides in the
 /// sequence.
 ///
-/// Measure: the number of branches immediately preceded by `pick 0`. Firing
-/// removes one, and the arms it rewrites begin with a `push`, so no rule in
-/// this set can hand one back.
+/// The `d >= 1` case is [`SpecializeEqual`]'s refinement with the branch
+/// itself as the test: the condition was a copy of the slot `d` deep, so
+/// inside each arm that slot *is* the literal the arm ran under, and the
+/// refinement dips to exactly there. It is what pays off a fused check — when
+/// [`DupProbeMixed`] has made a branch's condition a copy of another check's
+/// answer, this is how the arms learn that answer's value. The settled guard
+/// is `specialize_equal`'s, for the same oscillation reason.
+///
+/// Measure: at `d = 0`, branches immediately preceded by `pick 0` — firing
+/// removes one and no rule hands one back. At `d >= 1`, such branches whose
+/// then-arm does not open with the refinement, which is exactly what firing
+/// makes it open with.
 #[derive(Debug)]
 pub(crate) struct RetainCondition;
 
@@ -2184,7 +2213,7 @@ impl Rule for RetainCondition {
         2
     }
     fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
-        let [Node::Op(Instruction::Pick(0)), Node::Branch {
+        let [pick @ Node::Op(Instruction::Pick(d)), Node::Branch {
             then_origin,
             then_body,
             else_origin,
@@ -2194,18 +2223,52 @@ impl Rule for RetainCondition {
             return None;
         };
 
-        let arm = |lit: bool, body: &Vec<Node>| {
-            let mut out = vec![Node::Op(Instruction::Push(Value::Bool(lit)))];
+        if *d == 0 {
+            let arm = |lit: bool, body: &Vec<Node>| {
+                let mut out = vec![Node::Op(Instruction::Push(Value::Bool(lit)))];
+                out.extend(body.iter().cloned());
+                out
+            };
+            return Some(vec![Node::Branch {
+                then_origin: then_origin.clone(),
+                then_body: arm(true, then_body),
+                else_origin: else_origin.clone(),
+                else_body: arm(false, else_body),
+            }]);
+        }
+
+        // Already refined: the arm opens with the dip this rule would add.
+        let settled = matches!(
+            then_body.first(),
+            Some(Node::Dip { depth, body, .. })
+                if depth == d && matches!(body.first(), Some(Node::Op(Instruction::Drop)))
+        );
+        if settled {
+            return None;
+        }
+
+        let refine = |lit: bool, body: &Vec<Node>| {
+            let mut out = vec![Node::Dip {
+                depth: *d,
+                origins: Vec::new(),
+                body: vec![
+                    Node::Op(Instruction::Drop),
+                    Node::Op(Instruction::Push(Value::Bool(lit))),
+                ],
+            }];
             out.extend(body.iter().cloned());
             out
         };
 
-        Some(vec![Node::Branch {
-            then_origin: then_origin.clone(),
-            then_body: arm(true, then_body),
-            else_origin: else_origin.clone(),
-            else_body: arm(false, else_body),
-        }])
+        Some(vec![
+            pick.clone(),
+            Node::Branch {
+                then_origin: then_origin.clone(),
+                then_body: refine(true, then_body),
+                else_origin: else_origin.clone(),
+                else_body: refine(false, else_body),
+            },
+        ])
     }
 }
 
@@ -2519,6 +2582,48 @@ impl Rule for CopyComm {
                 depth: 1,
                 origins: Vec::new(),
                 body: vec![Node::Op(Instruction::Pick(*d))],
+            },
+        ])
+    }
+}
+
+/// `pick a ; pick b` becomes `pick (b-1) ; dip 1 { pick a }`, for `b >= 1`.
+///
+/// [`CopyComm`] without the equal-depth restriction: two copies of *any* two
+/// slots commute, because neither read disturbs the other — the second pick
+/// reached one past the first's fresh copy, so made first it reaches one
+/// less, and the first's read is re-derived under it in a frame. The point is
+/// the frame: any one creation in a copy chain can be framed for [`Float`]
+/// and [`UnfactorBranch`] to deliver to its consumer, however deep in the
+/// tree that consumer sits. At `b = 0` the second pick reads the first's copy
+/// itself, which is [`CopyAssoc`]'s window and a different law.
+///
+/// Kept out of every sweep: rotating arbitrary pick chains is aiming, not
+/// normalizing, and the sweeps' shapes are calibrated to `copy_comm`'s
+/// narrower window.
+#[derive(Debug)]
+pub(crate) struct CopySwap;
+
+impl Rule for CopySwap {
+    fn name(&self) -> &'static str {
+        "copy_swap"
+    }
+    fn width(&self) -> usize {
+        2
+    }
+    fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
+        let [Node::Op(Instruction::Pick(a)), Node::Op(Instruction::Pick(b))] = window else {
+            return None;
+        };
+        if *b < 1 {
+            return None;
+        }
+        Some(vec![
+            Node::Op(Instruction::Pick(*b - 1)),
+            Node::Dip {
+                depth: 1,
+                origins: Vec::new(),
+                body: vec![Node::Op(Instruction::Pick(*a))],
             },
         ])
     }
@@ -2932,6 +3037,197 @@ impl Rule for FoldAndBranch {
     }
 }
 
+/// `B ; pick-of-B's-answer ; branch { A } { A }` becomes
+/// `B ; pick ; drop ; A` — [`MergeBranch`] through a copy.
+///
+/// A branch whose arms agree and whose condition is a *copy* still needs the
+/// copied value known boolean before the drop may replace the check. The
+/// two-node rule cannot see past the pick; this window holds the producer
+/// too: a bare bool-yielder copied by `pick 0`, or a framed one
+/// `dip k { P }` copied by `pick k` — the pick reads exactly the frame's
+/// deposit either way.
+///
+/// Measure: branch count, as [`MergeBranch`].
+#[derive(Debug)]
+pub(crate) struct MergeCopiedBranch;
+
+impl Rule for MergeCopiedBranch {
+    fn name(&self) -> &'static str {
+        "merge_copied_branch"
+    }
+    fn width(&self) -> usize {
+        3
+    }
+    fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
+        let [
+            producer,
+            pick @ Node::Op(Instruction::Pick(d)),
+            Node::Branch {
+                then_body,
+                else_body,
+                ..
+            },
+        ] = window
+        else {
+            return None;
+        };
+        let copied_answer = match producer {
+            Node::Dip { depth, body, .. } => {
+                d == depth && matches!(&body[..], [p] if yields_bool(p))
+            }
+            p => *d == 0 && yields_bool(p),
+        };
+        if !copied_answer || !same_effect_seq(then_body, else_body) {
+            return None;
+        }
+        let mut out = vec![producer.clone(), pick.clone(), Node::Op(Instruction::Drop)];
+        out.extend(then_body.iter().cloned());
+        Some(out)
+    }
+}
+
+/// `dip k { A B ... }` becomes `dip k { A } ; dip k { B ... }`.
+///
+/// A dip distributes over the sequencing of its body — [`Fuse`] read
+/// backwards, and never in one `repeat` with it. Splitting is what lets one
+/// node of a delivered body meet its consumer alone: a refinement arrives as
+/// `dip d { drop; push c }`, and the `push c` half is the part
+/// [`CommuteFramedLit`] can hand to an operator.
+#[derive(Debug)]
+pub(crate) struct Fission;
+
+impl Rule for Fission {
+    fn name(&self) -> &'static str {
+        "fission"
+    }
+    fn width(&self) -> usize {
+        1
+    }
+    fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
+        let Node::Dip {
+            depth,
+            origins,
+            body,
+        } = &window[0]
+        else {
+            return None;
+        };
+        if body.len() < 2 {
+            return None;
+        }
+        Some(vec![
+            Node::Dip {
+                depth: *depth,
+                origins: origins.clone(),
+                body: vec![body[0].clone()],
+            },
+            Node::Dip {
+                depth: *depth,
+                origins: Vec::new(),
+                body: body[1..].to_vec(),
+            },
+        ])
+    }
+}
+
+/// `dip k { push c } ; pick d` commutes, and at `d = k` pays off: the pick
+/// reads the slot the frame just wrote, so its copy *is* the literal.
+///
+/// A framed literal is a refinement in transit — `retain_condition` and
+/// `specialize_equal` write one into a slot, and the code that reads the slot
+/// sits further right. A pick reading elsewhere commutes with mechanical
+/// re-indexing (the same accounting as [`SinkProbe`], in the other
+/// direction); a pick reading exactly the deposited slot becomes `push c`,
+/// which is [`CopyConst`] at depth and the payoff the whole delivery exists
+/// for.
+///
+/// Measure: at `d = k`, picks of a framed literal's slot. The commute cases
+/// have none and move the frame strictly rightward past bare picks, which
+/// nothing in the drains moves back.
+#[derive(Debug)]
+pub(crate) struct FloatLit;
+
+impl Rule for FloatLit {
+    fn name(&self) -> &'static str {
+        "float_lit"
+    }
+    fn width(&self) -> usize {
+        2
+    }
+    fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
+        match window {
+            [frame @ Node::Dip { depth: k, body, .. }, Node::Op(Instruction::Pick(d))] => {
+                let [Node::Op(Instruction::Push(c))] = &body[..] else {
+                    return None;
+                };
+                Some(if d == k {
+                    vec![frame.clone(), Node::Op(Instruction::Push(c.clone()))]
+                } else {
+                    let d_after = if d > k { d - 1 } else { *d };
+                    vec![
+                        Node::Op(Instruction::Pick(d_after)),
+                        Node::Dip {
+                            depth: k + 1,
+                            origins: Vec::new(),
+                            body: vec![Node::Op(Instruction::Push(c.clone()))],
+                        },
+                    ]
+                })
+            }
+            // The bare form: a pushed literal commutes past a pick that reads
+            // below it, entering the frame the other movement rules speak. At
+            // `d = 0` the pick reads the literal itself, which is
+            // `copy_const`'s window and stays its law.
+            [Node::Op(Instruction::Push(c)), Node::Op(Instruction::Pick(d))] if *d >= 1 => {
+                Some(vec![
+                    Node::Op(Instruction::Pick(d - 1)),
+                    Node::Dip {
+                        depth: 1,
+                        origins: Vec::new(),
+                        body: vec![Node::Op(Instruction::Push(c.clone()))],
+                    },
+                ])
+            }
+            _ => None,
+        }
+    }
+}
+
+/// `dip 1 { push c } ; op` becomes `push c ; op`, for a commutative `op`.
+///
+/// A literal deposited *under* the top is the second operand of the binary
+/// operator that follows; for `and`, `or` and `equal` the operands commute,
+/// and both are checked either way, so the literal may as well be pushed on
+/// top — where [`BoolIdentity`], [`FoldAndBranch`] and [`FoldConst`] can see
+/// it. This is how a refinement delivered into a slot finally meets the
+/// operator that consumes the slot.
+///
+/// Measure: framed single-literal dips before commutative operators.
+#[derive(Debug)]
+pub(crate) struct CommuteFramedLit;
+
+impl Rule for CommuteFramedLit {
+    fn name(&self) -> &'static str {
+        "commute_framed_lit"
+    }
+    fn width(&self) -> usize {
+        2
+    }
+    fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
+        let [
+            Node::Dip { depth: 1, body, .. },
+            op @ Node::Op(Instruction::And | Instruction::Or | Instruction::Equal),
+        ] = window
+        else {
+            return None;
+        };
+        let [lit @ Node::Op(Instruction::Push(_))] = &body[..] else {
+            return None;
+        };
+        Some(vec![lit.clone(), op.clone()])
+    }
+}
+
 /// `P1 ; dip 1 { P2 } ; and ; drop` becomes `P1 ; drop ; P2 ; drop`.
 ///
 /// [`AnnihilateDrop`] cannot touch `and; drop` alone: `and` rejects non-boolean
@@ -3245,6 +3541,45 @@ impl Rule for SinkProbe {
             },
             Node::Op(Instruction::Pick(d_after)),
         ])
+    }
+}
+
+/// `dip k { pick j; P } ; pick (k+j+1) ; P` becomes
+/// `dip k { pick j; P } ; pick k`.
+///
+/// The mixed form of [`DupProbe`]: a walked frame meets a bare pick-form
+/// check of the same slot. The frame reads the slot `k + j` deep and deposits
+/// its answer at depth `k`, pushing the slot one deeper — so a bare pick of
+/// depth `k + j + 1` reads exactly the value the frame just probed, and
+/// running the probe again can only repeat the answer sitting at depth `k`.
+/// The replacement is one `pick` and no probe at all, and the copy lands on
+/// top exactly where the bare check's answer did — which is the shape
+/// [`RetainCondition`] pays off when a branch consumes it.
+///
+/// Measure: probe count.
+#[derive(Debug)]
+pub(crate) struct DupProbeMixed;
+
+impl Rule for DupProbeMixed {
+    fn name(&self) -> &'static str {
+        "dup_probe_mixed"
+    }
+    fn width(&self) -> usize {
+        3
+    }
+    fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
+        let [frame @ Node::Dip { depth: k, body, .. }, Node::Op(Instruction::Pick(d)), p2] =
+            window
+        else {
+            return None;
+        };
+        let [Node::Op(Instruction::Pick(j)), p1] = &body[..] else {
+            return None;
+        };
+        if !total_probe(p1) || !same_effect(p1, p2) || *d != k + j + 1 {
+            return None;
+        }
+        Some(vec![frame.clone(), Node::Op(Instruction::Pick(*k))])
     }
 }
 
