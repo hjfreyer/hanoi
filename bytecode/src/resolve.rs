@@ -169,7 +169,12 @@ impl ModuleTree {
     }
 
     /// Binds `name` in `scope`, rejecting reserved words and redeclarations.
-    pub fn declare(&mut self, scope: ModuleId, name: String, item: ModuleItem) -> Result<(), String> {
+    pub fn declare(
+        &mut self,
+        scope: ModuleId,
+        name: String,
+        item: ModuleItem,
+    ) -> Result<(), String> {
         self.check_declarable(scope, &name)?;
         self.modules[scope].items.insert(name, item);
         Ok(())
@@ -239,21 +244,25 @@ impl ModuleTree {
                         name,
                         self.describe(cur),
                         other.describe()
-                    ))
+                    ));
                 }
                 None => {
                     return Err(format!(
                         "Module '{}' not found in '{}'",
                         name,
                         self.describe(cur)
-                    ))
+                    ));
                 }
             };
         }
 
         let name = expect_identifier(last)?;
         self.modules[cur].items.get(name).ok_or_else(|| {
-            format!("Item '{}' not found in module '{}'", name, self.describe(cur))
+            format!(
+                "Item '{}' not found in module '{}'",
+                name,
+                self.describe(cur)
+            )
         })
     }
 
@@ -289,11 +298,7 @@ impl ModuleTree {
 fn expect_identifier(seg: &PathSegment) -> Result<&str, String> {
     match seg {
         PathSegment::Identifier(name) => Ok(name),
-        PathSegment::Crate => {
-            Err("'crate' can only appear at the beginning of a path".to_string())
-        }
-        PathSegment::Super => {
-            Err("'super' can only appear at the beginning of a path".to_string())
-        }
+        PathSegment::Crate => Err("'crate' can only appear at the beginning of a path".to_string()),
+        PathSegment::Super => Err("'super' can only appear at the beginning of a path".to_string()),
     }
 }

@@ -14,7 +14,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
 
 use crate::arity::seq_arity;
-use crate::ir::{child_bodies, selected_bodies, sketch, Node, Selector};
+use crate::ir::{Node, Selector, child_bodies, selected_bodies, sketch};
 use crate::program::Program;
 use crate::rules::Rule;
 
@@ -302,11 +302,7 @@ pub(crate) fn apply(t: &Tactic, env: &Env, nodes: Vec<Node>) -> Result<Outcome, 
         Tactic::Seq(ts) => {
             // Only a member after the first needs a rollback copy: if the first
             // fails it has already handed the input back.
-            let saved = ts
-                .iter()
-                .skip(1)
-                .any(can_fail)
-                .then(|| nodes.clone());
+            let saved = ts.iter().skip(1).any(can_fail).then(|| nodes.clone());
             let mut cur = nodes;
             let mut changed = false;
             for t in ts {
@@ -407,8 +403,7 @@ pub(crate) fn apply(t: &Tactic, env: &Env, nodes: Vec<Node>) -> Result<Outcome, 
         }
 
         Tactic::Into(sel, inner) => {
-            let (nodes, changed) =
-                map_selected_seqs(nodes, *sel, &mut |n| apply(inner, env, n))?;
+            let (nodes, changed) = map_selected_seqs(nodes, *sel, &mut |n| apply(inner, env, n))?;
             Ok(if changed {
                 Outcome::Changed(nodes)
             } else {
@@ -505,7 +500,11 @@ fn map_child_seqs(
 /// on, which reproduces every cascade the hand-written passes used to spell
 /// out: a width-1 rule re-applies to its own output, and a width-2 rule
 /// reconsiders a moved node against its new neighbour.
-fn each(rules: &[&'static dyn Rule], env: &Env, mut nodes: Vec<Node>) -> Result<Outcome, TacticError> {
+fn each(
+    rules: &[&'static dyn Rule],
+    env: &Env,
+    mut nodes: Vec<Node>,
+) -> Result<Outcome, TacticError> {
     let mut fired = false;
     let mut w = 0usize;
 
@@ -530,7 +529,11 @@ fn each(rules: &[&'static dyn Rule], env: &Env, mut nodes: Vec<Node>) -> Result<
 }
 
 /// Applies the first rule that matches, at the first position it matches.
-fn once(rules: &[&'static dyn Rule], env: &Env, mut nodes: Vec<Node>) -> Result<Outcome, TacticError> {
+fn once(
+    rules: &[&'static dyn Rule],
+    env: &Env,
+    mut nodes: Vec<Node>,
+) -> Result<Outcome, TacticError> {
     for w in 0..nodes.len() {
         if step(rules, env, &mut nodes, w)?.is_some() {
             return Ok(Outcome::Changed(nodes));

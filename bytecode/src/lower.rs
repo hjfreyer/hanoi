@@ -187,11 +187,7 @@ impl Lowerer {
                 let paths = expect_paths(args, name, 3)?;
                 self.template(
                     TEMPLATE_CONCURRENT,
-                    &[
-                        ("p1", &paths[0]),
-                        ("p2", &paths[1]),
-                        ("sync_fn", &paths[2]),
-                    ],
+                    &[("p1", &paths[0]), ("p2", &paths[1]), ("sync_fn", &paths[2])],
                 )
             }
             Composer::Hidden => {
@@ -221,7 +217,11 @@ impl Lowerer {
             }
             Composer::StaticClosure => {
                 expect_arity(args, name, 2, "target_machine and a value")?;
-                let machine = expect_path(&args[0], name, "first argument must be a machine module path")?;
+                let machine = expect_path(
+                    &args[0],
+                    name,
+                    "first argument must be a machine module path",
+                )?;
                 let val = as_value(&args[1]);
                 self.template(
                     TEMPLATE_STATIC_CLOSURE,
@@ -241,7 +241,11 @@ impl Lowerer {
             Composer::EmitStatic => {
                 expect_arity(args, name, 2, "event and target_machine")?;
                 let val = as_value(&args[0]);
-                let machine = expect_path(&args[1], name, "second argument must be a machine module path")?;
+                let machine = expect_path(
+                    &args[1],
+                    name,
+                    "second argument must be a machine module path",
+                )?;
                 self.template(
                     TEMPLATE_EMIT_STATIC,
                     &[("machine", &machine), ("val", &val)],
@@ -249,8 +253,13 @@ impl Lowerer {
             }
             Composer::Accept => {
                 expect_arity(args, name, 2, "value_set and target_machine")?;
-                let val_set = expect_path(&args[0], name, "first argument must be a sentence path")?;
-                let machine = expect_path(&args[1], name, "second argument must be a machine module path")?;
+                let val_set =
+                    expect_path(&args[0], name, "first argument must be a sentence path")?;
+                let machine = expect_path(
+                    &args[1],
+                    name,
+                    "second argument must be a machine module path",
+                )?;
                 self.template(
                     TEMPLATE_ACCEPT,
                     &[("machine", &machine), ("val_set_path", &val_set)],
@@ -259,7 +268,11 @@ impl Lowerer {
             Composer::AcceptStatic => {
                 expect_arity(args, name, 2, "event and target_machine")?;
                 let val = as_value(&args[0]);
-                let machine = expect_path(&args[1], name, "second argument must be a machine module path")?;
+                let machine = expect_path(
+                    &args[1],
+                    name,
+                    "second argument must be a machine module path",
+                )?;
                 self.template(
                     TEMPLATE_ACCEPT_STATIC,
                     &[("machine", &machine), ("val", &val)],
@@ -305,12 +318,7 @@ fn expect_path(arg: &ComposerArg, composer: &str, what: &str) -> Result<Path, St
     }
 }
 
-fn expect_arity(
-    args: &[ComposerArg],
-    composer: &str,
-    n: usize,
-    what: &str,
-) -> Result<(), String> {
+fn expect_arity(args: &[ComposerArg], composer: &str, n: usize, what: &str) -> Result<(), String> {
     if args.len() != n {
         return Err(format!(
             "{} expects exactly {} arguments: {}",
@@ -397,7 +405,10 @@ fn check_sentence(
     spec: &TypeSpec,
     mut annotations: Vec<SourceAnnotation>,
 ) -> Result<SentenceDecl, String> {
-    if !annotations.iter().any(|ann| matches!(ann, Annotation::Total)) {
+    if !annotations
+        .iter()
+        .any(|ann| matches!(ann, Annotation::Total))
+    {
         annotations.push(Annotation::Total);
     }
 
@@ -460,7 +471,9 @@ fn compile_type_spec(spec: &TypeSpec) -> Result<Vec<ParsedInstruction>, String> 
                     insts.push(ParsedInstruction::And);
                 }
 
-                ParsedSentence { instructions: insts }
+                ParsedSentence {
+                    instructions: insts,
+                }
             };
 
             let then_is_tuple = ParsedSentence {

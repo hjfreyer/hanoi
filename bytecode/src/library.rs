@@ -1,7 +1,7 @@
 use crate::opcode::Instruction;
 use crate::value::Value;
-use std::collections::{HashMap, HashSet};
 use derive_more::{From, Into};
+use std::collections::{HashMap, HashSet};
 use typed_index_collections::TiVec;
 
 /// A type-safe index wrapper for indexing a `Sentence` in a `Library`.

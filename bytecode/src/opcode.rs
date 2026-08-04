@@ -19,14 +19,14 @@ pub enum Instruction {
     /// shifting all intermediate values down.
     /// (e.g., depth=1 is equivalent to Swap).
     Roll(usize),
-    
+
     /// Compare the top two values on the stack for equality.
     Equal,
     /// Check if the second-to-top value is greater than the top value.
     Greater,
     /// Check if the second-to-top value is less than the top value.
     Less,
-    
+
     /// Add the top two values on the stack.
     Add,
     /// Subtract the top value from the second-to-top value on the stack.
@@ -37,15 +37,15 @@ pub enum Instruction {
     Divide,
     /// Calculate modulo: second-to-top value % top value.
     Modulo,
-    
+
     /// Logically negate the top value on the stack.
     Not,
     /// Negate the numeric top value on the stack.
     Negate,
-    
+
     /// Print the top value on the stack (useful for debugging/IO).
     Print,
-    
+
     /// Hide the top `depth` values, call the sentence at the target SentenceIndex,
     /// then restore the hidden values on top of its results.
     ///
@@ -56,30 +56,30 @@ pub enum Instruction {
     /// Conditionally branch: if the top value on the stack is truthy, jump to the first SentenceIndex;
     /// otherwise, jump to the second SentenceIndex.
     Branch(SentenceIndex, SentenceIndex),
-    
+
     /// Abort execution immediately.
     Panic,
     /// Pop the top value off the stack and panic if it is falsey.
     Assert,
     /// Pop the top two values off the stack and panic if they are not equal.
     AssertEqual,
-    
+
     /// Pops the top N values off the stack and packages them into a single Tuple.
     Tuple(usize),
     /// Pops a Tuple off the stack, checks that it contains exactly N elements,
     /// and pushes each of those elements back onto the stack in order.
     Untuple(usize),
-    
+
     /// Pop the top two values on the stack, evaluate logical AND on their truthiness, and push the result.
     And,
     /// Pop the top two values on the stack, evaluate logical OR on their truthiness, and push the result.
     Or,
-    
+
     /// Pop a Symbol off the stack, and push its character length as an Int.
     SymbolLen,
     /// Pop an index (Int) and a Symbol off the stack, and push the Unicode code point of the character at that index as an Int.
     SymbolCharAt,
-    
+
     /// Pop the top value and push true if it is an Int, else false.
     IsInt,
     /// Pop the top value and push true if it is a Bool, else false.

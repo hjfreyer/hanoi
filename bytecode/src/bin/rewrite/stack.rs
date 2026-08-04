@@ -331,13 +331,13 @@ fn unary(inst: &Instruction, a: &Rc<Term>) -> Rc<Term> {
         match inst {
             Instruction::IsTuple => return Rc::new(Term::Const(ConstKey::new(&Value::Bool(true)))),
             Instruction::TupleLength => {
-                return Rc::new(Term::Const(ConstKey::new(&Value::Int(es.len() as i64))))
+                return Rc::new(Term::Const(ConstKey::new(&Value::Int(es.len() as i64))));
             }
             Instruction::IsInt
             | Instruction::IsBool
             | Instruction::IsFloat
             | Instruction::IsSymbol => {
-                return Rc::new(Term::Const(ConstKey::new(&Value::Bool(false))))
+                return Rc::new(Term::Const(ConstKey::new(&Value::Bool(false))));
             }
             _ => {}
         }

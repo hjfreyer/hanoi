@@ -69,23 +69,23 @@ impl<'a> Program<'a> {
 #[cfg(test)]
 mod invariant {
     use super::*;
-    use bytecode::{assemble, Instruction};
+    use bytecode::{Instruction, assemble};
     use std::collections::HashSet;
     use std::fs;
     use std::path::Path;
 
-/// Every sentence that can reach itself through calls or branch arms.
-        ///
-        /// Test-only: the tool does not compute this, it reads the annotation. This
-        /// exists to check that reading the annotation is enough.
-        fn cyclic_sentences(library: &Library) -> HashSet<SentenceIndex> {
+    /// Every sentence that can reach itself through calls or branch arms.
+    ///
+    /// Test-only: the tool does not compute this, it reads the annotation. This
+    /// exists to check that reading the annotation is enough.
+    fn cyclic_sentences(library: &Library) -> HashSet<SentenceIndex> {
         #[derive(Clone, Copy, PartialEq)]
         enum Colour {
             Unvisited,
             OnPath,
             Done,
         }
-    
+
         fn walk(
             library: &Library,
             s_idx: SentenceIndex,
@@ -104,7 +104,7 @@ mod invariant {
                 }
                 Colour::Unvisited => {}
             }
-    
+
             colour[usize::from(s_idx)] = Colour::OnPath;
             path.push(s_idx);
             for inst in &library.sentences[s_idx] {
@@ -120,7 +120,7 @@ mod invariant {
             path.pop();
             colour[usize::from(s_idx)] = Colour::Done;
         }
-    
+
         let mut cyclic = HashSet::new();
         let mut colour = vec![Colour::Unvisited; library.sentences.len()];
         let mut path = Vec::new();
@@ -243,12 +243,14 @@ mod invariant {
             vec!["loops"]
         );
         // Recursion through a branch arm counts.
-        assert!(cyclic_names(
-            r#"
+        assert!(
+            cyclic_names(
+                r#"
             #[recursive]
             sentence viabranch { pick 0 branch { drop 0 } { jump viabranch } }
         "#
-        )
-        .contains(&"viabranch".to_string()));
+            )
+            .contains(&"viabranch".to_string())
+        );
     }
 }

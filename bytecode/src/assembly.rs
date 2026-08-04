@@ -1,4 +1,3 @@
-use std::collections::{HashMap, HashSet};
 use crate::ast::core;
 use crate::ast::sugar::{self, Composer, ModuleExpr};
 use crate::ast::{
@@ -8,7 +7,8 @@ use crate::ast::{
 use crate::library::{Annotation, Library, SentenceAnnotation, SentenceIndex};
 use crate::opcode::Instruction;
 use crate::resolve::{ModuleId, ModuleItem, ModuleTree, ResolvedItem};
-use crate::value::{Value, Symbol};
+use crate::value::{Symbol, Value};
+use std::collections::{HashMap, HashSet};
 
 pub use crate::resolve::{Path, PathSegment};
 
@@ -169,15 +169,17 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
                 }
 
                 if is_float {
-                    let val = number_str.parse::<f64>()
-                        .map_err(|e| format!("Line {}: Invalid float '{}': {}", line, number_str, e))?;
+                    let val = number_str.parse::<f64>().map_err(|e| {
+                        format!("Line {}: Invalid float '{}': {}", line, number_str, e)
+                    })?;
                     tokens.push(Token::Float(val));
                 } else {
                     if number_str == "-" {
                         return Err(format!("Line {}: Minus sign without digits", line));
                     }
-                    let val = number_str.parse::<i64>()
-                        .map_err(|e| format!("Line {}: Invalid integer '{}': {}", line, number_str, e))?;
+                    let val = number_str.parse::<i64>().map_err(|e| {
+                        format!("Line {}: Invalid integer '{}': {}", line, number_str, e)
+                    })?;
                     tokens.push(Token::Int(val));
                 }
             }
@@ -300,7 +302,9 @@ fn parse_path(stream: &mut TokenStream, first_ident: String) -> Result<Path, Str
             Some(Token::Identifier(name)) => {
                 segments.push(parse_segment(&name));
             }
-            Some(other) => return Err(format!("Expected identifier after '::', found {:?}", other)),
+            Some(other) => {
+                return Err(format!("Expected identifier after '::', found {:?}", other));
+            }
             None => return Err("Expected identifier after '::', found end of input".to_string()),
         }
     }
@@ -380,7 +384,7 @@ fn parse_type_primary(stream: &mut TokenStream) -> Result<TypeSpec, String> {
         Some(Token::Identifier(name)) => {
             let name_cloned = name.clone();
             stream.next(); // consume identifier
-            
+
             // Check if it's a primitive type keyword (lowercase only)
             match name_cloned.as_str() {
                 "int" => Ok(TypeSpec::Primitive(PrimitiveType::Int)),
@@ -414,7 +418,10 @@ fn parse_target(stream: &mut TokenStream) -> Result<Target, String> {
             let sentence = parse_sentence_body(stream)?;
             Ok(Target::Inline(sentence))
         }
-        other => Err(format!("Expected label target or inline block '{{', found {:?}", other)),
+        other => Err(format!(
+            "Expected label target or inline block '{{', found {:?}",
+            other
+        )),
     }
 }
 
@@ -440,7 +447,9 @@ fn parse_usize(stream: &mut TokenStream) -> Result<usize, String> {
 }
 
 fn parse_instruction(stream: &mut TokenStream) -> Result<ParsedInstruction, String> {
-    let token = stream.next().ok_or_else(|| "Expected instruction, found end of input".to_string())?;
+    let token = stream
+        .next()
+        .ok_or_else(|| "Expected instruction, found end of input".to_string())?;
     let name = match token {
         Token::Identifier(name) => name,
         Token::ModKeyword => "mod".to_string(),
@@ -569,7 +578,10 @@ pub(crate) fn parse_source(
     base_dir: Option<&std::path::Path>,
 ) -> Result<Vec<sugar::Item>, String> {
     let tokens = tokenize(input)?;
-    let mut stream = TokenStream { tokens, position: 0 };
+    let mut stream = TokenStream {
+        tokens,
+        position: 0,
+    };
     parse_items(&mut stream, None, base_dir)
 }
 
@@ -589,20 +601,44 @@ fn parse_annotations(stream: &mut TokenStream) -> Result<Vec<SourceAnnotation>, 
                 stream.expect(Token::LParen)?;
                 let n = match stream.next() {
                     Some(Token::Int(val)) => val,
-                    Some(other) => return Err(format!("Expected integer for arity first argument, found {:?}", other)),
-                    None => return Err("Expected integer for arity first argument, found end of input".to_string()),
+                    Some(other) => {
+                        return Err(format!(
+                            "Expected integer for arity first argument, found {:?}",
+                            other
+                        ));
+                    }
+                    None => {
+                        return Err(
+                            "Expected integer for arity first argument, found end of input"
+                                .to_string(),
+                        );
+                    }
                 };
                 stream.expect(Token::Comma)?;
                 let m = match stream.next() {
                     Some(Token::Int(val)) => val,
-                    Some(other) => return Err(format!("Expected integer for arity second argument, found {:?}", other)),
-                    None => return Err("Expected integer for arity second argument, found end of input".to_string()),
+                    Some(other) => {
+                        return Err(format!(
+                            "Expected integer for arity second argument, found {:?}",
+                            other
+                        ));
+                    }
+                    None => {
+                        return Err(
+                            "Expected integer for arity second argument, found end of input"
+                                .to_string(),
+                        );
+                    }
                 };
                 stream.expect(Token::RParen)?;
                 Annotation::Arity(n, m)
             }
-            "precondition" => Annotation::Precondition(parse_annotation_path(stream, "precondition")?),
-            "postcondition" => Annotation::Postcondition(parse_annotation_path(stream, "postcondition")?),
+            "precondition" => {
+                Annotation::Precondition(parse_annotation_path(stream, "precondition")?)
+            }
+            "postcondition" => {
+                Annotation::Postcondition(parse_annotation_path(stream, "postcondition")?)
+            }
             "recursive" => Annotation::Recursive,
             "total" => Annotation::Total,
             "flags" => Annotation::Flags,
@@ -616,10 +652,12 @@ fn parse_annotations(stream: &mut TokenStream) -> Result<Vec<SourceAnnotation>, 
         // one of those is checked, and `recursive`/`total` are idempotent flags.
         let has = |f: fn(&SourceAnnotation) -> bool| annotations.iter().any(f);
         let duplicate = match &ann {
-            Annotation::Precondition(_)
-                if has(|a| matches!(a, Annotation::Precondition(_))) => Some("precondition"),
-            Annotation::Postcondition(_)
-                if has(|a| matches!(a, Annotation::Postcondition(_))) => Some("postcondition"),
+            Annotation::Precondition(_) if has(|a| matches!(a, Annotation::Precondition(_))) => {
+                Some("precondition")
+            }
+            Annotation::Postcondition(_) if has(|a| matches!(a, Annotation::Postcondition(_))) => {
+                Some("postcondition")
+            }
             _ => None,
         };
         if let Some(kind) = duplicate {
@@ -638,8 +676,18 @@ fn parse_annotation_path(stream: &mut TokenStream, kind: &str) -> Result<Path, S
     stream.expect(Token::LParen)?;
     let first_ident = match stream.next() {
         Some(Token::Identifier(s)) => s,
-        Some(other) => return Err(format!("Expected identifier for {} function, found {:?}", kind, other)),
-        None => return Err(format!("Expected identifier for {} function, found end of input", kind)),
+        Some(other) => {
+            return Err(format!(
+                "Expected identifier for {} function, found {:?}",
+                kind, other
+            ));
+        }
+        None => {
+            return Err(format!(
+                "Expected identifier for {} function, found end of input",
+                kind
+            ));
+        }
     };
     let path = parse_path(stream, first_ident)?;
     stream.expect(Token::RParen)?;
@@ -726,7 +774,11 @@ fn parse_items(
             let name = expect_name(stream, "type name")?;
             let spec = parse_type_spec(stream)?;
             stream.expect(Token::Semicolon)?;
-            items.push(sugar::Item::Type(sugar::TypeDecl { name, spec, annotations }));
+            items.push(sugar::Item::Type(sugar::TypeDecl {
+                name,
+                spec,
+                annotations,
+            }));
             continue;
         }
 
@@ -748,7 +800,7 @@ fn parse_items(
                 return Err(format!(
                     "Expected 'sentence', 'function', or 'type', found {:?}",
                     other
-                ))
+                ));
             }
         };
 
@@ -808,18 +860,29 @@ fn parse_mod_item(
         let file_name = format!("{}.hana", name);
         let file_path = base.join(&file_name);
         let file_content = std::fs::read_to_string(&file_path).map_err(|e| {
-            format!("Failed to read module file '{}' at {:?}: {}", file_name, file_path, e)
+            format!(
+                "Failed to read module file '{}' at {:?}: {}",
+                file_name, file_path, e
+            )
         })?;
 
         let items = parse_source(&file_content, Some(&base.join(&name)))?;
-        return Ok(sugar::Item::Mod(sugar::ModDecl { name, items, is_test }));
+        return Ok(sugar::Item::Mod(sugar::ModDecl {
+            name,
+            items,
+            is_test,
+        }));
     }
 
     stream.expect(Token::LBrace)?;
     let new_base = base_dir.map(|b| b.join(&name));
     let items = parse_items(stream, Some(Token::RBrace), new_base.as_deref())?;
     stream.expect(Token::RBrace)?;
-    Ok(sugar::Item::Mod(sugar::ModDecl { name, items, is_test }))
+    Ok(sugar::Item::Mod(sugar::ModDecl {
+        name,
+        items,
+        is_test,
+    }))
 }
 
 fn parse_enum_decl(
@@ -854,7 +917,10 @@ fn parse_enum_decl(
         }
         stream.expect(Token::RParen)?;
 
-        variants.push(sugar::EnumVariant { name: variant_name, elements });
+        variants.push(sugar::EnumVariant {
+            name: variant_name,
+            elements,
+        });
 
         // Variants may be followed by an optional comma.
         if stream.peek() == Some(&Token::Comma) {
@@ -863,7 +929,11 @@ fn parse_enum_decl(
     }
     stream.expect(Token::RBrace)?;
 
-    Ok(sugar::EnumDecl { name, variants, annotations })
+    Ok(sugar::EnumDecl {
+        name,
+        variants,
+        annotations,
+    })
 }
 
 /// Everything the tree-building pass accumulates alongside the module tree
@@ -961,7 +1031,10 @@ impl TreeBuilder {
     ) -> Result<(), String> {
         let fq_path = self.tree.path_of(module).join("::");
         if self.tree.sentence(module, "init").is_none() {
-            return Err(format!("Test mod '{}' must export an 'init' sentence", fq_path));
+            return Err(format!(
+                "Test mod '{}' must export an 'init' sentence",
+                fq_path
+            ));
         }
         self.test_machines.insert(fq_path);
 
@@ -996,12 +1069,12 @@ impl<'a> Compiler<'a> {
             .iter()
             .map(|ann| {
                 Ok(match ann {
-                    Annotation::Precondition(path) => {
-                        Annotation::Precondition(self.resolve_contract_fn("precondition", scope, path)?)
-                    }
-                    Annotation::Postcondition(path) => {
-                        Annotation::Postcondition(self.resolve_contract_fn("postcondition", scope, path)?)
-                    }
+                    Annotation::Precondition(path) => Annotation::Precondition(
+                        self.resolve_contract_fn("precondition", scope, path)?,
+                    ),
+                    Annotation::Postcondition(path) => Annotation::Postcondition(
+                        self.resolve_contract_fn("postcondition", scope, path)?,
+                    ),
                     Annotation::Arity(n, m) => Annotation::Arity(*n, *m),
                     Annotation::Recursive => Annotation::Recursive,
                     Annotation::Total => Annotation::Total,
@@ -1042,12 +1115,13 @@ impl<'a> Compiler<'a> {
                 }
                 Ok(Value::Tuple(compiled_elements))
             }
-            ParsedValue::SymbolRef(path) => {
-                match self.tree.resolve(scope, &path)? {
-                    ResolvedItem::Symbol(val) => Ok(val),
-                    ResolvedItem::Sentence(_) => Err(format!("Expected symbol, found sentence at path {:?}", path)),
-                }
-            }
+            ParsedValue::SymbolRef(path) => match self.tree.resolve(scope, &path)? {
+                ResolvedItem::Symbol(val) => Ok(val),
+                ResolvedItem::Sentence(_) => Err(format!(
+                    "Expected symbol, found sentence at path {:?}",
+                    path
+                )),
+            },
         }
     }
 
@@ -1067,7 +1141,11 @@ impl<'a> Compiler<'a> {
             .is_some_and(|anns| anns.iter().any(|a| matches!(a, Annotation::Flags)))
     }
 
-    fn compile_sentence_body(&mut self, scope: ModuleId, instructions: Vec<ParsedInstruction>) -> Result<Vec<Instruction>, String> {
+    fn compile_sentence_body(
+        &mut self,
+        scope: ModuleId,
+        instructions: Vec<ParsedInstruction>,
+    ) -> Result<Vec<Instruction>, String> {
         let keeps_flags = self.keeps_flags();
         let mut compiled = Vec::new();
         for inst in instructions {
@@ -1132,15 +1210,16 @@ impl<'a> Compiler<'a> {
                         Ok(res) => res,
                         Err(e) => {
                             let mut check_path = path.clone();
-                            check_path.segments.push(PathSegment::Identifier("check".to_string()));
-                            self.tree.resolve(scope, &check_path)
-                                .map_err(|_| format!("Could not resolve type path '{}': {}", path, e))?
+                            check_path
+                                .segments
+                                .push(PathSegment::Identifier("check".to_string()));
+                            self.tree.resolve(scope, &check_path).map_err(|_| {
+                                format!("Could not resolve type path '{}': {}", path, e)
+                            })?
                         }
                     };
                     match resolved {
-                        ResolvedItem::Sentence(idx) => {
-                            Instruction::Dip(0, idx)
-                        }
+                        ResolvedItem::Sentence(idx) => Instruction::Dip(0, idx),
                         ResolvedItem::Symbol(val) => {
                             compiled.push(Instruction::Push(val));
                             Instruction::Equal
@@ -1163,9 +1242,16 @@ impl<'a> Compiler<'a> {
     fn resolve_target(&mut self, scope: ModuleId, target: Target) -> Result<SentenceIndex, String> {
         match target {
             Target::Label(path) => {
-                match self.tree.resolve(scope, &path).map_err(|e| format!("Unresolved label target: {}", e))? {
+                match self
+                    .tree
+                    .resolve(scope, &path)
+                    .map_err(|e| format!("Unresolved label target: {}", e))?
+                {
                     ResolvedItem::Sentence(idx) => Ok(idx),
-                    ResolvedItem::Symbol(_) => Err(format!("Expected sentence, found symbol at path {:?}", path)),
+                    ResolvedItem::Symbol(_) => Err(format!(
+                        "Expected sentence, found symbol at path {:?}",
+                        path
+                    )),
                 }
             }
             Target::Inline(parsed_sentence) => {
@@ -1211,7 +1297,10 @@ pub fn assemble(input: &str) -> Result<Library, String> {
 }
 
 /// Assembles the input text with an optional base directory context for resolving external modules.
-pub fn assemble_with_path(input: &str, base_dir: Option<&std::path::Path>) -> Result<Library, String> {
+pub fn assemble_with_path(
+    input: &str,
+    base_dir: Option<&std::path::Path>,
+) -> Result<Library, String> {
     let parsed = parse_source(input, base_dir)?;
     let items = crate::lower::lower_items(parsed)?;
 
@@ -1247,7 +1336,8 @@ pub fn assemble_with_path(input: &str, base_dir: Option<&std::path::Path>) -> Re
             .resolve_annotations(scope, &sentence.annotations)
             .map_err(|e| format!("In '{}': {}", tree.fq_name(scope, &sentence.name), e))?;
         compiler.current_parent_idx = Some(SentenceIndex::from(idx));
-        let compiled_instructions = compiler.compile_sentence_body(scope, sentence.body.instructions)?;
+        let compiled_instructions =
+            compiler.compile_sentence_body(scope, sentence.body.instructions)?;
         compiler.sentences[idx] = compiled_instructions;
         compiler.names[idx] = tree.fq_name(scope, &sentence.name);
     }

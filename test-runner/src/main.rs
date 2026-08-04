@@ -1,7 +1,7 @@
-use std::fs;
-use std::process;
-use std::io::{self, Write};
 use clap::Parser;
+use std::fs;
+use std::io::{self, Write};
+use std::process;
 
 /// Hanoi Test Runner
 #[derive(Parser, Debug)]
@@ -26,7 +26,7 @@ struct Args {
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
-    
+
     let path = &args.directory;
     let filter = args.test_filter;
     let trace = args.trace;
@@ -120,7 +120,11 @@ async fn main() {
                 Some(v) => v,
                 None => {
                     let err = "prelude::start symbol not found";
-                    if trace { println!("result: FAILED ({})", err); } else { println!("FAILED ({})", err); }
+                    if trace {
+                        println!("result: FAILED ({})", err);
+                    } else {
+                        println!("FAILED ({})", err);
+                    }
                     failed += 1;
                     continue;
                 }
@@ -129,7 +133,11 @@ async fn main() {
                 Some(v) => v,
                 None => {
                     let err = "prelude::pass symbol not found";
-                    if trace { println!("result: FAILED ({})", err); } else { println!("FAILED ({})", err); }
+                    if trace {
+                        println!("result: FAILED ({})", err);
+                    } else {
+                        println!("FAILED ({})", err);
+                    }
                     failed += 1;
                     continue;
                 }
@@ -138,7 +146,11 @@ async fn main() {
                 Some(v) => v,
                 None => {
                     let err = "prelude::fail symbol not found";
-                    if trace { println!("result: FAILED ({})", err); } else { println!("FAILED ({})", err); }
+                    if trace {
+                        println!("result: FAILED ({})", err);
+                    } else {
+                        println!("FAILED ({})", err);
+                    }
                     failed += 1;
                     continue;
                 }
@@ -154,16 +166,28 @@ async fn main() {
                         }
                     } else {
                         if trace {
-                            println!("result: FAILED (stack was not empty: {:?}) ({} steps)", runtime.vm().stack(), runtime.vm().steps_executed());
+                            println!(
+                                "result: FAILED (stack was not empty: {:?}) ({} steps)",
+                                runtime.vm().stack(),
+                                runtime.vm().steps_executed()
+                            );
                         } else {
-                            println!("FAILED (stack was not empty: {:?}) ({} steps)", runtime.vm().stack(), runtime.vm().steps_executed());
+                            println!(
+                                "FAILED (stack was not empty: {:?}) ({} steps)",
+                                runtime.vm().stack(),
+                                runtime.vm().steps_executed()
+                            );
                         }
                         failed += 1;
                     }
                 }
                 Err(err) => {
                     if trace {
-                        println!("result: FAILED ({}) ({} steps)", err, runtime.vm().steps_executed());
+                        println!(
+                            "result: FAILED ({}) ({} steps)",
+                            err,
+                            runtime.vm().steps_executed()
+                        );
                     } else {
                         println!("FAILED ({}) ({} steps)", err, runtime.vm().steps_executed());
                     }
@@ -185,9 +209,17 @@ async fn main() {
                         }
                     } else {
                         if trace {
-                            println!("result: FAILED (stack was not empty: {:?}) ({} steps)", vm.stack(), vm.steps_executed());
+                            println!(
+                                "result: FAILED (stack was not empty: {:?}) ({} steps)",
+                                vm.stack(),
+                                vm.steps_executed()
+                            );
                         } else {
-                            println!("FAILED (stack was not empty: {:?}) ({} steps)", vm.stack(), vm.steps_executed());
+                            println!(
+                                "FAILED (stack was not empty: {:?}) ({} steps)",
+                                vm.stack(),
+                                vm.steps_executed()
+                            );
                         }
                         failed += 1;
                     }
@@ -216,8 +248,7 @@ async fn main() {
     } else {
         println!(
             "test result: ok. {} passed; 0 failed; {} filtered out",
-            tests_run,
-            filtered_out
+            tests_run, filtered_out
         );
     }
 }

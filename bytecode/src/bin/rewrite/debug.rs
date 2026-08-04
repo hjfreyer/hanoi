@@ -32,12 +32,12 @@ use std::io::{self, BufRead, Write};
 
 use bytecode::SentenceIndex;
 
+use crate::Options;
 use crate::diff::side_by_side;
-use crate::ir::{build, Node};
+use crate::ir::{Node, build};
 use crate::print::render_body;
 use crate::program::Program;
-use crate::tactic::{apply, Env, Firing, Tactic};
-use crate::Options;
+use crate::tactic::{Env, Firing, Tactic, apply};
 
 /// Firings listed either side of the cursor by `trace`.
 const TRACE_CONTEXT: usize = 8;
@@ -204,7 +204,10 @@ impl Session<'_> {
         if rows.is_empty() {
             // No rule returns its window unchanged, so this means the listing
             // cannot show what changed — a provenance label, say.
-            println!("  `{}@{}` changed nothing the listing shows.", fired.rule, fired.at);
+            println!(
+                "  `{}@{}` changed nothing the listing shows.",
+                fired.rule, fired.at
+            );
             return;
         }
         for row in rows {
@@ -249,13 +252,7 @@ impl Session<'_> {
     /// The listing of the tree after `n` firings.
     fn lines(&self, n: u64) -> Vec<String> {
         let body = self.replay(n).0;
-        render_body(
-            self.prog,
-            self.root,
-            &body,
-            &self.opts.tactic,
-            self.stack,
-        )
+        render_body(self.prog, self.root, &body, &self.opts.tactic, self.stack)
     }
 
     /// Runs the tactic from scratch, stopping after `n` firings.
@@ -371,7 +368,10 @@ fn parse(line: &str) -> Result<Command, String> {
     };
     let arg = words.next();
     if let Some(extra) = words.next() {
-        return Err(format!("'{}' takes at most one argument, found '{}'", verb, extra));
+        return Err(format!(
+            "'{}' takes at most one argument, found '{}'",
+            verb, extra
+        ));
     }
 
     let count = |default: u64| -> Result<u64, String> {
@@ -398,10 +398,7 @@ fn parse(line: &str) -> Result<Command, String> {
         "stack" => Ok(Command::Stack),
         "h" | "help" | "?" => Ok(Command::Help),
         "q" | "quit" => Ok(Command::Quit),
-        other => Err(format!(
-            "unknown command '{}'. `help` lists them.",
-            other
-        )),
+        other => Err(format!("unknown command '{}'. `help` lists them.", other)),
     }
 }
 

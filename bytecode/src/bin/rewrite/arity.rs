@@ -35,8 +35,7 @@ pub(crate) fn node_arity(prog: &Program, node: &Node) -> Option<(i64, i64)> {
             // The arity checker requires both arms to agree on net change, so
             // whichever arm is statically known answers for both. The extra
             // input is the condition.
-            let (n, m) =
-                full_arity(prog, then_body).or_else(|| full_arity(prog, else_body))?;
+            let (n, m) = full_arity(prog, then_body).or_else(|| full_arity(prog, else_body))?;
             Some((n + 1, m))
         }
     }
