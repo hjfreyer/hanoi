@@ -746,7 +746,7 @@ mod tests {
             assemble(
                 r#"
                 sentence pushy { push 7 }
-                sentence helper { add }
+                sentence pair { push 1 push 2 }
                 #[recursive] sentence loops { jump loops }
                 "#,
             )
@@ -801,15 +801,15 @@ mod tests {
 
     #[test]
     fn unfold_produces_a_body_the_step_never_carried() {
-        // `add` desugars to two instructions. The step names only the target,
-        // so those two nodes can have come from nowhere but the library — which
-        // is the whole reason unfolding is not a [`Rule2`].
+        // One call node becomes two. The step names only the target, so those
+        // nodes can have come from nowhere but the library — which is the whole
+        // reason unfolding is not a [`Rule2`].
         let library = library();
         let prog = Program::new(library);
-        let helper = named(library, "helper");
+        let pair = named(library, "pair");
         let mut tree = vec![Node::Call {
             depth: 0,
-            target: helper,
+            target: pair,
         }];
         let info = apply_step(
             &prog,
@@ -817,7 +817,7 @@ mod tests {
             &Step {
                 kind: StepKind::Unfold {
                     depth: 0,
-                    target: helper,
+                    target: pair,
                 },
                 dir: Direction::Forward,
                 loc: Location::root(0),
@@ -833,7 +833,13 @@ mod tests {
                 inserted: 2
             }
         );
-        assert_eq!(tree, vec![op(Instruction::Add), op(Instruction::Drop)]);
+        assert_eq!(
+            tree,
+            vec![
+                op(Instruction::Push(Value::Int(1))),
+                op(Instruction::Push(Value::Int(2))),
+            ]
+        );
     }
 
     #[test]
