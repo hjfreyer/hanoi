@@ -16,7 +16,10 @@ pub(crate) enum Node {
     /// somebody declined to expand. Making it the same node means a recursive
     /// call has a real arity — from its target's `#[arity]` — where a `Cut` had
     /// none and poisoned the reckoning of everything after it.
-    Call { depth: usize, target: SentenceIndex },
+    Call {
+        depth: usize,
+        target: SentenceIndex,
+    },
     /// An expanded call: a block running below `depth` hidden values.
     Dip {
         depth: usize,

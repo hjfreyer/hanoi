@@ -1,5 +1,5 @@
-use bytecode::{Library, SentenceIndex, Value};
 use crate::VM;
+use bytecode::{Library, SentenceIndex, Value};
 
 /// An Environment is a Hanoi CSP machine implemented in async Rust.
 #[allow(async_fn_in_trait)]
@@ -86,7 +86,9 @@ impl DefaultEnvironment {
 
 impl Environment for DefaultEnvironment {
     async fn handle_event(&mut self, event: Value) -> Result<(), String> {
-        if let Some(ch) = extract_putch_char(&event, &self.std_io, &self.std_stdout, &self.std_putch) {
+        if let Some(ch) =
+            extract_putch_char(&event, &self.std_io, &self.std_stdout, &self.std_putch)
+        {
             if let Some(ref mut buf) = self.capture_buffer {
                 buf.push(ch);
             } else {
@@ -124,14 +126,12 @@ impl<E: Environment> Runtime<E> {
     /// * `library` - The compiled bytecode library.
     /// * `prefix` - The namespace of the main Hanoi machine (e.g., "main").
     /// * `environment` - The async Rust environment instance.
-    pub fn new(
-        library: Library,
-        prefix: &str,
-        environment: E,
-    ) -> Result<Self, String> {
+    pub fn new(library: Library, prefix: &str, environment: E) -> Result<Self, String> {
         let resolve = |suffix: &str| -> Result<SentenceIndex, String> {
             let name = format!("{}::{}", prefix, suffix);
-            library.exports.get(&name)
+            library
+                .exports
+                .get(&name)
                 .copied()
                 .ok_or_else(|| format!("Could not find sentence export '{}'", name))
         };
@@ -271,7 +271,9 @@ impl<E: Environment> Runtime<E> {
 
             // C. Check if done (terminated without emitting pass or fail)
             if self.execute_is_done(state.clone())? {
-                return Err("Test machine terminated without emitting pass or fail event".to_string());
+                return Err(
+                    "Test machine terminated without emitting pass or fail event".to_string(),
+                );
             }
 
             // D. Asynchronously wait for the environment to pass an event
@@ -305,7 +307,10 @@ impl<E: Environment> Runtime<E> {
 
     fn execute_accept(&mut self, state: Value, event: Value) -> Result<bool, String> {
         if !self.vm.stack.is_empty() {
-            return Err(format!("Stack not empty before accept: {:?}", self.vm.stack));
+            return Err(format!(
+                "Stack not empty before accept: {:?}",
+                self.vm.stack
+            ));
         }
         let pair = Value::Tuple(vec![state, event]);
         self.vm.stack.push(pair);
@@ -322,13 +327,19 @@ impl<E: Environment> Runtime<E> {
 
     fn execute_tau_reduce(&mut self, state: Value) -> Result<(Value, bool), String> {
         if !self.vm.stack.is_empty() {
-            return Err(format!("Stack not empty before tau_reduce: {:?}", self.vm.stack));
+            return Err(format!(
+                "Stack not empty before tau_reduce: {:?}",
+                self.vm.stack
+            ));
         }
         self.vm.stack.push(state);
         self.vm.execute(self.main_tau_reduce)?;
         let res = self.vm.pop()?;
         if !self.vm.stack.is_empty() {
-            return Err(format!("Stack not empty after tau_reduce: {:?}", self.vm.stack));
+            return Err(format!(
+                "Stack not empty after tau_reduce: {:?}",
+                self.vm.stack
+            ));
         }
         match res {
             Value::Tuple(mut elems) if elems.len() == 2 => {
@@ -339,7 +350,10 @@ impl<E: Environment> Runtime<E> {
                 };
                 Ok((new_state, did_reduce))
             }
-            other => Err(format!("Expected (new_state, did_reduce) tuple from tau_reduce, found {:?}", other))
+            other => Err(format!(
+                "Expected (new_state, did_reduce) tuple from tau_reduce, found {:?}",
+                other
+            )),
         }
     }
 
@@ -362,32 +376,47 @@ impl<E: Environment> Runtime<E> {
                 };
                 Ok((event, has_event))
             }
-            other => Err(format!("Expected (event, has_event) tuple from emit, found {:?}", other))
+            other => Err(format!(
+                "Expected (event, has_event) tuple from emit, found {:?}",
+                other
+            )),
         }
     }
 
     fn execute_process(&mut self, state: Value, event: Value) -> Result<Value, String> {
         if !self.vm.stack.is_empty() {
-            return Err(format!("Stack not empty before process: {:?}", self.vm.stack));
+            return Err(format!(
+                "Stack not empty before process: {:?}",
+                self.vm.stack
+            ));
         }
         self.vm.stack.push(Value::Tuple(vec![state, event]));
         self.vm.execute(self.main_process)?;
         let res = self.vm.pop()?;
         if !self.vm.stack.is_empty() {
-            return Err(format!("Stack not empty after process: {:?}", self.vm.stack));
+            return Err(format!(
+                "Stack not empty after process: {:?}",
+                self.vm.stack
+            ));
         }
         Ok(res)
     }
 
     fn execute_is_done(&mut self, state: Value) -> Result<bool, String> {
         if !self.vm.stack.is_empty() {
-            return Err(format!("Stack not empty before is_done: {:?}", self.vm.stack));
+            return Err(format!(
+                "Stack not empty before is_done: {:?}",
+                self.vm.stack
+            ));
         }
         self.vm.stack.push(state);
         self.vm.execute(self.main_is_done)?;
         let res = self.vm.pop()?;
         if !self.vm.stack.is_empty() {
-            return Err(format!("Stack not empty after is_done: {:?}", self.vm.stack));
+            return Err(format!(
+                "Stack not empty after is_done: {:?}",
+                self.vm.stack
+            ));
         }
         match res {
             Value::Bool(b) => Ok(b),

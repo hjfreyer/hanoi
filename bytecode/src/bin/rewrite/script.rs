@@ -20,8 +20,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::rules::{rule_by_name, Rule, ALL_RULES};
 use crate::ir::Selector;
+use crate::rules::{ALL_RULES, Rule, rule_by_name};
 use crate::tactic::Tactic;
 
 /// Reproduces what the old `--dip-normalize`, `--factor-branches` and
@@ -128,7 +128,11 @@ impl ScriptError {
         let mut out = format!("error: {}\n", self.message);
         out.push_str(&format!(" --> tactic:{}:{}\n", line_no, column + 1));
         out.push_str(&format!("  | {}\n", &source[line_start..line_end]));
-        out.push_str(&format!("  | {}{}\n", " ".repeat(column), "^".repeat(width)));
+        out.push_str(&format!(
+            "  | {}{}\n",
+            " ".repeat(column),
+            "^".repeat(width)
+        ));
         if let Some(help) = &self.help {
             out.push_str(&format!("  = help: {}\n", help));
         }
@@ -325,8 +329,10 @@ impl<'a> Parser<'a> {
             // A `;` before `}`-less end-of-definition is a terminator, not a
             // separator; only continue if something follows that can start an
             // expression.
-            if !matches!(self.toks.get(self.pos + 1).map(|s| &s.tok), Some(Tok::Ident(_)) | Some(Tok::LParen))
-            {
+            if !matches!(
+                self.toks.get(self.pos + 1).map(|s| &s.tok),
+                Some(Tok::Ident(_)) | Some(Tok::LParen)
+            ) {
                 break;
             }
             self.bump();
@@ -450,11 +456,10 @@ impl Definitions {
                 }
             };
             if rule_by_name(&name).is_some() {
-                return Err(ScriptError::new(
-                    format!("'{}' is a rule name", name),
-                    name_span,
-                )
-                .with_help("rules and tactics are separate namespaces; pick another name"));
+                return Err(
+                    ScriptError::new(format!("'{}' is a rule name", name), name_span)
+                        .with_help("rules and tactics are separate namespaces; pick another name"),
+                );
             }
             p.expect(Tok::Eq, "'='")?;
             let body = p.expr()?;
@@ -523,23 +528,21 @@ impl Definitions {
         }
 
         if rule_by_name(name).is_some() {
-            return Err(ScriptError::new(
-                format!("'{}' is a rule, not a tactic", name),
-                span,
-            )
-            .with_help(format!(
-                "a rule has to be placed somewhere: write `each({})` to apply it \
+            return Err(
+                ScriptError::new(format!("'{}' is a rule, not a tactic", name), span).with_help(
+                    format!(
+                        "a rule has to be placed somewhere: write `each({})` to apply it \
                  everywhere in a sequence, or `once({})` for the first match",
-                name, name
-            )));
+                        name, name
+                    ),
+                ),
+            );
         }
 
         if COMBINATORS.iter().any(|(n, _)| *n == name) {
             return Err(
-                ScriptError::new(format!("'{}' needs arguments", name), span).with_help(format!(
-                    "write `{}(...)`",
-                    name
-                )),
+                ScriptError::new(format!("'{}' needs arguments", name), span)
+                    .with_help(format!("write `{}(...)`", name)),
             );
         }
 
@@ -558,13 +561,14 @@ impl Definitions {
         };
 
         if !visiting.insert(name.to_string()) {
-            return Err(
-                ScriptError::new(format!("tactic '{}' is defined in terms of itself", name), span)
-                    .with_help(
-                        "tactic definitions may not recurse, so that `repeat` is the only \
+            return Err(ScriptError::new(
+                format!("tactic '{}' is defined in terms of itself", name),
+                span,
+            )
+            .with_help(
+                "tactic definitions may not recurse, so that `repeat` is the only \
                          unbounded construct in the language",
-                    ),
-            );
+            ));
         }
         let out = self.resolve(body, visiting);
         visiting.remove(name);
@@ -715,7 +719,11 @@ mod tests {
             .compile(src)
             .err()
             .unwrap_or_else(|| panic!("`{}` unexpectedly compiled", src));
-        format!("{}{}", e.message, e.help.map(|h| format!(" | {}", h)).unwrap_or_default())
+        format!(
+            "{}{}",
+            e.message,
+            e.help.map(|h| format!(" | {}", h)).unwrap_or_default()
+        )
     }
 
     #[test]
@@ -772,11 +780,12 @@ mod tests {
     fn mutual_recursion_is_rejected_too() {
         let mut d = defs();
         d.load("tactic a = b; tactic b = a;").unwrap();
-        assert!(d
-            .compile("a")
-            .unwrap_err()
-            .message
-            .contains("defined in terms of itself"));
+        assert!(
+            d.compile("a")
+                .unwrap_err()
+                .message
+                .contains("defined in terms of itself")
+        );
     }
 
     #[test]

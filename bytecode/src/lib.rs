@@ -9,7 +9,7 @@ pub mod value;
 
 pub use arity::{check_arities, check_totality, failure_reachability};
 pub use assembly::{assemble, assemble_with_path};
-pub use library::{Library, Sentence, SentenceIndex, Annotation, Arity};
+pub use library::{Annotation, Arity, Library, Sentence, SentenceIndex};
 pub use opcode::Instruction;
 pub use value::{Symbol, Value};
 
@@ -24,8 +24,6 @@ mod tests {
         assert_eq!(format!("{}", Value::Float(3.14)), "3.14");
     }
 
-
-
     #[test]
     fn test_instruction_equality() {
         let inst1 = Instruction::Push(Value::Int(42));
@@ -39,14 +37,8 @@ mod tests {
     #[test]
     fn test_library_indexing() {
         let mut library = Library::new();
-        let sentence1 = vec![
-            Instruction::Push(Value::Int(10)),
-            Instruction::Drop,
-        ];
-        let sentence2 = vec![
-            Instruction::Push(Value::Int(20)),
-            Instruction::Drop,
-        ];
+        let sentence1 = vec![Instruction::Push(Value::Int(10)), Instruction::Drop];
+        let sentence2 = vec![Instruction::Push(Value::Int(20)), Instruction::Drop];
 
         library.sentences.push(sentence1.clone());
         library.sentences.push(sentence2.clone());
@@ -84,7 +76,10 @@ mod tests {
                 Instruction::Dip(1, SentenceIndex::from(1)),
             ]
         );
-        assert_eq!(res.sentences[SentenceIndex::from(1)], vec![Instruction::Drop]);
+        assert_eq!(
+            res.sentences[SentenceIndex::from(1)],
+            vec![Instruction::Drop]
+        );
     }
 
     #[test]
@@ -176,7 +171,10 @@ mod tests {
         "#;
         let res = assemble(code);
         assert!(res.is_err());
-        assert!(res.unwrap_err().contains("requires 3 inputs, which exceeds its annotated arity 1"));
+        assert!(
+            res.unwrap_err()
+                .contains("requires 3 inputs, which exceeds its annotated arity 1")
+        );
 
         // The same body checks out against the arity it actually has.
         let code = r#"
@@ -202,7 +200,10 @@ mod tests {
         "#;
         let res = assemble(code);
         assert!(res.is_err());
-        assert!(res.unwrap_err().contains("but is not annotated with #[recursive]"));
+        assert!(
+            res.unwrap_err()
+                .contains("but is not annotated with #[recursive]")
+        );
     }
 
     #[test]
@@ -266,12 +267,14 @@ mod tests {
         "#;
         let res = assemble(code).unwrap();
         assert_eq!(res.sentences.len(), 1);
-        
+
         let sentence = &res.sentences[SentenceIndex::from(0)];
         assert_eq!(sentence.len(), 2);
-        
+
         // Assert sym1 and sym2 are distinct symbols
-        if let (Instruction::Push(Value::Symbol(s1)), Instruction::Push(Value::Symbol(s2))) = (&sentence[0], &sentence[1]) {
+        if let (Instruction::Push(Value::Symbol(s1)), Instruction::Push(Value::Symbol(s2))) =
+            (&sentence[0], &sentence[1])
+        {
             assert_ne!(s1, s2);
             assert_eq!(s1.name, "My Custom Symbol");
             assert_eq!(s2.name, "sym2");
@@ -294,8 +297,14 @@ mod tests {
         "#;
         let res = assemble(code).unwrap();
         assert_eq!(res.tests.get("my_test"), Some(&SentenceIndex::from(0)));
-        assert_eq!(res.tests.get("my_exported_test"), Some(&SentenceIndex::from(1)));
-        assert_eq!(res.exports.get("my_exported_test"), Some(&SentenceIndex::from(1)));
+        assert_eq!(
+            res.tests.get("my_exported_test"),
+            Some(&SentenceIndex::from(1))
+        );
+        assert_eq!(
+            res.exports.get("my_exported_test"),
+            Some(&SentenceIndex::from(1))
+        );
         assert_eq!(res.exports.get("my_test"), None);
     }
 
@@ -339,7 +348,10 @@ mod tests {
         "#;
         let res = assemble(code);
         assert!(res.is_err());
-        assert!(res.unwrap_err().contains("requires 2 inputs, which exceeds its annotated arity 1"));
+        assert!(
+            res.unwrap_err()
+                .contains("requires 2 inputs, which exceeds its annotated arity 1")
+        );
 
         // 2. Net stack change is wrong
         let code = r#"
@@ -350,7 +362,9 @@ mod tests {
         "#;
         let res = assemble(code);
         assert!(res.is_err());
-        assert!(res.unwrap_err().contains("net stack change of -1, but annotated arity 2 -> 2 expects net change of 0"));
+        assert!(res.unwrap_err().contains(
+            "net stack change of -1, but annotated arity 2 -> 2 expects net change of 0"
+        ));
 
         // 3. Mismatched branch arities
         let code = r#"
@@ -370,7 +384,10 @@ mod tests {
         "#;
         let res = assemble(code);
         assert!(res.is_err());
-        assert!(res.unwrap_err().contains("Branch targets have mismatched net stack changes"));
+        assert!(
+            res.unwrap_err()
+                .contains("Branch targets have mismatched net stack changes")
+        );
 
         // 4. Recursion detected
         let code = r#"
@@ -409,7 +426,10 @@ mod tests {
         "#;
         let res2 = assemble(code2);
         assert!(res2.is_err());
-        assert!(res2.unwrap_err().contains("calls recursive sentence 'rec' but is not annotated with #[recursive]"));
+        assert!(
+            res2.unwrap_err()
+                .contains("calls recursive sentence 'rec' but is not annotated with #[recursive]")
+        );
 
         // 3. Verifying instruction arities are correctly populated for standard instructions
         let code3 = r#"
@@ -427,11 +447,26 @@ mod tests {
         assert_eq!(
             res3.instruction_arities[SentenceIndex::from(0)],
             Some(vec![
-                Arity::Normal { inputs: 0, outputs: 0 },
-                Arity::Normal { inputs: 0, outputs: 1 },
-                Arity::Normal { inputs: 0, outputs: 2 },
-                Arity::Normal { inputs: 0, outputs: 2 },
-                Arity::Normal { inputs: 0, outputs: 1 },
+                Arity::Normal {
+                    inputs: 0,
+                    outputs: 0
+                },
+                Arity::Normal {
+                    inputs: 0,
+                    outputs: 1
+                },
+                Arity::Normal {
+                    inputs: 0,
+                    outputs: 2
+                },
+                Arity::Normal {
+                    inputs: 0,
+                    outputs: 2
+                },
+                Arity::Normal {
+                    inputs: 0,
+                    outputs: 1
+                },
             ])
         );
 
@@ -446,8 +481,14 @@ mod tests {
             }
         "#;
         let res4 = assemble(code4).unwrap();
-        assert_eq!(res4.instruction_arities[SentenceIndex::from(0)], Some(vec![Arity::Panic { inputs: 0 }]));
-        assert_eq!(res4.instruction_arities[SentenceIndex::from(1)], Some(vec![Arity::Panic { inputs: 2 }]));
+        assert_eq!(
+            res4.instruction_arities[SentenceIndex::from(0)],
+            Some(vec![Arity::Panic { inputs: 0 }])
+        );
+        assert_eq!(
+            res4.instruction_arities[SentenceIndex::from(1)],
+            Some(vec![Arity::Panic { inputs: 2 }])
+        );
     }
 
     #[test]
@@ -471,7 +512,10 @@ mod tests {
         "#;
         let res = assemble(code);
         assert!(res.is_err());
-        assert!(res.unwrap_err().contains("Duplicate declaration of name 'foo'"));
+        assert!(
+            res.unwrap_err()
+                .contains("Duplicate declaration of name 'foo'")
+        );
 
         // Symbols, sentences and modules share one namespace, so a sentence
         // collides with a symbol of the same name too.
@@ -515,7 +559,10 @@ mod tests {
         "#;
         let res3 = assemble(code3);
         assert!(res3.is_err());
-        assert!(res3.unwrap_err().contains("'crate' can only appear at the beginning"));
+        assert!(
+            res3.unwrap_err()
+                .contains("'crate' can only appear at the beginning")
+        );
 
         let code4 = r#"
             mod a { mod b { symbol s } }
@@ -525,7 +572,10 @@ mod tests {
         "#;
         let res4 = assemble(code4);
         assert!(res4.is_err());
-        assert!(res4.unwrap_err().contains("'super' can only appear at the beginning"));
+        assert!(
+            res4.unwrap_err()
+                .contains("'super' can only appear at the beginning")
+        );
     }
 
     #[test]
@@ -587,14 +637,17 @@ mod tests {
         "#;
         let res = assemble(code);
         assert!(res.is_err());
-        assert!(res.unwrap_err().contains("no base directory context was provided"));
+        assert!(
+            res.unwrap_err()
+                .contains("no base directory context was provided")
+        );
     }
 
     #[test]
     fn test_assemble_file_mod_success() {
         let tmp_dir = std::env::temp_dir().join("hanoi_test_file_mods");
         let _ = std::fs::create_dir_all(&tmp_dir);
-        
+
         let main_code = r#"
             mod helper;
             
@@ -605,16 +658,16 @@ mod tests {
                 assert
             }
         "#;
-        
+
         let helper_code = r#"
             symbol val "Helper Val"
         "#;
-        
+
         std::fs::write(tmp_dir.join("helper.hana"), helper_code).unwrap();
-        
+
         let res = assemble_with_path(main_code, Some(&tmp_dir)).unwrap();
         assert!(res.tests.contains_key("run"));
-        
+
         let _ = std::fs::remove_file(tmp_dir.join("helper.hana"));
         let _ = std::fs::remove_dir(tmp_dir);
     }
@@ -657,11 +710,17 @@ mod tests {
         assert_eq!(res.annotations[safe_fn_idx], vec![Annotation::Arity(1, 1)]);
         assert_eq!(
             res.annotations[sentence_named(&res, "my_func")],
-            vec![Annotation::Precondition(safe_fn_idx), Annotation::Arity(1, 1)]
+            vec![
+                Annotation::Precondition(safe_fn_idx),
+                Annotation::Arity(1, 1)
+            ]
         );
         assert_eq!(
             res.annotations[sentence_named(&res, "inner::other_func")],
-            vec![Annotation::Precondition(safe_fn_idx), Annotation::Arity(1, 1)]
+            vec![
+                Annotation::Precondition(safe_fn_idx),
+                Annotation::Arity(1, 1)
+            ]
         );
     }
 
@@ -690,7 +749,10 @@ mod tests {
         "#;
         let res2 = assemble(code2);
         assert!(res2.is_err());
-        assert!(res2.unwrap_err().contains("names a symbol, but must name a sentence"));
+        assert!(
+            res2.unwrap_err()
+                .contains("names a symbol, but must name a sentence")
+        );
 
         // `super::` from the crate root walks off the top of the tree. This used
         // to be stored verbatim and only fail later, if the typechecker ran.
@@ -787,11 +849,17 @@ mod tests {
         assert_eq!(res.annotations[post_fn_idx], vec![Annotation::Arity(1, 1)]);
         assert_eq!(
             res.annotations[sentence_named(&res, "my_func")],
-            vec![Annotation::Postcondition(post_fn_idx), Annotation::Arity(1, 1)]
+            vec![
+                Annotation::Postcondition(post_fn_idx),
+                Annotation::Arity(1, 1)
+            ]
         );
         assert_eq!(
             res.annotations[sentence_named(&res, "inner::other_func")],
-            vec![Annotation::Postcondition(post_fn_idx), Annotation::Arity(1, 1)]
+            vec![
+                Annotation::Postcondition(post_fn_idx),
+                Annotation::Arity(1, 1)
+            ]
         );
     }
 
@@ -805,7 +873,12 @@ mod tests {
             }
         "#;
         let res = assemble(code).unwrap();
-        let my_func_idx = res.names.iter().position(|n| n == "my_func").map(SentenceIndex::from).unwrap();
+        let my_func_idx = res
+            .names
+            .iter()
+            .position(|n| n == "my_func")
+            .map(SentenceIndex::from)
+            .unwrap();
 
         assert_eq!(
             res.annotations[my_func_idx],

@@ -1,7 +1,7 @@
 use bytecode::{Instruction, Library, SentenceIndex, Value};
 
 pub mod runtime;
-pub use runtime::{Runtime, Environment, DefaultEnvironment};
+pub use runtime::{DefaultEnvironment, Environment, Runtime};
 
 use bytecode::value::numeric_cmp;
 
@@ -60,7 +60,9 @@ impl VM {
 
     /// Helper to pop a value from the stack, returning an error on underflow.
     fn pop(&mut self) -> Result<Value, String> {
-        self.stack.pop().ok_or_else(|| "Stack underflow".to_string())
+        self.stack
+            .pop()
+            .ok_or_else(|| "Stack underflow".to_string())
     }
 
     /// Helper to peek at a value from the top of the stack.
@@ -94,7 +96,6 @@ impl VM {
         self.stack.push(Value::Bool(false));
     }
 
-
     /// Executes sentences in the library starting with the given `start_sentence`.
     /// Reaching the end of a sentence pops the call stack to return to the caller.
     /// Execution terminates when the call stack is empty and the current sentence ends.
@@ -105,7 +106,10 @@ impl VM {
 
         loop {
             // Get the sentence reference
-            let sentence = self.library.sentences.get(current_sentence)
+            let sentence = self
+                .library
+                .sentences
+                .get(current_sentence)
                 .ok_or_else(|| format!("Invalid sentence index: {:?}", current_sentence))?;
 
             if ip >= sentence.len() {
@@ -160,7 +164,11 @@ impl VM {
                 }
                 Instruction::Pick(depth) => {
                     if self.stack.len() <= depth {
-                        return Err(format!("Stack underflow on Pick: depth {} but stack size {}", depth, self.stack.len()));
+                        return Err(format!(
+                            "Stack underflow on Pick: depth {} but stack size {}",
+                            depth,
+                            self.stack.len()
+                        ));
                     }
                     let index = self.stack.len() - 1 - depth;
                     let val = self.stack[index].clone();
@@ -168,7 +176,11 @@ impl VM {
                 }
                 Instruction::Roll(depth) => {
                     if self.stack.len() <= depth {
-                        return Err(format!("Stack underflow on Roll: depth {} but stack size {}", depth, self.stack.len()));
+                        return Err(format!(
+                            "Stack underflow on Roll: depth {} but stack size {}",
+                            depth,
+                            self.stack.len()
+                        ));
                     }
                     let index = self.stack.len() - 1 - depth;
                     let val = self.stack.remove(index);
@@ -291,11 +303,19 @@ impl VM {
                 }
                 Instruction::Dip(depth, target) => {
                     if self.stack.len() < depth {
-                        return Err(format!("Stack underflow on Dip: depth {} but stack size {}", depth, self.stack.len()));
+                        return Err(format!(
+                            "Stack underflow on Dip: depth {} but stack size {}",
+                            depth,
+                            self.stack.len()
+                        ));
                     }
                     // Withhold the top `depth` values for the duration of the call.
                     let hidden = self.stack.split_off(self.stack.len() - depth);
-                    self.call_stack.push(Frame { sentence: current_sentence, ip, hidden });
+                    self.call_stack.push(Frame {
+                        sentence: current_sentence,
+                        ip,
+                        hidden,
+                    });
                     current_sentence = target;
                     ip = 0;
                 }
@@ -306,7 +326,11 @@ impl VM {
                     // being falsy everywhere.
                     let b = cond.truthy();
                     // Push the return address (the next instruction) to the call stack
-                    self.call_stack.push(Frame { sentence: current_sentence, ip, hidden: Vec::new() });
+                    self.call_stack.push(Frame {
+                        sentence: current_sentence,
+                        ip,
+                        hidden: Vec::new(),
+                    });
                     if b {
                         current_sentence = then_target;
                     } else {
@@ -331,12 +355,19 @@ impl VM {
                     let b = self.pop()?;
                     let a = self.pop()?;
                     if a != b {
-                        return Err(format!("Assertion failed: values are not equal: {:?} != {:?}", a, b));
+                        return Err(format!(
+                            "Assertion failed: values are not equal: {:?} != {:?}",
+                            a, b
+                        ));
                     }
                 }
                 Instruction::Tuple(n) => {
                     if self.stack.len() < n {
-                        return Err(format!("Stack underflow on Tuple: requested {} but stack size {}", n, self.stack.len()));
+                        return Err(format!(
+                            "Stack underflow on Tuple: requested {} but stack size {}",
+                            n,
+                            self.stack.len()
+                        ));
                     }
                     let index = self.stack.len() - n;
                     let mut elements = self.stack.split_off(index);
@@ -381,7 +412,8 @@ impl VM {
                 }
                 Instruction::IsSymbol => {
                     let val = self.pop()?;
-                    self.stack.push(Value::Bool(matches!(val, Value::Symbol(_))));
+                    self.stack
+                        .push(Value::Bool(matches!(val, Value::Symbol(_))));
                 }
                 Instruction::IsTuple => {
                     let val = self.pop()?;
@@ -463,7 +495,7 @@ mod tests {
         let mut library = Library::new();
         let sentence = vec![
             Instruction::Push(Value::Int(5)),
-            Instruction::Pick(0), // Dup
+            Instruction::Pick(0),     // Dup
             Instruction::AssertEqual, // pop both, check equal
             Instruction::Push(Value::Int(5)),
             Instruction::Push(Value::Int(10)),
@@ -492,13 +524,8 @@ mod tests {
             Instruction::Push(Value::Bool(true)),
             Instruction::Branch(SentenceIndex::from(1), SentenceIndex::from(2)),
         ];
-        let s1 = vec![
-            Instruction::Push(Value::Int(42)),
-        ];
-        let s2 = vec![
-            Instruction::Push(Value::Bool(false)),
-            Instruction::Assert,
-        ];
+        let s1 = vec![Instruction::Push(Value::Int(42))];
+        let s2 = vec![Instruction::Push(Value::Bool(false)), Instruction::Assert];
 
         library.sentences.push(s0);
         library.sentences.push(s1);
@@ -519,11 +546,9 @@ mod tests {
             Instruction::Dip(0, SentenceIndex::from(1)),
             Instruction::AssertEqual,
         ];
-        
+
         // sentence 1: Push 10
-        let s1 = vec![
-            Instruction::Push(Value::Int(10)),
-        ];
+        let s1 = vec![Instruction::Push(Value::Int(10))];
 
         library.sentences.push(s0);
         library.sentences.push(s1);
@@ -652,24 +677,20 @@ mod tests {
             Instruction::IsInt,
             Instruction::Push(Value::Bool(true)),
             Instruction::AssertEqual,
-            
             Instruction::Push(Value::Bool(true)),
             Instruction::IsInt,
             Instruction::Push(Value::Bool(false)),
             Instruction::AssertEqual,
-
             // test is_bool
             Instruction::Push(Value::Bool(true)),
             Instruction::IsBool,
             Instruction::Push(Value::Bool(true)),
             Instruction::AssertEqual,
-
             // test is_float
             Instruction::Push(Value::Float(3.14)),
             Instruction::IsFloat,
             Instruction::Push(Value::Bool(true)),
             Instruction::AssertEqual,
-
             // test is_tuple
             Instruction::Push(Value::Int(1)),
             Instruction::Push(Value::Int(2)),
@@ -677,7 +698,6 @@ mod tests {
             Instruction::IsTuple,
             Instruction::Push(Value::Bool(true)),
             Instruction::AssertEqual,
-
             // test tuple_length
             Instruction::Push(Value::Int(1)),
             Instruction::Push(Value::Int(2)),
@@ -698,10 +718,7 @@ mod tests {
     #[test]
     fn test_assertion_failure() {
         let mut library = Library::new();
-        let sentence = vec![
-            Instruction::Push(Value::Bool(false)),
-            Instruction::Assert,
-        ];
+        let sentence = vec![Instruction::Push(Value::Bool(false)), Instruction::Assert];
         library.sentences.push(sentence);
         let idx = SentenceIndex::from(0);
 
@@ -736,7 +753,7 @@ mod tests {
         "#;
         let res = bytecode::assemble(code).unwrap();
         let start_idx = *res.exports.get("start").unwrap();
-        
+
         let mut vm = VM::new(res);
         assert!(vm.execute(start_idx).is_ok());
         assert!(vm.stack().is_empty());
@@ -769,7 +786,7 @@ mod tests {
         "#;
         let res = bytecode::assemble(code).unwrap();
         let entry_idx = *res.exports.get("entry").unwrap();
-        
+
         let mut vm = VM::new(res);
         assert!(vm.execute(entry_idx).is_ok());
         assert!(vm.stack().is_empty());
@@ -816,19 +833,19 @@ mod tests {
             }
         "#;
         let res = bytecode::assemble(code).unwrap();
-        
+
         // Run test_len
         let test_len_idx = *res.exports.get("test_len").unwrap();
         let mut vm = VM::new(res.clone());
         assert!(vm.execute(test_len_idx).is_ok());
         assert!(vm.stack().is_empty());
-        
+
         // Run test_char_at
         let test_char_idx = *res.exports.get("test_char_at").unwrap();
         let mut vm = VM::new(res.clone());
         assert!(vm.execute(test_char_idx).is_ok());
         assert!(vm.stack().is_empty());
-        
+
         // Run test_out_of_bounds: an index past the end answers 0 rather than
         // failing, and the sentence asserts exactly that.
         let oob_idx = *res.exports.get("test_out_of_bounds").unwrap();
@@ -1187,7 +1204,9 @@ mod totality_tests {
     /// [`apply`], then split the success flag off the top.
     fn flagged(operands: &[Value], inst: Instruction) -> (Vec<Value>, bool) {
         let mut out = apply(operands, inst.clone());
-        let flag = out.pop().unwrap_or_else(|| panic!("{:?} left nothing", inst));
+        let flag = out
+            .pop()
+            .unwrap_or_else(|| panic!("{:?} left nothing", inst));
         match flag {
             Value::Bool(b) => (out, b),
             other => panic!("{:?} left {:?} where its flag belongs", inst, other),
@@ -1195,7 +1214,10 @@ mod totality_tests {
     }
 
     fn sym(name: &str) -> Value {
-        Value::Symbol(Symbol { id: 7, name: name.to_string() })
+        Value::Symbol(Symbol {
+            id: 7,
+            name: name.to_string(),
+        })
     }
 
     fn unit() -> Value {
@@ -1221,7 +1243,10 @@ mod totality_tests {
         vec![
             (Instruction::Add, vec![sym("s"), Value::Int(1)]),
             (Instruction::Subtract, vec![Value::Int(1), sym("s")]),
-            (Instruction::Multiply, vec![Value::Bool(true), Value::Bool(false)]),
+            (
+                Instruction::Multiply,
+                vec![Value::Bool(true), Value::Bool(false)],
+            ),
             (Instruction::Divide, vec![Value::Int(7), Value::Int(0)]),
             (Instruction::Modulo, vec![Value::Int(7), Value::Int(0)]),
             (Instruction::Negate, vec![sym("s")]),
@@ -1253,7 +1278,11 @@ mod totality_tests {
                 failed.len(),
                 n_out
             );
-            assert!(is_fallible(&inst), "{:?} should be listed as fallible", inst);
+            assert!(
+                is_fallible(&inst),
+                "{:?} should be listed as fallible",
+                inst
+            );
         }
     }
 
@@ -1272,8 +1301,14 @@ mod totality_tests {
             (Instruction::Divide, vec![Value::Int(7), Value::Int(2)]),
             (Instruction::Negate, vec![Value::Int(3)]),
             (Instruction::Greater, vec![Value::Int(3), Value::Int(1)]),
-            (Instruction::Untuple(2), vec![Value::Tuple(vec![sym("a"), sym("b")])]),
-            (Instruction::TupleLength, vec![Value::Tuple(vec![Value::Int(1)])]),
+            (
+                Instruction::Untuple(2),
+                vec![Value::Tuple(vec![sym("a"), sym("b")])],
+            ),
+            (
+                Instruction::TupleLength,
+                vec![Value::Tuple(vec![Value::Int(1)])],
+            ),
             (Instruction::SymbolLen, vec![sym("hi")]),
             (Instruction::SymbolCharAt, vec![sym("hi"), Value::Int(0)]),
         ];
@@ -1435,8 +1470,12 @@ mod totality_tests {
                 Instruction::Push(v.clone()),
                 Instruction::Branch(SentenceIndex::from(1), SentenceIndex::from(2)),
             ]);
-            library.sentences.push(vec![Instruction::Push(Value::Int(1))]);
-            library.sentences.push(vec![Instruction::Push(Value::Int(2))]);
+            library
+                .sentences
+                .push(vec![Instruction::Push(Value::Int(1))]);
+            library
+                .sentences
+                .push(vec![Instruction::Push(Value::Int(2))]);
 
             let mut vm = VM::new(library);
             vm.execute(SentenceIndex::from(0))
@@ -1485,12 +1524,20 @@ mod totality_tests {
         // expression back into the integer convention.
         let (out, ok) = flagged(&[Value::Float(1.0), Value::Int(0)], Instruction::Divide);
         assert!(ok, "1.0 / 0 is an IEEE answer, not a failure");
-        let [Value::Float(q)] = out[..] else { panic!("expected a float") };
-        assert!(q.is_infinite() && q > 0.0, "1.0 / 0 should be inf, got {}", q);
+        let [Value::Float(q)] = out[..] else {
+            panic!("expected a float")
+        };
+        assert!(
+            q.is_infinite() && q > 0.0,
+            "1.0 / 0 should be inf, got {}",
+            q
+        );
 
         let (out, ok) = flagged(&[Value::Float(1.0), Value::Int(0)], Instruction::Modulo);
         assert!(ok);
-        let [Value::Float(r)] = out[..] else { panic!("expected a float") };
+        let [Value::Float(r)] = out[..] else {
+            panic!("expected a float")
+        };
         assert!(r.is_nan(), "1.0 % 0 should be NaN, got {}", r);
     }
 
@@ -1513,7 +1560,10 @@ mod totality_tests {
             (vec![Value::Bool(true)], true)
         );
         // A NaN is unordered rather than non-numeric, and fails alike.
-        let (_, ok) = flagged(&[Value::Float(f64::NAN), Value::Float(1.0)], Instruction::Less);
+        let (_, ok) = flagged(
+            &[Value::Float(f64::NAN), Value::Float(1.0)],
+            Instruction::Less,
+        );
         assert!(!ok, "an unordered pair is not a comparison");
     }
 
@@ -1535,18 +1585,22 @@ mod totality_tests {
 
     #[test]
     fn assert_eq_and_panic_are_the_other_two() {
-        assert!(run(vec![
-            Instruction::Push(Value::Int(1)),
-            Instruction::Push(Value::Int(2)),
-            Instruction::AssertEqual,
-        ])
-        .is_err());
-        assert!(run(vec![
-            Instruction::Push(Value::Int(1)),
-            Instruction::Push(Value::Int(1)),
-            Instruction::AssertEqual,
-        ])
-        .is_ok());
+        assert!(
+            run(vec![
+                Instruction::Push(Value::Int(1)),
+                Instruction::Push(Value::Int(2)),
+                Instruction::AssertEqual,
+            ])
+            .is_err()
+        );
+        assert!(
+            run(vec![
+                Instruction::Push(Value::Int(1)),
+                Instruction::Push(Value::Int(1)),
+                Instruction::AssertEqual,
+            ])
+            .is_ok()
+        );
         assert!(run(vec![Instruction::Panic]).is_err());
     }
 
@@ -1591,7 +1645,7 @@ mod runtime_tests {
                     }
                     Err(format!("Unexpected symbol event: {}", sym.name))
                 }
-                other => Err(format!("Unexpected event type: {:?}", other))
+                other => Err(format!("Unexpected event type: {:?}", other)),
             }
         }
 
@@ -1684,13 +1738,19 @@ mod runtime_tests {
         "#;
 
         let res = assemble(code).unwrap();
-        let pong_symbol = res.symbols.get("main::event::pong").cloned()
+        let pong_symbol = res
+            .symbols
+            .get("main::event::pong")
+            .cloned()
             .and_then(|v| match v {
                 Value::Symbol(s) => Some(s),
                 _ => None,
             })
             .unwrap();
-        let env = TestEnv { pong_symbol, received_ping: false };
+        let env = TestEnv {
+            pong_symbol,
+            received_ping: false,
+        };
         let mut runtime = Runtime::new(res, "main", env).unwrap();
 
         let run_res = runtime.run().await;
@@ -1801,7 +1861,7 @@ mod runtime_tests {
             println!("Hello world run failed: {}", e);
         }
         assert!(run_res.is_ok());
-        
+
         let output = runtime.environment.captured_output().unwrap();
         assert_eq!(output, "Hello, World!");
     }

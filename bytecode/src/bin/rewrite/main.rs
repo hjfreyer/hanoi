@@ -37,7 +37,7 @@ use bytecode::{Library, SentenceIndex};
 
 use crate::print::print_sentence;
 use crate::program::Program;
-use crate::script::{rule_names, Definitions, PRELUDE};
+use crate::script::{Definitions, PRELUDE, rule_names};
 use crate::tactic::Env;
 
 /// Rule firings allowed per run before the tool gives up and shows its work.
@@ -221,7 +221,9 @@ fn usage() {
     eprintln!("  --trace              print how often each rule fired.");
     eprintln!("  --step               walk the rewrite one rule firing at a time.");
     eprintln!("  --check              verify every rule preserves net stack effect.");
-    eprintln!("  --stack              show what each slot holds, with equal values sharing a name.");
+    eprintln!(
+        "  --stack              show what each slot holds, with equal values sharing a name."
+    );
     eprintln!();
     eprintln!("Examples:");
     eprintln!("  rewrite tests 'Pair::check' -t dip_normalize");
@@ -239,7 +241,10 @@ fn load(dir_arg: &str) -> Library {
 
     let file_path = dir.join("main.hana");
     if !file_path.exists() {
-        eprintln!("Error: Directory '{}' does not contain 'main.hana'", dir_arg);
+        eprintln!(
+            "Error: Directory '{}' does not contain 'main.hana'",
+            dir_arg
+        );
         process::exit(1);
     }
 
@@ -284,7 +289,11 @@ fn resolve_sentence(library: &Library, ident: &str) -> Result<SentenceIndex, Str
         return Ok(exact[0]);
     }
     if exact.len() > 1 {
-        return Err(format!("'{}' is ambiguous: {}", ident, render_candidates(library, &exact)));
+        return Err(format!(
+            "'{}' is ambiguous: {}",
+            ident,
+            render_candidates(library, &exact)
+        ));
     }
 
     // Fall back to a trailing path match, so `queue::accept` finds
@@ -319,10 +328,17 @@ const MAX_LISTED: usize = 15;
 fn render_candidates(library: &Library, candidates: &[SentenceIndex]) -> String {
     let mut out = String::from("\n");
     for idx in candidates.iter().take(MAX_LISTED) {
-        out.push_str(&format!("  #{:<5} {}\n", usize::from(*idx), library.names[*idx]));
+        out.push_str(&format!(
+            "  #{:<5} {}\n",
+            usize::from(*idx),
+            library.names[*idx]
+        ));
     }
     if candidates.len() > MAX_LISTED {
-        out.push_str(&format!("  ... and {} more\n", candidates.len() - MAX_LISTED));
+        out.push_str(&format!(
+            "  ... and {} more\n",
+            candidates.len() - MAX_LISTED
+        ));
     }
     out
 }
@@ -347,4 +363,3 @@ fn named_sentence_list(library: &Library) -> String {
     }
     out.join("\n")
 }
-

@@ -64,11 +64,7 @@ pub(crate) fn side_by_side(
 /// trimming both ends is the size of the rewrite rather than the size of the
 /// listing.
 fn align(before: &[String], after: &[String]) -> Vec<Row> {
-    let head = before
-        .iter()
-        .zip(after)
-        .take_while(|(a, b)| a == b)
-        .count();
+    let head = before.iter().zip(after).take_while(|(a, b)| a == b).count();
     let tail = before[head..]
         .iter()
         .rev()
@@ -82,9 +78,7 @@ fn align(before: &[String], after: &[String]) -> Vec<Row> {
         &after[head..after.len() - tail],
         head,
     ));
-    rows.extend(
-        (0..tail).map(|i| Row::Same(before.len() - tail + i, after.len() - tail + i)),
-    );
+    rows.extend((0..tail).map(|i| Row::Same(before.len() - tail + i, after.len() - tail + i)));
     rows
 }
 

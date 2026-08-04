@@ -4,10 +4,10 @@ use bytecode::SentenceIndex;
 use std::collections::HashSet;
 
 use crate::arity::{node_arity, seq_arity};
-use crate::ir::{build, Node};
+use crate::ir::{Node, build};
 use crate::program::Program;
 use crate::stack::{self, Fresh, Names, Stack};
-use crate::tactic::{apply, Env, Tactic, TacticError};
+use crate::tactic::{Env, Tactic, TacticError, apply};
 
 /// How wide the symbolic stack column is allowed to get.
 const STACK_WIDTH: usize = 34;
@@ -82,7 +82,9 @@ pub(crate) fn render_body(
 
     let mut names = Names::new();
     let mut fresh = Fresh::new();
-    let stack = show_stack.then(|| stack::entry(inputs, &mut fresh)).flatten();
+    let stack = show_stack
+        .then(|| stack::entry(inputs, &mut fresh))
+        .flatten();
 
     let head = if relative {
         "offset │ instruction   (entry depth unknown)"
@@ -91,12 +93,20 @@ pub(crate) fn render_body(
     };
     if show_stack {
         out.push(format!("  {:>w$} │ {}", "stack", head, w = STACK_WIDTH));
-        out.push(format!("  {}─┼─{}", "─".repeat(STACK_WIDTH), "─".repeat(24)));
+        out.push(format!(
+            "  {}─┼─{}",
+            "─".repeat(STACK_WIDTH),
+            "─".repeat(24)
+        ));
     } else {
         out.push(format!("  {}", head));
         out.push(format!(
             "  {}┼────────────",
-            if relative { "───────" } else { "──────" }
+            if relative {
+                "───────"
+            } else {
+                "──────"
+            }
         ));
     }
 
@@ -182,9 +192,9 @@ fn render_seq(
                 // still on the stack, so the inner frame's entry depth is the
                 // same number the dip itself was printed with — which is what
                 // makes the hidden region visible.
-                let inner = stack.as_ref().and_then(|s| {
-                    (*k <= s.len()).then(|| s[..s.len() - k].to_vec())
-                });
+                let inner = stack
+                    .as_ref()
+                    .and_then(|s| (*k <= s.len()).then(|| s[..s.len() - k].to_vec()));
                 render_seq(
                     prog,
                     body,
@@ -205,9 +215,9 @@ fn render_seq(
             } => {
                 // Both arms run on the stack with the condition popped.
                 let arm_entry = depth.map(|d| d - 1);
-                let arm_stack = stack.as_ref().and_then(|s| {
-                    (!s.is_empty()).then(|| s[..s.len() - 1].to_vec())
-                });
+                let arm_stack = stack
+                    .as_ref()
+                    .and_then(|s| (!s.is_empty()).then(|| s[..s.len() - 1].to_vec()));
                 out.push(format!(
                     "{} │ {}branch then → {} {{",
                     gutter, pad, then_origin
@@ -274,4 +284,3 @@ fn stack_blank(view: &Option<&mut View>) -> String {
         None => String::new(),
     }
 }
-

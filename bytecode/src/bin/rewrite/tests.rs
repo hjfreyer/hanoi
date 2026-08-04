@@ -2,15 +2,15 @@
 
 use std::collections::HashSet;
 
-use bytecode::{assemble, Instruction, Library, SentenceIndex};
+use bytecode::{Instruction, Library, SentenceIndex, assemble};
 use std::fs;
 use std::path::Path;
 
 use crate::arity::{node_arity, seq_arity};
-use crate::ir::{build, Node};
+use crate::ir::{Node, build};
 use crate::program::Program;
 use crate::script::{Definitions, PRELUDE};
-use crate::tactic::{apply, Env, Tactic};
+use crate::tactic::{Env, Tactic, apply};
 
 /// The prelude tactics, by the name a test refers to them by.
 const DIPS: &str = "dips";
@@ -221,10 +221,7 @@ fn dips_fuse_when_they_meet_at_the_same_depth() {
     "#,
         DIPS,
     );
-    assert_eq!(
-        shape(&body),
-        vec!["dip 1 { pick 0 drop pick 0 drop }"]
-    );
+    assert_eq!(shape(&body), vec!["dip 1 { pick 0 drop pick 0 drop }"]);
 }
 
 fn tree_unary(code: &str) -> Vec<Node> {
@@ -248,7 +245,11 @@ fn a_deep_dip_becomes_a_nest_of_unary_dips() {
     // that discards its flag -- this sentence has no `#[flags]`.
     assert_eq!(
         shape(&body),
-        vec!["untuple 3", "dip 1 { dip 1 { dip 1 { add drop } } }", "drop"]
+        vec![
+            "untuple 3",
+            "dip 1 { dip 1 { dip 1 { add drop } } }",
+            "drop"
+        ]
     );
 }
 
@@ -420,7 +421,11 @@ fn a_push_and_a_drop_cancel() {
         ANNIHILATE,
     );
     // Cancelling the inner pair exposes the outer one.
-    assert!(body.is_empty(), "expected nothing left, got {:?}", shape(&body));
+    assert!(
+        body.is_empty(),
+        "expected nothing left, got {:?}",
+        shape(&body)
+    );
 }
 
 #[test]
@@ -496,7 +501,10 @@ fn passes_compose() {
             branch { push 7 push 9 drop 0 push 1 } { push 7 push 2 }
         }
     "#;
-    assert_eq!(shape(&tree(code, FACTOR)), vec!["dip 1 { push 7 }", "branch"]);
+    assert_eq!(
+        shape(&tree(code, FACTOR)),
+        vec!["dip 1 { push 7 }", "branch"]
+    );
 
     let both = tree(code, "factoring; annihilate");
     let Node::Branch { then_body, .. } = &both[1] else {
@@ -684,7 +692,10 @@ fn most_of_the_corpus_is_provably_total() {
         total,
         can.len()
     );
-    assert!(claimed > 0, "the sugar should be making claims worth checking");
+    assert!(
+        claimed > 0,
+        "the sugar should be making claims worth checking"
+    );
 }
 
 /// Whether every dip in the tree hides at most one value.
@@ -719,7 +730,6 @@ fn normalization_preserves_arity() {
     assert_eq!(seq_arity(prog, &plain), seq_arity(prog, &normalized));
 }
 
-
 // ---------------------------------------------------------------------------
 // The tactic algebra
 //
@@ -745,11 +755,7 @@ fn sample() -> (&'static Program<'static>, Vec<Node>) {
     )
 }
 
-fn outcome(
-    prog: &Program,
-    src: &str,
-    nodes: Vec<Node>,
-) -> Result<Outcome, TacticError> {
+fn outcome(prog: &Program, src: &str, nodes: Vec<Node>) -> Result<Outcome, TacticError> {
     apply(&compile(src), &Env::new(prog, 1_000_000, true), nodes)
 }
 
@@ -1003,8 +1009,16 @@ fn selective_descent_breaks_the_staged_inlining_plateau() {
         "root-level staging cannot reach into arms; that is the plateau"
     );
 
-    let past = run(prog, before.clone(), "repeat_n(9, once(inline)); then(once(inline))");
-    assert_ne!(arm_shapes(&before), arm_shapes(&past), "`then` gets past it");
+    let past = run(
+        prog,
+        before.clone(),
+        "repeat_n(9, once(inline)); then(once(inline))",
+    );
+    assert_ne!(
+        arm_shapes(&before),
+        arm_shapes(&past),
+        "`then` gets past it"
+    );
 }
 
 #[test]
@@ -1329,7 +1343,10 @@ fn the_whole_derivation_runs_on_the_blocked_shape() {
     // shape.
     assert_eq!(untuples(&after), 2);
     let [_, Node::Branch { then_body, .. }] = &after[..] else {
-        panic!("expected the rebuild's guard branch, got {:?}", shape(&after))
+        panic!(
+            "expected the rebuild's guard branch, got {:?}",
+            shape(&after)
+        )
     };
     assert_eq!(
         untuples(then_body),
@@ -1368,8 +1385,9 @@ fn the_sharing_chain_runs_on_the_real_corpus_sentence() {
     let Ok(code) = fs::read_to_string(main) else {
         return;
     };
-    let library: &'static Library =
-        Box::leak(Box::new(bytecode::assemble_with_path(&code, main.parent()).unwrap()));
+    let library: &'static Library = Box::leak(Box::new(
+        bytecode::assemble_with_path(&code, main.parent()).unwrap(),
+    ));
     let prog: &'static Program<'static> = Box::leak(Box::new(Program::new(library)));
     let idx = prog
         .library()
@@ -1617,7 +1635,11 @@ fn a_later_step_finding_nothing_does_not_discard_an_earlier_one() {
     // whole thing back, silently, while --trace still reported `sink` firing.
     let (prog, before) = sample();
     let sunk = run(prog, before.clone(), "each(sink)");
-    assert_ne!(shape(&before), shape(&sunk), "expected sinking to do something");
+    assert_ne!(
+        shape(&before),
+        shape(&sunk),
+        "expected sinking to do something"
+    );
     assert_eq!(
         shape(&run(prog, before, "each(sink); each(annihilate_drop)")),
         shape(&sunk),
@@ -1633,7 +1655,10 @@ fn a_failing_step_rolls_the_whole_sequence_back() {
     let Outcome::Failed(after) = outcome(prog, "each(sink); fail", before.clone()).unwrap() else {
         panic!("the sequence should fail")
     };
-    assert_eq!(before, after, "a failed sequence must not leak its progress");
+    assert_eq!(
+        before, after,
+        "a failed sequence must not leak its progress"
+    );
 }
 
 #[test]
@@ -1673,11 +1698,15 @@ fn choice_falls_through_a_branch_that_did_nothing() {
 fn fail_is_the_identity_of_choice_and_id_of_sequence() {
     let (prog, before) = sample();
     assert_eq!(
-        outcome(prog, "fail | each(sink)", before.clone()).unwrap().into_nodes(),
+        outcome(prog, "fail | each(sink)", before.clone())
+            .unwrap()
+            .into_nodes(),
         run(prog, before.clone(), "each(sink)")
     );
     assert_eq!(
-        outcome(prog, "each(sink); id", before.clone()).unwrap().into_nodes(),
+        outcome(prog, "each(sink); id", before.clone())
+            .unwrap()
+            .into_nodes(),
         run(prog, before, "each(sink)")
     );
 }
@@ -1740,7 +1769,11 @@ fn duplicating_a_value_then_discarding_the_original_vanishes() {
     "#,
         "cleanup",
     );
-    assert!(body.is_empty(), "expected nothing left, got {:?}", shape(&body));
+    assert!(
+        body.is_empty(),
+        "expected nothing left, got {:?}",
+        shape(&body)
+    );
 }
 
 #[test]
@@ -1767,7 +1800,11 @@ fn distributing_a_suffix_into_both_arms_preserves_arity() {
     "#;
     let (prog, plain) = tree_of(code, NOTHING);
     let spread = tree(code, "distribute");
-    assert_eq!(shape(&spread), vec!["branch"], "the add should have moved in");
+    assert_eq!(
+        shape(&spread),
+        vec!["branch"],
+        "the add should have moved in"
+    );
     assert_eq!(
         seq_arity(prog, &plain),
         seq_arity(prog, &spread),
@@ -1836,7 +1873,11 @@ fn distributing_then_folding_reaches_what_neither_does_alone() {
     );
 
     let both = tree(code, "distribute; cleanup");
-    assert_eq!(shape(&both), vec!["branch"], "expected one branch to fold away");
+    assert_eq!(
+        shape(&both),
+        vec!["branch"],
+        "expected one branch to fold away"
+    );
     let Node::Branch {
         then_body,
         else_body,
@@ -2187,13 +2228,7 @@ fn every_firing_shows_up_in_the_listing() {
     let total = walk_total();
     let listing = |n| {
         let (prog, nodes, _) = walk(Some(n));
-        crate::print::render_body(
-            prog,
-            SentenceIndex::from(0),
-            &nodes,
-            WALK_TACTIC,
-            false,
-        )
+        crate::print::render_body(prog, SentenceIndex::from(0), &nodes, WALK_TACTIC, false)
     };
     for n in 1..=total {
         assert_ne!(listing(n - 1), listing(n), "firing {} left no trace", n);
