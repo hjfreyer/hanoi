@@ -1,0 +1,1038 @@
+//! The search: what drives the matchers, and what it leaves behind.
+//!
+//! A tactic is a partial function on a node sequence. It either matches and
+//! changes something, matches and changes nothing, or fails — and a tactic that
+//! fails hands the sequence back exactly as it received it, which is what makes
+//! rollback a matter of ownership rather than of copying.
+//!
+//! What is new is that running one **produces a script**. Every firing is
+//! applied by [`crate::applier`] and recorded as a [`Step`] with an absolute
+//! [`Location`], so a run leaves behind a derivation that reproduces it. The
+//! engine never edits a tree itself.
+//!
+//! ## The invariant, in three parts
+//!
+//! The old rule was: *a tactic's result depends only on the sequence it is
+//! given, never on where in the tree it is being applied.* That splits:
+//!
+//! 1. **Matchers stay position-blind.** [`Matcher::plan`] is a pure function of
+//!    its window, and reports where it wants to rewrite relative to that window.
+//! 2. **Only the driver knows the path.** It is threaded through the traversal
+//!    in [`Env::path`] and used for exactly one thing: stamping absolute
+//!    locations onto the steps it records.
+//! 3. **The applier depends only on the tree and the step.** So replaying a
+//!    recorded script against a fresh build reproduces the run's result exactly
+//!    — which is the property `a_run_is_reproduced_by_its_own_script` asserts,
+//!    and the reason the script can be trusted as a derivation.
+//!
+//! ## Local application, absolute record
+//!
+//! The traversal owns each sub-sequence as it visits it (`std::mem::take`, then
+//! write back), so during a run the root tree is not reachable from where the
+//! work happens. A firing is therefore applied to the sequence in hand, with a
+//! location relative to *it*, while the step written into the script carries
+//! the full path. The two agree by construction — same relative part, same
+//! offset — and the replay test is what holds them to it.
+//!
+//! Ancestor indices cannot go stale in between: while the engine is inside a
+//! child body every enclosing frame is suspended mid-iteration, so nothing can
+//! splice an ancestor sequence until the traversal returns to it.
+
+// See `location.rs`: the engine lands before `main` switches over to it.
+#![allow(dead_code)]
+
+use std::cell::{Cell, RefCell};
+use std::collections::{HashMap, VecDeque};
+
+use crate::applier::{ApplyError, apply_step};
+use crate::ir::{Node, Selector, child_seqs};
+use crate::matcher::Matcher;
+use crate::program::Program;
+use crate::rule2::{Script, Step};
+
+/// How many firings the trace remembers. Enough to read an oscillation off the
+/// end of it, not enough to bury the error message.
+const TRACE_WINDOW: usize = 24;
+
+/// What applying a tactic did.
+///
+/// `Failed` carries the sequence back out untouched. That is a contract, not a
+/// convention: `Seq` and `Choice` rely on it to avoid cloning.
+///
+/// Note what does *not* fail: a matcher that matches nowhere reports
+/// `Unchanged`. Scanning a sequence and finding no work is a successful no-op,
+/// and treating it as an error would make `a; b` throw away everything `a` did
+/// whenever `b` had nothing to do. `Failed` comes only from an explicit `fail`.
+#[derive(Debug)]
+pub(crate) enum Outcome {
+    Changed(Vec<Node>),
+    Unchanged(Vec<Node>),
+    Failed(Vec<Node>),
+}
+
+impl Outcome {
+    pub(crate) fn into_nodes(self) -> Vec<Node> {
+        match self {
+            Outcome::Changed(n) | Outcome::Unchanged(n) | Outcome::Failed(n) => n,
+        }
+    }
+
+    fn changed(&self) -> bool {
+        matches!(self, Outcome::Changed(_))
+    }
+}
+
+#[derive(Debug)]
+pub(crate) enum TacticError {
+    /// The budget ran out. Almost always an oscillation between two matchers
+    /// that undo each other, which the recent-firings list makes obvious.
+    OutOfFuel { spent: u64, recent: Vec<String> },
+    /// A matcher proposed a step the applier would not take. This is always a
+    /// bug in the matcher: it is required to check its own side conditions.
+    Refused(ApplyError),
+}
+
+impl std::fmt::Display for TacticError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TacticError::OutOfFuel { spent, recent } => {
+                writeln!(f, "out of fuel after {} steps.", spent)?;
+                writeln!(f)?;
+                writeln!(f, "The last {} were:", recent.len())?;
+                for r in recent {
+                    writeln!(f, "  {}", r)?;
+                }
+                writeln!(f)?;
+                write!(
+                    f,
+                    "A matcher alternating with its opposite looks exactly like \
+                     this. `collapse` and `expand` are opposite readings of one \
+                     law; so are `sink` and `float`, and `factor` and `unfactor`. \
+                     Raise the budget with --fuel if the work is genuinely this \
+                     large."
+                )
+            }
+            TacticError::Refused(err) => write!(
+                f,
+                "a matcher proposed a step that does not apply, which is a bug \
+                 in the matcher rather than in the script:\n  {}",
+                err
+            ),
+        }
+    }
+}
+
+pub(crate) struct Env<'a> {
+    prog: &'a Program<'a>,
+    fuel: Cell<u64>,
+    spent: Cell<u64>,
+    recent: RefCell<VecDeque<String>>,
+    hits: RefCell<HashMap<&'static str, usize>>,
+    check: bool,
+    /// The derivation so far.
+    script: RefCell<Script>,
+    /// Where the traversal currently is, outermost first. Pushed on the way
+    /// into a child sequence and popped on the way out.
+    path: RefCell<Vec<(usize, Selector)>>,
+}
+
+impl<'a> Env<'a> {
+    pub(crate) fn new(prog: &'a Program<'a>, fuel: u64, check: bool) -> Self {
+        Env {
+            prog,
+            fuel: Cell::new(fuel),
+            spent: Cell::new(0),
+            recent: RefCell::new(VecDeque::new()),
+            hits: RefCell::new(HashMap::new()),
+            check,
+            script: RefCell::new(Vec::new()),
+            path: RefCell::new(Vec::new()),
+        }
+    }
+
+    pub(crate) fn program(&self) -> &Program<'a> {
+        self.prog
+    }
+
+    /// The derivation this run produced.
+    pub(crate) fn script(&self) -> Script {
+        self.script.borrow().clone()
+    }
+
+    fn script_len(&self) -> usize {
+        self.script.borrow().len()
+    }
+
+    /// Drops everything recorded since `mark`, for a branch that rolled back.
+    ///
+    /// Fuel is deliberately *not* refunded. The work was done; that it was
+    /// thrown away is a fact about the search, and hiding it would make a
+    /// thrashing tactic look cheap.
+    fn truncate_script(&self, mark: usize) {
+        self.script.borrow_mut().truncate(mark);
+    }
+
+    fn descend(&self, index: usize, sel: Selector) {
+        self.path.borrow_mut().push((index, sel));
+    }
+
+    fn ascend(&self) {
+        self.path.borrow_mut().pop();
+    }
+
+    fn path(&self) -> Vec<(usize, Selector)> {
+        self.path.borrow().clone()
+    }
+
+    /// Charged once per *step*, globally across the run.
+    ///
+    /// Steps rather than firings, because a step is the unit of work the
+    /// applier does and the unit a script holds. A firing that takes three
+    /// steps costs three: `factor` is not free just because one matcher
+    /// arranged it.
+    fn spend(&self) -> Result<(), TacticError> {
+        let left = self.fuel.get();
+        self.spent.set(self.spent.get() + 1);
+        if left == 0 {
+            return Err(TacticError::OutOfFuel {
+                spent: self.spent.get(),
+                recent: self.recent.borrow().iter().cloned().collect(),
+            });
+        }
+        self.fuel.set(left - 1);
+        Ok(())
+    }
+
+    fn note(&self, matcher: &'static str, step: &Step) {
+        *self.hits.borrow_mut().entry(matcher).or_insert(0) += 1;
+        let mut recent = self.recent.borrow_mut();
+        if recent.len() == TRACE_WINDOW {
+            recent.pop_front();
+        }
+        recent.push_back(format!("{} via {}", step, matcher));
+    }
+
+    /// Firing counts by matcher, most frequent first.
+    pub(crate) fn histogram(&self) -> Vec<(&'static str, usize)> {
+        let mut out: Vec<_> = self.hits.borrow().iter().map(|(k, v)| (*k, *v)).collect();
+        out.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+        out
+    }
+
+    pub(crate) fn steps_taken(&self) -> u64 {
+        self.spent.get()
+    }
+}
+
+#[derive(Debug)]
+pub(crate) enum Tactic {
+    /// Apply these matchers at every position, left to right, to exhaustion.
+    Each(Vec<&'static dyn Matcher>),
+    /// Apply the first matcher that matches, at the first position it matches.
+    Once(Vec<&'static dyn Matcher>),
+    Seq(Vec<Tactic>),
+    Choice(Vec<Tactic>),
+    Try(Box<Tactic>),
+    Repeat(Box<Tactic>),
+    RepeatN(usize, Box<Tactic>),
+    /// Apply to every child sequence, one level down. Never fails.
+    Children(Box<Tactic>),
+    /// Apply to one *kind* of child sequence, one level down. Never fails.
+    ///
+    /// `children` is this with every selector at once. Splitting them out is
+    /// what lets a script open one branch arm and leave the other alone.
+    Into(Selector, Box<Tactic>),
+    /// Children first, then here. Never fails.
+    Bu(Box<Tactic>),
+    /// Here first, then children. Never fails.
+    ///
+    /// The direction matters most for `unfold`: `td` opens a call and then
+    /// descends into the body it just created, so one `td` pass expands the
+    /// whole call graph. `bu` reaches new bodies only on the next pass, so
+    /// `repeat_n(k, bu(each(unfold)))` is what gives you k levels.
+    Td(Box<Tactic>),
+    Id,
+    Fail,
+}
+
+/// Whether a tactic can report `Failed`.
+///
+/// Used to decide whether `Seq` and `Choice` need to save a copy for rollback.
+/// Since only an explicit `fail` can fail, nothing built from matchers clones.
+fn can_fail(t: &Tactic) -> bool {
+    match t {
+        Tactic::Fail => true,
+        Tactic::Each(_) | Tactic::Once(_) => false,
+        Tactic::Try(_)
+        | Tactic::Repeat(_)
+        | Tactic::Children(_)
+        | Tactic::Into(..)
+        | Tactic::Bu(_)
+        | Tactic::Td(_)
+        | Tactic::Id => false,
+        Tactic::RepeatN(_, t) => can_fail(t),
+        Tactic::Seq(ts) => ts.iter().any(can_fail),
+        // A choice reports whatever the branch it ends on reported, so it can
+        // only fail if that last branch can.
+        Tactic::Choice(ts) => ts.last().is_none_or(can_fail),
+    }
+}
+
+pub(crate) fn apply(t: &Tactic, env: &Env, nodes: Vec<Node>) -> Result<Outcome, TacticError> {
+    match t {
+        Tactic::Id => Ok(Outcome::Unchanged(nodes)),
+        Tactic::Fail => Ok(Outcome::Failed(nodes)),
+        Tactic::Each(ms) => each(ms, env, nodes),
+        Tactic::Once(ms) => once(ms, env, nodes),
+
+        Tactic::Try(inner) => Ok(match apply(inner, env, nodes)? {
+            Outcome::Failed(n) => Outcome::Unchanged(n),
+            other => other,
+        }),
+
+        Tactic::Seq(ts) => {
+            // Only a member after the first needs a rollback copy: if the first
+            // fails it has already handed the input back.
+            let saved = ts.iter().skip(1).any(can_fail).then(|| nodes.clone());
+            let mark = env.script_len();
+            let mut cur = nodes;
+            let mut changed = false;
+            for t in ts {
+                match apply(t, env, cur)? {
+                    Outcome::Changed(n) => {
+                        cur = n;
+                        changed = true;
+                    }
+                    Outcome::Unchanged(n) => cur = n,
+                    Outcome::Failed(n) => {
+                        // The tree goes back; so must the derivation, or the
+                        // script would describe work the run did not keep.
+                        env.truncate_script(mark);
+                        return Ok(Outcome::Failed(saved.unwrap_or(n)));
+                    }
+                }
+            }
+            Ok(if changed {
+                Outcome::Changed(cur)
+            } else {
+                Outcome::Unchanged(cur)
+            })
+        }
+
+        Tactic::Choice(ts) => {
+            // First branch that *does something*, not merely the first that
+            // does not fail. Every total tactic reports Unchanged when it had
+            // no work, and treating that as a win would make `a | b` unusable
+            // with any of them.
+            //
+            // No script bookkeeping here: a branch that changed nothing
+            // recorded nothing, and a branch that changed something returns
+            // immediately. A branch that changed-then-failed is itself a `Seq`,
+            // which has already truncated.
+            let mut cur = nodes;
+            let mut last = None;
+            for t in ts {
+                match apply(t, env, cur)? {
+                    changed @ Outcome::Changed(_) => return Ok(changed),
+                    other => {
+                        let failed = matches!(other, Outcome::Failed(_));
+                        cur = other.into_nodes();
+                        last = Some(failed);
+                    }
+                }
+            }
+            Ok(match last {
+                Some(true) | None => Outcome::Failed(cur),
+                Some(false) => Outcome::Unchanged(cur),
+            })
+        }
+
+        Tactic::Repeat(inner) => {
+            let mut cur = nodes;
+            let mut changed = false;
+            loop {
+                let outcome = apply(inner, env, cur)?;
+                let progressed = outcome.changed();
+                cur = outcome.into_nodes();
+                if !progressed {
+                    break;
+                }
+                changed = true;
+            }
+            Ok(if changed {
+                Outcome::Changed(cur)
+            } else {
+                Outcome::Unchanged(cur)
+            })
+        }
+
+        Tactic::RepeatN(n, inner) => {
+            let mut cur = nodes;
+            let mut changed = false;
+            for _ in 0..*n {
+                match apply(inner, env, cur)? {
+                    Outcome::Changed(v) => {
+                        cur = v;
+                        changed = true;
+                    }
+                    // Stop early rather than spinning on a tactic that has
+                    // nothing left to do.
+                    Outcome::Unchanged(v) | Outcome::Failed(v) => {
+                        cur = v;
+                        break;
+                    }
+                }
+            }
+            Ok(if changed {
+                Outcome::Changed(cur)
+            } else {
+                Outcome::Unchanged(cur)
+            })
+        }
+
+        Tactic::Children(inner) => {
+            let (nodes, changed) =
+                map_children(nodes, env, None, &mut |n, env| apply(inner, env, n))?;
+            Ok(if changed {
+                Outcome::Changed(nodes)
+            } else {
+                Outcome::Unchanged(nodes)
+            })
+        }
+
+        Tactic::Into(sel, inner) => {
+            let (nodes, changed) =
+                map_children(nodes, env, Some(*sel), &mut |n, env| apply(inner, env, n))?;
+            Ok(if changed {
+                Outcome::Changed(nodes)
+            } else {
+                Outcome::Unchanged(nodes)
+            })
+        }
+
+        Tactic::Bu(inner) => bottom_up(inner, env, nodes),
+
+        Tactic::Td(inner) => top_down(inner, env, nodes),
+    }
+}
+
+/// `bu(t) = children(bu(t)); try(t)`.
+///
+/// The `try` is load-bearing. Without it `bu` would fail whenever `t` misses at
+/// the root — which is nearly always — and `repeat(bu(X))` would stop after one
+/// pass even though a child had changed.
+fn bottom_up(t: &Tactic, env: &Env, nodes: Vec<Node>) -> Result<Outcome, TacticError> {
+    let (nodes, children_changed) =
+        map_children(nodes, env, None, &mut |n, env| bottom_up(t, env, n))?;
+    let outcome = apply(t, env, nodes)?;
+    let here_changed = outcome.changed();
+    let nodes = outcome.into_nodes();
+    Ok(if children_changed || here_changed {
+        Outcome::Changed(nodes)
+    } else {
+        Outcome::Unchanged(nodes)
+    })
+}
+
+/// `td(t) = try(t); children(td(t))`.
+///
+/// Total for the same reason `bu` is, and the mirror of it. Note what that
+/// means for a matcher that *creates* children: `td` descends into the body it
+/// just produced, so one pass runs all the way down.
+fn top_down(t: &Tactic, env: &Env, nodes: Vec<Node>) -> Result<Outcome, TacticError> {
+    let outcome = apply(t, env, nodes)?;
+    let here_changed = outcome.changed();
+    let nodes = outcome.into_nodes();
+    let (nodes, children_changed) =
+        map_children(nodes, env, None, &mut |n, env| top_down(t, env, n))?;
+    Ok(if here_changed || children_changed {
+        Outcome::Changed(nodes)
+    } else {
+        Outcome::Unchanged(nodes)
+    })
+}
+
+/// What a traversal does to each child sequence it reaches.
+type Descend<'f> = &'f mut dyn FnMut(Vec<Node>, &Env) -> Result<Outcome, TacticError>;
+
+/// Runs `f` over child sequences, in order, tracking where it went.
+///
+/// `sel` of `None` takes every child; `Some(s)` takes only children of that
+/// kind, so a node with none is simply skipped — the same stance `each` takes
+/// towards a matcher that matches nowhere.
+///
+/// The index pushed onto the path is the child's position *at the moment of
+/// descent*, which is what makes the recorded locations right: this level
+/// cannot be spliced while the traversal is below it.
+fn map_children(
+    mut nodes: Vec<Node>,
+    env: &Env,
+    sel: Option<Selector>,
+    f: Descend,
+) -> Result<(Vec<Node>, bool), TacticError> {
+    let mut changed = false;
+
+    for (index, node) in nodes.iter_mut().enumerate() {
+        for (kind, body) in child_seqs(node) {
+            if sel.is_some_and(|want| want != kind) {
+                continue;
+            }
+            env.descend(index, kind);
+            let outcome = f(std::mem::take(body), env);
+            env.ascend();
+            let outcome = outcome?;
+            changed |= outcome.changed();
+            *body = outcome.into_nodes();
+        }
+    }
+
+    Ok((nodes, changed))
+}
+
+/// Applies the matchers at every position, left to right, until none matches.
+///
+/// **The scan discipline lives here and nowhere else.** After a firing at
+/// window-start `w`, the scan resumes at `w - (width - 1)` rather than moving
+/// on, which reproduces every cascade the hand-written passes used to spell
+/// out: a width-1 matcher re-applies to its own output, and a width-2 matcher
+/// reconsiders a moved node against its new neighbour.
+fn each(
+    matchers: &[&'static dyn Matcher],
+    env: &Env,
+    mut nodes: Vec<Node>,
+) -> Result<Outcome, TacticError> {
+    let mut fired = false;
+    let mut w = 0usize;
+
+    while w < nodes.len() {
+        match step(matchers, env, &mut nodes, w)? {
+            Some(next) => {
+                w = next;
+                fired = true;
+            }
+            None => w += 1,
+        }
+    }
+
+    Ok(if fired {
+        Outcome::Changed(nodes)
+    } else {
+        Outcome::Unchanged(nodes)
+    })
+}
+
+/// Applies the first matcher that matches, at the first position it matches.
+fn once(
+    matchers: &[&'static dyn Matcher],
+    env: &Env,
+    mut nodes: Vec<Node>,
+) -> Result<Outcome, TacticError> {
+    for w in 0..nodes.len() {
+        if step(matchers, env, &mut nodes, w)?.is_some() {
+            return Ok(Outcome::Changed(nodes));
+        }
+    }
+    Ok(Outcome::Unchanged(nodes))
+}
+
+/// Tries every matcher at one position. On a hit, applies what it planned and
+/// returns where the scan should resume.
+fn step(
+    matchers: &[&'static dyn Matcher],
+    env: &Env,
+    nodes: &mut Vec<Node>,
+    w: usize,
+) -> Result<Option<usize>, TacticError> {
+    for matcher in matchers {
+        let width = matcher.width();
+        if w + width > nodes.len() {
+            continue;
+        }
+        let Some(planned) = matcher.plan(env.prog, &nodes[w..w + width]) else {
+            continue;
+        };
+        if planned.is_empty() {
+            continue;
+        }
+
+        let path = env.path();
+        for p in planned {
+            env.spend()?;
+
+            // Applied against the sequence in hand, recorded against the root.
+            // The two differ only in the ancestry stamped on the front.
+            let local = Step {
+                kind: p.kind.clone(),
+                dir: p.dir,
+                loc: p.rel.under(&[], w),
+            };
+            let recorded = Step {
+                kind: p.kind,
+                dir: p.dir,
+                loc: p.rel.under(&path, w),
+            };
+
+            apply_step(env.prog, nodes, &local, env.script_len(), env.check)
+                .map_err(TacticError::Refused)?;
+
+            env.note(matcher.name(), &recorded);
+            env.script.borrow_mut().push(recorded);
+        }
+        return Ok(Some(w.saturating_sub(width - 1)));
+    }
+    Ok(None)
+}
+
+/// Runs a tactic over a tree and returns what it produced, with its derivation.
+pub(crate) fn run(
+    env: &Env,
+    tactic: &Tactic,
+    tree: Vec<Node>,
+) -> Result<(Vec<Node>, Script), TacticError> {
+    let out = apply(tactic, env, tree)?.into_nodes();
+    Ok((out, env.script()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::applier::apply_script;
+    use crate::ir::build;
+    use crate::location::Location;
+    use crate::matcher::{self, matcher_by_name};
+    use bytecode::{Instruction, Library, Value, assemble};
+    use std::collections::HashSet;
+
+    fn m(name: &str) -> &'static dyn Matcher {
+        matcher_by_name(name).unwrap_or_else(|| panic!("no matcher '{}'", name))
+    }
+
+    fn each_of(names: &[&str]) -> Tactic {
+        Tactic::Each(names.iter().map(|n| m(n)).collect())
+    }
+
+    fn once_of(names: &[&str]) -> Tactic {
+        Tactic::Once(names.iter().map(|n| m(n)).collect())
+    }
+
+    fn empty_prog() -> Program<'static> {
+        Program::new(Box::leak(Box::new(Library::new())))
+    }
+
+    fn op(i: Instruction) -> Node {
+        Node::Op(i)
+    }
+
+    fn dip(depth: usize, body: Vec<Node>) -> Node {
+        Node::Dip {
+            depth,
+            origins: Vec::new(),
+            body,
+        }
+    }
+
+    fn branch(then_body: Vec<Node>, else_body: Vec<Node>) -> Node {
+        Node::Branch {
+            then_origin: "then".to_string(),
+            then_body,
+            else_origin: "else".to_string(),
+            else_body,
+        }
+    }
+
+    /// Runs a tactic and checks the script it produced reproduces it.
+    ///
+    /// Every test goes through this, so the replay invariant is not one test
+    /// but a precondition of every assertion in the module.
+    fn run_checked(prog: &Program, tactic: &Tactic, tree: Vec<Node>) -> (Vec<Node>, Script) {
+        let env = Env::new(prog, 100_000, true);
+        let before = tree.clone();
+        let (after, script) = run(&env, tactic, tree).expect("tactic failed");
+
+        let mut replayed = before;
+        apply_script(prog, &mut replayed, &script, true)
+            .unwrap_or_else(|e| panic!("the script did not replay: {}", e));
+        assert_eq!(
+            replayed, after,
+            "replaying the script gave a different tree than the run"
+        );
+        (after, script)
+    }
+
+    // -- the headline invariant ---------------------------------------------
+
+    #[test]
+    fn a_run_is_reproduced_by_its_own_script() {
+        // Deep, mixed work: rewrites at the root, inside a dip body, and inside
+        // both branch arms, so the recorded paths have to be right in every
+        // direction.
+        let prog = empty_prog();
+        let tree = vec![
+            dip(1, vec![dip(2, vec![op(Instruction::Add)])]),
+            branch(
+                vec![dip(1, vec![dip(1, vec![op(Instruction::Not)])])],
+                vec![
+                    op(Instruction::Push(Value::Int(1))),
+                    op(Instruction::Push(Value::Int(1))),
+                    op(Instruction::Equal),
+                ],
+            ),
+            dip(0, vec![op(Instruction::Drop)]),
+        ];
+        let tactic = Tactic::Repeat(Box::new(Tactic::Bu(Box::new(each_of(&[
+            "collapse", "flatten", "eval2",
+        ])))));
+        let (after, script) = run_checked(&prog, &tactic, tree);
+
+        // And it really did work in all three places.
+        assert!(script.len() >= 3, "script was {:?}", script);
+        assert_eq!(after[0], dip(3, vec![op(Instruction::Add)]));
+    }
+
+    #[test]
+    fn a_recorded_location_names_the_arm_it_worked_in() {
+        let prog = empty_prog();
+        let tree = vec![branch(
+            vec![op(Instruction::Add)],
+            vec![dip(1, vec![dip(1, vec![])])],
+        )];
+        let (_, script) = run_checked(&prog, &tree_collapse(), tree);
+        assert_eq!(script.len(), 1);
+        assert_eq!(
+            script[0].loc,
+            Location {
+                descent: vec![(0, Selector::Else)],
+                at: 0
+            }
+        );
+        assert_eq!(script[0].loc.to_string(), "[0.else] @0");
+    }
+
+    fn tree_collapse() -> Tactic {
+        Tactic::Bu(Box::new(each_of(&["collapse"])))
+    }
+
+    // -- scan discipline ----------------------------------------------------
+
+    #[test]
+    fn a_cascade_reconsiders_what_a_firing_moved() {
+        // Three nested dips collapse to one, which needs the scan to come back
+        // to a position it already passed.
+        let prog = empty_prog();
+        let tree = vec![dip(
+            1,
+            vec![dip(1, vec![dip(1, vec![op(Instruction::Add)])])],
+        )];
+        let tactic = Tactic::Repeat(Box::new(Tactic::Bu(Box::new(each_of(&["collapse"])))));
+        let (after, _) = run_checked(&prog, &tactic, tree);
+        assert_eq!(after, vec![dip(3, vec![op(Instruction::Add)])]);
+    }
+
+    #[test]
+    fn each_keeps_going_after_a_firing_shortens_the_sequence() {
+        let prog = empty_prog();
+        let tree = vec![
+            op(Instruction::Push(Value::Int(1))),
+            op(Instruction::Drop),
+            op(Instruction::Push(Value::Int(2))),
+            op(Instruction::Drop),
+        ];
+        let (after, script) = run_checked(&prog, &each_of(&["annihilate"]), tree);
+        assert_eq!(after, Vec::new());
+        assert_eq!(script.len(), 2);
+    }
+
+    // -- the outcome algebra ------------------------------------------------
+
+    #[test]
+    fn a_matcher_that_finds_nothing_is_not_a_failure() {
+        // `a; b` must not throw away what `a` did merely because `b` had
+        // nothing to do.
+        let prog = empty_prog();
+        let tree = vec![dip(1, vec![dip(1, vec![])])];
+        let tactic = Tactic::Seq(vec![each_of(&["collapse"]), each_of(&["cancel_tuple"])]);
+        let (after, script) = run_checked(&prog, &tactic, tree);
+        assert_eq!(after, vec![dip(2, vec![])]);
+        assert_eq!(script.len(), 1);
+    }
+
+    #[test]
+    fn choice_falls_through_a_branch_that_changed_nothing() {
+        let prog = empty_prog();
+        let tree = vec![dip(1, vec![dip(1, vec![])])];
+        let tactic = Tactic::Choice(vec![each_of(&["cancel_tuple"]), each_of(&["collapse"])]);
+        let (after, script) = run_checked(&prog, &tactic, tree);
+        assert_eq!(after, vec![dip(2, vec![])]);
+        assert_eq!(script.len(), 1);
+    }
+
+    #[test]
+    fn try_repeat_bu_and_children_are_total() {
+        let prog = empty_prog();
+        let tree = vec![op(Instruction::Add)];
+        for tactic in [
+            Tactic::Try(Box::new(Tactic::Fail)),
+            Tactic::Repeat(Box::new(each_of(&["collapse"]))),
+            Tactic::Bu(Box::new(each_of(&["collapse"]))),
+            Tactic::Td(Box::new(each_of(&["collapse"]))),
+            Tactic::Children(Box::new(each_of(&["collapse"]))),
+            Tactic::Into(Selector::Then, Box::new(each_of(&["collapse"]))),
+        ] {
+            let env = Env::new(&prog, 1000, true);
+            let outcome = apply(&tactic, &env, tree.clone()).unwrap();
+            assert!(
+                !matches!(outcome, Outcome::Failed(_)),
+                "{:?} failed on a sequence it had no work in",
+                tactic
+            );
+        }
+    }
+
+    #[test]
+    fn repeat_n_stops_early_when_there_is_nothing_left() {
+        let prog = empty_prog();
+        let tree = vec![dip(1, vec![dip(1, vec![])])];
+        let tactic = Tactic::RepeatN(50, Box::new(Tactic::Bu(Box::new(each_of(&["collapse"])))));
+        let (_, script) = run_checked(&prog, &tactic, tree);
+        assert_eq!(script.len(), 1, "it kept going after the work ran out");
+    }
+
+    #[test]
+    fn the_three_selectors_partition_children() {
+        let prog = empty_prog();
+        let tree = || {
+            vec![
+                branch(
+                    vec![dip(1, vec![dip(1, vec![])])],
+                    vec![dip(1, vec![dip(1, vec![])])],
+                ),
+                dip(1, vec![dip(1, vec![dip(1, vec![])])]),
+            ]
+        };
+        let inner = || each_of(&["collapse"]);
+        let all = Tactic::Children(Box::new(inner()));
+        let split = Tactic::Seq(vec![
+            Tactic::Into(Selector::Then, Box::new(inner())),
+            Tactic::Into(Selector::Else, Box::new(inner())),
+            Tactic::Into(Selector::Body, Box::new(inner())),
+        ]);
+        let (a, _) = run_checked(&prog, &all, tree());
+        let (b, _) = run_checked(&prog, &split, tree());
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn then_and_else_each_reach_one_arm_and_leave_the_other() {
+        let prog = empty_prog();
+        let tree = vec![branch(
+            vec![dip(1, vec![dip(1, vec![])])],
+            vec![dip(1, vec![dip(1, vec![])])],
+        )];
+        let tactic = Tactic::Into(Selector::Then, Box::new(each_of(&["collapse"])));
+        let (after, script) = run_checked(&prog, &tactic, tree);
+        assert_eq!(script.len(), 1);
+        let [
+            Node::Branch {
+                then_body,
+                else_body,
+                ..
+            },
+        ] = &after[..]
+        else {
+            panic!("expected a branch")
+        };
+        assert_eq!(then_body, &vec![dip(2, vec![])]);
+        assert_eq!(else_body, &vec![dip(1, vec![dip(1, vec![])])]);
+    }
+
+    // -- rollback -----------------------------------------------------------
+
+    #[test]
+    fn a_failing_sequence_rolls_back_the_tree_and_the_script_together() {
+        // This is the one place the two could diverge: if the tree goes back
+        // but the script does not, the script describes work that was undone.
+        let prog = empty_prog();
+        let tree = vec![dip(1, vec![dip(1, vec![])])];
+        let tactic = Tactic::Try(Box::new(Tactic::Seq(vec![
+            each_of(&["collapse"]),
+            Tactic::Fail,
+        ])));
+        let (after, script) = run_checked(&prog, &tactic, tree.clone());
+        assert_eq!(after, tree, "the tree did not roll back");
+        assert!(script.is_empty(), "the script kept {:?}", script);
+    }
+
+    #[test]
+    fn rollback_keeps_the_work_that_came_before_it() {
+        let prog = empty_prog();
+        let tree = vec![dip(1, vec![dip(1, vec![])]), dip(1, vec![dip(1, vec![])])];
+        // One collapse survives; the failing sequence after it does not.
+        let tactic = Tactic::Seq(vec![
+            once_of(&["collapse"]),
+            Tactic::Try(Box::new(Tactic::Seq(vec![
+                once_of(&["collapse"]),
+                Tactic::Fail,
+            ]))),
+        ]);
+        let (_, script) = run_checked(&prog, &tactic, tree);
+        assert_eq!(script.len(), 1);
+    }
+
+    #[test]
+    fn rollback_does_not_refund_fuel() {
+        // The work happened. Hiding that would make a thrashing tactic look
+        // cheap, and the budget is a measure of work rather than of progress.
+        let prog = empty_prog();
+        let env = Env::new(&prog, 1000, true);
+        let tactic = Tactic::Try(Box::new(Tactic::Seq(vec![
+            each_of(&["collapse"]),
+            Tactic::Fail,
+        ])));
+        apply(&tactic, &env, vec![dip(1, vec![dip(1, vec![])])]).unwrap();
+        assert_eq!(env.steps_taken(), 1);
+        assert!(env.script().is_empty());
+    }
+
+    // -- fuel ---------------------------------------------------------------
+
+    #[test]
+    fn a_multi_step_firing_costs_what_it_spends() {
+        // `factor` is three steps, and the budget says so. It is not free
+        // because one matcher arranged it.
+        let prog = empty_prog();
+        let env = Env::new(&prog, 1000, true);
+        let tree = vec![branch(
+            vec![op(Instruction::Add), op(Instruction::Drop)],
+            vec![op(Instruction::Add), op(Instruction::Not)],
+        )];
+        let (_, script) = run(&env, &once_of(&["factor"]), tree).unwrap();
+        assert_eq!(script.len(), 3);
+        assert_eq!(env.steps_taken(), 3);
+        // One firing, though, as far as the trace is concerned.
+        assert_eq!(env.histogram(), vec![("factor", 3)]);
+    }
+
+    #[test]
+    fn opposite_readings_of_one_law_exhaust_the_budget_and_say_so() {
+        let prog = empty_prog();
+        let env = Env::new(&prog, 20, true);
+        let tactic = Tactic::Repeat(Box::new(Tactic::Bu(Box::new(each_of(&[
+            "collapse", "expand",
+        ])))));
+        let err = apply(&tactic, &env, vec![dip(3, vec![op(Instruction::Add)])]).unwrap_err();
+        let TacticError::OutOfFuel { recent, .. } = &err else {
+            panic!("expected the budget to run out, got {:?}", err)
+        };
+        assert!(!recent.is_empty());
+        assert!(err.to_string().contains("collapse"));
+    }
+
+    // -- against the real corpus --------------------------------------------
+
+    #[test]
+    fn a_corpus_sentence_replays_step_for_step() {
+        let Some(library) = corpus() else { return };
+        let prog = Program::new(library);
+
+        let mut checked = 0;
+        for (idx, _) in library.sentences.iter_enumerated() {
+            if prog.is_recursive(idx) {
+                continue;
+            }
+            let tree = build(library, idx, &mut HashSet::new());
+            if tree.is_empty() {
+                continue;
+            }
+            let tactic = Tactic::Repeat(Box::new(Tactic::Bu(Box::new(each_of(&[
+                "collapse",
+                "flatten",
+                "fuse",
+                "sink",
+                "annihilate",
+                "annihilate_flagged",
+                "counit",
+                "eval1",
+                "eval2",
+                "fold_branch",
+                "factor",
+                "cancel_tuple",
+                "copy_const",
+            ])))));
+            let env = Env::new(&prog, 200_000, true);
+            let before = tree.clone();
+            let Ok((after, script)) = run(&env, &tactic, tree) else {
+                continue;
+            };
+            if script.is_empty() {
+                continue;
+            }
+            let mut replayed = before;
+            apply_script(&prog, &mut replayed, &script, true)
+                .unwrap_or_else(|e| panic!("#{} did not replay: {}", usize::from(idx), e));
+            assert_eq!(
+                replayed,
+                after,
+                "#{} replayed differently",
+                usize::from(idx)
+            );
+            checked += 1;
+        }
+        assert!(
+            checked > 50,
+            "only {} corpus sentences did any work; the sweep is near-vacuous",
+            checked
+        );
+    }
+
+    fn corpus() -> Option<&'static Library> {
+        let path = std::path::Path::new("../tests/main.hana");
+        let code = std::fs::read_to_string(path).ok()?;
+        let library = bytecode::assemble_with_path(&code, path.parent()).ok()?;
+        Some(Box::leak(Box::new(library)))
+    }
+
+    #[test]
+    fn unfolding_reaches_across_a_call_the_way_it_used_to() {
+        // The classic: a jump hides a branch from the operator after it, and
+        // opening it puts the two in one window.
+        let library: &'static Library = Box::leak(Box::new(
+            assemble(
+                r#"
+                sentence inner { push true branch { push 1 } { push 2 } }
+                sentence outer { jump inner }
+                "#,
+            )
+            .unwrap(),
+        ));
+        let prog = Program::new(library);
+        let outer = library
+            .names
+            .iter_enumerated()
+            .find(|(_, n)| *n == "outer")
+            .map(|(i, _)| i)
+            .unwrap();
+
+        let tree = build(library, outer, &mut HashSet::new());
+        let tactic = Tactic::Repeat(Box::new(Tactic::Td(Box::new(each_of(&[
+            "unfold",
+            "flatten",
+            "fold_branch",
+        ])))));
+        let (after, script) = run_checked(&prog, &tactic, tree);
+        assert_eq!(after, vec![op(Instruction::Push(Value::Int(1)))]);
+        assert!(script.iter().any(|s| s.kind.name() == "unfold"));
+    }
+
+    #[test]
+    fn every_matcher_can_be_placed_in_a_tactic() {
+        // A registry that names something `Tactic::Each` cannot hold would be a
+        // silent hole in the language.
+        let prog = empty_prog();
+        for name in matcher::matcher_names() {
+            let env = Env::new(&prog, 100, true);
+            let tactic = each_of(&[name]);
+            apply(&tactic, &env, vec![op(Instruction::Add)])
+                .unwrap_or_else(|e| panic!("{} could not be placed: {}", name, e));
+        }
+    }
+}
