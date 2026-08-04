@@ -698,44 +698,49 @@ the tool itself never runs it.
 
 `--trace` says which rules fired and how often; the listing says where the term
 ended up. Neither says *when* the term stopped being the one you meant.
-`--step` walks the derivation a firing at a time, printing the whole tree as it
-stood after that many firings, together with the window the last rule matched
-and the one the next rule is about to:
+`--step` walks the derivation a firing at a time. Each step puts the tree as it
+stood **before** the last firing beside the tree **after** it, so the only thing
+on the screen is what that one rule did — and sketches the window the next rule
+is about to match:
 
 ```
 $ rewrite tests dip_hides_several_values -t dip_normalize --step
-
   stepping `dip_normalize` — 2 rule firings.
-  `help` lists the commands; a bare newline repeats the last one.
+  ... the tree at step 0 ...
+(rewrite 0/2) s
 
-#15 dip::dip_hides_several_values
-
-  tactic: dip_normalize
-  depth │ instruction
-  ──────┼────────────
-      0 │ push 1
-      1 │ push 2
-      2 │ push 8
-      3 │ dip 1 → #658 <inline> {
-      3 │   add
-        │ }
-      2 │ push 9
-      3 │ push 9
-      4 │ assert_eq
-      2 │ push 8
-      3 │ assert_eq
-      1 │ push 3
-      2 │ assert_eq
+    step 0                      ┃   step 1  ·  sink@3
+  ──────────────────────────────╂──────────────────────────────
+    ⋮ 5 unchanged lines         ┃
+    0 │ push 1                  ┃   0 │ push 1
+    1 │ push 2                  ┃   1 │ push 2
+    2 │ push 8                  ┃   2 │ push 8
+  - 3 │ push 9                  ┃ + 3 │ dip 1 → #658 <inline> {
+  - 4 │ dip 2 → #658 <inline> { ┃ + 3 │   add
+  - 4 │   add                   ┃ + 3 │   drop
+  - 4 │   drop                  ┃
+      │ }                       ┃     │ }
+                                ┃ + 2 │ push 9
+    3 │ push 9                  ┃   3 │ push 9
+    4 │ assert_eq               ┃   4 │ assert_eq
+    2 │ push 8                  ┃   2 │ push 8
+    ⋮ 3 unchanged lines         ┃
 
   step 1 of 2
-  fired  sink@3
-           push 9 ; dip 2 { add }
-        ⇒  dip 1 { add } ; push 9
   next   sink@2
-           push 8 ; dip 1 { add }
-        ⇒  jump { add } ; push 8
+           push 8 ; dip 1 { add ; drop }
+        ⇒  jump { add ; drop } ; push 8
 (rewrite 1/2)
 ```
+
+There is the interchange rule doing its one job: the dip walked left past the
+`push 9`, and came out one shallower on the other side because the push is no
+longer under it. A rule firing is a splice of a few nodes, so showing the change
+rather than the tree is what keeps that visible — the listing around it may be a
+thousand lines, and one `inline` on a real sentence is thirty of them at once.
+
+`list` shows the whole tree when the tree is the question, and `diff` goes back.
+Step 0 has no firing behind it, so it shows the tree either way.
 
 | command | meaning |
 |---|---|
@@ -744,7 +749,8 @@ $ rewrite tests dip_hides_several_values -t dip_normalize --step
 | `g`, `goto <n>` | the tree after exactly n firings |
 | `c`, `continue` | run to the end of the derivation |
 | `r`, `restart` | back to the tree the tactic starts from |
-| `l`, `list` | print the current tree again |
+| `l`, `list` | show the whole tree instead of the change |
+| `d`, `diff` | back to showing what the last firing changed |
 | `t`, `trace` | the firing log around the cursor, and counts so far |
 | `stack` | toggle the `--stack` column |
 | `q`, `quit` | leave |
@@ -754,8 +760,16 @@ can be piped in.
 
 A step is **one rule firing, wherever in the tree it happened**. The `@n` beside
 a rule is a position within its own sequence rather than a global one: two
-firings reporting `@0` may be in different dip bodies. The tree above the prompt
+firings reporting `@0` may be in different dip bodies. The diff above the prompt
 is what says where.
+
+The diff is textual, over the rendered listing, rather than structural over the
+tree. That is a choice: a structural diff would have to decide what "the same
+node" means across a rewrite that splices, reorders and reparents — which is the
+question the rewriter is itself answering, so any answer here would be a second,
+quieter opinion about it. Working on the listing also means a depth shifting by
+one counts as a changed line, which is exactly what you want to see when the
+firing was `sink`.
 
 ### Stepping by replaying
 
@@ -790,10 +804,23 @@ puts you either side of it.
 $ rewrite tests dip_hides_several_values \
     -t 'repeat(bu(each(expand, collapse)))' --fuel 5 --step
 
+    step 4                        ┃   step 5  ·  expand@4
+  ────────────────────────────────╂────────────────────────────────
+    ⋮ 6 unchanged lines           ┃
+    1 │ push 2                    ┃   1 │ push 2
+    2 │ push 8                    ┃   2 │ push 8
+    3 │ push 9                    ┃   3 │ push 9
+  - 4 │ dip 2 → #658 <inline> {   ┃ + 4 │ dip 1 {
+  - 4 │   add                     ┃ + 4 │   dip 1 → #658 <inline> {
+  - 4 │   drop                    ┃ + 4 │     add
+                                  ┃ + 4 │     drop
+                                  ┃ +   │   }
+      │ }                         ┃     │ }
+    3 │ push 9                    ┃   3 │ push 9
+    4 │ assert_eq                 ┃   4 │ assert_eq
+    ⋮ 4 unchanged lines           ┃
+
   step 5 of 5
-  fired  expand@4
-           dip 2 { add }
-        ⇒  dip 1 { dip 1 { add } }
   next   the run ends here:
            out of fuel after 6 rule firings.
 ```
