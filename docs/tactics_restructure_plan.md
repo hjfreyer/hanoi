@@ -29,17 +29,17 @@ From the root sequence, each `(index, selector)` descends into a child body (`ir
 ```rust
 pub enum Direction { Forward, Reverse }
 pub enum Rule2 {
-    Inline { depth: usize, target: SentenceIndex },
+    Inline { depth: usize, target: SentenceIndex, body: Vec<Node> },  // claimed expansion
     Collapse { k: usize, j: usize, a: Vec<Node> },
     ElimDip0 { a: Vec<Node> },
-    Interchange { x: Node, framed: Node },   // framed carries LHS-side depth k
+    Interchange { x: Node, framed: Node, n: i64, m: i64 },  // framed carries LHS-side depth k; (n,m) is x's claimed arity
     Fuse { k: usize, a: Vec<Node>, b: Vec<Node> },
     Hoist { k: usize, x: Vec<Node>, then_arm: Vec<Node>, else_arm: Vec<Node>,
             then_origin: String, else_origin: String },
     Distribute { then_arm: Vec<Node>, else_arm: Vec<Node>, suffix: Vec<Node>, /* origins */ },
     FoldBranch { c: Value, then_arm: Vec<Node>, else_arm: Vec<Node>, /* origins */ },
     Eval { op: Instruction, inputs: Vec<Value> },
-    Annihilate { x: Node },
+    Annihilate { x: Node, n: usize, m: usize },             // claimed arity of x
     Counit { d: usize },
     CopyConst { c: Value },
     CopyAssoc { d: usize },
@@ -47,28 +47,33 @@ pub enum Rule2 {
 }
 impl Rule2 {
     fn name(&self) -> &'static str;
+    /// Verifies every fact the args claim against the library, plus the
+    /// equation's own side conditions. The applier MUST call this before
+    /// generating either side; lhs/rhs assume it has passed.
     fn check(&self, prog: &Program) -> Result<(), SideCondition>;
-    fn lhs(&self, prog: &Program) -> Result<Vec<Node>, SideCondition>;
-    fn rhs(&self, prog: &Program) -> Result<Vec<Node>, SideCondition>;
+    fn lhs(&self) -> Vec<Node>;   // pure functions of the args —
+    fn rhs(&self) -> Vec<Node>;   // Program appears only in check()
 }
 pub struct Step { pub rule: Rule2, pub dir: Direction, pub loc: Location }
 pub type Script = Vec<Step>;
 ```
 
+**Args are self-contained; the applier re-checks every claim.** A Rule2 closes over everything its two sides are built from, including facts that originate in the library: `Inline` carries the claimed expansion body, `Interchange`/`Annihilate` carry the claimed arity of X. `lhs()`/`rhs()` are therefore pure functions of the args. The applier is *required* to call `check(prog)` first, which verifies each claim against the authoritative source — `Inline.body` must `same_effect`-match `expand_call(prog, depth, target)`, claimed arities must equal `node_arity(prog, x)` — alongside the equation's own side conditions. A script is never trusted: it can only communicate a construction, and every fact it rests on is re-derived by the applier.
+
 ### The equation core (tranche 1) — 14 equations replacing 26 rules
 
 | equation | LHS = RHS | side conditions / notes |
 |---|---|---|
-| `inline(k, target)` | `Call{k,target}` = `expand_call(prog, k, target)` | target not `#[recursive]` |
+| `inline(k, target, body)` | `Call{k,target}` = `body` | target not `#[recursive]`; `check` verifies `body` against `expand_call(prog, k, target)` |
 | `collapse(k, j, A)` | `dip k { dip j { A } }` = `dip (k+j) { A }` | old `expand` = Reverse at split `(1, k-1)` |
 | `elim_dip0(A)` | `dip 0 { A }` = `A` (spliced) | old `flatten_call`; Reverse introduces a frame; generators must decline the empty-body identity firing |
-| `interchange(X, D)` | `X ; D_k` = `D_(k-m+n) ; X`, `arity(X)=(n,m)` | `k ≥ m` (⟺ `j ≥ n` read from the RHS — one condition, two readings, so one equation covers old `sink` (Fwd) and `float` (Rev)). D is a `Dip` at **any** depth incl. 0, or a `Call` with **depth ≥ 1 only** (`Call{0}` is frameless — preserve `frame_depth`'s asymmetry, rules.rs:241). `node_arity` must be `Some`; shifted-depth usize conversion must succeed |
+| `interchange(X, D)` | `X ; D_k` = `D_(k-m+n) ; X`, `arity(X)=(n,m)` | `k ≥ m` (⟺ `j ≥ n` read from the RHS — one condition, two readings, so one equation covers old `sink` (Fwd) and `float` (Rev)). D is a `Dip` at **any** depth incl. 0, or a `Call` with **depth ≥ 1 only** (`Call{0}` is frameless — preserve `frame_depth`'s asymmetry, rules.rs:241). `check` verifies the claimed `(n,m)` equals `node_arity(prog, x)`; shifted-depth usize conversion must succeed |
 | `fuse(k, A, B)` | `dip k { A } ; dip k { B }` = `dip k { A ++ B }` | |
 | `hoist(k, X, A, B)` | `dip (k+1) { X } ; branch { A } { B }` = `branch { dip k { X } ; A } { dip k { X } ; B }` | old `unfactor_branch` = Fwd. Old `factor_branch` = a **3-step macro**: per-arm `elim_dip0` Reverse (wrap the shared prefix), then `hoist` Reverse at k=0. Arms match via `same_effect` (provenance-blind) |
 | `distribute(A, B, C)` | `branch { A } { B } ; C` = `branch { A;C } { B;C }` | C a *sequence* (generalizes the old single-node rule). Fwd/Rev are genuine inverses — never in one fixpoint |
 | `fold_branch(c, A, B)` | `push c ; branch { A } { B }` = `A` if **`c.truthy()`** else `B` | decide by `Value::truthy`, NOT `c == Bool(true)` as a type test — `push 1; branch` folds to the else arm |
 | `eval(op, inputs)` | `push v1 … push vn ; op` = pushes of outputs | via shared `eval_op(inst, &[Value]) -> Option<Vec<Value>>` delegating to `bytecode::value::{truthy, numeric_cmp}`. Must reproduce the exact fold tables: comparisons push a flag too (`Less` on symbols → `push false; push false`), `tuple_length` on a non-tuple hands the value back + `false`. Subsumes `fold_const` + `fold_const_unary`; arithmetic ops become a trivial extension |
-| `annihilate(X)` | `X ; drop^m` = `drop^n`, `arity(X)=(n,m)` | X passes new `total_effect_free` predicate = `speculable` (rules.rs:3357) **with `Drop` allowed** (its exclusion there was for the measure, not soundness). Subsumes `annihilate_drop` (m=1) and `annihilate_flagged` (m=2) |
+| `annihilate(X, n, m)` | `X ; drop^m` = `drop^n` | `check` verifies `(n,m)` equals `node_arity(prog, x)`; X passes new `total_effect_free` predicate = `speculable` (rules.rs:3357) **with `Drop` allowed** (its exclusion there was for the measure, not soundness). Subsumes `annihilate_drop` (m=1) and `annihilate_flagged` (m=2) |
 | `counit(d)` | `pick d ; drop` = ε | the old `Pick` special case in `annihilation()` — deliberately NOT an `annihilate` instance |
 | `copy_const(c)` | `push c ; pick 0` = `push c ; push c` | |
 | `copy_assoc(d)` | `pick d ; pick 0` = `pick d ; dip 1 { pick d }` | |
@@ -96,6 +101,8 @@ pub enum ApplyError {
     WindowRange { at, need, len },
     WindowMismatch { expected: String, found: String },
     SideCondition(SideCondition),               // RecursiveTarget, FrameTooShallow{k,m},
+                                                // ClaimedArityMismatch{claimed, actual},
+                                                // ClaimedBodyMismatch,
                                                 // NotTotalEffectFree, ArityUnknown, UnsupportedOp, DepthOverflow
     NetChanged { before: Option<i64>, after: Option<i64> },
 }
@@ -144,7 +151,7 @@ Census = one engine run producing (final tree, script, ending). `goto n` = fresh
 
 ## Stages (each leaves `cargo test` green; run `./run_all_tests.sh` at each stage)
 
-1. **Foundations (additive).** `location.rs`, `rule2.rs` (14 equations), `applier.rs`; `same_effect_seq` → `pub(crate)`; add `total_effect_free` (duplicate `speculable` rather than touching rules.rs). Tests: per-equation lhs/rhs goldens (transliterated from rules.rs tests), side-condition rejections, applier navigation + every `ApplyError` variant provoked, Forward∘Reverse = identity round-trips (incl. one exact-equality case pinning provenance), table-driven net-preservation (`net(lhs) == net(rhs)` over arg corpora). Old code untouched.
+1. **Foundations (additive).** `location.rs`, `rule2.rs` (14 equations), `applier.rs`; `same_effect_seq` → `pub(crate)`; add `total_effect_free` (duplicate `speculable` rather than touching rules.rs). Tests: per-equation lhs/rhs goldens (transliterated from rules.rs tests), side-condition rejections (including fabricated claims: a wrong arity on `Interchange`/`Annihilate` and a tampered `Inline` body must be rejected by `check`), applier navigation + every `ApplyError` variant provoked, Forward∘Reverse = identity round-trips (incl. one exact-equality case pinning provenance), table-driven net-preservation (`net(lhs) == net(rhs)` over arg corpora). Old code untouched.
 2. **Matchers (additive).** `matcher.rs`, tranche-1 set. Tests: `plan` + `apply_step` on a scratch tree equals the old rule's documented replacement (reuse expected values from rules.rs tests).
 3. **Engine (parallel).** `engine.rs` + new `Env`. Port Outcome-algebra/rollback tests from tests.rs (~717-1707), add script-truncation-on-rollback assertions and the replay-invariant test. Old tactic.rs still drives main.rs; both compile side by side.
 4. **Cutover (the one big commit).** Rewire script.rs to matchers; rewrite `PRELUDE`; switch main.rs to engine.rs; add `--show-script`; `--check` flows into the applier. Delete rules.rs + old tactic.rs. Prune tests.rs to derivations tranche 1 supports: factoring (tests.rs:357/372/385), annihilate family (411-480), dips/collapse/fuse (190-355), distribute+fold (1778-1876), inline/flatten (1878-2024), and the corpus sweep `rewrites_preserve_arity_across_the_corpus` (tests.rs:515) — now also asserting script replay across the corpus. The sharing-chain block (tests.rs:1040-1460) moves out with a tranche-2 marker.
