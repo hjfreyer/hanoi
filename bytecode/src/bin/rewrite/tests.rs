@@ -2039,3 +2039,141 @@ fn an_unannotated_recursive_call_is_still_unknown() {
     assert_eq!(depths(prog, &body), vec![Some(0), Some(1)]);
     assert_eq!(seq_arity(prog, &body).1, None);
 }
+
+// ---------------------------------------------------------------------------
+// Stepping
+//
+// `--step` walks a derivation by replaying it under a budget: step n is "run
+// the same tactic again, and stop after n firings". That is only a debugger if
+// the derivation is the same one every time, and if stopping partway leaves a
+// tree that is really the tree at that point rather than a half-spliced one.
+// Both are properties of the evaluator, not of the front end, so they are
+// checked here.
+// ---------------------------------------------------------------------------
+
+use crate::tactic::Firing;
+
+/// A sentence with several rules' worth of work in it.
+const WALK: &str = r#"
+    #[arity(2, 2)]
+    sentence probe {
+        push 1
+        push 2
+        add
+        dip 1 { add }
+        push 3
+        dip 1 { add }
+        push 4
+        drop 0
+    }
+"#;
+
+const WALK_TACTIC: &str = "all";
+
+/// Runs the tactic over `WALK`, stopping after `n` firings.
+fn walk(n: Option<u64>) -> (&'static Program<'static>, Vec<Node>, Vec<Firing>) {
+    let prog = program_of(WALK);
+    let body = build(prog.library(), SentenceIndex::from(0), &mut HashSet::new());
+    let env = Env::stepping(prog, 1_000_000, true, n);
+    let nodes = apply(&compile(WALK_TACTIC), &env, body)
+        .unwrap_or_else(|e| panic!("{}", e))
+        .into_nodes();
+    (prog, nodes, env.firings())
+}
+
+/// How many firings the whole derivation takes.
+fn walk_total() -> u64 {
+    let total = walk(None).2.len() as u64;
+    assert!(
+        total >= 4,
+        "these tests want a derivation with a few steps in it, found {}",
+        total
+    );
+    total
+}
+
+#[test]
+fn a_budget_of_n_fires_exactly_n_times() {
+    let total = walk_total();
+    for n in 0..=total + 2 {
+        assert_eq!(
+            walk(Some(n)).2.len() as u64,
+            n.min(total),
+            "stopping after {} firings",
+            n
+        );
+    }
+}
+
+#[test]
+fn the_last_step_is_the_finished_rewrite_and_the_first_is_the_input() {
+    let total = walk_total();
+    let (prog, finished, _) = walk(None);
+    assert_eq!(walk(Some(total)).1, finished, "step {} is the end", total);
+
+    let untouched = build(prog.library(), SentenceIndex::from(0), &mut HashSet::new());
+    assert_eq!(walk(Some(0)).1, untouched, "step 0 is what the tactic got");
+    assert_ne!(finished, untouched, "expected the tactic to do something");
+}
+
+#[test]
+fn every_step_is_a_prefix_of_the_same_derivation() {
+    // What makes replaying a legitimate way to step: the rules are pure
+    // functions of the window they see and the search reads nothing but the
+    // tree, so a shorter budget cannot change which rule fires where. Were
+    // that false, stepping backwards would show a tree the run never had.
+    let total = walk_total();
+    let whole: Vec<String> = walk(None).2.iter().map(name_and_place).collect();
+    for n in 0..=total {
+        let prefix: Vec<String> = walk(Some(n)).2.iter().map(name_and_place).collect();
+        assert_eq!(prefix, whole[..n as usize], "the first {} firings", n);
+    }
+}
+
+fn name_and_place(f: &Firing) -> String {
+    format!("{}@{}", f.rule, f.at)
+}
+
+#[test]
+fn every_intermediate_tree_is_a_real_one() {
+    // The stepper prints these, so each has to be a tree in its own right —
+    // net stack effect included, which is the invariant every rule preserves.
+    let total = walk_total();
+    let (prog, finished, _) = walk(None);
+    let want = net(prog, &finished);
+    for n in 0..=total {
+        let (prog, nodes, _) = walk(Some(n));
+        assert_eq!(net(prog, &nodes), want, "the tree after {} firings", n);
+    }
+}
+
+#[test]
+fn only_the_firing_stopped_at_carries_its_window() {
+    // Rendering every window would keep a copy of the whole derivation in
+    // memory to print two lines of it.
+    let total = walk_total();
+    let log = walk(Some(total)).2;
+    let (last, earlier) = log.split_last().expect("a firing to stop at");
+    assert!(last.detail.is_some(), "the firing stopped at is sketched");
+    assert!(
+        earlier.iter().all(|f| f.detail.is_none()),
+        "no earlier firing is"
+    );
+    let (before, after) = last.detail.clone().unwrap();
+    assert_ne!(before, after, "a rule never returns its window unchanged");
+
+    assert!(
+        walk(None).2.iter().all(|f| f.detail.is_none()),
+        "an unbounded run stops at no firing, so it sketches none"
+    );
+}
+
+#[test]
+fn going_inert_inside_a_repeat_still_terminates() {
+    // `repeat` goes round again while something changed, so a budget that runs
+    // out mid-pass has to make the next pass a no-op rather than a spin. This
+    // test hanging is the failure it guards against.
+    for n in 0..walk_total() {
+        walk(Some(n));
+    }
+}

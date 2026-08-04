@@ -14,7 +14,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
 
 use crate::arity::seq_arity;
-use crate::ir::{child_bodies, selected_bodies, Node, Selector};
+use crate::ir::{child_bodies, selected_bodies, sketch, Node, Selector};
 use crate::program::Program;
 use crate::rules::Rule;
 
@@ -99,6 +99,19 @@ impl std::fmt::Display for TacticError {
     }
 }
 
+/// One rule firing, as the stepper sees it.
+#[derive(Debug, Clone)]
+pub(crate) struct Firing {
+    pub(crate) rule: &'static str,
+    /// Where in the sequence the rule rewrote — a position *within some
+    /// sequence of the tree*, never a global one. Two firings reporting `@0`
+    /// may be in different dip bodies.
+    pub(crate) at: usize,
+    /// The window and its replacement, sketched. Recorded only for the firing
+    /// a replay was asked to stop at; see [`Env::stepping`].
+    pub(crate) detail: Option<(String, String)>,
+}
+
 pub(crate) struct Env<'a> {
     prog: &'a Program<'a>,
     fuel: Cell<u64>,
@@ -106,6 +119,16 @@ pub(crate) struct Env<'a> {
     recent: RefCell<VecDeque<String>>,
     hits: RefCell<HashMap<&'static str, usize>>,
     check: bool,
+    /// The stepper's budget. Once this many rules have fired, every further
+    /// rule declines and the traversal unwinds normally — so what comes back is
+    /// the whole tree as it stood at that firing, rather than an error.
+    ///
+    /// Distinct from `fuel`, which is a backstop against a tactic that will not
+    /// settle and which reports a failure when it runs out. Going inert is not
+    /// a failure: it is how a step is taken.
+    stop_after: Option<u64>,
+    /// Every firing in order, recorded only when stepping.
+    log: Option<RefCell<Vec<Firing>>>,
 }
 
 impl<'a> Env<'a> {
@@ -117,6 +140,43 @@ impl<'a> Env<'a> {
             recent: RefCell::new(VecDeque::new()),
             hits: RefCell::new(HashMap::new()),
             check,
+            stop_after: None,
+            log: None,
+        }
+    }
+
+    /// An env that fires at most `stop_after` times and remembers every firing.
+    ///
+    /// `None` means "no limit", which is how the stepper learns how long the
+    /// derivation is before it starts walking through it.
+    ///
+    /// Only the firing the run stops at gets its window sketched. Rendering
+    /// every one would keep a copy of the whole derivation in memory to print
+    /// two lines of it, and the stepper never shows a firing it did not stop
+    /// either side of.
+    pub(crate) fn stepping(
+        prog: &'a Program<'a>,
+        fuel: u64,
+        check: bool,
+        stop_after: Option<u64>,
+    ) -> Self {
+        Env {
+            stop_after,
+            log: Some(RefCell::new(Vec::new())),
+            ..Env::new(prog, fuel, check)
+        }
+    }
+
+    /// Whether the stepping budget is spent, and so every rule now declines.
+    fn inert(&self) -> bool {
+        self.stop_after.is_some_and(|n| self.spent.get() >= n)
+    }
+
+    /// The firings that actually happened, in order.
+    pub(crate) fn firings(&self) -> Vec<Firing> {
+        match &self.log {
+            Some(log) => log.borrow().clone(),
+            None => Vec::new(),
         }
     }
 
@@ -140,13 +200,20 @@ impl<'a> Env<'a> {
         Ok(())
     }
 
-    fn note(&self, rule: &'static str, at: usize) {
+    fn note(&self, rule: &'static str, at: usize, window: &[Node], replacement: &[Node]) {
         *self.hits.borrow_mut().entry(rule).or_insert(0) += 1;
         let mut recent = self.recent.borrow_mut();
         if recent.len() == TRACE_WINDOW {
             recent.pop_front();
         }
         recent.push_back(format!("{}@{}", rule, at));
+
+        if let Some(log) = &self.log {
+            // `spend` has already counted this one, so `spent` is its index.
+            let detail = (self.stop_after == Some(self.spent.get()))
+                .then(|| (sketch(window), sketch(replacement)));
+            log.borrow_mut().push(Firing { rule, at, detail });
+        }
     }
 
     pub(crate) fn program(&self) -> &Program<'a> {
@@ -480,6 +547,14 @@ fn step(
     nodes: &mut Vec<Node>,
     w: usize,
 ) -> Result<Option<usize>, TacticError> {
+    // A stepper's budget is spent: decline everything from here on. `each`
+    // still walks to the end of its sequence and `repeat` still asks once more,
+    // but neither finds anything, so the traversal unwinds and hands back the
+    // tree as it stood at the firing we stopped at.
+    if env.inert() {
+        return Ok(None);
+    }
+
     for rule in rules {
         let width = rule.width();
         if w + width > nodes.len() {
@@ -518,7 +593,7 @@ fn step(
             }
         }
 
-        env.note(rule.name(), w);
+        env.note(rule.name(), w, window, &replacement);
         nodes.splice(w..w + width, replacement);
         return Ok(Some(w.saturating_sub(width - 1)));
     }

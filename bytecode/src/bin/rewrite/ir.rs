@@ -180,6 +180,77 @@ pub(crate) fn expand_call(prog: &Program, depth: usize, target: SentenceIndex) -
     }
 }
 
+/// A one-line sketch of a node sequence: what a rule saw, or what it left.
+///
+/// Bounded in both directions — three nodes wide at each level, two levels deep
+/// — because the stepper prints one of these next to a prompt, and the window a
+/// rule matched may hold a dip body with fifty thousand nodes in it. The
+/// listing above the prompt is where the tree is shown in full; this only has
+/// to be enough to recognize the rewrite by.
+///
+/// A call is named by index alone. The label wants the library, which a rule's
+/// window does not carry, and the index is what the listing prints first.
+pub(crate) fn sketch(nodes: &[Node]) -> String {
+    let full = sketch_seq(nodes, 2);
+    match full.char_indices().nth(SKETCH_LINE) {
+        Some((cut, _)) => format!("{}…", &full[..cut]),
+        None => full,
+    }
+}
+
+/// Nodes shown per level before the rest becomes an ellipsis.
+const SKETCH_WIDTH: usize = 3;
+
+/// Characters a sketch may take up. Two branches with three nodes each fit
+/// inside the structural bounds and still run off the side of a terminal.
+const SKETCH_LINE: usize = 88;
+
+fn sketch_seq(nodes: &[Node], depth: usize) -> String {
+    if nodes.is_empty() {
+        return "(nothing)".to_string();
+    }
+    let mut parts: Vec<String> = nodes
+        .iter()
+        .take(SKETCH_WIDTH)
+        .map(|node| sketch_node(node, depth))
+        .collect();
+    if nodes.len() > SKETCH_WIDTH {
+        parts.push("…".to_string());
+    }
+    parts.join(" ; ")
+}
+
+fn sketch_node(node: &Node, depth: usize) -> String {
+    match node {
+        Node::Op(inst) => format!("{}", inst),
+        Node::Call { depth: k, target } => format!("{} → #{}", verb(*k), usize::from(*target)),
+        Node::Dip { depth: k, body, .. } => match depth {
+            0 => format!("{} {{ … }}", verb(*k)),
+            _ => format!("{} {{ {} }}", verb(*k), sketch_seq(body, depth - 1)),
+        },
+        Node::Branch {
+            then_body,
+            else_body,
+            ..
+        } => match depth {
+            0 => "branch { … } { … }".to_string(),
+            _ => format!(
+                "branch {{ {} }} {{ {} }}",
+                sketch_seq(then_body, depth - 1),
+                sketch_seq(else_body, depth - 1)
+            ),
+        },
+    }
+}
+
+fn verb(k: usize) -> String {
+    if k == 0 {
+        "jump".to_string()
+    } else {
+        format!("dip {}", k)
+    }
+}
+
 /// Whether two nodes do the same thing.
 ///
 /// Deliberately *not* the derived `PartialEq`. `Dip::origins` and a branch's
