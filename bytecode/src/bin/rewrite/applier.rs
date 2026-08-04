@@ -16,9 +16,6 @@
 //! arguments claim an arity the library does not give is refused no matter how
 //! it came to be written.
 
-// See `location.rs`: the applier lands before the engine that calls it.
-#![allow(dead_code)]
-
 use crate::arity::seq_arity;
 use crate::ir::{Node, Selector, child_seq, expand_call, same_effect_seq, sketch};
 use crate::location::{Location, selector_name};
@@ -259,6 +256,17 @@ pub(crate) fn apply_step(
     };
     seq.splice(at..end, dst);
     Ok(info)
+}
+
+/// What a step would replace, and with what — sketched, for a listing.
+///
+/// The same two sequences [`apply_step`] works from, so what this shows is what
+/// would actually happen rather than a second account of it. `None` when the
+/// arguments do not satisfy the equation, which for a recorded step means
+/// something has changed underneath it.
+pub(crate) fn preview(prog: &Program, step: &Step) -> Option<(String, String)> {
+    let (src, dst) = sides(prog, step).ok()?;
+    Some((sketch(&src), sketch(&dst)))
 }
 
 /// Applies a whole script, in order.
@@ -689,7 +697,7 @@ mod tests {
             apply_script(&prog(), &mut tree, &script, true)
                 .unwrap_or_else(|e| panic!("deriving vacuous for {:?}: {}", x, e));
 
-            let mut expected = crate::rule2::copies(n);
+            let mut expected = crate::rule2::tests::copies(n);
             expected.push(x.clone());
             expected.extend(std::iter::repeat_n(op(Instruction::Drop), m));
             assert_eq!(

@@ -39,9 +39,6 @@
 //! fixpoint with their opposites — the fuel budget is what diagnoses it when
 //! they do.
 
-// See `location.rs`: the matchers land before the engine that drives them.
-#![allow(dead_code)]
-
 use bytecode::Instruction;
 
 use crate::arity::node_arity;

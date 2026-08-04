@@ -19,73 +19,76 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::engine::Tactic;
 use crate::ir::Selector;
-use crate::rules::{ALL_RULES, Rule, rule_by_name};
-use crate::tactic::Tactic;
+use crate::matcher::{Matcher, matcher_by_name, matcher_names};
 
-/// Reproduces what the old `--dip-normalize`, `--factor-branches` and
-/// `--annihilate` flags did, as named tactics that can be recombined.
+/// The named tactics every session starts with.
+///
+/// A tactic may not take a matcher's name, so where a pass and the matcher at
+/// its heart would collide the pass is the one that gives way: `annihilation`
+/// drives `annihilate`, `flattening` drives `flatten`.
 pub(crate) const PRELUDE: &str = r#"
 // Splice every call into its caller, all the way down, leaving one flat
-// sentence. `each` alone already expands a whole sequence transitively, since
-// a spliced body is rescanned where it landed; the `bu` is what reaches into
+// sentence. `each` alone already opens a whole sequence transitively, since an
+// unfolded body is rescanned where it landed; the `bu` is what reaches into
 // branch arms as well.
 //
-// For less than all of it, `once(inline)` takes the first call only, and
-// `repeat_n(k, once(inline))` takes k of them.
-tactic inline_all = repeat(bu(each(inline)));
+// For less than all of it, `once(unfold)` takes the first call only, and
+// `repeat_n(k, once(unfold))` takes k of them.
+tactic unfold_all = repeat(bu(each(unfold)));
 
-// Nothing is expanded unless you ask. The listing names every call on one
-// line, and you inline the ones you care about.
+// Nothing is opened unless you ask. The listing names every call on one line,
+// and you unfold the ones you care about.
 tactic default = id;
 
-// Move dips left, fuse the ones that meet, and keep nested dips collapsed so
-// the interchange rule sees a dip's true hidden depth.
+// Move framed blocks left, fuse the ones that meet, and keep nested frames
+// collapsed so the interchange law sees a frame's true hidden depth.
 tactic dips = repeat(bu(each(collapse); each(sink); each(fuse)));
 
-// Split every dip into a nest of unary `dip 1`s. Presentation only, and the
-// exact inverse of `collapse` — never put both in one `repeat`.
+// Split every frame into a nest of unary ones. Presentation only, and the
+// opposite reading of the same law as `collapse` — never put both in one
+// `repeat`.
 tactic unary = repeat(bu(each(expand)));
 
-tactic factoring  = repeat(bu(each(factor_branch)));
-tactic annihilate = repeat(bu(each(annihilate_drop, annihilate_flagged)));
+tactic factoring = repeat(bu(each(factor)));
 
-// Evaluate what is already decided. Every rule here answers a question about
-// values rather than about shape, and each declines the cases where the
-// instruction it would remove is really a check: `fold_const` folds `equal` on
-// any pair but `and` only on two booleans, and `bool_identity` needs to see
-// where its operand came from before it will drop a unit `and`.
-tactic values = repeat(bu(each(fold_const, fold_const_unary, bool_identity,
-                               cancel_tuple)));
+// Throw away results nothing reads. `annihilate` reads one output and
+// `annihilate_flagged` two, which is what a fallible instruction leaves;
+// `counit` is the copy that was made only to be discarded.
+tactic annihilation = repeat(bu(each(annihilate, annihilate_flagged, counit)));
 
-// Throw away work that does nothing. `pick_drop_to_roll` leaves a `roll 0`
-// behind when d is 0, and `annihilate_drop` can empty a dip body; `noop`
-// clears up after both, which is why these three belong together. The value
-// rules join them because folding is what exposes the literal `fold_branch`
-// needs, and dropping a branch is what exposes the next thing to fold.
-tactic cleanup = repeat(bu(each(annihilate_drop, annihilate_flagged,
-                                pick_drop_to_roll, noop, fold_branch);
-                           each(fold_const, fold_const_unary, bool_identity,
-                                cancel_tuple)));
+// Evaluate what is already decided. Every matcher here answers a question about
+// values rather than about shape, and the equation underneath declines anything
+// it has no answer for — so `eval2` folds `equal` on any pair and simply does
+// not fire on `add`.
+tactic values = repeat(bu(each(eval1, eval2, cancel_tuple, copy_const)));
 
-// Push what follows a branch into both of its arms, so a rule that only holds
-// on one side can see it. Kept out of `all` and `cleanup`: it duplicates code
-// on purpose, which is the opposite of what those two are for.
-tactic distribute = repeat(bu(each(distribute_branch)));
+// Throw away work that does nothing, then fold what that exposes. The two
+// belong together because each makes work for the other: folding is what
+// produces the literal `fold_branch` needs, and deciding a branch is what
+// exposes the next thing to fold.
+tactic cleanup = repeat(bu(each(annihilate, annihilate_flagged, counit, fold_branch);
+                           each(eval1, eval2, cancel_tuple, copy_const)));
 
-// Splice plain calls into their call sites. This is what lets the other rules
+// Push what follows a branch into both of its arms, so a law that only holds on
+// one side can see it. Kept out of `all` and `cleanup`: it duplicates code on
+// purpose, which is the opposite of what those two are for.
+tactic distribution = repeat(bu(each(distribute)));
+
+// Splice plain calls into their call sites. This is what lets the other laws
 // reach across a frame: a branch one level down and the instruction after the
 // call are not in the same sequence until the frame is gone. It discards the
 // origin labels, so it is opt-in rather than part of `all`.
-tactic flatten = repeat(bu(each(flatten_call)));
+tactic flattening = repeat(bu(each(flatten)));
 
-// Everything at once, which is what passing all three flags used to mean.
-tactic all = repeat(bu(each(annihilate_drop, annihilate_flagged, pick_drop_to_roll, noop, fold_branch);
-                       each(fold_const, fold_const_unary, bool_identity, cancel_tuple);
-                       each(factor_branch);
+// Everything that makes a term smaller, at once.
+tactic all = repeat(bu(each(annihilate, annihilate_flagged, counit, fold_branch);
+                       each(eval1, eval2, cancel_tuple, copy_const);
+                       each(factor);
                        each(collapse); each(sink); each(fuse)));
 
-// What `--dip-normalize` was.
+// Frames left-most and written in unary.
 tactic dip_normalize = dips; unary;
 "#;
 
@@ -454,7 +457,7 @@ impl Definitions {
                     return Err(ScriptError::new("expected a tactic name", name_span));
                 }
             };
-            if rule_by_name(&name).is_some() {
+            if matcher_by_name(&name).is_some() {
                 return Err(
                     ScriptError::new(format!("'{}' is a rule name", name), name_span)
                         .with_help("rules and tactics are separate namespaces; pick another name"),
@@ -526,7 +529,7 @@ impl Definitions {
             _ => {}
         }
 
-        if rule_by_name(name).is_some() {
+        if matcher_by_name(name).is_some() {
             return Err(
                 ScriptError::new(format!("'{}' is a rule, not a tactic", name), span).with_help(
                     format!(
@@ -611,21 +614,21 @@ impl Definitions {
                         span,
                     ));
                 }
-                let mut rules: Vec<&'static dyn Rule> = Vec::new();
+                let mut rules: Vec<&'static dyn Matcher> = Vec::new();
                 for arg in args {
                     let Arg::Expr(Expr::Name(rule_name, rule_span)) = arg else {
                         return Err(ScriptError::new(
                             format!("`{}` takes rule names, not tactics", name),
                             span,
                         )
-                        .with_help(format!("rules: {}", rule_names().join(", "))));
+                        .with_help(format!("rules: {}", matcher_names().join(", "))));
                     };
-                    let Some(rule) = rule_by_name(rule_name) else {
+                    let Some(rule) = matcher_by_name(rule_name) else {
                         return Err(ScriptError::new(
                             format!("unknown rule '{}'", rule_name),
                             *rule_span,
                         )
-                        .with_help(format!("rules: {}", rule_names().join(", "))));
+                        .with_help(format!("rules: {}", matcher_names().join(", "))));
                     };
                     rules.push(rule);
                 }
@@ -697,10 +700,6 @@ const COMBINATORS: &[(&str, Shape)] = &[
     ("td", Shape::One),
     ("repeat_n", Shape::CountAndOne),
 ];
-
-pub(crate) fn rule_names() -> Vec<&'static str> {
-    ALL_RULES.iter().map(|r| r.name()).collect()
-}
 
 #[cfg(test)]
 mod tests {
