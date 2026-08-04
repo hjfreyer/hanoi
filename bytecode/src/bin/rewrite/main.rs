@@ -19,6 +19,7 @@ mod applier;
 mod arity;
 mod debug;
 mod diff;
+mod engine;
 mod ir;
 mod location;
 mod matcher;
