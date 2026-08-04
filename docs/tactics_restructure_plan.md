@@ -19,7 +19,8 @@ The whole apparatus is restricted to roots that are non-recursive **and total**.
 
 Consequences, which the equations should exploit:
 
-- **`total_effect_free` collapses to "has a known arity."** The old `speculable` predicate existed to keep an `assert` hidden in a dip or call body from being run on a path that wouldn't have run it; no such node exists here. `annihilate` (and tranche 2's `speculate_branch`) may accept *any* node with a known arity — ops, dips, calls, branches alike — instead of a syntactic whitelist.
+- **`total_effect_free` collapses to "has a known arity."** The old `speculable` predicate existed to keep an `assert` hidden in a dip or call body from being run on a path that wouldn't have run it; no such node exists here. `annihilate`, `vacuous` (and tranche 2's `speculate_branch`) accept *any* node with a known arity — ops, dips, calls, branches alike — instead of a syntactic whitelist.
+- **`vacuous` exists at all.** "Run it on copies and throw the results away" is only the identity when the computation cannot fail; under partiality the reverse direction would invent a failure on a path that had none.
 - **Arity is always known.** Unknown arity came from `#[recursive]` callees; with recursion excluded, every node has an inferable arity, so `--check`'s "learning an arity" case (`None → Some`) disappears, `net` comparison becomes strict equality of known values, and `ArityUnknown` becomes an internal error rather than an expected side condition. (Verify during stage 1; if a residual `None` case survives, keep the old tolerant comparison and say why.)
 - **`Unfold`'s non-recursive side condition never bites** — the precondition guarantees it. Keep the cheap per-step annotation lookup anyway (a step should be safe on its own terms, and scripts are meant to be checkable in isolation), but the equation prose need not hedge.
 - **Tranche-2 bool/branch laws lose their panic caveats** — e.g. `bool_identity`'s absorbing cases were `B; drop; push c` rather than `push c` only because `B` might fail; under the precondition the drop-form composes with `annihilate` to reach the simple form anyway.
@@ -83,7 +84,7 @@ pub type Script = Vec<Step>;
 
 **Rule args are self-contained; the applier re-checks every claim.** A Rule2 closes over everything its two sides are built from. Facts that originate in the library — the claimed arity of X in `Interchange`/`Annihilate` — are carried in the args, which makes `lhs()`/`rhs()` pure functions of the args. The applier is *required* to call `check(prog)` first, which verifies each claim against the authoritative source (claimed arities must equal `node_arity(prog, x)`) alongside the equation's own side conditions. A script is never trusted: it can only communicate a construction, and every fact it rests on is re-derived by the applier.
 
-### The equation core (tranche 1) — 13 equations + definitional unfold, replacing 26 rules
+### The equation core (tranche 1) — 14 equations + definitional unfold, replacing 26 rules
 
 | equation | LHS = RHS | side conditions / notes |
 |---|---|---|
@@ -97,6 +98,7 @@ pub type Script = Vec<Step>;
 | `fold_branch(c, A, B)` | `push c ; branch { A } { B }` = `A` if **`c.truthy()`** else `B` | decide by `Value::truthy`, NOT `c == Bool(true)` as a type test — `push 1; branch` folds to the else arm |
 | `eval(op, inputs)` | `push v1 … push vn ; op` = pushes of outputs | via shared `eval_op(inst, &[Value]) -> Option<Vec<Value>>` delegating to `bytecode::value::{truthy, numeric_cmp}`. Must reproduce the exact fold tables: comparisons push a flag too (`Less` on symbols → `push false; push false`), `tuple_length` on a non-tuple hands the value back + `false`. Subsumes `fold_const` + `fold_const_unary`; arithmetic ops become a trivial extension |
 | `annihilate(X, n, m)` | `X ; drop^m` = `drop^n` | `check` verifies `(n,m)` equals `node_arity(prog, x)` — under the global precondition (total root) that is the *whole* condition; no `speculable`-style syntactic whitelist. Subsumes `annihilate_drop` (m=1) and `annihilate_flagged` (m=2), and covers calls/branches the old rules had to decline |
+| `vacuous(X, n, m)` | `pick (n-1)^n ; X ; drop^m` = ε | same arity check as `annihilate`. Copy the operands, compute on the copies, discard the results: the originals are untouched, so the run is the identity — available **only** because every function is total. **Reverse is the point**: it introduces an arbitrary total computation out of nothing, anywhere. Nothing else in the set can add work, and a derivation that must get worse before it gets better needs something that can. This is how a cancelling pair enters a term, to be walked into place by `interchange` |
 | `counit(d)` | `pick d ; drop` = ε | the old `Pick` special case in `annihilation()` — deliberately NOT an `annihilate` instance |
 | `copy_const(c)` | `push c ; pick 0` = `push c ; push c` | |
 | `copy_assoc(d)` | `pick d ; pick 0` = `pick d ; dip 1 { pick d }` | |

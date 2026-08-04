@@ -119,19 +119,72 @@ pub(crate) fn label(library: &Library, target: SentenceIndex) -> String {
     format!("#{} {}", usize::from(target), library.names[target])
 }
 
-/// The child sequences of a node, for traversal.
+/// The child sequences of a node, each labelled with the selector that names it.
 ///
 /// A `Call` has none: its body is a sentence in the library, not part of this
-/// tree, and reaching it is what `inline` is for.
-pub(crate) fn child_bodies(node: &mut Node) -> Vec<&mut Vec<Node>> {
+/// tree, and reaching it is what `unfold` is for.
+///
+/// The label is what lets a traversal record *where* it went. A driver that
+/// only needs the sequences can ignore it — [`child_bodies`] is exactly that —
+/// but one building a [`Location`][crate::location::Location] needs the
+/// selector, and recovering it after the fact is impossible.
+pub(crate) fn child_seqs(node: &mut Node) -> Vec<(Selector, &mut Vec<Node>)> {
     match node {
-        Node::Dip { body, .. } => vec![body],
+        Node::Dip { body, .. } => vec![(Selector::Body, body)],
         Node::Branch {
             then_body,
             else_body,
             ..
-        } => vec![then_body, else_body],
+        } => vec![(Selector::Then, then_body), (Selector::Else, else_body)],
         Node::Op(_) | Node::Call { .. } => Vec::new(),
+    }
+}
+
+/// The one child sequence `sel` names, if the node has one of that kind.
+pub(crate) fn child_seq(node: &mut Node, sel: Selector) -> Option<&mut Vec<Node>> {
+    child_seqs(node)
+        .into_iter()
+        .find(|(s, _)| *s == sel)
+        .map(|(_, body)| body)
+}
+
+/// The child sequences of a node, for traversal.
+pub(crate) fn child_bodies(node: &mut Node) -> Vec<&mut Vec<Node>> {
+    child_seqs(node).into_iter().map(|(_, body)| body).collect()
+}
+
+/// How deep a node's hidden window is, if it has one.
+///
+/// A `Dip { depth: k }` and a `Call { depth: k }` mean the same thing — a block
+/// running below `k` hidden values — and differ only in whether the block is
+/// part of this tree. Every equation that reasons about the *frame* rather than
+/// the body accepts both, or it would silently demand that you unfold a callee
+/// just to move it.
+///
+/// `Call { depth: 0 }` is a plain jump and has no frame, so it reports `None`.
+/// A `Dip { depth: 0 }` does have one: it is a frame that hides nothing, which
+/// is a different thing from having no frame at all.
+pub(crate) fn frame_depth(node: &Node) -> Option<usize> {
+    match node {
+        Node::Dip { depth, .. } => Some(*depth),
+        Node::Call { depth, .. } if *depth > 0 => Some(*depth),
+        _ => None,
+    }
+}
+
+/// The same node with its frame set to `depth`.
+pub(crate) fn with_frame_depth(node: &Node, depth: usize) -> Option<Node> {
+    match node {
+        Node::Dip { origins, body, .. } => Some(Node::Dip {
+            depth,
+            origins: origins.clone(),
+            body: body.clone(),
+        }),
+        Node::Call { target, .. } => Some(Node::Call {
+            depth,
+            target: *target,
+        }),
+        _ => None,
     }
 }
 
@@ -308,6 +361,6 @@ pub(crate) fn same_effect(a: &Node, b: &Node) -> bool {
     }
 }
 
-fn same_effect_seq(a: &[Node], b: &[Node]) -> bool {
+pub(crate) fn same_effect_seq(a: &[Node], b: &[Node]) -> bool {
     a.len() == b.len() && a.iter().zip(b).all(|(x, y)| same_effect(x, y))
 }
