@@ -485,7 +485,6 @@ fn parse_instruction(stream: &mut TokenStream) -> Result<ParsedInstruction, Stri
         "and" => Ok(ParsedInstruction::And),
         "or" => Ok(ParsedInstruction::Or),
         "negate" | "neg" => Ok(ParsedInstruction::Negate),
-        "print" => Ok(ParsedInstruction::Print),
         "jump" => {
             let target = parse_target(stream)?;
             Ok(ParsedInstruction::Jump(target))
@@ -1175,7 +1174,6 @@ impl<'a> Compiler<'a> {
                 ParsedInstruction::Modulo => Instruction::Modulo,
                 ParsedInstruction::Not => Instruction::Not,
                 ParsedInstruction::Negate => Instruction::Negate,
-                ParsedInstruction::Print => Instruction::Print,
                 ParsedInstruction::Panic => Instruction::Panic,
                 ParsedInstruction::Assert => Instruction::Assert,
                 ParsedInstruction::AssertEqual => Instruction::AssertEqual,

@@ -45,7 +45,7 @@ pub enum Target {
 ///
 /// Shared between sugar and core. `TypeCheckPath` is the one variant a user
 /// cannot write — it is only ever produced by lowering a [`TypeSpec`] — but
-/// duplicating a 33-variant enum to express that is not worth the churn.
+/// duplicating a 32-variant enum to express that is not worth the churn.
 #[derive(Debug, Clone)]
 pub enum ParsedInstruction {
     Push(ParsedValue),
@@ -62,7 +62,6 @@ pub enum ParsedInstruction {
     Modulo,
     Not,
     Negate,
-    Print,
     Jump(Target),
     /// Run the target with the top `usize` values of the stack hidden from it.
     Dip(usize, Target),

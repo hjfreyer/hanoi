@@ -132,7 +132,7 @@ its answer was computed or invented, by leaving a `bool` on top of its result.
 |---|---|---|---|
 | `push c`, `pick d`, `roll d`, `drop` | unchanged | — | cannot fail |
 | `equal`, `is_int`, `is_bool`, `is_float`, `is_symbol`, `is_tuple` | unchanged | — | cannot fail |
-| `not`, `and`, `or`, `print`, `tuple n` | unchanged | — | cannot fail |
+| `not`, `and`, `or`, `tuple n` | unchanged | — | cannot fail |
 | `add`, `subtract`, `multiply` | `2 -> 2` | sum, `true` | `Int 0`, `false` |
 | `divide`, `modulo` | `2 -> 2` | quotient, `true` | `Int 0`, `false` |
 | `greater`, `less` | `2 -> 2` | the answer, `true` | `false`, `false` |
@@ -211,8 +211,8 @@ instruction sets.
 
 The point of all this is which rewrites become sound. The wins:
 
-- `annihilate_drop` needs no whitelist. Any single-output operator other than
-  `print` cancels against a following `drop`, becoming drops of its inputs.
+- `annihilate_drop` needs no whitelist. Any single-output operator cancels
+  against a following `drop`, becoming drops of its inputs.
 - `fold_const` and `fold_const_unary` are *evaluation*. Folding a literal
   window is running it, so anything the VM computes they may compute.
 - `fold_branch` folds **any** literal condition, since the direction on junk is
@@ -294,7 +294,7 @@ What this needs is exactly what this document establishes:
 - `X` must be **total**, or the speculation fails on a path the original left
   alone. This is the whole reason the rule is possible; under the old semantics
   it was unsound for precisely the `untuple` case that matters.
-- `X` must have **no effect but the stack**, which excludes `print`.
+- `X` must have **no effect but the stack**.
 - `X`'s arity must be **known locally**, which excludes calls — their bodies may
   hold an `assert`.
 

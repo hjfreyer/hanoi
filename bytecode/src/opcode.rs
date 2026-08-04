@@ -43,9 +43,6 @@ pub enum Instruction {
     /// Negate the numeric top value on the stack.
     Negate,
 
-    /// Print the top value on the stack (useful for debugging/IO).
-    Print,
-
     /// Hide the top `depth` values, call the sentence at the target SentenceIndex,
     /// then restore the hidden values on top of its results.
     ///
@@ -116,7 +113,6 @@ impl std::fmt::Display for Instruction {
             Instruction::Modulo => write!(f, "modulo"),
             Instruction::Not => write!(f, "not"),
             Instruction::Negate => write!(f, "negate"),
-            Instruction::Print => write!(f, "print"),
             Instruction::Dip(0, s) => write!(f, "jump {:?}", s),
             Instruction::Dip(d, s) => write!(f, "dip {} {:?}", d, s),
             Instruction::Branch(t, e) => write!(f, "branch {:?} {:?}", t, e),
