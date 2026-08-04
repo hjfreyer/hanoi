@@ -1,3 +1,4 @@
+#[flags]
 function init {
     // Stack: [args]
     jump {{target}}::init
@@ -5,9 +6,11 @@ function init {
 }
 
 
+#[flags]
 function accept {
     // Stack: [(state, event)]
     untuple 2
+    assert
     // Stack: [event, state]
     pick 1
     push crate::prelude::start
@@ -29,6 +32,7 @@ function accept {
         pick 1
         // Stack: [event, state, event]
         untuple 2
+        assert
         // Stack: [event, state, payload, prefix]
         push {{prefix}}
         // Stack: [event, state, payload, prefix, {{prefix}}]
@@ -54,11 +58,13 @@ function accept {
     }
 }
 
+#[flags]
 function emit {
     // Stack: [state]
     jump {{target}}::emit
     // Stack: [(has_event, event)]
     untuple 2
+    assert
     // Stack: [event, has_event]
     branch {
         // Stack: [event]
@@ -83,13 +89,16 @@ function emit {
     }
 }
 
+#[flags]
 function process {
     // Stack: [(state, event)]
     untuple 2
+    assert
     // Stack: [event, state]
     roll 1
     // Stack: [state, event]
     untuple 2
+    assert
     // Stack: [state, payload, prefix]
     push {{prefix}}
     // Stack: [state, payload, prefix, {{prefix}}]
@@ -103,6 +112,7 @@ function process {
     // Stack: [next_state]
 }
 
+#[flags]
 function tau_reduce {
     // Stack: [state]
     push false
@@ -111,12 +121,14 @@ function tau_reduce {
     // Stack: [(false, state)]
 }
 
+#[flags]
 function is_done {
     // Stack: [state]
     jump {{target}}::is_done
     // Stack: [Bool]
 }
 
+#[flags]
 function is_ready_to_finish {
     // Stack: [state]
     jump {{target}}::is_ready_to_finish

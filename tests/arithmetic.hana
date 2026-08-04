@@ -1,52 +1,65 @@
 // Tests for arithmetic operations
 
+#[flags]
 test sentence add_numbers {
     push 10
     push 20
     add
+    assert
     push 30
     assert_eq
 }
 
+#[flags]
 test sentence subtract_numbers {
     push 50
     push 20
     sub
+    assert
     push 30
     assert_eq
 }
 
+#[flags]
 test sentence multiply_numbers {
     push 5
     push 6
     mul
+    assert
     push 30
     assert_eq
 }
 
+#[flags]
 test sentence divide_numbers {
     push 90
     push 3
     div
+    assert
     push 30
     assert_eq
 }
 
+#[flags]
 test sentence modulo_numbers {
     push 35
     push 10
     mod
+    assert
     push 5
     assert_eq
 }
 
+#[flags]
 test sentence negate_number {
     push 42
     neg
+    assert
     push -42
     assert_eq
 }
 
+#[flags]
 test sentence logical_not {
     push true
     not
@@ -59,6 +72,7 @@ test sentence logical_not {
     assert_eq
 }
 
+#[flags]
 test sentence boolean_operations {
     push true
     push true

@@ -1,11 +1,13 @@
 // Tests for tuples and nested tuples
 
+#[flags]
 test sentence simple_tuple {
     push 1
     push 2
     push 3
     tuple 3
     untuple 3
+    assert
     push 3
     assert_eq
     push 2
@@ -14,6 +16,7 @@ test sentence simple_tuple {
     assert_eq
 }
 
+#[flags]
 test sentence nested_tuples {
     push 10
     push (20, 30)
@@ -21,9 +24,11 @@ test sentence nested_tuples {
     
     // Destructure outer tuple
     untuple 2
+    assert
     
     // Destructure inner tuple
     untuple 2
+    assert
     
     push 20
     assert_eq

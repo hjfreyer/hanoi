@@ -14,15 +14,19 @@ mod string_ref {
 
     // init: returns idle state of string_ref
     // State is (sym, idle)
+    #[flags]
     function init {
         push idle
         tuple 2
     }
     
 
+    #[flags]
     function accept {
         untuple 2
-        untuple 2 // Stack: [event, sym, internal_state]
+        assert
+        untuple 2
+        assert // Stack: [event, sym, internal_state]
         pick 0 // duplicate internal_state
         push idle
         equal
@@ -31,6 +35,7 @@ mod string_ref {
             drop 0 // drop sym
             // Stack: [event]
             untuple 2
+            assert
             // Stack: [payload, tag]
             pick 0 // tag
             push length
@@ -55,7 +60,8 @@ mod string_ref {
         } {
             // In response state: accepts nothing (empty_set)
             pick 0
-            untuple 2 // Stack: [event, sym, internal_state, resp_val, resp_tag]
+            untuple 2
+            assert // Stack: [event, sym, internal_state, resp_val, resp_tag]
             pick 0 // resp_tag
             push length_resp
             equal
@@ -84,14 +90,17 @@ mod string_ref {
         }
     }
 
+    #[flags]
     function tau_reduce {
         push false
         tuple 2
     }
 
     // emit: takes state (sym, internal_state) and returns ValueSet of emitted events.
+    #[flags]
     function emit {
-        untuple 2 // Stack: [sym, internal_state]
+        untuple 2
+        assert // Stack: [sym, internal_state]
         pick 0 // duplicate internal_state
         push idle
         equal
@@ -104,7 +113,8 @@ mod string_ref {
         } {
             drop 1 // drop sym. Stack: [internal_state]
             pick 0
-            untuple 2 // Stack: [internal_state, resp_val, resp_tag]
+            untuple 2
+            assert // Stack: [internal_state, resp_val, resp_tag]
             pick 0 // resp_tag
             push length_resp
             equal
@@ -130,10 +140,13 @@ mod string_ref {
     }
     
     // process: takes state and event, returns next_state
+    #[flags]
     function process {
         untuple 2
+        assert
         // Stack: [event, state]
-        untuple 2 // Stack: [event, sym, internal_state]
+        untuple 2
+        assert // Stack: [event, sym, internal_state]
         
         pick 0
         push idle
@@ -142,7 +155,8 @@ mod string_ref {
             // Case 1: internal_state is idle. We processed a query event ((), length) or (N, charat).
             drop 0 // drop internal_state. Stack: [event, sym]
             roll 1 // Stack: [sym, event]
-            untuple 2 // Stack: [sym, query_payload, query_type]
+            untuple 2
+            assert // Stack: [sym, query_payload, query_type]
             
             pick 0 // query_type
             push length
@@ -152,6 +166,7 @@ mod string_ref {
                 drop 0 // drop query_payload (which is ())
                 pick 0 // sym
                 symbol_len // len
+                assert
                 
                 push length_resp
                 tuple 2 // (len, length_resp)
@@ -163,16 +178,19 @@ mod string_ref {
                 // Check if N < len
                 pick 1 // sym
                 symbol_len // len
+                assert
                 
                 pick 1 // N
                 pick 1 // len
                 less
+                assert
                 branch {
                     // N < len: return character
                     drop 0 // drop len
                     pick 1 // sym
                     pick 1 // N
                     symbol_char_at // ch
+                    assert
                     
                     push some
                     tuple 2 // (ch, some)
@@ -209,13 +227,16 @@ mod string_ref {
         }
     }
 
+    #[flags]
     function is_done {
         drop 0
         push false
     }
 
+    #[flags]
     function is_ready_to_finish {
         untuple 2
+        assert
         push idle
         equal
         roll 1
@@ -234,17 +255,22 @@ mod char_iterator {
 
     // Initialize char_iterator state.
     // Returns (0, fetch) state.
+    #[flags]
     function init {
         untuple 0
+        assert
         push 0
         push fetch
         tuple 2
     }
     
 
+    #[flags]
     function accept {
         untuple 2
-        untuple 2 // Stack: [event, payload, tag]
+        assert
+        untuple 2
+        assert // Stack: [event, payload, tag]
         pick 0 // tag
         push await_charat
         equal
@@ -253,6 +279,7 @@ mod char_iterator {
             drop 0 // drop payload
             // Stack: [event]
             untuple 2
+            assert
             // Stack: [channel, inner]
             push in
             equal
@@ -260,6 +287,7 @@ mod char_iterator {
                 // channel == in. Now check inner.
                 // Stack: [inner]
                 untuple 2
+                assert
                 // Stack: [tag, option]
                 push super::string_ref::charat_resp
                 equal
@@ -267,6 +295,7 @@ mod char_iterator {
                     // tag == charat_resp. Now check option.
                     // Stack: [option]
                     untuple 2
+                    assert
                     // Stack: [opt_tag, val]
                     pick 0 // opt_tag
                     push super::string_ref::some
@@ -350,14 +379,17 @@ mod char_iterator {
         }
     }
 
+    #[flags]
     function tau_reduce {
         push false
         tuple 2
     }
 
     // emit: takes state (payload, tag) and returns ValueSet of emitted events.
+    #[flags]
     function emit {
-        untuple 2 // Stack: [payload, tag]
+        untuple 2
+        assert // Stack: [payload, tag]
         
         pick 0 // tag
         push fetch
@@ -379,7 +411,8 @@ mod char_iterator {
             branch {
                 // yield_next state: payload is (idx, ch), emits (((ch, next), out), true)
                 drop 0 // drop tag. Stack: [(idx, ch)]
-                untuple 2 // Stack: [idx, ch]
+                untuple 2
+                assert // Stack: [idx, ch]
                 roll 1 // Stack: [ch, idx]
                 drop 0 // drop idx. Stack: [ch]
                 
@@ -437,10 +470,13 @@ mod char_iterator {
     }
     
     // process: takes state (payload, tag) and event, returns next_state
+    #[flags]
     function process {
         untuple 2
+        assert
         // Stack: [event, state]
-        untuple 2 // Stack: [event, payload, tag]
+        untuple 2
+        assert // Stack: [event, payload, tag]
         
         pick 0 // tag
         push fetch
@@ -464,14 +500,17 @@ mod char_iterator {
                 
                 // Destructure event: (((resp_event, charat_resp), in)
                 untuple 2
+                assert
                 push in
                 assert_eq
                 
                 untuple 2
+                assert
                 push super::string_ref::charat_resp
                 assert_eq
                 
-                untuple 2 // Stack: [idx, val, variant]
+                untuple 2
+                assert // Stack: [idx, val, variant]
                 
                 pick 0 // variant
                 push super::string_ref::some
@@ -494,13 +533,15 @@ mod char_iterator {
                 branch {
                     // Transition from ((idx, ch), yield_next) to (idx + 1, fetch)
                     drop 0 // drop tag
-                    untuple 2 // Stack: [event, idx, ch]
+                    untuple 2
+                    assert // Stack: [event, idx, ch]
                     drop 0 // drop ch
                     roll 1
                     drop 0 // drop event
                     
                     push 1
                     add
+                    assert
                     
                     push fetch
                     tuple 2 // (idx + 1, fetch)
@@ -517,8 +558,10 @@ mod char_iterator {
         }
     }
 
+    #[flags]
     function is_done {
         untuple 2
+        assert
         pick 0
         push done_state
         equal
@@ -528,8 +571,10 @@ mod char_iterator {
         drop 0
     }
 
+    #[flags]
     function is_ready_to_finish {
         untuple 2
+        assert
         pick 0
         push done_state
         equal
@@ -554,14 +599,18 @@ mod parseint {
     symbol yielding_err "Yielding err result state"
 
     // init: returns idle state
+    #[flags]
     function init {
         untuple 0
+        assert
         push idle
     }
 
 
+    #[flags]
     function accept {
         untuple 2
+        assert
         pick 0
         push idle
         equal
@@ -575,7 +624,8 @@ mod parseint {
             tuple 2 // (((), copy), out)
             equal
         } {
-            untuple 2 // Stack: [event, payload, tag]
+            untuple 2
+            assert // Stack: [event, payload, tag]
             pick 0 // tag
             push parsing
             equal
@@ -584,6 +634,7 @@ mod parseint {
                 drop 0 // drop payload
                 // Stack: [event]
                 untuple 2
+                assert
                 // Stack: [channel, inner]
                 push in
                 equal
@@ -591,6 +642,7 @@ mod parseint {
                     // channel == in. Now check inner.
                     // Stack: [inner]
                     untuple 2
+                    assert
                     // Stack: [msg_tag, msg_val]
                     pick 0 // msg_tag
                     push super::next
@@ -650,12 +702,14 @@ mod parseint {
         }
     }
 
+    #[flags]
     function tau_reduce {
         push false
         tuple 2
     }
 
     // emit: takes [state] and returns ValueSet of emitted events.
+    #[flags]
     function emit {
         pick 0
         push idle
@@ -666,7 +720,8 @@ mod parseint {
             push false
             tuple 2
         } {
-            untuple 2 // Stack: [payload, tag]
+            untuple 2
+            assert // Stack: [payload, tag]
             pick 0 // tag
             push parsing
             equal
@@ -725,8 +780,10 @@ mod parseint {
     }
 
     // process: takes [state, event] and returns next_state.
+    #[flags]
     function process {
         untuple 2
+        assert
         // Stack: [event, state]
         pick 0 // state
         push idle
@@ -751,7 +808,8 @@ mod parseint {
             tuple 2
         } {
             // State is (payload, tag)
-            untuple 2 // Stack: [event, payload, tag]
+            untuple 2
+            assert // Stack: [event, payload, tag]
             
             pick 0 // tag
             push yielding_ok
@@ -780,13 +838,16 @@ mod parseint {
                         drop 0 // drop tag
                         roll 1 // Stack: [payload, event]
                         
-                        untuple 2 // Stack: [payload, inner_event, in]
+                        untuple 2
+                        assert // Stack: [payload, inner_event, in]
                         push in
                         assert_eq
                         
-                        untuple 2 // Stack: [payload, val, item_tag]
+                        untuple 2
+                        assert // Stack: [payload, val, item_tag]
                         roll 2 // Stack: [val, item_tag, payload]
-                        untuple 2 // Stack: [val, item_tag, acc, count]
+                        untuple 2
+                        assert // Stack: [val, item_tag, acc, count]
                         
                         pick 2 // item_tag
                         push super::next
@@ -801,6 +862,7 @@ mod parseint {
                             pick 3 // ch
                             push 48
                             less
+                            assert
                             branch {
                                 // ch < 48: non-digit error!
                                 drop 0 // count
@@ -814,6 +876,7 @@ mod parseint {
                                 pick 3 // ch
                                 push 57
                                 greater
+                                assert
                                 branch {
                                     // ch > 57: non-digit error!
                                     drop 0
@@ -830,15 +893,19 @@ mod parseint {
                                     roll 2 // pull ch. Stack: [acc, count, ch]
                                     push 48
                                     sub // digit
+                                    assert
                                     
                                     roll 2 // acc
                                     push 10
                                     mul
+                                    assert
                                     add // acc' = acc * 10 + digit
+                                    assert
                                     
                                     roll 1 // acc', count
                                     push 1
                                     add // count'
+                                    assert
                                     
                                     tuple 2 // (acc', count')
                                     push parsing
@@ -863,6 +930,7 @@ mod parseint {
                                 pick 0 // count
                                 push 0
                                 greater
+                                assert
                                 branch {
                                     drop 0 // count. Stack: [acc]
                                     push yielding_ok
@@ -886,11 +954,13 @@ mod parseint {
         }
     }
 
+    #[flags]
     function is_done {
         drop 0
         push false
     }
 
+    #[flags]
     function is_ready_to_finish {
         push idle
         equal
@@ -918,15 +988,19 @@ mod split {
     symbol state_done           "done"
 
     // init: accepts delim on stack. Returns (delim, state_idle).
+    #[flags]
     function init {
         push state_idle
         tuple 2
     }
 
 
+    #[flags]
     function accept {
         untuple 2
-        untuple 2 // Stack: [event, payload, tag]
+        assert
+        untuple 2
+        assert // Stack: [event, payload, tag]
         pick 0 // tag
         push state_idle
         equal
@@ -958,6 +1032,7 @@ mod split {
                 drop 0 // drop payload
                 // Stack: [event]
                 untuple 2
+                assert
                 // Stack: [channel, inner]
                 push in
                 equal
@@ -965,6 +1040,7 @@ mod split {
                     // channel == in. Now check inner.
                     // Stack: [inner]
                     untuple 2
+                    assert
                     // Stack: [msg_tag, msg_val]
                     pick 0 // msg_tag
                     push super::next
@@ -1007,14 +1083,17 @@ mod split {
         }
     }
 
+    #[flags]
     function tau_reduce {
         push false
         tuple 2
     }
 
     // emit: takes [state] and returns ValueSet of emitted events.
+    #[flags]
     function emit {
-        untuple 2 // Stack: [payload, tag]
+        untuple 2
+        assert // Stack: [payload, tag]
         
         pick 0 // tag
         push state_yield_start
@@ -1038,7 +1117,8 @@ mod split {
             branch {
                 // yield_item: payload is (delim, ch). Emits ((((ch, next), item), out), true)
                 drop 0 // tag. Stack: [(delim, ch)]
-                untuple 2 // Stack: [delim, ch]
+                untuple 2
+                assert // Stack: [delim, ch]
                 roll 1 // Stack: [ch, delim]
                 drop 0 // drop delim. Stack: [ch]
                 
@@ -1112,10 +1192,13 @@ mod split {
     }
 
     // process: takes [state, event] and returns next_state.
+    #[flags]
     function process {
         untuple 2
+        assert
         // Stack: [event, state]
-        untuple 2 // Stack: [event, payload, tag]
+        untuple 2
+        assert // Stack: [event, payload, tag]
         
         pick 0 // tag
         push state_idle
@@ -1159,10 +1242,12 @@ mod split {
                     roll 1 // Stack: [delim, event]
                     
                     untuple 2
+                    assert
                     push in
                     assert_eq
                     
-                    untuple 2 // Stack: [delim, val, iter_tag]
+                    untuple 2
+                    assert // Stack: [delim, val, iter_tag]
                     
                     pick 0 // iter_tag
                     push super::next
@@ -1196,7 +1281,8 @@ mod split {
                         assert_eq
                         
                         pick 0 // payload: (delim, ch)
-                        untuple 2 // Stack: [(delim, ch), delim, ch]
+                        untuple 2
+                        assert // Stack: [(delim, ch), delim, ch]
                         pick 0 // ch
                         pick 2 // delim
                         equal
@@ -1205,6 +1291,7 @@ mod split {
                             drop 0
                             drop 0
                             untuple 2
+                            assert
                             drop 0 // drop ch
                             push state_yield_end
                             tuple 2
@@ -1224,6 +1311,7 @@ mod split {
                             roll 1
                             drop 0 // drop event. Stack: [(delim, ch)]
                             untuple 2
+                            assert
                             drop 0 // drop ch
                             push state_await_field
                             tuple 2
@@ -1236,10 +1324,12 @@ mod split {
                                 roll 1
                                 
                                 untuple 2
+                                assert
                                 push in
                                 assert_eq
                                 
-                                untuple 2 // Stack: [delim, val, iter_tag]
+                                untuple 2
+                                assert // Stack: [delim, val, iter_tag]
                                 
                                 pick 0
                                 push super::next
@@ -1334,8 +1424,10 @@ mod split {
         }
     }
 
+    #[flags]
     function is_done {
         untuple 2
+        assert
         pick 0
         push state_done
         equal
@@ -1345,8 +1437,10 @@ mod split {
         drop 0
     }
 
+    #[flags]
     function is_ready_to_finish {
         untuple 2
+        assert
         pick 0
         push state_idle
         equal
@@ -1373,33 +1467,42 @@ symbol str_123 "123"
 symbol str_45a "45a"
 
 mod string_ref_base {
+    #[flags]
     function init {
         untuple 0
+        assert
         push super::my_str
         jump super::string_ref::init
     }
+    #[flags]
     function accept {
         jump super::string_ref::accept
     }
+    #[flags]
     function tau_reduce {
         jump super::string_ref::tau_reduce
     }
+    #[flags]
     function emit {
         jump super::string_ref::emit
     }
+    #[flags]
     function process {
         jump super::string_ref::process
     }
 
+    #[flags]
     function is_done {
         jump super::string_ref::is_done
     }
 
+    #[flags]
     function is_ready_to_finish {
         jump super::string_ref::is_ready_to_finish
     }
 }
 
+#[flags]
 sentence sync_char_iterator_in {
     pick 0
     push crate::prelude::start
@@ -1417,6 +1520,7 @@ sentence sync_char_iterator_in {
         push false
     } {
         untuple 2
+        assert
         drop 1
         push char_iterator::in
         equal
@@ -1432,6 +1536,7 @@ mod string_hidden compose_hidden(
     sync_char_iterator_in
 );
 
+#[flags]
 test sentence iterate_string_ascii {
     // Initialize system -> [((my_str, idle), (fetch, 0))]
     tuple 0
@@ -1441,16 +1546,19 @@ test sentence iterate_string_ascii {
     jump string_hidden::tau_reduce
     untuple 2
     assert
+    assert
     
     // drive tau (charat response)
     jump string_hidden::tau_reduce
     untuple 2
+    assert
     assert
     
     // Check emitted iterator event: (char_iterator::out, (next, 97)) ('a')
     pick 0
     jump string_hidden::emit
     untuple 2
+    assert
     assert
     push 97
     push next
@@ -1473,13 +1581,16 @@ test sentence iterate_string_ascii {
     jump string_hidden::tau_reduce
     untuple 2
     assert
+    assert
     jump string_hidden::tau_reduce
     untuple 2
+    assert
     assert
     
     pick 0
     jump string_hidden::emit
     untuple 2
+    assert
     assert
     push 98
     push next
@@ -1501,13 +1612,16 @@ test sentence iterate_string_ascii {
     jump string_hidden::tau_reduce
     untuple 2
     assert
+    assert
     jump string_hidden::tau_reduce
     untuple 2
+    assert
     assert
     
     pick 0
     jump string_hidden::emit
     untuple 2
+    assert
     assert
     push 99
     push next
@@ -1529,13 +1643,16 @@ test sentence iterate_string_ascii {
     jump string_hidden::tau_reduce
     untuple 2
     assert
+    assert
     jump string_hidden::tau_reduce
     untuple 2
+    assert
     assert
     
     pick 0
     jump string_hidden::emit
     untuple 2
+    assert
     assert
     tuple 0
     push done
@@ -1566,6 +1683,7 @@ mod str_123_hidden compose_hidden(
     sync_char_iterator_in
 );
 
+#[flags]
 sentence sync_parseint_in {
     pick 0
     push crate::prelude::start
@@ -1583,6 +1701,7 @@ sentence sync_parseint_in {
         push false
     } {
         untuple 2
+        assert
         drop 1
         push parseint::in
         equal
@@ -1598,6 +1717,7 @@ mod parseint_123_system compose_hidden(
     sync_parseint_in
 );
 
+#[flags]
 test sentence parseint_valid_number {
     tuple 0
     jump parseint_123_system::init
@@ -1627,44 +1747,57 @@ test sentence parseint_valid_number {
     jump parseint_123_system::tau_reduce
     untuple 2
     assert
-    jump parseint_123_system::tau_reduce
-    untuple 2
     assert
     jump parseint_123_system::tau_reduce
     untuple 2
     assert
-    jump parseint_123_system::tau_reduce
-    untuple 2
     assert
     jump parseint_123_system::tau_reduce
     untuple 2
     assert
-    jump parseint_123_system::tau_reduce
-    untuple 2
     assert
     jump parseint_123_system::tau_reduce
     untuple 2
     assert
-    jump parseint_123_system::tau_reduce
-    untuple 2
     assert
     jump parseint_123_system::tau_reduce
     untuple 2
     assert
-    jump parseint_123_system::tau_reduce
-    untuple 2
     assert
     jump parseint_123_system::tau_reduce
     untuple 2
     assert
+    assert
     jump parseint_123_system::tau_reduce
     untuple 2
+    assert
+    assert
+    jump parseint_123_system::tau_reduce
+    untuple 2
+    assert
+    assert
+    jump parseint_123_system::tau_reduce
+    untuple 2
+    assert
+    assert
+    jump parseint_123_system::tau_reduce
+    untuple 2
+    assert
+    assert
+    jump parseint_123_system::tau_reduce
+    untuple 2
+    assert
+    assert
+    jump parseint_123_system::tau_reduce
+    untuple 2
+    assert
     assert
     
     // 4. Check emitted result: (parseint::out, (value, (ok, 123)))
     pick 0
     jump parseint_123_system::emit
     untuple 2
+    assert
     assert
     push 123
     push ok
@@ -1708,6 +1841,7 @@ mod parseint_45a_system compose_hidden(
     sync_parseint_in
 );
 
+#[flags]
 test sentence parseint_invalid_char {
     tuple 0
     jump parseint_45a_system::init
@@ -1726,35 +1860,45 @@ test sentence parseint_invalid_char {
     jump parseint_45a_system::tau_reduce
     untuple 2
     assert
-    jump parseint_45a_system::tau_reduce
-    untuple 2
     assert
     jump parseint_45a_system::tau_reduce
     untuple 2
     assert
-    jump parseint_45a_system::tau_reduce
-    untuple 2
     assert
     jump parseint_45a_system::tau_reduce
     untuple 2
     assert
-    jump parseint_45a_system::tau_reduce
-    untuple 2
     assert
     jump parseint_45a_system::tau_reduce
     untuple 2
     assert
-    jump parseint_45a_system::tau_reduce
-    untuple 2
     assert
     jump parseint_45a_system::tau_reduce
     untuple 2
+    assert
+    assert
+    jump parseint_45a_system::tau_reduce
+    untuple 2
+    assert
+    assert
+    jump parseint_45a_system::tau_reduce
+    untuple 2
+    assert
+    assert
+    jump parseint_45a_system::tau_reduce
+    untuple 2
+    assert
+    assert
+    jump parseint_45a_system::tau_reduce
+    untuple 2
+    assert
     assert
     
     // Check emitted result: (parseint::out, (value, (err, ())))
     pick 0
     jump parseint_45a_system::emit
     untuple 2
+    assert
     assert
     tuple 0
     push err
@@ -1788,6 +1932,7 @@ mod parseint_empty_system compose_hidden(
     sync_parseint_in
 );
 
+#[flags]
 test sentence parseint_empty_string {
     tuple 0
     jump parseint_empty_system::init
@@ -1806,17 +1951,21 @@ test sentence parseint_empty_string {
     jump parseint_empty_system::tau_reduce
     untuple 2
     assert
-    jump parseint_empty_system::tau_reduce
-    untuple 2
     assert
     jump parseint_empty_system::tau_reduce
     untuple 2
+    assert
+    assert
+    jump parseint_empty_system::tau_reduce
+    untuple 2
+    assert
     assert
     
     // Check emitted result: (parseint::out, (value, (err, ())))
     pick 0
     jump parseint_empty_system::emit
     untuple 2
+    assert
     assert
     tuple 0
     push err
@@ -1841,6 +1990,7 @@ test sentence parseint_empty_string {
     drop 0
 }
 
+#[flags]
 test sentence verify_string_ref {
     // Initialize base unprefixed string_ref with string xyz_str
     push xyz_str
@@ -1872,6 +2022,7 @@ test sentence verify_string_ref {
     pick 0
     jump string_ref::emit
     untuple 2
+    assert
     not
     assert
     drop 0
@@ -1886,6 +2037,7 @@ test sentence verify_string_ref {
     pick 0
     jump string_ref::emit
     untuple 2
+    assert
     assert
     push (string_ref::length_resp, 3)
     assert_eq
@@ -1907,6 +2059,7 @@ test sentence verify_string_ref {
     jump string_ref::emit
     untuple 2
     assert
+    assert
     push (string_ref::charat_resp, (string_ref::some, 121))
     assert_eq
     
@@ -1927,6 +2080,7 @@ test sentence verify_string_ref {
     jump string_ref::emit
     untuple 2
     assert
+    assert
     push (string_ref::charat_resp, (string_ref::none, ()))
     assert_eq
     
@@ -1938,6 +2092,7 @@ test sentence verify_string_ref {
     
     // Verify final state is ("xyz", idle)
     untuple 2
+    assert
     push string_ref::idle
     assert_eq
     push xyz_str
@@ -1946,6 +2101,7 @@ test sentence verify_string_ref {
 
 mod xyz_string_ref_instance compose_prefix(compose_static_closure(string_ref, xyz_str), char_iterator::in);
 
+#[flags]
 test sentence verify_prefixed_string_ref {
     // Initialize xyz_string_ref_instance
     tuple 0
@@ -1975,6 +2131,7 @@ test sentence verify_prefixed_string_ref {
     jump xyz_string_ref_instance::emit
     untuple 2
     assert
+    assert
     push (char_iterator::in, (string_ref::charat_resp, (string_ref::some, 121)))
     assert_eq
     
@@ -1986,6 +2143,7 @@ test sentence verify_prefixed_string_ref {
     
     // Verify state is (xyz_str, idle)
     untuple 2
+    assert
     push string_ref::idle
     assert_eq
     push xyz_str
@@ -2001,6 +2159,7 @@ mod empty_string_hidden compose_hidden(
     sync_char_iterator_in
 );
 
+#[flags]
 test sentence iterate_empty {
     tuple 0
     jump empty_string_hidden::init
@@ -2009,14 +2168,17 @@ test sentence iterate_empty {
     jump empty_string_hidden::tau_reduce
     untuple 2
     assert
+    assert
     jump empty_string_hidden::tau_reduce
     untuple 2
+    assert
     assert
     
     // Check emitted iterator event: (char_iterator::out, (done, ()))
     pick 0
     jump empty_string_hidden::emit
     untuple 2
+    assert
     assert
     tuple 0
     push done
@@ -2046,6 +2208,7 @@ mod cafe_string_hidden compose_hidden(
     sync_char_iterator_in
 );
 
+#[flags]
 test sentence iterate_unicode {
     tuple 0
     jump cafe_string_hidden::init
@@ -2054,13 +2217,16 @@ test sentence iterate_unicode {
     jump cafe_string_hidden::tau_reduce
     untuple 2
     assert
+    assert
     jump cafe_string_hidden::tau_reduce
     untuple 2
+    assert
     assert
     
     pick 0
     jump cafe_string_hidden::emit
     untuple 2
+    assert
     assert
     push 99
     push next
@@ -2081,13 +2247,16 @@ test sentence iterate_unicode {
     jump cafe_string_hidden::tau_reduce
     untuple 2
     assert
+    assert
     jump cafe_string_hidden::tau_reduce
     untuple 2
+    assert
     assert
     
     pick 0
     jump cafe_string_hidden::emit
     untuple 2
+    assert
     assert
     push 97
     push next
@@ -2108,13 +2277,16 @@ test sentence iterate_unicode {
     jump cafe_string_hidden::tau_reduce
     untuple 2
     assert
+    assert
     jump cafe_string_hidden::tau_reduce
     untuple 2
+    assert
     assert
     
     pick 0
     jump cafe_string_hidden::emit
     untuple 2
+    assert
     assert
     push 102
     push next
@@ -2135,13 +2307,16 @@ test sentence iterate_unicode {
     jump cafe_string_hidden::tau_reduce
     untuple 2
     assert
+    assert
     jump cafe_string_hidden::tau_reduce
     untuple 2
+    assert
     assert
     
     pick 0
     jump cafe_string_hidden::emit
     untuple 2
+    assert
     assert
     push 233
     push next
@@ -2162,13 +2337,16 @@ test sentence iterate_unicode {
     jump cafe_string_hidden::tau_reduce
     untuple 2
     assert
+    assert
     jump cafe_string_hidden::tau_reduce
     untuple 2
+    assert
     assert
     
     pick 0
     jump cafe_string_hidden::emit
     untuple 2
+    assert
     assert
     tuple 0
     push done
@@ -2199,6 +2377,7 @@ mod comma_str_hidden compose_hidden(
     sync_char_iterator_in
 );
 
+#[flags]
 sentence sync_split_in {
     pick 0
     push crate::prelude::start
@@ -2216,6 +2395,7 @@ sentence sync_split_in {
         push false
     } {
         untuple 2
+        assert
         drop 1
         push split::in
         equal
@@ -2231,6 +2411,7 @@ mod split_system compose_hidden(
     sync_split_in
 );
 
+#[flags]
 test sentence split_string {
     tuple 0
     jump split_system::init
@@ -2250,17 +2431,21 @@ test sentence split_string {
     jump split_system::tau_reduce
     untuple 2
     assert
-    jump split_system::tau_reduce
-    untuple 2
     assert
     jump split_system::tau_reduce
     untuple 2
+    assert
+    assert
+    jump split_system::tau_reduce
+    untuple 2
+    assert
     assert
     
     // 3. Check emitted: (split::out, (split::start, ()))
     pick 0
     jump split_system::emit
     untuple 2
+    assert
     assert
     tuple 0
     push split::start
@@ -2283,6 +2468,7 @@ test sentence split_string {
     pick 0
     jump split_system::emit
     untuple 2
+    assert
     assert
     push 97
     push next
@@ -2309,17 +2495,21 @@ test sentence split_string {
     jump split_system::tau_reduce
     untuple 2
     assert
-    jump split_system::tau_reduce
-    untuple 2
     assert
     jump split_system::tau_reduce
     untuple 2
+    assert
+    assert
+    jump split_system::tau_reduce
+    untuple 2
+    assert
     assert
     
     // 6. Check emitted: (split::out, (split::end, ()))
     pick 0
     jump split_system::emit
     untuple 2
+    assert
     assert
     tuple 0
     push split::end
@@ -2353,17 +2543,21 @@ test sentence split_string {
     jump split_system::tau_reduce
     untuple 2
     assert
-    jump split_system::tau_reduce
-    untuple 2
     assert
     jump split_system::tau_reduce
     untuple 2
+    assert
+    assert
+    jump split_system::tau_reduce
+    untuple 2
+    assert
     assert
     
     // 9. Check emitted: (split::out, (split::start, ()))
     pick 0
     jump split_system::emit
     untuple 2
+    assert
     assert
     tuple 0
     push split::start
@@ -2385,6 +2579,7 @@ test sentence split_string {
     pick 0
     jump split_system::emit
     untuple 2
+    assert
     assert
     push 98
     push next
@@ -2410,17 +2605,21 @@ test sentence split_string {
     jump split_system::tau_reduce
     untuple 2
     assert
-    jump split_system::tau_reduce
-    untuple 2
     assert
     jump split_system::tau_reduce
     untuple 2
+    assert
+    assert
+    jump split_system::tau_reduce
+    untuple 2
+    assert
     assert
     
     // 12. Check emitted: (split::out, (split::end, ()))
     pick 0
     jump split_system::emit
     untuple 2
+    assert
     assert
     tuple 0
     push split::end
@@ -2453,6 +2652,7 @@ test sentence split_string {
     pick 0
     jump split_system::emit
     untuple 2
+    assert
     assert
     tuple 0
     push split::done

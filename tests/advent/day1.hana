@@ -1,5 +1,6 @@
 symbol input0 "39472"
 
+#[flags]
 sentence sync_char_iterator_in {
     pick 0
     push crate::prelude::start
@@ -17,12 +18,14 @@ sentence sync_char_iterator_in {
         push false
     } {
         untuple 2
+        assert
         drop 1
         push crate::string::char_iterator::in
         equal
     }
 }
 
+#[flags]
 sentence sync_parseint_in {
     pick 0
     push crate::prelude::start
@@ -40,6 +43,7 @@ sentence sync_parseint_in {
         push false
     } {
         untuple 2
+        assert
         drop 1
         push crate::string::parseint::in
         equal
@@ -79,6 +83,7 @@ mod harness compose_accept_static(
     )
 );
 
+#[flags]
 sentence sync_set {
     pick 0
     push crate::prelude::start
@@ -96,6 +101,7 @@ sentence sync_set {
         push false
     } {
         untuple 2
+        assert
         drop 1
         push crate::string::parseint::out
         equal
@@ -106,12 +112,14 @@ mod sut_and_harness compose_concurrent(sut, harness, sync_set);
 
 mod test0 compose_hidden(sut_and_harness, sync_set);
 
+#[flags]
 #[recursive]
 sentence run_tau_reductions {
     // Stack: [state]
     pick 0
     jump test0::tau_reduce
-    untuple 2 // Stack: [state, next_state, did_change]
+    untuple 2
+    assert // Stack: [state, next_state, did_change]
     branch {
         // did_change is true: drop the old state and loop with next_state
         roll 1
@@ -123,6 +131,7 @@ sentence run_tau_reductions {
     }
 }
 
+#[flags]
 #[recursive]
 test sentence verify_day1_manually {
     tuple 0
@@ -141,6 +150,7 @@ test sentence verify_day1_manually {
     pick 0
     jump test0::emit
     untuple 2
+    assert
     assert // assert has_event is true
     push crate::prelude::pass
     assert_eq

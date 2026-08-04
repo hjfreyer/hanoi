@@ -401,15 +401,18 @@ fn lower_enum(decl: sugar::EnumDecl) -> Result<core::Item, String> {
 }
 
 /// Builds the exported, total `check` predicate for a spec.
+///
+/// The body reads the success flags: a tuple spec asks `untuple` the question
+/// directly rather than guarding it, so the flag *is* the shape test. That
+/// keeps the sentence total — the graceful arm is a `branch`, not an `assert`.
 fn check_sentence(
     spec: &TypeSpec,
     mut annotations: Vec<SourceAnnotation>,
 ) -> Result<SentenceDecl, String> {
-    if !annotations
-        .iter()
-        .any(|ann| matches!(ann, Annotation::Total))
-    {
-        annotations.push(Annotation::Total);
+    for ann in [Annotation::Total, Annotation::Flags] {
+        if !annotations.contains(&ann) {
+            annotations.push(ann);
+        }
     }
 
     Ok(SentenceDecl {
@@ -439,24 +442,20 @@ fn compile_type_spec(spec: &TypeSpec) -> Result<Vec<ParsedInstruction>, String> 
         TypeSpec::Path(path) => Ok(vec![ParsedInstruction::TypeCheckPath(path.clone())]),
         TypeSpec::Union(variants) => compile_union(variants),
         TypeSpec::Tuple(elements) => {
+            // `untuple n` succeeds on exactly the values this spec accepts the
+            // shape of, so the guard the old `is_tuple; tuple_length; equal`
+            // prologue recomputed is the flag the instruction already left.
+            // Ask the question once and branch on the answer.
             let n = elements.len();
-            let else_len_mismatches = ParsedSentence {
-                instructions: vec![
-                    ParsedInstruction::Drop(0),
-                    ParsedInstruction::Push(ParsedValue::Bool(false)),
-                ],
-            };
-            let then_len_matches = if n == 0 {
-                ParsedSentence {
-                    instructions: vec![
-                        ParsedInstruction::Drop(0),
-                        ParsedInstruction::Push(ParsedValue::Bool(true)),
-                    ],
-                }
-            } else {
-                let mut insts = vec![ParsedInstruction::Untuple(n)];
-                insts.extend(compile_type_spec(&elements[0])?);
+            if n == 0 {
+                // At n = 0 the flag is the whole answer: `untuple 0` leaves
+                // `true` for `()` and `false` for everything else, which is
+                // precisely the predicate.
+                return Ok(vec![ParsedInstruction::Untuple(0)]);
+            }
 
+            let then_untupled = {
+                let mut insts = compile_type_spec(&elements[0])?;
                 for elem in elements.iter().skip(1) {
                     // The result accumulated so far sits on top of the elements
                     // still to check. Hide it rather than rolling it out of the
@@ -470,38 +469,27 @@ fn compile_type_spec(spec: &TypeSpec) -> Result<Vec<ParsedInstruction>, String> 
                     ));
                     insts.push(ParsedInstruction::And);
                 }
-
                 ParsedSentence {
                     instructions: insts,
                 }
             };
 
-            let then_is_tuple = ParsedSentence {
-                instructions: vec![
-                    ParsedInstruction::Pick(0),
-                    ParsedInstruction::TupleLength,
-                    ParsedInstruction::Push(ParsedValue::Int(n as i64)),
-                    ParsedInstruction::Equal,
-                    ParsedInstruction::Branch(
-                        Target::Inline(then_len_matches),
-                        Target::Inline(else_len_mismatches),
-                    ),
-                ],
-            };
-
-            let else_not_tuple = ParsedSentence {
-                instructions: vec![
-                    ParsedInstruction::Drop(0),
-                    ParsedInstruction::Push(ParsedValue::Bool(false)),
-                ],
+            // Failure filled the same `n` slots — the value itself in the
+            // deepest, `()` padding above it — so the arm clears exactly what
+            // the other one consumes and answers `false`.
+            let else_wrong_shape = ParsedSentence {
+                instructions: std::iter::repeat_n(ParsedInstruction::Drop(0), n)
+                    .chain(std::iter::once(ParsedInstruction::Push(ParsedValue::Bool(
+                        false,
+                    ))))
+                    .collect(),
             };
 
             Ok(vec![
-                ParsedInstruction::Pick(0),
-                ParsedInstruction::IsTuple,
+                ParsedInstruction::Untuple(n),
                 ParsedInstruction::Branch(
-                    Target::Inline(then_is_tuple),
-                    Target::Inline(else_not_tuple),
+                    Target::Inline(then_untupled),
+                    Target::Inline(else_wrong_shape),
                 ),
             ])
         }

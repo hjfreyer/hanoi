@@ -1,11 +1,12 @@
 // Tests for the `dip` combinator, which runs a block with the top of the
 // stack hidden from it and restores it afterwards.
 
+#[flags]
 test sentence dip_hides_one_value {
     push 1
     push 2
     push 99
-    dip { add }
+    dip { add assert }
     // Stack: [3, 99]
     push 99
     assert_eq
@@ -14,23 +15,25 @@ test sentence dip_hides_one_value {
 }
 
 // The count is optional and defaults to 1.
+#[flags]
 test sentence dip_explicit_count_of_one {
     push 1
     push 2
     push 99
-    dip 1 { add }
+    dip 1 { add assert }
     push 99
     assert_eq
     push 3
     assert_eq
 }
 
+#[flags]
 test sentence dip_hides_several_values {
     push 1
     push 2
     push 8
     push 9
-    dip 2 { add }
+    dip 2 { add assert }
     // Stack: [3, 8, 9]
     push 9
     assert_eq
@@ -41,15 +44,17 @@ test sentence dip_hides_several_values {
 }
 
 // dip 0 gives the callee the whole top of stack, exactly like jump.
+#[flags]
 test sentence dip_zero_is_jump {
     push 20
     push 22
-    dip 0 { add }
+    dip 0 { add assert }
     push 42
     assert_eq
 }
 
 // An empty hidden region and an empty block are both no-ops.
+#[flags]
 test sentence dip_of_nothing {
     push 42
     dip { }
@@ -57,12 +62,15 @@ test sentence dip_of_nothing {
     assert_eq
 }
 
+#[flags]
 #[arity(2, 1)]
 sentence add_two {
     add
+    assert
 }
 
 // A dip target may be a named sentence rather than an inline block.
+#[flags]
 test sentence dip_to_label {
     push 1
     push 2
@@ -75,12 +83,13 @@ test sentence dip_to_label {
 }
 
 // Hidden regions accumulate as dips nest.
+#[flags]
 test sentence dip_nests {
     push 1
     push 2
     push 8
     push 9
-    dip { dip { add } }
+    dip { dip { add assert } }
     push 9
     assert_eq
     push 8
@@ -92,6 +101,7 @@ test sentence dip_nests {
 // The block sees the stack below the hidden region as its own top, so it can
 // reach values with the same depths it would use if the hidden values were
 // not there at all.
+#[flags]
 test sentence dip_block_indexes_below_the_hidden_region {
     push 7
     push 99
@@ -107,6 +117,7 @@ test sentence dip_block_indexes_below_the_hidden_region {
 
 // dip composes with branch: the condition is taken from below the hidden
 // region, since branch runs inside the dipped block.
+#[flags]
 test sentence dip_over_branch {
     push true
     push 99
@@ -121,6 +132,7 @@ test sentence dip_over_branch {
 
 // A value hidden by dip is untouched even when the block replaces everything
 // beneath it.
+#[flags]
 test sentence dip_preserves_hidden_across_rewrite {
     push 1
     push 2

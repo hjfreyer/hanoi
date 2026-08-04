@@ -1,15 +1,19 @@
+#[flags]
 function init {
     // Stack: [()]
     untuple 0
+    assert
     // Stack: []
     push 0
     // Stack: [0]
 }
 
 
+#[flags]
 function accept {
     // Stack: [(state, event)]
     untuple 2
+    assert
     // Stack: [event, state]
     drop 0
     // Stack: [event]
@@ -19,6 +23,7 @@ function accept {
     // Stack: [false]
 }
 
+#[flags]
 function emit {
     // Stack: [state]
     drop 0
@@ -31,14 +36,17 @@ function emit {
     // Stack: [(false, ())]
 }
 
+#[flags]
 function process {
     // Stack: [(state, event)]
     untuple 2
+    assert
     // Stack: [event, state]
     drop 1
     // Stack: [state]
 }
 
+#[flags]
 function tau_reduce {
     // Stack: [state]
     push false
@@ -47,6 +55,7 @@ function tau_reduce {
     // Stack: [(false, state)]
 }
 
+#[flags]
 function is_done {
     // Stack: [state]
     drop 0
@@ -55,6 +64,7 @@ function is_done {
     // Stack: [true]
 }
 
+#[flags]
 function is_ready_to_finish {
     // Stack: [state]
     drop 0

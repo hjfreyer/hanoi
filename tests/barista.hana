@@ -22,6 +22,7 @@ mod customer_impl {
     }
 
     // Initializes customer state: (id, preferred_drink, internal_state)
+    #[flags]
     function init {
     }
 
@@ -38,6 +39,7 @@ mod customer_impl {
         (super::event::enjoy, want_coffee_payload) |
         (super::super::queue::Event::PushBack::tag, (coffee_payload));
 
+    #[flags]
     function anything {
         drop 0
         push true
@@ -45,10 +47,13 @@ mod customer_impl {
 
     type accept_type (is_state, is_event);
 
+    #[flags]
     #[precondition(accept_type::check)]
     function accept {
         untuple 2
-        untuple 3 // Stack: [event, id, preferred_drink, internal_state]
+        assert
+        untuple 3
+        assert // Stack: [event, id, preferred_drink, internal_state]
         pick 0
         push state::idle
         equal
@@ -105,13 +110,16 @@ mod customer_impl {
         }
     }
 
+    #[flags]
     function tau_reduce {
         push false
         tuple 2
     }
 
+    #[flags]
     function emit_postcondition {
         untuple 2
+        assert
         pick 0
         is_bool
         branch {
@@ -128,6 +136,7 @@ mod customer_impl {
         }
     }
 
+    #[flags]
     function emit_does_pre_and_post {
         pick 0
         jump is_state::check
@@ -141,10 +150,12 @@ mod customer_impl {
     }
 
     // emit takes state: (id, preferred_drink, internal_state) and returns ValueSet of emitted events.
+    #[flags]
     #[precondition(is_state::check)]
     #[postcondition(emit_postcondition)]
     function emit {
-        untuple 3 // Stack: [id, preferred_drink, internal_state]
+        untuple 3
+        assert // Stack: [id, preferred_drink, internal_state]
         pick 0
         push state::thirsty
         equal
@@ -199,10 +210,13 @@ mod customer_impl {
     }
 
     // process takes [state, event] and returns next_state.
+    #[flags]
     function process {
         untuple 2
+        assert
         // Stack: [event, state]
-        untuple 3 // Stack: [event, id, preferred_drink, internal_state]
+        untuple 3
+        assert // Stack: [event, id, preferred_drink, internal_state]
         
         // Check internal_state
         pick 0
@@ -213,9 +227,11 @@ mod customer_impl {
             assert_eq
             roll 2
             untuple 2
+            assert
             push super::event::want_coffee
             assert_eq
             untuple 2
+            assert
             drop 0
             drop 0
             push state::thirsty
@@ -229,6 +245,7 @@ mod customer_impl {
                 assert_eq
                 roll 2
                 untuple 2
+                assert
                 push super::super::queue::Event::PushBack::tag
                 assert_eq
                 drop 0
@@ -243,9 +260,11 @@ mod customer_impl {
                     assert_eq
                     roll 2
                     untuple 2
+                    assert
                     push super::event::coffee
                     assert_eq
                     untuple 2
+                    assert
                     drop 0
                     drop 0
                     push state::has_coffee
@@ -259,9 +278,11 @@ mod customer_impl {
                         assert_eq
                         roll 2
                         untuple 2
+                        assert
                         push super::event::enjoy
                         assert_eq
                         untuple 2
+                        assert
                         drop 0
                         drop 0
                         push state::idle
@@ -274,13 +295,16 @@ mod customer_impl {
         }
     }
 
+    #[flags]
     function is_done {
         drop 0
         push false
     }
 
+    #[flags]
     function is_ready_to_finish {
         untuple 3
+        assert
         pick 0
         push state::idle
         equal
@@ -292,6 +316,7 @@ mod customer_impl {
         drop 0
     }
 }
+#[flags]
 test sentence verify_customer_is_event {
     // 1. Valid want_coffee event
     push (event::want_coffee, (customer_id::c1, ()))
@@ -326,6 +351,7 @@ test sentence verify_customer_is_event {
     assert
 }
 
+#[flags]
 test sentence verify_customer_logic {
     push customer_id::c1
     push event::latte
@@ -349,6 +375,7 @@ test sentence verify_customer_logic {
     pick 0
     jump customer_impl::emit
     untuple 2
+    assert
     assert
     push (super::queue::Event::PushBack::tag, ((event::latte, customer_id::c1)))
     assert_eq
@@ -399,14 +426,18 @@ mod barista {
     }
 
     // Initializes barista state
+    #[flags]
     function init {
         untuple 0
+        assert
         push state::idle
     }
 
 
+    #[flags]
     function accept {
         untuple 2
+        assert
         pick 0
         push state::idle
         equal
@@ -422,6 +453,7 @@ mod barista {
                 drop 0 // drop state
                 // Stack: [event]
                 untuple 2
+                assert
                 // Stack: [channel, inner]
                 push super::super::queue::Event::AwaitFront::tag
                 equal
@@ -429,8 +461,10 @@ mod barista {
                     // channel == await_front
                     // Stack: [Body]
                     untuple 1
+                    assert
                     // Stack: [reqresp]
                     untuple 2
+                    assert
                     // Stack: [resp_tag, option]
                     push super::super::prelude::resp
                     equal
@@ -438,6 +472,7 @@ mod barista {
                         // resp_tag == resp
                         // Stack: [option]
                         untuple 2
+                        assert
                         // Stack: [some_tag, val_tuple]
                         push super::super::prelude::some
                         equal
@@ -445,6 +480,7 @@ mod barista {
                             // some_tag == some
                             // Stack: [val_tuple]
                             untuple 2
+                            assert
                             // Stack: [empty_tuple, val]
                             drop 0 // drop val (can be anything)
                             // Stack: [empty_tuple]
@@ -473,12 +509,14 @@ mod barista {
         }
     }
 
+    #[flags]
     function tau_reduce {
         push false
         tuple 2
     }
 
     // emit takes [state] and returns ValueSet.
+    #[flags]
     function emit {
         // Stack: [state]
         pick 0
@@ -505,12 +543,14 @@ mod barista {
                 tuple 2
             } {
                 // Must be brewing
-                untuple 2 // Stack: [(id, drink), state_status]
+                untuple 2
+                assert // Stack: [(id, drink), state_status]
                 push state::brewing
                 equal
                 branch {
                     // Stack: [(id, drink)]
                     untuple 2
+                    assert
                     tuple 2
                     push super::event::coffee
                     tuple 2
@@ -524,8 +564,10 @@ mod barista {
     }
 
     // process takes [state, event] and returns next_state.
+    #[flags]
     function process {
         untuple 2
+        assert
         // Inputs: [event, state]
         pick 0 // state
         push state::idle
@@ -554,19 +596,24 @@ mod barista {
                 
                 // Destructure event: (await_front, (((val, ()), some), resp))
                 untuple 2
+                assert
                 push super::super::queue::Event::AwaitFront::tag
                 assert_eq
                 untuple 1
+                assert
 
                 untuple 2
+                assert
                 push super::super::prelude::resp
                 assert_eq
                 
                 untuple 2
+                assert
                 push super::super::prelude::some
                 assert_eq
                 
                 untuple 2
+                assert
                 roll 1
                 push ()
                 assert_eq
@@ -575,14 +622,17 @@ mod barista {
                 tuple 2 // (val, state::brewing)
             } {
                 // Must be brewing. Transition to idle.
-                untuple 2 // Stack: [event, state_status]
+                untuple 2
+                assert // Stack: [event, state_status]
                 push state::brewing
                 assert_eq
                 drop 0
-                untuple 2 // Stack: [(drink, id), coffee]
+                untuple 2
+                assert // Stack: [(drink, id), coffee]
                 push super::event::coffee
                 assert_eq
-                untuple 2 // Stack: [id, drink]
+                untuple 2
+                assert // Stack: [id, drink]
                 drop 0
                 drop 0
                 push state::idle
@@ -590,17 +640,20 @@ mod barista {
         }
     }
 
+    #[flags]
     function is_done {
         drop 0
         push false
     }
 
+    #[flags]
     function is_ready_to_finish {
         push state::idle
         equal
     }
 }
 
+#[flags]
 sentence customers_sync {
     drop 0
     push false
@@ -608,6 +661,7 @@ sentence customers_sync {
 
 mod customers compose_concurrent(customer1, customer2, customers_sync);
 
+#[flags]
 sentence customers_queue_sync {
     pick 0
     push crate::prelude::start
@@ -625,6 +679,7 @@ sentence customers_queue_sync {
         push false
     } {
         untuple 2
+        assert
         drop 1
         push super::queue::Event::PushBack::tag
         equal
@@ -633,6 +688,7 @@ sentence customers_queue_sync {
 
 mod customers_and_queue compose_concurrent(customers, super::queue::queue, customers_queue_sync);
 
+#[flags]
 sentence joint_sync {
     pick 0
     push crate::prelude::start
@@ -650,6 +706,7 @@ sentence joint_sync {
         push false
     } {
         untuple 2
+        assert
         drop 1 // drop payload
         pick 0
         push super::queue::Event::AwaitFront::tag
@@ -666,6 +723,7 @@ sentence joint_sync {
 
 mod concurrent compose_concurrent(customers_and_queue, barista, joint_sync);
 
+#[flags]
 sentence hidden_events {
     pick 0
     push crate::prelude::start
@@ -683,6 +741,7 @@ sentence hidden_events {
         push false
     } {
         untuple 2
+        assert
         drop 1 // drop payload
         pick 0
         push super::queue::Event::PushBack::tag
@@ -708,12 +767,14 @@ sentence hidden_events {
 mod hidden compose_hidden(concurrent, hidden_events);
 
 // Helpers to drive tau transitions in tests
+#[flags]
 #[recursive]
 sentence drive_tau {
     // Stack: [state]
     pick 0
     jump hidden::tau_reduce
     untuple 2
+    assert
     branch {
         drop 1 // drop old state
         jump drive_tau
@@ -722,11 +783,13 @@ sentence drive_tau {
     }
 }
 
+#[flags]
 #[recursive]
 sentence drive_concurrent_tau {
     pick 0
     jump concurrent::tau_reduce
     untuple 2
+    assert
     branch {
         drop 1
         jump drive_concurrent_tau
@@ -735,6 +798,7 @@ sentence drive_concurrent_tau {
     }
 }
 
+#[flags]
 #[recursive]
 test sentence verify_hidden_system {
     // 1. Initialize joint state
@@ -899,6 +963,7 @@ test sentence verify_hidden_system {
 }
 
 // Test the concurrent joint Customer-Queue-Barista system
+#[flags]
 #[recursive]
 test sentence verify_concurrent_system {
     // 1. Initialize joint state
@@ -909,6 +974,7 @@ test sentence verify_concurrent_system {
     pick 0
     jump concurrent::emit
     untuple 2
+    assert
     assert
     
     push ()
@@ -958,6 +1024,7 @@ test sentence verify_concurrent_system {
     jump concurrent::emit
     untuple 2
     assert
+    assert
     push (event::latte, customer_id::c1)
     tuple 1
     push super::queue::Event::PushBack::tag
@@ -977,6 +1044,7 @@ test sentence verify_concurrent_system {
     pick 0
     jump concurrent::emit
     untuple 2
+    assert
     assert
     
     push ()
@@ -1010,6 +1078,7 @@ test sentence verify_concurrent_system {
     jump concurrent::emit
     untuple 2
     assert
+    assert
     push (event::espresso, customer_id::c2)
     tuple 1
     push super::queue::Event::PushBack::tag
@@ -1029,6 +1098,7 @@ test sentence verify_concurrent_system {
     pick 0
     jump concurrent::emit
     untuple 2
+    assert
     assert
     push (event::coffee, (event::latte, customer_id::c1))
     assert_eq
@@ -1055,6 +1125,7 @@ test sentence verify_concurrent_system {
     jump concurrent::emit
     untuple 2
     assert
+    assert
     
     push ()
     push super::prelude::req
@@ -1078,6 +1149,7 @@ test sentence verify_concurrent_system {
     pick 0
     jump concurrent::emit
     untuple 2
+    assert
     assert
     
     push ()
@@ -1110,6 +1182,7 @@ test sentence verify_concurrent_system {
     pick 0
     jump concurrent::emit
     untuple 2
+    assert
     assert
     push (event::coffee, (event::espresso, customer_id::c2))
     assert_eq
@@ -1159,6 +1232,7 @@ test sentence verify_concurrent_system {
 }
 
 // Test the rejection of invalid events for Barista
+#[flags]
 test sentence verify_barista_rejection {
     // 1. Trigger invalid coffee event on idle (coffee is emit, not accept)
     tuple 0
@@ -1186,6 +1260,7 @@ test sentence verify_barista_rejection {
     jump barista::init
     jump barista::emit
     untuple 2
+    assert
     assert
     
     tuple 0
@@ -1240,6 +1315,7 @@ test sentence verify_barista_rejection {
     
     jump barista::emit
     untuple 2
+    assert
     not
     assert
     drop 0

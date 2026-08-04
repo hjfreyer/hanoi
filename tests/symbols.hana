@@ -4,6 +4,7 @@ symbol sym_a "A Symbol"
 symbol sym_b "B Symbol"
 symbol sym_c
 
+#[flags]
 test sentence symbol_equality {
     // Pushing the same symbol multiple times compares equal
     push sym_a
@@ -12,6 +13,7 @@ test sentence symbol_equality {
     assert
 }
 
+#[flags]
 test sentence symbol_inequality {
     // Distinct symbol definitions compare unequal
     push sym_a
@@ -27,44 +29,53 @@ test sentence symbol_inequality {
     assert
 }
 
+#[flags]
 test sentence symbol_cross_sentence {
     push sym_c
     jump check_symbol
 }
 
+#[flags]
 sentence check_symbol {
     push sym_c
     equal
     assert
 }
 
+#[flags]
 test sentence symbol_len_operation {
     push sym_a
     symbol_len
+    assert
     push 8
     assert_eq
     
     push sym_b
     symbol_len
+    assert
     push 8
     assert_eq
     
     push sym_c
     symbol_len
+    assert
     push 14
     assert_eq
 }
 
+#[flags]
 test sentence symbol_char_at_operation {
     push sym_a
     push 0
     symbol_char_at
+    assert
     push 65
     assert_eq
     
     push sym_a
     push 2
     symbol_char_at
+    assert
     push 83
     assert_eq
 }

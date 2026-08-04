@@ -1,3 +1,4 @@
+#[flags]
 function init {
     // Stack: [args]
     jump {{concurrent}}::init
@@ -5,9 +6,11 @@ function init {
 }
 
 
+#[flags]
 function accept {
     // Stack: [(state, event)]
     untuple 2
+    assert
     // Stack: [event, state]
     pick 1
     // Stack: [event, state, event]
@@ -30,6 +33,7 @@ function accept {
     }
 }
 
+#[flags]
 function emit {
     // Stack: [state]
     pick 0
@@ -37,6 +41,7 @@ function emit {
     jump {{concurrent}}::emit
     // Stack: [state, (has_event, event)]
     untuple 2
+    assert
     // Stack: [state, event, has_event]
     branch {
         // Stack: [state, event]
@@ -82,12 +87,14 @@ function emit {
     }
 }
 
+#[flags]
 function process {
     // Stack: [(state, event)]
     jump {{concurrent}}::process
     // Stack: [next_state]
 }
 
+#[flags]
 function tau_reduce {
     // Stack: [state]
     pick 0
@@ -95,6 +102,7 @@ function tau_reduce {
     jump {{concurrent}}::tau_reduce
     // Stack: [state, (did_reduce, next_state)]
     untuple 2
+    assert
     // Stack: [state, next_state, did_reduce]
     branch {
         // Stack: [state, next_state]
@@ -115,6 +123,7 @@ function tau_reduce {
         jump {{concurrent}}::emit
         // Stack: [state, (has_event, event)]
         untuple 2
+        assert
         // Stack: [state, event, has_event]
         branch {
             // Stack: [state, event]
@@ -155,12 +164,14 @@ function tau_reduce {
     }
 }
 
+#[flags]
 function is_done {
     // Stack: [state]
     jump {{concurrent}}::is_done
     // Stack: [Bool]
 }
 
+#[flags]
 function is_ready_to_finish {
     // Stack: [state]
     jump {{concurrent}}::is_ready_to_finish

@@ -1,3 +1,4 @@
+#[flags]
 function init {
     // Stack: [args]
     jump {{machine}}::init
@@ -9,11 +10,14 @@ function init {
 }
 
 
+#[flags]
 function accept {
     // Stack: [(state, event)]
     untuple 2
+    assert
     // Stack: [event, state]
     untuple 2
+    assert
     // Stack: [event, machine_state, phase]
     push 0
     // Stack: [event, machine_state, phase, 0]
@@ -36,9 +40,11 @@ function accept {
     }
 }
 
+#[flags]
 function tau_reduce {
     // Stack: [state]
     untuple 2
+    assert
     // Stack: [machine_state, phase]
     pick 0
     // Stack: [machine_state, phase, phase]
@@ -61,6 +67,7 @@ function tau_reduce {
         jump {{machine}}::tau_reduce
         // Stack: [machine_state, phase, (did_reduce, next_machine_state)]
         untuple 2
+        assert
         // Stack: [machine_state, phase, next_machine_state, did_reduce]
         branch {
             // Stack: [machine_state, phase, next_machine_state]
@@ -90,9 +97,11 @@ function tau_reduce {
     }
 }
 
+#[flags]
 function emit {
     // Stack: [state]
     untuple 2
+    assert
     // Stack: [machine_state, phase]
     pick 0
     // Stack: [machine_state, phase, phase]
@@ -121,11 +130,14 @@ function emit {
     }
 }
 
+#[flags]
 function process {
     // Stack: [(state, event)]
     untuple 2
+    assert
     // Stack: [event, state]
     untuple 2
+    assert
     // Stack: [event, machine_state, phase]
     pick 0
     // Stack: [event, machine_state, phase, phase]
@@ -181,9 +193,11 @@ function process {
     }
 }
 
+#[flags]
 function is_done {
     // Stack: [state]
     untuple 2
+    assert
     // Stack: [machine_state, phase]
     pick 0
     // Stack: [machine_state, phase, phase]
@@ -208,9 +222,11 @@ function is_done {
     }
 }
 
+#[flags]
 function is_ready_to_finish {
     // Stack: [state]
     untuple 2
+    assert
     // Stack: [machine_state, phase]
     pick 0
     // Stack: [machine_state, phase, phase]

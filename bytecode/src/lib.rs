@@ -919,10 +919,13 @@ mod tests {
             type Empty ();
         "#;
         let res = assemble(code).unwrap();
-        // Each tuple spec past its first element contributes one dip block,
-        // which is flattened into a sentence of its own: one for `Pair`, one
-        // for `Nested`.
-        assert_eq!(res.sentences.len(), 22);
+        // A tuple spec is one `untuple` and a branch, so it contributes two
+        // arms rather than the four the old `is_tuple`/`tuple_length` guards
+        // nested. `Empty` contributes none at all: `untuple 0` leaves exactly
+        // the answer. Each tuple spec past its first element still contributes
+        // one dip block, which is flattened into a sentence of its own: one for
+        // `Pair`, one for `Nested`.
+        assert_eq!(res.sentences.len(), 14);
     }
 
     #[test]
