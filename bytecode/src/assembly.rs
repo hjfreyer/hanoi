@@ -606,7 +606,6 @@ fn parse_annotations(stream: &mut TokenStream) -> Result<Vec<SourceAnnotation>, 
             "recursive" => Annotation::Recursive,
             "total" => Annotation::Total,
             "flags" => Annotation::Flags,
-            "partial" => Annotation::Partial,
             other => return Err(format!("Unsupported annotation '{}'", other)),
         };
         stream.expect(Token::RBracket)?;
@@ -1007,7 +1006,6 @@ impl<'a> Compiler<'a> {
                     Annotation::Recursive => Annotation::Recursive,
                     Annotation::Total => Annotation::Total,
                     Annotation::Flags => Annotation::Flags,
-                    Annotation::Partial => Annotation::Partial,
                 })
             })
             .collect()
@@ -1184,7 +1182,7 @@ impl<'a> Compiler<'a> {
                 if let Some(parent_idx) = self.current_parent_idx {
                     let parent_idx_usize: usize = parent_idx.into();
                     if parent_idx_usize < self.annotations.len() {
-                        for ann in [Annotation::Recursive, Annotation::Flags, Annotation::Partial] {
+                        for ann in [Annotation::Recursive, Annotation::Flags] {
                             if self.annotations[parent_idx_usize].contains(&ann) {
                                 inline_anns.push(ann);
                             }
@@ -1278,6 +1276,7 @@ pub fn assemble_with_path(input: &str, base_dir: Option<&std::path::Path>) -> Re
     library.symbols = tree.symbol_map();
 
     crate::arity::check_arities(&mut library)?;
+    crate::arity::check_totality(&library)?;
 
     Ok(library)
 }

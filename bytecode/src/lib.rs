@@ -7,7 +7,7 @@ pub mod opcode;
 pub mod resolve;
 pub mod value;
 
-pub use arity::check_arities;
+pub use arity::{check_arities, check_totality, failure_reachability};
 pub use assembly::{assemble, assemble_with_path};
 pub use library::{Library, Sentence, SentenceIndex, Annotation, Arity};
 pub use opcode::Instruction;

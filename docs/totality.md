@@ -2,11 +2,13 @@
 
 Every **data** operation in the hanoi bytecode is a total function. An
 operation applied to operands it was not written for does not fail; it returns
-a **deterministic default**, called *junk* below. Failure is a separate thing,
-reached only by instructions whose whole job is to fail.
+a **deterministic default**, called *junk* below, and — if it is one of the
+twelve **fallible** instructions — a `bool` saying so. Failure is a separate
+thing, reached only by the three instructions whose whole job is to fail, and
+ruled out by `#[total]`.
 
-This document is the normative specification of that. The junk table is the
-spec; `vm::totality_tests` is its executable mirror, one assertion per row.
+This document is the normative specification of that. The fallible table is the
+spec; `vm::totality_tests` is its executable mirror.
 
 ## Why total
 
@@ -56,6 +58,38 @@ a sentence that would underflow does not assemble. The one remaining gap is an
 entry point whose inferred arity has `inputs > 0` — it assembles, and then
 underflows when run with an empty stack.
 
+### Claiming otherwise: `#[total]`
+
+A sentence may declare that it *cannot* fail — that it neither executes one of
+those three nor reaches anything that does, through a `jump`, a `dip` or either
+branch arm. That is `#[total]`, and the compiler checks it.
+
+The claim is **opt-in**, and the polarity is the whole design. The opposite —
+requiring `#[partial]` on anything that can fail — was tried and collapsed under
+its own coverage. It needed an exemption for branch arms, which have no source
+to annotate; another for `test` declarations, where asserting is the point; and
+worst of all one for composer templates, which are generic over the machine they
+wrap and so are partial exactly when their argument is. Marking those partial
+would have made *every* composed machine partial, and in a corpus where nearly
+everything is composed that is enough to make the annotation say nothing.
+
+Turning it around removes all three cases at once. Nothing is obliged to carry
+an annotation, so generated code, inline blocks and tests need no special
+treatment — they simply make no claim. What is checked is exactly what somebody
+asserted.
+
+And the *fact* is available everywhere regardless. `failure_reachability` is a
+least fixpoint over the call graph and answers for every sentence, annotated or
+not; `check_totality` is just the part that compares it against the claims. On
+the `tests/` corpus **2735 of 3529 sentences are provably total**, with 58
+carrying a checked `#[total]` — the `type` and `enum` sugar puts one on each
+predicate it generates, which used to be an unverified assertion.
+
+The check is syntactic and therefore conservative: an `assert` on a branch that
+cannot be taken still counts against the claim. That is the same bargain
+`#[recursive]` makes, and it is what keeps this a reachability question rather
+than a proof obligation.
+
 ## Truthiness
 
 ```
@@ -88,61 +122,90 @@ value; that is the price of the two-valued definition and it is worth paying.
 literal `Bool(true)`. This agrees with junk-being-falsy everywhere else, and it
 is why `fold_branch` can now fold any literal.
 
-## The junk table
+## The fallible table
 
-`()` below is the empty tuple, `Value::Tuple(vec![])`.
+Every data operation is total. A **fallible** one additionally reports whether
+its answer was computed or invented, by leaving a `bool` on top of its result.
+`()` below is the empty tuple, `Value::unit()`.
 
-| instruction | defined on | result elsewhere |
-|---|---|---|
-| `push c` | everything | — |
-| `equal` | everything | — |
-| `is_int`, `is_bool`, `is_float`, `is_symbol`, `is_tuple` | everything | — |
-| `print` | everything | — |
-| `tuple n` | any `n` values | — |
-| `not` | everything | `Bool(!truthy(v))` |
-| `and`, `or` | everything | `Bool(truthy(a) ⊕ truthy(b))` |
-| `greater`, `less` | two numbers | `Bool(false)` |
-| `add`, `subtract`, `multiply` | two numbers | `Int(0)` |
-| `divide`, `modulo` | two numbers | `Int(0)` — see below |
-| `negate` | a number | `Int(0)` |
-| `untuple n` | an `n`-tuple | `n` copies of `()` |
-| `tuple_length` | a tuple | `Int(0)` |
-| `symbol_len` | a symbol | `Int(0)` |
-| `symbol_char_at` | a symbol and an in-range index | `Int(0)` |
-| `branch` | everything | else arm unless `Bool(true)` |
-| `assert` | a truthy value | **panics** |
-| `assert_eq` | two equal values | **panics** |
-| `panic` | nothing | **panics** |
+| instruction | arity | on success | off its domain |
+|---|---|---|---|
+| `push c`, `pick d`, `roll d`, `drop` | unchanged | — | cannot fail |
+| `equal`, `is_int`, `is_bool`, `is_float`, `is_symbol`, `is_tuple` | unchanged | — | cannot fail |
+| `not`, `and`, `or`, `print`, `tuple n` | unchanged | — | cannot fail |
+| `add`, `subtract`, `multiply` | `2 -> 2` | sum, `true` | `Int 0`, `false` |
+| `divide`, `modulo` | `2 -> 2` | quotient, `true` | `Int 0`, `false` |
+| `greater`, `less` | `2 -> 2` | the answer, `true` | `false`, `false` |
+| `negate` | `1 -> 2` | `-x`, `true` | **`x`**, `false` |
+| `tuple_length` | `1 -> 2` | the count, `true` | **`x`**, `false` |
+| `symbol_len` | `1 -> 2` | the count, `true` | **`x`**, `false` |
+| `symbol_char_at` | `2 -> 2` | the code point, `true` | `Int 0`, `false` |
+| `untuple n` | `1 -> n+1` | the `n` elements, `true` | **`x`**, `()` × (n-1), `false` |
+| `branch` | unchanged | else arm unless `Bool(true)` | cannot fail |
+| `assert`, `assert_eq`, `panic` | unchanged | — | **panics** |
 
-Where an instruction takes two numbers, a mixed `Int`/`Float` pair is still
-in-domain and promotes to `Float`, exactly as before. "Elsewhere" means at least
-one operand is not a number at all.
+Two rules govern the rest of the table.
 
-Integer arithmetic wraps (`wrapping_add` and friends), so `i64::MIN` is not a
+**The arity is fixed whichever way it goes.** A caller's stack does not depend
+on the data, so the arity checker still works on shape alone, and every rule
+that moves code past an instruction reads one pair of numbers rather than
+reasoning about which branch it took. That is why failure pads with junk rather
+than leaving fewer values.
+
+**Failure preserves its inputs where the output arity has room.** The bolded
+cells above are the instructions with one input and two slots: they hand the
+value straight back, and `untuple n` keeps it in the deepest of the `n` slots it
+filled with `()` padding above. Where there is no room — two operands and two
+slots, as in `add` — the result slot takes a default instead, which is why
+`add` does not bother.
+
+That second rule is what makes the flag a tag on the **stack** rather than
+inside `Value`. Untupling is now recoverable: read the flag, and either the
+parts rebuild the value or the value is still sitting there. `Tuple` stays a
+free constructor and no hana program can write a junk value, because there is
+no junk value to write.
+
+Where an instruction takes two numbers, a mixed `Int`/`Float` pair is in-domain
+and promotes to `Float`. Integer arithmetic wraps, so `i64::MIN` is not a
 special case anywhere, including `i64::MIN / -1`.
 
 ### Division by zero
 
 Two worlds, deliberately kept apart:
 
-- **Integer**: `Int x / Int 0 = Int 0` and `Int x % Int 0 = Int 0`. Following
-  Lean, which totalizes division the same way rather than inventing an error
-  value.
-- **Float**: uniformly IEEE. The old special case that rejected `Float / Int 0`
-  is gone — the `Int 0` coerces to `0.0` like any other mixed operand, so
-  `1.0 / 0` is `inf` and `1.0 % 0` is `NaN`, which is what the same expression
-  written `1.0 / 0.0` already did.
+- **Integer**: `Int x / Int 0` and `Int x % Int 0` **fail**, leaving `0` and
+  `false`. There is no answer to report and now no need to invent one.
+- **Float**: uniformly IEEE, and a **success**. `1.0 / 0` is `inf` and `1.0 % 0`
+  is `NaN`, which is what `1.0 / 0.0` already did — an `Int` divisor coerces
+  like any other mixed operand rather than being an excuse to leave the float
+  world.
 
-An `Int` divisor is not an excuse to leave the float world.
+### What the flag is not
 
-### Untupling is not tagged
+It is not a second control-flow outcome. A fallible instruction always
+completes and always leaves the same number of values; the flag is data, and a
+program is free to ignore it. Dropping it is exactly what `assemble` does by
+default (see below), which is why the surface language did not change.
 
-`untuple n` on a non-tuple, or on a tuple of the wrong size, pushes `n` copies
-of `()`. It does **not** push a tagged `J_n(x)` that remembers what it came
-from, and `Tuple` stays a free constructor with no junk inhabitants of its own.
+## Reading the flags
 
-That is a real choice with a real cost, paid in the next section. The gain is
-that the value domain stays exactly what a hanoi programmer can write.
+`assemble` **drops each flag as it emits the instruction**, so a fallible
+instruction leaves one value where it always did and source written against the
+old arities keeps working unchanged. `#[flags]` on a sentence turns that off:
+
+```
+#[flags]
+#[arity(1, 8)]
+sentence shares {
+    pick 0
+    untuple 3        // leaves 4: three parts and a flag
+    dip 4 { untuple 3 }
+}
+```
+
+Branch arms and dip bodies inherit the annotation, since a block that dropped
+its flags inside a sentence that kept them would give one sentence two
+instruction sets.
 
 ## What the laws buy, and what they cost
 
@@ -161,7 +224,7 @@ The point of all this is which rewrites become sound. The wins:
 
 And two things that did **not** become free.
 
-### `rebuild_copy` needed a guard
+### `rebuild_copy`, and what the flag paid for
 
 The old rule was
 
@@ -170,27 +233,29 @@ pick 0; untuple n   ==   untuple n; (pick (n-1))^n; dip n { tuple n }
 ```
 
 justified by "both sides panic on exactly the inputs where `x` is not an
-`n`-tuple". With no panic left to agree about, the two sides now visibly differ:
-the left keeps `x`, and the right hands back `untuple n; tuple n` of `x`, which
-on junk is `((), …, ())`. Sound before, unsound now — the rule was *relying* on
-partiality to hide a normalization.
+`n`-tuple". With no panic left to agree about, the two sides visibly differ: the
+left keeps `x`, and the right hands back `untuple n; tuple n` of `x`. Sound
+before, unsound after — the rule was *relying* on partiality to hide a
+normalization.
 
-Since untupling is untagged, nothing recovers `x` from the parts, so the rule
-has to test instead:
+While untupling junk was untagged, nothing recovered `x` from the parts, and the
+rule had to buy the condition back with a `tuple_length; push n; equal` guard.
+It does not any more:
 
 ```
 pick 0; untuple n
   ==
-pick 0; tuple_length; push n; equal;
-branch { untuple n; (pick (n-1))^n; dip n { tuple n } }
-       { (push ())^n }
+untuple n;
+branch { (pick (n-1))^n; dip n { tuple n }; push true }
+       { dip (n-1) { pick 0 }; push false }
 ```
 
-for `n >= 1`. The guard needs no `is_tuple`: `tuple_length` of a non-tuple is
-`Int 0`, which fails `= n`. The else arm needs no `untuple` either — in that arm
-the answer is *known* to be `n` copies of `()`, which is the totality contract
-paying for the guard it just required. The "construction is the proof" payload
-lives in the then arm, where it always did.
+**The guard the rewrite needs is the one the instruction already computed.** No
+recomputation, no `is_tuple`, and an else arm with something to say rather than
+junk to invent — the value `untuple n` could not take apart is still sitting in
+the deepest of the slots it filled. Both arms are exact.
+
+That is the clearest single argument for putting the flag on the stack.
 
 ### The single-arm hoist, which totality *did* buy
 
@@ -201,17 +266,17 @@ than expected. The obvious hoist
 branch { untuple 3; A } { B }   →   dip 1 { untuple 3 }; branch { A } { tuple 3; B }
 ```
 
-does **not** work, and totality does not make it work. It used to invent a panic
-on the path that took the other arm; now it *junk-normalizes* a value that `B`
-may go on to use, and `tuple 3` does not put it back. Untagged junk is what
-costs us this, and it is the one place the choice above is felt. A tagged junk
-value — `J_n^i(x)`, with `tuple n` recognizing a complete family and returning
-`x` — would make `untuple n` a genuine iso and license it. The price is that
-`tuple n` stops being a free constructor and can return a non-tuple, so
-`tuple 3; is_tuple` becomes false on some inputs.
+does **not** work as written. It used to invent a panic on the path that took
+the other arm; then it *junk-normalized* a value that `B` goes on to use, with
+`tuple 3` unable to put it back.
 
-None of that is needed, because **the hoist does not need an inverse — it needs
-a copy**:
+The flag changes what is *possible* here — `untuple n` preserves its input on
+failure, so the else arm could read the flag and recover `x` — but it does not
+make the rewrite above correct, because that rewrite reads no flag. Recovering
+would mean branching on it inside the arm, which is more machinery than the
+alternative needs.
+
+**The hoist does not need an inverse. It needs a copy**:
 
 ```
 branch { X; A } { B }

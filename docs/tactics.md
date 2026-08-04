@@ -35,6 +35,7 @@ operand came from. It either matches and returns a replacement, or fails.
 | `float` | `dip j { S } ; X`, `j >= n` | `X ; dip (j-n+m) { S }` |
 | `fuse` | `dip k { A }; dip k { B }` | `dip k { A B }` |
 | `annihilate_drop` | `X ; drop`, `X : n -> 1` | `drop^n` |
+| `annihilate_flagged` | `X ; drop ; drop`, `X : n -> 2` | `drop^n` |
 | `pick_drop_to_roll` | `pick d ; dip (d+1) { drop }` | `roll d` |
 | `noop` | `roll 0`, or an empty `dip` | nothing |
 | `flatten_call` | `dip 0 { P }` | `P`, spliced in |
@@ -44,13 +45,13 @@ operand came from. It either matches and returns a replacement, or fails.
 | `fold_const` | `push a ; push b ; op` | `push (a op b)` |
 | `fold_const_unary` | `push a ; op` | `push (op a)` |
 | `bool_identity` | `B ; push true ; and` | `B`, and the three other unit laws |
-| `cancel_tuple` | `tuple n ; untuple n` | nothing |
+| `cancel_tuple` | `tuple n ; untuple n` | `push true` |
 | `retain_condition` | `Y ; pick 0 ; branch { A } { B }`, `Y` yields a bool | `Y ; branch { push true; A } { push false; B }` |
 | `specialize_equal` | `pick d; push c; equal; branch { A } { B }` | the same, with A as `dip d { drop; push c }; A` |
 | `copy_const` | `push c ; pick 0` | `push c ; push c` |
 | `dup_natural` | `pick 0 ; X ; dip m { X }`, `X : 1 -> m` | `X ; (pick (m-1))^m` (also under a retained copy) |
 | `unfactor_branch` | `dip k { X } ; branch { A } { B }`, `k >= 1` | `branch { dip (k-1) { X }; A } { … }` |
-| `rebuild_copy` | `pick 0 ; untuple n`, `n >= 1` | a guard, then `untuple n ; (pick (n-1))^n ; dip n { tuple n }` |
+| `rebuild_copy` | `pick 0 ; untuple n`, `n >= 1` | `untuple n`, then a branch on its flag |
 | `copy_assoc` | `pick d ; pick 0` | `pick d ; dip 1 { pick d }` |
 | `speculate_branch` | `branch { X; A } { B }`, `X : n -> m` total | `dip 1 { (pick (n-1))^n; X }; branch { dip m { drop^n }; A } { drop^m; B }` |
 
@@ -82,12 +83,18 @@ not running it differ in something other than the stack. `assert` and
 `assert_eq` fall out on their own, leaving nothing on top for a drop to pair
 with.
 
-This rule used to be a five-instruction whitelist, and `add; drop` was
+`annihilate_flagged` is the same law one output wider, and it exists because a
+**fallible** instruction leaves its success flag alongside its value (see
+[totality.md](totality.md)). `add; drop` is no longer an annihilation — it is
+the old `add`, with the flag thrown away — so what cancels is `add; drop; drop`,
+three nodes and one more than the first rule's window. It is not only about
+flags: `pick 0` has arity `(1 -> 2)` and belongs there for the same arithmetic.
+
+This pair used to be a single five-instruction whitelist, and `add; drop` was
 deliberately *not* `drop; drop` — the add still rejected non-numeric operands,
-and cancelling it would have discarded that check. See
-[totality.md](totality.md) for why there is no longer a check to discard. The
-widening is not academic: the rule fired on **none** of the corpus before and
-fires **722 times across 78 sentences** now.
+and cancelling it would have discarded that check. The widening is not
+academic: it fired on **none** of the corpus before, and the two rules together
+now fire **17616 times across 721 sentences**.
 
 `pick_drop_to_roll` is where copying a value and then discarding the original
 turns back into the roll it always was. `sink` cannot reach this one and should
@@ -247,11 +254,12 @@ Its absorbing cases go to `B; drop; push c` rather than to `push c`, and that is
 the one place a failure argument still applies: `B` may be a `panic` or an
 `assert`, and `a && false` is `false` only on the runs where `a` happened.
 
-`cancel_tuple` goes one way only, and totality did not change that. `tuple n;
-untuple n` returns the stack to where it started, but `untuple n; tuple n` is
-**not** a no-op: it used to reject every value that was not an n-tuple, and now
-it maps each of them to `((), …, ())` instead. Still a real function, still not
-the identity.
+`cancel_tuple` goes one way only, and neither change touched that. `tuple n;
+untuple n` returns the stack to where it started and now says so, leaving the
+literal `true` that `untuple` could not have failed to produce. The converse
+`untuple n; tuple n` is **not** a no-op: it used to reject every value that was
+not an n-tuple, then junk-normalized each of them, and now additionally strands
+a flag. Still a real function, still not the identity.
 
 ## A path condition can be a value
 
@@ -419,9 +427,9 @@ value where it is wanted. That is `rebuild_copy`:
 ```
 pick 0; untuple n
   ==
-pick 0; tuple_length; push n; equal;
-branch { untuple n; (pick (n-1))^n; dip n { tuple n } }
-       { (push ())^n }
+untuple n;
+branch { (pick (n-1))^n; dip n { tuple n }; push true }
+       { dip (n-1) { pick 0 }; push false }
 ```
 
 Instead of keeping the value and taking a copy apart, take the value apart and
@@ -430,20 +438,19 @@ into a `tuple n` applied to parts now on the stack. The rebuild is framed as
 `dip n { tuple n }` rather than emitted with rolls because that rebuilds the
 lower copy where it already sits, and arrives in the form `float` can move.
 
-The guard is the interesting part, and it is what totality *cost* rather than
-what it bought. The rule used to be the bare equation without the branch,
-justified by both sides panicking on exactly the inputs where `x` was not an
-n-tuple. With no panic left to agree about the two sides visibly differ: the
-left keeps `x`, and the right hands back `untuple n; tuple n` of `x`, which on
-junk is `((), …, ())`. The old rule was *relying* on partiality to hide a
-normalization.
+The branch is the interesting part, and its history is the shortest argument
+for the whole flags design. The rule used to be the bare equation, justified by
+both sides panicking on exactly the inputs where `x` was not an n-tuple. Once
+the operators became total there was no panic left to agree about and the two
+sides visibly differed — the rule had been *relying* on partiality to hide a
+normalization — so it grew a `tuple_length; push n; equal` guard to buy the
+condition back, and an else arm that could only invent `n` copies of `()`.
 
-So it tests instead — and the test needs no `is_tuple`, since `tuple_length` of
-a non-tuple is `Int 0` and fails `= n` for every `n >= 1`. The else arm needs no
-`untuple` either: off the guard the answer is *known* to be n copies of `()`,
-which is the totality contract paying for the guard it just demanded. It is also
-what keeps the rule terminating, since an else arm holding `pick 0; untuple n`
-would hand the rule its own input back.
+Neither is needed now. **`untuple n` reports for itself**, so the condition is
+already on the stack, and the else arm has something to say: the value `untuple`
+could not take apart is still sitting in the deepest of the slots it filled. No
+recomputation, no `is_tuple`, and both arms exact. The guard a rewrite needs is
+the one the instruction already computed.
 
 Now the value reaching the branch is a `tuple n` node. `tuple n` is **total on
 the nose**, so `unfactor_branch` may push it into both arms without inventing

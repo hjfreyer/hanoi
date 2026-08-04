@@ -22,6 +22,13 @@ pub enum Annotation<Ref> {
     Recursive,
     Precondition(Ref),
     Postcondition(Ref),
+    /// This sentence cannot fail: it neither executes `panic`, `assert` or
+    /// `assert_eq` nor reaches anything that does.
+    ///
+    /// A claim, checked by [`crate::arity::check_totality`]. It is opt-in — an
+    /// unannotated sentence says nothing, rather than saying it may fail — so
+    /// generated code and branch arms need no special treatment. The `type` and
+    /// `enum` sugar puts it on the checks it generates.
     Total,
     /// This sentence sees the success flags of fallible instructions.
     ///
@@ -30,14 +37,6 @@ pub enum Annotation<Ref> {
     /// propagates silently. With it, `untuple 3` really does leave four values,
     /// and the sentence is expected to say what happens on failure.
     Flags,
-    /// This sentence may fail: it panics, asserts, or calls something that
-    /// does.
-    ///
-    /// Checked, not inferred — see [`crate::arity::check_partiality`]. The
-    /// annotation propagates up the call graph the way [`Annotation::Recursive`]
-    /// does, so its *absence* on a sentence is a proof that the sentence
-    /// terminates normally on every input it accepts.
-    Partial,
 }
 
 /// An annotation as it appears in a compiled [`Library`].

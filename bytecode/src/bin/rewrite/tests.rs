@@ -646,6 +646,47 @@ fn the_widened_annihilate_drop_reaches_real_code() {
     );
 }
 
+/// How much of the corpus is provably total, and how many claims are checked.
+///
+/// `#[total]` is opt-in, so the interesting number is not how many sentences
+/// carry it but how many the checker can *see* are total — that is what a rule
+/// like `speculate_branch` could act on for a `Call`, and it needs no
+/// annotation at all.
+#[test]
+fn most_of_the_corpus_is_provably_total() {
+    let main = Path::new("../tests/main.hana");
+    let Ok(code) = fs::read_to_string(main) else {
+        return;
+    };
+    let library = bytecode::assemble_with_path(&code, main.parent()).unwrap();
+    let can = bytecode::failure_reachability(&library);
+
+    let total = can.iter().filter(|c| !**c).count();
+    let claimed = library
+        .names
+        .iter_enumerated()
+        .filter(|(idx, _)| {
+            library.annotations[*idx]
+                .iter()
+                .any(|a| matches!(a, bytecode::Annotation::Total))
+        })
+        .count();
+
+    println!(
+        "{} of {} sentences provably total; {} carry a checked #[total]",
+        total,
+        can.len(),
+        claimed
+    );
+    assert!(
+        total * 2 > can.len(),
+        "expected most of the corpus to be total, got {} of {}",
+        total,
+        can.len()
+    );
+    assert!(claimed > 0, "the sugar should be making claims worth checking");
+}
+
 /// Whether every dip in the tree hides at most one value.
 fn unary_only(nodes: &[Node]) -> bool {
     nodes.iter().all(|node| match node {
