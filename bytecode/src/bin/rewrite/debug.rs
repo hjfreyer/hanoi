@@ -1,31 +1,29 @@
-//! The stepper: a derivation, one rule firing at a time.
+//! The stepper: a derivation, one step at a time.
 //!
 //! A tactic that does the wrong thing is hard to read backwards from its
-//! output. `--trace` says which rules fired and how often, and the listing says
+//! output. `--trace` says which laws fired and how often, and the listing says
 //! where the term ended up, but neither says *when* the term stopped being the
 //! one you meant. This walks the derivation: at every step it shows the tree
-//! before the last firing beside the tree after it, so what that one rule did
-//! is the only thing on the screen, and sketches the window the next rule is
-//! about to match.
+//! before the last one beside the tree after it, so what that one law did is
+//! the only thing on the screen, and sketches the window the next one is about
+//! to match.
 //!
-//! Showing the change rather than the tree is the whole point of the view.
-//! A rule firing is a splice of a few nodes; reprinting a thousand-line
-//! listing around it is how the first version of this buried what it was
-//! supposed to reveal. `list` is there for when the tree itself is the
-//! question.
+//! Showing the change rather than the tree is the whole point of the view. A
+//! step is a splice of a few nodes; reprinting a thousand-line listing around
+//! it is how the first version of this buried what it was supposed to reveal.
+//! `list` is there for when the tree itself is the question.
 //!
-//! **It steps by replaying, not by remembering.** A rule is a pure function of
-//! the window it is handed, and the search that places rules reads nothing but
-//! the tree, so running the same tactic over the same sentence twice fires the
-//! same rules at the same places in the same order. Step *n* is therefore
-//! "run it again, with a budget of n firings" — which makes stepping backwards
-//! cost exactly what stepping forwards does, and needs no undo log, no
-//! snapshots, and not one line of special handling inside the rules.
+//! **It steps by applying a prefix.** A run produces a script, and a script is
+//! a list of steps that can be applied to a fresh tree in order — so the tree
+//! after *n* steps is exactly `apply_script(&script[..n])`. Stepping backwards
+//! costs what stepping forwards does, and neither needs an undo log or a
+//! snapshot.
 //!
-//! What it costs is re-running the prefix, so walking to step *n* is quadratic
-//! in *n*. That is the trade this makes deliberately: a derivation worth
-//! reading by hand is tens of firings long, and the alternative buys speed with
-//! a second notion of what a rewrite is.
+//! This is what the two-layer split buys the stepper. It used to work by
+//! *re-running the search* with a budget of n firings, which was correct only
+//! because rules were pure functions of their windows, and which made walking
+//! to step *n* quadratic in *n*. Now the derivation is a value; the search runs
+//! once.
 
 use std::collections::HashSet;
 use std::io::{self, BufRead, Write};
@@ -33,38 +31,37 @@ use std::io::{self, BufRead, Write};
 use bytecode::SentenceIndex;
 
 use crate::Options;
+use crate::applier::{apply_script, preview};
 use crate::diff::side_by_side;
+use crate::engine::{Env, Tactic, run as run_tactic};
 use crate::ir::{Node, build};
 use crate::print::render_body;
 use crate::program::Program;
-use crate::tactic::{Env, Firing, Tactic, apply};
+use crate::rule2::{Script, Step};
 
-/// Firings listed either side of the cursor by `trace`.
+/// Steps listed either side of the cursor by `trace`.
 const TRACE_CONTEXT: usize = 8;
 
 pub(crate) fn run(prog: &Program, root: SentenceIndex, tactic: &Tactic, opts: &Options) {
-    // One full run, to learn how long the derivation is. It is also where a
-    // tactic that will not settle, or a rule that `--check` catches, reports
-    // itself — the stepper then walks up to that point and shows the error
-    // where it happens, which is the case it is most wanted for.
-    let census = Env::stepping(prog, opts.fuel, opts.check, None);
-    let ending = match apply(tactic, &census, tree(prog, root)) {
-        Ok(_) => None,
-        Err(err) => Some(err.to_string()),
+    // The search runs exactly once, and what it leaves behind is the thing the
+    // session walks. This is also where a tactic that will not settle reports
+    // itself — the script up to that point is still good, so the stepper walks
+    // to the failure and shows it where it happens, which is the case it is
+    // most wanted for.
+    let env = Env::new(prog, opts.fuel, opts.check);
+    let (script, ending) = match run_tactic(&env, tactic, tree(prog, root)) {
+        Ok((_, script)) => (script, None),
+        // A failed run still recorded everything it did before failing.
+        Err(err) => (env.script(), Some(err.to_string())),
     };
-    // The log records a firing after it is charged for and applied, so its
-    // length is what actually happened — one short of `spent` when the run
-    // ended by failing.
-    let firings = census.firings();
 
     let mut session = Session {
         prog,
         root,
-        tactic,
         opts,
         at: 0,
-        total: firings.len() as u64,
-        firings,
+        total: script.len() as u64,
+        script,
         ending,
         whole: false,
         stack: opts.stack,
@@ -76,18 +73,16 @@ pub(crate) fn run(prog: &Program, root: SentenceIndex, tactic: &Tactic, opts: &O
 struct Session<'a> {
     prog: &'a Program<'a>,
     root: SentenceIndex,
-    tactic: &'a Tactic,
     opts: &'a Options,
-    /// Firings applied in the tree currently on screen.
+    /// Steps applied in the tree currently on screen.
     at: u64,
-    /// Firings in the whole derivation.
+    /// Steps in the whole derivation.
     total: u64,
-    /// Every firing, by name and position. Windows are not sketched here; a
-    /// replay that stops at a firing is what renders it.
-    firings: Vec<Firing>,
+    /// The derivation itself. Every view is a prefix of this.
+    script: Script,
     /// How the full run ended, shown once the cursor reaches the end.
     ending: Option<String>,
-    /// Show the whole tree rather than what the last firing changed.
+    /// Show the whole tree rather than what the last step changed.
     whole: bool,
     stack: bool,
     /// Repeated by a bare newline, as a debugger should.
@@ -98,12 +93,12 @@ impl Session<'_> {
     fn repl(&mut self) {
         println!();
         println!(
-            "  stepping `{}` — {} rule firing{}.",
+            "  stepping `{}` — {} step{}.",
             self.opts.tactic,
             self.total,
             if self.total == 1 { "" } else { "s" }
         );
-        println!("  Each step shows what one rule firing changed; `list` shows the whole");
+        println!("  Each step shows what one law did; `list` shows the whole");
         println!("  tree, `help` lists the commands, and a bare newline repeats the last.");
         self.show();
 
@@ -174,7 +169,7 @@ impl Session<'_> {
         self.show();
     }
 
-    /// Shows what the last firing did, and says what the next one will do.
+    /// Shows what the last step did, and says what the next one will do.
     ///
     /// The diff is the default view because it answers the question stepping
     /// asks. The whole tree is one `list` away, and at step 0 it is all there
@@ -192,22 +187,19 @@ impl Session<'_> {
         self.footer();
     }
 
-    /// The tree either side of the firing that produced the current one.
+    /// The tree either side of the step that produced the current one.
     fn show_diff(&self, previous: u64) {
-        let fired = &self.firings[previous as usize];
+        let taken = &self.script[previous as usize];
         let rows = side_by_side(
             &self.lines(previous),
             &self.lines(self.at),
             &format!("step {}", previous),
-            &format!("step {}  ·  {}@{}", self.at, fired.rule, fired.at),
+            &format!("step {}  ·  {}", self.at, taken),
         );
         if rows.is_empty() {
-            // No rule returns its window unchanged, so this means the listing
-            // cannot show what changed — a provenance label, say.
-            println!(
-                "  `{}@{}` changed nothing the listing shows.",
-                fired.rule, fired.at
-            );
+            // No equation returns its window unchanged, so this means the
+            // listing cannot show what changed — a provenance label, say.
+            println!("  `{}` changed nothing the listing shows.", taken);
             return;
         }
         for row in rows {
@@ -215,9 +207,9 @@ impl Session<'_> {
         }
     }
 
-    /// Where the cursor is, and what the next firing will do.
+    /// Where the cursor is, and what the next step will do.
     ///
-    /// The window is sketched for the firing that has *not* happened yet, which
+    /// The window is sketched for the step that has *not* happened yet, which
     /// is the one the diff above cannot show.
     fn footer(&self) {
         println!();
@@ -228,7 +220,7 @@ impl Session<'_> {
             if self.whole { "   (whole tree)" } else { "" }
         );
         match (self.at < self.total, &self.ending) {
-            (true, _) => announce("next", &self.preview()),
+            (true, _) => announce("next", self.prog, self.next_step()),
             (false, Some(err)) => {
                 println!("  next   the run ends here:");
                 for line in err.lines() {
@@ -239,70 +231,64 @@ impl Session<'_> {
         }
     }
 
-    /// The firing about to happen, with its window.
+    /// The step about to be taken.
     ///
-    /// A replay that stops one later is what renders it: the derivation is the
-    /// same one, so the same rule fires at the same place.
-    fn preview(&self) -> Firing {
-        self.replay(self.at + 1)
-            .1
-            .unwrap_or_else(|| self.firings[self.at as usize].clone())
+    /// It is simply the next entry in the script — no second run and nothing to
+    /// reconstruct, since the derivation is a value the session already holds.
+    fn next_step(&self) -> &Step {
+        &self.script[self.at as usize]
     }
 
-    /// The listing of the tree after `n` firings.
+    /// The listing of the tree after `n` steps.
     fn lines(&self, n: u64) -> Vec<String> {
-        let body = self.replay(n).0;
+        let body = self.tree_at(n);
         render_body(self.prog, self.root, &body, &self.opts.tactic, self.stack)
     }
 
-    /// Runs the tactic from scratch, stopping after `n` firings.
+    /// The tree a prefix of the script produces.
     ///
-    /// Returns the tree at that point and the firing it stopped at, the only
-    /// one whose window this run sketched.
-    fn replay(&self, n: u64) -> (Vec<Node>, Option<Firing>) {
-        let env = Env::stepping(self.prog, self.opts.fuel, self.opts.check, Some(n));
-        match apply(self.tactic, &env, tree(self.prog, self.root)) {
-            Ok(outcome) => (outcome.into_nodes(), env.firings().pop()),
-            // Unreachable in practice: a run that stops at or before the
-            // census's last firing cannot reach whatever ended the census, and
-            // `n` never exceeds that. Reported rather than panicked on, since
-            // being wrong about that should not lose the session.
-            Err(err) => {
-                println!("  the replay stopped early: {}", err);
-                (Vec::new(), None)
-            }
+    /// Applying `n` steps to a fresh build, which is all "the tree after n
+    /// steps" has ever meant. A step that will not apply is reported rather
+    /// than panicked on: the session is worth keeping even when the script it
+    /// is walking has stopped fitting.
+    fn tree_at(&self, n: u64) -> Vec<Node> {
+        let mut body = tree(self.prog, self.root);
+        let prefix = &self.script[..(n as usize).min(self.script.len())];
+        if let Err(err) = apply_script(self.prog, &mut body, prefix, self.opts.check) {
+            println!("  the derivation stopped fitting: {}", err);
         }
+        body
     }
 
     /// The firing log, windowed around the cursor.
     fn trace(&self) {
         println!();
-        if self.firings.is_empty() {
-            println!("  no rule fired.");
+        if self.script.is_empty() {
+            println!("  nothing fired.");
             return;
         }
 
         let lo = (self.at as usize).saturating_sub(TRACE_CONTEXT);
-        let hi = (self.at as usize + TRACE_CONTEXT).min(self.firings.len());
+        let hi = (self.at as usize + TRACE_CONTEXT).min(self.script.len());
         if lo > 0 {
             println!("  ... {} earlier", lo);
         }
         if self.at == 0 {
-            println!("  ▸        (the cursor is before the first firing)");
+            println!("  ▸        (the cursor is before the first step)");
         }
-        for (i, f) in self.firings[lo..hi].iter().enumerate() {
+        for (i, s) in self.script[lo..hi].iter().enumerate() {
             let n = lo + i + 1;
-            // The cursor sits *after* the firing it last applied.
+            // The cursor sits *after* the step it last applied.
             let mark = if n as u64 == self.at { "▸" } else { " " };
-            println!("  {} {:>4}  {}@{}", mark, n, f.rule, f.at);
+            println!("  {} {:>4}  {}", mark, n, s);
         }
-        if hi < self.firings.len() {
-            println!("  ... {} later", self.firings.len() - hi);
+        if hi < self.script.len() {
+            println!("  ... {} later", self.script.len() - hi);
         }
 
         println!();
         println!("  fired so far");
-        let so_far = histogram(&self.firings[..self.at as usize]);
+        let so_far = histogram(&self.script[..self.at as usize]);
         if so_far.is_empty() {
             println!("  (none)");
         }
@@ -312,13 +298,14 @@ impl Session<'_> {
     }
 }
 
-/// Rule firing counts, most frequent first — the `--trace` table, for a prefix.
-fn histogram(firings: &[Firing]) -> Vec<(&'static str, usize)> {
+/// Rule counts, most frequent first — the `--trace` table, for a prefix.
+fn histogram(steps: &[Step]) -> Vec<(&'static str, usize)> {
     let mut counts: Vec<(&'static str, usize)> = Vec::new();
-    for f in firings {
-        match counts.iter_mut().find(|(rule, _)| *rule == f.rule) {
+    for step in steps {
+        let name = step.kind.name();
+        match counts.iter_mut().find(|(rule, _)| *rule == name) {
             Some((_, n)) => *n += 1,
-            None => counts.push((f.rule, 1)),
+            None => counts.push((name, 1)),
         }
     }
     counts.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
@@ -329,14 +316,14 @@ fn tree(prog: &Program, root: SentenceIndex) -> Vec<Node> {
     build(prog.library(), root, &mut HashSet::new())
 }
 
-/// One firing: which rule, where, and what it does to the window it matches.
+/// One step: which law, which way, where, and what it does to its window.
 ///
-/// The window goes on its own two lines rather than beside the rule name. A
-/// branch with three nodes in each arm is a perfectly ordinary window and does
-/// not fit next to anything.
-fn announce(label: &str, f: &Firing) {
-    println!("  {:<6} {}@{}", label, f.rule, f.at);
-    if let Some((before, after)) = &f.detail {
+/// The window goes on its own two lines rather than beside the name. A branch
+/// with three nodes in each arm is a perfectly ordinary window and does not fit
+/// next to anything.
+fn announce(label: &str, prog: &Program, step: &Step) {
+    println!("  {:<6} {}", label, step);
+    if let Some((before, after)) = preview(prog, step) {
         println!("           {}", before);
         println!("        ⇒  {}", after);
     }
@@ -404,23 +391,24 @@ fn parse(line: &str) -> Result<Command, String> {
 
 fn help() {
     println!();
-    println!("  s, step [n]   apply n more firings (default 1)");
-    println!("  b, back [n]   undo n firings, by replaying that many fewer");
-    println!("  g, goto <n>   the tree after exactly n firings");
+    println!("  s, step [n]   apply n more steps (default 1)");
+    println!("  b, back [n]   undo n steps, by applying that many fewer");
+    println!("  g, goto <n>   the tree after exactly n steps");
     println!("  c, continue   run to the end of the derivation");
     println!("  r, restart    back to the tree the tactic starts from");
     println!("  l, list       show the whole tree instead of the change");
     println!("  d, diff       back to showing what the last firing changed");
-    println!("  t, trace      the firing log around the cursor, and counts so far");
+    println!("  t, trace      the derivation around the cursor, and counts so far");
     println!("  stack         toggle the symbolic stack column (--stack)");
     println!("  h, help       this");
     println!("  q, quit       leave");
     println!();
     println!("  A bare newline repeats the last command, and end of input quits.");
-    println!("  A step is one *rule firing*, wherever in the tree it happened; the");
-    println!("  `@n` in a firing is a position within its own sequence, not a global");
-    println!("  one. The diff is over the listing, so a depth changing counts as a");
-    println!("  changed line — which is usually what you want to see.");
+    println!("  A step is one use of one law, in one direction, at one place. A");
+    println!("  matcher may take several: `factor` is three. The location reads");
+    println!("  outermost-first, so `[0.else] @2` is the third node of the else arm");
+    println!("  of the first. The diff is over the listing, so a depth changing");
+    println!("  counts as a changed line — which is usually what you want to see.");
 }
 
 #[cfg(test)]
@@ -468,16 +456,39 @@ mod tests {
 
     #[test]
     fn the_histogram_counts_a_prefix_most_frequent_first() {
-        let f = |rule| Firing {
-            rule,
-            at: 0,
-            detail: None,
+        use crate::location::Location;
+        use crate::rule2::{Direction, Rule2, StepKind};
+
+        let step = |rule: Rule2| Step {
+            kind: StepKind::Rule(rule),
+            dir: Direction::Forward,
+            loc: Location::root(0),
         };
-        let log = vec![f("sink"), f("fuse"), f("sink"), f("collapse")];
+        let collapse = || {
+            step(Rule2::Collapse {
+                k: 1,
+                j: 1,
+                a: Vec::new(),
+                outer: Vec::new(),
+                inner: Vec::new(),
+            })
+        };
+        let fuse = || {
+            step(Rule2::Fuse {
+                k: 1,
+                a: Vec::new(),
+                b: Vec::new(),
+                a_origins: Vec::new(),
+                b_origins: Vec::new(),
+            })
+        };
+        let cancel = || step(Rule2::CancelTuple { n: 2 });
+
+        let log = vec![cancel(), fuse(), cancel(), collapse()];
         assert_eq!(
             histogram(&log),
-            vec![("sink", 2), ("collapse", 1), ("fuse", 1)]
+            vec![("cancel_tuple", 2), ("collapse", 1), ("fuse", 1)]
         );
-        assert_eq!(histogram(&log[..1]), vec![("sink", 1)]);
+        assert_eq!(histogram(&log[..1]), vec![("cancel_tuple", 1)]);
     }
 }

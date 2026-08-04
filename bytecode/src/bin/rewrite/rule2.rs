@@ -36,9 +36,6 @@
 //! path that would not have run it. Each such place says so, since lifting the
 //! restriction means putting the condition back.
 
-// See `location.rs`: the equations land before the matchers that propose them.
-#![allow(dead_code)]
-
 use bytecode::value::numeric_cmp;
 use bytecode::{Instruction, SentenceIndex, Value};
 
@@ -57,6 +54,11 @@ pub(crate) enum Direction {
 }
 
 impl Direction {
+    /// The opposite reading of the same equation.
+    ///
+    /// Undoing a derivation is reversing every step and running it backwards,
+    /// which is what `applier`'s round-trip tests do with this.
+    #[allow(dead_code)]
     pub(crate) fn flipped(self) -> Direction {
         match self {
             Direction::Forward => Direction::Reverse,
@@ -713,19 +715,6 @@ fn push(v: Value) -> Node {
     Node::Op(Instruction::Push(v))
 }
 
-/// `n` copies of the top `n` values, in the order they were read.
-///
-/// Each `pick` reaches back past the copies already made, so `n = 2` over
-/// `a b` leaves `a b a b` rather than `a b b a`. At `n = 0` there are none.
-///
-/// Not part of any equation: it is the shape the **vacuous** derivation builds
-/// out of [`Rule2::Counit`], and what a generator emitting that derivation
-/// needs in order to recognize its own handiwork.
-pub(crate) fn copies(n: usize) -> Vec<Node> {
-    let reach = n.saturating_sub(1);
-    std::iter::repeat_n(Node::Op(Instruction::Pick(reach)), n).collect()
-}
-
 /// The arity the library gives `x`, once the step's claim has been held to it.
 fn claimed_arity(
     prog: &Program,
@@ -847,7 +836,7 @@ impl std::fmt::Display for Step {
 pub(crate) type Script = Vec<Step>;
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use bytecode::Library;
 
@@ -865,6 +854,16 @@ mod tests {
             origins: Vec::new(),
             body,
         }
+    }
+
+    /// `n` copies of the top `n` values, in the order they were read.
+    ///
+    /// Not part of any equation: it is the shape the **vacuous** derivation
+    /// builds out of [`Rule2::Counit`], and what a generator emitting that
+    /// derivation would need to recognize its own handiwork.
+    pub(crate) fn copies(n: usize) -> Vec<Node> {
+        let reach = n.saturating_sub(1);
+        std::iter::repeat_n(Node::Op(Instruction::Pick(reach)), n).collect()
     }
 
     fn drops(n: usize) -> Vec<Node> {

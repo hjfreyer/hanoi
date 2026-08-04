@@ -6,11 +6,6 @@
 //! number in a trace. A script has to say exactly where each step lands, so
 //! that applying it is a mechanical check rather than a second search.
 
-// The lower layer lands before anything drives it. Nothing outside the tests
-// calls this yet; the engine does once it is generating scripts, and this
-// allowance comes off then.
-#![allow(dead_code)]
-
 use std::fmt;
 
 use crate::ir::Selector;

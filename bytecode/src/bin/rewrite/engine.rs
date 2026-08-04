@@ -38,9 +38,6 @@
 //! child body every enclosing frame is suspended mid-iteration, so nothing can
 //! splice an ancestor sequence until the traversal returns to it.
 
-// See `location.rs`: the engine lands before `main` switches over to it.
-#![allow(dead_code)]
-
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
 

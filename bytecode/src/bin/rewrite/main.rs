@@ -26,10 +26,8 @@ mod matcher;
 mod print;
 mod program;
 mod rule2;
-mod rules;
 mod script;
 mod stack;
-mod tactic;
 #[cfg(test)]
 mod tests;
 
@@ -38,23 +36,26 @@ use std::fs;
 use std::path::Path;
 use std::process;
 
+use bytecode::arity::failure_reachability;
 use bytecode::{Library, SentenceIndex};
 
+use crate::engine::Env;
+use crate::matcher::matcher_names;
 use crate::print::print_sentence;
 use crate::program::Program;
-use crate::script::{Definitions, PRELUDE, rule_names};
-use crate::tactic::Env;
+use crate::script::{Definitions, PRELUDE};
 
 /// Rule firings allowed per run before the tool gives up and shows its work.
 const DEFAULT_FUEL: u64 = 1_000_000;
 
-struct Options {
-    tactic: String,
-    fuel: u64,
-    trace: bool,
-    check: bool,
-    stack: bool,
-    step: bool,
+pub(crate) struct Options {
+    pub(crate) tactic: String,
+    pub(crate) fuel: u64,
+    pub(crate) trace: bool,
+    pub(crate) check: bool,
+    pub(crate) stack: bool,
+    pub(crate) step: bool,
+    pub(crate) show_script: bool,
 }
 
 fn main() {
@@ -65,6 +66,7 @@ fn main() {
         check: false,
         stack: false,
         step: false,
+        show_script: false,
     };
     let mut tactic_files: Vec<String> = Vec::new();
     let mut positional: Vec<String> = Vec::new();
@@ -102,6 +104,7 @@ fn main() {
             "--step" => opts.step = true,
             "--stack" => opts.stack = true,
             "--check" => opts.check = true,
+            "--show-script" => opts.show_script = true,
             "--list-rules" => list_rules = true,
             "--list-tactics" => list_tactics = true,
             flag if flag.starts_with('-') => {
@@ -136,7 +139,7 @@ fn main() {
 
     if list_rules {
         println!("rules (place them with `each(...)` or `once(...)`):");
-        for name in rule_names() {
+        for name in matcher_names() {
             println!("  {}", name);
         }
         return;
@@ -185,6 +188,25 @@ fn main() {
         eprintln!("  sentence terminates — and its presence is where that proof stops.");
         process::exit(1);
     }
+    // The other half of the precondition the equations are stated under. Both
+    // properties are closed over reachability, so refusing the root refuses
+    // every node any tree here can come to hold — which is what lets an
+    // annihilation ask only for an arity, and what makes running a computation
+    // on copies and discarding the results the identity.
+    if failure_reachability(&library)[usize::from(root)] {
+        eprintln!("error: '{}' can fail", library.names[root]);
+        eprintln!();
+        eprintln!("  It reaches a `panic`, an `assert` or an `assert_eq`, directly or");
+        eprintln!("  through a call. Every law this tool rewrites by assumes the code");
+        eprintln!("  it is given is total: that is what lets a computation be moved,");
+        eprintln!("  duplicated onto a path that would not have run it, or dropped");
+        eprintln!("  along with its results. Rewriting a sentence that can fail would");
+        eprintln!("  move, invent or erase the failure.");
+        eprintln!();
+        eprintln!("  See docs/totality.md. `#[total]` is the annotation that claims");
+        eprintln!("  the property; this is the check that answers for every sentence.");
+        process::exit(1);
+    }
 
     if opts.step {
         debug::run(&prog, root, &tactic, &opts);
@@ -192,9 +214,28 @@ fn main() {
     }
 
     let env = Env::new(&prog, opts.fuel, opts.check);
-    if let Err(err) = print_sentence(root, &tactic, &env, &opts.tactic, opts.stack) {
-        eprintln!("error: {}", err);
-        process::exit(1);
+    let script = match print_sentence(root, &tactic, &env, &opts.tactic, opts.stack) {
+        Ok(script) => script,
+        Err(err) => {
+            eprintln!("error: {}", err);
+            process::exit(1);
+        }
+    };
+
+    if opts.show_script {
+        println!();
+        println!("  derivation — {} step(s)", script.len());
+        println!("  ────────────");
+        if script.is_empty() {
+            println!("  (nothing)");
+        }
+        for (i, step) in script.iter().enumerate() {
+            println!("  {:>4}  {}", i, step);
+            if let Some((before, after)) = applier::preview(&prog, step) {
+                println!("        {}", before);
+                println!("     ⇒  {}", after);
+            }
+        }
     }
 
     if opts.trace {
@@ -208,6 +249,8 @@ fn main() {
         for (rule, count) in histogram {
             println!("  {:<18} {}", rule, count);
         }
+        println!();
+        println!("  {} step(s) in all", env.steps_taken());
     }
 }
 
@@ -225,7 +268,8 @@ fn usage() {
     eprintln!("  --fuel <n>           rule firings before giving up.");
     eprintln!("  --trace              print how often each rule fired.");
     eprintln!("  --step               walk the rewrite one rule firing at a time.");
-    eprintln!("  --check              verify every rule preserves net stack effect.");
+    eprintln!("  --check              verify every step preserves net stack effect.");
+    eprintln!("  --show-script        print the derivation, one step per line.");
     eprintln!(
         "  --stack              show what each slot holds, with equal values sharing a name."
     );

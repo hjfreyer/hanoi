@@ -4,10 +4,11 @@ use bytecode::SentenceIndex;
 use std::collections::HashSet;
 
 use crate::arity::{node_arity, seq_arity};
+use crate::engine::{Env, Tactic, TacticError, run};
 use crate::ir::{Node, build};
 use crate::program::Program;
+use crate::rule2::Script;
 use crate::stack::{self, Fresh, Names, Stack};
-use crate::tactic::{Env, Tactic, TacticError, apply};
 
 /// How wide the symbolic stack column is allowed to get.
 const STACK_WIDTH: usize = 34;
@@ -18,18 +19,19 @@ struct View<'a> {
     fresh: &'a mut Fresh,
 }
 
+/// Rewrites a sentence, prints the listing, and hands back the derivation.
 pub(crate) fn print_sentence(
     root: SentenceIndex,
     tactic: &Tactic,
     env: &Env,
     source: &str,
     show_stack: bool,
-) -> Result<(), TacticError> {
+) -> Result<Script, TacticError> {
     let mut in_progress = HashSet::new();
     let body = build(env.program().library(), root, &mut in_progress);
-    let body = apply(tactic, env, body)?.into_nodes();
+    let (body, script) = run(env, tactic, body)?;
     print_body(env.program(), root, &body, source, show_stack);
-    Ok(())
+    Ok(script)
 }
 
 /// The listing for a tree that has already been rewritten.

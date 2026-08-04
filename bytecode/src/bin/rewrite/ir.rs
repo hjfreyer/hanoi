@@ -124,10 +124,10 @@ pub(crate) fn label(library: &Library, target: SentenceIndex) -> String {
 /// A `Call` has none: its body is a sentence in the library, not part of this
 /// tree, and reaching it is what `unfold` is for.
 ///
-/// The label is what lets a traversal record *where* it went. A driver that
-/// only needs the sequences can ignore it — [`child_bodies`] is exactly that —
-/// but one building a [`Location`][crate::location::Location] needs the
-/// selector, and recovering it after the fact is impossible.
+/// The label is what lets a traversal record *where* it went, which is what a
+/// [`Location`][crate::location::Location] is built from; recovering it after
+/// the fact is impossible, so every traversal carries it whether or not it
+/// looks.
 pub(crate) fn child_seqs(node: &mut Node) -> Vec<(Selector, &mut Vec<Node>)> {
     match node {
         Node::Dip { body, .. } => vec![(Selector::Body, body)],
@@ -146,11 +146,6 @@ pub(crate) fn child_seq(node: &mut Node, sel: Selector) -> Option<&mut Vec<Node>
         .into_iter()
         .find(|(s, _)| *s == sel)
         .map(|(_, body)| body)
-}
-
-/// The child sequences of a node, for traversal.
-pub(crate) fn child_bodies(node: &mut Node) -> Vec<&mut Vec<Node>> {
-    child_seqs(node).into_iter().map(|(_, body)| body).collect()
 }
 
 /// How deep a node's hidden window is, if it has one.
@@ -202,20 +197,6 @@ pub(crate) enum Selector {
     Else,
     /// The body of every dip.
     Body,
-}
-
-/// The child sequences of a node that `sel` picks out.
-///
-/// A node with no child of that kind contributes nothing, so `then(t)` applied
-/// to a sequence with no branches is a no-op rather than an error — the same
-/// stance `each` takes towards a rule that matches nowhere.
-pub(crate) fn selected_bodies(node: &mut Node, sel: Selector) -> Vec<&mut Vec<Node>> {
-    match (node, sel) {
-        (Node::Branch { then_body, .. }, Selector::Then) => vec![then_body],
-        (Node::Branch { else_body, .. }, Selector::Else) => vec![else_body],
-        (Node::Dip { body, .. }, Selector::Body) => vec![body],
-        _ => Vec::new(),
-    }
 }
 
 /// The nodes a call stands for.
