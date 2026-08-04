@@ -29,7 +29,6 @@ From the root sequence, each `(index, selector)` descends into a child body (`ir
 ```rust
 pub enum Direction { Forward, Reverse }
 pub enum Rule2 {
-    Inline { depth: usize, target: SentenceIndex, body: Vec<Node> },  // claimed expansion
     Collapse { k: usize, j: usize, a: Vec<Node> },
     ElimDip0 { a: Vec<Node> },
     Interchange { x: Node, framed: Node, n: i64, m: i64 },  // framed carries LHS-side depth k; (n,m) is x's claimed arity
@@ -54,17 +53,28 @@ impl Rule2 {
     fn lhs(&self) -> Vec<Node>;   // pure functions of the args —
     fn rhs(&self) -> Vec<Node>;   // Program appears only in check()
 }
-pub struct Step { pub rule: Rule2, pub dir: Direction, pub loc: Location }
+pub enum StepKind {
+    /// Invoke a law of the calculus.
+    Rule(Rule2),
+    /// Unfold a library definition (delta-reduction). Forward = old `inline`:
+    /// `Call{depth, target}` becomes `expand_call(prog, depth, target)`.
+    /// Reverse = *fold*: recognize the body in the window and replace it with
+    /// the call — a direction the old system never had.
+    Unfold { depth: usize, target: SentenceIndex },
+}
+pub struct Step { pub kind: StepKind, pub dir: Direction, pub loc: Location }
 pub type Script = Vec<Step>;
 ```
 
-**Args are self-contained; the applier re-checks every claim.** A Rule2 closes over everything its two sides are built from, including facts that originate in the library: `Inline` carries the claimed expansion body, `Interchange`/`Annihilate` carry the claimed arity of X. `lhs()`/`rhs()` are therefore pure functions of the args. The applier is *required* to call `check(prog)` first, which verifies each claim against the authoritative source — `Inline.body` must `same_effect`-match `expand_call(prog, depth, target)`, claimed arities must equal `node_arity(prog, x)` — alongside the equation's own side conditions. A script is never trusted: it can only communicate a construction, and every fact it rests on is re-derived by the applier.
+**Rules are laws; unfolding is definitional.** Every Rule2 is a schematic equation valid for *any* instantiation of its args; `Call{k, S} = body(S)` is not — its validity is the axiom the library contributes by defining `S`. So it is a separate step kind, not a Rule2: the applier fetches the body from the library itself (`expand_call`), so no copy of library content ever rides in a script and there is nothing to claim. Its only side condition is that `target` is not `#[recursive]`.
 
-### The equation core (tranche 1) — 14 equations replacing 26 rules
+**Rule args are self-contained; the applier re-checks every claim.** A Rule2 closes over everything its two sides are built from. Facts that originate in the library — the claimed arity of X in `Interchange`/`Annihilate` — are carried in the args, which makes `lhs()`/`rhs()` pure functions of the args. The applier is *required* to call `check(prog)` first, which verifies each claim against the authoritative source (claimed arities must equal `node_arity(prog, x)`) alongside the equation's own side conditions. A script is never trusted: it can only communicate a construction, and every fact it rests on is re-derived by the applier.
+
+### The equation core (tranche 1) — 13 equations + definitional unfold, replacing 26 rules
 
 | equation | LHS = RHS | side conditions / notes |
 |---|---|---|
-| `inline(k, target, body)` | `Call{k,target}` = `body` | target not `#[recursive]`; `check` verifies `body` against `expand_call(prog, k, target)` |
+| `unfold(k, target)` *(StepKind::Unfold, not a Rule2)* | `Call{k,target}` = `expand_call(prog, k, target)` | target not `#[recursive]`; body read from the library by the applier, never carried in the script. Fwd = old `inline`; Rev = fold a body back into a call |
 | `collapse(k, j, A)` | `dip k { dip j { A } }` = `dip (k+j) { A }` | old `expand` = Reverse at split `(1, k-1)` |
 | `elim_dip0(A)` | `dip 0 { A }` = `A` (spliced) | old `flatten_call`; Reverse introduces a frame; generators must decline the empty-body identity firing |
 | `interchange(X, D)` | `X ; D_k` = `D_(k-m+n) ; X`, `arity(X)=(n,m)` | `k ≥ m` (⟺ `j ≥ n` read from the RHS — one condition, two readings, so one equation covers old `sink` (Fwd) and `float` (Rev)). D is a `Dip` at **any** depth incl. 0, or a `Call` with **depth ≥ 1 only** (`Call{0}` is frameless — preserve `frame_depth`'s asymmetry, rules.rs:241). `check` verifies the claimed `(n,m)` equals `node_arity(prog, x)`; shifted-depth usize conversion must succeed |
@@ -90,7 +100,7 @@ pub fn apply_script(prog, tree: &mut Vec<Node>, script: &[Step], check: bool)
     -> Result<(), ApplyError>;
 ```
 
-Navigate `descent` with bounds/kind checks → `check()` side conditions → generate source side (`lhs` for Forward, `rhs` for Reverse) → compare window with `same_effect_seq` (make it `pub(crate)` in ir.rs; origins are provenance and must not count) → splice the other side. `--check` (net stack-effect via `seq_arity`, currently tactic.rs:577-597) moves here verbatim.
+Navigate `descent` with bounds/kind checks → `check()` side conditions → generate source side (`lhs` for Forward, `rhs` for Reverse; for `Unfold` the two sides are `[Call{depth, target}]` and `expand_call(prog, depth, target)`, built by the applier from the library) → compare window with `same_effect_seq` (make it `pub(crate)` in ir.rs; origins are provenance and must not count) → splice the other side. `--check` (net stack-effect via `seq_arity`, currently tactic.rs:577-597) moves here verbatim.
 
 Error taxonomy — every variant carries step index, rule name, direction, rendered Location; sketches via `ir::sketch`:
 
@@ -102,7 +112,6 @@ pub enum ApplyError {
     WindowMismatch { expected: String, found: String },
     SideCondition(SideCondition),               // RecursiveTarget, FrameTooShallow{k,m},
                                                 // ClaimedArityMismatch{claimed, actual},
-                                                // ClaimedBodyMismatch,
                                                 // NotTotalEffectFree, ArityUnknown, UnsupportedOp, DepthOverflow
     NetChanged { before: Option<i64>, after: Option<i64> },
 }
@@ -116,7 +125,7 @@ pub trait Matcher: Sync + Debug {
     fn width(&self) -> usize;
     fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>>;
 }
-pub struct PlannedStep { rule: Rule2, dir: Direction, rel: Location }  // window-RELATIVE location
+pub struct PlannedStep { kind: StepKind, dir: Direction, rel: Location }  // window-RELATIVE location
 pub const ALL_MATCHERS: &[&dyn Matcher]; // + matcher_by_name
 ```
 
@@ -151,7 +160,7 @@ Census = one engine run producing (final tree, script, ending). `goto n` = fresh
 
 ## Stages (each leaves `cargo test` green; run `./run_all_tests.sh` at each stage)
 
-1. **Foundations (additive).** `location.rs`, `rule2.rs` (14 equations), `applier.rs`; `same_effect_seq` → `pub(crate)`; add `total_effect_free` (duplicate `speculable` rather than touching rules.rs). Tests: per-equation lhs/rhs goldens (transliterated from rules.rs tests), side-condition rejections (including fabricated claims: a wrong arity on `Interchange`/`Annihilate` and a tampered `Inline` body must be rejected by `check`), applier navigation + every `ApplyError` variant provoked, Forward∘Reverse = identity round-trips (incl. one exact-equality case pinning provenance), table-driven net-preservation (`net(lhs) == net(rhs)` over arg corpora). Old code untouched.
+1. **Foundations (additive).** `location.rs`, `rule2.rs` (13 equations + `StepKind::Unfold`), `applier.rs`; `same_effect_seq` → `pub(crate)`; add `total_effect_free` (duplicate `speculable` rather than touching rules.rs). Tests: per-equation lhs/rhs goldens (transliterated from rules.rs tests), side-condition rejections (including fabricated claims: a wrong arity on `Interchange`/`Annihilate` must be rejected by `check`; `Unfold` of a `#[recursive]` target must be rejected; a Reverse `Unfold` whose window is not the target's body must fail `WindowMismatch`), applier navigation + every `ApplyError` variant provoked, Forward∘Reverse = identity round-trips (incl. one exact-equality case pinning provenance), table-driven net-preservation (`net(lhs) == net(rhs)` over arg corpora). Old code untouched.
 2. **Matchers (additive).** `matcher.rs`, tranche-1 set. Tests: `plan` + `apply_step` on a scratch tree equals the old rule's documented replacement (reuse expected values from rules.rs tests).
 3. **Engine (parallel).** `engine.rs` + new `Env`. Port Outcome-algebra/rollback tests from tests.rs (~717-1707), add script-truncation-on-rollback assertions and the replay-invariant test. Old tactic.rs still drives main.rs; both compile side by side.
 4. **Cutover (the one big commit).** Rewire script.rs to matchers; rewrite `PRELUDE`; switch main.rs to engine.rs; add `--show-script`; `--check` flows into the applier. Delete rules.rs + old tactic.rs. Prune tests.rs to derivations tranche 1 supports: factoring (tests.rs:357/372/385), annihilate family (411-480), dips/collapse/fuse (190-355), distribute+fold (1778-1876), inline/flatten (1878-2024), and the corpus sweep `rewrites_preserve_arity_across_the_corpus` (tests.rs:515) — now also asserting script replay across the corpus. The sharing-chain block (tests.rs:1040-1460) moves out with a tranche-2 marker.
