@@ -68,7 +68,7 @@ matchers that place them.
 | `distribute` | `branch { A } { B } ; C` = `branch { A C } { B C }` | `C` is a whole sequence. Backward factors a shared *suffix*, which the old set could not do at all |
 | `fold_branch` | `push c ; branch { A } { B }` = the arm `c` selects | selected by `truthy`, so `push 1; branch` takes the **else** arm |
 | `eval` | `push v1 … push vn ; op` = the pushes of what `op` answers | subsumes the old `fold_const` and `fold_const_unary` |
-| `annihilate` | `X ; drop^m` = `drop^n`, for `X : n -> m` | subsumes `annihilate_drop` (m=1) and `annihilate_flagged` (m=2) |
+| `annihilate` | `X ; drop^m` = `drop^n`, for `X : n -> m` | `X` is a whole sequence. Forward subsumes `annihilate_drop` (m=1) and `annihilate_flagged` (m=2); backward is `introduce`, below |
 | `counit` | `pick d ; drop` = nothing | *not* an annihilation: `pick d` is `(d+1 -> d+2)` |
 | `copy_const` | `push c ; pick 0` = `push c ; push c` | |
 | `copy_assoc` | `pick d ; pick 0` = `pick d ; dip 1 { pick d }` | neither side is smaller; the point is that one copy ends up **in a frame**, and a framed computation is one `float` can carry |
@@ -168,6 +168,7 @@ different thing to look for even though the arithmetic is the same:
 | `fold_branch` | 2 | |
 | `eval1` / `eval2` | 2 / 3 | one operand or two |
 | `annihilate` / `annihilate_flagged` | 2 / 3 | one output or two |
+| `introduce { .. }` | n | annihilate backwards — see below |
 | `counit`, `copy_const`, `copy_assoc`, `cancel_tuple` | 2 | |
 
 A matcher checks its own side conditions, so anything it proposes is something
@@ -178,6 +179,74 @@ Two of these need no coordination even though they look adjacent. `annihilate`
 wants `X : n -> 1` and `counit` wants `pick d ; drop`; since `pick d` is
 `(d+1 -> d+2)` it fails annihilate's arity requirement outright. The old code
 had an explicit special case for exactly this.
+
+## Saying what code to create
+
+Every matcher above rewrites what it found, so what it produces is a function of
+the window. An **introduction** has nothing to read: `drop` says nothing about
+which computation ought to appear in front of it. The code has to be written
+down, and the tactic expression is where.
+
+```
+once(introduce { pick 0 })
+```
+
+That is `annihilate` read backwards. The term names an `X : n -> m`; the matcher
+looks for `n` drops and replaces them with `X ; drop^m`. Both sides discard
+exactly the same `n` values, so the program means what it meant — but it now
+contains `X`, which nothing in the window could have supplied.
+
+**What it is for.** `factor` needs *both* arms of a branch to share a prefix.
+When only one does, give the other the missing code in a place where it provably
+costs nothing, and the two arms now share it:
+
+```
+$ rewrite probe test_always_true -t 'else(once(introduce { pick 0 })); factoring' --show-script
+  derivation — 4 step(s)
+     0  annihilate <- [2.else] @0
+        drop
+     ⇒  pick 0 ; drop ; drop
+     1  elim_dip0 <- [2.then] @0
+     2  elim_dip0 <- [2.else] @0
+     3  hoist <- @2
+        branch { jump { pick 0 } ; … } { jump { pick 0 } ; … }
+     ⇒  dip 1 { pick 0 } ; branch { … } { … }
+```
+
+The copy has been hoisted out of both arms, which is the move the old rule set
+could not reach at all.
+
+### Terms
+
+A term is a run of instructions in braces. `pick n`, `roll n`, `tuple n`,
+`untuple n`, `push <int|true|false>`, `dip n { ... }`, and the argument-free
+operators (`drop`, `not`, `and`, `equal`, `is_bool`, `add`, …). `--list-rules`
+prints the list.
+
+It has no calls — a term is written here rather than compiled from a sentence,
+so there is nothing to name — and no branches, which would need two blocks and a
+condition and would be a program rather than a term. `panic`, `assert` and
+`assert_eq` are absent on purpose: they are the three instructions that can
+fail, and introducing one would break the precondition every equation is stated
+under.
+
+A term's arity is worked out when the tactic is compiled, from the term alone,
+which is what lets a tactic be checked before a program is loaded. Two terms are
+refused there rather than at run time:
+
+- one whose arity is unknown, since there would be no saying what it discards;
+- one that **consumes nothing**. `push 7` would match a window of no nodes,
+  which is every position, so `each` would never move past the first — and this
+  law discards whatever the term produces, so it could only ever become
+  `push 7 ; drop`, which no later step can use.
+
+### It is not a normalizing pass
+
+`introduce` grows the term and has no measure, so it belongs in no `repeat`;
+putting it in one exhausts the budget. Aiming it is the whole job, which is what
+`once`, `then`, `else` and `repeat_n` are for. `annihilate` takes straight back
+out what `introduce` puts in, they being the two readings of one law — so the
+two must never share a fixpoint either.
 
 ## Combinators
 
@@ -407,9 +476,9 @@ Reading it as a test for *being* a boolean would send junk down the wrong path.
 ## Four things that are easy to get wrong
 
 1. **Opposite readings of one law in one `repeat`.** `collapse`/`expand`,
-   `sink`/`float`, `factor`/`unfactor`, and now `distribute` forward and
-   backward. Each pair is one equation read two ways and will oscillate until
-   the fuel runs out. The trace is what diagnoses it.
+   `sink`/`float`, `factor`/`unfactor`, `annihilate`/`introduce`, and now
+   `distribute` forward and backward. Each pair is one equation read two ways
+   and will oscillate until the fuel runs out. The trace is what diagnoses it.
 2. **Expecting `bu` to stage.** It reaches new bodies only on the next pass;
    `td` descends into what it just created, so one `td` pass opens the whole
    call graph.
@@ -498,6 +567,8 @@ consulting an analysis.
   shape on purpose. When it lands, a saved derivation will depend on the library
   only through names and facts the applier re-derives — never through quoted
   code — so it fails loudly at the changed step rather than rotting silently.
+- **Symbols and floats in terms.** `push` takes an integer or a boolean; the
+  other literals have no syntax yet.
 - **A smarter upper layer.** Matchers and combinators are the whole of the
   search today. Everything above is deliberately arranged so that a better
   generator can be dropped in without the lower layer noticing: whatever finds

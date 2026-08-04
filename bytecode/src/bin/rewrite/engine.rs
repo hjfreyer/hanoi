@@ -224,9 +224,13 @@ impl<'a> Env<'a> {
 #[derive(Debug)]
 pub(crate) enum Tactic {
     /// Apply these matchers at every position, left to right, to exhaustion.
-    Each(Vec<&'static dyn Matcher>),
+    ///
+    /// Owned rather than borrowed, because a matcher may carry an argument:
+    /// `introduce { pick 0 }` is a different matcher from `introduce { drop }`
+    /// and neither exists until a tactic names it.
+    Each(Vec<Box<dyn Matcher>>),
     /// Apply the first matcher that matches, at the first position it matches.
-    Once(Vec<&'static dyn Matcher>),
+    Once(Vec<Box<dyn Matcher>>),
     Seq(Vec<Tactic>),
     Choice(Vec<Tactic>),
     Try(Box<Tactic>),
@@ -494,7 +498,7 @@ fn map_children(
 /// out: a width-1 matcher re-applies to its own output, and a width-2 matcher
 /// reconsiders a moved node against its new neighbour.
 fn each(
-    matchers: &[&'static dyn Matcher],
+    matchers: &[Box<dyn Matcher>],
     env: &Env,
     mut nodes: Vec<Node>,
 ) -> Result<Outcome, TacticError> {
@@ -520,7 +524,7 @@ fn each(
 
 /// Applies the first matcher that matches, at the first position it matches.
 fn once(
-    matchers: &[&'static dyn Matcher],
+    matchers: &[Box<dyn Matcher>],
     env: &Env,
     mut nodes: Vec<Node>,
 ) -> Result<Outcome, TacticError> {
@@ -535,13 +539,18 @@ fn once(
 /// Tries every matcher at one position. On a hit, applies what it planned and
 /// returns where the scan should resume.
 fn step(
-    matchers: &[&'static dyn Matcher],
+    matchers: &[Box<dyn Matcher>],
     env: &Env,
     nodes: &mut Vec<Node>,
     w: usize,
 ) -> Result<Option<usize>, TacticError> {
     for matcher in matchers {
         let width = matcher.width();
+        // The resume arithmetic below reads `width - 1`, and a matcher that
+        // read no nodes would match at every position and never let `each`
+        // advance. Matchers that size themselves from an argument check this
+        // when they are built; this is where the invariant is written down.
+        debug_assert!(width > 0, "`{}` reads no nodes", matcher.name());
         if w + width > nodes.len() {
             continue;
         }
@@ -600,7 +609,7 @@ mod tests {
     use bytecode::{Instruction, Library, Value, assemble};
     use std::collections::HashSet;
 
-    fn m(name: &str) -> &'static dyn Matcher {
+    fn m(name: &str) -> Box<dyn Matcher> {
         matcher_by_name(name).unwrap_or_else(|| panic!("no matcher '{}'", name))
     }
 

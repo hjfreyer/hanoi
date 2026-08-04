@@ -498,7 +498,7 @@ mod tests {
                 inputs: vec![Value::Bool(true), Value::Bool(false)],
             },
             Rule2::Annihilate {
-                x: op(Instruction::Add),
+                x: vec![op(Instruction::Add)],
                 n: 2,
                 m: 2,
             },
@@ -688,7 +688,11 @@ mod tests {
                 })
                 .collect();
             script.push(step(
-                Rule2::Annihilate { x: x.clone(), n, m },
+                Rule2::Annihilate {
+                    x: vec![x.clone()],
+                    n,
+                    m,
+                },
                 Direction::Reverse,
                 Location::root(n),
             ));

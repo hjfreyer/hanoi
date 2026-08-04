@@ -19,9 +19,13 @@
 
 use std::collections::{HashMap, HashSet};
 
+use bytecode::{Instruction, Value};
+
 use crate::engine::Tactic;
-use crate::ir::Selector;
-use crate::matcher::{Matcher, matcher_by_name, matcher_names};
+use crate::ir::{Node, Selector};
+use crate::matcher::{
+    Matcher, matcher_by_name, matcher_names, matcher_with_term, term_matcher_names,
+};
 
 /// The named tactics every session starts with.
 ///
@@ -157,6 +161,8 @@ enum Tok {
     Pipe,
     LParen,
     RParen,
+    LBrace,
+    RBrace,
 }
 
 struct Spanned {
@@ -209,6 +215,14 @@ fn tokenize(src: &str) -> Result<Vec<Spanned>, ScriptError> {
                 i += 1;
                 Tok::RParen
             }
+            '{' => {
+                i += 1;
+                Tok::LBrace
+            }
+            '}' => {
+                i += 1;
+                Tok::RBrace
+            }
             c if c.is_ascii_digit() => {
                 while i < bytes.len() && (bytes[i] as char).is_ascii_digit() {
                     i += 1;
@@ -255,6 +269,13 @@ fn tokenize(src: &str) -> Result<Vec<Spanned>, ScriptError> {
 enum Expr {
     Name(String, Span),
     Call(String, Span, Vec<Arg>),
+    /// A matcher and the term it is completed by: `introduce { pick 0 }`.
+    ///
+    /// Every other matcher rewrites what it found, so what it produces is a
+    /// function of the window. An introduction has nothing to read — the code
+    /// it puts into the term has to be written down somewhere, and this is
+    /// where.
+    Term(String, Span, Vec<Node>),
     Seq(Vec<Expr>),
     Choice(Vec<Expr>),
 }
@@ -364,6 +385,12 @@ impl<'a> Parser<'a> {
                 else {
                     unreachable!("peeked an identifier")
                 };
+                if self.peek() == Some(&Tok::LBrace) {
+                    self.bump();
+                    let term = self.term()?;
+                    let close = self.expect(Tok::RBrace, "'}' or an instruction")?;
+                    return Ok(Expr::Term(name.clone(), (span.0, close.1), term));
+                }
                 if self.peek() != Some(&Tok::LParen) {
                     return Ok(Expr::Name(name.clone(), span));
                 }
@@ -401,7 +428,166 @@ impl<'a> Parser<'a> {
         }
         Ok(Arg::Expr(self.expr()?))
     }
+
+    /// A run of instructions, up to but not including the closing brace.
+    ///
+    /// Deliberately a small language: enough to name the code you want put
+    /// into a term, and no more. It has no calls — a term is written here
+    /// rather than compiled from a sentence, so there is nothing to name — and
+    /// no branches, since a branch needs two blocks and a condition and would
+    /// be a program rather than a term.
+    fn term(&mut self) -> Result<Vec<Node>, ScriptError> {
+        let mut out = Vec::new();
+        while !matches!(self.peek(), Some(&Tok::RBrace) | None) {
+            out.push(self.instruction()?);
+        }
+        Ok(out)
+    }
+
+    fn instruction(&mut self) -> Result<Node, ScriptError> {
+        let span = self.span();
+        let Some(Spanned {
+            tok: Tok::Ident(word),
+            ..
+        }) = self.bump()
+        else {
+            return Err(ScriptError::new("expected an instruction", span)
+                .with_help(format!("instructions: {}", INSTRUCTION_WORDS.join(", "))));
+        };
+        let word = word.clone();
+
+        // `dip k { ... }` is the one nested form, and the only way to write a
+        // term that hides part of the stack from itself.
+        if word == "dip" {
+            let depth = self.count(&word, span)?;
+            self.expect(Tok::LBrace, "'{'")?;
+            let body = self.term()?;
+            self.expect(Tok::RBrace, "'}'")?;
+            return Ok(Node::Dip {
+                depth,
+                origins: Vec::new(),
+                body,
+            });
+        }
+
+        if word == "push" {
+            return Ok(Node::Op(Instruction::Push(self.literal(span)?)));
+        }
+
+        let inst = match word.as_str() {
+            "pick" => Instruction::Pick(self.count(&word, span)?),
+            "roll" => Instruction::Roll(self.count(&word, span)?),
+            "tuple" => Instruction::Tuple(self.count(&word, span)?),
+            "untuple" => Instruction::Untuple(self.count(&word, span)?),
+            other => match plain_instruction(other) {
+                Some(inst) => inst,
+                None => {
+                    return Err(ScriptError::new(
+                        format!("'{}' is not an instruction a term may hold", other),
+                        span,
+                    )
+                    .with_help(format!("instructions: {}", INSTRUCTION_WORDS.join(", "))));
+                }
+            },
+        };
+        Ok(Node::Op(inst))
+    }
+
+    fn count(&mut self, word: &str, span: Span) -> Result<usize, ScriptError> {
+        match self.peek() {
+            Some(Tok::Int(n)) => {
+                let n = *n;
+                self.bump();
+                Ok(n)
+            }
+            _ => Err(ScriptError::new(format!("`{}` needs a number", word), span)
+                .with_help(format!("for example `{} 0`", word))),
+        }
+    }
+
+    fn literal(&mut self, span: Span) -> Result<Value, ScriptError> {
+        match self.peek() {
+            Some(Tok::Int(n)) => {
+                let n = *n as i64;
+                self.bump();
+                Ok(Value::Int(n))
+            }
+            Some(Tok::Ident(word)) if word == "true" || word == "false" => {
+                let yes = word == "true";
+                self.bump();
+                Ok(Value::Bool(yes))
+            }
+            _ => Err(ScriptError::new("`push` needs a literal", span).with_help(
+                "an integer or `true`/`false`. Symbols and floats have no \
+                     syntax here yet",
+            )),
+        }
+    }
 }
+
+/// The instructions a term may name that take no argument.
+fn plain_instruction(word: &str) -> Option<Instruction> {
+    Some(match word {
+        "drop" => Instruction::Drop,
+        "equal" => Instruction::Equal,
+        "greater" => Instruction::Greater,
+        "less" => Instruction::Less,
+        "add" => Instruction::Add,
+        "subtract" => Instruction::Subtract,
+        "multiply" => Instruction::Multiply,
+        "divide" => Instruction::Divide,
+        "modulo" => Instruction::Modulo,
+        "not" => Instruction::Not,
+        "negate" => Instruction::Negate,
+        "and" => Instruction::And,
+        "or" => Instruction::Or,
+        "is_int" => Instruction::IsInt,
+        "is_bool" => Instruction::IsBool,
+        "is_float" => Instruction::IsFloat,
+        "is_symbol" => Instruction::IsSymbol,
+        "is_tuple" => Instruction::IsTuple,
+        "tuple_length" => Instruction::TupleLength,
+        "symbol_len" => Instruction::SymbolLen,
+        "symbol_char_at" => Instruction::SymbolCharAt,
+        _ => return None,
+    })
+}
+
+/// What a term may hold, for an error message.
+///
+/// `panic`, `assert` and `assert_eq` are absent on purpose: they are the three
+/// instructions that can fail, and the whole tool is restricted to code that
+/// cannot. Introducing one would break the precondition every equation is
+/// stated under.
+const INSTRUCTION_WORDS: &[&str] = &[
+    "pick n",
+    "roll n",
+    "tuple n",
+    "untuple n",
+    "push <lit>",
+    "dip n { .. }",
+    "drop",
+    "equal",
+    "greater",
+    "less",
+    "add",
+    "subtract",
+    "multiply",
+    "divide",
+    "modulo",
+    "not",
+    "negate",
+    "and",
+    "or",
+    "is_int",
+    "is_bool",
+    "is_float",
+    "is_symbol",
+    "is_tuple",
+    "tuple_length",
+    "symbol_len",
+    "symbol_char_at",
+];
 
 fn describe(tok: &Tok) -> String {
     match tok {
@@ -412,6 +598,8 @@ fn describe(tok: &Tok) -> String {
         Tok::Semi => "';'".to_string(),
         Tok::Comma => "','".to_string(),
         Tok::Pipe => "'|'".to_string(),
+        Tok::LBrace => "'{'".to_string(),
+        Tok::RBrace => "'}'".to_string(),
         Tok::LParen => "'('".to_string(),
         Tok::RParen => "')'".to_string(),
     }
@@ -514,6 +702,18 @@ impl Definitions {
             )),
             Expr::Name(name, span) => self.resolve_name(name, *span, visiting),
             Expr::Call(name, span, args) => self.resolve_call(name, *span, args, visiting),
+            // A matcher with a term is not a tactic on its own: it still has
+            // to be placed. Saying so here is the same courtesy `each`/`once`
+            // extend to a bare rule name.
+            Expr::Term(name, span, _) => Err(ScriptError::new(
+                format!("'{}' is a rule, not a tactic", name),
+                *span,
+            )
+            .with_help(format!(
+                "a rule has to be placed somewhere: write `once({} {{ ... }})` \
+                 for the first match, or `each(...)` for every one",
+                name
+            ))),
         }
     }
 
@@ -614,23 +814,60 @@ impl Definitions {
                         span,
                     ));
                 }
-                let mut rules: Vec<&'static dyn Matcher> = Vec::new();
+                let mut rules: Vec<Box<dyn Matcher>> = Vec::new();
                 for arg in args {
-                    let Arg::Expr(Expr::Name(rule_name, rule_span)) = arg else {
-                        return Err(ScriptError::new(
-                            format!("`{}` takes rule names, not tactics", name),
-                            span,
-                        )
-                        .with_help(format!("rules: {}", matcher_names().join(", "))));
-                    };
-                    let Some(rule) = matcher_by_name(rule_name) else {
-                        return Err(ScriptError::new(
-                            format!("unknown rule '{}'", rule_name),
-                            *rule_span,
-                        )
-                        .with_help(format!("rules: {}", matcher_names().join(", "))));
-                    };
-                    rules.push(rule);
+                    match arg {
+                        Arg::Expr(Expr::Name(rule_name, rule_span)) => {
+                            if term_matcher_names().contains(&rule_name.as_str()) {
+                                return Err(ScriptError::new(
+                                    format!("`{}` needs a term", rule_name),
+                                    *rule_span,
+                                )
+                                .with_help(format!(
+                                    "say what to introduce: `{} {{ pick 0 }}`",
+                                    rule_name
+                                )));
+                            }
+                            let Some(rule) = matcher_by_name(rule_name) else {
+                                return Err(ScriptError::new(
+                                    format!("unknown rule '{}'", rule_name),
+                                    *rule_span,
+                                )
+                                .with_help(known_rules()));
+                            };
+                            rules.push(rule);
+                        }
+                        Arg::Expr(Expr::Term(rule_name, rule_span, term)) => {
+                            let Some(built) = matcher_with_term(rule_name, term.clone()) else {
+                                let help = if matcher_by_name(rule_name).is_some() {
+                                    format!("`{}` takes no term; write it bare", rule_name)
+                                } else {
+                                    known_rules()
+                                };
+                                return Err(ScriptError::new(
+                                    format!("'{}' does not take a term", rule_name),
+                                    *rule_span,
+                                )
+                                .with_help(help));
+                            };
+                            match built {
+                                Ok(rule) => rules.push(rule),
+                                Err(why) => {
+                                    return Err(ScriptError::new(
+                                        format!("`{}` cannot use that term: {}", rule_name, why),
+                                        *rule_span,
+                                    ));
+                                }
+                            }
+                        }
+                        _ => {
+                            return Err(ScriptError::new(
+                                format!("`{}` takes rule names, not tactics", name),
+                                span,
+                            )
+                            .with_help(known_rules()));
+                        }
+                    }
                 }
                 Ok(match name {
                     "each" => Tactic::Each(rules),
@@ -671,6 +908,14 @@ impl Definitions {
             }
         }
     }
+}
+
+/// The rule vocabulary, for an error message.
+fn known_rules() -> String {
+    let mut all = matcher_names();
+    all.extend(term_matcher_names());
+    all.sort();
+    format!("rules: {}", all.join(", "))
 }
 
 enum Shape {
@@ -836,5 +1081,79 @@ mod tests {
         d.load("// leading comment\ntactic spaced =\n  id; // trailing\n  id;\n")
             .unwrap();
         assert!(d.compile("spaced").is_ok());
+    }
+
+    // -- terms --------------------------------------------------------------
+
+    fn compiles(src: &str) -> bool {
+        defs().compile(src).is_ok()
+    }
+
+    #[test]
+    fn a_term_names_the_code_to_introduce() {
+        assert!(compiles("each(introduce { pick 0 })"));
+        assert!(compiles("once(introduce { pick 0 is_bool })"));
+        assert!(compiles("once(introduce { dip 1 { pick 0 } })"));
+        // A `push` has to be paired with something that consumes, or the term
+        // takes no inputs and there is no drop for it to stand in front of.
+        assert!(compiles("once(introduce { push 7 equal })"));
+        assert!(compiles("once(introduce { push true and })"));
+        // Mixed with ordinary rules in one placement.
+        assert!(compiles("each(sink, introduce { pick 0 }, fuse)"));
+    }
+
+    #[test]
+    fn a_rule_that_needs_a_term_says_so_when_written_bare() {
+        let e = err("each(introduce)");
+        assert!(e.contains("needs a term"), "{}", e);
+        assert!(e.contains("pick 0"), "{}", e);
+    }
+
+    #[test]
+    fn a_rule_that_takes_no_term_says_so_when_given_one() {
+        let e = err("each(sink { pick 0 })");
+        assert!(e.contains("does not take a term"), "{}", e);
+        assert!(e.contains("bare"), "{}", e);
+    }
+
+    #[test]
+    fn a_term_that_cannot_be_used_says_why() {
+        // `panic` has no arity, so there is no saying what it discards.
+        let e = err("each(introduce { panic })");
+        assert!(e.contains("not an instruction"), "{}", e);
+        // And one that consumes nothing is refused with its own reason.
+        let e = err("each(introduce { push 1 })");
+        assert!(e.contains("cannot use that term"), "{}", e);
+    }
+
+    #[test]
+    fn an_unknown_instruction_points_at_the_ones_that_exist() {
+        let e = err("each(introduce { frobnicate })");
+        assert!(e.contains("frobnicate"), "{}", e);
+        assert!(e.contains("pick n"), "{}", e);
+    }
+
+    #[test]
+    fn an_instruction_missing_its_number_says_so() {
+        let e = err("each(introduce { pick })");
+        assert!(e.contains("needs a number"), "{}", e);
+        let e = err("each(introduce { push })");
+        assert!(e.contains("needs a literal"), "{}", e);
+    }
+
+    #[test]
+    fn a_term_matcher_still_has_to_be_placed() {
+        let e = err("introduce { pick 0 }");
+        assert!(e.contains("not a tactic"), "{}", e);
+        assert!(e.contains("once("), "{}", e);
+    }
+
+    #[test]
+    fn an_unclosed_term_is_an_error_rather_than_a_silent_end() {
+        assert!(
+            Definitions::new()
+                .compile("each(introduce { pick 0")
+                .is_err()
+        );
     }
 }

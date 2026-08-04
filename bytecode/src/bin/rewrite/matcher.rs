@@ -83,38 +83,80 @@ fn at_window(prog: &Program, rule: Rule2, dir: Direction) -> Option<Vec<PlannedS
     }])
 }
 
-/// Every matcher, by name. A tactic expression can order and place these but
-/// cannot define one: they are a fixed vocabulary in their own namespace.
-pub(crate) const ALL_MATCHERS: &[&dyn Matcher] = &[
-    &Annihilate,
-    &AnnihilateFlagged,
-    &CancelTuple,
-    &Collapse,
-    &Counit,
-    &CopyAssoc,
-    &CopyConst,
-    &Distribute,
-    &EvalBinary,
-    &EvalUnary,
-    &Expand,
-    &Factor,
-    &Flatten,
-    &Float,
-    &FoldBranch,
-    &Fuse,
-    &Sink,
-    &Unfactor,
-    &Unfold,
-];
-
-pub(crate) fn matcher_by_name(name: &str) -> Option<&'static dyn Matcher> {
-    ALL_MATCHERS.iter().copied().find(|m| m.name() == name)
+/// Every matcher that takes no arguments, by name.
+///
+/// A tactic expression can order and place these but cannot define one: they
+/// are a fixed vocabulary in their own namespace. [`Introduce`] is not here
+/// because it is not complete without a term — see [`matcher_with_term`].
+pub(crate) fn matcher_by_name(name: &str) -> Option<Box<dyn Matcher>> {
+    Some(match name {
+        "annihilate" => Box::new(Annihilate),
+        "annihilate_flagged" => Box::new(AnnihilateFlagged),
+        "cancel_tuple" => Box::new(CancelTuple),
+        "collapse" => Box::new(Collapse),
+        "copy_assoc" => Box::new(CopyAssoc),
+        "copy_const" => Box::new(CopyConst),
+        "counit" => Box::new(Counit),
+        "distribute" => Box::new(Distribute),
+        "eval1" => Box::new(EvalUnary),
+        "eval2" => Box::new(EvalBinary),
+        "expand" => Box::new(Expand),
+        "factor" => Box::new(Factor),
+        "flatten" => Box::new(Flatten),
+        "float" => Box::new(Float),
+        "fold_branch" => Box::new(FoldBranch),
+        "fuse" => Box::new(Fuse),
+        "sink" => Box::new(Sink),
+        "unfactor" => Box::new(Unfactor),
+        "unfold" => Box::new(Unfold),
+        _ => return None,
+    })
 }
 
+/// The matchers that take no arguments, in the order `--list-rules` prints.
 pub(crate) fn matcher_names() -> Vec<&'static str> {
-    let mut names: Vec<&'static str> = ALL_MATCHERS.iter().map(|m| m.name()).collect();
+    let mut names = vec![
+        "annihilate",
+        "annihilate_flagged",
+        "cancel_tuple",
+        "collapse",
+        "copy_assoc",
+        "copy_const",
+        "counit",
+        "distribute",
+        "eval1",
+        "eval2",
+        "expand",
+        "factor",
+        "flatten",
+        "float",
+        "fold_branch",
+        "fuse",
+        "sink",
+        "unfactor",
+        "unfold",
+    ];
     names.sort();
     names
+}
+
+/// The matchers that need a term, by name.
+pub(crate) fn term_matcher_names() -> Vec<&'static str> {
+    vec!["introduce"]
+}
+
+/// A matcher completed by a term written in the tactic expression.
+///
+/// `None` for a name that is not one of these; `Err` for one that is but whose
+/// term it cannot use.
+pub(crate) fn matcher_with_term(
+    name: &str,
+    term: Vec<Node>,
+) -> Option<Result<Box<dyn Matcher>, String>> {
+    match name {
+        "introduce" => Some(Introduce::new(term).map(|m| Box::new(m) as Box<dyn Matcher>)),
+        _ => None,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -797,7 +839,7 @@ fn annihilate_with(prog: &Program, window: &[Node], m: usize) -> Option<Vec<Plan
     at_window(
         prog,
         Rule2::Annihilate {
-            x: x.clone(),
+            x: vec![x.clone()],
             n: usize::try_from(n).ok()?,
             m,
         },
@@ -807,6 +849,128 @@ fn annihilate_with(prog: &Program, window: &[Node], m: usize) -> Option<Vec<Plan
 
 fn is_drop(node: &Node) -> bool {
     matches!(node, Node::Op(Instruction::Drop))
+}
+
+/// Puts a computation into the term, at a place a `drop` was already standing.
+///
+/// The annihilation law read backwards: `drop^n` becomes `X ; drop^m`, for the
+/// `X : n -> m` the tactic named. Both sides discard exactly the same `n`
+/// values, so the term means what it meant — but it now contains `X`, which is
+/// something no rule reading the window could have supplied.
+///
+/// **This is the first matcher that takes an argument, and it has to.** Every
+/// other one reads a shape and rewrites it, so what it produces is a function
+/// of what it found. An introduction has nothing to read: `drop` says nothing
+/// about what computation ought to appear in front of it. The term comes from
+/// the tactic expression:
+///
+/// ```text
+/// then(once(introduce { pick 0 }))
+/// ```
+///
+/// It is what makes factoring reachable when only one arm has the code you want
+/// to hoist. Give the other arm a `pick 0` it immediately discards, and the two
+/// arms now share a prefix that `factor` can lift out — the copy having been
+/// paid for in a place where it provably costs nothing.
+///
+/// Measure: none, and it *grows* the term. Aiming it is entirely the caller's
+/// job, which is what `once`, `then`, `else` and `repeat_n` are for. Putting it
+/// in a `repeat` will exhaust the budget.
+#[derive(Debug)]
+pub(crate) struct Introduce {
+    x: Vec<Node>,
+    /// `x`'s arity, worked out when the tactic was compiled. It is a property
+    /// of the term alone — terms hold no calls — so it needs no library.
+    n: usize,
+    m: usize,
+}
+
+impl Introduce {
+    pub(crate) fn new(x: Vec<Node>) -> Result<Self, String> {
+        if x.is_empty() {
+            return Err("there is nothing to introduce".to_string());
+        }
+        let Some((n, m)) = term_arity(&x) else {
+            return Err(
+                "the arity of that is not known, so there is no way to say how \
+                 many values it discards"
+                    .to_string(),
+            );
+        };
+        let (Ok(n), Ok(m)) = (usize::try_from(n), usize::try_from(m)) else {
+            return Err(format!("an arity of {:?} cannot be used here", (n, m)));
+        };
+        if n == 0 {
+            // Two reasons, and either would do. A term that consumes nothing
+            // would match a window of no nodes, which is every position, so
+            // `each` would never move past the first one. And it would gain
+            // nothing: this law discards whatever the term produces, so
+            // `push 7` could only ever become `push 7 ; drop`, which no
+            // later step can use.
+            return Err(
+                "that consumes nothing, so there is no drop for it to stand in \
+                 front of — and its result would be discarded on the spot"
+                    .to_string(),
+            );
+        }
+        Ok(Introduce { x, n, m })
+    }
+}
+
+impl Matcher for Introduce {
+    fn name(&self) -> &'static str {
+        "introduce"
+    }
+    /// The `n` drops the term will stand in front of. A width that depends on
+    /// the argument is the whole reason matchers are values rather than
+    /// statics.
+    fn width(&self) -> usize {
+        self.n
+    }
+    fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
+        if !window.iter().all(is_drop) {
+            return None;
+        }
+        at_window(
+            prog,
+            Rule2::Annihilate {
+                x: self.x.clone(),
+                n: self.n,
+                m: self.m,
+            },
+            Direction::Reverse,
+        )
+    }
+}
+
+/// The arity of a term written in a tactic expression.
+///
+/// Terms are built from instructions and frames and never name a sentence, so
+/// this answers without a library — which is what lets a tactic be compiled
+/// before a program is loaded. `None` for anything whose reckoning stops, which
+/// for a term means a `panic`.
+pub(crate) fn term_arity(nodes: &[Node]) -> Option<(i64, i64)> {
+    let mut inputs = 0i64;
+    let mut size = 0i64;
+    for node in nodes {
+        let (n, m) = match node {
+            Node::Op(inst) => bytecode::arity::op_arity(inst)?,
+            Node::Dip { depth, body, .. } => {
+                let (n, m) = term_arity(body)?;
+                let d = *depth as i64;
+                (d + n, d + m)
+            }
+            // A term cannot hold one, and if one appears the caller built it
+            // rather than parsed it.
+            Node::Call { .. } | Node::Branch { .. } => return None,
+        };
+        if size < n {
+            inputs += n - size;
+            size = n;
+        }
+        size = size - n + m;
+    }
+    Some((inputs, size))
 }
 
 /// `pick d ; drop` becomes nothing.
@@ -1499,6 +1663,104 @@ mod tests {
         assert!(Unfold.plan(&prog, &w).is_none());
     }
 
+    // -- introduce ----------------------------------------------------------
+
+    fn introduce(term: Vec<Node>) -> Introduce {
+        Introduce::new(term).unwrap_or_else(|e| panic!("{}", e))
+    }
+
+    #[test]
+    fn introduce_puts_the_named_code_in_front_of_the_drops_it_pays_for() {
+        // `pick 0` is (1 -> 2), so it stands in front of one drop and brings
+        // two of its own. Both sides discard exactly one value.
+        let m = introduce(vec![op(Instruction::Pick(0))]);
+        assert_eq!(m.width(), 1);
+        assert_eq!(
+            fire(&m, &prog(), &[op(Instruction::Drop)]),
+            Some(vec![
+                op(Instruction::Pick(0)),
+                op(Instruction::Drop),
+                op(Instruction::Drop),
+            ])
+        );
+    }
+
+    #[test]
+    fn introduce_reads_as_many_drops_as_the_term_consumes() {
+        // `add` is (2 -> 2): it stands in front of *two* drops. A matcher whose
+        // width depends on its argument is why matchers are values.
+        let m = introduce(vec![op(Instruction::Add)]);
+        assert_eq!(m.width(), 2);
+        let w = [op(Instruction::Drop), op(Instruction::Drop)];
+        assert_eq!(
+            fire(&m, &prog(), &w),
+            Some(vec![
+                op(Instruction::Add),
+                op(Instruction::Drop),
+                op(Instruction::Drop),
+            ])
+        );
+    }
+
+    #[test]
+    fn introduce_declines_a_window_that_is_not_all_drops() {
+        let m = introduce(vec![op(Instruction::Add)]);
+        assert!(
+            m.plan(&prog(), &[op(Instruction::Drop), op(Instruction::Not)])
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_term_that_consumes_nothing_is_refused() {
+        // `push 7` is (0 -> 1). A width-0 matcher matches at every position,
+        // so `each` would never move past the first — and the law discards
+        // what the term makes anyway, so there would be nothing to gain.
+        let err = Introduce::new(vec![op(Instruction::Push(Value::Int(7)))]).unwrap_err();
+        assert!(err.contains("consumes nothing"), "{}", err);
+    }
+
+    #[test]
+    fn introduce_takes_a_whole_sequence() {
+        let m = introduce(vec![op(Instruction::Pick(0)), op(Instruction::IsBool)]);
+        // pick 0 is (1 -> 2), is_bool is (1 -> 1): together (1 -> 2).
+        assert_eq!(m.width(), 1);
+        let got = fire(&m, &prog(), &[op(Instruction::Drop)]).unwrap();
+        assert_eq!(got.len(), 4, "{:?}", got);
+    }
+
+    #[test]
+    fn introduce_refuses_a_term_with_no_arity() {
+        assert!(Introduce::new(Vec::new()).is_err());
+        assert!(Introduce::new(vec![op(Instruction::Panic)]).is_err());
+    }
+
+    #[test]
+    fn the_introduced_code_is_undone_by_annihilate() {
+        // Forward and backward readings of one law, so what `introduce` puts in
+        // `annihilate` takes straight back out.
+        let m = introduce(vec![op(Instruction::Pick(0))]);
+        let with = fire(&m, &prog(), &[op(Instruction::Drop)]).unwrap();
+        // `pick 0 ; drop` is the counit; the remaining `drop` is the original.
+        assert_eq!(
+            fire(&Counit, &prog(), &with[..2]),
+            Some(Vec::new()),
+            "{:?}",
+            with
+        );
+    }
+
+    #[test]
+    fn term_arity_reckons_frames_without_a_library() {
+        assert_eq!(term_arity(&[op(Instruction::Pick(0))]), Some((1, 2)));
+        assert_eq!(
+            term_arity(&[dip(2, vec![op(Instruction::Drop)])]),
+            Some((3, 2))
+        );
+        assert_eq!(term_arity(&[]), Some((0, 0)));
+        assert_eq!(term_arity(&[op(Instruction::Panic)]), None);
+    }
+
     // -- the registry -------------------------------------------------------
 
     #[test]
@@ -1507,10 +1769,29 @@ mod tests {
         let mut unique = names.clone();
         unique.dedup();
         assert_eq!(names.len(), unique.len(), "two matchers share a name");
+        // The constructor and the name list are separate, so they can drift.
+        // This is where that would show up.
         for name in &names {
-            assert_eq!(matcher_by_name(name).map(|m| m.name()), Some(*name));
+            assert_eq!(
+                matcher_by_name(name).map(|m| m.name()),
+                Some(*name),
+                "`{}` is listed but does not construct as itself",
+                name
+            );
         }
         assert!(matcher_by_name("no_such_matcher").is_none());
+        for name in term_matcher_names() {
+            assert!(
+                matcher_by_name(name).is_none(),
+                "`{}` needs a term and must not construct without one",
+                name
+            );
+            let built = matcher_with_term(name, vec![op(Instruction::Pick(0))])
+                .unwrap_or_else(|| panic!("`{}` is listed but takes no term", name))
+                .unwrap_or_else(|e| panic!("`{}` rejected a plain term: {}", name, e));
+            assert_eq!(built.name(), name);
+        }
+        assert!(matcher_with_term("sink", Vec::new()).is_none());
     }
 
     #[test]
@@ -1540,7 +1821,16 @@ mod tests {
         ];
 
         let mut fired = 0;
-        for m in ALL_MATCHERS {
+        let mut all: Vec<Box<dyn Matcher>> = matcher_names()
+            .into_iter()
+            .filter_map(matcher_by_name)
+            .collect();
+        all.push(
+            matcher_with_term("introduce", vec![op(Instruction::Pick(0))])
+                .unwrap()
+                .unwrap(),
+        );
+        for m in &all {
             let width = m.width();
             // Every window of this width over the corpus, in both orders, so
             // that pairs like `push ; pick 0` and `pick 0 ; push` both occur.
@@ -1550,7 +1840,7 @@ mod tests {
                     for k in 0..width {
                         window.push(corpus[(i + j * k) % corpus.len()].clone());
                     }
-                    if fire(*m, &prog, &window).is_some() {
+                    if fire(m.as_ref(), &prog, &window).is_some() {
                         fired += 1;
                     }
                 }

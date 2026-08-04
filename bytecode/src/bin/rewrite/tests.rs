@@ -461,6 +461,81 @@ fn passes_compose() {
 }
 
 // ---------------------------------------------------------------------------
+// Introducing code
+// ---------------------------------------------------------------------------
+
+/// The move that makes factoring reachable when only one arm has the prefix.
+///
+/// Every other matcher rewrites what it found, so a rule reading `drop` could
+/// never propose `pick 0` — nothing in the window says which computation ought
+/// to appear. The term comes from the tactic expression, and the annihilation
+/// law read backwards is what makes putting it there sound: both sides discard
+/// exactly the same value.
+#[test]
+fn introducing_a_copy_lets_factoring_reach_an_arm_that_lacked_it() {
+    // A predicate whose then-arm copies the value and whose else-arm does not.
+    let code = r#"
+        #[total]
+        function probe {
+            pick 0
+            is_bool
+            branch {
+                pick 0
+                branch { } { drop 0 push true }
+            } {
+                drop 0
+                push true
+            }
+        }
+    "#;
+    let (prog, plain) = tree_of(code, "id");
+
+    // Nothing to factor: the arms share no prefix.
+    let untouched = run(prog, plain.clone(), FACTOR);
+    assert_eq!(
+        shape(&untouched),
+        shape(&plain),
+        "there was a shared prefix"
+    );
+
+    // Give the else arm a `pick 0` it immediately discards, and now there is.
+    let (got, script) = with_script(prog, plain, "else(once(introduce { pick 0 })); factoring");
+    assert_eq!(
+        shape(&got)[2],
+        "dip 1 { pick 0 }",
+        "the copy was not hoisted: {:?}",
+        shape(&got)
+    );
+
+    // One step to introduce, three to factor.
+    assert_eq!(script.len(), 4);
+    assert_eq!(script[0].kind.name(), "annihilate");
+    assert_eq!(script[0].dir, crate::rule2::Direction::Reverse);
+}
+
+#[test]
+fn what_introduce_puts_in_annihilate_takes_back_out() {
+    // Forward and backward readings of one law, so the two undo each other and
+    // the term is where it started.
+    let code = "sentence probe { drop 0 push 1 }";
+    let (prog, plain) = tree_of(code, "id");
+    let there = run(prog, plain.clone(), "once(introduce { pick 0 })");
+    assert_ne!(shape(&there), shape(&plain));
+    let back = run(prog, there, "annihilation");
+    assert_eq!(shape(&back), shape(&plain));
+}
+
+#[test]
+fn introducing_preserves_what_the_program_does() {
+    // The check every test here runs anyway, said explicitly for the one
+    // matcher that makes a term bigger on purpose.
+    let code = "sentence probe { drop 0 drop 0 push 1 }";
+    let (prog, plain) = tree_of(code, "id");
+    let got = run(prog, plain.clone(), "once(introduce { pick 1 is_bool })");
+    assert_eq!(net(prog, &plain), net(prog, &got));
+}
+
+// ---------------------------------------------------------------------------
 // The corpus
 // ---------------------------------------------------------------------------
 
