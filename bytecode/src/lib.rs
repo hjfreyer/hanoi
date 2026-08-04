@@ -101,7 +101,7 @@ mod tests {
     #[test]
     fn test_assemble_dip() {
         let code = r#"
-            #[arity(3, 2)]
+            #[arity(3, 3)]
             sentence entry {
                 dip 1 {
                     add
@@ -115,19 +115,18 @@ mod tests {
             res.sentences[SentenceIndex::from(0)],
             vec![Instruction::Dip(1, SentenceIndex::from(1))]
         );
-        // `add` is fallible, so it leaves a success flag; without `#[flags]`
-        // the assembler drops it right there and the block's effect on the
-        // stack is what it always was.
+        // `add` stands alone: the flag it leaves is the block's third output,
+        // not something the assembler splices a drop in to remove.
         assert_eq!(
             res.sentences[SentenceIndex::from(1)],
-            vec![Instruction::Add, Instruction::Drop]
+            vec![Instruction::Add]
         );
     }
 
     #[test]
     fn test_assemble_dip_count_defaults_to_one() {
         let code = r#"
-            #[arity(3, 2)]
+            #[arity(3, 3)]
             sentence entry {
                 dip { add }
             }
@@ -142,11 +141,11 @@ mod tests {
     #[test]
     fn test_assemble_dip_to_label() {
         let code = r#"
-            #[arity(2, 1)]
+            #[arity(2, 2)]
             sentence add_two {
                 add
             }
-            #[arity(4, 3)]
+            #[arity(4, 4)]
             sentence entry {
                 dip 2 add_two
             }
@@ -162,7 +161,7 @@ mod tests {
     #[test]
     fn test_dip_arity_counts_the_hidden_region() {
         // `dip 1 { add }` needs two values for the add plus one to hide, and
-        // leaves the hidden value on top of the sum.
+        // leaves the hidden value on top of the sum and its flag.
         let code = r#"
             #[arity(1, 1)]
             sentence bad_dip {
@@ -178,7 +177,7 @@ mod tests {
 
         // The same body checks out against the arity it actually has.
         let code = r#"
-            #[arity(3, 2)]
+            #[arity(3, 3)]
             sentence good_dip {
                 dip { add }
             }
@@ -355,7 +354,7 @@ mod tests {
 
         // 2. Net stack change is wrong
         let code = r#"
-            #[arity(2, 2)]
+            #[arity(2, 1)]
             sentence bad_net_change {
                 add
             }
@@ -363,7 +362,7 @@ mod tests {
         let res = assemble(code);
         assert!(res.is_err());
         assert!(res.unwrap_err().contains(
-            "net stack change of -1, but annotated arity 2 -> 2 expects net change of 0"
+            "net stack change of 0, but annotated arity 2 -> 1 expects net change of -1"
         ));
 
         // 3. Mismatched branch arities
@@ -441,9 +440,9 @@ mod tests {
             }
         "#;
         let res3 = assemble(code3).unwrap();
-        // Five instructions for four written: `add` is fallible and its flag is
-        // dropped on the spot, so the depth goes 2 -> 2 -> 1 rather than
-        // 2 -> 1.
+        // One entry per written instruction, each the arity of the prefix
+        // before it. `add` is fallible and the sentence keeps its flag, so the
+        // depth stays at 2 across it and the `drop 0` takes it back to 1.
         assert_eq!(
             res3.instruction_arities[SentenceIndex::from(0)],
             Some(vec![
@@ -462,10 +461,6 @@ mod tests {
                 Arity::Normal {
                     inputs: 0,
                     outputs: 2
-                },
-                Arity::Normal {
-                    inputs: 0,
-                    outputs: 1
                 },
             ])
         );

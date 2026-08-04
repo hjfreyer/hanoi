@@ -464,8 +464,8 @@ mod tests {
             Instruction::Push(Value::Int(10)),
             Instruction::Push(Value::Int(20)),
             Instruction::Add,
-            // Hand-written bytecode, so nothing inserts the flag-drop that
-            // `assemble` would put here for a sentence without `#[flags]`.
+            // `add` is fallible, so this drops the flag it leaves. Source would
+            // say `assert`; hand-written bytecode says what it means.
             Instruction::Drop,
             Instruction::Push(Value::Int(30)),
             Instruction::AssertEqual,
@@ -719,7 +719,6 @@ mod tests {
     #[test]
     fn test_integration_assembler_vm() {
         let code = r#"
-            #[flags]
             export sentence start {
                 push 10
                 push 20
@@ -755,13 +754,11 @@ mod tests {
             symbol status_ok "Successful execution"
             symbol status_error "Execution error"
             
-            #[flags]
             export sentence entry {
                 push status_ok
                 jump verify
             }
             
-            #[flags]
             sentence verify {
                 // Top of stack has the passed symbol. Compare it to status_ok.
                 push status_ok
@@ -790,7 +787,6 @@ mod tests {
             symbol ascii_sym "hello"
             symbol unicode_sym "café"
             
-            #[flags]
             export sentence test_len {
                 push ascii_sym
                 symbol_len
@@ -805,7 +801,6 @@ mod tests {
                 assert_eq
             }
             
-            #[flags]
             export sentence test_char_at {
                 push ascii_sym
                 push 1
@@ -822,7 +817,6 @@ mod tests {
                 assert_eq
             }
             
-            #[flags]
             export sentence test_out_of_bounds {
                 push unicode_sym
                 push 4
@@ -860,7 +854,6 @@ mod tests {
     #[test]
     fn test_tracing_execution() {
         let code = r#"
-            #[flags]
             export sentence entry {
                 push 42
                 push 100
@@ -891,13 +884,11 @@ mod tests {
             symbol to_sym "ToSymbol"
             symbol payload "Payload"
             mod base {
-                #[flags]
                 export function init {
                     untuple 0
                     assert
                     push 0
                 }
-                #[flags]
                 export function accept {
                     untuple 2
                     assert
@@ -905,14 +896,12 @@ mod tests {
                     push crate::payload
                     equal
                 }
-                #[flags]
                 export function emit {
                     drop 0
                     push crate::payload
                     push true
                     tuple 2
                 }
-                #[flags]
                 export function process {
                     untuple 2
                     assert
@@ -920,17 +909,14 @@ mod tests {
                     drop 0
                     push 1
                 }
-                #[flags]
                 export function is_done {
                     drop 0
                     push false
                 }
-                #[flags]
                 export function is_ready_to_finish {
                     drop 0
                     push false
                 }
-                #[flags]
                 export function tau_reduce {
                     push false
                     tuple 2
@@ -940,7 +926,6 @@ mod tests {
             mod prefixed compose_prefix(base, from_sym);
             mod renamed compose_rename_prefix(from_sym, to_sym, prefixed);
 
-            #[flags]
             export sentence test_rename {
                 // Initialize state
                 tuple 0
@@ -1008,13 +993,9 @@ mod tests {
             symbol a
             symbol b
             mod m {
-                #[flags]
                 export function init { untuple 0 assert push 0 }
-                #[flags]
                 export sentence accept { untuple 2 assert drop 0 drop 0 push false }
-                #[flags]
                 export function emit { drop 0 tuple 0 push false tuple 2 }
-                #[flags]
                 export sentence process { }
             }
             mod bad compose_rename_prefix(a, m);
@@ -1026,14 +1007,12 @@ mod tests {
     fn test_compose_static_closure() {
         let code = r#"
             mod base {
-                #[flags]
                 export function init {
                     // Stack has the value pushed by the composer
                     push 10
                     add
                     assert
                 }
-                #[flags]
                 export function accept {
                     untuple 2
                     assert
@@ -1041,14 +1020,12 @@ mod tests {
                     drop 0
                     push false
                 }
-                #[flags]
                 export function emit {
                     drop 0
                     tuple 0
                     push false
                     tuple 2
                 }
-                #[flags]
                 export function process {
                     untuple 2
                     assert
@@ -1057,17 +1034,14 @@ mod tests {
                     add
                     assert
                 }
-                #[flags]
                 export function tau_reduce {
                     push false
                     tuple 2
                 }
-                #[flags]
                 export function is_done {
                     drop 0
                     push false
                 }
-                #[flags]
                 export function is_ready_to_finish {
                     drop 0
                     push false
@@ -1076,7 +1050,6 @@ mod tests {
 
             mod closed compose_static_closure(base, 42);
 
-            #[flags]
             export sentence test_closure {
                 // Initialize state: should push 42, then call base::init which adds 10 -> returns 52
                 tuple 0
@@ -1107,13 +1080,11 @@ mod tests {
     fn test_tau_reduce() {
         let code = r#"
             mod m_no_tau {
-                #[flags]
                 export function init {
                     untuple 0
                     assert
                     push 0
                 }
-                #[flags]
                 export sentence accept {
                     untuple 2
                     assert
@@ -1121,30 +1092,25 @@ mod tests {
                     drop 0
                     push false
                 }
-                #[flags]
                 export function emit {
                     drop 0
                     tuple 0
                     push false
                     tuple 2
                 }
-                #[flags]
                 export function tau_reduce {
                     push false
                     tuple 2
                 }
-                #[flags]
                 export function process {
                     untuple 2
                     assert
                     drop 1
                 }
-                #[flags]
                 export function is_done {
                     drop 0
                     push false
                 }
-                #[flags]
                 export function is_ready_to_finish {
                     drop 0
                     push false
@@ -1152,13 +1118,11 @@ mod tests {
             }
 
             mod m_with_tau {
-                #[flags]
                 export function init {
                     untuple 0
                     assert
                     push 0
                 }
-                #[flags]
                 export sentence accept {
                     untuple 2
                     assert
@@ -1166,39 +1130,33 @@ mod tests {
                     drop 0
                     push false
                 }
-                #[flags]
                 export function emit {
                     drop 0
                     tuple 0
                     push false
                     tuple 2
                 }
-                #[flags]
                 export function tau_reduce {
                     drop 0
                     push 1
                     push true
                     tuple 2
                 }
-                #[flags]
                 export function process {
                     untuple 2
                     assert
                     drop 1
                 }
-                #[flags]
                 export function is_done {
                     drop 0
                     push false
                 }
-                #[flags]
                 export function is_ready_to_finish {
                     drop 0
                     push false
                 }
             }
 
-            #[flags]
             export sentence test_tau {
                 // Test m_no_tau
                 tuple 0
@@ -1734,14 +1692,12 @@ mod runtime_tests {
                     symbol pong "pong event"
                 }
 
-                #[flags]
                 export function init {
                     untuple 0
                     assert
                     push state::init
                 }
 
-                #[flags]
                 export sentence accept {
                     untuple 2
                     assert
@@ -1757,13 +1713,11 @@ mod runtime_tests {
                     }
                 }
 
-                #[flags]
                 export function tau_reduce {
                     push false
                     tuple 2
                 }
 
-                #[flags]
                 export function emit {
                     push state::init
                     equal
@@ -1778,7 +1732,6 @@ mod runtime_tests {
                     }
                 }
 
-                #[flags]
                 export function process {
                     untuple 2
                     assert
@@ -1795,13 +1748,11 @@ mod runtime_tests {
                     }
                 }
 
-                #[flags]
                 export function is_done {
                     push state::done
                     equal
                 }
 
-                #[flags]
                 export function is_ready_to_finish {
                     drop 0
                     push false
@@ -1849,14 +1800,12 @@ mod runtime_tests {
             mod main {
                 symbol hello "Hello, World!"
 
-                #[flags]
                 export function init {
                     untuple 0
                     assert
                     push 0
                 }
 
-                #[flags]
                 export sentence accept {
                     untuple 2
                     assert
@@ -1865,13 +1814,11 @@ mod runtime_tests {
                     push false
                 }
 
-                #[flags]
                 export function tau_reduce {
                     push false
                     tuple 2
                 }
 
-                #[flags]
                 export function emit {
                     pick 0
                     push hello
@@ -1912,7 +1859,6 @@ mod runtime_tests {
                     }
                 }
 
-                #[flags]
                 export function process {
                     untuple 2
                     assert
@@ -1922,7 +1868,6 @@ mod runtime_tests {
                     assert
                 }
 
-                #[flags]
                 export function is_done {
                     push hello
                     symbol_len
@@ -1932,7 +1877,6 @@ mod runtime_tests {
                     not
                 }
 
-                #[flags]
                 export function is_ready_to_finish {
                     drop 0
                     push false

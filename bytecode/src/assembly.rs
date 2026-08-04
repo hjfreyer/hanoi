@@ -640,7 +640,6 @@ fn parse_annotations(stream: &mut TokenStream) -> Result<Vec<SourceAnnotation>, 
             }
             "recursive" => Annotation::Recursive,
             "total" => Annotation::Total,
-            "flags" => Annotation::Flags,
             other => return Err(format!("Unsupported annotation '{}'", other)),
         };
         stream.expect(Token::RBracket)?;
@@ -1077,7 +1076,6 @@ impl<'a> Compiler<'a> {
                     Annotation::Arity(n, m) => Annotation::Arity(*n, *m),
                     Annotation::Recursive => Annotation::Recursive,
                     Annotation::Total => Annotation::Total,
-                    Annotation::Flags => Annotation::Flags,
                 })
             })
             .collect()
@@ -1124,28 +1122,11 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    /// Whether the sentence being compiled asked to see the success flags.
-    ///
-    /// The default is to drop them, which is what keeps every `.hana` program
-    /// written against the old arities working: a fallible instruction still
-    /// leaves one value where it used to, and the flag is thrown away between
-    /// them. `#[flags]` is how a sentence opts into reading it instead.
-    fn keeps_flags(&self) -> bool {
-        let Some(idx) = self.current_parent_idx else {
-            return false;
-        };
-        let idx: usize = idx.into();
-        self.annotations
-            .get(idx)
-            .is_some_and(|anns| anns.iter().any(|a| matches!(a, Annotation::Flags)))
-    }
-
     fn compile_sentence_body(
         &mut self,
         scope: ModuleId,
         instructions: Vec<ParsedInstruction>,
     ) -> Result<Vec<Instruction>, String> {
-        let keeps_flags = self.keeps_flags();
         let mut compiled = Vec::new();
         for inst in instructions {
             let c_inst = match inst {
@@ -1225,14 +1206,7 @@ impl<'a> Compiler<'a> {
                     }
                 }
             };
-            // A fallible instruction leaves its flag on top. Unless the
-            // sentence asked for it, drop it right here, so the instruction's
-            // effect on the surrounding code is exactly what it always was.
-            let fallible = crate::arity::is_fallible(&c_inst);
             compiled.push(c_inst);
-            if fallible && !keeps_flags {
-                compiled.push(Instruction::Drop);
-            }
         }
         Ok(compiled)
     }
@@ -1259,18 +1233,14 @@ impl<'a> Compiler<'a> {
 
                 // A branch arm or dip body is part of the sentence that wrote
                 // it, so the annotations that change how its instructions
-                // compile have to follow it in. `#[flags]` especially: a block
-                // that dropped its flags while its parent kept them would give
-                // one sentence two different instruction sets.
+                // compile have to follow it in.
                 let mut inline_anns = Vec::new();
                 if let Some(parent_idx) = self.current_parent_idx {
                     let parent_idx_usize: usize = parent_idx.into();
-                    if parent_idx_usize < self.annotations.len() {
-                        for ann in [Annotation::Recursive, Annotation::Flags] {
-                            if self.annotations[parent_idx_usize].contains(&ann) {
-                                inline_anns.push(ann);
-                            }
-                        }
+                    if parent_idx_usize < self.annotations.len()
+                        && self.annotations[parent_idx_usize].contains(&Annotation::Recursive)
+                    {
+                        inline_anns.push(Annotation::Recursive);
                     }
                 }
                 self.annotations.push(inline_anns);

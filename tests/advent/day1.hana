@@ -1,6 +1,5 @@
 symbol input0 "39472"
 
-#[flags]
 sentence sync_char_iterator_in {
     pick 0
     push crate::prelude::start
@@ -25,7 +24,6 @@ sentence sync_char_iterator_in {
     }
 }
 
-#[flags]
 sentence sync_parseint_in {
     pick 0
     push crate::prelude::start
@@ -83,7 +81,6 @@ mod harness compose_accept_static(
     )
 );
 
-#[flags]
 sentence sync_set {
     pick 0
     push crate::prelude::start
@@ -112,7 +109,6 @@ mod sut_and_harness compose_concurrent(sut, harness, sync_set);
 
 mod test0 compose_hidden(sut_and_harness, sync_set);
 
-#[flags]
 #[recursive]
 sentence run_tau_reductions {
     // Stack: [state]
@@ -131,7 +127,6 @@ sentence run_tau_reductions {
     }
 }
 
-#[flags]
 #[recursive]
 test sentence verify_day1_manually {
     tuple 0

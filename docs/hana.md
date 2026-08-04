@@ -93,7 +93,6 @@ Hanoi supports static assertion checking at compile time via attributes. `#[arit
 - `#[postcondition(fn_name)]`: Names a `1 -> 1` function that must evaluate to `true` on the output, given the precondition (if any) held on the input.
 - `#[total]`: Declares that the sentence cannot fail — it neither executes `panic`, `assert` or `assert_eq` nor reaches anything that does. **Checked** by the compiler, and opt-in: an unannotated sentence makes no claim, so generated code and branch arms need no annotation. See [docs/totality.md](totality.md).
 - `#[recursive]`: Marks a sentence participating in a recursive call cycle so the verifier can model it.
-- `#[flags]`: Makes the sentence read the success flags that fallible instructions leave. Without it the compiler drops each flag as it emits the instruction, which is why existing source is unaffected by them. See [docs/totality.md](totality.md).
 
 Precondition/postcondition functions are ordinary `1 -> 1` functions, but they are commonly generated with the `type`/`enum` sugar rather than written by hand:
 

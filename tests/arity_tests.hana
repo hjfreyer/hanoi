@@ -1,26 +1,22 @@
 // Integration tests for sentence arity annotations
 
-#[flags]
 #[arity(2, 1)]
 sentence add_two {
     add
     assert
 }
 
-#[flags]
 #[arity(0, 1)]
 sentence push_val {
     push 100
 }
 
-#[flags]
 function double_val {
     pick 0
     add
     assert
 }
 
-#[flags]
 test sentence test_arity_add_two {
     push 40
     push 2
@@ -29,14 +25,12 @@ test sentence test_arity_add_two {
     assert_eq
 }
 
-#[flags]
 test sentence test_arity_push_val {
     jump push_val
     push 100
     assert_eq
 }
 
-#[flags]
 test sentence test_arity_double {
     push 21
     jump double_val
@@ -44,20 +38,17 @@ test sentence test_arity_double {
     assert_eq
 }
 
-#[flags]
 function recursive_helper {
     push 1
     add
     assert
 }
 
-#[flags]
 function nested_arity_calls {
     jump recursive_helper
     jump recursive_helper
 }
 
-#[flags]
 test sentence test_arity_nested_calls {
     push 10
     jump nested_arity_calls
@@ -65,14 +56,12 @@ test sentence test_arity_nested_calls {
     assert_eq
 }
 
-#[flags]
 function square {
     pick 0
     multiply
     assert
 }
 
-#[flags]
 test sentence test_function_keyword {
     push 6
     jump square

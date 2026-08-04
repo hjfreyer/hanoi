@@ -1,4 +1,3 @@
-#[flags]
 function init {
     // Stack: [args]
     jump {{target}}::init
@@ -6,7 +5,6 @@ function init {
 }
 
 
-#[flags]
 function accept {
     // Stack: [(state, event)]
     untuple 2
@@ -58,7 +56,6 @@ function accept {
     }
 }
 
-#[flags]
 function emit {
     // Stack: [state]
     jump {{target}}::emit
@@ -89,7 +86,6 @@ function emit {
     }
 }
 
-#[flags]
 function process {
     // Stack: [(state, event)]
     untuple 2
@@ -112,7 +108,6 @@ function process {
     // Stack: [next_state]
 }
 
-#[flags]
 function tau_reduce {
     // Stack: [state]
     push false
@@ -121,14 +116,12 @@ function tau_reduce {
     // Stack: [(false, state)]
 }
 
-#[flags]
 function is_done {
     // Stack: [state]
     jump {{target}}::is_done
     // Stack: [Bool]
 }
 
-#[flags]
 function is_ready_to_finish {
     // Stack: [state]
     jump {{target}}::is_ready_to_finish

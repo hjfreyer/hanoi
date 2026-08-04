@@ -402,17 +402,15 @@ fn lower_enum(decl: sugar::EnumDecl) -> Result<core::Item, String> {
 
 /// Builds the exported, total `check` predicate for a spec.
 ///
-/// The body reads the success flags: a tuple spec asks `untuple` the question
-/// directly rather than guarding it, so the flag *is* the shape test. That
-/// keeps the sentence total — the graceful arm is a `branch`, not an `assert`.
+/// A tuple spec asks `untuple` the shape question directly rather than guarding
+/// it, so the success flag *is* the test. That keeps the sentence total — the
+/// answer on the failing side is a `branch` arm, not an `assert`.
 fn check_sentence(
     spec: &TypeSpec,
     mut annotations: Vec<SourceAnnotation>,
 ) -> Result<SentenceDecl, String> {
-    for ann in [Annotation::Total, Annotation::Flags] {
-        if !annotations.contains(&ann) {
-            annotations.push(ann);
-        }
+    if !annotations.contains(&Annotation::Total) {
+        annotations.push(Annotation::Total);
     }
 
     Ok(SentenceDecl {

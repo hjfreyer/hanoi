@@ -22,7 +22,6 @@ mod customer_impl {
     }
 
     // Initializes customer state: (id, preferred_drink, internal_state)
-    #[flags]
     function init {
     }
 
@@ -39,7 +38,6 @@ mod customer_impl {
         (super::event::enjoy, want_coffee_payload) |
         (super::super::queue::Event::PushBack::tag, (coffee_payload));
 
-    #[flags]
     function anything {
         drop 0
         push true
@@ -47,7 +45,6 @@ mod customer_impl {
 
     type accept_type (is_state, is_event);
 
-    #[flags]
     #[precondition(accept_type::check)]
     function accept {
         untuple 2
@@ -110,13 +107,11 @@ mod customer_impl {
         }
     }
 
-    #[flags]
     function tau_reduce {
         push false
         tuple 2
     }
 
-    #[flags]
     function emit_postcondition {
         untuple 2
         assert
@@ -136,7 +131,6 @@ mod customer_impl {
         }
     }
 
-    #[flags]
     function emit_does_pre_and_post {
         pick 0
         jump is_state::check
@@ -150,7 +144,6 @@ mod customer_impl {
     }
 
     // emit takes state: (id, preferred_drink, internal_state) and returns ValueSet of emitted events.
-    #[flags]
     #[precondition(is_state::check)]
     #[postcondition(emit_postcondition)]
     function emit {
@@ -210,7 +203,6 @@ mod customer_impl {
     }
 
     // process takes [state, event] and returns next_state.
-    #[flags]
     function process {
         untuple 2
         assert
@@ -295,13 +287,11 @@ mod customer_impl {
         }
     }
 
-    #[flags]
     function is_done {
         drop 0
         push false
     }
 
-    #[flags]
     function is_ready_to_finish {
         untuple 3
         assert
@@ -316,7 +306,6 @@ mod customer_impl {
         drop 0
     }
 }
-#[flags]
 test sentence verify_customer_is_event {
     // 1. Valid want_coffee event
     push (event::want_coffee, (customer_id::c1, ()))
@@ -351,7 +340,6 @@ test sentence verify_customer_is_event {
     assert
 }
 
-#[flags]
 test sentence verify_customer_logic {
     push customer_id::c1
     push event::latte
@@ -426,7 +414,6 @@ mod barista {
     }
 
     // Initializes barista state
-    #[flags]
     function init {
         untuple 0
         assert
@@ -434,7 +421,6 @@ mod barista {
     }
 
 
-    #[flags]
     function accept {
         untuple 2
         assert
@@ -509,14 +495,12 @@ mod barista {
         }
     }
 
-    #[flags]
     function tau_reduce {
         push false
         tuple 2
     }
 
     // emit takes [state] and returns ValueSet.
-    #[flags]
     function emit {
         // Stack: [state]
         pick 0
@@ -564,7 +548,6 @@ mod barista {
     }
 
     // process takes [state, event] and returns next_state.
-    #[flags]
     function process {
         untuple 2
         assert
@@ -640,20 +623,17 @@ mod barista {
         }
     }
 
-    #[flags]
     function is_done {
         drop 0
         push false
     }
 
-    #[flags]
     function is_ready_to_finish {
         push state::idle
         equal
     }
 }
 
-#[flags]
 sentence customers_sync {
     drop 0
     push false
@@ -661,7 +641,6 @@ sentence customers_sync {
 
 mod customers compose_concurrent(customer1, customer2, customers_sync);
 
-#[flags]
 sentence customers_queue_sync {
     pick 0
     push crate::prelude::start
@@ -688,7 +667,6 @@ sentence customers_queue_sync {
 
 mod customers_and_queue compose_concurrent(customers, super::queue::queue, customers_queue_sync);
 
-#[flags]
 sentence joint_sync {
     pick 0
     push crate::prelude::start
@@ -723,7 +701,6 @@ sentence joint_sync {
 
 mod concurrent compose_concurrent(customers_and_queue, barista, joint_sync);
 
-#[flags]
 sentence hidden_events {
     pick 0
     push crate::prelude::start
@@ -767,7 +744,6 @@ sentence hidden_events {
 mod hidden compose_hidden(concurrent, hidden_events);
 
 // Helpers to drive tau transitions in tests
-#[flags]
 #[recursive]
 sentence drive_tau {
     // Stack: [state]
@@ -783,7 +759,6 @@ sentence drive_tau {
     }
 }
 
-#[flags]
 #[recursive]
 sentence drive_concurrent_tau {
     pick 0
@@ -798,7 +773,6 @@ sentence drive_concurrent_tau {
     }
 }
 
-#[flags]
 #[recursive]
 test sentence verify_hidden_system {
     // 1. Initialize joint state
@@ -963,7 +937,6 @@ test sentence verify_hidden_system {
 }
 
 // Test the concurrent joint Customer-Queue-Barista system
-#[flags]
 #[recursive]
 test sentence verify_concurrent_system {
     // 1. Initialize joint state
@@ -1232,7 +1205,6 @@ test sentence verify_concurrent_system {
 }
 
 // Test the rejection of invalid events for Barista
-#[flags]
 test sentence verify_barista_rejection {
     // 1. Trigger invalid coffee event on idle (coffee is emit, not accept)
     tuple 0

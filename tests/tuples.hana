@@ -1,6 +1,5 @@
 // Tests for tuples and nested tuples
 
-#[flags]
 test sentence simple_tuple {
     push 1
     push 2
@@ -16,7 +15,6 @@ test sentence simple_tuple {
     assert_eq
 }
 
-#[flags]
 test sentence nested_tuples {
     push 10
     push (20, 30)

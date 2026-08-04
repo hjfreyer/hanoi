@@ -1,18 +1,15 @@
 // Tests for control flow and subroutine call stack returns
 
-#[flags]
 test sentence unconditional_jump {
     push 100
     jump target_sentence
 }
 
-#[flags]
 sentence target_sentence {
     push 100
     assert_eq
 }
 
-#[flags]
 test sentence conditional_branch {
     push true
     branch {
@@ -25,14 +22,12 @@ test sentence conditional_branch {
     assert_eq
 }
 
-#[flags]
 #[recursive]
 test sentence recursion_and_returns {
     push 10
     jump recursive_helper
 }
 
-#[flags]
 #[recursive]
 sentence recursive_helper {
     // top of stack is decrement counter

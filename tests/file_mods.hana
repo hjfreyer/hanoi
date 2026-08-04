@@ -1,7 +1,6 @@
 // Main file for file module tests
 mod sub_module;
 
-#[flags]
 test sentence verify_import {
     push sub_module::my_val
     push sub_module::my_val

@@ -41,7 +41,6 @@ mod queue {
     // encoding. Body is per-tag: see super::State's variant comments.
 
     // init: returns initial state
-    #[flags]
     function init {
         untuple 0
         assert
@@ -52,7 +51,6 @@ mod queue {
     }
 
 
-    #[flags]
     function accept {
         untuple 2
         assert
@@ -184,7 +182,6 @@ mod queue {
 
     // emit: takes [state] and returns (has_event, event), where event is ()
     // when has_event is false -- so the result is not a plain (bool, Event).
-    #[flags]
     #[precondition(super::State::check)]
     function emit {
         // Stack: [state]
@@ -267,7 +264,6 @@ mod queue {
     // handles the state/event compatibility that no independent (State,
     // Event) tuple type could express (e.g. Idle and AwaitingPush only
     // accept requests, never the responses the queue itself emits).
-    #[flags]
     function process_precondition {
         // Stack: [arg]  where arg = (event, state), matching process's own
         pick 0
@@ -297,7 +293,6 @@ mod queue {
     }
 
     // process: takes [state, event] and returns next_state
-    #[flags]
     #[precondition(process_precondition)]
     function process {
         untuple 2
@@ -504,7 +499,6 @@ mod queue {
     }
 
     // tau_reduce: takes [state] and returns (new_state, changed)
-    #[flags]
     function tau_reduce {
         // Stack: [state]
         pick 0 // duplicate state. Stack: [state, state]
@@ -606,13 +600,11 @@ mod queue {
         }
     }
 
-    #[flags]
     function is_done {
         drop 0
         push false
     }
 
-    #[flags]
     function is_ready_to_finish {
         untuple 2
         assert
@@ -628,7 +620,6 @@ mod queue {
 }
 
 // Helper to drive the queue's tau reductions in tests
-#[flags]
 #[recursive]
 sentence drive_reductions {
     // Stack: [state]
@@ -646,7 +637,6 @@ sentence drive_reductions {
     }
 }
 
-#[flags]
 #[recursive]
 test sentence verify_queue_machine {
     tuple 0

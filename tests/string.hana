@@ -14,14 +14,12 @@ mod string_ref {
 
     // init: returns idle state of string_ref
     // State is (sym, idle)
-    #[flags]
     function init {
         push idle
         tuple 2
     }
     
 
-    #[flags]
     function accept {
         untuple 2
         assert
@@ -90,14 +88,12 @@ mod string_ref {
         }
     }
 
-    #[flags]
     function tau_reduce {
         push false
         tuple 2
     }
 
     // emit: takes state (sym, internal_state) and returns ValueSet of emitted events.
-    #[flags]
     function emit {
         untuple 2
         assert // Stack: [sym, internal_state]
@@ -140,7 +136,6 @@ mod string_ref {
     }
     
     // process: takes state and event, returns next_state
-    #[flags]
     function process {
         untuple 2
         assert
@@ -227,13 +222,11 @@ mod string_ref {
         }
     }
 
-    #[flags]
     function is_done {
         drop 0
         push false
     }
 
-    #[flags]
     function is_ready_to_finish {
         untuple 2
         assert
@@ -255,7 +248,6 @@ mod char_iterator {
 
     // Initialize char_iterator state.
     // Returns (0, fetch) state.
-    #[flags]
     function init {
         untuple 0
         assert
@@ -265,7 +257,6 @@ mod char_iterator {
     }
     
 
-    #[flags]
     function accept {
         untuple 2
         assert
@@ -379,14 +370,12 @@ mod char_iterator {
         }
     }
 
-    #[flags]
     function tau_reduce {
         push false
         tuple 2
     }
 
     // emit: takes state (payload, tag) and returns ValueSet of emitted events.
-    #[flags]
     function emit {
         untuple 2
         assert // Stack: [payload, tag]
@@ -470,7 +459,6 @@ mod char_iterator {
     }
     
     // process: takes state (payload, tag) and event, returns next_state
-    #[flags]
     function process {
         untuple 2
         assert
@@ -558,7 +546,6 @@ mod char_iterator {
         }
     }
 
-    #[flags]
     function is_done {
         untuple 2
         assert
@@ -571,7 +558,6 @@ mod char_iterator {
         drop 0
     }
 
-    #[flags]
     function is_ready_to_finish {
         untuple 2
         assert
@@ -599,7 +585,6 @@ mod parseint {
     symbol yielding_err "Yielding err result state"
 
     // init: returns idle state
-    #[flags]
     function init {
         untuple 0
         assert
@@ -607,7 +592,6 @@ mod parseint {
     }
 
 
-    #[flags]
     function accept {
         untuple 2
         assert
@@ -702,14 +686,12 @@ mod parseint {
         }
     }
 
-    #[flags]
     function tau_reduce {
         push false
         tuple 2
     }
 
     // emit: takes [state] and returns ValueSet of emitted events.
-    #[flags]
     function emit {
         pick 0
         push idle
@@ -780,7 +762,6 @@ mod parseint {
     }
 
     // process: takes [state, event] and returns next_state.
-    #[flags]
     function process {
         untuple 2
         assert
@@ -954,13 +935,11 @@ mod parseint {
         }
     }
 
-    #[flags]
     function is_done {
         drop 0
         push false
     }
 
-    #[flags]
     function is_ready_to_finish {
         push idle
         equal
@@ -988,14 +967,12 @@ mod split {
     symbol state_done           "done"
 
     // init: accepts delim on stack. Returns (delim, state_idle).
-    #[flags]
     function init {
         push state_idle
         tuple 2
     }
 
 
-    #[flags]
     function accept {
         untuple 2
         assert
@@ -1083,14 +1060,12 @@ mod split {
         }
     }
 
-    #[flags]
     function tau_reduce {
         push false
         tuple 2
     }
 
     // emit: takes [state] and returns ValueSet of emitted events.
-    #[flags]
     function emit {
         untuple 2
         assert // Stack: [payload, tag]
@@ -1192,7 +1167,6 @@ mod split {
     }
 
     // process: takes [state, event] and returns next_state.
-    #[flags]
     function process {
         untuple 2
         assert
@@ -1424,7 +1398,6 @@ mod split {
         }
     }
 
-    #[flags]
     function is_done {
         untuple 2
         assert
@@ -1437,7 +1410,6 @@ mod split {
         drop 0
     }
 
-    #[flags]
     function is_ready_to_finish {
         untuple 2
         assert
@@ -1467,42 +1439,34 @@ symbol str_123 "123"
 symbol str_45a "45a"
 
 mod string_ref_base {
-    #[flags]
     function init {
         untuple 0
         assert
         push super::my_str
         jump super::string_ref::init
     }
-    #[flags]
     function accept {
         jump super::string_ref::accept
     }
-    #[flags]
     function tau_reduce {
         jump super::string_ref::tau_reduce
     }
-    #[flags]
     function emit {
         jump super::string_ref::emit
     }
-    #[flags]
     function process {
         jump super::string_ref::process
     }
 
-    #[flags]
     function is_done {
         jump super::string_ref::is_done
     }
 
-    #[flags]
     function is_ready_to_finish {
         jump super::string_ref::is_ready_to_finish
     }
 }
 
-#[flags]
 sentence sync_char_iterator_in {
     pick 0
     push crate::prelude::start
@@ -1536,7 +1500,6 @@ mod string_hidden compose_hidden(
     sync_char_iterator_in
 );
 
-#[flags]
 test sentence iterate_string_ascii {
     // Initialize system -> [((my_str, idle), (fetch, 0))]
     tuple 0
@@ -1683,7 +1646,6 @@ mod str_123_hidden compose_hidden(
     sync_char_iterator_in
 );
 
-#[flags]
 sentence sync_parseint_in {
     pick 0
     push crate::prelude::start
@@ -1717,7 +1679,6 @@ mod parseint_123_system compose_hidden(
     sync_parseint_in
 );
 
-#[flags]
 test sentence parseint_valid_number {
     tuple 0
     jump parseint_123_system::init
@@ -1841,7 +1802,6 @@ mod parseint_45a_system compose_hidden(
     sync_parseint_in
 );
 
-#[flags]
 test sentence parseint_invalid_char {
     tuple 0
     jump parseint_45a_system::init
@@ -1932,7 +1892,6 @@ mod parseint_empty_system compose_hidden(
     sync_parseint_in
 );
 
-#[flags]
 test sentence parseint_empty_string {
     tuple 0
     jump parseint_empty_system::init
@@ -1990,7 +1949,6 @@ test sentence parseint_empty_string {
     drop 0
 }
 
-#[flags]
 test sentence verify_string_ref {
     // Initialize base unprefixed string_ref with string xyz_str
     push xyz_str
@@ -2101,7 +2059,6 @@ test sentence verify_string_ref {
 
 mod xyz_string_ref_instance compose_prefix(compose_static_closure(string_ref, xyz_str), char_iterator::in);
 
-#[flags]
 test sentence verify_prefixed_string_ref {
     // Initialize xyz_string_ref_instance
     tuple 0
@@ -2159,7 +2116,6 @@ mod empty_string_hidden compose_hidden(
     sync_char_iterator_in
 );
 
-#[flags]
 test sentence iterate_empty {
     tuple 0
     jump empty_string_hidden::init
@@ -2208,7 +2164,6 @@ mod cafe_string_hidden compose_hidden(
     sync_char_iterator_in
 );
 
-#[flags]
 test sentence iterate_unicode {
     tuple 0
     jump cafe_string_hidden::init
@@ -2377,7 +2332,6 @@ mod comma_str_hidden compose_hidden(
     sync_char_iterator_in
 );
 
-#[flags]
 sentence sync_split_in {
     pick 0
     push crate::prelude::start
@@ -2411,7 +2365,6 @@ mod split_system compose_hidden(
     sync_split_in
 );
 
-#[flags]
 test sentence split_string {
     tuple 0
     jump split_system::init

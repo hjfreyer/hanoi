@@ -1,7 +1,6 @@
 test mod verify_print_hello {
     symbol hello "Hello from Hanoi VM Async Runtime!\n"
 
-    #[flags]
     export function init {
         untuple 0
         assert
@@ -10,7 +9,6 @@ test mod verify_print_hello {
         tuple 2
     }
 
-    #[flags]
     export function accept {
         untuple 2
         assert
@@ -28,7 +26,6 @@ test mod verify_print_hello {
         }
     }
 
-    #[flags]
     export function tau_reduce {
         // Stack: [state]
         untuple 2
@@ -67,7 +64,6 @@ test mod verify_print_hello {
         }
     }
 
-    #[flags]
     export function emit {
         // Stack: [state]
         untuple 2
@@ -123,7 +119,6 @@ test mod verify_print_hello {
         }
     }
 
-    #[flags]
     export function process {
         untuple 2
         assert
@@ -182,7 +177,6 @@ test mod verify_print_hello {
         }
     }
 
-    #[flags]
     export function is_done {
         untuple 2
         assert
@@ -191,7 +185,6 @@ test mod verify_print_hello {
         equal
     }
 
-    #[flags]
     export function is_ready_to_finish {
         drop 0
         push false

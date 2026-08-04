@@ -1,6 +1,5 @@
 // Integration tests for is_done and is_ready_to_finish state machine sentences
 
-#[flags]
 test sentence verify_is_done_basic_machines {
     // 1. string_ref: state (sym, idle) -> is_done = false
     push ()
@@ -41,7 +40,6 @@ test sentence verify_is_done_basic_machines {
     assert_eq
 }
 
-#[flags]
 test sentence verify_is_ready_to_finish_basic_machines {
     // 1. string_ref: state (sym, idle) -> is_ready_to_finish = true
     push ()
@@ -82,7 +80,6 @@ test sentence verify_is_ready_to_finish_basic_machines {
     assert_eq
 }
 
-#[flags]
 test sentence verify_is_done_compositions {
     // 1. compose_static_closure (using customer1)
     tuple 0
@@ -106,7 +103,6 @@ test sentence verify_is_done_compositions {
     assert_eq
 }
 
-#[flags]
 test sentence verify_is_ready_to_finish_compositions {
     // 1. compose_static_closure (using customer1)
     tuple 0
