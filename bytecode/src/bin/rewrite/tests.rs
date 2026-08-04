@@ -477,22 +477,6 @@ fn an_operator_takes_its_operands_with_it() {
 }
 
 #[test]
-fn print_is_the_one_thing_a_drop_cannot_cancel() {
-    // Not a panic argument — running `print` and not running it differ in
-    // something other than the stack, which no amount of totality changes.
-    let (_prog, body) = tree_of(
-        r#"
-        sentence probe {
-            print
-            drop 0
-        }
-    "#,
-        ANNIHILATE,
-    );
-    assert_eq!(shape(&body), vec!["print", "drop"]);
-}
-
-#[test]
 fn passes_compose() {
     // Annihilating the push/drop pair leaves `push 7` shared by both arms,
     // which factoring then hoists — neither pass alone gets there.
@@ -608,8 +592,8 @@ fn rewrites_preserve_arity_across_the_corpus() {
 /// corpus" and "this one fires on a third of it", and those are exactly the
 /// claims that go stale when a rule is generalized. Totalizing the VM widened
 /// `annihilate_drop` from a five-instruction whitelist to every single-output
-/// operator but `print`, so the interesting question is whether that reaches
-/// real code or only the tests written for it.
+/// operator, so the interesting question is whether that reaches real code or
+/// only the tests written for it.
 ///
 /// The assertion is one-sided on purpose: an exact count would be a tripwire
 /// on the corpus rather than on the rules.

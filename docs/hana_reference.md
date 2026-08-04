@@ -81,7 +81,7 @@ fails too, being unordered rather than non-numeric.
 
 ---
 
-## 4. Control Flow & Debugging
+## 4. Control Flow & Validation
 
 These instructions control execution flow, jumps, and validation assertions.
 
@@ -93,7 +93,6 @@ These instructions control execution flow, jumps, and validation assertions.
 | `panic` | `panic` | `[...] -> [halt]` | Halts VM execution immediately with a failure status. This and the two below are the only instructions that can, and a sentence reaching any of them cannot claim `#[total]`. |
 | `assert` | `assert` | `[..., cond] -> [...]` | Pops $cond$. Halts and panics unless $cond$ is exactly `true` — a non-Boolean is a failed assertion rather than a separate error. |
 | `assert_equal` | `assert_eq` | `[..., a, b] -> [...]` | Pops $a$ and $b$. Halts and panics if $a \neq b$. |
-| `print` | `print` | `[..., v] -> [..., v]` | Peeks at the top value and prints it to stdout (useful for debugging/logging). |
 
 ---
 

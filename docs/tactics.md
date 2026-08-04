@@ -77,11 +77,8 @@ computing something and throwing it away is throwing away the operands
 instead, so `add; drop` is `drop; drop` and `tuple 3; drop` is three drops.
 `push` lands at zero drops, and `pick d` gets its own answer — no drops, since
 it consumed nothing — because its arity `(d+1 -> d+2)` is not of that shape.
-
-Only `print` is excluded, and not for a reason about failure: running it and
-not running it differ in something other than the stack. `assert` and
-`assert_eq` fall out on their own, leaving nothing on top for a drop to pair
-with.
+`assert` and `assert_eq` fall out on their own, leaving nothing on top for a
+drop to pair with.
 
 `annihilate_flagged` is the same law one output wider, and it exists because a
 **fallible** instruction leaves its success flag alongside its value (see
@@ -323,8 +320,7 @@ Three copies because the value came apart into three. At `m = 1` it is the
 familiar `pick 0; X; dip 1 { X }` → `X; pick 0`. Failure behaviour is preserved
 rather than merely respected: `X` runs on the copy first, so where the left side
 fails — `X` may contain an `assert` — it does so on exactly the value the right
-side hands to its single `X`. `print` is excluded, being the one instruction for
-which running twice differs in something other than the stack.
+side hands to its single `X`.
 
 This is the law that ought to close the gap between a predicate and its caller,
 because every predicate here is written `pick 0; jump P::check; branch {...}` —
@@ -366,9 +362,9 @@ be reconstructed and `untuple n` is asked nothing that `add` is not asked. The
 **This is what totalizing the VM actually bought.** The rule is sound only
 because `X` cannot fail on the path that skipped it — which, for the `untuple`
 case the sharing problem is entirely about, was false a week ago. Beyond that it
-asks only that `X` have no effect but the stack (excluding `print`) and a
-locally known arity (excluding calls, whose bodies may hold an `assert` several
-frames down; `inline` is how you make that visible). A `dip` qualifies when its
+asks only that `X` have no effect but the stack and a locally known arity
+(excluding calls, whose bodies may hold an `assert` several frames down;
+`inline` is how you make that visible). A `dip` qualifies when its
 whole body does, which is what lets a speculation climb out of *nested*
 branches — the rule's own output is a dip, and it would otherwise strand itself
 at the next branch out.

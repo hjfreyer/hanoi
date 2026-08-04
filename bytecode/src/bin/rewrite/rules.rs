@@ -410,10 +410,8 @@ impl Rule for Fuse {
 /// check. Now that every data operation is total there is no check to discard,
 /// and one arity condition covers the lot (see `docs/totality.md`).
 ///
-/// Two exceptions, and neither is about panics:
+/// One exception, and it is not about panics:
 ///
-/// - `print` leaves one value on top like any other unary operator, but
-///   running it and not running it differ in something other than the stack.
 /// - `pick d` has arity `(d+1 -> d+2)`, so it is not of this shape at all. It
 ///   gets its own answer — no drops, since it consumed nothing — which is the
 ///   counit law of the comonoid [`CopyAssoc`] names.
@@ -478,9 +476,6 @@ impl Rule for AnnihilateFlagged {
         else {
             return None;
         };
-        if matches!(prev, Instruction::Print) {
-            return None;
-        }
         let (n, 2) = op_arity(prev)? else {
             return None;
         };
@@ -493,8 +488,6 @@ fn annihilation(inst: &Instruction) -> Option<usize> {
     match inst {
         // Copying a value and discarding the copy: neither happened.
         Instruction::Pick(_) => Some(0),
-        // The one operator for which running twice is not running once.
-        Instruction::Print => None,
         // Everything that leaves exactly one value takes its inputs with it.
         // `push` lands here too, at zero drops.
         _ => match op_arity(inst) {
@@ -1126,13 +1119,7 @@ mod tests {
     }
 
     #[test]
-    fn annihilate_declines_print_and_anything_leaving_a_flag() {
-        // `print` is the operator whose second run differs in something other
-        // than the stack, and it is still the only *principled* exclusion.
-        assert_eq!(
-            AnnihilateDrop.rewrite(&prog(), &[op(Instruction::Print), op(Instruction::Drop)]),
-            None
-        );
+    fn annihilate_declines_anything_leaving_a_flag() {
         // The total operators cancel as before.
         for inst in [Instruction::Equal, Instruction::And, Instruction::Or] {
             assert_eq!(
@@ -2069,23 +2056,6 @@ mod tests {
     }
 
     #[test]
-    fn dup_natural_declines_print() {
-        // The one instruction where running twice and running once differ in
-        // something other than the stack.
-        assert_eq!(
-            DupNatural.rewrite(
-                &prog(),
-                &[
-                    op(Instruction::Pick(0)),
-                    op(Instruction::Print),
-                    dip(1, vec![op(Instruction::Print)]),
-                ]
-            ),
-            None
-        );
-    }
-
-    #[test]
     fn unfactor_branch_inverts_factor_branch() {
         let factored = [
             dip(1, vec![op(Instruction::IsTuple)]),
@@ -2257,7 +2227,6 @@ mod tests {
             vec![op(Instruction::Assert)],
             vec![op(Instruction::Add), op(Instruction::Assert)],
             vec![dip(1, vec![op(Instruction::Panic)])],
-            vec![op(Instruction::Print)],
             // A call is opaque, so a block containing one is too.
             vec![Node::Call {
                 depth: 0,
@@ -2306,12 +2275,11 @@ mod tests {
 
     #[test]
     fn speculate_branch_declines_what_must_not_run_on_the_losing_path() {
-        // Each of these would do something on the path that skipped the arm:
-        // print an extra line, or fail where the original did not. The other
-        // arm is left empty, since the rule takes whichever arm offers a head
-        // and would otherwise fire on that one instead.
+        // Each of these would fail where the original did not, on the path
+        // that skipped the arm. The other arm is left empty, since the rule
+        // takes whichever arm offers a head and would otherwise fire on that
+        // one instead.
         for inst in [
-            Instruction::Print,
             Instruction::Assert,
             Instruction::AssertEqual,
             Instruction::Panic,
@@ -2940,8 +2908,7 @@ impl Rule for SpecializeEqual {
 ///
 /// `X` runs on the copy first, so where the left side fails — `X` may contain
 /// an `assert` — it does so on exactly the value the right side hands to its
-/// single `X`. `print` is excluded, since it is the one instruction for which
-/// running twice and running once differ in something other than the stack.
+/// single `X`.
 ///
 /// Measure: node count, since `m` picks and one `X` replace two `X`s and a
 /// `pick` only when `m <= 1`; for larger `m` the measure is the number of
@@ -2961,10 +2928,6 @@ impl Rule for DupNatural {
             return None;
         };
         if !matches!(pick, Node::Op(Instruction::Pick(0))) {
-            return None;
-        }
-        // Running it twice has to mean what running it once means.
-        if matches!(first, Node::Op(Instruction::Print)) {
             return None;
         }
 
@@ -3008,7 +2971,7 @@ impl Rule for DupNatural {
             [Node::Op(Instruction::Pick(0)), inner] => (true, inner),
             _ => return None,
         };
-        if !same_effect(plain, inner) || matches!(plain, Node::Op(Instruction::Print)) {
+        if !same_effect(plain, inner) {
             return None;
         }
         let (n, m) = node_arity(prog, plain)?;
@@ -3353,7 +3316,7 @@ impl Rule for UnfactorBranch {
 ///   path. Every data operation now is, which is what makes the rule possible
 ///   at all; `assert`, `assert_eq` and `panic` are excluded, and fall out of
 ///   [`op_arity`] or the match below.
-/// - `X` must have **no effect but the stack**, which excludes `print`.
+/// - `X` must have **no effect but the stack**.
 /// - `X` must have a **local arity**, which excludes `Dip`, `Branch` and `Call`
 ///   nodes. Their bodies may hold an `assert` several frames down, and a
 ///   window-local rule has no business guessing. `inline` and `flatten_call`
@@ -3394,9 +3357,9 @@ pub(crate) struct SpeculateBranch;
 fn speculable(node: &Node) -> bool {
     match node {
         Node::Op(inst) => match inst {
-            // Running these on the losing path would print something the
-            // original did not, or fail where the original did not.
-            Instruction::Print | Instruction::Assert | Instruction::AssertEqual => false,
+            // Running these on the losing path would fail where the original
+            // did not.
+            Instruction::Assert | Instruction::AssertEqual => false,
             // Sound to speculate, but excluded so that the rule cannot match
             // what it just emitted. See the measure.
             Instruction::Drop => false,

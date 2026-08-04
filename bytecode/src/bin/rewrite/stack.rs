@@ -270,10 +270,6 @@ fn op(inst: &Instruction, s: &mut Vec<Rc<Term>>, fresh: &mut Fresh) -> bool {
             // flag is a fresh opaque slot rather than a claim.
             s.push(fresh.next());
         }
-        Instruction::Print => {
-            let a = pop!();
-            s.push(a);
-        }
         Instruction::Assert => {
             pop!();
         }

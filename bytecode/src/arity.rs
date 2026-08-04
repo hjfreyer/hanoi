@@ -313,7 +313,6 @@ pub fn op_arity(inst: &Instruction) -> Option<(i64, i64)> {
         Instruction::Roll(d) => (*d as i64 + 1, *d as i64 + 1),
         Instruction::Equal | Instruction::And | Instruction::Or => (2, 1),
         Instruction::Not
-        | Instruction::Print
         | Instruction::IsInt
         | Instruction::IsBool
         | Instruction::IsFloat

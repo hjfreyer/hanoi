@@ -65,14 +65,6 @@ impl VM {
             .ok_or_else(|| "Stack underflow".to_string())
     }
 
-    /// Helper to peek at a value from the top of the stack.
-    fn peek(&self, offset: usize) -> Result<&Value, String> {
-        if self.stack.len() <= offset {
-            return Err("Stack underflow on peek".to_string());
-        }
-        Ok(&self.stack[self.stack.len() - 1 - offset])
-    }
-
     /// A fallible instruction that computed its answer: the value, then `true`.
     fn ok(&mut self, value: Value) {
         self.stack.push(value);
@@ -296,10 +288,6 @@ impl VM {
                         Value::Float(x) => self.ok(Value::Float(-x)),
                         other => self.failed(other),
                     }
-                }
-                Instruction::Print => {
-                    let val = self.peek(0)?;
-                    println!("{}", val);
                 }
                 Instruction::Dip(depth, target) => {
                     if self.stack.len() < depth {
