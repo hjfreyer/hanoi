@@ -21,7 +21,7 @@ mod tests {
     fn test_value_display() {
         assert_eq!(format!("{}", Value::Bool(true)), "true");
         assert_eq!(format!("{}", Value::Int(42)), "42");
-        assert_eq!(format!("{}", Value::Float(3.14)), "3.14");
+        assert_eq!(format!("{}", Value::Float(1.5)), "1.5");
     }
 
     #[test]

@@ -86,6 +86,12 @@ pub struct ModuleTree {
     modules: TiVec<ModuleId, Module>,
 }
 
+impl Default for ModuleTree {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ModuleTree {
     pub fn new() -> Self {
         Self {
