@@ -39,7 +39,7 @@
 use bytecode::value::numeric_cmp;
 use bytecode::{Instruction, SentenceIndex, Value};
 
-use crate::arity::node_arity;
+use crate::arity::full_arity;
 use crate::ir::{Node, frame_depth, with_frame_depth};
 use crate::location::Location;
 use crate::program::Program;
@@ -317,7 +317,10 @@ pub(crate) enum Rule2 {
     /// precondition no such node exists, so this reaches calls, dips and
     /// branches that used to be refused. Lifting that restriction means
     /// bringing the predicate back.
-    Annihilate { x: Node, n: usize, m: usize },
+    /// `X` is a whole sequence, not a single node. Read backward that is what
+    /// makes this the introduction rule: the arguments say *what computation to
+    /// conjure*, and nothing in the window it replaces could have said it.
+    Annihilate { x: Vec<Node>, n: usize, m: usize },
 
     /// `pick d ; drop` = nothing.
     ///
@@ -406,7 +409,7 @@ impl Rule2 {
                 let depth = frame_depth(framed).ok_or_else(|| SideCondition::NotFramed {
                     found: crate::ir::sketch(std::slice::from_ref(framed)),
                 })?;
-                let actual = claimed_arity(prog, x, (*n, *m))?;
+                let actual = claimed_arity(prog, std::slice::from_ref(x), (*n, *m))?;
                 if (depth as i64) < actual.1 {
                     return Err(SideCondition::FrameTooShallow {
                         depth,
@@ -552,7 +555,7 @@ impl Rule2 {
             }
 
             Rule2::Annihilate { x, m, .. } => {
-                let mut out = vec![x.clone()];
+                let mut out = x.clone();
                 out.extend(std::iter::repeat_n(Node::Op(Instruction::Drop), *m));
                 out
             }
@@ -718,11 +721,11 @@ fn push(v: Value) -> Node {
 /// The arity the library gives `x`, once the step's claim has been held to it.
 fn claimed_arity(
     prog: &Program,
-    x: &Node,
+    x: &[Node],
     claimed: (i64, i64),
 ) -> Result<(i64, i64), SideCondition> {
-    let actual = node_arity(prog, x).ok_or_else(|| SideCondition::ArityUnknown {
-        found: crate::ir::sketch(std::slice::from_ref(x)),
+    let actual = full_arity(prog, x).ok_or_else(|| SideCondition::ArityUnknown {
+        found: crate::ir::sketch(x),
     })?;
     if actual != claimed {
         return Err(SideCondition::ClaimedArityMismatch { claimed, actual });
@@ -1225,7 +1228,7 @@ pub(crate) mod tests {
     fn annihilate_trades_outputs_for_inputs() {
         // `add` is (2 -> 2): two drops after it are two drops before it.
         let r = Rule2::Annihilate {
-            x: op(Instruction::Add),
+            x: vec![op(Instruction::Add)],
             n: 2,
             m: 2,
         };
@@ -1244,7 +1247,11 @@ pub(crate) mod tests {
         // framed computation annihilates like any other. `dip 1 { add }` is
         // (3 -> 3).
         let x = dip(1, vec![op(Instruction::Add)]);
-        let r = Rule2::Annihilate { x, n: 3, m: 3 };
+        let r = Rule2::Annihilate {
+            x: vec![x],
+            n: 3,
+            m: 3,
+        };
         assert_eq!(r.check(&prog()), Ok(()));
         assert_eq!(r.rhs(), drops(3));
     }
@@ -1345,7 +1352,7 @@ pub(crate) mod tests {
                 inputs: vec![Value::Bool(true), Value::Bool(false)],
             },
             Rule2::Annihilate {
-                x: op(Instruction::Add),
+                x: vec![op(Instruction::Add)],
                 n: 2,
                 m: 2,
             },

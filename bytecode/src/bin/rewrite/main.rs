@@ -40,7 +40,7 @@ use bytecode::arity::failure_reachability;
 use bytecode::{Library, SentenceIndex};
 
 use crate::engine::Env;
-use crate::matcher::matcher_names;
+use crate::matcher::{matcher_names, term_matcher_names};
 use crate::print::print_sentence;
 use crate::program::Program;
 use crate::script::{Definitions, PRELUDE};
@@ -141,6 +141,14 @@ fn main() {
         println!("rules (place them with `each(...)` or `once(...)`):");
         for name in matcher_names() {
             println!("  {}", name);
+        }
+        println!();
+        println!("rules that need a term saying what code to introduce:");
+        for name in term_matcher_names() {
+            println!(
+                "  {} {{ ... }}     e.g. `once({} {{ pick 0 }})`",
+                name, name
+            );
         }
         return;
     }
