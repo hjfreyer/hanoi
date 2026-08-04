@@ -321,10 +321,10 @@ fn exact(t: &Term) -> bool {
 
 fn unary(inst: &Instruction, a: &Rc<Term>) -> Rc<Term> {
     let name = op_name(inst);
-    if let Some(k) = as_const(a) {
-        if let Some(v) = fold_unary(inst, k) {
-            return Rc::new(Term::Const(ConstKey::new(&v)));
-        }
+    if let Some(k) = as_const(a)
+        && let Some(v) = fold_unary(inst, k)
+    {
+        return Rc::new(Term::Const(ConstKey::new(&v)));
     }
     // A tuple built here answers `is_tuple` and `tuple_length` on sight.
     if let Term::Tup(es) = &**a {

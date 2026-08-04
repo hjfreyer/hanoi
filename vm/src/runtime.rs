@@ -18,32 +18,22 @@ pub fn extract_putch_char(
     std_stdout: &Option<Value>,
     std_putch: &Option<Value>,
 ) -> Option<char> {
-    if let (Some(io_val), Some(stdout_val), Some(putch_val)) = (std_io, std_stdout, std_putch) {
-        if let Value::Tuple(elems) = value {
-            if elems.len() == 2 {
-                if &elems[0] == io_val {
-                    if let Value::Tuple(elems2) = &elems[1] {
-                        if elems2.len() == 2 {
-                            if &elems2[0] == stdout_val {
-                                if let Value::Tuple(elems3) = &elems2[1] {
-                                    if elems3.len() == 2 {
-                                        if &elems3[0] == putch_val {
-                                            if let Value::Tuple(elems4) = &elems3[1] {
-                                                if elems4.len() == 2 {
-                                                    if let Value::Int(n) = elems4[0] {
-                                                        return char::from_u32(n as u32);
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+    // Matches the nested pair (io, (stdout, (putch, char))).
+    if let (Some(io_val), Some(stdout_val), Some(putch_val)) = (std_io, std_stdout, std_putch)
+        && let Value::Tuple(elems) = value
+        && elems.len() == 2
+        && &elems[0] == io_val
+        && let Value::Tuple(elems2) = &elems[1]
+        && elems2.len() == 2
+        && &elems2[0] == stdout_val
+        && let Value::Tuple(elems3) = &elems2[1]
+        && elems3.len() == 2
+        && &elems3[0] == putch_val
+        && let Value::Tuple(elems4) = &elems3[1]
+        && elems4.len() == 2
+        && let Value::Int(n) = elems4[0]
+    {
+        return char::from_u32(n as u32);
     }
     None
 }

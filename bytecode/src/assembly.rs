@@ -126,7 +126,7 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
                 chars.next(); // consume '"'
                 let mut string_val = String::new();
                 let mut closed = false;
-                while let Some(next_c) = chars.next() {
+                for next_c in chars.by_ref() {
                     if next_c == '"' {
                         closed = true;
                         break;
@@ -529,12 +529,12 @@ fn parse_instruction(stream: &mut TokenStream) -> Result<ParsedInstruction, Stri
 }
 
 fn parse_module_expr(stream: &mut TokenStream) -> Result<ModuleExpr, String> {
-    if let Some(Token::Identifier(ident)) = stream.peek().cloned() {
-        if let Some(composer) = Composer::from_name(&ident) {
-            stream.next(); // consume composer name
-            let args = parse_composer_args(stream)?;
-            return Ok(ModuleExpr::Composed { composer, args });
-        }
+    if let Some(Token::Identifier(ident)) = stream.peek().cloned()
+        && let Some(composer) = Composer::from_name(&ident)
+    {
+        stream.next(); // consume composer name
+        let args = parse_composer_args(stream)?;
+        return Ok(ModuleExpr::Composed { composer, args });
     }
 
     match stream.peek() {
@@ -728,10 +728,10 @@ fn parse_items(
     let mut items = Vec::new();
 
     while stream.peek().is_some() {
-        if let Some(ref end) = end_token {
-            if stream.peek() == Some(end) {
-                break;
-            }
+        if let Some(ref end) = end_token
+            && stream.peek() == Some(end)
+        {
+            break;
         }
 
         let annotations = parse_annotations(stream)?;
@@ -835,18 +835,18 @@ fn parse_mod_item(
 ) -> Result<sugar::Item, String> {
     let name = expect_name(stream, "module name")?;
 
-    if let Some(Token::Identifier(ident)) = stream.peek() {
-        if let Some(composer) = Composer::from_name(ident) {
-            stream.next(); // consume composer name
-            let args = parse_composer_args(stream)?;
-            stream.expect(Token::Semicolon)?;
-            return Ok(sugar::Item::Compose(sugar::ComposeDecl {
-                name,
-                composer,
-                args,
-                is_test,
-            }));
-        }
+    if let Some(Token::Identifier(ident)) = stream.peek()
+        && let Some(composer) = Composer::from_name(ident)
+    {
+        stream.next(); // consume composer name
+        let args = parse_composer_args(stream)?;
+        stream.expect(Token::Semicolon)?;
+        return Ok(sugar::Item::Compose(sugar::ComposeDecl {
+            name,
+            composer,
+            args,
+            is_test,
+        }));
     }
 
     if stream.peek() == Some(&Token::Semicolon) {

@@ -3430,10 +3430,10 @@ impl Rule for SpeculateBranch {
 
         // A shared prefix is `factor_branch`'s, and it hoists one without
         // paying for any of this.
-        if let (Some(a), Some(b)) = (then_body.first(), else_body.first()) {
-            if same_effect(a, b) {
-                return None;
-            }
+        if let (Some(a), Some(b)) = (then_body.first(), else_body.first())
+            && same_effect(a, b)
+        {
+            return None;
         }
 
         // Whichever arm offers a head that may run on the other path.

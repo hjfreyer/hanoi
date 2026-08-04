@@ -145,10 +145,10 @@ impl VM {
             }
             ip += 1;
 
-            if let Some(limit) = self.gas_limit {
-                if self.steps_executed >= limit {
-                    return Err("gas limit exceeded".to_string());
-                }
+            if let Some(limit) = self.gas_limit
+                && self.steps_executed >= limit
+            {
+                return Err("gas limit exceeded".to_string());
             }
             self.steps_executed += 1;
 
@@ -393,7 +393,7 @@ impl VM {
                         // to hold it for: the flag is the whole answer.
                         _ if n == 0 => self.failed_with(std::iter::empty()),
                         other => {
-                            let padding = std::iter::repeat(Value::unit()).take(n - 1);
+                            let padding = std::iter::repeat_n(Value::unit(), n - 1);
                             self.failed_with(std::iter::once(other).chain(padding))
                         }
                     }
@@ -687,7 +687,7 @@ mod tests {
             Instruction::Push(Value::Bool(true)),
             Instruction::AssertEqual,
             // test is_float
-            Instruction::Push(Value::Float(3.14)),
+            Instruction::Push(Value::Float(1.5)),
             Instruction::IsFloat,
             Instruction::Push(Value::Bool(true)),
             Instruction::AssertEqual,
@@ -1379,7 +1379,7 @@ mod totality_tests {
         // junk could not do: on the failing path the value is still there, so
         // a caller that reads the flag can put the stack back exactly.
         for x in every_shape() {
-            let (parts, ok) = flagged(&[x.clone()], Instruction::Untuple(3));
+            let (parts, ok) = flagged(std::slice::from_ref(&x), Instruction::Untuple(3));
             if ok {
                 // A real 3-tuple rebuilds by `tuple 3`.
                 let mut body: Vec<Instruction> =
@@ -1400,7 +1400,7 @@ mod totality_tests {
         for v in every_shape() {
             let expected = v == Value::Bool(true);
             assert_eq!(
-                apply(&[v.clone()], Instruction::Not),
+                apply(std::slice::from_ref(&v), Instruction::Not),
                 vec![Value::Bool(!expected)],
                 "not {:?}",
                 v
@@ -1505,7 +1505,7 @@ mod totality_tests {
                 (Instruction::IsTuple, matches!(a, Value::Tuple(_))),
             ] {
                 assert_eq!(
-                    apply(&[a.clone()], inst.clone()),
+                    apply(std::slice::from_ref(&a), inst.clone()),
                     vec![Value::Bool(want)],
                     "{:?} of {:?}",
                     inst,
