@@ -16,8 +16,10 @@ function init {
 function accept {
     // Stack: [(state, event)]
     untuple 2
+    assert
     // Stack: [event, state]
     untuple 2
+    assert
     // Stack: [event, s1, s2]
     pick 2
     // Stack: [event, s1, s2, event]
@@ -115,6 +117,7 @@ function accept {
 function emit {
     // Stack: [state]
     untuple 2
+    assert
     // Stack: [s1, s2]
     roll 1
     // Stack: [s2, s1]
@@ -125,6 +128,7 @@ function emit {
     jump {{p1}}::emit
     // Stack: [s2, s1, (has_e1, e1)]
     untuple 2
+    assert
     // Stack: [s2, s1, e1, has_e1]
     roll 3
     // Stack: [s1, e1, has_e1, s2]
@@ -135,6 +139,7 @@ function emit {
     jump {{p2}}::emit
     // Stack: [s1, e1, has_e1, s2, (has_e2, e2)]
     untuple 2
+    assert
     // Stack: [s1, e1, has_e1, s2, e2, has_e2]
     
     // check_e1
@@ -484,6 +489,7 @@ function emit {
 function process {
     // Stack: [(state, event)]
     untuple 2
+    assert
     // Stack: [event, state]
     roll 1
     // Stack: [state, event]
@@ -496,6 +502,7 @@ function process {
         roll 1
         // Stack: [event, state]
         untuple 2
+        assert
         // Stack: [event, s1, s2]
         pick 2
         // Stack: [event, s1, s2, event]
@@ -522,6 +529,7 @@ function process {
         roll 1
         // Stack: [event, state]
         untuple 2
+        assert
         // Stack: [event, s1, s2]
         
         // Check P1 participation
@@ -546,6 +554,7 @@ function process {
             jump {{p1}}::emit
             // Stack: [event, s1, s2, (has_e1, e1)]
             untuple 2
+            assert
             // Stack: [event, s1, s2, e1, has_e1]
             branch {
                 // Stack: [event, s1, s2, e1]
@@ -584,6 +593,7 @@ function process {
             jump {{p2}}::emit
             // Stack: [event, s1, s2, p1_participates, (has_e2, e2)]
             untuple 2
+            assert
             // Stack: [event, s1, s2, p1_participates, e2, has_e2]
             branch {
                 // Stack: [event, s1, s2, p1_participates, e2]
@@ -652,12 +662,14 @@ function process {
 function tau_reduce {
     // Stack: [state]
     untuple 2
+    assert
     // Stack: [s1, s2]
     pick 1
     // Stack: [s1, s2, s1]
     jump {{p1}}::tau_reduce
     // Stack: [s1, s2, (did_reduce_p1, next_s1)]
     untuple 2
+    assert
     // Stack: [s1, s2, next_s1, did_reduce_p1]
     branch {
         // Stack: [s1, s2, next_s1]
@@ -687,6 +699,7 @@ function tau_reduce {
         jump {{p2}}::tau_reduce
         // Stack: [next_s1, s2, (did_reduce_p2, next_s2)]
         untuple 2
+        assert
         // Stack: [next_s1, s2, next_s2, did_reduce_p2]
         
         roll 2
@@ -709,6 +722,7 @@ function tau_reduce {
 function is_done {
     // Stack: [state]
     untuple 2
+    assert
     // Stack: [s1, s2]
     pick 1
     // Stack: [s1, s2, s1]
@@ -767,6 +781,7 @@ function is_done {
 function is_ready_to_finish {
     // Stack: [state]
     untuple 2
+    assert
     // Stack: [s1, s2]
     roll 1
     // Stack: [s2, s1]

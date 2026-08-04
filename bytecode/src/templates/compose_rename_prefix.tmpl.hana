@@ -8,6 +8,7 @@ function init {
 function accept {
     // Stack: [(state, event)]
     untuple 2
+    assert
     // Stack: [event, state]
     pick 1
     push crate::prelude::start
@@ -28,6 +29,7 @@ function accept {
         // Stack: [event, state]
         pick 1 // duplicate event
         untuple 2
+        assert
         // Stack: [event, state, payload, prefix]
         push {{to_symbol}}
         equal
@@ -63,10 +65,12 @@ function emit {
     jump {{target}}::emit
     // Stack: [(has_event, event)]
     untuple 2
+    assert
     // Stack: [event, has_event]
     branch {
         // Stack: [event]
         untuple 2
+        assert
         // Stack: [payload, prefix]
         pick 0
         // Stack: [payload, prefix, prefix]
@@ -111,10 +115,12 @@ function emit {
 function process {
     // Stack: [(state, event)]
     untuple 2
+    assert
     // Stack: [event, state]
     roll 1
     // Stack: [state, event]
     untuple 2
+    assert
     // Stack: [state, payload, prefix]
     pick 0
     // Stack: [state, payload, prefix, prefix]

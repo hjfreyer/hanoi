@@ -41,6 +41,7 @@ sentence recursive_helper {
         // Recursive case: decrement and recurse
         push 1
         sub
+        assert
         jump recursive_helper
         // Verification that we returned back up the stack
         push true

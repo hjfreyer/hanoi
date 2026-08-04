@@ -3,6 +3,7 @@ test mod verify_print_hello {
 
     export function init {
         untuple 0
+        assert
         push 0 // phase
         push 0 // data (char index)
         tuple 2
@@ -10,7 +11,9 @@ test mod verify_print_hello {
 
     export function accept {
         untuple 2
+        assert
         untuple 2
+        assert
         drop 0 // drop data
         push 0
         equal
@@ -26,6 +29,7 @@ test mod verify_print_hello {
     export function tau_reduce {
         // Stack: [state]
         untuple 2
+        assert
         // Stack: [phase, data]
         pick 1
         push 1
@@ -35,6 +39,7 @@ test mod verify_print_hello {
             pick 0
             push hello
             symbol_len
+            assert
             equal
             branch {
                 // data == hello.len(), transition to phase 2
@@ -62,6 +67,7 @@ test mod verify_print_hello {
     export function emit {
         // Stack: [state]
         untuple 2
+        assert
         // Stack: [phase, data]
         pick 1
         push 1
@@ -75,6 +81,7 @@ test mod verify_print_hello {
             push hello
             pick 4 // data
             symbol_char_at
+            assert
             
             push ()
             tuple 2
@@ -114,8 +121,10 @@ test mod verify_print_hello {
 
     export function process {
         untuple 2
+        assert
         // Stack: [event, state]
         untuple 2
+        assert
         // Stack: [event, data, phase]
         pick 1
         push 0
@@ -141,6 +150,7 @@ test mod verify_print_hello {
                 // Stack: [phase, data] (data is index 0)
                 push 1
                 add
+                assert
                 // Stack: [phase, data+1]
                 tuple 2
             } {
@@ -169,6 +179,7 @@ test mod verify_print_hello {
 
     export function is_done {
         untuple 2
+        assert
         drop 0
         push 3
         equal

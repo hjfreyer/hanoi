@@ -81,9 +81,17 @@ asserted.
 And the *fact* is available everywhere regardless. `failure_reachability` is a
 least fixpoint over the call graph and answers for every sentence, annotated or
 not; `check_totality` is just the part that compares it against the claims. On
-the `tests/` corpus **2735 of 3529 sentences are provably total**, with 58
+the `tests/` corpus **2189 of 3409 sentences are provably total**, with 58
 carrying a checked `#[total]` — the `type` and `enum` sugar puts one on each
 predicate it generates, which used to be an unverified assertion.
+
+That count went *down* when the corpus started reading its flags rather than
+having them dropped for it, and the drop is the measurement getting honest
+rather than the corpus getting worse. A discarded flag cannot fail, so every
+sentence that untupled a value it had no reason to trust counted as total while
+quietly computing on junk. Saying `assert` instead records the reliance those
+sentences always had — the reliance the pre-totality `untuple` enforced by
+panicking.
 
 The check is syntactic and therefore conservative: an `assert` on a branch that
 cannot be taken still counts against the claim. That is the same bargain
@@ -184,17 +192,15 @@ Two worlds, deliberately kept apart:
 
 It is not a second control-flow outcome. A fallible instruction always
 completes and always leaves the same number of values; the flag is data, and a
-program is free to ignore it. Dropping it is exactly what `assemble` does by
-default (see below), which is why the surface language did not change.
+program is free to ignore it.
 
 ## Reading the flags
 
-`assemble` **drops each flag as it emits the instruction**, so a fallible
-instruction leaves one value where it always did and source written against the
-old arities keeps working unchanged. `#[flags]` on a sentence turns that off:
+The arities in the table above are the ones `assemble` emits. `untuple 3`
+leaves four values, `add` leaves two, and a sentence that writes one is
+expected to say what happens when it is false:
 
 ```
-#[flags]
 #[arity(1, 8)]
 sentence shares {
     pick 0
@@ -203,9 +209,47 @@ sentence shares {
 }
 ```
 
-Branch arms and dip bodies inherit the annotation, since a block that dropped
-its flags inside a sentence that kept them would give one sentence two
-instruction sets.
+There is no annotation for this and no way to turn it off. For one change there
+was: `assemble` used to splice a `drop` in after every fallible instruction
+unless a sentence said `#[flags]`, so that source written against the old
+arities kept working while the corpus was converted. That scaffolding is gone
+now that every sentence has been converted, which is what keeps a branch arm
+from having a different instruction set than the sentence that wrote it.
+
+Converting took the two answers a flag admits, and which one a site wants is
+not a matter of taste:
+
+* **`assert` the flag.** The sentence relies on its input being the shape it
+  expected, so it says so. This is what the pre-totality instruction did, which
+  is why the whole suite kept its step counts across the conversion: one
+  flag-drop `assemble` used to splice in became one `assert` in the source.
+* **Read it.** Where the code was already computing the answer the flag
+  carries, the guard goes and the branch reads the flag instead — see the sugar
+  below. This is the only answer available to a `#[total]` sentence, since
+  `assert` would cost it the claim.
+
+A third answer is honest only where the code genuinely does not care: an
+explicit `drop`. It appears in rewriter fixtures whose subject is a rule's
+window rather than the value, and nowhere in the corpus — a program that drops
+a flag is a program that has decided to compute on junk, which is what the
+implicit drop did for everyone.
+
+### What the sugar does with it
+
+`type` and `enum` checks used to ask `is_tuple`, then `tuple_length; push n;
+equal`, and only then untuple — three instructions to recompute what `untuple`
+reports for free. They now ask once:
+
+```
+untuple n
+branch { ...element checks... }
+       { drop^n; push false }
+```
+
+The else arm clears the slots `untuple` filled — the value itself in the
+deepest, `()` padding above it — and answers `false`. No `assert` anywhere, so
+the check keeps its `#[total]`. At `n = 0` the flag *is* the predicate and the
+body is a bare `untuple 0`.
 
 ## What the laws buy, and what they cost
 

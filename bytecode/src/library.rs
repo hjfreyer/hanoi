@@ -30,13 +30,6 @@ pub enum Annotation<Ref> {
     /// generated code and branch arms need no special treatment. The `type` and
     /// `enum` sugar puts it on the checks it generates.
     Total,
-    /// This sentence sees the success flags of fallible instructions.
-    ///
-    /// Without it `assemble` drops each flag as it emits the instruction, so
-    /// source written against the old arities keeps working and junk still
-    /// propagates silently. With it, `untuple 3` really does leave four values,
-    /// and the sentence is expected to say what happens on failure.
-    Flags,
 }
 
 /// An annotation as it appears in a compiled [`Library`].

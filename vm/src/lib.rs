@@ -464,8 +464,8 @@ mod tests {
             Instruction::Push(Value::Int(10)),
             Instruction::Push(Value::Int(20)),
             Instruction::Add,
-            // Hand-written bytecode, so nothing inserts the flag-drop that
-            // `assemble` would put here for a sentence without `#[flags]`.
+            // `add` is fallible, so this drops the flag it leaves. Source would
+            // say `assert`; hand-written bytecode says what it means.
             Instruction::Drop,
             Instruction::Push(Value::Int(30)),
             Instruction::AssertEqual,
@@ -723,6 +723,7 @@ mod tests {
                 push 10
                 push 20
                 add
+                assert
                 push 30
                 assert_eq
                 
@@ -789,11 +790,13 @@ mod tests {
             export sentence test_len {
                 push ascii_sym
                 symbol_len
+                assert
                 push 5
                 assert_eq
                 
                 push unicode_sym
                 symbol_len
+                assert
                 push 4
                 assert_eq
             }
@@ -802,12 +805,14 @@ mod tests {
                 push ascii_sym
                 push 1
                 symbol_char_at
+                assert
                 push 101
                 assert_eq
                 
                 push unicode_sym
                 push 3
                 symbol_char_at
+                assert
                 push 233
                 assert_eq
             }
@@ -816,6 +821,10 @@ mod tests {
                 push unicode_sym
                 push 4
                 symbol_char_at
+                // Out of range, so the flag is the one place this differs from
+                // the two above: it says the 0 underneath was invented.
+                not
+                assert
                 push 0
                 assert_eq
             }
@@ -835,7 +844,7 @@ mod tests {
         assert!(vm.stack().is_empty());
 
         // Run test_out_of_bounds: an index past the end answers 0 rather than
-        // failing, and the sentence asserts exactly that.
+        // failing, and reports that it did. The sentence asserts both halves.
         let oob_idx = *res.exports.get("test_out_of_bounds").unwrap();
         let mut vm = VM::new(res);
         assert!(vm.execute(oob_idx).is_ok());
@@ -849,6 +858,7 @@ mod tests {
                 push 42
                 push 100
                 add
+                assert
             }
         "#;
         let res = bytecode::assemble(code).unwrap();
@@ -876,10 +886,12 @@ mod tests {
             mod base {
                 export function init {
                     untuple 0
+                    assert
                     push 0
                 }
                 export function accept {
                     untuple 2
+                    assert
                     drop 0
                     push crate::payload
                     equal
@@ -892,6 +904,7 @@ mod tests {
                 }
                 export function process {
                     untuple 2
+                    assert
                     drop 0
                     drop 0
                     push 1
@@ -934,6 +947,7 @@ mod tests {
                 jump renamed::emit
                 untuple 2
                 assert
+                assert
                 push payload
                 push to_sym
                 tuple 2
@@ -955,6 +969,7 @@ mod tests {
                 pick 0
                 jump renamed::tau_reduce
                 untuple 2
+                assert
                 pick 0
                 not
                 assert
@@ -977,7 +992,12 @@ mod tests {
         let bad_code = r#"
             symbol a
             symbol b
-            mod m { export function init { untuple 0 push 0 } export sentence accept { untuple 2 drop 0 drop 0 push false } export function emit { drop 0 tuple 0 push false tuple 2 } export sentence process { } }
+            mod m {
+                export function init { untuple 0 assert push 0 }
+                export sentence accept { untuple 2 assert drop 0 drop 0 push false }
+                export function emit { drop 0 tuple 0 push false tuple 2 }
+                export sentence process { }
+            }
             mod bad compose_rename_prefix(a, m);
         "#;
         assert!(bytecode::assemble(bad_code).is_err());
@@ -991,9 +1011,11 @@ mod tests {
                     // Stack has the value pushed by the composer
                     push 10
                     add
+                    assert
                 }
                 export function accept {
                     untuple 2
+                    assert
                     drop 0
                     drop 0
                     push false
@@ -1006,9 +1028,11 @@ mod tests {
                 }
                 export function process {
                     untuple 2
+                    assert
                     drop 1
                     push 100
                     add
+                    assert
                 }
                 export function tau_reduce {
                     push false
@@ -1058,10 +1082,12 @@ mod tests {
             mod m_no_tau {
                 export function init {
                     untuple 0
+                    assert
                     push 0
                 }
                 export sentence accept {
                     untuple 2
+                    assert
                     drop 0
                     drop 0
                     push false
@@ -1078,6 +1104,7 @@ mod tests {
                 }
                 export function process {
                     untuple 2
+                    assert
                     drop 1
                 }
                 export function is_done {
@@ -1093,10 +1120,12 @@ mod tests {
             mod m_with_tau {
                 export function init {
                     untuple 0
+                    assert
                     push 0
                 }
                 export sentence accept {
                     untuple 2
+                    assert
                     drop 0
                     drop 0
                     push false
@@ -1115,6 +1144,7 @@ mod tests {
                 }
                 export function process {
                     untuple 2
+                    assert
                     drop 1
                 }
                 export function is_done {
@@ -1133,6 +1163,7 @@ mod tests {
                 jump m_no_tau::init
                 jump m_no_tau::tau_reduce
                 untuple 2
+                assert
                 not
                 assert
                 drop 0
@@ -1142,6 +1173,7 @@ mod tests {
                 jump m_with_tau::init
                 jump m_with_tau::tau_reduce
                 untuple 2
+                assert
                 assert
                 push 1
                 assert_eq
@@ -1662,11 +1694,13 @@ mod runtime_tests {
 
                 export function init {
                     untuple 0
+                    assert
                     push state::init
                 }
 
                 export sentence accept {
                     untuple 2
+                    assert
                     // Stack: [event, state]
                     push state::waiting
                     equal
@@ -1700,6 +1734,7 @@ mod runtime_tests {
 
                 export function process {
                     untuple 2
+                    assert
                     push state::init
                     equal
                     branch {
@@ -1767,11 +1802,13 @@ mod runtime_tests {
 
                 export function init {
                     untuple 0
+                    assert
                     push 0
                 }
 
                 export sentence accept {
                     untuple 2
+                    assert
                     drop 0
                     drop 0
                     push false
@@ -1786,13 +1823,16 @@ mod runtime_tests {
                     pick 0
                     push hello
                     symbol_len
+                    assert
                     less
+                    assert
                     branch {
                         push ()
                         
                         push hello
                         pick 2 // index
                         symbol_char_at
+                        assert
                         
                         tuple 2 // (char, ())
                         
@@ -1821,15 +1861,19 @@ mod runtime_tests {
 
                 export function process {
                     untuple 2
+                    assert
                     drop 1 // drop event
                     push 1
                     add
+                    assert
                 }
 
                 export function is_done {
                     push hello
                     symbol_len
+                    assert
                     less
+                    assert
                     not
                 }
 

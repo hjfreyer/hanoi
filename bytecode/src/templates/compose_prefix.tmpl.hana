@@ -8,6 +8,7 @@ function init {
 function accept {
     // Stack: [(state, event)]
     untuple 2
+    assert
     // Stack: [event, state]
     pick 1
     push crate::prelude::start
@@ -29,6 +30,7 @@ function accept {
         pick 1
         // Stack: [event, state, event]
         untuple 2
+        assert
         // Stack: [event, state, payload, prefix]
         push {{prefix}}
         // Stack: [event, state, payload, prefix, {{prefix}}]
@@ -59,6 +61,7 @@ function emit {
     jump {{target}}::emit
     // Stack: [(has_event, event)]
     untuple 2
+    assert
     // Stack: [event, has_event]
     branch {
         // Stack: [event]
@@ -86,10 +89,12 @@ function emit {
 function process {
     // Stack: [(state, event)]
     untuple 2
+    assert
     // Stack: [event, state]
     roll 1
     // Stack: [state, event]
     untuple 2
+    assert
     // Stack: [state, payload, prefix]
     push {{prefix}}
     // Stack: [state, payload, prefix, {{prefix}}]

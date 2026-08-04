@@ -7,13 +7,11 @@ written for does not fail; it returns a deterministic default. Only `panic`,
 `assert` and `assert_eq` can halt a run for a reason about values. A sentence
 may claim it reaches none of them with `#[total]`, which the compiler checks.
 
-Twelve instructions are additionally **fallible**: they leave a `bool` on top of
-their result saying whether the answer was computed or invented, and where the
-output arity has room they hand their input back rather than replacing it. The
-stack transitions below are written **as the surface language sees them** —
-`assemble` drops each flag as it emits the instruction, so existing source is
-unaffected. `#[flags]` on a sentence keeps them, and then the transitions gain
-one value. Fallible instructions are marked ⚑.
+Twelve instructions are additionally **fallible**: they leave a `bool` — written
+`ok` in the transitions below — on top of their result saying whether the answer
+was computed or invented, and where the output arity has room they hand their
+input back rather than replacing it. Every sentence sees those flags; there is
+no mode in which they are dropped for you. Fallible instructions are marked ⚑.
 
 [docs/totality.md](totality.md) is the normative specification, including the
 full table and why `not junk` is `true`.
@@ -46,18 +44,17 @@ These instructions perform mathematical or Boolean logic operations on stack val
 
 | Mnemonic | Alternate Syntax | Stack Transition | Description |
 | :--- | :--- | :--- | :--- |
-| `add` | — | `[..., a, b] -> [..., a + b]` | Pops the top two numbers, adds them, and pushes the result. |
-| `subtract` | `sub` | `[..., a, b] -> [..., a - b]` | Pops the top two numbers, subtracts $b$ (TOS) from $a$ (second-to-top), and pushes the result. |
-| `multiply` | `mul` | `[..., a, b] -> [..., a * b]` | Pops the top two numbers, multiplies them, and pushes the result. |
-| `divide` ⚑ | `div` | `[..., a, b] -> [..., a / b]` | Pops the top two numbers, divides $a$ by $b$ (TOS), and pushes the result. Integer division by zero **fails**, answering `0`; the float world stays IEEE, so `1.0 / 0` succeeds with `inf`. |
-| `modulo` ⚑ | `mod` | `[..., a, b] -> [..., a % b]` | Pops the top two numbers, computes the remainder of $a / b$, and pushes the result. Integer modulo by zero **fails**; `1.0 % 0` succeeds with `NaN`. |
-| `negate` | `neg` | `[..., a] -> [..., -a]` | Pops the top number, negates it numerically, and pushes the result. |
+| `add` ⚑ | — | `[..., a, b] -> [..., a + b, ok]` | Pops the top two numbers, adds them, and pushes the result. |
+| `subtract` ⚑ | `sub` | `[..., a, b] -> [..., a - b, ok]` | Pops the top two numbers, subtracts $b$ (TOS) from $a$ (second-to-top), and pushes the result. |
+| `multiply` ⚑ | `mul` | `[..., a, b] -> [..., a * b, ok]` | Pops the top two numbers, multiplies them, and pushes the result. |
+| `divide` ⚑ | `div` | `[..., a, b] -> [..., a / b, ok]` | Pops the top two numbers, divides $a$ by $b$ (TOS), and pushes the result. Integer division by zero **fails**, answering `0`; the float world stays IEEE, so `1.0 / 0` succeeds with `inf`. |
+| `modulo` ⚑ | `mod` | `[..., a, b] -> [..., a % b, ok]` | Pops the top two numbers, computes the remainder of $a / b$, and pushes the result. Integer modulo by zero **fails**; `1.0 % 0` succeeds with `NaN`. |
+| `negate` ⚑ | `neg` | `[..., a] -> [..., -a, ok]` | Pops the top number, negates it numerically, and pushes the result. |
 | `not` | — | `[..., v] -> [..., !truthy(v)]` | Pops the top value and pushes `true` unless it was exactly `true`. |
 | `and` | — | `[..., a, b] -> [..., a && b]` | Pops the top two values, performs logical AND on their truthiness, and pushes the Boolean result. |
 | `or` | — | `[..., a, b] -> [..., a \|\| b]` | Pops the top two values, performs logical OR on their truthiness, and pushes the Boolean result. |
 
-⚑ `add`, `subtract`, `multiply`, `divide`, `modulo` and `negate` are fallible:
-off their domain they report `false`, answering `0` where there is no room to
+Off their domain the fallible six report `false`, answering `0` where there is no room to
 keep the operands and handing the value back where there is (`negate`). Integer
 arithmetic wraps, so `i64::MIN` is not a special case anywhere. `not`, `and` and
 `or` carry no flag — there is no input they cannot answer on — and truthiness is
@@ -72,8 +69,8 @@ These opcodes compare the top two stack values and push a Boolean result.
 | Mnemonic | Syntax | Stack Transition | Description |
 | :--- | :--- | :--- | :--- |
 | `equal` | `equal` | `[..., a, b] -> [..., a == b]` | Pops $a$ and $b$, checks if they are equal, and pushes `true` or `false`. |
-| `greater` | `greater` | `[..., a, b] -> [..., a > b]` | Pops $a$ and $b$, checks if $a$ (second-to-top) is greater than $b$ (TOS), and pushes the result. |
-| `less` | `less` | `[..., a, b] -> [..., a < b]` | Pops $a$ and $b$, checks if $a$ (second-to-top) is less than $b$ (TOS), and pushes the result. |
+| `greater` ⚑ | `greater` | `[..., a, b] -> [..., a > b, ok]` | Pops $a$ and $b$, checks if $a$ (second-to-top) is greater than $b$ (TOS), and pushes the result. |
+| `less` ⚑ | `less` | `[..., a, b] -> [..., a < b, ok]` | Pops $a$ and $b$, checks if $a$ (second-to-top) is less than $b$ (TOS), and pushes the result. |
 
 `equal` compares any two values and carries no flag. ⚑ `greater` and `less` are
 fallible: they answer `false, false` unless both operands are numbers, and a NaN
@@ -103,10 +100,10 @@ These operations construct, destructure, or query structured data types.
 | Mnemonic | Syntax | Stack Transition | Description |
 | :--- | :--- | :--- | :--- |
 | `tuple` | `tuple <size>` | `[..., v_{N-1}, ..., v_0] -> [..., (v_0, ..., v_{N-1})]` | Pops $N$ elements and packages them into a tuple. **Gotcha**: The TOS element $v_0$ becomes index 0 of the tuple. |
-| `untuple` ⚑ | `untuple <size>` | `[..., (v_0, ..., v_{N-1})] -> [..., v_{N-1}, ..., v_0]` | Pops a tuple of size $N$ and pushes its elements back onto the stack in reverse index order, leaving index 0 ($v_0$) at the top. Anything else **fails**, leaving the value itself in the deepest of the $N$ slots with `()` padding above it — so a caller that reads the flag has lost nothing. |
-| `symbol_len` ⚑ | `symbol_len` | `[..., sym] -> [..., len]` | Pops a symbol and pushes its character length as an Int. Fails on a non-symbol, handing the value back. |
-| `symbol_char_at` ⚑ | `symbol_char_at` | `[..., sym, idx] -> [..., char]` | Pops index $idx$ and symbol $sym$, then pushes the Unicode code point of the character at that index as an Int. Fails, answering `0`, if the index is out of range or either operand is the wrong type. |
-| `tuple_length` ⚑ | `tuple_length` | `[..., tup] -> [..., len]` | Pops a Tuple and pushes its element count as an Int. Fails on a non-tuple, handing the value back. |
+| `untuple` ⚑ | `untuple <size>` | `[..., (v_0, ..., v_{N-1})] -> [..., v_{N-1}, ..., v_0, ok]` | Pops a tuple of size $N$ and pushes its elements back onto the stack in reverse index order, leaving index 0 ($v_0$) at the top. Anything else **fails**, leaving the value itself in the deepest of the $N$ slots with `()` padding above it — so a caller that reads the flag has lost nothing. |
+| `symbol_len` ⚑ | `symbol_len` | `[..., sym] -> [..., len, ok]` | Pops a symbol and pushes its character length as an Int. Fails on a non-symbol, handing the value back. |
+| `symbol_char_at` ⚑ | `symbol_char_at` | `[..., sym, idx] -> [..., char, ok]` | Pops index $idx$ and symbol $sym$, then pushes the Unicode code point of the character at that index as an Int. Fails, answering `0`, if the index is out of range or either operand is the wrong type. |
+| `tuple_length` ⚑ | `tuple_length` | `[..., tup] -> [..., len, ok]` | Pops a Tuple and pushes its element count as an Int. Fails on a non-tuple, handing the value back. |
 
 ---
 

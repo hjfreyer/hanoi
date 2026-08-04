@@ -10,8 +10,10 @@ sentence test_swap {
 #[arity(2, 1)]
 sentence test_arith {
     add
+    assert
     push 10
     multiply
+    assert
 }
 
 function test_branch {
@@ -22,22 +24,27 @@ function test_branch {
         push 200
     }
     add
+    assert
 }
 
 #[arity(2, 1)]
 sentence test_symbol {
     symbol_char_at
+    assert
 }
 
 #[arity(2, 1)]
 sentence test_tuples {
     tuple 2
     untuple 2
+    assert
     subtract
+    assert
 }
 
 function swap_pair {
     untuple 2
+    assert
     roll 1
     tuple 2
 }
@@ -69,4 +76,5 @@ function test_is_tuple {
 
 function test_tuple_length {
     tuple_length
+    assert
 }

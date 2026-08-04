@@ -43,6 +43,7 @@ mod queue {
     // init: returns initial state
     function init {
         untuple 0
+        assert
         push () // current
         tuple 1
         push super::State::Idle::tag
@@ -52,10 +53,12 @@ mod queue {
 
     function accept {
         untuple 2
+        assert
         // Stack: [event, state]
         pick 0
         // Stack: [event, state, state]
         untuple 2
+        assert
         // Stack: [event, state, Body, tag]
 
         pick 0
@@ -67,6 +70,7 @@ mod queue {
             drop 0 // state (unused copy)
             // Stack: [event]
             untuple 2
+            assert
             // Stack: [Body, channel]
             pick 0 // channel
             push super::Event::PushBack::tag
@@ -87,6 +91,7 @@ mod queue {
                     // Only bare requests are accepted, not responses.
                     drop 0 // channel
                     untuple 1
+                    assert
                     // Stack: [reqresp]
                     tuple 0
                     push super::super::prelude::req
@@ -108,6 +113,7 @@ mod queue {
                 drop 0 // state (unused copy)
                 // Stack: [event]
                 untuple 2
+                assert
                 // Stack: [Body, channel]
                 pick 0 // channel
                 push super::Event::PushBack::tag
@@ -123,6 +129,7 @@ mod queue {
                     branch {
                         drop 0 // channel
                         untuple 1
+                        assert
                         tuple 0
                         push super::super::prelude::req
                         tuple 2
@@ -153,6 +160,7 @@ mod queue {
                     // Stack: [event, state]
                     jump super::queue::emit
                     untuple 2
+                    assert
                     branch {
                         // Stack: [event, emitted_event]
                         equal
@@ -178,6 +186,7 @@ mod queue {
     function emit {
         // Stack: [state]
         untuple 2
+        assert
         // Stack: [Body, tag]
 
         pick 0
@@ -187,6 +196,7 @@ mod queue {
             // PopFrontResp: Body = (option, current)
             drop 0 // tag
             untuple 2
+            assert
             // Stack: [current, option]
             drop 1 // drop current
             // Stack: [option]
@@ -205,6 +215,7 @@ mod queue {
                 // PopFrontRespAwait: Body = (option)
                 drop 0 // tag
                 untuple 1
+                assert
                 // Stack: [option]
                 push super::super::prelude::resp
                 tuple 2
@@ -221,6 +232,7 @@ mod queue {
                     // AwaitingFrontResp: Body = (option, current)
                     drop 0 // tag
                     untuple 2
+                    assert
                     // Stack: [current, option]
                     drop 1 // drop current
                     // Stack: [option]
@@ -256,6 +268,7 @@ mod queue {
         // Stack: [arg]  where arg = (event, state), matching process's own
         pick 0
         untuple 2
+        assert
         // Stack: [arg, event, state]
         pick 1 // duplicate event
         jump super::Event::check
@@ -283,8 +296,10 @@ mod queue {
     #[precondition(process_precondition)]
     function process {
         untuple 2
+        assert
         // Stack: [event, state]
         untuple 2
+        assert
         // Stack: [event, Body, tag]
 
         pick 0 // tag
@@ -294,9 +309,11 @@ mod queue {
             // Processing in idle state. Body = (current)
             drop 0 // drop tag
             untuple 1
+            assert
             // Stack: [event, current]
             roll 1 // Stack: [current, event]
-            untuple 2 // Stack: [current, Body, type]
+            untuple 2
+            assert // Stack: [current, Body, type]
 
             pick 0 // type
             push super::Event::PushBack::tag
@@ -305,6 +322,7 @@ mod queue {
                 // PUSH: payload is val. New state: Descending(val, (), current)
                 drop 0 // drop type. Stack: [current, Body]
                 untuple 1
+                assert
                 // Stack: [current, val]
                 push ()
                 roll 1 // Stack: [current, (), val]
@@ -319,6 +337,7 @@ mod queue {
                     // POP: payload is (req, ())
                     drop 0 // drop type. Stack: [current, Body]
                     untuple 1
+                    assert
                     // Stack: [current, reqresp]
                     push ()
                     push super::super::prelude::req
@@ -340,7 +359,8 @@ mod queue {
                         tuple 2
                     } {
                         // Pop head: PopFrontResp(some(head), rest)
-                        untuple 2 // Stack: [rest, head]
+                        untuple 2
+                        assert // Stack: [rest, head]
                         push ()
                         roll 1 // Stack: [rest, (), head]
                         tuple 2 // (head, ())
@@ -354,6 +374,7 @@ mod queue {
                     // AWAIT: payload is (req, ())
                     drop 0 // drop type. Stack: [current, Body]
                     untuple 1
+                    assert
                     // Stack: [current, reqresp]
                     tuple 0
                     push super::super::prelude::req
@@ -371,7 +392,8 @@ mod queue {
                         tuple 2
                     } {
                         // Serve head immediately: AwaitingFrontResp(some(head), rest)
-                        untuple 2 // Stack: [rest, head]
+                        untuple 2
+                        assert // Stack: [rest, head]
                         push ()
                         roll 1 // Stack: [rest, (), head]
                         tuple 2 // (head, ())
@@ -392,7 +414,8 @@ mod queue {
                 drop 0 // drop tag
                 drop 0 // drop Body (== ())
                 // Stack: [event]
-                untuple 2 // Stack: [Body, type]
+                untuple 2
+                assert // Stack: [Body, type]
 
                 pick 0 // type
                 push super::Event::PopFront::tag
@@ -401,6 +424,7 @@ mod queue {
                     // Nothing to serve: PopFrontRespAwait(none)
                     drop 0 // type
                     untuple 1
+                    assert
                     // Stack: [reqresp]
                     tuple 0
                     push super::super::prelude::req
@@ -417,6 +441,7 @@ mod queue {
                     // Push satisfies the wait: AwaitingFrontResp(some(val), ())
                     drop 0 // type. Stack: [Body]
                     untuple 1
+                    assert
                     // Stack: [val]
                     push ()
                     roll 1
@@ -442,6 +467,7 @@ mod queue {
                     // Both carry Body = (option, current); resume Idle(current)
                     drop 0 // tag
                     untuple 2
+                    assert
                     // Stack: [event, current, option]
                     drop 0 // drop option
                     drop 1 // drop event
@@ -477,6 +503,7 @@ mod queue {
         // Stack: [state]
         pick 0 // duplicate state. Stack: [state, state]
         untuple 2
+        assert
         // Stack: [state, Body, tag]
 
         pick 0 // tag
@@ -486,6 +513,7 @@ mod queue {
             // Descending: Body = (new_el, accumulator, current)
             drop 0 // tag
             untuple 3
+            assert
             // Stack: [state, current, accumulator, new_el]
             pick 2 // current
             push ()
@@ -507,7 +535,8 @@ mod queue {
             } {
                 // current is NOT () -> keep descending past its head
                 roll 2 // bring current to top. Stack: [state, accumulator, new_el, current]
-                untuple 2 // Stack: [state, accumulator, new_el, rest, head]
+                untuple 2
+                assert // Stack: [state, accumulator, new_el, rest, head]
                 pick 3 // duplicate accumulator
                 roll 1 // Stack: [state, accumulator, new_el, rest, accumulator, head]
                 tuple 2 // new_accumulator = (head, accumulator)
@@ -529,6 +558,7 @@ mod queue {
                 // Rebuilding: Body = (accumulator, current)
                 drop 0 // tag
                 untuple 2
+                assert
                 // Stack: [state, current, accumulator]
                 pick 0 // accumulator
                 push ()
@@ -545,7 +575,8 @@ mod queue {
                     drop 1 // drop original state
                 } {
                     // accumulator is NOT () -> move one element across
-                    untuple 2 // Stack: [state, current, rest_acc, head]
+                    untuple 2
+                    assert // Stack: [state, current, rest_acc, head]
                     pick 2 // duplicate current
                     roll 1 // Stack: [state, current, rest_acc, current, head]
                     tuple 2 // new_current = (head, current)
@@ -576,6 +607,7 @@ mod queue {
 
     function is_ready_to_finish {
         untuple 2
+        assert
         // Stack: [Body, tag]
         pick 0
         push super::State::Idle::tag
@@ -595,6 +627,7 @@ sentence drive_reductions {
     jump queue::tau_reduce
     // Stack: [state, (new_state, changed)]
     untuple 2
+    assert
     // Stack: [state, new_state, changed]
     branch {
         drop 1 // drop old state. Stack: [new_state]
@@ -646,6 +679,7 @@ test sentence verify_queue_machine {
     jump queue::emit
     untuple 2
     assert
+    assert
     
     push (10, ())
     push super::prelude::some
@@ -686,6 +720,7 @@ test sentence verify_queue_machine {
     jump queue::emit
     untuple 2
     assert
+    assert
     push (20, ())
     push super::prelude::some
     tuple 2
@@ -723,6 +758,7 @@ test sentence verify_queue_machine {
     pick 0
     jump queue::emit
     untuple 2
+    assert
     assert
     tuple 0
     push super::prelude::none
@@ -786,6 +822,7 @@ test sentence verify_queue_machine {
     jump queue::emit
     untuple 2
     assert
+    assert
     tuple 0
     push super::prelude::none
     tuple 2
@@ -823,6 +860,7 @@ test sentence verify_queue_machine {
     pick 0
     jump queue::emit
     untuple 2
+    assert
     assert
     push (100, ())
     push super::prelude::some

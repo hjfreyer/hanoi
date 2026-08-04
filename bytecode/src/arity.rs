@@ -626,12 +626,13 @@ mod tests {
 
     #[test]
     fn an_ordinary_sentence_is_inferred() {
+        // Two operands in, the sum and its success flag out.
         let got = arity_of("sentence probe { add }", "probe");
         assert_eq!(
             got,
             Some(Arity::Normal {
                 inputs: 2,
-                outputs: 1
+                outputs: 2
             })
         );
     }
@@ -643,7 +644,7 @@ mod tests {
         // what `check_arities` itself uses when it meets a Dip.
         let got = arity_of(
             r#"
-            #[arity(5, 4)]
+            #[arity(5, 5)]
             sentence probe { add }
         "#,
             "probe",
@@ -652,7 +653,7 @@ mod tests {
             got,
             Some(Arity::Normal {
                 inputs: 2,
-                outputs: 1
+                outputs: 2
             })
         );
     }
@@ -758,13 +759,13 @@ mod tests {
             assemble(
                 r#"
             #[total]
-            #[arity(2, 1)]
+            #[arity(2, 2)]
             sentence arith { add }
             #[total]
-            #[arity(1, 2)]
+            #[arity(1, 3)]
             sentence apart { untuple 2 }
             #[total]
-            #[arity(2, 1)]
+            #[arity(2, 2)]
             sentence caller { jump arith }
             #[total]
             #[arity(1, 1)]
@@ -820,7 +821,7 @@ mod tests {
             sentence risky { assert }
             #[arity(1, 0)]
             sentence caller { jump risky }
-            #[arity(2, 1)]
+            #[arity(2, 2)]
             sentence safe { add }
         "#,
         )

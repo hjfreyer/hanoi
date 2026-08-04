@@ -6,6 +6,7 @@ test sentence simple_tuple {
     push 3
     tuple 3
     untuple 3
+    assert
     push 3
     assert_eq
     push 2
@@ -21,9 +22,11 @@ test sentence nested_tuples {
     
     // Destructure outer tuple
     untuple 2
+    assert
     
     // Destructure inner tuple
     untuple 2
+    assert
     
     push 20
     assert_eq

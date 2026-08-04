@@ -41,16 +41,19 @@ sentence check_symbol {
 test sentence symbol_len_operation {
     push sym_a
     symbol_len
+    assert
     push 8
     assert_eq
     
     push sym_b
     symbol_len
+    assert
     push 8
     assert_eq
     
     push sym_c
     symbol_len
+    assert
     push 14
     assert_eq
 }
@@ -59,12 +62,14 @@ test sentence symbol_char_at_operation {
     push sym_a
     push 0
     symbol_char_at
+    assert
     push 65
     assert_eq
     
     push sym_a
     push 2
     symbol_char_at
+    assert
     push 83
     assert_eq
 }

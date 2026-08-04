@@ -1,6 +1,7 @@
 function init {
     // Stack: [()]
     untuple 0
+    assert
     // Stack: []
     push {{val}}
     // Stack: [{{val}}]

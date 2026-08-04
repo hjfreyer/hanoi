@@ -120,7 +120,7 @@ fn depth_counts_inputs_once() {
 fn dip_contributes_only_its_targets_net_change() {
     let (prog, body) = tree_of(
         r#"
-        #[arity(3, 1)]
+        #[arity(3, 2)]
         sentence probe {
             dip 1 { add }
             drop 0
@@ -128,10 +128,10 @@ fn dip_contributes_only_its_targets_net_change() {
     "#,
         NOTHING,
     );
-    assert_eq!(depths(prog, &body), vec![Some(3), Some(2)]);
-    // The dip itself takes three and leaves two: two consumed by the add,
-    // plus the one it holds out of the way.
-    assert_eq!(node_arity(prog, &body[0]), Some((3, 2)));
+    assert_eq!(depths(prog, &body), vec![Some(3), Some(3)]);
+    // The dip itself takes three and leaves three: the add's two operands
+    // become its sum and its flag, plus the one the dip holds out of the way.
+    assert_eq!(node_arity(prog, &body[0]), Some((3, 3)));
 }
 
 #[test]
@@ -166,7 +166,7 @@ fn factoring_looks_past_provenance() {
     );
     assert_eq!(
         shape(&body),
-        vec!["dip 1 { dip 1 { add drop } }", "branch"],
+        vec!["dip 1 { dip 1 { add } }", "branch"],
         "the shared dipped prefix should have been hoisted"
     );
 }
@@ -188,24 +188,25 @@ fn a_cycle_has_no_static_arity() {
 
 #[test]
 fn dips_sink_past_pushes_and_arithmetic() {
-    // The dip starts at the end hiding one value. Moving it past `add`
-    // widens it to two operands, and past each push narrows it again, so it
-    // arrives at the front hiding nothing at all.
+    // The dip starts at the end hiding the two values `add` leaves -- its sum
+    // and its flag. Moving it past that `add` widens it to two operands, and
+    // past each push narrows it again, so it arrives at the front hiding
+    // nothing at all.
     let (_prog, body) = tree_of(
         r#"
-        #[arity(2, 2)]
+        #[arity(2, 4)]
         sentence probe {
             push 1
             push 2
             add
-            dip 1 { add }
+            dip 2 { add }
         }
     "#,
         DIPS,
     );
     assert_eq!(
         shape(&body),
-        vec!["dip 0 { add drop }", "push 1", "push 2", "add", "drop"]
+        vec!["dip 0 { add }", "push 1", "push 2", "add"]
     );
 }
 
@@ -230,9 +231,9 @@ fn tree_unary(code: &str) -> Vec<Node> {
 
 #[test]
 fn a_deep_dip_becomes_a_nest_of_unary_dips() {
-    // `untuple 3` leaves three values, so a dip hiding two cannot clear it
-    // and stays put — which is what makes this a case where the expansion
-    // has something to do.
+    // `untuple 3` leaves four values — three parts and a flag — so a dip
+    // hiding two cannot clear it and stays put, which is what makes this a
+    // case where the expansion has something to do.
     let body = tree_unary(
         r#"
         sentence probe {
@@ -241,16 +242,7 @@ fn a_deep_dip_becomes_a_nest_of_unary_dips() {
         }
     "#,
     );
-    // `untuple` and `add` are both fallible, so each is followed by the drop
-    // that discards its flag -- this sentence has no `#[flags]`.
-    assert_eq!(
-        shape(&body),
-        vec![
-            "untuple 3",
-            "dip 1 { dip 1 { dip 1 { add drop } } }",
-            "drop"
-        ]
-    );
+    assert_eq!(shape(&body), vec!["untuple 3", "dip 1 { dip 1 { add } }"]);
 }
 
 #[test]
@@ -290,7 +282,7 @@ fn nested_dips_collapse_and_then_keep_sinking() {
     );
     assert_eq!(
         shape(&body),
-        vec!["push 1", "push 2", "dip 0 { add drop }", "push 8", "push 9"]
+        vec!["push 1", "push 2", "dip 0 { add }", "push 8", "push 9"]
     );
 }
 
@@ -440,7 +432,7 @@ fn a_pick_and_a_drop_cancel() {
     "#,
         ANNIHILATE,
     );
-    assert_eq!(shape(&body), vec!["add", "drop"]);
+    assert_eq!(shape(&body), vec!["add"]);
 }
 
 #[test]
@@ -461,13 +453,17 @@ fn a_type_test_leaves_the_drop_behind() {
 
 #[test]
 fn an_operator_takes_its_operands_with_it() {
-    // `add; drop` *is* `drop; drop`. It was not, while the add still rejected
-    // non-numeric operands and cancelling it would have discarded that check;
-    // with every data operation total there is no check left to discard.
+    // `add; drop; drop` *is* `drop; drop`. It was not, while the add still
+    // rejected non-numeric operands and cancelling it would have discarded
+    // that check; with every data operation total there is no check left to
+    // discard. Two drops rather than one because the sentence keeps the flag:
+    // that is `annihilate_flagged`'s three-node window, not
+    // `annihilate_drop`'s two.
     let (_prog, body) = tree_of(
         r#"
         sentence probe {
             add
+            drop 0
             drop 0
         }
     "#,
@@ -727,12 +723,12 @@ use crate::tactic::{Outcome, TacticError};
 fn sample() -> (&'static Program<'static>, Vec<Node>) {
     tree_of(
         r#"
-        #[arity(2, 2)]
+        #[arity(2, 4)]
         sentence probe {
             push 1
             push 2
             add
-            dip 1 { add }
+            dip 2 { add }
         }
     "#,
         NOTHING,
@@ -798,15 +794,15 @@ fn a_rule_that_matches_nowhere_is_a_no_op_not_a_failure() {
 /// A sentence whose two arms each contain a call, plus a call inside a dip.
 fn arms() -> &'static str {
     r#"
-        #[arity(1, 1)]
+        #[arity(1, 2)]
         sentence probe {
             pick 0
             is_tuple
             branch { jump left } { jump right }
         }
-        #[arity(1, 1)]
+        #[arity(1, 2)]
         sentence left { push 1 add }
-        #[arity(1, 1)]
+        #[arity(1, 2)]
         sentence right { push 2 add }
     "#
 }
@@ -932,7 +928,7 @@ fn an_inline_block_is_spelled_out_and_a_real_call_is_not() {
             jump named
         }
         #[arity(1, 1)]
-        sentence named { push 1 add }
+        sentence named { push 1 add drop 0 }
     "#,
     );
     let body = build(prog.library(), SentenceIndex::from(0), &mut HashSet::new());
@@ -1008,13 +1004,11 @@ fn selective_descent_breaks_the_staged_inlining_plateau() {
 #[test]
 fn dup_natural_shares_a_predicates_work_with_its_callers() {
     // End to end through the driver, on the idiom the sharing law exists for:
-    // a value handed to a check and then taken apart again.
-    // `#[flags]` so the sentence sees `untuple`'s success flag: the law is
-    // about the instruction's real arity, and without the annotation the
-    // assembler puts a flag-drop between the two occurrences.
+    // a value handed to a check and then taken apart again. The law is about
+    // `untuple`'s real arity, so the two occurrences sit next to each other
+    // with nothing between them.
     let (prog, before) = tree_of(
         r#"
-        #[flags]
         #[arity(1, 8)]
         sentence probe {
             pick 0
@@ -1055,7 +1049,7 @@ fn the_movement_rules_alone_cannot_reach_across_a_branch() {
         sentence probe {
             pick 0
             is_tuple
-            branch { untuple 3  drop 0  drop 0 } { drop 0  push true }
+            branch { untuple 3  drop 0  drop 0  drop 0 } { drop 0  push true }
         }
     "#,
         NOTHING,
@@ -1090,25 +1084,27 @@ const SHARING_PROBE: &str = r#"
     sentence blocked {
         pick 0
         untuple 3
+        drop 0
         is_symbol
         dip 1 { is_symbol }
         and
         dip 1 { is_symbol }
         and
-        branch { untuple 3  is_symbol  dip 1 { drop 0 }  dip 1 { drop 0 } }
+        branch { untuple 3  drop 0  is_symbol  dip 1 { drop 0 }  dip 1 { drop 0 } }
                { drop 0  push true }
     }
     #[arity(1, 1)]
     sentence given_the_fact {
         pick 0
         untuple 3
+        drop 0
         is_symbol
         dip 1 { is_symbol }
         and
         dip 1 { is_symbol }
         and
-        branch { untuple 3  is_symbol  dip 1 { drop 0 }  dip 1 { drop 0 } }
-               { untuple 3  drop 0  drop 0  drop 0  push true }
+        branch { untuple 3  drop 0  is_symbol  dip 1 { drop 0 }  dip 1 { drop 0 } }
+               { untuple 3  drop 0  drop 0  drop 0  drop 0  push true }
     }
 "#;
 
@@ -1189,6 +1185,7 @@ fn a_reconstruction_proves_the_shape_that_an_assertion_would_have_claimed() {
         #[arity(1, 1)]
         sentence via_reconstruct {
             untuple 3
+            drop 0
             pick 2  pick 2  pick 2
             is_symbol
             dip 1 { is_symbol }
@@ -1196,7 +1193,7 @@ fn a_reconstruction_proves_the_shape_that_an_assertion_would_have_claimed() {
             dip 1 { is_symbol }
             and
             dip 1 { tuple 3 }
-            branch { untuple 3  is_symbol  dip 1 { drop 0 }  dip 1 { drop 0 } }
+            branch { untuple 3  drop 0  is_symbol  dip 1 { drop 0 }  dip 1 { drop 0 } }
                    { drop 0  push true }
         }
     "#,
@@ -1430,6 +1427,7 @@ fn float_delivers_the_rebuild_to_the_branch_that_undoes_it() {
         #[arity(1, 1)]
         sentence needs_float {
             untuple 3
+            drop 0
             pick 2  pick 2  pick 2
             dip 3 { tuple 3 }
             is_symbol
@@ -1437,7 +1435,7 @@ fn float_delivers_the_rebuild_to_the_branch_that_undoes_it() {
             and
             dip 1 { is_symbol }
             and
-            branch { untuple 3  is_symbol  dip 1 { drop 0 }  dip 1 { drop 0 } }
+            branch { untuple 3  drop 0  is_symbol  dip 1 { drop 0 }  dip 1 { drop 0 } }
                    { drop 0  push true }
         }
     "#,
@@ -1526,7 +1524,7 @@ fn untupling_names_the_parts_and_a_later_copy_matches_them() {
     let (s, legend) = stack_after(
         r#"
         #[arity(1, 6)]
-        sentence probe { untuple 3  pick 2  pick 2  pick 2 }
+        sentence probe { untuple 3  drop 0  pick 2  pick 2  pick 2 }
     "#,
     );
     assert_eq!(s.len(), 6);
@@ -1553,7 +1551,7 @@ fn rebuilding_a_tuple_recovers_the_value_it_came_from() {
     let (s, legend) = stack_after(
         r#"
         #[arity(1, 4)]
-        sentence probe { untuple 3  pick 2  pick 2  pick 2  dip 3 { tuple 3 } }
+        sentence probe { untuple 3  drop 0  pick 2  pick 2  pick 2  dip 3 { tuple 3 } }
     "#,
     );
     // The rebuilt value sits under the three parts it was built from.
@@ -1600,7 +1598,7 @@ fn a_call_makes_its_result_opaque_rather_than_wrong() {
         #[arity(1, 2)]
         sentence probe { pick 0  dip 1 { jump named }  jump named }
         #[arity(1, 1)]
-        sentence named { push 1  add }
+        sentence named { push 1  add  drop 0 }
     "#,
         false,
     );
@@ -1900,7 +1898,7 @@ fn inlining_puts_the_callee_in_reach_of_the_callers_rules() {
 
     assert_eq!(
         shape(&run(prog, body.clone(), "distribute")),
-        vec!["call 0 #0", "add", "drop"],
+        vec!["call 0 #0", "add"],
         "an unexpanded call is opaque, so distribution has nothing to enter"
     );
     assert_eq!(
@@ -1936,10 +1934,7 @@ fn flattening_preserves_arity() {
     );
     let flat = run(prog, body.clone(), "flatten");
 
-    assert_eq!(
-        shape(&flat),
-        vec!["push 1", "add", "drop", "push 1", "add", "drop"]
-    );
+    assert_eq!(shape(&flat), vec!["push 1", "add", "push 1", "add"]);
     assert_eq!(seq_arity(prog, &body), seq_arity(prog, &flat));
 }
 
@@ -1991,18 +1986,18 @@ fn inlining_is_bounded_one_call_at_a_time() {
     let (prog, body) = raw(CALLS, "outer");
     assert_eq!(
         shape(&run(prog, body.clone(), "repeat_n(2, once(inline))")),
-        vec!["add", "drop", "call 0 #0"]
+        vec!["add", "call 0 #0"]
     );
     assert_eq!(
         shape(&run(prog, body, "repeat_n(3, once(inline))")),
-        vec!["add", "drop", "add", "drop"]
+        vec!["add", "add"]
     );
 }
 
 #[test]
 fn each_inline_expands_a_sequence_all_the_way_down() {
     let (prog, body) = raw(CALLS, "outer");
-    let both = vec!["add", "drop", "add", "drop"];
+    let both = vec!["add", "add"];
     assert_eq!(shape(&run(prog, body.clone(), "each(inline)")), both);
     assert_eq!(shape(&run(prog, body, "inline_all")), both);
 }
@@ -2080,14 +2075,14 @@ use crate::tactic::Firing;
 
 /// A sentence with several rules' worth of work in it.
 const WALK: &str = r#"
-    #[arity(2, 2)]
+    #[arity(2, 5)]
     sentence probe {
         push 1
         push 2
         add
-        dip 1 { add }
+        dip 2 { add }
         push 3
-        dip 1 { add }
+        dip 2 { add }
         push 4
         drop 0
     }

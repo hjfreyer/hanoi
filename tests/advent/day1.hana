@@ -17,6 +17,7 @@ sentence sync_char_iterator_in {
         push false
     } {
         untuple 2
+        assert
         drop 1
         push crate::string::char_iterator::in
         equal
@@ -40,6 +41,7 @@ sentence sync_parseint_in {
         push false
     } {
         untuple 2
+        assert
         drop 1
         push crate::string::parseint::in
         equal
@@ -96,6 +98,7 @@ sentence sync_set {
         push false
     } {
         untuple 2
+        assert
         drop 1
         push crate::string::parseint::out
         equal
@@ -111,7 +114,8 @@ sentence run_tau_reductions {
     // Stack: [state]
     pick 0
     jump test0::tau_reduce
-    untuple 2 // Stack: [state, next_state, did_change]
+    untuple 2
+    assert // Stack: [state, next_state, did_change]
     branch {
         // did_change is true: drop the old state and loop with next_state
         roll 1
@@ -141,6 +145,7 @@ test sentence verify_day1_manually {
     pick 0
     jump test0::emit
     untuple 2
+    assert
     assert // assert has_event is true
     push crate::prelude::pass
     assert_eq

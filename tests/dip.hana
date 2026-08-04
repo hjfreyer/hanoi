@@ -5,7 +5,7 @@ test sentence dip_hides_one_value {
     push 1
     push 2
     push 99
-    dip { add }
+    dip { add assert }
     // Stack: [3, 99]
     push 99
     assert_eq
@@ -18,7 +18,7 @@ test sentence dip_explicit_count_of_one {
     push 1
     push 2
     push 99
-    dip 1 { add }
+    dip 1 { add assert }
     push 99
     assert_eq
     push 3
@@ -30,7 +30,7 @@ test sentence dip_hides_several_values {
     push 2
     push 8
     push 9
-    dip 2 { add }
+    dip 2 { add assert }
     // Stack: [3, 8, 9]
     push 9
     assert_eq
@@ -44,7 +44,7 @@ test sentence dip_hides_several_values {
 test sentence dip_zero_is_jump {
     push 20
     push 22
-    dip 0 { add }
+    dip 0 { add assert }
     push 42
     assert_eq
 }
@@ -60,6 +60,7 @@ test sentence dip_of_nothing {
 #[arity(2, 1)]
 sentence add_two {
     add
+    assert
 }
 
 // A dip target may be a named sentence rather than an inline block.
@@ -80,7 +81,7 @@ test sentence dip_nests {
     push 2
     push 8
     push 9
-    dip { dip { add } }
+    dip { dip { add assert } }
     push 9
     assert_eq
     push 8

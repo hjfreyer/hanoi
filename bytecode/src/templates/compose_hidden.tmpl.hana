@@ -8,6 +8,7 @@ function init {
 function accept {
     // Stack: [(state, event)]
     untuple 2
+    assert
     // Stack: [event, state]
     pick 1
     // Stack: [event, state, event]
@@ -37,6 +38,7 @@ function emit {
     jump {{concurrent}}::emit
     // Stack: [state, (has_event, event)]
     untuple 2
+    assert
     // Stack: [state, event, has_event]
     branch {
         // Stack: [state, event]
@@ -95,6 +97,7 @@ function tau_reduce {
     jump {{concurrent}}::tau_reduce
     // Stack: [state, (did_reduce, next_state)]
     untuple 2
+    assert
     // Stack: [state, next_state, did_reduce]
     branch {
         // Stack: [state, next_state]
@@ -115,6 +118,7 @@ function tau_reduce {
         jump {{concurrent}}::emit
         // Stack: [state, (has_event, event)]
         untuple 2
+        assert
         // Stack: [state, event, has_event]
         branch {
             // Stack: [state, event]

@@ -3,6 +3,7 @@
 #[arity(2, 1)]
 sentence add_two {
     add
+    assert
 }
 
 #[arity(0, 1)]
@@ -13,6 +14,7 @@ sentence push_val {
 function double_val {
     pick 0
     add
+    assert
 }
 
 test sentence test_arity_add_two {
@@ -39,6 +41,7 @@ test sentence test_arity_double {
 function recursive_helper {
     push 1
     add
+    assert
 }
 
 function nested_arity_calls {
@@ -56,6 +59,7 @@ test sentence test_arity_nested_calls {
 function square {
     pick 0
     multiply
+    assert
 }
 
 test sentence test_function_keyword {
