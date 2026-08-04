@@ -6,7 +6,8 @@
 //! rules and a handful of combinators for control and traversal, so which
 //! rewrites run, in what order, where in the tree, and how many times are all
 //! things you say rather than things the tool decides. `--list-rules` and
-//! `--list-tactics` enumerate what is available.
+//! `--list-tactics` enumerate what is available, and `--step` walks a tactic
+//! one rule firing at a time instead of printing only where it ended up.
 //!
 //! This is a debugging aid, not a source generator: the output does not parse,
 //! because a dipped block operates below its hidden region and so cannot be
@@ -15,6 +16,7 @@
 //! references to chase by hand.
 
 mod arity;
+mod debug;
 mod ir;
 mod print;
 mod program;
@@ -46,6 +48,7 @@ struct Options {
     trace: bool,
     check: bool,
     stack: bool,
+    step: bool,
 }
 
 fn main() {
@@ -55,6 +58,7 @@ fn main() {
         trace: false,
         check: false,
         stack: false,
+        step: false,
     };
     let mut tactic_files: Vec<String> = Vec::new();
     let mut positional: Vec<String> = Vec::new();
@@ -89,6 +93,7 @@ fn main() {
                 };
             }
             "--trace" => opts.trace = true,
+            "--step" => opts.step = true,
             "--stack" => opts.stack = true,
             "--check" => opts.check = true,
             "--list-rules" => list_rules = true,
@@ -175,6 +180,11 @@ fn main() {
         process::exit(1);
     }
 
+    if opts.step {
+        debug::run(&prog, root, &tactic, &opts);
+        return;
+    }
+
     let env = Env::new(&prog, opts.fuel, opts.check);
     if let Err(err) = print_sentence(root, &tactic, &env, &opts.tactic, opts.stack) {
         eprintln!("error: {}", err);
@@ -208,6 +218,7 @@ fn usage() {
     eprintln!("  --list-tactics       the named tactics currently defined.");
     eprintln!("  --fuel <n>           rule firings before giving up.");
     eprintln!("  --trace              print how often each rule fired.");
+    eprintln!("  --step               walk the rewrite one rule firing at a time.");
     eprintln!("  --check              verify every rule preserves net stack effect.");
     eprintln!("  --stack              show what each slot holds, with equal values sharing a name.");
     eprintln!();
@@ -215,6 +226,7 @@ fn usage() {
     eprintln!("  rewrite tests 'Pair::check' -t dip_normalize");
     eprintln!("  rewrite tests foo -t 'repeat(bu(each(sink, fuse)))'");
     eprintln!("  rewrite tests foo -t 'annihilate | factoring'");
+    eprintln!("  rewrite tests foo -t 'dips; factoring' --step");
 }
 
 fn load(dir_arg: &str) -> Library {

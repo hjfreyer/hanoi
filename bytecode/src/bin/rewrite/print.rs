@@ -25,20 +25,35 @@ pub(crate) fn print_sentence(
     source: &str,
     show_stack: bool,
 ) -> Result<(), TacticError> {
-    let library = env.program().library();
+    let mut in_progress = HashSet::new();
+    let body = build(env.program().library(), root, &mut in_progress);
+    let body = apply(tactic, env, body)?.into_nodes();
+    print_body(env.program(), root, &body, source, show_stack);
+    Ok(())
+}
+
+/// The listing for a tree that has already been rewritten.
+///
+/// Split out from [`print_sentence`] for the stepper, which does its own
+/// rewriting — it runs the tactic under a budget, and what it has in hand is a
+/// tree from partway through the derivation rather than a tactic to finish.
+pub(crate) fn print_body(
+    prog: &Program,
+    root: SentenceIndex,
+    body: &[Node],
+    source: &str,
+    show_stack: bool,
+) {
+    let library = prog.library();
     println!("#{} {}", usize::from(root), library.names[root]);
     for ann in &library.annotations[root] {
         println!("  {:?}", ann);
     }
 
-    let mut in_progress = HashSet::new();
-    let body = build(library, root, &mut in_progress);
-    let body = apply(tactic, env, body)?.into_nodes();
-
     // A sentence whose reckoning breaks immediately — a #[recursive] one, whose
     // body is a cut edge — has no knowable entry depth. Counting from zero
     // still shows every step's effect; the `+` marks the numbers as offsets.
-    let (inputs, outputs) = seq_arity(env.program(), &body);
+    let (inputs, outputs) = seq_arity(prog, body);
     let relative = outputs.is_none() && inputs == 0;
 
     println!();
@@ -68,8 +83,8 @@ pub(crate) fn print_sentence(
         fresh: &mut fresh,
     });
     print_seq(
-        env.program(),
-        &body,
+        prog,
+        body,
         0,
         Some(inputs),
         relative,
@@ -84,7 +99,6 @@ pub(crate) fn print_sentence(
             println!("    {:>3} = {}", label, desc);
         }
     }
-    Ok(())
 }
 
 fn print_seq(

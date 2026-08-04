@@ -692,6 +692,116 @@ the tool itself never runs it.
 - `--fuel <n>` raises the budget when the work is genuinely large.
 - `--stack` shows what each slot holds, with equal values sharing a name. See
   below.
+- `--step` walks the derivation one rule firing at a time. See below.
+
+## Walking a derivation: `--step`
+
+`--trace` says which rules fired and how often; the listing says where the term
+ended up. Neither says *when* the term stopped being the one you meant.
+`--step` walks the derivation a firing at a time, printing the whole tree as it
+stood after that many firings, together with the window the last rule matched
+and the one the next rule is about to:
+
+```
+$ rewrite tests dip_hides_several_values -t dip_normalize --step
+
+  stepping `dip_normalize` — 2 rule firings.
+  `help` lists the commands; a bare newline repeats the last one.
+
+#15 dip::dip_hides_several_values
+
+  tactic: dip_normalize
+  depth │ instruction
+  ──────┼────────────
+      0 │ push 1
+      1 │ push 2
+      2 │ push 8
+      3 │ dip 1 → #658 <inline> {
+      3 │   add
+        │ }
+      2 │ push 9
+      3 │ push 9
+      4 │ assert_eq
+      2 │ push 8
+      3 │ assert_eq
+      1 │ push 3
+      2 │ assert_eq
+
+  step 1 of 2
+  fired  sink@3
+           push 9 ; dip 2 { add }
+        ⇒  dip 1 { add } ; push 9
+  next   sink@2
+           push 8 ; dip 1 { add }
+        ⇒  jump { add } ; push 8
+(rewrite 1/2)
+```
+
+| command | meaning |
+|---|---|
+| `s`, `step [n]` | apply n more firings (default 1) |
+| `b`, `back [n]` | undo n firings |
+| `g`, `goto <n>` | the tree after exactly n firings |
+| `c`, `continue` | run to the end of the derivation |
+| `r`, `restart` | back to the tree the tactic starts from |
+| `l`, `list` | print the current tree again |
+| `t`, `trace` | the firing log around the cursor, and counts so far |
+| `stack` | toggle the `--stack` column |
+| `q`, `quit` | leave |
+
+A bare newline repeats the last command, and end of input quits — so a session
+can be piped in.
+
+A step is **one rule firing, wherever in the tree it happened**. The `@n` beside
+a rule is a position within its own sequence rather than a global one: two
+firings reporting `@0` may be in different dip bodies. The tree above the prompt
+is what says where.
+
+### Stepping by replaying
+
+It steps by replaying, not by remembering. A rule is a pure function of the
+window it is handed, and the search that places rules reads nothing but the
+tree, so running the same tactic over the same sentence twice fires the same
+rules at the same places in the same order. Step *n* is therefore "run it again
+with a budget of n firings" — which is why stepping backwards costs exactly what
+stepping forwards does, and why none of this needs an undo log, a snapshot, or
+one line of special handling inside a rule.
+
+The budget is not `--fuel`, and the difference is the point. Running out of fuel
+is a failure and reports itself as one. Reaching the step budget makes every
+further rule *decline*: `each` still walks to the end of its sequence and
+`repeat` still asks once more, neither finds anything, and the traversal unwinds
+normally — so what comes back is a whole tree rather than an error. Every
+intermediate tree is a real one, net stack effect included.
+
+What it costs is re-running the prefix, so walking to step *n* is quadratic in
+*n*. That is the deliberate trade: a derivation worth reading by hand is tens of
+firings long, and the alternative buys speed with a second notion of what a
+rewrite is.
+
+### A tactic that will not settle
+
+This is what the stepper is most wanted for. `--fuel` reports an oscillation as
+a list of recent firings, which tells you *which* pair of rules is undoing each
+other; stepping shows you the term they are passing back and forth, and `goto`
+puts you either side of it.
+
+```
+$ rewrite tests dip_hides_several_values \
+    -t 'repeat(bu(each(expand, collapse)))' --fuel 5 --step
+
+  step 5 of 5
+  fired  expand@4
+           dip 2 { add }
+        ⇒  dip 1 { dip 1 { add } }
+  next   the run ends here:
+           out of fuel after 6 rule firings.
+```
+
+The census run happens once, before the prompt, which is how the stepper knows
+how long the derivation is — and how it knows a run ends in failure. It walks
+you up to the last firing before the failure and shows the error there. `--check`
+failures land the same way.
 
 ## Seeing which slots hold the same value
 
