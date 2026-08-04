@@ -494,11 +494,6 @@ mod tests {
                 n: 2,
                 m: 2,
             },
-            Rule2::Vacuous {
-                x: op(Instruction::Add),
-                n: 2,
-                m: 2,
-            },
             Rule2::Counit { d: 3 },
             Rule2::CopyConst { c: Value::Int(7) },
             Rule2::CopyAssoc { d: 2 },
@@ -629,17 +624,14 @@ mod tests {
 
     #[test]
     fn an_equation_with_an_empty_side_is_placed_by_its_location_alone() {
-        // `vacuous` backwards introduces a computation where there was
+        // `counit` backwards introduces a copy-and-discard where there was
         // nothing. An empty source window matches at every offset, so the
-        // location is the *only* thing that decides where the work lands —
-        // which is precisely what a script is for.
+        // location is the *only* thing deciding where the work lands — which
+        // is precisely what a script is for, and why introducing rules need
+        // addressing to be exact.
         let mut tree = vec![op(Instruction::Not), op(Instruction::Add)];
         let s = step(
-            Rule2::Vacuous {
-                x: op(Instruction::Not),
-                n: 1,
-                m: 1,
-            },
+            Rule2::Counit { d: 0 },
             Direction::Reverse,
             Location::root(1),
         );
@@ -648,7 +640,7 @@ mod tests {
             info,
             SpliceInfo {
                 removed: 0,
-                inserted: 3
+                inserted: 2
             }
         );
         assert_eq!(
@@ -656,11 +648,71 @@ mod tests {
             vec![
                 op(Instruction::Not),
                 op(Instruction::Pick(0)),
-                op(Instruction::Not),
                 op(Instruction::Drop),
                 op(Instruction::Add),
             ]
         );
+    }
+
+    #[test]
+    fn vacuous_is_derivable_from_annihilate_and_counit() {
+        // Is `vacuous` an axiom, or a lemma? Run the derivation and find out.
+        //
+        //   ε
+        //     counit(n-1) backwards, n times, each inside the last  -> pick^n drop^n
+        //     annihilate backwards on the drops                     -> pick^n X drop^m
+        //
+        // If this reproduces `vacuous`'s left-hand side exactly then the
+        // equation is a consequence of two others and does not earn a place
+        // among the axioms.
+        for (x, n, m) in [
+            (op(Instruction::Add), 2usize, 2usize),
+            (op(Instruction::Untuple(2)), 1, 3),
+            (op(Instruction::Not), 1, 1),
+        ] {
+            let mut script: Vec<Step> = (0..n)
+                .map(|i| {
+                    step(
+                        Rule2::Counit { d: n - 1 },
+                        Direction::Reverse,
+                        Location::root(i),
+                    )
+                })
+                .collect();
+            script.push(step(
+                Rule2::Annihilate { x: x.clone(), n, m },
+                Direction::Reverse,
+                Location::root(n),
+            ));
+
+            let mut tree: Vec<Node> = Vec::new();
+            apply_script(&prog(), &mut tree, &script, true)
+                .unwrap_or_else(|e| panic!("deriving vacuous for {:?}: {}", x, e));
+
+            let mut expected = crate::rule2::copies(n);
+            expected.push(x.clone());
+            expected.extend(std::iter::repeat_n(op(Instruction::Drop), m));
+            assert_eq!(
+                tree, expected,
+                "the derivation did not reproduce vacuous for {:?}",
+                x
+            );
+
+            // And forwards, deleting the whole thing again: the derivation is
+            // reversible step for step, which is what makes it a lemma rather
+            // than a one-way trick.
+            let back: Vec<Step> = script
+                .iter()
+                .rev()
+                .map(|s| Step {
+                    dir: s.dir.flipped(),
+                    ..s.clone()
+                })
+                .collect();
+            apply_script(&prog(), &mut tree, &back, true)
+                .unwrap_or_else(|e| panic!("undoing vacuous for {:?}: {}", x, e));
+            assert_eq!(tree, Vec::new(), "vacuous did not undo for {:?}", x);
+        }
     }
 
     // -- provenance is not identity -----------------------------------------
