@@ -3,9 +3,16 @@
 //! A tactic that does the wrong thing is hard to read backwards from its
 //! output. `--trace` says which rules fired and how often, and the listing says
 //! where the term ended up, but neither says *when* the term stopped being the
-//! one you meant. This walks the derivation: at every step it prints the whole
-//! tree as it stood after that many firings, plus the window the last rule
-//! matched and the one the next rule is about to.
+//! one you meant. This walks the derivation: at every step it shows the tree
+//! before the last firing beside the tree after it, so what that one rule did
+//! is the only thing on the screen, and sketches the window the next rule is
+//! about to match.
+//!
+//! Showing the change rather than the tree is the whole point of the view.
+//! A rule firing is a splice of a few nodes; reprinting a thousand-line
+//! listing around it is how the first version of this buried what it was
+//! supposed to reveal. `list` is there for when the tree itself is the
+//! question.
 //!
 //! **It steps by replaying, not by remembering.** A rule is a pure function of
 //! the window it is handed, and the search that places rules reads nothing but
@@ -25,8 +32,9 @@ use std::io::{self, BufRead, Write};
 
 use bytecode::SentenceIndex;
 
+use crate::diff::side_by_side;
 use crate::ir::{build, Node};
-use crate::print::print_body;
+use crate::print::render_body;
 use crate::program::Program;
 use crate::tactic::{apply, Env, Firing, Tactic};
 use crate::Options;
@@ -58,6 +66,7 @@ pub(crate) fn run(prog: &Program, root: SentenceIndex, tactic: &Tactic, opts: &O
         total: firings.len() as u64,
         firings,
         ending,
+        whole: false,
         stack: opts.stack,
         last: "step".to_string(),
     };
@@ -78,6 +87,8 @@ struct Session<'a> {
     firings: Vec<Firing>,
     /// How the full run ended, shown once the cursor reaches the end.
     ending: Option<String>,
+    /// Show the whole tree rather than what the last firing changed.
+    whole: bool,
     stack: bool,
     /// Repeated by a bare newline, as a debugger should.
     last: String,
@@ -92,7 +103,8 @@ impl Session<'_> {
             self.total,
             if self.total == 1 { "" } else { "s" }
         );
-        println!("  `help` lists the commands; a bare newline repeats the last one.");
+        println!("  Each step shows what one rule firing changed; `list` shows the whole");
+        println!("  tree, `help` lists the commands, and a bare newline repeats the last.");
         self.show();
 
         let stdin = io::stdin();
@@ -126,7 +138,14 @@ impl Session<'_> {
             Command::Goto(n) => self.goto(n),
             Command::End => self.goto(self.total),
             Command::Start => self.goto(0),
-            Command::List => self.show(),
+            Command::List => {
+                self.whole = true;
+                self.show();
+            }
+            Command::Diff => {
+                self.whole = false;
+                self.show();
+            }
             Command::Trace => self.trace(),
             Command::Stack => {
                 self.stack = !self.stack;
@@ -155,35 +174,88 @@ impl Session<'_> {
         self.show();
     }
 
-    /// Prints the tree as it stands, then what the step either side of it does.
+    /// Shows what the last firing did, and says what the next one will do.
+    ///
+    /// The diff is the default view because it answers the question stepping
+    /// asks. The whole tree is one `list` away, and at step 0 it is all there
+    /// is to show.
     fn show(&self) {
-        let (body, fired) = self.replay(self.at);
         println!();
-        print_body(self.prog, self.root, &body, &self.opts.tactic, self.stack);
-
-        // The firing after this one comes from a replay that stops one later:
-        // it is the same derivation, so the same rule fires at the same place,
-        // and stopping there is what renders its window.
-        let next = (self.at < self.total)
-            .then(|| self.replay(self.at + 1).1)
-            .flatten();
-
-        println!();
-        println!("  step {} of {}", self.at, self.total);
-        match &fired {
-            Some(f) => announce("fired", f),
-            None => println!("  fired  (nothing yet — this is the tree the tactic starts from)"),
+        match self.at.checked_sub(1).filter(|_| !self.whole) {
+            Some(previous) => self.show_diff(previous),
+            None => {
+                for line in self.lines(self.at) {
+                    println!("{}", line);
+                }
+            }
         }
-        match (&next, &self.ending) {
-            (Some(f), _) => announce("next", f),
-            (None, Some(err)) => {
+        self.footer();
+    }
+
+    /// The tree either side of the firing that produced the current one.
+    fn show_diff(&self, previous: u64) {
+        let fired = &self.firings[previous as usize];
+        let rows = side_by_side(
+            &self.lines(previous),
+            &self.lines(self.at),
+            &format!("step {}", previous),
+            &format!("step {}  ·  {}@{}", self.at, fired.rule, fired.at),
+        );
+        if rows.is_empty() {
+            // No rule returns its window unchanged, so this means the listing
+            // cannot show what changed — a provenance label, say.
+            println!("  `{}@{}` changed nothing the listing shows.", fired.rule, fired.at);
+            return;
+        }
+        for row in rows {
+            println!("{}", row);
+        }
+    }
+
+    /// Where the cursor is, and what the next firing will do.
+    ///
+    /// The window is sketched for the firing that has *not* happened yet, which
+    /// is the one the diff above cannot show.
+    fn footer(&self) {
+        println!();
+        println!(
+            "  step {} of {}{}",
+            self.at,
+            self.total,
+            if self.whole { "   (whole tree)" } else { "" }
+        );
+        match (self.at < self.total, &self.ending) {
+            (true, _) => announce("next", &self.preview()),
+            (false, Some(err)) => {
                 println!("  next   the run ends here:");
                 for line in err.lines() {
                     println!("           {}", line);
                 }
             }
-            (None, None) => println!("  next   (done — the tactic has nothing left to do)"),
+            (false, None) => println!("  next   (done — the tactic has nothing left to do)"),
         }
+    }
+
+    /// The firing about to happen, with its window.
+    ///
+    /// A replay that stops one later is what renders it: the derivation is the
+    /// same one, so the same rule fires at the same place.
+    fn preview(&self) -> Firing {
+        self.replay(self.at + 1)
+            .1
+            .unwrap_or_else(|| self.firings[self.at as usize].clone())
+    }
+
+    /// The listing of the tree after `n` firings.
+    fn lines(&self, n: u64) -> Vec<String> {
+        let body = self.replay(n).0;
+        render_body(
+            self.prog,
+            self.root,
+            &body,
+            &self.opts.tactic,
+            self.stack,
+        )
     }
 
     /// Runs the tactic from scratch, stopping after `n` firings.
@@ -260,7 +332,7 @@ fn tree(prog: &Program, root: SentenceIndex) -> Vec<Node> {
     build(prog.library(), root, &mut HashSet::new())
 }
 
-/// One firing: which rule, where, and what it did to the window it matched.
+/// One firing: which rule, where, and what it does to the window it matches.
 ///
 /// The window goes on its own two lines rather than beside the rule name. A
 /// branch with three nodes in each arm is a perfectly ordinary window and does
@@ -281,6 +353,7 @@ enum Command {
     End,
     Start,
     List,
+    Diff,
     Trace,
     Stack,
     Help,
@@ -320,6 +393,7 @@ fn parse(line: &str) -> Result<Command, String> {
         "c" | "continue" | "end" => Ok(Command::End),
         "r" | "restart" => Ok(Command::Start),
         "l" | "list" => Ok(Command::List),
+        "d" | "diff" => Ok(Command::Diff),
         "t" | "trace" => Ok(Command::Trace),
         "stack" => Ok(Command::Stack),
         "h" | "help" | "?" => Ok(Command::Help),
@@ -338,7 +412,8 @@ fn help() {
     println!("  g, goto <n>   the tree after exactly n firings");
     println!("  c, continue   run to the end of the derivation");
     println!("  r, restart    back to the tree the tactic starts from");
-    println!("  l, list       print the current tree again");
+    println!("  l, list       show the whole tree instead of the change");
+    println!("  d, diff       back to showing what the last firing changed");
     println!("  t, trace      the firing log around the cursor, and counts so far");
     println!("  stack         toggle the symbolic stack column (--stack)");
     println!("  h, help       this");
@@ -347,7 +422,8 @@ fn help() {
     println!("  A bare newline repeats the last command, and end of input quits.");
     println!("  A step is one *rule firing*, wherever in the tree it happened; the");
     println!("  `@n` in a firing is a position within its own sequence, not a global");
-    println!("  one.");
+    println!("  one. The diff is over the listing, so a depth changing counts as a");
+    println!("  changed line — which is usually what you want to see.");
 }
 
 #[cfg(test)]

@@ -17,6 +17,7 @@
 
 mod arity;
 mod debug;
+mod diff;
 mod ir;
 mod print;
 mod program;

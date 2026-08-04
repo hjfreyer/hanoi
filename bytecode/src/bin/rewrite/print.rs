@@ -44,10 +44,29 @@ pub(crate) fn print_body(
     source: &str,
     show_stack: bool,
 ) {
+    for line in render_body(prog, root, body, source, show_stack) {
+        println!("{}", line);
+    }
+}
+
+/// The same listing, as lines rather than as output.
+///
+/// The stepper diffs two of these against each other, which is the whole
+/// reason the listing is built before it is printed: what one rule firing did
+/// is a handful of lines in a tree that may be thousands long, and the way to
+/// show that is to line the two listings up rather than to print both.
+pub(crate) fn render_body(
+    prog: &Program,
+    root: SentenceIndex,
+    body: &[Node],
+    source: &str,
+    show_stack: bool,
+) -> Vec<String> {
     let library = prog.library();
-    println!("#{} {}", usize::from(root), library.names[root]);
+    let mut out = Vec::new();
+    out.push(format!("#{} {}", usize::from(root), library.names[root]));
     for ann in &library.annotations[root] {
-        println!("  {:?}", ann);
+        out.push(format!("  {:?}", ann));
     }
 
     // A sentence whose reckoning breaks immediately — a #[recursive] one, whose
@@ -56,9 +75,9 @@ pub(crate) fn print_body(
     let (inputs, outputs) = seq_arity(prog, body);
     let relative = outputs.is_none() && inputs == 0;
 
-    println!();
+    out.push(String::new());
     if source != "default" {
-        println!("  tactic: {}", source);
+        out.push(format!("  tactic: {}", source));
     }
 
     let mut names = Names::new();
@@ -71,18 +90,21 @@ pub(crate) fn print_body(
         "depth │ instruction"
     };
     if show_stack {
-        println!("  {:>w$} │ {}", "stack", head, w = STACK_WIDTH);
-        println!("  {}─┼─{}", "─".repeat(STACK_WIDTH), "─".repeat(24));
+        out.push(format!("  {:>w$} │ {}", "stack", head, w = STACK_WIDTH));
+        out.push(format!("  {}─┼─{}", "─".repeat(STACK_WIDTH), "─".repeat(24)));
     } else {
-        println!("  {}", head);
-        println!("  {}┼────────────", if relative { "───────" } else { "──────" });
+        out.push(format!("  {}", head));
+        out.push(format!(
+            "  {}┼────────────",
+            if relative { "───────" } else { "──────" }
+        ));
     }
 
     let mut view = show_stack.then_some(View {
         names: &mut names,
         fresh: &mut fresh,
     });
-    print_seq(
+    render_seq(
         prog,
         body,
         0,
@@ -90,18 +112,21 @@ pub(crate) fn print_body(
         relative,
         stack,
         view.as_mut(),
+        &mut out,
     );
 
     if show_stack && !names.legend().is_empty() {
-        println!();
-        println!("  where");
+        out.push(String::new());
+        out.push("  where".to_string());
         for (label, desc) in names.legend() {
-            println!("    {:>3} = {}", label, desc);
+            out.push(format!("    {:>3} = {}", label, desc));
         }
     }
+    out
 }
 
-fn print_seq(
+#[allow(clippy::too_many_arguments)]
+fn render_seq(
     prog: &Program,
     nodes: &[Node],
     indent: usize,
@@ -109,6 +134,7 @@ fn print_seq(
     relative: bool,
     entry_stack: Stack,
     mut view: Option<&mut View>,
+    out: &mut Vec<String>,
 ) {
     let mut depth = entry;
     let mut stack = entry_stack;
@@ -133,7 +159,7 @@ fn print_seq(
         let pad = "  ".repeat(indent);
 
         match node {
-            Node::Op(inst) => println!("{} │ {}{}", gutter, pad, inst),
+            Node::Op(inst) => out.push(format!("{} │ {}{}", gutter, pad, inst)),
             Node::Dip {
                 depth: k,
                 origins,
@@ -151,7 +177,7 @@ fn print_seq(
                 } else {
                     format!("{} → {}", verb, origins.join(" + "))
                 };
-                println!("{} │ {}{} {{", gutter, pad, head);
+                out.push(format!("{} │ {}{} {{", gutter, pad, head));
                 // The callee cannot reach the k dipped values, but they are
                 // still on the stack, so the inner frame's entry depth is the
                 // same number the dip itself was printed with — which is what
@@ -159,7 +185,7 @@ fn print_seq(
                 let inner = stack.as_ref().and_then(|s| {
                     (*k <= s.len()).then(|| s[..s.len() - k].to_vec())
                 });
-                print_seq(
+                render_seq(
                     prog,
                     body,
                     indent + 1,
@@ -167,8 +193,9 @@ fn print_seq(
                     relative,
                     inner,
                     view.as_deref_mut(),
+                    out,
                 );
-                println!("{}{} │ {}}}", stack_blank(&view), blank, pad);
+                out.push(format!("{}{} │ {}}}", stack_blank(&view), blank, pad));
             }
             Node::Branch {
                 then_origin,
@@ -181,8 +208,11 @@ fn print_seq(
                 let arm_stack = stack.as_ref().and_then(|s| {
                     (!s.is_empty()).then(|| s[..s.len() - 1].to_vec())
                 });
-                println!("{} │ {}branch then → {} {{", gutter, pad, then_origin);
-                print_seq(
+                out.push(format!(
+                    "{} │ {}branch then → {} {{",
+                    gutter, pad, then_origin
+                ));
+                render_seq(
                     prog,
                     then_body,
                     indent + 1,
@@ -190,15 +220,16 @@ fn print_seq(
                     relative,
                     arm_stack.clone(),
                     view.as_deref_mut(),
+                    out,
                 );
-                println!(
+                out.push(format!(
                     "{}{} │ {}}} else → {} {{",
                     stack_blank(&view),
                     blank,
                     pad,
                     else_origin
-                );
-                print_seq(
+                ));
+                render_seq(
                     prog,
                     else_body,
                     indent + 1,
@@ -206,8 +237,9 @@ fn print_seq(
                     relative,
                     arm_stack,
                     view.as_deref_mut(),
+                    out,
                 );
-                println!("{}{} │ {}}}", stack_blank(&view), blank, pad);
+                out.push(format!("{}{} │ {}}}", stack_blank(&view), blank, pad));
             }
             Node::Call { depth: k, target } => {
                 let verb = if *k == 0 {
@@ -215,7 +247,13 @@ fn print_seq(
                 } else {
                     format!("dip {}", k)
                 };
-                println!("{} │ {}{} → {}", gutter, pad, verb, prog.label(*target));
+                out.push(format!(
+                    "{} │ {}{} → {}",
+                    gutter,
+                    pad,
+                    verb,
+                    prog.label(*target)
+                ));
             }
         }
 

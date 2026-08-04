@@ -2177,3 +2177,25 @@ fn going_inert_inside_a_repeat_still_terminates() {
         walk(Some(n));
     }
 }
+
+#[test]
+fn every_firing_shows_up_in_the_listing() {
+    // What the side-by-side view relies on: a firing that changed the tree
+    // changed the listing too. Nothing makes that true in general — a rule
+    // that touched only provenance would not — which is why the stepper says
+    // so rather than printing an empty diff. It should stay rare.
+    let total = walk_total();
+    let listing = |n| {
+        let (prog, nodes, _) = walk(Some(n));
+        crate::print::render_body(
+            prog,
+            SentenceIndex::from(0),
+            &nodes,
+            WALK_TACTIC,
+            false,
+        )
+    };
+    for n in 1..=total {
+        assert_ne!(listing(n - 1), listing(n), "firing {} left no trace", n);
+    }
+}
