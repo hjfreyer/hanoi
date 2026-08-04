@@ -256,10 +256,12 @@ fn load(dir_arg: &str) -> Library {
         }
     };
 
-    match bytecode::assemble_with_path(&code, file_path.parent()) {
+    let mut sources = bytecode::SourceMap::new();
+    let root = sources.add_path(&file_path, code);
+    match bytecode::assemble_source(&mut sources, root, file_path.parent()) {
         Ok(lib) => lib,
         Err(err) => {
-            eprintln!("Assembly FAILED for '{}':\n{}", file_path.display(), err);
+            eprint!("{}", sources.render(&err));
             process::exit(1);
         }
     }

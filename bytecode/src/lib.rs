@@ -5,12 +5,14 @@ pub mod library;
 pub mod lower;
 pub mod opcode;
 pub mod resolve;
+pub mod source;
 pub mod value;
 
 pub use arity::{check_arities, check_totality, failure_reachability};
-pub use assembly::{assemble, assemble_with_path};
+pub use assembly::{assemble, assemble_source, assemble_with_path};
 pub use library::{Annotation, Arity, Library, Sentence, SentenceIndex};
 pub use opcode::Instruction;
+pub use source::{Error, FileId, SourceMap, Span};
 pub use value::{Symbol, Value};
 
 #[cfg(test)]
@@ -632,10 +634,14 @@ mod tests {
         "#;
         let res = assemble(code);
         assert!(res.is_err());
+        let err = res.unwrap_err();
         assert!(
-            res.unwrap_err()
-                .contains("no base directory context was provided")
+            err.contains("cannot load external module `my_external_file_module`"),
+            "{}",
+            err
         );
+        // The module name is what gets underlined, not the whole declaration.
+        assert!(err.contains("--> <input>:2:17"), "{}", err);
     }
 
     #[test]
@@ -784,7 +790,7 @@ mod tests {
         "#;
         let res = assemble(code);
         assert!(res.is_err());
-        assert!(res.unwrap_err().contains("Duplicate #[precondition]"));
+        assert!(res.unwrap_err().contains("duplicate #[precondition]"));
 
         let code2 = r#"
             function a { drop 0 push true }
@@ -799,7 +805,7 @@ mod tests {
         "#;
         let res2 = assemble(code2);
         assert!(res2.is_err());
-        assert!(res2.unwrap_err().contains("Duplicate #[postcondition]"));
+        assert!(res2.unwrap_err().contains("duplicate #[postcondition]"));
 
         // One of each is fine, and `arity` may still repeat: every one is checked.
         let code3 = r#"

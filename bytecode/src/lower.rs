@@ -295,7 +295,15 @@ impl Lowerer {
         for (name, val) in vars {
             rendered = rendered.replace(&format!("{{{{{}}}}}", name), &val.to_string());
         }
-        let parsed = crate::assembly::parse_source(&rendered, None)?;
+
+        // The template is generated, so it gets its own map under a name that
+        // says so. A failure here is a bug in the template rather than in the
+        // user's file, and the rendered error shows the substituted text — the
+        // only place the mistake is visible.
+        let mut map = crate::source::SourceMap::new();
+        let file = map.add("<composer template>", rendered);
+        let parsed =
+            crate::assembly::parse_source(&mut map, file, None).map_err(|e| map.render(&e))?;
         self.items(parsed)
     }
 }
