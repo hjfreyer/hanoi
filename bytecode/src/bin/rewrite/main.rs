@@ -158,9 +158,17 @@ fn main() {
             println!("  {}", name);
         }
         println!();
-        println!("combinators: each, once, try, repeat, repeat_n, id, fail");
+        println!("combinators: each, once, at, try, must, repeat, repeat_n, id, fail");
         println!("traversals:  children, then, else, body, bu, td");
         println!("operators:   `a; b` in sequence, `a | b` first that applies");
+        println!();
+        println!("aiming:      `at(n, r)` applies r at exactly position n, and");
+        println!("             `then(k, t)` reaches the then arm of the node at k");
+        println!("             (bare `then(t)` reaches every one). Composed, they");
+        println!("             name any window --show-script prints:");
+        println!("             `then(1, body(2, at(0, sink)))` is `[1.then, 2.body] @0`.");
+        println!("             `must(t)` fails if t changed nothing, so an aimed");
+        println!("             step that misses is an error rather than a no-op.");
         return;
     }
 
