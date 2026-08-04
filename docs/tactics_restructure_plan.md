@@ -13,6 +13,19 @@ Per the user: not much depends on the existing specifics — keep the overall vi
 
 ## Architecture
 
+### Global precondition: non-recursive, total sentences
+
+The whole apparatus is restricted to roots that are non-recursive **and total**. `main.rs` already refuses a `#[recursive]` root; it additionally refuses any root that can fail, via `bytecode::arity::failure_reachability` (public precisely for this consumer — see its doc comment). Both properties are closed over reachability (`check_arities` propagates `#[recursive]` up the call graph; `failure_reachability` is a fixpoint over it), so every node the tree can ever contain — including anything an `Unfold` splices in — is non-recursive and cannot reach `panic`/`assert`/`assert_eq`.
+
+Consequences, which the equations should exploit:
+
+- **`total_effect_free` collapses to "has a known arity."** The old `speculable` predicate existed to keep an `assert` hidden in a dip or call body from being run on a path that wouldn't have run it; no such node exists here. `annihilate` (and tranche 2's `speculate_branch`) may accept *any* node with a known arity — ops, dips, calls, branches alike — instead of a syntactic whitelist.
+- **Arity is always known.** Unknown arity came from `#[recursive]` callees; with recursion excluded, every node has an inferable arity, so `--check`'s "learning an arity" case (`None → Some`) disappears, `net` comparison becomes strict equality of known values, and `ArityUnknown` becomes an internal error rather than an expected side condition. (Verify during stage 1; if a residual `None` case survives, keep the old tolerant comparison and say why.)
+- **`Unfold`'s non-recursive side condition never bites** — the precondition guarantees it. Keep the cheap per-step annotation lookup anyway (a step should be safe on its own terms, and scripts are meant to be checkable in isolation), but the equation prose need not hedge.
+- **Tranche-2 bool/branch laws lose their panic caveats** — e.g. `bool_identity`'s absorbing cases were `B; drop; push c` rather than `push c` only because `B` might fail; under the precondition the drop-form composes with `annihilate` to reach the simple form anyway.
+
+Lifting the restriction later (recursive or partial roots) means reintroducing exactly these caveats, so each is marked at its use site with a comment naming this precondition.
+
 ### Location addressing (new — nothing like it exists today)
 
 ```rust
@@ -83,7 +96,7 @@ pub type Script = Vec<Step>;
 | `distribute(A, B, C)` | `branch { A } { B } ; C` = `branch { A;C } { B;C }` | C a *sequence* (generalizes the old single-node rule). Fwd/Rev are genuine inverses — never in one fixpoint |
 | `fold_branch(c, A, B)` | `push c ; branch { A } { B }` = `A` if **`c.truthy()`** else `B` | decide by `Value::truthy`, NOT `c == Bool(true)` as a type test — `push 1; branch` folds to the else arm |
 | `eval(op, inputs)` | `push v1 … push vn ; op` = pushes of outputs | via shared `eval_op(inst, &[Value]) -> Option<Vec<Value>>` delegating to `bytecode::value::{truthy, numeric_cmp}`. Must reproduce the exact fold tables: comparisons push a flag too (`Less` on symbols → `push false; push false`), `tuple_length` on a non-tuple hands the value back + `false`. Subsumes `fold_const` + `fold_const_unary`; arithmetic ops become a trivial extension |
-| `annihilate(X, n, m)` | `X ; drop^m` = `drop^n` | `check` verifies `(n,m)` equals `node_arity(prog, x)`; X passes new `total_effect_free` predicate = `speculable` (rules.rs:3357) **with `Drop` allowed** (its exclusion there was for the measure, not soundness). Subsumes `annihilate_drop` (m=1) and `annihilate_flagged` (m=2) |
+| `annihilate(X, n, m)` | `X ; drop^m` = `drop^n` | `check` verifies `(n,m)` equals `node_arity(prog, x)` — under the global precondition (total root) that is the *whole* condition; no `speculable`-style syntactic whitelist. Subsumes `annihilate_drop` (m=1) and `annihilate_flagged` (m=2), and covers calls/branches the old rules had to decline |
 | `counit(d)` | `pick d ; drop` = ε | the old `Pick` special case in `annihilation()` — deliberately NOT an `annihilate` instance |
 | `copy_const(c)` | `push c ; pick 0` = `push c ; push c` | |
 | `copy_assoc(d)` | `pick d ; pick 0` = `pick d ; dip 1 { pick d }` | |
@@ -112,7 +125,8 @@ pub enum ApplyError {
     WindowMismatch { expected: String, found: String },
     SideCondition(SideCondition),               // RecursiveTarget, FrameTooShallow{k,m},
                                                 // ClaimedArityMismatch{claimed, actual},
-                                                // NotTotalEffectFree, ArityUnknown, UnsupportedOp, DepthOverflow
+                                                // ArityUnknown (internal error under the
+                                                // global precondition), UnsupportedOp, DepthOverflow
     NetChanged { before: Option<i64>, after: Option<i64> },
 }
 ```
@@ -160,7 +174,7 @@ Census = one engine run producing (final tree, script, ending). `goto n` = fresh
 
 ## Stages (each leaves `cargo test` green; run `./run_all_tests.sh` at each stage)
 
-1. **Foundations (additive).** `location.rs`, `rule2.rs` (13 equations + `StepKind::Unfold`), `applier.rs`; `same_effect_seq` → `pub(crate)`; add `total_effect_free` (duplicate `speculable` rather than touching rules.rs). Tests: per-equation lhs/rhs goldens (transliterated from rules.rs tests), side-condition rejections (including fabricated claims: a wrong arity on `Interchange`/`Annihilate` must be rejected by `check`; `Unfold` of a `#[recursive]` target must be rejected; a Reverse `Unfold` whose window is not the target's body must fail `WindowMismatch`), applier navigation + every `ApplyError` variant provoked, Forward∘Reverse = identity round-trips (incl. one exact-equality case pinning provenance), table-driven net-preservation (`net(lhs) == net(rhs)` over arg corpora). Old code untouched.
+1. **Foundations (additive).** `location.rs`, `rule2.rs` (13 equations + `StepKind::Unfold`), `applier.rs`; `same_effect_seq` → `pub(crate)`. No `speculable`-style predicate is needed — the global precondition (non-recursive, total root) reduces totality conditions to arity lookups. Tests: per-equation lhs/rhs goldens (transliterated from rules.rs tests), side-condition rejections (including fabricated claims: a wrong arity on `Interchange`/`Annihilate` must be rejected by `check`; `Unfold` of a `#[recursive]` target must be rejected; a Reverse `Unfold` whose window is not the target's body must fail `WindowMismatch`), applier navigation + every `ApplyError` variant provoked, Forward∘Reverse = identity round-trips (incl. one exact-equality case pinning provenance), table-driven net-preservation (`net(lhs) == net(rhs)` over arg corpora). Old code untouched.
 2. **Matchers (additive).** `matcher.rs`, tranche-1 set. Tests: `plan` + `apply_step` on a scratch tree equals the old rule's documented replacement (reuse expected values from rules.rs tests).
 3. **Engine (parallel).** `engine.rs` + new `Env`. Port Outcome-algebra/rollback tests from tests.rs (~717-1707), add script-truncation-on-rollback assertions and the replay-invariant test. Old tactic.rs still drives main.rs; both compile side by side.
 4. **Cutover (the one big commit).** Rewire script.rs to matchers; rewrite `PRELUDE`; switch main.rs to engine.rs; add `--show-script`; `--check` flows into the applier. Delete rules.rs + old tactic.rs. Prune tests.rs to derivations tranche 1 supports: factoring (tests.rs:357/372/385), annihilate family (411-480), dips/collapse/fuse (190-355), distribute+fold (1778-1876), inline/flatten (1878-2024), and the corpus sweep `rewrites_preserve_arity_across_the_corpus` (tests.rs:515) — now also asserting script replay across the corpus. The sharing-chain block (tests.rs:1040-1460) moves out with a tranche-2 marker.
@@ -173,7 +187,8 @@ Commit per stage on branch `claude/tactics-language-restructure-rcyxnw`; push af
 
 - `cargo test` (workspace) + `./run_all_tests.sh` (adds the `.hana` integration suite) at every stage; fmt + clippy per CI (`.github/workflows/ci.yml`).
 - Headline invariant: for every engine test and the corpus sweep, replay the emitted script against a fresh `ir::build` and `assert_eq!` the trees.
-- End-to-end: `cargo run --bin rewrite -- tests <sentence> -t all --check --show-script` on a few sentences from `tests/main.hana`; `--step` walk of a factoring derivation; confirm out-of-fuel on `repeat(each(collapse); each(expand))` still prints a legible oscillation trace.
+- End-to-end: `cargo run --bin rewrite -- tests <sentence> -t all --check --show-script` on a few sentences from `tests/main.hana`; `--step` walk of a factoring derivation; confirm out-of-fuel on `repeat(each(collapse); each(expand))` still prints a legible oscillation trace; confirm the tool refuses a recursive root and a fallible root with distinct, legible messages.
+- Corpus sweeps iterate only roots passing both refusals (non-recursive AND total, via `failure_reachability`). Assert the surviving corpus is non-trivially large, so the totality restriction cannot silently empty the sweep and turn it vacuous.
 
 ## Risks
 
