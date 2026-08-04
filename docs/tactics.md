@@ -34,24 +34,26 @@ operand came from. It either matches and returns a replacement, or fails.
 | `sink` | `X ; dip k { S }`, `k >= m` | `dip (k-m+n) { S } ; X` |
 | `float` | `dip j { S } ; X`, `j >= n` | `X ; dip (j-n+m) { S }` |
 | `fuse` | `dip k { A }; dip k { B }` | `dip k { A B }` |
-| `annihilate_drop` | `X ; drop` | nothing, or `drop` |
+| `annihilate_drop` | `X ; drop`, `X : n -> 1` | `drop^n` |
+| `annihilate_flagged` | `X ; drop ; drop`, `X : n -> 2` | `drop^n` |
 | `pick_drop_to_roll` | `pick d ; dip (d+1) { drop }` | `roll d` |
 | `noop` | `roll 0`, or an empty `dip` | nothing |
 | `flatten_call` | `dip 0 { P }` | `P`, spliced in |
 | `distribute_branch` | `branch { A } { B } ; X` | `branch { A X } { B X }` |
-| `fold_branch` | `push true \| false ; branch { A } { B }` | the arm it selects |
+| `fold_branch` | `push c ; branch { A } { B }` | the arm `c` selects |
 | `inline` | a call | the block it names, spliced in |
 | `fold_const` | `push a ; push b ; op` | `push (a op b)` |
 | `fold_const_unary` | `push a ; op` | `push (op a)` |
 | `bool_identity` | `B ; push true ; and` | `B`, and the three other unit laws |
-| `cancel_tuple` | `tuple n ; untuple n` | nothing |
-| `retain_condition` | `pick 0 ; branch { A } { B }` | `branch { push true; A } { push false; B }` |
+| `cancel_tuple` | `tuple n ; untuple n` | `push true` |
+| `retain_condition` | `Y ; pick 0 ; branch { A } { B }`, `Y` yields a bool | `Y ; branch { push true; A } { push false; B }` |
 | `specialize_equal` | `pick d; push c; equal; branch { A } { B }` | the same, with A as `dip d { drop; push c }; A` |
 | `copy_const` | `push c ; pick 0` | `push c ; push c` |
-| `dup_natural` | `pick 0 ; X ; dip m { X }`, `X : 1 -> m` | `X ; (pick (m-1))^m` |
+| `dup_natural` | `pick 0 ; X ; dip m { X }`, `X : 1 -> m` | `X ; (pick (m-1))^m` (also under a retained copy) |
 | `unfactor_branch` | `dip k { X } ; branch { A } { B }`, `k >= 1` | `branch { dip (k-1) { X }; A } { … }` |
-| `rebuild_copy` | `pick 0 ; untuple n` | `untuple n ; (pick (n-1))^n ; dip n { tuple n }` |
+| `rebuild_copy` | `pick 0 ; untuple n`, `n >= 1` | `untuple n`, then a branch on its flag |
 | `copy_assoc` | `pick d ; pick 0` | `pick d ; dip 1 { pick d }` |
+| `speculate_branch` | `branch { X; A } { B }`, `X : n -> m` total | `dip 1 { (pick (n-1))^n; X }; branch { dip m { drop^n }; A } { drop^m; B }` |
 
 `sink` is the interchange rule, and its side condition is the one piece of real
 arithmetic here: writing `X`'s arity as `(n -> m)`, the dip's window must sit
@@ -70,11 +72,29 @@ direction and `float` has no measure at all. It earns its place when a total
 computation has to be delivered *to* somewhere rather than gathered up — see
 "a construction is a proof" below.
 
-`annihilate_drop` only fires for instructions that cannot panic: `push` and
-`pick` cancel entirely, and the five `is_*` predicates leave the drop behind
-(they consume a value to make the dropped one). `add; drop` is deliberately not
-`drop; drop` — the add still rejects non-numeric operands, and cancelling it
-would discard that check.
+`annihilate_drop` fires on any operator that leaves exactly one value:
+computing something and throwing it away is throwing away the operands
+instead, so `add; drop` is `drop; drop` and `tuple 3; drop` is three drops.
+`push` lands at zero drops, and `pick d` gets its own answer — no drops, since
+it consumed nothing — because its arity `(d+1 -> d+2)` is not of that shape.
+
+Only `print` is excluded, and not for a reason about failure: running it and
+not running it differ in something other than the stack. `assert` and
+`assert_eq` fall out on their own, leaving nothing on top for a drop to pair
+with.
+
+`annihilate_flagged` is the same law one output wider, and it exists because a
+**fallible** instruction leaves its success flag alongside its value (see
+[totality.md](totality.md)). `add; drop` is no longer an annihilation — it is
+the old `add`, with the flag thrown away — so what cancels is `add; drop; drop`,
+three nodes and one more than the first rule's window. It is not only about
+flags: `pick 0` has arity `(1 -> 2)` and belongs there for the same arithmetic.
+
+This pair used to be a single five-instruction whitelist, and `add; drop` was
+deliberately *not* `drop; drop` — the add still rejected non-numeric operands,
+and cancelling it would have discarded that check. The widening is not
+academic: it fired on **none** of the corpus before, and the two rules together
+now fire **17616 times across 721 sentences**.
 
 `pick_drop_to_roll` is where copying a value and then discarding the original
 turns back into the roll it always was. `sink` cannot reach this one and should
@@ -89,14 +109,16 @@ pairing is why `cleanup` bundles them: neither finishes the job alone.
 `distribute_branch` and `fold_branch` are the pair that shows why controlling
 order matters. Distribution is not a simplification — it duplicates X on
 purpose — but it puts X somewhere a rule can see it *in context*, and folding
-is what then pays off. On a sample of the test corpus `fold_branch` fires **no
-times at all** on its own, and **31 times** when `distribute` has run first.
-Neither rule finds that alone, and no flag combination expresses "distribute,
-then fold".
+is what then pays off. On `State::check` fully inlined, `fold_branch` fires
+**no times at all** on its own and **32762 times** when `distribute` has run
+first. Neither rule finds that alone, and no flag combination expresses
+"distribute, then fold".
 
-`fold_branch` matches only a literal `Bool`. The VM rejects a non-boolean
-condition, so folding `push 1 ; branch …` would erase a panic rather than
-preserve one — the same reason `annihilate_drop` will not touch `add`.
+`fold_branch` matches **any** literal, not only a `Bool`. A branch takes the
+then arm on `Bool(true)` and the else arm on everything else, so
+`push 1; branch …` is decided just as firmly as `push false; branch …` — it
+goes to the else arm. A *computed* condition still declines, which is the part
+of the rule that was ever really about knowing something.
 
 `inline` **splices**: the callee's body lands in the caller's sequence, with no
 frame left behind. That matters more than it sounds, because rules only ever
@@ -195,52 +217,64 @@ nowhere — `then(t)` on a sequence with no branch is a no-op, not an error.
 longer needed after inlining, which splices directly, but `sink` can still
 produce one: `push 1; dip 1 { X }` becomes `dip 0 { X }; push 1`.
 
-## Values, and why a literal is special
+## Values, and why folding is just evaluation
 
-Everything above rearranges code without asking what a value *is*. The last four
-rules do ask, and they all answer to one constraint: **an instruction that
-rejects an operand is a check, and removing the check changes the program even
-when it does not change the result.**
+Everything above rearranges code without asking what a value *is*. The value
+rules do ask, and the ground under them has shifted: **every data operation is
+total**, so an operator has no operand it could reject and no check a rewrite
+could throw away. See [totality.md](totality.md) for the contract and the junk
+table.
 
-That is why `annihilate_drop` will not touch `equal; drop` while `fold_const`
-folds `equal` happily. The objection in the first case is that an operand may
-itself be a panic, which `equal` propagates and `drop; drop` would not — an
-operator's panic branch is reachable whenever its operands are arbitrary. **A
-literal is never a panic.** With both operands pushed right there the branch
-cannot be taken, so the fold is an equality in the Z3 encoding and in the VM
-alike, and the rule needs no view on which of the two is the real semantics.
+That makes folding *evaluation*. `fold_const` and `fold_const_unary` may
+compute anything the VM computes, and their obligation is not a licence but an
+agreement — they must answer exactly as the interpreter does, on junk as much
+as on anything else. `push 1; push 2; and` folds to `push false` (neither
+operand is `Bool(true)`), `push idle; push thirsty; less` folds to `push false`
+(neither is a number), and `push sym; not` folds to `push true` (a symbol is not
+`true`, so it is falsy). The definitions themselves live in `bytecode::value` —
+`Value::truthy` and `numeric_cmp` — precisely so there is one of each rather
+than one for the VM and one for the rewriter.
 
-The operators that reject ordinary values are still restricted: `and`/`or` fold
-only on two booleans and the comparisons only on two numbers, because
-`push 1; push 2; and` is a panic and `push false` is not. `equal` rejects
-nothing, so it folds on any pair — which is what decides
-`push idle; push thirsty; equal` and collapses a whole symbol decision tree,
-since distinct symbols are already distinct structurally.
+What survives is a different constraint, and a sharper one. **Truthiness is not
+injective.** `and`, `or` and `branch` collapse every non-`true` value onto one
+answer, so a rule that hands a value *back* still has to know it was a boolean
+to begin with.
 
-`bool_identity` is the one that needs a three-node window, and the reason says
-something about how far two nodes can get you. `a && true = a` is a rewrite of
-*this* program only when `a` is known to be a boolean, since `and` rejects
-anything else; the two-node view `push true; and` cannot tell whether the value
-underneath was ever checked. Seeing the node that produced it can. That test is
-deliberately syntactic — a call to a sentence that happens to return a bool does
-not count, because that is a fact about the library rather than about the node,
-and `inline` is how you make the operator underneath visible.
+`bool_identity` is where that bites, and the reason says something about how far
+two nodes can get you. `a && true = a` is a rewrite of *this* program only when
+`a` is known to be a boolean — `and` no longer rejects a junk `a`, but it does
+coerce it to `Bool(false)`, which is a different value even though it is the
+same truth. The two-node view `push true; and` cannot tell what the value
+underneath is; seeing the node that produced it can. That test is deliberately
+syntactic — a call to a sentence that happens to return a bool does not count,
+because that is a fact about the library rather than about the node, and
+`inline` is how you make the operator underneath visible.
 
-Its absorbing cases go to `B; drop; push c` rather than to `push c`, for the
-same reason the unit case needs `B` at all: `B` may panic, and `a && false` is
-`false` only on the runs where `a` happened.
+Its absorbing cases go to `B; drop; push c` rather than to `push c`, and that is
+the one place a failure argument still applies: `B` may be a `panic` or an
+`assert`, and `a && false` is `false` only on the runs where `a` happened.
 
-`cancel_tuple` goes one way only. `tuple n; untuple n` returns the stack to
-where it started, but `untuple n; tuple n` is **not** a no-op — `untuple` is
-the instruction that checks the shape, so cancelling that pair would accept
-values the original rejected.
+`cancel_tuple` goes one way only, and neither change touched that. `tuple n;
+untuple n` returns the stack to where it started and now says so, leaving the
+literal `true` that `untuple` could not have failed to produce. The converse
+`untuple n; tuple n` is **not** a no-op: it used to reject every value that was
+not an n-tuple, then junk-normalized each of them, and now additionally strands
+a flag. Still a real function, still not the identity.
 
 ## A path condition can be a value
 
-A branch may tell its arms what its condition was, and doing so needs no
-context at all. The VM rejects a non-boolean condition, so an arm that runs at
-all ran because the value was exactly `true` or exactly `false` — which is a
-literal, and the arm can push it for itself. That is `retain_condition`.
+A branch may tell its arms what its condition was, and doing so needs almost no
+context: one node's worth. That is `retain_condition`, and it is written
+`Y; pick 0; branch { A } { B }` — three nodes, where `Y` is something that
+yields a boolean.
+
+The `Y` is load-bearing. A branch decides on *any* value, taking the else arm on
+everything that is not literally `Bool(true)`, so an else arm may perfectly well
+run while the copy `pick 0` left behind holds a `42`. Telling that arm its
+condition was `false` would be a lie about the value even though it is the truth
+about the path. `Y` yielding a bool is what rules the case out — the same
+predicate, and the same three-node window, that `bool_identity` needs for the
+same reason.
 
 This matters more than it sounds, because it is what lets a **path condition
 travel as a value**. The alternative is a traversal that carries hypotheses
@@ -286,32 +320,93 @@ pick 0; untuple 3; dip 3 { untuple 3 }   ==   untuple 3; pick 2; pick 2; pick 2
 ```
 
 Three copies because the value came apart into three. At `m = 1` it is the
-familiar `pick 0; X; dip 1 { X }` → `X; pick 0`. Panic behaviour is preserved
+familiar `pick 0; X; dip 1 { X }` → `X; pick 0`. Failure behaviour is preserved
 rather than merely respected: `X` runs on the copy first, so where the left side
-panics it does so on exactly the value the right side hands to its single `X`.
-`print` is excluded, being the one instruction for which running twice differs
-in something other than the stack.
+fails — `X` may contain an `assert` — it does so on exactly the value the right
+side hands to its single `X`. `print` is excluded, being the one instruction for
+which running twice differs in something other than the stack.
 
 This is the law that ought to close the gap between a predicate and its caller,
 because every predicate here is written `pick 0; jump P::check; branch {...}` —
 the check consumes a *copy* and the real work destructures the *original*. And
 it does close it, whenever the two occurrences are in one sequence.
 
-**They are not.** There is a branch in between, and nothing in this rule set
-moves code *out* of a branch arm except `factor_branch`, which needs both arms
-to share it. Hoisting from a single arm is not merely missing:
+**They are not.** There is a branch in between, and `factor_branch` — the only
+rule that moves code *out* of an arm — needs both arms to share it.
+
+The obvious hoist from a single arm does not work, and totality does not make it
+work:
 
 ```
 branch { untuple 3; A } { B }   →   dip 1 { untuple 3 }; branch { A } { tuple 3; B }
 ```
 
-would run `untuple 3` on the path that took the *other* arm, and `untuple` is
-partial — so the rewrite invents a panic the original did not have. The
-`untuple n ⊣ tuple n` pair looks like an iso and is only a *partial* one, and
-the case that matters is exactly where the partiality bites. Whether the hoist
-is safe depends on a guard several branches further out having already
-established that the value is a 3-tuple, and that is a fact about a path, not
-about a window.
+would run `untuple 3` on the path that took the *other* arm, where it
+junk-normalizes a value that `B` then goes on to use — and `tuple 3` does not
+put it back. The `untuple n ⊣ tuple n` pair looks like an iso and is not one.
+It used to invent a panic there instead; the argument changed and the
+conclusion did not.
+
+## Speculation is cheaper than an inverse
+
+**The hoist does not need an inverse. It needs a copy.** That is
+`speculate_branch`:
+
+```
+branch { X; A } { B }
+  ==
+dip 1 { (pick (n-1))^n; X };  branch { dip m { drop^n }; A } { drop^m; B }
+```
+
+Run `X` on a *copy* before the branch, and let each arm throw away the half it
+did not want. The losing path never gives up its own values, so nothing has to
+be reconstructed and `untuple n` is asked nothing that `add` is not asked. The
+`dip 1` is because the condition is still on top and `X` must not be handed it.
+
+**This is what totalizing the VM actually bought.** The rule is sound only
+because `X` cannot fail on the path that skipped it — which, for the `untuple`
+case the sharing problem is entirely about, was false a week ago. Beyond that it
+asks only that `X` have no effect but the stack (excluding `print`) and a
+locally known arity (excluding calls, whose bodies may hold an `assert` several
+frames down; `inline` is how you make that visible). A `dip` qualifies when its
+whole body does, which is what lets a speculation climb out of *nested*
+branches — the rule's own output is a dip, and it would otherwise strand itself
+at the next branch out.
+
+It declines when both arms open with the same effect: that is `factor_branch`'s
+case, and it does it strictly better, with no copies and no drops.
+
+So the direct route through the sharing problem is open:
+
+```
+speculate_branch   runs the arm's `untuple` on a copy, before the branch
+sink               walks it left to sit on the check's `untuple`
+dup_natural        merges the two
+```
+
+`dup_natural` learned one thing to close this. `sink` delivers the speculation
+as `pick 0; dip 1 { pick 0; X }; X` — the frame carries a `pick 0` of its own,
+because speculating had to copy — so the law is stated under a retained copy:
+
+```
+pick 0; dip 1 { pick 0; X }; X   ==   pick 0; X; (pick (m-1))^m
+```
+
+which is the same statement with the value surviving on the left of both sides.
+
+### How far it actually gets
+
+On the probe shape, all the way:
+`the_direct_route_closes_by_speculating` takes two `untuple`s to one with no
+reconstruction anywhere.
+
+On `emit_does_pre_and_post` — where the copy is made at the top of the caller
+and the `untuple` is two branches and several guards away — it does **not**
+close. The speculation climbs out correctly, but each level wraps the previous
+one in another frame, and `dup_natural` cannot see two occurrences through that
+nesting. There the `rebuild_copy` chain is still the one that pays, taking seven
+`untuple`s to two. Which route wins is a property of the shape, not of the
+rules, and picking one is the search's job.
 
 So `unfactor_branch` goes the other way — pushing context *into* both arms,
 which is always sound — and is the direction available today. It is the exact
@@ -330,35 +425,58 @@ thrown away.** Carry the *parts* forward instead of the value, and rebuild the
 value where it is wanted. That is `rebuild_copy`:
 
 ```
-pick 0; untuple n   ==   untuple n; (pick (n-1))^n; dip n { tuple n }
+pick 0; untuple n
+  ==
+untuple n;
+branch { (pick (n-1))^n; dip n { tuple n }; push true }
+       { dip (n-1) { pick 0 }; push false }
 ```
 
 Instead of keeping the value and taking a copy apart, take the value apart and
-rebuild the copy. Both sides leave `[x, e(n-1) .. e0]` and both panic on exactly
-the inputs where `x` is not an n-tuple, so the rewrite asks nothing of `x` — but
-it changes what the surviving `x` *is*, from an opaque value into a `tuple n`
-applied to parts now on the stack. The rebuild is framed as `dip n { tuple n }`
-rather than emitted with rolls because that rebuilds the lower copy where it
-already sits, and arrives in the form `float` can move.
+rebuild the copy. That changes what the surviving `x` *is*, from an opaque value
+into a `tuple n` applied to parts now on the stack. The rebuild is framed as
+`dip n { tuple n }` rather than emitted with rolls because that rebuilds the
+lower copy where it already sits, and arrives in the form `float` can move.
 
-Now the value reaching the branch is a `tuple n` node. `tuple n` is **total**,
-so `unfactor_branch` may push it into both arms without inventing anything, and
-in the arm that takes it apart again `cancel_tuple` removes both. `float` is
-what delivers it there:
+The branch is the interesting part, and its history is the shortest argument
+for the whole flags design. The rule used to be the bare equation, justified by
+both sides panicking on exactly the inputs where `x` was not an n-tuple. Once
+the operators became total there was no panic left to agree about and the two
+sides visibly differed — the rule had been *relying* on partiality to hide a
+normalization — so it grew a `tuple_length; push n; equal` guard to buy the
+condition back, and an else arm that could only invent `n` copies of `()`.
+
+Neither is needed now. **`untuple n` reports for itself**, so the condition is
+already on the stack, and the else arm has something to say: the value `untuple`
+could not take apart is still sitting in the deepest of the slots it filled. No
+recomputation, no `is_tuple`, and both arms exact. The guard a rewrite needs is
+the one the instruction already computed.
+
+Now the value reaching the branch is a `tuple n` node. `tuple n` is **total on
+the nose**, so `unfactor_branch` may push it into both arms without inventing
+anything, and in the arm that takes it apart again `cancel_tuple` removes both.
+`distribute_branch` is what brings the consumer into the guard's arms in the
+first place, and `float` is what delivers the rebuild the rest of the way:
 
 ```
-$ rewrite … -t 'once(rebuild_copy); repeat(bu(each(float)));
-              repeat(bu(each(unfactor_branch); each(cancel_tuple); cleanup))' --trace
-  float              5
-  cancel_tuple       1
-  rebuild_copy       1
-  unfactor_branch    1
+$ rewrite … -t 'once(rebuild_copy); distribute; repeat(bu(each(float)));
+              repeat(bu(each(unfactor_branch); each(cancel_tuple); cleanup));
+              all; flatten; cleanup'
 ```
 
 Two `untuple`s become one, and **no rule ever needed to know the value's shape**.
 A window that sees `tuple 3; untuple 3` needs to know nothing about where the
 value came from: the shape is evident because the code in front of it built that
 shape.
+
+Distribution copies the consumer into *both* arms, so the off-guard arm arrives
+carrying every `untuple` downstream of the rebuild — which would be a loss, if
+anything were left to compute there. Nothing is: that arm holds n literal `()`s,
+so `fold_const_unary` answers each `is_symbol` with `false`, `fold_const`
+collapses the `and`s, and `fold_branch` picks the arm that never untuples at
+all. **All three of those folds are things the old semantics declined to do.**
+The guard totality forced is paid for by the folding totality enabled, in the
+same derivation.
 
 This is the shape of the bargain between a clever search and a dumb rewriter.
 The search does not communicate a *fact*, which the rewriter would have to take
@@ -562,12 +680,15 @@ the tool itself never runs it.
   values that only the pick made.
 - `--trace` prints how often each rule fired. This is the cheap way to answer
   "does this rule ever apply to real code", and the answers are not obvious:
-  `annihilate_drop` fires on none of the 3526 sentences in `tests/`, while
-  `pick_drop_to_roll` fires on a third of them — 11 times in `State::check`
-  alone, which the listing shows as 1148 lines becoming 1092. Grepping the
-  `.hana` sources for that pattern finds exactly one site; the compiled,
-  inlined tree is where it actually lives. And `fold_branch` fires nowhere at
-  all until `distribute` has run, then 31 times.
+  `pick_drop_to_roll` fires on a third of the sentences in `tests/` — 11 times
+  in `State::check` alone, which the listing shows as 1148 lines becoming 1092.
+  Grepping the `.hana` sources for that pattern finds exactly one site; the
+  compiled, inlined tree is where it actually lives. `fold_branch` fires nowhere
+  at all until `distribute` has run, then thousands of times. And
+  `annihilate_drop` fired on **none** of the corpus while it was a whitelist of
+  instructions that cannot panic, and on 78 sentences once totality let it take
+  any single-output operator — which is the cheapest available measurement of
+  what that change was worth.
 - `--fuel <n>` raises the budget when the work is genuinely large.
 - `--stack` shows what each slot holds, with equal values sharing a name. See
   below.

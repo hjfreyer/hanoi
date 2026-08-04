@@ -10,6 +10,8 @@
 //! whatever drives the rules, and is written once in [`crate::tactic`] rather
 //! than open-coded inside each of them.
 
+use bytecode::arity::op_arity;
+use bytecode::value::numeric_cmp;
 use bytecode::{Instruction, Value};
 
 use crate::arity::node_arity;
@@ -37,6 +39,7 @@ pub(crate) trait Rule: Sync + std::fmt::Debug {
 /// or define one.
 pub(crate) const ALL_RULES: &[&dyn Rule] = &[
     &AnnihilateDrop,
+    &AnnihilateFlagged,
     &BoolIdentity,
     &CancelTuple,
     &Collapse,
@@ -59,6 +62,7 @@ pub(crate) const ALL_RULES: &[&dyn Rule] = &[
     &RetainCondition,
     &Sink,
     &SpecializeEqual,
+    &SpeculateBranch,
     &UnfactorBranch,
 ];
 
@@ -394,26 +398,32 @@ impl Rule for Fuse {
     }
 }
 
-/// Cancels a drop against the instruction that produced the value it drops.
+/// `X ; drop` becomes `drop^n`, where X has arity `(n -> 1)`.
 ///
-/// Only instructions that cannot panic qualify. `add` also leaves one value on
-/// top, but `add; drop` is not `drop; drop` — the add still rejects non-numeric
-/// operands, and cancelling it would throw that check away. `equal` is total in
-/// the VM but the Z3 model gives it a panic branch, so it is excluded too
-/// rather than have this tool assert an equivalence the verifier would not.
+/// Computing a value and throwing it away is throwing away the operands
+/// instead. That used to be true only of a whitelist — `push` and `pick`
+/// cancelled outright, the five `is_*` predicates left the drop behind, and
+/// `add; drop` was deliberately *not* `drop; drop`, because the add still
+/// rejected non-numeric operands and cancelling it would have discarded that
+/// check. Now that every data operation is total there is no check to discard,
+/// and one arity condition covers the lot (see `docs/totality.md`).
 ///
-/// Measure: node count.
+/// Two exceptions, and neither is about panics:
+///
+/// - `print` leaves one value on top like any other unary operator, but
+///   running it and not running it differ in something other than the stack.
+/// - `pick d` has arity `(d+1 -> d+2)`, so it is not of this shape at all. It
+///   gets its own answer — no drops, since it consumed nothing — which is the
+///   counit law of the comonoid [`CopyAssoc`] names.
+///
+/// `assert` and `assert_eq` fall out on their own: they leave nothing on top,
+/// so there is no drop to pair them with, and the rule cannot reach the three
+/// instructions that can still fail.
+///
+/// Measure: non-drop node count. The replacement is all drops, so firing takes
+/// one node out of the count even when it puts several in.
 #[derive(Debug)]
 pub(crate) struct AnnihilateDrop;
-
-/// What cancelling a `drop` against the instruction before it leaves behind.
-enum Annihilation {
-    /// Both go: the predecessor produced exactly what was dropped.
-    Both,
-    /// Only the predecessor goes: it consumed a value to make the dropped one,
-    /// so the drop stays and takes its input instead.
-    Predecessor,
-}
 
 impl Rule for AnnihilateDrop {
     fn name(&self) -> &'static str {
@@ -426,25 +436,65 @@ impl Rule for AnnihilateDrop {
         let [Node::Op(prev), Node::Op(Instruction::Drop)] = window else {
             return None;
         };
-        match annihilation(prev)? {
-            Annihilation::Both => Some(Vec::new()),
-            Annihilation::Predecessor => Some(vec![Node::Op(Instruction::Drop)]),
-        }
+        let drops = annihilation(prev)?;
+        Some(vec![Node::Op(Instruction::Drop); drops])
     }
 }
 
-fn annihilation(inst: &Instruction) -> Option<Annihilation> {
+/// `X ; drop ; drop` becomes `drop^n`, where X has arity `(n -> 2)`.
+///
+/// [`AnnihilateDrop`] read one output; this one reads two, and exists because
+/// a **fallible** instruction leaves its flag alongside its value. `add; drop`
+/// is no longer an annihilation — it is the old `add`, with the flag thrown
+/// away — so what cancels is `add; drop; drop`, which is three nodes and one
+/// more than that rule's window.
+///
+/// It is not only about flags: `pick 0` has arity `(1 -> 2)` and belongs here
+/// for the same arithmetic, copying a value only for both copies to go.
+///
+/// `untuple n` is covered only at `n = 1`, since a wider one leaves `n + 1`
+/// values and this window reaches two. That is a bound on the rule rather than
+/// a claim about the law.
+///
+/// Measure: non-`drop` node count, as for [`AnnihilateDrop`].
+#[derive(Debug)]
+pub(crate) struct AnnihilateFlagged;
+
+impl Rule for AnnihilateFlagged {
+    fn name(&self) -> &'static str {
+        "annihilate_flagged"
+    }
+    fn width(&self) -> usize {
+        3
+    }
+    fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
+        let [Node::Op(prev), Node::Op(Instruction::Drop), Node::Op(Instruction::Drop)] = window
+        else {
+            return None;
+        };
+        if matches!(prev, Instruction::Print) {
+            return None;
+        }
+        let (n, 2) = op_arity(prev)? else {
+            return None;
+        };
+        Some(vec![Node::Op(Instruction::Drop); usize::try_from(n).ok()?])
+    }
+}
+
+/// How many drops replace `inst; drop`, or `None` if the pair does not cancel.
+fn annihilation(inst: &Instruction) -> Option<usize> {
     match inst {
-        // Neither can fail once the arity checker has passed, and each leaves
-        // exactly the value the drop removes.
-        Instruction::Push(_) | Instruction::Pick(_) => Some(Annihilation::Both),
-        // Total, but each consumes a value to produce the dropped one.
-        Instruction::IsInt
-        | Instruction::IsBool
-        | Instruction::IsFloat
-        | Instruction::IsSymbol
-        | Instruction::IsTuple => Some(Annihilation::Predecessor),
-        _ => None,
+        // Copying a value and discarding the copy: neither happened.
+        Instruction::Pick(_) => Some(0),
+        // The one operator for which running twice is not running once.
+        Instruction::Print => None,
+        // Everything that leaves exactly one value takes its inputs with it.
+        // `push` lands here too, at zero drops.
+        _ => match op_arity(inst) {
+            Some((n, 1)) => usize::try_from(n).ok(),
+            _ => None,
+        },
     }
 }
 
@@ -500,11 +550,17 @@ impl Rule for DistributeBranch {
     }
 }
 
-/// `push true ; branch { A } { B }` becomes `A`, and `push false` takes `B`.
+/// `push c ; branch { A } { B }` becomes the arm `c` selects.
 ///
-/// Only a literal `Bool` counts. The VM rejects a non-boolean condition, so
-/// folding `push 1 ; branch …` would erase a panic rather than preserve one —
-/// which is the same reason [`AnnihilateDrop`] will not touch `add`.
+/// **Any** literal folds, not only a `Bool`. A branch takes the then arm on
+/// `Bool(true)` and the else arm on everything else, so `push 1; branch` is
+/// decided just as firmly as `push false; branch` — it goes to the else arm.
+/// This used to be restricted to booleans because the VM rejected any other
+/// condition and folding would have erased a panic rather than preserved one;
+/// with the condition total there is nothing left to erase.
+///
+/// A *computed* condition still declines, which is the real content of the
+/// rule: it folds what is already decided, and a `pick` or an `is_int` is not.
 ///
 /// Measure: branch count. The node count can grow, since the chosen arm may be
 /// longer than the two nodes it replaces, but a branch is gone for good.
@@ -520,7 +576,7 @@ impl Rule for FoldBranch {
     }
     fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
         let [
-            Node::Op(Instruction::Push(Value::Bool(cond))),
+            cond,
             Node::Branch {
                 then_body,
                 else_body,
@@ -530,7 +586,7 @@ impl Rule for FoldBranch {
         else {
             return None;
         };
-        Some(if *cond {
+        Some(if pushed(cond)?.truthy() {
             then_body.clone()
         } else {
             else_body.clone()
@@ -702,12 +758,18 @@ mod tests {
 
     #[test]
     fn sink_widens_past_an_operator_that_consumes_two() {
-        // `add` is (2 -> 1): 1 >= 1 clears the window, and the same window is
-        // 1 - 1 + 2 = 2 deep on the other side.
-        let w = [op(Instruction::Add), dip(1, vec![])];
+        // `add` is (2 -> 2), the second output being its success flag: 2 >= 2
+        // clears the window, and the same window is 2 - 2 + 2 = 2 deep on the
+        // other side.
+        let w = [op(Instruction::Add), dip(2, vec![])];
         assert_eq!(
             Sink.rewrite(&prog(), &w),
             Some(vec![dip(2, vec![]), op(Instruction::Add)])
+        );
+        // One shallower and the dip would be rewriting the flag.
+        assert_eq!(
+            Sink.rewrite(&prog(), &[op(Instruction::Add), dip(1, vec![])]),
+            None
         );
     }
 
@@ -723,15 +785,15 @@ mod tests {
 
     #[test]
     fn sink_declines_when_the_window_would_reach_what_prev_produced() {
-        // `untuple 3` is (1 -> 3); a dip hiding only two would be rewriting a
-        // slot the untuple just filled.
-        assert_eq!(
-            Sink.rewrite(&prog(), &[op(Instruction::Untuple(3)), dip(2, vec![])]),
-            None
-        );
-        // Hiding three clears it, and the window is 3 - 3 + 1 = 1 deep before.
+        // `untuple 3` is (1 -> 4) -- three elements and a flag -- so a dip
+        // hiding only three would be rewriting a slot the untuple just filled.
         assert_eq!(
             Sink.rewrite(&prog(), &[op(Instruction::Untuple(3)), dip(3, vec![])]),
+            None
+        );
+        // Hiding four clears it, and the window is 4 - 4 + 1 = 1 deep before.
+        assert_eq!(
+            Sink.rewrite(&prog(), &[op(Instruction::Untuple(3)), dip(4, vec![])]),
             Some(vec![dip(1, vec![]), op(Instruction::Untuple(3))])
         );
     }
@@ -785,7 +847,7 @@ mod tests {
     }
 
     #[test]
-    fn annihilate_cancels_a_total_producer_against_its_drop() {
+    fn annihilate_cancels_a_producer_against_its_drop() {
         assert_eq!(
             AnnihilateDrop.rewrite(&prog(), &[
                 op(Instruction::Push(Value::Int(1))),
@@ -800,13 +862,52 @@ mod tests {
     }
 
     #[test]
-    fn annihilate_leaves_the_drop_behind_for_a_type_test() {
+    fn annihilate_leaves_one_drop_per_input_the_operator_consumed() {
         // `is_int` consumes a value to make the dropped one, so the drop still
         // has to happen — it just takes the input instead.
         assert_eq!(
             AnnihilateDrop.rewrite(&prog(), &[op(Instruction::IsInt), op(Instruction::Drop)]),
             Some(vec![op(Instruction::Drop)])
         );
+        // A two-operand operator leaves two.
+        assert_eq!(
+            AnnihilateDrop.rewrite(&prog(), &[op(Instruction::Equal), op(Instruction::Drop)]),
+            Some(vec![op(Instruction::Drop), op(Instruction::Drop)])
+        );
+        // And `tuple n` leaves n, which is where the count stops being one or
+        // two and the arity has to be looked up rather than remembered.
+        assert_eq!(
+            AnnihilateDrop.rewrite(&prog(), &[op(Instruction::Tuple(3)), op(Instruction::Drop)]),
+            Some(vec![
+                op(Instruction::Drop),
+                op(Instruction::Drop),
+                op(Instruction::Drop)
+            ])
+        );
+    }
+
+    #[test]
+    fn annihilate_declines_what_is_not_one_value_on_top() {
+        // `untuple 3` leaves three, so the drop takes only one of them.
+        assert_eq!(
+            AnnihilateDrop.rewrite(&prog(), &[op(Instruction::Untuple(3)), op(Instruction::Drop)]),
+            None
+        );
+        // `roll 2` leaves the same three values it took, rearranged.
+        assert_eq!(
+            AnnihilateDrop.rewrite(&prog(), &[op(Instruction::Roll(2)), op(Instruction::Drop)]),
+            None
+        );
+        // `assert` leaves nothing on top, so the three instructions that can
+        // still fail are out of this rule's reach on their own terms.
+        for inst in [Instruction::Assert, Instruction::AssertEqual, Instruction::Panic] {
+            assert_eq!(
+                AnnihilateDrop.rewrite(&prog(), &[op(inst.clone()), op(Instruction::Drop)]),
+                None,
+                "{:?} should not cancel",
+                inst
+            );
+        }
     }
 
     #[test]
@@ -893,17 +994,25 @@ mod tests {
     }
 
     #[test]
-    fn only_a_literal_bool_folds_a_branch() {
-        // The VM rejects a non-boolean condition, so folding `push 1; branch`
-        // would erase a panic instead of preserving one.
-        assert_eq!(
-            FoldBranch.rewrite(&prog(), &[
-                op(Instruction::Push(Value::Int(1))),
-                branch(vec![], vec![])
-            ]),
-            None
-        );
-        // And a condition that is computed rather than pushed is not constant.
+    fn any_literal_folds_a_branch_and_only_true_takes_the_then_arm() {
+        let arms = || {
+            branch(
+                vec![op(Instruction::Push(Value::Int(10)))],
+                vec![op(Instruction::Push(Value::Int(20)))],
+            )
+        };
+        // A non-boolean condition is decided rather than rejected: it goes to
+        // the else arm, along with everything that is not `Bool(true)`.
+        for v in [Value::Int(1), sym(1), Value::Tuple(Vec::new()), Value::Bool(false)] {
+            assert_eq!(
+                FoldBranch.rewrite(&prog(), &[push(v.clone()), arms()]),
+                Some(vec![op(Instruction::Push(Value::Int(20)))]),
+                "{:?} should take the else arm",
+                v
+            );
+        }
+        // And a condition that is computed rather than pushed is not constant,
+        // which is the part of the rule that was ever really about knowing.
         assert_eq!(
             FoldBranch.rewrite(&prog(), &[op(Instruction::IsInt), branch(vec![], vec![])]),
             None
@@ -977,19 +1086,40 @@ mod tests {
     }
 
     #[test]
-    fn annihilate_declines_a_partial_producer() {
-        // `add; drop` is not `drop; drop`: the add still rejects non-numeric
-        // operands, and cancelling it would discard that check.
+    fn annihilate_declines_print_and_anything_leaving_a_flag() {
+        // `print` is the operator whose second run differs in something other
+        // than the stack, and it is still the only *principled* exclusion.
         assert_eq!(
-            AnnihilateDrop.rewrite(&prog(), &[op(Instruction::Add), op(Instruction::Drop)]),
+            AnnihilateDrop.rewrite(&prog(), &[op(Instruction::Print), op(Instruction::Drop)]),
             None
         );
-        // `equal` is total in the VM, but the Z3 model gives it a panic branch,
-        // so the tool does not assert an equivalence the verifier would not.
-        assert_eq!(
-            AnnihilateDrop.rewrite(&prog(), &[op(Instruction::Equal), op(Instruction::Drop)]),
-            None
-        );
+        // The total operators cancel as before.
+        for inst in [Instruction::Equal, Instruction::And, Instruction::Or] {
+            assert_eq!(
+                AnnihilateDrop.rewrite(&prog(), &[op(inst.clone()), op(Instruction::Drop)]),
+                Some(vec![op(Instruction::Drop), op(Instruction::Drop)]),
+                "{:?} should cancel into two drops",
+                inst
+            );
+        }
+        // A *fallible* one no longer matches, and this is a reach the flags
+        // cost rather than a soundness argument. `add` leaves two values now,
+        // so `add; drop` is the old `add` rather than an annihilation -- what
+        // cancels is `add; drop; drop`, three nodes, and this rule sees two.
+        // `AnnihilateFlagged` is the companion that takes that window.
+        for inst in [
+            Instruction::Add,
+            Instruction::Divide,
+            Instruction::SymbolCharAt,
+            Instruction::TupleLength,
+        ] {
+            assert_eq!(
+                AnnihilateDrop.rewrite(&prog(), &[op(inst.clone()), op(Instruction::Drop)]),
+                None,
+                "{:?} leaves a flag, so a lone drop only takes that",
+                inst
+            );
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -1042,25 +1172,34 @@ mod tests {
     }
 
     #[test]
-    fn fold_const_declines_an_operator_that_would_panic() {
-        // `push 1; push 2; and` is a panic, and `push false` is not one. The
-        // literals make the operands known, which is exactly what makes it
-        // knowable that this one must *not* fold.
+    fn fold_const_evaluates_rather_than_declining() {
+        // `push 1; push 2; and` used to be a panic and is now `false`: neither
+        // operand is `Bool(true)`, and `and` coerces each separately.
         assert_eq!(
             FoldConst.rewrite(
                 &prog(),
                 &[push(Value::Int(1)), push(Value::Int(2)), op(Instruction::And)]
             ),
-            None
+            Some(vec![push(Value::Bool(false))])
         );
         assert_eq!(
             FoldConst.rewrite(
                 &prog(),
-                &[push(sym(1)), push(sym(2)), op(Instruction::Less)]
+                &[push(Value::Int(1)), push(Value::Bool(true)), op(Instruction::Or)]
             ),
-            None
+            Some(vec![push(Value::Bool(true))])
         );
-        // Two booleans are fine.
+        // The comparisons are fallible now, so a fold produces the flag too.
+        // A non-numeric pair is not less and not greater, and says so twice.
+        for inst in [Instruction::Less, Instruction::Greater] {
+            assert_eq!(
+                FoldConst.rewrite(&prog(), &[push(sym(1)), push(sym(2)), op(inst.clone())]),
+                Some(vec![push(Value::Bool(false)), push(Value::Bool(false))]),
+                "{:?} on two symbols",
+                inst
+            );
+        }
+        // Two booleans still fold the obvious way.
         assert_eq!(
             FoldConst.rewrite(
                 &prog(),
@@ -1071,6 +1210,15 @@ mod tests {
                 ]
             ),
             Some(vec![push(Value::Bool(false))])
+        );
+        // And a mixed numeric pair compares, the way the VM does, reporting
+        // that it really did compare.
+        assert_eq!(
+            FoldConst.rewrite(
+                &prog(),
+                &[push(Value::Int(1)), push(Value::Float(1.5)), op(Instruction::Less)]
+            ),
+            Some(vec![push(Value::Bool(true)), push(Value::Bool(true))])
         );
     }
 
@@ -1086,7 +1234,7 @@ mod tests {
     }
 
     #[test]
-    fn fold_const_unary_answers_the_is_family_but_not_a_rejecting_one() {
+    fn fold_const_unary_answers_on_every_literal() {
         assert_eq!(
             FoldConstUnary.rewrite(&prog(), &[push(sym(1)), op(Instruction::IsSymbol)]),
             Some(vec![push(Value::Bool(true))])
@@ -1095,20 +1243,43 @@ mod tests {
             FoldConstUnary.rewrite(&prog(), &[push(Value::Int(3)), op(Instruction::IsSymbol)]),
             Some(vec![push(Value::Bool(false))])
         );
-        // `not` rejects a non-boolean, so it must not fold on one.
+        // The deliberate oddity, and the reason it is deliberate: a symbol is
+        // not `true`, so it is falsy, so `not` answers `true`.
         assert_eq!(
             FoldConstUnary.rewrite(&prog(), &[push(sym(1)), op(Instruction::Not)]),
-            None
+            Some(vec![push(Value::Bool(true))])
         );
         assert_eq!(
             FoldConstUnary.rewrite(&prog(), &[push(Value::Bool(true)), op(Instruction::Not)]),
             Some(vec![push(Value::Bool(false))])
         );
+        // `tuple_length` is fallible, so folding it produces the flag too --
+        // and on a non-tuple it hands the value back rather than inventing a
+        // length, which is the "preserve the inputs" rule applied to a literal.
+        assert_eq!(
+            FoldConstUnary.rewrite(&prog(), &[push(sym(1)), op(Instruction::TupleLength)]),
+            Some(vec![push(sym(1)), push(Value::Bool(false))])
+        );
+        assert_eq!(
+            FoldConstUnary.rewrite(
+                &prog(),
+                &[
+                    push(Value::Tuple(vec![Value::Int(1), Value::Int(2)])),
+                    op(Instruction::TupleLength)
+                ]
+            ),
+            Some(vec![push(Value::Int(2)), push(Value::Bool(true))])
+        );
+        // A computed operand is still not a literal.
+        assert_eq!(
+            FoldConstUnary.rewrite(&prog(), &[op(Instruction::Pick(0)), op(Instruction::Not)]),
+            None
+        );
     }
 
     #[test]
     fn bool_identity_drops_a_unit_and_only_when_the_operand_is_known_boolean() {
-        // `is_symbol` answers with a Bool or panics, so `&& true` adds nothing.
+        // `is_symbol` answers with a Bool, so `&& true` adds nothing.
         assert_eq!(
             BoolIdentity.rewrite(
                 &prog(),
@@ -1120,8 +1291,9 @@ mod tests {
             ),
             Some(vec![op(Instruction::IsSymbol)])
         );
-        // `pick 0` says nothing about the value, so the `and` is still the only
-        // thing rejecting a non-boolean and has to stay.
+        // `pick 0` says nothing about the value, so the `and` is still the
+        // only thing coercing it and has to stay: on a junk operand it answers
+        // `false`, which is not the operand.
         assert_eq!(
             BoolIdentity.rewrite(
                 &prog(),
@@ -1153,8 +1325,9 @@ mod tests {
 
     #[test]
     fn bool_identity_keeps_the_operand_in_the_absorbing_case() {
-        // `a && false` is `false` only on the runs where `a` happened at all,
-        // so the operand stays and a `drop` takes its place.
+        // `a && false` is `false` only on the runs where `a` happened at all
+        // -- `a` may be an `assert` -- so the operand stays and a `drop` takes
+        // its place.
         assert_eq!(
             BoolIdentity.rewrite(
                 &prog(),
@@ -1203,15 +1376,19 @@ mod tests {
     #[test]
     fn retain_condition_hands_each_arm_its_own_literal() {
         let w = [
+            op(Instruction::IsTuple),
             op(Instruction::Pick(0)),
             branch(vec![op(Instruction::Add)], vec![op(Instruction::Drop)]),
         ];
         assert_eq!(
             RetainCondition.rewrite(&prog(), &w),
-            Some(vec![branch(
-                vec![push(Value::Bool(true)), op(Instruction::Add)],
-                vec![push(Value::Bool(false)), op(Instruction::Drop)],
-            )])
+            Some(vec![
+                op(Instruction::IsTuple),
+                branch(
+                    vec![push(Value::Bool(true)), op(Instruction::Add)],
+                    vec![push(Value::Bool(false)), op(Instruction::Drop)],
+                )
+            ])
         );
     }
 
@@ -1222,7 +1399,11 @@ mod tests {
         assert_eq!(
             RetainCondition.rewrite(
                 &prog(),
-                &[op(Instruction::Pick(1)), branch(vec![], vec![])]
+                &[
+                    op(Instruction::IsTuple),
+                    op(Instruction::Pick(1)),
+                    branch(vec![], vec![])
+                ]
             ),
             None
         );
@@ -1230,7 +1411,45 @@ mod tests {
         assert_eq!(
             RetainCondition.rewrite(
                 &prog(),
-                &[op(Instruction::IsTuple), branch(vec![], vec![])]
+                &[
+                    op(Instruction::IsTuple),
+                    op(Instruction::IsTuple),
+                    branch(vec![], vec![])
+                ]
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn retain_condition_needs_the_condition_to_be_a_boolean() {
+        // A branch decides on any value, taking the else arm on anything that
+        // is not `Bool(true)`. `pick 0` says nothing about what the value is,
+        // so the else arm cannot be told it held `false`.
+        assert_eq!(
+            RetainCondition.rewrite(
+                &prog(),
+                &[
+                    op(Instruction::Pick(3)),
+                    op(Instruction::Pick(0)),
+                    branch(vec![], vec![])
+                ]
+            ),
+            None
+        );
+        // A call to a sentence that does return a bool is not enough either:
+        // that is a fact about the library, not about this node.
+        assert_eq!(
+            RetainCondition.rewrite(
+                &prog(),
+                &[
+                    Node::Call {
+                        depth: 0,
+                        target: bytecode::SentenceIndex::from(0)
+                    },
+                    op(Instruction::Pick(0)),
+                    branch(vec![], vec![])
+                ]
             ),
             None
         );
@@ -1244,13 +1463,14 @@ mod tests {
         // code that re-tests it.
         let inner = branch(vec![op(Instruction::Add)], vec![op(Instruction::Drop)]);
         let w = [
+            op(Instruction::IsTuple),
             op(Instruction::Pick(0)),
             branch(vec![inner.clone()], vec![]),
         ];
         let Some(out) = RetainCondition.rewrite(&prog(), &w) else {
             panic!("expected retain_condition to fire")
         };
-        let [Node::Branch { then_body, .. }] = &out[..] else {
+        let [_, Node::Branch { then_body, .. }] = &out[..] else {
             panic!("expected a branch")
         };
         assert_eq!(
@@ -1433,15 +1653,16 @@ mod tests {
         let w = [
             op(Instruction::Pick(0)),
             op(Instruction::Untuple(3)),
-            dip(3, vec![op(Instruction::Untuple(3))]),
+            dip(4, vec![op(Instruction::Untuple(3))]),
         ];
         assert_eq!(
             DupNatural.rewrite(&prog(), &w),
             Some(vec![
                 op(Instruction::Untuple(3)),
-                op(Instruction::Pick(2)),
-                op(Instruction::Pick(2)),
-                op(Instruction::Pick(2)),
+                op(Instruction::Pick(3)),
+                op(Instruction::Pick(3)),
+                op(Instruction::Pick(3)),
+                op(Instruction::Pick(3)),
             ])
         );
     }
@@ -1521,31 +1742,57 @@ mod tests {
 
     #[test]
     fn rebuild_copy_destructures_the_value_and_rebuilds_the_copy() {
-        assert_eq!(
-            RebuildCopy.rewrite(
-                &prog(),
-                &[op(Instruction::Pick(0)), op(Instruction::Untuple(3))]
+        // The guard is `untuple`'s own flag: the then arm rebuilds from parts
+        // that really are the value's, and the else arm copies the value
+        // `untuple` left in the deepest slot it filled.
+        let want = vec![
+            op(Instruction::Untuple(3)),
+            branch(
+                vec![
+                    op(Instruction::Pick(2)),
+                    op(Instruction::Pick(2)),
+                    op(Instruction::Pick(2)),
+                    dip(3, vec![op(Instruction::Tuple(3))]),
+                    push(Value::Bool(true)),
+                ],
+                vec![
+                    dip(2, vec![op(Instruction::Pick(0))]),
+                    push(Value::Bool(false)),
+                ],
             ),
-            Some(vec![
-                op(Instruction::Untuple(3)),
-                op(Instruction::Pick(2)),
-                op(Instruction::Pick(2)),
-                op(Instruction::Pick(2)),
-                dip(3, vec![op(Instruction::Tuple(3))]),
-            ])
-        );
-        // n = 1 is the degenerate but real case.
-        assert_eq!(
-            RebuildCopy.rewrite(
-                &prog(),
-                &[op(Instruction::Pick(0)), op(Instruction::Untuple(1))]
+        ];
+        let Some(got) = RebuildCopy.rewrite(
+            &prog(),
+            &[op(Instruction::Pick(0)), op(Instruction::Untuple(3))],
+        ) else {
+            panic!("expected rebuild_copy to fire")
+        };
+        assert_eq!(shape_of(&got), shape_of(&want));
+
+        // n = 1 is the degenerate but real case: no padding, so the else arm
+        // copies in place.
+        let want = vec![
+            op(Instruction::Untuple(1)),
+            branch(
+                vec![
+                    op(Instruction::Pick(0)),
+                    dip(1, vec![op(Instruction::Tuple(1))]),
+                    push(Value::Bool(true)),
+                ],
+                vec![
+                    dip(0, vec![op(Instruction::Pick(0))]),
+                    push(Value::Bool(false)),
+                ],
             ),
-            Some(vec![
-                op(Instruction::Untuple(1)),
-                op(Instruction::Pick(0)),
-                dip(1, vec![op(Instruction::Tuple(1))]),
-            ])
-        );
+        ];
+        let Some(got) = RebuildCopy.rewrite(
+            &prog(),
+            &[op(Instruction::Pick(0)), op(Instruction::Untuple(1))],
+        ) else {
+            panic!("expected rebuild_copy to fire")
+        };
+        assert_eq!(shape_of(&got), shape_of(&want));
+
         // A 0-tuple has no parts to share.
         assert_eq!(
             RebuildCopy.rewrite(
@@ -1566,17 +1813,65 @@ mod tests {
 
     #[test]
     fn rebuild_copy_settles() {
-        // Its own output contains no `pick 0; untuple n`, so `each` terminates
-        // rather than growing the term forever.
+        // Its own output contains no `pick 0; untuple n` -- neither at the top
+        // level nor in an arm, which is what the `push ()`s in the else arm buy
+        // over restating the input there. So `each` terminates rather than
+        // growing the term forever.
         let out = RebuildCopy
             .rewrite(
                 &prog(),
                 &[op(Instruction::Pick(0)), op(Instruction::Untuple(2))],
             )
             .expect("should fire");
-        for w in out.windows(2) {
-            assert_eq!(RebuildCopy.rewrite(&prog(), w), None, "re-fired on {:?}", w);
+        for nodes in sequences(&out) {
+            for w in nodes.windows(2) {
+                assert_eq!(RebuildCopy.rewrite(&prog(), w), None, "re-fired on {:?}", w);
+            }
         }
+    }
+
+    /// Every sequence in a tree: the top level, plus each arm and dip body.
+    fn sequences(nodes: &[Node]) -> Vec<Vec<Node>> {
+        let mut out = vec![nodes.to_vec()];
+        for node in nodes {
+            match node {
+                Node::Dip { body, .. } => out.extend(sequences(body)),
+                Node::Branch {
+                    then_body,
+                    else_body,
+                    ..
+                } => {
+                    out.extend(sequences(then_body));
+                    out.extend(sequences(else_body));
+                }
+                _ => {}
+            }
+        }
+        out
+    }
+
+    /// A tree rendered as text, so a mismatch reads as one.
+    fn shape_of(nodes: &[Node]) -> String {
+        nodes
+            .iter()
+            .map(|node| match node {
+                Node::Op(i) => format!("{}", i),
+                Node::Dip { depth, body, .. } => {
+                    format!("dip {} {{ {} }}", depth, shape_of(body))
+                }
+                Node::Branch {
+                    then_body,
+                    else_body,
+                    ..
+                } => format!(
+                    "branch {{ {} }} {{ {} }}",
+                    shape_of(then_body),
+                    shape_of(else_body)
+                ),
+                Node::Call { depth, target } => format!("call {} #{}", depth, usize::from(*target)),
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 
     #[test]
@@ -1647,7 +1942,7 @@ mod tests {
         let hand_written = [
             op(Instruction::Pick(0)),
             op(Instruction::Untuple(3)),
-            dip(3, vec![op(Instruction::Untuple(3))]),
+            dip(4, vec![op(Instruction::Untuple(3))]),
         ];
         let after_sinking = [
             op(Instruction::Pick(0)),
@@ -1656,9 +1951,10 @@ mod tests {
         ];
         let shared = Some(vec![
             op(Instruction::Untuple(3)),
-            op(Instruction::Pick(2)),
-            op(Instruction::Pick(2)),
-            op(Instruction::Pick(2)),
+            op(Instruction::Pick(3)),
+            op(Instruction::Pick(3)),
+            op(Instruction::Pick(3)),
+            op(Instruction::Pick(3)),
         ]);
         assert_eq!(DupNatural.rewrite(&prog(), &hand_written), shared);
         assert_eq!(DupNatural.rewrite(&prog(), &after_sinking), shared);
@@ -1666,10 +1962,10 @@ mod tests {
 
     #[test]
     fn dup_natural_needs_the_frame_to_match_what_the_first_copy_produced() {
-        // `untuple 3` leaves three values, so the second occurrence has to sit
-        // under exactly three. At any other depth the two are not looking at
-        // the same thing.
-        for depth in [1, 2, 4] {
+        // `untuple 3` leaves four values -- three elements and a flag -- so
+        // the second occurrence has to sit under exactly four. At any other
+        // depth the two are not looking at the same thing.
+        for depth in [1, 2, 3, 5] {
             assert_eq!(
                 DupNatural.rewrite(
                     &prog(),
@@ -1691,7 +1987,7 @@ mod tests {
                 &[
                     op(Instruction::Pick(0)),
                     op(Instruction::Untuple(3)),
-                    dip(3, vec![op(Instruction::Untuple(2))]),
+                    dip(4, vec![op(Instruction::Untuple(2))]),
                 ]
             ),
             None
@@ -1775,17 +2071,262 @@ mod tests {
     }
 
     #[test]
+    fn speculate_branch_runs_one_arms_head_on_a_copy() {
+        // `untuple 3` is (1 -> 3): copy the one operand, untuple the copy, and
+        // let the then arm drop the original from under the three results
+        // while the else arm drops the three results.
+        let w = [branch(
+            vec![op(Instruction::Untuple(3)), op(Instruction::Add)],
+            vec![op(Instruction::Push(Value::Int(9)))],
+        )];
+        assert_eq!(
+            SpeculateBranch.rewrite(&prog(), &w),
+            Some(vec![
+                dip(
+                    1,
+                    vec![op(Instruction::Pick(0)), op(Instruction::Untuple(3))]
+                ),
+                branch(
+                    vec![
+                        dip(4, vec![op(Instruction::Drop)]),
+                        op(Instruction::Add)
+                    ],
+                    vec![
+                        op(Instruction::Drop),
+                        op(Instruction::Drop),
+                        op(Instruction::Drop),
+                        op(Instruction::Drop),
+                        op(Instruction::Push(Value::Int(9))),
+                    ],
+                ),
+            ])
+        );
+    }
+
+    #[test]
+    fn speculate_branch_reaches_the_else_arm_too() {
+        // Same construction mirrored. The then arm opens with a call, whose
+        // body this rule will not look into -- otherwise the rule would take
+        // that arm, since it prefers the one it meets first.
+        let call = Node::Call {
+            depth: 0,
+            target: bytecode::SentenceIndex::from(0),
+        };
+        let w = [branch(vec![call.clone()], vec![op(Instruction::Untuple(2))])];
+        assert_eq!(
+            SpeculateBranch.rewrite(&prog(), &w),
+            Some(vec![
+                dip(
+                    1,
+                    vec![op(Instruction::Pick(0)), op(Instruction::Untuple(2))]
+                ),
+                branch(
+                    vec![
+                        op(Instruction::Drop),
+                        op(Instruction::Drop),
+                        op(Instruction::Drop),
+                        call
+                    ],
+                    vec![dip(3, vec![op(Instruction::Drop)])],
+                ),
+            ])
+        );
+    }
+
+    #[test]
+    fn speculate_branch_lifts_a_whole_block_not_just_one_op() {
+        // What lets a speculation climb out of nested branches: the rule's own
+        // output is a dip, so if a dip could not be lifted the second branch
+        // out would strand it. `dip 1 { untuple 2 }` is (2 -> 4).
+        let w = [branch(
+            vec![dip(1, vec![op(Instruction::Untuple(2))])],
+            vec![op(Instruction::Push(Value::Int(9)))],
+        )];
+        assert_eq!(
+            SpeculateBranch.rewrite(&prog(), &w),
+            Some(vec![
+                dip(
+                    1,
+                    vec![
+                        op(Instruction::Pick(1)),
+                        op(Instruction::Pick(1)),
+                        dip(1, vec![op(Instruction::Untuple(2))]),
+                    ]
+                ),
+                branch(
+                    vec![dip(
+                        4,
+                        vec![op(Instruction::Drop), op(Instruction::Drop)]
+                    )],
+                    vec![
+                        op(Instruction::Drop),
+                        op(Instruction::Drop),
+                        op(Instruction::Drop),
+                        op(Instruction::Drop),
+                        op(Instruction::Push(Value::Int(9))),
+                    ],
+                ),
+            ])
+        );
+    }
+
+    #[test]
+    fn speculate_branch_looks_all_the_way_into_a_block() {
+        // A dip qualifies only if its whole body does, however deep. One
+        // `assert` anywhere inside is enough to disqualify it, since running
+        // the block on the losing path would then fail where the original did
+        // not.
+        for body in [
+            vec![op(Instruction::Assert)],
+            vec![op(Instruction::Add), op(Instruction::Assert)],
+            vec![dip(1, vec![op(Instruction::Panic)])],
+            vec![op(Instruction::Print)],
+            // A call is opaque, so a block containing one is too.
+            vec![Node::Call {
+                depth: 0,
+                target: bytecode::SentenceIndex::from(0),
+            }],
+        ] {
+            assert_eq!(
+                SpeculateBranch.rewrite(&prog(), &[branch(vec![dip(1, body.clone())], vec![])]),
+                None,
+                "a block containing {:?} should not be speculated",
+                body
+            );
+        }
+    }
+
+    #[test]
+    fn speculate_branch_copies_every_operand_a_wider_x_reads() {
+        // `add` is (2 -> 2), so both operands are copied and the then arm drops
+        // two originals from under the result and its flag.
+        let w = [branch(
+            vec![op(Instruction::Add)],
+            vec![op(Instruction::Push(Value::Int(9)))],
+        )];
+        assert_eq!(
+            SpeculateBranch.rewrite(&prog(), &w),
+            Some(vec![
+                dip(
+                    1,
+                    vec![
+                        op(Instruction::Pick(1)),
+                        op(Instruction::Pick(1)),
+                        op(Instruction::Add)
+                    ]
+                ),
+                branch(
+                    vec![dip(
+                        2,
+                        vec![op(Instruction::Drop), op(Instruction::Drop)]
+                    )],
+                    vec![
+                        op(Instruction::Drop),
+                        op(Instruction::Drop),
+                        op(Instruction::Push(Value::Int(9)))
+                    ],
+                ),
+            ])
+        );
+    }
+
+    #[test]
+    fn speculate_branch_declines_what_must_not_run_on_the_losing_path() {
+        // Each of these would do something on the path that skipped the arm:
+        // print an extra line, or fail where the original did not. The other
+        // arm is left empty, since the rule takes whichever arm offers a head
+        // and would otherwise fire on that one instead.
+        for inst in [
+            Instruction::Print,
+            Instruction::Assert,
+            Instruction::AssertEqual,
+            Instruction::Panic,
+            // Sound, but excluded to keep the measure honest.
+            Instruction::Drop,
+        ] {
+            assert_eq!(
+                SpeculateBranch.rewrite(&prog(), &[branch(vec![op(inst.clone())], vec![])]),
+                None,
+                "{:?} should not be speculated",
+                inst
+            );
+        }
+        // A call may hold one of those several frames down, and this rule does
+        // not open callees to find out.
+        assert_eq!(
+            SpeculateBranch.rewrite(
+                &prog(),
+                &[branch(
+                    vec![Node::Call {
+                        depth: 0,
+                        target: bytecode::SentenceIndex::from(0)
+                    }],
+                    vec![]
+                )]
+            ),
+            None
+        );
+        // And an empty arm has no head to take.
+        assert_eq!(
+            SpeculateBranch.rewrite(&prog(), &[branch(vec![], vec![])]),
+            None
+        );
+    }
+
+    #[test]
+    fn speculate_branch_leaves_a_shared_prefix_to_factor_branch() {
+        // `factor_branch` does this case strictly better -- no copies and no
+        // drops, because a prefix both arms run needs no speculation.
+        let w = [branch(
+            vec![op(Instruction::Untuple(3)), op(Instruction::Add)],
+            vec![op(Instruction::Untuple(3)), op(Instruction::Drop)],
+        )];
+        assert_eq!(SpeculateBranch.rewrite(&prog(), &w), None);
+        assert!(FactorBranch.rewrite(&prog(), &w).is_some());
+    }
+
+    #[test]
+    fn speculate_branch_settles() {
+        // The measure is non-`drop` Ops inside arms: firing takes one out and
+        // puts back only drops and a dip, neither of which it will match.
+        let start = branch(
+            vec![op(Instruction::Untuple(3)), op(Instruction::Add)],
+            vec![op(Instruction::IsInt)],
+        );
+        let mut nodes = vec![start];
+        for round in 0..8 {
+            let Some(next) = nodes
+                .iter()
+                .position(|n| matches!(n, Node::Branch { .. }))
+                .and_then(|i| {
+                    SpeculateBranch
+                        .rewrite(&prog(), &nodes[i..i + 1])
+                        .map(|out| (i, out))
+                })
+            else {
+                assert!(round > 0, "expected at least one firing");
+                return;
+            };
+            let (i, out) = next;
+            nodes.splice(i..i + 1, out);
+        }
+        panic!("speculate_branch did not settle: {:?}", nodes);
+    }
+
+    #[test]
     fn cancel_tuple_goes_one_way_only() {
         assert_eq!(
             CancelTuple.rewrite(
                 &prog(),
                 &[op(Instruction::Tuple(2)), op(Instruction::Untuple(2))]
             ),
-            Some(Vec::new())
+            // Not nothing: `untuple` cannot fail on what `tuple` just built, so
+            // the pair leaves a literal `true` where its flag would be.
+            Some(vec![push(Value::Bool(true))])
         );
-        // `untuple n; tuple n` is *not* a no-op: `untuple` is the instruction
-        // that checks the shape, so removing the pair would accept values the
-        // original rejected.
+        // `untuple n; tuple n` is *not* a no-op: it junk-normalizes, mapping
+        // every non-n-tuple to `((), ...)`. A real function, and not the
+        // identity, so the pair does not come out.
         assert_eq!(
             CancelTuple.rewrite(
                 &prog(),
@@ -1793,7 +2334,7 @@ mod tests {
             ),
             None
         );
-        // Mismatched widths are a panic, not a cancellation.
+        // Mismatched widths junk-normalize rather than cancelling.
         assert_eq!(
             CancelTuple.rewrite(
                 &prog(),
@@ -1872,10 +2413,16 @@ impl Rule for NoOp {
 // Values
 //
 // Everything above rearranges code without ever asking what a value *is*. The
-// rules below are the ones that do, and they all answer to the same
-// constraint: an instruction that rejects an operand is a check, and a rewrite
-// that removes the check has changed the program even when it has not changed
-// the result. `equal` is total and folds freely; `and` is not and does not.
+// rules below are the ones that do, and since every data operation is total
+// (see `docs/totality.md`) their job is arithmetic rather than negotiation:
+// folding a window of literals is running it, and the obligation is to agree
+// with the interpreter exactly — on junk as much as on anything else.
+//
+// What survives is a different constraint, and a sharper one. `truthy` is not
+// injective: `and`, `or` and `branch` collapse every non-`true` value onto one
+// answer, so a rule that hands a value *back* has to know it was a boolean to
+// begin with. That is what `yields_bool` is for, and why `bool_identity` and
+// `retain_condition` both take a three-node window.
 // ---------------------------------------------------------------------------
 
 /// The literal a node pushes, if it pushes one.
@@ -1886,11 +2433,13 @@ fn pushed(node: &Node) -> Option<&Value> {
     }
 }
 
-/// Whether this node always leaves a `Bool` on top, or panics.
+/// Whether this node always leaves a `Bool` on top.
 ///
-/// The point of the "or panics" is that a caller may then treat the value as a
-/// boolean without having to keep `and`'s type check alive separately: on every
-/// path where the check would have mattered, the node already failed.
+/// Every instruction listed is total and answers with a `Bool`, so a caller may
+/// treat what it produced as a boolean rather than as a value that merely
+/// happens to be falsy — which is the difference between `a && true = a` and
+/// `a && true = false`, and between an else arm learning `false` and an else
+/// arm being told a lie.
 ///
 /// Deliberately syntactic. A call to a sentence that happens to return a bool
 /// does not count — that is a fact about the library rather than about this
@@ -1920,14 +2469,16 @@ fn yields_bool(node: &Node) -> bool {
 /// `B ; push true ; and` becomes `B`, and the three other unit laws.
 ///
 /// `a && true = a` is only a rewrite of *this program* when `a` is known to be
-/// a boolean, because `and` rejects anything else and dropping it would erase
-/// that rejection. `B` supplying the operand is what licenses it, which is why
-/// the window is three wide: the two-node view `push true; and` cannot tell
-/// whether the value underneath was ever checked.
+/// a boolean. `and` no longer rejects anything, but it does *coerce*: on a
+/// junk `a` it answers `Bool(false)`, which is a different value from `a` even
+/// though it is the same truth. `B` supplying the operand is what licenses the
+/// rewrite, which is why the window is three wide — the two-node view
+/// `push true; and` cannot tell what the value underneath is.
 ///
-/// The absorbing cases go to `B; drop; push c` rather than to `push c`, for the
-/// same reason — `B` may panic, and `a && false` is only `false` on the runs
-/// where `a` existed.
+/// This is the shape of what totality did *not* buy. The absorbing cases still
+/// go to `B; drop; push c` rather than to `push c`, because `B` may be a
+/// `panic` or an `assert`, and `a && false` is only `false` on the runs where
+/// `a` happened at all.
 ///
 /// Measure: node count, counting the absorbing cases as level (2 nodes for 2)
 /// and relying on the `drop` they expose to be cancelled by `annihilate_drop`.
@@ -1970,19 +2521,22 @@ impl Rule for BoolIdentity {
 
 /// Evaluates an operator whose operands are already literals.
 ///
-/// Note carefully why this is allowed to fold `equal` when [`AnnihilateDrop`]
-/// is not. The objection there is that an operand may itself be a panic, which
-/// `equal` propagates and `drop; drop` would not — an operator's panic branch is
-/// reachable whenever its operands are arbitrary. **A literal is never a
-/// panic**, so with both operands pushed right here that branch cannot be
-/// taken, and the fold is an equality in the Z3 encoding and in the VM alike.
-/// The rule needs no view on which of the two is the real semantics.
+/// **Folding is evaluation.** Every operator here is a total function, so
+/// running it on two known values and pushing the answer is the same program;
+/// there is no operand it could have rejected and no check the fold could
+/// throw away. What the rule needs is not a licence but an obligation — to
+/// agree with the interpreter exactly, on junk as much as on anything else,
+/// which is why `and`/`or` go through [`Value::truthy`] and the comparisons
+/// through [`numeric_cmp`] rather than through a second reading of the same
+/// rules. Both live in `bytecode::value` for that reason.
 ///
-/// That still leaves the operators that reject perfectly ordinary values:
-/// `and`/`or` fold only on two booleans and the comparisons only on two
-/// numbers, since `push 1; push 2; and` is a panic and `push false` is not.
-/// `equal` rejects nothing, so it folds on any pair — which is what decides
+/// So `push 1; push 2; and` folds to `push false` (neither operand is
+/// `Bool(true)`), and `push idle; push thirsty; less` folds to `push false`
+/// (neither is a number). `equal` folds on any pair, which is what decides
 /// `push idle; push thirsty; equal` and collapses a symbol decision tree.
+///
+/// The arithmetic operators are simply not listed. Adding them would be a
+/// straightforward extension now, not a question about semantics.
 ///
 /// Measure: node count.
 #[derive(Debug)]
@@ -2001,36 +2555,43 @@ impl Rule for FoldConst {
         let Node::Op(inst) = op else { return None };
 
         let out = match inst {
-            // Rejects nothing: any two values compare.
-            Instruction::Equal => Value::Bool(a == b),
-            Instruction::And | Instruction::Or => match (a, b) {
-                (Value::Bool(p), Value::Bool(q)) => Value::Bool(match inst {
-                    Instruction::And => *p && *q,
-                    _ => *p || *q,
-                }),
-                // Anything else is a panic, and a panic is not a value.
-                _ => return None,
-            },
-            Instruction::Greater | Instruction::Less => match (a, b) {
-                (Value::Int(p), Value::Int(q)) => Value::Bool(match inst {
-                    Instruction::Greater => p > q,
-                    _ => p < q,
-                }),
-                _ => return None,
-            },
+            Instruction::Equal => vec![Value::Bool(a == b)],
+            Instruction::And => vec![Value::Bool(a.truthy() && b.truthy())],
+            Instruction::Or => vec![Value::Bool(a.truthy() || b.truthy())],
+            // The comparisons are fallible, so folding one has to produce the
+            // flag as well. Unordered covers both a non-numeric operand and a
+            // NaN: neither is a comparison the instruction can claim to have
+            // made, so both answer `false, false`.
+            Instruction::Greater | Instruction::Less => {
+                let want = match inst {
+                    Instruction::Greater => std::cmp::Ordering::Greater,
+                    _ => std::cmp::Ordering::Less,
+                };
+                match numeric_cmp(a, b) {
+                    Some(ord) => vec![Value::Bool(ord == want), Value::Bool(true)],
+                    None => vec![Value::Bool(false), Value::Bool(false)],
+                }
+            }
             _ => return None,
         };
-        Some(vec![Node::Op(Instruction::Push(out))])
+        Some(
+            out.into_iter()
+                .map(|v| Node::Op(Instruction::Push(v)))
+                .collect(),
+        )
     }
 }
 
 /// Evaluates a one-operand operator applied to a literal.
 ///
-/// Same licence as [`FoldConst`]: the operand is a literal, so it is not a
-/// panic, so nothing the operator would propagate is in reach. The `is_*`
-/// family additionally rejects nothing — it asks a question about the value it
-/// is given rather than demanding a particular one — so it folds on any
-/// literal, while `not` and `tuple_length` fold only on the shape they accept.
+/// Same story as [`FoldConst`]: these are total functions, so folding is
+/// running them. Every case answers on every literal — `not` through
+/// [`Value::truthy`], which makes `push sym; not` fold to `push true`, and
+/// `tuple_length` to zero on anything that is not a tuple, which is what lets
+/// [`RebuildCopy`]'s guard be decided when its subject is a literal.
+///
+/// `symbol_len` and `negate` are simply not listed, the same way the
+/// arithmetic operators are absent from `fold_const`.
 ///
 /// Measure: node count.
 #[derive(Debug)]
@@ -2048,26 +2609,45 @@ impl Rule for FoldConstUnary {
         let a = pushed(x)?;
         let Node::Op(inst) = op else { return None };
 
-        let out = match (inst, a) {
-            (Instruction::IsInt, _) => Value::Bool(matches!(a, Value::Int(_))),
-            (Instruction::IsBool, _) => Value::Bool(matches!(a, Value::Bool(_))),
-            (Instruction::IsFloat, _) => Value::Bool(matches!(a, Value::Float(_))),
-            (Instruction::IsSymbol, _) => Value::Bool(matches!(a, Value::Symbol(_))),
-            (Instruction::IsTuple, _) => Value::Bool(matches!(a, Value::Tuple(_))),
-            (Instruction::Not, Value::Bool(p)) => Value::Bool(!p),
-            (Instruction::TupleLength, Value::Tuple(t)) => Value::Int(t.len() as i64),
+        let out = match inst {
+            Instruction::IsInt => vec![Value::Bool(matches!(a, Value::Int(_)))],
+            Instruction::IsBool => vec![Value::Bool(matches!(a, Value::Bool(_)))],
+            Instruction::IsFloat => vec![Value::Bool(matches!(a, Value::Float(_)))],
+            Instruction::IsSymbol => vec![Value::Bool(matches!(a, Value::Symbol(_)))],
+            Instruction::IsTuple => vec![Value::Bool(matches!(a, Value::Tuple(_)))],
+            Instruction::Not => vec![Value::Bool(!a.truthy())],
+            // Fallible, and with one input and two slots it hands the value
+            // back rather than inventing a length for it.
+            Instruction::TupleLength => match a {
+                Value::Tuple(t) => vec![Value::Int(t.len() as i64), Value::Bool(true)],
+                other => vec![other.clone(), Value::Bool(false)],
+            },
             _ => return None,
         };
-        Some(vec![Node::Op(Instruction::Push(out))])
+        Some(
+            out.into_iter()
+                .map(|v| Node::Op(Instruction::Push(v)))
+                .collect(),
+        )
     }
 }
 
-/// `pick 0 ; branch { A } { B }` becomes `branch { push true; A } { push false; B }`.
+/// `Y ; pick 0 ; branch { A } { B }` becomes
+/// `Y ; branch { push true; A } { push false; B }`, where `Y` yields a `Bool`.
 ///
-/// A branch may tell its arms what its condition was. The VM rejects a
-/// non-boolean condition, so an arm that runs at all ran because the value was
-/// exactly `true` or exactly `false` — and the copy `pick 0` left behind is
-/// therefore a literal, which the arm can push for itself.
+/// A branch may tell its arms what its condition was. `branch` takes the then
+/// arm exactly when the condition is `Bool(true)`, so *if the condition is
+/// known to be a boolean at all*, the copy `pick 0` left behind is `true` in
+/// one arm and `false` in the other — a literal, which the arm can push for
+/// itself.
+///
+/// The window is three wide because of that "if". A branch decides on any
+/// value, taking the else arm on anything that is not literally `Bool(true)`
+/// (see `docs/totality.md`), so an else arm may run holding a `42` or a
+/// symbol, and telling it the value was `false` would be a lie. [`BoolIdentity`]
+/// needs the same three-node view for the same reason and answers it with the
+/// same [`yields_bool`] predicate: two nodes cannot tell you what the value
+/// underneath is, and the node that produced it can.
 ///
 /// This is how a **path condition becomes a value**, and it is worth being
 /// precise about why that matters. A predicate in this language is written
@@ -2090,10 +2670,10 @@ impl Rule for RetainCondition {
         "retain_condition"
     }
     fn width(&self) -> usize {
-        2
+        3
     }
     fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
-        let [Node::Op(Instruction::Pick(0)), Node::Branch {
+        let [y, Node::Op(Instruction::Pick(0)), Node::Branch {
             then_origin,
             then_body,
             else_origin,
@@ -2102,6 +2682,11 @@ impl Rule for RetainCondition {
         else {
             return None;
         };
+        // Without this the else arm would be told `false` about a value that
+        // merely failed to be `true`.
+        if !yields_bool(y) {
+            return None;
+        }
 
         let arm = |lit: bool, body: &Vec<Node>| {
             let mut out = vec![Node::Op(Instruction::Push(Value::Bool(lit)))];
@@ -2109,12 +2694,15 @@ impl Rule for RetainCondition {
             out
         };
 
-        Some(vec![Node::Branch {
-            then_origin: then_origin.clone(),
-            then_body: arm(true, then_body),
-            else_origin: else_origin.clone(),
-            else_body: arm(false, else_body),
-        }])
+        Some(vec![
+            y.clone(),
+            Node::Branch {
+                then_origin: then_origin.clone(),
+                then_body: arm(true, then_body),
+                else_origin: else_origin.clone(),
+                else_body: arm(false, else_body),
+            },
+        ])
     }
 }
 
@@ -2268,11 +2856,10 @@ impl Rule for SpecializeEqual {
 /// apart into three. At `m = 0` there are no picks at all and `X; dip 0 { X }`
 /// simply loses its first copy.
 ///
-/// Panic behaviour is preserved rather than merely respected: `X` runs on the
-/// copy first, so where the left side panics it does so on exactly the value
-/// the right side hands to its single `X`. `print` is excluded, since it is the
-/// one instruction for which running twice and running once differ in something
-/// other than the stack.
+/// `X` runs on the copy first, so where the left side fails — `X` may contain
+/// an `assert` — it does so on exactly the value the right side hands to its
+/// single `X`. `print` is excluded, since it is the one instruction for which
+/// running twice and running once differ in something other than the stack.
 ///
 /// Measure: node count, since `m` picks and one `X` replace two `X`s and a
 /// `pick` only when `m <= 1`; for larger `m` the measure is the number of
@@ -2324,8 +2911,21 @@ impl Rule for DupNatural {
             _ => return None,
         };
 
-        // Whichever way round, it has to be the same computation.
-        let [inner] = framed else { return None };
+        // The frame may also carry a `pick 0` of its own, which is what
+        // [`SpeculateBranch`] leaves behind: speculating `X` out of one arm has
+        // to copy `X`'s operand, because the arm that did *not* want `X` still
+        // wants the value. So the law runs under a retained copy —
+        //
+        //   pick 0; dip 1 { pick 0; X }; X  ==  pick 0; X; (pick (m-1))^m
+        //
+        // — which is the same statement with `x` surviving on the left of both
+        // sides. Without this the sharing stops one step short of closing,
+        // since `sink` delivers the speculation in exactly this shape.
+        let (retained, inner) = match framed {
+            [inner] => (false, inner),
+            [Node::Op(Instruction::Pick(0)), inner] => (true, inner),
+            _ => return None,
+        };
         if !same_effect(plain, inner) || matches!(plain, Node::Op(Instruction::Print)) {
             return None;
         }
@@ -2334,7 +2934,11 @@ impl Rule for DupNatural {
             return None;
         }
 
-        let mut out = vec![plain.clone()];
+        let mut out = Vec::new();
+        if retained {
+            out.push(Node::Op(Instruction::Pick(0)));
+        }
+        out.push(plain.clone());
         // `m` copies, each reaching back past the ones already made.
         let reach = usize::try_from(m - 1).ok();
         if let Some(d) = reach {
@@ -2427,25 +3031,47 @@ impl Rule for CopyConst {
     }
 }
 
-/// `pick 0 ; untuple n` becomes `untuple n ; (pick (n-1))^n ; dip n { tuple n }`.
+/// `pick 0 ; untuple n` becomes, for `n >= 1`,
+///
+/// ```text
+/// untuple n;
+/// branch { (pick (n-1))^n; dip n { tuple n }; push true }
+///        { dip (n-1) { pick 0 }; push false }
+/// ```
 ///
 /// Instead of keeping the value and taking a copy apart, take the value apart
-/// and **rebuild** the copy. Both sides leave `[x, e(n-1) .. e0]` and both panic
-/// on exactly the inputs where `x` is not an n-tuple, so the rewrite asks
-/// nothing of `x` — but it changes what the surviving `x` *is*, from an opaque
-/// value into a `tuple n` applied to parts that are now on the stack.
+/// and **rebuild** the copy. That changes what the surviving `x` *is*, from an
+/// opaque value into a `tuple n` applied to parts that are now on the stack.
 ///
-/// That is the whole point, and it is worth being clear that it is a proof
-/// technique rather than a simplification. The problem it addresses is that a
-/// predicate consumes a copy while the real work destructures the original, with
-/// a branch in between that nothing can hoist across, because `untuple` is
-/// partial and hoisting it would run it on the path that did not take the arm.
-/// Knowing that path is safe needs a fact several branches out — but no fact is
-/// needed if the value arrives at the branch *already built*: `tuple n` is
-/// total, so [`UnfactorBranch`] may push it into both arms, and in the arm that
-/// takes it apart again [`CancelTuple`] removes both. A window that sees
+/// It is a proof technique rather than a simplification. The problem it
+/// addresses is that a predicate consumes a copy while the real work
+/// destructures the original, with a branch in between that nothing can hoist
+/// across. Knowing the hoist is safe needs a fact several branches out — but no
+/// fact is needed if the value arrives at the branch *already built*: `tuple n`
+/// is total, so [`UnfactorBranch`] may push it into both arms, and in the arm
+/// that takes it apart again [`CancelTuple`] removes both. A window that sees
 /// `tuple n; untuple n` needs to know nothing about where the value came from.
 /// **The construction is the proof.**
+///
+/// ## Why the branch, and why it is cheap
+///
+/// The rule used to be the bare equation `pick 0; untuple n` ==
+/// `untuple n; (pick (n-1))^n; dip n { tuple n }`, justified by both sides
+/// panicking on exactly the inputs where `x` is not an n-tuple. Once the
+/// operators became total there was no panic left to agree about, and the two
+/// sides visibly differed: the left keeps `x`, the right hands back
+/// `untuple n; tuple n` of `x`, which on junk is not `x`. The rule was
+/// *relying* on partiality to hide a normalization.
+///
+/// It briefly needed a `tuple_length; push n; equal` guard to recover. It does
+/// not any more: **`untuple n` reports for itself**, so the condition is
+/// already on the stack, and the else arm has something to say rather than
+/// junk to invent — the value `untuple n` could not take apart is still sitting
+/// in the deepest of the slots it filled. Both arms are exact, and neither
+/// recomputes anything.
+///
+/// That is the whole argument for putting the flag on the stack: the guard a
+/// rewrite needs is the one the instruction already computed.
 ///
 /// The rebuild is framed as `dip n { tuple n }` rather than emitted with rolls
 /// for two reasons: it rebuilds the lower copy where it already sits, and it
@@ -2453,7 +3079,9 @@ impl Rule for CopyConst {
 /// branch.
 ///
 /// This makes the term bigger and belongs in no normalizing pass. Aiming it is
-/// a caller's job.
+/// a caller's job — and now more than before, since the payload sits inside an
+/// arm and something has to bring the consumer in beside it. That something is
+/// [`DistributeBranch`].
 ///
 /// Measure: the number of `pick 0; untuple n` adjacencies, which this strictly
 /// decreases — its own output contains none.
@@ -2471,21 +3099,44 @@ impl Rule for RebuildCopy {
         let [Node::Op(Instruction::Pick(0)), Node::Op(Instruction::Untuple(n))] = window else {
             return None;
         };
-        // A 0-tuple has no parts to share, so there would be nothing to gain.
+        // A 0-tuple has no parts to share, so there would be nothing to gain —
+        // and the guard below could not tell one from junk anyway.
         if *n == 0 {
             return None;
         }
+        let n = *n;
 
-        let mut out = vec![Node::Op(Instruction::Untuple(*n))];
-        // Copy all `n` parts, each reaching back past the copies already made.
-        out.extend((0..*n).map(|_| Node::Op(Instruction::Pick(*n - 1))));
-        // Rebuild the lower copy in place, under the parts just copied.
-        out.push(Node::Dip {
-            depth: *n,
+        // Where it worked, the parts really are `x`'s and `tuple n` rebuilds
+        // it. Copy all `n`, each pick reaching back past the copies already
+        // made, then rebuild the lower copy in place underneath them.
+        let mut rebuilt: Vec<Node> = (0..n).map(|_| Node::Op(Instruction::Pick(n - 1))).collect();
+        rebuilt.push(Node::Dip {
+            depth: n,
             origins: Vec::new(),
-            body: vec![Node::Op(Instruction::Tuple(*n))],
+            body: vec![Node::Op(Instruction::Tuple(n))],
         });
-        Some(out)
+        rebuilt.push(Node::Op(Instruction::Push(Value::Bool(true))));
+
+        // Where it did not, there is nothing to rebuild: `untuple n` left `x`
+        // itself in the deepest of the n slots, so the copy is a copy of that.
+        let recovered = vec![
+            Node::Dip {
+                depth: n - 1,
+                origins: Vec::new(),
+                body: vec![Node::Op(Instruction::Pick(0))],
+            },
+            Node::Op(Instruction::Push(Value::Bool(false))),
+        ];
+
+        Some(vec![
+            Node::Op(Instruction::Untuple(n)),
+            Node::Branch {
+                then_origin: "came apart".to_string(),
+                then_body: rebuilt,
+                else_origin: "did not".to_string(),
+                else_body: recovered,
+            },
+        ])
     }
 }
 
@@ -2507,8 +3158,10 @@ impl Rule for RebuildCopy {
 /// reason — a rule that only holds inside an arm cannot see anything outside
 /// one. Note that the reverse direction, hoisting an `X` *out* of a single arm,
 /// is **not** available and is not merely missing: it would run `X` on the path
-/// that did not take that arm, and where `X` is partial — `untuple n` is — that
-/// invents a panic the original did not have.
+/// that did not take that arm, and `untuple n` junk-normalizes what it is
+/// given, so the other path would go on with a value the original left alone.
+/// Totality changed the argument here without changing the conclusion — it used
+/// to be that the hoist invented a panic.
 ///
 /// Never put this and `factor_branch` in one `repeat`; they are inverses in the
 /// same way `collapse` and `expand` are.
@@ -2575,15 +3228,195 @@ impl Rule for UnfactorBranch {
     }
 }
 
-/// `tuple n ; untuple n` becomes nothing.
+/// Hoists an operator out of **one** branch arm, by running it speculatively
+/// on a copy and letting each arm discard the half it did not want.
+///
+/// For `X : n -> m` at the head of the then arm:
+///
+/// ```text
+/// branch { X; A } { B }
+///   ==
+/// dip 1 { (pick (n-1))^n; X };
+/// branch { dip m { drop^n }; A } { drop^m; B }
+/// ```
+///
+/// and symmetrically for the else arm. The `dip 1` is because the condition is
+/// still on top and `X` must not be handed it; the `(pick (n-1))^n` copies `X`'s
+/// operands in place, the same way [`RebuildCopy`] and [`DupNatural`] do.
+///
+/// **This is the direction that used to be impossible.** `factor_branch` hoists
+/// a prefix only when *both* arms share it, and taking one from a single arm
+/// would run it on the path that did not take that arm. While `untuple n` could
+/// reject a value, that invented a panic; while its junk was untagged, it
+/// junk-normalized a value the other path went on to use. Neither objection
+/// survives here, because **the other path never gives up its own values** — the
+/// speculation runs on a copy, and the losing arm drops the results and carries
+/// on with what it always had. No inverse for `X` is needed, so this asks
+/// nothing of `untuple n` that it asks of `add`.
+///
+/// What it does need is exactly what `docs/totality.md` established:
+///
+/// - `X` must be **total**, or the speculation invents a failure on the losing
+///   path. Every data operation now is, which is what makes the rule possible
+///   at all; `assert`, `assert_eq` and `panic` are excluded, and fall out of
+///   [`op_arity`] or the match below.
+/// - `X` must have **no effect but the stack**, which excludes `print`.
+/// - `X` must have a **local arity**, which excludes `Dip`, `Branch` and `Call`
+///   nodes. Their bodies may hold an `assert` several frames down, and a
+///   window-local rule has no business guessing. `inline` and `flatten_call`
+///   are how you make the operator underneath visible, as usual.
+///
+/// `drop` is excluded too, for the measure rather than for soundness: the rule
+/// prepends drops to the arms, and hoisting those again would let it chase its
+/// own tail. Hoisting a `drop` is pure loss anyway — there is nothing to its
+/// left for it to cancel against that it could not have cancelled against
+/// inside the arm.
+///
+/// It also declines when **both** arms open with the same effect, which is
+/// [`FactorBranch`]'s case and which that rule does strictly better: no copies
+/// and no drops, because a shared prefix needs no speculation.
+///
+/// The term gets bigger — n copies and n + m drops to move one node — so this
+/// pays only when the hoisted `X` reaches something to its left that cancels
+/// it. Aiming it is the search's job, as with `float` and `rebuild_copy`.
+///
+/// Measure: the number of non-`drop` `Op` nodes inside branch arms. Firing
+/// removes exactly one and puts back only drops and a dip, so `each` settles
+/// even though the node count grows.
+#[derive(Debug)]
+pub(crate) struct SpeculateBranch;
+
+/// Whether `node` may be run on a path that would not have run it.
+///
+/// Total and effect-free, decided syntactically and recursively. A `Dip`
+/// qualifies when its whole body does, which is what lets a speculation climb
+/// out of nested branches: the rule's own output is a dip, and without this it
+/// would strand itself at the next branch out.
+///
+/// A `Call` never qualifies. Its body may hold an `assert` several frames down,
+/// and `inline` is how you make that visible — the same stance [`YieldsBool`]
+/// takes towards a call that happens to return a boolean.
+///
+/// [`YieldsBool`]: yields_bool
+fn speculable(node: &Node) -> bool {
+    match node {
+        Node::Op(inst) => match inst {
+            // Running these on the losing path would print something the
+            // original did not, or fail where the original did not.
+            Instruction::Print | Instruction::Assert | Instruction::AssertEqual => false,
+            // Sound to speculate, but excluded so that the rule cannot match
+            // what it just emitted. See the measure.
+            Instruction::Drop => false,
+            // `Panic`, `Dip` and `Branch` have no local arity and stop here.
+            _ => op_arity(inst).is_some(),
+        },
+        // An empty body is `noop`'s business, and hoisting it would report a
+        // change without making one.
+        Node::Dip { body, .. } => !body.is_empty() && body.iter().all(speculable),
+        Node::Branch { .. } | Node::Call { .. } => false,
+    }
+}
+
+impl Rule for SpeculateBranch {
+    fn name(&self) -> &'static str {
+        "speculate_branch"
+    }
+    fn width(&self) -> usize {
+        1
+    }
+    fn rewrite(&self, prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
+        let Node::Branch {
+            then_origin,
+            then_body,
+            else_origin,
+            else_body,
+        } = &window[0]
+        else {
+            return None;
+        };
+
+        // A shared prefix is `factor_branch`'s, and it hoists one without
+        // paying for any of this.
+        if let (Some(a), Some(b)) = (then_body.first(), else_body.first()) {
+            if same_effect(a, b) {
+                return None;
+            }
+        }
+
+        // Whichever arm offers a head that may run on the other path.
+        fn head(arm: &[Node]) -> Option<&Node> {
+            arm.first().filter(|n| speculable(n))
+        }
+        let (from_then, x) = match head(then_body) {
+            Some(x) => (true, x.clone()),
+            None => (false, head(else_body)?.clone()),
+        };
+        let (n, m) = node_arity(prog, &x)?;
+        let (n, m) = (usize::try_from(n).ok()?, usize::try_from(m).ok()?);
+
+        // Copy `X`'s operands in place, then run it on the copies. Each pick
+        // reaches back past the copies already made, so the block lands in the
+        // same order it was read.
+        let mut speculated: Vec<Node> = (0..n)
+            .map(|_| Node::Op(Instruction::Pick(n - 1)))
+            .collect();
+        speculated.push(x);
+
+        // The arm that asked for `X` keeps its results and drops the originals,
+        // which sit underneath them.
+        let winner = |rest: &[Node]| {
+            let mut out = Vec::new();
+            if n > 0 {
+                out.push(Node::Dip {
+                    depth: m,
+                    origins: Vec::new(),
+                    body: vec![Node::Op(Instruction::Drop); n],
+                });
+            }
+            out.extend(rest.iter().cloned());
+            out
+        };
+        // The other arm drops the results and goes on with the values it always
+        // had. This is the whole reason no inverse is needed.
+        let loser = |rest: &[Node]| {
+            let mut out = vec![Node::Op(Instruction::Drop); m];
+            out.extend(rest.iter().cloned());
+            out
+        };
+
+        let (then_body, else_body) = if from_then {
+            (winner(&then_body[1..]), loser(else_body))
+        } else {
+            (loser(then_body), winner(&else_body[1..]))
+        };
+
+        Some(vec![
+            Node::Dip {
+                depth: 1,
+                origins: Vec::new(),
+                body: speculated,
+            },
+            Node::Branch {
+                then_origin: then_origin.clone(),
+                then_body,
+                else_origin: else_origin.clone(),
+                else_body,
+            },
+        ])
+    }
+}
+
+/// `tuple n ; untuple n` becomes `push true`.
 ///
 /// Building a tuple and immediately taking it apart returns the stack to
-/// exactly where it started, and `untuple n` cannot reject what `tuple n` just
-/// built. The converse — `untuple n; tuple n` — is *not* a no-op and is not
-/// included: `untuple` is the instruction that checks the shape, so removing
-/// the pair would accept values the original rejected.
+/// exactly where it started — and now says so. `untuple n` cannot fail on
+/// something `tuple n` just built, so the flag it leaves is a literal `true`,
+/// and that literal is the whole residue of the pair.
 ///
-/// Measure: node count.
+/// The converse — `untuple n; tuple n` — is still *not* a no-op and still not
+/// included. It junk-normalizes, and it now also leaves the flag stranded.
+///
+/// Measure: node count. Two nodes become one.
 #[derive(Debug)]
 pub(crate) struct CancelTuple;
 
@@ -2598,6 +3431,6 @@ impl Rule for CancelTuple {
         let [Node::Op(Instruction::Tuple(n)), Node::Op(Instruction::Untuple(m))] = window else {
             return None;
         };
-        (n == m).then(Vec::new)
+        (n == m).then(|| vec![Node::Op(Instruction::Push(Value::Bool(true)))])
     }
 }

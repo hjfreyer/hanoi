@@ -81,6 +81,143 @@ fn is_recursive(s_idx: SentenceIndex, library: &Library) -> bool {
         .any(|ann| matches!(ann, Annotation::Recursive))
 }
 
+fn is_total(s_idx: SentenceIndex, library: &Library) -> bool {
+    library.annotations[s_idx]
+        .iter()
+        .any(|ann| matches!(ann, Annotation::Total))
+}
+
+/// The three instructions that can still fail for a reason about values.
+///
+/// Everything else is total (see `docs/totality.md`) — a fallible instruction
+/// reports failure with a flag and carries on, which is a value rather than an
+/// outcome. Underflow, a bad sentence index and the gas limit are structural
+/// and are not what this judgment is about.
+fn can_fail(inst: &Instruction) -> bool {
+    matches!(
+        inst,
+        Instruction::Panic | Instruction::Assert | Instruction::AssertEqual
+    )
+}
+
+/// The sentences an instruction can transfer control to.
+fn callees(inst: &Instruction) -> Vec<SentenceIndex> {
+    match inst {
+        Instruction::Dip(_, target) => vec![*target],
+        Instruction::Branch(then_t, else_t) => vec![*then_t, *else_t],
+        _ => Vec::new(),
+    }
+}
+
+/// Which sentences can fail: directly, or by reaching one that does.
+///
+/// A least fixpoint over the call graph, so a cycle that never reaches a
+/// failing instruction comes out total rather than unknown. Unlike arity
+/// inference this is a reachability question, and needs no annotation to
+/// terminate.
+///
+/// Public because it is the useful half of [`check_totality`], and it answers
+/// for *every* sentence rather than only the ones somebody annotated:
+/// `bin/rewrite` wants to know whether a `Call` can fail, and the answer is the
+/// same whether or not the callee says so.
+pub fn failure_reachability(library: &Library) -> Vec<bool> {
+    let mut can: Vec<bool> = library
+        .sentences
+        .iter()
+        .map(|sentence| sentence.iter().any(can_fail))
+        .collect();
+    loop {
+        let mut changed = false;
+        for (s_idx, sentence) in library.sentences.iter_enumerated() {
+            let i: usize = s_idx.into();
+            if can[i] {
+                continue;
+            }
+            if sentence.iter().flat_map(callees).any(|c| can[usize::from(c)]) {
+                can[i] = true;
+                changed = true;
+            }
+        }
+        if !changed {
+            return can;
+        }
+    }
+}
+
+/// Checks that every sentence claiming `#[total]` really cannot fail.
+///
+/// A sentence can fail if it executes `panic`, `assert` or `assert_eq`, or if
+/// it can reach one that does through a `jump`, a `dip`, or either branch arm.
+/// `#[total]` says it cannot, and this is what holds it to that.
+///
+/// **The claim is opt-in, and that is the whole design.** Requiring the
+/// opposite annotation — `#[partial]` on anything that can fail — was tried and
+/// collapsed under its own coverage. It needed an exemption for branch arms,
+/// which have no source to annotate; another for `test` declarations, where
+/// asserting is the point; and worst of all one for composer templates, which
+/// are generic over the machine they wrap and so are partial exactly when their
+/// argument is. Marking those partial would have made *every* composed machine
+/// partial, which in a corpus where nearly everything is composed is enough to
+/// make the annotation say nothing.
+///
+/// Turning it around removes all three cases at once. Nothing is obliged to
+/// carry an annotation, so generated code, inline blocks and tests need no
+/// special treatment — they simply make no claim. What gets checked is exactly
+/// what somebody asserted, and [`failure_reachability`] still says what is true
+/// of everything else.
+///
+/// The check is syntactic and therefore conservative: an `assert` on a branch
+/// that cannot be taken still counts against the claim. That is the same
+/// bargain the `#[recursive]` rule makes, and what keeps this a reachability
+/// question rather than a proof obligation.
+pub fn check_totality(library: &Library) -> Result<(), String> {
+    let can = failure_reachability(library);
+    for (s_idx, _) in library.sentences.iter_enumerated() {
+        if !is_total(s_idx, library) || !can[usize::from(s_idx)] {
+            continue;
+        }
+        return Err(format!(
+            "Sentence '{}' is annotated #[total] but {}",
+            library.names[s_idx],
+            explain_failure(library, &can, s_idx)
+        ));
+    }
+    Ok(())
+}
+
+/// Why a sentence can fail, as a route down to the instruction responsible.
+///
+/// Naming the immediate callee is not enough when it is an `<inline>` block or
+/// a composer's sentence: what the reader needs is the `panic` at the bottom
+/// and the way down to it.
+fn explain_failure(library: &Library, can: &[bool], start: SentenceIndex) -> String {
+    let mut route: Vec<String> = Vec::new();
+    let mut seen = HashSet::new();
+    let mut at = start;
+    loop {
+        if !seen.insert(at) {
+            return format!("can fail, via {}", route.join(" -> "));
+        }
+        if let Some(inst) = library.sentences[at].iter().find(|i| can_fail(i)) {
+            return if route.is_empty() {
+                format!("executes '{}'", inst)
+            } else {
+                format!("reaches '{}' via {}", inst, route.join(" -> "))
+            };
+        }
+        let Some(next) = library.sentences[at]
+            .iter()
+            .flat_map(callees)
+            .find(|c| can[usize::from(*c)])
+        else {
+            return "can fail".to_string();
+        };
+        route.push(library.names[next].clone());
+        at = next;
+    }
+}
+
+
 fn get_or_infer_arity(
     s_idx: SentenceIndex,
     library: &Library,
@@ -170,32 +307,65 @@ pub fn op_arity(inst: &Instruction) -> Option<(i64, i64)> {
         // down to that depth even though it consumes nothing.
         Instruction::Pick(d) => (*d as i64 + 1, *d as i64 + 2),
         Instruction::Roll(d) => (*d as i64 + 1, *d as i64 + 1),
-        Instruction::Equal
-        | Instruction::Greater
+        Instruction::Equal | Instruction::And | Instruction::Or => (2, 1),
+        Instruction::Not
+        | Instruction::Print
+        | Instruction::IsInt
+        | Instruction::IsBool
+        | Instruction::IsFloat
+        | Instruction::IsSymbol
+        | Instruction::IsTuple => (1, 1),
+        // The fallible instructions, each one output wider than the value it
+        // computes because the extra slot holds the success flag. See
+        // [`is_fallible`].
+        Instruction::Greater
         | Instruction::Less
         | Instruction::Add
         | Instruction::Subtract
         | Instruction::Multiply
         | Instruction::Divide
         | Instruction::Modulo
-        | Instruction::And
-        | Instruction::Or
-        | Instruction::SymbolCharAt => (2, 1),
-        Instruction::Not
-        | Instruction::Negate
-        | Instruction::Print
-        | Instruction::SymbolLen
-        | Instruction::IsInt
-        | Instruction::IsBool
-        | Instruction::IsFloat
-        | Instruction::IsSymbol
-        | Instruction::IsTuple
-        | Instruction::TupleLength => (1, 1),
+        | Instruction::SymbolCharAt => (2, 2),
+        Instruction::Negate | Instruction::SymbolLen | Instruction::TupleLength => (1, 2),
+        Instruction::Untuple(n) => (1, *n as i64 + 1),
         Instruction::AssertEqual => (2, 0),
         Instruction::Tuple(n) => (*n as i64, 1),
-        Instruction::Untuple(n) => (1, *n as i64),
         Instruction::Panic | Instruction::Dip(..) | Instruction::Branch(..) => return None,
     })
+}
+
+/// Whether this instruction reports success with a flag on top of its result.
+///
+/// A fallible instruction is still **total** — it answers on every input (see
+/// `docs/totality.md`). What the flag adds is that the answer says whether it
+/// was computed or invented: `add` on two symbols leaves `0` and `false`, and
+/// on two numbers leaves the sum and `true`.
+///
+/// The arity is fixed either way, which is the point. A caller's stack does not
+/// depend on data, so the arity checker still works on shape alone and every
+/// rule that moves code past an instruction reads one pair of numbers rather
+/// than reasoning about which branch it took.
+///
+/// Kept beside [`op_arity`] because the two must agree: a fallible instruction
+/// is exactly one whose output count includes a slot the value does not need.
+/// The VM produces the flag, `assemble` decides whether to drop it, and
+/// `bin/rewrite` folds it — three readers, one table.
+pub fn is_fallible(inst: &Instruction) -> bool {
+    matches!(
+        inst,
+        Instruction::Greater
+            | Instruction::Less
+            | Instruction::Add
+            | Instruction::Subtract
+            | Instruction::Multiply
+            | Instruction::Divide
+            | Instruction::Modulo
+            | Instruction::Negate
+            | Instruction::Untuple(_)
+            | Instruction::TupleLength
+            | Instruction::SymbolLen
+            | Instruction::SymbolCharAt
+    )
 }
 
 fn infer_arity_of_instructions(
@@ -456,6 +626,156 @@ mod tests {
                 outputs: 1
             })
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // #[total]
+    // -----------------------------------------------------------------------
+
+    fn totality_error(code: &str) -> String {
+        assemble(code)
+            .err()
+            .unwrap_or_else(|| panic!("expected `{}` to be rejected", code))
+    }
+
+    #[test]
+    fn claiming_totality_while_able_to_fail_is_refused() {
+        for inst in ["panic", "assert", "assert_eq"] {
+            let code = format!("#[total] sentence claims {{ {} }}", inst);
+            let msg = totality_error(&code);
+            assert!(msg.contains("#[total]"), "{}", msg);
+            assert!(msg.contains(inst), "should name the instruction: {}", msg);
+        }
+        // Without the claim there is nothing to check, which is the point of
+        // the polarity: failing is ordinary and needs no ceremony.
+        for inst in ["panic", "assert", "assert_eq"] {
+            assert!(
+                assemble(&format!("sentence quiet {{ {} }}", inst)).is_ok(),
+                "an unannotated sentence makes no claim"
+            );
+        }
+    }
+
+    #[test]
+    fn the_claim_is_checked_through_the_call_graph() {
+        // Reaching a failure counts, however far down, and the error names the
+        // route rather than only the immediate callee.
+        let code = r#"
+            #[arity(1, 0)]
+            sentence deep { assert }
+            #[arity(1, 0)]
+            sentence middle { jump deep }
+            #[total]
+            #[arity(1, 0)]
+            sentence claims { jump middle }
+        "#;
+        let msg = totality_error(code);
+        assert!(msg.contains("claims"), "{}", msg);
+        assert!(msg.contains("middle") && msg.contains("deep"), "route: {}", msg);
+        assert!(msg.contains("assert"), "the instruction: {}", msg);
+    }
+
+    #[test]
+    fn a_branch_arm_counts_against_the_claim_that_encloses_it() {
+        // The case the opposite polarity needed an exemption for. Here it needs
+        // none: the arm makes no claim, the sentence that wrote it does, and
+        // reachability connects the two.
+        for body in [
+            "pick 0 is_int branch { assert } { drop 0 }",
+            "pick 0 is_int branch { drop 0 } { assert }",
+            "dip 1 { drop 0 assert }",
+        ] {
+            let code = format!("#[total] #[recursive] sentence claims {{ {} }}", body);
+            let msg = totality_error(&code);
+            assert!(msg.contains("claims"), "should name the sentence: {}", msg);
+            assert!(msg.contains("assert"), "should name the instruction: {}", msg);
+        }
+    }
+
+    #[test]
+    fn ordinary_total_code_satisfies_the_claim() {
+        // Nothing here can fail, the fallible instructions included: they
+        // report rather than raise.
+        assert!(assemble(
+            r#"
+            #[total]
+            #[arity(2, 1)]
+            sentence arith { add }
+            #[total]
+            #[arity(1, 2)]
+            sentence apart { untuple 2 }
+            #[total]
+            #[arity(2, 1)]
+            sentence caller { jump arith }
+            #[total]
+            #[arity(1, 1)]
+            sentence chooses { pick 0 is_int branch { drop 0 push 1 } { drop 0 push 2 } }
+        "#
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn a_cycle_that_never_fails_is_total() {
+        // Reachability, not a fixpoint over arities: a loop with no failing
+        // instruction anywhere in it satisfies the claim.
+        assert!(assemble(
+            r#"
+            #[total]
+            #[recursive]
+            #[arity(1, 1)]
+            sentence loops { pick 0 is_int branch { } { jump loops } }
+        "#
+        )
+        .is_ok());
+        // And one that can reach a failure does not, however deep the cycle.
+        let msg = totality_error(
+            r#"
+            #[total]
+            #[recursive]
+            #[arity(1, 1)]
+            sentence loops { pick 0 is_int branch { assert push 1 } { jump loops } }
+        "#,
+        );
+        assert!(msg.contains("#[total]"), "{}", msg);
+    }
+
+    #[test]
+    fn the_type_sugar_generates_claims_that_hold() {
+        // `type` annotates its checks `#[total]`, which used to be an
+        // unverified assertion and is now checked like any other.
+        assert!(assemble("type Pair (int, int);").is_ok());
+        assert!(assemble("enum E { A(int), B(symbol) }").is_ok());
+    }
+
+    #[test]
+    fn reachability_answers_for_every_sentence_not_only_the_annotated() {
+        // What `bin/rewrite` needs: the fact is available whether or not the
+        // callee bothered to claim it.
+        let library = assemble(
+            r#"
+            #[arity(1, 0)]
+            sentence risky { assert }
+            #[arity(1, 0)]
+            sentence caller { jump risky }
+            #[arity(2, 1)]
+            sentence safe { add }
+        "#,
+        )
+        .unwrap();
+        let can = failure_reachability(&library);
+        let of = |name: &str| {
+            let idx = library
+                .names
+                .iter_enumerated()
+                .find(|(_, n)| *n == name)
+                .map(|(i, _)| usize::from(i))
+                .unwrap();
+            can[idx]
+        };
+        assert!(of("risky"));
+        assert!(of("caller"), "reachability propagates without any annotation");
+        assert!(!of("safe"));
     }
 
     #[test]

@@ -49,7 +49,7 @@ tactic dips = repeat(bu(each(collapse); each(sink); each(fuse)));
 tactic unary = repeat(bu(each(expand)));
 
 tactic factoring  = repeat(bu(each(factor_branch)));
-tactic annihilate = repeat(bu(each(annihilate_drop)));
+tactic annihilate = repeat(bu(each(annihilate_drop, annihilate_flagged)));
 
 // Evaluate what is already decided. Every rule here answers a question about
 // values rather than about shape, and each declines the cases where the
@@ -64,8 +64,8 @@ tactic values = repeat(bu(each(fold_const, fold_const_unary, bool_identity,
 // clears up after both, which is why these three belong together. The value
 // rules join them because folding is what exposes the literal `fold_branch`
 // needs, and dropping a branch is what exposes the next thing to fold.
-tactic cleanup = repeat(bu(each(annihilate_drop, pick_drop_to_roll, noop,
-                                fold_branch);
+tactic cleanup = repeat(bu(each(annihilate_drop, annihilate_flagged,
+                                pick_drop_to_roll, noop, fold_branch);
                            each(fold_const, fold_const_unary, bool_identity,
                                 cancel_tuple)));
 
@@ -81,7 +81,7 @@ tactic distribute = repeat(bu(each(distribute_branch)));
 tactic flatten = repeat(bu(each(flatten_call)));
 
 // Everything at once, which is what passing all three flags used to mean.
-tactic all = repeat(bu(each(annihilate_drop, pick_drop_to_roll, noop, fold_branch);
+tactic all = repeat(bu(each(annihilate_drop, annihilate_flagged, pick_drop_to_roll, noop, fold_branch);
                        each(fold_const, fold_const_unary, bool_identity, cancel_tuple);
                        each(factor_branch);
                        each(collapse); each(sink); each(fuse)));

@@ -3,6 +3,8 @@ use bytecode::{Instruction, Library, SentenceIndex, Value};
 pub mod runtime;
 pub use runtime::{Runtime, Environment, DefaultEnvironment};
 
+use bytecode::value::numeric_cmp;
+
 /// A pending return: where to resume, plus any values `Dip` hid from the callee.
 ///
 /// `hidden` is empty for `Jump` and `Branch`, which give the callee the top of
@@ -69,6 +71,28 @@ impl VM {
         Ok(&self.stack[self.stack.len() - 1 - offset])
     }
 
+    /// A fallible instruction that computed its answer: the value, then `true`.
+    fn ok(&mut self, value: Value) {
+        self.stack.push(value);
+        self.stack.push(Value::Bool(true));
+    }
+
+    /// A fallible instruction that did not: junk, then `false`.
+    ///
+    /// The caller passes whatever fills the result slots, which is where the
+    /// "preserve the inputs" rule of `docs/totality.md` is applied — an
+    /// instruction whose output arity has room hands its own input back, and
+    /// one whose does not fills with a default.
+    fn failed(&mut self, value: Value) {
+        self.stack.push(value);
+        self.stack.push(Value::Bool(false));
+    }
+
+    /// [`failed`](Self::failed) with several result slots to fill.
+    fn failed_with(&mut self, values: impl IntoIterator<Item = Value>) {
+        self.stack.extend(values);
+        self.stack.push(Value::Bool(false));
+    }
 
 
     /// Executes sentences in the library starting with the given `start_sentence`.
@@ -155,144 +179,111 @@ impl VM {
                     let a = self.pop()?;
                     self.stack.push(Value::Bool(a == b));
                 }
-                Instruction::Greater => {
+                Instruction::Greater | Instruction::Less => {
+                    // A NaN is unordered rather than non-numeric, but neither
+                    // pair yields an ordering and neither is a comparison this
+                    // instruction can claim to have made.
                     let b = self.pop()?;
                     let a = self.pop()?;
-                    let is_greater = match (a, b) {
-                        (Value::Int(x), Value::Int(y)) => x > y,
-                        (Value::Float(x), Value::Float(y)) => x > y,
-                        (Value::Int(x), Value::Float(y)) => (x as f64) > y,
-                        (Value::Float(x), Value::Int(y)) => x > (y as f64),
-                        (v1, v2) => return Err(format!("Cannot compare Greater between non-numeric values {} and {}", v1, v2)),
+                    let want = if matches!(instruction, Instruction::Greater) {
+                        std::cmp::Ordering::Greater
+                    } else {
+                        std::cmp::Ordering::Less
                     };
-                    self.stack.push(Value::Bool(is_greater));
-                }
-                Instruction::Less => {
-                    let b = self.pop()?;
-                    let a = self.pop()?;
-                    let is_less = match (a, b) {
-                        (Value::Int(x), Value::Int(y)) => x < y,
-                        (Value::Float(x), Value::Float(y)) => x < y,
-                        (Value::Int(x), Value::Float(y)) => (x as f64) < y,
-                        (Value::Float(x), Value::Int(y)) => x < (y as f64),
-                        (v1, v2) => return Err(format!("Cannot compare Less between non-numeric values {} and {}", v1, v2)),
-                    };
-                    self.stack.push(Value::Bool(is_less));
+                    match numeric_cmp(&a, &b) {
+                        Some(ord) => self.ok(Value::Bool(ord == want)),
+                        // Two slots and two inputs, so there is no room to keep
+                        // them; the result slot takes the junk answer.
+                        None => self.failed(Value::Bool(false)),
+                    }
                 }
                 Instruction::Add => {
                     let b = self.pop()?;
                     let a = self.pop()?;
-                    let res = match (a, b) {
-                        (Value::Int(x), Value::Int(y)) => Value::Int(x.wrapping_add(y)),
-                        (Value::Float(x), Value::Float(y)) => Value::Float(x + y),
-                        (Value::Int(x), Value::Float(y)) => Value::Float((x as f64) + y),
-                        (Value::Float(x), Value::Int(y)) => Value::Float(x + (y as f64)),
-                        (v1, v2) => return Err(format!("Cannot add non-numeric values {} and {}", v1, v2)),
-                    };
-                    self.stack.push(res);
+                    match (a, b) {
+                        (Value::Int(x), Value::Int(y)) => self.ok(Value::Int(x.wrapping_add(y))),
+                        (Value::Float(x), Value::Float(y)) => self.ok(Value::Float(x + y)),
+                        (Value::Int(x), Value::Float(y)) => self.ok(Value::Float((x as f64) + y)),
+                        (Value::Float(x), Value::Int(y)) => self.ok(Value::Float(x + (y as f64))),
+                        _ => self.failed(Value::Int(0)),
+                    }
                 }
                 Instruction::Subtract => {
                     let b = self.pop()?;
                     let a = self.pop()?;
-                    let res = match (a, b) {
-                        (Value::Int(x), Value::Int(y)) => Value::Int(x.wrapping_sub(y)),
-                        (Value::Float(x), Value::Float(y)) => Value::Float(x - y),
-                        (Value::Int(x), Value::Float(y)) => Value::Float((x as f64) - y),
-                        (Value::Float(x), Value::Int(y)) => Value::Float(x - (y as f64)),
-                        (v1, v2) => return Err(format!("Cannot subtract non-numeric values {} and {}", v1, v2)),
-                    };
-                    self.stack.push(res);
+                    match (a, b) {
+                        (Value::Int(x), Value::Int(y)) => self.ok(Value::Int(x.wrapping_sub(y))),
+                        (Value::Float(x), Value::Float(y)) => self.ok(Value::Float(x - y)),
+                        (Value::Int(x), Value::Float(y)) => self.ok(Value::Float((x as f64) - y)),
+                        (Value::Float(x), Value::Int(y)) => self.ok(Value::Float(x - (y as f64))),
+                        _ => self.failed(Value::Int(0)),
+                    }
                 }
                 Instruction::Multiply => {
                     let b = self.pop()?;
                     let a = self.pop()?;
-                    let res = match (a, b) {
-                        (Value::Int(x), Value::Int(y)) => Value::Int(x.wrapping_mul(y)),
-                        (Value::Float(x), Value::Float(y)) => Value::Float(x * y),
-                        (Value::Int(x), Value::Float(y)) => Value::Float((x as f64) * y),
-                        (Value::Float(x), Value::Int(y)) => Value::Float(x * (y as f64)),
-                        (v1, v2) => return Err(format!("Cannot multiply non-numeric values {} and {}", v1, v2)),
-                    };
-                    self.stack.push(res);
+                    match (a, b) {
+                        (Value::Int(x), Value::Int(y)) => self.ok(Value::Int(x.wrapping_mul(y))),
+                        (Value::Float(x), Value::Float(y)) => self.ok(Value::Float(x * y)),
+                        (Value::Int(x), Value::Float(y)) => self.ok(Value::Float((x as f64) * y)),
+                        (Value::Float(x), Value::Int(y)) => self.ok(Value::Float(x * (y as f64))),
+                        _ => self.failed(Value::Int(0)),
+                    }
                 }
                 Instruction::Divide => {
                     let b = self.pop()?;
                     let a = self.pop()?;
-                    let res = match (a, b) {
-                        (Value::Int(x), Value::Int(y)) => {
-                            if y == 0 {
-                                return Err("Division by zero".to_string());
-                            }
-                            Value::Int(x / y)
-                        }
-                        (Value::Float(x), Value::Float(y)) => Value::Float(x / y),
-                        (Value::Int(x), Value::Float(y)) => Value::Float((x as f64) / y),
-                        (Value::Float(x), Value::Int(y)) => {
-                            if y == 0 {
-                                return Err("Division by zero".to_string());
-                            }
-                            Value::Float(x / (y as f64))
-                        }
-                        (v1, v2) => return Err(format!("Cannot divide non-numeric values {} by {}", v1, v2)),
-                    };
-                    self.stack.push(res);
+                    match (a, b) {
+                        // Integer division by zero has no answer to report, and
+                        // now it can say so rather than inventing one.
+                        (Value::Int(_), Value::Int(0)) => self.failed(Value::Int(0)),
+                        // `wrapping_div` keeps `i64::MIN / -1` from being a
+                        // host-level overflow.
+                        (Value::Int(x), Value::Int(y)) => self.ok(Value::Int(x.wrapping_div(y))),
+                        // The float world is uniformly IEEE, and `inf` is an
+                        // answer rather than a failure: an `Int` divisor coerces
+                        // like any other mixed operand rather than being an
+                        // excuse to leave that world.
+                        (Value::Float(x), Value::Float(y)) => self.ok(Value::Float(x / y)),
+                        (Value::Int(x), Value::Float(y)) => self.ok(Value::Float((x as f64) / y)),
+                        (Value::Float(x), Value::Int(y)) => self.ok(Value::Float(x / (y as f64))),
+                        _ => self.failed(Value::Int(0)),
+                    }
                 }
                 Instruction::Modulo => {
                     let b = self.pop()?;
                     let a = self.pop()?;
-                    let res = match (a, b) {
-                        (Value::Int(x), Value::Int(y)) => {
-                            if y == 0 {
-                                return Err("Modulo by zero".to_string());
-                            }
-                            Value::Int(x % y)
-                        }
-                        (Value::Float(x), Value::Float(y)) => Value::Float(x % y),
-                        (Value::Int(x), Value::Float(y)) => Value::Float((x as f64) % y),
-                        (Value::Float(x), Value::Int(y)) => {
-                            if y == 0 {
-                                return Err("Modulo by zero".to_string());
-                            }
-                            Value::Float(x % (y as f64))
-                        }
-                        (v1, v2) => return Err(format!("Cannot modulo non-numeric values {} by {}", v1, v2)),
-                    };
-                    self.stack.push(res);
+                    match (a, b) {
+                        (Value::Int(_), Value::Int(0)) => self.failed(Value::Int(0)),
+                        (Value::Int(x), Value::Int(y)) => self.ok(Value::Int(x.wrapping_rem(y))),
+                        (Value::Float(x), Value::Float(y)) => self.ok(Value::Float(x % y)),
+                        (Value::Int(x), Value::Float(y)) => self.ok(Value::Float((x as f64) % y)),
+                        (Value::Float(x), Value::Int(y)) => self.ok(Value::Float(x % (y as f64))),
+                        _ => self.failed(Value::Int(0)),
+                    }
                 }
                 Instruction::Not => {
                     let val = self.pop()?;
-                    let b = match val {
-                        Value::Bool(b) => b,
-                        v => return Err(format!("Expected boolean operand on Not, found {:?}", v)),
-                    };
-                    self.stack.push(Value::Bool(!b));
+                    self.stack.push(Value::Bool(!val.truthy()));
                 }
                 Instruction::And => {
-                    let b_val = self.pop()?;
-                    let a_val = self.pop()?;
-                    let (a, b) = match (a_val, b_val) {
-                        (Value::Bool(a), Value::Bool(b)) => (a, b),
-                        (v1, v2) => return Err(format!("Expected boolean operands on And, found {:?} and {:?}", v1, v2)),
-                    };
-                    self.stack.push(Value::Bool(a && b));
+                    let b = self.pop()?;
+                    let a = self.pop()?;
+                    self.stack.push(Value::Bool(a.truthy() && b.truthy()));
                 }
                 Instruction::Or => {
-                    let b_val = self.pop()?;
-                    let a_val = self.pop()?;
-                    let (a, b) = match (a_val, b_val) {
-                        (Value::Bool(a), Value::Bool(b)) => (a, b),
-                        (v1, v2) => return Err(format!("Expected boolean operands on Or, found {:?} and {:?}", v1, v2)),
-                    };
-                    self.stack.push(Value::Bool(a || b));
+                    let b = self.pop()?;
+                    let a = self.pop()?;
+                    self.stack.push(Value::Bool(a.truthy() || b.truthy()));
                 }
                 Instruction::Negate => {
+                    // One input and two slots, so failure hands the value back.
                     let val = self.pop()?;
-                    let res = match val {
-                        Value::Int(x) => Value::Int(x.wrapping_neg()),
-                        Value::Float(x) => Value::Float(-x),
-                        v => return Err(format!("Cannot negate non-numeric value: {}", v)),
-                    };
-                    self.stack.push(res);
+                    match val {
+                        Value::Int(x) => self.ok(Value::Int(x.wrapping_neg())),
+                        Value::Float(x) => self.ok(Value::Float(-x)),
+                        other => self.failed(other),
+                    }
                 }
                 Instruction::Print => {
                     let val = self.peek(0)?;
@@ -310,10 +301,10 @@ impl VM {
                 }
                 Instruction::Branch(then_target, else_target) => {
                     let cond = self.pop()?;
-                    let b = match cond {
-                        Value::Bool(b) => b,
-                        v => return Err(format!("Expected boolean condition on Branch, found {:?}", v)),
-                    };
+                    // The then arm is reached by `Bool(true)` and nothing else;
+                    // every other value takes the else arm, agreeing with junk
+                    // being falsy everywhere.
+                    let b = cond.truthy();
                     // Push the return address (the next instruction) to the call stack
                     self.call_stack.push(Frame { sentence: current_sentence, ip, hidden: Vec::new() });
                     if b {
@@ -327,13 +318,13 @@ impl VM {
                     return Err("Panic instruction executed".to_string());
                 }
                 Instruction::Assert => {
+                    // One of the three instructions that may still fail, and
+                    // it fails on anything that is not `Bool(true)` — a
+                    // non-boolean is a failed assertion rather than a
+                    // separate kind of error.
                     let val = self.pop()?;
-                    let b = match val {
-                        Value::Bool(b) => b,
-                        v => return Err(format!("Expected boolean operand on Assert, found {:?}", v)),
-                    };
-                    if !b {
-                        return Err(format!("Assertion failed: value is false"));
+                    if !val.truthy() {
+                        return Err(format!("Assertion failed: {:?} is not true", val));
                     }
                 }
                 Instruction::AssertEqual => {
@@ -353,16 +344,27 @@ impl VM {
                     self.stack.push(Value::Tuple(elements));
                 }
                 Instruction::Untuple(n) => {
+                    // The instruction the "preserve the inputs" rule is really
+                    // for. On failure the value stays in the slot it occupied
+                    // and the n-1 slots above it take `()`, so a caller that
+                    // reads the flag can drop the padding and still have its
+                    // value — which is what makes the flag a tag on the *stack*
+                    // rather than inside `Value`. See `docs/totality.md`.
                     let val = self.pop()?;
-                    if let Value::Tuple(elements) = val {
-                        if elements.len() != n {
-                            return Err(format!("Tuple size mismatch on Untuple: expected {} but tuple has {}", n, elements.len()));
+                    match val {
+                        Value::Tuple(elements) if elements.len() == n => {
+                            for elem in elements.into_iter().rev() {
+                                self.stack.push(elem);
+                            }
+                            self.stack.push(Value::Bool(true));
                         }
-                        for elem in elements.into_iter().rev() {
-                            self.stack.push(elem);
+                        // At n = 0 there is no room for the value, and nothing
+                        // to hold it for: the flag is the whole answer.
+                        _ if n == 0 => self.failed_with(std::iter::empty()),
+                        other => {
+                            let padding = std::iter::repeat(Value::unit()).take(n - 1);
+                            self.failed_with(std::iter::once(other).chain(padding))
                         }
-                    } else {
-                        return Err(format!("Expected Value::Tuple on Untuple, found {:?}", val));
                     }
                 }
                 Instruction::IsInt => {
@@ -386,36 +388,41 @@ impl VM {
                     self.stack.push(Value::Bool(matches!(val, Value::Tuple(_))));
                 }
                 Instruction::TupleLength => {
+                    // One input and two slots, so a non-tuple comes back out
+                    // rather than being replaced by a length it does not have.
                     let val = self.pop()?;
-                    if let Value::Tuple(elements) = val {
-                        self.stack.push(Value::Int(elements.len() as i64));
-                    } else {
-                        return Err(format!("Expected Value::Tuple on tuple_length, found {:?}", val));
+                    match val {
+                        Value::Tuple(elements) => self.ok(Value::Int(elements.len() as i64)),
+                        other => self.failed(other),
                     }
                 }
                 Instruction::SymbolLen => {
                     let val = self.pop()?;
-                    if let Value::Symbol(sym) = val {
-                        self.stack.push(Value::Int(sym.name.chars().count() as i64));
-                    } else {
-                        return Err(format!("Expected Value::Symbol on symbol_len, found {:?}", val));
+                    match val {
+                        Value::Symbol(ref sym) => {
+                            let len = sym.name.chars().count() as i64;
+                            self.ok(Value::Int(len))
+                        }
+                        other => self.failed(other),
                     }
                 }
                 Instruction::SymbolCharAt => {
                     let idx_val = self.pop()?;
                     let sym_val = self.pop()?;
-                    match (sym_val, idx_val) {
-                        (Value::Symbol(sym), Value::Int(idx)) => {
-                            let char_count = sym.name.chars().count() as i64;
-                            if idx < 0 || idx >= char_count {
-                                return Err(format!("Symbol index out of bounds: index {} on symbol '{}' of length {}", idx, sym.name, char_count));
-                            }
-                            let ch = sym.name.chars().nth(idx as usize).unwrap();
-                            self.stack.push(Value::Int(ch as i64));
-                        }
-                        (s, i) => {
-                            return Err(format!("Invalid arguments to symbol_char_at: expected Symbol, Int, found {:?}, {:?}", s, i));
-                        }
+                    // Wrong types and an out-of-range index fail alike: an index
+                    // is in range or it is not, and there is nothing for a
+                    // caller to learn from telling the two apart. Two inputs and
+                    // two slots leave no room to hand either back.
+                    let ch = match (sym_val, idx_val) {
+                        (Value::Symbol(sym), Value::Int(idx)) => usize::try_from(idx)
+                            .ok()
+                            .and_then(|idx| sym.name.chars().nth(idx))
+                            .map(|ch| ch as i64),
+                        _ => None,
+                    };
+                    match ch {
+                        Some(ch) => self.ok(Value::Int(ch)),
+                        None => self.failed(Value::Int(0)),
                     }
                 }
             }
@@ -437,6 +444,9 @@ mod tests {
             Instruction::Push(Value::Int(10)),
             Instruction::Push(Value::Int(20)),
             Instruction::Add,
+            // Hand-written bytecode, so nothing inserts the flag-drop that
+            // `assemble` would put here for a sentence without `#[flags]`.
+            Instruction::Drop,
             Instruction::Push(Value::Int(30)),
             Instruction::AssertEqual,
         ];
@@ -534,7 +544,7 @@ mod tests {
             Instruction::Push(Value::Int(99)),
             Instruction::Dip(1, SentenceIndex::from(1)),
         ];
-        let s1 = vec![Instruction::Add];
+        let s1 = vec![Instruction::Add, Instruction::Drop];
 
         library.sentences.push(s0);
         library.sentences.push(s1);
@@ -553,7 +563,7 @@ mod tests {
             Instruction::Push(Value::Int(2)),
             Instruction::Dip(0, SentenceIndex::from(1)),
         ];
-        let s1 = vec![Instruction::Add];
+        let s1 = vec![Instruction::Add, Instruction::Drop];
 
         library.sentences.push(s0);
         library.sentences.push(s1);
@@ -577,7 +587,7 @@ mod tests {
             Instruction::Dip(1, SentenceIndex::from(1)),
         ];
         let s1 = vec![Instruction::Dip(1, SentenceIndex::from(2))];
-        let s2 = vec![Instruction::Add];
+        let s2 = vec![Instruction::Add, Instruction::Drop];
 
         library.sentences.push(s0);
         library.sentences.push(s1);
@@ -617,6 +627,7 @@ mod tests {
             Instruction::Push(Value::Int(3)),
             Instruction::Tuple(3),
             Instruction::Untuple(3),
+            Instruction::Drop, // the untuple's success flag
             Instruction::Push(Value::Int(3)),
             Instruction::AssertEqual,
             Instruction::Push(Value::Int(2)),
@@ -672,6 +683,7 @@ mod tests {
             Instruction::Push(Value::Int(2)),
             Instruction::Tuple(2),
             Instruction::TupleLength,
+            Instruction::Drop, // the tuple_length's success flag
             Instruction::Push(Value::Int(2)),
             Instruction::AssertEqual,
         ];
@@ -799,6 +811,8 @@ mod tests {
                 push unicode_sym
                 push 4
                 symbol_char_at
+                push 0
+                assert_eq
             }
         "#;
         let res = bytecode::assemble(code).unwrap();
@@ -815,12 +829,12 @@ mod tests {
         assert!(vm.execute(test_char_idx).is_ok());
         assert!(vm.stack().is_empty());
         
-        // Run test_out_of_bounds (should fail)
+        // Run test_out_of_bounds: an index past the end answers 0 rather than
+        // failing, and the sentence asserts exactly that.
         let oob_idx = *res.exports.get("test_out_of_bounds").unwrap();
         let mut vm = VM::new(res);
-        let run_res = vm.execute(oob_idx);
-        assert!(run_res.is_err());
-        assert!(run_res.unwrap_err().contains("Symbol index out of bounds"));
+        assert!(vm.execute(oob_idx).is_ok());
+        assert!(vm.stack().is_empty());
     }
 
     #[test]
@@ -1134,6 +1148,424 @@ mod tests {
         let mut vm = VM::new(res);
         if let Err(e) = vm.execute(test_idx) {
             panic!("Execution failed: {}", e);
+        }
+    }
+}
+
+/// The executable mirror of the fallible table in `docs/totality.md`.
+///
+/// Every data instruction is total — it answers on every input — and a
+/// **fallible** one additionally says whether the answer was computed or
+/// invented, by leaving a flag on top. These tests hold the VM to the table
+/// row by row, so a row changed in one place and not the other is a failure
+/// rather than a silent divergence.
+#[cfg(test)]
+mod totality_tests {
+    use super::*;
+    use bytecode::arity::{is_fallible, op_arity};
+    use bytecode::value::Symbol;
+
+    /// Runs `body` on an empty stack and hands back what it left.
+    fn run(body: Vec<Instruction>) -> Result<Vec<Value>, String> {
+        let mut library = Library::new();
+        library.sentences.push(body);
+        let mut vm = VM::new(library);
+        vm.execute(SentenceIndex::from(0))?;
+        Ok(vm.stack().to_vec())
+    }
+
+    /// Pushes `operands` left to right, then runs `inst`.
+    ///
+    /// Panics if the instruction failed, which is the point: these are total,
+    /// so `apply` having a `Result` would be admitting the thing under test.
+    fn apply(operands: &[Value], inst: Instruction) -> Vec<Value> {
+        let mut body: Vec<Instruction> = operands.iter().cloned().map(Instruction::Push).collect();
+        body.push(inst.clone());
+        run(body).unwrap_or_else(|e| panic!("{:?} on {:?} failed: {}", inst, operands, e))
+    }
+
+    /// [`apply`], then split the success flag off the top.
+    fn flagged(operands: &[Value], inst: Instruction) -> (Vec<Value>, bool) {
+        let mut out = apply(operands, inst.clone());
+        let flag = out.pop().unwrap_or_else(|| panic!("{:?} left nothing", inst));
+        match flag {
+            Value::Bool(b) => (out, b),
+            other => panic!("{:?} left {:?} where its flag belongs", inst, other),
+        }
+    }
+
+    fn sym(name: &str) -> Value {
+        Value::Symbol(Symbol { id: 7, name: name.to_string() })
+    }
+
+    fn unit() -> Value {
+        Value::Tuple(Vec::new())
+    }
+
+    /// One value of each shape, plus a couple of edge cases.
+    fn every_shape() -> Vec<Value> {
+        vec![
+            Value::Bool(true),
+            Value::Bool(false),
+            Value::Int(0),
+            Value::Int(-3),
+            Value::Float(1.5),
+            sym("s"),
+            unit(),
+            Value::Tuple(vec![Value::Int(1), Value::Int(2)]),
+        ]
+    }
+
+    /// Every instruction that carries a flag, with operands that make it fail.
+    fn failing_cases() -> Vec<(Instruction, Vec<Value>)> {
+        vec![
+            (Instruction::Add, vec![sym("s"), Value::Int(1)]),
+            (Instruction::Subtract, vec![Value::Int(1), sym("s")]),
+            (Instruction::Multiply, vec![Value::Bool(true), Value::Bool(false)]),
+            (Instruction::Divide, vec![Value::Int(7), Value::Int(0)]),
+            (Instruction::Modulo, vec![Value::Int(7), Value::Int(0)]),
+            (Instruction::Negate, vec![sym("s")]),
+            (Instruction::Greater, vec![sym("a"), sym("b")]),
+            (Instruction::Less, vec![unit(), unit()]),
+            (Instruction::Untuple(3), vec![Value::Int(5)]),
+            (Instruction::TupleLength, vec![sym("s")]),
+            (Instruction::SymbolLen, vec![Value::Int(3)]),
+            (Instruction::SymbolCharAt, vec![sym("hi"), Value::Int(9)]),
+        ]
+    }
+
+    // -- The shape of the contract ------------------------------------------
+
+    #[test]
+    fn a_fallible_instruction_keeps_its_arity_whichever_way_it_goes() {
+        // The reason the flag is a stack slot rather than a second outcome: a
+        // caller's stack does not depend on the data, so the arity checker
+        // still works on shape alone.
+        for (inst, bad) in failing_cases() {
+            let (_, n_out) = op_arity(&inst).expect("a fallible instruction has a local arity");
+            let failed = apply(&bad, inst.clone());
+            assert_eq!(
+                failed.len() as i64,
+                n_out,
+                "{:?} on {:?} left {} values, not {}",
+                inst,
+                bad,
+                failed.len(),
+                n_out
+            );
+            assert!(is_fallible(&inst), "{:?} should be listed as fallible", inst);
+        }
+    }
+
+    #[test]
+    fn failure_is_reported_rather_than_raised() {
+        for (inst, bad) in failing_cases() {
+            let (_, ok) = flagged(&bad, inst.clone());
+            assert!(!ok, "{:?} on {:?} should report failure", inst, bad);
+        }
+    }
+
+    #[test]
+    fn success_is_reported_too() {
+        let cases: Vec<(Instruction, Vec<Value>)> = vec![
+            (Instruction::Add, vec![Value::Int(1), Value::Int(2)]),
+            (Instruction::Divide, vec![Value::Int(7), Value::Int(2)]),
+            (Instruction::Negate, vec![Value::Int(3)]),
+            (Instruction::Greater, vec![Value::Int(3), Value::Int(1)]),
+            (Instruction::Untuple(2), vec![Value::Tuple(vec![sym("a"), sym("b")])]),
+            (Instruction::TupleLength, vec![Value::Tuple(vec![Value::Int(1)])]),
+            (Instruction::SymbolLen, vec![sym("hi")]),
+            (Instruction::SymbolCharAt, vec![sym("hi"), Value::Int(0)]),
+        ];
+        for (inst, good) in cases {
+            let (out, ok) = flagged(&good, inst.clone());
+            assert!(ok, "{:?} on {:?} should report success", inst, good);
+            assert!(!out.is_empty(), "{:?} should leave a result too", inst);
+        }
+    }
+
+    #[test]
+    fn a_failure_hands_its_input_back_where_there_is_room_for_it() {
+        // The rule that makes the flag a tag on the *stack*: an instruction
+        // whose output arity has room preserves the slot its input occupied,
+        // so a caller that reads the flag has not lost anything.
+        assert_eq!(
+            flagged(&[sym("s")], Instruction::TupleLength),
+            (vec![sym("s")], false)
+        );
+        assert_eq!(
+            flagged(&[Value::Int(3)], Instruction::SymbolLen),
+            (vec![Value::Int(3)], false)
+        );
+        assert_eq!(
+            flagged(&[unit()], Instruction::Negate),
+            (vec![unit()], false)
+        );
+        // `untuple n` is the one this rule is really for: the value stays in
+        // the deepest of the n slots and `()` pads the rest.
+        assert_eq!(
+            flagged(&[sym("s")], Instruction::Untuple(3)),
+            (vec![sym("s"), unit(), unit()], false)
+        );
+        assert_eq!(
+            flagged(&[sym("s")], Instruction::Untuple(1)),
+            (vec![sym("s")], false)
+        );
+    }
+
+    #[test]
+    fn a_failure_with_no_room_fills_with_a_default() {
+        // Two operands and two slots leave nowhere to keep them, which is why
+        // `add` does not bother.
+        assert_eq!(
+            flagged(&[sym("s"), Value::Int(1)], Instruction::Add),
+            (vec![Value::Int(0)], false)
+        );
+        assert_eq!(
+            flagged(&[sym("a"), sym("b")], Instruction::Greater),
+            (vec![Value::Bool(false)], false)
+        );
+        assert_eq!(
+            flagged(&[sym("hi"), Value::Int(9)], Instruction::SymbolCharAt),
+            (vec![Value::Int(0)], false)
+        );
+        // At n = 0 there is no room either, and nothing to hold: the flag is
+        // the whole answer.
+        assert_eq!(
+            flagged(&[Value::Int(5)], Instruction::Untuple(0)),
+            (vec![], false)
+        );
+        assert_eq!(flagged(&[unit()], Instruction::Untuple(0)), (vec![], true));
+    }
+
+    #[test]
+    fn untupling_and_retupling_recovers_the_value_it_came_from() {
+        // What the preserved input buys, and the thing the previous untagged
+        // junk could not do: on the failing path the value is still there, so
+        // a caller that reads the flag can put the stack back exactly.
+        for x in every_shape() {
+            let (parts, ok) = flagged(&[x.clone()], Instruction::Untuple(3));
+            if ok {
+                // A real 3-tuple rebuilds by `tuple 3`.
+                let mut body: Vec<Instruction> =
+                    parts.iter().cloned().map(Instruction::Push).collect();
+                body.push(Instruction::Tuple(3));
+                assert_eq!(run(body).unwrap(), vec![x.clone()], "rebuild of {:?}", x);
+            } else {
+                // Anything else left the value in the deepest slot untouched.
+                assert_eq!(parts[0], x, "untuple 3 lost {:?}", x);
+            }
+        }
+    }
+
+    // -- The instructions that carry no flag --------------------------------
+
+    #[test]
+    fn only_bool_true_is_true() {
+        for v in every_shape() {
+            let expected = v == Value::Bool(true);
+            assert_eq!(
+                apply(&[v.clone()], Instruction::Not),
+                vec![Value::Bool(!expected)],
+                "not {:?}",
+                v
+            );
+        }
+        // The deliberate oddity: junk is not true, so its negation is.
+        assert_eq!(
+            apply(&[Value::Int(42)], Instruction::Not),
+            vec![Value::Bool(true)]
+        );
+    }
+
+    #[test]
+    fn and_and_or_coerce_each_operand_separately() {
+        for a in every_shape() {
+            for b in every_shape() {
+                let (p, q) = (a == Value::Bool(true), b == Value::Bool(true));
+                assert_eq!(
+                    apply(&[a.clone(), b.clone()], Instruction::And),
+                    vec![Value::Bool(p && q)],
+                    "{:?} and {:?}",
+                    a,
+                    b
+                );
+                assert_eq!(
+                    apply(&[a.clone(), b.clone()], Instruction::Or),
+                    vec![Value::Bool(p || q)],
+                    "{:?} or {:?}",
+                    a,
+                    b
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn de_morgan_holds_on_every_value() {
+        // What per-operand coercion is for. `and`, `or` and `not` carry no
+        // flag precisely because there is no input they cannot answer on.
+        for a in every_shape() {
+            for b in every_shape() {
+                let lhs = run(vec![
+                    Instruction::Push(a.clone()),
+                    Instruction::Push(b.clone()),
+                    Instruction::And,
+                    Instruction::Not,
+                ])
+                .unwrap();
+                let rhs = run(vec![
+                    Instruction::Push(a.clone()),
+                    Instruction::Not,
+                    Instruction::Push(b.clone()),
+                    Instruction::Not,
+                    Instruction::Or,
+                ])
+                .unwrap();
+                assert_eq!(lhs, rhs, "de Morgan on {:?}, {:?}", a, b);
+            }
+        }
+    }
+
+    #[test]
+    fn a_branch_takes_the_else_arm_on_anything_but_true() {
+        for v in every_shape() {
+            let mut library = Library::new();
+            library.sentences.push(vec![
+                Instruction::Push(v.clone()),
+                Instruction::Branch(SentenceIndex::from(1), SentenceIndex::from(2)),
+            ]);
+            library.sentences.push(vec![Instruction::Push(Value::Int(1))]);
+            library.sentences.push(vec![Instruction::Push(Value::Int(2))]);
+
+            let mut vm = VM::new(library);
+            vm.execute(SentenceIndex::from(0))
+                .unwrap_or_else(|e| panic!("branch on {:?} failed: {}", v, e));
+            let taken = if v == Value::Bool(true) { 1 } else { 2 };
+            assert_eq!(vm.stack(), &[Value::Int(taken)], "branch on {:?}", v);
+        }
+    }
+
+    #[test]
+    fn equality_and_the_type_tests_answer_on_every_pair() {
+        for a in every_shape() {
+            for b in every_shape() {
+                assert_eq!(
+                    apply(&[a.clone(), b.clone()], Instruction::Equal),
+                    vec![Value::Bool(a == b)],
+                    "{:?} == {:?}",
+                    a,
+                    b
+                );
+            }
+            for (inst, want) in [
+                (Instruction::IsInt, matches!(a, Value::Int(_))),
+                (Instruction::IsBool, matches!(a, Value::Bool(_))),
+                (Instruction::IsFloat, matches!(a, Value::Float(_))),
+                (Instruction::IsSymbol, matches!(a, Value::Symbol(_))),
+                (Instruction::IsTuple, matches!(a, Value::Tuple(_))),
+            ] {
+                assert_eq!(
+                    apply(&[a.clone()], inst.clone()),
+                    vec![Value::Bool(want)],
+                    "{:?} of {:?}",
+                    inst,
+                    a
+                );
+            }
+        }
+    }
+
+    // -- Numbers ------------------------------------------------------------
+
+    #[test]
+    fn the_float_world_stays_ieee_even_with_an_int_divisor() {
+        // `inf` and `NaN` are answers rather than failures: an `Int` zero
+        // coerces like any other mixed operand rather than dragging the
+        // expression back into the integer convention.
+        let (out, ok) = flagged(&[Value::Float(1.0), Value::Int(0)], Instruction::Divide);
+        assert!(ok, "1.0 / 0 is an IEEE answer, not a failure");
+        let [Value::Float(q)] = out[..] else { panic!("expected a float") };
+        assert!(q.is_infinite() && q > 0.0, "1.0 / 0 should be inf, got {}", q);
+
+        let (out, ok) = flagged(&[Value::Float(1.0), Value::Int(0)], Instruction::Modulo);
+        assert!(ok);
+        let [Value::Float(r)] = out[..] else { panic!("expected a float") };
+        assert!(r.is_nan(), "1.0 % 0 should be NaN, got {}", r);
+    }
+
+    #[test]
+    fn integer_arithmetic_wraps_rather_than_overflowing_the_host() {
+        assert_eq!(
+            flagged(&[Value::Int(i64::MIN), Value::Int(-1)], Instruction::Divide),
+            (vec![Value::Int(i64::MIN)], true)
+        );
+        assert_eq!(
+            flagged(&[Value::Int(i64::MIN), Value::Int(-1)], Instruction::Modulo),
+            (vec![Value::Int(0)], true)
+        );
+    }
+
+    #[test]
+    fn comparisons_answer_on_a_mixed_numeric_pair_and_fail_off_the_numbers() {
+        assert_eq!(
+            flagged(&[Value::Int(1), Value::Float(1.5)], Instruction::Less),
+            (vec![Value::Bool(true)], true)
+        );
+        // A NaN is unordered rather than non-numeric, and fails alike.
+        let (_, ok) = flagged(&[Value::Float(f64::NAN), Value::Float(1.0)], Instruction::Less);
+        assert!(!ok, "an unordered pair is not a comparison");
+    }
+
+    // -- What is still partial ----------------------------------------------
+
+    #[test]
+    fn assert_fails_on_anything_that_is_not_true() {
+        for v in every_shape() {
+            let got = run(vec![Instruction::Push(v.clone()), Instruction::Assert]);
+            assert_eq!(
+                got.is_ok(),
+                v == Value::Bool(true),
+                "assert on {:?} gave {:?}",
+                v,
+                got
+            );
+        }
+    }
+
+    #[test]
+    fn assert_eq_and_panic_are_the_other_two() {
+        assert!(run(vec![
+            Instruction::Push(Value::Int(1)),
+            Instruction::Push(Value::Int(2)),
+            Instruction::AssertEqual,
+        ])
+        .is_err());
+        assert!(run(vec![
+            Instruction::Push(Value::Int(1)),
+            Instruction::Push(Value::Int(1)),
+            Instruction::AssertEqual,
+        ])
+        .is_ok());
+        assert!(run(vec![Instruction::Panic]).is_err());
+    }
+
+    #[test]
+    fn underflow_is_still_an_error_because_it_is_structural() {
+        // Ruled out by arity checking rather than by a flag: a sentence that
+        // would underflow does not assemble in the first place.
+        for body in [
+            vec![Instruction::Drop],
+            vec![Instruction::Pick(0)],
+            vec![Instruction::Roll(2)],
+            vec![Instruction::Tuple(1)],
+            vec![Instruction::Add],
+        ] {
+            assert!(
+                run(body.clone()).is_err(),
+                "{:?} on an empty stack should underflow",
+                body
+            );
         }
     }
 }

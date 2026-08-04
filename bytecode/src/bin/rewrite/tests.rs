@@ -166,7 +166,7 @@ fn factoring_looks_past_provenance() {
     );
     assert_eq!(
         shape(&body),
-        vec!["dip 1 { dip 1 { add } }", "branch"],
+        vec!["dip 1 { dip 1 { add drop } }", "branch"],
         "the shared dipped prefix should have been hoisted"
     );
 }
@@ -205,7 +205,7 @@ fn dips_sink_past_pushes_and_arithmetic() {
     );
     assert_eq!(
         shape(&body),
-        vec!["dip 0 { add }", "push 1", "push 2", "add"]
+        vec!["dip 0 { add drop }", "push 1", "push 2", "add", "drop"]
     );
 }
 
@@ -244,9 +244,11 @@ fn a_deep_dip_becomes_a_nest_of_unary_dips() {
         }
     "#,
     );
+    // `untuple` and `add` are both fallible, so each is followed by the drop
+    // that discards its flag -- this sentence has no `#[flags]`.
     assert_eq!(
         shape(&body),
-        vec!["untuple 3", "dip 1 { dip 1 { add } }"]
+        vec!["untuple 3", "dip 1 { dip 1 { dip 1 { add drop } } }", "drop"]
     );
 }
 
@@ -287,7 +289,7 @@ fn nested_dips_collapse_and_then_keep_sinking() {
     );
     assert_eq!(
         shape(&body),
-        vec!["push 1", "push 2", "dip 0 { add }", "push 8", "push 9"]
+        vec!["push 1", "push 2", "dip 0 { add drop }", "push 8", "push 9"]
     );
 }
 
@@ -433,7 +435,7 @@ fn a_pick_and_a_drop_cancel() {
     "#,
         ANNIHILATE,
     );
-    assert_eq!(shape(&body), vec!["add"]);
+    assert_eq!(shape(&body), vec!["add", "drop"]);
 }
 
 #[test]
@@ -453,9 +455,10 @@ fn a_type_test_leaves_the_drop_behind() {
 }
 
 #[test]
-fn a_partial_instruction_is_not_annihilated() {
-    // `add; drop` is not `drop; drop`: the add still rejects non-numeric
-    // operands, and cancelling it would discard that check.
+fn an_operator_takes_its_operands_with_it() {
+    // `add; drop` *is* `drop; drop`. It was not, while the add still rejected
+    // non-numeric operands and cancelling it would have discarded that check;
+    // with every data operation total there is no check left to discard.
     let (_prog, body) = tree_of(
         r#"
         sentence probe {
@@ -465,7 +468,23 @@ fn a_partial_instruction_is_not_annihilated() {
     "#,
         ANNIHILATE,
     );
-    assert_eq!(shape(&body), vec!["add", "drop"]);
+    assert_eq!(shape(&body), vec!["drop", "drop"]);
+}
+
+#[test]
+fn print_is_the_one_thing_a_drop_cannot_cancel() {
+    // Not a panic argument — running `print` and not running it differ in
+    // something other than the stack, which no amount of totality changes.
+    let (_prog, body) = tree_of(
+        r#"
+        sentence probe {
+            print
+            drop 0
+        }
+    "#,
+        ANNIHILATE,
+    );
+    assert_eq!(shape(&body), vec!["print", "drop"]);
 }
 
 #[test]
@@ -573,6 +592,99 @@ fn rewrites_preserve_arity_across_the_corpus() {
     }
 
     assert!(checked > 500, "expected the full corpus, saw {}", checked);
+}
+
+/// How often each rule of `all` fires across the whole corpus.
+///
+/// `docs/tactics.md` makes claims of the form "this rule fires on none of the
+/// corpus" and "this one fires on a third of it", and those are exactly the
+/// claims that go stale when a rule is generalized. Totalizing the VM widened
+/// `annihilate_drop` from a five-instruction whitelist to every single-output
+/// operator but `print`, so the interesting question is whether that reaches
+/// real code or only the tests written for it.
+///
+/// The assertion is one-sided on purpose: an exact count would be a tripwire
+/// on the corpus rather than on the rules.
+#[test]
+fn the_widened_annihilate_drop_reaches_real_code() {
+    let main = Path::new("../tests/main.hana");
+    let Ok(code) = fs::read_to_string(main) else {
+        return;
+    };
+    let library = bytecode::assemble_with_path(&code, main.parent()).unwrap();
+    let prog = Program::new(&library);
+
+    let mut fired = 0usize;
+    let mut sentences = 0usize;
+    for (s_idx, _) in library.names.iter_enumerated() {
+        let env = Env::new(&prog, 1_000_000, true);
+        let plain = run(
+            &prog,
+            build(&library, s_idx, &mut HashSet::new()),
+            "inline_all",
+        );
+        apply(&compile(ALL), &env, plain).unwrap();
+        let hits = env
+            .histogram()
+            .into_iter()
+            .find(|(name, _)| *name == "annihilate_drop")
+            .map_or(0, |(_, n)| n);
+        if hits > 0 {
+            sentences += 1;
+        }
+        fired += hits;
+    }
+
+    assert!(
+        fired > 0,
+        "annihilate_drop fired nowhere in the corpus, which is what it did \
+         before the whitelist was removed -- the generalization bought nothing"
+    );
+    println!(
+        "annihilate_drop: {} firings across {} sentences",
+        fired, sentences
+    );
+}
+
+/// How much of the corpus is provably total, and how many claims are checked.
+///
+/// `#[total]` is opt-in, so the interesting number is not how many sentences
+/// carry it but how many the checker can *see* are total — that is what a rule
+/// like `speculate_branch` could act on for a `Call`, and it needs no
+/// annotation at all.
+#[test]
+fn most_of_the_corpus_is_provably_total() {
+    let main = Path::new("../tests/main.hana");
+    let Ok(code) = fs::read_to_string(main) else {
+        return;
+    };
+    let library = bytecode::assemble_with_path(&code, main.parent()).unwrap();
+    let can = bytecode::failure_reachability(&library);
+
+    let total = can.iter().filter(|c| !**c).count();
+    let claimed = library
+        .names
+        .iter_enumerated()
+        .filter(|(idx, _)| {
+            library.annotations[*idx]
+                .iter()
+                .any(|a| matches!(a, bytecode::Annotation::Total))
+        })
+        .count();
+
+    println!(
+        "{} of {} sentences provably total; {} carry a checked #[total]",
+        total,
+        can.len(),
+        claimed
+    );
+    assert!(
+        total * 2 > can.len(),
+        "expected most of the corpus to be total, got {} of {}",
+        total,
+        can.len()
+    );
+    assert!(claimed > 0, "the sugar should be making claims worth checking");
 }
 
 /// Whether every dip in the tree hides at most one value.
@@ -899,13 +1011,17 @@ fn selective_descent_breaks_the_staged_inlining_plateau() {
 fn dup_natural_shares_a_predicates_work_with_its_callers() {
     // End to end through the driver, on the idiom the sharing law exists for:
     // a value handed to a check and then taken apart again.
+    // `#[flags]` so the sentence sees `untuple`'s success flag: the law is
+    // about the instruction's real arity, and without the annotation the
+    // assembler puts a flag-drop between the two occurrences.
     let (prog, before) = tree_of(
         r#"
-        #[arity(1, 6)]
+        #[flags]
+        #[arity(1, 8)]
         sentence probe {
             pick 0
             untuple 3
-            dip 3 { untuple 3 }
+            dip 4 { untuple 3 }
         }
     "#,
         NOTHING,
@@ -913,8 +1029,8 @@ fn dup_natural_shares_a_predicates_work_with_its_callers() {
     let after = run(prog, before.clone(), "each(dup_natural)");
     assert_eq!(
         shape(&after),
-        vec!["untuple 3", "pick 2", "pick 2", "pick 2"],
-        "one untuple and three copies should replace two untuples"
+        vec!["untuple 3", "pick 3", "pick 3", "pick 3", "pick 3"],
+        "one untuple and four copies should replace two untuples"
     );
     // The driver ran with --check on, so the net effect is already known to
     // match; assert the full arity too, since this rule reshapes the stack
@@ -923,20 +1039,18 @@ fn dup_natural_shares_a_predicates_work_with_its_callers() {
 }
 
 #[test]
-fn the_sharing_law_cannot_reach_across_a_branch() {
-    // Why the direct route does not work — and it still does not.
+fn the_movement_rules_alone_cannot_reach_across_a_branch() {
+    // Why the *movement* rules do not get there on their own.
     //
     // This is the shape every predicate in the corpus actually has: the check
     // consumes a *copy* and the real work destructures the *original*, with a
     // branch in between. `dup_natural` relates the two occurrences only when
-    // they are in one sequence, and no rule moves the inner `untuple` out of
-    // the arm — hoisting it would run it on the path that did not take the
-    // arm, and `untuple` is partial, so that invents a panic.
+    // they are in one sequence, and nothing in this tactic moves the inner
+    // `untuple` out of the arm — `factor_branch` needs both arms to share it,
+    // and `sink` cannot cross a branch at all.
     //
-    // The resolution is not to find such a rule but to stop needing one:
-    // `rebuild_copy` makes the value arrive already built, and `tuple n` is
-    // total where `untuple n` is not. See
-    // `the_whole_derivation_runs_on_the_blocked_shape`.
+    // `speculate_branch` is what moves it, and it is not in this tactic. See
+    // `the_direct_route_closes_by_speculating`.
     let (prog, before) = tree_of(
         r#"
         #[arity(1, 1)]
@@ -1104,31 +1218,123 @@ fn a_reconstruction_proves_the_shape_that_an_assertion_would_have_claimed() {
     );
 }
 
+/// The direct route: hoist the arm's `untuple` out and merge it with the
+/// check's, with no reconstruction anywhere.
+///
+/// This is the derivation `the_movement_rules_alone_cannot_reach_across_a_branch`
+/// shows the movement rules cannot find, and it is shorter than the
+/// `rebuild_copy` one it replaces:
+///
+///   speculate_branch  runs the arm's `untuple` on a copy, before the branch
+///   sink              walks it left to sit on the check's `untuple`
+///   dup_natural       merges the two
+///
+/// **`speculate_branch` is sound only because the data operations are total.**
+/// Running `untuple 3` on the path that took the *other* arm used to invent a
+/// panic; what makes it harmless is not that untupling became reversible — it
+/// did not, see `docs/totality.md` — but that the losing arm never gives up its
+/// own value. The speculation runs on a copy and its results are dropped.
+///
+/// `vm::totality_tests` is the executable check on the semantics; this is the
+/// check that the semantics bought the rewrite it was supposed to.
+#[test]
+fn the_direct_route_closes_by_speculating() {
+    let (prog, before) = probe("blocked");
+    assert_eq!(untuples(&before), 2);
+    let after = run(
+        prog,
+        before.clone(),
+        "once(speculate_branch); \
+         repeat(bu(each(collapse); each(sink); each(fuse))); \
+         repeat(bu(each(dup_natural)))",
+    );
+    assert_eq!(
+        untuples(&after),
+        1,
+        "the two occurrences should have become one"
+    );
+    assert_eq!(
+        seq_arity(prog, &before),
+        seq_arity(prog, &after),
+        "the whole derivation should preserve arity"
+    );
+    // And no reconstruction was involved: this route never builds a tuple.
+    assert_eq!(
+        tuples(&after),
+        0,
+        "expected no rebuild, got {:?}",
+        shape(&after)
+    );
+}
+
+/// `tuple n` nodes anywhere in the tree, the counterpart of [`untuples`].
+fn tuples(nodes: &[Node]) -> usize {
+    nodes
+        .iter()
+        .map(|n| match n {
+            Node::Op(Instruction::Tuple(_)) => 1,
+            Node::Dip { body, .. } => tuples(body),
+            Node::Branch {
+                then_body,
+                else_body,
+                ..
+            } => tuples(then_body) + tuples(else_body),
+            _ => 0,
+        })
+        .sum()
+}
+
 #[test]
 fn the_whole_derivation_runs_on_the_blocked_shape() {
     // End to end, from the shape `the_sharing_law_cannot_reach_across_a_branch`
     // shows is out of reach, with nothing hand-placed:
     //
     //   rebuild_copy     the value arrives built rather than carried
+    //   distribute       brings the consumer into the guard's arms
     //   float            delivers the rebuild down to the branch
     //   unfactor_branch  pushes it into both arms (sound: `tuple n` is total)
     //   cancel_tuple     annihilates it against the arm's `untuple`
+    //   folding          decides the off-guard arm outright
     //
     // Every step is a local equivalence the rewriter checks for itself. No rule
     // is ever told that the value is a 3-tuple.
+    //
+    // `distribute` is what totalizing the VM added to this derivation.
+    // `rebuild_copy` now guards its payload, so the reconstruction lands inside
+    // an arm and the `untuple` it has to meet is still outside; distributing
+    // puts them back in one sequence. The off-guard arm is then *decided*
+    // rather than merely carried: it holds three literal `()`s, so
+    // `fold_const_unary` answers each `is_symbol` with `false`, `fold_const`
+    // collapses the `and`s, and `fold_branch` picks the arm that never untuples
+    // at all. Under the old semantics none of those three folds was available.
     let (prog, before) = probe("blocked");
     assert_eq!(untuples(&before), 2);
     let after = run(
         prog,
         before.clone(),
-        "once(rebuild_copy); repeat(bu(each(float))); \
-         repeat(bu(each(unfactor_branch); each(cancel_tuple); \
-                   each(annihilate_drop, noop, pick_drop_to_roll)))",
+        "once(rebuild_copy); distribute; \
+         repeat(bu(each(float))); \
+         repeat(bu(each(unfactor_branch); each(cancel_tuple); cleanup)); \
+         all; flatten; cleanup",
     );
+    // Two, not one, and the reason is the point. `rebuild_copy` branches on
+    // `untuple`'s flag now, and in the arm where untupling *failed* there is
+    // nothing to rebuild from -- so that arm keeps an `untuple` of its own,
+    // for a value already known not to come apart.
+    //
+    // The arm that matters is fully shared: everything downstream of a
+    // successful untupling reads the parts with `pick`, and holds no `untuple`
+    // at all. `the_direct_route_closes_by_speculating` gets the whole sentence
+    // to one without a reconstruction, and is now the better route on this
+    // shape.
+    assert_eq!(untuples(&after), 2);
+    let [_, Node::Branch { then_body, .. }] = &after[..] else {
+        panic!("expected the rebuild's guard branch, got {:?}", shape(&after))
+    };
     assert_eq!(
-        untuples(&after),
-        1,
-        "the two occurrences should have become one"
+        untuples(then_body),
+        0,
+        "the arm where the value came apart should share everything"
     );
     assert_eq!(
         seq_arity(prog, &before),
@@ -1147,7 +1353,15 @@ fn the_sharing_chain_runs_on_the_real_corpus_sentence() {
     //   float            walks it past each guard instruction
     //   unfactor_branch  carries it through each branch
     //   rebuild_copy     fires once the copy finally sits on the untuple
+    //   distribute_branch  brings the consumer into the guard's arms
     //   cancel_tuple     annihilates the rebuild against the later untuples
+    //   folding          decides the off-guard arm, which distribution copied
+    //
+    // The last two lines are what totalizing the VM added. `rebuild_copy`
+    // guards its payload now, so distribution has to carry the consumer into
+    // both arms — and that duplicates every `untuple` downstream of it unless
+    // something decides the off-guard arm, where the parts are literal `()`s.
+    // The folding rules do, and end up doing rather better than before.
     // Tests run with the package root as the working directory. Not finding
     // the corpus is not a failure: the crate should still be testable alone.
     let main = Path::new("../tests/main.hana");
@@ -1181,7 +1395,10 @@ fn the_sharing_chain_runs_on_the_real_corpus_sentence() {
         prog,
         opened.clone(),
         "repeat(bu(each(copy_assoc); each(float); each(unfactor_branch); \
-                   each(flatten_call); each(rebuild_copy); each(cancel_tuple)))",
+                   each(flatten_call); each(rebuild_copy); each(distribute_branch); \
+                   each(cancel_tuple); \
+                   each(fold_const, fold_const_unary, bool_identity, copy_const); \
+                   each(annihilate_drop, pick_drop_to_roll, noop, fold_branch)))",
     );
     assert!(
         untuples(&after) < before,
@@ -1658,7 +1875,7 @@ fn inlining_puts_the_callee_in_reach_of_the_callers_rules() {
 
     assert_eq!(
         shape(&run(prog, body.clone(), "distribute")),
-        vec!["call 0 #0", "add"],
+        vec!["call 0 #0", "add", "drop"],
         "an unexpanded call is opaque, so distribution has nothing to enter"
     );
     assert_eq!(
@@ -1694,7 +1911,10 @@ fn flattening_preserves_arity() {
     );
     let flat = run(prog, body.clone(), "flatten");
 
-    assert_eq!(shape(&flat), vec!["push 1", "add", "push 1", "add"]);
+    assert_eq!(
+        shape(&flat),
+        vec!["push 1", "add", "drop", "push 1", "add", "drop"]
+    );
     assert_eq!(seq_arity(prog, &body), seq_arity(prog, &flat));
 }
 
@@ -1746,19 +1966,20 @@ fn inlining_is_bounded_one_call_at_a_time() {
     let (prog, body) = raw(CALLS, "outer");
     assert_eq!(
         shape(&run(prog, body.clone(), "repeat_n(2, once(inline))")),
-        vec!["add", "call 0 #0"]
+        vec!["add", "drop", "call 0 #0"]
     );
     assert_eq!(
         shape(&run(prog, body, "repeat_n(3, once(inline))")),
-        vec!["add", "add"]
+        vec!["add", "drop", "add", "drop"]
     );
 }
 
 #[test]
 fn each_inline_expands_a_sequence_all_the_way_down() {
     let (prog, body) = raw(CALLS, "outer");
-    assert_eq!(shape(&run(prog, body.clone(), "each(inline)")), vec!["add", "add"]);
-    assert_eq!(shape(&run(prog, body, "inline_all")), vec!["add", "add"]);
+    let both = vec!["add", "drop", "add", "drop"];
+    assert_eq!(shape(&run(prog, body.clone(), "each(inline)")), both);
+    assert_eq!(shape(&run(prog, body, "inline_all")), both);
 }
 
 const LOOPS: &str = r#"

@@ -86,13 +86,14 @@ function double_value {
 
 ## 4. Contract Annotations
 
-Hanoi supports static assertion checking at compile time via attributes, intended to be verified by the `typecheck` tool (currently removed from the codebase along with its Z3 dependency; see [docs/typecheck.md](typecheck.md) for the design):
+Hanoi supports static assertion checking at compile time via attributes. `#[arity]`, `#[total]` and `#[recursive]` are checked by the compiler today; `#[precondition]` and `#[postcondition]` were verified by the `typecheck` tool, currently removed from the codebase along with its Z3 dependency (see [docs/typecheck.md](typecheck.md) for the design):
 
 - `#[arity(inputs, outputs)]`: Declares the stack arity (required for sentences that do not use the default `function` arity of `1 -> 1`).
 - `#[precondition(fn_name)]`: Names a `1 -> 1` function that must evaluate to `true` on the input for the annotated function to be considered safe to call.
 - `#[postcondition(fn_name)]`: Names a `1 -> 1` function that must evaluate to `true` on the output, given the precondition (if any) held on the input.
-- `#[total]`: Asserts the function never panics on *any* input.
+- `#[total]`: Declares that the sentence cannot fail — it neither executes `panic`, `assert` or `assert_eq` nor reaches anything that does. **Checked** by the compiler, and opt-in: an unannotated sentence makes no claim, so generated code and branch arms need no annotation. See [docs/totality.md](totality.md).
 - `#[recursive]`: Marks a sentence participating in a recursive call cycle so the verifier can model it.
+- `#[flags]`: Makes the sentence read the success flags that fallible instructions leave. Without it the compiler drops each flag as it emits the instruction, which is why existing source is unaffected by them. See [docs/totality.md](totality.md).
 
 Precondition/postcondition functions are ordinary `1 -> 1` functions, but they are commonly generated with the `type`/`enum` sugar rather than written by hand:
 
@@ -144,11 +145,12 @@ the arity checker charges them to the requirement but not to the net change,
 and the Z3 encoding threads them through as the same terms rather than
 rebuilding them.
 
-The alternative — `tuple N`, shuffle, `untuple N` — is worse than it looks
-under verification. `untuple` is partial: it panics when its argument is not a
-tuple of exactly that size. Saving and restoring `N` values that way adds `N`
-panic branches the solver has to rule out, purely as an artifact of the
-encoding. `dip` makes them impossible to write.
+The alternative — `tuple N`, shuffle, `untuple N` — is worse than it looks.
+`untuple` no longer panics on a value that is not a tuple of exactly that size,
+but it does *fail*: it reports `false` and hands the value back (see
+[docs/totality.md](totality.md)). Saving and restoring `N` values that way adds
+`N` failure flags to reason about, purely as an artifact of the encoding. `dip`
+makes them impossible to write.
 
 ```hana
 // Reach past a value you want to keep:
