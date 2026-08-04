@@ -47,10 +47,12 @@ async fn main() {
     };
 
     let base_dir = file_path.parent();
-    let res = match bytecode::assemble_with_path(&code, base_dir) {
+    let mut sources = bytecode::SourceMap::new();
+    let root = sources.add_path(&file_path, code);
+    let res = match bytecode::assemble_source(&mut sources, root, base_dir) {
         Ok(result) => result,
         Err(err) => {
-            eprintln!("Assembly Error:\n{}", err);
+            eprint!("{}", sources.render(&err));
             process::exit(1);
         }
     };

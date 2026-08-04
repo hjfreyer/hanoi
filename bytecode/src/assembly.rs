@@ -7,6 +7,7 @@ use crate::ast::{
 use crate::library::{Annotation, Library, SentenceAnnotation, SentenceIndex};
 use crate::opcode::Instruction;
 use crate::resolve::{ModuleId, ModuleItem, ModuleTree, ResolvedItem};
+use crate::source::{Error, FileId, SourceMap, Span};
 use crate::value::{Symbol, Value};
 use std::collections::{HashMap, HashSet};
 
@@ -42,91 +43,143 @@ enum Token {
     Bool(bool),
 }
 
-/// Tokenizer split logic.
-fn tokenize(input: &str) -> Result<Vec<Token>, String> {
-    let mut tokens = Vec::new();
-    let mut chars = input.chars().peekable();
-    let mut line = 1;
+/// How a token is written in source, for error messages. `Expected ';', found
+/// '}'` beats `Expected Semicolon, found RBrace` when the reader is looking at
+/// their own file rather than at this enum.
+fn describe(token: &Token) -> String {
+    let literal = match token {
+        Token::Export => "export",
+        Token::SymbolKeyword => "symbol",
+        Token::TestKeyword => "test",
+        Token::ModKeyword => "mod",
+        Token::SentenceKeyword => "sentence",
+        Token::FunctionKeyword => "function",
+        Token::TypeKeyword => "type",
+        Token::EnumKeyword => "enum",
+        Token::DoubleColon => "::",
+        Token::Semicolon => ";",
+        Token::LBrace => "{",
+        Token::RBrace => "}",
+        Token::Hash => "#",
+        Token::LBracket => "[",
+        Token::RBracket => "]",
+        Token::LParen => "(",
+        Token::RParen => ")",
+        Token::Comma => ",",
+        Token::Colon => ":",
+        Token::Pipe => "|",
+        Token::Identifier(name) => return format!("`{}`", name),
+        Token::StringLiteral(s) => return format!("string literal \"{}\"", s),
+        Token::Int(i) => return format!("`{}`", i),
+        Token::Float(f) => return format!("`{}`", f),
+        Token::Bool(b) => return format!("`{}`", b),
+    };
+    format!("`{}`", literal)
+}
 
-    while let Some(&c) = chars.peek() {
+/// A token together with the byte range it occupies in its file.
+#[derive(Debug, Clone)]
+struct SpannedToken {
+    token: Token,
+    span: Span,
+}
+
+/// Tokenizer split logic. Every token records where it came from, so a parse
+/// error can underline the offending word rather than describe it.
+fn tokenize(input: &str, file: FileId) -> Result<Vec<SpannedToken>, Error> {
+    let mut tokens = Vec::new();
+    let mut chars = input.char_indices().peekable();
+
+    // Pushes a token spanning from `start` to wherever the cursor now sits.
+    macro_rules! push {
+        ($tokens:expr, $start:expr, $chars:expr, $token:expr) => {{
+            let end = $chars.peek().map_or(input.len(), |&(i, _)| i);
+            $tokens.push(SpannedToken {
+                token: $token,
+                span: Span::new(file, $start, end),
+            });
+        }};
+    }
+
+    while let Some(&(start, c)) = chars.peek() {
         match c {
-            '\n' => {
-                line += 1;
-                chars.next();
-            }
             c if c.is_whitespace() => {
                 chars.next();
             }
             '/' => {
                 chars.next();
-                if chars.peek() == Some(&'/') {
+                if chars.peek().map(|&(_, c)| c) == Some('/') {
                     chars.next();
                     // Comment, consume until end of line
-                    while let Some(&next_c) = chars.peek() {
+                    while let Some(&(_, next_c)) = chars.peek() {
                         if next_c == '\n' {
                             break;
                         }
                         chars.next();
                     }
                 } else {
-                    return Err(format!("Line {}: Unexpected character '/'", line));
+                    let end = chars.peek().map_or(input.len(), |&(i, _)| i);
+                    return Err(
+                        Error::at("unexpected character `/`", Span::new(file, start, end))
+                            .with_help("comments start with `//`"),
+                    );
                 }
             }
             '{' => {
-                tokens.push(Token::LBrace);
                 chars.next();
+                push!(tokens, start, chars, Token::LBrace);
             }
             '}' => {
-                tokens.push(Token::RBrace);
                 chars.next();
+                push!(tokens, start, chars, Token::RBrace);
             }
             '#' => {
-                tokens.push(Token::Hash);
                 chars.next();
+                push!(tokens, start, chars, Token::Hash);
             }
             '[' => {
-                tokens.push(Token::LBracket);
                 chars.next();
+                push!(tokens, start, chars, Token::LBracket);
             }
             ']' => {
-                tokens.push(Token::RBracket);
                 chars.next();
+                push!(tokens, start, chars, Token::RBracket);
             }
             '(' => {
-                tokens.push(Token::LParen);
                 chars.next();
+                push!(tokens, start, chars, Token::LParen);
             }
             ')' => {
-                tokens.push(Token::RParen);
                 chars.next();
+                push!(tokens, start, chars, Token::RParen);
             }
             ',' => {
-                tokens.push(Token::Comma);
                 chars.next();
+                push!(tokens, start, chars, Token::Comma);
             }
             ';' => {
-                tokens.push(Token::Semicolon);
                 chars.next();
+                push!(tokens, start, chars, Token::Semicolon);
             }
             ':' => {
                 chars.next();
-                if chars.peek() == Some(&':') {
+                if chars.peek().map(|&(_, c)| c) == Some(':') {
                     chars.next();
-                    tokens.push(Token::DoubleColon);
+                    push!(tokens, start, chars, Token::DoubleColon);
                 } else {
-                    tokens.push(Token::Colon);
+                    push!(tokens, start, chars, Token::Colon);
                 }
             }
 
             '|' => {
-                tokens.push(Token::Pipe);
                 chars.next();
+                push!(tokens, start, chars, Token::Pipe);
             }
             '"' => {
                 chars.next(); // consume '"'
                 let mut string_val = String::new();
                 let mut closed = false;
-                for next_c in chars.by_ref() {
+                for (_, next_c) in chars.by_ref() {
                     if next_c == '"' {
                         closed = true;
                         break;
@@ -134,81 +187,92 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
                     string_val.push(next_c);
                 }
                 if !closed {
-                    return Err(format!("Line {}: Unclosed string literal", line));
+                    return Err(Error::at(
+                        "unclosed string literal",
+                        Span::new(file, start, input.len()),
+                    ));
                 }
-                tokens.push(Token::StringLiteral(string_val));
+                push!(tokens, start, chars, Token::StringLiteral(string_val));
             }
             // Parse negative or positive numbers
             '-' | '0'..='9' => {
                 let mut number_str = String::new();
                 if c == '-' {
-                    number_str.push(chars.next().unwrap());
+                    number_str.push(chars.next().unwrap().1);
                 }
 
-                while let Some(&next_c) = chars.peek() {
+                while let Some(&(_, next_c)) = chars.peek() {
                     if next_c.is_ascii_digit() {
-                        number_str.push(chars.next().unwrap());
+                        number_str.push(chars.next().unwrap().1);
                     } else {
                         break;
                     }
                 }
 
                 let mut is_float = false;
-                if let Some(&'.') = chars.peek() {
+                if let Some(&(_, '.')) = chars.peek() {
                     chars.next(); // consume '.'
                     number_str.push('.');
                     is_float = true;
 
-                    while let Some(&next_c) = chars.peek() {
+                    while let Some(&(_, next_c)) = chars.peek() {
                         if next_c.is_ascii_digit() {
-                            number_str.push(chars.next().unwrap());
+                            number_str.push(chars.next().unwrap().1);
                         } else {
                             break;
                         }
                     }
                 }
 
+                let end = chars.peek().map_or(input.len(), |&(i, _)| i);
+                let span = Span::new(file, start, end);
                 if is_float {
                     let val = number_str.parse::<f64>().map_err(|e| {
-                        format!("Line {}: Invalid float '{}': {}", line, number_str, e)
+                        Error::at(format!("invalid float `{}`: {}", number_str, e), span)
                     })?;
-                    tokens.push(Token::Float(val));
+                    push!(tokens, start, chars, Token::Float(val));
                 } else {
                     if number_str == "-" {
-                        return Err(format!("Line {}: Minus sign without digits", line));
+                        return Err(Error::at("minus sign without digits", span));
                     }
                     let val = number_str.parse::<i64>().map_err(|e| {
-                        format!("Line {}: Invalid integer '{}': {}", line, number_str, e)
+                        Error::at(format!("invalid integer `{}`: {}", number_str, e), span)
                     })?;
-                    tokens.push(Token::Int(val));
+                    push!(tokens, start, chars, Token::Int(val));
                 }
             }
             c if c.is_ascii_alphabetic() || c == '_' => {
                 let mut ident = String::new();
-                while let Some(&next_c) = chars.peek() {
+                while let Some(&(_, next_c)) = chars.peek() {
                     if next_c.is_ascii_alphanumeric() || next_c == '_' {
-                        ident.push(chars.next().unwrap());
+                        ident.push(chars.next().unwrap().1);
                     } else {
                         break;
                     }
                 }
 
-                match ident.as_str() {
-                    "export" => tokens.push(Token::Export),
-                    "symbol" => tokens.push(Token::SymbolKeyword),
-                    "test" => tokens.push(Token::TestKeyword),
-                    "mod" => tokens.push(Token::ModKeyword),
-                    "sentence" => tokens.push(Token::SentenceKeyword),
-                    "function" => tokens.push(Token::FunctionKeyword),
-                    "type" => tokens.push(Token::TypeKeyword),
-                    "enum" => tokens.push(Token::EnumKeyword),
-                    "true" => tokens.push(Token::Bool(true)),
-                    "false" => tokens.push(Token::Bool(false)),
-                    _ => tokens.push(Token::Identifier(ident)),
-                }
+                let token = match ident.as_str() {
+                    "export" => Token::Export,
+                    "symbol" => Token::SymbolKeyword,
+                    "test" => Token::TestKeyword,
+                    "mod" => Token::ModKeyword,
+                    "sentence" => Token::SentenceKeyword,
+                    "function" => Token::FunctionKeyword,
+                    "type" => Token::TypeKeyword,
+                    "enum" => Token::EnumKeyword,
+                    "true" => Token::Bool(true),
+                    "false" => Token::Bool(false),
+                    _ => Token::Identifier(ident),
+                };
+                push!(tokens, start, chars, token);
             }
             other => {
-                return Err(format!("Line {}: Unexpected character '{}'", line, other));
+                chars.next();
+                let end = chars.peek().map_or(input.len(), |&(i, _)| i);
+                return Err(Error::at(
+                    format!("unexpected character `{}`", other),
+                    Span::new(file, start, end),
+                ));
             }
         }
     }
@@ -217,22 +281,39 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
 }
 
 struct TokenStream {
-    tokens: Vec<Token>,
+    tokens: Vec<SpannedToken>,
     position: usize,
+    /// A zero-width span at the end of the file, for errors that have no
+    /// token to point at because the input ran out.
+    eof: Span,
 }
 
 impl TokenStream {
+    fn new(tokens: Vec<SpannedToken>, file: FileId, len: usize) -> Self {
+        TokenStream {
+            tokens,
+            position: 0,
+            eof: Span::new(file, len, len),
+        }
+    }
+
     fn peek(&self) -> Option<&Token> {
-        self.tokens.get(self.position)
+        self.tokens.get(self.position).map(|t| &t.token)
     }
 
     fn peek_at(&self, offset: usize) -> Option<&Token> {
-        self.tokens.get(self.position + offset)
+        self.tokens.get(self.position + offset).map(|t| &t.token)
+    }
+
+    /// Where the next token sits, or end of input. Capture this *before*
+    /// consuming, so an error can point at the token that caused it.
+    fn span(&self) -> Span {
+        self.tokens.get(self.position).map_or(self.eof, |t| t.span)
     }
 
     fn next(&mut self) -> Option<Token> {
         if self.position < self.tokens.len() {
-            let t = self.tokens[self.position].clone();
+            let t = self.tokens[self.position].token.clone();
             self.position += 1;
             Some(t)
         } else {
@@ -240,17 +321,30 @@ impl TokenStream {
         }
     }
 
-    fn expect(&mut self, expected: Token) -> Result<(), String> {
-        match self.next() {
-            Some(t) if t == expected => Ok(()),
-            Some(other) => Err(format!("Expected {:?}, found {:?}", expected, other)),
-            None => Err(format!("Expected {:?}, found end of input", expected)),
+    /// `expected X, found Y` against the token at the cursor, whether or not
+    /// there is one.
+    fn expected(&self, what: &str) -> Error {
+        match self.peek() {
+            Some(found) => Error::at(
+                format!("expected {}, found {}", what, describe(found)),
+                self.span(),
+            ),
+            None => Error::at(format!("expected {}, found end of input", what), self.eof),
         }
+    }
+
+    fn expect(&mut self, expected: Token) -> Result<(), Error> {
+        if self.peek() == Some(&expected) {
+            self.next();
+            return Ok(());
+        }
+        Err(self.expected(&describe(&expected)))
     }
 }
 
 /// Parses values into ParsedValue AST nodes.
-fn parse_value(stream: &mut TokenStream) -> Result<ParsedValue, String> {
+fn parse_value(stream: &mut TokenStream) -> Result<ParsedValue, Error> {
+    let err = stream.expected("a value");
     match stream.next() {
         Some(Token::Bool(b)) => Ok(ParsedValue::Bool(b)),
         Some(Token::Int(i)) => Ok(ParsedValue::Int(i)),
@@ -282,30 +376,25 @@ fn parse_value(stream: &mut TokenStream) -> Result<ParsedValue, String> {
                         stream.next(); // consume ')'
                         break;
                     }
-                    other => {
-                        return Err(format!("Expected ',' or ')', found {:?}", other));
-                    }
+                    _ => return Err(stream.expected("`,` or `)`")),
                 }
             }
             Ok(ParsedValue::Tuple(elements))
         }
-        Some(other) => Err(format!("Expected value, found {:?}", other)),
-        None => Err("Expected value, found end of input".to_string()),
+        _ => Err(err),
     }
 }
 
-fn parse_path(stream: &mut TokenStream, first_ident: String) -> Result<Path, String> {
+fn parse_path(stream: &mut TokenStream, first_ident: String) -> Result<Path, Error> {
     let mut segments = vec![parse_segment(&first_ident)];
     while let Some(&Token::DoubleColon) = stream.peek() {
         stream.next(); // consume '::'
-        match stream.next() {
+        match stream.peek() {
             Some(Token::Identifier(name)) => {
-                segments.push(parse_segment(&name));
+                segments.push(parse_segment(&name.clone()));
+                stream.next();
             }
-            Some(other) => {
-                return Err(format!("Expected identifier after '::', found {:?}", other));
-            }
-            None => return Err("Expected identifier after '::', found end of input".to_string()),
+            _ => return Err(stream.expected("an identifier after `::`")),
         }
     }
     Ok(Path { segments })
@@ -319,11 +408,11 @@ fn parse_segment(name: &str) -> PathSegment {
     }
 }
 
-fn parse_type_spec(stream: &mut TokenStream) -> Result<TypeSpec, String> {
+fn parse_type_spec(stream: &mut TokenStream) -> Result<TypeSpec, Error> {
     parse_type_disjunction(stream)
 }
 
-fn parse_type_disjunction(stream: &mut TokenStream) -> Result<TypeSpec, String> {
+fn parse_type_disjunction(stream: &mut TokenStream) -> Result<TypeSpec, Error> {
     let mut left = parse_type_primary(stream)?;
     while stream.peek() == Some(&Token::Pipe) {
         stream.next(); // consume '|'
@@ -340,7 +429,7 @@ fn parse_type_disjunction(stream: &mut TokenStream) -> Result<TypeSpec, String> 
     Ok(left)
 }
 
-fn parse_type_primary(stream: &mut TokenStream) -> Result<TypeSpec, String> {
+fn parse_type_primary(stream: &mut TokenStream) -> Result<TypeSpec, Error> {
     match stream.peek() {
         Some(&Token::LParen) => {
             stream.next(); // consume '('
@@ -358,7 +447,7 @@ fn parse_type_primary(stream: &mut TokenStream) -> Result<TypeSpec, String> {
                         Some(&Token::RParen) => {
                             break;
                         }
-                        other => return Err(format!("Expected ',' or ')', found {:?}", other)),
+                        _ => return Err(stream.expected("`,` or `)`")),
                     }
                 }
             }
@@ -399,12 +488,12 @@ fn parse_type_primary(stream: &mut TokenStream) -> Result<TypeSpec, String> {
                 }
             }
         }
-        other => Err(format!("Expected type specification, found {:?}", other)),
+        _ => Err(stream.expected("a type")),
     }
 }
 
 /// Parses a target which is either a named label or an inline `{}` block.
-fn parse_target(stream: &mut TokenStream) -> Result<Target, String> {
+fn parse_target(stream: &mut TokenStream) -> Result<Target, Error> {
     match stream.peek() {
         Some(&Token::Identifier(_)) => {
             if let Some(Token::Identifier(name)) = stream.next() {
@@ -418,14 +507,12 @@ fn parse_target(stream: &mut TokenStream) -> Result<Target, String> {
             let sentence = parse_sentence_body(stream)?;
             Ok(Target::Inline(sentence))
         }
-        other => Err(format!(
-            "Expected label target or inline block '{{', found {:?}",
-            other
-        )),
+        _ => Err(stream.expected("a label or an inline `{` block")),
     }
 }
 
-fn parse_sentence_body(stream: &mut TokenStream) -> Result<ParsedSentence, String> {
+fn parse_sentence_body(stream: &mut TokenStream) -> Result<ParsedSentence, Error> {
+    let open = stream.span();
     stream.expect(Token::LBrace)?;
     let mut instructions = Vec::new();
 
@@ -434,26 +521,33 @@ fn parse_sentence_body(stream: &mut TokenStream) -> Result<ParsedSentence, Strin
         instructions.push(inst);
     }
 
+    // Running out of input mid-body means the brace that opened it was never
+    // closed, and that brace is the useful thing to point at — the end of the
+    // file tells the reader nothing about which block went wrong.
+    if stream.peek().is_none() {
+        return Err(Error::at("unclosed `{`", open).with_help("this block has no closing `}`"));
+    }
     stream.expect(Token::RBrace)?;
     Ok(ParsedSentence { instructions })
 }
 
-fn parse_usize(stream: &mut TokenStream) -> Result<usize, String> {
-    match stream.next() {
-        Some(Token::Int(val)) if val >= 0 => Ok(val as usize),
-        Some(other) => Err(format!("Expected non-negative integer, found {:?}", other)),
-        None => Err("Expected non-negative integer, found end of input".to_string()),
+fn parse_usize(stream: &mut TokenStream) -> Result<usize, Error> {
+    match stream.peek() {
+        Some(&Token::Int(val)) if val >= 0 => {
+            stream.next();
+            Ok(val as usize)
+        }
+        _ => Err(stream.expected("a non-negative integer")),
     }
 }
 
-fn parse_instruction(stream: &mut TokenStream) -> Result<ParsedInstruction, String> {
-    let token = stream
-        .next()
-        .ok_or_else(|| "Expected instruction, found end of input".to_string())?;
-    let name = match token {
-        Token::Identifier(name) => name,
-        Token::ModKeyword => "mod".to_string(),
-        other => return Err(format!("Expected instruction mnemonic, found {:?}", other)),
+fn parse_instruction(stream: &mut TokenStream) -> Result<ParsedInstruction, Error> {
+    let span = stream.span();
+    let err = stream.expected("an instruction");
+    let name = match stream.next() {
+        Some(Token::Identifier(name)) => name,
+        Some(Token::ModKeyword) => "mod".to_string(),
+        _ => return Err(err),
     };
 
     match name.as_str() {
@@ -523,11 +617,11 @@ fn parse_instruction(stream: &mut TokenStream) -> Result<ParsedInstruction, Stri
         "is_symbol" => Ok(ParsedInstruction::IsSymbol),
         "is_tuple" => Ok(ParsedInstruction::IsTuple),
         "tuple_length" => Ok(ParsedInstruction::TupleLength),
-        other => Err(format!("Unknown instruction mnemonic: '{}'", other)),
+        other => Err(Error::at(format!("unknown instruction `{}`", other), span)),
     }
 }
 
-fn parse_module_expr(stream: &mut TokenStream) -> Result<ModuleExpr, String> {
+fn parse_module_expr(stream: &mut TokenStream) -> Result<ModuleExpr, Error> {
     if let Some(Token::Identifier(ident)) = stream.peek().cloned()
         && let Some(composer) = Composer::from_name(&ident)
     {
@@ -549,11 +643,11 @@ fn parse_module_expr(stream: &mut TokenStream) -> Result<ModuleExpr, String> {
             let val = parse_value(stream)?;
             Ok(ModuleExpr::Value(val))
         }
-        None => Err("Expected module expression or value, found end of input".to_string()),
+        None => Err(stream.expected("a module expression or value")),
     }
 }
 
-fn parse_composer_args(stream: &mut TokenStream) -> Result<Vec<ModuleExpr>, String> {
+fn parse_composer_args(stream: &mut TokenStream) -> Result<Vec<ModuleExpr>, Error> {
     stream.expect(Token::LParen)?;
     let mut args = Vec::new();
     if stream.peek() != Some(&Token::RParen) {
@@ -572,62 +666,55 @@ fn parse_composer_args(stream: &mut TokenStream) -> Result<Vec<ModuleExpr>, Stri
 
 /// Phase 1: tokenize and parse. Performs no desugaring; the only non-syntactic
 /// work is reading the files named by `mod name;`.
+///
+/// `file` must already be registered in `map`. The map is threaded through
+/// rather than returned because `mod name;` registers further files partway
+/// into the parse, and an error in one of those has to render against the file
+/// it came from.
 pub(crate) fn parse_source(
-    input: &str,
+    map: &mut SourceMap,
+    file: FileId,
     base_dir: Option<&std::path::Path>,
-) -> Result<Vec<sugar::Item>, String> {
-    let tokens = tokenize(input)?;
-    let mut stream = TokenStream {
-        tokens,
-        position: 0,
-    };
-    parse_items(&mut stream, None, base_dir)
+) -> Result<Vec<sugar::Item>, Error> {
+    // Copied out so the map stays free for the nested files `mod name;` adds.
+    let input = map.text(file).to_owned();
+    let tokens = tokenize(&input, file)?;
+    let mut stream = TokenStream::new(tokens, file, input.len());
+    parse_items(&mut stream, None, base_dir, map)
 }
 
-fn parse_annotations(stream: &mut TokenStream) -> Result<Vec<SourceAnnotation>, String> {
+fn parse_annotations(stream: &mut TokenStream) -> Result<Vec<SourceAnnotation>, Error> {
     let mut annotations = Vec::new();
     while stream.peek() == Some(&Token::Hash) {
         stream.next(); // consume '#'
         stream.expect(Token::LBracket)?;
-        let name = match stream.next() {
-            Some(Token::Identifier(name)) => name,
-            Some(other) => return Err(format!("Expected annotation name, found {:?}", other)),
-            None => return Err("Expected annotation name, found end of input".to_string()),
+        let name_span = stream.span();
+        let name = match stream.peek() {
+            Some(Token::Identifier(name)) => {
+                let name = name.clone();
+                stream.next();
+                name
+            }
+            _ => return Err(stream.expected("an annotation name")),
         };
 
         let ann = match name.as_str() {
             "arity" => {
                 stream.expect(Token::LParen)?;
-                let n = match stream.next() {
-                    Some(Token::Int(val)) => val,
-                    Some(other) => {
-                        return Err(format!(
-                            "Expected integer for arity first argument, found {:?}",
-                            other
-                        ));
+                let n = match stream.peek() {
+                    Some(&Token::Int(val)) => {
+                        stream.next();
+                        val
                     }
-                    None => {
-                        return Err(
-                            "Expected integer for arity first argument, found end of input"
-                                .to_string(),
-                        );
-                    }
+                    _ => return Err(stream.expected("an integer, the arity's input count")),
                 };
                 stream.expect(Token::Comma)?;
-                let m = match stream.next() {
-                    Some(Token::Int(val)) => val,
-                    Some(other) => {
-                        return Err(format!(
-                            "Expected integer for arity second argument, found {:?}",
-                            other
-                        ));
+                let m = match stream.peek() {
+                    Some(&Token::Int(val)) => {
+                        stream.next();
+                        val
                     }
-                    None => {
-                        return Err(
-                            "Expected integer for arity second argument, found end of input"
-                                .to_string(),
-                        );
-                    }
+                    _ => return Err(stream.expected("an integer, the arity's output count")),
                 };
                 stream.expect(Token::RParen)?;
                 Annotation::Arity(n, m)
@@ -640,7 +727,13 @@ fn parse_annotations(stream: &mut TokenStream) -> Result<Vec<SourceAnnotation>, 
             }
             "recursive" => Annotation::Recursive,
             "total" => Annotation::Total,
-            other => return Err(format!("Unsupported annotation '{}'", other)),
+            other => {
+                return Err(
+                    Error::at(format!("unsupported annotation `{}`", other), name_span).with_help(
+                        "known annotations: arity, precondition, postcondition, recursive, total",
+                    ),
+                );
+            }
         };
         stream.expect(Token::RBracket)?;
 
@@ -659,10 +752,11 @@ fn parse_annotations(stream: &mut TokenStream) -> Result<Vec<SourceAnnotation>, 
             _ => None,
         };
         if let Some(kind) = duplicate {
-            return Err(format!(
-                "Duplicate #[{}] on one declaration; only one is allowed",
-                kind
-            ));
+            return Err(Error::at(
+                format!("duplicate #[{}] on one declaration", kind),
+                name_span,
+            )
+            .with_help("only one is allowed; a second would be ignored rather than conjoined"));
         }
 
         annotations.push(ann);
@@ -670,22 +764,15 @@ fn parse_annotations(stream: &mut TokenStream) -> Result<Vec<SourceAnnotation>, 
     Ok(annotations)
 }
 
-fn parse_annotation_path(stream: &mut TokenStream, kind: &str) -> Result<Path, String> {
+fn parse_annotation_path(stream: &mut TokenStream, kind: &str) -> Result<Path, Error> {
     stream.expect(Token::LParen)?;
-    let first_ident = match stream.next() {
-        Some(Token::Identifier(s)) => s,
-        Some(other) => {
-            return Err(format!(
-                "Expected identifier for {} function, found {:?}",
-                kind, other
-            ));
+    let first_ident = match stream.peek() {
+        Some(Token::Identifier(s)) => {
+            let s = s.clone();
+            stream.next();
+            s
         }
-        None => {
-            return Err(format!(
-                "Expected identifier for {} function, found end of input",
-                kind
-            ));
-        }
+        _ => return Err(stream.expected(&format!("an identifier, the {} function", kind))),
     };
     let path = parse_path(stream, first_ident)?;
     stream.expect(Token::RParen)?;
@@ -710,11 +797,14 @@ fn parse_modifiers(stream: &mut TokenStream) -> (bool, bool) {
     (is_exported, is_test)
 }
 
-fn expect_name(stream: &mut TokenStream, what: &str) -> Result<String, String> {
-    match stream.next() {
-        Some(Token::Identifier(name)) => Ok(name),
-        Some(other) => Err(format!("Expected {} identifier, found {:?}", what, other)),
-        None => Err(format!("Expected {} identifier, found end of input", what)),
+fn expect_name(stream: &mut TokenStream, what: &str) -> Result<String, Error> {
+    match stream.peek() {
+        Some(Token::Identifier(name)) => {
+            let name = name.clone();
+            stream.next();
+            Ok(name)
+        }
+        _ => Err(stream.expected(&format!("a {}", what))),
     }
 }
 
@@ -722,7 +812,8 @@ fn parse_items(
     stream: &mut TokenStream,
     end_token: Option<Token>,
     base_dir: Option<&std::path::Path>,
-) -> Result<Vec<sugar::Item>, String> {
+    map: &mut SourceMap,
+) -> Result<Vec<sugar::Item>, Error> {
     let mut items = Vec::new();
 
     while stream.peek().is_some() {
@@ -732,6 +823,7 @@ fn parse_items(
             break;
         }
 
+        let item_span = stream.span();
         let annotations = parse_annotations(stream)?;
 
         // Symbols take no modifiers, so they are recognized before them.
@@ -739,10 +831,11 @@ fn parse_items(
             stream.next(); // consume 'symbol'
             let name = expect_name(stream, "symbol name")?;
             let debug_desc = match stream.peek() {
-                Some(Token::StringLiteral(_)) => match stream.next() {
-                    Some(Token::StringLiteral(desc)) => Some(desc),
-                    _ => unreachable!(),
-                },
+                Some(Token::StringLiteral(desc)) => {
+                    let desc = desc.clone();
+                    stream.next();
+                    Some(desc)
+                }
                 _ => None,
             };
             items.push(sugar::Item::Symbol(SymbolDecl { name, debug_desc }));
@@ -755,13 +848,16 @@ fn parse_items(
             && stream.peek_at(1) == Some(&Token::ModKeyword);
         if is_test_mod || stream.peek() == Some(&Token::ModKeyword) {
             if !annotations.is_empty() {
-                return Err("Annotations are not supported on modules".to_string());
+                return Err(Error::at(
+                    "annotations are not supported on modules",
+                    item_span,
+                ));
             }
             if is_test_mod {
                 stream.next(); // consume 'test'
             }
             stream.next(); // consume 'mod'
-            items.push(parse_mod_item(stream, is_test_mod, base_dir)?);
+            items.push(parse_mod_item(stream, is_test_mod, base_dir, map)?);
             continue;
         }
 
@@ -794,12 +890,7 @@ fn parse_items(
                 stream.next();
                 true
             }
-            other => {
-                return Err(format!(
-                    "Expected 'sentence', 'function', or 'type', found {:?}",
-                    other
-                ));
-            }
+            _ => return Err(stream.expected("`sentence`, `function`, `type`, `enum`, or `mod`")),
         };
 
         let name = expect_name(stream, "sentence name")?;
@@ -830,7 +921,9 @@ fn parse_mod_item(
     stream: &mut TokenStream,
     is_test: bool,
     base_dir: Option<&std::path::Path>,
-) -> Result<sugar::Item, String> {
+    map: &mut SourceMap,
+) -> Result<sugar::Item, Error> {
+    let name_span = stream.span();
     let name = expect_name(stream, "module name")?;
 
     if let Some(Token::Identifier(ident)) = stream.peek()
@@ -850,21 +943,21 @@ fn parse_mod_item(
     if stream.peek() == Some(&Token::Semicolon) {
         stream.next(); // consume ';'
         let base = base_dir.ok_or_else(|| {
-            format!(
-                "Cannot load external module '{}' because no base directory context was provided",
-                name
-            )
+            Error::at(format!("cannot load external module `{}`", name), name_span)
+                .with_help("no base directory was given, so there is nowhere to look for the file")
         })?;
-        let file_name = format!("{}.hana", name);
-        let file_path = base.join(&file_name);
+        let file_path = base.join(format!("{}.hana", name));
         let file_content = std::fs::read_to_string(&file_path).map_err(|e| {
-            format!(
-                "Failed to read module file '{}' at {:?}: {}",
-                file_name, file_path, e
+            Error::at(
+                format!("cannot read `{}`: {}", file_path.display(), e),
+                name_span,
             )
         })?;
 
-        let items = parse_source(&file_content, Some(&base.join(&name)))?;
+        // Registered before parsing, so an error inside the file renders
+        // against the file rather than against whoever included it.
+        let included = map.add_path(&file_path, file_content);
+        let items = parse_source(map, included, Some(&base.join(&name)))?;
         return Ok(sugar::Item::Mod(sugar::ModDecl {
             name,
             items,
@@ -874,7 +967,7 @@ fn parse_mod_item(
 
     stream.expect(Token::LBrace)?;
     let new_base = base_dir.map(|b| b.join(&name));
-    let items = parse_items(stream, Some(Token::RBrace), new_base.as_deref())?;
+    let items = parse_items(stream, Some(Token::RBrace), new_base.as_deref(), map)?;
     stream.expect(Token::RBrace)?;
     Ok(sugar::Item::Mod(sugar::ModDecl {
         name,
@@ -886,7 +979,7 @@ fn parse_mod_item(
 fn parse_enum_decl(
     stream: &mut TokenStream,
     annotations: Vec<SourceAnnotation>,
-) -> Result<sugar::EnumDecl, String> {
+) -> Result<sugar::EnumDecl, Error> {
     stream.expect(Token::EnumKeyword)?;
     let name = expect_name(stream, "enum name")?;
     stream.expect(Token::LBrace)?;
@@ -909,7 +1002,7 @@ fn parse_enum_decl(
                         }
                     }
                     Some(&Token::RParen) => break,
-                    other => return Err(format!("Expected ',' or ')', found {:?}", other)),
+                    _ => return Err(stream.expected("`,` or `)`")),
                 }
             }
         }
@@ -1259,7 +1352,11 @@ impl<'a> Compiler<'a> {
     }
 }
 
-/// Assembles the input text into a `Library`.
+/// Assembles the input text into a `Library`, rendering any error as text.
+///
+/// A convenience for callers with a single source string and no file on disk;
+/// it registers the input as `<input>` in a throwaway map. Callers that have
+/// real files should use [`assemble_source`] so errors name them.
 pub fn assemble(input: &str) -> Result<Library, String> {
     assemble_with_path(input, None)
 }
@@ -1269,7 +1366,22 @@ pub fn assemble_with_path(
     input: &str,
     base_dir: Option<&std::path::Path>,
 ) -> Result<Library, String> {
-    let parsed = parse_source(input, base_dir)?;
+    let mut map = SourceMap::new();
+    let file = map.add("<input>", input.to_string());
+    assemble_source(&mut map, file, base_dir).map_err(|e| map.render(&e))
+}
+
+/// Assembles a source file already registered in `map`.
+///
+/// The caller owns the map so it outlives assembly: rendering an error needs
+/// the text of whichever file it came from, including files pulled in by
+/// `mod name;` partway through the parse.
+pub fn assemble_source(
+    map: &mut SourceMap,
+    file: FileId,
+    base_dir: Option<&std::path::Path>,
+) -> Result<Library, Error> {
+    let parsed = parse_source(map, file, base_dir)?;
     let items = crate::lower::lower_items(parsed)?;
 
     let mut builder = TreeBuilder::new();
@@ -1337,4 +1449,152 @@ pub fn assemble_with_path(
     crate::arity::check_totality(&library)?;
 
     Ok(library)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Parses `input` and returns the rendered error, which is what a user
+    /// actually sees.
+    fn error_for(input: &str) -> String {
+        let mut map = SourceMap::new();
+        let file = map.add("main.hana", input.to_string());
+        let err = parse_source(&mut map, file, None).expect_err("expected a parse error");
+        map.render(&err)
+    }
+
+    fn spans(input: &str) -> Vec<(Token, &str)> {
+        let mut map = SourceMap::new();
+        let file = map.add("main.hana", input.to_string());
+        tokenize(input, file)
+            .unwrap()
+            .into_iter()
+            .map(|t| (t.token, &input[t.span.start as usize..t.span.end as usize]))
+            .collect()
+    }
+
+    #[test]
+    fn every_token_spans_exactly_its_own_text() {
+        let toks = spans("sentence a { push -12 add }");
+        let slices: Vec<&str> = toks.iter().map(|(_, s)| *s).collect();
+        assert_eq!(
+            slices,
+            vec!["sentence", "a", "{", "push", "-12", "add", "}"]
+        );
+    }
+
+    #[test]
+    fn spans_survive_comments_and_blank_lines() {
+        let toks = spans("// leading\n\n  push  3.5\n");
+        let slices: Vec<&str> = toks.iter().map(|(_, s)| *s).collect();
+        assert_eq!(slices, vec!["push", "3.5"]);
+    }
+
+    #[test]
+    fn a_string_literal_spans_its_quotes() {
+        let toks = spans("symbol s \"a desc\"");
+        assert_eq!(toks.last().unwrap().1, "\"a desc\"");
+    }
+
+    #[test]
+    fn multibyte_text_does_not_shift_later_spans() {
+        // The comment holds four bytes but two characters; the tokens after it
+        // must still slice their own text.
+        let toks = spans("// ää\npush 1\n");
+        let slices: Vec<&str> = toks.iter().map(|(_, s)| *s).collect();
+        assert_eq!(slices, vec!["push", "1"]);
+    }
+
+    #[test]
+    fn an_error_points_at_the_offending_token() {
+        let rendered = error_for("sentence a {\n    add {\n}\n");
+        assert!(rendered.contains("--> main.hana:2:9"), "{}", rendered);
+        assert!(rendered.contains("|         ^\n"), "{}", rendered);
+    }
+
+    #[test]
+    fn an_unknown_instruction_underlines_the_whole_word() {
+        let rendered = error_for("sentence a {\n    frobnicate\n}\n");
+        assert!(
+            rendered.contains("unknown instruction `frobnicate`"),
+            "{}",
+            rendered
+        );
+        assert!(rendered.contains("^^^^^^^^^^"), "{}", rendered);
+    }
+
+    #[test]
+    fn an_unclosed_block_points_at_its_opening_brace() {
+        // Not at the end of the file, which would say nothing about which
+        // block was left open.
+        let rendered = error_for("sentence a {\n    push 1\n");
+        assert!(rendered.contains("unclosed `{`"), "{}", rendered);
+        assert!(rendered.contains("--> main.hana:1:12"), "{}", rendered);
+    }
+
+    #[test]
+    fn running_out_of_input_points_at_the_end() {
+        let rendered = error_for("sentence");
+        assert!(rendered.contains("found end of input"), "{}", rendered);
+        assert!(rendered.contains("--> main.hana:1:9"), "{}", rendered);
+    }
+
+    #[test]
+    fn a_lexer_error_is_spanned_too() {
+        let rendered = error_for("sentence a {\n    push 1 @ 2\n}\n");
+        assert!(
+            rendered.contains("unexpected character `@`"),
+            "{}",
+            rendered
+        );
+        assert!(rendered.contains("--> main.hana:2:12"), "{}", rendered);
+    }
+
+    #[test]
+    fn errors_name_tokens_as_written_not_as_variants() {
+        let rendered = error_for("sentence a { push 1 } }");
+        assert!(rendered.contains("`}`"), "{}", rendered);
+        assert!(!rendered.contains("RBrace"), "{}", rendered);
+    }
+
+    #[test]
+    fn an_error_in_an_included_file_names_that_file() {
+        let dir = std::env::temp_dir().join("hanoi_span_include_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let main = dir.join("main.hana");
+        std::fs::write(&main, "mod helper;\n").unwrap();
+        std::fs::write(dir.join("helper.hana"), "sentence v {\n    add {\n}\n").unwrap();
+
+        let mut map = SourceMap::new();
+        let root = map.add_path(&main, std::fs::read_to_string(&main).unwrap());
+        let err = parse_source(&mut map, root, main.parent()).expect_err("expected an error");
+        let rendered = map.render(&err);
+
+        assert!(rendered.contains("helper.hana:2:9"), "{}", rendered);
+        // The snippet comes from the included file, not from the includer.
+        assert!(rendered.contains("|     add {"), "{}", rendered);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_missing_module_file_points_at_the_module_name() {
+        let dir = std::env::temp_dir().join("hanoi_span_missing_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let main = dir.join("main.hana");
+        std::fs::write(&main, "mod nowhere;\n").unwrap();
+
+        let mut map = SourceMap::new();
+        let root = map.add_path(&main, std::fs::read_to_string(&main).unwrap());
+        let err = parse_source(&mut map, root, main.parent()).expect_err("expected an error");
+        let rendered = map.render(&err);
+
+        assert!(rendered.contains("cannot read"), "{}", rendered);
+        assert!(rendered.contains("main.hana:1:5"), "{}", rendered);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

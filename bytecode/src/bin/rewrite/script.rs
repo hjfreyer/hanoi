@@ -10,13 +10,12 @@
 //! ```
 //!
 //! Two precedence levels, one more than the rest of the codebase has. Hand
-//! written recursive descent, per house style — a parser generator was tried
-//! twice in this repo and abandoned both times.
+//! written recursive descent, like the `.hana` parser.
 //!
-//! Unlike the `.hana` tokenizer, every token here carries a byte span, so an
-//! error can point at the offending word instead of describing it. That is
-//! deliberate: the failure mode worth avoiding is the one the composer
-//! templates have, where a message names text the user never wrote.
+//! Every token carries a byte span, so an error can point at the offending
+//! word instead of describing it. `.hana` spans its tokens the same way, but
+//! against a `SourceMap` — it has many files to name, where this language has
+//! only the prelude and whatever came in on the command line.
 
 use std::collections::{HashMap, HashSet};
 
