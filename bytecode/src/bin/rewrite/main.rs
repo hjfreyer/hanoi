@@ -21,6 +21,7 @@ mod debug;
 mod diff;
 mod ir;
 mod location;
+mod matcher;
 mod print;
 mod program;
 mod rule2;
