@@ -317,33 +317,6 @@ pub(crate) enum Rule2 {
     /// bringing the predicate back.
     Annihilate { x: Node, n: usize, m: usize },
 
-    /// `pick (n-1) ^n ; X ; drop^m` = nothing, where `X : n -> m`.
-    ///
-    /// Copy the operands, compute on the copies, throw the results away: the
-    /// originals were never touched, so the whole run is the identity. This is
-    /// [`Rule2::Annihilate`] extended to the case where the operands *survive*,
-    /// and it is only available because every function here is total — the
-    /// whole point is that the computation has no consequence beyond the values
-    /// it leaves, and a computation that could fail would have one.
-    ///
-    /// Forward it deletes work that was never going to matter. **Backward is
-    /// where it earns its place**: it introduces an arbitrary total computation
-    /// out of nothing, at any point in the program. That is how a cancelling
-    /// pair gets into a term in the first place — conjure `X` beside the value
-    /// it will eventually cancel against, then walk the pieces where they need
-    /// to go with [`Rule2::Interchange`]. Nothing else in the set can add work,
-    /// and a derivation that has to get worse before it gets better needs
-    /// something that can.
-    ///
-    /// The `n` copies are each `pick (n-1)`, each reaching back past the copies
-    /// already made, so they land in the order they were read. At `n = 0` there
-    /// are no copies and this is just `X ; drop^m` for a computation that
-    /// consumes nothing.
-    ///
-    /// Measureless and unbounded in the backward direction, so it belongs to no
-    /// normalizing pass; aiming it is entirely the generator's job.
-    Vacuous { x: Node, n: usize, m: usize },
-
     /// `pick d ; drop` = nothing.
     ///
     /// Copying a value and discarding the copy: neither happened. This is the
@@ -351,6 +324,21 @@ pub(crate) enum Rule2 {
     /// deliberately *not* an instance of [`Rule2::Annihilate`] — `pick d` is
     /// `(d+1 -> d+2)`, so that equation would ask for `d+2` drops and answer
     /// with `d+1` of them.
+    ///
+    /// Together with [`Rule2::Annihilate`] this generates the **vacuous** law,
+    ///
+    /// ```text
+    /// pick (n-1)^n ; X ; drop^m  =  nothing        for X : n -> m
+    /// ```
+    ///
+    /// — compute on copies, discard the results, and the originals were never
+    /// touched. That is a lemma rather than an axiom: `n` backward counits nest
+    /// a run of picks against a run of drops, and one backward annihilation
+    /// turns the drops into `X`. Backward it is the only way to introduce work
+    /// into a term at all, which is how a cancelling pair gets in beside the
+    /// value it will eventually meet. It belongs to the generator, which may
+    /// emit the whole derivation as one firing; see
+    /// `applier::tests::vacuous_is_derivable_from_annihilate_and_counit`.
     Counit { d: usize },
 
     /// `push c ; pick 0` = `push c ; push c`.
@@ -398,7 +386,6 @@ impl Rule2 {
             Rule2::FoldBranch { .. } => "fold_branch",
             Rule2::Eval { .. } => "eval",
             Rule2::Annihilate { .. } => "annihilate",
-            Rule2::Vacuous { .. } => "vacuous",
             Rule2::Counit { .. } => "counit",
             Rule2::CopyConst { .. } => "copy_const",
             Rule2::CopyAssoc { .. } => "copy_assoc",
@@ -426,11 +413,11 @@ impl Rule2 {
                 }
                 shifted_depth(depth, actual).map(|_| ())
             }
-            // Both ask exactly one thing: that the arity the step claims for
-            // `x` is the one the library gives. Under the global precondition
-            // that is the whole condition — there is no partial or effectful
-            // node for a syntactic predicate to exclude.
-            Rule2::Annihilate { x, n, m } | Rule2::Vacuous { x, n, m } => {
+            // One thing only: that the arity the step claims for `x` is the one
+            // the library gives. Under the global precondition that is the
+            // whole condition — there is no partial or effectful node for a
+            // syntactic predicate to exclude.
+            Rule2::Annihilate { x, n, m } => {
                 claimed_arity(prog, x, (*n as i64, *m as i64)).map(|_| ())
             }
             Rule2::Eval { op, inputs } => match eval_op(op, inputs) {
@@ -564,13 +551,6 @@ impl Rule2 {
 
             Rule2::Annihilate { x, m, .. } => {
                 let mut out = vec![x.clone()];
-                out.extend(std::iter::repeat_n(Node::Op(Instruction::Drop), *m));
-                out
-            }
-
-            Rule2::Vacuous { x, n, m } => {
-                let mut out = copies(*n);
-                out.push(x.clone());
                 out.extend(std::iter::repeat_n(Node::Op(Instruction::Drop), *m));
                 out
             }
@@ -711,7 +691,7 @@ impl Rule2 {
                 std::iter::repeat_n(Node::Op(Instruction::Drop), *n).collect()
             }
 
-            Rule2::Vacuous { .. } | Rule2::Counit { .. } => Vec::new(),
+            Rule2::Counit { .. } => Vec::new(),
 
             Rule2::CopyConst { c } => vec![push(c.clone()), push(c.clone())],
 
@@ -737,7 +717,11 @@ fn push(v: Value) -> Node {
 ///
 /// Each `pick` reaches back past the copies already made, so `n = 2` over
 /// `a b` leaves `a b a b` rather than `a b b a`. At `n = 0` there are none.
-fn copies(n: usize) -> Vec<Node> {
+///
+/// Not part of any equation: it is the shape the **vacuous** derivation builds
+/// out of [`Rule2::Counit`], and what a generator emitting that derivation
+/// needs in order to recognize its own handiwork.
+pub(crate) fn copies(n: usize) -> Vec<Node> {
     let reach = n.saturating_sub(1);
     std::iter::repeat_n(Node::Op(Instruction::Pick(reach)), n).collect()
 }
@@ -1267,69 +1251,14 @@ mod tests {
     }
 
     #[test]
-    fn vacuous_computes_on_copies_and_leaves_nothing() {
-        // `add` is (2 -> 2): copy both operands, add the copies, drop both
-        // results. The originals never moved.
-        let r = Rule2::Vacuous {
-            x: op(Instruction::Add),
-            n: 2,
-            m: 2,
-        };
-        assert_eq!(r.check(&prog()), Ok(()));
+    fn copies_reach_back_past_the_copies_already_made() {
+        // `a b` becomes `a b a b`, not `a b b a` — the shape the vacuous
+        // derivation builds.
+        assert_eq!(copies(0), Vec::new());
+        assert_eq!(copies(1), vec![op(Instruction::Pick(0))]);
         assert_eq!(
-            r.lhs(),
-            vec![
-                op(Instruction::Pick(1)),
-                op(Instruction::Pick(1)),
-                op(Instruction::Add),
-                op(Instruction::Drop),
-                op(Instruction::Drop),
-            ]
-        );
-        assert_eq!(r.rhs(), Vec::new());
-    }
-
-    #[test]
-    fn vacuous_needs_no_copies_when_x_consumes_nothing() {
-        // At n = 0 there is nothing to preserve, so this degenerates to
-        // `push c ; drop`.
-        let r = Rule2::Vacuous {
-            x: push(Value::Int(7)),
-            n: 0,
-            m: 1,
-        };
-        assert_eq!(r.check(&prog()), Ok(()));
-        assert_eq!(r.lhs(), vec![push(Value::Int(7)), op(Instruction::Drop)]);
-    }
-
-    #[test]
-    fn vacuous_read_backwards_conjures_work_out_of_nothing() {
-        // The direction that matters: an empty window becomes a whole
-        // computation, which is how a cancelling pair enters a term at all.
-        // Nothing else in the set can add work.
-        let r = Rule2::Vacuous {
-            x: op(Instruction::Untuple(2)),
-            n: 1,
-            m: 3,
-        };
-        assert_eq!(r.check(&prog()), Ok(()));
-        assert_eq!(r.rhs(), Vec::new());
-        assert_eq!(r.lhs().len(), 5); // one pick, the untuple, three drops
-    }
-
-    #[test]
-    fn vacuous_holds_the_step_to_the_librarys_arity() {
-        let r = Rule2::Vacuous {
-            x: op(Instruction::Add),
-            n: 1,
-            m: 1,
-        };
-        assert_eq!(
-            r.check(&prog()),
-            Err(SideCondition::ClaimedArityMismatch {
-                claimed: (1, 1),
-                actual: (2, 2)
-            })
+            copies(2),
+            vec![op(Instruction::Pick(1)), op(Instruction::Pick(1))]
         );
     }
 
@@ -1421,11 +1350,6 @@ mod tests {
                 n: 2,
                 m: 2,
             },
-            Rule2::Vacuous {
-                x: op(Instruction::Add),
-                n: 2,
-                m: 2,
-            },
             Rule2::Counit { d: 3 },
             Rule2::CopyConst { c: Value::Int(7) },
             Rule2::CopyAssoc { d: 2 },
@@ -1476,7 +1400,9 @@ mod tests {
         let before = names.len();
         names.dedup();
         assert_eq!(before, names.len(), "two equations share a name");
-        // Every variant of the enum appears in the sweep above.
-        assert_eq!(before, 14);
+        // Every variant of the enum appears in the sweep above. Keeping this
+        // number honest is the point: an equation is an axiom, and the set is
+        // meant to grow only when something genuinely cannot be derived.
+        assert_eq!(before, 13);
     }
 }
