@@ -15,12 +15,15 @@
 //! the whole call tree in one listing instead of a set of `SentenceIndex`
 //! references to chase by hand.
 
+mod applier;
 mod arity;
 mod debug;
 mod diff;
 mod ir;
+mod location;
 mod print;
 mod program;
+mod rule2;
 mod rules;
 mod script;
 mod stack;
