@@ -256,13 +256,16 @@ Control and traversal, unchanged from before the split:
 |---|---|
 | `each(r, ...)` | every position in one sequence, left to right, to exhaustion |
 | `once(r, ...)` | the first matcher that matches, at the first position it does |
+| `at(n, r, ...)` | the first matcher that matches, at *exactly* position n |
 | `a; b` | in sequence |
 | `a \| b` | the first that *changes something* |
 | `try(t)` | never fails |
+| `must(t)` | fails unless `t` changed something |
 | `repeat(t)` | until nothing changes |
 | `repeat_n(k, t)` | at most k times, stopping early |
 | `children(t)` | every child sequence, one level down |
-| `then(t)`, `else(t)`, `body(t)` | one *kind* of child |
+| `then(t)`, `else(t)`, `body(t)` | one *kind* of child, everywhere |
+| `then(k, t)`, `else(k, t)`, `body(k, t)` | that child of the node at `k` |
 | `bu(t)`, `td(t)` | children first / here first, recursively |
 | `id`, `fail` | |
 
@@ -274,6 +277,36 @@ A matcher that matches nowhere reports **unchanged, not failed**. Scanning a
 sequence and finding no work is a successful no-op; treating it as an error made
 `a; b` throw away everything `a` did whenever `b` had nothing to do. `Failed`
 comes only from an explicit `fail`.
+
+### Aiming at exactly one window
+
+`each` and `once` say *what* to apply and `then`/`else`/`body` say *which kind*
+of child to go into. Neither says *which one*, so a term with two branches in it
+could not be addressed. Two forms close that, and composed they name any window
+a script prints:
+
+```
+$ rewrite tests 'Pair::check' -t 'unfold_all; then(1, body(2, then(1, at(2, sink))))' --show-script
+     2  interchange -> [1.then, 2.body, 1.then] @2
+```
+
+The tactic and the location read the same, in the same order. `at(n, ...)` is
+`once` told where to look instead of asked to find out, and `then(k, t)` is
+`then(t)` narrowed from every branch to the one you meant.
+
+Both are **silent when they miss**, because a rule that matches nowhere is an
+ordinary no-op and always has been. That is wrong for an aimed step, where
+missing means the position was wrong:
+
+```
+must(then(1, at(2, sink)))
+```
+
+`must(t)` fails unless `t` changed something. It is exactly `t | fail` and is
+built that way; it exists because the idiom is not obvious and aiming without it
+is unverifiable. A failure that reaches the top of a run is reported and exits
+non-zero — nothing swallows it, since `try` is how you say a failure is
+acceptable.
 
 ### The scan discipline
 
@@ -486,6 +519,9 @@ Reading it as a test for *being* a boolean would send junk down the wrong path.
    Remove the frame with `flatten`, or bring the neighbour in with `distribute`.
 4. **Reading `@n` as a global position.** It is an offset in the sequence the
    descent arrives at. Two steps reporting `@0` may be in different arms.
+5. **Aiming without `must`.** `at(9, sink)` on a five-node sequence is a no-op,
+   not an error, so a mistyped position looks exactly like a rule that had
+   nothing to do. Wrap an aimed step in `must` and find out.
 
 ## Checking and tracing
 

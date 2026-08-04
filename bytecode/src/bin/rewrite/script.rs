@@ -807,6 +807,44 @@ impl Definitions {
         };
 
         match shape {
+            Shape::CountAndRules => {
+                let [Arg::Int(n), rest @ ..] = args else {
+                    return Err(ScriptError::new(
+                        format!("`{}` takes a position and then rules", name),
+                        span,
+                    )
+                    .with_help(format!("for example `{}(2, sink)`", name)));
+                };
+                let rules = self.rules(name, span, rest)?;
+                Ok(Tactic::At(*n, rules))
+            }
+            Shape::Descend => {
+                let (index, inner) = match args {
+                    [Arg::Expr(inner)] => (None, inner),
+                    [Arg::Int(k), Arg::Expr(inner)] => (Some(*k), inner),
+                    _ => {
+                        return Err(ScriptError::new(
+                            format!("`{}` takes a tactic, or an index and a tactic", name),
+                            span,
+                        )
+                        .with_help(format!(
+                            "`{}(t)` reaches every one; `{}(2, t)` reaches the one \
+                             belonging to the node at 2",
+                            name, name
+                        )));
+                    }
+                };
+                let sel = match name {
+                    "then" => Selector::Then,
+                    "else" => Selector::Else,
+                    _ => Selector::Body,
+                };
+                let inner = Box::new(self.resolve(inner, visiting)?);
+                Ok(match index {
+                    Some(k) => Tactic::IntoNth(k, sel, inner),
+                    None => Tactic::Into(sel, inner),
+                })
+            }
             Shape::Rules => {
                 if args.is_empty() {
                     return Err(ScriptError::new(
@@ -814,61 +852,7 @@ impl Definitions {
                         span,
                     ));
                 }
-                let mut rules: Vec<Box<dyn Matcher>> = Vec::new();
-                for arg in args {
-                    match arg {
-                        Arg::Expr(Expr::Name(rule_name, rule_span)) => {
-                            if term_matcher_names().contains(&rule_name.as_str()) {
-                                return Err(ScriptError::new(
-                                    format!("`{}` needs a term", rule_name),
-                                    *rule_span,
-                                )
-                                .with_help(format!(
-                                    "say what to introduce: `{} {{ pick 0 }}`",
-                                    rule_name
-                                )));
-                            }
-                            let Some(rule) = matcher_by_name(rule_name) else {
-                                return Err(ScriptError::new(
-                                    format!("unknown rule '{}'", rule_name),
-                                    *rule_span,
-                                )
-                                .with_help(known_rules()));
-                            };
-                            rules.push(rule);
-                        }
-                        Arg::Expr(Expr::Term(rule_name, rule_span, term)) => {
-                            let Some(built) = matcher_with_term(rule_name, term.clone()) else {
-                                let help = if matcher_by_name(rule_name).is_some() {
-                                    format!("`{}` takes no term; write it bare", rule_name)
-                                } else {
-                                    known_rules()
-                                };
-                                return Err(ScriptError::new(
-                                    format!("'{}' does not take a term", rule_name),
-                                    *rule_span,
-                                )
-                                .with_help(help));
-                            };
-                            match built {
-                                Ok(rule) => rules.push(rule),
-                                Err(why) => {
-                                    return Err(ScriptError::new(
-                                        format!("`{}` cannot use that term: {}", rule_name, why),
-                                        *rule_span,
-                                    ));
-                                }
-                            }
-                        }
-                        _ => {
-                            return Err(ScriptError::new(
-                                format!("`{}` takes rule names, not tactics", name),
-                                span,
-                            )
-                            .with_help(known_rules()));
-                        }
-                    }
-                }
+                let rules = self.rules(name, span, args)?;
                 Ok(match name {
                     "each" => Tactic::Each(rules),
                     _ => Tactic::Once(rules),
@@ -884,11 +868,9 @@ impl Definitions {
                 let inner = Box::new(self.resolve(inner, visiting)?);
                 Ok(match name {
                     "try" => Tactic::Try(inner),
+                    "must" => Tactic::Must(inner),
                     "repeat" => Tactic::Repeat(inner),
                     "children" => Tactic::Children(inner),
-                    "then" => Tactic::Into(Selector::Then, inner),
-                    "else" => Tactic::Into(Selector::Else, inner),
-                    "body" => Tactic::Into(Selector::Body, inner),
                     "bu" => Tactic::Bu(inner),
                     _ => Tactic::Td(inner),
                 })
@@ -908,6 +890,77 @@ impl Definitions {
             }
         }
     }
+
+    /// The rule list `each`, `once` and `at` all take.
+    fn rules(
+        &self,
+        name: &str,
+        span: Span,
+        args: &[Arg],
+    ) -> Result<Vec<Box<dyn Matcher>>, ScriptError> {
+        if args.is_empty() {
+            return Err(ScriptError::new(
+                format!("`{}` needs at least one rule", name),
+                span,
+            ));
+        }
+        let mut rules: Vec<Box<dyn Matcher>> = Vec::new();
+        for arg in args {
+            match arg {
+                Arg::Expr(Expr::Name(rule_name, rule_span)) => {
+                    if term_matcher_names().contains(&rule_name.as_str()) {
+                        return Err(ScriptError::new(
+                            format!("`{}` needs a term", rule_name),
+                            *rule_span,
+                        )
+                        .with_help(format!(
+                            "say what to introduce: `{} {{ pick 0 }}`",
+                            rule_name
+                        )));
+                    }
+                    let Some(rule) = matcher_by_name(rule_name) else {
+                        return Err(ScriptError::new(
+                            format!("unknown rule '{}'", rule_name),
+                            *rule_span,
+                        )
+                        .with_help(known_rules()));
+                    };
+                    rules.push(rule);
+                }
+                Arg::Expr(Expr::Term(rule_name, rule_span, term)) => {
+                    let Some(built) = matcher_with_term(rule_name, term.clone()) else {
+                        let help = if matcher_by_name(rule_name).is_some() {
+                            format!("`{}` takes no term; write it bare", rule_name)
+                        } else {
+                            known_rules()
+                        };
+                        return Err(ScriptError::new(
+                            format!("'{}' does not take a term", rule_name),
+                            *rule_span,
+                        )
+                        .with_help(help));
+                    };
+                    match built {
+                        Ok(rule) => rules.push(rule),
+                        Err(why) => {
+                            return Err(ScriptError::new(
+                                format!("`{}` cannot use that term: {}", rule_name, why),
+                                *rule_span,
+                            ));
+                        }
+                    }
+                }
+                _ => {
+                    return Err(ScriptError::new(
+                        format!("`{}` takes rule names, not tactics", name),
+                        span,
+                    )
+                    .with_help(known_rules()));
+                }
+            }
+        }
+        Ok(rules)
+    }
 }
 
 /// The rule vocabulary, for an error message.
@@ -919,6 +972,14 @@ fn known_rules() -> String {
 }
 
 enum Shape {
+    /// Takes a position, then a comma-separated list of rule names.
+    CountAndRules,
+    /// Descends one level: a tactic, or an index and a tactic.
+    ///
+    /// Without the index it reaches every child of that kind; with it, one.
+    /// The two readings are the difference between "every then arm" and "the
+    /// then arm of the branch I mean".
+    Descend,
     /// Takes a comma-separated list of rule names.
     ///
     /// Deliberately not a tactic expression: "the arguments to `each` are
@@ -933,14 +994,18 @@ enum Shape {
 const COMBINATORS: &[(&str, Shape)] = &[
     ("each", Shape::Rules),
     ("once", Shape::Rules),
+    // `once` told where to look instead of asked to find out.
+    ("at", Shape::CountAndRules),
     ("try", Shape::One),
+    // The counterpart to `try`: `must(t)` fails when `t` changes nothing,
+    // which is how an aimed step says it missed.
+    ("must", Shape::One),
     ("repeat", Shape::One),
     ("children", Shape::One),
-    // `children` narrowed to one kind of child. `then`/`else` are the pair that
-    // makes a branch addressable at all.
-    ("then", Shape::One),
-    ("else", Shape::One),
-    ("body", Shape::One),
+    // `children` narrowed to one kind of child, and optionally to one node.
+    ("then", Shape::Descend),
+    ("else", Shape::Descend),
+    ("body", Shape::Descend),
     ("bu", Shape::One),
     ("td", Shape::One),
     ("repeat_n", Shape::CountAndOne),
@@ -1155,5 +1220,60 @@ mod tests {
                 .compile("each(introduce { pick 0")
                 .is_err()
         );
+    }
+
+    // -- aiming -------------------------------------------------------------
+
+    #[test]
+    fn at_takes_a_position_and_then_rules() {
+        assert!(compiles("at(0, sink)"));
+        assert!(compiles("at(3, sink, fuse)"));
+        assert!(compiles("at(1, introduce { pick 0 })"));
+        assert!(compiles("bu(at(0, collapse))"));
+    }
+
+    #[test]
+    fn at_without_a_position_says_what_it_wants() {
+        let e = err("at(sink)");
+        assert!(e.contains("a position and then rules"), "{}", e);
+        assert!(e.contains("at(2, sink)"), "{}", e);
+    }
+
+    #[test]
+    fn at_still_insists_on_a_rule() {
+        assert!(err("at(0)").contains("at least one rule"));
+    }
+
+    #[test]
+    fn a_descent_reaches_every_child_or_one() {
+        assert!(compiles("then(each(sink))"));
+        assert!(compiles("then(2, each(sink))"));
+        assert!(compiles("else(0, at(1, fuse))"));
+        assert!(compiles("body(7, id)"));
+        // Nested, which is how a whole path gets written.
+        assert!(compiles("then(1, body(2, at(0, sink)))"));
+    }
+
+    #[test]
+    fn a_descent_given_nonsense_explains_both_readings() {
+        let e = err("then(1, 2)");
+        assert!(e.contains("a tactic, or an index and a tactic"), "{}", e);
+        assert!(e.contains("reaches every one"), "{}", e);
+    }
+
+    #[test]
+    fn must_guards_an_aimed_step() {
+        assert!(compiles("must(at(2, sink))"));
+        assert!(compiles("must(then(1, once(collapse)))"));
+        assert!(compiles("try(must(at(0, fuse)))"));
+        assert!(err("must(1, at(0, sink))").contains("exactly one tactic"));
+    }
+
+    #[test]
+    fn the_traversals_that_take_no_index_still_do_not() {
+        // `bu`, `td`, `children` visit everything by their nature; an index
+        // would mean nothing, so it is refused rather than ignored.
+        assert!(err("bu(1, each(sink))").contains("exactly one tactic"));
+        assert!(err("children(1, each(sink))").contains("exactly one tactic"));
     }
 }
