@@ -120,9 +120,12 @@ mod tests {
             res.sentences[SentenceIndex::from(0)],
             vec![Instruction::Dip(1, SentenceIndex::from(1))]
         );
+        // `add` is fallible, so it leaves a success flag; without `#[flags]`
+        // the assembler drops it right there and the block's effect on the
+        // stack is what it always was.
         assert_eq!(
             res.sentences[SentenceIndex::from(1)],
-            vec![Instruction::Add]
+            vec![Instruction::Add, Instruction::Drop]
         );
     }
 
@@ -418,11 +421,15 @@ mod tests {
             }
         "#;
         let res3 = assemble(code3).unwrap();
+        // Five instructions for four written: `add` is fallible and its flag is
+        // dropped on the spot, so the depth goes 2 -> 2 -> 1 rather than
+        // 2 -> 1.
         assert_eq!(
             res3.instruction_arities[SentenceIndex::from(0)],
             Some(vec![
                 Arity::Normal { inputs: 0, outputs: 0 },
                 Arity::Normal { inputs: 0, outputs: 1 },
+                Arity::Normal { inputs: 0, outputs: 2 },
                 Arity::Normal { inputs: 0, outputs: 2 },
                 Arity::Normal { inputs: 0, outputs: 1 },
             ])

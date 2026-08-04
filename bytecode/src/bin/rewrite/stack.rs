@@ -219,11 +219,15 @@ fn op(inst: &Instruction, s: &mut Vec<Rc<Term>>, fresh: &mut Fresh) -> bool {
                     for e in es.iter().rev() {
                         s.push(e.clone());
                     }
+                    // A tuple this wide always comes apart, and the view knows
+                    // it, so the flag is a literal rather than an opaque slot.
+                    s.push(Rc::new(Term::Const(ConstKey::new(&Value::Bool(true)))));
                 }
                 _ => {
                     for i in (0..*n).rev() {
                         s.push(Rc::new(Term::Proj(i, t.clone())));
                     }
+                    s.push(fresh.next());
                 }
             }
         }
@@ -233,16 +237,23 @@ fn op(inst: &Instruction, s: &mut Vec<Rc<Term>>, fresh: &mut Fresh) -> bool {
             s.push(equality(&a, &b));
         }
         Instruction::Not
-        | Instruction::Negate
         | Instruction::IsInt
         | Instruction::IsBool
         | Instruction::IsFloat
         | Instruction::IsSymbol
-        | Instruction::IsTuple
-        | Instruction::TupleLength
-        | Instruction::SymbolLen => {
+        | Instruction::IsTuple => {
             let a = pop!();
             s.push(unary(inst, &a));
+        }
+        Instruction::Negate | Instruction::TupleLength | Instruction::SymbolLen => {
+            let a = pop!();
+            s.push(unary(inst, &a));
+            s.push(fresh.next());
+        }
+        Instruction::And | Instruction::Or => {
+            let b = pop!();
+            let a = pop!();
+            s.push(Rc::new(Term::App(op_name(inst), vec![a, b])));
         }
         Instruction::Greater
         | Instruction::Less
@@ -251,12 +262,13 @@ fn op(inst: &Instruction, s: &mut Vec<Rc<Term>>, fresh: &mut Fresh) -> bool {
         | Instruction::Multiply
         | Instruction::Divide
         | Instruction::Modulo
-        | Instruction::And
-        | Instruction::Or
         | Instruction::SymbolCharAt => {
             let b = pop!();
             let a = pop!();
             s.push(Rc::new(Term::App(op_name(inst), vec![a, b])));
+            // Whether it succeeded is not something the view tracks, so the
+            // flag is a fresh opaque slot rather than a claim.
+            s.push(fresh.next());
         }
         Instruction::Print => {
             let a = pop!();

@@ -170,32 +170,65 @@ pub fn op_arity(inst: &Instruction) -> Option<(i64, i64)> {
         // down to that depth even though it consumes nothing.
         Instruction::Pick(d) => (*d as i64 + 1, *d as i64 + 2),
         Instruction::Roll(d) => (*d as i64 + 1, *d as i64 + 1),
-        Instruction::Equal
-        | Instruction::Greater
+        Instruction::Equal | Instruction::And | Instruction::Or => (2, 1),
+        Instruction::Not
+        | Instruction::Print
+        | Instruction::IsInt
+        | Instruction::IsBool
+        | Instruction::IsFloat
+        | Instruction::IsSymbol
+        | Instruction::IsTuple => (1, 1),
+        // The fallible instructions, each one output wider than the value it
+        // computes because the extra slot holds the success flag. See
+        // [`is_fallible`].
+        Instruction::Greater
         | Instruction::Less
         | Instruction::Add
         | Instruction::Subtract
         | Instruction::Multiply
         | Instruction::Divide
         | Instruction::Modulo
-        | Instruction::And
-        | Instruction::Or
-        | Instruction::SymbolCharAt => (2, 1),
-        Instruction::Not
-        | Instruction::Negate
-        | Instruction::Print
-        | Instruction::SymbolLen
-        | Instruction::IsInt
-        | Instruction::IsBool
-        | Instruction::IsFloat
-        | Instruction::IsSymbol
-        | Instruction::IsTuple
-        | Instruction::TupleLength => (1, 1),
+        | Instruction::SymbolCharAt => (2, 2),
+        Instruction::Negate | Instruction::SymbolLen | Instruction::TupleLength => (1, 2),
+        Instruction::Untuple(n) => (1, *n as i64 + 1),
         Instruction::AssertEqual => (2, 0),
         Instruction::Tuple(n) => (*n as i64, 1),
-        Instruction::Untuple(n) => (1, *n as i64),
         Instruction::Panic | Instruction::Dip(..) | Instruction::Branch(..) => return None,
     })
+}
+
+/// Whether this instruction reports success with a flag on top of its result.
+///
+/// A fallible instruction is still **total** — it answers on every input (see
+/// `docs/totality.md`). What the flag adds is that the answer says whether it
+/// was computed or invented: `add` on two symbols leaves `0` and `false`, and
+/// on two numbers leaves the sum and `true`.
+///
+/// The arity is fixed either way, which is the point. A caller's stack does not
+/// depend on data, so the arity checker still works on shape alone and every
+/// rule that moves code past an instruction reads one pair of numbers rather
+/// than reasoning about which branch it took.
+///
+/// Kept beside [`op_arity`] because the two must agree: a fallible instruction
+/// is exactly one whose output count includes a slot the value does not need.
+/// The VM produces the flag, `assemble` decides whether to drop it, and
+/// `bin/rewrite` folds it — three readers, one table.
+pub fn is_fallible(inst: &Instruction) -> bool {
+    matches!(
+        inst,
+        Instruction::Greater
+            | Instruction::Less
+            | Instruction::Add
+            | Instruction::Subtract
+            | Instruction::Multiply
+            | Instruction::Divide
+            | Instruction::Modulo
+            | Instruction::Negate
+            | Instruction::Untuple(_)
+            | Instruction::TupleLength
+            | Instruction::SymbolLen
+            | Instruction::SymbolCharAt
+    )
 }
 
 fn infer_arity_of_instructions(

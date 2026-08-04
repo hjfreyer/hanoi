@@ -23,6 +23,21 @@ pub enum Annotation<Ref> {
     Precondition(Ref),
     Postcondition(Ref),
     Total,
+    /// This sentence sees the success flags of fallible instructions.
+    ///
+    /// Without it `assemble` drops each flag as it emits the instruction, so
+    /// source written against the old arities keeps working and junk still
+    /// propagates silently. With it, `untuple 3` really does leave four values,
+    /// and the sentence is expected to say what happens on failure.
+    Flags,
+    /// This sentence may fail: it panics, asserts, or calls something that
+    /// does.
+    ///
+    /// Checked, not inferred — see [`crate::arity::check_partiality`]. The
+    /// annotation propagates up the call graph the way [`Annotation::Recursive`]
+    /// does, so its *absence* on a sentence is a proof that the sentence
+    /// terminates normally on every input it accepts.
+    Partial,
 }
 
 /// An annotation as it appears in a compiled [`Library`].

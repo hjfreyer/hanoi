@@ -166,7 +166,7 @@ fn factoring_looks_past_provenance() {
     );
     assert_eq!(
         shape(&body),
-        vec!["dip 1 { dip 1 { add } }", "branch"],
+        vec!["dip 1 { dip 1 { add drop } }", "branch"],
         "the shared dipped prefix should have been hoisted"
     );
 }
@@ -205,7 +205,7 @@ fn dips_sink_past_pushes_and_arithmetic() {
     );
     assert_eq!(
         shape(&body),
-        vec!["dip 0 { add }", "push 1", "push 2", "add"]
+        vec!["dip 0 { add drop }", "push 1", "push 2", "add", "drop"]
     );
 }
 
@@ -244,9 +244,11 @@ fn a_deep_dip_becomes_a_nest_of_unary_dips() {
         }
     "#,
     );
+    // `untuple` and `add` are both fallible, so each is followed by the drop
+    // that discards its flag -- this sentence has no `#[flags]`.
     assert_eq!(
         shape(&body),
-        vec!["untuple 3", "dip 1 { dip 1 { add } }"]
+        vec!["untuple 3", "dip 1 { dip 1 { dip 1 { add drop } } }", "drop"]
     );
 }
 
@@ -287,7 +289,7 @@ fn nested_dips_collapse_and_then_keep_sinking() {
     );
     assert_eq!(
         shape(&body),
-        vec!["push 1", "push 2", "dip 0 { add }", "push 8", "push 9"]
+        vec!["push 1", "push 2", "dip 0 { add drop }", "push 8", "push 9"]
     );
 }
 
@@ -433,7 +435,7 @@ fn a_pick_and_a_drop_cancel() {
     "#,
         ANNIHILATE,
     );
-    assert_eq!(shape(&body), vec!["add"]);
+    assert_eq!(shape(&body), vec!["add", "drop"]);
 }
 
 #[test]
@@ -968,13 +970,17 @@ fn selective_descent_breaks_the_staged_inlining_plateau() {
 fn dup_natural_shares_a_predicates_work_with_its_callers() {
     // End to end through the driver, on the idiom the sharing law exists for:
     // a value handed to a check and then taken apart again.
+    // `#[flags]` so the sentence sees `untuple`'s success flag: the law is
+    // about the instruction's real arity, and without the annotation the
+    // assembler puts a flag-drop between the two occurrences.
     let (prog, before) = tree_of(
         r#"
-        #[arity(1, 6)]
+        #[flags]
+        #[arity(1, 8)]
         sentence probe {
             pick 0
             untuple 3
-            dip 3 { untuple 3 }
+            dip 4 { untuple 3 }
         }
     "#,
         NOTHING,
@@ -982,8 +988,8 @@ fn dup_natural_shares_a_predicates_work_with_its_callers() {
     let after = run(prog, before.clone(), "each(dup_natural)");
     assert_eq!(
         shape(&after),
-        vec!["untuple 3", "pick 2", "pick 2", "pick 2"],
-        "one untuple and three copies should replace two untuples"
+        vec!["untuple 3", "pick 3", "pick 3", "pick 3", "pick 3"],
+        "one untuple and four copies should replace two untuples"
     );
     // The driver ran with --check on, so the net effect is already known to
     // match; assert the full arity too, since this rule reshapes the stack
@@ -1270,10 +1276,24 @@ fn the_whole_derivation_runs_on_the_blocked_shape() {
          repeat(bu(each(unfactor_branch); each(cancel_tuple); cleanup)); \
          all; flatten; cleanup",
     );
+    // Two, not one, and the reason is the point. `rebuild_copy` branches on
+    // `untuple`'s flag now, and in the arm where untupling *failed* there is
+    // nothing to rebuild from -- so that arm keeps an `untuple` of its own,
+    // for a value already known not to come apart.
+    //
+    // The arm that matters is fully shared: everything downstream of a
+    // successful untupling reads the parts with `pick`, and holds no `untuple`
+    // at all. `the_direct_route_closes_by_speculating` gets the whole sentence
+    // to one without a reconstruction, and is now the better route on this
+    // shape.
+    assert_eq!(untuples(&after), 2);
+    let [_, Node::Branch { then_body, .. }] = &after[..] else {
+        panic!("expected the rebuild's guard branch, got {:?}", shape(&after))
+    };
     assert_eq!(
-        untuples(&after),
-        1,
-        "the two occurrences should have become one"
+        untuples(then_body),
+        0,
+        "the arm where the value came apart should share everything"
     );
     assert_eq!(
         seq_arity(prog, &before),
@@ -1814,7 +1834,7 @@ fn inlining_puts_the_callee_in_reach_of_the_callers_rules() {
 
     assert_eq!(
         shape(&run(prog, body.clone(), "distribute")),
-        vec!["call 0 #0", "add"],
+        vec!["call 0 #0", "add", "drop"],
         "an unexpanded call is opaque, so distribution has nothing to enter"
     );
     assert_eq!(
@@ -1850,7 +1870,10 @@ fn flattening_preserves_arity() {
     );
     let flat = run(prog, body.clone(), "flatten");
 
-    assert_eq!(shape(&flat), vec!["push 1", "add", "push 1", "add"]);
+    assert_eq!(
+        shape(&flat),
+        vec!["push 1", "add", "drop", "push 1", "add", "drop"]
+    );
     assert_eq!(seq_arity(prog, &body), seq_arity(prog, &flat));
 }
 
@@ -1902,19 +1925,20 @@ fn inlining_is_bounded_one_call_at_a_time() {
     let (prog, body) = raw(CALLS, "outer");
     assert_eq!(
         shape(&run(prog, body.clone(), "repeat_n(2, once(inline))")),
-        vec!["add", "call 0 #0"]
+        vec!["add", "drop", "call 0 #0"]
     );
     assert_eq!(
         shape(&run(prog, body, "repeat_n(3, once(inline))")),
-        vec!["add", "add"]
+        vec!["add", "drop", "add", "drop"]
     );
 }
 
 #[test]
 fn each_inline_expands_a_sequence_all_the_way_down() {
     let (prog, body) = raw(CALLS, "outer");
-    assert_eq!(shape(&run(prog, body.clone(), "each(inline)")), vec!["add", "add"]);
-    assert_eq!(shape(&run(prog, body, "inline_all")), vec!["add", "add"]);
+    let both = vec!["add", "drop", "add", "drop"];
+    assert_eq!(shape(&run(prog, body.clone(), "each(inline)")), both);
+    assert_eq!(shape(&run(prog, body, "inline_all")), both);
 }
 
 const LOOPS: &str = r#"

@@ -39,6 +39,7 @@ pub(crate) trait Rule: Sync + std::fmt::Debug {
 /// or define one.
 pub(crate) const ALL_RULES: &[&dyn Rule] = &[
     &AnnihilateDrop,
+    &AnnihilateFlagged,
     &BoolIdentity,
     &CancelTuple,
     &Collapse,
@@ -440,6 +441,47 @@ impl Rule for AnnihilateDrop {
     }
 }
 
+/// `X ; drop ; drop` becomes `drop^n`, where X has arity `(n -> 2)`.
+///
+/// [`AnnihilateDrop`] read one output; this one reads two, and exists because
+/// a **fallible** instruction leaves its flag alongside its value. `add; drop`
+/// is no longer an annihilation — it is the old `add`, with the flag thrown
+/// away — so what cancels is `add; drop; drop`, which is three nodes and one
+/// more than that rule's window.
+///
+/// It is not only about flags: `pick 0` has arity `(1 -> 2)` and belongs here
+/// for the same arithmetic, copying a value only for both copies to go.
+///
+/// `untuple n` is covered only at `n = 1`, since a wider one leaves `n + 1`
+/// values and this window reaches two. That is a bound on the rule rather than
+/// a claim about the law.
+///
+/// Measure: non-`drop` node count, as for [`AnnihilateDrop`].
+#[derive(Debug)]
+pub(crate) struct AnnihilateFlagged;
+
+impl Rule for AnnihilateFlagged {
+    fn name(&self) -> &'static str {
+        "annihilate_flagged"
+    }
+    fn width(&self) -> usize {
+        3
+    }
+    fn rewrite(&self, _prog: &Program, window: &[Node]) -> Option<Vec<Node>> {
+        let [Node::Op(prev), Node::Op(Instruction::Drop), Node::Op(Instruction::Drop)] = window
+        else {
+            return None;
+        };
+        if matches!(prev, Instruction::Print) {
+            return None;
+        }
+        let (n, 2) = op_arity(prev)? else {
+            return None;
+        };
+        Some(vec![Node::Op(Instruction::Drop); usize::try_from(n).ok()?])
+    }
+}
+
 /// How many drops replace `inst; drop`, or `None` if the pair does not cancel.
 fn annihilation(inst: &Instruction) -> Option<usize> {
     match inst {
@@ -716,12 +758,18 @@ mod tests {
 
     #[test]
     fn sink_widens_past_an_operator_that_consumes_two() {
-        // `add` is (2 -> 1): 1 >= 1 clears the window, and the same window is
-        // 1 - 1 + 2 = 2 deep on the other side.
-        let w = [op(Instruction::Add), dip(1, vec![])];
+        // `add` is (2 -> 2), the second output being its success flag: 2 >= 2
+        // clears the window, and the same window is 2 - 2 + 2 = 2 deep on the
+        // other side.
+        let w = [op(Instruction::Add), dip(2, vec![])];
         assert_eq!(
             Sink.rewrite(&prog(), &w),
             Some(vec![dip(2, vec![]), op(Instruction::Add)])
+        );
+        // One shallower and the dip would be rewriting the flag.
+        assert_eq!(
+            Sink.rewrite(&prog(), &[op(Instruction::Add), dip(1, vec![])]),
+            None
         );
     }
 
@@ -737,15 +785,15 @@ mod tests {
 
     #[test]
     fn sink_declines_when_the_window_would_reach_what_prev_produced() {
-        // `untuple 3` is (1 -> 3); a dip hiding only two would be rewriting a
-        // slot the untuple just filled.
-        assert_eq!(
-            Sink.rewrite(&prog(), &[op(Instruction::Untuple(3)), dip(2, vec![])]),
-            None
-        );
-        // Hiding three clears it, and the window is 3 - 3 + 1 = 1 deep before.
+        // `untuple 3` is (1 -> 4) -- three elements and a flag -- so a dip
+        // hiding only three would be rewriting a slot the untuple just filled.
         assert_eq!(
             Sink.rewrite(&prog(), &[op(Instruction::Untuple(3)), dip(3, vec![])]),
+            None
+        );
+        // Hiding four clears it, and the window is 4 - 4 + 1 = 1 deep before.
+        assert_eq!(
+            Sink.rewrite(&prog(), &[op(Instruction::Untuple(3)), dip(4, vec![])]),
             Some(vec![dip(1, vec![]), op(Instruction::Untuple(3))])
         );
     }
@@ -823,7 +871,7 @@ mod tests {
         );
         // A two-operand operator leaves two.
         assert_eq!(
-            AnnihilateDrop.rewrite(&prog(), &[op(Instruction::Add), op(Instruction::Drop)]),
+            AnnihilateDrop.rewrite(&prog(), &[op(Instruction::Equal), op(Instruction::Drop)]),
             Some(vec![op(Instruction::Drop), op(Instruction::Drop)])
         );
         // And `tuple n` leaves n, which is where the count stops being one or
@@ -1038,26 +1086,37 @@ mod tests {
     }
 
     #[test]
-    fn annihilate_declines_only_print() {
-        // The whitelist is gone: `add; drop` *is* `drop; drop` now, since the
-        // add has no non-numeric operand left to reject. What survives is the
-        // one operator whose second run differs in something other than the
-        // stack.
+    fn annihilate_declines_print_and_anything_leaving_a_flag() {
+        // `print` is the operator whose second run differs in something other
+        // than the stack, and it is still the only *principled* exclusion.
         assert_eq!(
             AnnihilateDrop.rewrite(&prog(), &[op(Instruction::Print), op(Instruction::Drop)]),
             None
         );
-        for inst in [
-            Instruction::Add,
-            Instruction::Equal,
-            Instruction::Divide,
-            Instruction::And,
-            Instruction::SymbolCharAt,
-        ] {
+        // The total operators cancel as before.
+        for inst in [Instruction::Equal, Instruction::And, Instruction::Or] {
             assert_eq!(
                 AnnihilateDrop.rewrite(&prog(), &[op(inst.clone()), op(Instruction::Drop)]),
                 Some(vec![op(Instruction::Drop), op(Instruction::Drop)]),
                 "{:?} should cancel into two drops",
+                inst
+            );
+        }
+        // A *fallible* one no longer matches, and this is a reach the flags
+        // cost rather than a soundness argument. `add` leaves two values now,
+        // so `add; drop` is the old `add` rather than an annihilation -- what
+        // cancels is `add; drop; drop`, three nodes, and this rule sees two.
+        // `AnnihilateFlagged` is the companion that takes that window.
+        for inst in [
+            Instruction::Add,
+            Instruction::Divide,
+            Instruction::SymbolCharAt,
+            Instruction::TupleLength,
+        ] {
+            assert_eq!(
+                AnnihilateDrop.rewrite(&prog(), &[op(inst.clone()), op(Instruction::Drop)]),
+                None,
+                "{:?} leaves a flag, so a lone drop only takes that",
                 inst
             );
         }
@@ -1130,11 +1189,12 @@ mod tests {
             ),
             Some(vec![push(Value::Bool(true))])
         );
-        // A non-numeric pair is not less, and not greater either.
+        // The comparisons are fallible now, so a fold produces the flag too.
+        // A non-numeric pair is not less and not greater, and says so twice.
         for inst in [Instruction::Less, Instruction::Greater] {
             assert_eq!(
                 FoldConst.rewrite(&prog(), &[push(sym(1)), push(sym(2)), op(inst.clone())]),
-                Some(vec![push(Value::Bool(false))]),
+                Some(vec![push(Value::Bool(false)), push(Value::Bool(false))]),
                 "{:?} on two symbols",
                 inst
             );
@@ -1151,13 +1211,14 @@ mod tests {
             ),
             Some(vec![push(Value::Bool(false))])
         );
-        // And a mixed numeric pair compares, the way the VM does.
+        // And a mixed numeric pair compares, the way the VM does, reporting
+        // that it really did compare.
         assert_eq!(
             FoldConst.rewrite(
                 &prog(),
                 &[push(Value::Int(1)), push(Value::Float(1.5)), op(Instruction::Less)]
             ),
-            Some(vec![push(Value::Bool(true))])
+            Some(vec![push(Value::Bool(true)), push(Value::Bool(true))])
         );
     }
 
@@ -1192,11 +1253,12 @@ mod tests {
             FoldConstUnary.rewrite(&prog(), &[push(Value::Bool(true)), op(Instruction::Not)]),
             Some(vec![push(Value::Bool(false))])
         );
-        // `tuple_length` of a non-tuple is zero, which is what makes
-        // `rebuild_copy`'s guard decidable on a literal.
+        // `tuple_length` is fallible, so folding it produces the flag too --
+        // and on a non-tuple it hands the value back rather than inventing a
+        // length, which is the "preserve the inputs" rule applied to a literal.
         assert_eq!(
             FoldConstUnary.rewrite(&prog(), &[push(sym(1)), op(Instruction::TupleLength)]),
-            Some(vec![push(Value::Int(0))])
+            Some(vec![push(sym(1)), push(Value::Bool(false))])
         );
         assert_eq!(
             FoldConstUnary.rewrite(
@@ -1206,7 +1268,7 @@ mod tests {
                     op(Instruction::TupleLength)
                 ]
             ),
-            Some(vec![push(Value::Int(2))])
+            Some(vec![push(Value::Int(2)), push(Value::Bool(true))])
         );
         // A computed operand is still not a literal.
         assert_eq!(
@@ -1591,15 +1653,16 @@ mod tests {
         let w = [
             op(Instruction::Pick(0)),
             op(Instruction::Untuple(3)),
-            dip(3, vec![op(Instruction::Untuple(3))]),
+            dip(4, vec![op(Instruction::Untuple(3))]),
         ];
         assert_eq!(
             DupNatural.rewrite(&prog(), &w),
             Some(vec![
                 op(Instruction::Untuple(3)),
-                op(Instruction::Pick(2)),
-                op(Instruction::Pick(2)),
-                op(Instruction::Pick(2)),
+                op(Instruction::Pick(3)),
+                op(Instruction::Pick(3)),
+                op(Instruction::Pick(3)),
+                op(Instruction::Pick(3)),
             ])
         );
     }
@@ -1677,33 +1740,27 @@ mod tests {
         );
     }
 
-    /// The guard `rebuild_copy` puts in front of its payload.
-    fn tuple_guard(n: usize) -> Vec<Node> {
-        vec![
-            op(Instruction::Pick(0)),
-            op(Instruction::TupleLength),
-            push(Value::Int(n as i64)),
-            op(Instruction::Equal),
-        ]
-    }
-
-    fn unit() -> Value {
-        Value::unit()
-    }
-
     #[test]
     fn rebuild_copy_destructures_the_value_and_rebuilds_the_copy() {
-        let mut want = tuple_guard(3);
-        want.push(branch(
-            vec![
-                op(Instruction::Untuple(3)),
-                op(Instruction::Pick(2)),
-                op(Instruction::Pick(2)),
-                op(Instruction::Pick(2)),
-                dip(3, vec![op(Instruction::Tuple(3))]),
-            ],
-            vec![push(unit()), push(unit()), push(unit())],
-        ));
+        // The guard is `untuple`'s own flag: the then arm rebuilds from parts
+        // that really are the value's, and the else arm copies the value
+        // `untuple` left in the deepest slot it filled.
+        let want = vec![
+            op(Instruction::Untuple(3)),
+            branch(
+                vec![
+                    op(Instruction::Pick(2)),
+                    op(Instruction::Pick(2)),
+                    op(Instruction::Pick(2)),
+                    dip(3, vec![op(Instruction::Tuple(3))]),
+                    push(Value::Bool(true)),
+                ],
+                vec![
+                    dip(2, vec![op(Instruction::Pick(0))]),
+                    push(Value::Bool(false)),
+                ],
+            ),
+        ];
         let Some(got) = RebuildCopy.rewrite(
             &prog(),
             &[op(Instruction::Pick(0)), op(Instruction::Untuple(3))],
@@ -1712,16 +1769,22 @@ mod tests {
         };
         assert_eq!(shape_of(&got), shape_of(&want));
 
-        // n = 1 is the degenerate but real case.
-        let mut want = tuple_guard(1);
-        want.push(branch(
-            vec![
-                op(Instruction::Untuple(1)),
-                op(Instruction::Pick(0)),
-                dip(1, vec![op(Instruction::Tuple(1))]),
-            ],
-            vec![push(unit())],
-        ));
+        // n = 1 is the degenerate but real case: no padding, so the else arm
+        // copies in place.
+        let want = vec![
+            op(Instruction::Untuple(1)),
+            branch(
+                vec![
+                    op(Instruction::Pick(0)),
+                    dip(1, vec![op(Instruction::Tuple(1))]),
+                    push(Value::Bool(true)),
+                ],
+                vec![
+                    dip(0, vec![op(Instruction::Pick(0))]),
+                    push(Value::Bool(false)),
+                ],
+            ),
+        ];
         let Some(got) = RebuildCopy.rewrite(
             &prog(),
             &[op(Instruction::Pick(0)), op(Instruction::Untuple(1))],
@@ -1730,8 +1793,7 @@ mod tests {
         };
         assert_eq!(shape_of(&got), shape_of(&want));
 
-        // A 0-tuple has no parts to share, and the guard could not tell one
-        // from junk anyway.
+        // A 0-tuple has no parts to share.
         assert_eq!(
             RebuildCopy.rewrite(
                 &prog(),
@@ -1880,7 +1942,7 @@ mod tests {
         let hand_written = [
             op(Instruction::Pick(0)),
             op(Instruction::Untuple(3)),
-            dip(3, vec![op(Instruction::Untuple(3))]),
+            dip(4, vec![op(Instruction::Untuple(3))]),
         ];
         let after_sinking = [
             op(Instruction::Pick(0)),
@@ -1889,9 +1951,10 @@ mod tests {
         ];
         let shared = Some(vec![
             op(Instruction::Untuple(3)),
-            op(Instruction::Pick(2)),
-            op(Instruction::Pick(2)),
-            op(Instruction::Pick(2)),
+            op(Instruction::Pick(3)),
+            op(Instruction::Pick(3)),
+            op(Instruction::Pick(3)),
+            op(Instruction::Pick(3)),
         ]);
         assert_eq!(DupNatural.rewrite(&prog(), &hand_written), shared);
         assert_eq!(DupNatural.rewrite(&prog(), &after_sinking), shared);
@@ -1899,10 +1962,10 @@ mod tests {
 
     #[test]
     fn dup_natural_needs_the_frame_to_match_what_the_first_copy_produced() {
-        // `untuple 3` leaves three values, so the second occurrence has to sit
-        // under exactly three. At any other depth the two are not looking at
-        // the same thing.
-        for depth in [1, 2, 4] {
+        // `untuple 3` leaves four values -- three elements and a flag -- so
+        // the second occurrence has to sit under exactly four. At any other
+        // depth the two are not looking at the same thing.
+        for depth in [1, 2, 3, 5] {
             assert_eq!(
                 DupNatural.rewrite(
                     &prog(),
@@ -1924,7 +1987,7 @@ mod tests {
                 &[
                     op(Instruction::Pick(0)),
                     op(Instruction::Untuple(3)),
-                    dip(3, vec![op(Instruction::Untuple(2))]),
+                    dip(4, vec![op(Instruction::Untuple(2))]),
                 ]
             ),
             None
@@ -2025,10 +2088,11 @@ mod tests {
                 ),
                 branch(
                     vec![
-                        dip(3, vec![op(Instruction::Drop)]),
+                        dip(4, vec![op(Instruction::Drop)]),
                         op(Instruction::Add)
                     ],
                     vec![
+                        op(Instruction::Drop),
                         op(Instruction::Drop),
                         op(Instruction::Drop),
                         op(Instruction::Drop),
@@ -2057,8 +2121,13 @@ mod tests {
                     vec![op(Instruction::Pick(0)), op(Instruction::Untuple(2))]
                 ),
                 branch(
-                    vec![op(Instruction::Drop), op(Instruction::Drop), call],
-                    vec![dip(2, vec![op(Instruction::Drop)])],
+                    vec![
+                        op(Instruction::Drop),
+                        op(Instruction::Drop),
+                        op(Instruction::Drop),
+                        call
+                    ],
+                    vec![dip(3, vec![op(Instruction::Drop)])],
                 ),
             ])
         );
@@ -2068,7 +2137,7 @@ mod tests {
     fn speculate_branch_lifts_a_whole_block_not_just_one_op() {
         // What lets a speculation climb out of nested branches: the rule's own
         // output is a dip, so if a dip could not be lifted the second branch
-        // out would strand it. `dip 1 { untuple 2 }` is (2 -> 3).
+        // out would strand it. `dip 1 { untuple 2 }` is (2 -> 4).
         let w = [branch(
             vec![dip(1, vec![op(Instruction::Untuple(2))])],
             vec![op(Instruction::Push(Value::Int(9)))],
@@ -2086,10 +2155,11 @@ mod tests {
                 ),
                 branch(
                     vec![dip(
-                        3,
+                        4,
                         vec![op(Instruction::Drop), op(Instruction::Drop)]
                     )],
                     vec![
+                        op(Instruction::Drop),
                         op(Instruction::Drop),
                         op(Instruction::Drop),
                         op(Instruction::Drop),
@@ -2128,8 +2198,8 @@ mod tests {
 
     #[test]
     fn speculate_branch_copies_every_operand_a_wider_x_reads() {
-        // `add` is (2 -> 1), so both operands are copied and the then arm drops
-        // two originals from under the single result.
+        // `add` is (2 -> 2), so both operands are copied and the then arm drops
+        // two originals from under the result and its flag.
         let w = [branch(
             vec![op(Instruction::Add)],
             vec![op(Instruction::Push(Value::Int(9)))],
@@ -2147,10 +2217,11 @@ mod tests {
                 ),
                 branch(
                     vec![dip(
-                        1,
+                        2,
                         vec![op(Instruction::Drop), op(Instruction::Drop)]
                     )],
                     vec![
+                        op(Instruction::Drop),
                         op(Instruction::Drop),
                         op(Instruction::Push(Value::Int(9)))
                     ],
@@ -2249,7 +2320,9 @@ mod tests {
                 &prog(),
                 &[op(Instruction::Tuple(2)), op(Instruction::Untuple(2))]
             ),
-            Some(Vec::new())
+            // Not nothing: `untuple` cannot fail on what `tuple` just built, so
+            // the pair leaves a literal `true` where its flag would be.
+            Some(vec![push(Value::Bool(true))])
         );
         // `untuple n; tuple n` is *not* a no-op: it junk-normalizes, mapping
         // every non-n-tuple to `((), ...)`. A real function, and not the
@@ -2482,18 +2555,30 @@ impl Rule for FoldConst {
         let Node::Op(inst) = op else { return None };
 
         let out = match inst {
-            Instruction::Equal => Value::Bool(a == b),
-            Instruction::And => Value::Bool(a.truthy() && b.truthy()),
-            Instruction::Or => Value::Bool(a.truthy() || b.truthy()),
-            // Unordered covers both a non-numeric operand and a NaN, and both
-            // answer `false` to either comparison.
-            Instruction::Greater => {
-                Value::Bool(numeric_cmp(a, b) == Some(std::cmp::Ordering::Greater))
+            Instruction::Equal => vec![Value::Bool(a == b)],
+            Instruction::And => vec![Value::Bool(a.truthy() && b.truthy())],
+            Instruction::Or => vec![Value::Bool(a.truthy() || b.truthy())],
+            // The comparisons are fallible, so folding one has to produce the
+            // flag as well. Unordered covers both a non-numeric operand and a
+            // NaN: neither is a comparison the instruction can claim to have
+            // made, so both answer `false, false`.
+            Instruction::Greater | Instruction::Less => {
+                let want = match inst {
+                    Instruction::Greater => std::cmp::Ordering::Greater,
+                    _ => std::cmp::Ordering::Less,
+                };
+                match numeric_cmp(a, b) {
+                    Some(ord) => vec![Value::Bool(ord == want), Value::Bool(true)],
+                    None => vec![Value::Bool(false), Value::Bool(false)],
+                }
             }
-            Instruction::Less => Value::Bool(numeric_cmp(a, b) == Some(std::cmp::Ordering::Less)),
             _ => return None,
         };
-        Some(vec![Node::Op(Instruction::Push(out))])
+        Some(
+            out.into_iter()
+                .map(|v| Node::Op(Instruction::Push(v)))
+                .collect(),
+        )
     }
 }
 
@@ -2525,19 +2610,25 @@ impl Rule for FoldConstUnary {
         let Node::Op(inst) = op else { return None };
 
         let out = match inst {
-            Instruction::IsInt => Value::Bool(matches!(a, Value::Int(_))),
-            Instruction::IsBool => Value::Bool(matches!(a, Value::Bool(_))),
-            Instruction::IsFloat => Value::Bool(matches!(a, Value::Float(_))),
-            Instruction::IsSymbol => Value::Bool(matches!(a, Value::Symbol(_))),
-            Instruction::IsTuple => Value::Bool(matches!(a, Value::Tuple(_))),
-            Instruction::Not => Value::Bool(!a.truthy()),
-            Instruction::TupleLength => Value::Int(match a {
-                Value::Tuple(t) => t.len() as i64,
-                _ => 0,
-            }),
+            Instruction::IsInt => vec![Value::Bool(matches!(a, Value::Int(_)))],
+            Instruction::IsBool => vec![Value::Bool(matches!(a, Value::Bool(_)))],
+            Instruction::IsFloat => vec![Value::Bool(matches!(a, Value::Float(_)))],
+            Instruction::IsSymbol => vec![Value::Bool(matches!(a, Value::Symbol(_)))],
+            Instruction::IsTuple => vec![Value::Bool(matches!(a, Value::Tuple(_)))],
+            Instruction::Not => vec![Value::Bool(!a.truthy())],
+            // Fallible, and with one input and two slots it hands the value
+            // back rather than inventing a length for it.
+            Instruction::TupleLength => match a {
+                Value::Tuple(t) => vec![Value::Int(t.len() as i64), Value::Bool(true)],
+                other => vec![other.clone(), Value::Bool(false)],
+            },
             _ => return None,
         };
-        Some(vec![Node::Op(Instruction::Push(out))])
+        Some(
+            out.into_iter()
+                .map(|v| Node::Op(Instruction::Push(v)))
+                .collect(),
+        )
     }
 }
 
@@ -2943,9 +3034,9 @@ impl Rule for CopyConst {
 /// `pick 0 ; untuple n` becomes, for `n >= 1`,
 ///
 /// ```text
-/// pick 0; tuple_length; push n; equal;
-/// branch { untuple n; (pick (n-1))^n; dip n { tuple n } }
-///        { (push ())^n }
+/// untuple n;
+/// branch { (pick (n-1))^n; dip n { tuple n }; push true }
+///        { dip (n-1) { pick 0 }; push false }
 /// ```
 ///
 /// Instead of keeping the value and taking a copy apart, take the value apart
@@ -2962,27 +3053,25 @@ impl Rule for CopyConst {
 /// `tuple n; untuple n` needs to know nothing about where the value came from.
 /// **The construction is the proof.**
 ///
-/// ## Why the guard
+/// ## Why the branch, and why it is cheap
 ///
 /// The rule used to be the bare equation `pick 0; untuple n` ==
 /// `untuple n; (pick (n-1))^n; dip n { tuple n }`, justified by both sides
-/// panicking on exactly the inputs where `x` is not an n-tuple. There is no
-/// panic left to agree about (see `docs/totality.md`), and without it the two
-/// sides visibly differ: the left keeps `x`, and the right hands back
-/// `untuple n; tuple n` of `x`, which on junk is `((), …, ())`. The old rule
-/// was *relying* on partiality to hide a normalization, and is unsound the
-/// moment the operators become total.
+/// panicking on exactly the inputs where `x` is not an n-tuple. Once the
+/// operators became total there was no panic left to agree about, and the two
+/// sides visibly differed: the left keeps `x`, the right hands back
+/// `untuple n; tuple n` of `x`, which on junk is not `x`. The rule was
+/// *relying* on partiality to hide a normalization.
 ///
-/// Untupling junk is untagged, so nothing recovers `x` from the parts and the
-/// rule has to test instead. The guard needs no `is_tuple` in front of it:
-/// `tuple_length` of a non-tuple is `Int 0`, which fails `= n` for every
-/// `n >= 1` — and `n = 0` is declined anyway, a 0-tuple having no parts to
-/// share.
+/// It briefly needed a `tuple_length; push n; equal` guard to recover. It does
+/// not any more: **`untuple n` reports for itself**, so the condition is
+/// already on the stack, and the else arm has something to say rather than
+/// junk to invent — the value `untuple n` could not take apart is still sitting
+/// in the deepest of the slots it filled. Both arms are exact, and neither
+/// recomputes anything.
 ///
-/// The else arm needs no `untuple` either. In that arm the answer is *known* to
-/// be n copies of `()`, which is the totality contract paying for the guard it
-/// just demanded — and it is what keeps the measure below true, since an else
-/// arm holding `pick 0; untuple n` would hand the rule its own input back.
+/// That is the whole argument for putting the flag on the stack: the guard a
+/// rewrite needs is the one the instruction already computed.
 ///
 /// The rebuild is framed as `dip n { tuple n }` rather than emitted with rolls
 /// for two reasons: it rebuilds the lower copy where it already sits, and it
@@ -3017,32 +3106,35 @@ impl Rule for RebuildCopy {
         }
         let n = *n;
 
-        let mut rebuilt = vec![Node::Op(Instruction::Untuple(n))];
-        // Copy all `n` parts, each reaching back past the copies already made.
-        rebuilt.extend((0..n).map(|_| Node::Op(Instruction::Pick(n - 1))));
-        // Rebuild the lower copy in place, under the parts just copied.
+        // Where it worked, the parts really are `x`'s and `tuple n` rebuilds
+        // it. Copy all `n`, each pick reaching back past the copies already
+        // made, then rebuild the lower copy in place underneath them.
+        let mut rebuilt: Vec<Node> = (0..n).map(|_| Node::Op(Instruction::Pick(n - 1))).collect();
         rebuilt.push(Node::Dip {
             depth: n,
             origins: Vec::new(),
             body: vec![Node::Op(Instruction::Tuple(n))],
         });
+        rebuilt.push(Node::Op(Instruction::Push(Value::Bool(true))));
 
-        // Off the guard, untupling gives n copies of `()` and the value is
-        // untouched, so the arm can say that outright.
-        let junk = (0..n)
-            .map(|_| Node::Op(Instruction::Push(Value::unit())))
-            .collect();
+        // Where it did not, there is nothing to rebuild: `untuple n` left `x`
+        // itself in the deepest of the n slots, so the copy is a copy of that.
+        let recovered = vec![
+            Node::Dip {
+                depth: n - 1,
+                origins: Vec::new(),
+                body: vec![Node::Op(Instruction::Pick(0))],
+            },
+            Node::Op(Instruction::Push(Value::Bool(false))),
+        ];
 
         Some(vec![
-            Node::Op(Instruction::Pick(0)),
-            Node::Op(Instruction::TupleLength),
-            Node::Op(Instruction::Push(Value::Int(n as i64))),
-            Node::Op(Instruction::Equal),
+            Node::Op(Instruction::Untuple(n)),
             Node::Branch {
-                then_origin: "is an n-tuple".to_string(),
+                then_origin: "came apart".to_string(),
                 then_body: rebuilt,
-                else_origin: "is not".to_string(),
-                else_body: junk,
+                else_origin: "did not".to_string(),
+                else_body: recovered,
             },
         ])
     }
@@ -3314,16 +3406,17 @@ impl Rule for SpeculateBranch {
     }
 }
 
-/// `tuple n ; untuple n` becomes nothing.
+/// `tuple n ; untuple n` becomes `push true`.
 ///
 /// Building a tuple and immediately taking it apart returns the stack to
-/// exactly where it started. The converse — `untuple n; tuple n` — is *not* a
-/// no-op and is not included, and totalizing the VM did not change that: it
-/// used to reject every value that was not an n-tuple, and now it maps each of
-/// them to `((), …, ())` instead. Still a real function, still not the
-/// identity.
+/// exactly where it started — and now says so. `untuple n` cannot fail on
+/// something `tuple n` just built, so the flag it leaves is a literal `true`,
+/// and that literal is the whole residue of the pair.
 ///
-/// Measure: node count.
+/// The converse — `untuple n; tuple n` — is still *not* a no-op and still not
+/// included. It junk-normalizes, and it now also leaves the flag stranded.
+///
+/// Measure: node count. Two nodes become one.
 #[derive(Debug)]
 pub(crate) struct CancelTuple;
 
@@ -3338,6 +3431,6 @@ impl Rule for CancelTuple {
         let [Node::Op(Instruction::Tuple(n)), Node::Op(Instruction::Untuple(m))] = window else {
             return None;
         };
-        (n == m).then(Vec::new)
+        (n == m).then(|| vec![Node::Op(Instruction::Push(Value::Bool(true)))])
     }
 }
