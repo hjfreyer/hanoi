@@ -719,10 +719,12 @@ mod tests {
     #[test]
     fn test_integration_assembler_vm() {
         let code = r#"
+            #[flags]
             export sentence start {
                 push 10
                 push 20
                 add
+                assert
                 push 30
                 assert_eq
                 
@@ -753,11 +755,13 @@ mod tests {
             symbol status_ok "Successful execution"
             symbol status_error "Execution error"
             
+            #[flags]
             export sentence entry {
                 push status_ok
                 jump verify
             }
             
+            #[flags]
             sentence verify {
                 // Top of stack has the passed symbol. Compare it to status_ok.
                 push status_ok
@@ -786,36 +790,47 @@ mod tests {
             symbol ascii_sym "hello"
             symbol unicode_sym "café"
             
+            #[flags]
             export sentence test_len {
                 push ascii_sym
                 symbol_len
+                assert
                 push 5
                 assert_eq
                 
                 push unicode_sym
                 symbol_len
+                assert
                 push 4
                 assert_eq
             }
             
+            #[flags]
             export sentence test_char_at {
                 push ascii_sym
                 push 1
                 symbol_char_at
+                assert
                 push 101
                 assert_eq
                 
                 push unicode_sym
                 push 3
                 symbol_char_at
+                assert
                 push 233
                 assert_eq
             }
             
+            #[flags]
             export sentence test_out_of_bounds {
                 push unicode_sym
                 push 4
                 symbol_char_at
+                // Out of range, so the flag is the one place this differs from
+                // the two above: it says the 0 underneath was invented.
+                not
+                assert
                 push 0
                 assert_eq
             }
@@ -835,7 +850,7 @@ mod tests {
         assert!(vm.stack().is_empty());
 
         // Run test_out_of_bounds: an index past the end answers 0 rather than
-        // failing, and the sentence asserts exactly that.
+        // failing, and reports that it did. The sentence asserts both halves.
         let oob_idx = *res.exports.get("test_out_of_bounds").unwrap();
         let mut vm = VM::new(res);
         assert!(vm.execute(oob_idx).is_ok());
@@ -845,10 +860,12 @@ mod tests {
     #[test]
     fn test_tracing_execution() {
         let code = r#"
+            #[flags]
             export sentence entry {
                 push 42
                 push 100
                 add
+                assert
             }
         "#;
         let res = bytecode::assemble(code).unwrap();
@@ -874,36 +891,46 @@ mod tests {
             symbol to_sym "ToSymbol"
             symbol payload "Payload"
             mod base {
+                #[flags]
                 export function init {
                     untuple 0
+                    assert
                     push 0
                 }
+                #[flags]
                 export function accept {
                     untuple 2
+                    assert
                     drop 0
                     push crate::payload
                     equal
                 }
+                #[flags]
                 export function emit {
                     drop 0
                     push crate::payload
                     push true
                     tuple 2
                 }
+                #[flags]
                 export function process {
                     untuple 2
+                    assert
                     drop 0
                     drop 0
                     push 1
                 }
+                #[flags]
                 export function is_done {
                     drop 0
                     push false
                 }
+                #[flags]
                 export function is_ready_to_finish {
                     drop 0
                     push false
                 }
+                #[flags]
                 export function tau_reduce {
                     push false
                     tuple 2
@@ -913,6 +940,7 @@ mod tests {
             mod prefixed compose_prefix(base, from_sym);
             mod renamed compose_rename_prefix(from_sym, to_sym, prefixed);
 
+            #[flags]
             export sentence test_rename {
                 // Initialize state
                 tuple 0
@@ -933,6 +961,7 @@ mod tests {
                 pick 0
                 jump renamed::emit
                 untuple 2
+                assert
                 assert
                 push payload
                 push to_sym
@@ -955,6 +984,7 @@ mod tests {
                 pick 0
                 jump renamed::tau_reduce
                 untuple 2
+                assert
                 pick 0
                 not
                 assert
@@ -977,7 +1007,16 @@ mod tests {
         let bad_code = r#"
             symbol a
             symbol b
-            mod m { export function init { untuple 0 push 0 } export sentence accept { untuple 2 drop 0 drop 0 push false } export function emit { drop 0 tuple 0 push false tuple 2 } export sentence process { } }
+            mod m {
+                #[flags]
+                export function init { untuple 0 assert push 0 }
+                #[flags]
+                export sentence accept { untuple 2 assert drop 0 drop 0 push false }
+                #[flags]
+                export function emit { drop 0 tuple 0 push false tuple 2 }
+                #[flags]
+                export sentence process { }
+            }
             mod bad compose_rename_prefix(a, m);
         "#;
         assert!(bytecode::assemble(bad_code).is_err());
@@ -987,37 +1026,48 @@ mod tests {
     fn test_compose_static_closure() {
         let code = r#"
             mod base {
+                #[flags]
                 export function init {
                     // Stack has the value pushed by the composer
                     push 10
                     add
+                    assert
                 }
+                #[flags]
                 export function accept {
                     untuple 2
+                    assert
                     drop 0
                     drop 0
                     push false
                 }
+                #[flags]
                 export function emit {
                     drop 0
                     tuple 0
                     push false
                     tuple 2
                 }
+                #[flags]
                 export function process {
                     untuple 2
+                    assert
                     drop 1
                     push 100
                     add
+                    assert
                 }
+                #[flags]
                 export function tau_reduce {
                     push false
                     tuple 2
                 }
+                #[flags]
                 export function is_done {
                     drop 0
                     push false
                 }
+                #[flags]
                 export function is_ready_to_finish {
                     drop 0
                     push false
@@ -1026,6 +1076,7 @@ mod tests {
 
             mod closed compose_static_closure(base, 42);
 
+            #[flags]
             export sentence test_closure {
                 // Initialize state: should push 42, then call base::init which adds 10 -> returns 52
                 tuple 0
@@ -1056,34 +1107,44 @@ mod tests {
     fn test_tau_reduce() {
         let code = r#"
             mod m_no_tau {
+                #[flags]
                 export function init {
                     untuple 0
+                    assert
                     push 0
                 }
+                #[flags]
                 export sentence accept {
                     untuple 2
+                    assert
                     drop 0
                     drop 0
                     push false
                 }
+                #[flags]
                 export function emit {
                     drop 0
                     tuple 0
                     push false
                     tuple 2
                 }
+                #[flags]
                 export function tau_reduce {
                     push false
                     tuple 2
                 }
+                #[flags]
                 export function process {
                     untuple 2
+                    assert
                     drop 1
                 }
+                #[flags]
                 export function is_done {
                     drop 0
                     push false
                 }
+                #[flags]
                 export function is_ready_to_finish {
                     drop 0
                     push false
@@ -1091,48 +1152,60 @@ mod tests {
             }
 
             mod m_with_tau {
+                #[flags]
                 export function init {
                     untuple 0
+                    assert
                     push 0
                 }
+                #[flags]
                 export sentence accept {
                     untuple 2
+                    assert
                     drop 0
                     drop 0
                     push false
                 }
+                #[flags]
                 export function emit {
                     drop 0
                     tuple 0
                     push false
                     tuple 2
                 }
+                #[flags]
                 export function tau_reduce {
                     drop 0
                     push 1
                     push true
                     tuple 2
                 }
+                #[flags]
                 export function process {
                     untuple 2
+                    assert
                     drop 1
                 }
+                #[flags]
                 export function is_done {
                     drop 0
                     push false
                 }
+                #[flags]
                 export function is_ready_to_finish {
                     drop 0
                     push false
                 }
             }
 
+            #[flags]
             export sentence test_tau {
                 // Test m_no_tau
                 tuple 0
                 jump m_no_tau::init
                 jump m_no_tau::tau_reduce
                 untuple 2
+                assert
                 not
                 assert
                 drop 0
@@ -1142,6 +1215,7 @@ mod tests {
                 jump m_with_tau::init
                 jump m_with_tau::tau_reduce
                 untuple 2
+                assert
                 assert
                 push 1
                 assert_eq
@@ -1660,13 +1734,17 @@ mod runtime_tests {
                     symbol pong "pong event"
                 }
 
+                #[flags]
                 export function init {
                     untuple 0
+                    assert
                     push state::init
                 }
 
+                #[flags]
                 export sentence accept {
                     untuple 2
+                    assert
                     // Stack: [event, state]
                     push state::waiting
                     equal
@@ -1679,11 +1757,13 @@ mod runtime_tests {
                     }
                 }
 
+                #[flags]
                 export function tau_reduce {
                     push false
                     tuple 2
                 }
 
+                #[flags]
                 export function emit {
                     push state::init
                     equal
@@ -1698,8 +1778,10 @@ mod runtime_tests {
                     }
                 }
 
+                #[flags]
                 export function process {
                     untuple 2
+                    assert
                     push state::init
                     equal
                     branch {
@@ -1713,11 +1795,13 @@ mod runtime_tests {
                     }
                 }
 
+                #[flags]
                 export function is_done {
                     push state::done
                     equal
                 }
 
+                #[flags]
                 export function is_ready_to_finish {
                     drop 0
                     push false
@@ -1765,34 +1849,43 @@ mod runtime_tests {
             mod main {
                 symbol hello "Hello, World!"
 
+                #[flags]
                 export function init {
                     untuple 0
+                    assert
                     push 0
                 }
 
+                #[flags]
                 export sentence accept {
                     untuple 2
+                    assert
                     drop 0
                     drop 0
                     push false
                 }
 
+                #[flags]
                 export function tau_reduce {
                     push false
                     tuple 2
                 }
 
+                #[flags]
                 export function emit {
                     pick 0
                     push hello
                     symbol_len
+                    assert
                     less
+                    assert
                     branch {
                         push ()
                         
                         push hello
                         pick 2 // index
                         symbol_char_at
+                        assert
                         
                         tuple 2 // (char, ())
                         
@@ -1819,20 +1912,27 @@ mod runtime_tests {
                     }
                 }
 
+                #[flags]
                 export function process {
                     untuple 2
+                    assert
                     drop 1 // drop event
                     push 1
                     add
+                    assert
                 }
 
+                #[flags]
                 export function is_done {
                     push hello
                     symbol_len
+                    assert
                     less
+                    assert
                     not
                 }
 
+                #[flags]
                 export function is_ready_to_finish {
                     drop 0
                     push false
