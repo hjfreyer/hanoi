@@ -215,7 +215,8 @@ different thing to look for even though the arithmetic is the same:
 | `split_bool` / `unsplit_bool` | 1 / 3 | the case split, either way |
 | `introduce { .. }` | n | annihilate backwards — see below |
 | `share { .. }` | n+\|X\|+1 | `copy_nat` forward — see below |
-| `counit`, `copy_const`, `copy_assoc`, `cancel_tuple` | 2 | |
+| `counit` / `counit(d)` / `inv(counit(d))` | 2 / 2 / 1 | the copy-and-discard law: found, found at one depth, or *put in* |
+| `copy_const`, `copy_assoc`, `cancel_tuple` | 2 | |
 
 `inv(r)` is the rest of them: every backward reading that is not worth a name
 of its own. See "reading an equation backwards" below.
@@ -295,9 +296,50 @@ have:
 | `inv(copy_assoc)` | take the second copy back out of its frame |
 | `inv(introduce { X })` | `X ; drop^m` = `drop^n` — `annihilate`'s law reading a whole *term*, where `annihilate` reads a single node |
 
+### Putting work where there is nothing to match
+
+Every introduction so far has stood on something. `introduce { X }` needs the
+drops already there; `inv(flatten)` needs a node to wrap; `share`'s backward
+reading needs the computation it un-shares. None of them can put code at a
+position that holds nothing to match.
+
+`counit` is the law that can — `pick d ; drop` = nothing, so backwards it puts
+a copy-and-discard anywhere at all. What stopped it was not the empty side but
+the **`d`**: no window can say which value to copy. So the tactic says it.
+
+```
+$ rewrite demo probe -t 'must(at(1, inv(counit(0))))' --show-script
+     0  counit <- @1
+        (nothing)
+     ⇒  pick 0 ; drop
+```
+
+`counit(d)` is the forward reading narrowed to one depth, and `inv` flips it
+like any other pair. A rule taking a number reads the way `at(n, r)` does, and
+`counit` is the only one that takes one.
+
+**It inserts *before* the window** and reads one node purely to have somewhere
+to stand — the same arrangement `split_bool` uses, and for the same reason: an
+equation whose other side is empty has no window to recognize. The same
+limitation follows for both, that neither can insert past the last node of a
+sequence.
+
+The copy is the point. A cancelling pair beside a value is how a copy of that
+value gets somewhere it is wanted, and `introduce` then turns the `drop` into a
+computation — which together spell out the vacuous law in the tactic language,
+where it belongs, since it is a lemma rather than an axiom:
+
+```
+$ rewrite demo probe -t 'at(1, inv(counit(0))); at(2, introduce { pick 0 })'
+   1 │ pick 0        ⎫
+   2 │ pick 0        ⎬  pick (n-1)^n ; X ; drop^m  =  nothing
+   3 │ drop          ⎪
+   4 │ drop          ⎭
+```
+
 ### When there is no backward reading
 
-Six rules have none, and asking says why rather than matching nothing:
+Five rules have none, and asking says why rather than matching nothing:
 
 ```
 $ rewrite tests probe -t 'each(inv(cancel_tuple))'
@@ -308,16 +350,16 @@ error: `cancel_tuple` has no backward reading
           say what `n` was — a tuple of any width leaves the same flag
 ```
 
-Three things put a reading out of reach, and they are worth telling apart:
+Two things put a reading out of reach, and they are worth telling apart:
 
 - **It would have to invent, not recognize.** `inv(eval1)` would need the
   operator that produced the literal, and `inv(fold_branch)` the arm that was
-  not taken. Nothing in the window says either.
-- **An argument is not recoverable.** `cancel_tuple`'s `n`, above.
-- **The backward side is empty.** `counit` is `pick d ; drop` = *nothing*, so
-  there is no window to match at all — a matcher must read at least one node.
-  That reading belongs to the generator, which can emit it as part of a
-  derivation; see the vacuous law above.
+  not taken. Nothing in the window says either, and nothing you could write
+  would either — the term that made it right would be a different rewrite.
+- **An argument is not recoverable from the window.** `cancel_tuple`'s `n`,
+  above. This is the weaker obstacle of the two, and `counit` is what shows it:
+  it was on this list until `inv(counit(0))` let the tactic name the `d`. The
+  same could be done for `cancel_tuple` the day something wants it.
 
 Two more are refusals that point somewhere: `inv(annihilate)` is the
 introduction rule and has to say what to conjure, so it is

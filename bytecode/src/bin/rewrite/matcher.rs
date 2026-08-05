@@ -173,6 +173,24 @@ pub(crate) fn matcher_names() -> Vec<&'static str> {
     names
 }
 
+/// The matchers that take a count, by name.
+pub(crate) fn count_matcher_names() -> Vec<&'static str> {
+    vec!["counit"]
+}
+
+/// A matcher narrowed by a number written in the tactic expression.
+///
+/// `None` for a name that does not take one. Where a bare name reads whatever
+/// it finds, this says which — and that is what makes the *backward* reading
+/// expressible, since an equation whose other side is empty has no window to
+/// read the number off.
+pub(crate) fn matcher_with_count(name: &str, count: usize) -> Option<Box<dyn Matcher>> {
+    match name {
+        "counit" => Some(Box::new(CounitAt(count))),
+        _ => None,
+    }
+}
+
 /// The matchers that need a term, by name.
 pub(crate) fn term_matcher_names() -> Vec<&'static str> {
     vec!["introduce", "share"]
@@ -1608,9 +1626,9 @@ impl Matcher for Counit {
     }
     fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
         Err(
-            "`pick d ; drop` = nothing, so the backward side is empty: there \
-             is no window to recognize, and nothing to say which `d` to put \
-             back. It is the generator's to emit, not a matcher's to find"
+            "which `d`? `pick d ; drop` = nothing, so reading it backwards \
+             puts a copy-and-discard where there was nothing at all, and no \
+             window can say which value to copy. Name it: `inv(counit(0))`"
                 .to_string(),
         )
     }
@@ -1622,6 +1640,78 @@ impl Matcher for Counit {
             return None;
         }
         at_window(prog, Rule::Counit { d: *d }, Direction::Forward)
+    }
+}
+
+/// `pick d ; drop` becomes nothing, for the one `d` the tactic names.
+///
+/// [`Counit`] narrowed. On its own that is a small convenience — one more way
+/// to aim — but it is what makes the backward reading writable: `inv(counit)`
+/// has no window to read `d` off, and `inv(counit(0))` does not need one.
+#[derive(Debug)]
+pub(crate) struct CounitAt(usize);
+
+impl Matcher for CounitAt {
+    fn name(&self) -> &'static str {
+        "counit"
+    }
+    fn width(&self) -> usize {
+        2
+    }
+    fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
+        Ok(Box::new(InvCounit(self.0)))
+    }
+    fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
+        let [Node::Op(Instruction::Pick(d)), drop] = window else {
+            return None;
+        };
+        if *d != self.0 || !is_drop(drop) {
+            return None;
+        }
+        at_window(prog, Rule::Counit { d: *d }, Direction::Forward)
+    }
+}
+
+/// Puts `pick d ; drop` where there was nothing at all.
+///
+/// [`Rule::Counit`] read backwards, and the way work gets into a term at a
+/// place that holds nothing to match. Every other introduction stands on
+/// something: [`Introduce`] needs drops already there, and [`InvFlatten`] needs
+/// a node to wrap. This needs only somewhere to stand.
+///
+/// **It inserts *before* the window**, the way [`SplitBool`] does, and reads one
+/// node for the same reason: an equation whose other side is empty has no
+/// window to recognize, so the matcher stands in front of something instead.
+/// That also means it cannot insert past the last node of a sequence — there is
+/// nothing there to stand in front of.
+///
+/// The copy is the point. A cancelling pair put beside a value is how a copy of
+/// that value gets somewhere it is wanted; the `drop` then either travels off
+/// with [`Float`] or becomes a computation with [`Introduce`], which together
+/// spell out the vacuous law:
+///
+/// ```text
+/// pick (n-1)^n ; X ; drop^m  =  nothing            for X : n -> m
+/// ```
+///
+/// Measure: none, and it grows the term — its own output is a node it would
+/// happily insert in front of again. Aim it.
+#[derive(Debug)]
+pub(crate) struct InvCounit(usize);
+
+impl Matcher for InvCounit {
+    fn name(&self) -> &'static str {
+        "inv(counit)"
+    }
+    /// One node, purely to have somewhere to stand.
+    fn width(&self) -> usize {
+        1
+    }
+    fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
+        Ok(Box::new(CounitAt(self.0)))
+    }
+    fn plan(&self, prog: &Program, _window: &[Node]) -> Option<Vec<PlannedStep>> {
+        at_window(prog, Rule::Counit { d: self.0 }, Direction::Reverse)
     }
 }
 
@@ -2192,6 +2282,47 @@ mod tests {
                 )
                 .is_none()
         );
+    }
+
+    #[test]
+    fn a_copy_and_discard_goes_where_there_is_nothing_to_match() {
+        // The pair every other introduction cannot manage: `introduce` needs
+        // drops already there and `inv(flatten)` needs a node to wrap, where
+        // this needs only somewhere to stand.
+        let m = InvCounit(0);
+        assert_eq!(m.width(), 1, "one node, purely to stand in front of");
+        assert_eq!(
+            fire(&m, &prog(), &[op(Instruction::Add)]),
+            Some(vec![
+                op(Instruction::Pick(0)),
+                op(Instruction::Drop),
+                op(Instruction::Add),
+            ]),
+            "it inserts before the window rather than rewriting it"
+        );
+
+        // Any depth, and `counit` takes it straight back out.
+        let there = fire(&InvCounit(3), &prog(), &[op(Instruction::Add)]).unwrap();
+        assert_eq!(there[0], op(Instruction::Pick(3)));
+        assert_eq!(fire(&Counit, &prog(), &there[..2]), Some(Vec::new()));
+    }
+
+    #[test]
+    fn a_counit_narrowed_to_one_depth_reads_only_that_one() {
+        let w = [op(Instruction::Pick(2)), op(Instruction::Drop)];
+        assert_eq!(fire(&CounitAt(2), &prog(), &w), Some(Vec::new()));
+        assert!(CounitAt(0).plan(&prog(), &w).is_none());
+        // And it is the reading `inv` flips, in both directions.
+        assert_eq!(CounitAt(2).inverse().unwrap().name(), "inv(counit)");
+        assert_eq!(InvCounit(2).inverse().unwrap().name(), "counit");
+    }
+
+    #[test]
+    fn a_bare_counit_says_which_number_it_is_missing() {
+        // The message has to be actionable: the reading exists, it just needs
+        // to be told `d`.
+        let why = Counit.inverse().unwrap_err();
+        assert!(why.contains("inv(counit(0))"), "{}", why);
     }
 
     #[test]

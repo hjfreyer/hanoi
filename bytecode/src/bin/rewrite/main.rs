@@ -40,7 +40,7 @@ use bytecode::Library;
 use bytecode::arity::failure_reachability;
 
 use crate::engine::{Env, miss_report};
-use crate::matcher::{matcher_by_name, matcher_names, term_matcher_names};
+use crate::matcher::{count_matcher_names, matcher_by_name, matcher_names, term_matcher_names};
 use crate::print::print_sentence;
 use crate::program::{Program, resolve_sentence};
 use crate::script::{Definitions, PRELUDE};
@@ -146,6 +146,11 @@ fn main() {
                 Ok(back) => println!("  {:<20} inv → {}", name, back.name()),
                 Err(_) => println!("  {:<20} (no backward reading)", name),
             }
+        }
+        println!();
+        println!("rules narrowed by a number, the way `at(n, r)` is:");
+        for name in count_matcher_names() {
+            println!("  {}(d)              e.g. `at(2, inv({}(0)))`", name, name);
         }
         println!();
         println!("rules that take a term, saying what code the window cannot:");

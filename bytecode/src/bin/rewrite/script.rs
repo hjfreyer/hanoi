@@ -24,7 +24,8 @@ use bytecode::{Instruction, Value};
 use crate::engine::Tactic;
 use crate::ir::{Node, Selector};
 use crate::matcher::{
-    Matcher, matcher_by_name, matcher_names, matcher_with_term, term_matcher_names,
+    Matcher, count_matcher_names, matcher_by_name, matcher_names, matcher_with_count,
+    matcher_with_term, term_matcher_names,
 };
 use crate::program::{Program, resolve_sentence};
 
@@ -1135,12 +1136,27 @@ fn rule(
             })
         }
 
+        // `counit(0)`: a rule narrowed by a number, the way `at(n, r)` is. It
+        // is the *backward* reading this exists for — an equation whose other
+        // side is empty has no window to read the number off.
+        Expr::Call(name, call_span, args) if count_matcher_names().contains(&name.as_str()) => {
+            let [Arg::Int(count)] = &args[..] else {
+                return Err(
+                    ScriptError::new(format!("`{}` takes one number", name), *call_span)
+                        .with_help(format!("for example `{}(0)`", name)),
+                );
+            };
+            matcher_with_count(name, *count)
+                .ok_or_else(|| ScriptError::new(format!("`{}` takes no number", name), *call_span))
+        }
+
         Expr::Call(name, call_span, _) => Err(ScriptError::new(
             format!("unknown rule form '{}(...)'", name),
             *call_span,
         )
         .with_help(format!(
-            "`inv(r)` is the only one, and reads r's equation backwards. {}",
+            "`inv(r)` reads r's equation backwards, and {} take a number. {}",
+            count_matcher_names().join(", "),
             known_rules()
         ))),
 
@@ -1463,6 +1479,26 @@ mod tests {
     }
 
     #[test]
+    fn a_rule_may_be_narrowed_by_a_number() {
+        assert!(compiles("each(counit(0))"));
+        assert!(compiles("at(2, inv(counit(0)))"));
+        assert!(compiles("each(collapse, counit(3), sink)"));
+        // The number is what makes the backward reading writable at all.
+        let e = err("each(inv(counit))");
+        assert!(e.contains("inv(counit(0))"), "{}", e);
+    }
+
+    #[test]
+    fn a_number_is_only_accepted_where_a_rule_takes_one() {
+        assert!(err("each(counit(0, 1))").contains("takes one number"));
+        assert!(err("each(counit())").contains("takes one number"));
+        assert!(err("each(counit(sink))").contains("takes one number"));
+        let e = err("each(sink(0))");
+        assert!(e.contains("unknown rule form"), "{}", e);
+        assert!(e.contains("counit"), "{}", e);
+    }
+
+    #[test]
     fn a_rule_with_no_backward_reading_says_what_stands_in_the_way() {
         // Three different reasons, and the message is the whole point of
         // refusing here rather than matching nothing at run time.
@@ -1472,9 +1508,6 @@ mod tests {
 
         let e = err("each(inv(cancel_tuple))");
         assert!(e.contains("does not say what `n` was"), "{}", e);
-
-        let e = err("each(inv(counit))");
-        assert!(e.contains("backward side is empty"), "{}", e);
 
         // And one that points at the rule that *does* do the job.
         let e = err("each(inv(annihilate))");
