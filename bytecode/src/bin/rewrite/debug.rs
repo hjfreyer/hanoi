@@ -179,7 +179,7 @@ impl Session<'_> {
         match self.at.checked_sub(1).filter(|_| !self.whole) {
             Some(previous) => self.show_diff(previous),
             None => {
-                for line in self.lines(self.at) {
+                for line in self.lines(self.at, true) {
                     println!("{}", line);
                 }
             }
@@ -188,11 +188,16 @@ impl Session<'_> {
     }
 
     /// The tree either side of the step that produced the current one.
+    ///
+    /// Without the position column: a splice renumbers every sibling after it,
+    /// so a step that shortened a sequence would report the whole rest of that
+    /// sequence as changed. `list` is the view that numbers the nodes, since
+    /// aiming is what the numbers are for and the whole tree is where you aim.
     fn show_diff(&self, previous: u64) {
         let taken = &self.script[previous as usize];
         let rows = side_by_side(
-            &self.lines(previous),
-            &self.lines(self.at),
+            &self.lines(previous, false),
+            &self.lines(self.at, false),
             &format!("step {}", previous),
             &format!("step {}  ·  {}", self.at, taken),
         );
@@ -240,9 +245,16 @@ impl Session<'_> {
     }
 
     /// The listing of the tree after `n` steps.
-    fn lines(&self, n: u64) -> Vec<String> {
+    fn lines(&self, n: u64, positions: bool) -> Vec<String> {
         let body = self.tree_at(n);
-        render_body(self.prog, self.root, &body, &self.opts.tactic, self.stack)
+        render_body(
+            self.prog,
+            self.root,
+            &body,
+            &self.opts.tactic,
+            self.stack,
+            positions,
+        )
     }
 
     /// The tree a prefix of the script produces.
@@ -396,7 +408,7 @@ fn help() {
     println!("  g, goto <n>   the tree after exactly n steps");
     println!("  c, continue   run to the end of the derivation");
     println!("  r, restart    back to the tree the tactic starts from");
-    println!("  l, list       show the whole tree instead of the change");
+    println!("  l, list       show the whole tree, with the position of each node");
     println!("  d, diff       back to showing what the last firing changed");
     println!("  t, trace      the derivation around the cursor, and counts so far");
     println!("  stack         toggle the symbolic stack column (--stack)");
@@ -409,6 +421,8 @@ fn help() {
     println!("  outermost-first, so `[0.else] @2` is the third node of the else arm");
     println!("  of the first. The diff is over the listing, so a depth changing");
     println!("  counts as a changed line — which is usually what you want to see.");
+    println!("  The diff leaves the `pos` column out, because a splice renumbers");
+    println!("  every sibling after it; `list` is where the positions are.");
 }
 
 #[cfg(test)]

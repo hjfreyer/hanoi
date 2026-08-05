@@ -282,17 +282,19 @@ literal. Everything else needs the fact already on the stack.
 
 ```
 $ rewrite demo probe -t 'at(0, split_bool); distribution; values'
-      1 │ pick 0
-      2 │ is_bool
-      2 │ branch then → a bool {
-      1 │   branch then → true {
-      0 │     push false
-        │   } else → false {
-      0 │     push true
-        │   }
-        │ } else → not a bool {
-      1 │   not
-        │ }
+ pos │  depth │ instruction
+─────┼────────┼────────────
+   0 │      1 │ pick 0
+   1 │      2 │ is_bool
+   2 │      2 │ branch then → a bool {
+   0 │      1 │   branch then → true {
+   0 │      0 │     push false
+     │        │   } else → false {
+   0 │      0 │     push true
+     │        │   }
+     │        │ } else → not a bool {
+   0 │      1 │   not
+     │        │ }
 ```
 
 That was `not` on an opaque value — nothing to fold. Splitting first replaces
@@ -366,6 +368,37 @@ $ rewrite tests 'Pair::check' -t 'unfold_all; then(1, body(2, then(1, at(2, sink
 The tactic and the location read the same, in the same order. `at(n, ...)` is
 `once` told where to look instead of asked to find out, and `then(k, t)` is
 `then(t)` narrowed from every branch to the one you meant.
+
+### The listing says which number to write
+
+Every number in that tactic is in the `pos` column, which is a node's index in
+the sequence it belongs to. It restarts at every nesting level, which is what
+the indentation shows, and a closing brace belongs to no node and is blank:
+
+```
+$ rewrite tests 'Pair::check' -t unfold_all
+ pos │  depth │ instruction
+─────┼────────┼────────────
+   0 │      1 │ untuple 2
+   1 │      3 │ branch then → #3408 <inline> {
+   0 │      2 │   push symbol(…::Pair::tag)
+   1 │      3 │   equal
+   2 │      2 │   dip 1 → #3409 <inline> {
+   0 │      2 │     untuple 2
+   1 │      4 │     branch then → #3405 <inline> {
+   0 │      3 │       pick 0
+   1 │      4 │       is_int
+   2 │      4 │       branch then → #3398 <inline> {
+```
+
+Read down the column at each nesting level and the path writes itself:
+`then(1, body(2, then(1, at(2, …))))`, which is the `[1.then, 2.body, 1.then]
+@2` above. One number per level, and the last one is the window.
+
+The stepper's diff leaves the column out, and `list` puts it back. A splice
+renumbers every sibling after it, so a step that removed one node would report
+the whole rest of the sequence as changed — where a depth is stable across a
+firing, since every equation preserves the net stack effect of what it rewrote.
 
 Both are **silent when they miss**, because a rule that matches nowhere is an
 ordinary no-op and always has been. That is wrong for an aimed step, where
@@ -507,9 +540,9 @@ the un-expanded listing to usefully name on one line. Both are spelled out by
 `build`, before any tactic runs.
 
 ```
-      4 │ dip 1 → #676 <inline> {
-      4 │   is_symbol
-        │ }
+   3 │      4 │ dip 1 → #676 <inline> {
+   0 │      4 │   is_symbol
+     │        │ }
 ```
 
 A `dip N` or `jump` naming a real sentence is a different thing and stays a
@@ -595,7 +628,9 @@ Reading it as a test for *being* a boolean would send junk down the wrong path.
    descent arrives at. Two steps reporting `@0` may be in different arms.
 5. **Aiming without `must`.** `at(9, sink)` on a five-node sequence is a no-op,
    not an error, so a mistyped position looks exactly like a rule that had
-   nothing to do. Wrap an aimed step in `must` and find out.
+   nothing to do. Wrap an aimed step in `must` and find out — and read the
+   position off the `pos` column rather than counting lines, since the column
+   restarts at every nesting level and the lines do not.
 
 ## Checking and tracing
 

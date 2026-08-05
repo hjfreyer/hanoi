@@ -841,7 +841,7 @@ fn stack_of(code: &str, src: &str) -> Vec<String> {
     let prog = program_of(code);
     let body = build(prog.library(), SentenceIndex::from(0), &mut HashSet::new());
     let body = run(prog, body, src);
-    crate::print::render_body(prog, SentenceIndex::from(0), &body, src, true)
+    crate::print::render_body(prog, SentenceIndex::from(0), &body, src, true, false)
 }
 
 #[test]
@@ -852,6 +852,73 @@ fn the_stack_view_gives_equal_values_the_same_name() {
         "no stack column: {:?}",
         lines
     );
+}
+
+// ---------------------------------------------------------------------------
+// The position column
+// ---------------------------------------------------------------------------
+
+/// The position cell and the text of every numbered line of a listing.
+///
+/// The header is dropped, and so is anything with no gutter at all — the name,
+/// the annotations, the rule.
+fn positions(lines: &[String]) -> Vec<(String, String)> {
+    lines
+        .iter()
+        .filter_map(|line| {
+            let mut cols = line.split('│');
+            let pos = cols.next()?.trim().to_string();
+            cols.next()?;
+            let text = cols.collect::<Vec<_>>().join("│").trim().to_string();
+            (pos != "pos").then_some((pos, text))
+        })
+        .collect()
+}
+
+#[test]
+fn the_listing_numbers_each_sequence_from_zero() {
+    let prog = program_of("sentence probe { push 1 pick 0 branch { not } { is_bool } }");
+    let body = build(prog.library(), SentenceIndex::from(0), &mut HashSet::new());
+    let lines = crate::print::render_body(prog, SentenceIndex::from(0), &body, "id", false, true);
+    let rows = positions(&lines);
+
+    // The arms restart at zero — a position is an index in the sequence it is
+    // in, which is exactly what `at(n, ...)` means — and a closing brace, which
+    // belongs to no node, is blank.
+    let cells: Vec<&str> = rows.iter().map(|(pos, _)| pos.as_str()).collect();
+    assert_eq!(cells, vec!["0", "1", "2", "0", "", "0", ""], "{:?}", rows);
+    assert_eq!(rows[0].1, "push 1");
+    assert!(rows[2].1.starts_with("branch"), "{:?}", rows[2]);
+    assert_eq!(rows[3].1, "not");
+    assert_eq!(rows[5].1, "is_bool");
+
+    // And the column is one the caller chooses: the stepper's diff turns it
+    // off, since a splice renumbers every sibling after it.
+    let bare = crate::print::render_body(prog, SentenceIndex::from(0), &body, "id", false, false);
+    assert!(bare.iter().all(|line| !line.contains("pos")), "{:?}", bare);
+}
+
+#[test]
+fn the_number_the_listing_prints_is_the_number_a_tactic_takes() {
+    // The property that makes the column worth printing: read a position off
+    // the listing, hand it to `at`, and the step lands there.
+    let prog = program_of("sentence probe { push 1 push 2 dip 1 { dip 1 { drop 0 } } }");
+    let body = build(prog.library(), SentenceIndex::from(0), &mut HashSet::new());
+    let lines = crate::print::render_body(prog, SentenceIndex::from(0), &body, "id", false, true);
+
+    let rows = positions(&lines);
+    let (cell, _) = rows
+        .iter()
+        .find(|(_, text)| text.starts_with("dip 1"))
+        .unwrap_or_else(|| panic!("no frame in {:?}", rows));
+    let n: usize = cell.parse().unwrap();
+    assert_eq!(n, 2, "the frame is the third node");
+
+    // `must`, so that aiming at the wrong place is a failure rather than a
+    // quietly empty script.
+    let (_, script) = with_script(prog, body, &format!("must(at({}, collapse))", n));
+    assert_eq!(script.len(), 1);
+    assert_eq!(script[0].loc, crate::location::Location::root(n));
 }
 
 #[test]
