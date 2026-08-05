@@ -215,6 +215,12 @@ pub(crate) fn apply_step(
     let (src, dst) = sides(prog, step).map_err(|sc| fail(Cause::SideCondition(sc)))?;
 
     if check {
+        // What this cannot catch: a rewrite licensed by a *wrong* arity. Net
+        // change is preserved by a misreported one as readily as by a correct
+        // one — a branch that claimed `(1 -> 0)` when it was `(2 -> 1)` has the
+        // same net either way — so the guard here is downstream of the arity
+        // being right. See `arity::branch_arity`.
+        //
         // Learning an arity that was previously unknown stays permissible.
         // Under the global precondition it should not arise — every node has
         // an arity once recursion and panics are excluded — but tolerating it

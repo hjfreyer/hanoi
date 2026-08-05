@@ -157,6 +157,73 @@ fn depth_stops_being_known_after_a_panic() {
     assert_eq!(d[2], None, "the reckoning should stop at the panic");
 }
 
+/// A branch's arity accounts for **both** arms, not whichever answered first.
+///
+/// The arity checker holds the two arms to the same *net* change and to
+/// nothing else, so they may differ in what they require. Reading the arity off
+/// one arm understated it, and an understated arity is a soundness bug:
+/// `annihilate` asks only for an arity.
+#[test]
+fn a_branch_takes_what_the_hungrier_arm_takes() {
+    // `{ }` is (0 -> 0) and `{ drop 0  push true }` is (1 -> 1): same net,
+    // different demands. The branch needs the condition and the value.
+    let prog = program_of("sentence probe { pick 0 branch { } { drop 0 push true } }");
+    let body = build(prog.library(), SentenceIndex::from(0), &mut HashSet::new());
+    let [_, inner] = &body[..] else {
+        panic!("expected a pick and a branch, got {:?}", shape(&body))
+    };
+    assert_eq!(node_arity(prog, inner), Some((2, 1)));
+
+    // An arm that never returns answers for neither, and the other stands
+    // alone — the one case where a single arm decides.
+    let prog = program_of("sentence probe { pick 0 branch { panic } { drop 0 } }");
+    let body = build(prog.library(), SentenceIndex::from(0), &mut HashSet::new());
+    let [_, inner] = &body[..] else {
+        panic!("expected a branch")
+    };
+    assert_eq!(node_arity(prog, inner), Some((2, 0)));
+}
+
+/// The rewrite that understating a branch's arity used to license.
+///
+/// `test_always_true` returns `true` for every input — it is `drop ; push
+/// true`, not the identity. The inner `branch { } { drop ; push true }` is
+/// `(2 -> 1)`, but reading the then arm alone made it `(1 -> 0)`, and
+/// `annihilate` with no outputs to read turned it into a `drop`. Twice over,
+/// that left the identity.
+///
+/// **`--check` could not have caught it.** It compares net change, and `(1, 0)`
+/// and `(2, 1)` have the same net; the input requirement fell, which it allows
+/// on purpose because annihilation legitimately lowers one. The arity was the
+/// only place to fix it.
+#[test]
+fn a_function_that_is_not_the_identity_is_not_rewritten_into_one() {
+    let code = r#"
+        #[total]
+        function test_always_true {
+            pick 0
+            is_bool
+            branch {
+                pick 0
+                branch { } { drop 0 push true }
+            } {
+                drop 0
+                push true
+            }
+        }
+    "#;
+    let (prog, plain) = tree_of(code, "id");
+    for tac in ["cleanup", "all", "annihilation", "factoring; all"] {
+        let got = run(prog, plain.clone(), tac);
+        assert_eq!(
+            shape(&got),
+            shape(&plain),
+            "`{}` rewrote a function that nothing in the set can simplify",
+            tac
+        );
+    }
+}
+
 #[test]
 fn a_cycle_has_no_static_arity() {
     let prog = program_of("#[recursive] sentence loops { jump loops }");
@@ -911,6 +978,96 @@ fn the_annihilation_with_no_outputs_is_a_third_of_them() {
         void,
         total
     );
+}
+
+/// Every branch in the corpus is given an arity both its arms can live with.
+///
+/// The property, rather than a restatement of the formula: a branch reported
+/// `(n -> m)` promises that either arm, entered with `n - 1` values, leaves
+/// exactly `m`. An arm needing more than `n - 1` is one the reported arity
+/// cannot deliver — which is the shape the `test_always_true` bug took.
+#[test]
+fn a_branch_arity_is_one_both_arms_can_meet() {
+    let Some((library, prog)) = corpus() else {
+        return;
+    };
+
+    let mut checked = 0usize;
+    let mut asymmetric = 0usize;
+    for s_idx in admissible(library, prog) {
+        let tree = run(
+            prog,
+            build(library, s_idx, &mut HashSet::new()),
+            "unfold_all",
+        );
+        walk_branches(prog, &tree, &mut |then_body, else_body, reported| {
+            let (Some((tn, tm)), Some((en, em))) =
+                (seq_full(prog, then_body), seq_full(prog, else_body))
+            else {
+                return;
+            };
+            let (n, m) = reported.expect("both arms are known, so the branch is");
+            checked += 1;
+            asymmetric += usize::from(tn != en);
+            for (label, (an, ao)) in [("then", (tn, tm)), ("else", (en, em))] {
+                assert!(
+                    n > an,
+                    "a branch reported ({} -> {}) cannot feed its {} arm, which needs {}",
+                    n,
+                    m,
+                    label,
+                    an
+                );
+                assert_eq!(
+                    (n - 1) - an + ao,
+                    m,
+                    "a branch reported ({} -> {}) does not leave that from its {} arm",
+                    n,
+                    m,
+                    label
+                );
+            }
+        });
+    }
+    assert!(checked > 100, "only {} branches were checked", checked);
+    // A thin guard, and worth saying so: exactly one branch in about a
+    // thousand has arms of differing demand, so a sweep that lost it would
+    // pass on the reading that took whichever arm answered first.
+    // `a_branch_takes_what_the_hungrier_arm_takes` is the real test; this one
+    // is for breadth.
+    assert!(
+        asymmetric > 0,
+        "no branch in the corpus has arms of differing demand, so this sweep \
+         has stopped being able to tell the two readings apart"
+    );
+}
+
+fn seq_full(prog: &Program, nodes: &[Node]) -> Option<(i64, i64)> {
+    let (inputs, outputs) = seq_arity(prog, nodes);
+    outputs.map(|o| (inputs, o))
+}
+
+/// Every branch in a tree, with the arity the reckoning gives it.
+fn walk_branches(
+    prog: &Program,
+    nodes: &[Node],
+    f: &mut impl FnMut(&[Node], &[Node], Option<(i64, i64)>),
+) {
+    for node in nodes {
+        match node {
+            Node::Branch {
+                then_body,
+                else_body,
+                ..
+            } => {
+                f(then_body, else_body, node_arity(prog, node));
+                walk_branches(prog, then_body, f);
+                walk_branches(prog, else_body, f);
+            }
+            Node::Dip { body, .. } => walk_branches(prog, body, f),
+            Node::Op(_) | Node::Call { .. } => {}
+        }
+    }
 }
 
 /// The precondition has to leave something to work on.
