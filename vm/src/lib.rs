@@ -1325,6 +1325,99 @@ mod totality_tests {
         }
     }
 
+    /// Every instruction whose result is computed from operands.
+    ///
+    /// The candidates for the sweep below, not the answer to it. `tuple n` is
+    /// in the list precisely because it is *not* one — a sweep with no negative
+    /// case is a sweep that would pass on any list at all.
+    ///
+    /// `push`, `drop`, `pick` and `roll` are absent because what they leave
+    /// came off the stack rather than out of the instruction, so running them
+    /// on operands measures nothing about them.
+    fn every_computation() -> Vec<Instruction> {
+        vec![
+            Instruction::Equal,
+            Instruction::Greater,
+            Instruction::Less,
+            Instruction::Add,
+            Instruction::Subtract,
+            Instruction::Multiply,
+            Instruction::Divide,
+            Instruction::Modulo,
+            Instruction::Not,
+            Instruction::Negate,
+            Instruction::And,
+            Instruction::Or,
+            Instruction::SymbolLen,
+            Instruction::SymbolCharAt,
+            Instruction::IsInt,
+            Instruction::IsBool,
+            Instruction::IsFloat,
+            Instruction::IsSymbol,
+            Instruction::IsTuple,
+            Instruction::TupleLength,
+            Instruction::Untuple(2),
+            Instruction::Tuple(2),
+        ]
+    }
+
+    /// Runs `op` on a list of operands and reports the whole stack.
+    fn run_on(operands: &[Value], inst: &Instruction) -> Result<Vec<Value>, String> {
+        let mut library = Library::new();
+        let mut body: Vec<Instruction> = operands.iter().cloned().map(Instruction::Push).collect();
+        body.push(inst.clone());
+        library.sentences.push(body);
+        let mut vm = VM::new(library);
+        vm.execute(SentenceIndex::from(0))?;
+        Ok(vm.stack().to_vec())
+    }
+
+    /// `Instruction::yields_bool` is measured, not asserted.
+    ///
+    /// `bin/rewrite` folds `op ; is_bool` to `op ; drop ; push true` on the
+    /// strength of that list. The fact cannot be derived by rewriting — a
+    /// codomain is not something a case split can reach — so this is the only
+    /// thing holding it to the machine.
+    #[test]
+    fn the_instructions_that_leave_a_bool_are_exactly_the_ones_the_list_names() {
+        for inst in every_computation() {
+            let (n, _) = bytecode::arity::op_arity(&inst)
+                .unwrap_or_else(|| panic!("{:?} has no arity", inst));
+            let operand_sets: Vec<Vec<Value>> = match n {
+                1 => every_shape().into_iter().map(|a| vec![a]).collect(),
+                2 => every_shape()
+                    .into_iter()
+                    .flat_map(|a| every_shape().into_iter().map(move |b| vec![a.clone(), b]))
+                    .collect(),
+                other => panic!(
+                    "{:?} reads {} operands, which the sweep does not build",
+                    inst, other
+                ),
+            };
+
+            let mut always = true;
+            let mut witness = None;
+            for operands in operand_sets {
+                let top = run_on(&operands, &inst)
+                    .ok()
+                    .and_then(|s| s.last().cloned());
+                if !matches!(top, Some(Value::Bool(_))) {
+                    always = false;
+                    witness = Some((operands, top));
+                }
+            }
+            assert_eq!(
+                always,
+                inst.yields_bool(),
+                "{:?} leaves a bool = {}, but the list says {} (witness {:?})",
+                inst,
+                always,
+                inst.yields_bool(),
+                witness
+            );
+        }
+    }
+
     /// Every instruction that carries a flag, with operands that make it fail.
     fn failing_cases() -> Vec<(Instruction, Vec<Value>)> {
         vec![

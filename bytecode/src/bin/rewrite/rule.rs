@@ -108,6 +108,8 @@ pub(crate) enum SideCondition {
     /// `commute` was handed an operator that does not answer the same either
     /// way round.
     NotCommutative { op: String },
+    /// `bool_result` was handed an operator that does not always leave a bool.
+    NotBoolResult { op: String },
 }
 
 impl std::fmt::Display for SideCondition {
@@ -150,6 +152,9 @@ impl std::fmt::Display for SideCondition {
                     "`{}` does not answer the same with its operands swapped",
                     op
                 )
+            }
+            SideCondition::NotBoolResult { op } => {
+                write!(f, "`{}` does not always leave a boolean on top", op)
             }
         }
     }
@@ -465,6 +470,41 @@ pub(crate) enum Rule {
     /// effectful instruction would take this law with it, and nothing else.
     CopyNat { x: Vec<Node>, n: usize, m: usize },
 
+    /// `op ; is_bool` = `op ; drop ; push true`, for an `op` that always leaves
+    /// a boolean on top.
+    ///
+    /// Asking whether a value is a boolean when the instruction that produced
+    /// it can only produce booleans. `is_bool ; is_bool` is the case that wants
+    /// it, and with [`Rule::Annihilate`] to take the `op ; drop` away it is
+    /// `drop ; push true`, which is what one wanted to write in the first
+    /// place.
+    ///
+    /// `op` stays on both sides on purpose, which makes this the smallest thing
+    /// that has to be assumed: the existing set does the rest. The law then
+    /// covers a *flag* as readily as a predicate — `add` is `(2 -> 2)` and the
+    /// flag is what `is_bool` would be asking about, so `add ; is_bool` folds
+    /// even though nothing can delete the `add`.
+    ///
+    /// ## Why it is an axiom
+    ///
+    /// **A codomain is not something a rewrite can reach.** [`Rule::SplitBool`]
+    /// splits a value into the cases where it *is* a boolean, and in the case
+    /// where it is not, the value stays opaque — so driving `is_bool ; is_bool`
+    /// that way leaves an else arm holding `is_bool` again. That arm is dead,
+    /// and its deadness is precisely the fact being sought.
+    ///
+    /// It is independent rather than merely elusive. Read `is_bool` as
+    /// answering `42` for `true`, `true` for `false`, and `false` otherwise:
+    /// `split_bool` still holds, since 42 is truthy and the inner branch still
+    /// recovers the value, and every other equation is generic in what
+    /// `is_bool` means. This law fails there. The gap is that a branch observes
+    /// **truthiness**, and `false` is the only falsy value, so being truthy is
+    /// strictly weaker than being a boolean.
+    ///
+    /// So the fact lives on the instruction, as `Instruction::yields_bool`, and
+    /// `vm` measures it against the machine the way it measures commutativity.
+    BoolResult { op: Instruction },
+
     /// `tuple n ; untuple n` = `push true`.
     ///
     /// Building a tuple and immediately taking it apart returns the stack to
@@ -496,6 +536,7 @@ impl Rule {
             Rule::CopyConst { .. } => "copy_const",
             Rule::CopyAssoc { .. } => "copy_assoc",
             Rule::CopyNat { .. } => "copy_nat",
+            Rule::BoolResult { .. } => "bool_result",
             Rule::CancelTuple { .. } => "cancel_tuple",
         }
     }
@@ -532,6 +573,15 @@ impl Rule {
             // instruction set rather than of these arguments — there is nothing
             // here to check it against.
             Rule::CopyNat { x, n, m } => claimed_arity(prog, x, (*n as i64, *m as i64)).map(|_| ()),
+            Rule::BoolResult { op } => {
+                if op.yields_bool() {
+                    Ok(())
+                } else {
+                    Err(SideCondition::NotBoolResult {
+                        op: format!("{}", op),
+                    })
+                }
+            }
             Rule::Commute { op } => {
                 if op.commutative() {
                     Ok(())
@@ -719,6 +769,8 @@ impl Rule {
                 out
             }
 
+            Rule::BoolResult { op } => vec![Node::Op(op.clone()), Node::Op(Instruction::IsBool)],
+
             Rule::CancelTuple { n } => vec![
                 Node::Op(Instruction::Tuple(*n)),
                 Node::Op(Instruction::Untuple(*n)),
@@ -864,6 +916,12 @@ impl Rule {
                 out.extend(copy_block(*m));
                 out
             }
+
+            Rule::BoolResult { op } => vec![
+                Node::Op(op.clone()),
+                Node::Op(Instruction::Drop),
+                push(Value::Bool(true)),
+            ],
 
             Rule::CancelTuple { .. } => vec![push(Value::Bool(true))],
         }
@@ -1622,6 +1680,57 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn bool_result_keeps_the_operator_and_answers_the_question() {
+        // The smallest thing that has to be assumed: `op` stays on both sides,
+        // and `annihilate` is what takes it away afterwards.
+        let r = Rule::BoolResult {
+            op: Instruction::IsBool,
+        };
+        assert_eq!(
+            r.lhs(),
+            vec![op(Instruction::IsBool), op(Instruction::IsBool)]
+        );
+        assert_eq!(
+            r.rhs(),
+            vec![
+                op(Instruction::IsBool),
+                op(Instruction::Drop),
+                push(Value::Bool(true)),
+            ]
+        );
+    }
+
+    #[test]
+    fn bool_result_asks_the_instruction_rather_than_deciding_for_itself() {
+        // The fact is `Instruction::yields_bool`, which `vm` measures against
+        // the machine. A `tuple n` leaves a tuple, and no amount of wanting it
+        // to makes this law apply.
+        assert_eq!(
+            Rule::BoolResult {
+                op: Instruction::Add
+            }
+            .check(&prog()),
+            Ok(()),
+            "a flag is a boolean"
+        );
+        assert!(matches!(
+            Rule::BoolResult {
+                op: Instruction::Tuple(2)
+            }
+            .check(&prog()),
+            Err(SideCondition::NotBoolResult { .. })
+        ));
+        // And a literal is `eval`'s business, which answers better than this.
+        assert!(
+            Rule::BoolResult {
+                op: Instruction::Push(Value::Bool(true))
+            }
+            .check(&prog())
+            .is_err()
+        );
+    }
+
+    #[test]
     fn cancel_tuple_leaves_the_flag_behind() {
         let r = Rule::CancelTuple { n: 3 };
         assert_eq!(r.rhs(), vec![push(Value::Bool(true))]);
@@ -1697,6 +1806,9 @@ pub(crate) mod tests {
                 n: 2,
                 m: 1,
             },
+            Rule::BoolResult {
+                op: Instruction::IsBool,
+            },
             Rule::CancelTuple { n: 3 },
         ]
     }
@@ -1748,11 +1860,11 @@ pub(crate) mod tests {
         // number honest is the point: an equation is an axiom, and the set is
         // meant to grow only when something genuinely cannot be derived.
         //
-        // Sixteen variants, fifteen axioms: `copy_const` is the constant case
+        // Seventeen variants, sixteen axioms: `copy_const` is the constant case
         // of `copy_nat` and is kept only because it is one step where the
         // derivation is three, and `values` and `cleanup` fire it constantly.
         // `applier::tests::copy_const_is_derivable_from_copy_nat` is what says
         // so out loud.
-        assert_eq!(before, 16);
+        assert_eq!(before, 17);
     }
 }
