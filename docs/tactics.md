@@ -66,7 +66,7 @@ matchers that place them.
 | `fuse` | `dip k { A } ; dip k { B }` = `dip k { A B }` | backward splits one frame at a point the arguments name |
 | `hoist` | `dip (k+1) { X } ; branch { A } { B }` = `branch { dip k { X } ; A } { dip k { X } ; B }` | forward is `unfactor`; backward is the last step of `factor` |
 | `distribute` | `branch { A } { B } ; C` = `branch { A C } { B C }` | `C` is a whole sequence. Backward factors a shared *suffix*, which the old set could not do at all |
-| `fold_branch` | `push c ; branch { A } { B }` = the arm `c` selects | selected by `truthy`, so `push 1; branch` takes the **else** arm |
+| `fold_branch` | `push c ; branch { A } { B }` = the arm `c` selects | selected by `truthy`, and `false` is the only falsy value, so `push 1; branch` takes the **then** arm |
 | `eval` | `push v1 … push vn ; op` = the pushes of what `op` answers | subsumes the old `fold_const` and `fold_const_unary` |
 | `annihilate` | `X ; drop^m` = `drop^n`, for `X : n -> m` | `X` is a whole sequence. Forward subsumes `annihilate_drop` (m=1) and `annihilate_flagged` (m=2); backward is `introduce`, below |
 | `counit` | `pick d ; drop` = nothing | *not* an annihilation: `pick d` is `(d+1 -> d+2)` |
@@ -498,12 +498,13 @@ as much as on anything else.
 
 That is why it goes through `Value::truthy` and `numeric_cmp` from
 `bytecode::value` rather than a second reading of the same rules. `push 1; push
-2; and` folds to `push false` because neither operand is `Bool(true)`. `less` on
-two symbols is not a comparison it can claim to have made, so it answers
-`false, false` — the flag as well as the value.
+2; and` folds to `push true` because neither operand is `Bool(false)` — `false`
+is the unique falsy value. `less` on two symbols is not a comparison it can
+claim to have made, so it answers `false, false` — the flag as well as the
+value.
 
 `fold_branch` selects by the same `truthy`, which is why `push 1; branch` is
-decided just as firmly as `push false; branch`: it takes the **else** arm.
+decided just as firmly as `push false; branch`: it takes the **then** arm.
 Reading it as a test for *being* a boolean would send junk down the wrong path.
 
 ## Four things that are easy to get wrong

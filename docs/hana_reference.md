@@ -50,7 +50,7 @@ These instructions perform mathematical or Boolean logic operations on stack val
 | `divide` ⚑ | `div` | `[..., a, b] -> [..., a / b, ok]` | Pops the top two numbers, divides $a$ by $b$ (TOS), and pushes the result. Integer division by zero **fails**, answering `0`; the float world stays IEEE, so `1.0 / 0` succeeds with `inf`. |
 | `modulo` ⚑ | `mod` | `[..., a, b] -> [..., a % b, ok]` | Pops the top two numbers, computes the remainder of $a / b$, and pushes the result. Integer modulo by zero **fails**; `1.0 % 0` succeeds with `NaN`. |
 | `negate` ⚑ | `neg` | `[..., a] -> [..., -a, ok]` | Pops the top number, negates it numerically, and pushes the result. |
-| `not` | — | `[..., v] -> [..., !truthy(v)]` | Pops the top value and pushes `true` unless it was exactly `true`. |
+| `not` | — | `[..., v] -> [..., !truthy(v)]` | Pops the top value and pushes `false` unless it was exactly `false`. |
 | `and` | — | `[..., a, b] -> [..., a && b]` | Pops the top two values, performs logical AND on their truthiness, and pushes the Boolean result. |
 | `or` | — | `[..., a, b] -> [..., a \|\| b]` | Pops the top two values, performs logical OR on their truthiness, and pushes the Boolean result. |
 
@@ -59,6 +59,8 @@ keep the operands and handing the value back where there is (`negate`). Integer
 arithmetic wraps, so `i64::MIN` is not a special case anywhere. `not`, `and` and
 `or` carry no flag — there is no input they cannot answer on — and truthiness is
 applied per operand, which is what keeps De Morgan true on every value.
+`truthy(v)` is `v != false`: `false` is the only falsy value, so a number, a
+symbol or a tuple is true. See `docs/totality.md`.
 
 ---
 

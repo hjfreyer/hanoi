@@ -1416,9 +1416,9 @@ mod totality_tests {
     // -- The instructions that carry no flag --------------------------------
 
     #[test]
-    fn only_bool_true_is_true() {
+    fn only_bool_false_is_false() {
         for v in every_shape() {
-            let expected = v == Value::Bool(true);
+            let expected = v != Value::Bool(false);
             assert_eq!(
                 apply(std::slice::from_ref(&v), Instruction::Not),
                 vec![Value::Bool(!expected)],
@@ -1426,10 +1426,14 @@ mod totality_tests {
                 v
             );
         }
-        // The deliberate oddity: junk is not true, so its negation is.
+        // Junk is not `false`, so it is true and its negation is `false`.
         assert_eq!(
             apply(&[Value::Int(42)], Instruction::Not),
-            vec![Value::Bool(true)]
+            vec![Value::Bool(false)]
+        );
+        assert_eq!(
+            apply(&[Value::unit()], Instruction::Not),
+            vec![Value::Bool(false)]
         );
     }
 
@@ -1437,7 +1441,7 @@ mod totality_tests {
     fn and_and_or_coerce_each_operand_separately() {
         for a in every_shape() {
             for b in every_shape() {
-                let (p, q) = (a == Value::Bool(true), b == Value::Bool(true));
+                let (p, q) = (a != Value::Bool(false), b != Value::Bool(false));
                 assert_eq!(
                     apply(&[a.clone(), b.clone()], Instruction::And),
                     vec![Value::Bool(p && q)],
@@ -1483,7 +1487,7 @@ mod totality_tests {
     }
 
     #[test]
-    fn a_branch_takes_the_else_arm_on_anything_but_true() {
+    fn a_branch_takes_the_then_arm_on_anything_but_false() {
         for v in every_shape() {
             let mut library = Library::new();
             library.sentences.push(vec![
@@ -1500,7 +1504,7 @@ mod totality_tests {
             let mut vm = VM::new(library);
             vm.execute(SentenceIndex::from(0))
                 .unwrap_or_else(|e| panic!("branch on {:?} failed: {}", v, e));
-            let taken = if v == Value::Bool(true) { 1 } else { 2 };
+            let taken = if v != Value::Bool(false) { 1 } else { 2 };
             assert_eq!(vm.stack(), &[Value::Int(taken)], "branch on {:?}", v);
         }
     }
@@ -1590,17 +1594,29 @@ mod totality_tests {
     // -- What is still partial ----------------------------------------------
 
     #[test]
-    fn assert_fails_on_anything_that_is_not_true() {
+    fn assert_fails_only_on_false() {
+        // The sharp edge of the truthiness rule, and the reason to know which
+        // way round it goes: an assertion here checks that something did not
+        // definitely go wrong, not that it definitely went right. `assert` on
+        // junk passes.
         for v in every_shape() {
             let got = run(vec![Instruction::Push(v.clone()), Instruction::Assert]);
             assert_eq!(
                 got.is_ok(),
-                v == Value::Bool(true),
+                v != Value::Bool(false),
                 "assert on {:?} gave {:?}",
                 v,
                 got
             );
         }
+        assert!(run(vec![Instruction::Push(Value::unit()), Instruction::Assert]).is_ok());
+        assert!(
+            run(vec![
+                Instruction::Push(Value::Bool(false)),
+                Instruction::Assert
+            ])
+            .is_err()
+        );
     }
 
     #[test]

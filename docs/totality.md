@@ -23,6 +23,7 @@ those conditions are not window-local. The damage was visible everywhere:
 - `fold_const` declined `push 1; push 2; and`, because `push false` is not a
   panic and the original was.
 - `fold_branch` needed a literal `Bool`, because `push 1; branch` was a panic.
+  It now folds any literal, `push 1; branch` taking the then arm.
 - `rebuild_copy` existed at all in order to launder an opaque value into a
   syntactically total shape, and even then the *reverse* — hoisting a partial
   computation out of a single branch arm — stayed out of reach.
@@ -40,7 +41,7 @@ three that exist to:
 | instruction | fails when |
 |---|---|
 | `panic` | always |
-| `assert` | `!truthy(v)` |
+| `assert` | `!truthy(v)`, i.e. `v == Bool(false)` |
 | `assert_eq` | `a != b` |
 
 Everything else that can still stop a run is **meta-level or structural**, not a
@@ -101,8 +102,11 @@ than a proof obligation.
 ## Truthiness
 
 ```
-truthy(v)  =  (v == Bool(true))
+truthy(v)  =  (v != Bool(false))
 ```
+
+**`false` is the unique falsy value.** A number, a symbol, a tuple — anything
+that is not literally `false` — is true.
 
 Applied **per operand**, and every boolean-shaped instruction is defined through
 it:
@@ -122,13 +126,39 @@ Morgan hold on *all* values, not just booleans: `not (a and b)` is
 `truthy(Bool(p)) = p`. Coercing the pair jointly, or making `and` return its
 operand, would both break that.
 
-One consequence is surprising and correct: **`not junk = true`**. Junk is not
-`true`, so it is falsy, so its negation is `true`. There is no third truth
-value; that is the price of the two-valued definition and it is worth paying.
+Note what that argument does *not* establish. It needs only per-operand
+coercion and `truthy(Bool(p)) = p`, and both hold just as well for the opposite
+rule `truthy(v) = (v == Bool(true))`. De Morgan does not pick a pole; it rules
+out joint coercion. The pole is a separate choice, made below.
 
-**A branch takes the else arm on junk.** The then arm is reached only by a
-literal `Bool(true)`. This agrees with junk-being-falsy everywhere else, and it
-is why `fold_branch` can now fold any literal.
+**A branch takes the then arm on junk.** The else arm is reached only by a
+literal `Bool(false)`, which is what lets `fold_branch` fold any literal. And
+**`not junk = false`**: junk is not `false`, so it is true, so its negation is
+`false`. There is no third truth value; that is the price of a two-valued
+definition and it is worth paying either way round.
+
+### Which pole is unique
+
+`false` is, and the choice is worth stating because the two rules are duals and
+the arguments are not overwhelming in either direction.
+
+What it buys is that the *positive* answer is the cheap one. A predicate that
+computes a real boolean is unaffected — `equal`, the `is_*` tests and the
+fallible instructions' flags all produce genuine `Bool`s, so they read the same
+under either rule. What differs is only what happens to a value that was never
+a boolean at all, and there "carry on" is the less surprising reading than
+"take the failure path".
+
+What it costs is `assert`, which fails exactly when its operand is falsy and so
+now **passes on junk**. Only a literal `false` fails an assertion. An `assert`
+here therefore checks that something did not definitely go wrong, rather than
+that it definitely went right; a check that wants the stronger reading has to
+say `push true equal assert` — or, better, come from an instruction that reports
+with a flag, which is what the flags are for.
+
+The change was made deliberately and is invisible to the corpus: every one of
+the 64 `.hana` integration tests runs the identical number of VM steps under
+either rule, because nothing in real code lets a non-boolean reach a branch.
 
 ## The fallible table
 
@@ -149,7 +179,7 @@ its answer was computed or invented, by leaving a `bool` on top of its result.
 | `symbol_len` | `1 -> 2` | the count, `true` | **`x`**, `false` |
 | `symbol_char_at` | `2 -> 2` | the code point, `true` | `Int 0`, `false` |
 | `untuple n` | `1 -> n+1` | the `n` elements, `true` | **`x`**, `()` × (n-1), `false` |
-| `branch` | unchanged | else arm unless `Bool(true)` | cannot fail |
+| `branch` | unchanged | then arm unless `Bool(false)` | cannot fail |
 | `assert`, `assert_eq`, `panic` | unchanged | — | **panics** |
 
 Two rules govern the rest of the table.

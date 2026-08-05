@@ -1156,20 +1156,30 @@ pub(crate) mod tests {
         };
         assert_eq!(arms(Value::Bool(true)).rhs(), vec![op(Instruction::Add)]);
         assert_eq!(arms(Value::Bool(false)).rhs(), vec![op(Instruction::Drop)]);
-        // Not a bool at all: the branch takes the else arm, and so must this.
-        assert_eq!(arms(Value::Int(1)).rhs(), vec![op(Instruction::Drop)]);
+        // Not a bool at all: `false` is the only falsy value, so the branch
+        // takes the *then* arm, and so must this.
+        assert_eq!(arms(Value::Int(1)).rhs(), vec![op(Instruction::Add)]);
+        assert_eq!(arms(Value::unit()).rhs(), vec![op(Instruction::Add)]);
     }
 
     // -- values -------------------------------------------------------------
 
     #[test]
     fn eval_agrees_with_the_interpreter_on_junk() {
-        // Neither operand is `Bool(true)`, so `and` is false — not an error.
+        // Neither operand is `Bool(false)`, so both are true and `and` is
+        // true — not an error, and not a coercion to false either.
         let r = Rule2::Eval {
             op: Instruction::And,
             inputs: vec![Value::Int(1), Value::Int(2)],
         };
         assert_eq!(r.check(&prog()), Ok(()));
+        assert_eq!(r.rhs(), vec![push(Value::Bool(true))]);
+
+        // And one `false` operand is enough to decide it.
+        let r = Rule2::Eval {
+            op: Instruction::And,
+            inputs: vec![Value::Int(1), Value::Bool(false)],
+        };
         assert_eq!(r.rhs(), vec![push(Value::Bool(false))]);
     }
 

@@ -29,20 +29,30 @@ pub enum Value {
 }
 
 impl Value {
-    /// Whether this value counts as true: exactly `Bool(true)` and nothing
-    /// else.
+    /// Whether this value counts as true: everything except `Bool(false)`.
+    ///
+    /// **`false` is the unique falsy value.** A number, a symbol, a tuple —
+    /// anything that is not literally `false` — is true, so `branch` takes the
+    /// then arm on junk and `not junk` is `false`.
     ///
     /// Every boolean-shaped instruction — `not`, `and`, `or`, `branch`,
-    /// `assert` — is defined through this, applied **per operand**. That is
-    /// what makes De Morgan hold on all values rather than only on booleans,
-    /// and it is why `not junk` is `true`. See `docs/totality.md`.
+    /// `assert` — is defined through this, applied **per operand**. That, and
+    /// not the choice of which pole is unique, is what makes De Morgan hold on
+    /// all values rather than only on booleans: the derivation needs only
+    /// `truthy(Bool(p)) = p`, which holds either way round. See
+    /// `docs/totality.md`.
+    ///
+    /// The consequence worth knowing is about `assert`, which fails exactly
+    /// when its operand is falsy: it now passes on junk, and only a literal
+    /// `false` fails it. An assertion here checks that something did not
+    /// definitely go wrong, rather than that it definitely went right.
     ///
     /// It lives here rather than in the VM because `bin/rewrite` folds the
     /// same operators and has to agree with the interpreter exactly; a second
     /// copy of the definition would be a silent hazard rather than a
     /// duplication, in the same way [`crate::arity::op_arity`] is shared.
     pub fn truthy(&self) -> bool {
-        *self == Value::Bool(true)
+        *self != Value::Bool(false)
     }
 
     /// The empty tuple, which is the junk the untupling instructions hand
