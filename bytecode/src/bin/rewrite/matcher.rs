@@ -71,6 +71,29 @@ pub(crate) trait Matcher: Sync + std::fmt::Debug {
     /// checks its own side conditions rather than proposing something that
     /// fails. An empty vector is not a match — return `None`.
     fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>>;
+
+    /// The same equation, read the other way: what `inv(...)` resolves to.
+    ///
+    /// An equation is true in both directions, but *looking* for it is not the
+    /// same job twice — `sink` reads `X ; D` where `float` reads `D ; X`, and
+    /// the arithmetic between them runs backwards. So an inverse is a real
+    /// matcher and has to be written, and this is where each one says which.
+    ///
+    /// It is **required rather than defaulted**, so that adding a matcher means
+    /// deciding what its backward reading is instead of silently having none.
+    /// Where that reading is worth a name of its own it gets one and this
+    /// simply returns it: `Sink::inverse` is [`Float`]. Where it is not, the
+    /// matcher is unnameable — reachable only through `inv` — and reports
+    /// itself as `inv(x)`, which keeps the rule namespace to the readings
+    /// people actually talk about.
+    ///
+    /// `Err` for a reading that cannot be searched for at all, carrying why.
+    /// Three things put a reading out of reach, and the message says which:
+    /// the backward side would have to be **invented** rather than recognized
+    /// (`eval`, `fold_branch`), an argument it needs is **not recoverable**
+    /// from the window (`cancel_tuple`'s `n`), or the backward side is
+    /// **empty**, so there is no window to match at all (`counit`).
+    fn inverse(&self) -> Result<Box<dyn Matcher>, String>;
 }
 
 /// A step at the window itself, refused if its arguments do not hold up.
@@ -186,6 +209,15 @@ impl Matcher for Unfold {
     fn width(&self) -> usize {
         1
     }
+    fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
+        Err(
+            "reading `unfold` backwards *folds*: it contracts a body back \
+             into a call. That has to name the sentence to fold into, and \
+             nothing in a window says which one — the step kind can express \
+             it, but no matcher looks for it yet"
+                .to_string(),
+        )
+    }
     fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
         let Node::Call { depth, target } = &window[0] else {
             return None;
@@ -216,6 +248,9 @@ impl Matcher for Collapse {
     }
     fn width(&self) -> usize {
         1
+    }
+    fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
+        Ok(Box::new(Expand))
     }
     fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
         let Node::Dip {
@@ -269,6 +304,9 @@ impl Matcher for Expand {
     fn width(&self) -> usize {
         1
     }
+    fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
+        Ok(Box::new(Collapse))
+    }
     fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
         let Node::Dip {
             depth,
@@ -316,6 +354,9 @@ impl Matcher for Flatten {
     fn width(&self) -> usize {
         1
     }
+    fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
+        Ok(Box::new(InvFlatten))
+    }
     fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
         let Node::Dip {
             depth: 0,
@@ -336,6 +377,43 @@ impl Matcher for Flatten {
     }
 }
 
+/// `A` becomes `dip 0 { A }`: the frame [`Flatten`] takes away.
+///
+/// [`Rule::ElimDip0`] read backwards, wrapping one node in a frame that hides
+/// nothing. That looks like a pointless thing to do until you want to move the
+/// node, because [`Rule::Interchange`] and [`Rule::Hoist`] both carry *frames*
+/// — so putting one round a bare instruction is how it becomes something the
+/// movement laws can pick up. `factor` uses exactly this step, twice.
+///
+/// No name of its own: it is `inv(flatten)`.
+///
+/// Measure: none, and it grows the term — its own output is a node it would
+/// wrap again, so `each` never settles. Aim it.
+#[derive(Debug)]
+pub(crate) struct InvFlatten;
+
+impl Matcher for InvFlatten {
+    fn name(&self) -> &'static str {
+        "inv(flatten)"
+    }
+    fn width(&self) -> usize {
+        1
+    }
+    fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
+        Ok(Box::new(Flatten))
+    }
+    fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
+        at_window(
+            prog,
+            Rule::ElimDip0 {
+                a: window.to_vec(),
+                origins: Vec::new(),
+            },
+            Direction::Reverse,
+        )
+    }
+}
+
 /// `dip k { A } ; dip k { B }` becomes `dip k { A B }`.
 ///
 /// Measure: node count.
@@ -348,6 +426,9 @@ impl Matcher for Fuse {
     }
     fn width(&self) -> usize {
         2
+    }
+    fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
+        Ok(Box::new(InvFuse))
     }
     fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
         let [
@@ -382,6 +463,58 @@ impl Matcher for Fuse {
     }
 }
 
+/// `dip k { A B }` becomes `dip k { A } ; dip k { B }`, splitting off one node.
+///
+/// [`Rule::Fuse`] read backwards. The equation lets the body be cut anywhere,
+/// and this takes the canonical cut: one node off the front, the way [`Expand`]
+/// takes the canonical split of [`Rule::Collapse`]. Driven by `each` it would
+/// peel the whole body apart, one frame per node — which is also why it must
+/// not share a fixpoint with [`Fuse`].
+///
+/// No name of its own: it is `inv(fuse)`.
+///
+/// Measure: none. It grows the term.
+#[derive(Debug)]
+pub(crate) struct InvFuse;
+
+impl Matcher for InvFuse {
+    fn name(&self) -> &'static str {
+        "inv(fuse)"
+    }
+    fn width(&self) -> usize {
+        1
+    }
+    fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
+        Ok(Box::new(Fuse))
+    }
+    fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
+        let Node::Dip {
+            depth,
+            origins,
+            body,
+        } = &window[0]
+        else {
+            return None;
+        };
+        // One node either side, or the split says nothing: an empty frame beside
+        // the original is a change the listing shows and nothing can use.
+        if body.len() < 2 {
+            return None;
+        }
+        at_window(
+            prog,
+            Rule::Fuse {
+                k: *depth,
+                a: body[..1].to_vec(),
+                b: body[1..].to_vec(),
+                a_origins: origins.clone(),
+                b_origins: Vec::new(),
+            },
+            Direction::Reverse,
+        )
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Interchange
 // ---------------------------------------------------------------------------
@@ -402,6 +535,9 @@ impl Matcher for Sink {
     }
     fn width(&self) -> usize {
         2
+    }
+    fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
+        Ok(Box::new(Float))
     }
     fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
         let [x, framed] = window else { return None };
@@ -443,6 +579,9 @@ impl Matcher for Float {
     }
     fn width(&self) -> usize {
         2
+    }
+    fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
+        Ok(Box::new(Sink))
     }
     fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
         let [framed, x] = window else { return None };
@@ -497,6 +636,14 @@ impl Matcher for Factor {
     }
     fn width(&self) -> usize {
         1
+    }
+    fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
+        Err(
+            "`factor` is three steps of two different equations, so there is \
+             no single one to read backwards. `inv(unfactor)` is the last of \
+             the three, lifting a framed prefix out of both arms"
+                .to_string(),
+        )
     }
     fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
         let Node::Branch {
@@ -583,6 +730,9 @@ impl Matcher for Unfactor {
     fn width(&self) -> usize {
         2
     }
+    fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
+        Ok(Box::new(InvHoist))
+    }
     fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
         let [
             Node::Dip {
@@ -624,6 +774,79 @@ impl Matcher for Unfactor {
     }
 }
 
+/// `branch { dip k { X } ; A } { dip k { X } ; B }` becomes
+/// `dip (k+1) { X } ; branch { A } { B }`.
+///
+/// [`Rule::Hoist`] read backwards: the frame both arms open with runs whichever
+/// way the branch goes, so it can run before the condition is consumed — one
+/// deeper, because out there the condition is still on the stack.
+///
+/// This is [`Factor`]'s third step, on its own and generalized. `factor` starts
+/// from an *unframed* shared prefix and wraps it first, so it always hoists at
+/// `k = 0`; this takes a frame that is already there, at any depth, which is
+/// what `float` tends to leave behind.
+///
+/// The two frames are compared by effect, so provenance does not have to agree.
+///
+/// No name of its own: it is `inv(unfactor)`.
+///
+/// Measure: nodes held inside branch arms, like [`Factor`]'s — but it must
+/// still not share a fixpoint with [`Unfactor`], which puts them back.
+#[derive(Debug)]
+pub(crate) struct InvHoist;
+
+impl Matcher for InvHoist {
+    fn name(&self) -> &'static str {
+        "inv(unfactor)"
+    }
+    fn width(&self) -> usize {
+        1
+    }
+    fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
+        Ok(Box::new(Unfactor))
+    }
+    fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
+        let Node::Branch {
+            then_origin,
+            then_body,
+            else_origin,
+            else_body,
+        } = &window[0]
+        else {
+            return None;
+        };
+        let (Some(head), Some(other)) = (then_body.first(), else_body.first()) else {
+            return None;
+        };
+        if !same_effect(head, other) {
+            return None;
+        }
+        // A `Call` hides something too, but the equation spells the frame out as
+        // a dip and there is nowhere to put a callee's name.
+        let Node::Dip {
+            depth: k,
+            origins,
+            body: x,
+        } = head
+        else {
+            return None;
+        };
+        at_window(
+            prog,
+            Rule::Hoist {
+                k: *k,
+                x: x.clone(),
+                origins: origins.clone(),
+                then_arm: then_body[1..].to_vec(),
+                else_arm: else_body[1..].to_vec(),
+                then_origin: then_origin.clone(),
+                else_origin: else_origin.clone(),
+            },
+            Direction::Reverse,
+        )
+    }
+}
+
 /// `branch { A } { B } ; X` becomes `branch { A X } { B X }`.
 ///
 /// `X` runs after whichever arm was taken, so moving it inside both is no
@@ -641,6 +864,9 @@ impl Matcher for Distribute {
     }
     fn width(&self) -> usize {
         2
+    }
+    fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
+        Ok(Box::new(InvDistribute))
     }
     fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
         let [
@@ -669,6 +895,63 @@ impl Matcher for Distribute {
     }
 }
 
+/// `branch { A C } { B C }` becomes `branch { A } { B } ; C`.
+///
+/// [`Rule::Distribute`] read backwards, which factors a shared **suffix** out
+/// of both arms — the move the old rule set could not express at all, since
+/// `factor_branch` only ever worked on prefixes. It takes the longest shared
+/// run, compared by effect.
+///
+/// No name of its own: it is `inv(distribute)`.
+///
+/// Measure: nodes held inside branch arms. It shrinks the term, but must not
+/// share a fixpoint with [`Distribute`], which puts the suffix back.
+#[derive(Debug)]
+pub(crate) struct InvDistribute;
+
+impl Matcher for InvDistribute {
+    fn name(&self) -> &'static str {
+        "inv(distribute)"
+    }
+    fn width(&self) -> usize {
+        1
+    }
+    fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
+        Ok(Box::new(Distribute))
+    }
+    fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
+        let Node::Branch {
+            then_origin,
+            then_body,
+            else_origin,
+            else_body,
+        } = &window[0]
+        else {
+            return None;
+        };
+        let shared = then_body
+            .iter()
+            .rev()
+            .zip(else_body.iter().rev())
+            .take_while(|(a, b)| same_effect(a, b))
+            .count();
+        if shared == 0 {
+            return None;
+        }
+        at_window(
+            prog,
+            Rule::Distribute {
+                then_arm: then_body[..then_body.len() - shared].to_vec(),
+                else_arm: else_body[..else_body.len() - shared].to_vec(),
+                suffix: then_body[then_body.len() - shared..].to_vec(),
+                then_origin: then_origin.clone(),
+                else_origin: else_origin.clone(),
+            },
+            Direction::Reverse,
+        )
+    }
+}
+
 /// `push c ; branch { A } { B }` becomes the arm `c` selects.
 ///
 /// Any literal folds, not only a `Bool`: a branch takes the then arm on
@@ -686,6 +969,14 @@ impl Matcher for FoldBranch {
     }
     fn width(&self) -> usize {
         2
+    }
+    fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
+        Err(
+            "reading `fold_branch` backwards would have to invent the arm \
+             that was not taken, and a condition that chooses between them. \
+             The window is the arm that ran and says neither"
+                .to_string(),
+        )
     }
     fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
         let [
@@ -735,6 +1026,13 @@ impl Matcher for EvalBinary {
     fn width(&self) -> usize {
         3
     }
+    fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
+        Err(
+            "reading `eval` backwards would have to invent the operator \
+             that produced the literal, and the operands it was applied to"
+                .to_string(),
+        )
+    }
     fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
         let [
             Node::Op(Instruction::Push(a)),
@@ -768,6 +1066,13 @@ impl Matcher for EvalUnary {
     fn width(&self) -> usize {
         2
     }
+    fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
+        Err(
+            "reading `eval` backwards would have to invent the operator \
+             that produced the literal, and the operand it was applied to"
+                .to_string(),
+        )
+    }
     fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
         let [Node::Op(Instruction::Push(a)), Node::Op(inst)] = window else {
             return None;
@@ -800,6 +1105,14 @@ impl Matcher for Annihilate {
     fn width(&self) -> usize {
         2
     }
+    fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
+        Err(
+            "the backward reading of `annihilate` is the introduction rule, \
+             which has to say what computation to conjure in front of the \
+             drops: write `introduce { ... }`"
+                .to_string(),
+        )
+    }
     fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
         annihilate_with(prog, window, 1)
     }
@@ -822,6 +1135,14 @@ impl Matcher for AnnihilateFlagged {
     }
     fn width(&self) -> usize {
         3
+    }
+    fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
+        Err(
+            "the backward reading of `annihilate` is the introduction rule, \
+             which has to say what computation to conjure in front of the \
+             drops: write `introduce { ... }`"
+                .to_string(),
+        )
     }
     fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
         annihilate_with(prog, window, 2)
@@ -935,6 +1256,13 @@ impl Matcher for Introduce {
     fn width(&self) -> usize {
         self.n
     }
+    fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
+        Ok(Box::new(InvIntroduce {
+            x: self.x.clone(),
+            n: self.n,
+            m: self.m,
+        }))
+    }
     fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
         if !window.iter().all(is_drop) {
             return None;
@@ -947,6 +1275,56 @@ impl Matcher for Introduce {
                 m: self.m,
             },
             Direction::Reverse,
+        )
+    }
+}
+
+/// `X ; drop^m` becomes `drop^n`, for the `X : n -> m` the tactic named.
+///
+/// [`Introduce`] read backwards, which is [`Rule::Annihilate`] read forwards —
+/// so it is [`Annihilate`]'s law, but reading a whole *term* rather than a
+/// single node. That is the difference worth having: `annihilate` matches
+/// `X ; drop` for one node `X`, where this matches the run of nodes the term
+/// spells out, and so can take back out exactly what an `introduce` put in.
+///
+/// No name of its own: it is `inv(introduce { ... })`.
+///
+/// Measure: node count, as [`Annihilate`]'s is.
+#[derive(Debug)]
+pub(crate) struct InvIntroduce {
+    x: Vec<Node>,
+    n: usize,
+    m: usize,
+}
+
+impl Matcher for InvIntroduce {
+    fn name(&self) -> &'static str {
+        "inv(introduce)"
+    }
+    /// The term, and the drops that follow it.
+    fn width(&self) -> usize {
+        self.x.len() + self.m
+    }
+    fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
+        Ok(Box::new(Introduce {
+            x: self.x.clone(),
+            n: self.n,
+            m: self.m,
+        }))
+    }
+    fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
+        let (term, drops) = window.split_at(self.x.len());
+        if !same_effect_seq(term, &self.x) || !drops.iter().all(is_drop) {
+            return None;
+        }
+        at_window(
+            prog,
+            Rule::Annihilate {
+                x: self.x.clone(),
+                n: self.n,
+                m: self.m,
+            },
+            Direction::Forward,
         )
     }
 }
@@ -997,6 +1375,14 @@ impl Matcher for Counit {
     fn width(&self) -> usize {
         2
     }
+    fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
+        Err(
+            "`pick d ; drop` = nothing, so the backward side is empty: there \
+             is no window to recognize, and nothing to say which `d` to put \
+             back. It is the generator's to emit, not a matcher's to find"
+                .to_string(),
+        )
+    }
     fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
         let [Node::Op(Instruction::Pick(d)), drop] = window else {
             return None;
@@ -1027,6 +1413,9 @@ impl Matcher for Comm {
     fn width(&self) -> usize {
         2
     }
+    fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
+        Ok(Box::new(Swap))
+    }
     fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
         let [Node::Op(Instruction::Roll(1)), Node::Op(op)] = window else {
             return None;
@@ -1054,6 +1443,9 @@ impl Matcher for Swap {
     }
     fn width(&self) -> usize {
         1
+    }
+    fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
+        Ok(Box::new(Comm))
     }
     fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
         let Node::Op(op) = &window[0] else {
@@ -1092,6 +1484,9 @@ impl Matcher for SplitBool {
     fn width(&self) -> usize {
         1
     }
+    fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
+        Ok(Box::new(UnsplitBool))
+    }
     fn plan(&self, prog: &Program, _window: &[Node]) -> Option<Vec<PlannedStep>> {
         at_window(prog, Rule::SplitBool, Direction::Reverse)
     }
@@ -1112,6 +1507,9 @@ impl Matcher for UnsplitBool {
     }
     fn width(&self) -> usize {
         3
+    }
+    fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
+        Ok(Box::new(SplitBool))
     }
     fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
         // The equation is closed, so the applier compares the window against
@@ -1141,6 +1539,9 @@ impl Matcher for CopyConst {
     fn width(&self) -> usize {
         2
     }
+    fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
+        Ok(Box::new(InvCopyConst))
+    }
     fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
         let [
             Node::Op(Instruction::Push(c)),
@@ -1150,6 +1551,45 @@ impl Matcher for CopyConst {
             return None;
         };
         at_window(prog, Rule::CopyConst { c: c.clone() }, Direction::Forward)
+    }
+}
+
+/// `push c ; push c` becomes `push c ; pick 0`.
+///
+/// [`Rule::CopyConst`] read backwards. Pushing a literal twice is pushing it
+/// and copying it, and the copy is what a law about *slots* can act on where a
+/// second literal is just another literal.
+///
+/// No name of its own: it is `inv(copy_const)`.
+///
+/// Measure: none worth the name — it does not grow the term, but its output
+/// contains no `push c ; push c`, so it settles where [`CopyConst`] does not
+/// undo it. Never put the two in one `repeat`.
+#[derive(Debug)]
+pub(crate) struct InvCopyConst;
+
+impl Matcher for InvCopyConst {
+    fn name(&self) -> &'static str {
+        "inv(copy_const)"
+    }
+    fn width(&self) -> usize {
+        2
+    }
+    fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
+        Ok(Box::new(CopyConst))
+    }
+    fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
+        let [
+            Node::Op(Instruction::Push(a)),
+            Node::Op(Instruction::Push(b)),
+        ] = window
+        else {
+            return None;
+        };
+        if a != b {
+            return None;
+        }
+        at_window(prog, Rule::CopyConst { c: a.clone() }, Direction::Reverse)
     }
 }
 
@@ -1171,6 +1611,9 @@ impl Matcher for CopyAssoc {
     fn width(&self) -> usize {
         2
     }
+    fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
+        Ok(Box::new(InvCopyAssoc))
+    }
     fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
         let [
             Node::Op(Instruction::Pick(d)),
@@ -1180,6 +1623,46 @@ impl Matcher for CopyAssoc {
             return None;
         };
         at_window(prog, Rule::CopyAssoc { d: *d }, Direction::Forward)
+    }
+}
+
+/// `pick d ; dip 1 { pick d }` becomes `pick d ; pick 0`.
+///
+/// [`Rule::CopyAssoc`] read backwards, taking the second copy back out of its
+/// frame once it has been carried to where it was wanted.
+///
+/// No name of its own: it is `inv(copy_assoc)`.
+///
+/// Measure: its output contains no `pick d ; dip 1 { pick d }`, so it settles
+/// on its own — but not beside [`CopyAssoc`], which puts the frame back.
+#[derive(Debug)]
+pub(crate) struct InvCopyAssoc;
+
+impl Matcher for InvCopyAssoc {
+    fn name(&self) -> &'static str {
+        "inv(copy_assoc)"
+    }
+    fn width(&self) -> usize {
+        2
+    }
+    fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
+        Ok(Box::new(CopyAssoc))
+    }
+    fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
+        let [
+            Node::Op(Instruction::Pick(d)),
+            Node::Dip { depth: 1, body, .. },
+        ] = window
+        else {
+            return None;
+        };
+        let [Node::Op(Instruction::Pick(inner))] = &body[..] else {
+            return None;
+        };
+        if d != inner {
+            return None;
+        }
+        at_window(prog, Rule::CopyAssoc { d: *d }, Direction::Reverse)
     }
 }
 
@@ -1199,6 +1682,13 @@ impl Matcher for CancelTuple {
     }
     fn width(&self) -> usize {
         2
+    }
+    fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
+        Err(
+            "the backward side of `cancel_tuple` is `push true`, which does \
+             not say what `n` was — a tuple of any width leaves the same flag"
+                .to_string(),
+        )
     }
     fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
         let [
@@ -1267,6 +1757,232 @@ mod tests {
         apply_script(prog, &mut tree, &script, true)
             .unwrap_or_else(|e| panic!("{} proposed a step that was refused: {}", m.name(), e));
         Some(tree)
+    }
+
+    // -- reading an equation backwards ---------------------------------------
+
+    /// Fires `m`, then fires `inv(m)` on the result, and expects the window
+    /// back.
+    ///
+    /// This is what `inv` promises, so it is asserted rather than described:
+    /// two readings of one equation undo each other. Where the backward reading
+    /// has a name of its own the pair is already tested by name; this covers
+    /// every pair at once, including the ones reachable only through `inv`.
+    fn round_trip(m: &dyn Matcher, window: &[Node]) {
+        let there = fire(m, &prog(), window)
+            .unwrap_or_else(|| panic!("{} declined {:?}", m.name(), window));
+        let back = m
+            .inverse()
+            .unwrap_or_else(|why| panic!("{} has no inverse: {}", m.name(), why));
+        assert_ne!(there, window, "{} changed nothing", m.name());
+        assert_eq!(
+            fire(&*back, &prog(), &there).as_deref(),
+            Some(window),
+            "{} did not undo {}",
+            back.name(),
+            m.name()
+        );
+    }
+
+    #[test]
+    fn every_matcher_says_which_way_it_reads_back() {
+        // A matcher with no answer here would be a silent hole: `inv` of it
+        // would report "unknown", which is a different claim from "that
+        // reading cannot be searched for, and here is why".
+        for name in matcher_names() {
+            let m = matcher_by_name(name).unwrap();
+            match m.inverse() {
+                Ok(back) => {
+                    // Reading back twice is reading forwards: `inv` is an
+                    // involution, so `inv(inv(r))` is `r` rather than a third
+                    // thing that happens to behave like it.
+                    let again = back
+                        .inverse()
+                        .unwrap_or_else(|why| panic!("{} has no inverse: {}", back.name(), why));
+                    assert_eq!(again.name(), m.name(), "inv(inv({})) drifted", name);
+                }
+                Err(why) => assert!(
+                    why.len() > 20,
+                    "{} declines an inverse without saying why",
+                    name
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn the_unnamed_readings_undo_the_named_ones() {
+        let d = |depth, body| dip(depth, body);
+        // `inv(flatten)`: a frame that hides nothing, put back.
+        round_trip(&Flatten, &[d(0, vec![op(Instruction::Add)])]);
+        // `inv(fuse)`: one node split off the front of a body.
+        round_trip(
+            &InvFuse,
+            &[d(2, vec![op(Instruction::Add), op(Instruction::Not)])],
+        );
+        // `inv(unfactor)`: a frame both arms open with, lifted out.
+        round_trip(
+            &Unfactor,
+            &[
+                d(1, vec![op(Instruction::Add)]),
+                branch(vec![op(Instruction::Drop)], vec![op(Instruction::Not)]),
+            ],
+        );
+        // `inv(distribute)`: a suffix both arms end with, taken out.
+        round_trip(
+            &Distribute,
+            &[
+                branch(vec![op(Instruction::Add)], vec![op(Instruction::Drop)]),
+                op(Instruction::Not),
+            ],
+        );
+        round_trip(
+            &CopyConst,
+            &[
+                op(Instruction::Push(Value::Int(7))),
+                op(Instruction::Pick(0)),
+            ],
+        );
+        round_trip(
+            &CopyAssoc,
+            &[op(Instruction::Pick(3)), op(Instruction::Pick(0))],
+        );
+    }
+
+    #[test]
+    fn inv_flatten_wraps_one_node_in_a_frame_that_hides_nothing() {
+        // Worth having on its own: a bare instruction cannot travel, and this
+        // is what makes it into something the movement laws carry.
+        assert_eq!(
+            fire(&InvFlatten, &prog(), &[op(Instruction::Add)]),
+            Some(vec![dip(0, vec![op(Instruction::Add)])])
+        );
+    }
+
+    #[test]
+    fn inv_fuse_splits_one_node_off_the_front() {
+        let w = [dip(
+            1,
+            vec![
+                op(Instruction::Add),
+                op(Instruction::Not),
+                op(Instruction::Drop),
+            ],
+        )];
+        assert_eq!(
+            fire(&InvFuse, &prog(), &w),
+            Some(vec![
+                dip(1, vec![op(Instruction::Add)]),
+                dip(1, vec![op(Instruction::Not), op(Instruction::Drop)]),
+            ])
+        );
+        // A body with nothing to split leaves an empty frame beside itself,
+        // which is a change nothing can use.
+        assert!(
+            InvFuse
+                .plan(&prog(), &[dip(1, vec![op(Instruction::Add)])])
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn inv_unfactor_lifts_a_frame_the_arms_share() {
+        // Deeper than `factor` can reach on its own: the prefix is already
+        // framed, at depth 2, and comes out at 3.
+        let w = [branch(
+            vec![dip(2, vec![op(Instruction::Add)]), op(Instruction::Drop)],
+            vec![dip(2, vec![op(Instruction::Add)]), op(Instruction::Not)],
+        )];
+        assert_eq!(
+            fire(&InvHoist, &prog(), &w),
+            Some(vec![
+                dip(3, vec![op(Instruction::Add)]),
+                branch(vec![op(Instruction::Drop)], vec![op(Instruction::Not)]),
+            ])
+        );
+        // Arms that open differently, and an unframed shared prefix — which is
+        // `factor`'s business, since it has to wrap it first.
+        assert!(
+            InvHoist
+                .plan(
+                    &prog(),
+                    &[branch(
+                        vec![dip(1, vec![op(Instruction::Add)])],
+                        vec![dip(2, vec![op(Instruction::Add)])],
+                    )]
+                )
+                .is_none()
+        );
+        assert!(
+            InvHoist
+                .plan(
+                    &prog(),
+                    &[branch(
+                        vec![op(Instruction::Add)],
+                        vec![op(Instruction::Add)]
+                    )]
+                )
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn inv_distribute_factors_the_longest_shared_suffix() {
+        // The move the old rule set could not express at all: `factor_branch`
+        // only ever worked on prefixes.
+        let w = [branch(
+            vec![
+                op(Instruction::Add),
+                op(Instruction::Not),
+                op(Instruction::Drop),
+            ],
+            vec![
+                op(Instruction::Pick(0)),
+                op(Instruction::Not),
+                op(Instruction::Drop),
+            ],
+        )];
+        assert_eq!(
+            fire(&InvDistribute, &prog(), &w),
+            Some(vec![
+                branch(vec![op(Instruction::Add)], vec![op(Instruction::Pick(0))]),
+                op(Instruction::Not),
+                op(Instruction::Drop),
+            ])
+        );
+        assert!(
+            InvDistribute
+                .plan(
+                    &prog(),
+                    &[branch(
+                        vec![op(Instruction::Add)],
+                        vec![op(Instruction::Not)]
+                    )]
+                )
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn inv_introduce_reads_the_whole_term_where_annihilate_reads_one_node() {
+        // `pick 0` is (1 -> 2), so the introduction stands in front of one drop
+        // and leaves two; reading it back takes all three nodes.
+        let m = Introduce::new(vec![op(Instruction::Pick(0))]).unwrap();
+        round_trip(&m, &[op(Instruction::Drop)]);
+
+        // A term of more than one node, which `annihilate` cannot match: it
+        // reads `X ; drop` for a single node `X`.
+        let term = vec![op(Instruction::Pick(0)), op(Instruction::IsBool)];
+        let m = Introduce::new(term.clone()).unwrap();
+        round_trip(&m, &[op(Instruction::Drop)]);
+        let back = m.inverse().unwrap();
+        assert_eq!(back.width(), 4, "the term, then the drops it leaves");
+        assert!(
+            Annihilate
+                .plan(&prog(), &[term[0].clone(), term[1].clone()])
+                .is_none(),
+            "annihilate should not reach a two-node term"
+        );
     }
 
     // -- frames -------------------------------------------------------------

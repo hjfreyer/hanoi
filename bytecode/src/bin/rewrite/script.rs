@@ -656,6 +656,12 @@ impl Definitions {
                         .with_help("rules and tactics are separate namespaces; pick another name"),
                 );
             }
+            if name == "inv" {
+                return Err(
+                    ScriptError::new("'inv' is the backward-reading form", name_span)
+                        .with_help("`inv(r)` names a rule, so it cannot also name a tactic"),
+                );
+            }
             p.expect(Tok::Eq, "'='")?;
             let body = p.expr()?;
             p.expect(Tok::Semi, "';'")?;
@@ -789,6 +795,18 @@ impl Definitions {
         args: &[Arg],
         visiting: &mut HashSet<String>,
     ) -> Result<Tactic, ScriptError> {
+        // `inv(r)` is a rule, and a rule has to be placed — the same courtesy
+        // a bare rule name gets, since `inv` looks exactly like a combinator.
+        if name == "inv" {
+            return Err(
+                ScriptError::new("`inv(...)` is a rule, not a tactic", span).with_help(
+                    "a rule has to be placed somewhere: write `each(inv(fuse))` \
+                     to apply it everywhere in a sequence, or `once(inv(fuse))` \
+                     for the first match",
+                ),
+            );
+        }
+
         let Some((_, shape)) = COMBINATORS.iter().find(|(n, _)| *n == name) else {
             if self.defs.contains_key(name) {
                 return Err(ScriptError::new(
@@ -911,60 +929,95 @@ impl Definitions {
         }
         let mut rules: Vec<Box<dyn Matcher>> = Vec::new();
         for arg in args {
-            match arg {
-                Arg::Expr(Expr::Name(rule_name, rule_span)) => {
-                    if term_matcher_names().contains(&rule_name.as_str()) {
-                        return Err(ScriptError::new(
-                            format!("`{}` needs a term", rule_name),
-                            *rule_span,
-                        )
+            let Arg::Expr(expr) = arg else {
+                return Err(ScriptError::new(
+                    format!("`{}` takes rule names, not tactics", name),
+                    span,
+                )
+                .with_help(known_rules()));
+            };
+            rules.push(rule(name, span, expr)?);
+        }
+        Ok(rules)
+    }
+}
+
+/// One rule, in any of the three forms a rule list accepts.
+///
+/// A bare name, a name completed by a term, or `inv(r)` — the same equation
+/// read the other way. `inv` is a form here rather than a combinator because
+/// what it produces is a rule: it has still to be placed.
+fn rule(placed_in: &str, span: Span, expr: &Expr) -> Result<Box<dyn Matcher>, ScriptError> {
+    match expr {
+        Expr::Name(rule_name, rule_span) => {
+            if term_matcher_names().contains(&rule_name.as_str()) {
+                return Err(
+                    ScriptError::new(format!("`{}` needs a term", rule_name), *rule_span)
                         .with_help(format!(
                             "say what to introduce: `{} {{ pick 0 }}`",
                             rule_name
-                        )));
-                    }
-                    let Some(rule) = matcher_by_name(rule_name) else {
-                        return Err(ScriptError::new(
-                            format!("unknown rule '{}'", rule_name),
-                            *rule_span,
-                        )
-                        .with_help(known_rules()));
-                    };
-                    rules.push(rule);
-                }
-                Arg::Expr(Expr::Term(rule_name, rule_span, term)) => {
-                    let Some(built) = matcher_with_term(rule_name, term.clone()) else {
-                        let help = if matcher_by_name(rule_name).is_some() {
-                            format!("`{}` takes no term; write it bare", rule_name)
-                        } else {
-                            known_rules()
-                        };
-                        return Err(ScriptError::new(
-                            format!("'{}' does not take a term", rule_name),
-                            *rule_span,
-                        )
-                        .with_help(help));
-                    };
-                    match built {
-                        Ok(rule) => rules.push(rule),
-                        Err(why) => {
-                            return Err(ScriptError::new(
-                                format!("`{}` cannot use that term: {}", rule_name, why),
-                                *rule_span,
-                            ));
-                        }
-                    }
-                }
-                _ => {
-                    return Err(ScriptError::new(
-                        format!("`{}` takes rule names, not tactics", name),
-                        span,
-                    )
-                    .with_help(known_rules()));
-                }
+                        )),
+                );
             }
+            matcher_by_name(rule_name).ok_or_else(|| {
+                ScriptError::new(format!("unknown rule '{}'", rule_name), *rule_span)
+                    .with_help(known_rules())
+            })
         }
-        Ok(rules)
+
+        Expr::Term(rule_name, rule_span, term) => {
+            let Some(built) = matcher_with_term(rule_name, term.clone()) else {
+                let help = if matcher_by_name(rule_name).is_some() {
+                    format!("`{}` takes no term; write it bare", rule_name)
+                } else {
+                    known_rules()
+                };
+                return Err(ScriptError::new(
+                    format!("'{}' does not take a term", rule_name),
+                    *rule_span,
+                )
+                .with_help(help));
+            };
+            built.map_err(|why| {
+                ScriptError::new(
+                    format!("`{}` cannot use that term: {}", rule_name, why),
+                    *rule_span,
+                )
+            })
+        }
+
+        // `inv(r)`: whatever `r` places, read backwards. Nested and repeated
+        // freely, so `inv(inv(sink))` is `sink` — which is worth allowing
+        // rather than special-casing, since a definition may already say `inv`.
+        Expr::Call(name, call_span, args) if name == "inv" => {
+            let [Arg::Expr(inner)] = &args[..] else {
+                return Err(ScriptError::new("`inv` takes exactly one rule", *call_span)
+                    .with_help("for example `inv(fuse)`"));
+            };
+            let forward = rule(placed_in, span, inner)?;
+            forward.inverse().map_err(|why| {
+                ScriptError::new(
+                    format!("`{}` has no backward reading", forward.name()),
+                    *call_span,
+                )
+                .with_help(why)
+            })
+        }
+
+        Expr::Call(name, call_span, _) => Err(ScriptError::new(
+            format!("unknown rule form '{}(...)'", name),
+            *call_span,
+        )
+        .with_help(format!(
+            "`inv(r)` is the only one, and reads r's equation backwards. {}",
+            known_rules()
+        ))),
+
+        Expr::Seq(_) | Expr::Choice(_) => Err(ScriptError::new(
+            format!("`{}` takes rule names, not tactics", placed_in),
+            span,
+        )
+        .with_help(known_rules())),
     }
 }
 
@@ -1225,6 +1278,67 @@ mod tests {
                 .compile("each(introduce { pick 0")
                 .is_err()
         );
+    }
+
+    // -- reading a rule backwards --------------------------------------------
+
+    #[test]
+    fn inv_names_the_backward_reading_of_any_rule() {
+        assert!(compiles("each(inv(fuse))"));
+        assert!(compiles("once(inv(distribute))"));
+        assert!(compiles("at(2, inv(unfactor))"));
+        // Where the backward reading has a name of its own, `inv` is that name.
+        assert!(compiles("each(inv(sink))"));
+        // Twice over is forwards again, which is worth allowing rather than
+        // special-casing: a definition may already say `inv`.
+        assert!(compiles("each(inv(inv(sink)))"));
+        // Alongside ordinary rules in one placement, and over a term rule.
+        assert!(compiles("each(collapse, inv(fuse), sink)"));
+        assert!(compiles("once(inv(introduce { pick 0 }))"));
+    }
+
+    #[test]
+    fn a_rule_with_no_backward_reading_says_what_stands_in_the_way() {
+        // Three different reasons, and the message is the whole point of
+        // refusing here rather than matching nothing at run time.
+        let e = err("each(inv(eval1))");
+        assert!(e.contains("no backward reading"), "{}", e);
+        assert!(e.contains("invent the operator"), "{}", e);
+
+        let e = err("each(inv(cancel_tuple))");
+        assert!(e.contains("does not say what `n` was"), "{}", e);
+
+        let e = err("each(inv(counit))");
+        assert!(e.contains("backward side is empty"), "{}", e);
+
+        // And one that points at the rule that *does* do the job.
+        let e = err("each(inv(annihilate))");
+        assert!(e.contains("introduce {"), "{}", e);
+        let e = err("each(inv(factor))");
+        assert!(e.contains("inv(unfactor)"), "{}", e);
+    }
+
+    #[test]
+    fn inv_is_a_rule_and_still_has_to_be_placed() {
+        let e = err("inv(fuse)");
+        assert!(e.contains("is a rule, not a tactic"), "{}", e);
+        assert!(e.contains("each(inv(fuse))"), "{}", e);
+    }
+
+    #[test]
+    fn inv_takes_exactly_one_rule() {
+        assert!(err("each(inv())").contains("exactly one rule"));
+        assert!(err("each(inv(sink, fuse))").contains("exactly one rule"));
+        assert!(err("each(inv(nope))").contains("unknown rule 'nope'"));
+        // Any other call in rule position is not a rule form at all.
+        assert!(err("each(nope(sink))").contains("unknown rule form"));
+    }
+
+    #[test]
+    fn inv_may_not_be_taken_as_a_tactic_name() {
+        let mut d = defs();
+        let e = d.load("tactic inv = id;").unwrap_err();
+        assert!(e.message.contains("backward-reading form"), "{}", e.message);
     }
 
     // -- aiming -------------------------------------------------------------

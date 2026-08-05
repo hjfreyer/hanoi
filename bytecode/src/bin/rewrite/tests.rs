@@ -571,6 +571,54 @@ fn splitting_a_bool_lets_the_folding_laws_reach_an_opaque_value() {
     assert_eq!(shape(no), vec!["push true"]);
 }
 
+// ---------------------------------------------------------------------------
+// Reading an equation backwards
+// ---------------------------------------------------------------------------
+
+/// The end of a branch that `factor` cannot reach.
+///
+/// `factor` hoists a shared *prefix*; the shared suffix is the distribution law
+/// read backwards, which nothing had a name for. `inv(distribute)` is that
+/// reading, and needing no name of its own is the point.
+#[test]
+fn reading_distribute_backwards_factors_a_shared_suffix() {
+    let code = "sentence probe { pick 0 branch { drop 0 push 1 not } { drop 0 push 2 not } }";
+    let (prog, plain) = tree_of(code, "id");
+
+    let got = run(prog, plain.clone(), "bu(each(inv(distribute)))");
+    assert_eq!(
+        shape(&got),
+        vec!["pick 0", "branch", "not"],
+        "{:?}",
+        shape(&got)
+    );
+
+    // And the forward reading puts it back, which is what makes them one law.
+    assert_eq!(shape(&run(prog, got, "distribution")), shape(&plain));
+}
+
+#[test]
+fn the_two_readings_of_a_law_are_one_law() {
+    // Every `inv` pair, over real code: there and back is where it started.
+    let code = "sentence probe { pick 0 dip 2 { push 1 drop 0 } branch { not } { is_bool } }";
+    let (prog, plain) = tree_of(code, "id");
+    for (there, back) in [
+        ("once(inv(flatten))", "bu(each(flatten))"),
+        ("once(inv(fuse))", "bu(each(fuse))"),
+        ("bu(once(expand))", "repeat(bu(each(collapse)))"),
+    ] {
+        let out = run(prog, plain.clone(), there);
+        assert_ne!(shape(&out), shape(&plain), "`{}` did nothing", there);
+        assert_eq!(
+            shape(&run(prog, out, back)),
+            shape(&plain),
+            "`{}` did not undo `{}`",
+            back,
+            there
+        );
+    }
+}
+
 #[test]
 fn a_split_that_taught_nothing_can_be_taken_back_out() {
     let (prog, plain) = tree_of("#[total] function probe { not }", "id");
