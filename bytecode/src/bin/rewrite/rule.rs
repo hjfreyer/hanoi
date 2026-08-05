@@ -350,6 +350,38 @@ pub(crate) enum Rule {
     /// `add` on operands it cannot add: `0, false` either way round.
     Commute { op: Instruction },
 
+    /// `pick 0 ; is_bool ; branch { branch { push true } { push false } } { }`
+    /// = nothing.
+    ///
+    /// **A boolean is either `true` or `false`.** Copy the value, ask whether
+    /// it is a boolean, and if it is, branch on it and push back the literal
+    /// that branching just told you it was; if it is not, do nothing. Either
+    /// way the value is unchanged, so the whole thing is the identity.
+    ///
+    /// The only law here that takes no arguments at all, and the only one that
+    /// can put a `branch` on an *unknown* condition into a term.
+    ///
+    /// Read backward it is a **case split**, and that is the direction that
+    /// matters. Every other way of learning something about a value needs the
+    /// value to be a literal already; this manufactures the two cases in which
+    /// it is one. Inside the inner arms the opaque value has been replaced by
+    /// `push true` and `push false`, so [`Rule::Eval`] and [`Rule::FoldBranch`]
+    /// can act on what was previously beyond them — the "path condition becomes
+    /// a value" move, with no side condition to satisfy.
+    ///
+    /// The guard is what makes it unconditional. Stating it instead as
+    /// `X ; branch { push true } { push false }` = `X` for an `X` that yields a
+    /// boolean would need a syntactic predicate over instructions, and would
+    /// then decline exactly the interesting cases — a value that arrived by
+    /// `pick`, or out of a call. Asking `is_bool` in the term costs a branch
+    /// and answers for every value.
+    ///
+    /// Both sides leave the stack as they found it, but the left needs a value
+    /// to look at where the right does not. That asymmetry is the same one
+    /// [`Rule::Counit`] has, and `--check` allows it: what a sequence *requires*
+    /// may fall, what it *leaves* may not move.
+    SplitBool,
+
     /// `pick d ; drop` = nothing.
     ///
     /// Copying a value and discarding the copy: neither happened. This is the
@@ -420,6 +452,7 @@ impl Rule {
             Rule::Eval { .. } => "eval",
             Rule::Annihilate { .. } => "annihilate",
             Rule::Commute { .. } => "commute",
+            Rule::SplitBool => "split_bool",
             Rule::Counit { .. } => "counit",
             Rule::CopyConst { .. } => "copy_const",
             Rule::CopyAssoc { .. } => "copy_assoc",
@@ -478,6 +511,7 @@ impl Rule {
             | Rule::Hoist { .. }
             | Rule::Distribute { .. }
             | Rule::FoldBranch { .. }
+            | Rule::SplitBool
             | Rule::Counit { .. }
             | Rule::CopyConst { .. }
             | Rule::CopyAssoc { .. }
@@ -601,6 +635,22 @@ impl Rule {
             Rule::Commute { op } => {
                 vec![Node::Op(Instruction::Roll(1)), Node::Op(op.clone())]
             }
+
+            Rule::SplitBool => vec![
+                Node::Op(Instruction::Pick(0)),
+                Node::Op(Instruction::IsBool),
+                Node::Branch {
+                    then_origin: "a bool".to_string(),
+                    then_body: vec![Node::Branch {
+                        then_origin: "true".to_string(),
+                        then_body: vec![push(Value::Bool(true))],
+                        else_origin: "false".to_string(),
+                        else_body: vec![push(Value::Bool(false))],
+                    }],
+                    else_origin: "not a bool".to_string(),
+                    else_body: Vec::new(),
+                },
+            ],
 
             Rule::Counit { d } => {
                 vec![Node::Op(Instruction::Pick(*d)), Node::Op(Instruction::Drop)]
@@ -740,7 +790,7 @@ impl Rule {
 
             Rule::Commute { op } => vec![Node::Op(op.clone())],
 
-            Rule::Counit { .. } => Vec::new(),
+            Rule::SplitBool | Rule::Counit { .. } => Vec::new(),
 
             Rule::CopyConst { c } => vec![push(c.clone()), push(c.clone())],
 
@@ -1373,6 +1423,46 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn split_bool_is_a_closed_identity() {
+        // No arguments, no side conditions, and one side is nothing at all.
+        let r = Rule::SplitBool;
+        assert_eq!(r.check(&prog()), Ok(()));
+        assert_eq!(r.rhs(), Vec::new());
+        assert_eq!(r.lhs().len(), 3);
+        assert_eq!(r.lhs()[0], op(Instruction::Pick(0)));
+        assert_eq!(r.lhs()[1], op(Instruction::IsBool));
+
+        // The inner arms hold the literals, which is the whole point: after a
+        // split the value is something the folding laws can read.
+        let [.., Node::Branch { then_body, .. }] = &r.lhs()[..] else {
+            panic!("expected a guard branch")
+        };
+        let [
+            Node::Branch {
+                then_body: yes,
+                else_body: no,
+                ..
+            },
+        ] = &then_body[..]
+        else {
+            panic!("expected an inner branch")
+        };
+        assert_eq!(yes, &vec![push(Value::Bool(true))]);
+        assert_eq!(no, &vec![push(Value::Bool(false))]);
+    }
+
+    #[test]
+    fn split_bool_leaves_the_stack_as_it_found_it() {
+        // Net change is what must not move; that the left needs a value to
+        // look at and the right does not is the same asymmetry `counit` has.
+        let prog = prog();
+        let r = Rule::SplitBool;
+        let (li, lo) = crate::arity::seq_arity(&prog, &r.lhs());
+        assert_eq!((li, lo), (1, Some(1)));
+        assert_eq!(crate::arity::seq_arity(&prog, &r.rhs()), (0, Some(0)));
+    }
+
+    #[test]
     fn counit_is_not_an_annihilation() {
         // `pick d` is (d+1 -> d+2), so the annihilation equation would ask for
         // d+2 drops. The counit law is the one that holds.
@@ -1463,6 +1553,7 @@ pub(crate) mod tests {
             Rule::Commute {
                 op: Instruction::Add,
             },
+            Rule::SplitBool,
             Rule::Counit { d: 3 },
             Rule::CopyConst { c: Value::Int(7) },
             Rule::CopyAssoc { d: 2 },
@@ -1516,6 +1607,6 @@ pub(crate) mod tests {
         // Every variant of the enum appears in the sweep above. Keeping this
         // number honest is the point: an equation is an axiom, and the set is
         // meant to grow only when something genuinely cannot be derived.
-        assert_eq!(before, 14);
+        assert_eq!(before, 15);
     }
 }

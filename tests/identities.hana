@@ -1,0 +1,68 @@
+// The laws `bin/rewrite` rewrites by, checked against the interpreter.
+//
+// Each equation there claims two programs behave identically. The rewriter
+// takes that on faith — it is an axiom — so the claims are worth stating
+// somewhere that runs them. A law that turned out to be false would show up
+// here rather than as a silently wrong derivation.
+
+symbol some_sym "some_sym"
+
+// `pick 0 ; is_bool ; branch { branch { push true } { push false } } { }` = ε.
+//
+// A boolean is either true or false: ask whether the value is one, and if it
+// is, branch on it and push back the literal that branching just told you it
+// was. The guard is what makes it unconditional — on anything that is not a
+// boolean the block does nothing at all.
+#[total]
+function split_bool {
+    pick 0
+    is_bool
+    branch {
+        branch { push true } { push false }
+    } { }
+}
+
+test sentence split_bool_is_the_identity {
+    push true     jump split_bool   push true     assert_eq
+    push false    jump split_bool   push false    assert_eq
+    push 42       jump split_bool   push 42       assert_eq
+    push 0        jump split_bool   push 0        assert_eq
+    push 3.5      jump split_bool   push 3.5      assert_eq
+    push some_sym jump split_bool   push some_sym assert_eq
+    push ()       jump split_bool   push ()       assert_eq
+    push (1, 2)   jump split_bool   push (1, 2)   assert_eq
+}
+
+// `roll 1 ; op` = `op`, for the commutative operators.
+//
+// `vm` measures the commutative set exhaustively over every pair of value
+// shapes; this checks the shape of the law the rewriter actually applies.
+test sentence commuting_operands_changes_nothing {
+    push 3 push 4 roll 1 add   assert   push 7    assert_eq
+    push 3 push 4 add          assert   push 7    assert_eq
+
+    push 3 push 4 roll 1 mul   assert   push 12   assert_eq
+    push true push false roll 1 and     push false assert_eq
+    push true push false roll 1 or      push true  assert_eq
+    push 3 push some_sym roll 1 equal   push false assert_eq
+}
+
+// `X ; drop^m` = `drop^n`, and `pick d ; drop` = nothing.
+test sentence discarded_work_is_no_work {
+    push 9
+    push 3 push 4 add drop 0 drop 0
+    push 9 assert_eq
+
+    push 9
+    pick 0 drop 0
+    push 9 assert_eq
+}
+
+// `tuple n ; untuple n` = `push true`.
+test sentence building_and_taking_apart_leaves_the_flag {
+    push 1 push 2
+    tuple 2 untuple 2
+    assert
+    push 2 assert_eq
+    push 1 assert_eq
+}

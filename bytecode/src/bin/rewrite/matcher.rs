@@ -42,7 +42,7 @@
 use bytecode::Instruction;
 
 use crate::arity::node_arity;
-use crate::ir::{Node, Selector, frame_depth, same_effect, with_frame_depth};
+use crate::ir::{Node, Selector, frame_depth, same_effect, same_effect_seq, with_frame_depth};
 use crate::location::Location;
 use crate::program::Program;
 use crate::rule::{Direction, Rule, StepKind};
@@ -108,7 +108,9 @@ pub(crate) fn matcher_by_name(name: &str) -> Option<Box<dyn Matcher>> {
         "fold_branch" => Box::new(FoldBranch),
         "fuse" => Box::new(Fuse),
         "sink" => Box::new(Sink),
+        "split_bool" => Box::new(SplitBool),
         "swap" => Box::new(Swap),
+        "unsplit_bool" => Box::new(UnsplitBool),
         "unfactor" => Box::new(Unfactor),
         "unfold" => Box::new(Unfold),
         _ => return None,
@@ -136,8 +138,10 @@ pub(crate) fn matcher_names() -> Vec<&'static str> {
         "fold_branch",
         "fuse",
         "sink",
+        "split_bool",
         "swap",
         "unfactor",
+        "unsplit_bool",
         "unfold",
     ];
     names.sort();
@@ -1059,6 +1063,66 @@ impl Matcher for Swap {
     }
 }
 
+/// Splits an opaque value into the two cases where it is a boolean.
+///
+/// Puts `pick 0 ; is_bool ; branch { branch { push true } { push false } } { }`
+/// in front of the node it is aimed at. The whole block is the identity, so the
+/// term still means what it meant — but inside the inner arms the value has
+/// been replaced by a **literal**, which every law that folds constants can act
+/// on and none of them could reach before.
+///
+/// This is the only way to get a branch on an unknown condition into a term,
+/// and so the only way to learn anything about a value that did not arrive as a
+/// literal. Everything else needs the fact already on the stack.
+///
+/// It inserts *before* the window, so aiming is the whole job: `at(2,
+/// split_bool)` puts the split in front of node 2. It reads one node only to
+/// have somewhere to stand, and so cannot insert past the last one.
+///
+/// Measure: none, and it grows the term — its own output is a node it would
+/// happily insert in front of again. Aim it with `once`, `at` or a descent, as
+/// with `introduce` and `swap`.
+#[derive(Debug)]
+pub(crate) struct SplitBool;
+
+impl Matcher for SplitBool {
+    fn name(&self) -> &'static str {
+        "split_bool"
+    }
+    fn width(&self) -> usize {
+        1
+    }
+    fn plan(&self, prog: &Program, _window: &[Node]) -> Option<Vec<PlannedStep>> {
+        at_window(prog, Rule::SplitBool, Direction::Reverse)
+    }
+}
+
+/// Removes a case split that has served its purpose.
+///
+/// [`SplitBool`] read forward: the whole guarded block is the identity, so once
+/// the arms have been folded down to nothing interesting it can go.
+///
+/// Measure: node count.
+#[derive(Debug)]
+pub(crate) struct UnsplitBool;
+
+impl Matcher for UnsplitBool {
+    fn name(&self) -> &'static str {
+        "unsplit_bool"
+    }
+    fn width(&self) -> usize {
+        3
+    }
+    fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
+        // The equation is closed, so the applier compares the window against
+        // the one shape it has. All this decides is whether to bother.
+        if !same_effect_seq(window, &Rule::SplitBool.lhs()) {
+            return None;
+        }
+        at_window(prog, Rule::SplitBool, Direction::Forward)
+    }
+}
+
 /// `push c ; pick 0` becomes `push c ; push c`.
 ///
 /// Copying a constant is pushing it again. It is what makes a refinement pay:
@@ -1696,6 +1760,47 @@ mod tests {
         assert!(Swap.plan(&prog(), &[op(Instruction::Subtract)]).is_none());
         assert!(Swap.plan(&prog(), &[op(Instruction::Not)]).is_none());
         assert!(Swap.plan(&prog(), &[dip(1, Vec::new())]).is_none());
+    }
+
+    #[test]
+    fn split_bool_puts_the_two_cases_in_front_of_what_it_is_aimed_at() {
+        let w = [op(Instruction::Not)];
+        let got = fire(&SplitBool, &prog(), &w).unwrap();
+        assert_eq!(got.len(), 4, "{:?}", got);
+        assert_eq!(got[0], op(Instruction::Pick(0)));
+        assert_eq!(got[1], op(Instruction::IsBool));
+        assert_eq!(got[3], op(Instruction::Not), "it did not insert in front");
+    }
+
+    #[test]
+    fn unsplit_bool_takes_the_split_back_out() {
+        let split = fire(&SplitBool, &prog(), &[op(Instruction::Not)]).unwrap();
+        // The guard block is the first three nodes; `not` is what it stood in
+        // front of.
+        assert_eq!(
+            fire(&UnsplitBool, &prog(), &split[..3]),
+            Some(Vec::new()),
+            "{:?}",
+            split
+        );
+    }
+
+    #[test]
+    fn unsplit_bool_declines_a_block_that_is_not_the_split() {
+        // A guard over different arms is a different program.
+        let wrong = [
+            op(Instruction::Pick(0)),
+            op(Instruction::IsBool),
+            branch(vec![op(Instruction::Drop)], Vec::new()),
+        ];
+        assert!(UnsplitBool.plan(&prog(), &wrong).is_none());
+        // And so is the same shape guarded on something else.
+        let wrong = [
+            op(Instruction::Pick(0)),
+            op(Instruction::IsInt),
+            Rule::SplitBool.lhs()[2].clone(),
+        ];
+        assert!(UnsplitBool.plan(&prog(), &wrong).is_none());
     }
 
     #[test]
