@@ -40,7 +40,7 @@ use bytecode::arity::failure_reachability;
 use bytecode::{Library, SentenceIndex};
 
 use crate::engine::{Env, miss_report};
-use crate::matcher::{matcher_names, term_matcher_names};
+use crate::matcher::{matcher_by_name, matcher_names, term_matcher_names};
 use crate::print::print_sentence;
 use crate::program::Program;
 use crate::script::{Definitions, PRELUDE};
@@ -138,9 +138,14 @@ fn main() {
     }
 
     if list_rules {
-        println!("rules (place them with `each(...)` or `once(...)`):");
+        println!("rules (place them with `each(...)` or `once(...)`),");
+        println!("and what `inv(r)` gives for each:");
         for name in matcher_names() {
-            println!("  {}", name);
+            let rule = matcher_by_name(name).expect("it came from the list");
+            match rule.inverse() {
+                Ok(back) => println!("  {:<20} inv → {}", name, back.name()),
+                Err(_) => println!("  {:<20} (no backward reading)", name),
+            }
         }
         println!();
         println!("rules that need a term saying what code to introduce:");
@@ -150,6 +155,12 @@ fn main() {
                 name, name
             );
         }
+        println!();
+        println!("`inv(r)` is r's equation read the other way. Where that reading is");
+        println!("worth a name it has one — `inv(sink)` is `float` — and where it is");
+        println!("not, `inv` is the only way to say it. A reading that cannot be");
+        println!("searched for at all is refused with the reason when the tactic is");
+        println!("compiled, rather than quietly matching nothing.");
         return;
     }
     if list_tactics {

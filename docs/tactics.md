@@ -175,6 +175,9 @@ different thing to look for even though the arithmetic is the same:
 | `introduce { .. }` | n | annihilate backwards — see below |
 | `counit`, `copy_const`, `copy_assoc`, `cancel_tuple` | 2 | |
 
+`inv(r)` is the rest of them: every backward reading that is not worth a name
+of its own. See "reading an equation backwards" below.
+
 A matcher checks its own side conditions, so anything it proposes is something
 the applier accepts. That is swept: every matcher over a corpus of windows,
 asserting nothing is ever refused.
@@ -183,6 +186,83 @@ Two of these need no coordination even though they look adjacent. `annihilate`
 wants `X : n -> 1` and `counit` wants `pick d ; drop`; since `pick d` is
 `(d+1 -> d+2)` it fails annihilate's arity requirement outright. The old code
 had an explicit special case for exactly this.
+
+## Reading an equation backwards: `inv`
+
+An equation is true both ways, but *looking* for it is not one job done twice.
+`sink` reads `X ; D` where `float` reads `D ; X`, and the arithmetic between
+them runs the other way. So a backward reading is a real matcher and has to be
+written — the question is only whether it deserves a name.
+
+Some do. `sink`/`float`, `collapse`/`expand`, `comm`/`swap` are pairs anyone
+working here talks about separately, and naming them is right. The rest are
+not: `unfuse`, `undistribute`, `unflatten` are words invented to fill a table,
+and every one added is another entry in a namespace that has to be memorized.
+
+```
+each(inv(fuse))          each(inv(distribute))         at(2, inv(flatten))
+```
+
+`inv(r)` is `r`'s equation, read the other way, wherever a rule name goes. It
+composes — `inv(inv(sink))` is `sink` — and when the reading already has a
+name, that is exactly what you get, so `inv(sink)` *is* `float`.
+
+Six readings exist only this way, and each is a capability the tool did not
+have:
+
+| | |
+|---|---|
+| `inv(flatten)` | `A` = `dip 0 { A }` — put a frame round a bare node so the movement laws can carry it. `factor`'s first two steps |
+| `inv(fuse)` | split one node off the front of a frame's body, the way `expand` takes the canonical split of `collapse` |
+| `inv(unfactor)` | lift a frame **both arms open with** out in front of the branch. `factor`'s third step, at any depth rather than only `0` |
+| `inv(distribute)` | factor the longest shared **suffix** out of both arms — the end of a branch `factor` cannot reach, since it only ever worked on prefixes |
+| `inv(copy_const)` | `push c ; push c` = `push c ; pick 0` |
+| `inv(copy_assoc)` | take the second copy back out of its frame |
+| `inv(introduce { X })` | `X ; drop^m` = `drop^n` — `annihilate`'s law reading a whole *term*, where `annihilate` reads a single node |
+
+### When there is no backward reading
+
+Six rules have none, and asking says why rather than matching nothing:
+
+```
+$ rewrite tests probe -t 'each(inv(cancel_tuple))'
+error: `cancel_tuple` has no backward reading
+  | each(inv(cancel_tuple))
+  |      ^^^^^^^^^^^^^^^^^
+  = help: the backward side of `cancel_tuple` is `push true`, which does not
+          say what `n` was — a tuple of any width leaves the same flag
+```
+
+Three things put a reading out of reach, and they are worth telling apart:
+
+- **It would have to invent, not recognize.** `inv(eval1)` would need the
+  operator that produced the literal, and `inv(fold_branch)` the arm that was
+  not taken. Nothing in the window says either.
+- **An argument is not recoverable.** `cancel_tuple`'s `n`, above.
+- **The backward side is empty.** `counit` is `pick d ; drop` = *nothing*, so
+  there is no window to match at all — a matcher must read at least one node.
+  That reading belongs to the generator, which can emit it as part of a
+  derivation; see the vacuous law above.
+
+Two more are refusals that point somewhere: `inv(annihilate)` is the
+introduction rule and has to say what to conjure, so it is
+`introduce { ... }`; and `factor` is three steps of two different equations, so
+there is no single one to reverse — `inv(unfactor)` is the last of the three.
+`inv(unfold)` is the real gap: folding a body back into a call is expressible
+as a step, but nothing looks for it, because a window does not say which
+sentence to fold into.
+
+**Every matcher has to answer.** `Matcher::inverse` has no default
+implementation, so adding a rule means saying what its backward reading is or
+why there is not one — a new rule cannot quietly have none.
+
+### They are still opposite readings
+
+`inv(r)` and `r` are one equation, so they oscillate: the warning about
+`collapse`/`expand` in one `repeat` covers `fuse`/`inv(fuse)` and
+`distribute`/`inv(distribute)` exactly as much. Most of the `inv` readings also
+grow the term and have no measure at all, which is what `once`, `at` and a
+descent are for.
 
 ## Saying what code to create
 
@@ -661,9 +741,10 @@ Reading it as a test for *being* a boolean would send junk down the wrong path.
 ## Four things that are easy to get wrong
 
 1. **Opposite readings of one law in one `repeat`.** `collapse`/`expand`,
-   `sink`/`float`, `factor`/`unfactor`, `annihilate`/`introduce`, and now
-   `distribute` forward and backward. Each pair is one equation read two ways
-   and will oscillate until the fuel runs out. The trace is what diagnoses it.
+   `sink`/`float`, `factor`/`unfactor`, `annihilate`/`introduce` — and every
+   `r`/`inv(r)` pair, which is now the general statement of it. Each is one
+   equation read two ways and will oscillate until the fuel runs out. The trace
+   is what diagnoses it, since the two readings show up under both names.
 2. **Expecting `bu` to stage.** It reaches new bodies only on the next pass;
    `td` descends into what it just created, so one `td` pass opens the whole
    call graph.
