@@ -1001,6 +1001,14 @@ Reading it as a test for *being* a boolean would send junk down the wrong path.
   rewrote. It checks *net change* rather than full arity, because `annihilate`
   legitimately lowers the input requirement: dropping `pick 2; drop` also drops
   the demand for three values that only the pick made.
+
+  **What it cannot catch is a rewrite licensed by a wrong arity.** A
+  misreported arity preserves net change as readily as a correct one, and a
+  lowered requirement is what it allows on purpose — so it is downstream of the
+  reckoning being right, not a guard on it. A branch whose arity was read off
+  one arm claimed `(1 -> 0)` where it was `(2 -> 1)`, and `--check` waved the
+  resulting rewrite through; see `arity::branch_arity` and
+  `tests::a_function_that_is_not_the_identity_is_not_rewritten_into_one`.
 - `--show-script` prints the derivation, one step per line, with each step's
   window and replacement sketched.
 - `--trace` prints how often each matcher fired, and the total step count. The
