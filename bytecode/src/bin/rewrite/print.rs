@@ -1,4 +1,11 @@
-//! The depth-gutter listing.
+//! The gutter listing: where each node is, and how deep the stack is there.
+//!
+//! Two columns before the instruction. **Depth** is what the stack holds on the
+//! way in, and **position** is the node's index in the sequence it belongs to —
+//! which is the number `at(n, ...)` takes, and the number `then(n, t)` and its
+//! relatives take when read off a `branch` or `dip` line. Between them a window
+//! a script prints as `[1.then, 2.body] @2` can be read straight off the
+//! listing instead of counted out by hand.
 
 use bytecode::SentenceIndex;
 use std::collections::HashSet;
@@ -13,10 +20,33 @@ use crate::stack::{self, Fresh, Names, Stack};
 /// How wide the symbolic stack column is allowed to get.
 const STACK_WIDTH: usize = 34;
 
+/// How wide the position column is. Three digits and a space, which covers a
+/// sequence long enough that nobody is aiming into it by eye anyway.
+const POS_WIDTH: usize = 4;
+
 /// Everything the stack view needs, threaded through the listing.
 struct View<'a> {
     names: &'a mut Names,
     fresh: &'a mut Fresh,
+}
+
+/// The position column: a node's index **in the sequence it belongs to**.
+///
+/// That is exactly the number `at(n, ...)` takes, and — read off a `branch` or
+/// a `dip` line — the number `then(n, t)`, `else(n, t)` and `body(n, t)` take.
+/// So a window a script prints as `[1.then, 2.body] @2` can be read straight
+/// off the listing rather than counted out by hand.
+///
+/// It restarts at every nesting level, which the indentation is what shows.
+/// A closing brace belongs to no node and is left blank.
+fn pos_cell(show: bool, index: Option<usize>) -> String {
+    if !show {
+        return String::new();
+    }
+    match index {
+        Some(i) => format!("{:>w$} │", i, w = POS_WIDTH),
+        None => format!("{:>w$} │", "", w = POS_WIDTH),
+    }
 }
 
 /// Rewrites a sentence, prints the listing, and hands back the derivation.
@@ -46,7 +76,7 @@ pub(crate) fn print_body(
     source: &str,
     show_stack: bool,
 ) {
-    for line in render_body(prog, root, body, source, show_stack) {
+    for line in render_body(prog, root, body, source, show_stack, true) {
         println!("{}", line);
     }
 }
@@ -57,12 +87,20 @@ pub(crate) fn print_body(
 /// reason the listing is built before it is printed: what one rule firing did
 /// is a handful of lines in a tree that may be thousands long, and the way to
 /// show that is to line the two listings up rather than to print both.
+///
+/// `show_pos` is what that diff turns off. A position is stable only while a
+/// sequence keeps its length, and a splice renumbers every sibling after it —
+/// so a firing that removed one node would report the whole rest of the
+/// sequence as changed. Depth does not have that problem, since every equation
+/// preserves the net stack effect of the window it rewrote, which is why the
+/// gutter has always been safe to diff.
 pub(crate) fn render_body(
     prog: &Program,
     root: SentenceIndex,
     body: &[Node],
     source: &str,
     show_stack: bool,
+    show_pos: bool,
 ) -> Vec<String> {
     let library = prog.library();
     let mut out = Vec::new();
@@ -88,22 +126,47 @@ pub(crate) fn render_body(
         .then(|| stack::entry(inputs, &mut fresh))
         .flatten();
 
+    // Padded to the width of a depth gutter, so the header's dividers sit over
+    // the ones below it whether or not the stack column pushes them along.
     let head = if relative {
-        "offset │ instruction   (entry depth unknown)"
+        format!("{:>7} │ instruction   (entry depth unknown)", "offset")
     } else {
-        "depth │ instruction"
+        format!("{:>7} │ instruction", "depth")
     };
+    let pos_head = if show_pos {
+        format!("{:>w$} │", "pos", w = POS_WIDTH)
+    } else {
+        String::new()
+    };
+    let pos_rule = if show_pos {
+        format!("{}┼", "─".repeat(POS_WIDTH + 1))
+    } else {
+        String::new()
+    };
+    // The rule line runs under the position column too, so the two-space lead
+    // every other line carries becomes dashes there.
+    let lead = if show_pos { "──" } else { "  " };
     if show_stack {
-        out.push(format!("  {:>w$} │ {}", "stack", head, w = STACK_WIDTH));
         out.push(format!(
-            "  {}─┼─{}",
+            "{}  {:>w$} │{}",
+            pos_head,
+            "stack",
+            head,
+            w = STACK_WIDTH
+        ));
+        out.push(format!(
+            "{}{}{}─┼─{}",
+            pos_rule,
+            lead,
             "─".repeat(STACK_WIDTH),
             "─".repeat(24)
         ));
     } else {
-        out.push(format!("  {}", head));
+        out.push(format!("{}{}", pos_head, head));
         out.push(format!(
-            "  {}┼────────────",
+            "{}{}{}┼────────────",
+            pos_rule,
+            lead,
             if relative {
                 "───────"
             } else {
@@ -124,6 +187,7 @@ pub(crate) fn render_body(
         relative,
         stack,
         view.as_mut(),
+        show_pos,
         &mut out,
     );
 
@@ -146,13 +210,17 @@ fn render_seq(
     relative: bool,
     entry_stack: Stack,
     mut view: Option<&mut View>,
+    show_pos: bool,
     out: &mut Vec<String>,
 ) {
     let mut depth = entry;
     let mut stack = entry_stack;
     let blank = " ".repeat(7);
+    // A closing brace belongs to no node, so its position cell is empty.
+    let close =
+        |view: &Option<&mut View>| format!("{}{}", pos_cell(show_pos, None), stack_blank(view));
 
-    for node in nodes {
+    for (index, node) in nodes.iter().enumerate() {
         let gutter = match (depth, relative) {
             (Some(d), true) => format!("{:>7}", format!("{:+}", d)),
             (Some(d), false) => format!("{:>7}", d),
@@ -168,6 +236,7 @@ fn render_seq(
             ),
             None => gutter,
         };
+        let gutter = format!("{}{}", pos_cell(show_pos, Some(index)), gutter);
         let pad = "  ".repeat(indent);
 
         match node {
@@ -205,9 +274,10 @@ fn render_seq(
                     relative,
                     inner,
                     view.as_deref_mut(),
+                    show_pos,
                     out,
                 );
-                out.push(format!("{}{} │ {}}}", stack_blank(&view), blank, pad));
+                out.push(format!("{}{} │ {}}}", close(&view), blank, pad));
             }
             Node::Branch {
                 then_origin,
@@ -232,11 +302,12 @@ fn render_seq(
                     relative,
                     arm_stack.clone(),
                     view.as_deref_mut(),
+                    show_pos,
                     out,
                 );
                 out.push(format!(
                     "{}{} │ {}}} else → {} {{",
-                    stack_blank(&view),
+                    close(&view),
                     blank,
                     pad,
                     else_origin
@@ -249,9 +320,10 @@ fn render_seq(
                     relative,
                     arm_stack,
                     view.as_deref_mut(),
+                    show_pos,
                     out,
                 );
-                out.push(format!("{}{} │ {}}}", stack_blank(&view), blank, pad));
+                out.push(format!("{}{} │ {}}}", close(&view), blank, pad));
             }
             Node::Call { depth: k, target } => {
                 let verb = if *k == 0 {
