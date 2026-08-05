@@ -70,7 +70,7 @@ the derivation is three.
 | `distribute` | `branch { A } { B } ; C` = `branch { A C } { B C }` | `C` is a whole sequence. Backward factors a shared *suffix*, which the old set could not do at all |
 | `fold_branch` | `push c ; branch { A } { B }` = the arm `c` selects | selected by `truthy`, and `false` is the only falsy value, so `push 1; branch` takes the **then** arm |
 | `eval` | `push v1 … push vn ; op` = the pushes of what `op` answers | subsumes the old `fold_const` and `fold_const_unary` |
-| `annihilate` | `X ; drop^m` = `drop^n`, for `X : n -> m` | `X` is a whole sequence. Forward subsumes `annihilate_drop` (m=1) and `annihilate_flagged` (m=2); backward is `introduce`, below |
+| `annihilate` | `X ; drop^m` = `drop^n`, for `X : n -> m` | `X` is a whole sequence. Forward subsumes `annihilate_drop` (m=1), `annihilate_flagged` (m=2) and the case with no drops at all (m=0, where `branch { } { }` = `drop`); backward is `introduce`, below |
 | `commute` | `roll 1 ; op` = `op`, for a commutative `op` | `roll 1` swaps the top two, and `add`, `multiply`, `and`, `or`, `equal` cannot tell. Forward is `comm`, backward is `swap` |
 | `split_bool` | `pick 0 ; is_bool ; branch { branch { push true } { push false } } { }` = nothing | a boolean is either `true` or `false`. Backward it is a case split; forward is `unsplit_bool` |
 | `counit` | `pick d ; drop` = nothing | *not* an annihilation: `pick d` is `(d+1 -> d+2)` |
@@ -210,7 +210,7 @@ different thing to look for even though the arithmetic is the same:
 | `distribute` | 2 | |
 | `fold_branch` | 2 | |
 | `eval1` / `eval2` | 2 / 3 | one operand or two |
-| `annihilate` / `annihilate_flagged` | 2 / 3 | one output or two |
+| `annihilate` / `annihilate_flagged` / `annihilate_void` | 2 / 3 / 1 | one output, two, or none |
 | `comm` / `swap` | 2 / 1 | commutativity, either way |
 | `split_bool` / `unsplit_bool` | 1 / 3 | the case split, either way |
 | `introduce { .. }` | n | annihilate backwards — see below |
@@ -228,6 +228,39 @@ Two of these need no coordination even though they look adjacent. `annihilate`
 wants `X : n -> 1` and `counit` wants `pick d ; drop`; since `pick d` is
 `(d+1 -> d+2)` it fails annihilate's arity requirement outright. The old code
 had an explicit special case for exactly this.
+
+### Three matchers, one annihilation
+
+`annihilate`, `annihilate_flagged` and `annihilate_void` are the same equation
+read at `m = 1`, `2` and `0`. They are three matchers because a matcher's width
+is fixed before it looks, and the width is `1 + m`.
+
+The last of them is the one with **no drops to read**, so it recognizes `X` by
+its arity alone: a computation that leaves nothing is exactly the discarding of
+what it consumed.
+
+```text
+branch { } { }   ⇒   drop
+```
+
+That is the case that wanted it — two empty arms take the condition and do
+nothing else — and empty arms are what `factor` leaves behind when the two arms
+were the same *all the way down*. So `factoring; all` now takes the husk with
+them:
+
+```
+$ rewrite demo probe -t factoring      # pick 0 ; dip 1 { drop } ; branch { } { }
+$ rewrite demo probe -t 'factoring; all'                                 # drop
+```
+
+It reaches more than branches: any `(n -> 0)` node, including a call. A `drop`
+is itself `(1 -> 0)` and is declined, or it would rewrite every one into itself
+and report a change forever.
+
+**It is not a new equation, and the number says it was not a corner either.** A
+third of every annihilation over the admissible corpus is this case, and
+nothing was looking for it — see
+`tests::the_annihilation_with_no_outputs_is_a_third_of_them`.
 
 ## Reading an equation backwards: `inv`
 

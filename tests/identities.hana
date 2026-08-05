@@ -47,6 +47,29 @@ test sentence commuting_operands_changes_nothing {
     push 3 push some_sym roll 1 equal   push false assert_eq
 }
 
+// `X` = `drop^n` where `X : n -> 0` — the annihilation with nothing to read.
+//
+// A computation that leaves nothing is exactly the discarding of what it
+// consumed. `branch { } { }` is the case that wanted it: two empty arms take
+// the condition and do nothing else.
+test sentence a_computation_that_leaves_nothing_is_a_drop {
+    push 9  push true  branch { } { }
+    push 9 assert_eq
+
+    push 9  push false branch { } { }
+    push 9 assert_eq
+
+    push 9  push true  drop 0
+    push 9 assert_eq
+
+    // Arms that consume as well: (2 -> 0), so it is two drops.
+    push 9  push 1 push true  branch { drop 0 } { drop 0 }
+    push 9 assert_eq
+
+    push 9  push 1 push true  drop 0 drop 0
+    push 9 assert_eq
+}
+
 // `X ; drop^m` = `drop^n`, and `pick d ; drop` = nothing.
 test sentence discarded_work_is_no_work {
     push 9

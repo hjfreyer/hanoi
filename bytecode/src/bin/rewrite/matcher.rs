@@ -115,6 +115,7 @@ pub(crate) fn matcher_by_name(name: &str) -> Option<Box<dyn Matcher>> {
     Some(match name {
         "annihilate" => Box::new(Annihilate),
         "annihilate_flagged" => Box::new(AnnihilateFlagged),
+        "annihilate_void" => Box::new(AnnihilateVoid),
         "cancel_tuple" => Box::new(CancelTuple),
         "collapse" => Box::new(Collapse),
         "comm" => Box::new(Comm),
@@ -145,6 +146,7 @@ pub(crate) fn matcher_names() -> Vec<&'static str> {
     let mut names = vec![
         "annihilate",
         "annihilate_flagged",
+        "annihilate_void",
         "cancel_tuple",
         "collapse",
         "comm",
@@ -1185,6 +1187,48 @@ impl Matcher for AnnihilateFlagged {
     }
 }
 
+/// `X` becomes `drop^n`, where `X : n -> 0`.
+///
+/// The case with no outputs at all, and so no drops to read: a computation
+/// that leaves nothing is exactly the discarding of what it consumed. Where
+/// [`Annihilate`] and [`AnnihilateFlagged`] read the drops that cancel `X`,
+/// this one has none to read and recognizes `X` by its arity alone.
+///
+/// **`branch { } { }` becomes `drop`**, which is the case that wanted it. Two
+/// empty arms consume the condition and do nothing else, and empty arms are
+/// what [`Factor`] leaves behind when it hoists a prefix the two arms shared
+/// *entirely* — so this is the step that finishes the job.
+///
+/// A `drop` is itself `(1 -> 0)` and is declined, or the matcher would rewrite
+/// every one into itself and report a change forever. That guard is
+/// [`annihilate_with`]'s, shared with the other two.
+///
+/// Measure: non-drop node count, as the other two have. It can *grow* the node
+/// count — a `(3 -> 0)` call becomes three drops — but its own output is drops,
+/// which it declines.
+#[derive(Debug)]
+pub(crate) struct AnnihilateVoid;
+
+impl Matcher for AnnihilateVoid {
+    fn name(&self) -> &'static str {
+        "annihilate_void"
+    }
+    fn width(&self) -> usize {
+        1
+    }
+    fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
+        Err(
+            "the backward reading of `annihilate` is the introduction rule, \
+             which has to say what computation to conjure: write \
+             `introduce { ... }`"
+                .to_string(),
+        )
+    }
+    fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
+        annihilate_with(prog, window, 0)
+    }
+}
+
 /// The shared body of the annihilation matchers, which differ only in how many
 /// outputs they read.
 fn annihilate_with(prog: &Program, window: &[Node], m: usize) -> Option<Vec<PlannedStep>> {
@@ -2097,6 +2141,49 @@ mod tests {
                         vec![op(Instruction::Not)]
                     )]
                 )
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn an_empty_branch_is_a_drop() {
+        // Two empty arms consume the condition and do nothing else, which is
+        // the annihilation with no outputs to read. Not a new law: the trace
+        // says `annihilate`, because that is what fired.
+        let w = [branch(Vec::new(), Vec::new())];
+        assert_eq!(
+            fire(&AnnihilateVoid, &prog(), &w),
+            Some(vec![op(Instruction::Drop)])
+        );
+        let planned = AnnihilateVoid.plan(&prog(), &w).unwrap();
+        assert_eq!(planned.len(), 1);
+        assert_eq!(planned[0].kind.name(), "annihilate");
+    }
+
+    #[test]
+    fn annihilate_void_takes_a_whole_consuming_node_with_it() {
+        // Arms that consume as well: `branch { drop } { drop }` is (2 -> 0),
+        // so what it becomes is two drops.
+        let w = [branch(
+            vec![op(Instruction::Drop)],
+            vec![op(Instruction::Drop)],
+        )];
+        assert_eq!(
+            fire(&AnnihilateVoid, &prog(), &w),
+            Some(vec![op(Instruction::Drop), op(Instruction::Drop)])
+        );
+
+        // A `drop` is itself (1 -> 0), and rewriting it into itself would
+        // report a change forever.
+        assert!(
+            AnnihilateVoid
+                .plan(&prog(), &[op(Instruction::Drop)])
+                .is_none()
+        );
+        // And a node that leaves something is the other two matchers' business.
+        assert!(
+            AnnihilateVoid
+                .plan(&prog(), &[op(Instruction::Add)])
                 .is_none()
         );
     }
