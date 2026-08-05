@@ -7,7 +7,7 @@ use crate::arity::{node_arity, seq_arity};
 use crate::engine::{Env, Tactic, TacticError, run};
 use crate::ir::{Node, build};
 use crate::program::Program;
-use crate::rule2::Script;
+use crate::rule::Script;
 use crate::stack::{self, Fresh, Names, Stack};
 
 /// How wide the symbolic stack column is allowed to get.

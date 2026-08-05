@@ -96,6 +96,40 @@ pub enum Instruction {
 /// A zero-width dip prints as `jump`, which is how it was written and how it
 /// behaves; the derived `Debug` is still available where the distinction
 /// between the two spellings matters.
+impl Instruction {
+    /// Whether this takes two operands and answers the same either way round.
+    ///
+    /// `roll 1` swaps the top two values, so for these — and only these —
+    /// `roll 1 ; op` is `op`. That is what `bin/rewrite`'s `comm` law rests on,
+    /// and it lives here rather than in the rewriter because it is a fact about
+    /// the instruction set, the same way [`crate::arity::op_arity`] is; a second
+    /// copy of the list would be a silent hazard rather than a duplication.
+    ///
+    /// The flag a fallible one leaves is symmetric too: `add` on a symbol and an
+    /// int fails whichever order they arrive in, answering `0, false` both ways.
+    ///
+    /// `assert_eq` looks like it belongs and does not. It fails exactly when
+    /// `a != b`, which is symmetric, but the diagnostic it fails *with* names
+    /// the operands in the order they were given, so the two readings are
+    /// observably different — `vm` measures this and the sweep reports the
+    /// witness. Nothing is lost by leaving it out: `bin/rewrite` refuses any
+    /// sentence that can reach an `assert_eq` at all.
+    ///
+    /// Floats are commutative for these operations including on NaN, where both
+    /// orders produce a NaN; that the two do not compare *equal* is a fact about
+    /// `equal`, not about the operation.
+    pub fn commutative(&self) -> bool {
+        matches!(
+            self,
+            Instruction::Add
+                | Instruction::Multiply
+                | Instruction::And
+                | Instruction::Or
+                | Instruction::Equal
+        )
+    }
+}
+
 impl std::fmt::Display for Instruction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

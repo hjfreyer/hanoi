@@ -55,7 +55,7 @@ finite by construction.
 
 ## The equations
 
-Thirteen, plus one thing that is not an equation. `--list-rules` prints the
+Fourteen, plus one thing that is not an equation. `--list-rules` prints the
 matchers that place them.
 
 | equation | law | notes |
@@ -69,6 +69,7 @@ matchers that place them.
 | `fold_branch` | `push c ; branch { A } { B }` = the arm `c` selects | selected by `truthy`, and `false` is the only falsy value, so `push 1; branch` takes the **then** arm |
 | `eval` | `push v1 … push vn ; op` = the pushes of what `op` answers | subsumes the old `fold_const` and `fold_const_unary` |
 | `annihilate` | `X ; drop^m` = `drop^n`, for `X : n -> m` | `X` is a whole sequence. Forward subsumes `annihilate_drop` (m=1) and `annihilate_flagged` (m=2); backward is `introduce`, below |
+| `commute` | `roll 1 ; op` = `op`, for a commutative `op` | `roll 1` swaps the top two, and `add`, `multiply`, `and`, `or`, `equal` cannot tell. Forward is `comm`, backward is `swap` |
 | `counit` | `pick d ; drop` = nothing | *not* an annihilation: `pick d` is `(d+1 -> d+2)` |
 | `copy_const` | `push c ; pick 0` = `push c ; push c` | |
 | `copy_assoc` | `pick d ; pick 0` = `pick d ; dip 1 { pick d }` | neither side is smaller; the point is that one copy ends up **in a frame**, and a framed computation is one `float` can carry |
@@ -168,6 +169,7 @@ different thing to look for even though the arithmetic is the same:
 | `fold_branch` | 2 | |
 | `eval1` / `eval2` | 2 / 3 | one operand or two |
 | `annihilate` / `annihilate_flagged` | 2 / 3 | one output or two |
+| `comm` / `swap` | 2 / 1 | commutativity, either way |
 | `introduce { .. }` | n | annihilate backwards — see below |
 | `counit`, `copy_const`, `copy_assoc`, `cancel_tuple` | 2 | |
 
@@ -239,6 +241,36 @@ refused there rather than at run time:
   which is every position, so `each` would never move past the first — and this
   law discards whatever the term produces, so it could only ever become
   `push 7 ; drop`, which no later step can use.
+
+### Commutativity, and what the set is
+
+`comm` deletes a swap that a commutative operator cannot see:
+
+```
+roll 1 ; and   ⇒   and
+```
+
+The set is `add`, `multiply`, `and`, `or` and `equal`. It lives on the
+instruction — `Instruction::commutative` — rather than in the rewriter, for the
+same reason `op_arity` and `truthy` do: a second copy of the list would be a
+silent hazard. **`vm` measures it** rather than restating it, running every
+binary instruction on every pair of value shapes both ways round and holding the
+list to what it finds.
+
+That measurement earned its keep immediately. `assert_eq` looks commutative — it
+fails exactly when `a != b`, which is symmetric — and is not: the diagnostic it
+fails *with* names the operands in the order given, so the two readings are
+observably different. It is excluded, and nothing is lost, because the tool
+refuses any sentence that can reach an `assert_eq` anyway.
+
+The flag a fallible operator leaves is symmetric too, so this holds for `add` on
+operands it cannot add: `0, false` either way round.
+
+`swap` is the backward reading, putting a `roll 1` *in* so that what sits
+underneath the operands can be rearranged to line up with something else. It has
+no measure and grows the term — its output still contains the operator it
+matched, so `each` would put a second `roll 1` in front of it and keep going.
+Aim it, as with `introduce`.
 
 ### It is not a normalizing pass
 
@@ -318,8 +350,8 @@ one place and nowhere else.
 ## Named tactics
 
 `--list-tactics` prints them. `unfold_all`, `dips`, `unary`, `factoring`,
-`annihilation`, `values`, `cleanup`, `distribution`, `flattening`, `all`,
-`dip_normalize`.
+`annihilation`, `values`, `commuting`, `cleanup`, `distribution`, `flattening`,
+`all`, `dip_normalize`.
 
 A tactic may not take a matcher's name, so where a pass and the matcher at its
 heart would collide the pass gives way: `annihilation` drives `annihilate`,

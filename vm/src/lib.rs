@@ -1258,6 +1258,73 @@ mod totality_tests {
         ]
     }
 
+    /// Every instruction that reads two operands, whether or not it commutes.
+    ///
+    /// The list is the *candidates*: the point of the sweep below is to find
+    /// out which of them actually commute, rather than to restate a belief.
+    fn every_binary() -> Vec<Instruction> {
+        vec![
+            Instruction::Equal,
+            Instruction::Greater,
+            Instruction::Less,
+            Instruction::Add,
+            Instruction::Subtract,
+            Instruction::Multiply,
+            Instruction::Divide,
+            Instruction::Modulo,
+            Instruction::And,
+            Instruction::Or,
+            Instruction::SymbolCharAt,
+            Instruction::AssertEqual,
+            Instruction::Tuple(2),
+        ]
+    }
+
+    /// Runs `a b op` and reports everything observable: the stack, or the
+    /// failure.
+    fn run_pair(a: &Value, b: &Value, inst: &Instruction) -> Result<Vec<Value>, String> {
+        let mut library = Library::new();
+        library.sentences.push(vec![
+            Instruction::Push(a.clone()),
+            Instruction::Push(b.clone()),
+            inst.clone(),
+        ]);
+        let mut vm = VM::new(library);
+        vm.execute(SentenceIndex::from(0))?;
+        Ok(vm.stack().to_vec())
+    }
+
+    /// `Instruction::commutative` is measured, not asserted.
+    ///
+    /// `bin/rewrite` rewrites `roll 1 ; op` to `op` on the strength of that
+    /// list, so a wrong entry would be a soundness bug in the rewriter rather
+    /// than an inaccuracy in a comment. This runs every candidate on every pair
+    /// of shapes both ways round and holds the list to what it finds.
+    #[test]
+    fn the_commutative_instructions_are_exactly_the_ones_the_list_names() {
+        for inst in every_binary() {
+            let mut commutes = true;
+            let mut witness = None;
+            for a in every_shape() {
+                for b in every_shape() {
+                    if run_pair(&a, &b, &inst) != run_pair(&b, &a, &inst) {
+                        commutes = false;
+                        witness = Some((a.clone(), b.clone()));
+                    }
+                }
+            }
+            assert_eq!(
+                commutes,
+                inst.commutative(),
+                "{:?} commutes = {}, but the list says {} (witness {:?})",
+                inst,
+                commutes,
+                inst.commutative(),
+                witness
+            );
+        }
+    }
+
     /// Every instruction that carries a flag, with operands that make it fail.
     fn failing_cases() -> Vec<(Instruction, Vec<Value>)> {
         vec![

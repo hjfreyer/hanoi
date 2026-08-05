@@ -7,8 +7,8 @@
 //!
 //! This is the upper layer at its simplest: one matcher per *search direction*
 //! over the equations. `sink` and `float` are two matchers over one
-//! [`Rule2::Interchange`]; `collapse` and `expand` two over one
-//! [`Rule2::Collapse`]. What used to be a doubled rule is now a doubled way of
+//! [`Rule::Interchange`]; `collapse` and `expand` two over one
+//! [`Rule::Collapse`]. What used to be a doubled rule is now a doubled way of
 //! looking, which is the part that genuinely differs — the arithmetic is
 //! written once.
 //!
@@ -45,7 +45,7 @@ use crate::arity::node_arity;
 use crate::ir::{Node, Selector, frame_depth, same_effect, with_frame_depth};
 use crate::location::Location;
 use crate::program::Program;
-use crate::rule2::{Direction, Rule2, StepKind};
+use crate::rule::{Direction, Rule, StepKind};
 
 /// A step a matcher wants taken, positioned relative to the window it saw.
 #[derive(Debug, Clone, PartialEq)]
@@ -74,7 +74,7 @@ pub(crate) trait Matcher: Sync + std::fmt::Debug {
 }
 
 /// A step at the window itself, refused if its arguments do not hold up.
-fn at_window(prog: &Program, rule: Rule2, dir: Direction) -> Option<Vec<PlannedStep>> {
+fn at_window(prog: &Program, rule: Rule, dir: Direction) -> Option<Vec<PlannedStep>> {
     rule.check(prog).ok()?;
     Some(vec![PlannedStep {
         kind: StepKind::Rule(rule),
@@ -94,6 +94,7 @@ pub(crate) fn matcher_by_name(name: &str) -> Option<Box<dyn Matcher>> {
         "annihilate_flagged" => Box::new(AnnihilateFlagged),
         "cancel_tuple" => Box::new(CancelTuple),
         "collapse" => Box::new(Collapse),
+        "comm" => Box::new(Comm),
         "copy_assoc" => Box::new(CopyAssoc),
         "copy_const" => Box::new(CopyConst),
         "counit" => Box::new(Counit),
@@ -107,6 +108,7 @@ pub(crate) fn matcher_by_name(name: &str) -> Option<Box<dyn Matcher>> {
         "fold_branch" => Box::new(FoldBranch),
         "fuse" => Box::new(Fuse),
         "sink" => Box::new(Sink),
+        "swap" => Box::new(Swap),
         "unfactor" => Box::new(Unfactor),
         "unfold" => Box::new(Unfold),
         _ => return None,
@@ -120,6 +122,7 @@ pub(crate) fn matcher_names() -> Vec<&'static str> {
         "annihilate_flagged",
         "cancel_tuple",
         "collapse",
+        "comm",
         "copy_assoc",
         "copy_const",
         "counit",
@@ -133,6 +136,7 @@ pub(crate) fn matcher_names() -> Vec<&'static str> {
         "fold_branch",
         "fuse",
         "sink",
+        "swap",
         "unfactor",
         "unfold",
     ];
@@ -230,7 +234,7 @@ impl Matcher for Collapse {
         };
         at_window(
             prog,
-            Rule2::Collapse {
+            Rule::Collapse {
                 k: *k,
                 j: *j,
                 a: a.clone(),
@@ -276,7 +280,7 @@ impl Matcher for Expand {
         }
         at_window(
             prog,
-            Rule2::Collapse {
+            Rule::Collapse {
                 k: 1,
                 j: depth - 1,
                 a: body.clone(),
@@ -319,7 +323,7 @@ impl Matcher for Flatten {
         };
         at_window(
             prog,
-            Rule2::ElimDip0 {
+            Rule::ElimDip0 {
                 a: body.clone(),
                 origins: origins.clone(),
             },
@@ -362,7 +366,7 @@ impl Matcher for Fuse {
         }
         at_window(
             prog,
-            Rule2::Fuse {
+            Rule::Fuse {
                 k: *ka,
                 a: ba.clone(),
                 b: bb.clone(),
@@ -402,7 +406,7 @@ impl Matcher for Sink {
         let (n, m) = node_arity(prog, x)?;
         at_window(
             prog,
-            Rule2::Interchange {
+            Rule::Interchange {
                 x: x.clone(),
                 framed: framed.clone(),
                 n,
@@ -448,7 +452,7 @@ impl Matcher for Float {
         let k = usize::try_from(j - n + m).ok()?;
         at_window(
             prog,
-            Rule2::Interchange {
+            Rule::Interchange {
                 x: x.clone(),
                 framed: with_frame_depth(framed, k)?,
                 n,
@@ -470,9 +474,9 @@ impl Matcher for Float {
 /// condition is still on top and `X` must not be handed it.
 ///
 /// **This is a firing of three steps.** The law it ends on
-/// ([`Rule2::Hoist`], backwards) lifts one framed block out of both arms, so
+/// ([`Rule::Hoist`], backwards) lifts one framed block out of both arms, so
 /// the shared run has to be wrapped in a frame first — which is
-/// [`Rule2::ElimDip0`] backwards, once per arm. Where the old rule spliced a
+/// [`Rule::ElimDip0`] backwards, once per arm. Where the old rule spliced a
 /// prefix of any length in one motion, this spells out why that was allowed.
 ///
 /// Takes the whole shared run at once. Arms are compared by effect, not by
@@ -515,7 +519,7 @@ impl Matcher for Factor {
         // wrapped using the `then` arm's copy, which is sound because the two
         // are the same by effect and is what loses the else arm's origins.
         let wrap = |sel: Selector| PlannedStep {
-            kind: StepKind::Rule(Rule2::ElimDip0 {
+            kind: StepKind::Rule(Rule::ElimDip0 {
                 a: prefix.clone(),
                 origins: Vec::new(),
             }),
@@ -528,7 +532,7 @@ impl Matcher for Factor {
         let steps = [wrap(Selector::Then), wrap(Selector::Else)];
 
         // Then lift the two frames into one, in front of the branch.
-        let hoist = Rule2::Hoist {
+        let hoist = Rule::Hoist {
             k: 0,
             x: prefix,
             origins: Vec::new(),
@@ -602,7 +606,7 @@ impl Matcher for Unfactor {
         }
         at_window(
             prog,
-            Rule2::Hoist {
+            Rule::Hoist {
                 k: depth - 1,
                 x: body.clone(),
                 origins: origins.clone(),
@@ -649,7 +653,7 @@ impl Matcher for Distribute {
         };
         at_window(
             prog,
-            Rule2::Distribute {
+            Rule::Distribute {
                 then_arm: then_body.clone(),
                 else_arm: else_body.clone(),
                 suffix: vec![next.clone()],
@@ -694,7 +698,7 @@ impl Matcher for FoldBranch {
         };
         at_window(
             prog,
-            Rule2::FoldBranch {
+            Rule::FoldBranch {
                 c: c.clone(),
                 then_arm: then_body.clone(),
                 else_arm: else_body.clone(),
@@ -738,7 +742,7 @@ impl Matcher for EvalBinary {
         };
         at_window(
             prog,
-            Rule2::Eval {
+            Rule::Eval {
                 op: inst.clone(),
                 inputs: vec![a.clone(), b.clone()],
             },
@@ -766,7 +770,7 @@ impl Matcher for EvalUnary {
         };
         at_window(
             prog,
-            Rule2::Eval {
+            Rule::Eval {
                 op: inst.clone(),
                 inputs: vec![a.clone()],
             },
@@ -838,7 +842,7 @@ fn annihilate_with(prog: &Program, window: &[Node], m: usize) -> Option<Vec<Plan
     }
     at_window(
         prog,
-        Rule2::Annihilate {
+        Rule::Annihilate {
             x: vec![x.clone()],
             n: usize::try_from(n).ok()?,
             m,
@@ -933,7 +937,7 @@ impl Matcher for Introduce {
         }
         at_window(
             prog,
-            Rule2::Annihilate {
+            Rule::Annihilate {
                 x: self.x.clone(),
                 n: self.n,
                 m: self.m,
@@ -996,7 +1000,62 @@ impl Matcher for Counit {
         if !is_drop(drop) {
             return None;
         }
-        at_window(prog, Rule2::Counit { d: *d }, Direction::Forward)
+        at_window(prog, Rule::Counit { d: *d }, Direction::Forward)
+    }
+}
+
+/// `roll 1 ; op` becomes `op`, for a commutative `op`.
+///
+/// `roll 1` swaps the top two values, and an operator that answers the same
+/// either way round cannot tell. The commutative set — `add`, `multiply`,
+/// `and`, `or`, `equal` — is a property of the instruction rather than of this
+/// matcher, and `vm` measures it against the interpreter rather than trusting
+/// the list.
+///
+/// Measure: node count.
+#[derive(Debug)]
+pub(crate) struct Comm;
+
+impl Matcher for Comm {
+    fn name(&self) -> &'static str {
+        "comm"
+    }
+    fn width(&self) -> usize {
+        2
+    }
+    fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
+        let [Node::Op(Instruction::Roll(1)), Node::Op(op)] = window else {
+            return None;
+        };
+        at_window(prog, Rule::Commute { op: op.clone() }, Direction::Forward)
+    }
+}
+
+/// `op` becomes `roll 1 ; op`, for a commutative `op`.
+///
+/// The same law read backwards: it swaps the operands of a commutative
+/// operator, which is how what sits *underneath* them gets rearranged to line
+/// up with something else. `comm` then takes the shuffle away again once it has
+/// done its work, or `interchange` carries it off.
+///
+/// Measure: none, and it grows the term — its own output contains the operator
+/// it just matched, so `each` would put a second `roll 1` in front of it and
+/// keep going. Aim it with `once`, `at` or a descent, as with `introduce`.
+#[derive(Debug)]
+pub(crate) struct Swap;
+
+impl Matcher for Swap {
+    fn name(&self) -> &'static str {
+        "swap"
+    }
+    fn width(&self) -> usize {
+        1
+    }
+    fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
+        let Node::Op(op) = &window[0] else {
+            return None;
+        };
+        at_window(prog, Rule::Commute { op: op.clone() }, Direction::Reverse)
     }
 }
 
@@ -1026,7 +1085,7 @@ impl Matcher for CopyConst {
         else {
             return None;
         };
-        at_window(prog, Rule2::CopyConst { c: c.clone() }, Direction::Forward)
+        at_window(prog, Rule::CopyConst { c: c.clone() }, Direction::Forward)
     }
 }
 
@@ -1056,7 +1115,7 @@ impl Matcher for CopyAssoc {
         else {
             return None;
         };
-        at_window(prog, Rule2::CopyAssoc { d: *d }, Direction::Forward)
+        at_window(prog, Rule::CopyAssoc { d: *d }, Direction::Forward)
     }
 }
 
@@ -1088,7 +1147,7 @@ impl Matcher for CancelTuple {
         if n != m {
             return None;
         }
-        at_window(prog, Rule2::CancelTuple { n: *n }, Direction::Forward)
+        at_window(prog, Rule::CancelTuple { n: *n }, Direction::Forward)
     }
 }
 
@@ -1096,7 +1155,7 @@ impl Matcher for CancelTuple {
 mod tests {
     use super::*;
     use crate::applier::apply_script;
-    use crate::rule2::Step;
+    use crate::rule::Step;
     use bytecode::{Library, SentenceIndex, Value, assemble};
 
     fn prog() -> Program<'static> {
@@ -1584,6 +1643,59 @@ mod tests {
         let w = [op(Instruction::Pick(2)), op(Instruction::Drop)];
         assert!(Annihilate.plan(&prog(), &w).is_none());
         assert_eq!(fire(&Counit, &prog(), &w), Some(Vec::new()));
+    }
+
+    #[test]
+    fn comm_removes_a_swap_before_a_commutative_operator() {
+        for inst in [
+            Instruction::Add,
+            Instruction::Multiply,
+            Instruction::And,
+            Instruction::Or,
+            Instruction::Equal,
+        ] {
+            let w = [op(Instruction::Roll(1)), op(inst.clone())];
+            assert_eq!(
+                fire(&Comm, &prog(), &w),
+                Some(vec![op(inst.clone())]),
+                "{:?}",
+                inst
+            );
+        }
+    }
+
+    #[test]
+    fn comm_declines_an_operator_that_reads_its_operands_in_order() {
+        for inst in [
+            Instruction::Subtract,
+            Instruction::Less,
+            Instruction::Tuple(2),
+        ] {
+            let w = [op(Instruction::Roll(1)), op(inst.clone())];
+            assert!(Comm.plan(&prog(), &w).is_none(), "{:?}", inst);
+        }
+        // And a deeper roll is not a swap of the top two.
+        let w = [op(Instruction::Roll(2)), op(Instruction::Add)];
+        assert!(Comm.plan(&prog(), &w).is_none());
+    }
+
+    #[test]
+    fn swap_introduces_the_shuffle_comm_removes() {
+        let w = [op(Instruction::Add)];
+        assert_eq!(
+            fire(&Swap, &prog(), &w),
+            Some(vec![op(Instruction::Roll(1)), op(Instruction::Add)])
+        );
+        // And straight back out again: two readings of one law.
+        let there = fire(&Swap, &prog(), &w).unwrap();
+        assert_eq!(fire(&Comm, &prog(), &there), Some(w.to_vec()));
+    }
+
+    #[test]
+    fn swap_declines_what_comm_declines() {
+        assert!(Swap.plan(&prog(), &[op(Instruction::Subtract)]).is_none());
+        assert!(Swap.plan(&prog(), &[op(Instruction::Not)]).is_none());
+        assert!(Swap.plan(&prog(), &[dip(1, Vec::new())]).is_none());
     }
 
     #[test]

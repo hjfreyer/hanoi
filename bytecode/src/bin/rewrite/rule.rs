@@ -18,9 +18,9 @@
 //! ## What an argument may be
 //!
 //! Everything the two sides are built from, including facts that originate in
-//! the library. The claimed arity of `X` in [`Rule2::Interchange`] is an
+//! the library. The claimed arity of `X` in [`Rule::Interchange`] is an
 //! argument, not a lookup, so `lhs` and `rhs` are pure functions of the
-//! arguments. What keeps that honest is [`Rule2::check`], which the applier is
+//! arguments. What keeps that honest is [`Rule::check`], which the applier is
 //! required to run first and which verifies every claim against the real
 //! [`Program`]. **A script is never trusted.** It communicates a construction,
 //! and every fact that construction rests on is re-derived by the applier.
@@ -31,7 +31,7 @@
 //! fail, and refuses others up front (see `main`). Both properties are closed
 //! over reachability, so every node any tree here can hold is total and
 //! non-recursive. Several conditions the old rules needed therefore collapse:
-//! [`Rule2::Annihilate`] asks only for an arity where `speculable` used to
+//! [`Rule::Annihilate`] asks only for an arity where `speculable` used to
 //! require a syntactic whitelist, because there is no `assert` left to run on a
 //! path that would not have run it. Each such place says so, since lifting the
 //! restriction means putting the condition back.
@@ -105,6 +105,9 @@ pub(crate) enum SideCondition {
     /// `eval` was handed an operator it has no answer for, or the wrong number
     /// of operands for one it does.
     NotEvaluable { op: String, operands: usize },
+    /// `commute` was handed an operator that does not answer the same either
+    /// way round.
+    NotCommutative { op: String },
 }
 
 impl std::fmt::Display for SideCondition {
@@ -141,6 +144,13 @@ impl std::fmt::Display for SideCondition {
             SideCondition::NotEvaluable { op, operands } => {
                 write!(f, "`{}` cannot be folded on {} operand(s)", op, operands)
             }
+            SideCondition::NotCommutative { op } => {
+                write!(
+                    f,
+                    "`{}` does not answer the same with its operands swapped",
+                    op
+                )
+            }
         }
     }
 }
@@ -148,11 +158,11 @@ impl std::fmt::Display for SideCondition {
 /// An equation: two program sequences that always behave identically.
 ///
 /// Each variant states its law in its doc comment as `LHS = RHS`, together with
-/// what it takes on faith and what [`Rule2::check`] verifies. Adding one is
+/// what it takes on faith and what [`Rule::check`] verifies. Adding one is
 /// meant to be rare — a new equation is a new axiom, and everything the search
 /// can do is a consequence of these.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) enum Rule2 {
+pub(crate) enum Rule {
     /// `dip k { dip j { A } }` = `dip (k+j) { A }`.
     ///
     /// Hiding `k` values and then hiding `j` more of what is left is hiding
@@ -183,7 +193,7 @@ pub(crate) enum Rule2 {
     /// fired.
     ///
     /// Read backward it *introduces* a frame around a run of nodes, which is
-    /// how a shared prefix gets wrapped up before [`Rule2::Hoist`] carries it
+    /// how a shared prefix gets wrapped up before [`Rule::Hoist`] carries it
     /// out of a branch.
     ElimDip0 { a: Vec<Node>, origins: Vec<String> },
 
@@ -240,7 +250,7 @@ pub(crate) enum Rule2 {
     /// Backward is the old `factor_branch`, and this is where the two-layer
     /// split earns its keep. That rule hoisted a shared *prefix* of any length
     /// and spliced it out in one motion; here it is a script — wrap the prefix
-    /// in a frame in each arm with [`Rule2::ElimDip0`] backward, then read this
+    /// in a frame in each arm with [`Rule::ElimDip0`] backward, then read this
     /// equation backward to lift the two frames into one. Three steps, each of
     /// which is an instance of a law, instead of one rule that knew a whole
     /// procedure.
@@ -322,15 +332,33 @@ pub(crate) enum Rule2 {
     /// conjure*, and nothing in the window it replaces could have said it.
     Annihilate { x: Vec<Node>, n: usize, m: usize },
 
+    /// `roll 1 ; op` = `op`, for a commutative `op`.
+    ///
+    /// `roll 1` swaps the top two values, so for an operator that answers the
+    /// same either way round the swap is invisible. The commutative set is
+    /// `add`, `multiply`, `and`, `or` and `equal`, and it lives on the
+    /// instruction ([`Instruction::commutative`]) rather than here — it is a
+    /// fact about the instruction set, and `vm` measures it against the
+    /// interpreter rather than taking the list on faith.
+    ///
+    /// Read forward this deletes a shuffle. Read backward it *introduces* one,
+    /// which is how the operands of a commutative operator get swapped so that
+    /// what is underneath them lines up with something else — the same job
+    /// [`Rule::Annihilate`] backwards does for a whole computation.
+    ///
+    /// The flag a fallible operator leaves is symmetric too, so this holds for
+    /// `add` on operands it cannot add: `0, false` either way round.
+    Commute { op: Instruction },
+
     /// `pick d ; drop` = nothing.
     ///
     /// Copying a value and discarding the copy: neither happened. This is the
     /// counit law of the comonoid whose comultiplication is `pick`, and it is
-    /// deliberately *not* an instance of [`Rule2::Annihilate`] — `pick d` is
+    /// deliberately *not* an instance of [`Rule::Annihilate`] — `pick d` is
     /// `(d+1 -> d+2)`, so that equation would ask for `d+2` drops and answer
     /// with `d+1` of them.
     ///
-    /// Together with [`Rule2::Annihilate`] this generates the **vacuous** law,
+    /// Together with [`Rule::Annihilate`] this generates the **vacuous** law,
     ///
     /// ```text
     /// pick (n-1)^n ; X ; drop^m  =  nothing        for X : n -> m
@@ -351,7 +379,7 @@ pub(crate) enum Rule2 {
     /// Copying a constant is pushing it again. It is what makes a refinement
     /// pay: code downstream reads a slot with `pick`, and a `pick` is opaque to
     /// every equation that folds literals, so rewriting it back into a `push`
-    /// is what lets [`Rule2::Eval`] see two constants and decide.
+    /// is what lets [`Rule::Eval`] see two constants and decide.
     CopyConst { c: Value },
 
     /// `pick d ; pick 0` = `pick d ; dip 1 { pick d }`.
@@ -361,7 +389,7 @@ pub(crate) enum Rule2 {
     /// same value.
     ///
     /// Neither side is smaller, which is the point: the right-hand side puts a
-    /// copy *in a frame*, and a framed computation is one [`Rule2::Interchange`]
+    /// copy *in a frame*, and a framed computation is one [`Rule::Interchange`]
     /// can carry. A bare `pick` cannot travel, so the copy a later step needs
     /// would otherwise be stranded where it was made.
     CopyAssoc { d: usize },
@@ -379,33 +407,34 @@ pub(crate) enum Rule2 {
     CancelTuple { n: usize },
 }
 
-impl Rule2 {
+impl Rule {
     pub(crate) fn name(&self) -> &'static str {
         match self {
-            Rule2::Collapse { .. } => "collapse",
-            Rule2::ElimDip0 { .. } => "elim_dip0",
-            Rule2::Interchange { .. } => "interchange",
-            Rule2::Fuse { .. } => "fuse",
-            Rule2::Hoist { .. } => "hoist",
-            Rule2::Distribute { .. } => "distribute",
-            Rule2::FoldBranch { .. } => "fold_branch",
-            Rule2::Eval { .. } => "eval",
-            Rule2::Annihilate { .. } => "annihilate",
-            Rule2::Counit { .. } => "counit",
-            Rule2::CopyConst { .. } => "copy_const",
-            Rule2::CopyAssoc { .. } => "copy_assoc",
-            Rule2::CancelTuple { .. } => "cancel_tuple",
+            Rule::Collapse { .. } => "collapse",
+            Rule::ElimDip0 { .. } => "elim_dip0",
+            Rule::Interchange { .. } => "interchange",
+            Rule::Fuse { .. } => "fuse",
+            Rule::Hoist { .. } => "hoist",
+            Rule::Distribute { .. } => "distribute",
+            Rule::FoldBranch { .. } => "fold_branch",
+            Rule::Eval { .. } => "eval",
+            Rule::Annihilate { .. } => "annihilate",
+            Rule::Commute { .. } => "commute",
+            Rule::Counit { .. } => "counit",
+            Rule::CopyConst { .. } => "copy_const",
+            Rule::CopyAssoc { .. } => "copy_assoc",
+            Rule::CancelTuple { .. } => "cancel_tuple",
         }
     }
 
     /// Verifies every fact the arguments claim, against the library.
     ///
-    /// The applier must run this before generating either side. [`Rule2::lhs`]
-    /// and [`Rule2::rhs`] assume it has passed and will panic rather than
+    /// The applier must run this before generating either side. [`Rule::lhs`]
+    /// and [`Rule::rhs`] assume it has passed and will panic rather than
     /// invent a shape if it has not.
     pub(crate) fn check(&self, prog: &Program) -> Result<(), SideCondition> {
         match self {
-            Rule2::Interchange { x, framed, n, m } => {
+            Rule::Interchange { x, framed, n, m } => {
                 let depth = frame_depth(framed).ok_or_else(|| SideCondition::NotFramed {
                     found: crate::ir::sketch(std::slice::from_ref(framed)),
                 })?;
@@ -422,10 +451,19 @@ impl Rule2 {
             // the library gives. Under the global precondition that is the
             // whole condition — there is no partial or effectful node for a
             // syntactic predicate to exclude.
-            Rule2::Annihilate { x, n, m } => {
+            Rule::Annihilate { x, n, m } => {
                 claimed_arity(prog, x, (*n as i64, *m as i64)).map(|_| ())
             }
-            Rule2::Eval { op, inputs } => match eval_op(op, inputs) {
+            Rule::Commute { op } => {
+                if op.commutative() {
+                    Ok(())
+                } else {
+                    Err(SideCondition::NotCommutative {
+                        op: format!("{}", op),
+                    })
+                }
+            }
+            Rule::Eval { op, inputs } => match eval_op(op, inputs) {
                 Some(_) => Ok(()),
                 None => Err(SideCondition::NotEvaluable {
                     op: format!("{}", op),
@@ -434,23 +472,23 @@ impl Rule2 {
             },
             // The rest are schematic in their arguments and hold for every
             // instantiation, so there is nothing to check.
-            Rule2::Collapse { .. }
-            | Rule2::ElimDip0 { .. }
-            | Rule2::Fuse { .. }
-            | Rule2::Hoist { .. }
-            | Rule2::Distribute { .. }
-            | Rule2::FoldBranch { .. }
-            | Rule2::Counit { .. }
-            | Rule2::CopyConst { .. }
-            | Rule2::CopyAssoc { .. }
-            | Rule2::CancelTuple { .. } => Ok(()),
+            Rule::Collapse { .. }
+            | Rule::ElimDip0 { .. }
+            | Rule::Fuse { .. }
+            | Rule::Hoist { .. }
+            | Rule::Distribute { .. }
+            | Rule::FoldBranch { .. }
+            | Rule::Counit { .. }
+            | Rule::CopyConst { .. }
+            | Rule::CopyAssoc { .. }
+            | Rule::CancelTuple { .. } => Ok(()),
         }
     }
 
-    /// The left-hand side. Pure in the arguments; assumes [`Rule2::check`].
+    /// The left-hand side. Pure in the arguments; assumes [`Rule::check`].
     pub(crate) fn lhs(&self) -> Vec<Node> {
         match self {
-            Rule2::Collapse {
+            Rule::Collapse {
                 k,
                 j,
                 a,
@@ -466,15 +504,15 @@ impl Rule2 {
                 }],
             }],
 
-            Rule2::ElimDip0 { a, origins } => vec![Node::Dip {
+            Rule::ElimDip0 { a, origins } => vec![Node::Dip {
                 depth: 0,
                 origins: origins.clone(),
                 body: a.clone(),
             }],
 
-            Rule2::Interchange { x, framed, .. } => vec![x.clone(), framed.clone()],
+            Rule::Interchange { x, framed, .. } => vec![x.clone(), framed.clone()],
 
-            Rule2::Fuse {
+            Rule::Fuse {
                 k,
                 a,
                 b,
@@ -493,7 +531,7 @@ impl Rule2 {
                 },
             ],
 
-            Rule2::Hoist {
+            Rule::Hoist {
                 k,
                 x,
                 origins,
@@ -515,7 +553,7 @@ impl Rule2 {
                 },
             ],
 
-            Rule2::Distribute {
+            Rule::Distribute {
                 then_arm,
                 else_arm,
                 suffix,
@@ -532,7 +570,7 @@ impl Rule2 {
                 out
             }
 
-            Rule2::FoldBranch {
+            Rule::FoldBranch {
                 c,
                 then_arm,
                 else_arm,
@@ -548,40 +586,44 @@ impl Rule2 {
                 },
             ],
 
-            Rule2::Eval { op, inputs } => {
+            Rule::Eval { op, inputs } => {
                 let mut out: Vec<Node> = inputs.iter().cloned().map(push).collect();
                 out.push(Node::Op(op.clone()));
                 out
             }
 
-            Rule2::Annihilate { x, m, .. } => {
+            Rule::Annihilate { x, m, .. } => {
                 let mut out = x.clone();
                 out.extend(std::iter::repeat_n(Node::Op(Instruction::Drop), *m));
                 out
             }
 
-            Rule2::Counit { d } => {
+            Rule::Commute { op } => {
+                vec![Node::Op(Instruction::Roll(1)), Node::Op(op.clone())]
+            }
+
+            Rule::Counit { d } => {
                 vec![Node::Op(Instruction::Pick(*d)), Node::Op(Instruction::Drop)]
             }
 
-            Rule2::CopyConst { c } => vec![push(c.clone()), Node::Op(Instruction::Pick(0))],
+            Rule::CopyConst { c } => vec![push(c.clone()), Node::Op(Instruction::Pick(0))],
 
-            Rule2::CopyAssoc { d } => vec![
+            Rule::CopyAssoc { d } => vec![
                 Node::Op(Instruction::Pick(*d)),
                 Node::Op(Instruction::Pick(0)),
             ],
 
-            Rule2::CancelTuple { n } => vec![
+            Rule::CancelTuple { n } => vec![
                 Node::Op(Instruction::Tuple(*n)),
                 Node::Op(Instruction::Untuple(*n)),
             ],
         }
     }
 
-    /// The right-hand side. Pure in the arguments; assumes [`Rule2::check`].
+    /// The right-hand side. Pure in the arguments; assumes [`Rule::check`].
     pub(crate) fn rhs(&self) -> Vec<Node> {
         match self {
-            Rule2::Collapse {
+            Rule::Collapse {
                 k,
                 j,
                 a,
@@ -597,9 +639,9 @@ impl Rule2 {
                 }]
             }
 
-            Rule2::ElimDip0 { a, .. } => a.clone(),
+            Rule::ElimDip0 { a, .. } => a.clone(),
 
-            Rule2::Interchange { x, framed, n, m } => {
+            Rule::Interchange { x, framed, n, m } => {
                 let depth = frame_depth(framed).expect("check() accepted an unframed node");
                 let shifted =
                     shifted_depth(depth, (*n, *m)).expect("check() accepted an unusable depth");
@@ -609,7 +651,7 @@ impl Rule2 {
                 ]
             }
 
-            Rule2::Fuse {
+            Rule::Fuse {
                 k,
                 a,
                 b,
@@ -627,7 +669,7 @@ impl Rule2 {
                 }]
             }
 
-            Rule2::Hoist {
+            Rule::Hoist {
                 k,
                 x,
                 origins,
@@ -653,7 +695,7 @@ impl Rule2 {
                 }]
             }
 
-            Rule2::Distribute {
+            Rule::Distribute {
                 then_arm,
                 else_arm,
                 suffix,
@@ -673,7 +715,7 @@ impl Rule2 {
                 }]
             }
 
-            Rule2::FoldBranch {
+            Rule::FoldBranch {
                 c,
                 then_arm,
                 else_arm,
@@ -686,21 +728,23 @@ impl Rule2 {
                 }
             }
 
-            Rule2::Eval { op, inputs } => eval_op(op, inputs)
+            Rule::Eval { op, inputs } => eval_op(op, inputs)
                 .expect("check() accepted an operator that cannot be folded")
                 .into_iter()
                 .map(push)
                 .collect(),
 
-            Rule2::Annihilate { n, .. } => {
+            Rule::Annihilate { n, .. } => {
                 std::iter::repeat_n(Node::Op(Instruction::Drop), *n).collect()
             }
 
-            Rule2::Counit { .. } => Vec::new(),
+            Rule::Commute { op } => vec![Node::Op(op.clone())],
 
-            Rule2::CopyConst { c } => vec![push(c.clone()), push(c.clone())],
+            Rule::Counit { .. } => Vec::new(),
 
-            Rule2::CopyAssoc { d } => vec![
+            Rule::CopyConst { c } => vec![push(c.clone()), push(c.clone())],
+
+            Rule::CopyAssoc { d } => vec![
                 Node::Op(Instruction::Pick(*d)),
                 Node::Dip {
                     depth: 1,
@@ -709,7 +753,7 @@ impl Rule2 {
                 },
             ],
 
-            Rule2::CancelTuple { .. } => vec![push(Value::Bool(true))],
+            Rule::CancelTuple { .. } => vec![push(Value::Bool(true))],
         }
     }
 }
@@ -747,7 +791,7 @@ fn shifted_depth(depth: usize, (n, m): (i64, i64)) -> Result<usize, SideConditio
 ///
 /// A fallible operator answers with its flag as well: `less` on two symbols is
 /// not a comparison it can claim to have made, so it leaves `false, false`.
-/// `None` means this is not an operator [`Rule2::Eval`] can fold, which
+/// `None` means this is not an operator [`Rule::Eval`] can fold, which
 /// includes handing one the wrong number of operands.
 pub(crate) fn eval_op(inst: &Instruction, inputs: &[Value]) -> Option<Vec<Value>> {
     match (inst, inputs) {
@@ -787,7 +831,7 @@ pub(crate) fn eval_op(inst: &Instruction, inputs: &[Value]) -> Option<Vec<Value>
 /// One entry of a rewrite script.
 ///
 /// Two kinds, and the difference is where the equation comes from. A
-/// [`Rule2`] is a law of the calculus: schematic in its arguments and valid for
+/// [`Rule`] is a law of the calculus: schematic in its arguments and valid for
 /// every instantiation of them. An [`StepKind::Unfold`] is not — that
 /// `Call { k, S }` may be replaced by `S`'s body is the axiom the *library*
 /// contributes by defining `S`, and it says nothing about any other sentence.
@@ -797,7 +841,7 @@ pub(crate) fn eval_op(inst: &Instruction, inputs: &[Value]) -> Option<Vec<Value>
 /// a sentence and never quotes it.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum StepKind {
-    Rule(Rule2),
+    Rule(Rule),
     /// `Call { depth, target }` = the body of `target`, spliced.
     ///
     /// Forward is the old `inline`. Backward is *folding*: recognizing a
@@ -862,7 +906,7 @@ pub(crate) mod tests {
     /// `n` copies of the top `n` values, in the order they were read.
     ///
     /// Not part of any equation: it is the shape the **vacuous** derivation
-    /// builds out of [`Rule2::Counit`], and what a generator emitting that
+    /// builds out of [`Rule::Counit`], and what a generator emitting that
     /// derivation would need to recognize its own handiwork.
     pub(crate) fn copies(n: usize) -> Vec<Node> {
         let reach = n.saturating_sub(1);
@@ -877,7 +921,7 @@ pub(crate) mod tests {
 
     #[test]
     fn collapse_adds_the_two_hidden_depths() {
-        let r = Rule2::Collapse {
+        let r = Rule::Collapse {
             k: 2,
             j: 3,
             a: vec![op(Instruction::Add)],
@@ -896,7 +940,7 @@ pub(crate) mod tests {
         // `expand` peeled exactly one level: dip 3 { A } becomes
         // dip 1 { dip 2 { A } }. That is this equation at the split (1, 2),
         // with the origins riding inward to the level that holds the body.
-        let r = Rule2::Collapse {
+        let r = Rule::Collapse {
             k: 1,
             j: 2,
             a: vec![op(Instruction::Add)],
@@ -927,7 +971,7 @@ pub(crate) mod tests {
 
     #[test]
     fn elim_dip0_splices_the_body() {
-        let r = Rule2::ElimDip0 {
+        let r = Rule::ElimDip0 {
             a: vec![op(Instruction::Add), op(Instruction::Drop)],
             origins: Vec::new(),
         };
@@ -940,7 +984,7 @@ pub(crate) mod tests {
 
     #[test]
     fn fuse_concatenates_two_bodies_at_the_same_depth() {
-        let r = Rule2::Fuse {
+        let r = Rule::Fuse {
             k: 2,
             a: vec![op(Instruction::Add)],
             b: vec![op(Instruction::Drop)],
@@ -964,7 +1008,7 @@ pub(crate) mod tests {
     fn interchange_widens_a_window_past_an_operator_that_consumes_two() {
         // `add` is (2 -> 2), the second output being its success flag: 2 >= 2
         // clears the window, and the same window is 2 - 2 + 2 = 2 deep beyond.
-        let r = Rule2::Interchange {
+        let r = Rule::Interchange {
             x: op(Instruction::Add),
             framed: dip(2, Vec::new()),
             n: 2,
@@ -978,7 +1022,7 @@ pub(crate) mod tests {
     #[test]
     fn interchange_narrows_a_window_past_a_push() {
         // `push` is (0 -> 1): a window 1 deep clears it and is 0 deep beyond.
-        let r = Rule2::Interchange {
+        let r = Rule::Interchange {
             x: push(Value::Int(1)),
             framed: dip(1, Vec::new()),
             n: 0,
@@ -990,7 +1034,7 @@ pub(crate) mod tests {
 
     #[test]
     fn interchange_refuses_a_window_that_would_reach_what_x_produced() {
-        let r = Rule2::Interchange {
+        let r = Rule::Interchange {
             x: op(Instruction::Add),
             framed: dip(1, Vec::new()),
             n: 2,
@@ -1013,7 +1057,7 @@ pub(crate) mod tests {
             depth: 0,
             target: SentenceIndex::from(0),
         };
-        let r = Rule2::Interchange {
+        let r = Rule::Interchange {
             x: push(Value::Int(1)),
             framed: jump,
             n: 0,
@@ -1028,7 +1072,7 @@ pub(crate) mod tests {
             depth: 2,
             target: SentenceIndex::from(0),
         };
-        let r = Rule2::Interchange {
+        let r = Rule::Interchange {
             x: push(Value::Int(1)),
             framed: called.clone(),
             n: 0,
@@ -1052,7 +1096,7 @@ pub(crate) mod tests {
     fn a_fabricated_arity_is_caught_against_the_library() {
         // Claiming `add` is (1 -> 1) would let the window move where it must
         // not. The library is the authority, and it disagrees.
-        let r = Rule2::Interchange {
+        let r = Rule::Interchange {
             x: op(Instruction::Add),
             framed: dip(1, Vec::new()),
             n: 1,
@@ -1069,8 +1113,8 @@ pub(crate) mod tests {
 
     // -- branch equations ---------------------------------------------------
 
-    fn hoist(k: usize, x: Vec<Node>, then_arm: Vec<Node>, else_arm: Vec<Node>) -> Rule2 {
-        Rule2::Hoist {
+    fn hoist(k: usize, x: Vec<Node>, then_arm: Vec<Node>, else_arm: Vec<Node>) -> Rule {
+        Rule::Hoist {
             k,
             x,
             origins: Vec::new(),
@@ -1123,7 +1167,7 @@ pub(crate) mod tests {
 
     #[test]
     fn distribute_takes_a_whole_suffix_into_both_arms() {
-        let r = Rule2::Distribute {
+        let r = Rule::Distribute {
             then_arm: vec![op(Instruction::Add)],
             else_arm: Vec::new(),
             suffix: vec![op(Instruction::Drop), op(Instruction::Not)],
@@ -1147,7 +1191,7 @@ pub(crate) mod tests {
 
     #[test]
     fn fold_branch_decides_by_truthiness_not_by_being_a_bool() {
-        let arms = |c: Value| Rule2::FoldBranch {
+        let arms = |c: Value| Rule::FoldBranch {
             c,
             then_arm: vec![op(Instruction::Add)],
             else_arm: vec![op(Instruction::Drop)],
@@ -1168,7 +1212,7 @@ pub(crate) mod tests {
     fn eval_agrees_with_the_interpreter_on_junk() {
         // Neither operand is `Bool(false)`, so both are true and `and` is
         // true — not an error, and not a coercion to false either.
-        let r = Rule2::Eval {
+        let r = Rule::Eval {
             op: Instruction::And,
             inputs: vec![Value::Int(1), Value::Int(2)],
         };
@@ -1176,7 +1220,7 @@ pub(crate) mod tests {
         assert_eq!(r.rhs(), vec![push(Value::Bool(true))]);
 
         // And one `false` operand is enough to decide it.
-        let r = Rule2::Eval {
+        let r = Rule::Eval {
             op: Instruction::And,
             inputs: vec![Value::Int(1), Value::Bool(false)],
         };
@@ -1185,7 +1229,7 @@ pub(crate) mod tests {
 
     #[test]
     fn eval_of_a_fallible_comparison_produces_the_flag_too() {
-        let r = Rule2::Eval {
+        let r = Rule::Eval {
             op: Instruction::Less,
             inputs: vec![Value::Int(1), Value::Int(2)],
         };
@@ -1194,7 +1238,7 @@ pub(crate) mod tests {
             vec![push(Value::Bool(true)), push(Value::Bool(true))]
         );
         // Unordered: not a comparison it can claim to have made.
-        let r = Rule2::Eval {
+        let r = Rule::Eval {
             op: Instruction::Less,
             inputs: vec![Value::Bool(true), Value::Int(2)],
         };
@@ -1206,7 +1250,7 @@ pub(crate) mod tests {
 
     #[test]
     fn eval_of_tuple_length_hands_a_non_tuple_back() {
-        let r = Rule2::Eval {
+        let r = Rule::Eval {
             op: Instruction::TupleLength,
             inputs: vec![Value::Int(7)],
         };
@@ -1215,7 +1259,7 @@ pub(crate) mod tests {
 
     #[test]
     fn eval_refuses_an_operator_it_has_no_answer_for() {
-        let r = Rule2::Eval {
+        let r = Rule::Eval {
             op: Instruction::Drop,
             inputs: vec![Value::Int(1)],
         };
@@ -1224,7 +1268,7 @@ pub(crate) mod tests {
             Err(SideCondition::NotEvaluable { .. })
         ));
         // Right operator, wrong number of operands.
-        let r = Rule2::Eval {
+        let r = Rule::Eval {
             op: Instruction::And,
             inputs: vec![Value::Int(1)],
         };
@@ -1237,7 +1281,7 @@ pub(crate) mod tests {
     #[test]
     fn annihilate_trades_outputs_for_inputs() {
         // `add` is (2 -> 2): two drops after it are two drops before it.
-        let r = Rule2::Annihilate {
+        let r = Rule::Annihilate {
             x: vec![op(Instruction::Add)],
             n: 2,
             m: 2,
@@ -1257,7 +1301,7 @@ pub(crate) mod tests {
         // framed computation annihilates like any other. `dip 1 { add }` is
         // (3 -> 3).
         let x = dip(1, vec![op(Instruction::Add)]);
-        let r = Rule2::Annihilate {
+        let r = Rule::Annihilate {
             x: vec![x],
             n: 3,
             m: 3,
@@ -1279,10 +1323,60 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn commute_deletes_the_swap_a_commutative_operator_cannot_see() {
+        let r = Rule::Commute {
+            op: Instruction::Add,
+        };
+        assert_eq!(r.check(&prog()), Ok(()));
+        assert_eq!(
+            r.lhs(),
+            vec![op(Instruction::Roll(1)), op(Instruction::Add)]
+        );
+        assert_eq!(r.rhs(), vec![op(Instruction::Add)]);
+    }
+
+    #[test]
+    fn commute_refuses_an_operator_that_reads_its_operands_in_order() {
+        for inst in [
+            Instruction::Subtract,
+            Instruction::Divide,
+            Instruction::Less,
+            Instruction::Greater,
+            Instruction::Tuple(2),
+            // Not binary at all.
+            Instruction::Not,
+            Instruction::Drop,
+        ] {
+            let r = Rule::Commute { op: inst.clone() };
+            assert!(
+                matches!(r.check(&prog()), Err(SideCondition::NotCommutative { .. })),
+                "{:?} was accepted as commutative",
+                inst
+            );
+        }
+    }
+
+    #[test]
+    fn the_commutative_set_is_the_instructions_own_answer() {
+        // The list is not restated here: `vm` measures it against the
+        // interpreter, and this only checks the equation asks the instruction.
+        for inst in [
+            Instruction::Add,
+            Instruction::Multiply,
+            Instruction::And,
+            Instruction::Or,
+            Instruction::Equal,
+        ] {
+            assert!(inst.commutative(), "{:?}", inst);
+            assert_eq!(Rule::Commute { op: inst }.check(&prog()), Ok(()));
+        }
+    }
+
+    #[test]
     fn counit_is_not_an_annihilation() {
         // `pick d` is (d+1 -> d+2), so the annihilation equation would ask for
         // d+2 drops. The counit law is the one that holds.
-        let r = Rule2::Counit { d: 3 };
+        let r = Rule::Counit { d: 3 };
         assert_eq!(
             r.lhs(),
             vec![op(Instruction::Pick(3)), op(Instruction::Drop)]
@@ -1292,7 +1386,7 @@ pub(crate) mod tests {
 
     #[test]
     fn copy_assoc_puts_one_copy_in_a_frame() {
-        let r = Rule2::CopyAssoc { d: 2 };
+        let r = Rule::CopyAssoc { d: 2 };
         assert_eq!(
             r.rhs(),
             vec![
@@ -1304,33 +1398,33 @@ pub(crate) mod tests {
 
     #[test]
     fn cancel_tuple_leaves_the_flag_behind() {
-        let r = Rule2::CancelTuple { n: 3 };
+        let r = Rule::CancelTuple { n: 3 };
         assert_eq!(r.rhs(), vec![push(Value::Bool(true))]);
     }
 
     // -- properties over the whole set --------------------------------------
 
     /// One instance of every equation, for the sweeps below.
-    fn every_equation() -> Vec<Rule2> {
+    fn every_equation() -> Vec<Rule> {
         vec![
-            Rule2::Collapse {
+            Rule::Collapse {
                 k: 2,
                 j: 3,
                 a: vec![op(Instruction::Add)],
                 outer: vec!["o".to_string()],
                 inner: vec!["i".to_string()],
             },
-            Rule2::ElimDip0 {
+            Rule::ElimDip0 {
                 a: vec![op(Instruction::Add)],
                 origins: vec!["o".to_string()],
             },
-            Rule2::Interchange {
+            Rule::Interchange {
                 x: op(Instruction::Add),
                 framed: dip(2, vec![op(Instruction::Drop)]),
                 n: 2,
                 m: 2,
             },
-            Rule2::Fuse {
+            Rule::Fuse {
                 k: 1,
                 a: vec![op(Instruction::Add)],
                 b: vec![op(Instruction::Drop)],
@@ -1343,33 +1437,36 @@ pub(crate) mod tests {
                 vec![op(Instruction::Drop)],
                 vec![op(Instruction::Not)],
             ),
-            Rule2::Distribute {
+            Rule::Distribute {
                 then_arm: vec![op(Instruction::Add)],
                 else_arm: vec![op(Instruction::Not)],
                 suffix: vec![op(Instruction::Drop)],
                 then_origin: "then".to_string(),
                 else_origin: "else".to_string(),
             },
-            Rule2::FoldBranch {
+            Rule::FoldBranch {
                 c: Value::Bool(true),
                 then_arm: vec![op(Instruction::Add)],
                 else_arm: vec![op(Instruction::Add)],
                 then_origin: "then".to_string(),
                 else_origin: "else".to_string(),
             },
-            Rule2::Eval {
+            Rule::Eval {
                 op: Instruction::And,
                 inputs: vec![Value::Bool(true), Value::Bool(false)],
             },
-            Rule2::Annihilate {
+            Rule::Annihilate {
                 x: vec![op(Instruction::Add)],
                 n: 2,
                 m: 2,
             },
-            Rule2::Counit { d: 3 },
-            Rule2::CopyConst { c: Value::Int(7) },
-            Rule2::CopyAssoc { d: 2 },
-            Rule2::CancelTuple { n: 3 },
+            Rule::Commute {
+                op: Instruction::Add,
+            },
+            Rule::Counit { d: 3 },
+            Rule::CopyConst { c: Value::Int(7) },
+            Rule::CopyAssoc { d: 2 },
+            Rule::CancelTuple { n: 3 },
         ]
     }
 
@@ -1419,6 +1516,6 @@ pub(crate) mod tests {
         // Every variant of the enum appears in the sweep above. Keeping this
         // number honest is the point: an equation is an axiom, and the set is
         // meant to grow only when something genuinely cannot be derived.
-        assert_eq!(before, 13);
+        assert_eq!(before, 14);
     }
 }
