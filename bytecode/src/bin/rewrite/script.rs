@@ -480,17 +480,31 @@ impl<'a> Parser<'a> {
         };
         let word = word.clone();
 
+        // The two nested forms. A branch reads as a program rather than a
+        // value, which is why a term used to decline one — but a `Node::Branch`
+        // carries no condition, only the two arms, and the condition it pops is
+        // whatever the stack already holds. So it is a node like any other, and
+        // excluding it left `annihilate` with no way to be read backwards at
+        // `m = 0`: nothing could write the `branch { } { }` to introduce.
+        if word == "branch" {
+            let then_body = self.block()?;
+            let else_body = self.block()?;
+            return Ok(Node::Branch {
+                then_origin: TERM_ORIGIN.to_string(),
+                then_body,
+                else_origin: TERM_ORIGIN.to_string(),
+                else_body,
+            });
+        }
+
         // `dip k { ... }` is the one nested form, and the only way to write a
         // term that hides part of the stack from itself.
         if word == "dip" {
             let depth = self.count(&word, span)?;
-            self.expect(Tok::LBrace, "'{'")?;
-            let body = self.term()?;
-            self.expect(Tok::RBrace, "'}'")?;
             return Ok(Node::Dip {
                 depth,
                 origins: Vec::new(),
-                body,
+                body: self.block()?,
             });
         }
 
@@ -561,6 +575,14 @@ impl<'a> Parser<'a> {
         resolve_sentence(prog.library(), &ident).map_err(|why| ScriptError::new(why, ident_span))
     }
 
+    /// A braced run of instructions: a dip body, or one arm of a branch.
+    fn block(&mut self) -> Result<Vec<Node>, ScriptError> {
+        self.expect(Tok::LBrace, "'{'")?;
+        let body = self.term()?;
+        self.expect(Tok::RBrace, "'}'")?;
+        Ok(body)
+    }
+
     fn count(&mut self, word: &str, span: Span) -> Result<usize, ScriptError> {
         match self.peek() {
             Some(Tok::Int(n)) => {
@@ -621,6 +643,14 @@ fn plain_instruction(word: &str) -> Option<Instruction> {
     })
 }
 
+/// Where a block written in a tactic came from, for the listing.
+///
+/// Phase 4 labels an inline block `<inline>`; this is the same courtesy for
+/// code that was never compiled at all. Provenance is not part of a term's
+/// identity — `same_effect` ignores it — so this only ever shows up in a
+/// listing, saying that the code came from the tactic rather than a sentence.
+pub(crate) const TERM_ORIGIN: &str = "<term>";
+
 /// What a term may hold, for an error message.
 ///
 /// `panic`, `assert` and `assert_eq` are absent on purpose: they are the three
@@ -629,6 +659,7 @@ fn plain_instruction(word: &str) -> Option<Instruction> {
 /// stated under.
 const INSTRUCTION_WORDS: &[&str] = &[
     "pick n",
+    "branch { .. } { .. }",
     "roll n",
     "tuple n",
     "untuple n",
@@ -1323,6 +1354,40 @@ mod tests {
         assert!(compiles("once(introduce { push true and })"));
         // Mixed with ordinary rules in one placement.
         assert!(compiles("each(sink, introduce { pick 0 }, fuse)"));
+    }
+
+    #[test]
+    fn a_term_may_hold_a_branch() {
+        // It could not before, on the grounds that a branch needs a condition
+        // and so reads as a program — but the node carries only the two arms,
+        // and the condition it pops is whatever the stack already holds.
+        assert!(compiles("once(introduce { branch { } { } })"));
+        assert!(compiles("once(introduce { branch { not } { is_bool } })"));
+        assert!(compiles("once(introduce { dip 1 { branch { } { } } })"));
+        assert!(compiles(
+            "once(introduce { branch { branch { } { } } { drop } })"
+        ));
+    }
+
+    #[test]
+    fn a_branch_in_a_term_is_held_to_what_the_arity_checker_asks() {
+        // Arms that leave different amounts are not a program the compiler
+        // would have accepted, and a term is code about to be spliced into
+        // one. Nothing downstream would catch it, since a node's arity is read
+        // off whichever arm answers first.
+        let e = err("once(introduce { branch { drop } { } })");
+        assert!(e.contains("leave different amounts"), "{}", e);
+        assert!(e.contains("-1 against 0"), "{}", e);
+
+        // Including one nested inside another block.
+        let e = err("once(introduce { dip 1 { branch { drop } { } } })");
+        assert!(e.contains("leave different amounts"), "{}", e);
+    }
+
+    #[test]
+    fn the_instruction_list_mentions_a_branch() {
+        let e = err("once(introduce { frobnicate })");
+        assert!(e.contains("branch { .. } { .. }"), "{}", e);
     }
 
     #[test]

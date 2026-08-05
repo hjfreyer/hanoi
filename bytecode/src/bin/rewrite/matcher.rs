@@ -206,6 +206,43 @@ fn arity_of(prog: Option<&Program>, x: &[Node]) -> Option<(i64, i64)> {
     }
 }
 
+/// Both arms of every branch in a term leave the same amount behind.
+///
+/// The arity checker holds real code to this, and a term is code that is about
+/// to be spliced into some — so a term that broke it would put a program into
+/// the tree that could not have been compiled. Nothing downstream would catch
+/// it: a node's arity is read off whichever arm answers first, so the tree
+/// would simply be wrong about itself.
+fn arms_agree(prog: Option<&Program>, x: &[Node]) -> Result<(), String> {
+    let net = |arm: &[Node]| arity_of(prog, arm).map(|(n, m)| m - n);
+    for node in x {
+        match node {
+            Node::Branch {
+                then_body,
+                else_body,
+                ..
+            } => {
+                match (net(then_body), net(else_body)) {
+                    (Some(a), Some(b)) if a == b => {}
+                    (Some(a), Some(b)) => {
+                        return Err(format!(
+                            "the arms of that branch leave different amounts \
+                             behind, {} against {}",
+                            a, b
+                        ));
+                    }
+                    _ => return Err("the arity of a branch arm is not known".to_string()),
+                }
+                arms_agree(prog, then_body)?;
+                arms_agree(prog, else_body)?;
+            }
+            Node::Dip { body, .. } => arms_agree(prog, body)?,
+            Node::Op(_) | Node::Call { .. } => {}
+        }
+    }
+    Ok(())
+}
+
 /// What a term has to be before a law can close over it.
 ///
 /// Shared by the two rules that take one, because they want the same three
@@ -215,6 +252,7 @@ fn term_arity_or_why(prog: Option<&Program>, x: &[Node]) -> Result<(usize, usize
     if x.is_empty() {
         return Err("there is nothing there".to_string());
     }
+    arms_agree(prog, x)?;
     let Some((n, m)) = arity_of(prog, x) else {
         return Err(
             "the arity of that is not known, so there is no saying how many \
@@ -1528,9 +1566,20 @@ pub(crate) fn term_arity(nodes: &[Node]) -> Option<(i64, i64)> {
                 let d = *depth as i64;
                 (d + n, d + m)
             }
-            // A term cannot hold one, and if one appears the caller built it
-            // rather than parsed it.
-            Node::Call { .. } | Node::Branch { .. } => return None,
+            // Whichever arm answers, answers for both — the same reading
+            // [`node_arity`] takes, and sound for the same reason: the two are
+            // held to the same net change. The extra input is the condition.
+            Node::Branch {
+                then_body,
+                else_body,
+                ..
+            } => {
+                let (n, m) = term_arity(then_body).or_else(|| term_arity(else_body))?;
+                (n + 1, m)
+            }
+            // A term holds one only when it named a sentence, and then there is
+            // a program to ask; `arity_of` is what routes that case away.
+            Node::Call { .. } => return None,
         };
         if size < n {
             inputs += n - size;
@@ -2142,6 +2191,38 @@ mod tests {
                     )]
                 )
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn a_term_holding_a_branch_has_an_arity() {
+        // The condition is the extra input, and whichever arm answers answers
+        // for both. `branch { } { }` is (1 -> 0), which is what makes it the
+        // thing `introduce` can put where a `drop` was.
+        assert_eq!(term_arity(&[branch(Vec::new(), Vec::new())]), Some((1, 0)));
+        assert_eq!(
+            term_arity(&[branch(
+                vec![op(Instruction::Not)],
+                vec![op(Instruction::IsBool)]
+            )]),
+            Some((2, 1))
+        );
+    }
+
+    #[test]
+    fn introducing_a_branch_is_what_reads_the_void_annihilation_backwards() {
+        // The pair this closes: `annihilate_void` turns `branch { } { }` into
+        // `drop`, and until a term could hold a branch nothing could turn it
+        // back. `inv(annihilate_void)` says to write `introduce { ... }`, and
+        // now that can be written.
+        let m = Introduce::new(None, vec![branch(Vec::new(), Vec::new())]).unwrap();
+        assert_eq!(m.width(), 1, "it stands where one drop was");
+        let there = fire(&m, &prog(), &[op(Instruction::Drop)]).unwrap();
+        assert_eq!(there, vec![branch(Vec::new(), Vec::new())]);
+        assert_eq!(
+            fire(&AnnihilateVoid, &prog(), &there),
+            Some(vec![op(Instruction::Drop)]),
+            "the two readings did not undo each other"
         );
     }
 
