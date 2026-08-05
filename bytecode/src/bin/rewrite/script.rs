@@ -64,7 +64,8 @@ tactic factoring = repeat(bu(each(factor)));
 // `annihilate_void` reads none, which is what an empty branch is; `counit` is
 // the copy that was made only to be discarded.
 tactic annihilation =
-    repeat(bu(each(annihilate, annihilate_flagged, annihilate_void, counit)));
+    repeat(bu(each(annihilate, annihilate_flagged, annihilate_void,
+                   counit, counit_under)));
 
 // Evaluate what is already decided. Every matcher here answers a question about
 // values rather than about shape, and the equation underneath declines anything
@@ -81,8 +82,10 @@ tactic commuting = repeat(bu(each(comm)));
 // belong together because each makes work for the other: folding is what
 // produces the literal `fold_branch` needs, and deciding a branch is what
 // exposes the next thing to fold.
+// `retest` is here rather than with the branch passes because what it does is
+// delete an arm that cannot run, which is cleanup by any reading.
 tactic cleanup = repeat(bu(each(annihilate, annihilate_flagged, annihilate_void,
-                                counit, comm, fold_branch);
+                                counit, counit_under, comm, fold_branch, retest);
                            each(eval1, eval2, bool_result, cancel_tuple, copy_const)));
 
 // Push what follows a branch into both of its arms, so a law that only holds on
@@ -98,7 +101,7 @@ tactic flattening = repeat(bu(each(flatten)));
 
 // Everything that makes a term smaller, at once.
 tactic all = repeat(bu(each(annihilate, annihilate_flagged, annihilate_void,
-                            counit, comm, fold_branch);
+                            counit, counit_under, comm, fold_branch, retest);
                        each(eval1, eval2, bool_result, cancel_tuple, copy_const);
                        each(factor);
                        each(collapse); each(sink); each(fuse)));

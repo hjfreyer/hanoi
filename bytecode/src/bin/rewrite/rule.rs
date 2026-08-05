@@ -110,6 +110,8 @@ pub(crate) enum SideCondition {
     NotCommutative { op: String },
     /// `bool_result` was handed an operator that does not always leave a bool.
     NotBoolResult { op: String },
+    /// `retest` was handed something other than a branch to collapse.
+    NotABranch { arm: &'static str, found: String },
 }
 
 impl std::fmt::Display for SideCondition {
@@ -156,6 +158,33 @@ impl std::fmt::Display for SideCondition {
             SideCondition::NotBoolResult { op } => {
                 write!(f, "`{}` does not always leave a boolean on top", op)
             }
+            SideCondition::NotABranch { arm, found } => {
+                write!(
+                    f,
+                    "the {} arm opens with `{}`, which is not a branch and so \
+                     tests nothing",
+                    arm, found
+                )
+            }
+        }
+    }
+}
+
+/// Which arm of a branch a law is talking about.
+///
+/// [`crate::ir::Selector`] has a third case for a dip body, which has no
+/// meaning here; two variants is the whole of what [`Rule::Retest`] can mean.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Arm {
+    Then,
+    Else,
+}
+
+impl Arm {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Arm::Then => "then",
+            Arm::Else => "else",
         }
     }
 }
@@ -411,6 +440,68 @@ pub(crate) enum Rule {
     /// `applier::tests::vacuous_is_derivable_from_annihilate_and_counit`.
     Counit { d: usize },
 
+    /// `pick 0 ; branch { branch { A } { B } ; R } { Q }`
+    ///   = `pick 0 ; branch { drop ; A ; R } { Q }`, and the mirror of it.
+    ///
+    /// **The same value tested twice answers the same.** The condition is a
+    /// copy, so an arm of the outer branch already knows which way its own
+    /// branch will go: inside the *then* arm the value is truthy and the inner
+    /// branch takes `A`, inside the *else* arm it is `false` and the inner
+    /// branch takes `D`. The other inner arm cannot run, and goes.
+    ///
+    /// [`Arm`] says which arm the inner branch is in, so the two readings are
+    /// one equation. Firing both — the outer branch has a branch in each arm —
+    /// leaves `pick 0 ; branch { drop ; A } { drop ; D }`, which [`Rule::Hoist`]
+    /// backwards and [`Rule::CounitUnder`] finish as `branch { A } { D }`.
+    ///
+    /// ## Why the shape is what it is
+    ///
+    /// The inner *branch* is not an arbitrary restriction. Inside the then arm
+    /// the value is known only to be **truthy**, not what it is — replacing it
+    /// with `push true` would be wrong, since `is_int` answers differently on
+    /// `42` than on `true`. A branch is the only construct that observes
+    /// exactly truthiness, so it is the only thing this can say anything about.
+    ///
+    /// The else arm knows more: `false` is the unique falsy value, so there the
+    /// value is a literal. Stated that way the law would be more general on
+    /// that side and would grow the term; this direction shrinks it, which is
+    /// what a pass wants.
+    ///
+    /// ## What is already derivable, and is therefore not this
+    ///
+    /// When the two inner branches are *the same*, no axiom is needed:
+    /// [`Rule::Distribute`] backwards factors the shared inner branch out of
+    /// both arms, leaving `branch { } { }` for [`Rule::Annihilate`] at `m = 0`
+    /// and then [`Rule::Counit`]. Three steps, no new law. What this adds is
+    /// only that the **off-diagonal arms are dead**, which nothing reaches: an
+    /// arm cannot see the branch it is inside, and driving it through
+    /// [`Rule::SplitBool`] stalls in the same "not a bool" arm that
+    /// [`Rule::BoolResult`] does.
+    Retest {
+        arm: Arm,
+        /// The inner branch, whole. [`Rule::check`] holds it to being one.
+        inner: Node,
+        /// What follows the inner branch in that arm.
+        rest: Vec<Node>,
+        /// The outer branch's other arm, untouched.
+        other: Vec<Node>,
+        then_origin: String,
+        else_origin: String,
+    },
+
+    /// `pick 0 ; dip 1 { drop }` = nothing.
+    ///
+    /// Copy a value and discard the **original**: the copy is the same value,
+    /// so neither happened. [`Rule::Counit`] is the other way round — copy and
+    /// discard the *copy* — and the two are the two counit laws of the comonoid
+    /// whose comultiplication is `pick`. They come in pairs, and only one of
+    /// them was here.
+    ///
+    /// Only at depth 0. Deeper, `pick d ; dip (d+1) { drop }` is not the
+    /// identity at all but a `roll d`: copying to the top and deleting the
+    /// original *moves* the value. That is a different law and is not written.
+    CounitUnder,
+
     /// `push c ; pick 0` = `push c ; push c`.
     ///
     /// Copying a constant is pushing it again. It is what makes a refinement
@@ -533,6 +624,8 @@ impl Rule {
             Rule::Commute { .. } => "commute",
             Rule::SplitBool => "split_bool",
             Rule::Counit { .. } => "counit",
+            Rule::CounitUnder => "counit_under",
+            Rule::Retest { .. } => "retest",
             Rule::CopyConst { .. } => "copy_const",
             Rule::CopyAssoc { .. } => "copy_assoc",
             Rule::CopyNat { .. } => "copy_nat",
@@ -573,6 +666,18 @@ impl Rule {
             // instruction set rather than of these arguments — there is nothing
             // here to check it against.
             Rule::CopyNat { x, n, m } => claimed_arity(prog, x, (*n as i64, *m as i64)).map(|_| ()),
+            // The one thing the arguments claim about themselves: that there is
+            // a branch there to collapse. `lhs` and `rhs` both read its arms.
+            Rule::Retest { arm, inner, .. } => {
+                if matches!(inner, Node::Branch { .. }) {
+                    Ok(())
+                } else {
+                    Err(SideCondition::NotABranch {
+                        arm: arm.name(),
+                        found: crate::ir::sketch(std::slice::from_ref(inner)),
+                    })
+                }
+            }
             Rule::BoolResult { op } => {
                 if op.yields_bool() {
                     Ok(())
@@ -608,6 +713,7 @@ impl Rule {
             | Rule::FoldBranch { .. }
             | Rule::SplitBool
             | Rule::Counit { .. }
+            | Rule::CounitUnder
             | Rule::CopyConst { .. }
             | Rule::CopyAssoc { .. }
             | Rule::CancelTuple { .. } => Ok(()),
@@ -749,6 +855,28 @@ impl Rule {
 
             Rule::Counit { d } => {
                 vec![Node::Op(Instruction::Pick(*d)), Node::Op(Instruction::Drop)]
+            }
+
+            Rule::CounitUnder => vec![
+                Node::Op(Instruction::Pick(0)),
+                Node::Dip {
+                    depth: 1,
+                    origins: Vec::new(),
+                    body: vec![Node::Op(Instruction::Drop)],
+                },
+            ],
+
+            Rule::Retest {
+                arm,
+                inner,
+                rest,
+                other,
+                then_origin,
+                else_origin,
+            } => {
+                let mut held = vec![inner.clone()];
+                held.extend(rest.iter().cloned());
+                retest_shape(*arm, held, other, then_origin, else_origin)
             }
 
             Rule::CopyConst { c } => vec![push(c.clone()), Node::Op(Instruction::Pick(0))],
@@ -898,7 +1026,36 @@ impl Rule {
 
             Rule::Commute { op } => vec![Node::Op(op.clone())],
 
-            Rule::SplitBool | Rule::Counit { .. } => Vec::new(),
+            Rule::SplitBool | Rule::Counit { .. } | Rule::CounitUnder => Vec::new(),
+
+            Rule::Retest {
+                arm,
+                inner,
+                rest,
+                other,
+                then_origin,
+                else_origin,
+            } => {
+                let Node::Branch {
+                    then_body,
+                    else_body,
+                    ..
+                } = inner
+                else {
+                    unreachable!("check() accepted something that is not a branch")
+                };
+                // The arm the outer condition selects. In the then arm the
+                // value is truthy, so the inner branch goes then; in the else
+                // arm it is `false`, so it goes else.
+                let live = match arm {
+                    Arm::Then => then_body,
+                    Arm::Else => else_body,
+                };
+                let mut held = vec![Node::Op(Instruction::Drop)];
+                held.extend(live.iter().cloned());
+                held.extend(rest.iter().cloned());
+                retest_shape(*arm, held, other, then_origin, else_origin)
+            }
 
             Rule::CopyConst { c } => vec![push(c.clone()), push(c.clone())],
 
@@ -926,6 +1083,33 @@ impl Rule {
             Rule::CancelTuple { .. } => vec![push(Value::Bool(true))],
         }
     }
+}
+
+/// `pick 0 ; branch { .. } { .. }` with `held` in the arm the law names.
+///
+/// Both sides of [`Rule::Retest`] are this shape and differ only in what the
+/// arm holds, which is what makes the equation one law read at two arms rather
+/// than two laws that happen to look alike.
+fn retest_shape(
+    arm: Arm,
+    held: Vec<Node>,
+    other: &[Node],
+    then_origin: &str,
+    else_origin: &str,
+) -> Vec<Node> {
+    let (then_body, else_body) = match arm {
+        Arm::Then => (held, other.to_vec()),
+        Arm::Else => (other.to_vec(), held),
+    };
+    vec![
+        Node::Op(Instruction::Pick(0)),
+        Node::Branch {
+            then_origin: then_origin.to_string(),
+            then_body,
+            else_origin: else_origin.to_string(),
+            else_body,
+        },
+    ]
 }
 
 fn push(v: Value) -> Node {
@@ -1084,6 +1268,15 @@ pub(crate) mod tests {
             depth,
             origins: Vec::new(),
             body,
+        }
+    }
+
+    fn branch(then_body: Vec<Node>, else_body: Vec<Node>) -> Node {
+        Node::Branch {
+            then_origin: "then".to_string(),
+            then_body,
+            else_origin: "else".to_string(),
+            else_body,
         }
     }
 
@@ -1731,6 +1924,97 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn retest_deletes_the_arm_that_cannot_run() {
+        // The then arm's inner branch is entered on a truthy value, so it goes
+        // then; what is left of it is the `drop` of the condition it read.
+        let inner = || branch(vec![op(Instruction::Not)], vec![op(Instruction::IsBool)]);
+        let r = |arm| Rule::Retest {
+            arm,
+            inner: inner(),
+            rest: vec![op(Instruction::Add)],
+            other: vec![op(Instruction::Drop)],
+            then_origin: "then".to_string(),
+            else_origin: "else".to_string(),
+        };
+
+        let held = |nodes: Vec<Node>| nodes;
+        assert_eq!(
+            r(Arm::Then).lhs(),
+            vec![
+                op(Instruction::Pick(0)),
+                branch(
+                    held(vec![inner(), op(Instruction::Add)]),
+                    vec![op(Instruction::Drop)]
+                ),
+            ]
+        );
+        assert_eq!(
+            r(Arm::Then).rhs(),
+            vec![
+                op(Instruction::Pick(0)),
+                branch(
+                    held(vec![
+                        op(Instruction::Drop),
+                        op(Instruction::Not),
+                        op(Instruction::Add)
+                    ]),
+                    vec![op(Instruction::Drop)]
+                ),
+            ]
+        );
+
+        // The else arm reads the other way: there the value is `false`, so the
+        // inner branch goes else.
+        assert_eq!(
+            r(Arm::Else).rhs(),
+            vec![
+                op(Instruction::Pick(0)),
+                branch(
+                    vec![op(Instruction::Drop)],
+                    held(vec![
+                        op(Instruction::Drop),
+                        op(Instruction::IsBool),
+                        op(Instruction::Add)
+                    ])
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn retest_insists_there_is_a_branch_to_collapse() {
+        let r = Rule::Retest {
+            arm: Arm::Then,
+            inner: op(Instruction::Add),
+            rest: Vec::new(),
+            other: Vec::new(),
+            then_origin: "then".to_string(),
+            else_origin: "else".to_string(),
+        };
+        assert!(matches!(
+            r.check(&prog()),
+            Err(SideCondition::NotABranch { .. })
+        ));
+    }
+
+    #[test]
+    fn the_two_counits_discard_opposite_copies() {
+        // One law each way round, and the set had only one of them.
+        assert_eq!(
+            Rule::Counit { d: 0 }.lhs(),
+            vec![op(Instruction::Pick(0)), op(Instruction::Drop)]
+        );
+        assert_eq!(
+            Rule::CounitUnder.lhs(),
+            vec![
+                op(Instruction::Pick(0)),
+                dip(1, vec![op(Instruction::Drop)])
+            ]
+        );
+        assert_eq!(Rule::CounitUnder.rhs(), Vec::new());
+    }
+
+    #[test]
     fn cancel_tuple_leaves_the_flag_behind() {
         let r = Rule::CancelTuple { n: 3 };
         assert_eq!(r.rhs(), vec![push(Value::Bool(true))]);
@@ -1809,6 +2093,15 @@ pub(crate) mod tests {
             Rule::BoolResult {
                 op: Instruction::IsBool,
             },
+            Rule::CounitUnder,
+            Rule::Retest {
+                arm: Arm::Then,
+                inner: branch(vec![op(Instruction::Not)], vec![op(Instruction::IsBool)]),
+                rest: Vec::new(),
+                other: vec![op(Instruction::Drop)],
+                then_origin: "then".to_string(),
+                else_origin: "else".to_string(),
+            },
             Rule::CancelTuple { n: 3 },
         ]
     }
@@ -1860,11 +2153,11 @@ pub(crate) mod tests {
         // number honest is the point: an equation is an axiom, and the set is
         // meant to grow only when something genuinely cannot be derived.
         //
-        // Seventeen variants, sixteen axioms: `copy_const` is the constant case
+        // Nineteen variants, eighteen axioms: `copy_const` is the constant case
         // of `copy_nat` and is kept only because it is one step where the
         // derivation is three, and `values` and `cleanup` fire it constantly.
         // `applier::tests::copy_const_is_derivable_from_copy_nat` is what says
         // so out loud.
-        assert_eq!(before, 17);
+        assert_eq!(before, 19);
     }
 }
