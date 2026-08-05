@@ -19,7 +19,7 @@ use crate::arity::{node_arity, seq_arity};
 use crate::engine::{Env, Tactic, run as run_tactic};
 use crate::ir::{Node, build};
 use crate::program::Program;
-use crate::rule::Script;
+use crate::rule::{Rule, Script, StepKind};
 use crate::script::{Definitions, PRELUDE};
 
 /// The prelude tactics, by the name a test refers to them by.
@@ -606,6 +606,31 @@ fn reading_distribute_backwards_factors_a_shared_suffix() {
     assert_eq!(shape(&run(prog, got, "distribution")), shape(&plain));
 }
 
+/// Factoring can leave a branch with nothing in it, and then it can go.
+///
+/// Arms that were the same all the way down are hoisted out entirely, and what
+/// is left consumes the condition and does nothing else. That is `annihilate`
+/// with no outputs to read — not a new law, just the case no matcher looked
+/// for.
+#[test]
+fn a_branch_whose_arms_were_the_same_disappears_along_with_them() {
+    let code = "sentence probe { pick 0 branch { drop 0 } { drop 0 } }";
+    let (prog, plain) = tree_of(code, "id");
+
+    // Factoring alone leaves the husk behind.
+    let factored = run(prog, plain.clone(), FACTOR);
+    assert_eq!(
+        shape(&factored),
+        vec!["pick 0", "dip 1 { drop }", "branch"],
+        "{:?}",
+        shape(&factored)
+    );
+
+    // Cleaning up after it takes the husk, and then everything it was holding.
+    let got = run(prog, plain, "factoring; all");
+    assert_eq!(shape(&got), vec!["drop"], "{:?}", shape(&got));
+}
+
 // ---------------------------------------------------------------------------
 // Sharing one computation between two uses
 // ---------------------------------------------------------------------------
@@ -849,6 +874,42 @@ fn corpus_derivations_replay() {
         "only {} sentences did work, {} steps in all",
         worked,
         steps
+    );
+}
+
+/// The annihilation with no outputs, and how much of the corpus it reaches.
+///
+/// `branch { } { }` is what `factor` leaves behind when the two arms were the
+/// same all the way down, so the two belong together — and the number says
+/// this is not a corner. A third of every annihilation over the admissible
+/// corpus is the case that had no matcher looking for it.
+#[test]
+fn the_annihilation_with_no_outputs_is_a_third_of_them() {
+    let Some((library, prog)) = corpus() else {
+        return;
+    };
+
+    let (mut total, mut void) = (0usize, 0usize);
+    for s_idx in admissible(library, prog) {
+        let plain = run(
+            prog,
+            build(library, s_idx, &mut HashSet::new()),
+            "unfold_all",
+        );
+        let (_, script) = with_script(prog, plain, "factoring; all");
+        for step in &script {
+            let StepKind::Rule(Rule::Annihilate { m, .. }) = &step.kind else {
+                continue;
+            };
+            total += 1;
+            void += usize::from(*m == 0);
+        }
+    }
+    assert!(
+        total > 100 && void * 4 > total,
+        "{} of {} annihilations left nothing behind",
+        void,
+        total
     );
 }
 
