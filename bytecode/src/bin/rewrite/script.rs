@@ -26,6 +26,7 @@ use crate::ir::{Node, Selector};
 use crate::matcher::{
     Matcher, matcher_by_name, matcher_names, matcher_with_term, term_matcher_names,
 };
+use crate::program::{Program, resolve_sentence};
 
 /// The named tactics every session starts with.
 ///
@@ -239,11 +240,21 @@ fn tokenize(src: &str) -> Result<Vec<Spanned>, ScriptError> {
                 Tok::Int(value)
             }
             c if c.is_alphabetic() || c == '_' => {
-                while i < bytes.len() && {
-                    let c = bytes[i] as char;
-                    c.is_alphanumeric() || c == '_'
-                } {
-                    i += 1;
+                let word = |i: &mut usize| {
+                    while *i < bytes.len() && {
+                        let c = bytes[*i] as char;
+                        c.is_alphanumeric() || c == '_'
+                    } {
+                        *i += 1;
+                    }
+                };
+                word(&mut i);
+                // `::` continues the same token, so a term can name a sentence
+                // the way the command line does. Nothing else in this language
+                // uses a colon, so there is no ambiguity to resolve.
+                while src[i..].starts_with("::") {
+                    i += 2;
+                    word(&mut i);
                 }
                 match &src[start..i] {
                     "tactic" => Tok::Tactic,
@@ -294,6 +305,10 @@ struct Parser<'a> {
     toks: &'a [Spanned],
     pos: usize,
     end: usize,
+    /// Only needed to resolve a sentence named inside a term, and to work out
+    /// the arity of one. A tactic that names no sentence compiles without a
+    /// program, which is what keeps the prelude checkable on its own.
+    prog: Option<&'a Program<'a>>,
 }
 
 impl<'a> Parser<'a> {
@@ -479,6 +494,17 @@ impl<'a> Parser<'a> {
             return Ok(Node::Op(Instruction::Push(self.literal(span)?)));
         }
 
+        // The one thing in a term that reaches outside it. A term used to hold
+        // no calls because there was nothing for one to name — the code was
+        // written here rather than compiled from a sentence — but `share` is
+        // about running *a function* twice, and the function has a name.
+        if word == "jump" {
+            return Ok(Node::Call {
+                depth: 0,
+                target: self.sentence(span)?,
+            });
+        }
+
         let inst = match word.as_str() {
             "pick" => Instruction::Pick(self.count(&word, span)?),
             "roll" => Instruction::Roll(self.count(&word, span)?),
@@ -496,6 +522,39 @@ impl<'a> Parser<'a> {
             },
         };
         Ok(Node::Op(inst))
+    }
+
+    /// The sentence a term names, resolved the way the command line resolves
+    /// one: an index, an exact name, or an unambiguous trailing part of one.
+    fn sentence(&mut self, span: Span) -> Result<bytecode::SentenceIndex, ScriptError> {
+        let (ident, ident_span) = match self.peek() {
+            Some(Tok::Ident(name)) => {
+                let name = name.clone();
+                let span = self.span();
+                self.bump();
+                (name, span)
+            }
+            Some(Tok::Int(n)) => {
+                let name = n.to_string();
+                let span = self.span();
+                self.bump();
+                (name, span)
+            }
+            _ => {
+                return Err(ScriptError::new("`jump` needs a sentence", span)
+                    .with_help("a name, a unique trailing part of one, or an index"));
+            }
+        };
+        let Some(prog) = self.prog else {
+            return Err(
+                ScriptError::new("naming a sentence needs a program", ident_span).with_help(
+                    "a term that names one cannot be compiled on its own, since \
+                     the sentence's arity is what says how wide a window the \
+                     rule reads",
+                ),
+            );
+        };
+        resolve_sentence(prog.library(), &ident).map_err(|why| ScriptError::new(why, ident_span))
     }
 
     fn count(&mut self, word: &str, span: Span) -> Result<usize, ScriptError> {
@@ -636,6 +695,10 @@ impl Definitions {
             toks: &toks,
             pos: 0,
             end: source.len(),
+            // Definitions are parsed once, before any program is chosen, so a
+            // *stored* term may not name a sentence. Only the expression given
+            // on the command line can, which is where `compile_with` gets one.
+            prog: None,
         };
 
         while p.peek().is_some() {
@@ -680,12 +743,32 @@ impl Definitions {
     }
 
     /// Parses and resolves a single expression against these definitions.
+    ///
+    /// No program, so a term may not name a sentence. Every other tactic
+    /// compiles, which is what keeps the prelude checkable on its own.
+    #[cfg(test)]
     pub(crate) fn compile(&self, source: &str) -> Result<Tactic, ScriptError> {
+        self.compile_with(source, None)
+    }
+
+    /// The same, with a program in hand, so a term may name a sentence.
+    ///
+    /// Everything else about a tactic is still settled here rather than at run
+    /// time — the rule names, the shapes of the combinators, and the arity of
+    /// every term. What the program adds is the one fact a term cannot supply
+    /// for itself: what `jump foo` does to the stack, which is how wide a
+    /// window the rule holding it reads.
+    pub(crate) fn compile_with(
+        &self,
+        source: &str,
+        prog: Option<&Program>,
+    ) -> Result<Tactic, ScriptError> {
         let toks = tokenize(source)?;
         let mut p = Parser {
             toks: &toks,
             pos: 0,
             end: source.len(),
+            prog,
         };
         let expr = p.expr()?;
         if let Some(tok) = p.peek() {
@@ -694,25 +777,30 @@ impl Definitions {
                 p.span(),
             ));
         }
-        self.resolve(&expr, &mut HashSet::new())
+        self.resolve(&expr, prog, &mut HashSet::new())
     }
 
-    fn resolve(&self, expr: &Expr, visiting: &mut HashSet<String>) -> Result<Tactic, ScriptError> {
+    fn resolve(
+        &self,
+        expr: &Expr,
+        prog: Option<&Program>,
+        visiting: &mut HashSet<String>,
+    ) -> Result<Tactic, ScriptError> {
         match expr {
             Expr::Seq(parts) => Ok(Tactic::Seq(
                 parts
                     .iter()
-                    .map(|e| self.resolve(e, visiting))
+                    .map(|e| self.resolve(e, prog, visiting))
                     .collect::<Result<_, _>>()?,
             )),
             Expr::Choice(parts) => Ok(Tactic::Choice(
                 parts
                     .iter()
-                    .map(|e| self.resolve(e, visiting))
+                    .map(|e| self.resolve(e, prog, visiting))
                     .collect::<Result<_, _>>()?,
             )),
-            Expr::Name(name, span) => self.resolve_name(name, *span, visiting),
-            Expr::Call(name, span, args) => self.resolve_call(name, *span, args, visiting),
+            Expr::Name(name, span) => self.resolve_name(name, *span, prog, visiting),
+            Expr::Call(name, span, args) => self.resolve_call(name, *span, args, prog, visiting),
             // A matcher with a term is not a tactic on its own: it still has
             // to be placed. Saying so here is the same courtesy `each`/`once`
             // extend to a bare rule name.
@@ -732,6 +820,7 @@ impl Definitions {
         &self,
         name: &str,
         span: Span,
+        prog: Option<&Program>,
         visiting: &mut HashSet<String>,
     ) -> Result<Tactic, ScriptError> {
         match name {
@@ -783,7 +872,7 @@ impl Definitions {
                          unbounded construct in the language",
             ));
         }
-        let out = self.resolve(body, visiting);
+        let out = self.resolve(body, prog, visiting);
         visiting.remove(name);
         out
     }
@@ -793,6 +882,7 @@ impl Definitions {
         name: &str,
         span: Span,
         args: &[Arg],
+        prog: Option<&Program>,
         visiting: &mut HashSet<String>,
     ) -> Result<Tactic, ScriptError> {
         // `inv(r)` is a rule, and a rule has to be placed — the same courtesy
@@ -838,7 +928,7 @@ impl Definitions {
                     )
                     .with_help(format!("for example `{}(2, sink)`", name)));
                 };
-                let rules = self.rules(name, span, rest)?;
+                let rules = self.rules(name, span, rest, prog)?;
                 Ok(Tactic::At(*n, rules))
             }
             Shape::Descend => {
@@ -862,7 +952,7 @@ impl Definitions {
                     "else" => Selector::Else,
                     _ => Selector::Body,
                 };
-                let inner = Box::new(self.resolve(inner, visiting)?);
+                let inner = Box::new(self.resolve(inner, prog, visiting)?);
                 Ok(match index {
                     Some(k) => Tactic::IntoNth(k, sel, inner),
                     None => Tactic::Into(sel, inner),
@@ -875,7 +965,7 @@ impl Definitions {
                         span,
                     ));
                 }
-                let rules = self.rules(name, span, args)?;
+                let rules = self.rules(name, span, args, prog)?;
                 Ok(match name {
                     "each" => Tactic::Each(rules),
                     _ => Tactic::Once(rules),
@@ -888,7 +978,7 @@ impl Definitions {
                         span,
                     ));
                 };
-                let inner = Box::new(self.resolve(inner, visiting)?);
+                let inner = Box::new(self.resolve(inner, prog, visiting)?);
                 Ok(match name {
                     "try" => Tactic::Try(inner),
                     "must" => Tactic::Must(inner),
@@ -908,7 +998,7 @@ impl Definitions {
                 };
                 Ok(Tactic::RepeatN(
                     *n,
-                    Box::new(self.resolve(inner, visiting)?),
+                    Box::new(self.resolve(inner, prog, visiting)?),
                 ))
             }
         }
@@ -920,6 +1010,7 @@ impl Definitions {
         name: &str,
         span: Span,
         args: &[Arg],
+        prog: Option<&Program>,
     ) -> Result<Vec<Box<dyn Matcher>>, ScriptError> {
         if args.is_empty() {
             return Err(ScriptError::new(
@@ -936,7 +1027,7 @@ impl Definitions {
                 )
                 .with_help(known_rules()));
             };
-            rules.push(rule(name, span, expr)?);
+            rules.push(rule(name, span, expr, prog)?);
         }
         Ok(rules)
     }
@@ -947,7 +1038,12 @@ impl Definitions {
 /// A bare name, a name completed by a term, or `inv(r)` — the same equation
 /// read the other way. `inv` is a form here rather than a combinator because
 /// what it produces is a rule: it has still to be placed.
-fn rule(placed_in: &str, span: Span, expr: &Expr) -> Result<Box<dyn Matcher>, ScriptError> {
+fn rule(
+    placed_in: &str,
+    span: Span,
+    expr: &Expr,
+    prog: Option<&Program>,
+) -> Result<Box<dyn Matcher>, ScriptError> {
     match expr {
         Expr::Name(rule_name, rule_span) => {
             if term_matcher_names().contains(&rule_name.as_str()) {
@@ -966,7 +1062,7 @@ fn rule(placed_in: &str, span: Span, expr: &Expr) -> Result<Box<dyn Matcher>, Sc
         }
 
         Expr::Term(rule_name, rule_span, term) => {
-            let Some(built) = matcher_with_term(rule_name, term.clone()) else {
+            let Some(built) = matcher_with_term(rule_name, term.clone(), prog) else {
                 let help = if matcher_by_name(rule_name).is_some() {
                     format!("`{}` takes no term; write it bare", rule_name)
                 } else {
@@ -994,7 +1090,7 @@ fn rule(placed_in: &str, span: Span, expr: &Expr) -> Result<Box<dyn Matcher>, Sc
                 return Err(ScriptError::new("`inv` takes exactly one rule", *call_span)
                     .with_help("for example `inv(fuse)`"));
             };
-            let forward = rule(placed_in, span, inner)?;
+            let forward = rule(placed_in, span, inner, prog)?;
             forward.inverse().map_err(|why| {
                 ScriptError::new(
                     format!("`{}` has no backward reading", forward.name()),

@@ -41,7 +41,7 @@
 
 use bytecode::Instruction;
 
-use crate::arity::node_arity;
+use crate::arity::{full_arity, node_arity};
 use crate::ir::{Node, Selector, frame_depth, same_effect, same_effect_seq, with_frame_depth};
 use crate::location::Location;
 use crate::program::Program;
@@ -173,7 +173,7 @@ pub(crate) fn matcher_names() -> Vec<&'static str> {
 
 /// The matchers that need a term, by name.
 pub(crate) fn term_matcher_names() -> Vec<&'static str> {
-    vec!["introduce"]
+    vec!["introduce", "share"]
 }
 
 /// A matcher completed by a term written in the tactic expression.
@@ -183,10 +183,46 @@ pub(crate) fn term_matcher_names() -> Vec<&'static str> {
 pub(crate) fn matcher_with_term(
     name: &str,
     term: Vec<Node>,
+    prog: Option<&Program>,
 ) -> Option<Result<Box<dyn Matcher>, String>> {
     match name {
-        "introduce" => Some(Introduce::new(term).map(|m| Box::new(m) as Box<dyn Matcher>)),
+        "introduce" => Some(Introduce::new(prog, term).map(|m| Box::new(m) as Box<dyn Matcher>)),
+        "share" => Some(Share::new(prog, term).map(|m| Box::new(m) as Box<dyn Matcher>)),
         _ => None,
+    }
+}
+
+/// A term's arity, using the library when there is one.
+///
+/// [`term_arity`] answers from the term alone, which is what lets a tactic be
+/// compiled before a program is chosen — but it has no answer for a term that
+/// names a sentence. With a program in hand, `full_arity` does.
+fn arity_of(prog: Option<&Program>, x: &[Node]) -> Option<(i64, i64)> {
+    match prog {
+        Some(prog) => full_arity(prog, x),
+        None => term_arity(x),
+    }
+}
+
+/// What a term has to be before a law can close over it.
+///
+/// Shared by the two rules that take one, because they want the same three
+/// things: something to work with, an arity to state the law at, and that
+/// arity in the range the law's arguments are counted in.
+fn term_arity_or_why(prog: Option<&Program>, x: &[Node]) -> Result<(usize, usize), String> {
+    if x.is_empty() {
+        return Err("there is nothing there".to_string());
+    }
+    let Some((n, m)) = arity_of(prog, x) else {
+        return Err(
+            "the arity of that is not known, so there is no saying how many \
+             values it reads or leaves"
+                .to_string(),
+        );
+    };
+    match (usize::try_from(n), usize::try_from(m)) {
+        (Ok(n), Ok(m)) => Ok((n, m)),
+        _ => Err(format!("an arity of {:?} cannot be used here", (n, m))),
     }
 }
 
@@ -1215,20 +1251,8 @@ pub(crate) struct Introduce {
 }
 
 impl Introduce {
-    pub(crate) fn new(x: Vec<Node>) -> Result<Self, String> {
-        if x.is_empty() {
-            return Err("there is nothing to introduce".to_string());
-        }
-        let Some((n, m)) = term_arity(&x) else {
-            return Err(
-                "the arity of that is not known, so there is no way to say how \
-                 many values it discards"
-                    .to_string(),
-            );
-        };
-        let (Ok(n), Ok(m)) = (usize::try_from(n), usize::try_from(m)) else {
-            return Err(format!("an arity of {:?} cannot be used here", (n, m)));
-        };
+    pub(crate) fn new(prog: Option<&Program>, x: Vec<Node>) -> Result<Self, String> {
+        let (n, m) = term_arity_or_why(prog, &x)?;
         if n == 0 {
             // Two reasons, and either would do. A term that consumes nothing
             // would match a window of no nodes, which is every position, so
@@ -1326,6 +1350,120 @@ impl Matcher for InvIntroduce {
             },
             Direction::Forward,
         )
+    }
+}
+
+/// `pick(n-1)^n ; X ; dip m { X }` becomes `X ; pick(m-1)^m`.
+///
+/// [`Rule::CopyNat`] read forward: common-subexpression elimination. Copying
+/// the inputs and running `X` on both the copy and the original is running it
+/// once and copying the outputs, because `X` answers the same twice.
+///
+/// **It takes a term, and has to.** The window cannot say what `X` is: for a
+/// run of nodes there is nothing to mark where it begins, and the number of
+/// `pick`s in front of it is `X`'s own input arity, which the matcher has to
+/// know before it can ask for a window at all. So the tactic names it, the way
+/// it names what to [`Introduce`] — and here it may name a *sentence*, since
+/// running one function twice is the whole case this is for:
+///
+/// ```text
+/// each(share { jump State::check })
+/// ```
+///
+/// Measure: applications of `X`, which it strictly reduces. Safe in a fixpoint,
+/// but not beside its own backward reading.
+#[derive(Debug)]
+pub(crate) struct Share {
+    x: Vec<Node>,
+    n: usize,
+    m: usize,
+}
+
+impl Share {
+    pub(crate) fn new(prog: Option<&Program>, x: Vec<Node>) -> Result<Self, String> {
+        let (n, m) = term_arity_or_why(prog, &x)?;
+        Ok(Share { x, n, m })
+    }
+
+    fn rule(&self) -> Rule {
+        Rule::CopyNat {
+            x: self.x.clone(),
+            n: self.n,
+            m: self.m,
+        }
+    }
+}
+
+impl Matcher for Share {
+    fn name(&self) -> &'static str {
+        "share"
+    }
+    /// The copies, the term, and the frame holding the second application.
+    fn width(&self) -> usize {
+        self.n + self.x.len() + 1
+    }
+    fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
+        Ok(Box::new(InvShare {
+            x: self.x.clone(),
+            n: self.n,
+            m: self.m,
+        }))
+    }
+    fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
+        // The equation is closed over the term, so there is one shape to look
+        // for and the applier will compare against it anyway. All this decides
+        // is whether to propose.
+        let rule = self.rule();
+        if !same_effect_seq(window, &rule.lhs()) {
+            return None;
+        }
+        at_window(prog, rule, Direction::Forward)
+    }
+}
+
+/// `X ; pick(m-1)^m` becomes `pick(n-1)^n ; X ; dip m { X }`.
+///
+/// [`Rule::CopyNat`] read backwards: it un-shares, running `X` a second time
+/// rather than copying what it left. That is how a computation gets delivered
+/// to a place that needs its own copy — the same job `inv(annihilate)` does for
+/// code that was never there at all, except that here the second copy is
+/// provably the same value as the first.
+///
+/// No name of its own: it is `inv(share { ... })`.
+///
+/// Measure: none, and it grows the term.
+#[derive(Debug)]
+pub(crate) struct InvShare {
+    x: Vec<Node>,
+    n: usize,
+    m: usize,
+}
+
+impl Matcher for InvShare {
+    fn name(&self) -> &'static str {
+        "inv(share)"
+    }
+    /// The term, and the copies of what it left.
+    fn width(&self) -> usize {
+        self.x.len() + self.m
+    }
+    fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
+        Ok(Box::new(Share {
+            x: self.x.clone(),
+            n: self.n,
+            m: self.m,
+        }))
+    }
+    fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
+        let rule = Rule::CopyNat {
+            x: self.x.clone(),
+            n: self.n,
+            m: self.m,
+        };
+        if !same_effect_seq(window, &rule.rhs()) {
+            return None;
+        }
+        at_window(prog, rule, Direction::Reverse)
     }
 }
 
@@ -1964,16 +2102,78 @@ mod tests {
     }
 
     #[test]
+    fn share_runs_a_computation_once_and_copies_what_it_left() {
+        // `equal` is (2 -> 1), so two picks in front and one after.
+        let m = Share::new(None, vec![op(Instruction::Equal)]).unwrap();
+        assert_eq!(m.width(), 4);
+        let w = [
+            op(Instruction::Pick(1)),
+            op(Instruction::Pick(1)),
+            op(Instruction::Equal),
+            dip(1, vec![op(Instruction::Equal)]),
+        ];
+        assert_eq!(
+            fire(&m, &prog(), &w),
+            Some(vec![op(Instruction::Equal), op(Instruction::Pick(0))])
+        );
+        round_trip(&m, &w);
+
+        // The copies have to be the ones the law names: `pick 0` twice copies
+        // the top value twice over, which is a different program.
+        let wrong = [
+            op(Instruction::Pick(0)),
+            op(Instruction::Pick(0)),
+            op(Instruction::Equal),
+            dip(1, vec![op(Instruction::Equal)]),
+        ];
+        assert!(m.plan(&prog(), &wrong).is_none());
+    }
+
+    #[test]
+    fn share_reads_a_term_of_any_shape() {
+        // Nothing to copy, which is the case `copy_const` is: the term needs
+        // no inputs, so the law says only that the second application can be
+        // replaced by a copy of the first.
+        let m = Share::new(None, vec![op(Instruction::Push(Value::Int(7)))]).unwrap();
+        assert_eq!(m.width(), 2, "no picks in front of it");
+        round_trip(
+            &m,
+            &[
+                op(Instruction::Push(Value::Int(7))),
+                dip(1, vec![op(Instruction::Push(Value::Int(7)))]),
+            ],
+        );
+
+        // And a term of more than one node, where nothing in the window could
+        // have said where the computation began.
+        let term = vec![op(Instruction::Pick(0)), op(Instruction::IsBool)];
+        let m = Share::new(None, term.clone()).unwrap();
+        assert_eq!(m.width(), 1 + 2 + 1, "one pick, the term, the frame");
+        let mut w = vec![op(Instruction::Pick(0))];
+        w.extend(term.clone());
+        w.push(dip(2, term));
+        round_trip(&m, &w);
+    }
+
+    #[test]
+    fn share_needs_a_term_it_can_state_the_law_at() {
+        assert!(Share::new(None, Vec::new()).is_err());
+        // `panic` has no arity, so there is no saying what it reads or leaves.
+        let err = Share::new(None, vec![op(Instruction::Panic)]).unwrap_err();
+        assert!(err.contains("arity"), "{}", err);
+    }
+
+    #[test]
     fn inv_introduce_reads_the_whole_term_where_annihilate_reads_one_node() {
         // `pick 0` is (1 -> 2), so the introduction stands in front of one drop
         // and leaves two; reading it back takes all three nodes.
-        let m = Introduce::new(vec![op(Instruction::Pick(0))]).unwrap();
+        let m = Introduce::new(None, vec![op(Instruction::Pick(0))]).unwrap();
         round_trip(&m, &[op(Instruction::Drop)]);
 
         // A term of more than one node, which `annihilate` cannot match: it
         // reads `X ; drop` for a single node `X`.
         let term = vec![op(Instruction::Pick(0)), op(Instruction::IsBool)];
-        let m = Introduce::new(term.clone()).unwrap();
+        let m = Introduce::new(None, term.clone()).unwrap();
         round_trip(&m, &[op(Instruction::Drop)]);
         let back = m.inverse().unwrap();
         assert_eq!(back.width(), 4, "the term, then the drops it leaves");
@@ -2600,7 +2800,7 @@ mod tests {
     // -- introduce ----------------------------------------------------------
 
     fn introduce(term: Vec<Node>) -> Introduce {
-        Introduce::new(term).unwrap_or_else(|e| panic!("{}", e))
+        Introduce::new(None, term).unwrap_or_else(|e| panic!("{}", e))
     }
 
     #[test]
@@ -2650,7 +2850,7 @@ mod tests {
         // `push 7` is (0 -> 1). A width-0 matcher matches at every position,
         // so `each` would never move past the first — and the law discards
         // what the term makes anyway, so there would be nothing to gain.
-        let err = Introduce::new(vec![op(Instruction::Push(Value::Int(7)))]).unwrap_err();
+        let err = Introduce::new(None, vec![op(Instruction::Push(Value::Int(7)))]).unwrap_err();
         assert!(err.contains("consumes nothing"), "{}", err);
     }
 
@@ -2665,8 +2865,8 @@ mod tests {
 
     #[test]
     fn introduce_refuses_a_term_with_no_arity() {
-        assert!(Introduce::new(Vec::new()).is_err());
-        assert!(Introduce::new(vec![op(Instruction::Panic)]).is_err());
+        assert!(Introduce::new(None, Vec::new()).is_err());
+        assert!(Introduce::new(None, vec![op(Instruction::Panic)]).is_err());
     }
 
     #[test]
@@ -2720,12 +2920,12 @@ mod tests {
                 "`{}` needs a term and must not construct without one",
                 name
             );
-            let built = matcher_with_term(name, vec![op(Instruction::Pick(0))])
+            let built = matcher_with_term(name, vec![op(Instruction::Pick(0))], None)
                 .unwrap_or_else(|| panic!("`{}` is listed but takes no term", name))
                 .unwrap_or_else(|e| panic!("`{}` rejected a plain term: {}", name, e));
             assert_eq!(built.name(), name);
         }
-        assert!(matcher_with_term("sink", Vec::new()).is_none());
+        assert!(matcher_with_term("sink", Vec::new(), None).is_none());
     }
 
     #[test]
@@ -2760,7 +2960,7 @@ mod tests {
             .filter_map(matcher_by_name)
             .collect();
         all.push(
-            matcher_with_term("introduce", vec![op(Instruction::Pick(0))])
+            matcher_with_term("introduce", vec![op(Instruction::Pick(0))], None)
                 .unwrap()
                 .unwrap(),
         );

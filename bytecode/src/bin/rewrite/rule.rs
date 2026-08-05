@@ -426,6 +426,45 @@ pub(crate) enum Rule {
     /// would otherwise be stranded where it was made.
     CopyAssoc { d: usize },
 
+    /// `pick (n-1)^n ; X ; dip m { X }` = `X ; pick (m-1)^m`, for `X : n -> m`.
+    ///
+    /// **Copying is natural.** Copy the inputs and run `X` on both the copy and
+    /// the original, or run it once and copy the outputs: the same thing, since
+    /// `X` applied twice to the same values answers the same twice. Read
+    /// forward it is common-subexpression elimination; read backward it is how
+    /// a second copy of a computation gets delivered to somewhere that needs
+    /// one.
+    ///
+    /// `pick (n-1)` done `n` times duplicates the top `n` values as a block —
+    /// `a b` becomes `a b a b` — and the second application has to run under
+    /// the first one's results, which is what the frame is for.
+    ///
+    /// The law of the comonoid this set already half-describes: [`Rule::Counit`]
+    /// is its counit and [`Rule::CopyAssoc`] its coassociativity, and this says
+    /// every `X` is a homomorphism for it. [`Rule::CopyConst`] is the case
+    /// `X = push c`, and is now a lemma rather than an axiom — the `n = 0`
+    /// instance reads `push c ; dip 1 { push c }` = `push c ; pick 0`, and one
+    /// [`Rule::Interchange`] and one [`Rule::ElimDip0`] turn the left side into
+    /// `push c ; push c`. See
+    /// `applier::tests::copy_const_is_derivable_from_copy_nat`, which runs the
+    /// derivation rather than asserting the claim.
+    ///
+    /// ## What it assumes, which nothing else here does
+    ///
+    /// **Determinism.** Every other equation in this set is sound even for an
+    /// `X` that answered differently each time it ran: `annihilate` throws the
+    /// answers away, `interchange` reorders computations that cannot see each
+    /// other, and the rest never mention an opaque `X` at all. This one is the
+    /// exception, and it is the reason the law cannot be derived from the
+    /// others rather than merely having resisted derivation — read `X` as a
+    /// random oracle and every other equation still holds while this one fails.
+    ///
+    /// It costs nothing today, because the instruction set is pure and a
+    /// sentence of arity `(n -> m)` can only see the `n` values it is given. It
+    /// is written down for the same reason the totality precondition is: an
+    /// effectful instruction would take this law with it, and nothing else.
+    CopyNat { x: Vec<Node>, n: usize, m: usize },
+
     /// `tuple n ; untuple n` = `push true`.
     ///
     /// Building a tuple and immediately taking it apart returns the stack to
@@ -456,6 +495,7 @@ impl Rule {
             Rule::Counit { .. } => "counit",
             Rule::CopyConst { .. } => "copy_const",
             Rule::CopyAssoc { .. } => "copy_assoc",
+            Rule::CopyNat { .. } => "copy_nat",
             Rule::CancelTuple { .. } => "cancel_tuple",
         }
     }
@@ -487,6 +527,11 @@ impl Rule {
             Rule::Annihilate { x, n, m } => {
                 claimed_arity(prog, x, (*n as i64, *m as i64)).map(|_| ())
             }
+            // The same one claim, and the same whole condition. Determinism is
+            // the other thing this law rests on, and it is a property of the
+            // instruction set rather than of these arguments — there is nothing
+            // here to check it against.
+            Rule::CopyNat { x, n, m } => claimed_arity(prog, x, (*n as i64, *m as i64)).map(|_| ()),
             Rule::Commute { op } => {
                 if op.commutative() {
                     Ok(())
@@ -663,6 +708,17 @@ impl Rule {
                 Node::Op(Instruction::Pick(0)),
             ],
 
+            Rule::CopyNat { x, n, m } => {
+                let mut out = copy_block(*n);
+                out.extend(x.iter().cloned());
+                out.push(Node::Dip {
+                    depth: *m,
+                    origins: Vec::new(),
+                    body: x.clone(),
+                });
+                out
+            }
+
             Rule::CancelTuple { n } => vec![
                 Node::Op(Instruction::Tuple(*n)),
                 Node::Op(Instruction::Untuple(*n)),
@@ -803,6 +859,12 @@ impl Rule {
                 },
             ],
 
+            Rule::CopyNat { x, m, .. } => {
+                let mut out = x.clone();
+                out.extend(copy_block(*m));
+                out
+            }
+
             Rule::CancelTuple { .. } => vec![push(Value::Bool(true))],
         }
     }
@@ -810,6 +872,20 @@ impl Rule {
 
 fn push(v: Value) -> Node {
     Node::Op(Instruction::Push(v))
+}
+
+/// Duplicates the top `k` values as a block: `pick (k-1)`, `k` times.
+///
+/// `a b` becomes `a b a b`. Each pick reaches past the copies made so far to
+/// the next original, which is why the depth does not change — after `j` of
+/// them the next original is still `k-1` down.
+fn copy_block(k: usize) -> Vec<Node> {
+    match k.checked_sub(1) {
+        Some(d) => std::iter::repeat_n(Node::Op(Instruction::Pick(d)), k).collect(),
+        // Nothing to copy: a computation that reads nothing needs no inputs
+        // duplicated, which is what makes `copy_const` the `n = 0` case.
+        None => Vec::new(),
+    }
 }
 
 /// The arity the library gives `x`, once the step's claim has been held to it.
@@ -959,8 +1035,10 @@ pub(crate) mod tests {
     /// builds out of [`Rule::Counit`], and what a generator emitting that
     /// derivation would need to recognize its own handiwork.
     pub(crate) fn copies(n: usize) -> Vec<Node> {
-        let reach = n.saturating_sub(1);
-        std::iter::repeat_n(Node::Op(Instruction::Pick(reach)), n).collect()
+        // The same helper `Rule::CopyNat` builds its sides from, so the shape
+        // the vacuous derivation expects and the shape the law states cannot
+        // drift apart.
+        copy_block(n)
     }
 
     fn drops(n: usize) -> Vec<Node> {
@@ -1487,6 +1565,63 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn copy_nat_copies_the_inputs_on_one_side_and_the_outputs_on_the_other() {
+        // `equal` is (2 -> 1): two picks in front on the left, one after on the
+        // right, and the second application under a frame one deep.
+        let r = Rule::CopyNat {
+            x: vec![op(Instruction::Equal)],
+            n: 2,
+            m: 1,
+        };
+        assert_eq!(
+            r.lhs(),
+            vec![
+                op(Instruction::Pick(1)),
+                op(Instruction::Pick(1)),
+                op(Instruction::Equal),
+                dip(1, vec![op(Instruction::Equal)]),
+            ]
+        );
+        assert_eq!(
+            r.rhs(),
+            vec![op(Instruction::Equal), op(Instruction::Pick(0))]
+        );
+    }
+
+    #[test]
+    fn copy_nat_at_no_inputs_is_the_constant_case() {
+        // Nothing to copy, and what is left is `copy_const`'s left-hand side —
+        // which is what makes that law a lemma of this one. The derivation is
+        // in `applier::tests::copy_const_is_derivable_from_copy_nat`.
+        let c = Value::Int(7);
+        let r = Rule::CopyNat {
+            x: vec![push(c.clone())],
+            n: 0,
+            m: 1,
+        };
+        assert_eq!(
+            r.lhs(),
+            vec![push(c.clone()), dip(1, vec![push(c.clone())])]
+        );
+        assert_eq!(r.rhs(), Rule::CopyConst { c }.lhs());
+    }
+
+    #[test]
+    fn copy_nat_holds_the_term_to_the_arity_it_claims() {
+        // The one fact the arguments assert about the library, and the applier
+        // re-derives it however the step came to be written.
+        let wrong = Rule::CopyNat {
+            x: vec![op(Instruction::Equal)],
+            n: 2,
+            m: 2,
+        };
+        assert!(matches!(
+            wrong.check(&prog()),
+            Err(SideCondition::ClaimedArityMismatch { .. })
+        ));
+    }
+
+    #[test]
     fn cancel_tuple_leaves_the_flag_behind() {
         let r = Rule::CancelTuple { n: 3 };
         assert_eq!(r.rhs(), vec![push(Value::Bool(true))]);
@@ -1557,6 +1692,11 @@ pub(crate) mod tests {
             Rule::Counit { d: 3 },
             Rule::CopyConst { c: Value::Int(7) },
             Rule::CopyAssoc { d: 2 },
+            Rule::CopyNat {
+                x: vec![op(Instruction::Equal)],
+                n: 2,
+                m: 1,
+            },
             Rule::CancelTuple { n: 3 },
         ]
     }
@@ -1607,6 +1747,12 @@ pub(crate) mod tests {
         // Every variant of the enum appears in the sweep above. Keeping this
         // number honest is the point: an equation is an axiom, and the set is
         // meant to grow only when something genuinely cannot be derived.
-        assert_eq!(before, 15);
+        //
+        // Sixteen variants, fifteen axioms: `copy_const` is the constant case
+        // of `copy_nat` and is kept only because it is one step where the
+        // derivation is three, and `values` and `cleanup` fire it constantly.
+        // `applier::tests::copy_const_is_derivable_from_copy_nat` is what says
+        // so out loud.
+        assert_eq!(before, 16);
     }
 }
