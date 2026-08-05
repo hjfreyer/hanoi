@@ -55,7 +55,7 @@ finite by construction.
 
 ## The equations
 
-Fourteen, plus one thing that is not an equation. `--list-rules` prints the
+Fifteen, plus one thing that is not an equation. `--list-rules` prints the
 matchers that place them.
 
 | equation | law | notes |
@@ -70,6 +70,7 @@ matchers that place them.
 | `eval` | `push v1 … push vn ; op` = the pushes of what `op` answers | subsumes the old `fold_const` and `fold_const_unary` |
 | `annihilate` | `X ; drop^m` = `drop^n`, for `X : n -> m` | `X` is a whole sequence. Forward subsumes `annihilate_drop` (m=1) and `annihilate_flagged` (m=2); backward is `introduce`, below |
 | `commute` | `roll 1 ; op` = `op`, for a commutative `op` | `roll 1` swaps the top two, and `add`, `multiply`, `and`, `or`, `equal` cannot tell. Forward is `comm`, backward is `swap` |
+| `split_bool` | `pick 0 ; is_bool ; branch { branch { push true } { push false } } { }` = nothing | a boolean is either `true` or `false`. Backward it is a case split; forward is `unsplit_bool` |
 | `counit` | `pick d ; drop` = nothing | *not* an annihilation: `pick d` is `(d+1 -> d+2)` |
 | `copy_const` | `push c ; pick 0` = `push c ; push c` | |
 | `copy_assoc` | `pick d ; pick 0` = `pick d ; dip 1 { pick d }` | neither side is smaller; the point is that one copy ends up **in a frame**, and a framed computation is one `float` can carry |
@@ -170,6 +171,7 @@ different thing to look for even though the arithmetic is the same:
 | `eval1` / `eval2` | 2 / 3 | one operand or two |
 | `annihilate` / `annihilate_flagged` | 2 / 3 | one output or two |
 | `comm` / `swap` | 2 / 1 | commutativity, either way |
+| `split_bool` / `unsplit_bool` | 1 / 3 | the case split, either way |
 | `introduce { .. }` | n | annihilate backwards — see below |
 | `counit`, `copy_const`, `copy_assoc`, `cancel_tuple` | 2 | |
 
@@ -271,6 +273,45 @@ underneath the operands can be rearranged to line up with something else. It has
 no measure and grows the term — its output still contains the operator it
 matched, so `each` would put a second `roll 1` in front of it and keep going.
 Aim it, as with `introduce`.
+
+### A boolean is either true or false
+
+The only law that can put a `branch` on an **unknown** condition into a term,
+and so the only way to learn anything about a value that did not arrive as a
+literal. Everything else needs the fact already on the stack.
+
+```
+$ rewrite demo probe -t 'at(0, split_bool); distribution; values'
+      1 │ pick 0
+      2 │ is_bool
+      2 │ branch then → a bool {
+      1 │   branch then → true {
+      0 │     push false
+        │   } else → false {
+      0 │     push true
+        │   }
+        │ } else → not a bool {
+      1 │   not
+        │ }
+```
+
+That was `not` on an opaque value — nothing to fold. Splitting first replaces
+the value with a **literal** inside each arm, and `not true = false` and
+`not false = true` both fall out. It is the "path condition becomes a value"
+move, with no side condition to satisfy.
+
+The guard is what makes the law unconditional. Stating it instead as
+`X ; branch { push true } { push false }` = `X` for an `X` that yields a boolean
+would need a syntactic predicate over instructions, and would then decline
+exactly the interesting cases — a value that arrived by `pick`, or out of a
+call. Asking `is_bool` in the term costs a branch and answers for every value.
+
+It takes no arguments at all, which nothing else in the set manages. Both sides
+leave the stack as they found it, though the left needs a value to look at where
+the right does not; that asymmetry is `counit`'s, and `--check` allows it.
+
+`unsplit_bool` is the forward reading, for taking a split back out once its arms
+have been folded down to nothing interesting.
 
 ### It is not a normalizing pass
 
@@ -627,10 +668,16 @@ consulting an analysis.
 
 ## What is not here yet
 
-- **Tranche two.** `retain_condition`, `bool_identity`, `specialize_equal`,
-  `dup_natural`, `rebuild_copy`, `speculate_branch`, `pick_drop_to_roll`, and
-  `roll 0 = ε` / `dip k { } = ε`. All are expressible as equations in this
-  framework; none is written yet.
+- **Tranche two.** `specialize_equal`, `dup_natural`, `rebuild_copy`,
+  `speculate_branch`, `pick_drop_to_roll`, and `roll 0 = ε` / `dip k { } = ε`.
+  All are expressible as equations in this framework; none is written yet.
+
+  Two that used to be on this list are not any more. `bool_identity` and
+  `retain_condition` both existed to tell an arm what its condition was, and
+  both needed the `yields_bool` syntactic predicate to do it — which declined
+  the interesting cases. `split_bool` reaches the same place without a
+  predicate: split the value, and each arm holds a literal that the folding
+  laws read for themselves.
 - **Scripts as files.** A script is a value, not yet a syntax. Serializing one
   needs a grammar for node sequences; the step kinds are a closed, serializable
   shape on purpose. When it lands, a saved derivation will depend on the library

@@ -90,7 +90,7 @@ These instructions control execution flow, jumps, and validation assertions.
 | `dip` | `dip <count>? <target>` | `[..., v_{k-1}, ..., v_0] -> [..., v_{k-1}, ..., v_0]` | Hides the top `<count>` values (default 1), runs `<target>` on what remains, then restores the hidden values on top of its results. `dip 0 <target>` is exactly `jump <target>`. |
 | `branch` | `branch { then } { else }` | `[..., cond] -> [...]` | Pops $cond$. Executes the `then` block if $cond$ is exactly `true`, and the `else` block on **every** other value. |
 | `panic` | `panic` | `[...] -> [halt]` | Halts VM execution immediately with a failure status. This and the two below are the only instructions that can, and a sentence reaching any of them cannot claim `#[total]`. |
-| `assert` | `assert` | `[..., cond] -> [...]` | Pops $cond$. Halts and panics unless $cond$ is exactly `true` — a non-Boolean is a failed assertion rather than a separate error. |
+| `assert` | `assert` | `[..., cond] -> [...]` | Pops $cond$. Halts and panics only if $cond$ is exactly `false`; anything else is truthy and passes. See `docs/totality.md`. |
 | `assert_equal` | `assert_eq` | `[..., a, b] -> [...]` | Pops $a$ and $b$. Halts and panics if $a \neq b$. |
 
 ---

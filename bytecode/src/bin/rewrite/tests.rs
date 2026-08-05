@@ -539,6 +539,46 @@ fn introducing_preserves_what_the_program_does() {
     assert_eq!(net(prog, &plain), net(prog, &got));
 }
 
+/// A case split is what lets folding reach a value that was never a literal.
+///
+/// Every other law needs the fact already on the stack. This manufactures the
+/// two cases in which it is one — and `tests/identities.hana` runs the block
+/// against the interpreter to check it really is the identity.
+#[test]
+fn splitting_a_bool_lets_the_folding_laws_reach_an_opaque_value() {
+    // `not` on an unknown value: nothing can be said about it.
+    let (prog, plain) = tree_of("#[total] function probe { not }", "id");
+    assert_eq!(shape(&plain), vec!["not"]);
+    assert_eq!(run(prog, plain.clone(), "values"), plain);
+
+    // Split the value first and each boolean case folds to a literal.
+    let got = run(prog, plain, "at(0, split_bool); distribution; values");
+    let [_, _, Node::Branch { then_body, .. }] = &got[..] else {
+        panic!("expected a guard branch, got {:?}", shape(&got))
+    };
+    let [
+        Node::Branch {
+            then_body: yes,
+            else_body: no,
+            ..
+        },
+    ] = &then_body[..]
+    else {
+        panic!("expected an inner branch")
+    };
+    // not true = false, not false = true.
+    assert_eq!(shape(yes), vec!["push false"]);
+    assert_eq!(shape(no), vec!["push true"]);
+}
+
+#[test]
+fn a_split_that_taught_nothing_can_be_taken_back_out() {
+    let (prog, plain) = tree_of("#[total] function probe { not }", "id");
+    let there = run(prog, plain.clone(), "at(0, split_bool)");
+    assert_ne!(shape(&there), shape(&plain));
+    assert_eq!(run(prog, there, "once(unsplit_bool)"), plain);
+}
+
 // ---------------------------------------------------------------------------
 // The corpus
 // ---------------------------------------------------------------------------
