@@ -699,6 +699,70 @@ fn a_branch_whose_arms_were_the_same_disappears_along_with_them() {
 }
 
 // ---------------------------------------------------------------------------
+// Testing the same value twice
+// ---------------------------------------------------------------------------
+
+/// When the two inner branches are the same, no new law is needed.
+///
+/// Worth pinning, because it is the reason `retest` says only what it says:
+/// `distribute` backwards factors the shared inner branch out of both arms,
+/// which leaves `branch { } { }` for `annihilate` at m = 0 and then `counit`.
+/// Three steps, no axiom. What `retest` adds is only that the *off-diagonal*
+/// arms are dead.
+#[test]
+fn a_branch_repeated_in_both_arms_needs_no_new_law() {
+    let code = r#"
+        #[total] #[arity(1, 1)]
+        sentence probe {
+            pick 0
+            branch { branch { push 1 } { push 2 } } { branch { push 1 } { push 2 } }
+        }
+    "#;
+    let (prog, plain) = tree_of(code, "id");
+    let tactic = "bu(each(inv(distribute))); repeat(bu(each(annihilate_void, counit)))";
+    let (got, script) = with_script(prog, plain, tactic);
+    assert_eq!(shape(&got), vec!["branch"], "{:?}", shape(&got));
+    assert_eq!(script.len(), 3);
+    assert_eq!(
+        script.iter().map(|s| s.kind.name()).collect::<Vec<_>>(),
+        vec!["distribute", "annihilate", "counit"]
+    );
+}
+
+/// The general case, which is what the new law is for.
+#[test]
+fn four_different_arms_collapse_to_the_diagonal() {
+    let code = r#"
+        #[total] #[arity(1, 1)]
+        sentence probe {
+            pick 0
+            branch { branch { push 1 } { push 2 } } { branch { push 3 } { push 4 } }
+        }
+    "#;
+    let (prog, plain) = tree_of(code, "id");
+    let (got, script) = with_script(prog, plain, "all");
+    let [
+        Node::Branch {
+            then_body,
+            else_body,
+            ..
+        },
+    ] = &got[..]
+    else {
+        panic!("expected one branch, got {:?}", shape(&got))
+    };
+    // `A` from the then arm's then arm, `D` from the else arm's else arm: the
+    // two arms the same condition can actually reach.
+    assert_eq!(shape(then_body), vec!["push 1"]);
+    assert_eq!(shape(else_body), vec!["push 4"]);
+
+    // Two firings of `retest`, one per arm, then `factor` and the other counit.
+    let fired: Vec<&str> = script.iter().map(|s| s.kind.name()).collect();
+    assert_eq!(fired.iter().filter(|n| **n == "retest").count(), 2);
+    assert!(fired.contains(&"counit_under"), "{:?}", fired);
+}
+
+// ---------------------------------------------------------------------------
 // Sharing one computation between two uses
 // ---------------------------------------------------------------------------
 

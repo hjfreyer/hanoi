@@ -55,8 +55,8 @@ finite by construction.
 
 ## The equations
 
-Seventeen, plus one thing that is not an equation. `--list-rules` prints the
-matchers that place them. Sixteen of the seventeen are axioms: `copy_const` is
+Nineteen, plus one thing that is not an equation. `--list-rules` prints the
+matchers that place them. Eighteen of the nineteen are axioms: `copy_const` is
 the constant case of `copy_nat` and is kept only because it is one step where
 the derivation is three.
 
@@ -73,7 +73,9 @@ the derivation is three.
 | `annihilate` | `X ; drop^m` = `drop^n`, for `X : n -> m` | `X` is a whole sequence. Forward subsumes `annihilate_drop` (m=1), `annihilate_flagged` (m=2) and the case with no drops at all (m=0, where `branch { } { }` = `drop`); backward is `introduce`, below |
 | `commute` | `roll 1 ; op` = `op`, for a commutative `op` | `roll 1` swaps the top two, and `add`, `multiply`, `and`, `or`, `equal` cannot tell. Forward is `comm`, backward is `swap` |
 | `split_bool` | `pick 0 ; is_bool ; branch { branch { push true } { push false } } { }` = nothing | a boolean is either `true` or `false`. Backward it is a case split; forward is `unsplit_bool` |
-| `counit` | `pick d ; drop` = nothing | *not* an annihilation: `pick d` is `(d+1 -> d+2)` |
+| `counit` | `pick d ; drop` = nothing | copy, discard the **copy**. *Not* an annihilation: `pick d` is `(d+1 -> d+2)` |
+| `counit_under` | `pick 0 ; dip 1 { drop }` = nothing | copy, discard the **original**. The other counit law; only at depth 0, since deeper it is a `roll` |
+| `retest` | `pick 0 ; branch { branch { A } { B } ; R } { Q }` = `pick 0 ; branch { drop ; A ; R } { Q }`, and the mirror | the same value tested twice answers the same, so the other inner arm is dead. One equation read at either arm |
 | `copy_const` | `push c ; pick 0` = `push c ; push c` | |
 | `copy_assoc` | `pick d ; pick 0` = `pick d ; dip 1 { pick d }` | neither side is smaller; the point is that one copy ends up **in a frame**, and a framed computation is one `float` can carry |
 | `copy_nat` | `pick (n-1)^n ; X ; dip m { X }` = `X ; pick (m-1)^m`, for `X : n -> m` | copying is natural. Forward is common-subexpression elimination; the only law that needs `X` to be **deterministic** |
@@ -217,6 +219,8 @@ different thing to look for even though the arithmetic is the same:
 | `introduce { .. }` | n | annihilate backwards — see below |
 | `share { .. }` | n+\|X\|+1 | `copy_nat` forward — see below |
 | `bool_result` | 2 | `op ; is_bool` forward; backward is `inv(bool_result)` |
+| `retest` | 2 | one arm per firing, then arm first; no backward reading |
+| `counit_under` / `inv(counit_under)` | 2 / 1 | the other counit, found or *put in* |
 | `counit` / `counit(d)` / `inv(counit(d))` | 2 / 2 / 1 | the copy-and-discard law: found, found at one depth, or *put in* |
 | `copy_const`, `copy_assoc`, `cancel_tuple` | 2 | |
 
@@ -532,6 +536,77 @@ underneath the operands can be rearranged to line up with something else. It has
 no measure and grows the term — its output still contains the operator it
 matched, so `each` would put a second `roll 1` in front of it and keep going.
 Aim it, as with `introduce`.
+
+### An arm knows its own condition: `retest`
+
+```text
+pick 0 ; branch { branch { A } { B } ; R } { Q }  =  pick 0 ; branch { drop ; A ; R } { Q }
+pick 0 ; branch { P } { branch { C } { D } ; R }  =  pick 0 ; branch { P } { drop ; D ; R }
+```
+
+The condition is a copy, so the arm the outer branch took already decides the
+inner one: in the *then* arm the value is truthy and the inner branch goes
+then, in the *else* arm it is `false` and the inner branch goes else. The other
+inner arm cannot run.
+
+One equation read at either arm, so it fires when only *one* arm opens with a
+branch. Both arms and it fires twice, and `factor` and `counit_under` finish:
+
+```
+$ rewrite demo four_arms -t all --show-script
+   0  retest -> @0    pick 0 ; branch { branch { push 1 } { push 2 } } { branch { push 3 } { push 4 } }
+                   ⇒  pick 0 ; branch { drop ; push 1 } { branch { push 3 } { push 4 } }
+   1  retest -> @0 ⇒  pick 0 ; branch { drop ; push 1 } { drop ; push 4 }
+   2  elim_dip0 <- [1.then] @0            ⎫
+   3  elim_dip0 <- [1.else] @0            ⎬  factor
+   4  hoist     <- @1                     ⎭  ⇒ dip 1 { drop } ; branch { … } { … }
+   5  counit_under -> @0                     ⇒ branch { push 1 } { push 4 }
+```
+
+**Why the inner branch.** It is not an arbitrary restriction. Inside the then
+arm the value is known only to be **truthy**, not what it is — replacing it
+with `push true` would be wrong, since `is_int` answers differently on `42`
+than on `true`. A branch is the only construct that observes exactly
+truthiness, so it is the only thing the law can say anything about. (The else
+arm knows more, since `false` is the unique falsy value: there the value is a
+literal. Stated that way the law is more general on that side and grows the
+term, where this direction shrinks it.)
+
+**What is derivable, and is therefore not in the law.** When the two inner
+branches are *the same*, no axiom is needed:
+
+```
+$ rewrite demo same_arms -t 'bu(each(inv(distribute))); cleanup' --show-script
+   0  distribute <- @1   ⇒  branch { (nothing) } { (nothing) } ; branch { push 1 } { push 2 }
+   1  annihilate -> @1   ⇒  drop
+   2  counit     -> @0   ⇒  (nothing)
+```
+
+`inv(distribute)` factors the shared inner branch out as a suffix, which leaves
+`branch { } { }` for `annihilate` at `m = 0` and then `counit`. So the whole
+content of `retest` is that the **off-diagonal arms are dead** — and nothing
+reaches that, because an arm cannot see the branch it is inside. Driving it
+through `split_bool` stalls in the same "not a bool" arm that `bool_result`
+does, holding the original problem verbatim.
+
+### Two counits, not one
+
+`pick` is a comultiplication and `drop` a counit, and a comonoid has *two*
+counit laws — discard the copy, or discard the original:
+
+```text
+counit        pick d ; drop            = nothing
+counit_under  pick 0 ; dip 1 { drop }  = nothing
+```
+
+Only the first was here. The second is what `factor` leaves behind after
+`retest` has fired on both arms, and it is an axiom for the same reason its
+partner is. It holds **only at depth 0**: `pick d ; dip (d+1) { drop }` copies
+to the top and deletes the original, which for `d > 0` *moves* the value — that
+is a `roll d`, a different law, and not written.
+
+`inv(counit_under)` puts the pair in where there was nothing, and unlike
+`inv(counit(d))` it needs no argument, the law being stated at one depth.
 
 ### The one thing a case split cannot reach: `bool_result`
 

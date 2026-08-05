@@ -70,6 +70,62 @@ test sentence a_computation_that_leaves_nothing_is_a_drop {
     push 9 assert_eq
 }
 
+// `pick 0 ; branch { branch { A } { B } ; R } { Q }`
+//   = `pick 0 ; branch { drop ; A ; R } { Q }`, and the mirror of it.
+//
+// The same value tested twice answers the same, so the arm the outer branch
+// took already decides the inner one. Read at the then arm the value is
+// truthy; at the else arm it is `false`, which is the only falsy value.
+#[total] #[arity(1,1)] function retest_then_lhs {
+    pick 0 branch { branch { push 1 } { push 2 } } { drop 0 push 9 } }
+#[total] #[arity(1,1)] function retest_then_rhs {
+    pick 0 branch { drop 0 push 1 } { drop 0 push 9 } }
+#[total] #[arity(1,1)] function retest_else_lhs {
+    pick 0 branch { drop 0 push 9 } { branch { push 3 } { push 4 } } }
+#[total] #[arity(1,1)] function retest_else_rhs {
+    pick 0 branch { drop 0 push 9 } { drop 0 push 4 } }
+#[total] #[arity(1,1)] function retest_both_lhs {
+    pick 0 branch { branch { push 1 } { push 2 } } { branch { push 3 } { push 4 } } }
+#[total] #[arity(1,1)] function retest_both_rhs { branch { push 1 } { push 4 } }
+
+test sentence a_value_tested_twice_answers_the_same {
+    push true  jump retest_then_lhs push 1 assert_eq
+    push true  jump retest_then_rhs push 1 assert_eq
+    push false jump retest_then_lhs push 9 assert_eq
+    push false jump retest_then_rhs push 9 assert_eq
+    push 42    jump retest_then_lhs push 1 assert_eq
+    push 42    jump retest_then_rhs push 1 assert_eq
+
+    push true  jump retest_else_lhs push 9 assert_eq
+    push true  jump retest_else_rhs push 9 assert_eq
+    push false jump retest_else_lhs push 4 assert_eq
+    push false jump retest_else_rhs push 4 assert_eq
+    push 42    jump retest_else_lhs push 9 assert_eq
+    push 42    jump retest_else_rhs push 9 assert_eq
+
+    // Both arms, which is where the whole thing collapses to the diagonal.
+    push true  jump retest_both_lhs push 1 assert_eq
+    push true  jump retest_both_rhs push 1 assert_eq
+    push false jump retest_both_lhs push 4 assert_eq
+    push false jump retest_both_rhs push 4 assert_eq
+    push 42    jump retest_both_lhs push 1 assert_eq
+    push 42    jump retest_both_rhs push 1 assert_eq
+}
+
+// `pick 0 ; dip 1 { drop }` = nothing — the other counit.
+//
+// Copy a value and discard the *original*. `pick d ; drop` discards the copy
+// instead; the two are the two counit laws of the comonoid `pick` builds, and
+// only one of them was here. Deeper it is not the identity at all: `pick 1 ;
+// dip 2 { drop }` moves the value, which is a `roll`.
+test sentence copying_and_discarding_the_original_is_nothing {
+    push 7 push 8  pick 0 dip 1 { drop 0 }
+    push 8 assert_eq   push 7 assert_eq
+
+    push 7 push 8
+    push 8 assert_eq   push 7 assert_eq
+}
+
 // `op ; is_bool` = `op ; drop ; push true`, for an op that yields a boolean.
 //
 // The one fact here that no rewriting can reach: a codomain is not something a

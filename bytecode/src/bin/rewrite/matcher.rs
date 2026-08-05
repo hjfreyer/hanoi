@@ -45,7 +45,7 @@ use crate::arity::{full_arity, node_arity};
 use crate::ir::{Node, Selector, frame_depth, same_effect, same_effect_seq, with_frame_depth};
 use crate::location::Location;
 use crate::program::Program;
-use crate::rule::{Direction, Rule, StepKind};
+use crate::rule::{Arm, Direction, Rule, StepKind};
 
 /// A step a matcher wants taken, positioned relative to the window it saw.
 #[derive(Debug, Clone, PartialEq)]
@@ -118,6 +118,8 @@ pub(crate) fn matcher_by_name(name: &str) -> Option<Box<dyn Matcher>> {
         "annihilate_void" => Box::new(AnnihilateVoid),
         "bool_result" => Box::new(BoolResult),
         "cancel_tuple" => Box::new(CancelTuple),
+        "counit_under" => Box::new(CounitUnder),
+        "retest" => Box::new(Retest),
         "collapse" => Box::new(Collapse),
         "comm" => Box::new(Comm),
         "copy_assoc" => Box::new(CopyAssoc),
@@ -155,6 +157,7 @@ pub(crate) fn matcher_names() -> Vec<&'static str> {
         "copy_assoc",
         "copy_const",
         "counit",
+        "counit_under",
         "distribute",
         "eval1",
         "eval2",
@@ -170,6 +173,7 @@ pub(crate) fn matcher_names() -> Vec<&'static str> {
         "unfactor",
         "unsplit_bool",
         "unfold",
+        "retest",
     ];
     names.sort();
     names
@@ -1796,6 +1800,144 @@ impl Matcher for InvCounit {
     }
 }
 
+/// `pick 0 ; branch { branch { A } { B } ; R } { Q }` becomes
+/// `pick 0 ; branch { drop ; A ; R } { Q }`, and the mirror of it.
+///
+/// [`Rule::Retest`] forward: the same value tested twice answers the same, so
+/// the arm the outer branch took already decides the inner one and the other
+/// inner arm is dead code.
+///
+/// It plans **one arm per firing**, taking the then arm first. `each` rescans
+/// the window it just rewrote, so a branch with a branch in each arm is
+/// collapsed by two firings rather than needing a third shape.
+///
+/// Measure: arms that begin with a branch under a `pick 0`, which it strictly
+/// reduces — what it leaves in one begins with a `drop`.
+#[derive(Debug)]
+pub(crate) struct Retest;
+
+impl Matcher for Retest {
+    fn name(&self) -> &'static str {
+        "retest"
+    }
+    fn width(&self) -> usize {
+        2
+    }
+    fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
+        Err(
+            "reading `retest` backwards would have to invent the arm that \
+             cannot run — the whole content of the law is that nothing in the \
+             term says what it held"
+                .to_string(),
+        )
+    }
+    fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
+        let [
+            Node::Op(Instruction::Pick(0)),
+            Node::Branch {
+                then_origin,
+                then_body,
+                else_origin,
+                else_body,
+            },
+        ] = window
+        else {
+            return None;
+        };
+
+        // Whichever arm opens with a branch. Then first, and the rescan takes
+        // the else arm on the next pass if it has one too.
+        let (arm, held) = match (then_body.first(), else_body.first()) {
+            (Some(Node::Branch { .. }), _) => (Arm::Then, then_body),
+            (_, Some(Node::Branch { .. })) => (Arm::Else, else_body),
+            _ => return None,
+        };
+        let (inner, rest) = held.split_first()?;
+        let other = match arm {
+            Arm::Then => else_body,
+            Arm::Else => then_body,
+        };
+
+        at_window(
+            prog,
+            Rule::Retest {
+                arm,
+                inner: inner.clone(),
+                rest: rest.to_vec(),
+                other: other.clone(),
+                then_origin: then_origin.clone(),
+                else_origin: else_origin.clone(),
+            },
+            Direction::Forward,
+        )
+    }
+}
+
+/// `pick 0 ; dip 1 { drop }` becomes nothing.
+///
+/// [`Rule::CounitUnder`] forward: copy a value and discard the original. The
+/// other counit law of the comonoid `pick` comultiplies, where [`Counit`] is
+/// the one that discards the copy.
+///
+/// Measure: node count.
+#[derive(Debug)]
+pub(crate) struct CounitUnder;
+
+impl Matcher for CounitUnder {
+    fn name(&self) -> &'static str {
+        "counit_under"
+    }
+    fn width(&self) -> usize {
+        2
+    }
+    fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
+        Ok(Box::new(InvCounitUnder))
+    }
+    fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
+        let [
+            Node::Op(Instruction::Pick(0)),
+            Node::Dip { depth: 1, body, .. },
+        ] = window
+        else {
+            return None;
+        };
+        let [Node::Op(Instruction::Drop)] = &body[..] else {
+            return None;
+        };
+        at_window(prog, Rule::CounitUnder, Direction::Forward)
+    }
+}
+
+/// Puts `pick 0 ; dip 1 { drop }` where there was nothing at all.
+///
+/// [`Rule::CounitUnder`] backwards. Unlike [`InvCounit`] it needs no argument —
+/// the law is only stated at depth 0 — so `inv(counit_under)` is written bare.
+///
+/// It inserts **before** the window and reads one node only to have somewhere
+/// to stand, as [`SplitBool`] and [`InvCounit`] do, and so cannot insert past
+/// the last node of a sequence.
+///
+/// No name of its own: it is `inv(counit_under)`.
+///
+/// Measure: none, and it grows the term. Aim it.
+#[derive(Debug)]
+pub(crate) struct InvCounitUnder;
+
+impl Matcher for InvCounitUnder {
+    fn name(&self) -> &'static str {
+        "inv(counit_under)"
+    }
+    fn width(&self) -> usize {
+        1
+    }
+    fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
+        Ok(Box::new(CounitUnder))
+    }
+    fn plan(&self, prog: &Program, _window: &[Node]) -> Option<Vec<PlannedStep>> {
+        at_window(prog, Rule::CounitUnder, Direction::Reverse)
+    }
+}
+
 /// `roll 1 ; op` becomes `op`, for a commutative `op`.
 ///
 /// `roll 1` swaps the top two values, and an operator that answers the same
@@ -2362,6 +2504,122 @@ mod tests {
                     )]
                 )
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn retest_collapses_one_arm_at_a_time() {
+        let inner = || branch(vec![op(Instruction::Not)], vec![op(Instruction::IsBool)]);
+        let w = [
+            op(Instruction::Pick(0)),
+            branch(vec![inner()], vec![inner()]),
+        ];
+
+        // Then arm first, and what it leaves there no longer begins with a
+        // branch — which is what lets the rescan take the else arm next.
+        let once = fire(&Retest, &prog(), &w).unwrap();
+        assert_eq!(
+            once,
+            vec![
+                op(Instruction::Pick(0)),
+                branch(
+                    vec![op(Instruction::Drop), op(Instruction::Not)],
+                    vec![inner()]
+                ),
+            ]
+        );
+        assert_eq!(
+            fire(&Retest, &prog(), &once),
+            Some(vec![
+                op(Instruction::Pick(0)),
+                branch(
+                    vec![op(Instruction::Drop), op(Instruction::Not)],
+                    vec![op(Instruction::Drop), op(Instruction::IsBool)],
+                ),
+            ]),
+            "the else arm reads the other way: there the value is `false`"
+        );
+
+        // Whatever follows the inner branch in that arm rides along.
+        let w = [
+            op(Instruction::Pick(0)),
+            branch(vec![inner(), op(Instruction::Add)], Vec::new()),
+        ];
+        assert_eq!(
+            fire(&Retest, &prog(), &w),
+            Some(vec![
+                op(Instruction::Pick(0)),
+                branch(
+                    vec![
+                        op(Instruction::Drop),
+                        op(Instruction::Not),
+                        op(Instruction::Add)
+                    ],
+                    Vec::new()
+                ),
+            ])
+        );
+    }
+
+    #[test]
+    fn retest_needs_the_condition_to_be_a_copy() {
+        let inner = || branch(Vec::new(), Vec::new());
+        // No `pick 0`, so the two branches read different values.
+        assert!(
+            Retest
+                .plan(
+                    &prog(),
+                    &[op(Instruction::Not), branch(vec![inner()], Vec::new())]
+                )
+                .is_none()
+        );
+        // And an arm that does not open with a branch says nothing.
+        assert!(
+            Retest
+                .plan(
+                    &prog(),
+                    &[
+                        op(Instruction::Pick(0)),
+                        branch(vec![op(Instruction::Not)], vec![op(Instruction::Add)]),
+                    ]
+                )
+                .is_none()
+        );
+        // Reading it backwards would have to invent the arm that cannot run.
+        assert!(Retest.inverse().is_err());
+    }
+
+    #[test]
+    fn the_two_counits_discard_opposite_copies() {
+        // `counit` drops the copy; `counit_under` drops the original from
+        // under it. Two laws, and the set had only one.
+        let w = [
+            op(Instruction::Pick(0)),
+            dip(1, vec![op(Instruction::Drop)]),
+        ];
+        assert_eq!(fire(&CounitUnder, &prog(), &w), Some(Vec::new()));
+        assert!(
+            CounitUnder
+                .plan(
+                    &prog(),
+                    &[
+                        op(Instruction::Pick(1)),
+                        dip(1, vec![op(Instruction::Drop)])
+                    ]
+                )
+                .is_none(),
+            "only at depth 0 — deeper it is a `roll`, not the identity"
+        );
+
+        // Backwards it needs no argument, unlike `inv(counit(d))`, because the
+        // law is stated at one depth.
+        assert_eq!(
+            fire(&InvCounitUnder, &prog(), &[op(Instruction::Add)]),
+            Some(vec![
+                op(Instruction::Pick(0)),
+                dip(1, vec![op(Instruction::Drop)]),
+                op(Instruction::Add),
+            ])
         );
     }
 
