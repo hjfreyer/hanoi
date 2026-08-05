@@ -403,14 +403,42 @@ provably the same value as the first.
 ### Terms
 
 A term is a run of instructions in braces. `pick n`, `roll n`, `tuple n`,
-`untuple n`, `push <int|true|false>`, `dip n { ... }`, `jump <sentence>`, and
-the argument-free operators (`drop`, `not`, `and`, `equal`, `is_bool`, `add`,
-…). `--list-rules` prints the list.
+`untuple n`, `push <int|true|false>`, `dip n { ... }`, `branch { .. } { .. }`,
+`jump <sentence>`, and the argument-free operators (`drop`, `not`, `and`,
+`equal`, `is_bool`, `add`, …). `--list-rules` prints the list.
 
-It has no branches, which would need two blocks and a condition and would be a
-program rather than a term. `panic`, `assert` and `assert_eq` are absent on
-purpose: they are the three instructions that can fail, and introducing one
-would break the precondition every equation is stated under.
+`panic`, `assert` and `assert_eq` are absent on purpose: they are the three
+instructions that can fail, and introducing one would break the precondition
+every equation is stated under.
+
+**A branch used to be absent too**, on the grounds that it needs two blocks and
+a condition and so reads as a program rather than a term. That was wrong about
+the condition: a `Node::Branch` carries only the two arms, and the condition it
+pops is whatever the stack already holds — so it is a node like any other, of
+arity `(n+1 -> m)`. Excluding it left a hole exactly where the last equation
+landed: `annihilate` at `m = 0` turns `branch { } { }` into `drop`, and nothing
+could write the term to read that backwards.
+
+```
+$ rewrite demo just_drop -t 'must(once(introduce { branch { } { } }))'
+   0 │      1 │ branch then → <term> {
+     │        │ } else → <term> {
+     │        │ }
+
+     0  annihilate <- @0
+        drop
+     ⇒  branch { (nothing) } { (nothing) }
+```
+
+Both arms have to leave the same amount behind, which is what the arity checker
+asks of real code and is checked when the tactic is compiled. Nothing
+downstream would catch it otherwise — a node's arity is read off whichever arm
+answers first, so a term that broke it would put a program into the tree that
+could not have been compiled, and the tree would be wrong about itself.
+
+Code written in a tactic is labelled `<term>` in the listing, the way phase 4
+labels an inline block `<inline>`. Provenance is not part of a term's identity,
+so it never affects what matches.
 
 **`jump <sentence>` is the one thing in a term that reaches outside it.** A
 term used to hold no calls because there was nothing for one to name — the code
