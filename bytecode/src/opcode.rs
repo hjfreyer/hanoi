@@ -128,6 +128,60 @@ impl Instruction {
                 | Instruction::Equal
         )
     }
+
+    /// Whether what this leaves on top of the stack is always a `Bool`.
+    ///
+    /// `bin/rewrite` folds `op ; is_bool` to `op ; drop ; push true` on the
+    /// strength of this, so a wrong entry is a soundness bug rather than an
+    /// inaccurate comment — and `vm` measures it, running every candidate on
+    /// every shape of operand and holding the list to what it finds.
+    ///
+    /// It is a wide list because a **flag** is a boolean: every fallible
+    /// operation reports with one, and reports it on top. `add` leaves a sum
+    /// and a flag, and it is the flag `is_bool` would be asking about.
+    ///
+    /// The three exclusions are all deliberate:
+    ///
+    /// - `tuple n` builds a tuple, and is the negative case the sweep needs to
+    ///   stay honest about being a measurement.
+    /// - `drop`, `pick` and `roll` leave a value that came off the stack rather
+    ///   than one they computed, so nothing about the instruction decides it.
+    /// - `push` leaves exactly its literal, so the answer is known *better*
+    ///   than this: `eval` folds `push c ; is_bool` to the literal it really
+    ///   is, where this would only say that it is one.
+    ///
+    /// A **codomain is not something a rewrite can discover.** `split_bool`
+    /// splits a value into the cases where it is a boolean, but the case where
+    /// it is not leaves the value opaque, and every equation the tool has is
+    /// true of an `is_bool` that answered `42` for `true` — truthiness is all a
+    /// branch can observe, and `false` is the only falsy value. So this fact
+    /// has to be stated about the instruction and measured against the machine.
+    pub fn yields_bool(&self) -> bool {
+        matches!(
+            self,
+            Instruction::Equal
+                | Instruction::Greater
+                | Instruction::Less
+                | Instruction::Add
+                | Instruction::Subtract
+                | Instruction::Multiply
+                | Instruction::Divide
+                | Instruction::Modulo
+                | Instruction::Not
+                | Instruction::Negate
+                | Instruction::And
+                | Instruction::Or
+                | Instruction::SymbolLen
+                | Instruction::SymbolCharAt
+                | Instruction::IsInt
+                | Instruction::IsBool
+                | Instruction::IsFloat
+                | Instruction::IsSymbol
+                | Instruction::IsTuple
+                | Instruction::TupleLength
+                | Instruction::Untuple(_)
+        )
+    }
 }
 
 impl std::fmt::Display for Instruction {

@@ -70,6 +70,32 @@ test sentence a_computation_that_leaves_nothing_is_a_drop {
     push 9 assert_eq
 }
 
+// `op ; is_bool` = `op ; drop ; push true`, for an op that yields a boolean.
+//
+// The one fact here that no rewriting can reach: a codomain is not something a
+// case split discovers. `vm` measures which instructions qualify; this checks
+// the shape of the law the rewriter applies, on a predicate and on a flag.
+test sentence a_test_on_something_already_boolean_is_decided {
+    push true     is_bool is_bool  push true assert_eq
+    push false    is_bool is_bool  push true assert_eq
+    push 42       is_bool is_bool  push true assert_eq
+    push 3.5      is_bool is_bool  push true assert_eq
+    push some_sym is_bool is_bool  push true assert_eq
+    push (1, 2)   is_bool is_bool  push true assert_eq
+
+    // The right-hand side, once `annihilate` has taken the operator away.
+    push 42       drop 0 push true  push true assert_eq
+
+    // A flag is a boolean, so it folds where the operator cannot be deleted.
+    push 3 push 4 add is_bool       push true assert_eq  push 7 assert_eq
+    push 3 push 4 add drop 0 push true
+                                    push true assert_eq  push 7 assert_eq
+
+    // And one that fails, where the flag says so and is still a boolean.
+    push some_sym push 4 add is_bool
+                                    push true assert_eq  drop 0
+}
+
 // `X ; drop^m` = `drop^n`, and `pick d ; drop` = nothing.
 test sentence discarded_work_is_no_work {
     push 9

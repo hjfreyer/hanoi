@@ -39,7 +39,7 @@
 //! fixpoint with their opposites — the fuel budget is what diagnoses it when
 //! they do.
 
-use bytecode::Instruction;
+use bytecode::{Instruction, Value};
 
 use crate::arity::{full_arity, node_arity};
 use crate::ir::{Node, Selector, frame_depth, same_effect, same_effect_seq, with_frame_depth};
@@ -116,6 +116,7 @@ pub(crate) fn matcher_by_name(name: &str) -> Option<Box<dyn Matcher>> {
         "annihilate" => Box::new(Annihilate),
         "annihilate_flagged" => Box::new(AnnihilateFlagged),
         "annihilate_void" => Box::new(AnnihilateVoid),
+        "bool_result" => Box::new(BoolResult),
         "cancel_tuple" => Box::new(CancelTuple),
         "collapse" => Box::new(Collapse),
         "comm" => Box::new(Comm),
@@ -147,6 +148,7 @@ pub(crate) fn matcher_names() -> Vec<&'static str> {
         "annihilate",
         "annihilate_flagged",
         "annihilate_void",
+        "bool_result",
         "cancel_tuple",
         "collapse",
         "comm",
@@ -1608,6 +1610,85 @@ pub(crate) fn term_arity(nodes: &[Node]) -> Option<(i64, i64)> {
     Some((inputs, size))
 }
 
+/// `op ; is_bool` becomes `op ; drop ; push true`.
+///
+/// [`Rule::BoolResult`] forward: asking whether a value is a boolean when the
+/// instruction that produced it can only produce booleans. `is_bool ; is_bool`
+/// is the case that wanted it, and beside [`Annihilate`] — which takes the
+/// `is_bool ; drop` away — it comes out as `drop ; push true`.
+///
+/// The set it draws on is wide, because a **flag** is a boolean: `add` is
+/// `(2 -> 2)` and the flag is what `is_bool` would be asking about, so this
+/// folds there too even though nothing can delete the `add`.
+///
+/// Measure: `is_bool` nodes, which it strictly reduces — its own output holds
+/// none. It grows the node count by one, which the annihilation beside it
+/// usually more than takes back.
+#[derive(Debug)]
+pub(crate) struct BoolResult;
+
+impl Matcher for BoolResult {
+    fn name(&self) -> &'static str {
+        "bool_result"
+    }
+    fn width(&self) -> usize {
+        2
+    }
+    fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
+        Ok(Box::new(InvBoolResult))
+    }
+    fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
+        let [Node::Op(op), Node::Op(Instruction::IsBool)] = window else {
+            return None;
+        };
+        at_window(
+            prog,
+            Rule::BoolResult { op: op.clone() },
+            Direction::Forward,
+        )
+    }
+}
+
+/// `op ; drop ; push true` becomes `op ; is_bool`.
+///
+/// [`Rule::BoolResult`] read backwards, putting the question back. It is the
+/// rarer direction — you would want it to make a window match something that
+/// asks `is_bool` — and it recognizes its side exactly, so it needs no name.
+///
+/// No name of its own: it is `inv(bool_result)`.
+///
+/// Measure: none worth the name. It does not grow the term, but never put it
+/// in a `repeat` beside [`BoolResult`].
+#[derive(Debug)]
+pub(crate) struct InvBoolResult;
+
+impl Matcher for InvBoolResult {
+    fn name(&self) -> &'static str {
+        "inv(bool_result)"
+    }
+    fn width(&self) -> usize {
+        3
+    }
+    fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
+        Ok(Box::new(BoolResult))
+    }
+    fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
+        let [
+            Node::Op(op),
+            Node::Op(Instruction::Drop),
+            Node::Op(Instruction::Push(Value::Bool(true))),
+        ] = window
+        else {
+            return None;
+        };
+        at_window(
+            prog,
+            Rule::BoolResult { op: op.clone() },
+            Direction::Reverse,
+        )
+    }
+}
+
 /// `pick d ; drop` becomes nothing.
 ///
 /// Copying a value and discarding the copy: neither happened. The counit law of
@@ -2279,6 +2360,59 @@ mod tests {
                         vec![op(Instruction::Add)],
                         vec![op(Instruction::Not)]
                     )]
+                )
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn asking_whether_a_bool_is_a_bool_is_answered() {
+        // The case that wanted the law. One step here; `annihilate` beside it
+        // is what turns `is_bool ; drop` into the `drop` you wanted.
+        let w = [op(Instruction::IsBool), op(Instruction::IsBool)];
+        assert_eq!(
+            fire(&BoolResult, &prog(), &w),
+            Some(vec![
+                op(Instruction::IsBool),
+                op(Instruction::Drop),
+                op(Instruction::Push(Value::Bool(true))),
+            ])
+        );
+        round_trip(&BoolResult, &w);
+
+        // A flag is a boolean too, and there the operator cannot be deleted at
+        // all — which is why the law keeps it rather than folding it away.
+        assert_eq!(
+            fire(
+                &BoolResult,
+                &prog(),
+                &[op(Instruction::Add), op(Instruction::IsBool)]
+            ),
+            Some(vec![
+                op(Instruction::Add),
+                op(Instruction::Drop),
+                op(Instruction::Push(Value::Bool(true))),
+            ])
+        );
+
+        // And an operator that leaves something else is declined.
+        assert!(
+            BoolResult
+                .plan(
+                    &prog(),
+                    &[op(Instruction::Tuple(2)), op(Instruction::IsBool)]
+                )
+                .is_none()
+        );
+        // As is a literal: `eval` answers that one exactly.
+        assert!(
+            BoolResult
+                .plan(
+                    &prog(),
+                    &[
+                        op(Instruction::Push(Value::Bool(true))),
+                        op(Instruction::IsBool)
+                    ]
                 )
                 .is_none()
         );

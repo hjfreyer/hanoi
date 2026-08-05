@@ -55,8 +55,8 @@ finite by construction.
 
 ## The equations
 
-Sixteen, plus one thing that is not an equation. `--list-rules` prints the
-matchers that place them. Fifteen of the sixteen are axioms: `copy_const` is
+Seventeen, plus one thing that is not an equation. `--list-rules` prints the
+matchers that place them. Sixteen of the seventeen are axioms: `copy_const` is
 the constant case of `copy_nat` and is kept only because it is one step where
 the derivation is three.
 
@@ -77,6 +77,7 @@ the derivation is three.
 | `copy_const` | `push c ; pick 0` = `push c ; push c` | |
 | `copy_assoc` | `pick d ; pick 0` = `pick d ; dip 1 { pick d }` | neither side is smaller; the point is that one copy ends up **in a frame**, and a framed computation is one `float` can carry |
 | `copy_nat` | `pick (n-1)^n ; X ; dip m { X }` = `X ; pick (m-1)^m`, for `X : n -> m` | copying is natural. Forward is common-subexpression elimination; the only law that needs `X` to be **deterministic** |
+| `bool_result` | `op ; is_bool` = `op ; drop ; push true`, for an `op` that always leaves a boolean | the only fact here about an instruction's **codomain**, and the only one no rewriting could reach. `Instruction::yields_bool`, measured by `vm` |
 | `cancel_tuple` | `tuple n ; untuple n` = `push true` | the flag is the whole residue. The converse order is not a no-op and has no equation |
 
 **`unfold` is not one of these.** That `Call { k, S }` may be replaced by `S`'s
@@ -215,6 +216,7 @@ different thing to look for even though the arithmetic is the same:
 | `split_bool` / `unsplit_bool` | 1 / 3 | the case split, either way |
 | `introduce { .. }` | n | annihilate backwards — see below |
 | `share { .. }` | n+\|X\|+1 | `copy_nat` forward — see below |
+| `bool_result` | 2 | `op ; is_bool` forward; backward is `inv(bool_result)` |
 | `counit` / `counit(d)` / `inv(counit(d))` | 2 / 2 / 1 | the copy-and-discard law: found, found at one depth, or *put in* |
 | `copy_const`, `copy_assoc`, `cancel_tuple` | 2 | |
 
@@ -530,6 +532,62 @@ underneath the operands can be rearranged to line up with something else. It has
 no measure and grows the term — its output still contains the operator it
 matched, so `each` would put a second `roll 1` in front of it and keep going.
 Aim it, as with `introduce`.
+
+### The one thing a case split cannot reach: `bool_result`
+
+```text
+op ; is_bool  =  op ; drop ; push true       for an op that yields a boolean
+```
+
+`is_bool ; is_bool` is the case that wants it, and with `annihilate` to take
+the `is_bool ; drop` away it comes out as `drop ; push true`. The operator
+stays on both sides on purpose — that makes this the smallest thing that has to
+be assumed, and lets the existing set finish the job. It also means the law
+covers a **flag** as readily as a predicate: `add` is `(2 -> 2)` and the flag
+is what `is_bool` would be asking about, so `add ; is_bool` folds even though
+nothing can delete the `add`.
+
+**Why it is not derivable from `split_bool`.** It looks as though it should be:
+split the value, and in each case it is a literal that `eval` folds. The then
+arm does exactly that. The else arm does not:
+
+```
+$ rewrite demo twice_bool -t 'at(1, split_bool); distribution; values; factoring; all'
+   0 │ is_bool
+   1 │ pick 0
+   2 │ is_bool
+   3 │ branch then → a bool {
+     │   drop
+     │   push true
+     │ } else → not a bool {
+     │   is_bool                          ← the original problem, again
+     │ }
+```
+
+That arm is *dead* — the value came out of `is_bool`, so it is a boolean — and
+its deadness is precisely the fact being sought. Splitting again reproduces it.
+
+It is independent rather than merely elusive, and the argument is the same
+shape as `copy_nat`'s. Read `is_bool` as answering `42` for `true`, `true` for
+`false`, and `false` otherwise. `split_bool` still holds — 42 is truthy, so the
+then arm runs and the inner branch still recovers the value — and every other
+equation is generic in what `is_bool` means. This law fails there. The gap is
+that a branch can observe only **truthiness**, and `false` is the only falsy
+value, so being truthy is strictly weaker than being a boolean. **No case split
+on a value yields a fact about the codomain of a function.**
+
+So the fact lives on the instruction, as `Instruction::yields_bool`, beside
+`commutative` and for the same reason — and `vm` measures it rather than
+restating it, running every computation on every shape of operand and holding
+the list to what it finds. The list is wide, because every fallible operation
+reports with a flag and reports it on top; `tuple n` is the negative case that
+keeps the sweep honest.
+
+`push` is excluded deliberately. A literal's type is known *better* than this
+law says: `eval` folds `push c ; is_bool` to the answer rather than to `true`.
+
+The five type tests other than `is_bool` are decided by the same fact —
+`op ; is_int` would be `op ; drop ; push false` — and are not written yet.
 
 ### A boolean is either true or false
 
