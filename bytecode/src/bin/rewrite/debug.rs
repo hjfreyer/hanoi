@@ -33,7 +33,7 @@ use bytecode::SentenceIndex;
 use crate::Options;
 use crate::applier::{apply_script, preview};
 use crate::diff::side_by_side;
-use crate::engine::{Env, Tactic, run as run_tactic};
+use crate::engine::{Env, Tactic, miss_report, run as run_tactic};
 use crate::ir::{Node, build};
 use crate::print::render_body;
 use crate::program::Program;
@@ -54,6 +54,21 @@ pub(crate) fn run(prog: &Program, root: SentenceIndex, tactic: &Tactic, opts: &O
         // A failed run still recorded everything it did before failing.
         Err(err) => (env.script(), Some(err.to_string())),
     };
+
+    // Said once, up front. A session that is short because an aimed step never
+    // landed should say so before the walking starts, not leave it to be
+    // inferred from a derivation with nothing in it.
+    let report = miss_report(&env.misses());
+    if !report.is_empty() {
+        println!();
+        for line in &report {
+            if line.is_empty() {
+                println!();
+            } else {
+                println!("  {}", line);
+            }
+        }
+    }
 
     let mut session = Session {
         prog,

@@ -334,8 +334,8 @@ Control and traversal, unchanged from before the split:
 | `at(n, r, ...)` | the first matcher that matches, at *exactly* position n |
 | `a; b` | in sequence |
 | `a \| b` | the first that *changes something* |
-| `try(t)` | never fails |
-| `must(t)` | fails unless `t` changed something |
+| `try(t)` | never fails, and an aim inside it that misses is not reported |
+| `must(t)` | fails unless `t` changed something, rolling the term back |
 | `repeat(t)` | until nothing changes |
 | `repeat_n(k, t)` | at most k times, stopping early |
 | `children(t)` | every child sequence, one level down |
@@ -352,6 +352,10 @@ A matcher that matches nowhere reports **unchanged, not failed**. Scanning a
 sequence and finding no work is a successful no-op; treating it as an error made
 `a; b` throw away everything `a` did whenever `b` had nothing to do. `Failed`
 comes only from an explicit `fail`.
+
+An *aimed* step that misses is unchanged too, and is additionally **reported** —
+see "an index is a claim" below. That is a diagnostic rather than an outcome, so
+nothing above it has to know about it.
 
 ### Aiming at exactly one window
 
@@ -400,19 +404,60 @@ renumbers every sibling after it, so a step that removed one node would report
 the whole rest of the sequence as changed — where a depth is stable across a
 firing, since every equation preserves the net stack effect of what it rewrote.
 
-Both are **silent when they miss**, because a rule that matches nowhere is an
-ordinary no-op and always has been. That is wrong for an aimed step, where
-missing means the position was wrong:
+### An index is a claim; a scan is a question
+
+A matcher that matches nowhere reports **unchanged, not failed**, and must: a
+sweep that finds no work has done its job, and treating that as an error would
+make `a; b` throw away everything `a` did whenever `b` had nothing to do.
+
+But `at(2, unfold)` is not asking whether anything fits — it is saying there is
+a call at 2. When there is not, the number is wrong, and that used to look
+exactly like a rule with nothing to do. So the two are separated:
+
+| | |
+|---|---|
+| a **claim** | `at(n, r)`, `then(k, t)`, `else(k, t)`, `body(k, t)` |
+| a **question** | `each`, `once`, `then(t)`, `children`, `bu`, `td`, `repeat`, `repeat_n` |
+
+A claim that does not hold is a **miss**: reported at the end of the run, with
+what was there instead, and the tool exits non-zero.
 
 ```
-must(then(1, at(2, sink)))
+$ rewrite tests 'Pair::check' -t 'unfold_all; at(9, sink)'
+   ...the listing...
+
+error: 1 aimed step(s) matched nothing:
+
+  at(9, sink) at the root — that sequence holds 2 nodes, 0 to 1
 ```
 
-`must(t)` fails unless `t` changed something. It is exactly `t | fail` and is
-built that way; it exists because the idiom is not obvious and aiming without it
-is unverifiable. A failure that reaches the top of a run is reported and exits
-non-zero — nothing swallows it, since `try` is how you say a failure is
-acceptable.
+**A miss is a diagnostic, not a failure.** Nothing rolls back, and the listing
+is printed first — because the tree is what says which number to write instead,
+and a rollback would take away the thing you need to fix it. It also means a
+miss composes: `a; b` still keeps what `a` did.
+
+The reason is worth having, because four different mistakes used to look
+identical: the sequence is too short, the window runs off the end of it (`fuse`
+reads two nodes and one is left), the node is the wrong shape, or a rule looked
+and declined.
+
+Two things do **not** record a miss:
+
+- **A claim inside a search is not a claim.** `bu(at(0, collapse))` is a sweep
+  that happens to be aimed at every level it visits, so the levels where it does
+  not land are the answer rather than a mistake. Same for `try(t)`, which is the
+  explicit way to say a miss is acceptable, and for `repeat`, whose last turn
+  misses by construction.
+- **A `|` branch a later one took over from.** Offering an alternative is saying
+  the first may miss. If nothing changed anything, they all stand — which is
+  what makes `t | fail` report the same as `must(t)`.
+
+`must(t)` is still there, and is now the *stronger* thing: it fails unless `t`
+changed something, rolling the term and the derivation back. Use it when the
+aim is a precondition for what follows rather than a step in its own right —
+and note it also fires when a search legitimately found nothing, which a miss
+deliberately does not. It is exactly `t | fail`, and is built that way. The miss
+survives the rollback, since it is the explanation rather than the work.
 
 ### The scan discipline
 
@@ -626,11 +671,13 @@ Reading it as a test for *being* a boolean would send junk down the wrong path.
    Remove the frame with `flatten`, or bring the neighbour in with `distribute`.
 4. **Reading `@n` as a global position.** It is an offset in the sequence the
    descent arrives at. Two steps reporting `@0` may be in different arms.
-5. **Aiming without `must`.** `at(9, sink)` on a five-node sequence is a no-op,
-   not an error, so a mistyped position looks exactly like a rule that had
-   nothing to do. Wrap an aimed step in `must` and find out — and read the
-   position off the `pos` column rather than counting lines, since the column
-   restarts at every nesting level and the lines do not.
+5. **Hiding an aim inside a search.** `at(9, sink)` on a five-node sequence
+   reports itself, but `bu(at(9, sink))` does not — an aim inside a sweep is
+   along for the ride, and there is no telling a level it skipped from a level
+   it was never meant to hit. Read the position off the `pos` column rather
+   than counting lines, since the column restarts at every nesting level and
+   the lines do not, and reach for `must` when the aim is a precondition for
+   what comes after it rather than a step in its own right.
 
 ## Checking and tracing
 

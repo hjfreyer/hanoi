@@ -40,9 +40,11 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
+use std::fmt;
 
 use crate::applier::{ApplyError, apply_step};
-use crate::ir::{Node, Selector, child_seq, child_seqs};
+use crate::ir::{Node, Selector, child_seq, child_seqs, sketch_head};
+use crate::location::selector_name;
 use crate::matcher::Matcher;
 use crate::program::Program;
 use crate::rule::{Script, Step};
@@ -50,6 +52,9 @@ use crate::rule::{Script, Step};
 /// How many firings the trace remembers. Enough to read an oscillation off the
 /// end of it, not enough to bury the error message.
 const TRACE_WINDOW: usize = 24;
+
+/// How many misses the report spells out before it starts counting them.
+const MISSES_SHOWN: usize = 10;
 
 /// What applying a tactic did.
 ///
@@ -60,6 +65,11 @@ const TRACE_WINDOW: usize = 24;
 /// `Unchanged`. Scanning a sequence and finding no work is a successful no-op,
 /// and treating it as an error would make `a; b` throw away everything `a` did
 /// whenever `b` had nothing to do. `Failed` comes only from an explicit `fail`.
+///
+/// An *aimed* step that misses is `Unchanged` too, and additionally records a
+/// [`Miss`]. That is deliberately not a fourth variant: a miss says the tactic
+/// was written wrong, not that the run went differently, so nothing here has to
+/// know about it.
 #[derive(Debug)]
 pub(crate) enum Outcome {
     Changed(Vec<Node>),
@@ -77,6 +87,89 @@ impl Outcome {
     fn changed(&self) -> bool {
         matches!(self, Outcome::Changed(_))
     }
+}
+
+/// A claim the tactic made that the tree did not bear out.
+///
+/// **An index is a claim; a scan is a question.** `at(9, sink)` says there is a
+/// window at 9 and `then(3, t)` says the node at 3 has a then arm, where
+/// `each(sink)` only asks whether anything fits. A question answered "nothing"
+/// is an ordinary no-op — which is why a matcher that matches nowhere reports
+/// `Unchanged`, and why it must — but a claim that does not hold is a mistyped
+/// number, and it used to look exactly like a rule with nothing to do.
+///
+/// A miss is a **diagnostic rather than a failure**: the tree keeps whatever
+/// the rest of the tactic did, so the listing that says which number to write
+/// instead is printed beside the complaint. Nothing rolls back, and `must(t)`
+/// is still how you ask for that.
+///
+/// Two things do not record one. A claim made inside a search is not a claim —
+/// `bu(at(0, collapse))` is a sweep that happens to be aimed at every level it
+/// visits, and the levels where it does not land are the answer rather than a
+/// mistake — and neither is a claim in a `|` branch that a later branch took
+/// over from, since offering an alternative is saying the first may miss.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Miss {
+    /// What was aimed, as the tactic wrote it.
+    aim: String,
+    /// Why it did not land, in terms of what was there instead.
+    why: String,
+    /// Where the traversal was when it aimed.
+    path: Vec<(usize, Selector)>,
+}
+
+impl fmt::Display for Miss {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} {} — {}",
+            self.aim,
+            where_it_aimed(&self.path),
+            self.why
+        )
+    }
+}
+
+/// The sequence a miss happened in, named the way a location names it.
+fn where_it_aimed(path: &[(usize, Selector)]) -> String {
+    if path.is_empty() {
+        return "at the root".to_string();
+    }
+    let legs: Vec<String> = path
+        .iter()
+        .map(|(i, sel)| format!("{}.{}", i, selector_name(*sel)))
+        .collect();
+    format!("in [{}]", legs.join(", "))
+}
+
+/// The misses of a run, as the lines the tool prints.
+///
+/// Empty when nothing missed, so the caller can use it to decide whether to
+/// say anything at all — and, at the top level, whether to exit non-zero.
+pub(crate) fn miss_report(misses: &[Miss]) -> Vec<String> {
+    if misses.is_empty() {
+        return Vec::new();
+    }
+    let mut out = vec![
+        format!("{} aimed step(s) matched nothing:", misses.len()),
+        String::new(),
+    ];
+    for miss in misses.iter().take(MISSES_SHOWN) {
+        out.push(format!("  {}", miss));
+    }
+    if misses.len() > MISSES_SHOWN {
+        out.push(format!("  ... and {} more", misses.len() - MISSES_SHOWN));
+    }
+    out.push(String::new());
+    out.push(
+        "  An aimed step names a position, so missing one is a mistyped number \
+         rather"
+            .to_string(),
+    );
+    out.push("  than a rule with nothing to do. The `pos` column of the listing is".to_string());
+    out.push("  where the numbers are, and `try(...)` is how you say a miss is".to_string());
+    out.push("  acceptable. Nothing was rolled back.".to_string());
+    out
 }
 
 #[derive(Debug)]
@@ -146,6 +239,13 @@ pub(crate) struct Env<'a> {
     /// Where the traversal currently is, outermost first. Pushed on the way
     /// into a child sequence and popped on the way out.
     path: RefCell<Vec<(usize, Selector)>>,
+    /// Aimed steps that did not land. See [`Miss`].
+    misses: RefCell<Vec<Miss>>,
+    /// How many searches the tactic is currently inside.
+    ///
+    /// A claim made inside one is not a claim, so this is what tells an aimed
+    /// step whether missing is worth saying anything about.
+    searching: Cell<usize>,
 }
 
 impl<'a> Env<'a> {
@@ -159,6 +259,8 @@ impl<'a> Env<'a> {
             check,
             script: RefCell::new(Vec::new()),
             path: RefCell::new(Vec::new()),
+            misses: RefCell::new(Vec::new()),
+            searching: Cell::new(0),
         }
     }
 
@@ -182,6 +284,48 @@ impl<'a> Env<'a> {
     /// thrashing tactic look cheap.
     fn truncate_script(&self, mark: usize) {
         self.script.borrow_mut().truncate(mark);
+    }
+
+    /// The aimed steps this run made that did not land.
+    pub(crate) fn misses(&self) -> Vec<Miss> {
+        self.misses.borrow().clone()
+    }
+
+    /// Records that an aimed step did not land, unless a search is asking.
+    ///
+    /// Deliberately *not* an [`Outcome`]. A miss changes nothing about what the
+    /// tactic does, which is what lets it be reported without redesigning the
+    /// outcome algebra around a fourth case — and what lets a run that missed
+    /// still show the tree it produced, since that is the listing you need in
+    /// order to fix the number.
+    fn note_miss(&self, aim: String, why: String) {
+        if self.searching.get() > 0 {
+            return;
+        }
+        self.misses.borrow_mut().push(Miss {
+            aim,
+            why,
+            path: self.path(),
+        });
+    }
+
+    fn misses_len(&self) -> usize {
+        self.misses.borrow().len()
+    }
+
+    /// Forgets the misses recorded in `from..to`, for a `|` branch that a later
+    /// one took over from.
+    fn drop_misses(&self, from: usize, to: usize) {
+        self.misses.borrow_mut().drain(from..to);
+    }
+
+    /// Runs `f` in a search context, where an aimed step that misses is not
+    /// making a claim.
+    fn searching<T>(&self, f: impl FnOnce() -> T) -> T {
+        self.searching.set(self.searching.get() + 1);
+        let out = f();
+        self.searching.set(self.searching.get() - 1);
+        out
     }
 
     fn descend(&self, index: usize, sel: Selector) {
@@ -325,7 +469,9 @@ pub(crate) fn apply(t: &Tactic, env: &Env, nodes: Vec<Node>) -> Result<Outcome, 
         Tactic::Once(ms) => once(ms, env, nodes),
         Tactic::At(n, ms) => at(*n, ms, env, nodes),
 
-        Tactic::Try(inner) => Ok(match apply(inner, env, nodes)? {
+        // A search, for the purpose of misses: `try` is the explicit way to say
+        // that what is inside it may come to nothing.
+        Tactic::Try(inner) => Ok(match env.searching(|| apply(inner, env, nodes))? {
             Outcome::Failed(n) => Outcome::Unchanged(n),
             other => other,
         }),
@@ -382,11 +528,23 @@ pub(crate) fn apply(t: &Tactic, env: &Env, nodes: Vec<Node>) -> Result<Outcome, 
             // recorded nothing, and a branch that changed something returns
             // immediately. A branch that changed-then-failed is itself a `Seq`,
             // which has already truncated.
+            //
+            // Misses do need it. Offering an alternative is saying the first
+            // branch may miss, so once a later one has done something, what the
+            // earlier ones aimed at was a candidate rather than a claim. Only
+            // the ones before the winner go: its own inner misses stand, and so
+            // do all of them when no branch changed anything — `t | fail` is
+            // `must(t)`, and the reason it failed is the whole point.
+            let start = env.misses_len();
             let mut cur = nodes;
             let mut last = None;
             for t in ts {
+                let mark = env.misses_len();
                 match apply(t, env, cur)? {
-                    changed @ Outcome::Changed(_) => return Ok(changed),
+                    changed @ Outcome::Changed(_) => {
+                        env.drop_misses(start, mark);
+                        return Ok(changed);
+                    }
                     other => {
                         let failed = matches!(other, Outcome::Failed(_));
                         cur = other.into_nodes();
@@ -400,7 +558,10 @@ pub(crate) fn apply(t: &Tactic, env: &Env, nodes: Vec<Node>) -> Result<Outcome, 
             })
         }
 
-        Tactic::Repeat(inner) => {
+        // Every arm from here to `td` is a search: it says where to look rather
+        // than what has to be there, and the last turn of a `repeat` misses by
+        // construction. An aimed step nested inside one is along for the ride.
+        Tactic::Repeat(inner) => env.searching(|| {
             let mut cur = nodes;
             let mut changed = false;
             loop {
@@ -417,9 +578,9 @@ pub(crate) fn apply(t: &Tactic, env: &Env, nodes: Vec<Node>) -> Result<Outcome, 
             } else {
                 Outcome::Unchanged(cur)
             })
-        }
+        }),
 
-        Tactic::RepeatN(n, inner) => {
+        Tactic::RepeatN(n, inner) => env.searching(|| {
             let mut cur = nodes;
             let mut changed = false;
             for _ in 0..*n {
@@ -441,11 +602,11 @@ pub(crate) fn apply(t: &Tactic, env: &Env, nodes: Vec<Node>) -> Result<Outcome, 
             } else {
                 Outcome::Unchanged(cur)
             })
-        }
+        }),
 
         Tactic::Children(inner) => {
-            let (nodes, changed) =
-                map_children(nodes, env, None, &mut |n, env| apply(inner, env, n))?;
+            let (nodes, changed) = env
+                .searching(|| map_children(nodes, env, None, &mut |n, env| apply(inner, env, n)))?;
             Ok(if changed {
                 Outcome::Changed(nodes)
             } else {
@@ -454,8 +615,9 @@ pub(crate) fn apply(t: &Tactic, env: &Env, nodes: Vec<Node>) -> Result<Outcome, 
         }
 
         Tactic::Into(sel, inner) => {
-            let (nodes, changed) =
-                map_children(nodes, env, Some(*sel), &mut |n, env| apply(inner, env, n))?;
+            let (nodes, changed) = env.searching(|| {
+                map_children(nodes, env, Some(*sel), &mut |n, env| apply(inner, env, n))
+            })?;
             Ok(if changed {
                 Outcome::Changed(nodes)
             } else {
@@ -473,9 +635,9 @@ pub(crate) fn apply(t: &Tactic, env: &Env, nodes: Vec<Node>) -> Result<Outcome, 
             })
         }
 
-        Tactic::Bu(inner) => bottom_up(inner, env, nodes),
+        Tactic::Bu(inner) => env.searching(|| bottom_up(inner, env, nodes)),
 
-        Tactic::Td(inner) => top_down(inner, env, nodes),
+        Tactic::Td(inner) => env.searching(|| top_down(inner, env, nodes)),
     }
 }
 
@@ -586,9 +748,13 @@ fn each(
 
 /// Applies the first matcher that matches, at exactly `n`.
 ///
-/// No scan: a position past the end, or one where nothing fits, is a no-op
-/// rather than an error, so `at` composes in a sequence like everything else.
-/// Aiming badly is a thing you find out from the listing, not from a failure.
+/// No scan, and no failure either: a position past the end, or one where
+/// nothing fits, hands the sequence back unchanged, so `at` composes in a
+/// sequence like everything else and `a; b` keeps what `a` did.
+///
+/// It does not do so *silently*, though. Naming a position is a claim, and one
+/// that does not hold is recorded as a [`Miss`] saying what was there instead.
+/// That is a diagnostic rather than a rollback — see [`Env::note_miss`].
 fn at(
     n: usize,
     matchers: &[Box<dyn Matcher>],
@@ -598,7 +764,38 @@ fn at(
     if n < nodes.len() && step(matchers, env, &mut nodes, n)?.is_some() {
         return Ok(Outcome::Changed(nodes));
     }
+    let names: Vec<&str> = matchers.iter().map(|m| m.name()).collect();
+    env.note_miss(
+        format!("at({}, {})", n, names.join(", ")),
+        why_nothing_fits(matchers, &nodes, n),
+    );
     Ok(Outcome::Unchanged(nodes))
+}
+
+/// Why an aimed rule did not fire, in terms of what was actually there.
+///
+/// Four different things look identical from outside — the sequence is too
+/// short, the window runs off the end of it, the node is the wrong shape, or a
+/// rule looked and declined — and a report that said only "matched nothing"
+/// would leave the reader to work out which.
+fn why_nothing_fits(matchers: &[Box<dyn Matcher>], nodes: &[Node], n: usize) -> String {
+    if n >= nodes.len() {
+        return match nodes.len() {
+            0 => "that sequence is empty".to_string(),
+            1 => "that sequence holds one node, at 0".to_string(),
+            len => format!("that sequence holds {} nodes, 0 to {}", len, len - 1),
+        };
+    }
+    let left = nodes.len() - n;
+    let narrowest = matchers.iter().map(|m| m.width()).min().unwrap_or(1);
+    if narrowest > left {
+        return format!(
+            "the window runs off the end: {} node(s) left there, and the \
+             narrowest of those rules reads {}",
+            left, narrowest
+        );
+    }
+    format!("the node there is `{}`", sketch_head(&nodes[n]))
 }
 
 /// Applies the first matcher that matches, at the first position it matches.
@@ -674,6 +871,9 @@ fn step(
 /// step taken down here records the same location it would have if a sweep had
 /// found it — which is what keeps `at` and `each` interchangeable as far as the
 /// script is concerned.
+///
+/// A node that is not there, or has no child of that kind, is left alone and
+/// recorded as a [`Miss`]: an index is a claim, the same way `at`'s is.
 fn map_one_child(
     mut nodes: Vec<Node>,
     env: &Env,
@@ -681,12 +881,21 @@ fn map_one_child(
     sel: Selector,
     f: Descend,
 ) -> Result<(Vec<Node>, bool), TacticError> {
-    let Some(node) = nodes.get_mut(index) else {
+    let kind = selector_name(sel);
+    let aim = || format!("{}({}, …)", kind, index);
+    if index >= nodes.len() {
+        env.note_miss(aim(), why_nothing_fits(&[], &nodes, index));
         return Ok((nodes, false));
-    };
-    let Some(body) = child_seq(node, sel) else {
+    }
+    if child_seq(&mut nodes[index], sel).is_none() {
+        let what = sketch_head(&nodes[index]);
+        env.note_miss(
+            aim(),
+            format!("the node there is `{}`, which has no {} part", what, kind),
+        );
         return Ok((nodes, false));
-    };
+    }
+    let body = child_seq(&mut nodes[index], sel).expect("just looked");
     env.descend(index, sel);
     let outcome = f(std::mem::take(body), env);
     env.ascend();
@@ -1043,6 +1252,191 @@ mod tests {
             assert_eq!(ra.into_nodes(), rb.into_nodes());
             assert_eq!(a.script().len(), b.script().len());
         }
+    }
+
+    // -- misses: an index is a claim ----------------------------------------
+
+    /// The misses a tactic leaves behind, as the strings they print as.
+    fn misses_of(prog: &Program, tactic: &Tactic, tree: Vec<Node>) -> Vec<String> {
+        let env = Env::new(prog, 1000, true);
+        apply(tactic, &env, tree).expect("the tactic errored");
+        env.misses().iter().map(|m| m.to_string()).collect()
+    }
+
+    #[test]
+    fn an_aimed_step_that_misses_says_what_was_there() {
+        let prog = empty_prog();
+        let tree = || vec![dip(1, vec![dip(1, Vec::new())]), op(Instruction::Add)];
+
+        // Past the end: the sequence's size is the answer.
+        let got = misses_of(&prog, &Tactic::At(9, vec![m("collapse")]), tree());
+        assert_eq!(got.len(), 1, "{:?}", got);
+        assert!(
+            got[0].starts_with("at(9, collapse) at the root"),
+            "{}",
+            got[0]
+        );
+        assert!(got[0].contains("holds 2 nodes, 0 to 1"), "{}", got[0]);
+
+        // In range, wrong shape: what is there is the answer.
+        let got = misses_of(&prog, &Tactic::At(1, vec![m("collapse")]), tree());
+        assert_eq!(got.len(), 1, "{:?}", got);
+        assert!(got[0].contains("the node there is `add`"), "{}", got[0]);
+
+        // In range, but the window runs off the end. `fuse` reads two nodes and
+        // there is one left, which is a different mistake from either above.
+        let got = misses_of(&prog, &Tactic::At(1, vec![m("fuse")]), tree());
+        assert_eq!(got.len(), 1, "{:?}", got);
+        assert!(got[0].contains("runs off the end"), "{}", got[0]);
+    }
+
+    #[test]
+    fn an_indexed_descent_that_misses_names_the_part_it_wanted() {
+        let prog = empty_prog();
+        let inner = || Box::new(Tactic::Each(vec![m("collapse")]));
+
+        // A dip has a body, not a then arm.
+        let tree = vec![dip(1, vec![dip(1, Vec::new())])];
+        let got = misses_of(&prog, &Tactic::IntoNth(0, Selector::Then, inner()), tree);
+        assert_eq!(got.len(), 1, "{:?}", got);
+        assert!(got[0].starts_with("then(0, …)"), "{}", got[0]);
+        assert!(got[0].contains("no then part"), "{}", got[0]);
+
+        // And an index past the end of the sequence.
+        let tree = vec![dip(1, vec![dip(1, Vec::new())])];
+        let got = misses_of(&prog, &Tactic::IntoNth(9, Selector::Body, inner()), tree);
+        assert_eq!(got.len(), 1, "{:?}", got);
+        assert!(got[0].contains("holds one node, at 0"), "{}", got[0]);
+    }
+
+    #[test]
+    fn a_miss_names_the_sequence_it_happened_in() {
+        // The path is the other half of the address, so a miss two levels down
+        // has to say which two levels.
+        let prog = empty_prog();
+        let tree = vec![branch(vec![dip(1, vec![op(Instruction::Add)])], Vec::new())];
+        let tactic = Tactic::IntoNth(
+            0,
+            Selector::Then,
+            Box::new(Tactic::IntoNth(
+                0,
+                Selector::Body,
+                Box::new(Tactic::At(4, vec![m("collapse")])),
+            )),
+        );
+        let got = misses_of(&prog, &tactic, tree);
+        assert_eq!(got.len(), 1, "{:?}", got);
+        assert!(got[0].contains("in [0.then, 0.body]"), "{}", got[0]);
+    }
+
+    #[test]
+    fn a_claim_made_inside_a_search_is_not_a_claim() {
+        // `bu(at(0, collapse))` is a sweep that happens to be aimed at every
+        // level it visits. The levels where it does not land are the answer,
+        // not a mistyped number, and reporting them would drown the report.
+        let prog = empty_prog();
+        let tree = || {
+            vec![
+                dip(1, vec![dip(1, vec![op(Instruction::Add)])]),
+                op(Instruction::Not),
+            ]
+        };
+        let aimed = || Tactic::At(0, vec![m("collapse")]);
+        for tactic in [
+            Tactic::Bu(Box::new(aimed())),
+            Tactic::Td(Box::new(aimed())),
+            Tactic::Children(Box::new(aimed())),
+            Tactic::Into(Selector::Body, Box::new(aimed())),
+            Tactic::Try(Box::new(Tactic::At(9, vec![m("collapse")]))),
+            Tactic::Repeat(Box::new(aimed())),
+            Tactic::RepeatN(3, Box::new(aimed())),
+        ] {
+            let got = misses_of(&prog, &tactic, tree());
+            assert!(got.is_empty(), "{:?} reported {:?}", tactic, got);
+        }
+
+        // Bare, the same aim is a claim — and this one holds, so it is silent
+        // for the ordinary reason.
+        let got = misses_of(&prog, &aimed(), tree());
+        assert!(got.is_empty(), "{:?}", got);
+        let got = misses_of(&prog, &Tactic::At(1, vec![m("collapse")]), tree());
+        assert_eq!(got.len(), 1, "{:?}", got);
+    }
+
+    #[test]
+    fn an_alternative_taking_over_means_the_earlier_aim_was_a_candidate() {
+        let prog = empty_prog();
+        let tree = || vec![op(Instruction::Add), dip(1, vec![dip(1, Vec::new())])];
+
+        // The second branch does something, so the first was offered rather
+        // than claimed.
+        let tactic = Tactic::Choice(vec![
+            Tactic::At(9, vec![m("collapse")]),
+            Tactic::At(1, vec![m("collapse")]),
+        ]);
+        assert!(misses_of(&prog, &tactic, tree()).is_empty());
+
+        // Nothing took over, so both stand.
+        let tactic = Tactic::Choice(vec![
+            Tactic::At(9, vec![m("collapse")]),
+            Tactic::At(0, vec![m("collapse")]),
+        ]);
+        assert_eq!(misses_of(&prog, &tactic, tree()).len(), 2);
+    }
+
+    #[test]
+    fn must_keeps_the_reason_it_failed() {
+        // `must` rolls the tree and the script back; the miss is not work, it
+        // is the explanation, and throwing it away would leave the failure
+        // saying only that something did not happen.
+        let prog = empty_prog();
+        let env = Env::new(&prog, 1000, true);
+        let tactic = Tactic::Must(Box::new(Tactic::At(5, vec![m("collapse")])));
+        let outcome = apply(&tactic, &env, vec![dip(1, vec![dip(1, Vec::new())])]).unwrap();
+        assert!(matches!(outcome, Outcome::Failed(_)));
+        let misses = env.misses();
+        assert_eq!(misses.len(), 1, "{:?}", misses);
+        assert!(misses[0].to_string().contains("at(5, collapse)"));
+    }
+
+    #[test]
+    fn a_miss_rolls_nothing_back() {
+        // The whole point of reporting rather than failing: the tree still
+        // shows what the rest of the tactic did, which is the listing you need
+        // in order to fix the number.
+        let prog = empty_prog();
+        let env = Env::new(&prog, 1000, true);
+        let tree = vec![dip(1, vec![dip(1, Vec::new())])];
+        let tactic = Tactic::Seq(vec![
+            Tactic::At(0, vec![m("collapse")]),
+            Tactic::At(9, vec![m("collapse")]),
+        ]);
+        let outcome = apply(&tactic, &env, tree).unwrap();
+        assert!(matches!(outcome, Outcome::Changed(_)));
+        assert_eq!(outcome.into_nodes(), vec![dip(2, Vec::new())]);
+        assert_eq!(env.script().len(), 1);
+        assert_eq!(env.misses().len(), 1);
+    }
+
+    #[test]
+    fn the_report_is_bounded() {
+        let prog = empty_prog();
+        let tactic = Tactic::Seq(
+            (0..MISSES_SHOWN + 3)
+                .map(|_| Tactic::At(9, vec![m("collapse")]))
+                .collect(),
+        );
+        let env = Env::new(&prog, 1000, true);
+        apply(&tactic, &env, vec![op(Instruction::Add)]).unwrap();
+        let misses = env.misses();
+        assert_eq!(misses.len(), MISSES_SHOWN + 3);
+        let report = miss_report(&misses);
+        assert!(report[0].contains(&format!("{} aimed", MISSES_SHOWN + 3)));
+        assert!(
+            report.iter().any(|l| l.contains("and 3 more")),
+            "{:?}",
+            report
+        );
     }
 
     #[test]
