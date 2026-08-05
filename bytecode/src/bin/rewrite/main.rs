@@ -39,7 +39,7 @@ use std::process;
 use bytecode::arity::failure_reachability;
 use bytecode::{Library, SentenceIndex};
 
-use crate::engine::Env;
+use crate::engine::{Env, miss_report};
 use crate::matcher::{matcher_names, term_matcher_names};
 use crate::print::print_sentence;
 use crate::program::Program;
@@ -167,8 +167,12 @@ fn main() {
         println!("             (bare `then(t)` reaches every one). Composed, they");
         println!("             name any window --show-script prints:");
         println!("             `then(1, body(2, at(0, sink)))` is `[1.then, 2.body] @0`.");
-        println!("             `must(t)` fails if t changed nothing, so an aimed");
-        println!("             step that misses is an error rather than a no-op.");
+        println!("             An index is a claim: an aimed step that misses is");
+        println!("             reported and exits non-zero, saying what was there");
+        println!("             instead. A scan is a question, so `each` and the like");
+        println!("             stay silent — and an aim inside one is along for the");
+        println!("             ride. `try(t)` says a miss is acceptable; `must(t)`");
+        println!("             turns it into a failure that rolls the term back.");
         return;
     }
 
@@ -234,6 +238,10 @@ fn main() {
         Ok(script) => script,
         Err(err) => {
             eprintln!("error: {}", err);
+            // A failure is usually a `must` whose aim missed, and the miss is
+            // what says which number was wrong. Written under the failure
+            // rather than beside it: there is only one thing wrong here.
+            report_misses(&env, false);
             process::exit(1);
         }
     };
@@ -268,6 +276,35 @@ fn main() {
         println!();
         println!("  {} step(s) in all", env.steps_taken());
     }
+
+    // Last, and only after the listing: the tree is what says which number to
+    // write instead, so a miss is worth nothing printed above it.
+    if report_misses(&env, true) {
+        process::exit(1);
+    }
+}
+
+/// Prints what the run aimed at and did not find. True if there was any.
+///
+/// An aimed step that misses is not a failure — the tree keeps what the rest of
+/// the tactic did — but it is a mistyped number, so the tool says so and exits
+/// non-zero. `try(...)` is how you say a miss is acceptable.
+fn report_misses(env: &Env, standalone: bool) -> bool {
+    let misses = env.misses();
+    let report = miss_report(&misses);
+    if report.is_empty() {
+        return false;
+    }
+    eprintln!();
+    if standalone {
+        eprintln!("error: {}", report[0]);
+    } else {
+        eprintln!("  {}", report[0]);
+    }
+    for line in &report[1..] {
+        eprintln!("{}", line);
+    }
+    true
 }
 
 fn usage() {

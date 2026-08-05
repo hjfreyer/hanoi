@@ -235,6 +235,16 @@ pub(crate) fn sketch(nodes: &[Node]) -> String {
     }
 }
 
+/// One node, named but not opened: `add`, `dip 1 { … }`, `branch { … } { … }`.
+///
+/// What [`sketch`] is for is recognizing a rewrite, so it shows two levels. What
+/// this is for is saying what happened to be somewhere — a miss report naming
+/// the node an aimed rule declined — where the shape is the whole answer and a
+/// branch's contents are a wall.
+pub(crate) fn sketch_head(node: &Node) -> String {
+    sketch_node(node, 0)
+}
+
 /// Nodes shown per level before the rest becomes an ellipsis.
 const SKETCH_WIDTH: usize = 3;
 
