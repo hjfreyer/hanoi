@@ -1,6 +1,6 @@
 //! Integration tests for the rewrite tool.
 //!
-//! The layers have their own tests: `rule2` checks that each equation says what
+//! The layers have their own tests: `rule` checks that each equation says what
 //! it means, `applier` that a step is applied or refused exactly, `matcher`
 //! that a proposal is one the applier takes, `engine` that a run is reproduced
 //! by the script it leaves. What is left for here is the tool as a whole —
@@ -19,7 +19,7 @@ use crate::arity::{node_arity, seq_arity};
 use crate::engine::{Env, Tactic, run as run_tactic};
 use crate::ir::{Node, build};
 use crate::program::Program;
-use crate::rule2::Script;
+use crate::rule::Script;
 use crate::script::{Definitions, PRELUDE};
 
 /// The prelude tactics, by the name a test refers to them by.
@@ -514,7 +514,7 @@ fn introducing_a_copy_lets_factoring_reach_an_arm_that_lacked_it() {
     // One step to introduce, three to factor.
     assert_eq!(script.len(), 4);
     assert_eq!(script[0].kind.name(), "annihilate");
-    assert_eq!(script[0].dir, crate::rule2::Direction::Reverse);
+    assert_eq!(script[0].dir, crate::rule::Direction::Reverse);
 }
 
 #[test]

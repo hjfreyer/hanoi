@@ -37,7 +37,7 @@ use crate::engine::{Env, Tactic, run as run_tactic};
 use crate::ir::{Node, build};
 use crate::print::render_body;
 use crate::program::Program;
-use crate::rule2::{Script, Step};
+use crate::rule::{Script, Step};
 
 /// Steps listed either side of the cursor by `trace`.
 const TRACE_CONTEXT: usize = 8;
@@ -457,15 +457,15 @@ mod tests {
     #[test]
     fn the_histogram_counts_a_prefix_most_frequent_first() {
         use crate::location::Location;
-        use crate::rule2::{Direction, Rule2, StepKind};
+        use crate::rule::{Direction, Rule, StepKind};
 
-        let step = |rule: Rule2| Step {
+        let step = |rule: Rule| Step {
             kind: StepKind::Rule(rule),
             dir: Direction::Forward,
             loc: Location::root(0),
         };
         let collapse = || {
-            step(Rule2::Collapse {
+            step(Rule::Collapse {
                 k: 1,
                 j: 1,
                 a: Vec::new(),
@@ -474,7 +474,7 @@ mod tests {
             })
         };
         let fuse = || {
-            step(Rule2::Fuse {
+            step(Rule::Fuse {
                 k: 1,
                 a: Vec::new(),
                 b: Vec::new(),
@@ -482,7 +482,7 @@ mod tests {
                 b_origins: Vec::new(),
             })
         };
-        let cancel = || step(Rule2::CancelTuple { n: 2 });
+        let cancel = || step(Rule::CancelTuple { n: 2 });
 
         let log = vec![cancel(), fuse(), cancel(), collapse()];
         assert_eq!(

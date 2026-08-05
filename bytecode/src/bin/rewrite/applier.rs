@@ -12,7 +12,7 @@
 //! fitting.
 //!
 //! Nothing here trusts the script. Side conditions are re-checked against the
-//! library on every application (see [`Rule2::check`]), so a step whose
+//! library on every application (see [`Rule::check`]), so a step whose
 //! arguments claim an arity the library does not give is refused no matter how
 //! it came to be written.
 
@@ -20,7 +20,7 @@ use crate::arity::seq_arity;
 use crate::ir::{Node, Selector, child_seq, expand_call, same_effect_seq, sketch};
 use crate::location::{Location, selector_name};
 use crate::program::Program;
-use crate::rule2::{Direction, SideCondition, Step, StepKind};
+use crate::rule::{Direction, SideCondition, Step, StepKind};
 
 /// What a step did to the sequence it landed in.
 ///
@@ -285,7 +285,7 @@ pub(crate) fn apply_script(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rule2::Rule2;
+    use crate::rule::Rule;
     use bytecode::{Instruction, Library, Value, assemble};
 
     fn prog() -> Program<'static> {
@@ -313,7 +313,7 @@ mod tests {
         }
     }
 
-    fn step(kind: Rule2, dir: Direction, loc: Location) -> Step {
+    fn step(kind: Rule, dir: Direction, loc: Location) -> Step {
         Step {
             kind: StepKind::Rule(kind),
             dir,
@@ -321,8 +321,8 @@ mod tests {
         }
     }
 
-    fn collapse(k: usize, j: usize, a: Vec<Node>) -> Rule2 {
-        Rule2::Collapse {
+    fn collapse(k: usize, j: usize, a: Vec<Node>) -> Rule {
+        Rule::Collapse {
             k,
             j,
             a,
@@ -396,11 +396,7 @@ mod tests {
             op(Instruction::Drop),
             op(Instruction::Add),
         ];
-        let s = step(
-            Rule2::Counit { d: 2 },
-            Direction::Forward,
-            Location::root(1),
-        );
+        let s = step(Rule::Counit { d: 2 }, Direction::Forward, Location::root(1));
         let info = apply_step(&prog(), &mut tree, &s, 0, true).unwrap();
         assert_eq!(
             info,
@@ -450,27 +446,27 @@ mod tests {
         }
     }
 
-    fn equations() -> Vec<Rule2> {
+    fn equations() -> Vec<Rule> {
         vec![
             collapse(2, 3, vec![op(Instruction::Add)]),
-            Rule2::ElimDip0 {
+            Rule::ElimDip0 {
                 a: vec![op(Instruction::Add)],
                 origins: vec!["o".to_string()],
             },
-            Rule2::Interchange {
+            Rule::Interchange {
                 x: op(Instruction::Add),
                 framed: dip(2, vec![op(Instruction::Drop)]),
                 n: 2,
                 m: 2,
             },
-            Rule2::Fuse {
+            Rule::Fuse {
                 k: 1,
                 a: vec![op(Instruction::Add)],
                 b: vec![op(Instruction::Drop)],
                 a_origins: vec!["a".to_string()],
                 b_origins: vec!["b".to_string()],
             },
-            Rule2::Hoist {
+            Rule::Hoist {
                 k: 1,
                 x: vec![op(Instruction::Add)],
                 origins: Vec::new(),
@@ -479,33 +475,33 @@ mod tests {
                 then_origin: "then".to_string(),
                 else_origin: "else".to_string(),
             },
-            Rule2::Distribute {
+            Rule::Distribute {
                 then_arm: vec![op(Instruction::Add)],
                 else_arm: vec![op(Instruction::Add)],
                 suffix: vec![op(Instruction::Drop)],
                 then_origin: "then".to_string(),
                 else_origin: "else".to_string(),
             },
-            Rule2::FoldBranch {
+            Rule::FoldBranch {
                 c: Value::Bool(true),
                 then_arm: vec![op(Instruction::Add)],
                 else_arm: vec![op(Instruction::Add)],
                 then_origin: "then".to_string(),
                 else_origin: "else".to_string(),
             },
-            Rule2::Eval {
+            Rule::Eval {
                 op: Instruction::And,
                 inputs: vec![Value::Bool(true), Value::Bool(false)],
             },
-            Rule2::Annihilate {
+            Rule::Annihilate {
                 x: vec![op(Instruction::Add)],
                 n: 2,
                 m: 2,
             },
-            Rule2::Counit { d: 3 },
-            Rule2::CopyConst { c: Value::Int(7) },
-            Rule2::CopyAssoc { d: 2 },
-            Rule2::CancelTuple { n: 3 },
+            Rule::Counit { d: 3 },
+            Rule::CopyConst { c: Value::Int(7) },
+            Rule::CopyAssoc { d: 2 },
+            Rule::CancelTuple { n: 3 },
         ]
     }
 
@@ -560,11 +556,7 @@ mod tests {
     #[test]
     fn a_window_running_off_the_end_is_refused() {
         let mut tree = vec![op(Instruction::Pick(0))];
-        let s = step(
-            Rule2::Counit { d: 0 },
-            Direction::Forward,
-            Location::root(0),
-        );
+        let s = step(Rule::Counit { d: 0 }, Direction::Forward, Location::root(0));
         assert!(matches!(
             apply_step(&prog(), &mut tree, &s, 0, false)
                 .unwrap_err()
@@ -580,11 +572,7 @@ mod tests {
     #[test]
     fn a_window_that_is_not_what_the_equation_says_is_refused() {
         let mut tree = vec![op(Instruction::Pick(0)), op(Instruction::Add)];
-        let s = step(
-            Rule2::Counit { d: 0 },
-            Direction::Forward,
-            Location::root(0),
-        );
+        let s = step(Rule::Counit { d: 0 }, Direction::Forward, Location::root(0));
         let err = apply_step(&prog(), &mut tree, &s, 0, false).unwrap_err();
         let Cause::WindowMismatch { expected, found } = &err.cause else {
             panic!("expected a mismatch, got {:?}", err.cause)
@@ -599,7 +587,7 @@ mod tests {
         // about `add` is what the library disagrees with, and that is enough.
         let mut tree = vec![op(Instruction::Add), dip(1, Vec::new())];
         let s = step(
-            Rule2::Interchange {
+            Rule::Interchange {
                 x: op(Instruction::Add),
                 framed: dip(1, Vec::new()),
                 n: 1,
@@ -621,11 +609,7 @@ mod tests {
     fn a_failed_step_leaves_the_tree_alone() {
         let before = vec![op(Instruction::Pick(0)), op(Instruction::Add)];
         let mut tree = before.clone();
-        let s = step(
-            Rule2::Counit { d: 0 },
-            Direction::Forward,
-            Location::root(0),
-        );
+        let s = step(Rule::Counit { d: 0 }, Direction::Forward, Location::root(0));
         assert!(apply_step(&prog(), &mut tree, &s, 0, false).is_err());
         assert_eq!(tree, before);
     }
@@ -638,11 +622,7 @@ mod tests {
         // is precisely what a script is for, and why introducing rules need
         // addressing to be exact.
         let mut tree = vec![op(Instruction::Not), op(Instruction::Add)];
-        let s = step(
-            Rule2::Counit { d: 0 },
-            Direction::Reverse,
-            Location::root(1),
-        );
+        let s = step(Rule::Counit { d: 0 }, Direction::Reverse, Location::root(1));
         let info = apply_step(&prog(), &mut tree, &s, 0, true).unwrap();
         assert_eq!(
             info,
@@ -681,14 +661,14 @@ mod tests {
             let mut script: Vec<Step> = (0..n)
                 .map(|i| {
                     step(
-                        Rule2::Counit { d: n - 1 },
+                        Rule::Counit { d: n - 1 },
                         Direction::Reverse,
                         Location::root(i),
                     )
                 })
                 .collect();
             script.push(step(
-                Rule2::Annihilate {
+                Rule::Annihilate {
                     x: vec![x.clone()],
                     n,
                     m,
@@ -701,7 +681,7 @@ mod tests {
             apply_script(&prog(), &mut tree, &script, true)
                 .unwrap_or_else(|e| panic!("deriving vacuous for {:?}: {}", x, e));
 
-            let mut expected = crate::rule2::tests::copies(n);
+            let mut expected = crate::rule::tests::copies(n);
             expected.push(x.clone());
             expected.extend(std::iter::repeat_n(op(Instruction::Drop), m));
             assert_eq!(
@@ -740,7 +720,7 @@ mod tests {
             body: vec![op(Instruction::Add)],
         }];
         let s = step(
-            Rule2::ElimDip0 {
+            Rule::ElimDip0 {
                 a: vec![op(Instruction::Add)],
                 origins: Vec::new(),
             },
@@ -815,7 +795,7 @@ mod tests {
     fn unfold_produces_a_body_the_step_never_carried() {
         // One call node becomes two. The step names only the target, so those
         // nodes can have come from nowhere but the library — which is the whole
-        // reason unfolding is not a [`Rule2`].
+        // reason unfolding is not a [`Rule`].
         let library = library();
         let prog = Program::new(library);
         let pair = named(library, "pair");
@@ -991,7 +971,7 @@ mod tests {
         )];
         let wrap = |sel| {
             step(
-                Rule2::ElimDip0 {
+                Rule::ElimDip0 {
                     a: vec![op(Instruction::Add)],
                     origins: Vec::new(),
                 },
@@ -1006,7 +986,7 @@ mod tests {
             wrap(Selector::Then),
             wrap(Selector::Else),
             step(
-                Rule2::Hoist {
+                Rule::Hoist {
                     k: 0,
                     x: vec![op(Instruction::Add)],
                     origins: Vec::new(),

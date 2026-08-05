@@ -45,7 +45,7 @@ use crate::applier::{ApplyError, apply_step};
 use crate::ir::{Node, Selector, child_seq, child_seqs};
 use crate::matcher::Matcher;
 use crate::program::Program;
-use crate::rule2::{Script, Step};
+use crate::rule::{Script, Step};
 
 /// How many firings the trace remembers. Enough to read an oscillation off the
 /// end of it, not enough to bury the error message.
@@ -1372,14 +1372,33 @@ mod tests {
 
     #[test]
     fn every_matcher_can_be_placed_in_a_tactic() {
-        // A registry that names something `Tactic::Each` cannot hold would be a
-        // silent hole in the language.
+        // A registry that names something a tactic cannot hold would be a
+        // silent hole in the language. `once` rather than `each`, because
+        // placement is the question here and the matchers with no measure
+        // deliberately do not settle — see below.
         let prog = empty_prog();
         for name in matcher::matcher_names() {
             let env = Env::new(&prog, 100, true);
-            let tactic = each_of(&[name]);
+            let tactic = once_of(&[name]);
             apply(&tactic, &env, vec![op(Instruction::Add)])
                 .unwrap_or_else(|e| panic!("{} could not be placed: {}", name, e));
         }
+    }
+
+    #[test]
+    fn a_matcher_that_rebuilds_its_own_window_does_not_settle() {
+        // `swap` puts a `roll 1` in front of the operator it matched, and the
+        // operator is still there — so `each` finds it again one along. That is
+        // the same shape as `introduce`, and the reason both say to aim rather
+        // than sweep. The budget is what says so out loud.
+        let prog = empty_prog();
+        let env = Env::new(&prog, 40, true);
+        let err = apply(&each_of(&["swap"]), &env, vec![op(Instruction::Add)]).unwrap_err();
+        assert!(matches!(err, TacticError::OutOfFuel { .. }), "{:?}", err);
+
+        // Aimed, it does exactly one thing.
+        let (after, script) = run_checked(&prog, &once_of(&["swap"]), vec![op(Instruction::Add)]);
+        assert_eq!(script.len(), 1);
+        assert_eq!(after, vec![op(Instruction::Roll(1)), op(Instruction::Add)]);
     }
 }

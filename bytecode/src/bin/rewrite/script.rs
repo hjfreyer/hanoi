@@ -68,11 +68,16 @@ tactic annihilation = repeat(bu(each(annihilate, annihilate_flagged, counit)));
 // not fire on `add`.
 tactic values = repeat(bu(each(eval1, eval2, cancel_tuple, copy_const)));
 
+// Delete shuffles an operator cannot see. `comm` is the only law here and it
+// strictly shrinks the term, so unlike its backward reading `swap` it is safe
+// in a fixpoint.
+tactic commuting = repeat(bu(each(comm)));
+
 // Throw away work that does nothing, then fold what that exposes. The two
 // belong together because each makes work for the other: folding is what
 // produces the literal `fold_branch` needs, and deciding a branch is what
 // exposes the next thing to fold.
-tactic cleanup = repeat(bu(each(annihilate, annihilate_flagged, counit, fold_branch);
+tactic cleanup = repeat(bu(each(annihilate, annihilate_flagged, counit, comm, fold_branch);
                            each(eval1, eval2, cancel_tuple, copy_const)));
 
 // Push what follows a branch into both of its arms, so a law that only holds on
@@ -87,7 +92,7 @@ tactic distribution = repeat(bu(each(distribute)));
 tactic flattening = repeat(bu(each(flatten)));
 
 // Everything that makes a term smaller, at once.
-tactic all = repeat(bu(each(annihilate, annihilate_flagged, counit, fold_branch);
+tactic all = repeat(bu(each(annihilate, annihilate_flagged, counit, comm, fold_branch);
                        each(eval1, eval2, cancel_tuple, copy_const);
                        each(factor);
                        each(collapse); each(sink); each(fuse)));

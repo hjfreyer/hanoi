@@ -25,7 +25,7 @@ mod location;
 mod matcher;
 mod print;
 mod program;
-mod rule2;
+mod rule;
 mod script;
 mod stack;
 #[cfg(test)]
