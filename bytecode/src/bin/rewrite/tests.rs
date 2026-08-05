@@ -363,9 +363,13 @@ fn comparing_two_literals_is_decided() {
 
 #[test]
 fn folding_is_evaluation_even_on_junk() {
-    // Neither operand is `Bool(true)`, so `and` is false — the same answer the
-    // interpreter gives, which is the whole obligation.
+    // Neither operand is `Bool(false)`, so both are true and `and` is true —
+    // the same answer the interpreter gives, which is the whole obligation.
     let got = tree("sentence probe { push 1 push 2 and }", "values");
+    assert_eq!(shape(&got), vec!["push true"]);
+
+    // And `false` is what decides it the other way.
+    let got = tree("sentence probe { push 1 push false and }", "values");
     assert_eq!(shape(&got), vec!["push false"]);
 }
 

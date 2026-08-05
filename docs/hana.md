@@ -127,7 +127,7 @@ enum MyEnum {
 
 - **Jumps**: Subroutine execution is initiated via `jump S`, which pushes the return address to a call stack and jumps to sentence `S`. Reaching the end of `S` pops the return address and returns control to the caller.
 - **Dips**: `dip N { block }` (or `dip N S`) runs a block with the top `N` stack values hidden from it, restoring them on top of whatever the block leaves behind. `N` may be omitted, in which case it is 1. This is `jump` with an offset into the stack: `dip 0 S` and `jump S` are the same instruction.
-- **Branches**: Conditional execution is implemented via `branch { then_block } { else_block }`. The VM pops the top stack element; if it is truthy, it executes `then_block`, otherwise it executes `else_block`.
+- **Branches**: Conditional execution is implemented via `branch { then_block } { else_block }`. The VM pops the top stack element; if it is truthy, it executes `then_block`, otherwise it executes `else_block`. Truthiness is `v != false`, so only a literal `false` reaches the else block.
 - **Panics**: If a condition fails, `panic` immediately halts VM execution. Safe assertion operations `assert` and `assert_eq` verify preconditions and abort the program on failure.
 
 ### Why `dip` and not `roll`

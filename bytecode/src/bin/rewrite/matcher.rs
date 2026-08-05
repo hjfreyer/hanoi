@@ -1432,10 +1432,11 @@ mod tests {
             fire(&FoldBranch, &prog(), &w(Value::Bool(false))),
             Some(vec![op(Instruction::Not)])
         );
-        // Not a bool at all: the branch takes the else arm, and so does this.
+        // Not a bool at all: `false` is the only falsy value, so the branch
+        // takes the then arm, and so does this.
         assert_eq!(
             fire(&FoldBranch, &prog(), &w(Value::Int(1))),
-            Some(vec![op(Instruction::Not)])
+            Some(vec![op(Instruction::Add)])
         );
     }
 
@@ -1495,12 +1496,12 @@ mod tests {
 
     #[test]
     fn eval_folds_a_unary_operator() {
-        // `not` goes through `truthy`, so a non-boolean is falsy and negates
-        // to `true` rather than being rejected.
+        // `not` goes through `truthy`, so a non-boolean is *true* and negates
+        // to `false` rather than being rejected.
         let w = [op(Instruction::Push(Value::Int(7))), op(Instruction::Not)];
         assert_eq!(
             fire(&EvalUnary, &prog(), &w),
-            Some(vec![op(Instruction::Push(Value::Bool(true)))])
+            Some(vec![op(Instruction::Push(Value::Bool(false)))])
         );
         // And a type test answers on every literal.
         let w = [op(Instruction::Push(Value::Int(7))), op(Instruction::IsInt)];
