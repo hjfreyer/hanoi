@@ -42,6 +42,15 @@ fn compile(src: &str) -> Tactic {
         .unwrap_or_else(|e| panic!("{}", e.render(src)))
 }
 
+/// The same, with a program, so a term may name a sentence.
+fn compile_for(prog: &Program, src: &str) -> Tactic {
+    let mut defs = Definitions::new();
+    defs.load(PRELUDE)
+        .unwrap_or_else(|e| panic!("{}", e.render(PRELUDE)));
+    defs.compile_with(src, Some(prog))
+        .unwrap_or_else(|e| panic!("{}", e.render(src)))
+}
+
 /// Runs a tactic with `--check` on, and checks the script it produced replays.
 ///
 /// Every test in this file therefore also asserts that each step preserved the
@@ -595,6 +604,70 @@ fn reading_distribute_backwards_factors_a_shared_suffix() {
 
     // And the forward reading puts it back, which is what makes them one law.
     assert_eq!(shape(&run(prog, got, "distribution")), shape(&plain));
+}
+
+// ---------------------------------------------------------------------------
+// Sharing one computation between two uses
+// ---------------------------------------------------------------------------
+
+/// The case the law is for: a call made twice on copies of the same inputs.
+///
+/// The term names the sentence, which is what a term could not do before —
+/// there was nothing for one to name, since a term is written in the tactic
+/// rather than compiled from a sentence. `share` needs the name, and needs the
+/// library to know how wide a window `jump classify` makes.
+#[test]
+fn sharing_a_call_runs_it_once_and_copies_what_it_left() {
+    let code = r#"
+        #[total]
+        function classify { pick 0 is_int branch { drop 0 push 7 } { drop 0 push 8 } }
+
+        #[total]
+        #[arity(1, 2)]
+        sentence twice { pick 0 jump classify dip 1 { jump classify } }
+    "#;
+    let (prog, plain) = raw(code, "twice");
+    let tactic = compile_for(prog, "must(once(share { jump classify }))");
+
+    let env = Env::new(prog, 1_000_000, true);
+    let (got, script) =
+        run_tactic(&env, &tactic, plain.clone()).unwrap_or_else(|e| panic!("{}", e));
+    assert_eq!(
+        shape(&got),
+        vec!["call 0 #0", "pick 0"],
+        "{:?}",
+        shape(&got)
+    );
+    assert_eq!(script.len(), 1, "one law, one step");
+    assert_eq!(script[0].kind.name(), "copy_nat");
+
+    // And the derivation replays, which is what makes the step a construction
+    // rather than a claim.
+    let mut replayed = plain.clone();
+    apply_script(prog, &mut replayed, &script, true).unwrap();
+    assert_eq!(replayed, got);
+
+    // Backwards, it runs the call a second time instead of copying.
+    let back = compile_for(prog, "must(once(inv(share { jump classify })))");
+    let env = Env::new(prog, 1_000_000, true);
+    let (there, _) = run_tactic(&env, &back, got).unwrap_or_else(|e| panic!("{}", e));
+    assert_eq!(shape(&there), shape(&plain));
+}
+
+#[test]
+fn a_term_may_only_name_a_sentence_when_there_is_a_program() {
+    // The arity of `jump foo` is what says how wide a window the rule reads,
+    // and that is a fact about the library. Everything else about a tactic is
+    // still settled without one.
+    let mut defs = Definitions::new();
+    defs.load(PRELUDE).unwrap();
+    let err = defs
+        .compile("once(share { jump whatever })")
+        .expect_err("it should not compile with no program");
+    assert!(err.message.contains("needs a program"), "{}", err.message);
+
+    // A term that names nothing still compiles on its own.
+    assert!(defs.compile("once(share { equal })").is_ok());
 }
 
 #[test]

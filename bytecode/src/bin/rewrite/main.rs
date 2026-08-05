@@ -36,13 +36,13 @@ use std::fs;
 use std::path::Path;
 use std::process;
 
+use bytecode::Library;
 use bytecode::arity::failure_reachability;
-use bytecode::{Library, SentenceIndex};
 
 use crate::engine::{Env, miss_report};
 use crate::matcher::{matcher_by_name, matcher_names, term_matcher_names};
 use crate::print::print_sentence;
-use crate::program::Program;
+use crate::program::{Program, resolve_sentence};
 use crate::script::{Definitions, PRELUDE};
 
 /// Rule firings allowed per run before the tool gives up and shows its work.
@@ -148,13 +148,18 @@ fn main() {
             }
         }
         println!();
-        println!("rules that need a term saying what code to introduce:");
+        println!("rules that take a term, saying what code the window cannot:");
         for name in term_matcher_names() {
             println!(
                 "  {} {{ ... }}     e.g. `once({} {{ pick 0 }})`",
                 name, name
             );
         }
+        println!();
+        println!("a term is instructions in braces — `pick n`, `push <lit>`,");
+        println!("`dip n {{ ... }}`, `jump <sentence>`, and the argument-free");
+        println!("operators. Naming a sentence needs a program loaded, since its");
+        println!("arity is what says how wide a window the rule reads.");
         println!();
         println!("`inv(r)` is r's equation read the other way. Where that reading is");
         println!("worth a name it has one — `inv(sink)` is `float` — and where it is");
@@ -192,14 +197,6 @@ fn main() {
         process::exit(1);
     }
 
-    let tactic = match defs.compile(&opts.tactic) {
-        Ok(t) => t,
-        Err(err) => {
-            eprint!("{}", err.render(&opts.tactic));
-            process::exit(1);
-        }
-    };
-
     let library = load(&positional[0]);
     let root = match resolve_sentence(&library, &positional[1]) {
         Ok(idx) => idx,
@@ -210,6 +207,17 @@ fn main() {
     };
 
     let prog = Program::new(&library);
+
+    // After the library, because a term may name a sentence — `share { jump
+    // foo }` needs `foo`'s arity to know how wide a window it reads. Everything
+    // else about a tactic is still checked here rather than at run time.
+    let tactic = match defs.compile_with(&opts.tactic, Some(&prog)) {
+        Ok(t) => t,
+        Err(err) => {
+            eprint!("{}", err.render(&opts.tactic));
+            process::exit(1);
+        }
+    };
     if prog.is_recursive(root) {
         eprintln!("error: '{}' is #[recursive]", library.names[root]);
         eprintln!();
@@ -378,103 +386,4 @@ fn load(dir_arg: &str) -> Library {
             process::exit(1);
         }
     }
-}
-
-/// Accepts an index (`#12` or `12`), an exact name, or an unambiguous suffix.
-fn resolve_sentence(library: &Library, ident: &str) -> Result<SentenceIndex, String> {
-    let numeric = ident.strip_prefix('#').unwrap_or(ident);
-    if let Ok(raw) = numeric.parse::<usize>() {
-        if raw >= library.sentences.len() {
-            return Err(format!(
-                "No sentence #{}: the library has {}",
-                raw,
-                library.sentences.len()
-            ));
-        }
-        return Ok(SentenceIndex::from(raw));
-    }
-
-    let exact: Vec<SentenceIndex> = library
-        .names
-        .iter_enumerated()
-        .filter(|(_, name)| *name == ident)
-        .map(|(idx, _)| idx)
-        .collect();
-    if exact.len() == 1 {
-        return Ok(exact[0]);
-    }
-    if exact.len() > 1 {
-        return Err(format!(
-            "'{}' is ambiguous: {}",
-            ident,
-            render_candidates(library, &exact)
-        ));
-    }
-
-    // Fall back to a trailing path match, so `queue::accept` finds
-    // `queue::queue::accept` without spelling out every segment.
-    let suffix = format!("::{}", ident);
-    let matches: Vec<SentenceIndex> = library
-        .names
-        .iter_enumerated()
-        .filter(|(_, name)| name.ends_with(&suffix))
-        .map(|(idx, _)| idx)
-        .collect();
-
-    match matches.len() {
-        1 => Ok(matches[0]),
-        0 => Err(format!(
-            "No sentence matching '{}'. Named sentences:\n{}",
-            ident,
-            named_sentence_list(library)
-        )),
-        _ => Err(format!(
-            "'{}' is ambiguous: {}",
-            ident,
-            render_candidates(library, &matches)
-        )),
-    }
-}
-
-/// The most a listing prints before it stops being an aid and starts being a
-/// wall; `check` alone matches nearly sixty sentences in the test corpus.
-const MAX_LISTED: usize = 15;
-
-fn render_candidates(library: &Library, candidates: &[SentenceIndex]) -> String {
-    let mut out = String::from("\n");
-    for idx in candidates.iter().take(MAX_LISTED) {
-        out.push_str(&format!(
-            "  #{:<5} {}\n",
-            usize::from(*idx),
-            library.names[*idx]
-        ));
-    }
-    if candidates.len() > MAX_LISTED {
-        out.push_str(&format!(
-            "  ... and {} more\n",
-            candidates.len() - MAX_LISTED
-        ));
-    }
-    out
-}
-
-fn named_sentence_list(library: &Library) -> String {
-    let mut named: Vec<(&str, SentenceIndex)> = library
-        .names
-        .iter_enumerated()
-        .filter(|(_, name)| *name != "<inline>")
-        .map(|(idx, name)| (name.as_str(), idx))
-        .collect();
-    named.sort();
-
-    let total = named.len();
-    let mut out: Vec<String> = named
-        .into_iter()
-        .take(MAX_LISTED)
-        .map(|(name, idx)| format!("  #{:<5} {}", usize::from(idx), name))
-        .collect();
-    if total > MAX_LISTED {
-        out.push(format!("  ... and {} more", total - MAX_LISTED));
-    }
-    out.join("\n")
 }

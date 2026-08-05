@@ -66,3 +66,45 @@ test sentence building_and_taking_apart_leaves_the_flag {
     push 2 assert_eq
     push 1 assert_eq
 }
+
+// `pick (n-1)^n ; X ; dip m { X }` = `X ; pick (m-1)^m`, for `X : n -> m`.
+//
+// Copying is natural: copy the inputs and run X on both the copy and the
+// original, or run it once and copy the outputs. The one law here that needs X
+// to be *deterministic* — every other equation is sound even for an X that
+// answered differently each time — so it is the one most worth running.
+#[total]
+function classify { pick 0 is_int branch { drop 0 push 7 } { drop 0 push 8 } }
+
+test sentence copying_inputs_is_copying_outputs {
+    // X = equal : 2 -> 1
+    push 3 push 4  pick 1 pick 1 equal dip 1 { equal }
+    push false assert_eq   push false assert_eq
+    push 3 push 4  equal pick 0
+    push false assert_eq   push false assert_eq
+
+    push 5 push 5  pick 1 pick 1 equal dip 1 { equal }
+    push true assert_eq    push true assert_eq
+    push 5 push 5  equal pick 0
+    push true assert_eq    push true assert_eq
+
+    // X = add : 2 -> 2, where the flag is copied too
+    push 3 push 4  pick 1 pick 1 add dip 2 { add }
+    push true assert_eq  push 7 assert_eq
+    push true assert_eq  push 7 assert_eq
+    push 3 push 4  add pick 1 pick 1
+    push true assert_eq  push 7 assert_eq
+    push true assert_eq  push 7 assert_eq
+
+    // X = a call, which is the case `share { jump ... }` is for
+    push 42  pick 0 jump classify dip 1 { jump classify }
+    push 7 assert_eq   push 7 assert_eq
+    push 42  jump classify pick 0
+    push 7 assert_eq   push 7 assert_eq
+
+    // X = push c : 0 -> 1, the constant case that makes `copy_const` a lemma
+    push 9 dip 1 { push 9 }
+    push 9 assert_eq   push 9 assert_eq
+    push 9 pick 0
+    push 9 assert_eq   push 9 assert_eq
+}

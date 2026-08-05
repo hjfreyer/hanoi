@@ -707,6 +707,81 @@ mod tests {
         }
     }
 
+    #[test]
+    fn copy_const_is_derivable_from_copy_nat() {
+        // Is `copy_const` an axiom, or a lemma? Run the derivation and find out.
+        //
+        //   push c ; pick 0
+        //     copy_nat backwards, at n = 0        -> push c ; dip 1 { push c }
+        //     interchange forwards                -> dip 0 { push c } ; push c
+        //     elim_dip0 forwards                  -> push c ; push c
+        //
+        // Copying a constant is the constant case of copying being natural, so
+        // the general law demotes this one. It stays a matcher — `values` and
+        // `cleanup` lean on it, and one step beats three — but it is no longer
+        // something the set has to take on faith.
+        let c = Value::Int(7);
+        let push_c = || op(Instruction::Push(c.clone()));
+        let rule = Rule::CopyConst { c: c.clone() };
+
+        let script = vec![
+            step(
+                Rule::CopyNat {
+                    x: vec![push_c()],
+                    n: 0,
+                    m: 1,
+                },
+                Direction::Reverse,
+                Location::root(0),
+            ),
+            step(
+                Rule::Interchange {
+                    x: push_c(),
+                    framed: Node::Dip {
+                        depth: 1,
+                        origins: Vec::new(),
+                        body: vec![push_c()],
+                    },
+                    n: 0,
+                    m: 1,
+                },
+                Direction::Forward,
+                Location::root(0),
+            ),
+            step(
+                Rule::ElimDip0 {
+                    a: vec![push_c()],
+                    origins: Vec::new(),
+                },
+                Direction::Forward,
+                Location::root(0),
+            ),
+        ];
+
+        let mut tree = rule.lhs();
+        apply_script(&prog(), &mut tree, &script, true)
+            .unwrap_or_else(|e| panic!("deriving copy_const: {}", e));
+        assert_eq!(
+            tree,
+            rule.rhs(),
+            "the derivation did not reproduce copy_const"
+        );
+
+        // And back, step for step, which is what makes it a lemma rather than
+        // a coincidence that happens to land on the same tree.
+        let back: Vec<Step> = script
+            .iter()
+            .rev()
+            .map(|s| Step {
+                dir: s.dir.flipped(),
+                ..s.clone()
+            })
+            .collect();
+        apply_script(&prog(), &mut tree, &back, true)
+            .unwrap_or_else(|e| panic!("undoing the derivation: {}", e));
+        assert_eq!(tree, rule.lhs());
+    }
+
     // -- provenance is not identity -----------------------------------------
 
     #[test]

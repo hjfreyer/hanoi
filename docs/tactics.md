@@ -55,8 +55,10 @@ finite by construction.
 
 ## The equations
 
-Fifteen, plus one thing that is not an equation. `--list-rules` prints the
-matchers that place them.
+Sixteen, plus one thing that is not an equation. `--list-rules` prints the
+matchers that place them. Fifteen of the sixteen are axioms: `copy_const` is
+the constant case of `copy_nat` and is kept only because it is one step where
+the derivation is three.
 
 | equation | law | notes |
 |---|---|---|
@@ -74,6 +76,7 @@ matchers that place them.
 | `counit` | `pick d ; drop` = nothing | *not* an annihilation: `pick d` is `(d+1 -> d+2)` |
 | `copy_const` | `push c ; pick 0` = `push c ; push c` | |
 | `copy_assoc` | `pick d ; pick 0` = `pick d ; dip 1 { pick d }` | neither side is smaller; the point is that one copy ends up **in a frame**, and a framed computation is one `float` can carry |
+| `copy_nat` | `pick (n-1)^n ; X ; dip m { X }` = `X ; pick (m-1)^m`, for `X : n -> m` | copying is natural. Forward is common-subexpression elimination; the only law that needs `X` to be **deterministic** |
 | `cancel_tuple` | `tuple n ; untuple n` = `push true` | the flag is the whole residue. The converse order is not a no-op and has no equation |
 
 **`unfold` is not one of these.** That `Call { k, S }` may be replaced by `S`'s
@@ -100,6 +103,44 @@ of drops, and one backward `annihilate` turns the drops into `X`. So it is a
 lemma for a generator to emit as one firing, not an axiom. See
 `applier::tests::vacuous_is_derivable_from_annihilate_and_counit`, which runs
 the derivation both ways rather than asserting the claim.
+
+### The one that was worth adding: `copy_nat`
+
+```text
+pick (n-1)^n ; X ; dip m { X }  =  X ; pick (m-1)^m       for X : n -> m
+```
+
+Copy the inputs and run `X` on both the copy and the original, or run it once
+and copy the outputs. `pick (n-1)` done `n` times duplicates the top `n` values
+as a block — `a b` becomes `a b a b` — and the second application runs under
+the first one's results, which is what the frame is for. Forward it is common
+subexpression elimination; backward it delivers a second copy of a computation
+to a place that needs its own.
+
+**It is genuinely independent, and there is an argument rather than a failed
+search.** Read an opaque `X` as a random oracle — every application answers
+freshly — and every other equation in the set still holds. `annihilate` throws
+the answers away, `interchange` reorders computations that cannot see each
+other, and the rest never mention an opaque `X`. This one fails: the left side
+runs `X` twice and gets two different answers where the right runs it once and
+copies, and an `equal` afterwards can tell. No derivation from the others can
+exist.
+
+That argument is also the statement of what it assumes. **It is the only law
+here that needs `X` to be deterministic**, the way `annihilate` and
+`interchange` are the only two that need it to be total. It costs nothing
+today, because the instruction set is pure and a sentence of arity `(n -> m)`
+can see only the `n` values it is given — but an effectful instruction would
+take this law with it and nothing else, so it is written down rather than
+assumed.
+
+Adding it demoted one: `copy_const` is the case `X = push c`. The `n = 0`
+instance reads `push c ; dip 1 { push c }` = `push c ; pick 0`, and one
+`interchange` and one `elim_dip0` turn the left side into `push c ; push c`.
+See `applier::tests::copy_const_is_derivable_from_copy_nat`, which runs that
+derivation both ways. It keeps its one-step matcher because `values` and
+`cleanup` fire it constantly and three steps is three times the fuel, but the
+set now rests on fifteen axioms rather than sixteen.
 
 ## Scripts
 
@@ -173,6 +214,7 @@ different thing to look for even though the arithmetic is the same:
 | `comm` / `swap` | 2 / 1 | commutativity, either way |
 | `split_bool` / `unsplit_bool` | 1 / 3 | the case split, either way |
 | `introduce { .. }` | n | annihilate backwards — see below |
+| `share { .. }` | n+\|X\|+1 | `copy_nat` forward — see below |
 | `counit`, `copy_const`, `copy_assoc`, `cancel_tuple` | 2 | |
 
 `inv(r)` is the rest of them: every backward reading that is not worth a name
@@ -300,23 +342,55 @@ $ rewrite probe test_always_true -t 'else(once(introduce { pick 0 })); factoring
 The copy has been hoisted out of both arms, which is the move the old rule set
 could not reach at all.
 
+### Running one computation instead of two
+
+`share { X }` is the other rule that takes a term, and it takes one for a
+sharper reason. `introduce`'s window says nothing about what to conjure;
+`share`'s window cannot say what `X` **is**. For a run of nodes there is
+nothing to mark where the computation begins, and the number of `pick`s in
+front of it is `X`'s own input arity — which the matcher has to know before it
+can even ask for a window, since a matcher's width is fixed before it looks.
+
+```
+$ rewrite demo twice -t 'must(once(share { jump classify }))' --show-script
+   0 │      1 │ jump → #0 classify
+   1 │      1 │ pick 0
+
+  derivation — 1 step(s)
+     0  copy_nat -> @0
+        pick 0 ; jump → #0 ; dip 1 { jump → #0 }
+     ⇒  jump → #0 ; pick 0
+```
+
+Backwards — `inv(share { X })` — it un-shares, running `X` a second time
+rather than copying what it left. That is how a computation reaches a place
+that needs its own copy, and unlike `inv(annihilate)` the second copy is
+provably the same value as the first.
+
 ### Terms
 
 A term is a run of instructions in braces. `pick n`, `roll n`, `tuple n`,
-`untuple n`, `push <int|true|false>`, `dip n { ... }`, and the argument-free
-operators (`drop`, `not`, `and`, `equal`, `is_bool`, `add`, …). `--list-rules`
-prints the list.
+`untuple n`, `push <int|true|false>`, `dip n { ... }`, `jump <sentence>`, and
+the argument-free operators (`drop`, `not`, `and`, `equal`, `is_bool`, `add`,
+…). `--list-rules` prints the list.
 
-It has no calls — a term is written here rather than compiled from a sentence,
-so there is nothing to name — and no branches, which would need two blocks and a
-condition and would be a program rather than a term. `panic`, `assert` and
-`assert_eq` are absent on purpose: they are the three instructions that can
-fail, and introducing one would break the precondition every equation is stated
-under.
+It has no branches, which would need two blocks and a condition and would be a
+program rather than a term. `panic`, `assert` and `assert_eq` are absent on
+purpose: they are the three instructions that can fail, and introducing one
+would break the precondition every equation is stated under.
 
-A term's arity is worked out when the tactic is compiled, from the term alone,
-which is what lets a tactic be checked before a program is loaded. Two terms are
-refused there rather than at run time:
+**`jump <sentence>` is the one thing in a term that reaches outside it.** A
+term used to hold no calls because there was nothing for one to name — the code
+is written in the tactic rather than compiled from a sentence — but `share` is
+about running *a function* twice, and the function has a name. It is resolved
+the way the command line resolves one: an index, an exact name, or an
+unambiguous trailing part of one.
+
+A term's arity is worked out when the tactic is compiled. From the term alone
+where it names nothing, which is what lets the prelude be checked with no
+program loaded; from the library where it says `jump`, which is why a term that
+names a sentence is refused unless there is one. Two terms are refused at
+compile time rather than at run time:
 
 - one whose arity is unknown, since there would be no saying what it discards;
 - one that **consumes nothing**. `push 7` would match a window of no nodes,
