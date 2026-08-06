@@ -5,7 +5,7 @@
 // somewhere that runs them. A law that turned out to be false would show up
 // here rather than as a silently wrong derivation.
 
-symbol some_sym "some_sym"
+symbol some_sym
 
 // `pick 0 ; is_bool ; branch { branch { push true } { push false } } { }` = ε.
 //

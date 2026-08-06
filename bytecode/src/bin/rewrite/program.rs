@@ -82,9 +82,10 @@ const MAX_LISTED: usize = 15;
 /// `queue::State::Idle::tag` out.
 ///
 /// A symbol cannot be built from its name: [`bytecode::Symbol`] compares by
-/// `id`, and two declarations with the same text are different symbols. So a
+/// `id`, and two declarations reading the same are different symbols. So a
 /// term that pushes one is looking the real one up rather than making it, and
-/// a name that denotes none is refused.
+/// a name that denotes none is refused. (A `"const string"` is the opposite
+/// case — it *is* its text, so a term writes one out.)
 pub(crate) fn resolve_symbol(library: &Library, ident: &str) -> Result<Value, String> {
     if let Some(value) = library.symbols.get(ident) {
         return Ok(value.clone());
@@ -111,27 +112,12 @@ pub(crate) fn resolve_symbol(library: &Library, ident: &str) -> Result<Value, St
     }
 }
 
-/// What went wrong, with the one mistake worth naming out loud.
+/// What went wrong, with the names that were on offer.
 ///
-/// A symbol declared with a description prints as that description — the
-/// listing shows `symbol(std::io)` for one whose fully qualified name is
-/// `std::io::io` — so reading a name off a listing and writing it back is the
-/// obvious thing to try and the wrong one.
+/// A symbol prints as the fully qualified name it is declared under, which is
+/// the same name this reads, so a name taken off a listing can be written back
+/// as it stands.
 fn no_such_symbol(library: &Library, ident: &str) -> String {
-    let described: Vec<&str> = library
-        .symbols
-        .iter()
-        .filter(|(_, v)| matches!(v, Value::Symbol(s) if s.name == ident))
-        .map(|(k, _)| k.as_str())
-        .collect();
-    if let [fq] = described[..] {
-        return format!(
-            "'{}' is how the symbol declared as '{}' prints, not its name. \
-             Write '{}'",
-            ident, fq, fq
-        );
-    }
-
     let mut named: Vec<&str> = library.symbols.keys().map(|s| s.as_str()).collect();
     named.sort();
     format!(

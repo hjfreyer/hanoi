@@ -15,15 +15,17 @@ use crate::resolve::Path;
 /// An annotation as written in source: it names its target by path.
 pub type SourceAnnotation = Annotation<Path>;
 
-/// A value as written in source. Symbol references are still paths here; they
-/// become [`crate::value::Value`]s only once resolution has run.
+/// A value as written in source. References to declared constants — symbols and
+/// const strings alike — are still paths here; they become
+/// [`crate::value::Value`]s only once resolution has run.
 #[derive(Debug, Clone)]
 pub enum ParsedValue {
     Bool(bool),
     Int(i64),
     Float(f64),
+    ConstString(String),
     Tuple(Vec<ParsedValue>),
-    SymbolRef(Path),
+    Ref(Path),
 }
 
 #[derive(Debug, Clone)]
@@ -73,11 +75,12 @@ pub enum ParsedInstruction {
     Untuple(usize),
     And,
     Or,
-    SymbolLen,
-    SymbolCharAt,
+    ConstStringLen,
+    ConstStringCharAt,
     IsInt,
     IsBool,
     IsFloat,
+    IsConstString,
     IsSymbol,
     IsTuple,
     TupleLength,
@@ -86,10 +89,19 @@ pub enum ParsedInstruction {
 }
 
 /// A symbol declaration. Shared between sugar and core.
+///
+/// A symbol carries no text: the name it is declared under is the whole
+/// declaration, and the fully qualified form of it is what the value prints as.
 #[derive(Debug, Clone)]
 pub struct SymbolDecl {
     pub name: String,
-    pub debug_desc: Option<String>,
+}
+
+/// A const string declaration. Shared between sugar and core.
+#[derive(Debug, Clone)]
+pub struct ConstStringDecl {
+    pub name: String,
+    pub text: String,
 }
 
 /// A sentence declaration. Shared between sugar and core.
@@ -120,6 +132,7 @@ pub enum PrimitiveType {
     Int,
     Bool,
     Float,
+    ConstString,
     Symbol,
     Tuple,
 }
@@ -130,6 +143,9 @@ impl std::fmt::Display for ParsedValue {
             ParsedValue::Bool(b) => write!(f, "{}", b),
             ParsedValue::Int(i) => write!(f, "{}", i),
             ParsedValue::Float(fl) => write!(f, "{}", fl),
+            // Quoted, because composer templates are rendered as text and
+            // re-parsed: what this prints has to lex back to the same literal.
+            ParsedValue::ConstString(s) => write!(f, "{:?}", s),
             ParsedValue::Tuple(elements) => {
                 write!(f, "(")?;
                 for (i, elem) in elements.iter().enumerate() {
@@ -143,19 +159,22 @@ impl std::fmt::Display for ParsedValue {
                 }
                 write!(f, ")")
             }
-            ParsedValue::SymbolRef(path) => write!(f, "{}", path),
+            ParsedValue::Ref(path) => write!(f, "{}", path),
         }
     }
 }
 
 /// The surface language, as parsed. No desugaring has happened yet.
 pub mod sugar {
-    use super::{ParsedValue, SentenceDecl, SourceAnnotation, SymbolDecl, TypeSpec};
+    use super::{
+        ConstStringDecl, ParsedValue, SentenceDecl, SourceAnnotation, SymbolDecl, TypeSpec,
+    };
     use crate::resolve::Path;
 
     #[derive(Debug, Clone)]
     pub enum Item {
         Symbol(SymbolDecl),
+        ConstString(ConstStringDecl),
         Sentence(SentenceDecl),
         Mod(ModDecl),
         Type(TypeDecl),
@@ -262,11 +281,12 @@ pub mod sugar {
 /// The irreducible subset of the language. Everything here corresponds to
 /// something a user could have written by hand.
 pub mod core {
-    use super::{SentenceDecl, SymbolDecl};
+    use super::{ConstStringDecl, SentenceDecl, SymbolDecl};
 
     #[derive(Debug, Clone)]
     pub enum Item {
         Symbol(SymbolDecl),
+        ConstString(ConstStringDecl),
         Sentence(SentenceDecl),
         Mod(ModDecl),
     }

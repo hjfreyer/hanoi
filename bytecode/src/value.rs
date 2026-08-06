@@ -1,10 +1,20 @@
 use std::fmt;
 
-/// Represents a unique identifier with a debugging description name.
+/// A unique identity, and nothing else.
+///
+/// A symbol is equal to itself and to no other value: `id` is the whole of it,
+/// and two declarations reading the same are still two symbols. `path` is the
+/// fully qualified name it was declared under, carried for printing only — it
+/// takes no part in equality, and nothing in the language can read it.
+///
+/// Text that a program is meant to *look at* is a [`Value::ConstString`]. The
+/// two were one thing until the string a symbol carried was doing double duty
+/// as its description and as data, which made `symbol_len` a question about a
+/// value that was supposed to be opaque.
 #[derive(Debug, Clone, Eq)]
 pub struct Symbol {
     pub id: usize,
-    pub name: String,
+    pub path: String,
 }
 
 impl PartialEq for Symbol {
@@ -22,6 +32,12 @@ pub enum Value {
     Int(i64),
     /// A 64-bit floating-point number.
     Float(f64),
+    /// An immutable string of characters.
+    ///
+    /// Unlike a [`Symbol`], it is exactly its text: two const strings reading
+    /// the same are the same value, and `const_string_len` and
+    /// `const_string_char_at` read it.
+    ConstString(String),
     /// A conceptual tuple containing multiple values.
     Tuple(Vec<Value>),
     /// A unique symbol value.
@@ -97,7 +113,11 @@ impl fmt::Display for Value {
                 }
                 write!(f, ")")
             }
-            Value::Symbol(sym) => write!(f, "symbol({})", sym.name),
+            Value::ConstString(s) => write!(f, "{:?}", s),
+            // A symbol has no text of its own, so it shows where it was
+            // declared: `crate::io::stdout::putch` prints as `io::stdout::putch`,
+            // the same fully qualified name the library keys it under.
+            Value::Symbol(sym) => write!(f, "{}", sym.path),
         }
     }
 }

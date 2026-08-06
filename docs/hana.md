@@ -13,8 +13,27 @@ The stack can contain elements of the following types:
 - **Bool**: `true` or `false`.
 - **Int**: Signed 64-bit integers (e.g., `42`, `-1`).
 - **Float**: 64-bit floating-point numbers (e.g., `3.14`).
-- **Symbol**: Unique identifiers associated with string descriptions (e.g., `symbol my_event "Event description"`).
+- **ConstString**: Immutable text (e.g., `const_string greeting "hello"`, or the literal `"hello"`). Two const strings are equal exactly when they read the same, and `const_string_len` and `const_string_char_at` read one.
+- **Symbol**: A unique identity and nothing else (e.g., `symbol my_event`). Two declarations are two symbols, whatever they are named; a symbol carries no text, and prints as the fully qualified path it was declared under.
 - **Tuple**: Nested structures grouping zero or more values (e.g., `(foo, (bar, 42))`).
+
+A symbol is for a name a program *compares*; a const string is for text a program *reads*. Declaring one of each looks the same, but only the const string has characters to ask about:
+
+```hana
+symbol idle                       // an identity
+const_string greeting "hello"     // five characters
+
+sentence example {
+    push idle
+    const_string_len   // fails: a symbol has no text — the flag says so
+    drop 0
+    drop 0
+
+    push greeting
+    const_string_len   // 5, true
+    assert
+}
+```
 
 ---
 
@@ -96,7 +115,7 @@ Hanoi supports static assertion checking at compile time via attributes. `#[arit
 
 Precondition/postcondition functions are ordinary `1 -> 1` functions, but they are commonly generated with the `type`/`enum` sugar rather than written by hand:
 
-- `type Name <spec>;` declares a value predicate from a spec of primitive type names (`int`, `bool`, `float`, `symbol`, `tuple`), literal values, tuples (`(spec, spec, ...)`), `|`-separated unions, or paths to other `type`/`enum` checks or `symbol`s. It expands to `mod Name { sentence check { ... } }`, exported and automatically annotated `#[total]`.
+- `type Name <spec>;` declares a value predicate from a spec of primitive type names (`int`, `bool`, `float`, `const_string`, `symbol`, `tuple`), literal values (including `"strings"`), tuples (`(spec, spec, ...)`), `|`-separated unions, or paths to other `type`/`enum` checks or `symbol`s. It expands to `mod Name { sentence check { ... } }`, exported and automatically annotated `#[total]`.
 - `enum Name { Variant(spec, ...), ... }` declares a tagged union: each `Variant` gets its own submodule with a fresh `tag` symbol and a `Body::check` for its payload tuple, and `Name::check` accepts any `(tag, payload)` pair matching one of the variants.
 
 ### Example

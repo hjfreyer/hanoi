@@ -80,7 +80,7 @@ Under the `(tag, args)` convention, the tag or state symbol is placed at the fir
 ### State Representation
 Machine state is typically represented as a `Tuple` starting with the current state symbol:
 * **Customer State:** `(internal_state_symbol, (preferred_drink, id))`
-* **Character Iterator State:** `(symbol, current_index)`
+* **Character Iterator State:** `(const_string, current_index)`
 
 ### Event Representation
 Events are usually represented as a `Tuple` starting with the event identifier symbol:
@@ -99,8 +99,8 @@ Events can also be structured using **Path Notation** (dot notation) to represen
 Here is a simplified version of the character iterator machine from the Hanoi Assembly file [string.hana](../tests/string.hana):
 
 ```hana
-symbol next "Next character event"
-symbol done "Iteration finished event"
+symbol next
+symbol done
 
 mod char_iterator {
     // init: takes the parameter () and returns the initial state (sym, 0)
@@ -120,7 +120,7 @@ mod char_iterator {
         // Stack: [event, idx, sym]
         
         pick 0 // sym
-        symbol_len // len (stack: [event, idx, sym, len])
+        const_string_len // len (stack: [event, idx, sym, len])
         
         pick 2 // idx
         pick 1 // len
@@ -129,7 +129,7 @@ mod char_iterator {
             // idx < len: accepts (next, ch) where ch is char at idx
             pick 1 // sym
             pick 3 // idx
-            symbol_char_at // ch (stack: [event, idx, sym, len, ch])
+            const_string_char_at // ch (stack: [event, idx, sym, len, ch])
             
             push super::next
             tuple 2 // (next, ch) (stack: [event, idx, sym, len, (next, ch)])
@@ -187,7 +187,7 @@ mod char_iterator {
     function is_done {
         untuple 2 // Stack: [idx, sym]
         pick 0 // sym
-        symbol_len // len (stack: [idx, sym, len])
+        const_string_len // len (stack: [idx, sym, len])
         
         roll 2 // Stack: [sym, len, idx]
         pick 1 // len

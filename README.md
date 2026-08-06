@@ -13,7 +13,7 @@ Hanoi is a stack-oriented, VM-executed language designed to explore static analy
 - **Scoped Stack Frames**: `dip N { ... }` runs a block with the top `N` stack values hidden from it, so the arity checker can treat those values as unchanged across the call rather than tracking them through it.
 - **CSP State Machine Modeling**: Fully implements Communicating Sequential Processes (CSP) state machines. State machines are represented as modules with standardized hooks for managing state transitions, internal execution steps, and termination. See the [CSP Machines Documentation](docs/machines.md) for details.
 - **Static Safety & Behavior Contracts** *(annotations only — verifier temporarily removed)*: Functions can be annotated with a precondition (`#[precondition(fn_name)]`), a postcondition (`#[postcondition(fn_name)]`), or a totality claim (`#[total]`). `#[total]` is checked by the compiler; the precondition and postcondition annotations are parsed and preserved, but the Z3-backed static verifier that proved them has been removed for now. See [docs/typecheck.md](docs/typecheck.md) for the design.
-- **`type` / `enum` Predicate Sugar**: Declare reusable value predicates with `type Name <spec>;` (primitives, literals, tuples, and `|`-unions) or `enum Name { Variant(spec, ...), ... }`, which expand into `Name::check` sentences usable directly as preconditions/postconditions.
+- **`type` / `enum` Predicate Sugar**: Declare reusable value predicates with `type Name <spec>;` (primitives — `int`, `bool`, `float`, `const_string`, `symbol`, `tuple` — literals, tuples, and `|`-unions) or `enum Name { Variant(spec, ...), ... }`, which expand into `Name::check` sentences usable directly as preconditions/postconditions.
 - **Static Arity Verification**: An arity checker runs before execution to ensure that stack push/pop operations match function signatures, avoiding runtime stack underflows.
 - **Namespacing & Modularity**: Hierarchical module declarations (`mod name { ... }` or `mod name;`) with file-import support, relative/absolute path routing, and name visibility exports.
 
@@ -21,7 +21,17 @@ Hanoi is a stack-oriented, VM-executed language designed to explore static analy
 
 ## Assembly Syntax & Structure
 
-Hanoi Assembly files (`.hana`) consist of modules, symbols, sentences, and functions.
+Hanoi Assembly files (`.hana`) consist of modules, constants, sentences, and functions.
+
+### Symbols and Const Strings
+Two kinds of constant can be declared, and they divide the work a name does:
+- `symbol name` declares a **unique identity**. Two declarations are two symbols however they are named, nothing can read anything out of one, and it prints as the fully qualified path it was declared under.
+- `const_string name "text"` declares **text**. It is exactly its characters — two const strings reading the same are the same value — and `const_string_len` and `const_string_char_at` read them. A literal `"text"` may also be pushed directly.
+
+```hana
+symbol idle
+const_string greeting "hello"
+```
 
 ### Sentences and Functions
 Hanoi supports two keywords to define execution blocks:
@@ -91,8 +101,8 @@ The Hanoi VM supports a rich instruction set categorized into five main domains:
 | **Stack Ops** | `Push(V)`, `Drop`, `Pick(d)`, `Roll(d)` | Standard stack push, pop, copy/peek at depth, and rotate. `Pick` and `Roll` are the only instructions that address below the top of the stack. |
 | **Arithmetic & Logic** | `Add`, `Subtract`, `Multiply`, `Divide`, `Modulo`, `Negate`, `Equal`, `Greater`, `Less`, `Not`, `And`, `Or` | Basic mathematical and Boolean logic operations. |
 | **Control Flow** | `Dip(n, S)`, `Branch(S1, S2)`, `Panic`, `Assert`, `AssertEqual` | Subroutine execution under a hidden region of the stack (a plain `jump` is `Dip(0, S)`), conditional branching, and explicit panics. |
-| **Composite Types** | `Tuple(n)`, `Untuple(n)`, `SymbolLen`, `SymbolCharAt`, `TupleLength` | Constructing and destructuring tuples, and analyzing symbols (immutable strings). |
-| **Type Predicates** | `IsInt`, `IsBool`, `IsFloat`, `IsSymbol`, `IsTuple` | Runtime type tests, also used internally to compile `type`/`enum` predicates. |
+| **Composite Types** | `Tuple(n)`, `Untuple(n)`, `ConstStringLen`, `ConstStringCharAt`, `TupleLength` | Constructing and destructuring tuples, and reading the length and characters of const strings. |
+| **Type Predicates** | `IsInt`, `IsBool`, `IsFloat`, `IsConstString`, `IsSymbol`, `IsTuple` | Runtime type tests, also used internally to compile `type`/`enum` predicates. |
 
 ---
 

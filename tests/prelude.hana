@@ -1,11 +1,11 @@
-symbol none "None option variant"
-symbol some "Some option variant"
-symbol req  "Request tag"
-symbol resp "Response tag"
+symbol none
+symbol some
+symbol req
+symbol resp
 
-symbol start "Start test event"
-symbol pass "Pass test event"
-symbol fail "Fail test event"
+symbol start
+symbol pass
+symbol fail
 
 mod event {
 }

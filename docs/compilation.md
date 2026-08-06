@@ -16,19 +16,19 @@ front because it determines where the core/sugar seam goes.
 The test for whether something belongs in **core** is: *could a user have
 written this by hand in `.hana` source?* Core is the subset of the surface
 language that cannot be expressed in terms of other surface constructs. A user
-can write `mod`, `symbol`, `sentence` longhand, so those are core. A user cannot
+can write `mod`, `symbol`, `const_string`, `sentence` longhand, so those are core. A user cannot
 write a `SentenceIndex`, so bytecode is not core.
 
 | | core AST | bytecode (`Library`) |
 |---|---|---|
 | structure | nested modules | flat `TiVec<SentenceIndex, Sentence>` |
 | references | `Path` (names) | `SentenceIndex` (indices) |
-| symbols | `SymbolRef(Path)` | `Value::Symbol { id, name }` |
+| constants | `Ref(Path)` | `Value::Symbol { id, path }`, `Value::ConstString(text)` |
 | branch targets | `Target::Label` or inline block | `SentenceIndex` |
 | type checks | `TypeCheckPath(Path)` | `Dip(0, idx)`, or `Push(v); Equal` |
 | calls | `Jump`, `Dip` | `Dip` only — `jump` is `Dip(0, idx)` |
 | deep drops | `Drop(d)` | `Dip(d, idx)` around a plain `Drop` |
-| declarations | `symbol`, `mod` | erased |
+| declarations | `symbol`, `const_string`, `mod` | erased |
 | annotations | attached to the sentence | side table keyed by `SentenceIndex` |
 
 The two erasures are different in kind:
@@ -44,8 +44,8 @@ user could have written, rather than one a desugaring invented.
 ## Phase 0: tokenize
 
 `text -> Vec<Token>`. Strips whitespace and `//` comments; recognizes the
-keyword set (`export`, `symbol`, `test`, `mod`, `sentence`, `function`, `type`,
-`enum`, `true`, `false`) and the punctuation used by paths, annotations, blocks
+keyword set (`export`, `symbol`, `const_string`, `test`, `mod`, `sentence`,
+`function`, `type`, `enum`, `true`, `false`) and the punctuation used by paths, annotations, blocks
 and tuples.
 
 Note that `crate` and `super` are *not* keywords here — they tokenize as
@@ -73,7 +73,8 @@ pub struct Module {
 }
 
 pub enum Item {
-    Symbol(SymbolDecl),      // core
+    Symbol(SymbolDecl),           // core
+    ConstString(ConstStringDecl), // core
     Sentence(SentenceDecl),  // core
     Mod(ModDecl),            // core
     Type(TypeDecl),          // sugar
@@ -180,16 +181,17 @@ pub struct Module {
 
 pub enum Item {
     Symbol(SymbolDecl),
+    ConstString(ConstStringDecl),
     Sentence(SentenceDecl),
     Mod(ModDecl),   // items: Vec<core::Item>
     Use(UseDecl),   // see below
 }
 ```
 
-`SymbolDecl` and `SentenceDecl` are shared verbatim with sugar. `ModDecl` is
+`SymbolDecl`, `ConstStringDecl` and `SentenceDecl` are shared verbatim with sugar. `ModDecl` is
 duplicated only because its child type differs. Instruction bodies, values,
-paths and annotations are all shared. **The seam is one 6-variant enum against
-one 4-variant enum, and one struct** — everything else is shared by
+paths and annotations are all shared. **The seam is one 7-variant enum against
+one 5-variant enum, and one struct** — everything else is shared by
 composition. That is the entire cost of the split, and it is why parallel ASTs
 per conceptual level are not worth it: enum → type → predicate is three
 concepts but only two vocabularies.
@@ -202,7 +204,7 @@ concepts but only two vocabularies.
 - allocates a `ModuleId` per module and a `SentenceIndex` per sentence,
 - binds every name via `declare`/`declare_module`, which reject reserved words
   and redeclarations against the single per-module namespace,
-- assigns symbol ids and debug descriptions,
+- assigns symbol ids and the fully qualified path each symbol prints as,
 - populates the `exports`, `tests` and `test_machines` maps by fully qualified
   name,
 - checks that a `test mod` has an `init` sentence, and for composed test
@@ -216,11 +218,11 @@ sentence is declared in* — no special case for type checks.
 
 `ModuleTree + sentences -> Library`. For each sentence body, against its scope:
 
-- `ParsedValue::SymbolRef(path)` resolves to a `Value`,
+- `ParsedValue::Ref(path)` resolves to a `Value` — a symbol or a const string,
 - `Target::Label(path)` resolves to a `SentenceIndex`,
 - `Target::Inline(body)` is flattened into a freshly allocated sentence,
 - `TypeCheckPath(path)` resolves to `Dip(0, idx)` for a predicate sentence, or
-  `Push(v); Equal` for a symbol.
+  `Push(v); Equal` for a path that names a value.
 
 Resolution is `ModuleTree::resolve(scope, path)` — one entry point, one set of
 rules, for every path in the language.

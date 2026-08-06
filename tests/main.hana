@@ -1,9 +1,9 @@
 mod std {
     mod io {
-        symbol io "std::io"
+        symbol io
         mod stdout {
-            symbol stdout "std::io::stdout"
-            symbol putch "std::io::stdout::putch"
+            symbol stdout
+            symbol putch
         }
     }
 }
@@ -17,6 +17,7 @@ mod barista;
 mod file_mods;
 mod namespacing;
 mod symbols;
+mod const_strings;
 mod tuples;
 mod string;
 mod queue;

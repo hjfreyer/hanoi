@@ -1,24 +1,24 @@
 // Customer-Queue-Barista Coffee Shop CSP System
 
 mod customer_id {
-    symbol c1 "Customer 1 ID"
-    symbol c2 "Customer 2 ID"
+    symbol c1
+    symbol c2
 }
 
 mod event {
-    symbol want_coffee  "Customer wants coffee"
-    symbol coffee       "Barista serves coffee"
-    symbol enjoy        "Customer enjoys coffee"
-    symbol latte        "Latte coffee type"
-    symbol espresso     "Espresso coffee type"
+    symbol want_coffee
+    symbol coffee
+    symbol enjoy
+    symbol latte
+    symbol espresso
 }
 
 mod customer_impl {
     mod state {
-        symbol idle       "Customer is idle"
-        symbol thirsty    "Customer is thirsty"
-        symbol ordered    "Customer has ordered"
-        symbol has_coffee "Customer has coffee"
+        symbol idle
+        symbol thirsty
+        symbol ordered
+        symbol has_coffee
     }
 
     // Initializes customer state: (id, preferred_drink, internal_state)
@@ -408,9 +408,9 @@ mod customer2 compose_static_closure(customer_impl, (super::customer_impl::state
 
 mod barista {
     mod state {
-        symbol idle             "Barista is idle"
-        symbol awaiting_order   "Barista is awaiting order from queue"
-        symbol brewing          "Barista is brewing coffee"
+        symbol idle
+        symbol awaiting_order
+        symbol brewing
     }
 
     // Initializes barista state

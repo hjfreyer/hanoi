@@ -1,7 +1,7 @@
 // Tests for Hanoi Namespacing Mechanism
 
 mod foo {
-    symbol inner_sym "Inner"
+    symbol inner_sym
 
     sentence target_sentence {
         push 42
@@ -9,7 +9,7 @@ mod foo {
     }
 
     mod bar {
-        symbol deepest_sym "Deepest"
+        symbol deepest_sym
 
         export test sentence check_deep {
             // Reference sibling
@@ -44,7 +44,7 @@ mod foo {
     }
 }
 
-symbol root_sym "Root"
+symbol root_sym
 
 test sentence check_root {
     // Reference nested symbol using path

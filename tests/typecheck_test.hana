@@ -1,5 +1,5 @@
-symbol latte "Latte"
-symbol espresso "Espresso"
+symbol latte
+symbol espresso
 
 #[arity(2, 2)]
 sentence test_swap {
@@ -29,7 +29,7 @@ function test_branch {
 
 #[arity(2, 1)]
 sentence test_symbol {
-    symbol_char_at
+    const_string_char_at
     assert
 }
 

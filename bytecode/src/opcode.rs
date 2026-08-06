@@ -72,10 +72,10 @@ pub enum Instruction {
     /// Pop the top two values on the stack, evaluate logical OR on their truthiness, and push the result.
     Or,
 
-    /// Pop a Symbol off the stack, and push its character length as an Int.
-    SymbolLen,
-    /// Pop an index (Int) and a Symbol off the stack, and push the Unicode code point of the character at that index as an Int.
-    SymbolCharAt,
+    /// Pop a ConstString off the stack, and push its character length as an Int.
+    ConstStringLen,
+    /// Pop an index (Int) and a ConstString off the stack, and push the Unicode code point of the character at that index as an Int.
+    ConstStringCharAt,
 
     /// Pop the top value and push true if it is an Int, else false.
     IsInt,
@@ -83,6 +83,8 @@ pub enum Instruction {
     IsBool,
     /// Pop the top value and push true if it is a Float, else false.
     IsFloat,
+    /// Pop the top value and push true if it is a ConstString, else false.
+    IsConstString,
     /// Pop the top value and push true if it is a Symbol, else false.
     IsSymbol,
     /// Pop the top value and push true if it is a Tuple, else false.
@@ -171,11 +173,12 @@ impl Instruction {
                 | Instruction::Negate
                 | Instruction::And
                 | Instruction::Or
-                | Instruction::SymbolLen
-                | Instruction::SymbolCharAt
+                | Instruction::ConstStringLen
+                | Instruction::ConstStringCharAt
                 | Instruction::IsInt
                 | Instruction::IsBool
                 | Instruction::IsFloat
+                | Instruction::IsConstString
                 | Instruction::IsSymbol
                 | Instruction::IsTuple
                 | Instruction::TupleLength
@@ -211,11 +214,12 @@ impl std::fmt::Display for Instruction {
             Instruction::Untuple(n) => write!(f, "untuple {}", n),
             Instruction::And => write!(f, "and"),
             Instruction::Or => write!(f, "or"),
-            Instruction::SymbolLen => write!(f, "symbol_len"),
-            Instruction::SymbolCharAt => write!(f, "symbol_char_at"),
+            Instruction::ConstStringLen => write!(f, "const_string_len"),
+            Instruction::ConstStringCharAt => write!(f, "const_string_char_at"),
             Instruction::IsInt => write!(f, "is_int"),
             Instruction::IsBool => write!(f, "is_bool"),
             Instruction::IsFloat => write!(f, "is_float"),
+            Instruction::IsConstString => write!(f, "is_const_string"),
             Instruction::IsSymbol => write!(f, "is_symbol"),
             Instruction::IsTuple => write!(f, "is_tuple"),
             Instruction::TupleLength => write!(f, "tuple_length"),

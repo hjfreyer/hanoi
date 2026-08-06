@@ -1,5 +1,5 @@
 test mod verify_print_hello {
-    symbol hello "Hello from Hanoi VM Async Runtime!\n"
+    const_string hello "Hello from Hanoi VM Async Runtime!\n"
 
     export function init {
         untuple 0
@@ -38,7 +38,7 @@ test mod verify_print_hello {
             // Phase is 1. Check if data == hello.len()
             pick 0
             push hello
-            symbol_len
+            const_string_len
             assert
             equal
             branch {
@@ -80,7 +80,7 @@ test mod verify_print_hello {
             
             push hello
             pick 4 // data
-            symbol_char_at
+            const_string_char_at
             assert
             
             push ()

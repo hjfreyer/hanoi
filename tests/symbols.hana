@@ -1,7 +1,7 @@
 // Tests for unique Symbols
 
-symbol sym_a "A Symbol"
-symbol sym_b "B Symbol"
+symbol sym_a
+symbol sym_b
 symbol sym_c
 
 test sentence symbol_equality {
@@ -38,38 +38,37 @@ sentence check_symbol {
     assert
 }
 
-test sentence symbol_len_operation {
+test sentence a_symbol_carries_no_text {
+    // A symbol is opaque: the string instructions have nothing to read in one,
+    // so they report failure and hand it back.
     push sym_a
-    symbol_len
+    const_string_len
+    not
     assert
-    push 8
+    push sym_a
     assert_eq
-    
-    push sym_b
-    symbol_len
+
+    push sym_a
+    push 0
+    const_string_char_at
+    not
     assert
-    push 8
-    assert_eq
-    
-    push sym_c
-    symbol_len
-    assert
-    push 14
+    push 0
     assert_eq
 }
 
-test sentence symbol_char_at_operation {
+test sentence a_symbol_is_not_a_const_string {
     push sym_a
-    push 0
-    symbol_char_at
+    is_symbol
     assert
-    push 65
-    assert_eq
-    
+
     push sym_a
-    push 2
-    symbol_char_at
+    is_const_string
+    not
     assert
-    push 83
-    assert_eq
+
+    push "sym_a"
+    is_symbol
+    not
+    assert
 }

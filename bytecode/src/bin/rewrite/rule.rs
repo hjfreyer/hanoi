@@ -1182,6 +1182,9 @@ pub(crate) fn eval_op(inst: &Instruction, inputs: &[Value]) -> Option<Vec<Value>
         (Instruction::IsInt, [a]) => Some(vec![Value::Bool(matches!(a, Value::Int(_)))]),
         (Instruction::IsBool, [a]) => Some(vec![Value::Bool(matches!(a, Value::Bool(_)))]),
         (Instruction::IsFloat, [a]) => Some(vec![Value::Bool(matches!(a, Value::Float(_)))]),
+        (Instruction::IsConstString, [a]) => {
+            Some(vec![Value::Bool(matches!(a, Value::ConstString(_)))])
+        }
         (Instruction::IsSymbol, [a]) => Some(vec![Value::Bool(matches!(a, Value::Symbol(_)))]),
         (Instruction::IsTuple, [a]) => Some(vec![Value::Bool(matches!(a, Value::Tuple(_)))]),
         (Instruction::Not, [a]) => Some(vec![Value::Bool(!a.truthy())]),

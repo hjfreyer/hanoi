@@ -891,7 +891,7 @@ fn sharing_a_call_runs_it_once_and_copies_what_it_left() {
 
 const SYMBOLS: &str = r#"
     symbol plain
-    mod outer { symbol tag "shortname" }
+    mod outer { symbol tag }
     #[total] #[arity(1, 1)] sentence probe { drop 0 push 1 }
 "#;
 
@@ -922,10 +922,12 @@ fn a_term_can_push_a_symbol_by_name() {
     let fq = pushed(prog, "outer::tag").unwrap();
     let short = pushed(prog, "tag").unwrap();
     assert_eq!(fq.id, short.id, "the same symbol either way it is named");
-    assert_eq!(fq.name, "shortname", "it prints as its description");
+    // A symbol prints as the fully qualified name it is declared under, which
+    // is the same name that resolves it.
+    assert_eq!(fq.path, "outer::tag");
 
-    // A symbol at the root, whose description defaults to its name.
-    assert_eq!(pushed(prog, "plain").unwrap().name, "plain");
+    // A symbol at the root is its bare name.
+    assert_eq!(pushed(prog, "plain").unwrap().path, "plain");
 
     // And it is the library's symbol, not one built from the text: `Symbol`
     // compares by `id`, so a fabricated one would match nothing.
@@ -943,12 +945,36 @@ fn a_symbol_that_is_not_there_says_what_is() {
     assert!(why.contains("No symbol matching 'nope'"), "{}", why);
     assert!(why.contains("outer::tag"), "{}", why);
 
-    // The mistake worth naming: a described symbol prints as its description,
-    // so reading one off a listing and writing it back is the obvious thing to
-    // try and the wrong one.
-    let why = pushed(prog, "shortname").unwrap_err();
-    assert!(why.contains("is how the symbol declared as"), "{}", why);
-    assert!(why.contains("Write 'outer::tag'"), "{}", why);
+    // A name read off a listing is a name that resolves: a symbol prints as
+    // the fully qualified name it was declared under and nothing else.
+    assert!(pushed(prog, "outer::tag").is_ok());
+}
+
+#[test]
+fn a_term_can_push_a_const_string_written_out() {
+    // The opposite case to a symbol: a const string is exactly its text, so a
+    // term writes one down rather than looking one up — and needs no program
+    // to do it.
+    let mut defs = Definitions::new();
+    defs.load(PRELUDE).unwrap();
+    assert!(
+        defs.compile(r#"once(introduce { push "hi" equal })"#)
+            .is_ok()
+    );
+
+    let prog = program_of(SYMBOLS);
+    let tactic = defs
+        .compile_with(r#"once(introduce { push "hi" equal })"#, Some(prog))
+        .unwrap();
+    let body = build(prog.library(), SentenceIndex::from(0), &mut HashSet::new());
+    let env = Env::new(prog, 1000, true);
+    let (got, _) = run_tactic(&env, &tactic, body).unwrap_or_else(|e| panic!("{}", e));
+    assert_eq!(
+        got[0],
+        Node::Op(Instruction::Push(Value::ConstString("hi".to_string()))),
+        "{:?}",
+        got[0]
+    );
 }
 
 #[test]
