@@ -1,8 +1,8 @@
 use crate::ast::core;
 use crate::ast::sugar::{self, Composer, ModuleExpr};
 use crate::ast::{
-    ParsedInstruction, ParsedSentence, ParsedValue, PrimitiveType, SentenceDecl, SourceAnnotation,
-    SymbolDecl, Target, TypeSpec,
+    ConstStringDecl, ParsedInstruction, ParsedSentence, ParsedValue, PrimitiveType, SentenceDecl,
+    SourceAnnotation, SymbolDecl, Target, TypeSpec,
 };
 use crate::library::{Annotation, Library, SentenceAnnotation, SentenceIndex};
 use crate::opcode::Instruction;
@@ -18,6 +18,7 @@ pub use crate::resolve::{Path, PathSegment};
 enum Token {
     Export,
     SymbolKeyword,
+    ConstStringKeyword,
     TestKeyword,
     ModKeyword,
     SentenceKeyword,
@@ -50,6 +51,7 @@ fn describe(token: &Token) -> String {
     let literal = match token {
         Token::Export => "export",
         Token::SymbolKeyword => "symbol",
+        Token::ConstStringKeyword => "const_string",
         Token::TestKeyword => "test",
         Token::ModKeyword => "mod",
         Token::SentenceKeyword => "sentence",
@@ -254,6 +256,7 @@ fn tokenize(input: &str, file: FileId) -> Result<Vec<SpannedToken>, Error> {
                 let token = match ident.as_str() {
                     "export" => Token::Export,
                     "symbol" => Token::SymbolKeyword,
+                    "const_string" => Token::ConstStringKeyword,
                     "test" => Token::TestKeyword,
                     "mod" => Token::ModKeyword,
                     "sentence" => Token::SentenceKeyword,
@@ -349,9 +352,10 @@ fn parse_value(stream: &mut TokenStream) -> Result<ParsedValue, Error> {
         Some(Token::Bool(b)) => Ok(ParsedValue::Bool(b)),
         Some(Token::Int(i)) => Ok(ParsedValue::Int(i)),
         Some(Token::Float(f)) => Ok(ParsedValue::Float(f)),
+        Some(Token::StringLiteral(s)) => Ok(ParsedValue::ConstString(s)),
         Some(Token::Identifier(name)) => {
             let path = parse_path(stream, name)?;
-            Ok(ParsedValue::SymbolRef(path))
+            Ok(ParsedValue::Ref(path))
         }
         Some(Token::LParen) => {
             let mut elements = Vec::new();
@@ -466,9 +470,18 @@ fn parse_type_primary(stream: &mut TokenStream) -> Result<TypeSpec, Error> {
             stream.next();
             Ok(TypeSpec::Literal(ParsedValue::Float(f)))
         }
+        Some(Token::StringLiteral(s)) => {
+            let s = s.clone();
+            stream.next();
+            Ok(TypeSpec::Literal(ParsedValue::ConstString(s)))
+        }
         Some(&Token::SymbolKeyword) => {
             stream.next();
             Ok(TypeSpec::Primitive(PrimitiveType::Symbol))
+        }
+        Some(&Token::ConstStringKeyword) => {
+            stream.next();
+            Ok(TypeSpec::Primitive(PrimitiveType::ConstString))
         }
         Some(Token::Identifier(name)) => {
             let name_cloned = name.clone();
@@ -609,11 +622,12 @@ fn parse_instruction(stream: &mut TokenStream) -> Result<ParsedInstruction, Erro
             let size = parse_usize(stream)?;
             Ok(ParsedInstruction::Untuple(size))
         }
-        "symbol_len" => Ok(ParsedInstruction::SymbolLen),
-        "symbol_char_at" => Ok(ParsedInstruction::SymbolCharAt),
+        "const_string_len" => Ok(ParsedInstruction::ConstStringLen),
+        "const_string_char_at" => Ok(ParsedInstruction::ConstStringCharAt),
         "is_int" => Ok(ParsedInstruction::IsInt),
         "is_bool" => Ok(ParsedInstruction::IsBool),
         "is_float" => Ok(ParsedInstruction::IsFloat),
+        "is_const_string" => Ok(ParsedInstruction::IsConstString),
         "is_symbol" => Ok(ParsedInstruction::IsSymbol),
         "is_tuple" => Ok(ParsedInstruction::IsTuple),
         "tuple_length" => Ok(ParsedInstruction::TupleLength),
@@ -826,19 +840,41 @@ fn parse_items(
         let item_span = stream.span();
         let annotations = parse_annotations(stream)?;
 
-        // Symbols take no modifiers, so they are recognized before them.
+        // Constants take no modifiers, so they are recognized before them.
         if annotations.is_empty() && stream.peek() == Some(&Token::SymbolKeyword) {
             stream.next(); // consume 'symbol'
             let name = expect_name(stream, "symbol name")?;
-            let debug_desc = match stream.peek() {
-                Some(Token::StringLiteral(desc)) => {
-                    let desc = desc.clone();
+            // A symbol used to carry a description, which was also the text
+            // `symbol_len` read. Text is a `const_string` now, so the old
+            // spelling is refused rather than quietly ignored.
+            if let Some(Token::StringLiteral(text)) = stream.peek() {
+                let text = text.clone();
+                return Err(
+                    Error::at("a symbol carries no text", stream.span()).with_help(format!(
+                        "a symbol is a unique identity and prints as its own path; \
+                         write `const_string {} {:?}` for text a program reads",
+                        name, text
+                    )),
+                );
+            }
+            items.push(sugar::Item::Symbol(SymbolDecl { name }));
+            continue;
+        }
+
+        if annotations.is_empty() && stream.peek() == Some(&Token::ConstStringKeyword) {
+            stream.next(); // consume 'const_string'
+            let name = expect_name(stream, "const string name")?;
+            let text = match stream.peek() {
+                Some(Token::StringLiteral(text)) => {
+                    let text = text.clone();
                     stream.next();
-                    Some(desc)
+                    text
                 }
-                _ => None,
+                // The text is the declaration: a const string without one would
+                // be a symbol written the long way round.
+                _ => return Err(stream.expected("a string literal, the const string's text")),
             };
-            items.push(sugar::Item::Symbol(SymbolDecl { name, debug_desc }));
+            items.push(sugar::Item::ConstString(ConstStringDecl { name, text }));
             continue;
         }
 
@@ -1071,17 +1107,24 @@ impl TreeBuilder {
         for item in items {
             match item {
                 core::Item::Symbol(decl) => {
-                    let desc = decl
-                        .debug_desc
-                        .unwrap_or_else(|| self.tree.fq_name(scope, &decl.name));
+                    // The path is only how the symbol prints; `id` is what it
+                    // is. Both are settled here, where the declaring module is
+                    // known.
                     let symbol = Value::Symbol(Symbol {
                         id: self.symbol_counter,
-                        name: desc,
+                        path: self.tree.fq_name(scope, &decl.name),
                     });
                     self.symbol_counter += 1;
 
                     self.tree
-                        .declare(scope, decl.name, ModuleItem::Symbol(symbol))?;
+                        .declare(scope, decl.name, ModuleItem::Const(symbol))?;
+                }
+                core::Item::ConstString(decl) => {
+                    self.tree.declare(
+                        scope,
+                        decl.name,
+                        ModuleItem::Const(Value::ConstString(decl.text)),
+                    )?;
                 }
                 core::Item::Sentence(decl) => {
                     let s_idx = SentenceIndex::from(self.sentence_counter);
@@ -1180,15 +1223,17 @@ impl<'a> Compiler<'a> {
         scope: ModuleId,
         path: &Path,
     ) -> Result<SentenceIndex, String> {
-        match self
+        let resolved = self
             .tree
             .resolve(scope, path)
-            .map_err(|e| format!("unresolved {} '{}': {}", kind, path, e))?
-        {
+            .map_err(|e| format!("unresolved {} '{}': {}", kind, path, e))?;
+        match resolved {
             ResolvedItem::Sentence(idx) => Ok(idx),
-            ResolvedItem::Symbol(_) => Err(format!(
-                "{} '{}' names a symbol, but must name a sentence",
-                kind, path
+            other => Err(format!(
+                "{} '{}' names a {}, but must name a sentence",
+                kind,
+                path,
+                other.describe()
             )),
         }
     }
@@ -1198,6 +1243,7 @@ impl<'a> Compiler<'a> {
             ParsedValue::Bool(b) => Ok(Value::Bool(b)),
             ParsedValue::Int(i) => Ok(Value::Int(i)),
             ParsedValue::Float(f) => Ok(Value::Float(f)),
+            ParsedValue::ConstString(s) => Ok(Value::ConstString(s)),
             ParsedValue::Tuple(elements) => {
                 let mut compiled_elements = Vec::new();
                 for elem in elements {
@@ -1205,10 +1251,10 @@ impl<'a> Compiler<'a> {
                 }
                 Ok(Value::Tuple(compiled_elements))
             }
-            ParsedValue::SymbolRef(path) => match self.tree.resolve(scope, &path)? {
-                ResolvedItem::Symbol(val) => Ok(val),
+            ParsedValue::Ref(path) => match self.tree.resolve(scope, &path)? {
+                ResolvedItem::Const(val) => Ok(val),
                 ResolvedItem::Sentence(_) => Err(format!(
-                    "Expected symbol, found sentence at path {:?}",
+                    "Expected a value, found sentence at path {:?}",
                     path
                 )),
             },
@@ -1255,11 +1301,12 @@ impl<'a> Compiler<'a> {
                 ParsedInstruction::Untuple(n) => Instruction::Untuple(n),
                 ParsedInstruction::And => Instruction::And,
                 ParsedInstruction::Or => Instruction::Or,
-                ParsedInstruction::SymbolLen => Instruction::SymbolLen,
-                ParsedInstruction::SymbolCharAt => Instruction::SymbolCharAt,
+                ParsedInstruction::ConstStringLen => Instruction::ConstStringLen,
+                ParsedInstruction::ConstStringCharAt => Instruction::ConstStringCharAt,
                 ParsedInstruction::IsInt => Instruction::IsInt,
                 ParsedInstruction::IsBool => Instruction::IsBool,
                 ParsedInstruction::IsFloat => Instruction::IsFloat,
+                ParsedInstruction::IsConstString => Instruction::IsConstString,
                 ParsedInstruction::IsSymbol => Instruction::IsSymbol,
                 ParsedInstruction::IsTuple => Instruction::IsTuple,
                 ParsedInstruction::TupleLength => Instruction::TupleLength,
@@ -1292,7 +1339,9 @@ impl<'a> Compiler<'a> {
                     };
                     match resolved {
                         ResolvedItem::Sentence(idx) => Instruction::Dip(0, idx),
-                        ResolvedItem::Symbol(val) => {
+                        // A path that names a value is the predicate "equal to
+                        // that value", whether it is a symbol or a const string.
+                        ResolvedItem::Const(val) => {
                             compiled.push(Instruction::Push(val));
                             Instruction::Equal
                         }
@@ -1313,8 +1362,8 @@ impl<'a> Compiler<'a> {
                     .map_err(|e| format!("Unresolved label target: {}", e))?
                 {
                     ResolvedItem::Sentence(idx) => Ok(idx),
-                    ResolvedItem::Symbol(_) => Err(format!(
-                        "Expected sentence, found symbol at path {:?}",
+                    ResolvedItem::Const(_) => Err(format!(
+                        "Expected sentence, found a value at path {:?}",
                         path
                     )),
                 }

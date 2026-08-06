@@ -168,6 +168,7 @@ impl ScriptError {
 enum Tok {
     Ident(String),
     Int(usize),
+    Str(String),
     Tactic,
     Eq,
     Semi,
@@ -236,6 +237,21 @@ fn tokenize(src: &str) -> Result<Vec<Spanned>, ScriptError> {
             '}' => {
                 i += 1;
                 Tok::RBrace
+            }
+            // A const string is written out, unlike a symbol: it is exactly its
+            // text, so there is nothing to look up. No escapes, as in .hana.
+            '"' => {
+                i += 1;
+                let text_start = i;
+                while i < bytes.len() && bytes[i] != b'"' {
+                    i += 1;
+                }
+                if i == bytes.len() {
+                    return Err(ScriptError::new("unclosed string literal", (start, i)));
+                }
+                let text = src[text_start..i].to_string();
+                i += 1; // consume the closing quote
+                Tok::Str(text)
             }
             c if c.is_ascii_digit() => {
                 while i < bytes.len() && (bytes[i] as char).is_ascii_digit() {
@@ -611,6 +627,15 @@ impl<'a> Parser<'a> {
                 self.bump();
                 Ok(Value::Bool(yes))
             }
+            // A const string is its text, so unlike a symbol it is built here
+            // rather than looked up, and needs no program to be compiled
+            // against.
+            Some(Tok::Str(_)) => {
+                let Some(Tok::Str(text)) = self.bump().map(|s| s.tok.clone()) else {
+                    unreachable!("peeked a string literal")
+                };
+                Ok(Value::ConstString(text))
+            }
             // Anything else that reads as a name is a symbol, looked up rather
             // than built: `Symbol` compares by `id`, so one made from its text
             // would equal nothing in the program.
@@ -632,8 +657,8 @@ impl<'a> Parser<'a> {
                     .map_err(|why| ScriptError::new(why, ident_span))
             }
             _ => Err(ScriptError::new("`push` needs a literal", span).with_help(
-                "an integer, `true`/`false`, or a symbol by name. Floats have \
-                 no syntax here yet",
+                "an integer, `true`/`false`, a `\"const string\"`, or a symbol \
+                 by name. Floats have no syntax here yet",
             )),
         }
     }
@@ -658,11 +683,12 @@ fn plain_instruction(word: &str) -> Option<Instruction> {
         "is_int" => Instruction::IsInt,
         "is_bool" => Instruction::IsBool,
         "is_float" => Instruction::IsFloat,
+        "is_const_string" => Instruction::IsConstString,
         "is_symbol" => Instruction::IsSymbol,
         "is_tuple" => Instruction::IsTuple,
         "tuple_length" => Instruction::TupleLength,
-        "symbol_len" => Instruction::SymbolLen,
-        "symbol_char_at" => Instruction::SymbolCharAt,
+        "const_string_len" => Instruction::ConstStringLen,
+        "const_string_char_at" => Instruction::ConstStringCharAt,
         _ => return None,
     })
 }
@@ -687,7 +713,7 @@ const INSTRUCTION_WORDS: &[&str] = &[
     "roll n",
     "tuple n",
     "untuple n",
-    "push <int|true|false|symbol>",
+    "push <int|true|false|\"const string\"|symbol>",
     "dip n { .. }",
     "drop",
     "equal",
@@ -705,17 +731,19 @@ const INSTRUCTION_WORDS: &[&str] = &[
     "is_int",
     "is_bool",
     "is_float",
+    "is_const_string",
     "is_symbol",
     "is_tuple",
     "tuple_length",
-    "symbol_len",
-    "symbol_char_at",
+    "const_string_len",
+    "const_string_char_at",
 ];
 
 fn describe(tok: &Tok) -> String {
     match tok {
         Tok::Ident(name) => format!("'{}'", name),
         Tok::Int(n) => format!("'{}'", n),
+        Tok::Str(text) => format!("string literal \"{}\"", text),
         Tok::Tactic => "'tactic'".to_string(),
         Tok::Eq => "'='".to_string(),
         Tok::Semi => "';'".to_string(),

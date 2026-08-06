@@ -36,10 +36,10 @@ $ rewrite tests 'Pair::check' -t 'unfold_all; all' --show-script
   derivation — 7 step(s)
      0  unfold -> [1.then, 2.body] @0
         jump → #645
-     ⇒  untuple 2 ; branch { jump → #642 ; dip 1 { push symbol(some_other) ; equal } ; and } { d…
+     ⇒  untuple 2 ; branch { jump → #642 ; dip 1 { push type_tests::other_sym ; equal } ; and } { d…
      2  interchange -> [1.then, 2.body, 1.then] @2
-        branch { drop ; push true } { is_bool } ; dip 1 { push symbol(some_other) ; equal }
-     ⇒  dip 2 { push symbol(some_other) ; equal } ; branch { drop ; push true } { is_bool }
+        branch { drop ; push true } { is_bool } ; dip 1 { push type_tests::other_sym ; equal }
+     ⇒  dip 2 { push type_tests::other_sym ; equal } ; branch { drop ; push true } { is_bool }
 ```
 
 Applying that script to a fresh build reproduces the run exactly. That is
@@ -500,7 +500,7 @@ the other now opens with drops.
 ### Terms
 
 A term is a run of instructions in braces. `pick n`, `roll n`, `tuple n`,
-`untuple n`, `push <int|true|false|symbol>`, `dip n { ... }`,
+`untuple n`, `push <int|true|false|"const string"|symbol>`, `dip n { ... }`,
 `branch { .. } { .. }`, `jump <sentence>`, and the argument-free operators
 (`drop`, `not`, `and`, `equal`, `is_bool`, `add`, …). `--list-rules` prints the
 list.
@@ -553,17 +553,19 @@ symbol cannot be built from its text — `Symbol` compares by `id`, so two
 declarations reading the same are different symbols — so this looks the real
 one up and refuses a name that denotes none.
 
-One trap, which the error names: a symbol declared with a description **prints
-as that description**. `symbol io "std::io"` inside `mod std { mod io { … } }`
-shows up in a listing as `symbol(std::io)` while its name is `std::io::io`, so
-copying what you read is the obvious thing to try and the wrong one.
-
 ```
-error: 'std::io' is how the symbol declared as 'std::io::io' prints, not its
-       name. Write 'std::io::io'
+error: No symbol matching 'std::io'. Symbols:
+  std::io::io
+  std::io::stdout::putch
+  std::io::stdout::stdout
   | once(introduce { push std::io equal })
   |                       ^^^^^^^
 ```
+
+A symbol prints as the fully qualified name it was declared under, so a name
+read off a listing is a name that resolves. A **const string** is the opposite
+case and reaches outside nothing: it is exactly its text, so `push "hello"`
+writes one down and needs no program at all.
 
 A term's arity is worked out when the tactic is compiled. From the term alone
 where it names nothing, which is what lets the prelude be checked with no
@@ -845,7 +847,7 @@ $ rewrite tests 'Pair::check' -t unfold_all
 ─────┼────────┼────────────
    0 │      1 │ untuple 2
    1 │      3 │ branch then → #3408 <inline> {
-   0 │      2 │   push symbol(…::Pair::tag)
+   0 │      2 │   push …::Pair::tag
    1 │      3 │   equal
    2 │      2 │   dip 1 → #3409 <inline> {
    0 │      2 │     untuple 2
@@ -1234,8 +1236,8 @@ consulting an analysis.
   shape on purpose. When it lands, a saved derivation will depend on the library
   only through names and facts the applier re-derives — never through quoted
   code — so it fails loudly at the changed step rather than rotting silently.
-- **Floats in terms.** `push` takes an integer, a boolean or a symbol; a float
-  has no syntax yet. It would want one anyway — a literal `1.5` in a term would
+- **Floats in terms.** `push` takes an integer, a boolean, a const string or a
+  symbol; a float has no syntax yet. It would want one anyway — a literal `1.5` in a term would
   have to answer for what `equal` does to it, which `--stack` already declines
   to guess at.
 - **A smarter upper layer.** Matchers and combinators are the whole of the

@@ -258,12 +258,14 @@ mod tests {
     #[test]
     fn test_assemble_symbols() {
         let code = r#"
-            symbol sym1 "My Custom Symbol"
-            symbol sym2
-            
+            symbol sym1
+            mod m {
+                symbol sym2
+            }
+
             sentence entry {
                 push sym1
-                push sym2
+                push m::sym2
             }
         "#;
         let res = assemble(code).unwrap();
@@ -272,16 +274,104 @@ mod tests {
         let sentence = &res.sentences[SentenceIndex::from(0)];
         assert_eq!(sentence.len(), 2);
 
-        // Assert sym1 and sym2 are distinct symbols
+        // Assert sym1 and sym2 are distinct symbols, each carrying the fully
+        // qualified name it was declared under.
         if let (Instruction::Push(Value::Symbol(s1)), Instruction::Push(Value::Symbol(s2))) =
             (&sentence[0], &sentence[1])
         {
             assert_ne!(s1, s2);
-            assert_eq!(s1.name, "My Custom Symbol");
-            assert_eq!(s2.name, "sym2");
+            assert_eq!(s1.path, "sym1");
+            assert_eq!(s2.path, "m::sym2");
         } else {
             panic!("Expected pushing of two symbols");
         }
+    }
+
+    #[test]
+    fn a_symbol_prints_as_the_path_it_was_declared_under() {
+        let code = r#"
+            mod m {
+                symbol s
+            }
+            sentence entry {
+                push m::s
+            }
+        "#;
+        let res = assemble(code).unwrap();
+        let Instruction::Push(sym) = &res.sentences[SentenceIndex::from(0)][0] else {
+            panic!("expected a push");
+        };
+        assert_eq!(sym.to_string(), "m::s");
+    }
+
+    #[test]
+    fn test_assemble_const_strings() {
+        // A const string is its text: two declarations reading the same are
+        // the same value, which is the whole difference from a symbol.
+        let code = r#"
+            const_string greeting "hello"
+            const_string other "hello"
+
+            sentence entry {
+                push greeting
+                push other
+                push "hello"
+            }
+        "#;
+        let res = assemble(code).unwrap();
+        let sentence = &res.sentences[SentenceIndex::from(0)];
+        let expected = Instruction::Push(Value::ConstString("hello".to_string()));
+        assert_eq!(
+            sentence,
+            &vec![expected.clone(), expected.clone(), expected]
+        );
+
+        // Const strings are not symbols, so nothing needs to look one up by
+        // name at runtime.
+        assert!(res.symbols.is_empty());
+    }
+
+    #[test]
+    fn a_const_string_declaration_needs_its_text() {
+        let err = assemble("const_string greeting").unwrap_err();
+        assert!(err.contains("expected a string literal"), "{}", err);
+    }
+
+    #[test]
+    fn a_symbol_declaration_refuses_the_text_it_used_to_carry() {
+        // The one migration worth naming: the description a symbol used to
+        // take was also the text `symbol_len` read, and both are now the
+        // business of `const_string`.
+        let err = assemble(r#"symbol greeting "hello""#).unwrap_err();
+        assert!(err.contains("a symbol carries no text"), "{}", err);
+        assert!(err.contains(r#"const_string greeting "hello""#), "{}", err);
+    }
+
+    #[test]
+    fn a_const_string_survives_a_composer_template() {
+        // Composer templates are rendered as text and re-parsed, so a value
+        // passed to one has to print as something that lexes back to it. A
+        // string literal is the only value where that takes quoting.
+        let code = r#"
+            mod m {
+                export function init { drop 0 push "unused" }
+                export function accept { drop 0 push false }
+                export function tau_reduce { push false tuple 2 }
+                export function emit { drop 0 tuple 0 push false tuple 2 }
+                export function process { untuple 2 assert drop 0 }
+                export function is_done { drop 0 push false }
+                export function is_ready_to_finish { drop 0 push false }
+            }
+            mod closed compose_static_closure(m, "xyz");
+        "#;
+        let res = assemble(code).unwrap();
+        let idx = res.names.iter().position(|n| n == "closed::init").unwrap();
+        assert!(
+            res.sentences[SentenceIndex::from(idx)]
+                .contains(&Instruction::Push(Value::ConstString("xyz".to_string()))),
+            "{:?}",
+            res.sentences[SentenceIndex::from(idx)]
+        );
     }
 
     #[test]
@@ -610,7 +700,7 @@ mod tests {
     fn test_assemble_namespaces() {
         let code = r#"
             mod a {
-                symbol my_sym "A's Symbol"
+                symbol my_sym
                 mod b {
                     export test sentence my_test {
                         push super::my_sym
@@ -661,7 +751,7 @@ mod tests {
         "#;
 
         let helper_code = r#"
-            symbol val "Helper Val"
+            symbol val
         "#;
 
         std::fs::write(tmp_dir.join("helper.hana"), helper_code).unwrap();
@@ -951,7 +1041,7 @@ mod tests {
     #[test]
     fn test_type_definitions_literals() {
         let code = r#"
-            symbol my_sym "some symbol"
+            symbol my_sym
             type OnlySym my_sym;
             type Only42 42;
             type TrueOr314 true | 3.14;

@@ -105,7 +105,7 @@ than a proof obligation.
 truthy(v)  =  (v != Bool(false))
 ```
 
-**`false` is the unique falsy value.** A number, a symbol, a tuple — anything
+**`false` is the unique falsy value.** A number, a symbol, a const string, a tuple — anything
 that is not literally `false` — is true.
 
 Applied **per operand**, and every boolean-shaped instruction is defined through
@@ -169,15 +169,15 @@ its answer was computed or invented, by leaving a `bool` on top of its result.
 | instruction | arity | on success | off its domain |
 |---|---|---|---|
 | `push c`, `pick d`, `roll d`, `drop` | unchanged | — | cannot fail |
-| `equal`, `is_int`, `is_bool`, `is_float`, `is_symbol`, `is_tuple` | unchanged | — | cannot fail |
+| `equal`, `is_int`, `is_bool`, `is_float`, `is_const_string`, `is_symbol`, `is_tuple` | unchanged | — | cannot fail |
 | `not`, `and`, `or`, `tuple n` | unchanged | — | cannot fail |
 | `add`, `subtract`, `multiply` | `2 -> 2` | sum, `true` | `Int 0`, `false` |
 | `divide`, `modulo` | `2 -> 2` | quotient, `true` | `Int 0`, `false` |
 | `greater`, `less` | `2 -> 2` | the answer, `true` | `false`, `false` |
 | `negate` | `1 -> 2` | `-x`, `true` | **`x`**, `false` |
 | `tuple_length` | `1 -> 2` | the count, `true` | **`x`**, `false` |
-| `symbol_len` | `1 -> 2` | the count, `true` | **`x`**, `false` |
-| `symbol_char_at` | `2 -> 2` | the code point, `true` | `Int 0`, `false` |
+| `const_string_len` | `1 -> 2` | the count, `true` | **`x`**, `false` |
+| `const_string_char_at` | `2 -> 2` | the code point, `true` | `Int 0`, `false` |
 | `untuple n` | `1 -> n+1` | the `n` elements, `true` | **`x`**, `()` × (n-1), `false` |
 | `branch` | unchanged | then arm unless `Bool(false)` | cannot fail |
 | `assert`, `assert_eq`, `panic` | unchanged | — | **panics** |

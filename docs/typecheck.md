@@ -79,7 +79,7 @@ To prove totality, Typecheck attempts to find any input $x$ that causes $F(x) = 
 ### Monadic `Result` Type and Panic Propagation
 To represent and propagate runtime panics, Typecheck wraps all stack variables and function returns in a monadic `Result` datatype containing either `Ok Val` or `Panic`:
 
-* **Val**: Represents runtime values of types `Int`, `Bool`, `Float`, `Symbol`, and `Tuple` (represented as Z3 ADT constructors).
+* **Val**: Represents runtime values of types `Int`, `Bool`, `Float`, `ConstString`, `Symbol`, and `Tuple` (represented as Z3 ADT constructors).
 * **Result**: Represents either a successful computation (`Ok`) wrapping a `Val`, or a execution abort (`Panic`).
 
 ### Preconditions & Primitive Operations
@@ -87,8 +87,8 @@ All primitive operations (such as additions, conditionals, and tuple accesses) a
 
 ---
 
-## 3. Symbols
-Symbols are mapped to unique integer IDs. Symbol operations such as `symbol_len` and `symbol_char_at` are modeled in Z3 via nested conditional expressions matching on the registered static symbols list.
+## 3. Symbols and const strings
+Symbols are mapped to unique integer IDs and have no other content, so the only question to ask about one is whether it equals another. The string operations `const_string_len` and `const_string_char_at` read a `ConstString`, and are modeled in Z3 via nested conditional expressions matching on the registered static strings list.
 
 ---
 

@@ -316,6 +316,7 @@ pub fn op_arity(inst: &Instruction) -> Option<(i64, i64)> {
         | Instruction::IsInt
         | Instruction::IsBool
         | Instruction::IsFloat
+        | Instruction::IsConstString
         | Instruction::IsSymbol
         | Instruction::IsTuple => (1, 1),
         // The fallible instructions, each one output wider than the value it
@@ -328,8 +329,8 @@ pub fn op_arity(inst: &Instruction) -> Option<(i64, i64)> {
         | Instruction::Multiply
         | Instruction::Divide
         | Instruction::Modulo
-        | Instruction::SymbolCharAt => (2, 2),
-        Instruction::Negate | Instruction::SymbolLen | Instruction::TupleLength => (1, 2),
+        | Instruction::ConstStringCharAt => (2, 2),
+        Instruction::Negate | Instruction::ConstStringLen | Instruction::TupleLength => (1, 2),
         Instruction::Untuple(n) => (1, *n as i64 + 1),
         Instruction::AssertEqual => (2, 0),
         Instruction::Tuple(n) => (*n as i64, 1),
@@ -366,8 +367,8 @@ pub fn is_fallible(inst: &Instruction) -> bool {
             | Instruction::Negate
             | Instruction::Untuple(_)
             | Instruction::TupleLength
-            | Instruction::SymbolLen
-            | Instruction::SymbolCharAt
+            | Instruction::ConstStringLen
+            | Instruction::ConstStringCharAt
     )
 }
 

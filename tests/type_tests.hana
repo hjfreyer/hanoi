@@ -1,5 +1,5 @@
-symbol test_sym "my_test_symbol"
-symbol other_sym "some_other"
+symbol test_sym
+symbol other_sym
 
 type TestInt int;
 type TestBool bool;

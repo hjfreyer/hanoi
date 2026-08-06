@@ -31,7 +31,7 @@ These opcodes manipulate the stack directly without modifying values.
 
 | Mnemonic | Syntax | Stack Transition | Description |
 | :--- | :--- | :--- | :--- |
-| `push` | `push <value>` | `[...] -> [..., value]` | Pushes a literal value (e.g., `42`, `true`, `3.14`, `()`, `(1, 2)`) or a symbol onto the top of the stack. |
+| `push` | `push <value>` | `[...] -> [..., value]` | Pushes a literal value (e.g., `42`, `true`, `3.14`, `"text"`, `()`, `(1, 2)`) or a path naming a declared `symbol` or `const_string` onto the top of the stack. |
 | `drop` | `drop <depth>` | `[..., v_d, v_{d-1}, ..., v_0] -> [..., v_{d-1}, ..., v_0]` | Discards the stack element at the specified 0-indexed depth from the top (e.g., `drop 0` pops/drops the TOS). |
 | `pick` | `pick <depth>` | `[..., v_d, ..., v_0] -> [..., v_d, ..., v_0, v_d]` | Copies the element at `<depth>` from the top and pushes the copy to the top. `pick 0` is equivalent to `dup`. |
 | `roll` | `roll <depth>` | `[..., v_d, v_{d-1}, ..., v_0] -> [..., v_{d-1}, ..., v_0, v_d]` | Rotates the element at `<depth>` to the top, shifting intermediate elements down. `roll 1` is equivalent to `swap`. |
@@ -60,7 +60,7 @@ arithmetic wraps, so `i64::MIN` is not a special case anywhere. `not`, `and` and
 `or` carry no flag — there is no input they cannot answer on — and truthiness is
 applied per operand, which is what keeps De Morgan true on every value.
 `truthy(v)` is `v != false`: `false` is the only falsy value, so a number, a
-symbol or a tuple is true. See `docs/totality.md`.
+symbol, a const string or a tuple is true. See `docs/totality.md`.
 
 ---
 
@@ -95,7 +95,7 @@ These instructions control execution flow, jumps, and validation assertions.
 
 ---
 
-## 5. Composite Types (Tuples & Symbols)
+## 5. Composite Types (Tuples & Const Strings)
 
 These operations construct, destructure, or query structured data types.
 
@@ -103,8 +103,8 @@ These operations construct, destructure, or query structured data types.
 | :--- | :--- | :--- | :--- |
 | `tuple` | `tuple <size>` | `[..., v_{N-1}, ..., v_0] -> [..., (v_0, ..., v_{N-1})]` | Pops $N$ elements and packages them into a tuple. **Gotcha**: The TOS element $v_0$ becomes index 0 of the tuple. |
 | `untuple` ⚑ | `untuple <size>` | `[..., (v_0, ..., v_{N-1})] -> [..., v_{N-1}, ..., v_0, ok]` | Pops a tuple of size $N$ and pushes its elements back onto the stack in reverse index order, leaving index 0 ($v_0$) at the top. Anything else **fails**, leaving the value itself in the deepest of the $N$ slots with `()` padding above it — so a caller that reads the flag has lost nothing. |
-| `symbol_len` ⚑ | `symbol_len` | `[..., sym] -> [..., len, ok]` | Pops a symbol and pushes its character length as an Int. Fails on a non-symbol, handing the value back. |
-| `symbol_char_at` ⚑ | `symbol_char_at` | `[..., sym, idx] -> [..., char, ok]` | Pops index $idx$ and symbol $sym$, then pushes the Unicode code point of the character at that index as an Int. Fails, answering `0`, if the index is out of range or either operand is the wrong type. |
+| `const_string_len` ⚑ | `const_string_len` | `[..., str] -> [..., len, ok]` | Pops a const string and pushes its character length as an Int. Fails on anything else, handing the value back. |
+| `const_string_char_at` ⚑ | `const_string_char_at` | `[..., str, idx] -> [..., char, ok]` | Pops index $idx$ and const string $str$, then pushes the Unicode code point of the character at that index as an Int. Fails, answering `0`, if the index is out of range or either operand is the wrong type. |
 | `tuple_length` ⚑ | `tuple_length` | `[..., tup] -> [..., len, ok]` | Pops a Tuple and pushes its element count as an Int. Fails on a non-tuple, handing the value back. |
 
 ---
@@ -118,5 +118,6 @@ These instructions test the runtime type of the top stack value, pushing a Bool.
 | `is_int` | `is_int` | `[..., v] -> [..., is_int]` | Pops a value and pushes `true` if it is an Int, else `false`. |
 | `is_bool` | `is_bool` | `[..., v] -> [..., is_bool]` | Pops a value and pushes `true` if it is a Bool, else `false`. |
 | `is_float` | `is_float` | `[..., v] -> [..., is_float]` | Pops a value and pushes `true` if it is a Float, else `false`. |
+| `is_const_string` | `is_const_string` | `[..., v] -> [..., is_const_string]` | Pops a value and pushes `true` if it is a ConstString, else `false`. |
 | `is_symbol` | `is_symbol` | `[..., v] -> [..., is_symbol]` | Pops a value and pushes `true` if it is a Symbol, else `false`. |
 | `is_tuple` | `is_tuple` | `[..., v] -> [..., is_tuple]` | Pops a value and pushes `true` if it is a Tuple, else `false`. |

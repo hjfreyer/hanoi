@@ -398,6 +398,11 @@ impl VM {
                     let val = self.pop()?;
                     self.stack.push(Value::Bool(matches!(val, Value::Float(_))));
                 }
+                Instruction::IsConstString => {
+                    let val = self.pop()?;
+                    self.stack
+                        .push(Value::Bool(matches!(val, Value::ConstString(_))));
+                }
                 Instruction::IsSymbol => {
                     let val = self.pop()?;
                     self.stack
@@ -416,27 +421,27 @@ impl VM {
                         other => self.failed(other),
                     }
                 }
-                Instruction::SymbolLen => {
+                Instruction::ConstStringLen => {
                     let val = self.pop()?;
                     match val {
-                        Value::Symbol(ref sym) => {
-                            let len = sym.name.chars().count() as i64;
+                        Value::ConstString(ref s) => {
+                            let len = s.chars().count() as i64;
                             self.ok(Value::Int(len))
                         }
                         other => self.failed(other),
                     }
                 }
-                Instruction::SymbolCharAt => {
+                Instruction::ConstStringCharAt => {
                     let idx_val = self.pop()?;
-                    let sym_val = self.pop()?;
+                    let str_val = self.pop()?;
                     // Wrong types and an out-of-range index fail alike: an index
                     // is in range or it is not, and there is nothing for a
                     // caller to learn from telling the two apart. Two inputs and
                     // two slots leave no room to hand either back.
-                    let ch = match (sym_val, idx_val) {
-                        (Value::Symbol(sym), Value::Int(idx)) => usize::try_from(idx)
+                    let ch = match (str_val, idx_val) {
+                        (Value::ConstString(s), Value::Int(idx)) => usize::try_from(idx)
                             .ok()
-                            .and_then(|idx| sym.name.chars().nth(idx))
+                            .and_then(|idx| s.chars().nth(idx))
                             .map(|ch| ch as i64),
                         _ => None,
                     };
@@ -751,8 +756,8 @@ mod tests {
     #[test]
     fn test_symbols_vm() {
         let code = r#"
-            symbol status_ok "Successful execution"
-            symbol status_error "Execution error"
+            symbol status_ok
+            symbol status_error
             
             export sentence entry {
                 push status_ok
@@ -782,45 +787,45 @@ mod tests {
     }
 
     #[test]
-    fn test_symbol_len_and_char_at() {
+    fn test_const_string_len_and_char_at() {
         let code = r#"
-            symbol ascii_sym "hello"
-            symbol unicode_sym "café"
+            const_string ascii_str "hello"
+            const_string unicode_str "café"
             
             export sentence test_len {
-                push ascii_sym
-                symbol_len
+                push ascii_str
+                const_string_len
                 assert
                 push 5
                 assert_eq
                 
-                push unicode_sym
-                symbol_len
+                push unicode_str
+                const_string_len
                 assert
                 push 4
                 assert_eq
             }
             
             export sentence test_char_at {
-                push ascii_sym
+                push ascii_str
                 push 1
-                symbol_char_at
+                const_string_char_at
                 assert
                 push 101
                 assert_eq
                 
-                push unicode_sym
+                push unicode_str
                 push 3
-                symbol_char_at
+                const_string_char_at
                 assert
                 push 233
                 assert_eq
             }
             
             export sentence test_out_of_bounds {
-                push unicode_sym
+                push unicode_str
                 push 4
-                symbol_char_at
+                const_string_char_at
                 // Out of range, so the flag is the one place this differs from
                 // the two above: it says the 0 underneath was invented.
                 not
@@ -875,14 +880,14 @@ mod tests {
                 mod event {
                     symbol tau
                 }
-                symbol start "Start test event"
-                symbol pass "Pass test event"
-                symbol fail "Fail test event"
+                symbol start
+                symbol pass
+                symbol fail
             }
 
-            symbol from_sym "FromSymbol"
-            symbol to_sym "ToSymbol"
-            symbol payload "Payload"
+            symbol from_sym
+            symbol to_sym
+            symbol payload
             mod base {
                 export function init {
                     untuple 0
@@ -1233,11 +1238,17 @@ mod totality_tests {
         }
     }
 
-    fn sym(name: &str) -> Value {
+    /// A symbol, identified by its id — two are the same value exactly when
+    /// their ids are, so the path is only there to print.
+    fn sym(id: usize) -> Value {
         Value::Symbol(Symbol {
-            id: 7,
-            name: name.to_string(),
+            id,
+            path: format!("s{}", id),
         })
+    }
+
+    fn cs(text: &str) -> Value {
+        Value::ConstString(text.to_string())
     }
 
     fn unit() -> Value {
@@ -1252,7 +1263,9 @@ mod totality_tests {
             Value::Int(0),
             Value::Int(-3),
             Value::Float(1.5),
-            sym("s"),
+            cs("hi"),
+            cs(""),
+            sym(7),
             unit(),
             Value::Tuple(vec![Value::Int(1), Value::Int(2)]),
         ]
@@ -1274,7 +1287,7 @@ mod totality_tests {
             Instruction::Modulo,
             Instruction::And,
             Instruction::Or,
-            Instruction::SymbolCharAt,
+            Instruction::ConstStringCharAt,
             Instruction::AssertEqual,
             Instruction::Tuple(2),
         ]
@@ -1348,11 +1361,12 @@ mod totality_tests {
             Instruction::Negate,
             Instruction::And,
             Instruction::Or,
-            Instruction::SymbolLen,
-            Instruction::SymbolCharAt,
+            Instruction::ConstStringLen,
+            Instruction::ConstStringCharAt,
             Instruction::IsInt,
             Instruction::IsBool,
             Instruction::IsFloat,
+            Instruction::IsConstString,
             Instruction::IsSymbol,
             Instruction::IsTuple,
             Instruction::TupleLength,
@@ -1421,21 +1435,24 @@ mod totality_tests {
     /// Every instruction that carries a flag, with operands that make it fail.
     fn failing_cases() -> Vec<(Instruction, Vec<Value>)> {
         vec![
-            (Instruction::Add, vec![sym("s"), Value::Int(1)]),
-            (Instruction::Subtract, vec![Value::Int(1), sym("s")]),
+            (Instruction::Add, vec![sym(7), Value::Int(1)]),
+            (Instruction::Subtract, vec![Value::Int(1), sym(7)]),
             (
                 Instruction::Multiply,
                 vec![Value::Bool(true), Value::Bool(false)],
             ),
             (Instruction::Divide, vec![Value::Int(7), Value::Int(0)]),
             (Instruction::Modulo, vec![Value::Int(7), Value::Int(0)]),
-            (Instruction::Negate, vec![sym("s")]),
-            (Instruction::Greater, vec![sym("a"), sym("b")]),
+            (Instruction::Negate, vec![sym(7)]),
+            (Instruction::Greater, vec![sym(1), sym(2)]),
             (Instruction::Less, vec![unit(), unit()]),
             (Instruction::Untuple(3), vec![Value::Int(5)]),
-            (Instruction::TupleLength, vec![sym("s")]),
-            (Instruction::SymbolLen, vec![Value::Int(3)]),
-            (Instruction::SymbolCharAt, vec![sym("hi"), Value::Int(9)]),
+            (Instruction::TupleLength, vec![sym(7)]),
+            (Instruction::ConstStringLen, vec![Value::Int(3)]),
+            (
+                Instruction::ConstStringCharAt,
+                vec![cs("hi"), Value::Int(9)],
+            ),
         ]
     }
 
@@ -1483,14 +1500,17 @@ mod totality_tests {
             (Instruction::Greater, vec![Value::Int(3), Value::Int(1)]),
             (
                 Instruction::Untuple(2),
-                vec![Value::Tuple(vec![sym("a"), sym("b")])],
+                vec![Value::Tuple(vec![sym(1), sym(2)])],
             ),
             (
                 Instruction::TupleLength,
                 vec![Value::Tuple(vec![Value::Int(1)])],
             ),
-            (Instruction::SymbolLen, vec![sym("hi")]),
-            (Instruction::SymbolCharAt, vec![sym("hi"), Value::Int(0)]),
+            (Instruction::ConstStringLen, vec![cs("hi")]),
+            (
+                Instruction::ConstStringCharAt,
+                vec![cs("hi"), Value::Int(0)],
+            ),
         ];
         for (inst, good) in cases {
             let (out, ok) = flagged(&good, inst.clone());
@@ -1505,11 +1525,11 @@ mod totality_tests {
         // whose output arity has room preserves the slot its input occupied,
         // so a caller that reads the flag has not lost anything.
         assert_eq!(
-            flagged(&[sym("s")], Instruction::TupleLength),
-            (vec![sym("s")], false)
+            flagged(&[sym(7)], Instruction::TupleLength),
+            (vec![sym(7)], false)
         );
         assert_eq!(
-            flagged(&[Value::Int(3)], Instruction::SymbolLen),
+            flagged(&[Value::Int(3)], Instruction::ConstStringLen),
             (vec![Value::Int(3)], false)
         );
         assert_eq!(
@@ -1519,12 +1539,12 @@ mod totality_tests {
         // `untuple n` is the one this rule is really for: the value stays in
         // the deepest of the n slots and `()` pads the rest.
         assert_eq!(
-            flagged(&[sym("s")], Instruction::Untuple(3)),
-            (vec![sym("s"), unit(), unit()], false)
+            flagged(&[sym(7)], Instruction::Untuple(3)),
+            (vec![sym(7), unit(), unit()], false)
         );
         assert_eq!(
-            flagged(&[sym("s")], Instruction::Untuple(1)),
-            (vec![sym("s")], false)
+            flagged(&[sym(7)], Instruction::Untuple(1)),
+            (vec![sym(7)], false)
         );
     }
 
@@ -1533,15 +1553,15 @@ mod totality_tests {
         // Two operands and two slots leave nowhere to keep them, which is why
         // `add` does not bother.
         assert_eq!(
-            flagged(&[sym("s"), Value::Int(1)], Instruction::Add),
+            flagged(&[sym(7), Value::Int(1)], Instruction::Add),
             (vec![Value::Int(0)], false)
         );
         assert_eq!(
-            flagged(&[sym("a"), sym("b")], Instruction::Greater),
+            flagged(&[sym(1), sym(2)], Instruction::Greater),
             (vec![Value::Bool(false)], false)
         );
         assert_eq!(
-            flagged(&[sym("hi"), Value::Int(9)], Instruction::SymbolCharAt),
+            flagged(&[cs("hi"), Value::Int(9)], Instruction::ConstStringCharAt),
             (vec![Value::Int(0)], false)
         );
         // At n = 0 there is no room either, and nothing to hold: the flag is
@@ -1685,6 +1705,10 @@ mod totality_tests {
                 (Instruction::IsInt, matches!(a, Value::Int(_))),
                 (Instruction::IsBool, matches!(a, Value::Bool(_))),
                 (Instruction::IsFloat, matches!(a, Value::Float(_))),
+                (
+                    Instruction::IsConstString,
+                    matches!(a, Value::ConstString(_)),
+                ),
                 (Instruction::IsSymbol, matches!(a, Value::Symbol(_))),
                 (Instruction::IsTuple, matches!(a, Value::Tuple(_))),
             ] {
@@ -1835,11 +1859,11 @@ mod runtime_tests {
         async fn handle_event(&mut self, event: Value) -> Result<(), String> {
             match event {
                 Value::Symbol(sym) => {
-                    if sym.name == "ping event" {
+                    if sym.path == "main::event::ping" {
                         self.received_ping = true;
                         return Ok(());
                     }
-                    Err(format!("Unexpected symbol event: {}", sym.name))
+                    Err(format!("Unexpected symbol event: {}", sym.path))
                 }
                 other => Err(format!("Unexpected event type: {:?}", other)),
             }
@@ -1858,14 +1882,14 @@ mod runtime_tests {
         let code = r#"
             mod main {
                 mod state {
-                    symbol init "initial state"
-                    symbol waiting "waiting state"
-                    symbol done "done state"
+                    symbol init
+                    symbol waiting
+                    symbol done
                 }
 
                 mod event {
-                    symbol ping "ping event"
-                    symbol pong "pong event"
+                    symbol ping
+                    symbol pong
                 }
 
                 export function init {
@@ -1965,16 +1989,16 @@ mod runtime_tests {
         let code = r#"
             mod std {
                 mod io {
-                    symbol io "std::io"
+                    symbol io
                     mod stdout {
-                        symbol stdout "std::io::stdout"
-                        symbol putch "std::io::stdout::putch"
+                        symbol stdout
+                        symbol putch
                     }
                 }
             }
 
             mod main {
-                symbol hello "Hello, World!"
+                const_string hello "Hello, World!"
 
                 export function init {
                     untuple 0
@@ -1998,7 +2022,7 @@ mod runtime_tests {
                 export function emit {
                     pick 0
                     push hello
-                    symbol_len
+                    const_string_len
                     assert
                     less
                     assert
@@ -2007,7 +2031,7 @@ mod runtime_tests {
                         
                         push hello
                         pick 2 // index
-                        symbol_char_at
+                        const_string_char_at
                         assert
                         
                         tuple 2 // (char, ())
@@ -2046,7 +2070,7 @@ mod runtime_tests {
 
                 export function is_done {
                     push hello
-                    symbol_len
+                    const_string_len
                     assert
                     less
                     assert

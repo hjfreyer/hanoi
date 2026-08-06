@@ -1,0 +1,154 @@
+// Tests for ConstString, the value that is exactly its text.
+
+const_string greeting "hello"
+const_string same_greeting "hello"
+const_string empty ""
+const_string unicode "café"
+
+test sentence a_const_string_is_its_text {
+    // Two declarations reading the same are the same value — the whole
+    // difference from a symbol, which is a fresh identity every time.
+    push greeting
+    push same_greeting
+    equal
+    assert
+
+    // And a literal is that same value, with nothing to declare.
+    push greeting
+    push "hello"
+    equal
+    assert
+
+    push greeting
+    push "goodbye"
+    equal
+    not
+    assert
+}
+
+test sentence const_string_len_counts_characters {
+    push greeting
+    const_string_len
+    assert
+    push 5
+    assert_eq
+
+    push empty
+    const_string_len
+    assert
+    push 0
+    assert_eq
+
+    // Characters, not bytes: `café` is five bytes and four characters.
+    push unicode
+    const_string_len
+    assert
+    push 4
+    assert_eq
+}
+
+test sentence const_string_len_fails_off_the_strings {
+    // One input and two slots, so the value it could not measure comes back.
+    push 3
+    const_string_len
+    not
+    assert
+    push 3
+    assert_eq
+}
+
+test sentence const_string_char_at_reads_a_code_point {
+    push greeting
+    push 0
+    const_string_char_at
+    assert
+    push 104 // 'h'
+    assert_eq
+
+    push greeting
+    push 4
+    const_string_char_at
+    assert
+    push 111 // 'o'
+    assert_eq
+
+    push unicode
+    push 3
+    const_string_char_at
+    assert
+    push 233 // 'é'
+    assert_eq
+}
+
+test sentence const_string_char_at_fails_out_of_range {
+    // Two inputs and two slots leave no room to hand either back, so the
+    // answer is `0` and the flag is what says it was invented.
+    push greeting
+    push 5
+    const_string_char_at
+    not
+    assert
+    push 0
+    assert_eq
+
+    push empty
+    push 0
+    const_string_char_at
+    not
+    assert
+    push 0
+    assert_eq
+
+    // A wrong operand type fails the same way.
+    push 7
+    push 0
+    const_string_char_at
+    not
+    assert
+    push 0
+    assert_eq
+}
+
+test sentence is_const_string_answers_on_every_shape {
+    push greeting
+    is_const_string
+    assert
+
+    push ""
+    is_const_string
+    assert
+
+    push 42
+    is_const_string
+    not
+    assert
+
+    push (greeting, 1)
+    is_const_string
+    not
+    assert
+}
+
+// A const string is a value like any other, so it works as a type spec too.
+type Greeting const_string;
+type Hello "hello";
+
+test sentence const_string_type_checks {
+    push greeting
+    jump Greeting::check
+    assert
+
+    push 42
+    jump Greeting::check
+    not
+    assert
+
+    push "hello"
+    jump Hello::check
+    assert
+
+    push "goodbye"
+    jump Hello::check
+    not
+    assert
+}

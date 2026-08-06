@@ -45,7 +45,7 @@ fn shift_path(path: &Path, levels: usize) -> Path {
 }
 
 /// Applies [`shift_path`] to every path a spec mentions. `Literal` holds only
-/// bools, ints and floats, so it has no paths to shift.
+/// bools, ints, floats and const strings, so it has no paths to shift.
 fn shift_spec(spec: &TypeSpec, levels: usize) -> TypeSpec {
     match spec {
         TypeSpec::Path(path) => TypeSpec::Path(shift_path(path, levels)),
@@ -109,6 +109,7 @@ impl Lowerer {
     fn item(&mut self, item: sugar::Item) -> Result<Vec<core::Item>, String> {
         match item {
             sugar::Item::Symbol(decl) => Ok(vec![core::Item::Symbol(decl)]),
+            sugar::Item::ConstString(decl) => Ok(vec![core::Item::ConstString(decl)]),
             sugar::Item::Sentence(decl) => Ok(vec![core::Item::Sentence(decl)]),
             sugar::Item::Mod(decl) => Ok(vec![core::Item::Mod(core::ModDecl {
                 name: decl.name,
@@ -315,7 +316,7 @@ const COMPOSER_DEPTH: usize = 1;
 fn as_value(arg: &ComposerArg) -> ParsedValue {
     match arg {
         ComposerArg::Value(val) => val.clone(),
-        ComposerArg::Path(path) => ParsedValue::SymbolRef(shift_path(path, COMPOSER_DEPTH)),
+        ComposerArg::Path(path) => ParsedValue::Ref(shift_path(path, COMPOSER_DEPTH)),
     }
 }
 
@@ -391,7 +392,6 @@ fn lower_enum(decl: sugar::EnumDecl) -> Result<core::Item, String> {
             vec![
                 core::Item::Symbol(SymbolDecl {
                     name: "tag".to_string(),
-                    debug_desc: None,
                 }),
                 plain_mod("Body".to_string(), vec![core::Item::Sentence(body_check)]),
                 core::Item::Sentence(variant_check),
@@ -438,6 +438,7 @@ fn compile_type_spec(spec: &TypeSpec) -> Result<Vec<ParsedInstruction>, String> 
             PrimitiveType::Int => ParsedInstruction::IsInt,
             PrimitiveType::Bool => ParsedInstruction::IsBool,
             PrimitiveType::Float => ParsedInstruction::IsFloat,
+            PrimitiveType::ConstString => ParsedInstruction::IsConstString,
             PrimitiveType::Symbol => ParsedInstruction::IsSymbol,
             PrimitiveType::Tuple => ParsedInstruction::IsTuple,
         }]),

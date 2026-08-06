@@ -1,4 +1,4 @@
-symbol input0 "39472"
+const_string input0 "39472"
 
 sentence sync_char_iterator_in {
     pick 0

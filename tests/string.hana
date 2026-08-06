@@ -1,19 +1,19 @@
 // String manipulation machines and tests using the new (args, tag) tuple convention.
 
-symbol next "Next character event"
-symbol done "Iteration finished event"
+symbol next
+symbol done
 
 mod string_ref {
-    symbol idle "idle state"
-    symbol length "length query"
-    symbol charat "charat query"
-    symbol length_resp "length response"
-    symbol charat_resp "charat response"
-    symbol some "some option variant"
-    symbol none "none option variant"
+    symbol idle
+    symbol length
+    symbol charat
+    symbol length_resp
+    symbol charat_resp
+    symbol some
+    symbol none
 
     // init: returns idle state of string_ref
-    // State is (sym, idle)
+    // State is (str, idle)
     function init {
         push idle
         tuple 2
@@ -24,13 +24,13 @@ mod string_ref {
         untuple 2
         assert
         untuple 2
-        assert // Stack: [event, sym, internal_state]
+        assert // Stack: [event, str, internal_state]
         pick 0 // duplicate internal_state
         push idle
         equal
         branch {
             drop 0 // drop internal_state
-            drop 0 // drop sym
+            drop 0 // drop str
             // Stack: [event]
             untuple 2
             assert
@@ -59,7 +59,7 @@ mod string_ref {
             // In response state: accepts nothing (empty_set)
             pick 0
             untuple 2
-            assert // Stack: [event, sym, internal_state, resp_val, resp_tag]
+            assert // Stack: [event, str, internal_state, resp_val, resp_tag]
             pick 0 // resp_tag
             push length_resp
             equal
@@ -93,21 +93,21 @@ mod string_ref {
         tuple 2
     }
 
-    // emit: takes state (sym, internal_state) and returns ValueSet of emitted events.
+    // emit: takes state (str, internal_state) and returns ValueSet of emitted events.
     function emit {
         untuple 2
-        assert // Stack: [sym, internal_state]
+        assert // Stack: [str, internal_state]
         pick 0 // duplicate internal_state
         push idle
         equal
         branch {
             drop 0 // drop internal_state
-            drop 0 // drop sym
+            drop 0 // drop str
             tuple 0
             push false
             tuple 2
         } {
-            drop 1 // drop sym. Stack: [internal_state]
+            drop 1 // drop str. Stack: [internal_state]
             pick 0
             untuple 2
             assert // Stack: [internal_state, resp_val, resp_tag]
@@ -141,17 +141,17 @@ mod string_ref {
         assert
         // Stack: [event, state]
         untuple 2
-        assert // Stack: [event, sym, internal_state]
+        assert // Stack: [event, str, internal_state]
         
         pick 0
         push idle
         equal
         branch {
             // Case 1: internal_state is idle. We processed a query event ((), length) or (N, charat).
-            drop 0 // drop internal_state. Stack: [event, sym]
-            roll 1 // Stack: [sym, event]
+            drop 0 // drop internal_state. Stack: [event, str]
+            roll 1 // Stack: [str, event]
             untuple 2
-            assert // Stack: [sym, query_payload, query_type]
+            assert // Stack: [str, query_payload, query_type]
             
             pick 0 // query_type
             push length
@@ -159,20 +159,20 @@ mod string_ref {
             branch {
                 drop 0 // drop query_type
                 drop 0 // drop query_payload (which is ())
-                pick 0 // sym
-                symbol_len // len
+                pick 0 // str
+                const_string_len // len
                 assert
                 
                 push length_resp
                 tuple 2 // (len, length_resp)
                 
-                tuple 2 // (sym, (len, length_resp))
+                tuple 2 // (str, (len, length_resp))
             } {
-                drop 0 // drop query_type. Stack: [sym, N]
+                drop 0 // drop query_type. Stack: [str, N]
                 
                 // Check if N < len
-                pick 1 // sym
-                symbol_len // len
+                pick 1 // str
+                const_string_len // len
                 assert
                 
                 pick 1 // N
@@ -182,9 +182,9 @@ mod string_ref {
                 branch {
                     // N < len: return character
                     drop 0 // drop len
-                    pick 1 // sym
+                    pick 1 // str
                     pick 1 // N
-                    symbol_char_at // ch
+                    const_string_char_at // ch
                     assert
                     
                     push some
@@ -194,11 +194,11 @@ mod string_ref {
                     tuple 2 // ((ch, some), charat_resp)
                     
                     drop 1 // drop N
-                    tuple 2 // (sym, ((ch, some), charat_resp))
+                    tuple 2 // (str, ((ch, some), charat_resp))
                 } {
                     // N >= len: return none
                     drop 0 // drop len
-                    drop 0 // drop N. Stack: [sym]
+                    drop 0 // drop N. Stack: [str]
                     
                     tuple 0
                     push none
@@ -207,18 +207,18 @@ mod string_ref {
                     push charat_resp
                     tuple 2 // (((), none), charat_resp)
                     
-                    tuple 2 // (sym, (((), none), charat_resp))
+                    tuple 2 // (str, (((), none), charat_resp))
                 }
             }
         } {
             // Case 2: internal_state is not idle. We processed the response event.
             // Transition back to idle.
             drop 0 // drop internal_state
-            roll 1 // Stack: [sym, event]
-            drop 0 // drop event. Stack: [sym]
+            roll 1 // Stack: [str, event]
+            drop 0 // drop event. Stack: [str]
             
             push idle
-            tuple 2 // (sym, idle)
+            tuple 2 // (str, idle)
         }
     }
 
@@ -238,13 +238,13 @@ mod string_ref {
 }
 
 mod char_iterator {
-    symbol in           "char_iterator::in"
-    symbol out          "char_iterator::out"
-    symbol fetch        "Fetch charat state"
-    symbol await_charat "Await charat response state"
-    symbol yield_next   "Yield next character state"
-    symbol yield_done   "Yield done state"
-    symbol done_state   "Finished iteration state"
+    symbol in
+    symbol out
+    symbol fetch
+    symbol await_charat
+    symbol yield_next
+    symbol yield_done
+    symbol done_state
 
     // Initialize char_iterator state.
     // Returns (0, fetch) state.
@@ -571,18 +571,18 @@ mod char_iterator {
     }
 }
 
-symbol copy  "copy"
-symbol value "value"
-symbol ok    "ok"
-symbol err   "err"
+symbol copy
+symbol value
+symbol ok
+symbol err
 
 mod parseint {
-    symbol in           "parseint::in"
-    symbol out          "parseint::out"
-    symbol idle         "Idle state"
-    symbol parsing      "Parsing state"
-    symbol yielding_ok  "Yielding ok result state"
-    symbol yielding_err "Yielding err result state"
+    symbol in
+    symbol out
+    symbol idle
+    symbol parsing
+    symbol yielding_ok
+    symbol yielding_err
 
     // init: returns idle state
     function init {
@@ -947,24 +947,24 @@ mod parseint {
 }
 
 mod split {
-    symbol in                   "split::in"
-    symbol out                  "split::out"
-    symbol next                 "next"
-    symbol start                "start"
-    symbol item                 "item"
-    symbol end                  "end"
-    symbol done                 "done"
+    symbol in
+    symbol out
+    symbol next
+    symbol start
+    symbol item
+    symbol end
+    symbol done
 
-    symbol state_idle           "idle"
-    symbol state_await_start    "await_start"
-    symbol state_yield_start    "yield_start"
-    symbol state_yield_item     "yield_item"
-    symbol state_await_field    "await_field"
-    symbol state_yield_end      "yield_end"
-    symbol state_yield_end_done "yield_end_done"
-    symbol state_idle_done      "idle_done"
-    symbol state_yield_done     "yield_done"
-    symbol state_done           "done"
+    symbol state_idle
+    symbol state_await_start
+    symbol state_yield_start
+    symbol state_yield_item
+    symbol state_await_field
+    symbol state_yield_end
+    symbol state_yield_end_done
+    symbol state_idle_done
+    symbol state_yield_done
+    symbol state_done
 
     // init: accepts delim on stack. Returns (delim, state_idle).
     function init {
@@ -1431,12 +1431,12 @@ mod split {
     }
 }
 
-symbol my_str "abc"
-symbol empty_str ""
-symbol cafe_str "café"
-symbol xyz_str "xyz"
-symbol str_123 "123"
-symbol str_45a "45a"
+const_string my_str "abc"
+const_string empty_str ""
+const_string cafe_str "café"
+const_string xyz_str "xyz"
+const_string str_123 "123"
+const_string str_45a "45a"
 
 mod string_ref_base {
     function init {
@@ -2321,7 +2321,7 @@ test sentence iterate_unicode {
     drop 0
 }
 
-symbol comma_str "a,b"
+const_string comma_str "a,b"
 
 mod comma_str_hidden compose_hidden(
     compose_concurrent(

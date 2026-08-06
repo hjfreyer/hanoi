@@ -73,7 +73,8 @@ fn render_value(v: &Value) -> String {
         Value::Bool(b) => b.to_string(),
         Value::Int(i) => i.to_string(),
         Value::Float(f) => format!("{}", f),
-        Value::Symbol(s) => format!("'{}", short_symbol(&s.name)),
+        Value::ConstString(s) => format!("{:?}", s),
+        Value::Symbol(s) => format!("'{}", short_symbol(&s.path)),
         Value::Tuple(es) => {
             let mut out = String::from("(");
             for (i, e) in es.iter().enumerate() {
@@ -88,14 +89,10 @@ fn render_value(v: &Value) -> String {
     }
 }
 
-/// Symbol descriptions are sentences ("Customer is idle"); a listing needs a
-/// word. The last one is the distinguishing one in every case in the corpus.
-fn short_symbol(name: &str) -> String {
-    let tail = name.rsplit("::").next().unwrap_or(name);
-    match tail.rsplit(' ').next() {
-        Some(w) if !w.is_empty() => w.to_string(),
-        _ => tail.to_string(),
-    }
+/// A symbol prints as its fully qualified path (`queue::State::Idle::tag`); a
+/// listing needs a word, and the last segment is the distinguishing one.
+fn short_symbol(path: &str) -> String {
+    path.rsplit("::").next().unwrap_or(path).to_string()
 }
 
 /// The stack, or `None` where it stopped being knowable.
@@ -240,12 +237,13 @@ fn op(inst: &Instruction, s: &mut Vec<Rc<Term>>, fresh: &mut Fresh) -> bool {
         | Instruction::IsInt
         | Instruction::IsBool
         | Instruction::IsFloat
+        | Instruction::IsConstString
         | Instruction::IsSymbol
         | Instruction::IsTuple => {
             let a = pop!();
             s.push(unary(inst, &a));
         }
-        Instruction::Negate | Instruction::TupleLength | Instruction::SymbolLen => {
+        Instruction::Negate | Instruction::TupleLength | Instruction::ConstStringLen => {
             let a = pop!();
             s.push(unary(inst, &a));
             s.push(fresh.next());
@@ -262,7 +260,7 @@ fn op(inst: &Instruction, s: &mut Vec<Rc<Term>>, fresh: &mut Fresh) -> bool {
         | Instruction::Multiply
         | Instruction::Divide
         | Instruction::Modulo
-        | Instruction::SymbolCharAt => {
+        | Instruction::ConstStringCharAt => {
             let b = pop!();
             let a = pop!();
             s.push(Rc::new(Term::App(op_name(inst), vec![a, b])));
@@ -332,6 +330,7 @@ fn unary(inst: &Instruction, a: &Rc<Term>) -> Rc<Term> {
             Instruction::IsInt
             | Instruction::IsBool
             | Instruction::IsFloat
+            | Instruction::IsConstString
             | Instruction::IsSymbol => {
                 return Rc::new(Term::Const(ConstKey::new(&Value::Bool(false))));
             }
@@ -349,12 +348,14 @@ fn fold_unary(inst: &Instruction, k: &ConstKey) -> Option<Value> {
     let bool_lit = r == "true" || r == "false";
     let sym = r.starts_with('\'');
     let tup = r.starts_with('(');
+    let string = r.starts_with('"');
     let float = !k.exact();
-    let int = !bool_lit && !sym && !tup && !float && r.parse::<i64>().is_ok();
+    let int = !bool_lit && !sym && !tup && !string && !float && r.parse::<i64>().is_ok();
     match inst {
         Instruction::IsBool => is(bool_lit),
         Instruction::IsInt => is(int),
         Instruction::IsFloat => is(float),
+        Instruction::IsConstString => is(string),
         Instruction::IsSymbol => is(sym),
         Instruction::IsTuple => is(tup),
         Instruction::Not if bool_lit => is(r == "false"),
@@ -369,10 +370,11 @@ fn op_name(inst: &Instruction) -> &'static str {
         Instruction::IsInt => "is_int",
         Instruction::IsBool => "is_bool",
         Instruction::IsFloat => "is_float",
+        Instruction::IsConstString => "is_const_string",
         Instruction::IsSymbol => "is_symbol",
         Instruction::IsTuple => "is_tuple",
         Instruction::TupleLength => "len",
-        Instruction::SymbolLen => "sym_len",
+        Instruction::ConstStringLen => "str_len",
         Instruction::Greater => ">",
         Instruction::Less => "<",
         Instruction::Add => "+",
@@ -382,7 +384,7 @@ fn op_name(inst: &Instruction) -> &'static str {
         Instruction::Modulo => "%",
         Instruction::And => "&&",
         Instruction::Or => "||",
-        Instruction::SymbolCharAt => "char_at",
+        Instruction::ConstStringCharAt => "char_at",
         _ => "?",
     }
 }

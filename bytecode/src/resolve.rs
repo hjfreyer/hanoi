@@ -1,7 +1,7 @@
 //! The module tree and name resolution.
 //!
-//! Symbols, sentences, and submodules share a single namespace per module, so a
-//! name in a module denotes exactly one [`ModuleItem`]. Modules live in a flat
+//! Constants, sentences, and submodules share a single namespace per module, so
+//! a name in a module denotes exactly one [`ModuleItem`]. Modules live in a flat
 //! arena and are addressed by [`ModuleId`], and each one knows its parent, so a
 //! resolution scope is just an id rather than a path that has to be re-walked
 //! from the root.
@@ -53,7 +53,8 @@ pub const ROOT: ModuleId = ModuleId(0);
 /// A single name binding in a module.
 #[derive(Debug, Clone)]
 pub enum ModuleItem {
-    Symbol(Value),
+    /// A declared value: a `symbol` or a `const_string`.
+    Const(Value),
     Sentence(SentenceIndex),
     Mod(ModuleId),
 }
@@ -62,7 +63,9 @@ impl ModuleItem {
     /// How to refer to this kind of item in an error message.
     fn describe(&self) -> &'static str {
         match self {
-            ModuleItem::Symbol(_) => "symbol",
+            ModuleItem::Const(Value::Symbol(_)) => "symbol",
+            ModuleItem::Const(Value::ConstString(_)) => "const string",
+            ModuleItem::Const(_) => "constant",
             ModuleItem::Sentence(_) => "sentence",
             ModuleItem::Mod(_) => "module",
         }
@@ -72,8 +75,20 @@ impl ModuleItem {
 /// What a path denotes at a use site. Modules are not items in this sense: a
 /// path that names one cannot be pushed or jumped to.
 pub enum ResolvedItem {
-    Symbol(Value),
+    Const(Value),
     Sentence(SentenceIndex),
+}
+
+impl ResolvedItem {
+    /// How to refer to what this is in an error message.
+    pub fn describe(&self) -> &'static str {
+        match self {
+            ResolvedItem::Const(Value::Symbol(_)) => "symbol",
+            ResolvedItem::Const(Value::ConstString(_)) => "const string",
+            ResolvedItem::Const(_) => "constant",
+            ResolvedItem::Sentence(_) => "sentence",
+        }
+    }
 }
 
 struct Module {
@@ -208,11 +223,14 @@ impl ModuleTree {
     }
 
     /// Every symbol in the tree, keyed by fully qualified name.
+    ///
+    /// Symbols only: a const string can be written down, so nothing needs to
+    /// look one up by the name it was declared under.
     pub fn symbol_map(&self) -> HashMap<String, Value> {
         let mut symbols = HashMap::new();
         for (id, module) in self.modules.iter_enumerated() {
             for (name, item) in &module.items {
-                if let ModuleItem::Symbol(val) = item {
+                if let ModuleItem::Const(val @ Value::Symbol(_)) = item {
                     symbols.insert(self.fq_name(id, name), val.clone());
                 }
             }
@@ -223,7 +241,7 @@ impl ModuleTree {
     /// Resolves `path` as seen from `scope` to the item it denotes.
     pub fn resolve(&self, scope: ModuleId, path: &Path) -> Result<ResolvedItem, String> {
         match self.resolve_entry(scope, path)? {
-            ModuleItem::Symbol(val) => Ok(ResolvedItem::Symbol(val.clone())),
+            ModuleItem::Const(val) => Ok(ResolvedItem::Const(val.clone())),
             ModuleItem::Sentence(idx) => Ok(ResolvedItem::Sentence(*idx)),
             ModuleItem::Mod(_) => Err(format!(
                 "Path '{}' names a module, which is not an item",
