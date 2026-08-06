@@ -10,7 +10,7 @@
 use std::collections::HashSet;
 
 use bytecode::arity::failure_reachability;
-use bytecode::{Instruction, Library, SentenceIndex, assemble};
+use bytecode::{Instruction, Library, SentenceIndex, Value, assemble};
 use std::fs;
 use std::path::Path;
 
@@ -883,6 +883,88 @@ fn sharing_a_call_runs_it_once_and_copies_what_it_left() {
     let env = Env::new(prog, 1_000_000, true);
     let (there, _) = run_tactic(&env, &back, got).unwrap_or_else(|e| panic!("{}", e));
     assert_eq!(shape(&there), shape(&plain));
+}
+
+// ---------------------------------------------------------------------------
+// Pushing a symbol
+// ---------------------------------------------------------------------------
+
+const SYMBOLS: &str = r#"
+    symbol plain
+    mod outer { symbol tag "shortname" }
+    #[total] #[arity(1, 1)] sentence probe { drop 0 push 1 }
+"#;
+
+/// The symbol a term pushed, as the tool resolved it.
+fn pushed(prog: &'static Program<'static>, name: &str) -> Result<bytecode::Symbol, String> {
+    let mut defs = Definitions::new();
+    defs.load(PRELUDE).unwrap();
+    let src = format!("once(introduce {{ push {} equal }})", name);
+    let tactic = defs
+        .compile_with(&src, Some(prog))
+        .map_err(|e| format!("{}{}", e.message, e.help.unwrap_or_default()))?;
+
+    let body = build(prog.library(), SentenceIndex::from(0), &mut HashSet::new());
+    let env = Env::new(prog, 1000, true);
+    let (got, _) = run_tactic(&env, &tactic, body).unwrap_or_else(|e| panic!("{}", e));
+    match &got[0] {
+        Node::Op(Instruction::Push(Value::Symbol(s))) => Ok(s.clone()),
+        other => panic!("expected a pushed symbol, got {:?}", other),
+    }
+}
+
+#[test]
+fn a_term_can_push_a_symbol_by_name() {
+    let prog = program_of(SYMBOLS);
+
+    // Fully qualified, and the unambiguous trailing part — the same two
+    // readings `jump` gives a sentence.
+    let fq = pushed(prog, "outer::tag").unwrap();
+    let short = pushed(prog, "tag").unwrap();
+    assert_eq!(fq.id, short.id, "the same symbol either way it is named");
+    assert_eq!(fq.name, "shortname", "it prints as its description");
+
+    // A symbol at the root, whose description defaults to its name.
+    assert_eq!(pushed(prog, "plain").unwrap().name, "plain");
+
+    // And it is the library's symbol, not one built from the text: `Symbol`
+    // compares by `id`, so a fabricated one would match nothing.
+    let Some(Value::Symbol(real)) = prog.library().symbols.get("outer::tag") else {
+        panic!("the fixture should declare it")
+    };
+    assert_eq!(fq, *real);
+}
+
+#[test]
+fn a_symbol_that_is_not_there_says_what_is() {
+    let prog = program_of(SYMBOLS);
+
+    let why = pushed(prog, "nope").unwrap_err();
+    assert!(why.contains("No symbol matching 'nope'"), "{}", why);
+    assert!(why.contains("outer::tag"), "{}", why);
+
+    // The mistake worth naming: a described symbol prints as its description,
+    // so reading one off a listing and writing it back is the obvious thing to
+    // try and the wrong one.
+    let why = pushed(prog, "shortname").unwrap_err();
+    assert!(why.contains("is how the symbol declared as"), "{}", why);
+    assert!(why.contains("Write 'outer::tag'"), "{}", why);
+}
+
+#[test]
+fn a_term_may_only_name_a_symbol_when_there_is_a_program() {
+    // Same rule as `jump`: a symbol is a declaration in the library rather
+    // than a piece of syntax, so there has to be a library.
+    let mut defs = Definitions::new();
+    defs.load(PRELUDE).unwrap();
+    let err = defs
+        .compile("once(introduce { push whatever equal })")
+        .expect_err("it should not compile with no program");
+    assert!(err.message.contains("needs a program"), "{}", err.message);
+
+    // The literals that are syntax still compile on their own.
+    assert!(defs.compile("once(introduce { push 7 equal })").is_ok());
+    assert!(defs.compile("once(introduce { push true and })").is_ok());
 }
 
 #[test]

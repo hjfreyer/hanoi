@@ -500,9 +500,10 @@ the other now opens with drops.
 ### Terms
 
 A term is a run of instructions in braces. `pick n`, `roll n`, `tuple n`,
-`untuple n`, `push <int|true|false>`, `dip n { ... }`, `branch { .. } { .. }`,
-`jump <sentence>`, and the argument-free operators (`drop`, `not`, `and`,
-`equal`, `is_bool`, `add`, …). `--list-rules` prints the list.
+`untuple n`, `push <int|true|false|symbol>`, `dip n { ... }`,
+`branch { .. } { .. }`, `jump <sentence>`, and the argument-free operators
+(`drop`, `not`, `and`, `equal`, `is_bool`, `add`, …). `--list-rules` prints the
+list.
 
 `panic`, `assert` and `assert_eq` are absent on purpose: they are the three
 instructions that can fail, and introducing one would break the precondition
@@ -537,12 +538,32 @@ Code written in a tactic is labelled `<term>` in the listing, the way phase 4
 labels an inline block `<inline>`. Provenance is not part of a term's identity,
 so it never affects what matches.
 
-**`jump <sentence>` is the one thing in a term that reaches outside it.** A
-term used to hold no calls because there was nothing for one to name — the code
-is written in the tactic rather than compiled from a sentence — but `share` is
-about running *a function* twice, and the function has a name. It is resolved
-the way the command line resolves one: an index, an exact name, or an
-unambiguous trailing part of one.
+**Two things in a term reach outside it**, and both are resolved the way the
+command line resolves a sentence: an exact name, or an unambiguous trailing
+part of one.
+
+`jump <sentence>` is a call. A term used to hold none because there was nothing
+for one to name — the code is written in the tactic rather than compiled from a
+sentence — but `share` is about running *a function* twice, and the function
+has a name. Sentences also answer to an index.
+
+`push <symbol>` is a symbol, by fully qualified name: `push
+queue::State::Idle::tag`, or `push Idle::tag` where that is unambiguous. A
+symbol cannot be built from its text — `Symbol` compares by `id`, so two
+declarations reading the same are different symbols — so this looks the real
+one up and refuses a name that denotes none.
+
+One trap, which the error names: a symbol declared with a description **prints
+as that description**. `symbol io "std::io"` inside `mod std { mod io { … } }`
+shows up in a listing as `symbol(std::io)` while its name is `std::io::io`, so
+copying what you read is the obvious thing to try and the wrong one.
+
+```
+error: 'std::io' is how the symbol declared as 'std::io::io' prints, not its
+       name. Write 'std::io::io'
+  | once(introduce { push std::io equal })
+  |                       ^^^^^^^
+```
 
 A term's arity is worked out when the tactic is compiled. From the term alone
 where it names nothing, which is what lets the prelude be checked with no
@@ -1213,8 +1234,10 @@ consulting an analysis.
   shape on purpose. When it lands, a saved derivation will depend on the library
   only through names and facts the applier re-derives — never through quoted
   code — so it fails loudly at the changed step rather than rotting silently.
-- **Symbols and floats in terms.** `push` takes an integer or a boolean; the
-  other literals have no syntax yet.
+- **Floats in terms.** `push` takes an integer, a boolean or a symbol; a float
+  has no syntax yet. It would want one anyway — a literal `1.5` in a term would
+  have to answer for what `equal` does to it, which `--stack` already declines
+  to guess at.
 - **A smarter upper layer.** Matchers and combinators are the whole of the
   search today. Everything above is deliberately arranged so that a better
   generator can be dropped in without the lower layer noticing: whatever finds
