@@ -45,7 +45,7 @@ use crate::arity::{full_arity, node_arity};
 use crate::ir::{Node, Selector, frame_depth, same_effect, same_effect_seq, with_frame_depth};
 use crate::location::Location;
 use crate::program::Program;
-use crate::rule::{Arm, Direction, Rule, StepKind};
+use crate::rule::{Arm, Direction, Rule, StepKind, copy_block};
 
 /// A step a matcher wants taken, positioned relative to the window it saw.
 #[derive(Debug, Clone, PartialEq)]
@@ -199,7 +199,7 @@ pub(crate) fn matcher_with_count(name: &str, count: usize) -> Option<Box<dyn Mat
 
 /// The matchers that need a term, by name.
 pub(crate) fn term_matcher_names() -> Vec<&'static str> {
-    vec!["introduce", "share"]
+    vec!["introduce", "share", "speculate"]
 }
 
 /// A matcher completed by a term written in the tactic expression.
@@ -214,6 +214,7 @@ pub(crate) fn matcher_with_term(
     match name {
         "introduce" => Some(Introduce::new(prog, term).map(|m| Box::new(m) as Box<dyn Matcher>)),
         "share" => Some(Share::new(prog, term).map(|m| Box::new(m) as Box<dyn Matcher>)),
+        "speculate" => Some(Speculate::new(prog, term).map(|m| Box::new(m) as Box<dyn Matcher>)),
         _ => None,
     }
 }
@@ -1573,6 +1574,178 @@ impl Matcher for InvShare {
     }
 }
 
+/// Hoists a speculation out of the **one** arm that has it.
+///
+/// ```text
+/// branch { pick (n-1)^n ; X ; B } { C }
+///   =  dip 1 { pick (n-1)^n ; X } ; branch { B } { drop^m ; C }
+/// ```
+///
+/// [`Factor`] needs *both* arms to share a prefix. When only one has it, this
+/// gives the other arm the same code in a place where it provably costs
+/// nothing and then factors — the move `docs/tactics.md` spells out by hand as
+/// `introduce` followed by `factoring`, in one firing.
+///
+/// **No new law.** What it inserts is the vacuous identity, which is a lemma
+/// rather than an axiom: `n` backward [`Rule::Counit`]s nest a run of picks
+/// against a run of drops, and one backward [`Rule::Annihilate`] turns the
+/// drops into `X`. So the whole firing is `n + 4` steps of equations the tool
+/// already had, and the applier checks every one.
+///
+/// The copies are what make it sound without asking anything of `X`. `X` runs
+/// on the path that did not want it, but only ever on *copies* of the operands
+/// — the losing arm drops the results and carries on with the values it always
+/// had. No inverse for `X` is needed, only that it is total, which the global
+/// precondition gives.
+///
+/// It **declines when both arms open with it**, since that is [`Factor`]'s job
+/// and factoring needs no drops. It also reaches an arm that is *empty*, which
+/// the same move written by hand cannot: `inv(counit(d))` needs a node to stand
+/// in front of, where a planned step names position 0 of a sequence with
+/// nothing in it.
+///
+/// Measure: none. It grows the term by the frame and the `m` drops, and so is
+/// in no default pass — but it cannot fire on its own output, since the arm it
+/// rewrote no longer opens with the prefix and the other now opens with drops.
+#[derive(Debug)]
+pub(crate) struct Speculate {
+    x: Vec<Node>,
+    n: usize,
+    m: usize,
+}
+
+impl Speculate {
+    pub(crate) fn new(prog: Option<&Program>, x: Vec<Node>) -> Result<Self, String> {
+        let (n, m) = term_arity_or_why(prog, &x)?;
+        Ok(Speculate { x, n, m })
+    }
+
+    /// `pick (n-1)^n ; X`: what one arm has to open with, and what comes out.
+    fn prefix(&self) -> Vec<Node> {
+        let mut out = copy_block(self.n);
+        out.extend(self.x.iter().cloned());
+        out
+    }
+}
+
+impl Matcher for Speculate {
+    fn name(&self) -> &'static str {
+        "speculate"
+    }
+    fn width(&self) -> usize {
+        1
+    }
+    fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
+        Err(
+            "`speculate` is a firing of several steps over three different \
+             equations, so there is no single one to read backwards. \
+             `unfactor` pushes the frame back into both arms, and `counit` and \
+             `annihilate` forwards take the speculation out again"
+                .to_string(),
+        )
+    }
+    fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
+        let [
+            Node::Branch {
+                then_origin,
+                then_body,
+                else_origin,
+                else_body,
+            },
+        ] = window
+        else {
+            return None;
+        };
+
+        let a = self.prefix();
+        let opens = |arm: &[Node]| arm.len() >= a.len() && same_effect_seq(&arm[..a.len()], &a);
+        let (arm, matched, other) = match (opens(then_body), opens(else_body)) {
+            // `factor` already does this one, and without paying for drops.
+            (true, true) | (false, false) => return None,
+            (true, false) => (Selector::Then, then_body, else_body),
+            (false, true) => (Selector::Else, else_body, then_body),
+        };
+        let opposite = match arm {
+            Selector::Then => Selector::Else,
+            _ => Selector::Then,
+        };
+
+        // The arms as the insertion and the factoring leave them: what followed
+        // the prefix where it was, and the drops in front of what did not.
+        let rest = matched[a.len()..].to_vec();
+        let mut paid: Vec<Node> =
+            std::iter::repeat_n(Node::Op(Instruction::Drop), self.m).collect();
+        paid.extend(other.iter().cloned());
+        let (then_arm, else_arm) = match arm {
+            Selector::Then => (rest, paid),
+            _ => (paid, rest),
+        };
+
+        let at = |sel, at| PlannedStep {
+            kind: StepKind::Rule(Rule::ElimDip0 {
+                a: a.clone(),
+                origins: Vec::new(),
+            }),
+            dir: Direction::Reverse,
+            rel: Location {
+                descent: vec![(0, sel)],
+                at,
+            },
+        };
+
+        let mut steps = Vec::new();
+        // The vacuous identity, derived rather than assumed: `n` cancelling
+        // pairs, then the computation in front of the drops they left.
+        for i in 0..self.n {
+            steps.push(PlannedStep {
+                kind: StepKind::Rule(Rule::Counit { d: self.n - 1 }),
+                dir: Direction::Reverse,
+                rel: Location {
+                    descent: vec![(0, opposite)],
+                    at: i,
+                },
+            });
+        }
+        let conjure = Rule::Annihilate {
+            x: self.x.clone(),
+            n: self.n,
+            m: self.m,
+        };
+        conjure.check(prog).ok()?;
+        steps.push(PlannedStep {
+            kind: StepKind::Rule(conjure),
+            dir: Direction::Reverse,
+            rel: Location {
+                descent: vec![(0, opposite)],
+                at: self.n,
+            },
+        });
+
+        // Both arms open with the prefix now: wrap it in each and lift the two
+        // frames into one, which is `factor`'s three steps with the prefix
+        // named rather than found.
+        for sel in [Selector::Then, Selector::Else] {
+            steps.push(at(sel, 0));
+        }
+        let hoist = Rule::Hoist {
+            k: 0,
+            x: a,
+            origins: Vec::new(),
+            then_arm,
+            else_arm,
+            then_origin: then_origin.clone(),
+            else_origin: else_origin.clone(),
+        };
+        hoist.check(prog).ok()?;
+        steps.push(PlannedStep {
+            kind: StepKind::Rule(hoist),
+            dir: Direction::Reverse,
+            rel: Location::root(0),
+        });
+        Some(steps)
+    }
+}
+
 /// The arity of a term written in a tactic expression.
 ///
 /// Terms are built from instructions and frames and never name a sentence, so
@@ -2790,6 +2963,93 @@ mod tests {
                 .plan(&prog(), &[op(Instruction::Add)])
                 .is_none()
         );
+    }
+
+    #[test]
+    fn speculate_hoists_out_of_the_one_arm_that_has_it() {
+        // `equal` is (2 -> 1), so the prefix is `pick 1 ; pick 1 ; equal` and
+        // the losing arm pays one drop.
+        let m = Speculate::new(None, vec![op(Instruction::Equal)]).unwrap();
+        let prefix = || {
+            vec![
+                op(Instruction::Pick(1)),
+                op(Instruction::Pick(1)),
+                op(Instruction::Equal),
+            ]
+        };
+        let mut then_arm = prefix();
+        then_arm.push(op(Instruction::And));
+        let w = [branch(then_arm, vec![op(Instruction::Not)])];
+
+        assert_eq!(
+            fire(&m, &prog(), &w),
+            Some(vec![
+                dip(1, prefix()),
+                branch(
+                    vec![op(Instruction::And)],
+                    vec![op(Instruction::Drop), op(Instruction::Not)]
+                ),
+            ])
+        );
+
+        // `n` cancelling pairs, one conjuring, and factor's three.
+        assert_eq!(m.plan(&prog(), &w).unwrap().len(), 2 + 1 + 3);
+    }
+
+    #[test]
+    fn speculate_reaches_an_arm_with_nothing_in_it() {
+        // The same move written by hand cannot: `inv(counit(d))` needs a node
+        // to stand in front of, where a planned step names position 0 of a
+        // sequence that has none.
+        let m = Speculate::new(None, vec![op(Instruction::Equal)]).unwrap();
+        let w = [branch(
+            vec![
+                op(Instruction::Pick(1)),
+                op(Instruction::Pick(1)),
+                op(Instruction::Equal),
+            ],
+            Vec::new(),
+        )];
+        let got = fire(&m, &prog(), &w).unwrap();
+        let [_, Node::Branch { else_body, .. }] = &got[..] else {
+            panic!("expected a frame and a branch, got {:?}", got)
+        };
+        assert_eq!(else_body, &vec![op(Instruction::Drop)]);
+    }
+
+    #[test]
+    fn speculate_declines_what_factor_already_does() {
+        let m = Speculate::new(None, vec![op(Instruction::Equal)]).unwrap();
+        let prefix = || {
+            vec![
+                op(Instruction::Pick(1)),
+                op(Instruction::Pick(1)),
+                op(Instruction::Equal),
+            ]
+        };
+        // Both arms open with it, so factoring needs no drops and no copies.
+        assert!(
+            m.plan(&prog(), &[branch(prefix(), prefix())]).is_none(),
+            "that is `factor`'s, and it is cheaper"
+        );
+        // Neither arm opens with it.
+        assert!(
+            m.plan(
+                &prog(),
+                &[branch(
+                    vec![op(Instruction::Not)],
+                    vec![op(Instruction::And)]
+                )]
+            )
+            .is_none()
+        );
+        // The copies have to be there: `equal` alone is not the prefix.
+        assert!(
+            m.plan(&prog(), &[branch(vec![op(Instruction::Equal)], Vec::new())])
+                .is_none()
+        );
+        // And it is a firing of several steps, so nothing reads it backwards.
+        assert!(m.inverse().is_err());
     }
 
     #[test]

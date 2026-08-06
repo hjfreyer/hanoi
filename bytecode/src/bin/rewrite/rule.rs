@@ -1121,7 +1121,7 @@ fn push(v: Value) -> Node {
 /// `a b` becomes `a b a b`. Each pick reaches past the copies made so far to
 /// the next original, which is why the depth does not change — after `j` of
 /// them the next original is still `k-1` down.
-fn copy_block(k: usize) -> Vec<Node> {
+pub(crate) fn copy_block(k: usize) -> Vec<Node> {
     match k.checked_sub(1) {
         Some(d) => std::iter::repeat_n(Node::Op(Instruction::Pick(d)), k).collect(),
         // Nothing to copy: a computation that reads nothing needs no inputs

@@ -699,6 +699,81 @@ fn a_branch_whose_arms_were_the_same_disappears_along_with_them() {
 }
 
 // ---------------------------------------------------------------------------
+// Hoisting out of one arm
+// ---------------------------------------------------------------------------
+
+const SPECULATION: &str = r#"
+    #[total] #[arity(2, 2)]
+    sentence probe { pick 0 branch { pick 1 pick 1 equal and } { not } }
+"#;
+
+/// `speculate { X }` is shorthand, and this says so literally.
+///
+/// Nothing new is assumed: the firing is the vacuous identity conjured into
+/// the other arm and then factored, which is what `inv(counit)`, `introduce`
+/// and `factoring` do when written out. Both routes are held to the same
+/// answer, so the shorthand cannot drift from what it abbreviates.
+#[test]
+fn speculating_is_what_the_three_rules_do_written_out() {
+    let (prog, plain) = tree_of(SPECULATION, "id");
+
+    let by_hand = run(
+        prog,
+        plain.clone(),
+        "must(else(at(0, inv(counit(1)))));          must(else(at(1, inv(counit(1)))));          must(else(at(2, introduce { equal })));          must(factoring)",
+    );
+    let (shorthand, script) = with_script(prog, plain, "must(once(speculate { equal }))");
+
+    assert_eq!(shape(&shorthand), shape(&by_hand));
+    assert_eq!(
+        shape(&shorthand),
+        vec!["pick 0", "dip 1 { pick 1 pick 1 equal }", "branch"],
+        "{:?}",
+        shape(&shorthand)
+    );
+
+    // Every step is an equation the tool already had — no new law rode in.
+    let laws: Vec<&str> = script.iter().map(|s| s.kind.name()).collect();
+    assert_eq!(
+        laws,
+        vec![
+            "counit",
+            "counit",
+            "annihilate",
+            "elim_dip0",
+            "elim_dip0",
+            "hoist"
+        ]
+    );
+}
+
+/// What the losing arm is left holding.
+///
+/// The point of speculating on *copies*: the arm that did not want `X` drops
+/// its results and carries on with the values it always had, so `X` needs no
+/// inverse and nothing is asked of it but totality.
+#[test]
+fn the_arm_that_did_not_want_it_drops_the_results() {
+    let (prog, plain) = tree_of(SPECULATION, "id");
+    let got = run(prog, plain, "must(once(speculate { equal }))");
+    let [
+        _,
+        _,
+        Node::Branch {
+            then_body,
+            else_body,
+            ..
+        },
+    ] = &got[..]
+    else {
+        panic!("expected a frame and a branch, got {:?}", shape(&got))
+    };
+    assert_eq!(shape(then_body), vec!["and"]);
+    // `equal` is (2 -> 1), so exactly one result to discard.
+    assert_eq!(shape(else_body), vec!["drop", "not"]);
+}
+
+// ---------------------------------------------------------------------------
 // Testing the same value twice
 // ---------------------------------------------------------------------------
 
