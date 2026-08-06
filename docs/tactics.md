@@ -218,6 +218,7 @@ different thing to look for even though the arithmetic is the same:
 | `split_bool` / `unsplit_bool` | 1 / 3 | the case split, either way |
 | `introduce { .. }` | n | annihilate backwards — see below |
 | `share { .. }` | n+\|X\|+1 | `copy_nat` forward — see below |
+| `speculate { .. }` | 1 | hoist out of the one arm that has it — see below. `n + 4` steps, no new law |
 | `bool_result` | 2 | `op ; is_bool` forward; backward is `inv(bool_result)` |
 | `retest` | 2 | one arm per firing, then arm first; no backward reading |
 | `counit_under` / `inv(counit_under)` | 2 / 1 | the other counit, found or *put in* |
@@ -447,6 +448,54 @@ Backwards — `inv(share { X })` — it un-shares, running `X` a second time
 rather than copying what it left. That is how a computation reaches a place
 that needs its own copy, and unlike `inv(annihilate)` the second copy is
 provably the same value as the first.
+
+### Hoisting out of the one arm that has it
+
+`factor` needs *both* arms to share a prefix. `speculate { X }` is the move for
+when only one does, in a single firing:
+
+```text
+branch { pick (n-1)^n ; X ; B } { C }
+  =  dip 1 { pick (n-1)^n ; X } ; branch { B } { drop^m ; C }
+```
+
+```
+$ rewrite demo spec -t 'must(once(speculate { equal }))' --show-script
+   0  counit     <- [1.else] @0    (nothing)   ⇒  pick 1 ; drop
+   1  counit     <- [1.else] @1    (nothing)   ⇒  pick 1 ; drop
+   2  annihilate <- [1.else] @2    drop ; drop ⇒  equal ; drop
+   3  elim_dip0  <- [1.then] @0    ⎫
+   4  elim_dip0  <- [1.else] @0    ⎬ factor, with the prefix named
+   5  hoist      <- @1             ⎭
+   ⇒  dip 1 { pick 1 ; pick 1 ; equal } ; branch { and } { drop ; not }
+```
+
+**It is shorthand, not a law.** Every step is an equation the set already had:
+what it conjures into the other arm is the *vacuous* identity, which is a lemma
+— `n` backward `counit`s nest a run of picks against a run of drops, and one
+backward `annihilate` turns the drops into `X`. Written out it is
+`inv(counit(d))` ×n, then `introduce { X }`, then `factoring`; the matcher just
+does it in one firing with the prefix named rather than found.
+`tests::speculating_is_what_the_three_rules_do_written_out` holds the two
+routes to the same answer.
+
+**The copies are what make it sound.** `X` runs on the path that did not want
+it, but only ever on copies of the operands — the losing arm drops the results
+and carries on with the values it always had. So `X` needs no inverse, and
+nothing is asked of it beyond the totality the precondition already gives.
+
+Two things it does that the hand-written version cannot. It **names the
+prefix**, where `factoring` takes the longest shared run and will happily
+swallow more than you meant once the conjured drops line up with what follows.
+And it reaches an arm that is **empty**: `inv(counit(d))` needs a node to stand
+in front of, where a planned step can name position 0 of a sequence with
+nothing in it.
+
+It declines when *both* arms open with the prefix — that is `factor`'s, and
+factoring needs no copies and no drops. It has no measure and grows the term by
+the frame and the `m` drops, so it is in no default pass; but it cannot fire on
+its own output, since the arm it rewrote no longer opens with the prefix and
+the other now opens with drops.
 
 ### Terms
 
@@ -1150,7 +1199,7 @@ consulting an analysis.
 ## What is not here yet
 
 - **Tranche two.** `specialize_equal`, `dup_natural`, `rebuild_copy`,
-  `speculate_branch`, `pick_drop_to_roll`, and `roll 0 = ε` / `dip k { } = ε`.
+  `pick_drop_to_roll`, and `roll 0 = ε` / `dip k { } = ε`.
   All are expressible as equations in this framework; none is written yet.
 
   Two that used to be on this list are not any more. `bool_identity` and
