@@ -11,7 +11,7 @@
 //! being applied.
 
 use bytecode::arity::sentence_arity;
-use bytecode::{Annotation, Arity, Library, SentenceIndex};
+use bytecode::{Annotation, Arity, Library, SentenceIndex, Value};
 
 pub(crate) struct Program<'a> {
     library: &'a Library,
@@ -73,6 +73,84 @@ impl<'a> Program<'a> {
 /// The most a listing prints before it stops being an aid and starts being a
 /// wall; `check` alone matches nearly sixty sentences in the test corpus.
 const MAX_LISTED: usize = 15;
+
+/// The symbol a name denotes: an exact fully qualified name, or an unambiguous
+/// trailing part of one.
+///
+/// The same reading `resolve_sentence` gives a sentence, and for the same
+/// reason — `Idle::tag` beats writing every segment of
+/// `queue::State::Idle::tag` out.
+///
+/// A symbol cannot be built from its name: [`bytecode::Symbol`] compares by
+/// `id`, and two declarations with the same text are different symbols. So a
+/// term that pushes one is looking the real one up rather than making it, and
+/// a name that denotes none is refused.
+pub(crate) fn resolve_symbol(library: &Library, ident: &str) -> Result<Value, String> {
+    if let Some(value) = library.symbols.get(ident) {
+        return Ok(value.clone());
+    }
+
+    let suffix = format!("::{}", ident);
+    let matches: Vec<&String> = library
+        .symbols
+        .keys()
+        .filter(|name| name.ends_with(&suffix))
+        .collect();
+    match matches.len() {
+        1 => Ok(library.symbols[matches[0]].clone()),
+        0 => Err(no_such_symbol(library, ident)),
+        _ => {
+            let mut named: Vec<&str> = matches.iter().map(|s| s.as_str()).collect();
+            named.sort();
+            Err(format!(
+                "'{}' is ambiguous: {}",
+                ident,
+                render_names(&named)
+            ))
+        }
+    }
+}
+
+/// What went wrong, with the one mistake worth naming out loud.
+///
+/// A symbol declared with a description prints as that description — the
+/// listing shows `symbol(std::io)` for one whose fully qualified name is
+/// `std::io::io` — so reading a name off a listing and writing it back is the
+/// obvious thing to try and the wrong one.
+fn no_such_symbol(library: &Library, ident: &str) -> String {
+    let described: Vec<&str> = library
+        .symbols
+        .iter()
+        .filter(|(_, v)| matches!(v, Value::Symbol(s) if s.name == ident))
+        .map(|(k, _)| k.as_str())
+        .collect();
+    if let [fq] = described[..] {
+        return format!(
+            "'{}' is how the symbol declared as '{}' prints, not its name. \
+             Write '{}'",
+            ident, fq, fq
+        );
+    }
+
+    let mut named: Vec<&str> = library.symbols.keys().map(|s| s.as_str()).collect();
+    named.sort();
+    format!(
+        "No symbol matching '{}'. Symbols:{}",
+        ident,
+        render_names(&named)
+    )
+}
+
+fn render_names(names: &[&str]) -> String {
+    let mut out = String::from("\n");
+    for name in names.iter().take(MAX_LISTED) {
+        out.push_str(&format!("  {}\n", name));
+    }
+    if names.len() > MAX_LISTED {
+        out.push_str(&format!("  ... and {} more\n", names.len() - MAX_LISTED));
+    }
+    out
+}
 
 /// Accepts an index (`#12` or `12`), an exact name, or an unambiguous suffix.
 pub(crate) fn resolve_sentence(library: &Library, ident: &str) -> Result<SentenceIndex, String> {

@@ -27,7 +27,7 @@ use crate::matcher::{
     Matcher, count_matcher_names, matcher_by_name, matcher_names, matcher_with_count,
     matcher_with_term, term_matcher_names,
 };
-use crate::program::{Program, resolve_sentence};
+use crate::program::{Program, resolve_sentence, resolve_symbol};
 
 /// The named tactics every session starts with.
 ///
@@ -611,9 +611,29 @@ impl<'a> Parser<'a> {
                 self.bump();
                 Ok(Value::Bool(yes))
             }
+            // Anything else that reads as a name is a symbol, looked up rather
+            // than built: `Symbol` compares by `id`, so one made from its text
+            // would equal nothing in the program.
+            Some(Tok::Ident(_)) => {
+                let ident_span = self.span();
+                let Some(Tok::Ident(name)) = self.bump().map(|s| s.tok.clone()) else {
+                    unreachable!("peeked an identifier")
+                };
+                let Some(prog) = self.prog else {
+                    return Err(
+                        ScriptError::new("naming a symbol needs a program", ident_span).with_help(
+                            "a symbol is a declaration in the library, not a \
+                             piece of syntax, so a term that pushes one cannot \
+                             be compiled on its own",
+                        ),
+                    );
+                };
+                resolve_symbol(prog.library(), &name)
+                    .map_err(|why| ScriptError::new(why, ident_span))
+            }
             _ => Err(ScriptError::new("`push` needs a literal", span).with_help(
-                "an integer or `true`/`false`. Symbols and floats have no \
-                     syntax here yet",
+                "an integer, `true`/`false`, or a symbol by name. Floats have \
+                 no syntax here yet",
             )),
         }
     }
@@ -667,7 +687,7 @@ const INSTRUCTION_WORDS: &[&str] = &[
     "roll n",
     "tuple n",
     "untuple n",
-    "push <lit>",
+    "push <int|true|false|symbol>",
     "dip n { .. }",
     "drop",
     "equal",
