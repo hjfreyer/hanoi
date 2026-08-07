@@ -12,7 +12,7 @@
 //! the token stream, so [`Error`] makes the span optional and `From<String>`
 //! keeps those call sites unchanged.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Index into a [`SourceMap`].
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
@@ -43,6 +43,12 @@ struct SourceFile {
     /// What the `-->` line shows: a path for real files, or a bracketed
     /// placeholder like `<input>` for source that never came from disk.
     name: String,
+    /// The file this came from, when it came from one at all.
+    ///
+    /// Kept beside `name` rather than parsed back out of it, because a display
+    /// string is lossy for anything unusual and a path recovered by guesswork
+    /// is a silent wrong answer rather than a loud one.
+    path: Option<PathBuf>,
     text: String,
     /// Byte offset of each line's first character, always starting with 0.
     line_starts: Vec<u32>,
@@ -71,6 +77,7 @@ impl SourceMap {
         );
         self.files.push(SourceFile {
             name: name.into(),
+            path: None,
             text,
             line_starts,
         });
@@ -79,11 +86,23 @@ impl SourceMap {
 
     /// Registers a file read from disk, displayed by its path.
     pub fn add_path(&mut self, path: &Path, text: String) -> FileId {
-        self.add(path.display().to_string(), text)
+        let id = self.add(path.display().to_string(), text);
+        self.files[id.0 as usize].path = Some(path.to_path_buf());
+        id
     }
 
     pub fn name(&self, file: FileId) -> &str {
         &self.file(file).name
+    }
+
+    /// The file on disk this came from, if it came from one.
+    ///
+    /// `None` for source registered under a bracketed placeholder — a string
+    /// assembled in a test, or a composer template. A caller that needs a
+    /// sibling file has to say what it does about source that has no sibling
+    /// to have.
+    pub fn path(&self, file: FileId) -> Option<&Path> {
+        self.file(file).path.as_deref()
     }
 
     pub fn text(&self, file: FileId) -> &str {

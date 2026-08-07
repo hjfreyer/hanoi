@@ -1,5 +1,6 @@
 use crate::library::{Annotation, Arity, Library, SentenceIndex};
 use crate::opcode::Instruction;
+use crate::source::Error;
 use std::collections::{HashMap, HashSet};
 
 /// Checks whether all sentences in the library obey their declared arity,
@@ -188,6 +189,62 @@ pub fn check_totality(library: &Library) -> Result<(), String> {
             library.names[s_idx],
             explain_failure(library, &can, s_idx)
         ));
+    }
+    Ok(())
+}
+
+/// Every identity's two sides must have the same stack effect.
+///
+/// Phase 5, after `check_arities` has settled every inference and verified
+/// every `#[arity]`. This is the one property of an identity that is a fact
+/// about the *statement* rather than about its proof: two programs with
+/// different effects are not two spellings of one thing, whatever a tactic
+/// does to them.
+///
+/// The preconditions the rewriter's equations are stated under — non-recursive,
+/// and unable to fail — are deliberately *not* checked here. They are
+/// conditions on provability rather than on well-formedness, and asking for
+/// them in the compiler would tie the language to a particular rule set.
+/// `bin/prove` asks, and refuses in the same words `rewrite` does.
+pub fn check_identities(library: &Library) -> Result<(), Error> {
+    for identity in &library.identities {
+        let effect = |side: SentenceIndex, which: &str| -> Result<(i64, i64), Error> {
+            match sentence_arity(library, side) {
+                Some(Arity::Normal { inputs, outputs }) => Ok((inputs, outputs)),
+                // A side that always fails cannot stand in for one that does
+                // not, and one whose arity is unknowable says nothing at all.
+                other => Err(Error::at(
+                    format!(
+                        "identity `{}`: the {} side has no stack effect",
+                        identity.name, which
+                    ),
+                    identity.span,
+                )
+                .with_help(match other {
+                    Some(Arity::Panic { .. }) => {
+                        "it always fails, so there is nothing for the other side to equal"
+                    }
+                    _ => "its arity could not be inferred; give it an `#[arity(n, m)]`",
+                })),
+            }
+        };
+
+        let (li, lo) = effect(identity.lhs, "left-hand")?;
+        let (ri, ro) = effect(identity.rhs, "right-hand")?;
+        if (li, lo) != (ri, ro) {
+            return Err(Error::at(
+                format!(
+                    "identity `{}`: the two sides do not have the same stack effect \
+                     ({} -> {} against {} -> {})",
+                    identity.name, li, lo, ri, ro
+                ),
+                identity.span,
+            )
+            .with_help(
+                "an identity claims two programs are interchangeable, so they must \
+                 take and leave the same number of values",
+            ));
+        }
     }
     Ok(())
 }

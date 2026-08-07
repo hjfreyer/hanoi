@@ -1,10 +1,12 @@
 use crate::ast::core;
 use crate::ast::sugar::{self, Composer, ModuleExpr};
 use crate::ast::{
-    ConstStringDecl, ParsedInstruction, ParsedSentence, ParsedValue, PrimitiveType, SentenceDecl,
-    SourceAnnotation, SymbolDecl, Target, TypeSpec,
+    ConstStringDecl, IdentityDecl, ParsedInstruction, ParsedSentence, ParsedValue, PrimitiveType,
+    SentenceDecl, SourceAnnotation, SymbolDecl, Target, TypeSpec,
 };
-use crate::library::{Annotation, Library, SentenceAnnotation, SentenceIndex};
+use crate::library::{
+    Annotation, Identity, IdentityIndex, Library, SentenceAnnotation, SentenceIndex,
+};
 use crate::opcode::Instruction;
 use crate::resolve::{ModuleId, ModuleItem, ModuleTree, ResolvedItem};
 use crate::source::{Error, FileId, SourceMap, Span};
@@ -25,7 +27,9 @@ enum Token {
     FunctionKeyword,
     TypeKeyword,
     EnumKeyword,
+    IdentityKeyword,
     DoubleColon,
+    Equals,
     Semicolon,
     Identifier(String),
     StringLiteral(String),
@@ -58,7 +62,9 @@ fn describe(token: &Token) -> String {
         Token::FunctionKeyword => "function",
         Token::TypeKeyword => "type",
         Token::EnumKeyword => "enum",
+        Token::IdentityKeyword => "identity",
         Token::DoubleColon => "::",
+        Token::Equals => "=",
         Token::Semicolon => ";",
         Token::LBrace => "{",
         Token::RBrace => "}",
@@ -163,6 +169,13 @@ fn tokenize(input: &str, file: FileId) -> Result<Vec<SpannedToken>, Error> {
                 chars.next();
                 push!(tokens, start, chars, Token::Semicolon);
             }
+            // Only an `identity` uses this, and only between its two sides.
+            // Nothing else in the language writes `=`, so it needs no
+            // lookahead to tell it from `==`, which is spelled `equal`.
+            '=' => {
+                chars.next();
+                push!(tokens, start, chars, Token::Equals);
+            }
             ':' => {
                 chars.next();
                 if chars.peek().map(|&(_, c)| c) == Some(':') {
@@ -263,6 +276,7 @@ fn tokenize(input: &str, file: FileId) -> Result<Vec<SpannedToken>, Error> {
                     "function" => Token::FunctionKeyword,
                     "type" => Token::TypeKeyword,
                     "enum" => Token::EnumKeyword,
+                    "identity" => Token::IdentityKeyword,
                     "true" => Token::Bool(true),
                     "false" => Token::Bool(false),
                     _ => Token::Identifier(ident),
@@ -917,6 +931,37 @@ fn parse_items(
             continue;
         }
 
+        // `identity name { A } = { B };`. Matched after the modifier loop so
+        // that `export identity foo` is refused with a reason rather than
+        // reported as a stray `export`.
+        if stream.peek() == Some(&Token::IdentityKeyword) {
+            stream.next(); // consume 'identity'
+            let name_span = stream.span();
+            let name = expect_name(stream, "identity name")?;
+            let lhs = parse_sentence_body(stream)?;
+            stream.expect(Token::Equals)?;
+            let rhs = parse_sentence_body(stream)?;
+            stream.expect(Token::Semicolon)?;
+            if is_exported || is_test {
+                return Err(
+                    Error::at("an identity takes no `export` or `test` marker", item_span)
+                        .with_help(
+                            "an identity is a claim about two programs, not a program: \
+                     nothing calls it and nothing runs it",
+                        ),
+                );
+            }
+            check_identity_annotations(&annotations, item_span)?;
+            items.push(sugar::Item::Identity(IdentityDecl {
+                name,
+                lhs,
+                rhs,
+                annotations,
+                span: name_span,
+            }));
+            continue;
+        }
+
         let is_function = match stream.peek() {
             Some(&Token::SentenceKeyword) => {
                 stream.next();
@@ -926,7 +971,11 @@ fn parse_items(
                 stream.next();
                 true
             }
-            _ => return Err(stream.expected("`sentence`, `function`, `type`, `enum`, or `mod`")),
+            _ => {
+                return Err(
+                    stream.expected("`sentence`, `function`, `type`, `enum`, `identity`, or `mod`")
+                );
+            }
         };
 
         let name = expect_name(stream, "sentence name")?;
@@ -950,6 +999,42 @@ fn parse_items(
     }
 
     Ok(items)
+}
+
+/// The annotations an identity may carry.
+///
+/// `#[arity(n, m)]` pins the shape both sides must have, and `#[total]` is a
+/// claim each of them answers for. The rest name properties of a sentence
+/// *being called* — which an identity is not — so they are refused rather than
+/// ignored, on the principle that an annotation nothing reads is a lie.
+fn check_identity_annotations(annotations: &[SourceAnnotation], span: Span) -> Result<(), Error> {
+    for ann in annotations {
+        let (name, why) = match ann {
+            Annotation::Arity(..) | Annotation::Total => continue,
+            Annotation::Recursive => (
+                "recursive",
+                "the rewriter expands calls, so it cannot prove anything about a \
+                 program with no finite expansion",
+            ),
+            Annotation::Precondition(_) => (
+                "precondition",
+                "a contract constrains what a caller may pass; an identity has no caller",
+            ),
+            Annotation::Postcondition(_) => (
+                "postcondition",
+                "a contract constrains what a caller may pass; an identity has no caller",
+            ),
+        };
+        return Err(
+            Error::at(format!("`#[{}]` is not an identity annotation", name), span).with_help(
+                format!(
+                    "{}. `#[arity(n, m)]` and `#[total]` are the two that are",
+                    why
+                ),
+            ),
+        );
+    }
+    Ok(())
 }
 
 /// Parses what follows `mod`: a composition, an external file, or a block.
@@ -1077,6 +1162,8 @@ struct TreeBuilder {
     exports: HashMap<String, SentenceIndex>,
     tests: HashMap<String, SentenceIndex>,
     test_machines: HashSet<String>,
+    /// In declaration order, which is the order `IdentityIndex` counts in.
+    identities: Vec<Identity>,
 }
 
 /// Sentences a test machine module exposes to the runtime.
@@ -1100,6 +1187,7 @@ impl TreeBuilder {
             exports: HashMap::new(),
             tests: HashMap::new(),
             test_machines: HashSet::new(),
+            identities: Vec::new(),
         }
     }
 
@@ -1142,6 +1230,50 @@ impl TreeBuilder {
                     }
 
                     self.flat_sentences.push((scope, decl));
+                }
+                core::Item::Identity(decl) => {
+                    // Two sentences, allocated and pushed in lockstep. Phase 4
+                    // relies on `flat_sentences[i]` being `SentenceIndex(i)`,
+                    // so nothing may come between the counter bumps and the
+                    // pushes — a sentence compiled into the wrong slot fails
+                    // silently and much later.
+                    let lhs = SentenceIndex::from(self.sentence_counter);
+                    let rhs = SentenceIndex::from(self.sentence_counter + 1);
+                    self.sentence_counter += 2;
+
+                    let id = IdentityIndex::from(self.identities.len());
+                    // Into the single per-module namespace, so `identity foo`
+                    // and `sentence foo` in one module collide. That is what
+                    // makes a fully qualified identity name denote one thing —
+                    // which is what a proof, and later a rewrite step, names.
+                    let fq_name = self.tree.fq_name(scope, &decl.name);
+                    self.tree
+                        .declare(scope, decl.name.clone(), ModuleItem::Identity(id))?;
+                    self.identities.push(Identity {
+                        name: fq_name,
+                        lhs,
+                        rhs,
+                        span: decl.span,
+                    });
+
+                    // Named `<identity>::lhs` and `::rhs`, which phase 4 turns
+                    // into fully qualified names for free. Nothing resolves to
+                    // them — they are not in the module tree — but
+                    // `resolve_sentence` reads `Library::names`, so
+                    // `rewrite tests 'foo::lhs' -t ...` addresses one. That is
+                    // the loop a proof is found in.
+                    for (suffix, body) in [("lhs", decl.lhs), ("rhs", decl.rhs)] {
+                        self.flat_sentences.push((
+                            scope,
+                            SentenceDecl {
+                                name: format!("{}::{}", decl.name, suffix),
+                                body,
+                                annotations: decl.annotations.clone(),
+                                is_exported: false,
+                                is_test: false,
+                            },
+                        ));
+                    }
                 }
                 core::Item::Mod(decl) => {
                     let sub_id = self.tree.declare_module(scope, decl.name)?;
@@ -1443,6 +1575,7 @@ pub fn assemble_source(
         exports,
         tests,
         test_machines,
+        identities,
         ..
     } = builder;
 
@@ -1493,9 +1626,11 @@ pub fn assemble_source(
     library.annotations = final_annotations;
 
     library.symbols = tree.symbol_map();
+    library.identities = identities.into();
 
     crate::arity::check_arities(&mut library)?;
     crate::arity::check_totality(&library)?;
+    crate::arity::check_identities(&library)?;
 
     Ok(library)
 }
@@ -1645,5 +1780,162 @@ mod tests {
         assert!(rendered.contains("main.hana:1:5"), "{}", rendered);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // -----------------------------------------------------------------------
+    // `identity`
+    // -----------------------------------------------------------------------
+
+    /// Assembles `input`, returning the rendered error a user would see.
+    fn assemble_error(input: &str) -> String {
+        let mut map = SourceMap::new();
+        let file = map.add("main.hana", input.to_string());
+        let err = assemble_source(&mut map, file, None).expect_err("expected an error");
+        map.render(&err)
+    }
+
+    #[test]
+    fn an_identity_states_two_bodies() {
+        let lib = assemble("identity testing_a_test { is_bool is_bool } = { drop 0 push true };")
+            .expect("should assemble");
+        assert_eq!(lib.identities.len(), 1);
+        let id = &lib.identities[IdentityIndex::from(0)];
+        assert_eq!(id.name, "testing_a_test");
+        assert_eq!(lib.sentences[id.lhs].len(), 2);
+        assert_eq!(lib.sentences[id.rhs].len(), 2);
+    }
+
+    /// The whole development loop rests on this: `rewrite <dir> 'foo::lhs'`
+    /// finds a side by the name phase 4 gave it, so a proof can be iterated on
+    /// with the exploration tool before it is written down.
+    #[test]
+    fn an_identity_names_both_of_its_sides() {
+        let lib = assemble("mod m { identity foo { drop 0 } = { drop 0 }; }").expect("assembles");
+        let names: Vec<&str> = lib.names.iter().map(|s| s.as_str()).collect();
+        assert!(names.contains(&"m::foo::lhs"), "{:?}", names);
+        assert!(names.contains(&"m::foo::rhs"), "{:?}", names);
+    }
+
+    /// Not in the module tree, though, so nothing can call one.
+    #[test]
+    fn a_path_that_names_an_identity_is_not_a_jump_target() {
+        let err = assemble("identity foo { drop 0 } = { drop 0 };\nsentence a { jump foo }")
+            .expect_err("expected an error");
+        assert!(err.contains("names an identity"), "{}", err);
+    }
+
+    #[test]
+    fn an_identity_shares_the_namespace_with_sentences() {
+        let err = assemble("sentence foo { }\nidentity foo { drop 0 } = { drop 0 };")
+            .expect_err("expected an error");
+        assert!(err.contains("Duplicate declaration"), "{}", err);
+    }
+
+    #[test]
+    fn an_identity_carries_its_annotations_onto_both_sides() {
+        let lib = assemble("#[arity(1, 1)] identity foo { } = { };").expect("assembles");
+        let id = &lib.identities[IdentityIndex::from(0)];
+        assert!(lib.annotations[id.lhs].contains(&Annotation::Arity(1, 1)));
+        assert!(lib.annotations[id.rhs].contains(&Annotation::Arity(1, 1)));
+    }
+
+    #[test]
+    fn an_identity_whose_sides_disagree_is_refused() {
+        let rendered = assemble_error("identity mismatched { push 1 } = { };");
+        assert!(
+            rendered.contains("do not have the same stack effect"),
+            "{}",
+            rendered
+        );
+        // Spanned at the name, which is the only span an AST node carries.
+        assert!(rendered.contains("^^^^^^^^^^"), "{}", rendered);
+    }
+
+    #[test]
+    fn an_identity_refuses_an_annotation_nothing_would_read() {
+        for (ann, word) in [
+            ("#[recursive]", "recursive"),
+            ("#[precondition(p)]", "precondition"),
+        ] {
+            let rendered = error_for(&format!("{} identity x {{ }} = {{ }};", ann));
+            assert!(
+                rendered.contains(&format!("`#[{}]` is not an identity annotation", word)),
+                "{}",
+                rendered
+            );
+        }
+    }
+
+    #[test]
+    fn an_identity_takes_no_export_or_test_marker() {
+        let rendered = error_for("export identity x { } = { };");
+        assert!(
+            rendered.contains("an identity takes no `export` or `test` marker"),
+            "{}",
+            rendered
+        );
+        assert!(rendered.contains("nothing calls it"), "{}", rendered);
+    }
+
+    #[test]
+    fn an_identity_without_the_equals_sign_points_at_what_came_instead() {
+        let rendered = error_for("identity x { drop 0 } { drop 0 };");
+        assert!(rendered.contains("expected `=`, found `{`"), "{}", rendered);
+    }
+
+    /// `identity` is a hard keyword, so a body that writes one is refused by
+    /// name rather than reported as a mysterious parse failure.
+    #[test]
+    fn identity_is_not_an_instruction() {
+        let rendered = error_for("sentence a { identity }");
+        assert!(
+            rendered.contains("expected an instruction, found `identity`"),
+            "{}",
+            rendered
+        );
+    }
+
+    /// The one thing the span is carried for: an identity has to know which
+    /// file stated it, because that is the file whose `.hant` must prove it.
+    #[test]
+    fn an_identity_records_the_file_it_was_stated_in() {
+        let dir = std::env::temp_dir().join("hanoi_identity_file_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let main = dir.join("main.hana");
+        std::fs::write(
+            &main,
+            "identity here { drop 0 } = { drop 0 };\nmod helper;\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("helper.hana"),
+            "identity there { drop 0 } = { drop 0 };\n",
+        )
+        .unwrap();
+
+        let mut map = SourceMap::new();
+        let root = map.add_path(&main, std::fs::read_to_string(&main).unwrap());
+        let lib = assemble_source(&mut map, root, main.parent()).expect("assembles");
+
+        assert_eq!(lib.identities.len(), 2);
+        let here = &lib.identities[IdentityIndex::from(0)];
+        let there = &lib.identities[IdentityIndex::from(1)];
+        assert_ne!(here.span.file, there.span.file);
+        assert_eq!(lib.identities_in(here.span.file).len(), 1);
+        assert_eq!(
+            map.path(there.span.file).map(|p| p.file_name().unwrap()),
+            Some(std::ffi::OsStr::new("helper.hana"))
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_identity_answers_to_an_unambiguous_suffix() {
+        let lib = assemble("mod m { identity foo { drop 0 } = { drop 0 }; }").expect("assembles");
+        assert_eq!(lib.identity_by_name("foo"), Ok(IdentityIndex::from(0)));
+        assert_eq!(lib.identity_by_name("m::foo"), Ok(IdentityIndex::from(0)));
+        assert!(lib.identity_by_name("nope").is_err());
     }
 }
