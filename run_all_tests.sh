@@ -30,6 +30,13 @@ if ! ./run_tests.sh "$@"; then
 fi
 
 echo ""
+if ! ./run_proofs.sh; then
+    echo "======================================"
+    echo "FAILED: identity proofs failed."
+    exit 1
+fi
+
+echo ""
 echo "======================================"
 echo "All tests passed successfully!"
 echo "======================================"

@@ -1840,15 +1840,31 @@ mod tests {
     }
 
     #[test]
-    fn an_identity_whose_sides_disagree_is_refused() {
+    fn an_identity_that_leaves_a_different_amount_is_refused() {
         let rendered = assemble_error("identity mismatched { push 1 } = { };");
         assert!(
-            rendered.contains("do not have the same stack effect"),
+            rendered.contains("leave the stack differently"),
             "{}",
             rendered
         );
         // Spanned at the name, which is the only span an AST node carries.
         assert!(rendered.contains("^^^^^^^^^^"), "{}", rendered);
+    }
+
+    /// Net change, not full arity — and that is what the interesting laws need.
+    /// `pick 1 ; drop` = nothing is `(2 -> 2)` against `(0 -> 0)`: both leave
+    /// the stack as they found it, but the left needs a value to look at.
+    /// Refusing this would refuse every counit and every annihilation.
+    #[test]
+    fn sides_may_need_different_amounts_so_long_as_they_leave_the_same() {
+        assemble("identity counit { pick 1 drop 0 } = { };").expect("assembles");
+    }
+
+    #[test]
+    fn a_side_that_always_fails_is_refused() {
+        let rendered = assemble_error("identity always { panic } = { };");
+        assert!(rendered.contains("has no stack effect"), "{}", rendered);
+        assert!(rendered.contains("it always fails"), "{}", rendered);
     }
 
     #[test]

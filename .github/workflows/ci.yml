@@ -33,6 +33,17 @@ jobs:
       # Builds test-runner and runs every .hana file under tests/.
       - run: ./run_tests.sh
 
+  identity-proofs:
+    name: identity proofs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Builds prove and checks every `identity` stated under tests/ against
+      # the proof in the `.hant` beside it.
+      - run: ./run_proofs.sh
+
   fmt:
     name: cargo fmt
     runs-on: ubuntu-latest

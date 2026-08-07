@@ -1572,3 +1572,48 @@ fn an_instruction_that_reports_with_a_flag_is_still_total() {
         "add should leave its flag"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The identities the corpus states
+// ---------------------------------------------------------------------------
+
+/// Every `identity` under `tests/` is proved by the `.hant` beside it.
+///
+/// This is `./run_proofs.sh` again, behind `cargo test` — which matters because
+/// the two run at different times. A change to an equation, a matcher or the
+/// scan discipline can leave every unit test green and silently stop a proof
+/// from landing where it landed before, and that is a regression in the
+/// rewriter rather than in the corpus.
+#[test]
+fn every_identity_in_the_corpus_is_proved() {
+    let dir = Path::new("../tests");
+    if !dir.join("main.hana").exists() {
+        return; // the crate stays testable on its own
+    }
+    let opts = crate::prove::Options {
+        dir: dir.to_path_buf(),
+        ..Default::default()
+    };
+    let mut report = Vec::new();
+    let code = crate::prove::run(&opts, &mut report).expect("writing to a Vec cannot fail");
+    assert_eq!(
+        code,
+        crate::prove::OK,
+        "{}",
+        String::from_utf8_lossy(&report)
+    );
+}
+
+/// And the corpus states some. A sweep that quietly covers nothing is worse
+/// than no sweep, since it reads as coverage.
+#[test]
+fn the_corpus_states_identities_for_it_to_prove() {
+    let Some((library, _)) = corpus() else {
+        return;
+    };
+    assert!(
+        library.identities.len() >= 4,
+        "the corpus states {} identities",
+        library.identities.len()
+    );
+}

@@ -16,6 +16,7 @@ Hanoi is a stack-oriented, VM-executed language designed to explore static analy
 - **`type` / `enum` Predicate Sugar**: Declare reusable value predicates with `type Name <spec>;` (primitives — `int`, `bool`, `float`, `const_string`, `symbol`, `tuple` — literals, tuples, and `|`-unions) or `enum Name { Variant(spec, ...), ... }`, which expand into `Name::check` sentences usable directly as preconditions/postconditions.
 - **Static Arity Verification**: An arity checker runs before execution to ensure that stack push/pop operations match function signatures, avoiding runtime stack underflows.
 - **Namespacing & Modularity**: Hierarchical module declarations (`mod name { ... }` or `mod name;`) with file-import support, relative/absolute path routing, and name visibility exports.
+- **Stated Identities & Out-of-Line Proofs**: `identity A = B;` states that two programs are interchangeable; the tactic that proves it lives in the `.hant` beside the `.hana`, and `bin/prove` checks that every stated identity has a proof that discharges it. See [docs/identities.md](docs/identities.md).
 
 ---
 
@@ -90,6 +91,25 @@ sentence test_type_and_enum {
 ```
 Each `type`/`enum` declaration expands into a module with a `check` sentence (`Name::check`) that consumes a value and pushes a `Bool`, so it can be used directly as a `#[precondition(...)]` or `#[postcondition(...)]`. See [docs/typecheck.md](docs/typecheck.md) for the verification model design (currently unimplemented) and [docs/hana.md](docs/hana.md) for the complete `type`/`enum` grammar.
 
+### Identities
+A claim that two programs are interchangeable, stated in the source and proved
+out of line:
+
+```hana
+// identities.hana
+identity testing_a_test { is_bool is_bool } = { drop 0 push true };
+```
+
+```
+// identities.hant
+proof testing_a_test = cleanup;
+```
+
+`./run_proofs.sh` checks every one. The proof is a tactic rather than part of
+the program, because it depends on the rewriter's rule set and changes when that
+does, while the claim it establishes does not. See
+[docs/identities.md](docs/identities.md).
+
 ---
 
 ## Conceptual Instruction Set Architecture (ISA)
@@ -113,6 +133,9 @@ The Hanoi codebase is structured as a cargo workspace with several key packages:
 - **[bytecode](bytecode)**: The compiler frontend and validation pipeline.
   - [bytecode/src/assembly.rs](bytecode/src/assembly.rs): Parser and assembler that turns `.hana` source code into VM bytecode.
   - [bytecode/src/arity.rs](bytecode/src/arity.rs): Static arity checker for validating stack depths.
+- **[rewrite](rewrite)**: The equational rewriter, and the two tools built on it.
+  - `bin/rewrite`: a debugging aid — takes one sentence and shows what a tactic does to it.
+  - `bin/prove`: a gate — takes a corpus and checks that every stated identity has a proof.
 - **[vm](vm)**: The virtual machine execution engine.
   - [vm/src/lib.rs](vm/src/lib.rs): Core interpreter, instruction dispatch loop, and stack representation.
   - [vm/src/runtime.rs](vm/src/runtime.rs): Asynchronous CSP coordinator that drives state machine step cycles.
@@ -146,6 +169,10 @@ Use the helper shell scripts at the project root to execute test suites:
   ```bash
   ./run_tests.sh
   ```
+- **Check every stated identity against its proof**:
+  ```bash
+  ./run_proofs.sh
+  ```
 
 ---
 
@@ -156,4 +183,5 @@ Use the helper shell scripts at the project root to execute test suites:
 - [docs/typecheck.md](docs/typecheck.md): Detailed SMT verification and symbolic execution design for the `typecheck` tool (currently removed from the codebase; kept as a design reference).
 - [docs/machines.md](docs/machines.md): Specification of Hanoi's Communicating Sequential Processes (CSP) state machine semantics.
 - [docs/compilation.md](docs/compilation.md): The compilation pipeline — the sugar and core ASTs, and what each phase from tokens to bytecode may assume.
-- [docs/tactics.md](docs/tactics.md): The tactic language `bin/rewrite` uses to inline and rewrite compiled bytecode — the rule set, the combinators, and the laws they obey.
+- [docs/tactics.md](docs/tactics.md): The tactic language the `rewrite` crate uses to inline and rewrite compiled bytecode — the rule set, the combinators, and the laws they obey.
+- [docs/identities.md](docs/identities.md): Stating an identity in a `.hana`, proving it in the `.hant` beside it, and what `bin/prove` checks.

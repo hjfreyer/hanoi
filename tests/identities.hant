@@ -1,0 +1,18 @@
+proof testing_a_test = cleanup;
+proof a_value_tested_twice = all;
+
+// Never `copy_const`, which is the matcher that would answer in one step.
+// `inv(share { X })` reads naturality backwards to put the second `push` in a
+// frame, and the movement laws take the frame away again — which is the
+// derivation `applier::tests::copy_const_is_derivable_from_copy_nat` runs, said
+// in the tactic language.
+proof copying_a_constant =
+    must(once(inv(share { push 9 })));
+    must(at(0, sink));
+    must(at(0, flatten));
+
+// One annihilation and two counits, which is the whole content of the claim
+// that this is a lemma rather than an axiom. `applier::tests::\
+// vacuous_is_derivable_from_annihilate_and_counit` runs the same derivation
+// over an opaque `X`; here it is a concrete one, stated in the language.
+proof discarded_work_on_copies = cleanup;

@@ -101,6 +101,25 @@ function double_value {
 > [!IMPORTANT]
 > The parser automatically attaches an arity annotation of `#[arity(1, 1)]` to any block declared with the `function` keyword. If a function's instructions result in a different stack size transition, it will fail the arity check at compile time.
 
+### Identities
+Declared using the `identity` keyword, and not a program at all: it *claims*
+that two programs are interchangeable.
+
+```hana
+identity testing_a_test { is_bool is_bool } = { drop 0 push true };
+```
+
+Both sides are written inline. Naming two sentences that already exist is
+`{ jump a } = { jump b }`, so there is one form rather than two. The compiler
+checks that the two sides leave the stack the same — the net change, not the
+arity, since `pick 1 ; drop` = nothing is `(2 -> 2)` against `(0 -> 0)`.
+
+Nothing calls an identity and nothing runs it, so it takes no `export` or `test`
+marker, and only `#[arity]` and `#[total]` mean anything on one. The tactic that
+*proves* it lives out of line, in the `.hant` beside the `.hana`, and
+`bin/prove` checks that every stated identity has one. See
+[docs/identities.md](identities.md).
+
 ---
 
 ## 4. Contract Annotations

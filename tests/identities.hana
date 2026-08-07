@@ -213,3 +213,43 @@ test sentence copying_inputs_is_copying_outputs {
     push 9 pick 0
     push 9 assert_eq   push 9 assert_eq
 }
+
+// ---------------------------------------------------------------------------
+// The same laws again, stated for the rewriter rather than the interpreter.
+//
+// Everything above runs both sides and asserts they agree, which is a check on
+// finitely many inputs. An `identity` is the claim itself, and `bin/prove`
+// discharges it by deriving one side from the other — so the two readings of
+// this file answer different questions: does the law hold on these values, and
+// does the rewriter's own equation set reach it.
+// ---------------------------------------------------------------------------
+
+// `op ; is_bool` = `op ; drop ; push true`, then the annihilation takes the
+// operator away. Two steps, and neither is `is_bool`-specific.
+identity testing_a_test { is_bool is_bool } = { drop 0 push true };
+
+// The four-arm collapse. `retest` fires once per arm, `factor` lifts the two
+// `drop`s out, and `counit_under` deletes the copy whose original went.
+identity a_value_tested_twice
+    { pick 0 branch { branch { push 1 } { push 2 } } { branch { push 3 } { push 4 } } }
+  = { branch { push 1 } { push 4 } };
+
+// `push c ; pick 0` = `push c ; push c` — the constant case of `copy_nat`,
+// which is why `copy_const` is a lemma and not an axiom.
+//
+// The proof is what makes the point: it never uses the `copy_const` matcher.
+// `inv(share { push 9 })` reads the naturality law backwards to put the second
+// `push` inside a frame, and the movement laws take the frame away again.
+identity copying_a_constant { push 9 pick 0 } = { push 9 push 9 };
+
+// `pick (n-1)^n ; X ; drop^m` = nothing, for `X : n -> m`.
+//
+// Compute on copies, discard the results, and the originals were never
+// touched. The law that looked essential and turned out to be derivable — read
+// backwards it is the only way to introduce work into a term at all — so it is
+// a lemma a generator emits as one firing, not an axiom.
+//
+// Note the two sides need different amounts of stack and leave the same:
+// `(2 -> 2)` against `(0 -> 0)`. That asymmetry is `counit`'s, and it is why an
+// identity is held to its net change rather than to its arity.
+identity discarded_work_on_copies { pick 1 pick 1 equal drop 0 } = { };
