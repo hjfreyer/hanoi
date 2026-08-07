@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use derive_more::{From, Into};
 use typed_index_collections::TiVec;
 
-use crate::library::SentenceIndex;
+use crate::library::{IdentityIndex, SentenceIndex};
 use crate::value::Value;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,6 +56,10 @@ pub enum ModuleItem {
     /// A declared value: a `symbol` or a `const_string`.
     Const(Value),
     Sentence(SentenceIndex),
+    /// A stated equation. Here, in the one namespace a module has, so that
+    /// `identity foo` collides with `sentence foo` and a fully qualified
+    /// identity name therefore denotes exactly one thing.
+    Identity(IdentityIndex),
     Mod(ModuleId),
 }
 
@@ -67,6 +71,7 @@ impl ModuleItem {
             ModuleItem::Const(Value::ConstString(_)) => "const string",
             ModuleItem::Const(_) => "constant",
             ModuleItem::Sentence(_) => "sentence",
+            ModuleItem::Identity(_) => "identity",
             ModuleItem::Mod(_) => "module",
         }
     }
@@ -243,6 +248,10 @@ impl ModuleTree {
         match self.resolve_entry(scope, path)? {
             ModuleItem::Const(val) => Ok(ResolvedItem::Const(val.clone())),
             ModuleItem::Sentence(idx) => Ok(ResolvedItem::Sentence(*idx)),
+            ModuleItem::Identity(_) => Err(format!(
+                "Path '{}' names an identity, which is not an item",
+                path
+            )),
             ModuleItem::Mod(_) => Err(format!(
                 "Path '{}' names a module, which is not an item",
                 path

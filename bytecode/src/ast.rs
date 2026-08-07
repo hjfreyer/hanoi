@@ -11,6 +11,7 @@
 
 use crate::library::Annotation;
 use crate::resolve::Path;
+use crate::source::Span;
 
 /// An annotation as written in source: it names its target by path.
 pub type SourceAnnotation = Annotation<Path>;
@@ -117,6 +118,33 @@ pub struct SentenceDecl {
     pub is_test: bool,
 }
 
+/// A claim that two programs are interchangeable.
+///
+/// Both sides are written inline, and only inline: naming two sentences that
+/// already exist is `{ jump a } = { jump b }`, so one form covers both cases
+/// and there is no second spelling to keep consistent with the first.
+///
+/// This is core rather than sugar. A `sentence` names code and a `test
+/// sentence` runs it; neither states an equation, and there is no combination
+/// of surface constructs that does. See `docs/compilation.md`.
+#[derive(Debug, Clone)]
+pub struct IdentityDecl {
+    pub name: String,
+    pub lhs: ParsedSentence,
+    pub rhs: ParsedSentence,
+    /// Applied to *both* sides, so `#[arity(1, 1)]` is a claim each of them
+    /// answers for on its own.
+    pub annotations: Vec<SourceAnnotation>,
+    /// Where the name was written.
+    ///
+    /// The only span an AST node carries, and it is here as *data* rather than
+    /// for reporting: an identity is proved in a file named after the file it
+    /// was stated in, so which file that was has to survive into the
+    /// [`crate::Library`]. Everything after parsing still reports against the
+    /// module tree.
+    pub span: Span,
+}
+
 /// A type specification. Sugar only — it never survives lowering.
 #[derive(Debug, Clone)]
 pub enum TypeSpec {
@@ -167,7 +195,8 @@ impl std::fmt::Display for ParsedValue {
 /// The surface language, as parsed. No desugaring has happened yet.
 pub mod sugar {
     use super::{
-        ConstStringDecl, ParsedValue, SentenceDecl, SourceAnnotation, SymbolDecl, TypeSpec,
+        ConstStringDecl, IdentityDecl, ParsedValue, SentenceDecl, SourceAnnotation, SymbolDecl,
+        TypeSpec,
     };
     use crate::resolve::Path;
 
@@ -176,6 +205,7 @@ pub mod sugar {
         Symbol(SymbolDecl),
         ConstString(ConstStringDecl),
         Sentence(SentenceDecl),
+        Identity(IdentityDecl),
         Mod(ModDecl),
         Type(TypeDecl),
         Enum(EnumDecl),
@@ -281,13 +311,14 @@ pub mod sugar {
 /// The irreducible subset of the language. Everything here corresponds to
 /// something a user could have written by hand.
 pub mod core {
-    use super::{ConstStringDecl, SentenceDecl, SymbolDecl};
+    use super::{ConstStringDecl, IdentityDecl, SentenceDecl, SymbolDecl};
 
     #[derive(Debug, Clone)]
     pub enum Item {
         Symbol(SymbolDecl),
         ConstString(ConstStringDecl),
         Sentence(SentenceDecl),
+        Identity(IdentityDecl),
         Mod(ModDecl),
     }
 

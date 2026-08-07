@@ -111,6 +111,10 @@ impl Lowerer {
             sugar::Item::Symbol(decl) => Ok(vec![core::Item::Symbol(decl)]),
             sugar::Item::ConstString(decl) => Ok(vec![core::Item::ConstString(decl)]),
             sugar::Item::Sentence(decl) => Ok(vec![core::Item::Sentence(decl)]),
+            // Core, so there is nothing to lower. The depth rule does not
+            // apply either: an identity emits nothing deeper than where it was
+            // written, so no path inside it needs shifting.
+            sugar::Item::Identity(decl) => Ok(vec![core::Item::Identity(decl)]),
             sugar::Item::Mod(decl) => Ok(vec![core::Item::Mod(core::ModDecl {
                 name: decl.name,
                 items: self.items(decl.items)?,
