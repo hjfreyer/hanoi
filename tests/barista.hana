@@ -112,25 +112,34 @@ mod customer_impl {
         tuple 2
     }
 
+    #[total]
     function emit_postcondition {
         untuple 2
-        assert
-        pick 0
-        is_bool
         branch {
+            pick 0
+            is_bool
             branch {
-                jump is_event::check
+                branch {
+                    jump is_event::check
+                } {
+                    drop 0
+                    push true
+                }
             } {
                 drop 0
-                push true
+                drop 0
+                push false
             }
         } {
+            // Not a pair: the value itself sits in the deepest slot untuple
+            // filled, with () padding above it. Clear both and reject.
             drop 0
             drop 0
             push false
         }
     }
 
+    #[total]
     function emit_does_pre_and_post {
         pick 0
         jump is_state::check
@@ -146,35 +155,26 @@ mod customer_impl {
     // emit takes state: (id, preferred_drink, internal_state) and returns ValueSet of emitted events.
     #[precondition(is_state::check)]
     #[postcondition(emit_postcondition)]
+    #[total]
     function emit {
         untuple 3
-        assert // Stack: [id, preferred_drink, internal_state]
-        pick 0
-        push state::thirsty
-        equal
         branch {
-            // Customer emits order request to queue (push_back event)
-            drop 0 // drop internal_state. Stack: [id, preferred_drink]
-            tuple 2 // (id, preferred_drink)
-            tuple 1
-            push super::super::queue::Event::PushBack::tag
-            tuple 2
-            push true
-            tuple 2
-        } {
+            // Stack: [id, preferred_drink, internal_state]
             pick 0
-            push state::idle
+            push state::thirsty
             equal
             branch {
-                drop 0
-                drop 0
-                drop 0
-                tuple 0
-                push false
+                // Customer emits order request to queue (push_back event)
+                drop 0 // drop internal_state. Stack: [id, preferred_drink]
+                tuple 2 // (id, preferred_drink)
+                tuple 1
+                push super::super::queue::Event::PushBack::tag
+                tuple 2
+                push true
                 tuple 2
             } {
                 pick 0
-                push state::ordered
+                push state::idle
                 equal
                 branch {
                     drop 0
@@ -185,7 +185,7 @@ mod customer_impl {
                     tuple 2
                 } {
                     pick 0
-                    push state::has_coffee
+                    push state::ordered
                     equal
                     branch {
                         drop 0
@@ -195,10 +195,37 @@ mod customer_impl {
                         push false
                         tuple 2
                     } {
-                        panic
+                        pick 0
+                        push state::has_coffee
+                        equal
+                        branch {
+                            drop 0
+                            drop 0
+                            drop 0
+                            tuple 0
+                            push false
+                            tuple 2
+                        } {
+                            // Unrecognized internal state: emit nothing.
+                            drop 0
+                            drop 0
+                            drop 0
+                            tuple 0
+                            push false
+                            tuple 2
+                        }
                     }
                 }
             }
+        } {
+            // Not a triple: the value itself sits in the deepest slot untuple
+            // filled, with () padding above it. Clear all three and emit nothing.
+            drop 0
+            drop 0
+            drop 0
+            tuple 0
+            push false
+            tuple 2
         }
     }
 
@@ -401,6 +428,43 @@ test sentence verify_customer_logic {
     jump customer_impl::process
     
     drop 0
+}
+
+// emit, its postcondition, and the combined check are #[total]: off their
+// intended domain they answer negatively instead of panicking.
+test sentence verify_emit_totality {
+    // Not a triple at all: emit nothing.
+    push 42
+    jump customer_impl::emit
+    push (false, ())
+    assert_eq
+
+    // A triple whose internal state is unrecognized: emit nothing.
+    push (event::latte, event::latte, customer_id::c1)
+    jump customer_impl::emit
+    push (false, ())
+    assert_eq
+
+    // The postcondition rejects a value that is not a (flag, event) pair, ...
+    push 42
+    jump customer_impl::emit_postcondition
+    not
+    assert
+
+    // ... and holds for what emit answers on junk.
+    push (false, ())
+    jump customer_impl::emit_postcondition
+    assert
+
+    // The combined check holds on a value that is not a state at all, ...
+    push 42
+    jump customer_impl::emit_does_pre_and_post
+    assert
+
+    // ... and on a real state, where it runs emit and checks its output.
+    push (customer_impl::state::thirsty, event::latte, customer_id::c1)
+    jump customer_impl::emit_does_pre_and_post
+    assert
 }
 
 mod customer1 compose_static_closure(customer_impl, (super::customer_impl::state::idle, super::event::latte, super::customer_id::c1));
