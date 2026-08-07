@@ -10,13 +10,16 @@
 //! a fact about the whole library, never about where in the tree a rule is
 //! being applied.
 
-use bytecode::arity::sentence_arity;
+use bytecode::arity::{failure_reachability, sentence_arity};
 use bytecode::{Annotation, Arity, Library, SentenceIndex, Value};
 
 pub(crate) struct Program<'a> {
     library: &'a Library,
     /// Indexed by `usize::from(SentenceIndex)`.
     arities: Vec<Option<(i64, i64)>>,
+    /// Indexed the same way. A whole-library fixpoint, so it is computed once:
+    /// `prove` asks it twice per identity, and there may be many.
+    can_fail: Vec<bool>,
 }
 
 impl<'a> Program<'a> {
@@ -30,7 +33,11 @@ impl<'a> Program<'a> {
             })
             .collect();
 
-        Program { library, arities }
+        Program {
+            library,
+            arities,
+            can_fail: failure_reachability(library),
+        }
     }
 
     pub(crate) fn library(&self) -> &'a Library {
@@ -59,6 +66,16 @@ impl<'a> Program<'a> {
         self.library.annotations[s_idx]
             .iter()
             .any(|ann| matches!(ann, Annotation::Recursive))
+    }
+
+    /// Whether the sentence reaches a `panic`, an `assert` or an `assert_eq`,
+    /// directly or through a call.
+    ///
+    /// The other half of the precondition the equations are stated under. Like
+    /// `is_recursive` it is closed over reachability, so a root that answers
+    /// `false` answers for every node a tree built from it can hold.
+    pub(crate) fn can_fail(&self, s_idx: SentenceIndex) -> bool {
+        self.can_fail[usize::from(s_idx)]
     }
 
     pub(crate) fn label(&self, s_idx: SentenceIndex) -> String {
