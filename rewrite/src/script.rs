@@ -135,6 +135,15 @@ impl ScriptError {
         }
     }
 
+    /// A spanned error against a `.hant`, raised from outside this module.
+    ///
+    /// `prove` reports an orphan proof — one naming an identity that is not
+    /// stated in the sibling `.hana` — and wants it to underline the path the
+    /// way a parse error underlines a word.
+    pub(crate) fn about(message: impl Into<String>, span: Span, help: impl Into<String>) -> Self {
+        ScriptError::new(message, span).with_help(help)
+    }
+
     fn with_help(mut self, help: impl Into<String>) -> Self {
         self.help = Some(help.into());
         self
