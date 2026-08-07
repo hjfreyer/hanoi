@@ -788,6 +788,98 @@ mod tests {
         assert_eq!(tree, rule.lhs());
     }
 
+    #[test]
+    fn copy_const_at_depth_is_derivable_from_the_roll_laws() {
+        // The question the roll laws exist to answer: does a literal held
+        // *below* the top of the stack still read as a literal? `copy_const` is
+        // stated at depth 0, and the slot is read with `pick d`, which is
+        // opaque to every law that folds. Run the derivation and find out.
+        //
+        //   dip d { push c } ; pick d
+        //     pick_roll forwards      -> dip d { push c } ; dip d { pick 0 } ; roll d
+        //     fuse forwards           -> dip d { push c ; pick 0 } ; roll d
+        //     copy_const, in the body -> dip d { push c ; push c } ; roll d
+        //     fuse backwards          -> dip d { push c } ; dip d { push c } ; roll d
+        //     unframe forwards        -> dip d { push c } ; push c
+        //
+        // So `copy_const` needs no depth reading of its own, and neither does
+        // anything else: the roll laws move the value to where the law already
+        // applies, rather than restating the law where the value is.
+        let d = 3;
+        let c = Value::Int(7);
+        let push_c = || op(Instruction::Push(c.clone()));
+        let framed = |body: Vec<Node>| Node::Dip {
+            depth: d,
+            origins: Vec::new(),
+            body,
+        };
+
+        let script = vec![
+            step(Rule::PickRoll { d }, Direction::Forward, Location::root(1)),
+            step(
+                Rule::Fuse {
+                    k: d,
+                    a: vec![push_c()],
+                    b: vec![op(Instruction::Pick(0))],
+                    a_origins: Vec::new(),
+                    b_origins: Vec::new(),
+                },
+                Direction::Forward,
+                Location::root(0),
+            ),
+            step(
+                Rule::CopyConst { c: c.clone() },
+                Direction::Forward,
+                Location {
+                    descent: vec![(0, Selector::Body)],
+                    at: 0,
+                },
+            ),
+            step(
+                Rule::Fuse {
+                    k: d,
+                    a: vec![push_c()],
+                    b: vec![push_c()],
+                    a_origins: Vec::new(),
+                    b_origins: Vec::new(),
+                },
+                Direction::Reverse,
+                Location::root(0),
+            ),
+            step(
+                Rule::Unframe {
+                    framed: framed(vec![push_c()]),
+                    n: 0,
+                    m: 1,
+                },
+                Direction::Forward,
+                Location::root(1),
+            ),
+        ];
+
+        let mut tree = vec![framed(vec![push_c()]), op(Instruction::Pick(d))];
+        apply_script(&prog(), &mut tree, &script, true)
+            .unwrap_or_else(|e| panic!("deriving copy_const at depth: {}", e));
+        assert_eq!(
+            tree,
+            vec![framed(vec![push_c()]), push_c()],
+            "the derivation did not read the deep slot as the literal it holds"
+        );
+
+        // And back, so it is a lemma rather than a tree that happens to match.
+        let back: Vec<Step> = script
+            .iter()
+            .rev()
+            .map(|s| Step {
+                dir: s.dir.flipped(),
+                ..s.clone()
+            })
+            .collect();
+        apply_script(&prog(), &mut tree, &back, true)
+            .unwrap_or_else(|e| panic!("undoing the derivation: {}", e));
+        assert_eq!(tree, vec![framed(vec![push_c()]), op(Instruction::Pick(d))]);
+    }
+
     // -- provenance is not identity -----------------------------------------
 
     #[test]
