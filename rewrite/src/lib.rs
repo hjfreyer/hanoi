@@ -55,7 +55,7 @@ use bytecode::{Library, SentenceIndex, SourceMap};
 use crate::engine::Env;
 use crate::matcher::{count_matcher_names, matcher_by_name, matcher_names, term_matcher_names};
 use crate::program::Program;
-use crate::rule::Script;
+use crate::rule::Step;
 use crate::script::Definitions;
 
 /// Rule firings allowed per run before a tool gives up and shows its work.
@@ -217,15 +217,21 @@ pub(crate) fn tactic_listing(defs: &Definitions) -> Vec<String> {
     out
 }
 
-/// The derivation, one step per line, each with its window and replacement.
+/// A derivation, one step per line, each with its window and replacement.
 ///
-/// The other half of keeping the calculus private: a `Step` is a public type
-/// with private fields, so a binary can hold a `Script` and hand it back here
+/// The other half of keeping the calculus private: a `Step` is a crate type
+/// with private fields, so a caller can hold a `Script` and hand it back here
 /// without being able to read what is in it.
-pub(crate) fn derivation_lines(prog: &Program, script: &Script) -> Vec<String> {
+///
+/// `title` is what the block is called. A proof that met its goal up to
+/// inlining has three of these — what the proof did, what unfolding did, and
+/// the fold-back — and a reader looking at a hundred unfolds followed by a
+/// hundred folds deserves to be told which is which. Numbering restarts per
+/// block, each being its own journey.
+pub(crate) fn derivation_lines(prog: &Program, title: &str, script: &[Step]) -> Vec<String> {
     let mut out = Vec::new();
-    out.push(format!("  derivation — {} step(s)", script.len()));
-    out.push("  ────────────".to_string());
+    out.push(format!("  {} — {} step(s)", title, script.len()));
+    out.push(format!("  {}", "─".repeat(title.chars().count() + 2)));
     if script.is_empty() {
         out.push("  (nothing)".to_string());
     }

@@ -383,6 +383,15 @@ there is no single one to reverse — `inv(unfactor)` is the last of the three.
 as a step, but nothing looks for it, because a window does not say which
 sentence to fold into.
 
+**Nothing needs to, as it turns out.** A fold script is an unfold script read
+backwards, and `rule::invert` is that reading — reverse the order, flip every
+direction. So the one place that wants folding gets it without a matcher:
+`bin/prove` compares an identity's two sides up to inlining by unfolding both
+and inverting the right-hand side's script, which lets a right-hand side be
+written as the call it is rather than pasted out. The gap is in *searching*, and
+a generator that knew where it was going would not be searching. See
+`docs/identities.md`.
+
 **Every matcher has to answer.** `Matcher::inverse` has no default
 implementation, so adding a rule means saying what its backward reading is or
 why there is not one — a new rule cannot quietly have none.

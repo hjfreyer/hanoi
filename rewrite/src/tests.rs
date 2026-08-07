@@ -19,7 +19,7 @@ use crate::arity::{node_arity, seq_arity};
 use crate::engine::{Env, Tactic, run as run_tactic};
 use crate::ir::{Node, build};
 use crate::program::Program;
-use crate::rule::{Rule, Script, StepKind};
+use crate::rule::{Rule, Script, StepKind, invert};
 use crate::script::{Definitions, PRELUDE};
 
 /// The prelude tactics, by the name a test refers to them by.
@@ -1187,6 +1187,64 @@ fn corpus_derivations_replay() {
         worked > 100 && steps > 1000,
         "only {} sentences did work, {} steps in all",
         worked,
+        steps
+    );
+}
+
+/// A derivation read backwards returns the term to where it started.
+///
+/// This is what `rule::invert` claims, held to the real corpus rather than to
+/// the argument in its doc comment — which rests on three things that would be
+/// easy to break without noticing: that `sides` swaps on `dir` for every step
+/// kind, that a side condition does not depend on the direction, and that a
+/// location addresses the same window before and after its own splice.
+///
+/// It is also the property `prove` rests on, since a proof that meets in the
+/// middle folds the right-hand side back up by inverting the script that
+/// unfolded it.
+#[test]
+fn inverting_a_corpus_derivation_returns_it_to_where_it_started() {
+    let Some((library, prog)) = corpus() else {
+        return;
+    };
+
+    let mut undone = 0usize;
+    let mut steps = 0usize;
+    for s_idx in admissible(library, prog) {
+        let before = run(
+            prog,
+            build(library, s_idx, &mut HashSet::new()),
+            "unfold_all",
+        );
+        let env = Env::new(prog, 1_000_000, true);
+        let (after, script) =
+            run_tactic(&env, &compile(ALL), before.clone()).unwrap_or_else(|e| panic!("{}", e));
+        if script.is_empty() {
+            continue;
+        }
+
+        let mut back = after;
+        apply_script(prog, &mut back, &invert(&script), true).unwrap_or_else(|e| {
+            panic!(
+                "the inverse of {}'s {}-step derivation does not apply: {}",
+                library.names[s_idx],
+                script.len(),
+                e
+            )
+        });
+        assert_eq!(
+            back, before,
+            "undoing {}'s derivation did not return it to where it started",
+            library.names[s_idx]
+        );
+        undone += 1;
+        steps += script.len();
+    }
+
+    assert!(
+        undone > 100 && steps > 1000,
+        "only {} derivations were undone, {} steps in all",
+        undone,
         steps
     );
 }

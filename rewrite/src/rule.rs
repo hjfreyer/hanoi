@@ -57,8 +57,8 @@ impl Direction {
     /// The opposite reading of the same equation.
     ///
     /// Undoing a derivation is reversing every step and running it backwards,
-    /// which is what `applier`'s round-trip tests do with this.
-    #[allow(dead_code)]
+    /// which is what `applier`'s round-trip tests do with this, and what
+    /// [`invert`] does to a whole script.
     pub(crate) fn flipped(self) -> Direction {
         match self {
             Direction::Forward => Direction::Reverse,
@@ -1253,6 +1253,43 @@ impl std::fmt::Display for Step {
 /// A derivation: the steps that take one program to another.
 pub(crate) type Script = Vec<Step>;
 
+/// The same derivation read the other way: `B ⇒ A` from `A ⇒ B`.
+///
+/// Reverse the order and flip every direction. Three facts make that all there
+/// is to it, and each is easy to lose, so they are written down rather than
+/// relied on:
+///
+/// - **Every step is two-sided.** [`crate::applier::sides`] ends in
+///   `match step.dir { Forward => (lhs, rhs), Reverse => (rhs, lhs) }`,
+///   uniformly for every [`StepKind`] — [`StepKind::Unfold`] included, where the
+///   backward reading contracts a body back into a call. What `unfold` lacks is
+///   a *matcher*: nothing can read a window and say which sentence to fold into.
+///   Inverting needs none, because the step already names the sentence.
+/// - **A side condition does not depend on the direction.** [`Rule::check`]
+///   takes no [`Direction`]; it asks whether the facts a step claims about the
+///   library are true. So a step that was validated forward is validated
+///   backward, and inverting a script the engine produced cannot manufacture a
+///   step the applier would refuse for a reason the original did not have.
+/// - **A location addresses the same window before and after its own splice.**
+///   `at` is the window's start either way — the splice put `dst` exactly where
+///   `src` was — and the descent's indices name positions in *enclosing*
+///   sequences, which a splice into the innermost one cannot renumber. So the
+///   step that took `T → T'` at `loc` takes `T' → T` at the same `loc`.
+///
+/// `tests::inverting_a_corpus_derivation_returns_it_to_where_it_started` holds
+/// the claim to the real corpus rather than to the argument.
+pub(crate) fn invert(script: &[Step]) -> Script {
+    script
+        .iter()
+        .rev()
+        .map(|step| Step {
+            kind: step.kind.clone(),
+            dir: step.dir.flipped(),
+            loc: step.loc.clone(),
+        })
+        .collect()
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -2162,5 +2199,56 @@ pub(crate) mod tests {
         // `applier::tests::copy_const_is_derivable_from_copy_nat` is what says
         // so out loud.
         assert_eq!(before, 19);
+    }
+
+    // -----------------------------------------------------------------------
+    // Reading a derivation backwards
+    // -----------------------------------------------------------------------
+
+    fn a_step(dir: Direction, at: usize) -> Step {
+        Step {
+            kind: StepKind::Unfold {
+                depth: 0,
+                target: SentenceIndex::from(at),
+            },
+            dir,
+            loc: Location::root(at),
+        }
+    }
+
+    #[test]
+    fn inverting_reverses_the_order_and_flips_every_direction() {
+        let script = vec![
+            a_step(Direction::Forward, 0),
+            a_step(Direction::Reverse, 1),
+            a_step(Direction::Forward, 2),
+        ];
+        let back = invert(&script);
+        let read: Vec<(Direction, usize)> = back.iter().map(|s| (s.dir, s.loc.at)).collect();
+        assert_eq!(
+            read,
+            vec![
+                (Direction::Reverse, 2),
+                (Direction::Forward, 1),
+                (Direction::Reverse, 0),
+            ]
+        );
+    }
+
+    /// An equation read twice the other way is the equation, which is the whole
+    /// of why undoing a derivation needs no separate machinery.
+    #[test]
+    fn inverting_twice_is_the_original() {
+        let script = vec![
+            a_step(Direction::Forward, 0),
+            a_step(Direction::Reverse, 1),
+            a_step(Direction::Forward, 2),
+        ];
+        assert_eq!(invert(&invert(&script)), script);
+    }
+
+    #[test]
+    fn inverting_nothing_is_nothing() {
+        assert!(invert(&[]).is_empty());
     }
 }
