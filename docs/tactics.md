@@ -62,10 +62,12 @@ finite by construction.
 
 ## The equations
 
-Nineteen, plus one thing that is not an equation. `--list-rules` prints the
-matchers that place them. Eighteen of the nineteen are axioms: `copy_const` is
-the constant case of `copy_nat` and is kept only because it is one step where
-the derivation is three.
+Twenty-two, plus one thing that is not an equation. `--list-rules` prints the
+matchers that place them, which is not all of them — the last three have no
+matcher yet, and are steps a script may name rather than shapes anything looks
+for. Twenty-one of the twenty-two are axioms: `copy_const` is the constant case
+of `copy_nat` and is kept only because it is one step where the derivation is
+three.
 
 | equation | law | notes |
 |---|---|---|
@@ -88,6 +90,9 @@ the derivation is three.
 | `copy_nat` | `pick (n-1)^n ; X ; dip m { X }` = `X ; pick (m-1)^m`, for `X : n -> m` | copying is natural. Forward is common-subexpression elimination; the only law that needs `X` to be **deterministic** |
 | `bool_result` | `op ; is_bool` = `op ; drop ; push true`, for an `op` that always leaves a boolean | the only fact here about an instruction's **codomain**, and the only one no rewriting could reach. `Instruction::yields_bool`, measured by `vm` |
 | `cancel_tuple` | `tuple n ; untuple n` = `push true` | the flag is the whole residue. The converse order is not a no-op and has no equation |
+| `roll_cycle` | `(roll d)^(d+1)` = nothing | a rotation of `d+1` things has order `d+1`. Backward it is the only way to put a roll into a term that holds none |
+| `unframe` | `dip d { X } ; (roll (d+m-1))^m` = `(roll (d+n-1))^n ; X`, for `X : n -> m` | a framed computation is a rolled one. Forward brings the operands to the top; backward puts the answer back under a frame |
+| `pick_roll` | `pick d` = `dip d { pick 0 } ; roll d` | copying from depth is copying at depth and rolling the copy up |
 
 **`unfold` is not one of these.** That `Call { k, S }` may be replaced by `S`'s
 body is not a law of the calculus — it is the axiom the *library* contributes by
@@ -243,6 +248,57 @@ Two of these need no coordination even though they look adjacent. `annihilate`
 wants `X : n -> 1` and `counit` wants `pick d ; drop`; since `pick d` is
 `(d+1 -> d+2)` it fails annihilate's arity requirement outright. The old code
 had an explicit special case for exactly this.
+
+### Reaching a value below the top
+
+Every law about *what a value is* — `split_bool`, `bool_result`, `copy_const`,
+`eval` — is stated about the top of the stack, because `branch` observes the top
+and nothing else does. So a value held under a frame is out of all of their
+reach, and the obvious fix is the wrong one twice over.
+
+`body(t)` is not it. A rule does apply inside a frame, and sees the top of the
+*inner* stack — but a `branch` inside a frame cannot show its two cases to the
+code outside it, and there is no top-level branch equal to one. A case split at
+depth is therefore an identity insertion that tells the continuation nothing:
+sound, and useless.
+
+Parameterizing the laws by depth is not it either. `split_bool(d)` would want
+`bool_result(d)` to discharge its guard, which would want `copy_const(d)` to
+read what it left, and each is the same fact restated in a new shape. The
+namespace grows and nothing composes.
+
+**The three roll laws move the value instead of the reasoning.** `roll d` lifts
+the value at depth `d` to the top, `roll_cycle` is what lets one be written down
+at all, and `unframe` is what a frame turns into. Applied to
+`dip 3 { is_symbol }` they leave
+
+```
+untuple 3 ; roll 3 ; is_symbol ; …the split… ; roll 3 ; roll 3 ; roll 3
+```
+
+— the case analysis on a top-level `branch`, where `distribute` can push the
+continuation into both arms and the value is a literal in each, and then three
+rolls that carry that literal back down to the slot it came from. That is the
+whole point: the fork has to happen where `branch` can express it.
+
+`pick_roll` is the third because a literal at depth is read with `pick d`, which
+every folding law is blind to. Opening it into `dip d { pick 0 } ; roll d` puts
+the literal and its copy adjacent *inside* the frame, where `copy_const` fires
+and `unframe` eats the leftover roll —
+`applier::tests::copy_const_at_depth_is_derivable_from_the_roll_laws` runs that
+derivation both ways. So `copy_const` needs no depth reading, and neither does
+anything else.
+
+No `unroll` instruction was needed. `roll d` rotates `d+1` values, so
+`(roll d)^d` already inverts it, and `roll 0 = ε` is `roll_cycle` at `d = 0`
+rather than a law of its own.
+
+**Nothing places these yet.** They are equations and a script may name them, but
+there is no matcher for any of the three, so a tactic cannot ask for one. That
+is deliberate: what each of the six readings should look for is a question about
+search rather than about truth — `roll_cycle` alone is `d+1` nodes wide, and its
+backward reading has the same "somewhere to stand" problem `inv(counit(d))` has
+— and the laws are worth landing before the answer to it is.
 
 ### Three matchers, one annihilation
 
@@ -1237,9 +1293,22 @@ consulting an analysis.
 
 ## What is not here yet
 
-- **Tranche two.** `specialize_equal`, `dup_natural`, `rebuild_copy`,
-  `pick_drop_to_roll`, and `roll 0 = ε` / `dip k { } = ε`.
-  All are expressible as equations in this framework; none is written yet.
+- **Tranche two.** `specialize_equal`, `dup_natural`, `rebuild_copy`, and
+  `dip k { } = ε`. All are expressible as equations in this framework; none is
+  written yet.
+
+  Two that used to be on this list are now in the set, as equations without
+  matchers. `roll 0 = ε` is `roll_cycle` at `d = 0`, and the rolls arrived with
+  company: `unframe` and `pick_roll` are what make a roll worth writing, since
+  alone it only moves a value and nothing could say what that bought.
+  `pick_drop_to_roll` — `pick d ; dip (d+1) { drop }` = `roll d`, which is
+  `counit_under` at depth and would demote it — is still not written, nothing
+  having wanted it.
+
+- **Matchers for the three roll laws.** Six readings, and each has a real
+  question behind it: the width of `roll_cycle` is its own argument, its
+  backward reading needs somewhere to stand, and `unframe` can only fix one of
+  `n` and `m` before it looks.
 
   Two that used to be on this list are not any more. `bool_identity` and
   `retain_condition` both existed to tell an arm what its condition was, and

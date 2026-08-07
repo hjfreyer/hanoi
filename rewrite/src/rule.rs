@@ -607,6 +607,104 @@ pub(crate) enum Rule {
     /// junk-normalizes and strands a flag — which is why this equation is about
     /// one order and not the other.
     CancelTuple { n: usize },
+
+    /// `(roll d)^(d+1)` = nothing.
+    ///
+    /// `roll d` lifts the value at depth `d` to the top, which rotates the top
+    /// `d+1` values by one and leaves everything under them alone. A rotation
+    /// of `d+1` things has order `d+1`, so doing it that many times puts every
+    /// one of them back where it started.
+    ///
+    /// **This is what makes a roll writable at all.** Read forward it deletes a
+    /// run of rolls that has come back round; read backward it is the only way
+    /// to put a roll into a term that holds none, which is what
+    /// [`Rule::Unframe`] then has something to work with. `d = 0` is the
+    /// degenerate case — `roll 0` removes the top value and pushes it — and
+    /// falls out of the same statement rather than needing its own.
+    ///
+    /// No inverse is needed for the rotation itself: `(roll d)^d` already
+    /// undoes one `roll d`, so the tool needs no `unroll` instruction and the
+    /// machine needs no new opcode.
+    ///
+    /// Dead to the lib target, as all three roll laws are: an equation is
+    /// constructed by the matcher that places it, and these have none yet. The
+    /// tests construct them — `every_equation` sweeps all three, and
+    /// `applier::tests::copy_const_at_depth_is_derivable_from_the_roll_laws`
+    /// runs two of them — and a serialized script naming one will.
+    #[allow(dead_code)]
+    RollCycle { d: usize },
+
+    /// `dip d { X } ; (roll (d+m-1))^m` = `(roll (d+n-1))^n ; X`,
+    /// for `X : n -> m`.
+    ///
+    /// **A framed computation is a rolled one.** Both sides apply `X` to the
+    /// `n` values sitting under the top `d`, and leave its `m` results on top
+    /// of those `d` — the left by reaching under them with a frame, the right
+    /// by rolling the operands up, computing at the top, and leaving the
+    /// answers there. The rolls are all at one depth because a rotation does
+    /// not change how many values there are.
+    ///
+    /// ## What it is for
+    ///
+    /// Every law about *what a value is* — [`Rule::SplitBool`],
+    /// [`Rule::BoolResult`], [`Rule::CopyConst`], [`Rule::Eval`] — is stated
+    /// about the top of the stack, because `branch` observes the top and
+    /// nothing else. A value held under a frame is therefore out of their
+    /// reach, and no amount of `body(t)` fixes that: a `branch` *inside* a
+    /// frame cannot show its two cases to the code outside it, so a case split
+    /// at depth is an identity insertion that tells the continuation nothing.
+    ///
+    /// This is the law that moves the value instead of the reasoning. Roll the
+    /// operand up, split it where every existing equation can see it, and the
+    /// fork is at the top level of the sequence where [`Rule::Distribute`] can
+    /// push the continuation into both arms.
+    ///
+    /// ## Why it is not derivable
+    ///
+    /// Nothing else in the set mentions `roll` except [`Rule::Commute`], which
+    /// only says an operator cannot see one. `dip` and `roll` are the two ways
+    /// to address a value below the top, and no equation related them, so
+    /// neither could be rewritten into the other.
+    ///
+    /// The `d = 0` reading is `dip 0 { X } ; (roll (m-1))^m` =
+    /// `(roll (n-1))^n ; X`, which for `n = m = 1` is `X = X` — the law says
+    /// nothing where there is no depth to reach past, as it should.
+    /// No matcher places it yet; see [`Rule::RollCycle`].
+    #[allow(dead_code)]
+    Unframe {
+        /// The frame, whole, so its origins survive the rewrite.
+        framed: Node,
+        n: usize,
+        m: usize,
+    },
+
+    /// `pick d` = `dip d { pick 0 } ; roll d`.
+    ///
+    /// **Copying from depth is copying at depth and rolling the copy up.** The
+    /// frame reaches past the top `d` values and duplicates the one under them;
+    /// the roll then lifts one of the two — they are the same value, so which
+    /// one does not matter — to the top, which is where `pick d` puts it.
+    ///
+    /// It is the third of the three laws that relate `dip` to `roll`, and the
+    /// one about `pick` rather than about a computation. [`Rule::Unframe`]
+    /// cannot reach it: `pick 0` is `1 -> 2`, so that law reads
+    /// `dip d { pick 0 } ; (roll (d+1))^2` = `roll d ; pick 0`, which is a
+    /// different pair of rolls and says nothing about a single `pick d`.
+    ///
+    /// ## What it is for
+    ///
+    /// [`Rule::CopyConst`] is what turns a slot back into a literal, and it is
+    /// stated at the top of the stack. Once a case split has put a literal at
+    /// depth, the code that reads that slot reads it with `pick d`, which is
+    /// opaque to every law that folds. This is what opens it up: rewriting the
+    /// `pick d` into a framed `pick 0` lets `copy_const` fire *inside* the
+    /// frame, where the literal and its copy are adjacent, and the leftover
+    /// roll is eaten by [`Rule::Unframe`]. Together they are `copy_const` at
+    /// depth, derived rather than restated.
+    ///
+    /// No matcher places it yet; see [`Rule::RollCycle`].
+    #[allow(dead_code)]
+    PickRoll { d: usize },
 }
 
 impl Rule {
@@ -631,6 +729,9 @@ impl Rule {
             Rule::CopyNat { .. } => "copy_nat",
             Rule::BoolResult { .. } => "bool_result",
             Rule::CancelTuple { .. } => "cancel_tuple",
+            Rule::RollCycle { .. } => "roll_cycle",
+            Rule::Unframe { .. } => "unframe",
+            Rule::PickRoll { .. } => "pick_roll",
         }
     }
 
@@ -703,9 +804,21 @@ impl Rule {
                     operands: inputs.len(),
                 }),
             },
+            // Two claims, both re-derived here: that there is a frame to
+            // unwrap, and that its body has the arity the step says — the roll
+            // depths on both sides are computed from it, so a wrong `n` or `m`
+            // would generate a different program rather than a wrong rewrite.
+            Rule::Unframe { framed, n, m } => {
+                let (_, body) = framed_body(framed).ok_or_else(|| SideCondition::NotFramed {
+                    found: crate::ir::sketch(std::slice::from_ref(framed)),
+                })?;
+                claimed_arity(prog, &body, (*n as i64, *m as i64)).map(|_| ())
+            }
             // The rest are schematic in their arguments and hold for every
             // instantiation, so there is nothing to check.
-            Rule::Collapse { .. }
+            Rule::RollCycle { .. }
+            | Rule::PickRoll { .. }
+            | Rule::Collapse { .. }
             | Rule::ElimDip0 { .. }
             | Rule::Fuse { .. }
             | Rule::Hoist { .. }
@@ -903,6 +1016,17 @@ impl Rule {
                 Node::Op(Instruction::Tuple(*n)),
                 Node::Op(Instruction::Untuple(*n)),
             ],
+
+            Rule::RollCycle { d } => rolls(*d, d + 1),
+
+            Rule::PickRoll { d } => vec![Node::Op(Instruction::Pick(*d))],
+
+            Rule::Unframe { framed, m, .. } => {
+                let (depth, _) = framed_body(framed).expect("check() accepted an unframed node");
+                let mut nodes = vec![framed.clone()];
+                nodes.extend(rolls(depth + m.saturating_sub(1), *m));
+                nodes
+            }
         }
     }
 
@@ -1081,7 +1205,49 @@ impl Rule {
             ],
 
             Rule::CancelTuple { .. } => vec![push(Value::Bool(true))],
+
+            Rule::RollCycle { .. } => Vec::new(),
+
+            Rule::PickRoll { d } => vec![
+                Node::Dip {
+                    depth: *d,
+                    origins: Vec::new(),
+                    body: vec![Node::Op(Instruction::Pick(0))],
+                },
+                Node::Op(Instruction::Roll(*d)),
+            ],
+
+            Rule::Unframe { framed, n, .. } => {
+                let (depth, body) = framed_body(framed).expect("check() accepted an unframed node");
+                let mut nodes = rolls(depth + n.saturating_sub(1), *n);
+                nodes.extend(body);
+                nodes
+            }
         }
+    }
+}
+
+/// `count` copies of `roll d`.
+fn rolls(d: usize, count: usize) -> Vec<Node> {
+    std::iter::repeat_n(Node::Op(Instruction::Roll(d)), count).collect()
+}
+
+/// A frame's depth and the body it hides that depth from.
+///
+/// A `dip` carries its body inline; a call at depth carries it in the library,
+/// so what comes back is the call itself, re-read at depth 0. Either way the
+/// answer is a program equal to what the frame runs.
+fn framed_body(node: &Node) -> Option<(usize, Vec<Node>)> {
+    match node {
+        Node::Dip { depth, body, .. } => Some((*depth, body.clone())),
+        Node::Call { depth, target } if *depth > 0 => Some((
+            *depth,
+            vec![Node::Call {
+                depth: 0,
+                target: *target,
+            }],
+        )),
+        _ => None,
     }
 }
 
@@ -2143,6 +2309,17 @@ pub(crate) mod tests {
                 else_origin: "else".to_string(),
             },
             Rule::CancelTuple { n: 3 },
+            Rule::RollCycle { d: 3 },
+            Rule::Unframe {
+                framed: Node::Dip {
+                    depth: 2,
+                    origins: Vec::new(),
+                    body: vec![op(Instruction::Equal)],
+                },
+                n: 2,
+                m: 1,
+            },
+            Rule::PickRoll { d: 3 },
         ]
     }
 
@@ -2193,12 +2370,25 @@ pub(crate) mod tests {
         // number honest is the point: an equation is an axiom, and the set is
         // meant to grow only when something genuinely cannot be derived.
         //
-        // Nineteen variants, eighteen axioms: `copy_const` is the constant case
-        // of `copy_nat` and is kept only because it is one step where the
+        // Twenty-two variants, twenty-one axioms: `copy_const` is the constant
+        // case of `copy_nat` and is kept only because it is one step where the
         // derivation is three, and `values` and `cleanup` fire it constantly.
         // `applier::tests::copy_const_is_derivable_from_copy_nat` is what says
         // so out loud.
-        assert_eq!(before, 19);
+        //
+        // The last three are the roll laws, and they were added together for
+        // one reason: every equation about *what a value is* is stated about
+        // the top of the stack, because `branch` observes the top and nothing
+        // else does, so a value under a frame is out of all of their reach.
+        // Restating each of them at depth — `split_bool(d)`, then
+        // `bool_result(d)` to discharge its guard, then `copy_const(d)` to read
+        // what it left — is the same fact three times and composes with
+        // nothing. These move the value instead, and `copy_const` at depth then
+        // falls out as a lemma rather than a fourth axiom, which
+        // `applier::tests::copy_const_at_depth_is_derivable_from_the_roll_laws`
+        // runs in both directions. `vm::roll_law_tests` measures all three
+        // against the machine.
+        assert_eq!(before, 22);
     }
 
     // -----------------------------------------------------------------------

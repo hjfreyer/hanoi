@@ -2098,3 +2098,137 @@ mod runtime_tests {
         assert_eq!(output, "Hello, World!");
     }
 }
+
+/// The three laws relating `dip` to `roll`, measured against the machine.
+///
+/// `bin/rewrite` rewrites on the strength of these — they are what lets a law
+/// stated about the top of the stack reach a value held below it — so, like
+/// `Instruction::commutative` and `Instruction::yields_bool`, they are run
+/// rather than asserted. Each test builds both sides of one equation and
+/// checks they leave the same stack, over every depth and every shape of
+/// operand the sweep can reach.
+#[cfg(test)]
+mod roll_law_tests {
+    use super::*;
+    use bytecode::value::Symbol;
+
+    /// Distinct values, so a law that permuted them wrongly could not pass.
+    fn stack_of(size: usize) -> Vec<Instruction> {
+        (0..size)
+            .map(|i| Instruction::Push(Value::Int(i as i64)))
+            .collect()
+    }
+
+    /// Runs `body` with `helpers` reachable as sentences 1, 2, … and hands
+    /// back the stack it left.
+    fn run_with(body: Vec<Instruction>, helpers: Vec<Vec<Instruction>>) -> Vec<Value> {
+        let mut library = Library::new();
+        library.sentences.push(body);
+        for h in helpers {
+            library.sentences.push(h);
+        }
+        let mut vm = VM::new(library);
+        vm.execute(SentenceIndex::from(0))
+            .unwrap_or_else(|e| panic!("the law's own side failed to run: {}", e));
+        vm.stack().to_vec()
+    }
+
+    fn rolls(d: usize, count: usize) -> Vec<Instruction> {
+        std::iter::repeat_n(Instruction::Roll(d), count).collect()
+    }
+
+    /// The computations the sweep uses for `X`, with their arities.
+    fn bodies() -> Vec<(Vec<Instruction>, usize, usize)> {
+        vec![
+            (vec![Instruction::IsSymbol], 1, 1),
+            (vec![Instruction::Not], 1, 1),
+            (vec![Instruction::Push(Value::Bool(true))], 0, 1),
+            (vec![Instruction::Add], 2, 2),
+            (vec![Instruction::And], 2, 1),
+            (vec![Instruction::Drop], 1, 0),
+            (
+                vec![
+                    Instruction::Push(Value::Symbol(Symbol {
+                        id: 7,
+                        path: "s7".to_string(),
+                    })),
+                    Instruction::Equal,
+                ],
+                1,
+                1,
+            ),
+        ]
+    }
+
+    /// `(roll d)^(d+1)` = nothing.
+    #[test]
+    fn rolling_the_whole_way_round_is_the_identity() {
+        for d in 0..6 {
+            for extra in 0..3 {
+                let size = d + 1 + extra;
+                let mut lhs = stack_of(size);
+                lhs.extend(rolls(d, d + 1));
+                assert_eq!(
+                    run_with(lhs, Vec::new()),
+                    run_with(stack_of(size), Vec::new()),
+                    "(roll {})^{} moved something, on a stack of {}",
+                    d,
+                    d + 1,
+                    size
+                );
+            }
+        }
+    }
+
+    /// `dip d { X } ; (roll (d+m-1))^m` = `(roll (d+n-1))^n ; X`.
+    #[test]
+    fn a_framed_computation_is_a_rolled_one() {
+        for (body, n, m) in bodies() {
+            for d in 0..5 {
+                for extra in 0..2 {
+                    let size = d + n + extra;
+                    let mut lhs = stack_of(size);
+                    lhs.push(Instruction::Dip(d, SentenceIndex::from(1)));
+                    lhs.extend(rolls(d + m.saturating_sub(1), m));
+
+                    let mut rhs = stack_of(size);
+                    rhs.extend(rolls(d + n.saturating_sub(1), n));
+                    rhs.push(Instruction::Dip(0, SentenceIndex::from(1)));
+
+                    assert_eq!(
+                        run_with(lhs, vec![body.clone()]),
+                        run_with(rhs, vec![body.clone()]),
+                        "dip {} {{ {:?} }} is not the rolled form, on a stack of {}",
+                        d,
+                        body,
+                        size
+                    );
+                }
+            }
+        }
+    }
+
+    /// `pick d` = `dip d { pick 0 } ; roll d`.
+    #[test]
+    fn copying_from_depth_is_copying_at_depth_and_rolling_up() {
+        for d in 0..6 {
+            for extra in 0..3 {
+                let size = d + 1 + extra;
+                let mut lhs = stack_of(size);
+                lhs.push(Instruction::Pick(d));
+
+                let mut rhs = stack_of(size);
+                rhs.push(Instruction::Dip(d, SentenceIndex::from(1)));
+                rhs.push(Instruction::Roll(d));
+
+                assert_eq!(
+                    run_with(lhs, vec![vec![Instruction::Pick(0)]]),
+                    run_with(rhs, vec![vec![Instruction::Pick(0)]]),
+                    "pick {} is not the framed copy rolled up, on a stack of {}",
+                    d,
+                    size
+                );
+            }
+        }
+    }
+}

@@ -377,6 +377,59 @@ That is `speculate_branch` in `bin/rewrite`, and
 problem was stuck on: hoist the arm's `untuple`, `sink` it back onto the check's,
 `dup_natural` merges the two. No reconstruction, no guard, no imaginary values.
 
+## A worked obligation: `emit_does_pre_and_post`
+
+`tests/barista.hana` carries the smallest interesting instance of the judgment
+this document says is missing — *does this program ever compute on junk?* —
+written as a program rather than a claim:
+
+```
+#[total]
+function emit_does_pre_and_post {
+    pick 0
+    jump is_state::check
+    branch { jump emit ; jump emit_postcondition } { drop ; push true }
+}
+```
+
+It should answer `true` on **every** input, and `bin/rewrite` should be able to
+say so by reducing it to `drop ; push true`. It is worth writing down how far
+that gets, because the answer is a measurement of the rewriter rather than of
+the program.
+
+**What the theorem needs.** Not much of the check, and all of the hard part of
+it. Four of `emit`'s five arms answer `((), false)`, which the postcondition
+passes on its own, so they fold by evaluation alone. The *thirsty* arm builds a
+`push_back` event, and `is_event` asks that its payload be a pair of symbols —
+which is exactly what the precondition established two branches earlier and
+nothing in the arm can see. So the proof turns on **sharing**: the two
+`is_symbol` computations, one in the check and one inside the postcondition,
+have to become one.
+
+**The derivation, as far as it is written.** Each step is an existing rule and
+`--check` accepts every one:
+
+1. `speculate { jump emit jump emit_postcondition }` hoists the whole then arm
+   out of the branch, which is sound precisely because both are now `#[total]`.
+   What is left is `check ; dip 1 { … } ; branch { dip 1 { drop } } { … }`.
+2. `share { untuple 3 }` merges the check's destructuring with `emit`'s, so
+   both read one set of parts.
+3. `introduce { dip 2 { is_symbol } }` in the else arm, then `inv(unfactor)`,
+   lifts both `is_symbol`s out of the check's branch — giving the shared prefix
+   `X = untuple 3 ; dip 3 { is_symbol } ; dip 2 { is_symbol }` that one
+   `share { X }` would eliminate against the emit side.
+4. The two booleans then have to be case-split where they sit, which is under
+   two and three values respectively. That is what the roll laws are for — see
+   "reaching a value below the top" in `docs/tactics.md`. They are equations
+   here without matchers, so today this step is a script rather than a tactic.
+
+**What is left.** The emit side has to be normalized to open with the same `X`,
+which means reducing `is_event`'s union check on a constructed event — the
+`tuple n ; pick 0 ; untuple n` shape yields to
+`inv(share { push … tuple 2 })`, `float` and `cancel_tuple` — and then lifting
+its `is_symbol`s out through the branch levels the way step 3 does. That is
+mechanical and long, and nothing in it is known to be blocked.
+
 ## What is not covered
 
 - **Float `equal`.** `0.0 == -0.0` holds while the two stay distinguishable, so
