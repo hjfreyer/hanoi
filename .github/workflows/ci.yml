@@ -41,7 +41,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       # Builds prove and checks every `identity` stated under tests/ against
-      # the proof in the `.hant` beside it.
+      # the proof in the `.hant` beside it — then writes the derivations out in
+      # the portable format and has `replay` check them a second time, with the
+      # tactic engine taken away.
       - run: ./run_proofs.sh
 
   fmt:

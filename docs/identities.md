@@ -375,6 +375,18 @@ themselves are now in the language.
   goal window at the same position**, never the whole goal — that keeps `plan` a
   pure function of its windows and the position-blindness invariant survives
   verbatim.
-- **Scripts as files.** `docs/tactics.md` wants a derivation to be a saved
-  value. A `.hant` saves the *tactic* that finds one, which is a smaller thing
-  and needs no grammar for node sequences; the script form is still ahead.
+
+## The derivation is a file too
+
+A `.hant` saves the *tactic* that finds a proof. What the proof leaves behind is
+a derivation, and that has a format of its own:
+
+```bash
+prove tests --emit derivations.hand    # what the search found
+replay tests derivations.hand          # checked again, with the search gone
+```
+
+`./run_proofs.sh` does both, so every commit exercises the whole path. The
+second run shares no code with the tactic engine — it parses the file and hands
+each step to the applier — which is what makes a proof something other than a
+tactic can produce. See [docs/derivations.md](derivations.md).

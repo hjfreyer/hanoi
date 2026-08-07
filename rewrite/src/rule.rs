@@ -626,12 +626,13 @@ pub(crate) enum Rule {
     /// undoes one `roll d`, so the tool needs no `unroll` instruction and the
     /// machine needs no new opcode.
     ///
-    /// Dead to the lib target, as all three roll laws are: an equation is
-    /// constructed by the matcher that places it, and these have none yet. The
-    /// tests construct them — `every_equation` sweeps all three, and
+    /// No *matcher* places any of the three roll laws, so no tactic can ask for
+    /// one. Two other things construct them: the tests —`every_equation` sweeps
+    /// all three, and
     /// `applier::tests::copy_const_at_depth_is_derivable_from_the_roll_laws`
-    /// runs two of them — and a serialized script naming one will.
-    #[allow(dead_code)]
+    /// runs two of them — and a derivation file naming one, which
+    /// [`crate::serial`] reads and writes like any other step. A law with no
+    /// search behind it is still a law something can spell out.
     RollCycle { d: usize },
 
     /// `dip d { X } ; (roll (d+m-1))^m` = `(roll (d+n-1))^n ; X`,
@@ -670,7 +671,6 @@ pub(crate) enum Rule {
     /// `(roll (n-1))^n ; X`, which for `n = m = 1` is `X = X` — the law says
     /// nothing where there is no depth to reach past, as it should.
     /// No matcher places it yet; see [`Rule::RollCycle`].
-    #[allow(dead_code)]
     Unframe {
         /// The frame, whole, so its origins survive the rewrite.
         framed: Node,
@@ -703,7 +703,6 @@ pub(crate) enum Rule {
     /// depth, derived rather than restated.
     ///
     /// No matcher places it yet; see [`Rule::RollCycle`].
-    #[allow(dead_code)]
     PickRoll { d: usize },
 }
 

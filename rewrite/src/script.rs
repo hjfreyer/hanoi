@@ -127,7 +127,7 @@ pub(crate) struct ScriptError {
 }
 
 impl ScriptError {
-    fn new(message: impl Into<String>, span: Span) -> Self {
+    pub(crate) fn new(message: impl Into<String>, span: Span) -> Self {
         ScriptError {
             message: message.into(),
             span,
@@ -144,7 +144,7 @@ impl ScriptError {
         ScriptError::new(message, span).with_help(help)
     }
 
-    fn with_help(mut self, help: impl Into<String>) -> Self {
+    pub(crate) fn with_help(mut self, help: impl Into<String>) -> Self {
         self.help = Some(help.into());
         self
     }
@@ -693,7 +693,12 @@ impl<'a> Parser<'a> {
 }
 
 /// The instructions a term may name that take no argument.
-fn plain_instruction(word: &str) -> Option<Instruction> {
+///
+/// Shared with [`crate::serial`], which reads and writes the same vocabulary:
+/// a second copy of this table would be a silent hazard rather than a
+/// duplication, since a word that meant one instruction in a tactic and another
+/// in a derivation file would be worse than one that meant nothing.
+pub(crate) fn plain_instruction(word: &str) -> Option<Instruction> {
     Some(match word {
         "drop" => Instruction::Drop,
         "equal" => Instruction::Equal,
@@ -720,6 +725,69 @@ fn plain_instruction(word: &str) -> Option<Instruction> {
         _ => return None,
     })
 }
+
+/// The word that names an argument-free instruction, which is
+/// [`plain_instruction`] the other way round.
+///
+/// It exists because a derivation is written down as well as read, and the two
+/// directions have to be inverse or a file would not mean the run it records.
+/// `plain_words_and_instructions_are_inverse` holds them to it rather than
+/// leaving the pair to be maintained by eye.
+pub(crate) fn plain_word(inst: &Instruction) -> Option<&'static str> {
+    Some(match inst {
+        Instruction::Drop => "drop",
+        Instruction::Equal => "equal",
+        Instruction::Greater => "greater",
+        Instruction::Less => "less",
+        Instruction::Add => "add",
+        Instruction::Subtract => "subtract",
+        Instruction::Multiply => "multiply",
+        Instruction::Divide => "divide",
+        Instruction::Modulo => "modulo",
+        Instruction::Not => "not",
+        Instruction::Negate => "negate",
+        Instruction::And => "and",
+        Instruction::Or => "or",
+        Instruction::IsInt => "is_int",
+        Instruction::IsBool => "is_bool",
+        Instruction::IsFloat => "is_float",
+        Instruction::IsConstString => "is_const_string",
+        Instruction::IsSymbol => "is_symbol",
+        Instruction::IsTuple => "is_tuple",
+        Instruction::TupleLength => "tuple_length",
+        Instruction::ConstStringLen => "const_string_len",
+        Instruction::ConstStringCharAt => "const_string_char_at",
+        _ => return None,
+    })
+}
+
+/// The argument-free instructions, by name. The domain both functions above
+/// are defined on, written once so the test can sweep it.
+#[cfg(test)]
+const PLAIN_WORDS: &[&str] = &[
+    "drop",
+    "equal",
+    "greater",
+    "less",
+    "add",
+    "subtract",
+    "multiply",
+    "divide",
+    "modulo",
+    "not",
+    "negate",
+    "and",
+    "or",
+    "is_int",
+    "is_bool",
+    "is_float",
+    "is_const_string",
+    "is_symbol",
+    "is_tuple",
+    "tuple_length",
+    "const_string_len",
+    "const_string_char_at",
+];
 
 /// Where a block written in a tactic came from, for the listing.
 ///
@@ -1452,6 +1520,30 @@ mod tests {
             e.message,
             e.help.map(|h| format!(" | {}", h)).unwrap_or_default()
         )
+    }
+
+    /// Every word names an instruction, every instruction is named by the word
+    /// it was found under, and nothing in the list is missing from either
+    /// table. A derivation is written with one and read with the other.
+    #[test]
+    fn plain_words_and_instructions_are_inverse() {
+        for word in PLAIN_WORDS {
+            let inst = plain_instruction(word)
+                .unwrap_or_else(|| panic!("'{}' is listed but names no instruction", word));
+            assert_eq!(plain_word(&inst), Some(*word));
+        }
+        // ...and the list is the whole domain: a word a term accepts but the
+        // list omits would be readable and unwritable.
+        for word in INSTRUCTION_WORDS {
+            let head = word.split(' ').next().unwrap_or(word);
+            if plain_instruction(head).is_some() {
+                assert!(
+                    PLAIN_WORDS.contains(&head),
+                    "'{}' is an instruction a term accepts but the list omits",
+                    head
+                );
+            }
+        }
     }
 
     #[test]

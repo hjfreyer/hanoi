@@ -47,8 +47,9 @@ use crate::engine::{Env, Tactic, TacticError, miss_report, run as run_tactic};
 use crate::ir::{Node, build, same_effect_seq};
 use crate::print::render_nodes;
 use crate::program::Program;
-use crate::rule::{Script, invert};
+use crate::rule::{Script, Step, invert};
 use crate::script::{Definitions, PRELUDE, ProofFile, ScriptError};
+use crate::serial;
 use crate::{DEFAULT_FUEL, Precondition, check_preconditions, precondition_explanation};
 
 pub(crate) struct Options {
@@ -59,6 +60,14 @@ pub(crate) struct Options {
     pub(crate) show_script: bool,
     pub(crate) stack: bool,
     pub(crate) tactic_files: Vec<PathBuf>,
+    /// Where to write the derivations, in [`crate::serial`]'s format. `-` is
+    /// stdout.
+    ///
+    /// This is the search half of the tool handing its answer to the checking
+    /// half: what it writes is what `replay` reads, and the two agreeing is
+    /// what makes the format worth anything. It is also the reference a
+    /// producer in another language is written against.
+    pub(crate) emit: Option<PathBuf>,
 }
 
 impl Default for Options {
@@ -73,6 +82,7 @@ impl Default for Options {
             show_script: false,
             stack: false,
             tactic_files: Vec::new(),
+            emit: None,
         }
     }
 }
@@ -395,6 +405,7 @@ fn check_all(
 
     let mut passed = 0usize;
     let mut failed = 0usize;
+    let mut derived: Vec<(String, Script)> = Vec::new();
     for (file, index, proof) in &selected {
         let identity = &library.identities[*index];
         write!(out, "identity {} ... ", identity.name)?;
@@ -402,6 +413,9 @@ fn check_all(
             Ok(proven) => {
                 passed += 1;
                 writeln!(out, "ok ({})", proven.closed.summary())?;
+                if opts.emit.is_some() {
+                    derived.push((identity.name.clone(), proven.script.clone()));
+                }
                 if opts.show_script {
                     writeln!(out)?;
                     for line in derivation(prog, &proven) {
@@ -422,6 +436,13 @@ fn check_all(
         }
     }
 
+    if let Some(path) = &opts.emit
+        && let Err(err) = emit(prog, path, &derived, out)?
+    {
+        writeln!(out, "{}", err)?;
+        return Ok(BROKEN);
+    }
+
     writeln!(out)?;
     writeln!(
         out,
@@ -432,6 +453,40 @@ fn check_all(
         filtered
     )?;
     Ok(if failed == 0 { OK } else { FAILED })
+}
+
+/// Writes every derivation that came out proved, in the portable format.
+///
+/// Only the ones that passed, since a derivation that did not discharge its
+/// identity is not one — the exit code is what says whether that is all of
+/// them.
+fn emit(
+    prog: &Program,
+    path: &Path,
+    derived: &[(String, Script)],
+    out: &mut dyn std::io::Write,
+) -> std::io::Result<Result<(), String>> {
+    let borrowed: Vec<(&str, &[Step])> = derived
+        .iter()
+        .map(|(name, script)| (name.as_str(), script.as_slice()))
+        .collect();
+    let text = match serial::write(prog, &borrowed) {
+        Ok(text) => text,
+        Err(why) => {
+            return Ok(Err(format!(
+                "error: this derivation cannot be written: {}",
+                why
+            )));
+        }
+    };
+    if path == Path::new("-") {
+        write!(out, "{}", text)?;
+        return Ok(Ok(()));
+    }
+    match std::fs::write(path, text) {
+        Ok(()) => Ok(Ok(())),
+        Err(err) => Ok(Err(format!("error: writing '{}': {}", path.display(), err))),
+    }
 }
 
 /// Why an identity did not come out proved.
@@ -836,6 +891,10 @@ pub(crate) fn cli() -> i32 {
                 }
                 None => return BROKEN,
             },
+            "--emit" => match value("--emit") {
+                Some(v) => opts.emit = Some(PathBuf::from(v)),
+                None => return BROKEN,
+            },
             "--no-check" => opts.check = false,
             "--show-script" => opts.show_script = true,
             "--stack" => opts.stack = true,
@@ -880,6 +939,9 @@ fn usage() {
     eprintln!("  --filter <substr>    only identities whose name contains this.");
     eprintln!("  --tactics <file>     tactic definitions loaded before every .hant.");
     eprintln!("  --show-script        print each derivation, one step per line.");
+    eprintln!("  --emit <file>        write every derivation to <file> (`-` is stdout)");
+    eprintln!("                       in the portable format `replay` reads. What");
+    eprintln!("                       the search found, handed to the checker.");
     eprintln!("  --stack              show what each slot holds, in a failure diff.");
     eprintln!("  --fuel <n>           rule firings before giving up.");
     eprintln!("  --no-check           skip the net-stack-effect check on every step.");
@@ -1302,6 +1364,35 @@ mod tests {
         let (code, report) = c.run();
         assert_eq!(code, OK, "{}", report);
         assert!(report.contains("up to inlining"), "{}", report);
+    }
+
+    // -----------------------------------------------------------------------
+    // Handing the derivation over
+    // -----------------------------------------------------------------------
+
+    /// The seam between the two halves of the tool: what the search found, and
+    /// what the checker will take. A derivation that passes here and is refused
+    /// there — or one that cannot be written down at all — means the format
+    /// does not carry what a script is.
+    #[test]
+    fn what_a_proof_emits_is_what_replay_accepts() {
+        let c = Corpus::new(
+            "emit",
+            // One that closes exactly and one that closes up to inlining, so
+            // the emitted file holds an `unfold` read backwards as well.
+            &format!("{}\n{}", TESTING_A_TEST, BY_NAME),
+            Some("proof testing_a_test = cleanup;\nproof foo = cleanup;"),
+        );
+        let out = c.0.join("derivations.hand");
+        let (code, report) = c.run_with(Options {
+            emit: Some(out.clone()),
+            ..Options::default()
+        });
+        assert_eq!(code, OK, "{}", report);
+
+        let (code, report) = crate::replay::check_for_tests(&c.0, &[out]);
+        assert_eq!(code, OK, "{}", report);
+        assert!(report.contains("2 passed; 0 failed"), "{}", report);
     }
 
     #[test]
