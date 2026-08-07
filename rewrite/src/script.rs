@@ -3,11 +3,18 @@
 //! ```text
 //! script := def*
 //! def    := "tactic" ident "=" expr ";"
+//!         | "proof"  path  "=" expr ";"      // .hant only
+//! path   := ident ("::" ident)*
 //! expr   := choice
 //! choice := seq ("|" seq)*
 //! seq    := prim (";" prim)*
 //! prim   := ident | ident "(" args ")" | "(" expr ")"
 //! ```
+//!
+//! A `.hant` is this language with `proof` added: the file beside a `.hana`,
+//! holding a proof of each identity that `.hana` states. A `--tactics` file is
+//! the same language without it, since a claim discharged has nowhere to land
+//! when there is no corpus to state it.
 //!
 //! Two precedence levels, one more than the rest of the codebase has. Hand
 //! written recursive descent, like the `.hana` parser.
@@ -134,7 +141,15 @@ impl ScriptError {
     }
 
     /// Renders the error against the source, pointing at the span.
+    ///
+    /// The tactic came from the command line, so it has no file to name.
     pub(crate) fn render(&self, source: &str) -> String {
+        self.render_in(source, "tactic")
+    }
+
+    /// The same, naming the file it came from — a `.hant`, or a `--tactics`
+    /// file.
+    pub(crate) fn render_in(&self, source: &str, name: &str) -> String {
         let (start, end) = self.span;
         let line_start = source[..start].rfind('\n').map(|i| i + 1).unwrap_or(0);
         let line_end = source[start..]
@@ -146,7 +161,7 @@ impl ScriptError {
         let width = (end.saturating_sub(start)).max(1);
 
         let mut out = format!("error: {}\n", self.message);
-        out.push_str(&format!(" --> tactic:{}:{}\n", line_no, column + 1));
+        out.push_str(&format!(" --> {}:{}:{}\n", name, line_no, column + 1));
         out.push_str(&format!("  | {}\n", &source[line_start..line_end]));
         out.push_str(&format!(
             "  | {}{}\n",
@@ -170,6 +185,7 @@ enum Tok {
     Int(usize),
     Str(String),
     Tactic,
+    Proof,
     Eq,
     Semi,
     Comma,
@@ -282,6 +298,7 @@ fn tokenize(src: &str) -> Result<Vec<Spanned>, ScriptError> {
                 }
                 match &src[start..i] {
                     "tactic" => Tok::Tactic,
+                    "proof" => Tok::Proof,
                     word => Tok::Ident(word.to_string()),
                 }
             }
@@ -306,6 +323,7 @@ fn tokenize(src: &str) -> Result<Vec<Spanned>, ScriptError> {
 // ---------------------------------------------------------------------------
 
 /// A tactic expression before names are resolved.
+#[derive(Clone)]
 enum Expr {
     Name(String, Span),
     Call(String, Span, Vec<Arg>),
@@ -320,6 +338,7 @@ enum Expr {
     Choice(Vec<Expr>),
 }
 
+#[derive(Clone)]
 enum Arg {
     Expr(Expr),
     Int(usize),
@@ -745,6 +764,7 @@ fn describe(tok: &Tok) -> String {
         Tok::Int(n) => format!("'{}'", n),
         Tok::Str(text) => format!("string literal \"{}\"", text),
         Tok::Tactic => "'tactic'".to_string(),
+        Tok::Proof => "'proof'".to_string(),
         Tok::Eq => "'='".to_string(),
         Tok::Semi => "';'".to_string(),
         Tok::Comma => "','".to_string(),
@@ -760,7 +780,72 @@ fn describe(tok: &Tok) -> String {
 // Definitions and resolution
 // ---------------------------------------------------------------------------
 
+/// A `.hant`: tactic definitions, plus a proof of each identity its sibling
+/// `.hana` states.
+pub(crate) struct ProofFile {
+    /// Seeded from the prelude — and from any `--tactics` file — and then
+    /// **file-local**. A tactic defined in one `.hant` is invisible to every
+    /// other one, because a proof has to be readable beside the identity it
+    /// proves, and a name that could have come from any of a dozen files is
+    /// not. A corpus-wide prelude is `prove --tactics <file>`, which is the
+    /// same mechanism said out loud.
+    pub(crate) defs: Definitions,
+    /// In source order, which is the order they are checked in.
+    pub(crate) proofs: Vec<ProofDef>,
+}
+
+/// One `proof <identity> = <tactic>;`.
+pub(crate) struct ProofDef {
+    /// The identity as written. Resolved against the library, not here — a
+    /// `.hant` is not part of the module tree, so it has no scope of its own
+    /// and suffix matching is the only reading available.
+    pub(crate) path: String,
+    pub(crate) path_span: Span,
+    /// The expression's span in the file, for an error that has to point at it.
+    pub(crate) span: Span,
+    body: Expr,
+}
+
+impl ProofFile {
+    /// Parses a `.hant` against a program.
+    ///
+    /// Unlike `Definitions::load` this has the program in hand from the start,
+    /// so a term here may name a sentence — `share { jump helper }` works in a
+    /// proof and in a tactic defined beside it, where in a `--tactics` file it
+    /// does not. That falls out of *when* the two are read: a `--tactics` file
+    /// is loaded before a corpus is chosen, and a `.hant` only ever after one.
+    ///
+    /// It also means the whole file is parsed in one pass over its own tokens,
+    /// so every span is an offset into the file rather than into a slice of it.
+    /// Compiling each proof from its own substring would report line 1 of a
+    /// one-line string for every error in every `.hant`.
+    pub(crate) fn parse(
+        source: &str,
+        base: &Definitions,
+        prog: &Program,
+    ) -> Result<ProofFile, ScriptError> {
+        let toks = tokenize(source)?;
+        let mut p = Parser {
+            toks: &toks,
+            pos: 0,
+            end: source.len(),
+            prog: Some(prog),
+        };
+        let mut defs = base.clone();
+        let mut proofs = Vec::new();
+        defs.parse_defs(&mut p, Some(&mut proofs))?;
+        Ok(ProofFile { defs, proofs })
+    }
+
+    /// Resolves one proof's expression against this file's definitions.
+    pub(crate) fn compile(&self, proof: &ProofDef, prog: &Program) -> Result<Tactic, ScriptError> {
+        self.defs
+            .resolve(&proof.body, Some(prog), &mut HashSet::new())
+    }
+}
+
 /// A set of named tactics, built from the prelude plus any user script.
+#[derive(Clone)]
 pub(crate) struct Definitions {
     defs: HashMap<String, Expr>,
     /// Declaration order, for `--list-tactics`.
@@ -788,8 +873,28 @@ impl Definitions {
             prog: None,
         };
 
-        while p.peek().is_some() {
-            p.expect(Tok::Tactic, "'tactic'")?;
+        self.parse_defs(&mut p, None)
+    }
+
+    /// The definition loop, shared by `--tactics` files and `.hant` files.
+    ///
+    /// `proofs` is what tells the two apart. Given `None` a `proof` is refused
+    /// by name rather than by a parse failure, so a `.hant` handed to
+    /// `--tactics` says what is wrong with it.
+    fn parse_defs(
+        &mut self,
+        p: &mut Parser,
+        mut proofs: Option<&mut Vec<ProofDef>>,
+    ) -> Result<(), ScriptError> {
+        while let Some(tok) = p.peek() {
+            let is_proof = match tok {
+                Tok::Tactic => false,
+                Tok::Proof => true,
+                _ => return Err(ScriptError::new("expected 'tactic' or 'proof'", p.span())),
+            };
+            let keyword_span = p.span();
+            p.bump();
+
             let name_span = p.span();
             let name = match p.bump() {
                 Some(Spanned {
@@ -797,9 +902,59 @@ impl Definitions {
                     ..
                 }) => name.clone(),
                 _ => {
-                    return Err(ScriptError::new("expected a tactic name", name_span));
+                    let what = if is_proof {
+                        "expected the name of an identity"
+                    } else {
+                        "expected a tactic name"
+                    };
+                    return Err(ScriptError::new(what, name_span));
                 }
             };
+
+            if is_proof {
+                let Some(proofs) = proofs.as_deref_mut() else {
+                    return Err(ScriptError::new(
+                        "`proof` is not a tactic definition",
+                        keyword_span,
+                    )
+                    .with_help(
+                        "a proof discharges an identity, so it belongs in the `.hant` \
+                                 beside the `.hana` that states one; a `--tactics` file holds \
+                                 `tactic NAME = expr;` and nothing else",
+                    ));
+                };
+                p.expect(Tok::Eq, "'='")?;
+                let body_start = p.span().0;
+                let body = p.expr()?;
+                let body_end = p.span().0;
+                p.expect(Tok::Semi, "';'")?;
+
+                // Two proofs of one identity is a mistake, where two tactics of
+                // one name is shadowing. A tactic name is a binding, meant to
+                // be overridable — that is what lets `--tactics` replace a
+                // prelude entry. A proof is a claim discharged, and a claim
+                // discharged twice was discharged once too often.
+                if let Some(prior) = proofs.iter().find(|d| d.path == name) {
+                    let (line, _) = prior.path_span;
+                    return Err(ScriptError::new(
+                        format!("'{}' is proved twice in this file", name),
+                        name_span,
+                    )
+                    .with_help(format!(
+                        "the first proof of it starts at byte {}; a tactic name shadows, \
+                         but a proof does not",
+                        line
+                    )));
+                }
+                proofs.push(ProofDef {
+                    path: name,
+                    path_span: name_span,
+                    span: (body_start, body_end.max(body_start)),
+                    body,
+                });
+                continue;
+            }
+
             if matcher_by_name(&name).is_some() {
                 return Err(
                     ScriptError::new(format!("'{}' is a rule name", name), name_span)
@@ -1643,5 +1798,131 @@ mod tests {
         // would mean nothing, so it is refused rather than ignored.
         assert!(err("bu(1, each(sink))").contains("exactly one tactic"));
         assert!(err("children(1, each(sink))").contains("exactly one tactic"));
+    }
+
+    // -----------------------------------------------------------------------
+    // `.hant`: proofs out of line
+    // -----------------------------------------------------------------------
+
+    /// A tiny corpus, so a proof has a program to be compiled against.
+    fn corpus(source: &str) -> bytecode::Library {
+        bytecode::assemble(source).unwrap_or_else(|e| panic!("{}", e))
+    }
+
+    fn hant(library: &bytecode::Library, source: &str) -> Result<ProofFile, String> {
+        let prog = Program::new(library);
+        ProofFile::parse(source, &defs(), &prog).map_err(|e| e.render_in(source, "x.hant"))
+    }
+
+    /// The rendered error, or a panic if the file was fine after all.
+    fn hant_err(library: &bytecode::Library, source: &str) -> String {
+        match hant(library, source) {
+            Err(rendered) => rendered,
+            Ok(_) => panic!("expected an error from:\n{}", source),
+        }
+    }
+
+    /// The same, for a `.hant` that parses but whose proof will not resolve.
+    fn proof_err(library: &bytecode::Library, source: &str) -> String {
+        let prog = Program::new(library);
+        let file = hant(library, source).expect("parses");
+        match file.compile(&file.proofs[0], &prog) {
+            Err(e) => e.render_in(source, "x.hant"),
+            Ok(_) => panic!("expected a resolution error from:\n{}", source),
+        }
+    }
+
+    #[test]
+    fn a_hant_holds_tactics_and_proofs_together() {
+        let lib = corpus("identity foo { is_bool is_bool } = { drop 0 push true };");
+        let file =
+            hant(&lib, "tactic mine = cleanup; values;\nproof foo = mine;\n").expect("parses");
+        assert_eq!(file.proofs.len(), 1);
+        assert_eq!(file.proofs[0].path, "foo");
+        assert!(file.defs.names().contains(&"mine".to_string()));
+    }
+
+    #[test]
+    fn a_proof_may_name_a_qualified_identity() {
+        let lib = corpus("mod m { identity foo { drop 0 } = { drop 0 }; }");
+        let file = hant(&lib, "proof m::foo = id;").expect("parses");
+        assert_eq!(file.proofs[0].path, "m::foo");
+    }
+
+    #[test]
+    fn a_proof_body_is_a_whole_tactic_expression() {
+        let lib = corpus("identity foo { drop 0 } = { drop 0 };");
+        let file = hant(&lib, "proof foo = (cleanup; values) | id;").expect("parses");
+        let prog = Program::new(&lib);
+        file.compile(&file.proofs[0], &prog).expect("compiles");
+    }
+
+    /// A tactic name shadows, because the prelude is meant to be overridable.
+    /// A proof does not: a claim discharged twice was discharged once too often.
+    #[test]
+    fn two_proofs_of_one_identity_are_refused() {
+        let lib = corpus("identity foo { drop 0 } = { drop 0 };");
+        let rendered = hant_err(&lib, "proof foo = id;\nproof foo = cleanup;\n");
+        assert!(rendered.contains("proved twice"), "{}", rendered);
+        assert!(rendered.contains("x.hant:2:7"), "{}", rendered);
+    }
+
+    #[test]
+    fn a_tactic_name_still_shadows() {
+        let lib = corpus("identity foo { drop 0 } = { drop 0 };");
+        let file =
+            hant(&lib, "tactic t = id;\ntactic t = cleanup;\nproof foo = t;").expect("parses");
+        assert_eq!(file.proofs.len(), 1);
+    }
+
+    #[test]
+    fn proof_is_refused_in_a_tactics_file() {
+        let mut d = defs();
+        let source = "proof foo = id;";
+        let rendered = d
+            .load(source)
+            .expect_err("expected an error")
+            .render_in(source, "extra.tactics");
+        assert!(
+            rendered.contains("`proof` is not a tactic definition"),
+            "{}",
+            rendered
+        );
+        assert!(rendered.contains("belongs in the `.hant`"), "{}", rendered);
+    }
+
+    /// The trap this shape exists to avoid: compiling each proof from its own
+    /// substring would tokenize from offset 0, so every error in every `.hant`
+    /// would report line 1.
+    #[test]
+    fn an_error_in_a_proof_points_at_its_line_in_the_file() {
+        let lib = corpus("identity foo { drop 0 } = { drop 0 };");
+        let source = "tactic t = id;\n\nproof foo = nonesuch;\n";
+        let rendered = proof_err(&lib, source);
+        assert!(rendered.contains("x.hant:3:13"), "{}", rendered);
+        assert!(rendered.contains("unknown tactic"), "{}", rendered);
+    }
+
+    /// A term in a `.hant` may name a sentence, where one in a `--tactics`
+    /// file may not — the difference being that a `.hant` is only ever read
+    /// once a corpus has been chosen.
+    #[test]
+    fn a_proof_may_name_a_sentence_in_a_term() {
+        let lib = corpus(
+            "#[total] function classify { pick 0 is_int branch { drop 0 push 7 } { drop 0 push 8 } }\n\
+             identity foo { drop 0 } = { drop 0 };",
+        );
+        hant(&lib, "proof foo = try(once(share { jump classify }));").expect("parses");
+    }
+
+    #[test]
+    fn a_hant_that_is_not_a_definition_says_so() {
+        let lib = corpus("identity foo { drop 0 } = { drop 0 };");
+        let rendered = hant_err(&lib, "cleanup;");
+        assert!(
+            rendered.contains("expected 'tactic' or 'proof'"),
+            "{}",
+            rendered
+        );
     }
 }
