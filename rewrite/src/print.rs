@@ -108,17 +108,43 @@ pub(crate) fn render_body(
     for ann in &library.annotations[root] {
         out.push(format!("  {:?}", ann));
     }
+    out.push(String::new());
+    if source != "default" {
+        out.push(format!("  tactic: {}", source));
+    }
+    out.extend(render_nodes(prog, body, show_stack, show_pos, true));
+    out
+}
+
+/// The listing alone, with no header.
+///
+/// Split out for the one comparison where a header would be noise: `prove`
+/// diffs what a tactic reached against what an identity states, and those are
+/// two different sentences with two different indices and names. Without the
+/// split every failure diff would open with two lines that always differ,
+/// burying the one that does not.
+///
+/// `show_origins` is the same problem one level down. A `<inline>` label says
+/// which sentence phase 4 put a block in, and two identical blocks compiled
+/// from two different sentences never share one — so a diff that showed them
+/// would report every brace as a difference. Provenance is not part of a term's
+/// identity, which is why `same_effect` ignores it, and a listing being
+/// compared has to agree. A `Call`'s label stays either way: there the target
+/// is the term.
+pub(crate) fn render_nodes(
+    prog: &Program,
+    body: &[Node],
+    show_stack: bool,
+    show_pos: bool,
+    show_origins: bool,
+) -> Vec<String> {
+    let mut out = Vec::new();
 
     // A sentence whose reckoning breaks immediately — a #[recursive] one, whose
     // body is a cut edge — has no knowable entry depth. Counting from zero
     // still shows every step's effect; the `+` marks the numbers as offsets.
     let (inputs, outputs) = seq_arity(prog, body);
     let relative = outputs.is_none() && inputs == 0;
-
-    out.push(String::new());
-    if source != "default" {
-        out.push(format!("  tactic: {}", source));
-    }
 
     let mut names = Names::new();
     let mut fresh = Fresh::new();
@@ -188,6 +214,7 @@ pub(crate) fn render_body(
         stack,
         view.as_mut(),
         show_pos,
+        show_origins,
         &mut out,
     );
 
@@ -211,6 +238,7 @@ fn render_seq(
     entry_stack: Stack,
     mut view: Option<&mut View>,
     show_pos: bool,
+    show_origins: bool,
     out: &mut Vec<String>,
 ) {
     let mut depth = entry;
@@ -253,7 +281,7 @@ fn render_seq(
                 };
                 // A wrapper level added by unary expansion has no origin of its
                 // own; only the level holding the body names a sentence.
-                let head = if origins.is_empty() {
+                let head = if origins.is_empty() || !show_origins {
                     verb
                 } else {
                     format!("{} → {}", verb, origins.join(" + "))
@@ -275,6 +303,7 @@ fn render_seq(
                     inner,
                     view.as_deref_mut(),
                     show_pos,
+                    show_origins,
                     out,
                 );
                 out.push(format!("{}{} │ {}}}", close(&view), blank, pad));
@@ -290,10 +319,11 @@ fn render_seq(
                 let arm_stack = stack
                     .as_ref()
                     .and_then(|s| (!s.is_empty()).then(|| s[..s.len() - 1].to_vec()));
-                out.push(format!(
-                    "{} │ {}branch then → {} {{",
-                    gutter, pad, then_origin
-                ));
+                out.push(if show_origins {
+                    format!("{} │ {}branch then → {} {{", gutter, pad, then_origin)
+                } else {
+                    format!("{} │ {}branch then {{", gutter, pad)
+                });
                 render_seq(
                     prog,
                     then_body,
@@ -303,15 +333,20 @@ fn render_seq(
                     arm_stack.clone(),
                     view.as_deref_mut(),
                     show_pos,
+                    show_origins,
                     out,
                 );
-                out.push(format!(
-                    "{}{} │ {}}} else → {} {{",
-                    close(&view),
-                    blank,
-                    pad,
-                    else_origin
-                ));
+                out.push(if show_origins {
+                    format!(
+                        "{}{} │ {}}} else → {} {{",
+                        close(&view),
+                        blank,
+                        pad,
+                        else_origin
+                    )
+                } else {
+                    format!("{}{} │ {}}} else {{", close(&view), blank, pad)
+                });
                 render_seq(
                     prog,
                     else_body,
@@ -321,6 +356,7 @@ fn render_seq(
                     arm_stack,
                     view.as_deref_mut(),
                     show_pos,
+                    show_origins,
                     out,
                 );
                 out.push(format!("{}{} │ {}}}", close(&view), blank, pad));

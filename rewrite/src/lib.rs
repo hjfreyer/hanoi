@@ -24,6 +24,11 @@
 
 pub mod cli;
 
+/// The `prove` binary's entry point. See [`prove`].
+pub fn prove_cli() -> i32 {
+    prove::cli()
+}
+
 mod applier;
 mod arity;
 mod debug;
@@ -34,6 +39,7 @@ mod location;
 mod matcher;
 mod print;
 mod program;
+mod prove;
 mod rule;
 mod script;
 mod stack;
