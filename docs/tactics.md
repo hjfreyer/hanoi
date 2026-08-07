@@ -176,6 +176,18 @@ cheaper than a search. What makes it safe is that the applier regenerates the
 side it expects to find and refuses to splice unless the window matches, so a
 stale path fails loudly instead of rewriting the wrong code.
 
+A script also has a **file format**, which is that line with the arguments
+written out:
+
+```
+annihilate(x = { equal }, n = 2, m = 1) -> [1.then, 2.body] @2;
+```
+
+`prove --emit` writes them and `bin/replay` checks them, with none of this page
+involved — no tactic, no matcher, no fuel. That is the payoff of the split:
+everything above is about *finding* a rewrite, and none of it is needed to check
+one. See [docs/derivations.md](derivations.md).
+
 ### What the applier checks
 
 Every application, live run and replay alike:
@@ -1316,26 +1328,12 @@ consulting an analysis.
   the interesting cases. `split_bool` reaches the same place without a
   predicate: split the value, and each arm holds a literal that the folding
   laws read for themselves.
-- **Scripts as files.** A script is a value, not yet a syntax. Serializing one
-  needs a grammar for node sequences; the step kinds are a closed, serializable
-  shape on purpose. When it lands, a saved derivation will depend on the library
-  only through names and facts the applier re-derives — never through quoted
-  code — so it fails loudly at the changed step rather than rotting silently.
-
-  **Half of this has landed, and it is the other half.** An `identity` in a
-  `.hana` states that two programs are interchangeable, and a `proof` in the
-  `.hant` beside it says which tactic reaches one from the other; `bin/prove`
-  checks every one, and the derivation is replayed against a fresh build on
-  every run. So what is saved is the *tactic* that finds a script rather than
-  the script — a smaller thing, needing no grammar for node sequences, and one
-  that re-derives everything each time rather than depending on the library
-  only through names. The claim the bullet above makes about a saved script is
-  already load-bearing elsewhere, though: `Identity` holds its two sides as
-  `SentenceIndex`es for exactly that reason. See `docs/identities.md`.
-- **Floats in terms.** `push` takes an integer, a boolean, a const string or a
-  symbol; a float has no syntax yet. It would want one anyway — a literal `1.5` in a term would
-  have to answer for what `equal` does to it, which `--stack` already declines
-  to guess at.
+- **Floats in a *tactic's* term.** `push` in a tactic takes an integer, a
+  boolean, a const string or a symbol; a float has no syntax there yet. A
+  derivation file spells one, since a corpus can hold one and a step that folds
+  it has to say which value it folded — but a float written by hand would want
+  an answer for what `equal` does to it, which `--stack` already declines to
+  guess at.
 - **A smarter upper layer.** Matchers and combinators are the whole of the
   search today. Everything above is deliberately arranged so that a better
   generator can be dropped in without the lower layer noticing: whatever finds

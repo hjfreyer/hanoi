@@ -29,6 +29,11 @@ pub fn prove_cli() -> i32 {
     prove::cli()
 }
 
+/// The `replay` binary's entry point. See [`replay`].
+pub fn replay_cli() -> i32 {
+    replay::cli()
+}
+
 mod applier;
 mod arity;
 mod debug;
@@ -40,8 +45,10 @@ mod matcher;
 mod print;
 mod program;
 mod prove;
+mod replay;
 mod rule;
 mod script;
+mod serial;
 mod stack;
 
 #[cfg(test)]

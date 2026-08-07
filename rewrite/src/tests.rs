@@ -17,7 +17,7 @@ use std::path::Path;
 use crate::applier::apply_script;
 use crate::arity::{node_arity, seq_arity};
 use crate::engine::{Env, Tactic, run as run_tactic};
-use crate::ir::{Node, build};
+use crate::ir::{Node, build, same_effect_seq};
 use crate::program::Program;
 use crate::rule::{Rule, Script, StepKind, invert};
 use crate::script::{Definitions, PRELUDE};
@@ -1187,6 +1187,66 @@ fn corpus_derivations_replay() {
         worked > 100 && steps > 1000,
         "only {} sentences did work, {} steps in all",
         worked,
+        steps
+    );
+}
+
+/// ...and a derivation written down and read back is the same derivation.
+///
+/// The sweep that says the format carries what a script *is*, rather than what
+/// the few derivations in `tests/identities.hant` happen to hold. Every
+/// equation the passes fire, over every admissible sentence in the corpus, goes
+/// out as text and comes back as steps — and what comes back is applied to the
+/// same tree and held to leaving the same one.
+///
+/// Compared by effect rather than by `==`, because provenance does not travel:
+/// origins say where code came from, which a listing reads and nothing else
+/// does. That is the one thing the format drops, and this is where the claim
+/// that dropping it costs nothing is checked.
+#[test]
+fn corpus_derivations_survive_being_written_down() {
+    let Some((library, prog)) = corpus() else {
+        return;
+    };
+
+    let mut steps = 0usize;
+    for s_idx in admissible(library, prog) {
+        let plain = run(
+            prog,
+            build(library, s_idx, &mut HashSet::new()),
+            "unfold_all",
+        );
+        let (after, script) = with_script(prog, plain.clone(), ALL);
+        if script.is_empty() {
+            continue;
+        }
+        let name = format!("#{} {}", usize::from(s_idx), library.names[s_idx]);
+
+        let text = crate::serial::write(prog, &[("x", &script)])
+            .unwrap_or_else(|why| panic!("the derivation of {} cannot be written: {}", name, why));
+        let parsed = crate::serial::parse(&text, prog)
+            .unwrap_or_else(|e| panic!("{}", e.render_in(&text, &name)));
+        assert_eq!(
+            parsed[0].steps.len(),
+            script.len(),
+            "the derivation of {} changed length in the round trip",
+            name
+        );
+
+        let mut replayed = plain;
+        apply_script(prog, &mut replayed, &parsed[0].steps, true).unwrap_or_else(|e| {
+            panic!("the written derivation of {} does not replay: {}", name, e)
+        });
+        assert!(
+            same_effect_seq(&replayed, &after),
+            "the written derivation of {} replayed to a different term",
+            name
+        );
+        steps += script.len();
+    }
+    assert!(
+        steps > 1000,
+        "only {} steps made the round trip; the sweep is near-vacuous",
         steps
     );
 }
