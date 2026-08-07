@@ -76,6 +76,7 @@ pub enum Item {
     Symbol(SymbolDecl),           // core
     ConstString(ConstStringDecl), // core
     Sentence(SentenceDecl),  // core
+    Identity(IdentityDecl),  // core
     Mod(ModDecl),            // core
     Type(TypeDecl),          // sugar
     Enum(EnumDecl),          // sugar
@@ -183,15 +184,16 @@ pub enum Item {
     Symbol(SymbolDecl),
     ConstString(ConstStringDecl),
     Sentence(SentenceDecl),
+    Identity(IdentityDecl),
     Mod(ModDecl),   // items: Vec<core::Item>
     Use(UseDecl),   // see below
 }
 ```
 
-`SymbolDecl`, `ConstStringDecl` and `SentenceDecl` are shared verbatim with sugar. `ModDecl` is
+`SymbolDecl`, `ConstStringDecl`, `SentenceDecl` and `IdentityDecl` are shared verbatim with sugar. `ModDecl` is
 duplicated only because its child type differs. Instruction bodies, values,
-paths and annotations are all shared. **The seam is one 7-variant enum against
-one 5-variant enum, and one struct** — everything else is shared by
+paths and annotations are all shared. **The seam is one 8-variant enum against
+one 6-variant enum, and one struct** — everything else is shared by
 composition. That is the entire cost of the split, and it is why parallel ASTs
 per conceptual level are not worth it: enum → type → predicate is three
 concepts but only two vocabularies.
@@ -227,7 +229,8 @@ sentence is declared in* — no special case for type checks.
 Resolution is `ModuleTree::resolve(scope, path)` — one entry point, one set of
 rules, for every path in the language.
 
-Phase 5 then runs `check_arities` over the resulting `Library`. A Z3-backed
+Phase 5 then runs `check_arities` over the resulting `Library`, followed by
+`check_totality` and `check_identities`. A Z3-backed
 precondition/postcondition/total checker previously ran separately via
 `bin/typecheck`; it has been removed from the codebase for now (see
 [docs/typecheck.md](typecheck.md) for the design).
@@ -280,6 +283,31 @@ that trade.** It replaces one instruction with `O(d)` instructions and `O(d)`
 calls, and each expansion still bottoms out in a frame-crossing `roll 1`, so
 the hard case is multiplied rather than removed. A minimal primitive set makes
 the metatheory smaller and the analysis larger; here the analysis is the point.
+
+## Where `identity` fits
+
+`identity A = B` is **core**, and it is the second construct where the
+"could a user have written this by hand?" test needs an argument rather than an
+inspection. A `sentence` names code and a `test sentence` runs it; neither
+states an equation, and there is no combination of surface constructs that does.
+A hypothetical lowering to two sentences plus *something* leaves the *something*
+with nowhere in core to live, so the lowering buys nothing. It lowers to itself.
+
+Phase 3 declares the name into the module's one namespace as
+`ModuleItem::Identity`, so `identity foo` and `sentence foo` collide and a
+fully qualified identity name denotes exactly one thing. It allocates two
+`SentenceIndex`es and pushes two `SentenceDecl`s named `foo::lhs` and `foo::rhs`
+— **in lockstep**, since phase 4 relies on `flat_sentences[i]` being
+`SentenceIndex(i)`.
+
+Phase 4 needs no special case at all, which is the interesting fact: the two
+sides compile exactly as any named sentence does, inline blocks and all.
+
+`IdentityDecl` is the one AST node that carries a `Span`, and it carries it as
+*data*: an identity is proved in the file beside the one that stated it, so
+which file that was has to survive into the `Library`. `SourceMap::path` is the
+other half. Everything after parsing still reports errors against the module
+tree.
 
 ## Where `use` fits
 

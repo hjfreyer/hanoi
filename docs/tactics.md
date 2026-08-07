@@ -1,6 +1,7 @@
 # Tactics
 
-`bin/rewrite` turns one sentence's compiled bytecode into a tree and prints it.
+`bin/rewrite` — in the `rewrite` crate, beside `bin/prove` — turns one
+sentence's compiled bytecode into a tree and prints it.
 A **tactic** says how to rewrite that tree before printing.
 
 No *call* is opened unless you ask. The default listing shows one sentence,
@@ -11,6 +12,12 @@ spelled out, because they are not calls.
 ```bash
 cargo run --bin rewrite -- tests 'State::check' -t 'unfold_all; dips'
 ```
+
+A run of this tool answers a question and forgets it. To write the answer down
+— so that it is re-checked when the library changes, and so that something can
+later build on it — state an `identity` in the `.hana` and prove it in the
+`.hant` beside it. See `docs/identities.md`; `bin/prove` is the other binary in
+this crate.
 
 ## Two layers
 
@@ -1236,6 +1243,17 @@ consulting an analysis.
   shape on purpose. When it lands, a saved derivation will depend on the library
   only through names and facts the applier re-derives — never through quoted
   code — so it fails loudly at the changed step rather than rotting silently.
+
+  **Half of this has landed, and it is the other half.** An `identity` in a
+  `.hana` states that two programs are interchangeable, and a `proof` in the
+  `.hant` beside it says which tactic reaches one from the other; `bin/prove`
+  checks every one, and the derivation is replayed against a fresh build on
+  every run. So what is saved is the *tactic* that finds a script rather than
+  the script — a smaller thing, needing no grammar for node sequences, and one
+  that re-derives everything each time rather than depending on the library
+  only through names. The claim the bullet above makes about a saved script is
+  already load-bearing elsewhere, though: `Identity` holds its two sides as
+  `SentenceIndex`es for exactly that reason. See `docs/identities.md`.
 - **Floats in terms.** `push` takes an integer, a boolean, a const string or a
   symbol; a float has no syntax yet. It would want one anyway — a literal `1.5` in a term would
   have to answer for what `equal` does to it, which `--stack` already declines

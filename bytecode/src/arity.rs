@@ -193,13 +193,26 @@ pub fn check_totality(library: &Library) -> Result<(), String> {
     Ok(())
 }
 
-/// Every identity's two sides must have the same stack effect.
+/// Every identity's two sides must have the same *net* stack effect.
 ///
 /// Phase 5, after `check_arities` has settled every inference and verified
 /// every `#[arity]`. This is the one property of an identity that is a fact
-/// about the *statement* rather than about its proof: two programs with
-/// different effects are not two spellings of one thing, whatever a tactic
+/// about the *statement* rather than about its proof: two programs that leave
+/// the stack differently are not two spellings of one thing, whatever a tactic
 /// does to them.
+///
+/// **Net change, not full arity**, and the distinction is not a loosening for
+/// convenience — it is what the interesting laws need. `pick 1 ; drop` = ε is
+/// `(2 -> 2)` against `(0 -> 0)`: both leave the stack exactly as they found
+/// it, but the left needs a value to look at where the right does not. Every
+/// counit reads this way, and so does every annihilation, which lowers the
+/// input requirement on purpose — dropping `pick 2 ; drop` drops the demand for
+/// three values that only the `pick` made. `--check` in the rewriter allows the
+/// same asymmetry for the same reason (`applier::net`), and refusing it here
+/// would refuse exactly the equations the rewriter is built out of.
+///
+/// What it does still catch is a claim that leaves a different amount behind,
+/// which no proof could ever discharge.
 ///
 /// The preconditions the rewriter's equations are stated under — non-recursive,
 /// and unable to fail — are deliberately *not* checked here. They are
@@ -231,10 +244,10 @@ pub fn check_identities(library: &Library) -> Result<(), Error> {
 
         let (li, lo) = effect(identity.lhs, "left-hand")?;
         let (ri, ro) = effect(identity.rhs, "right-hand")?;
-        if (li, lo) != (ri, ro) {
+        if lo - li != ro - ri {
             return Err(Error::at(
                 format!(
-                    "identity `{}`: the two sides do not have the same stack effect \
+                    "identity `{}`: the two sides leave the stack differently \
                      ({} -> {} against {} -> {})",
                     identity.name, li, lo, ri, ro
                 ),
@@ -242,7 +255,8 @@ pub fn check_identities(library: &Library) -> Result<(), Error> {
             )
             .with_help(
                 "an identity claims two programs are interchangeable, so they must \
-                 take and leave the same number of values",
+                 leave the same amount behind — the net change, not the arity, since \
+                 `pick 1 ; drop` = nothing is (2 -> 2) against (0 -> 0)",
             ));
         }
     }
