@@ -1,5 +1,4 @@
 [workspace]
 resolver = "2"
 
-members = ["bytecode"
-, "test-runner", "vm"]
+members = ["bytecode", "rewrite", "test-runner", "vm"]
