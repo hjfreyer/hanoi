@@ -176,7 +176,7 @@ pub fn run() -> i32 {
 
     if opts.show_script {
         println!();
-        for line in derivation_lines(&prog, &script) {
+        for line in derivation_lines(&prog, "derivation", &script) {
             println!("{}", line);
         }
     }

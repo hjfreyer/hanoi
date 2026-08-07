@@ -253,3 +253,17 @@ identity copying_a_constant { push 9 pick 0 } = { push 9 push 9 };
 // `(2 -> 2)` against `(0 -> 0)`. That asymmetry is `counit`'s, and it is why an
 // identity is held to its net change rather than to its arity.
 identity discarded_work_on_copies { pick 1 pick 1 equal drop 0 } = { };
+
+// The same law as `testing_a_test`, with the right-hand side written as the
+// call it is rather than pasted out in full.
+//
+// `cleanup` leaves `drop 0 push true` on the left and nothing folds it back up,
+// because nothing can read a window and say which sentence to fold into. So the
+// two sides are compared *up to inlining*: both are unfolded, and the proof is
+// what the left reached meeting what the right unfolds to. That is one
+// derivation still — the fold-back is the right-hand side's own unfold script,
+// read backwards.
+#[total]
+function drop_and_true { drop 0 push true }
+
+identity testing_a_test_by_name { is_bool is_bool } = { jump drop_and_true };

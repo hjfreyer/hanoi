@@ -16,3 +16,8 @@ proof copying_a_constant =
 // vacuous_is_derivable_from_annihilate_and_counit` runs the same derivation
 // over an opaque `X`; here it is a concrete one, stated in the language.
 proof discarded_work_on_copies = cleanup;
+
+// The same proof as `testing_a_test`. What differs is the right-hand side,
+// which names a sentence rather than spelling it out — so this one closes up to
+// inlining where that one closes exactly.
+proof testing_a_test_by_name = cleanup;
