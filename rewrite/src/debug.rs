@@ -33,7 +33,6 @@ use bytecode::SentenceIndex;
 use crate::Options;
 use crate::applier::{apply_script, preview};
 use crate::diff::side_by_side;
-use crate::engine::{Env, Tactic, miss_report, run as run_tactic};
 use crate::ir::{Node, build};
 use crate::print::render_body;
 use crate::program::Program;
@@ -42,34 +41,25 @@ use crate::rule::{Script, Step};
 /// Steps listed either side of the cursor by `trace`.
 const TRACE_CONTEXT: usize = 8;
 
-pub(crate) fn run(prog: &Program, root: SentenceIndex, tactic: &Tactic, opts: &Options) {
-    // The search runs exactly once, and what it leaves behind is the thing the
-    // session walks. This is also where a tactic that will not settle reports
-    // itself — the script up to that point is still good, so the stepper walks
-    // to the failure and shows it where it happens, which is the case it is
-    // most wanted for.
-    let env = Env::new(prog, opts.fuel, opts.check);
-    let (script, ending) = match run_tactic(&env, tactic, tree(prog, root)) {
-        Ok((_, script)) => (script, None),
-        // A failed run still recorded everything it did before failing.
-        Err(err) => (env.script(), Some(err.to_string())),
-    };
-
-    // Said once, up front. A session that is short because an aimed step never
-    // landed should say so before the walking starts, not leave it to be
-    // inferred from a derivation with nothing in it.
-    let report = miss_report(&env.misses());
-    if !report.is_empty() {
-        println!();
-        for line in &report {
-            if line.is_empty() {
-                println!();
-            } else {
-                println!("  {}", line);
-            }
-        }
-    }
-
+/// Walks a derivation one step at a time, from the tree `root` builds.
+///
+/// The search has already happened: what this takes is the script it left
+/// behind, which is the only thing a session ever needed. That the derivation
+/// might have been assembled by a strategy out of several runs — the backward
+/// half of a `normalize`, steps lifted out of a branch arm — makes no difference
+/// here, because lifting produced ordinary steps addressed to this same tree.
+///
+/// `ending` is how the run that produced the script finished, shown once the
+/// cursor reaches the end. A tactic that would not settle still recorded
+/// everything it did first, so the stepper walks to the failure and shows it
+/// where it happens, which is the case it is most wanted for.
+pub(crate) fn run(
+    prog: &Program,
+    root: SentenceIndex,
+    script: Script,
+    ending: Option<String>,
+    opts: &Options,
+) {
     let mut session = Session {
         prog,
         root,

@@ -1176,6 +1176,33 @@ impl Definitions {
     /// there it is refused because `each(r)` and `once(r)` are both plausible,
     /// and here it is taken because there is only one thing a tactic can mean
     /// when it is handed a goal.
+    /// Parses and resolves a proof body given as text, which is what `rewrite`
+    /// has: a strategy off the command line rather than out of a `.hant`.
+    ///
+    /// The same shape as [`compile_with`](Definitions::compile_with) one layer
+    /// up, and it exists so that `Expr` stays private to this module.
+    pub(crate) fn compile_proof(
+        &self,
+        source: &str,
+        prog: Option<&Program>,
+    ) -> Result<Strategy, ScriptError> {
+        let toks = tokenize(source)?;
+        let mut p = Parser {
+            toks: &toks,
+            pos: 0,
+            end: source.len(),
+            prog,
+        };
+        let expr = p.expr()?;
+        if let Some(tok) = p.peek() {
+            return Err(ScriptError::new(
+                format!("unexpected {} after the strategy", describe(tok)),
+                p.span(),
+            ));
+        }
+        self.resolve_proof(&expr, prog)
+    }
+
     fn resolve_proof(&self, expr: &Expr, prog: Option<&Program>) -> Result<Strategy, ScriptError> {
         if self.mentions_strategy(expr) {
             self.resolve_strategy(expr, prog, &mut HashSet::new(), &mut HashSet::new())

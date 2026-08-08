@@ -264,10 +264,6 @@ impl<'a> Env<'a> {
         }
     }
 
-    pub(crate) fn program(&self) -> &Program<'a> {
-        self.prog
-    }
-
     /// The derivation this run produced.
     pub(crate) fn script(&self) -> Script {
         self.script.borrow().clone()

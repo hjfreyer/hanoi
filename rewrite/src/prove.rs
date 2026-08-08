@@ -46,10 +46,8 @@ use std::path::{Path, PathBuf};
 use bytecode::{Identity, IdentityIndex, Library, SentenceIndex, SourceMap};
 
 use crate::applier::apply_script;
-use crate::diff::side_by_side;
 use crate::engine::{Tactic, TacticError, miss_report};
 use crate::ir::{Node, build, same_effect_seq};
-use crate::print::render_nodes;
 use crate::program::Program;
 use crate::prover::{self, Closed, Goal, Residual, Strategy, Unproved};
 use crate::rule::{Script, Step};
@@ -666,44 +664,19 @@ impl Failure {
                 out.extend(cited(file, proof));
             }
             Failure::NotReached(residual) => {
-                out.push(format!("  {}", residual.why));
-                if let Some(context) = residual.context() {
-                    out.push(String::new());
-                    out.push(format!("  The goal left over is inside {}.", context));
-                }
+                out.extend(residual.headline());
                 out.extend(cited(file, proof));
                 out.push(String::new());
-                // Without origins: the two sides came from two sentences, so
-                // every `<inline>` label differs and none of the differences
-                // mean anything. `same_effect_seq` ignores them for the same
-                // reason, and a listing being compared has to agree with the
-                // comparison.
-                let left = render_nodes(prog, &residual.lhs, opts.stack, true, false);
-                let right = render_nodes(prog, &residual.rhs, opts.stack, true, false);
-                let rows = side_by_side(&left, &right, "what it reached", "the right-hand side");
-                if rows.is_empty() {
-                    // Two listings that read alike but are not the same by
-                    // effect. That is a bug in one of them rather than in the
-                    // proof, so show both rather than nothing at all.
-                    out.push(
-                        "  The two listings read alike but are not the same term.".to_string(),
-                    );
-                    out.extend(left);
-                    out.push(String::new());
-                    out.extend(right);
-                } else {
-                    out.extend(rows);
-                }
+                out.extend(residual.diff(prog, opts.stack));
                 // The listing above is what is *written*, which is the useful
                 // orientation. When the difference is inside a call, the way to
-                // see it is to open the two sides up — and each is addressable
-                // by name, which is what that naming is for.
+                // see it is to open both sides up — and `rewrite` addresses the
+                // identity itself, so working the goal is one command away.
                 out.push(String::new());
                 out.push(format!(
-                    "  To see inside the calls: rewrite <dir> '{}::lhs' -t unfold_all",
+                    "  To work the goal: rewrite <dir> {} -t 'normalize(unfold_all)'",
                     short_path(&identity.name)
                 ));
-                out.push("  and the same for `::rhs`.".to_string());
             }
             Failure::Replay(why) => {
                 out.push("  the proof reached the right-hand side, but its derivation".to_string());
@@ -1289,8 +1262,13 @@ mod tests {
         );
         assert!(report.contains("jump"), "{}", report);
         // ...and it says how to see inside the call, since that is where the
-        // difference is.
-        assert!(report.contains("foo::lhs"), "{}", report);
+        // difference is: `rewrite` addresses the identity, so working the goal
+        // is one command away.
+        assert!(
+            report.contains("rewrite <dir> foo -t 'normalize(unfold_all)'"),
+            "{}",
+            report
+        );
     }
 
     /// Both directions at once: the left inlines *and* the right folds back.

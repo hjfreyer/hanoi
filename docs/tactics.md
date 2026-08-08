@@ -1,23 +1,36 @@
 # Tactics
 
-`bin/rewrite` — in the `rewrite` crate, beside `bin/prove` — turns one
-sentence's compiled bytecode into a tree and prints it.
-A **tactic** says how to rewrite that tree before printing.
-
-No *call* is opened unless you ask. The default listing shows one sentence,
-naming every call it makes on a single line; `unfold` is how you open one up.
-Blocks written inline — branch arms and `dip N { ... }` bodies — are always
-spelled out, because they are not calls.
+`bin/rewrite` — in the `rewrite` crate, beside `bin/prove` — works the **goal**
+an `identity` states: two terms, and the claim that they are equal. A **tactic**
+says how to rewrite a term, and is most of this document.
 
 ```bash
-cargo run --bin rewrite -- tests 'State::check' -t 'unfold_all; dips'
+cargo run --bin rewrite -- tests state_check -t 'exact(unfold_all; dips)'
 ```
 
-A run of this tool answers a question and forgets it. To write the answer down
-— so that it is re-checked when the library changes, and so that something can
-later build on it — state an `identity` in the `.hana` and prove it in the
-`.hant` beside it. See `docs/identities.md`; `bin/prove` is the other binary in
-this crate.
+No *call* is opened unless you ask. A listing shows one sentence, naming every
+call it makes on a single line; `unfold` is how you open one up. Blocks written
+inline — branch arms and `dip N { ... }` bodies — are always spelled out,
+because they are not calls.
+
+**There is no way to name a bare sentence**, because everything this tool does
+is about a goal. A term worth looking at is therefore a term worth stating an
+identity over, and the cheapest one is reflexive: `tests/probes.hana` holds
+`identity state_check { jump State::check } = { jump State::check };` for exactly
+that. Three idioms come out of it, and they are worth knowing before the
+examples below use them:
+
+| what you want | what to write |
+|---|---|
+| the term, fully opened | `-t unfold_all` — it closes, and prints where the two sides met |
+| what a tactic *did*, against where it started | `-t 'exact(t)'` — no inlining fallback, so the goal stays open and you get the diff |
+| the derivation `t` produces | `-t 'normalize(t)'` — both sides driven the same way, so it always closes |
+
+A run of this tool answers a question and forgets it. To write the answer down —
+so that it is re-checked when the library changes, and so that something can
+later build on it — prove the identity in the `.hant` beside the `.hana`. What
+closes here is what goes in that file, character for character. See
+`docs/identities.md`; `bin/prove` is the other binary in this crate.
 
 ## Two layers
 
@@ -47,15 +60,16 @@ strategy calls tactics, and nothing below it knows a goal exists. See
 So a run leaves behind a derivation:
 
 ```
-$ rewrite tests 'Pair::check' -t 'unfold_all; all' --show-script
+$ rewrite tests a_value_tested_twice -t all --show-script
+closed — 6 steps
 ...
-  derivation — 7 step(s)
-     0  unfold -> [1.then, 2.body] @0
-        jump → #645
-     ⇒  untuple 2 ; branch { jump → #642 ; dip 1 { push type_tests::other_sym ; equal } ; and } { d…
-     2  interchange -> [1.then, 2.body, 1.then] @2
-        branch { drop ; push true } { is_bool } ; dip 1 { push type_tests::other_sym ; equal }
-     ⇒  dip 2 { push type_tests::other_sym ; equal } ; branch { drop ; push true } { is_bool }
+  derivation — 6 step(s)
+     1  retest -> @0
+        pick 0 ; branch { drop ; push 1 } { branch { push 3 } { push 4 } }
+     ⇒  pick 0 ; branch { drop ; push 1 } { drop ; push 4 }
+     4  hoist <- @1
+        branch { jump { drop } ; push 1 } { jump { drop } ; push 4 }
+     ⇒  dip 1 { drop } ; branch { push 1 } { push 4 }
 ```
 
 Applying that script to a fresh build reproduces the run exactly. That is
@@ -433,7 +447,7 @@ $ rewrite demo probe -t 'at(1, inv(counit(0))); at(2, introduce { pick 0 })'
 Five rules have none, and asking says why rather than matching nothing:
 
 ```
-$ rewrite tests probe -t 'each(inv(cancel_tuple))'
+$ rewrite tests pair_check -t 'each(inv(cancel_tuple))'
 error: `cancel_tuple` has no backward reading
   | each(inv(cancel_tuple))
   |      ^^^^^^^^^^^^^^^^^
@@ -920,8 +934,8 @@ could not be addressed. Two forms close that, and composed they name any window
 a script prints:
 
 ```
-$ rewrite tests 'Pair::check' -t 'unfold_all; then(1, body(2, then(1, at(2, sink))))' --show-script
-     2  interchange -> [1.then, 2.body, 1.then] @2
+$ rewrite tests pair_check -t 'normalize(unfold_all; then(1, body(2, then(1, at(2, sink)))))' --show-script
+     3  interchange -> [1.then, 2.body, 1.then] @2
 ```
 
 The tactic and the location read the same, in the same order. `at(n, ...)` is
@@ -935,19 +949,21 @@ the sequence it belongs to. It restarts at every nesting level, which is what
 the indentation shows, and a closing brace belongs to no node and is blank:
 
 ```
-$ rewrite tests 'Pair::check' -t unfold_all
+$ rewrite tests pair_check -t unfold_all
+closed — 3 steps + 3 up to inlining
+
  pos │  depth │ instruction
 ─────┼────────┼────────────
    0 │      1 │ untuple 2
-   1 │      3 │ branch then → #3408 <inline> {
-   0 │      2 │   push …::Pair::tag
+   1 │      3 │ branch then → #3499 <inline> {
+   0 │      2 │   push type_tests::RelEnum::Pair::tag
    1 │      3 │   equal
-   2 │      2 │   dip 1 → #3409 <inline> {
+   2 │      2 │   dip 1 → #3500 <inline> {
    0 │      2 │     untuple 2
-   1 │      4 │     branch then → #3405 <inline> {
+   1 │      4 │     branch then → #3496 <inline> {
    0 │      3 │       pick 0
    1 │      4 │       is_int
-   2 │      4 │       branch then → #3398 <inline> {
+   2 │      4 │       branch then → #3489 <inline> {
 ```
 
 Read down the column at each nesting level and the path writes itself:
@@ -978,7 +994,7 @@ A claim that does not hold is a **miss**: reported at the end of the run, with
 what was there instead, and the tool exits non-zero.
 
 ```
-$ rewrite tests 'Pair::check' -t 'unfold_all; at(9, sink)'
+$ rewrite tests pair_check -t 'unfold_all; at(9, sink)'
    ...the listing...
 
 error: 1 aimed step(s) matched nothing:
@@ -1050,12 +1066,20 @@ the annotation.
 **Able to fail**, because the equations assume totality:
 
 ```
-$ rewrite tests 'queue::accept' -t all
-error: 'queue::queue::accept' can fail
+error: the left-hand side cannot be rewritten.
+
+  'queue::queue::accept' can fail
 
   It reaches a `panic`, an `assert` or an `assert_eq`, directly or
   through a call. ...
 ```
+
+There is no command above that block, and there cannot be: both binaries check
+this before rewriting anything, and the only way to hand either one a fallible
+term is to state an identity over it — which a corpus that must prove everything
+it states will not accept. So the message is quoted rather than run.
+`prove::tests::a_side_that_can_fail_is_refused_in_rewrites_own_words` is what
+keeps the quote honest.
 
 Both properties are closed over reachability, so refusing the root refuses every
 node any tree can come to hold. That is what lets `annihilate` ask only for an
@@ -1076,14 +1100,17 @@ The consequence is visible in a trace: the movement laws run freely while the
 value laws have almost nothing to act on.
 
 ```
-$ rewrite tests 'State::check' -t 'unfold_all; all' --trace
+$ rewrite tests state_check -t 'exact(unfold_all; all)' --trace
   rule firings
   ────────────
   sink               66
-  unfold             32
-
-  98 step(s) in all
+  unfold             33
 ```
+
+`exact` is doing real work there: without it the goal would close up to
+inlining, and a closed goal prints where the two sides *met* rather than what
+the tactic did on the way. The counts are the search's and would be printed
+either way — a route that does not work out still cost what it cost.
 
 Worth knowing: only **two** of the thirteen equations actually need totality.
 `annihilate` needs it because dropping `X`'s results still has to run `X` if `X`
@@ -1151,9 +1178,9 @@ label is worth keeping. An inline block that would recurse also stays a call,
 which is what it becomes at run time anyway.
 
 ```
-$ rewrite tests 'State::check'                     #  48 lines, every call named
-$ rewrite tests 'State::check' -t 'once(unfold)'   #  61, one call opened
-$ rewrite tests 'State::check' -t unfold_all       # 637, one flat sentence
+$ rewrite tests state_check -t 'exact(once(unfold))'              #  50 lines
+$ rewrite tests state_check -t 'exact(repeat_n(2, once(unfold)))' #  62, one more call opened
+$ rewrite tests state_check -t unfold_all                         # 635, one flat sentence
 ```
 
 Because splicing rescans where it landed, `each(unfold)` already opens a whole

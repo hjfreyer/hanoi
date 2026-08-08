@@ -8,13 +8,10 @@
 //! listing instead of counted out by hand.
 
 use bytecode::SentenceIndex;
-use std::collections::HashSet;
 
 use crate::arity::{node_arity, seq_arity};
-use crate::engine::{Env, Tactic, TacticError, run};
-use crate::ir::{Node, build};
+use crate::ir::Node;
 use crate::program::Program;
-use crate::rule::Script;
 use crate::stack::{self, Fresh, Names, Stack};
 
 /// How wide the symbolic stack column is allowed to get.
@@ -46,38 +43,6 @@ fn pos_cell(show: bool, index: Option<usize>) -> String {
     match index {
         Some(i) => format!("{:>w$} │", i, w = POS_WIDTH),
         None => format!("{:>w$} │", "", w = POS_WIDTH),
-    }
-}
-
-/// Rewrites a sentence, prints the listing, and hands back the derivation.
-pub(crate) fn print_sentence(
-    root: SentenceIndex,
-    tactic: &Tactic,
-    env: &Env,
-    source: &str,
-    show_stack: bool,
-) -> Result<Script, TacticError> {
-    let mut in_progress = HashSet::new();
-    let body = build(env.program().library(), root, &mut in_progress);
-    let (body, script) = run(env, tactic, body)?;
-    print_body(env.program(), root, &body, source, show_stack);
-    Ok(script)
-}
-
-/// The listing for a tree that has already been rewritten.
-///
-/// Split out from [`print_sentence`] for the stepper, which does its own
-/// rewriting — it runs the tactic under a budget, and what it has in hand is a
-/// tree from partway through the derivation rather than a tactic to finish.
-pub(crate) fn print_body(
-    prog: &Program,
-    root: SentenceIndex,
-    body: &[Node],
-    source: &str,
-    show_stack: bool,
-) {
-    for line in render_body(prog, root, body, source, show_stack, true) {
-        println!("{}", line);
     }
 }
 
