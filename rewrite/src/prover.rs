@@ -84,10 +84,10 @@ impl Goal {
 
 /// How a goal is to be attacked.
 ///
-/// The leaves ([`Blind`](Strategy::Blind), [`Exact`](Strategy::Exact),
-/// [`Normalize`](Strategy::Normalize)) run tactics and compare. Everything else
-/// cuts the goal up and recurses. See the module docs for why there is no
-/// variant that decides between them on its own.
+/// A [`Sequence`](Strategy::Sequence) of [`Move`]s rewrites the goal a side at a
+/// time and then compares; everything else cuts the goal up and recurses. See
+/// the module docs for why there is no variant that decides between them on its
+/// own.
 pub(crate) enum Strategy {
     /// A bare tactic, which is what every `.hant` written before this module
     /// existed holds: run it on the left-hand side and compare, exactly or —
@@ -99,15 +99,18 @@ pub(crate) enum Strategy {
     /// unfolding is applied to what the tactic reached, not to the term the
     /// tactic started from.
     Blind(Tactic),
-    /// `exact(t)`: run `t` on the left and land on the right as written. The
-    /// same as [`Blind`](Strategy::Blind) without the inlining fallback, for a
-    /// proof that wants to say the shapes match and mean it.
-    Exact(Tactic),
-    /// `normalize(t)`: run `t` on *both* sides and meet in the middle.
+    /// `a ; b ; c`: rewrite the goal a move at a time, then close.
     ///
-    /// The derivation is the left's script followed by the right's inverted,
-    /// which is sound for the three reasons [`invert`] is written down under.
-    Normalize(Tactic),
+    /// This is the shape the language wanted all along. A move rewrites **one
+    /// side** and leaves a goal behind, so moves compose the way tactics do —
+    /// `cleanup ; rhs(dips)` drives the left with one and the right with the
+    /// other, and the two meet or they do not. What closes the sequence is the
+    /// same comparison as ever: the two sides agreeing by effect.
+    ///
+    /// A single move is a sequence of one, which is why `exact(t)`,
+    /// `normalize(t)` and `rhs(t)` are spellings of a sequence rather than
+    /// leaves of their own.
+    Sequence(Vec<Move>),
     /// `peel(s)`: strip the longest common prefix and suffix, then `s` on what
     /// is left. Fails when there is nothing to strip — see [`Prover::peel`].
     Peel(Box<Strategy>),
@@ -117,6 +120,25 @@ pub(crate) enum Strategy {
     Inline(Box<Strategy>),
     /// `s1 | s2`: try, and fall back.
     Choice(Vec<Strategy>),
+}
+
+/// One rewrite of one side of a goal.
+///
+/// The unit a sequence is built from. Every one of them runs an ordinary tactic
+/// through the ordinary blind engine; what a move adds is *which term* it is
+/// handed and which half of the derivation its steps join.
+pub(crate) enum Move {
+    /// A bare tactic, or `exact(t)`: the left-hand side.
+    Left(Tactic),
+    /// `rhs(t)`: the right-hand side.
+    ///
+    /// Worth having because the two sides usually want different work. A
+    /// right-hand side written the way a person would write it often needs one
+    /// step to meet a left-hand side that needed ten, and saying so beats
+    /// driving both with a tactic that suits neither.
+    Right(Tactic),
+    /// `normalize(t)`: both, with the same tactic.
+    Both(Tactic),
 }
 
 /// Which children `descend` reaches into.
@@ -222,7 +244,11 @@ impl Closed {
 pub(crate) enum Unproved {
     /// The strategy ran, and a goal is left over. The useful failure: it names
     /// the smallest disagreement rather than the whole term.
-    Residual(Residual),
+    ///
+    /// Boxed, like the `TacticError`s below and for the same reason: it carries
+    /// two whole terms, and every `Result` in this module would otherwise be as
+    /// wide as the largest thing that can go wrong in it.
+    Residual(Box<Residual>),
     /// A tactic ran out of fuel, was refused, or failed.
     Ran(Box<TacticError>),
     /// Unfolding a side to compare them did not finish. Named apart from
@@ -241,7 +267,18 @@ pub(crate) struct Residual {
     pub(crate) rhs: Vec<Node>,
     /// What the strategy was trying to do when it gave up.
     pub(crate) why: String,
+    /// What to call the two columns.
+    ///
+    /// Which side moved is the strategy's business, not the reporter's: a blind
+    /// tactic drove the left, `rhs` drove the right, and `normalize` drove both.
+    /// Saying "what it reached" over a column nobody touched would be a small
+    /// lie in exactly the place a reader is trying to orient.
+    pub(crate) labels: (&'static str, &'static str),
 }
+
+/// The headings for a strategy that drove the left and measured against the
+/// right, which is most of them.
+const REACHED: (&str, &str) = ("what it reached", "the right-hand side");
 
 impl Residual {
     /// The context, as a location prints one. Empty at the root.
@@ -281,10 +318,10 @@ impl Residual {
     /// every `<inline>` label differs and none of those differences mean
     /// anything. `same_effect_seq` ignores them for the same reason, and a
     /// listing being compared has to agree with the comparison.
-    pub(crate) fn diff(&self, prog: &Program, stack: bool) -> Vec<String> {
+    pub(crate) fn diff(&self, prog: &Program, stack: bool, width: usize) -> Vec<String> {
         let left = render_nodes(prog, &self.lhs, stack, true, false);
         let right = render_nodes(prog, &self.rhs, stack, true, false);
-        let rows = side_by_side(&left, &right, "what it reached", "the right-hand side");
+        let rows = side_by_side(&left, &right, self.labels.0, self.labels.1, width);
         if !rows.is_empty() {
             return rows;
         }
@@ -366,8 +403,7 @@ impl Prover<'_> {
     fn solve(&self, goal: &Goal, strategy: &Strategy) -> Result<Solved, Unproved> {
         match strategy {
             Strategy::Blind(tactic) => self.blind(goal, tactic),
-            Strategy::Exact(tactic) => self.exact(goal, tactic),
-            Strategy::Normalize(tactic) => self.normalize(goal, tactic),
+            Strategy::Sequence(moves) => self.sequence(goal, moves),
             Strategy::Peel(inner) => self.peel(goal, inner),
             Strategy::Descend(descent) => self.descend(goal, descent),
             Strategy::Inline(inner) => self.inline(goal, inner),
@@ -399,7 +435,7 @@ impl Prover<'_> {
         let left = self.unfold(ran.nodes.clone(), "left-hand")?;
         let right = self.unfold(goal.rhs.clone(), "right-hand")?;
         if !same_effect_seq(&left.nodes, &right.nodes) {
-            return Err(Unproved::Residual(Residual {
+            return Err(Unproved::residual(Residual {
                 at: goal.at.clone(),
                 lhs: ran.nodes,
                 rhs: goal.rhs.clone(),
@@ -409,6 +445,7 @@ impl Prover<'_> {
                 why: "the tactic ran, but did not reach the right-hand side,\n  \
                       and inlining both sides did not reconcile them either."
                     .to_string(),
+                labels: REACHED,
             }));
         }
 
@@ -427,57 +464,88 @@ impl Prover<'_> {
         })
     }
 
-    /// `exact(t)`: no inlining fallback. The shapes match, or they do not.
-    fn exact(&self, goal: &Goal, tactic: &Tactic) -> Result<Solved, Unproved> {
-        let ran = self.run(tactic, goal.lhs.clone(), Unproved::ran)?;
-        let steps = ran.script.len();
-        if !same_effect_seq(&ran.nodes, &goal.rhs) {
-            return Err(Unproved::Residual(Residual {
-                at: goal.at.clone(),
-                lhs: ran.nodes,
-                rhs: goal.rhs.clone(),
-                why: "the tactic ran and landed somewhere else.".to_string(),
-            }));
-        }
-        Ok(Solved {
-            script: ran.script,
-            misses: ran.misses,
-            closed: Closed::Exactly { steps },
-        })
-    }
-
-    /// `normalize(t)`: drive both sides with the same tactic and meet.
+    /// A sequence of moves, and the comparison that closes it.
     ///
-    /// **The right-hand run's misses are discarded.** An aimed step is a claim
-    /// about the term it is aimed at, and running a proof's tactic against the
-    /// right-hand side asks it a question it was never written to answer — so a
-    /// miss there says nothing about the proof. It is the stance the engine
-    /// already takes towards an aim made inside a search.
-    fn normalize(&self, goal: &Goal, tactic: &Tactic) -> Result<Solved, Unproved> {
-        let left = self.run(tactic, goal.lhs.clone(), |e| {
-            Unproved::Inlining("left-hand", e)
-        })?;
-        let right = self.run(tactic, goal.rhs.clone(), |e| {
-            Unproved::Inlining("right-hand", e)
-        })?;
-        if !same_effect_seq(&left.nodes, &right.nodes) {
-            return Err(Unproved::Residual(Residual {
+    /// The left's script runs forwards and the right's is inverted onto the end,
+    /// so however many moves drove whichever side, what comes out reads
+    /// `LHS ⇒ RHS` like any other derivation. That is sound for the three
+    /// reasons [`invert`] is written down under.
+    fn sequence(&self, goal: &Goal, moves: &[Move]) -> Result<Solved, Unproved> {
+        let (mut lhs, mut rhs) = (goal.lhs.clone(), goal.rhs.clone());
+        let (mut left, mut right) = (Script::new(), Script::new());
+        let mut misses = Vec::new();
+        let (mut drove_left, mut drove_right) = (false, false);
+
+        for step in moves {
+            // Misses come from the side the author *named*. An aimed step is a
+            // claim about the term it is aimed at, so a tactic written for the
+            // left says nothing when it is run against the right — which is why
+            // `Both` keeps only the left's, and `Right` keeps its own.
+            match step {
+                Move::Left(tactic) => {
+                    let ran = self.run(tactic, lhs, Unproved::ran)?;
+                    lhs = ran.nodes;
+                    left.extend(ran.script);
+                    misses.extend(ran.misses);
+                    drove_left = true;
+                }
+                Move::Right(tactic) => {
+                    let ran = self.run(tactic, rhs, Unproved::ran)?;
+                    rhs = ran.nodes;
+                    right.extend(ran.script);
+                    misses.extend(ran.misses);
+                    drove_right = true;
+                }
+                Move::Both(tactic) => {
+                    let l = self.run(tactic, lhs, |e| Unproved::Inlining("left-hand", e))?;
+                    let r = self.run(tactic, rhs, |e| Unproved::Inlining("right-hand", e))?;
+                    lhs = l.nodes;
+                    rhs = r.nodes;
+                    left.extend(l.script);
+                    right.extend(r.script);
+                    misses.extend(l.misses);
+                    (drove_left, drove_right) = (true, true);
+                }
+            }
+        }
+
+        if !same_effect_seq(&lhs, &rhs) {
+            return Err(Unproved::residual(Residual {
                 at: goal.at.clone(),
-                lhs: left.nodes,
-                rhs: right.nodes,
-                why: "both sides were normalized, and they did not meet.\n  \
-                      What is shown is where each side got, not what was written."
-                    .to_string(),
+                lhs,
+                rhs,
+                why: match (drove_left, drove_right) {
+                    (true, true) => "the moves ran, and the two sides did not meet.\n  \
+                                     What is shown is where each side got, not what was written."
+                        .to_string(),
+                    (false, true) => {
+                        "the right-hand side was driven and did not reach the left.\n  \
+                                      The right column is where it got; the left is as written."
+                            .to_string()
+                    }
+                    _ => "the tactic ran and landed somewhere else.".to_string(),
+                },
+                labels: match (drove_left, drove_right) {
+                    (true, true) => ("where the left got", "where the right got"),
+                    (false, true) => ("the left-hand side", "what the right reached"),
+                    _ => REACHED,
+                },
             }));
         }
-        let (l, r) = (left.script.len(), right.script.len());
-        let mut script = left.script;
-        script.extend(invert(&right.script));
+
+        let (l, r) = (left.len(), right.len());
+        let mut script = left;
+        script.extend(invert(&right));
         Ok(Solved {
             script,
-            // Only the left's. See above.
-            misses: left.misses,
-            closed: Closed::Meeting { left: l, right: r },
+            misses,
+            // Nothing drove the right, so the two met where the right already
+            // was — which is what a one-sided proof has always reported.
+            closed: if r == 0 {
+                Closed::Exactly { steps: l }
+            } else {
+                Closed::Meeting { left: l, right: r }
+            },
         })
     }
 
@@ -510,11 +578,12 @@ impl Prover<'_> {
             .min(room);
 
         if prefix == 0 && suffix == 0 {
-            return Err(Unproved::Residual(Residual {
+            return Err(Unproved::residual(Residual {
                 at: goal.at.clone(),
                 lhs: goal.lhs.clone(),
                 rhs: goal.rhs.clone(),
                 why: "`peel` found nothing the two sides already share at either end.".to_string(),
+                labels: REACHED,
             }));
         }
 
@@ -545,11 +614,12 @@ impl Prover<'_> {
     /// interior nodes correspond is a search this deliberately does not do.
     fn descend(&self, goal: &Goal, descent: &Descent) -> Result<Solved, Unproved> {
         let refuse = |why: String| {
-            Err(Unproved::Residual(Residual {
+            Err(Unproved::residual(Residual {
                 at: goal.at.clone(),
                 lhs: goal.lhs.clone(),
                 rhs: goal.rhs.clone(),
                 why,
+                labels: REACHED,
             }))
         };
         let ([lhs], [rhs]) = (&goal.lhs[..], &goal.rhs[..]) else {
@@ -630,7 +700,7 @@ impl Prover<'_> {
                         // proof, and a claim gets checked.
                         None if same_effect_seq(l, r) => parts += 1,
                         None => {
-                            return Err(Unproved::Residual(Residual {
+                            return Err(Unproved::residual(Residual {
                                 at: sub.at,
                                 lhs: sub.lhs,
                                 rhs: sub.rhs,
@@ -639,6 +709,7 @@ impl Prover<'_> {
                                      `descend` was\n  given no strategy for them.",
                                     crate::location::selector_name(sel)
                                 ),
+                                labels: ("the left-hand arm", "the right-hand arm"),
                             }));
                         }
                     }
@@ -722,11 +793,12 @@ impl Prover<'_> {
         // general case last, and that is the one whose failure explains the
         // most.
         Err(last.unwrap_or_else(|| {
-            Unproved::Residual(Residual {
+            Unproved::residual(Residual {
                 at: goal.at.clone(),
                 lhs: goal.lhs.clone(),
                 rhs: goal.rhs.clone(),
                 why: "an empty choice closes nothing.".to_string(),
+                labels: REACHED,
             })
         }))
     }
@@ -781,6 +853,10 @@ impl Prover<'_> {
 impl Unproved {
     fn ran(err: Box<TacticError>) -> Unproved {
         Unproved::Ran(err)
+    }
+
+    fn residual(residual: Residual) -> Unproved {
+        Unproved::Residual(Box::new(residual))
     }
 }
 
@@ -900,9 +976,12 @@ mod tests {
         );
         // Not provable as written — what matters is that peeling isolated the
         // middle, which the residual's shape is what shows.
-        let err = attempt(goal, &Strategy::Peel(Box::new(Strategy::Exact(cleanup()))))
-            .err()
-            .expect("the middles differ");
+        let err = attempt(
+            goal,
+            &Strategy::Peel(Box::new(Strategy::Sequence(vec![Move::Left(cleanup())]))),
+        )
+        .err()
+        .expect("the middles differ");
         let Unproved::Residual(r) = err else {
             panic!("expected a residual");
         };
@@ -918,9 +997,12 @@ mod tests {
     #[test]
     fn peeling_nothing_is_a_failure_not_a_no_op() {
         let goal = Goal::root(vec![push(1)], vec![push(2)]);
-        let err = attempt(goal, &Strategy::Peel(Box::new(Strategy::Exact(id()))))
-            .err()
-            .expect("there is nothing to peel");
+        let err = attempt(
+            goal,
+            &Strategy::Peel(Box::new(Strategy::Sequence(vec![Move::Left(id())]))),
+        )
+        .err()
+        .expect("there is nothing to peel");
         assert!(
             why(err).contains("found nothing"),
             "expected a peel failure"
@@ -936,7 +1018,10 @@ mod tests {
             vec![op(Instruction::Drop), op(Instruction::Drop)],
         );
         let solved = ok(
-            attempt(goal, &Strategy::Peel(Box::new(Strategy::Exact(id())))),
+            attempt(
+                goal,
+                &Strategy::Peel(Box::new(Strategy::Sequence(vec![Move::Left(id())]))),
+            ),
             "an empty goal to close with no steps",
         );
         assert!(solved.script.is_empty(), "nothing to do, nothing done");
@@ -966,7 +1051,7 @@ mod tests {
         let solved = attempt(
             goal,
             &Strategy::Descend(Descent::Arms {
-                then: Some(Box::new(Strategy::Exact(cleanup()))),
+                then: Some(Box::new(Strategy::Sequence(vec![Move::Left(cleanup())]))),
                 els: None,
             }),
         );
@@ -1027,7 +1112,9 @@ mod tests {
         let goal = Goal::root(vec![dip(1)], vec![dip(2)]);
         let err = attempt(
             goal,
-            &Strategy::Descend(Descent::Body(Box::new(Strategy::Exact(id())))),
+            &Strategy::Descend(Descent::Body(Box::new(Strategy::Sequence(vec![
+                Move::Left(id()),
+            ])))),
         )
         .err()
         .expect("different depths");
@@ -1042,7 +1129,9 @@ mod tests {
         );
         let err = attempt(
             goal,
-            &Strategy::Descend(Descent::Body(Box::new(Strategy::Exact(id())))),
+            &Strategy::Descend(Descent::Body(Box::new(Strategy::Sequence(vec![
+                Move::Left(id()),
+            ])))),
         )
         .err()
         .expect("two nodes against one");
@@ -1070,9 +1159,12 @@ mod tests {
         };
 
         // Peeled, the residual is the false middle.
-        let err = attempt(goal(), &Strategy::Peel(Box::new(Strategy::Exact(id()))))
-            .err()
-            .expect("`push 1` is not `push 2`");
+        let err = attempt(
+            goal(),
+            &Strategy::Peel(Box::new(Strategy::Sequence(vec![Move::Left(id())]))),
+        )
+        .err()
+        .expect("`push 1` is not `push 2`");
         let Unproved::Residual(r) = err else {
             panic!("expected a residual");
         };
@@ -1081,7 +1173,7 @@ mod tests {
 
         // Normalized, both sides annihilate and it closes.
         let solved = ok(
-            attempt(goal(), &Strategy::Normalize(cleanup())),
+            attempt(goal(), &Strategy::Sequence(vec![Move::Both(cleanup())])),
             "both sides to clean up to nothing",
         );
         assert!(matches!(solved.closed, Closed::Meeting { .. }));
@@ -1099,8 +1191,8 @@ mod tests {
             attempt(
                 goal,
                 &Strategy::Choice(vec![
-                    Strategy::Peel(Box::new(Strategy::Exact(id()))),
-                    Strategy::Normalize(cleanup()),
+                    Strategy::Peel(Box::new(Strategy::Sequence(vec![Move::Left(id())]))),
+                    Strategy::Sequence(vec![Move::Both(cleanup())]),
                 ]),
             ),
             "the second alternative to close it",

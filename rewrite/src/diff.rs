@@ -17,10 +17,14 @@
 /// Identical lines kept either side of a change.
 const CONTEXT: usize = 3;
 
-/// The widest either column may get before lines are elided. Listings are
-/// narrow; `--stack` ones are not, and two of those side by side would run off
-/// any terminal.
-const MAX_COL: usize = 56;
+/// The widest either column may get before lines are elided, unless `--width`
+/// says otherwise. Listings are narrow; `--stack` ones are not, and two of those
+/// side by side would run off any terminal.
+///
+/// A default rather than a limit: it is chosen to fit two columns in eighty,
+/// and a wider terminal — or a name long enough that the elision is where the
+/// information was — is exactly what `--width` is for.
+pub(crate) const DEFAULT_WIDTH: usize = 56;
 
 /// The longest run of changed lines that gets aligned line by line.
 ///
@@ -49,12 +53,20 @@ pub(crate) fn side_by_side(
     after: &[String],
     left_label: &str,
     right_label: &str,
+    width: usize,
 ) -> Vec<String> {
     let rows = align(before, after);
     if rows.iter().all(|r| matches!(r, Row::Same(..))) {
         return Vec::new();
     }
-    render(&collapse(rows), before, after, left_label, right_label)
+    render(
+        &collapse(rows),
+        before,
+        after,
+        left_label,
+        right_label,
+        width,
+    )
 }
 
 /// Pairs the two listings up, line for line.
@@ -163,6 +175,7 @@ fn render<'a>(
     after: &'a [String],
     left_label: &str,
     right_label: &str,
+    max_col: usize,
 ) -> Vec<String> {
     let shown = |row: &Row| -> Vec<&str> {
         match row {
@@ -191,7 +204,7 @@ fn render<'a>(
         .map(|line| cut(line).chars().count())
         .max()
         .unwrap_or(0)
-        .clamp(left_label.chars().count().min(MAX_COL), MAX_COL);
+        .clamp(left_label.chars().count().min(max_col), max_col);
 
     let mut out = vec![
         format!("    {:<w$} ┃   {}", left_label, right_label, w = width),
@@ -278,7 +291,12 @@ mod tests {
 
     /// The diff with its two header lines dropped.
     fn diff(before: &str, after: &str) -> Vec<String> {
-        let out = side_by_side(&lines(before), &lines(after), "before", "after");
+        wide(before, after, DEFAULT_WIDTH)
+    }
+
+    /// The same, at a width the caller chose — which is what `--width` sets.
+    fn wide(before: &str, after: &str, width: usize) -> Vec<String> {
+        let out = side_by_side(&lines(before), &lines(after), "before", "after", width);
         if out.is_empty() {
             return out;
         }
@@ -287,7 +305,7 @@ mod tests {
 
     #[test]
     fn identical_listings_diff_to_nothing() {
-        assert!(side_by_side(&lines("a\nb"), &lines("a\nb"), "l", "r").is_empty());
+        assert!(side_by_side(&lines("a\nb"), &lines("a\nb"), "l", "r", DEFAULT_WIDTH).is_empty());
     }
 
     #[test]
@@ -313,7 +331,7 @@ mod tests {
         let mut after = before.clone();
         after[20] = "changed".to_string();
 
-        let out = side_by_side(&before, &after, "l", "r");
+        let out = side_by_side(&before, &after, "l", "r", DEFAULT_WIDTH);
         let skipped: Vec<&String> = out.iter().filter(|l| l.contains('⋮')).collect();
         assert_eq!(skipped.len(), 2, "one elision either side: {:#?}", out);
         // The change, its context, two elisions, and the two header lines.
@@ -328,21 +346,36 @@ mod tests {
         let mut after = before.clone();
         after[0] = "changed".to_string();
 
-        let out = side_by_side(&before, &after, "l", "r");
+        let out = side_by_side(&before, &after, "l", "r", DEFAULT_WIDTH);
         assert_eq!(out.len(), 2 + 1 + CONTEXT + 1, "{:#?}", out);
         assert!(out.last().unwrap().contains('⋮'), "{:#?}", out);
     }
 
     #[test]
     fn a_long_line_is_elided_rather_than_wrapped() {
-        let long = "x".repeat(MAX_COL + 20);
+        let long = "x".repeat(DEFAULT_WIDTH + 20);
         let rows = diff(&long, "short");
         assert!(rows[0].contains('…'), "{}", rows[0]);
         assert!(
-            rows[0].chars().count() < 2 * MAX_COL + 12,
+            rows[0].chars().count() < 2 * DEFAULT_WIDTH + 12,
             "row is {} wide",
             rows[0].chars().count()
         );
+    }
+
+    /// ...and `--width` is how you say the elision took the part you wanted.
+    #[test]
+    fn a_wider_column_elides_less() {
+        let long = "x".repeat(DEFAULT_WIDTH + 20);
+        assert!(wide(&long, "short", DEFAULT_WIDTH + 40)[0].contains('x'));
+        assert!(
+            !wide(&long, "short", DEFAULT_WIDTH + 40)[0].contains('…'),
+            "a column wide enough for the line should not elide it"
+        );
+        // Narrower than the default is equally allowed, and still lines up.
+        let rows = wide(&long, "short", 12);
+        assert!(rows[0].contains('…'), "{}", rows[0]);
+        assert!(rows[0].chars().count() < 40, "{}", rows[0]);
     }
 
     #[test]
@@ -351,7 +384,7 @@ mod tests {
         // two runs are shown whole rather than paired up. Nothing is dropped.
         let before: Vec<String> = (0..MAX_LCS + 10).map(|i| format!("a {}", i)).collect();
         let after: Vec<String> = (0..MAX_LCS + 10).map(|i| format!("b {}", i)).collect();
-        let out = side_by_side(&before, &after, "l", "r");
+        let out = side_by_side(&before, &after, "l", "r", DEFAULT_WIDTH);
         assert_eq!(out.len(), 2 + MAX_LCS + 10);
         assert!(out[2].contains("- a 0") && out[2].contains("+ b 0"));
     }

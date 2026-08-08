@@ -26,6 +26,11 @@ examples below use them:
 | what a tactic *did*, against where it started | `-t 'exact(t)'` — no inlining fallback, so the goal stays open and you get the diff |
 | the derivation `t` produces | `-t 'normalize(t)'` — both sides driven the same way, so it always closes |
 
+`-t` takes a **strategy**, which is a sequence of moves over the goal:
+`cleanup ; rhs(unfold_all)` drives the left with one tactic and the right with
+another. `--width <n>` widens each column of a side-by-side listing when the
+elision took the part you wanted.
+
 A run of this tool answers a question and forgets it. To write the answer down —
 so that it is re-checked when the library changes, and so that something can
 later build on it — prove the identity in the `.hant` beside the `.hana`. What

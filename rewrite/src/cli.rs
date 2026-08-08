@@ -60,6 +60,16 @@ pub fn run() -> i32 {
             "--trace" => opts.trace = true,
             "--step" => opts.step = true,
             "--stack" => opts.stack = true,
+            "--width" => {
+                let raw = value("--width");
+                opts.width = match raw.parse() {
+                    Ok(v) => v,
+                    Err(_) => {
+                        eprintln!("--width needs a number, found '{}'", raw);
+                        process::exit(1);
+                    }
+                };
+            }
             "--check" => opts.check = true,
             "--show-script" => opts.show_script = true,
             "--list-rules" => list_rules = true,
@@ -196,13 +206,21 @@ fn usage() {
     eprintln!(
         "  --stack              show what each slot holds, with equal values sharing a name."
     );
+    eprintln!("  --width <n>          how wide each column of a side-by-side listing");
+    eprintln!("                       may get before a line is elided. Default 56,");
+    eprintln!("                       which fits two columns in eighty.");
     eprintln!();
-    eprintln!("Strategies: exact(t), normalize(t), peel(s), inline(s),");
-    eprintln!("            descend(body: s), descend(then: s, else: s), s | s");
+    eprintln!("Strategies are a sequence of moves over the goal, `a; b; c`:");
+    eprintln!("  <tactic>, exact(t)   drive the left-hand side");
+    eprintln!("  rhs(t)               drive the right-hand side");
+    eprintln!("  normalize(t)         drive both with the same tactic");
+    eprintln!("and these take the rest as an argument rather than sequencing:");
+    eprintln!("  peel(s), inline(s), descend(body: s), descend(then: s, else: s), s | s");
     eprintln!();
     eprintln!("Examples:");
     eprintln!("  rewrite tests two_spellings_of_one_test");
     eprintln!("  rewrite tests two_spellings_of_one_test -t 'normalize(cleanup)'");
+    eprintln!("  rewrite tests testing_a_test_by_name -t 'cleanup; rhs(unfold_all)'");
     eprintln!("  rewrite tests a_test_inside_an_arm -t 'descend(then: cleanup)'");
     eprintln!("  rewrite tests copying_a_constant -t 'dips; factoring' --step");
 }

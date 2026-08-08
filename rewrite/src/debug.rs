@@ -205,6 +205,7 @@ impl Session<'_> {
             &self.lines(self.at, false),
             &format!("step {}", previous),
             &format!("step {}  ·  {}", self.at, taken),
+            self.opts.width,
         );
         if rows.is_empty() {
             // No equation returns its window unchanged, so this means the

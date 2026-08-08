@@ -200,20 +200,45 @@ A **rule** rewrites a window. A **tactic** places rules in a term. A
 The layering is strict, and it is one-way — a strategy calls tactics, and
 nothing below it knows a goal exists.
 
+A strategy is a sequence of **moves**. Each rewrites one side of the goal and
+leaves a goal behind, so they compose the way tactics do — and the sequence
+closes when the two sides agree by effect.
+
+| move | which side it drives |
+|---|---|
+| `<tactic>`, `exact(t)` | the left |
+| `rhs(t)` | the right |
+| `normalize(t)` | both, with the same tactic |
+
+```
+proof foo = cleanup ; rhs(unfold_all);
+```
+
+That is the shape most claims want: the two sides rarely need the same work. A
+right-hand side written the way a person would write it often needs one step to
+meet a left-hand side that needed ten, and saying so beats driving both with a
+tactic that suits neither.
+
+The rest take the remaining proof as an argument rather than leaving a goal, so
+they are not moves and cannot be sequenced — `peel(a ; rhs(b))`, not
+`peel(a) ; rhs(b)`:
+
 | strategy | what it does |
 |---|---|
-| `<tactic>` | run it on the left and compare, exactly or after unfolding both sides |
-| `exact(t)` | the same without the inlining fallback |
-| `normalize(t)` | run `t` on **both** sides and meet in the middle |
+| `<tactic>` alone | run it on the left and compare, exactly or after unfolding both sides |
 | `peel(s)` | strip the common prefix and suffix, then `s` on what is left |
 | `descend(body: s)` | congruence into a frame |
 | `descend(then: s, else: s)` | congruence into the arms of a branch |
 | `inline(s)` | unfold every call on both sides, then `s` |
 | `s1 \| s2` | try, and fall back |
 
-**A bare tactic keeps its meaning.** A proof that names no strategy is the first
-row of that table, which is what `prove` has always done — so every `.hant`
-written before strategies existed says and does exactly what it did.
+**A bare tactic keeps its meaning.** A proof that names no strategy at all is
+the last table's first row — one-sided, compared up to inlining, which is what
+`prove` has always done — so every `.hant` written before strategies existed
+says and does exactly what it did. Name one anywhere in the expression and the
+whole thing reads as a sequence of moves, whose close is exact. The two readings
+agree on everything but that fallback, and `cleanup ; rhs(unfold_all)` is how you
+ask for it out loud.
 
 Congruence is not a new equation. A `Location` *is* a context and
 `Location::under` *is* the rule `A = B ⟹ C[A] = C[B]`; what was missing was

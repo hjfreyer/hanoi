@@ -53,6 +53,8 @@ pub(crate) struct Options {
     /// and a different question from whether what arrived is sound.
     pub(crate) complete: bool,
     pub(crate) stack: bool,
+    /// The widest either column of a failure diff may get.
+    pub(crate) width: usize,
 }
 
 impl Default for Options {
@@ -66,6 +68,7 @@ impl Default for Options {
             check: true,
             complete: false,
             stack: false,
+            width: crate::diff::DEFAULT_WIDTH,
         }
     }
 }
@@ -316,7 +319,13 @@ impl Failure {
                 // and none of those differences mean anything.
                 let left = render_nodes(prog, got, opts.stack, true, false);
                 let right = render_nodes(prog, &want, opts.stack, true, false);
-                let rows = side_by_side(&left, &right, "where it landed", "the right-hand side");
+                let rows = side_by_side(
+                    &left,
+                    &right,
+                    "where it landed",
+                    "the right-hand side",
+                    opts.width,
+                );
                 if rows.is_empty() {
                     out.push(
                         "  The two listings read alike but are not the same term.".to_string(),
@@ -366,12 +375,33 @@ pub(crate) fn cli() -> i32 {
     let mut opts = Options::default();
     let mut positional: Vec<String> = Vec::new();
 
+    // Indexed rather than a plain iteration, since `--width` takes a value.
     let args: Vec<String> = std::env::args().skip(1).collect();
-    for arg in &args {
-        match arg.as_str() {
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i].as_str();
+        let mut value = |name: &str| -> Option<String> {
+            i += 1;
+            match args.get(i) {
+                Some(v) => Some(v.clone()),
+                None => {
+                    eprintln!("{} needs a value", name);
+                    None
+                }
+            }
+        };
+        match arg {
             "--no-check" => opts.check = false,
             "--complete" => opts.complete = true,
             "--stack" => opts.stack = true,
+            "--width" => match value("--width").map(|raw| raw.parse()) {
+                Some(Ok(v)) => opts.width = v,
+                Some(Err(_)) => {
+                    eprintln!("--width needs a number");
+                    return BROKEN;
+                }
+                None => return BROKEN,
+            },
             "-h" | "--help" => {
                 usage();
                 return OK;
@@ -383,6 +413,7 @@ pub(crate) fn cli() -> i32 {
             }
             other => positional.push(other.to_string()),
         }
+        i += 1;
     }
 
     if positional.len() < 2 {
@@ -421,6 +452,7 @@ fn usage() {
     eprintln!("  --complete           every identity the corpus states must be");
     eprintln!("                       derived by one of these files.");
     eprintln!("  --stack              show what each slot holds, in a failure diff.");
+    eprintln!("  --width <n>          how wide each column of a failure diff may get.");
     eprintln!("  --no-check           skip the net-stack-effect check on every step.");
     eprintln!();
     eprintln!("Exit: 0 every derivation checked out, 1 one did not, 2 the input");

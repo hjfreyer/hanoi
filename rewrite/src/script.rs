@@ -44,7 +44,7 @@ use crate::matcher::{
     matcher_with_term, term_matcher_names,
 };
 use crate::program::{Program, resolve_sentence, resolve_symbol};
-use crate::prover::{Descent, Strategy};
+use crate::prover::{Descent, Move, Strategy};
 
 /// The named tactics every session starts with.
 ///
@@ -1250,23 +1250,15 @@ impl Definitions {
                     .collect::<Result<_, _>>()?,
             )),
 
-            // `;` composes tactics, which each take a term and return one.
-            // Strategies do not compose that way: each one discharges the whole
-            // goal or does not, so there is nothing for a second to be handed.
-            Expr::Seq(parts) => {
-                let span = parts
+            // `;` between moves, where each rewrites one side of the goal and
+            // hands the rest of the sequence what it left. This is the reading
+            // that makes `cleanup ; rhs(dips)` mean what it looks like.
+            Expr::Seq(parts) => Ok(Strategy::Sequence(
+                parts
                     .iter()
-                    .find(|e| self.mentions_strategy(e))
-                    .and_then(span_of)
-                    .unwrap_or((0, 0));
-                Err(
-                    ScriptError::new("a strategy cannot be sequenced with `;`", span).with_help(
-                        "`;` runs one tactic after another on a term. A strategy \
-                         discharges a goal, so write `|` to try one and fall back, \
-                         or nest them: `peel(descend(then: ...))`",
-                    ),
-                )
-            }
+                    .map(|e| self.resolve_move(e, prog, tactics))
+                    .collect::<Result<_, _>>()?,
+            )),
 
             Expr::Name(name, span) if self.strategies.contains_key(name) => {
                 let body = &self.strategies[name];
@@ -1300,6 +1292,51 @@ impl Definitions {
         }
     }
 
+    /// One element of a `;` sequence.
+    ///
+    /// Only the forms that rewrite a side can appear here. `peel` and `descend`
+    /// take the rest of the proof as an argument — they cut the goal up and hand
+    /// the pieces on — so they are not something a later move could follow, and
+    /// saying that is better than letting one be written and quietly ignored.
+    fn resolve_move(
+        &self,
+        expr: &Expr,
+        prog: Option<&Program>,
+        tactics: &mut HashSet<String>,
+    ) -> Result<Move, ScriptError> {
+        if let Expr::Call(name, span, args) = expr
+            && MOVES.contains(&name.as_str())
+        {
+            let [Arg::Expr(inner)] = args.as_slice() else {
+                return Err(ScriptError::new(
+                    format!("`{}` takes exactly one tactic", name),
+                    *span,
+                )
+                .with_help(format!("for example `{}(cleanup)`", name)));
+            };
+            let tactic = self.resolve(inner, prog, &mut HashSet::new())?;
+            return Ok(match name.as_str() {
+                "exact" => Move::Left(tactic),
+                "normalize" => Move::Both(tactic),
+                _ => Move::Right(tactic),
+            });
+        }
+        if let Expr::Call(name, span, _) = expr
+            && STRATEGY_FORMS.contains(&name.as_str())
+        {
+            return Err(
+                ScriptError::new(format!("`{}` cannot be one of a sequence", name), *span)
+                    .with_help(
+                        "it takes the rest of the proof as an argument rather than \
+                         leaving a goal for a later move: write `peel(a ; rhs(b))` \
+                         rather than `peel(a) ; rhs(b)`",
+                    ),
+            );
+        }
+        // Anything else is a tactic, and a tactic drives the left-hand side.
+        Ok(Move::Left(self.resolve(expr, prog, tactics)?))
+    }
+
     fn strategy_form(
         &self,
         name: &str,
@@ -1322,8 +1359,11 @@ impl Definitions {
         };
 
         match name {
-            "exact" => Ok(Strategy::Exact(one_tactic("exact")?)),
-            "normalize" => Ok(Strategy::Normalize(one_tactic("normalize")?)),
+            "exact" | "normalize" | "rhs" => Ok(Strategy::Sequence(vec![match name {
+                "exact" => Move::Left(one_tactic(name)?),
+                "normalize" => Move::Both(one_tactic(name)?),
+                _ => Move::Right(one_tactic(name)?),
+            }])),
             "peel" | "inline" => {
                 let [Arg::Expr(inner)] = args else {
                     return Err(ScriptError::new(
@@ -1836,15 +1876,10 @@ enum Def {
 /// `then(t)` is a tactic that reaches into every then arm, and it would be a
 /// trap for the goal-directed descent to answer to the same word. `descend`
 /// takes the arm by name instead.
-const STRATEGY_FORMS: &[&str] = &["exact", "normalize", "peel", "descend", "inline"];
+const STRATEGY_FORMS: &[&str] = &["exact", "normalize", "rhs", "peel", "descend", "inline"];
 
-/// Where an expression starts, for an error that has to point at one.
-fn span_of(expr: &Expr) -> Option<Span> {
-    match expr {
-        Expr::Name(_, span) | Expr::Call(_, span, _) | Expr::Term(_, span, _) => Some(*span),
-        Expr::Seq(parts) | Expr::Choice(parts) => parts.first().and_then(span_of),
-    }
-}
+/// The forms that rewrite one side and leave a goal, so may be sequenced.
+const MOVES: &[&str] = &["exact", "normalize", "rhs"];
 
 const COMBINATORS: &[(&str, Shape)] = &[
     ("each", Shape::Rules),
@@ -2425,12 +2460,37 @@ mod tests {
         );
     }
 
+    /// Moves sequence, which is the whole point of their being moves: each
+    /// rewrites one side and leaves a goal for the next.
     #[test]
-    fn a_strategy_cannot_be_sequenced_with_a_semicolon() {
+    fn moves_sequence_with_a_semicolon() {
+        let lib = corpus("identity foo { drop 0 } = { drop 0 };");
+        for source in [
+            "proof foo = cleanup; rhs(dips);",
+            "proof foo = exact(cleanup); rhs(unfold_all);",
+            "proof foo = rhs(dips); rhs(cleanup); normalize(all);",
+        ] {
+            let prog = Program::new(&lib);
+            let file = hant(&lib, source).expect("parses");
+            let compiled = file
+                .compile(&file.proofs[0], &prog)
+                .unwrap_or_else(|e| panic!("{}", e.render_in(source, "x.hant")));
+            assert!(matches!(compiled, Strategy::Sequence(_)), "{}", source);
+        }
+    }
+
+    /// ...and the forms that take the rest of the proof as an argument cannot,
+    /// since there is no goal left for a later move to be handed.
+    #[test]
+    fn a_form_that_takes_a_continuation_is_not_a_move() {
         let lib = corpus("identity foo { drop 0 } = { drop 0 };");
         let rendered = proof_err(&lib, "proof foo = cleanup; peel(cleanup);");
-        assert!(rendered.contains("cannot be sequenced"), "{}", rendered);
-        assert!(rendered.contains("try one and fall back"), "{}", rendered);
+        assert!(
+            rendered.contains("cannot be one of a sequence"),
+            "{}",
+            rendered
+        );
+        assert!(rendered.contains("peel(a ; rhs(b))"), "{}", rendered);
     }
 
     #[test]
