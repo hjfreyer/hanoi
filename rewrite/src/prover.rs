@@ -110,14 +110,18 @@ pub(crate) enum Strategy {
     /// A single move is a sequence of one, which is why `exact(t)`,
     /// `normalize(t)` and `rhs(t)` are spellings of a sequence rather than
     /// leaves of their own.
-    Sequence(Vec<Move>),
-    /// `peel(s)`: strip the longest common prefix and suffix, then `s` on what
-    /// is left. Fails when there is nothing to strip — see [`Prover::peel`].
-    Peel(Box<Strategy>),
+    Sequence {
+        moves: Vec<Move>,
+        /// What discharges whatever the moves left.
+        ///
+        /// Only [`Descend`](Strategy::Descend) and a choice need this: a branch
+        /// forks into two sub-goals and a sequence is linear, so there is
+        /// nowhere for the second to go. Everything else transforms the goal and
+        /// is a move.
+        then: Option<Box<Strategy>>,
+    },
     /// `descend(...)`: congruence into the one node each side has reduced to.
     Descend(Descent),
-    /// `inline(s)`: unfold every call on both sides, then `s` on the result.
-    Inline(Box<Strategy>),
     /// `s1 | s2`: try, and fall back.
     Choice(Vec<Strategy>),
 }
@@ -139,6 +143,16 @@ pub(crate) enum Move {
     Right(Tactic),
     /// `normalize(t)`: both, with the same tactic.
     Both(Tactic),
+    /// `peel`: narrow the goal to what the two sides do *not* already share.
+    ///
+    /// A move rather than something taking the rest of the proof, because that
+    /// is what it is: it leaves a smaller goal. What made it look otherwise was
+    /// lifting — the steps that follow address a window that has moved, and a
+    /// continuation is one place to do that shifting. Carrying the offset along
+    /// the sequence is another, and it is the one that composes.
+    Peel,
+    /// `inline`: unfold every call on both sides.
+    Inline,
 }
 
 /// Which children `descend` reaches into.
@@ -403,10 +417,8 @@ impl Prover<'_> {
     fn solve(&self, goal: &Goal, strategy: &Strategy) -> Result<Solved, Unproved> {
         match strategy {
             Strategy::Blind(tactic) => self.blind(goal, tactic),
-            Strategy::Sequence(moves) => self.sequence(goal, moves),
-            Strategy::Peel(inner) => self.peel(goal, inner),
+            Strategy::Sequence { moves, then } => self.sequence(goal, moves, then.as_deref()),
             Strategy::Descend(descent) => self.descend(goal, descent),
-            Strategy::Inline(inner) => self.inline(goal, inner),
             Strategy::Choice(parts) => self.choice(goal, parts),
         }
     }
@@ -464,17 +476,31 @@ impl Prover<'_> {
         })
     }
 
-    /// A sequence of moves, and the comparison that closes it.
+    /// A sequence of moves, and whatever closes what they left.
     ///
     /// The left's script runs forwards and the right's is inverted onto the end,
     /// so however many moves drove whichever side, what comes out reads
     /// `LHS ⇒ RHS` like any other derivation. That is sound for the three
     /// reasons [`invert`] is written down under.
-    fn sequence(&self, goal: &Goal, moves: &[Move]) -> Result<Solved, Unproved> {
+    ///
+    /// **`window` is what makes `peel` a move.** Narrowing the goal shifts every
+    /// later step sideways, and carrying the offset along the sequence is how
+    /// that shift gets applied — [`Location::under`] once per move, exactly as a
+    /// decomposition would have done it at the point it handed a sub-goal on.
+    /// The scripts that come out are relative to *this* goal, so a sequence
+    /// nested inside a `descend` is lifted once more by the descend and not
+    /// twice by itself.
+    fn sequence(
+        &self,
+        goal: &Goal,
+        moves: &[Move],
+        then: Option<&Strategy>,
+    ) -> Result<Solved, Unproved> {
         let (mut lhs, mut rhs) = (goal.lhs.clone(), goal.rhs.clone());
         let (mut left, mut right) = (Script::new(), Script::new());
         let mut misses = Vec::new();
         let (mut drove_left, mut drove_right) = (false, false);
+        let mut window = 0usize;
 
         for step in moves {
             // Misses come from the side the author *named*. An aimed step is a
@@ -485,31 +511,73 @@ impl Prover<'_> {
                 Move::Left(tactic) => {
                     let ran = self.run(tactic, lhs, Unproved::ran)?;
                     lhs = ran.nodes;
-                    left.extend(ran.script);
+                    left.extend(lift(ran.script, &[], window));
                     misses.extend(ran.misses);
                     drove_left = true;
                 }
                 Move::Right(tactic) => {
                     let ran = self.run(tactic, rhs, Unproved::ran)?;
                     rhs = ran.nodes;
-                    right.extend(ran.script);
+                    right.extend(lift(ran.script, &[], window));
                     misses.extend(ran.misses);
                     drove_right = true;
                 }
                 Move::Both(tactic) => {
                     let l = self.run(tactic, lhs, |e| Unproved::Inlining("left-hand", e))?;
                     let r = self.run(tactic, rhs, |e| Unproved::Inlining("right-hand", e))?;
-                    lhs = l.nodes;
-                    rhs = r.nodes;
-                    left.extend(l.script);
-                    right.extend(r.script);
+                    (lhs, rhs) = (l.nodes, r.nodes);
+                    left.extend(lift(l.script, &[], window));
+                    right.extend(lift(r.script, &[], window));
                     misses.extend(l.misses);
                     (drove_left, drove_right) = (true, true);
+                }
+                Move::Inline => {
+                    let l = self.unfold(lhs, "left-hand")?;
+                    let r = self.unfold(rhs, "right-hand")?;
+                    (lhs, rhs) = (l.nodes, r.nodes);
+                    left.extend(lift(l.script, &[], window));
+                    right.extend(lift(r.script, &[], window));
+                    (drove_left, drove_right) = (true, true);
+                }
+                Move::Peel => {
+                    let (prefix, suffix) = ends(&lhs, &rhs);
+                    // **Fails when it strips nothing.** A `peel` that quietly
+                    // passed its goal through would be a no-op hiding an
+                    // authoring mistake — the same reason `must(t)` fails when
+                    // `t` changes nothing.
+                    if prefix == 0 && suffix == 0 {
+                        return Err(Unproved::residual(Residual {
+                            at: goal.at.clone(),
+                            lhs,
+                            rhs,
+                            why: "`peel` found nothing the two sides already share at either end."
+                                .to_string(),
+                            labels: REACHED,
+                        }));
+                    }
+                    lhs = lhs[prefix..lhs.len() - suffix].to_vec();
+                    rhs = rhs[prefix..rhs.len() - suffix].to_vec();
+                    // Everything the prefix hid is untouched by every step
+                    // below, so the whole rest of the sequence shifts by it.
+                    window += prefix;
                 }
             }
         }
 
-        if !same_effect_seq(&lhs, &rhs) {
+        // What the moves left, discharged by something that forks — or by the
+        // comparison, which is what a sequence closes with when nothing follows.
+        let mut parts = None;
+        if let Some(then) = then {
+            let sub = Goal {
+                at: goal.at.clone(),
+                lhs,
+                rhs,
+            };
+            let solved = self.solve(&sub, then)?;
+            parts = Some(solved.closed.parts());
+            misses.extend(solved.misses);
+            left.extend(lift(solved.script, &[], window));
+        } else if !same_effect_seq(&lhs, &rhs) {
             return Err(Unproved::residual(Residual {
                 at: goal.at.clone(),
                 lhs,
@@ -537,74 +605,25 @@ impl Prover<'_> {
         let mut script = left;
         script.extend(invert(&right));
         Ok(Solved {
+            closed: match parts {
+                Some(parts) => Closed::ByParts {
+                    steps: script.len(),
+                    parts,
+                },
+                // Nothing drove the right, so the two met where the right
+                // already was — which is what a one-sided proof has always
+                // reported.
+                None if r == 0 => Closed::Exactly { steps: l },
+                None => Closed::Meeting { left: l, right: r },
+            },
             script,
             misses,
-            // Nothing drove the right, so the two met where the right already
-            // was — which is what a one-sided proof has always reported.
-            closed: if r == 0 {
-                Closed::Exactly { steps: l }
-            } else {
-                Closed::Meeting { left: l, right: r }
-            },
         })
     }
 
     // -----------------------------------------------------------------------
     // The decompositions
     // -----------------------------------------------------------------------
-
-    /// `peel(s)`: strip what the two sides already share at each end.
-    ///
-    /// **Fails when it strips nothing.** A `peel` that quietly passed its goal
-    /// through would be a no-op that hides an authoring mistake — the same
-    /// reason `must(t)` fails when `t` changes nothing.
-    fn peel(&self, goal: &Goal, inner: &Strategy) -> Result<Solved, Unproved> {
-        let prefix = goal
-            .lhs
-            .iter()
-            .zip(&goal.rhs)
-            .take_while(|(l, r)| same_effect(l, r))
-            .count();
-        // Never past the prefix: two identical sequences are all prefix, and
-        // counting them twice would take the suffix off the front.
-        let room = goal.lhs.len().min(goal.rhs.len()) - prefix;
-        let suffix = goal
-            .lhs
-            .iter()
-            .rev()
-            .zip(goal.rhs.iter().rev())
-            .take_while(|(l, r)| same_effect(l, r))
-            .count()
-            .min(room);
-
-        if prefix == 0 && suffix == 0 {
-            return Err(Unproved::residual(Residual {
-                at: goal.at.clone(),
-                lhs: goal.lhs.clone(),
-                rhs: goal.rhs.clone(),
-                why: "`peel` found nothing the two sides already share at either end.".to_string(),
-                labels: REACHED,
-            }));
-        }
-
-        let sub = Goal {
-            at: goal.at.clone(),
-            lhs: goal.lhs[prefix..goal.lhs.len() - suffix].to_vec(),
-            rhs: goal.rhs[prefix..goal.rhs.len() - suffix].to_vec(),
-        };
-        let solved = self.solve(&sub, inner)?;
-        // The prefix is untouched by every step below, so the whole sub-script
-        // shifts by exactly its length.
-        let script = lift(solved.script, &[], prefix);
-        Ok(Solved {
-            closed: Closed::ByParts {
-                steps: script.len(),
-                parts: solved.closed.parts(),
-            },
-            script,
-            misses: solved.misses,
-        })
-    }
 
     /// `descend(...)`: congruence into a node both sides open with.
     ///
@@ -742,34 +761,6 @@ impl Prover<'_> {
         }
     }
 
-    /// `inline(s)`: open every call on both sides, then `s`.
-    ///
-    /// The fold-back is the right-hand side's own unfold script read backwards,
-    /// which is the same trick [`blind`](Prover::blind) turns.
-    fn inline(&self, goal: &Goal, inner: &Strategy) -> Result<Solved, Unproved> {
-        let left = self.unfold(goal.lhs.clone(), "left-hand")?;
-        let right = self.unfold(goal.rhs.clone(), "right-hand")?;
-        let sub = Goal {
-            at: goal.at.clone(),
-            lhs: left.nodes,
-            rhs: right.nodes,
-        };
-        let solved = self.solve(&sub, inner)?;
-        // Same sequence, same offset: unfolding moves nothing sideways, so the
-        // sub-script needs no lifting.
-        let mut script = left.script;
-        script.extend(solved.script);
-        script.extend(invert(&right.script));
-        Ok(Solved {
-            closed: Closed::ByParts {
-                steps: script.len(),
-                parts: solved.closed.parts(),
-            },
-            script,
-            misses: solved.misses,
-        })
-    }
-
     /// `s1 | s2`: the first that closes the goal.
     ///
     /// A residual is an alternative not working out, so it is caught; so is a
@@ -890,6 +881,27 @@ fn merge(into: &mut Vec<(&'static str, usize)>, from: Vec<(&'static str, usize)>
     into.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
 }
 
+/// How much of the two sequences already agrees at each end.
+///
+/// The suffix never reaches past the prefix: two identical sequences are all
+/// prefix, and counting them twice would take the suffix off the front.
+fn ends(lhs: &[Node], rhs: &[Node]) -> (usize, usize) {
+    let prefix = lhs
+        .iter()
+        .zip(rhs)
+        .take_while(|(l, r)| same_effect(l, r))
+        .count();
+    let room = lhs.len().min(rhs.len()) - prefix;
+    let suffix = lhs
+        .iter()
+        .rev()
+        .zip(rhs.iter().rev())
+        .take_while(|(l, r)| same_effect(l, r))
+        .count()
+        .min(room);
+    (prefix, suffix)
+}
+
 fn plural(n: usize, one: &str, many: &str) -> String {
     if n == 1 {
         format!("{} {}", n, one)
@@ -978,7 +990,10 @@ mod tests {
         // middle, which the residual's shape is what shows.
         let err = attempt(
             goal,
-            &Strategy::Peel(Box::new(Strategy::Sequence(vec![Move::Left(cleanup())]))),
+            &Strategy::Sequence {
+                moves: vec![Move::Peel, Move::Left(cleanup())],
+                then: None,
+            },
         )
         .err()
         .expect("the middles differ");
@@ -999,7 +1014,10 @@ mod tests {
         let goal = Goal::root(vec![push(1)], vec![push(2)]);
         let err = attempt(
             goal,
-            &Strategy::Peel(Box::new(Strategy::Sequence(vec![Move::Left(id())]))),
+            &Strategy::Sequence {
+                moves: vec![Move::Peel, Move::Left(id())],
+                then: None,
+            },
         )
         .err()
         .expect("there is nothing to peel");
@@ -1020,7 +1038,10 @@ mod tests {
         let solved = ok(
             attempt(
                 goal,
-                &Strategy::Peel(Box::new(Strategy::Sequence(vec![Move::Left(id())]))),
+                &Strategy::Sequence {
+                    moves: vec![Move::Peel, Move::Left(id())],
+                    then: None,
+                },
             ),
             "an empty goal to close with no steps",
         );
@@ -1051,7 +1072,10 @@ mod tests {
         let solved = attempt(
             goal,
             &Strategy::Descend(Descent::Arms {
-                then: Some(Box::new(Strategy::Sequence(vec![Move::Left(cleanup())]))),
+                then: Some(Box::new(Strategy::Sequence {
+                    moves: vec![Move::Left(cleanup())],
+                    then: None,
+                })),
                 els: None,
             }),
         );
@@ -1112,9 +1136,10 @@ mod tests {
         let goal = Goal::root(vec![dip(1)], vec![dip(2)]);
         let err = attempt(
             goal,
-            &Strategy::Descend(Descent::Body(Box::new(Strategy::Sequence(vec![
-                Move::Left(id()),
-            ])))),
+            &Strategy::Descend(Descent::Body(Box::new(Strategy::Sequence {
+                moves: vec![Move::Left(id())],
+                then: None,
+            }))),
         )
         .err()
         .expect("different depths");
@@ -1129,9 +1154,10 @@ mod tests {
         );
         let err = attempt(
             goal,
-            &Strategy::Descend(Descent::Body(Box::new(Strategy::Sequence(vec![
-                Move::Left(id()),
-            ])))),
+            &Strategy::Descend(Descent::Body(Box::new(Strategy::Sequence {
+                moves: vec![Move::Left(id())],
+                then: None,
+            }))),
         )
         .err()
         .expect("two nodes against one");
@@ -1161,7 +1187,10 @@ mod tests {
         // Peeled, the residual is the false middle.
         let err = attempt(
             goal(),
-            &Strategy::Peel(Box::new(Strategy::Sequence(vec![Move::Left(id())]))),
+            &Strategy::Sequence {
+                moves: vec![Move::Peel, Move::Left(id())],
+                then: None,
+            },
         )
         .err()
         .expect("`push 1` is not `push 2`");
@@ -1173,7 +1202,13 @@ mod tests {
 
         // Normalized, both sides annihilate and it closes.
         let solved = ok(
-            attempt(goal(), &Strategy::Sequence(vec![Move::Both(cleanup())])),
+            attempt(
+                goal(),
+                &Strategy::Sequence {
+                    moves: vec![Move::Both(cleanup())],
+                    then: None,
+                },
+            ),
             "both sides to clean up to nothing",
         );
         assert!(matches!(solved.closed, Closed::Meeting { .. }));
@@ -1191,8 +1226,14 @@ mod tests {
             attempt(
                 goal,
                 &Strategy::Choice(vec![
-                    Strategy::Peel(Box::new(Strategy::Sequence(vec![Move::Left(id())]))),
-                    Strategy::Sequence(vec![Move::Both(cleanup())]),
+                    Strategy::Sequence {
+                        moves: vec![Move::Peel, Move::Left(id())],
+                        then: None,
+                    },
+                    Strategy::Sequence {
+                        moves: vec![Move::Both(cleanup())],
+                        then: None,
+                    },
                 ]),
             ),
             "the second alternative to close it",

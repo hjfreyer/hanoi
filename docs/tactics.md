@@ -28,7 +28,8 @@ examples below use them:
 
 `-t` takes a **strategy**, which is a sequence of moves over the goal:
 `cleanup ; rhs(unfold_all)` drives the left with one tactic and the right with
-another. `--width <n>` widens each column of a side-by-side listing when the
+another, and `peel ; descend(then: cleanup)` narrows the goal and then decomposes
+what is left. `--width <n>` widens each column of a side-by-side listing when the
 elision took the part you wanted.
 
 A run of this tool answers a question and forgets it. To write the answer down —

@@ -1224,7 +1224,9 @@ impl Definitions {
     /// resolver in its own words, not a signal about the whole expression.
     fn mentions_strategy(&self, expr: &Expr) -> bool {
         match expr {
-            Expr::Name(name, _) => self.strategies.contains_key(name),
+            Expr::Name(name, _) => {
+                BARE_MOVES.contains(&name.as_str()) || self.strategies.contains_key(name)
+            }
             Expr::Call(name, _, _) => {
                 STRATEGY_FORMS.contains(&name.as_str()) || self.strategies.contains_key(name)
             }
@@ -1253,12 +1255,28 @@ impl Definitions {
             // `;` between moves, where each rewrites one side of the goal and
             // hands the rest of the sequence what it left. This is the reading
             // that makes `cleanup ; rhs(dips)` mean what it looks like.
-            Expr::Seq(parts) => Ok(Strategy::Sequence(
-                parts
+            //
+            // A strategy that *forks* — `descend`, or a choice — discharges the
+            // goal rather than narrowing it, so it can only come last, and there
+            // is nothing arbitrary about that: a branch has two sub-goals and a
+            // sequence has one place to put the next thing.
+            Expr::Seq(parts) => {
+                let (last, init) = parts.split_last().expect("a sequence has parts");
+                let mut moves: Vec<Move> = init
                     .iter()
                     .map(|e| self.resolve_move(e, prog, tactics))
-                    .collect::<Result<_, _>>()?,
-            )),
+                    .collect::<Result<_, _>>()?;
+                if self.is_move(last) {
+                    moves.push(self.resolve_move(last, prog, tactics)?);
+                    return Ok(Strategy::Sequence { moves, then: None });
+                }
+                Ok(Strategy::Sequence {
+                    moves,
+                    then: Some(Box::new(
+                        self.resolve_strategy(last, prog, visiting, tactics)?,
+                    )),
+                })
+            }
 
             Expr::Name(name, span) if self.strategies.contains_key(name) => {
                 let body = &self.strategies[name];
@@ -1287,6 +1305,12 @@ impl Definitions {
                 self.strategy_form(name, *span, args, prog, visiting, tactics)
             }
 
+            // A move on its own is a sequence of one.
+            Expr::Name(name, _) if BARE_MOVES.contains(&name.as_str()) => Ok(Strategy::Sequence {
+                moves: vec![self.resolve_move(expr, prog, tactics)?],
+                then: None,
+            }),
+
             // Everything else is a tactic, which means today's reading.
             other => Ok(Strategy::Blind(self.resolve(other, prog, tactics)?)),
         }
@@ -1304,6 +1328,13 @@ impl Definitions {
         prog: Option<&Program>,
         tactics: &mut HashSet<String>,
     ) -> Result<Move, ScriptError> {
+        if let Expr::Name(name, _) = expr {
+            match name.as_str() {
+                "peel" => return Ok(Move::Peel),
+                "inline" => return Ok(Move::Inline),
+                _ => {}
+            }
+        }
         if let Expr::Call(name, span, args) = expr
             && MOVES.contains(&name.as_str())
         {
@@ -1325,16 +1356,36 @@ impl Definitions {
             && STRATEGY_FORMS.contains(&name.as_str())
         {
             return Err(
-                ScriptError::new(format!("`{}` cannot be one of a sequence", name), *span)
-                    .with_help(
-                        "it takes the rest of the proof as an argument rather than \
-                         leaving a goal for a later move: write `peel(a ; rhs(b))` \
-                         rather than `peel(a) ; rhs(b)`",
-                    ),
+                ScriptError::new(format!("`{}` has to come last", name), *span).with_help(
+                    "it forks the goal into more than one, and a sequence has one \
+                     place to put what follows. Put the rest inside it instead",
+                ),
             );
         }
         // Anything else is a tactic, and a tactic drives the left-hand side.
         Ok(Move::Left(self.resolve(expr, prog, tactics)?))
+    }
+
+    /// Whether this can be one of a sequence rather than the end of it.
+    ///
+    /// Everything is, except the two kinds of thing that discharge a goal rather
+    /// than narrowing it: a form that forks, and a named strategy — which is
+    /// arbitrary, so nothing here can say what it leaves behind. A plain tactic
+    /// is a move like any other, since driving the left-hand side is what one
+    /// does to a goal.
+    fn is_move(&self, expr: &Expr) -> bool {
+        let named_strategy = |name: &String| self.strategies.contains_key(name);
+        match expr {
+            Expr::Name(name, _) => BARE_MOVES.contains(&name.as_str()) || !named_strategy(name),
+            Expr::Call(name, _, _) => {
+                MOVES.contains(&name.as_str())
+                    || !(STRATEGY_FORMS.contains(&name.as_str()) || named_strategy(name))
+            }
+            // A rule completed by a term, which is a tactic, which drives the
+            // left. (It will be refused for other reasons, in its own words.)
+            Expr::Term(_, _, _) => true,
+            Expr::Seq(_) | Expr::Choice(_) => false,
+        }
     }
 
     fn strategy_form(
@@ -1359,25 +1410,24 @@ impl Definitions {
         };
 
         match name {
-            "exact" | "normalize" | "rhs" => Ok(Strategy::Sequence(vec![match name {
-                "exact" => Move::Left(one_tactic(name)?),
-                "normalize" => Move::Both(one_tactic(name)?),
-                _ => Move::Right(one_tactic(name)?),
-            }])),
-            "peel" | "inline" => {
-                let [Arg::Expr(inner)] = args else {
-                    return Err(ScriptError::new(
-                        format!("`{}` takes exactly one strategy", name),
-                        span,
-                    )
-                    .with_help(format!("for example `{}(cleanup)`", name)));
-                };
-                let inner = Box::new(self.resolve_strategy(inner, prog, visiting, tactics)?);
-                Ok(match name {
-                    "peel" => Strategy::Peel(inner),
-                    _ => Strategy::Inline(inner),
-                })
-            }
+            "exact" | "normalize" | "rhs" => Ok(Strategy::Sequence {
+                moves: vec![match name {
+                    "exact" => Move::Left(one_tactic(name)?),
+                    "normalize" => Move::Both(one_tactic(name)?),
+                    _ => Move::Right(one_tactic(name)?),
+                }],
+                then: None,
+            }),
+            "peel" | "inline" => Err(ScriptError::new(
+                format!("`{}` takes no arguments", name),
+                span,
+            )
+            .with_help(format!(
+                "it narrows the goal and leaves one, so it is a move rather \
+                             than something taking the rest of the proof: write \
+                             `{} ; <the rest>`",
+                name
+            ))),
             _ => self.descend(span, args, prog, visiting, tactics),
         }
     }
@@ -1880,6 +1930,10 @@ const STRATEGY_FORMS: &[&str] = &["exact", "normalize", "rhs", "peel", "descend"
 
 /// The forms that rewrite one side and leave a goal, so may be sequenced.
 const MOVES: &[&str] = &["exact", "normalize", "rhs"];
+
+/// The moves that take no argument, since what they do to a goal is not
+/// parameterized by a tactic.
+const BARE_MOVES: &[&str] = &["peel", "inline"];
 
 const COMBINATORS: &[(&str, Shape)] = &[
     ("each", Shape::Rules),
@@ -2475,22 +2529,8 @@ mod tests {
             let compiled = file
                 .compile(&file.proofs[0], &prog)
                 .unwrap_or_else(|e| panic!("{}", e.render_in(source, "x.hant")));
-            assert!(matches!(compiled, Strategy::Sequence(_)), "{}", source);
+            assert!(matches!(compiled, Strategy::Sequence { .. }), "{}", source);
         }
-    }
-
-    /// ...and the forms that take the rest of the proof as an argument cannot,
-    /// since there is no goal left for a later move to be handed.
-    #[test]
-    fn a_form_that_takes_a_continuation_is_not_a_move() {
-        let lib = corpus("identity foo { drop 0 } = { drop 0 };");
-        let rendered = proof_err(&lib, "proof foo = cleanup; peel(cleanup);");
-        assert!(
-            rendered.contains("cannot be one of a sequence"),
-            "{}",
-            rendered
-        );
-        assert!(rendered.contains("peel(a ; rhs(b))"), "{}", rendered);
     }
 
     #[test]
@@ -2523,8 +2563,8 @@ mod tests {
             "proof foo = descend(then: cleanup, else: dips);",
             // One arm named is the claim that the other needs no proof.
             "proof foo = descend(then: cleanup);",
-            "proof foo = peel(descend(then: normalize(all)));",
-            "proof foo = inline(exact(cleanup));",
+            "proof foo = peel ; descend(then: normalize(all));",
+            "proof foo = inline ; exact(cleanup);",
         ] {
             let prog = Program::new(&lib);
             let file = hant(&lib, source).expect("parses");
@@ -2556,7 +2596,7 @@ mod tests {
     #[test]
     fn a_strategy_may_not_recurse() {
         let lib = corpus("identity foo { drop 0 } = { drop 0 };");
-        let rendered = proof_err(&lib, "strategy loop = peel(loop);\nproof foo = loop;");
+        let rendered = proof_err(&lib, "strategy loop = peel ; loop;\nproof foo = loop;");
         assert!(
             rendered.contains("defined in terms of itself"),
             "{}",
