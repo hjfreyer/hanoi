@@ -240,3 +240,6 @@ Two things are worth knowing when writing one:
   and the language for *finding* a derivation.
 - [docs/identities.md](identities.md) — stating the claim a derivation
   discharges.
+- [docs/egglog.md](egglog.md) — a producer worked out in full: an e-graph
+  saturated on both sides of an identity, and its explanation read out as one of
+  these files.

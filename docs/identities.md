@@ -363,6 +363,10 @@ themselves are now in the language.
   goes tree-shaped while the script stays `Vec<Step>`, and replay,
   `--show-script` and `--step` need no change at all.
 
+  **An e-graph is that congruence, bought rather than built** — and bought
+  outside the trust boundary, since what it produces is a `.hand` file like any
+  other. [docs/egglog.md](egglog.md) works the encoding out.
+
   Two things that are not free. `diff::align` is not reusable — it aligns
   rendered lines, not nodes — so node-level alignment is a sibling with the same
   shape. And termination stops being the generator's private problem: today "a

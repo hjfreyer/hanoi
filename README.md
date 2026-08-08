@@ -194,3 +194,4 @@ Use the helper shell scripts at the project root to execute test suites:
 - [docs/tactics.md](docs/tactics.md): The tactic language the `rewrite` crate uses to inline and rewrite compiled bytecode — the rule set, the combinators, and the laws they obey.
 - [docs/identities.md](docs/identities.md): Stating an identity in a `.hana`, proving it in the `.hant` beside it, and what `bin/prove` checks.
 - [docs/derivations.md](docs/derivations.md): The text format a rewrite script is written in, and what `bin/replay` checks — the interface a proof producer in any language writes to.
+- [docs/egglog.md](docs/egglog.md): A design for finding proofs by equality saturation — what the equations would have to be encoded as, and how an e-graph's explanation becomes a derivation the replayer decides. Not implemented.
