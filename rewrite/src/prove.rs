@@ -6,11 +6,15 @@
 //! printed and lost, so nothing re-checked it when the library changed
 //! underneath.
 //!
-//! **A proof is one-sided, and the comparison is up to inlining.** The tactic
-//! rewrites the left-hand side; the result must be the right-hand side, either
-//! as written or after both are unfolded. Every step is an equation, so what
-//! the run leaves behind is a derivation LHS ⇒ RHS — one linear script, which
-//! is a thing that can be replayed, printed, stepped through and diffed.
+//! **A proof is a strategy, and a bare tactic is one.** Written bare it is
+//! one-sided and compared up to inlining: the tactic rewrites the left-hand
+//! side, and the result must be the right-hand side, either as written or after
+//! both are unfolded. That is the whole of what is described below, and it is
+//! what every proof said before [`crate::prover`] existed. A proof that names a
+//! strategy can also drive both sides, or cut the goal into smaller ones — but
+//! whatever route it takes, what the run leaves behind is the same thing: a
+//! derivation LHS ⇒ RHS, one linear script that can be replayed, printed,
+//! stepped through and diffed.
 //!
 //! Unfolding being an equation like any other is what makes the second reading
 //! sound: it is the axiom the library contributes by defining a sentence, so
@@ -43,11 +47,12 @@ use bytecode::{Identity, IdentityIndex, Library, SentenceIndex, SourceMap};
 
 use crate::applier::apply_script;
 use crate::diff::side_by_side;
-use crate::engine::{Env, Tactic, TacticError, miss_report, run as run_tactic};
+use crate::engine::{Tactic, TacticError, miss_report};
 use crate::ir::{Node, build, same_effect_seq};
 use crate::print::render_nodes;
 use crate::program::Program;
-use crate::rule::{Script, Step, invert};
+use crate::prover::{self, Closed, Goal, Residual, Strategy, Unproved};
+use crate::rule::{Script, Step};
 use crate::script::{Definitions, PRELUDE, ProofFile, ScriptError};
 use crate::serial;
 use crate::{DEFAULT_FUEL, Precondition, check_preconditions, precondition_explanation};
@@ -506,8 +511,12 @@ enum Failure {
     Inlining(&'static str, Box<TacticError>),
     /// An aimed step matched nothing.
     Missed(Vec<String>),
-    /// It ran, and landed somewhere else.
-    NotReached(Vec<Node>),
+    /// It ran, and a goal is left over.
+    ///
+    /// A whole-term diff when the proof was one blind tactic, and the smallest
+    /// disagreement — one branch arm, named — when it decomposed. That
+    /// narrowing is worth having even for a proof that proves nothing new.
+    NotReached(Residual),
     /// The script does not reproduce the run. A bug here, not in the proof.
     Replay(String),
 }
@@ -520,44 +529,12 @@ struct Proven {
     closed: Closed,
 }
 
-/// The two ways a proof reaches the right-hand side.
-enum Closed {
-    /// The tactic landed on it as written. The derivation is the proof's own
-    /// steps and nothing else.
-    Exactly { steps: usize },
-    /// It landed somewhere the right-hand side *inlines to*. Unfolding is an
-    /// equation like any other — the axiom the library contributes by defining
-    /// a sentence — so two terms with the same fully inlined form are equal.
-    UpToInlining {
-        /// The proof's own steps.
-        steps: usize,
-        /// Inlining what the proof reached.
-        unfolded: usize,
-        /// Folding the right-hand side back up, which is the *forward* unfold
-        /// of the right-hand side read backwards.
-        folded: usize,
-    },
-}
-
-impl Closed {
-    /// The count a passing line reports.
-    fn summary(&self) -> String {
-        match self {
-            Closed::Exactly { steps } => plural(*steps, "step", "steps"),
-            Closed::UpToInlining {
-                steps,
-                unfolded,
-                folded,
-            } => format!(
-                "{} + {} up to inlining",
-                plural(*steps, "step", "steps"),
-                unfolded + folded
-            ),
-        }
-    }
-}
-
 /// Runs one proof, returning its derivation.
+///
+/// The search itself is [`crate::prover`]'s. What is left here is the part that
+/// makes an answer trustworthy: the preconditions both sides have to satisfy,
+/// the aimed steps that had better have landed, and the replay that ends the
+/// derivation at the right-hand side rather than at an equality test.
 fn check(
     prog: &Program,
     identity: &Identity,
@@ -577,69 +554,32 @@ fn check(
         }
     }
 
-    let tactic = compile(prog, file, proof)?;
+    let strategy = compile(prog, file, proof)?;
     let lhs = tree(prog, identity.lhs);
     let rhs = tree(prog, identity.rhs);
 
-    let env = Env::new(prog, opts.fuel, opts.check);
-    let (got, s1) =
-        run_tactic(&env, &tactic, lhs.clone()).map_err(|e| Failure::Ran(Box::new(e)))?;
+    let goal = Goal::root(lhs.clone(), rhs.clone());
+    let solved = prover::solve(prog, inline, &goal, &strategy, opts.fuel, opts.check)?;
 
-    let misses = env.misses();
-    if !misses.is_empty() {
-        return Err(Failure::Missed(miss_report(&misses)));
+    if !solved.misses.is_empty() {
+        return Err(Failure::Missed(miss_report(&solved.misses)));
     }
 
-    // The claim that makes a script a derivation rather than a log: replaying
-    // it against a fresh build reproduces the run *exactly*. Checked here on
-    // the proof's own steps, where `==` is available and is the stronger
-    // comparison — the end of the whole derivation is measured by effect.
-    let mut replayed = lhs.clone();
-    match apply_script(prog, &mut replayed, &s1, opts.check) {
-        Ok(()) if replayed == got => {}
-        Ok(()) => return Err(Failure::Replay("it produced a different tree".to_string())),
-        Err(err) => return Err(Failure::Replay(err.to_string())),
-    }
-
-    let steps = s1.len();
+    // And the derivation ends at the right-hand side. That is the thing a
+    // one-sided check could not say: a script that stopped at what the tactic
+    // reached left the last hop an equality test rather than a splice the
+    // applier had to accept.
+    //
     // Compared by effect, not by `==`. Phase 4 mints a fresh `SentenceIndex`
     // for every inline block, so the right-hand side's blocks can never share
     // provenance with anything the left-hand side rewrote into — and provenance
     // is not part of a term's identity.
-    let (script, closed) = if same_effect_seq(&got, &rhs) {
-        (s1, Closed::Exactly { steps })
-    } else {
-        // Up to inlining. The fold-back is generated by running the *forward*
-        // unfold on the right-hand side and inverting the script — which is why
-        // `inv(unfold)` having no matcher costs nothing here. Nothing can read a
-        // window and say which sentence to fold into, and nothing has to: the
-        // step already names it.
-        let (left, s2) = normalize(prog, inline, got.clone(), "left-hand", opts)?;
-        let (right, s3) = normalize(prog, inline, rhs.clone(), "right-hand", opts)?;
-        if !same_effect_seq(&left, &right) {
-            return Err(Failure::NotReached(got));
-        }
-        let (unfolded, folded) = (s2.len(), s3.len());
-        let mut script = s1;
-        script.extend(s2);
-        script.extend(invert(&s3));
-        (
-            script,
-            Closed::UpToInlining {
-                steps,
-                unfolded,
-                folded,
-            },
-        )
-    };
-
-    // And the derivation ends at the right-hand side. That is the thing the old
-    // one-sided check could not say: its script stopped at what the tactic
-    // reached, and the last hop was an equality test rather than a splice the
-    // applier had to accept.
     let mut landed = lhs;
-    match apply_script(prog, &mut landed, &script, opts.check) {
-        Ok(()) if same_effect_seq(&landed, &rhs) => Ok(Proven { script, closed }),
+    match apply_script(prog, &mut landed, &solved.script, opts.check) {
+        Ok(()) if same_effect_seq(&landed, &rhs) => Ok(Proven {
+            script: solved.script,
+            closed: solved.closed,
+        }),
         Ok(()) => Err(Failure::Replay(
             "it did not land on the right-hand side".to_string(),
         )),
@@ -647,23 +587,18 @@ fn check(
     }
 }
 
-/// Inlines every call, and says which side it was doing it to.
-///
-/// A separate `Env` per side, so the two scripts stay separable — the left's is
-/// appended and the right's is inverted. Neither can record a miss: `unfold_all`
-/// aims at nothing.
-fn normalize(
-    prog: &Program,
-    inline: &Tactic,
-    nodes: Vec<Node>,
-    which: &'static str,
-    opts: &Options,
-) -> Result<(Vec<Node>, Script), Failure> {
-    let env = Env::new(prog, opts.fuel, opts.check);
-    run_tactic(&env, inline, nodes).map_err(|e| Failure::Inlining(which, Box::new(e)))
+impl From<Unproved> for Failure {
+    fn from(err: Unproved) -> Failure {
+        match err {
+            Unproved::Residual(residual) => Failure::NotReached(residual),
+            Unproved::Ran(err) => Failure::Ran(err),
+            Unproved::Inlining(which, err) => Failure::Inlining(which, err),
+            Unproved::Replay(why) => Failure::Replay(why),
+        }
+    }
 }
 
-fn compile(prog: &Program, file: &ProvenFile, proof: usize) -> Result<Tactic, Failure> {
+fn compile(prog: &Program, file: &ProvenFile, proof: usize) -> Result<Strategy, Failure> {
     file.file
         .compile(&file.file.proofs[proof], prog)
         .map_err(|e| Failure::Proof(e.render_in(&file.source, &file.hant.display().to_string())))
@@ -730,19 +665,21 @@ impl Failure {
                 );
                 out.extend(cited(file, proof));
             }
-            Failure::NotReached(got) => {
-                out.push("  the proof ran, but did not reach the right-hand side,".to_string());
-                out.push("  and inlining both sides did not reconcile them either.".to_string());
+            Failure::NotReached(residual) => {
+                out.push(format!("  {}", residual.why));
+                if let Some(context) = residual.context() {
+                    out.push(String::new());
+                    out.push(format!("  The goal left over is inside {}.", context));
+                }
                 out.extend(cited(file, proof));
                 out.push(String::new());
-                let want = tree(prog, identity.rhs);
                 // Without origins: the two sides came from two sentences, so
                 // every `<inline>` label differs and none of the differences
                 // mean anything. `same_effect_seq` ignores them for the same
                 // reason, and a listing being compared has to agree with the
                 // comparison.
-                let left = render_nodes(prog, got, opts.stack, true, false);
-                let right = render_nodes(prog, &want, opts.stack, true, false);
+                let left = render_nodes(prog, &residual.lhs, opts.stack, true, false);
+                let right = render_nodes(prog, &residual.rhs, opts.stack, true, false);
                 let rows = side_by_side(&left, &right, "what it reached", "the right-hand side");
                 if rows.is_empty() {
                     // Two listings that read alike but are not the same by
@@ -787,7 +724,12 @@ impl Failure {
 /// went somewhere and came back.
 fn derivation(prog: &Program, proven: &Proven) -> Vec<String> {
     match proven.closed {
-        Closed::Exactly { .. } => crate::derivation_lines(prog, "derivation", &proven.script),
+        // A decomposed proof is one derivation like any other. Its steps went
+        // into branch arms and came back out addressed to the whole term, and
+        // there is no seam left to point at.
+        Closed::Exactly { .. } | Closed::Meeting { .. } | Closed::ByParts { .. } => {
+            crate::derivation_lines(prog, "derivation", &proven.script)
+        }
         Closed::UpToInlining {
             steps,
             unfolded,
@@ -1364,6 +1306,167 @@ mod tests {
         let (code, report) = c.run();
         assert_eq!(code, OK, "{}", report);
         assert!(report.contains("up to inlining"), "{}", report);
+    }
+
+    // -----------------------------------------------------------------------
+    // Strategies
+    // -----------------------------------------------------------------------
+
+    /// Two spellings of one test, neither of them the normal form. Nothing
+    /// one-sided closes this: rewriting the left reaches the normal form and
+    /// the right is still where it was written.
+    const TWO_SPELLINGS: &str = "identity foo { is_bool is_bool } = { is_int is_bool };";
+
+    #[test]
+    fn a_bare_tactic_cannot_close_what_normalize_can() {
+        let c = Corpus::new("one_sided", TWO_SPELLINGS, Some("proof foo = cleanup;"));
+        let (code, report) = c.run();
+        assert_eq!(code, FAILED, "{}", report);
+
+        let c = Corpus::new(
+            "meeting",
+            TWO_SPELLINGS,
+            Some("proof foo = normalize(cleanup);"),
+        );
+        let (code, report) = c.run();
+        assert_eq!(code, OK, "{}", report);
+        assert!(report.contains("meeting in the middle"), "{}", report);
+    }
+
+    /// The right-hand side is driven by the proof's own tactic, which was never
+    /// written to describe it — so an aim that misses over there says nothing
+    /// about the proof and must not fail it.
+    #[test]
+    fn an_aim_that_misses_on_the_right_does_not_fail_the_proof() {
+        let c = Corpus::new(
+            "right_miss",
+            TWO_SPELLINGS,
+            // `at(0, bool_result)` lands on the left and has nothing to hit on
+            // the right, where the term starts `is_int`.
+            Some("proof foo = normalize(try(at(0, bool_result)); cleanup);"),
+        );
+        let (code, report) = c.run();
+        assert_eq!(code, OK, "{}", report);
+    }
+
+    /// Congruence end to end: the steps come back addressed to the arm they
+    /// were found in, and the arm nobody proved is checked rather than assumed.
+    #[test]
+    fn descending_proves_one_arm_and_checks_the_other() {
+        let c = Corpus::new(
+            "descend",
+            "identity foo { branch { is_bool is_bool } { not } } \
+             = { branch { is_int is_bool } { not } };",
+            Some("proof foo = descend(then: normalize(cleanup));"),
+        );
+        let (code, report) = c.run_with(Options {
+            show_script: true,
+            ..Options::default()
+        });
+        assert_eq!(code, OK, "{}", report);
+        assert!(report.contains("in 2 parts"), "{}", report);
+        // Every step lifted into the then arm, which is what congruence is.
+        assert!(report.contains("[0.then]"), "{}", report);
+    }
+
+    /// An arm with no strategy is a claim that it needs none, and the report
+    /// says which arm broke it rather than diffing the whole term.
+    #[test]
+    fn a_residual_names_the_arm_it_is_in() {
+        let c = Corpus::new(
+            "residual",
+            "identity foo { branch { not } { drop 0 push 1 } } \
+             = { branch { not } { drop 0 push 2 } };",
+            Some("proof foo = descend(then: exact(id));"),
+        );
+        let (code, report) = c.run();
+        assert_eq!(code, FAILED, "{}", report);
+        assert!(
+            report.contains("`else` arms are not already equal"),
+            "{}",
+            report
+        );
+        assert!(report.contains("inside [0.else]"), "{}", report);
+        // ...and the diff is the arm, not the branch that contains it.
+        assert!(report.contains("push 1"), "{}", report);
+        assert!(!report.contains("branch"), "{}", report);
+    }
+
+    /// The discipline that keeps a decomposition from becoming a silent no-op
+    /// when the term moves out from under it.
+    #[test]
+    fn peeling_nothing_fails_rather_than_passing_through() {
+        let c = Corpus::new(
+            "peel_nothing",
+            TESTING_A_TEST,
+            Some("proof testing_a_test = peel(cleanup);"),
+        );
+        let (code, report) = c.run();
+        assert_eq!(code, FAILED, "{}", report);
+        assert!(report.contains("found nothing"), "{}", report);
+    }
+
+    /// The garden path, at the level a proof is written: peeling a shared
+    /// suffix off a true goal can leave a false one. Both readings are correct
+    /// — which is why the author picks, and why nothing picks for them.
+    #[test]
+    fn peeling_can_strand_a_goal_that_normalize_would_close() {
+        const SHARED_SUFFIX: &str = "identity foo { push 1 drop 0 } = { push 2 drop 0 };";
+
+        let c = Corpus::new(
+            "peeled",
+            SHARED_SUFFIX,
+            Some("proof foo = peel(exact(id));"),
+        );
+        let (code, report) = c.run();
+        assert_eq!(code, FAILED, "{}", report);
+        assert!(report.contains("push 1"), "{}", report);
+        assert!(report.contains("push 2"), "{}", report);
+
+        let c = Corpus::new(
+            "not_peeled",
+            SHARED_SUFFIX,
+            Some("proof foo = normalize(cleanup);"),
+        );
+        let (code, report) = c.run();
+        assert_eq!(code, OK, "{}", report);
+    }
+
+    /// ...and `|` is how a proof says to try one and fall back.
+    #[test]
+    fn a_choice_falls_back_to_the_next_strategy() {
+        let c = Corpus::new(
+            "fallback",
+            "identity foo { push 1 drop 0 } = { push 2 drop 0 };",
+            Some("proof foo = peel(exact(id)) | normalize(cleanup);"),
+        );
+        let (code, report) = c.run();
+        assert_eq!(code, OK, "{}", report);
+    }
+
+    /// A named strategy, which is where a route that keeps coming up belongs —
+    /// in the corpus, readable and changeable, rather than built in.
+    #[test]
+    fn a_strategy_can_be_named() {
+        let c = Corpus::new(
+            "named",
+            TWO_SPELLINGS,
+            Some("strategy meet = normalize(cleanup);\nproof foo = meet;"),
+        );
+        let (code, report) = c.run();
+        assert_eq!(code, OK, "{}", report);
+    }
+
+    #[test]
+    fn a_strategy_cannot_be_sequenced_with_a_semicolon() {
+        let c = Corpus::new(
+            "sequenced",
+            TWO_SPELLINGS,
+            Some("proof foo = cleanup; normalize(cleanup);"),
+        );
+        let (code, report) = c.run();
+        assert_eq!(code, FAILED, "{}", report);
+        assert!(report.contains("cannot be sequenced"), "{}", report);
     }
 
     // -----------------------------------------------------------------------

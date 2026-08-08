@@ -45,6 +45,7 @@ mod matcher;
 mod print;
 mod program;
 mod prove;
+mod prover;
 mod replay;
 mod rule;
 mod script;

@@ -267,3 +267,34 @@ identity discarded_work_on_copies { pick 1 pick 1 equal drop 0 } = { };
 function drop_and_true { drop 0 push true }
 
 identity testing_a_test_by_name { is_bool is_bool } = { jump drop_and_true };
+
+// Two spellings of one test, and neither of them is the normal form.
+//
+// `is_int` leaves a bool behind, so testing that bool with `is_bool` is the
+// same `true` that `testing_a_test` produces. Both sides reduce to
+// `drop 0 push true`; neither reduces to the other. A one-sided proof cannot
+// close this at all — rewriting the left gets to the normal form and the right
+// is still sitting where it was written, and unfolding reconciles nothing
+// because there is nothing here to unfold.
+//
+// So the proof drives *both* sides and meets in the middle. The derivation is
+// the left's script followed by the right's read backwards, which is why the
+// listing shows `bool_result` firing forwards at the top and backwards at the
+// bottom.
+identity two_spellings_of_one_test { is_bool is_bool } = { is_int is_bool };
+
+// The same claim, one level down, and proved by congruence rather than by
+// reaching in with a traversal.
+//
+// `descend` cuts the goal into one sub-goal per child: the `then` arms become a
+// goal of their own, discharged by the proof above, and the `else` arms are
+// claimed to need no proof — a claim that is checked and not assumed. What each
+// sub-proof produces is lifted back through the context, which is why every
+// step in the listing is addressed `[0.then]`.
+//
+// `normalize` alone would also close this, since it would drive the whole term
+// rather than the arm. Written this way it says where the difference is, and
+// the derivation says it too.
+identity a_test_inside_an_arm
+    { branch { is_bool is_bool } { not } }
+  = { branch { is_int is_bool } { not } };

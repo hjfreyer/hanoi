@@ -13,14 +13,16 @@ cargo run --bin prove -- tests
 ```
 
 ```
-Proving 5 identities...
+Proving 7 identities...
 identity identities::testing_a_test ... ok (2 steps)
 identity identities::a_value_tested_twice ... ok (6 steps)
 identity identities::copying_a_constant ... ok (3 steps)
 identity identities::discarded_work_on_copies ... ok (3 steps)
 identity identities::testing_a_test_by_name ... ok (2 steps + 1 up to inlining)
+identity identities::two_spellings_of_one_test ... ok (4 steps meeting in the middle)
+identity identities::a_test_inside_an_arm ... ok (4 steps in 2 parts)
 
-identity result: ok. 5 passed; 0 failed; 0 filtered out
+identity result: ok. 7 passed; 0 failed; 0 filtered out
 ```
 
 ## Stating one
@@ -102,15 +104,18 @@ proof copying_a_constant =
     must(at(0, flatten));
 ```
 
-A `.hant` is the tactic language of `docs/tactics.md` with one definition form
+A `.hant` is the tactic language of `docs/tactics.md` with two definition forms
 added:
 
 ```text
-def := "tactic" ident "=" expr ";"
-     | "proof"  path  "=" expr ";"
+def := "tactic"   ident "=" expr ";"
+     | "strategy" ident "=" expr ";"
+     | "proof"    path  "=" expr ";"
 ```
 
-so a file may define its own tactics and then prove with them.
+so a file may define its own tactics and then prove with them. A proof body is a
+**strategy**, and a bare tactic is the strategy that runs it blind — see
+"Strategies: proving a goal".
 
 ### Why the proof is not in the `.hana`
 
@@ -163,9 +168,80 @@ inlining segment. The machinery only runs when it is needed.
 
 **What inlining does not reconcile is a *frame*-shape mismatch.** A proof that
 says `dips` leaves frames collapsed and sunk, and a naturally-written right-hand
-side will not match that however much either side is unfolded. When that becomes
-the binding constraint the answer is a goal-directed engine — see "What is not
-here yet".
+side will not match that however much either side is unfolded. Nor does it help
+when neither side is the normal form: rewriting the left reaches it and the
+right is still sitting where it was written. That is what strategies are for.
+
+## Strategies: proving a goal
+
+`docs/tactics.md` describes two layers — equations and an applier below,
+matchers and combinators above. A proof adds a third.
+
+A **rule** rewrites a window. A **tactic** places rules in a term. A
+**strategy** discharges a *goal*: two terms, and the claim that they are equal.
+The layering is strict, and it is one-way — a strategy calls tactics, and
+nothing below it knows a goal exists.
+
+| strategy | what it does |
+|---|---|
+| `<tactic>` | run it on the left and compare, exactly or after unfolding both sides |
+| `exact(t)` | the same without the inlining fallback |
+| `normalize(t)` | run `t` on **both** sides and meet in the middle |
+| `peel(s)` | strip the common prefix and suffix, then `s` on what is left |
+| `descend(body: s)` | congruence into a frame |
+| `descend(then: s, else: s)` | congruence into the arms of a branch |
+| `inline(s)` | unfold every call on both sides, then `s` |
+| `s1 \| s2` | try, and fall back |
+
+**A bare tactic keeps its meaning.** A proof that names no strategy is the first
+row of that table, which is what `prove` has always done — so every `.hant`
+written before strategies existed says and does exactly what it did.
+
+Congruence is not a new equation. A `Location` *is* a context and
+`Location::under` *is* the rule `A = B ⟹ C[A] = C[B]`; what was missing was
+something to read it backwards. So a sub-proof found inside a branch arm comes
+back out addressed to the whole term, the script stays a flat `Vec<Step>`, and a
+decomposed proof emits and replays like any other:
+
+```
+$ prove tests --filter a_test_inside_an_arm --show-script
+identity identities::a_test_inside_an_arm ... ok (4 steps in 2 parts)
+
+  derivation — 4 step(s)
+     0  bool_result -> [0.then] @0
+        is_bool ; is_bool
+     ⇒  is_bool ; drop ; push true
+     ...
+```
+
+`descend` given one arm and not the other is a claim that the other needs no
+proof, and the claim is checked rather than assumed.
+
+### Why there is no `auto`
+
+There is deliberately no default ladder — nothing that decomposes on its own
+initiative when a tactic falls short.
+
+Decomposition can take a garden path. Peeling is **incomplete**: `push 1 ; drop`
+and `push 2 ; drop` are equal, and stripping the shared `drop` leaves the false
+`push 1 ⇒ push 2` behind. Descending commits just as hard. A prover that reached
+for those whenever the plain tactic came up short would sometimes turn a
+provable goal into an unprovable one and then report a residual that is not the
+author's mistake — with no way to say "not there" except by learning which rung
+fired and writing around it.
+
+So which route a proof takes is written in the proof, reviewed with it, and
+diffable when it changes. `strategy NAME = ...;` names one, which is where a
+shape that keeps coming up belongs: in the corpus, readable and changeable,
+rather than built in. Strategies do not recurse, for the reason tactics do not —
+nothing here measures a goal getting smaller — so the depth is written out.
+`peel` and `descend` **fail when they decompose nothing**, so a strategy that no
+longer matches the term says so instead of quietly becoming a no-op.
+
+None of this is trusted. A strategy picks which sub-goals to attack; it does not
+get to decide what is true. Every step still comes from a matcher, the applier
+still re-derives every side condition, and `prove` still replays the whole
+assembled script onto the right-hand side before calling an identity proved.
 
 #### Why `inv(unfold)` having no matcher costs nothing
 
@@ -341,40 +417,27 @@ themselves are now in the language.
   Soundness comes from `prove`'s whole-corpus pass, not from the applier —
   which is an accepted asymmetry, `rewrite` being a debugging aid whose output
   does not even parse.
-- **A goal-directed engine.** Today a proof is a blind search strategy: the
-  tactic knows nothing about where it is meant to end up, and the author
-  iterates with `rewrite` until the two listings agree. A driver that could see
-  both the current term and the goal would be far more convenient.
+- **Node-level alignment.** `peel` strips what the two sides share at their
+  ends, and stops there. When what is left is two multi-node sequences with no
+  common ends, nothing pairs up the interior — a branch at position 3 of one and
+  position 4 of the other are not the same node, and guessing is a search
+  `peel` deliberately does not do. `diff::align` is not reusable, since it
+  aligns rendered lines rather than nodes; a Myers-style diff over `same_effect`
+  to find interior anchors is the obvious next strategy, and should wait until
+  the corpus asks for one.
 
-  It is *only* convenience — everything a goal-aware tactic finds could have
-  been spelled out as aimed steps — and that is exactly why it is safe. It is an
-  upper-layer change: matchers still only propose, the applier still re-derives
-  every fact and re-checks every window, and the output is still a `Script`. A
-  goal-directed engine cannot make a wrong rewrite possible, only a right one
-  easier to find.
+- **Combinators that consult the goal, and matchers that read a second window.**
+  Deliberately after strategies, if ever. A strategy is an outer driver and
+  nothing below it knows a goal exists, which is what keeps the position-blind
+  invariant intact; pushing the goal downwards spends that. If the latter ever
+  lands it should take **the goal window at the same position**, never the whole
+  goal — that keeps `plan` a pure function of its windows.
 
-  **Congruence is the piece worth having first.** If the current term is
-  `P ; X ; S` and the goal is `P ; Y ; S`, the problem *is* `X = Y`: peel the
-  shared prefix and suffix, pair up branch arms and dip bodies, and hand each
-  sub-goal to an ordinary blind tactic. Nothing in `Matcher` or the combinators
-  changes — the goal lives strictly in a new outer driver. And the proof object
-  stays linear, since a sub-proof found at a position becomes whole-term steps
-  by prefixing its descent, which `Location::under` already does. So the search
-  goes tree-shaped while the script stays `Vec<Step>`, and replay,
-  `--show-script` and `--step` need no change at all.
-
-  Two things that are not free. `diff::align` is not reusable — it aligns
-  rendered lines, not nodes — so node-level alignment is a sibling with the same
-  shape. And termination stops being the generator's private problem: today "a
-  script is finite by construction" is what makes oscillation someone else's
-  concern, where a loop that keeps choosing steps because they *look* closer
-  needs a measure.
-
-  Deliberately after that, if ever: combinators that consult the goal, and
-  matchers that read a second window. If the latter lands it should take **the
-  goal window at the same position**, never the whole goal — that keeps `plan` a
-  pure function of its windows and the position-blindness invariant survives
-  verbatim.
+- **A `find` binary** that writes a proof to a `.hand` file rather than a
+  strategy to a `.hant`. The prover makes it a thin wrapper, but a found
+  derivation checked into the repo churns whenever the rule set moves, where a
+  `.hant` is small and stable. Worth having as an authoring aid, not as where
+  proofs live.
 
 ## The derivation is a file too
 
