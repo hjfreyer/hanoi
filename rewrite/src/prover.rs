@@ -41,12 +41,14 @@
 //! where someone wrote it down. Which route a proof takes is then part of the
 //! proof, reviewed with it and diffable when it changes.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 
 use crate::applier::apply_script;
+use crate::diff::side_by_side;
 use crate::engine::{Env, Miss, Tactic, TacticError, run as run_tactic};
 use crate::ir::{Node, Selector, same_effect, same_effect_seq};
 use crate::location::Location;
+use crate::print::render_nodes;
 use crate::program::Program;
 use crate::rule::{Script, Step, invert};
 
@@ -189,6 +191,24 @@ impl Closed {
         }
     }
 
+    /// How far along the derivation the two sides met.
+    ///
+    /// A derivation runs `LHS ⇒ … ⇒ (the middle) ⇐ … ⇐ RHS`, and the middle is
+    /// the interesting term: it is what both sides were driven to, where the two
+    /// ends are just the claim restated. For a strategy that drove only the left
+    /// there is no middle and the answer is the whole script, which lands on the
+    /// right-hand side — correctly, since that is where the right-hand side was
+    /// already sitting.
+    pub(crate) fn met_after(&self, script: usize) -> usize {
+        match self {
+            Closed::Exactly { .. } | Closed::ByParts { .. } => script,
+            Closed::UpToInlining {
+                steps, unfolded, ..
+            } => steps + unfolded,
+            Closed::Meeting { left, .. } => *left,
+        }
+    }
+
     /// How many goals were discharged to get here.
     fn parts(&self) -> usize {
         match self {
@@ -239,6 +259,44 @@ impl Residual {
             .to_string(),
         )
     }
+
+    /// What the strategy was doing, and where it was doing it.
+    ///
+    /// Split from [`diff`](Residual::diff) so a caller can put something of its
+    /// own between the two — `prove` quotes the proof and says which file to go
+    /// and fix it in, where `rewrite` has a strategy that came off the command
+    /// line and nothing to cite.
+    pub(crate) fn headline(&self) -> Vec<String> {
+        let mut out = vec![format!("  {}", self.why)];
+        if let Some(context) = self.context() {
+            out.push(String::new());
+            out.push(format!("  The goal left over is inside {}.", context));
+        }
+        out
+    }
+
+    /// The two sides, side by side.
+    ///
+    /// Rendered **without origins**: the two sides came from two sentences, so
+    /// every `<inline>` label differs and none of those differences mean
+    /// anything. `same_effect_seq` ignores them for the same reason, and a
+    /// listing being compared has to agree with the comparison.
+    pub(crate) fn diff(&self, prog: &Program, stack: bool) -> Vec<String> {
+        let left = render_nodes(prog, &self.lhs, stack, true, false);
+        let right = render_nodes(prog, &self.rhs, stack, true, false);
+        let rows = side_by_side(&left, &right, "what it reached", "the right-hand side");
+        if !rows.is_empty() {
+            return rows;
+        }
+        // Two listings that read alike but are not the same term. That is a bug
+        // in one of them rather than in the proof, so show both rather than
+        // nothing at all.
+        let mut out = vec!["  The two listings read alike but are not the same term.".to_string()];
+        out.extend(left);
+        out.push(String::new());
+        out.extend(right);
+        out
+    }
 }
 
 /// Discharges `goal` with `strategy`.
@@ -254,13 +312,37 @@ pub(crate) fn solve(
     fuel: u64,
     check: bool,
 ) -> Result<Solved, Unproved> {
-    Prover {
+    work(prog, inline, goal, strategy, fuel, check).0
+}
+
+/// The same, with what the search cost alongside what it found.
+///
+/// The firing counts are the **search's**, not the derivation's: every run the
+/// strategy made is counted, including an alternative that lost a
+/// [`Choice`](Strategy::Choice) and steps a tactic took and rolled back. That is
+/// deliberate, and it is the opposite of how [`Solved::misses`] is gathered —
+/// because the two answer different questions. A miss is a *claim* that turned
+/// out to be about a term nobody kept, so it is dropped with the run that made
+/// it. A firing is *work done*, and work done is done whoever paid for it. Which
+/// is also why this comes back from a goal that did not close: what a fruitless
+/// route cost is exactly what you wanted to know about it.
+pub(crate) fn work(
+    prog: &Program,
+    inline: &Tactic,
+    goal: &Goal,
+    strategy: &Strategy,
+    fuel: u64,
+    check: bool,
+) -> (Result<Solved, Unproved>, Vec<(&'static str, usize)>) {
+    let prover = Prover {
         prog,
         inline,
         check,
         fuel: Cell::new(fuel),
-    }
-    .solve(goal, strategy)
+        firings: RefCell::new(Vec::new()),
+    };
+    let out = prover.solve(goal, strategy);
+    (out, prover.firings.into_inner())
 }
 
 struct Prover<'a> {
@@ -269,6 +351,8 @@ struct Prover<'a> {
     inline: &'a Tactic,
     check: bool,
     fuel: Cell<u64>,
+    /// What every run so far has cost, merged. See [`work`].
+    firings: RefCell<Vec<(&'static str, usize)>>,
 }
 
 /// One run of the blind engine.
@@ -319,7 +403,10 @@ impl Prover<'_> {
                 at: goal.at.clone(),
                 lhs: ran.nodes,
                 rhs: goal.rhs.clone(),
-                why: "the proof ran, but did not reach the right-hand side,\n  \
+                // Neutral about which tool is asking: `prove` reads this out of
+                // a `.hant` and `rewrite` off the command line, and a bare
+                // tactic is what `Blind` holds either way.
+                why: "the tactic ran, but did not reach the right-hand side,\n  \
                       and inlining both sides did not reconcile them either."
                     .to_string(),
             }));
@@ -665,6 +752,7 @@ impl Prover<'_> {
         let outcome = run_tactic(&env, tactic, nodes.clone());
         self.fuel
             .set(self.fuel.get().saturating_sub(env.steps_taken()));
+        merge(&mut self.firings.borrow_mut(), env.histogram());
         let (got, script) = outcome.map_err(|e| wrap(Box::new(e)))?;
 
         let mut replayed = nodes;
@@ -712,6 +800,18 @@ fn lift(script: Script, outer: &[(usize, Selector)], window_start: usize) -> Scr
             ..step
         })
         .collect()
+}
+
+/// Adds one run's firing counts to a running total, keeping the order
+/// [`Env::histogram`] produces: most frequent first, ties by name.
+fn merge(into: &mut Vec<(&'static str, usize)>, from: Vec<(&'static str, usize)>) {
+    for (name, count) in from {
+        match into.iter_mut().find(|(n, _)| *n == name) {
+            Some((_, total)) => *total += count,
+            None => into.push((name, count)),
+        }
+    }
+    into.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
 }
 
 fn plural(n: usize, one: &str, many: &str) -> String {

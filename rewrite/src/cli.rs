@@ -1,27 +1,27 @@
-//! `rewrite` — dump one sentence's compiled bytecode as a tree and rewrite it.
+//! `rewrite` — work the goal an identity states, and watch a strategy try it.
 //!
-//! This is a debugging aid, not a source generator: the output does not parse,
-//! because a dipped block operates below its hidden region and so cannot be
-//! spliced into the enclosing instruction stream as-is. What it gives you is
-//! the whole call tree in one listing instead of a set of `SentenceIndex`
-//! references to chase by hand.
+//! Argument parsing and nothing else; [`crate::goal`] is where the work happens
+//! and where the reasoning lives.
 //!
-//! Its sibling is `prove`, which checks the identities a corpus states rather
-//! than exploring one sentence. Both sit on the `rewrite` library.
+//! The listing this prints is a debugging aid, not a source generator: the
+//! output does not parse, because a dipped block operates below its hidden
+//! region and so cannot be spliced into the enclosing instruction stream as-is.
+//! What it gives you is the whole call tree in one listing instead of a set of
+//! `SentenceIndex` references to chase by hand.
+//!
+//! Its sibling is `prove`, which checks every identity a corpus states against
+//! the proof written beside it. Both sit on the `rewrite` library, and both run
+//! the same strategy over the same goal — what differs is where the strategy
+//! came from and what is done about a goal that does not close.
 
 use std::env;
 use std::fs;
 use std::path::Path;
 use std::process;
 
-use crate::engine::Env;
-use crate::print::print_sentence;
-use crate::program::{Program, resolve_sentence};
+use crate::program::Program;
 use crate::script::{Definitions, PRELUDE};
-use crate::{
-    Options, check_preconditions, debug, derivation_lines, load, precondition_explanation,
-    report_misses, rule_listing, tactic_listing,
-};
+use crate::{Options, goal, load, rule_listing, tactic_listing};
 
 pub fn run() -> i32 {
     let mut opts = Options::default();
@@ -122,108 +122,87 @@ pub fn run() -> i32 {
             process::exit(1);
         }
     };
-    let root = match resolve_sentence(&library, &positional[1]) {
+    // An identity, and only an identity. Everything this tool does is about a
+    // goal, so a term worth looking at is a term worth stating one over — and a
+    // reflexive `identity probe { jump X } = { jump X };` gives back the
+    // one-sided listing this positional used to take a sentence for.
+    let index = match library.identity_by_name(&positional[1]) {
         Ok(idx) => idx,
         Err(err) => {
             eprintln!("{}", err);
             process::exit(1);
         }
     };
+    let identity = &library.identities[index];
 
     let prog = Program::new(&library);
 
     // After the library, because a term may name a sentence — `share { jump
     // foo }` needs `foo`'s arity to know how wide a window it reads. Everything
-    // else about a tactic is still checked here rather than at run time.
-    let tactic = match defs.compile_with(&opts.tactic, Some(&prog)) {
-        Ok(t) => t,
+    // else about a strategy is still checked here rather than at run time.
+    let strategy = match defs.compile_proof(&opts.tactic, Some(&prog)) {
+        Ok(s) => s,
         Err(err) => {
             eprint!("{}", err.render(&opts.tactic));
             process::exit(1);
         }
     };
-    // The two properties every equation is stated under. Both are closed over
-    // reachability, so refusing the root refuses every node any tree here can
-    // come to hold — which is what lets an annihilation ask only for an arity,
-    // and what makes running a computation on copies and discarding the results
-    // the identity.
-    if let Err(p) = check_preconditions(&prog, root) {
-        let lines = precondition_explanation(p, &library.names[root]);
-        eprintln!("error: {}", lines[0]);
-        for line in &lines[1..] {
-            eprintln!("{}", line);
-        }
-        process::exit(1);
-    }
-
-    if opts.step {
-        debug::run(&prog, root, &tactic, &opts);
-        return 0;
-    }
-
-    let env = Env::new(&prog, opts.fuel, opts.check);
-    let script = match print_sentence(root, &tactic, &env, &opts.tactic, opts.stack) {
-        Ok(script) => script,
+    // The comparison is up to inlining, and this is what does it. From the
+    // prelude, where it is `repeat(bu(each(unfold)))`.
+    let inline = match defs.compile_with("unfold_all", Some(&prog)) {
+        Ok(t) => t,
         Err(err) => {
-            eprintln!("error: {}", err);
-            // A failure is usually a `must` whose aim missed, and the miss is
-            // what says which number was wrong. Written under the failure
-            // rather than beside it: there is only one thing wrong here.
-            report_misses(&env, false);
+            eprint!("{}", err.render("unfold_all"));
+            eprintln!("(this is a bug in the built-in prelude)");
             process::exit(1);
         }
     };
 
-    if opts.show_script {
-        println!();
-        for line in derivation_lines(&prog, "derivation", &script) {
-            println!("{}", line);
+    let stdout = std::io::stdout();
+    let mut handle = stdout.lock();
+    match goal::run(&prog, identity, &strategy, &inline, &opts, &mut handle) {
+        Ok(code) => code,
+        Err(err) => {
+            eprintln!("error writing the report: {}", err);
+            1
         }
     }
-
-    if opts.trace {
-        println!();
-        println!("  rule firings");
-        println!("  ────────────");
-        let histogram = env.histogram();
-        if histogram.is_empty() {
-            println!("  (none)");
-        }
-        for (rule, count) in histogram {
-            println!("  {:<18} {}", rule, count);
-        }
-        println!();
-        println!("  {} step(s) in all", env.steps_taken());
-    }
-
-    // Last, and only after the listing: the tree is what says which number to
-    // write instead, so a miss is worth nothing printed above it.
-    if report_misses(&env, true) { 1 } else { 0 }
 }
 
 fn usage() {
-    eprintln!("Usage: rewrite <directory> <sentence> [-t <tactic>] [options]");
+    eprintln!("Usage: rewrite <directory> <identity> [-t <strategy>] [options]");
     eprintln!();
-    eprintln!("  <sentence> is a fully qualified name (queue::queue::accept), a");
-    eprintln!("  unique trailing part of one (queue::accept), or an index (#12).");
+    eprintln!("  Works the goal an `identity` states: two terms, and the claim");
+    eprintln!("  that they are equal. <identity> is a fully qualified name or an");
+    eprintln!("  unambiguous trailing part of one.");
     eprintln!();
-    eprintln!("  -t, --tactic <expr>  the rewrite to apply. Default `default`,");
-    eprintln!("                       which expands every call it safely can.");
-    eprintln!("  --tactics <file>     load `tactic NAME = expr;` definitions.");
+    eprintln!("  What closes here is what goes in the `.hant`, character for");
+    eprintln!("  character. A goal left standing is the answer, not an error;");
+    eprintln!("  `prove` is the tool whose job is to say no.");
+    eprintln!();
+    eprintln!("  -t, --tactic <expr>  the strategy to try. A bare tactic runs it on");
+    eprintln!("                       the left and compares, which is what a proof");
+    eprintln!("                       written bare has always meant. Default");
+    eprintln!("                       `default`, which shows the two sides as written.");
+    eprintln!("  --tactics <file>     load `tactic`/`strategy` definitions.");
     eprintln!("  --list-rules         the rules a tactic can place.");
     eprintln!("  --list-tactics       the named tactics currently defined.");
-    eprintln!("  --fuel <n>           rule firings before giving up.");
+    eprintln!("  --fuel <n>           rule firings before giving up, over the whole");
+    eprintln!("                       strategy rather than each run in it.");
     eprintln!("  --trace              print how often each rule fired.");
-    eprintln!("  --step               walk the rewrite one rule firing at a time.");
+    eprintln!("  --step               walk the derivation one rule firing at a time.");
     eprintln!("  --check              verify every step preserves net stack effect.");
     eprintln!("  --show-script        print the derivation, one step per line.");
     eprintln!(
         "  --stack              show what each slot holds, with equal values sharing a name."
     );
     eprintln!();
+    eprintln!("Strategies: exact(t), normalize(t), peel(s), inline(s),");
+    eprintln!("            descend(body: s), descend(then: s, else: s), s | s");
+    eprintln!();
     eprintln!("Examples:");
-    eprintln!("  rewrite tests 'Pair::check' -t dip_normalize");
-    eprintln!("  rewrite tests foo -t 'repeat(bu(each(sink, fuse)))'");
-    eprintln!("  rewrite tests foo -t 'annihilate | factoring'");
-    eprintln!("  rewrite tests foo -t 'dips; factoring' --step");
+    eprintln!("  rewrite tests two_spellings_of_one_test");
+    eprintln!("  rewrite tests two_spellings_of_one_test -t 'normalize(cleanup)'");
+    eprintln!("  rewrite tests a_test_inside_an_arm -t 'descend(then: cleanup)'");
+    eprintln!("  rewrite tests copying_a_constant -t 'dips; factoring' --step");
 }

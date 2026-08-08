@@ -39,6 +39,7 @@ mod arity;
 mod debug;
 mod diff;
 mod engine;
+mod goal;
 mod ir;
 mod location;
 mod matcher;
@@ -60,7 +61,6 @@ use std::path::Path;
 
 use bytecode::{Library, SentenceIndex, SourceMap};
 
-use crate::engine::Env;
 use crate::matcher::{count_matcher_names, matcher_by_name, matcher_names, term_matcher_names};
 use crate::program::Program;
 use crate::rule::Step;
@@ -124,29 +124,6 @@ pub(crate) fn load(dir: &Path) -> Result<(SourceMap, Library), String> {
         Ok(lib) => Ok((sources, lib)),
         Err(err) => Err(sources.render(&err)),
     }
-}
-
-/// Prints what a run aimed at and did not find. True if there was any.
-///
-/// An aimed step that misses is not a failure — the tree keeps what the rest of
-/// the tactic did — but it is a mistyped number, so the tool says so and exits
-/// non-zero. `try(...)` is how you say a miss is acceptable.
-pub(crate) fn report_misses(env: &Env, standalone: bool) -> bool {
-    let misses = env.misses();
-    let report = engine::miss_report(&misses);
-    if report.is_empty() {
-        return false;
-    }
-    eprintln!();
-    if standalone {
-        eprintln!("error: {}", report[0]);
-    } else {
-        eprintln!("  {}", report[0]);
-    }
-    for line in &report[1..] {
-        eprintln!("{}", line);
-    }
-    true
 }
 
 // ---------------------------------------------------------------------------

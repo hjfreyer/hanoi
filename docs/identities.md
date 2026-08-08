@@ -13,7 +13,7 @@ cargo run --bin prove -- tests
 ```
 
 ```
-Proving 7 identities...
+Proving 9 identities...
 identity identities::testing_a_test ... ok (2 steps)
 identity identities::a_value_tested_twice ... ok (6 steps)
 identity identities::copying_a_constant ... ok (3 steps)
@@ -21,8 +21,10 @@ identity identities::discarded_work_on_copies ... ok (3 steps)
 identity identities::testing_a_test_by_name ... ok (2 steps + 1 up to inlining)
 identity identities::two_spellings_of_one_test ... ok (4 steps meeting in the middle)
 identity identities::a_test_inside_an_arm ... ok (4 steps in 2 parts)
+identity probes::pair_check ... ok (0 steps)
+identity probes::state_check ... ok (0 steps)
 
-identity result: ok. 7 passed; 0 failed; 0 filtered out
+identity result: ok. 9 passed; 0 failed; 0 filtered out
 ```
 
 ## Stating one
@@ -55,20 +57,36 @@ sugar/core seam grows by one variant on each side rather than by a lowering.
 Each side is compiled into the library as an ordinary sentence, named
 `<identity>::lhs` and `<identity>::rhs`. Nothing resolves to those names —
 `jump foo::lhs` is refused, because an identity is declared into the module
-namespace as an identity, not as a sentence — but `Library::names` is what
-`resolve_sentence` reads, so **`rewrite` can address a side directly**:
+namespace as an identity, not as a sentence — but they are real sentences, and
+two things rest on that. `--step` walks a derivation by rebuilding the left-hand
+side and applying a prefix, which needs a `SentenceIndex` and has one; and the
+applier can regenerate either side from the library rather than being handed a
+copy.
+
+## Writing one
+
+`rewrite` addresses the identity, so the goal is one command away:
 
 ```bash
-$ rewrite tests 'copying_a_constant::lhs' -t 'once(inv(share { push 9 }))' --show-script
-$ rewrite tests 'copying_a_constant::rhs'
+$ rewrite tests copying_a_constant
+$ rewrite tests copying_a_constant -t 'must(once(inv(share { push 9 })))'
+$ rewrite tests copying_a_constant -t '<the whole proof>' --show-script
 ```
 
-That is the loop a proof gets written in: explore with `rewrite` until the two
-listings agree, then move the tactic into the `.hant`.
+Bare, it prints the two sides against each other. With `-t`, it runs a strategy
+and prints either `closed` or **the residual** — the smallest part of the claim
+still standing, which is what says what to try next. A goal left open is the
+answer rather than an error; `prove` is the tool whose job is to say no.
 
-It is also the decision the next feature rests on. When a derivation may cite an
-identity, the applier will regenerate both sides from the library on every
-application — exactly as it already regenerates an unfolded body — so no copy of
+**`-t` is a proof body, resolved exactly as a `proof` is.** A bare tactic is the
+blind reading and `normalize(cleanup)` is a strategy, so what closes on the
+command line is what goes in the `.hant`, character for character. That is the
+loop a proof gets written in, and nothing has to be translated on the way into
+the file.
+
+Their being sentences is also the decision the next feature rests on. When a
+derivation may cite an identity, the applier will regenerate both sides from
+the library on every application — exactly as it already regenerates an unfolded body — so no copy of
 a program ever travels inside a script, and a script written against a library
 that has since changed fails at the step that stopped fitting rather than
 rewriting by a stale claim.
