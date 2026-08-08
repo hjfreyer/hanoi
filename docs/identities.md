@@ -236,7 +236,9 @@ what discharges each arm goes *inside* it. A choice reads the same way.
 |---|---|
 | `<tactic>` alone | run it on the left and compare, exactly or after unfolding both sides |
 | `descend(body: s)` | congruence into a frame |
-| `descend(then: s, else: s)` | congruence into the arms of a branch |
+| `descend(then: s, else: s)` | congruence into both arms of a branch |
+| `descend(then: s)` | into the `then` arm, claiming the `else` arms already match |
+| `descend(else: s)` | into the `else` arm, claiming the `then` arms already match |
 | `s1 \| s2` | try, and fall back |
 
 **A bare tactic keeps its meaning.** A proof that names no strategy at all is
@@ -264,8 +266,26 @@ identity identities::a_test_inside_an_arm ... ok (4 steps in 2 parts)
      ...
 ```
 
-`descend` given one arm and not the other is a claim that the other needs no
-proof, and the claim is checked rather than assumed.
+**An arm left out is a claim that it already matches**, and the claim is checked
+rather than assumed — omitting it is not ignoring it. Most branch goals are this
+shape, since a difference is usually in one arm:
+
+```
+proof then_differs = descend(then: normalize(cleanup));
+proof else_differs = descend(else: normalize(cleanup));
+```
+
+If you would rather not leave the claim to an absence, `exact(id)` is it in the
+text — `descend(then: normalize(cleanup), else: exact(id))` says the same thing
+and closes the same way. When an omitted arm turns out *not* to match, the
+residual says which one and shows it alone:
+
+```
+  the two `else` arms are not already equal, and `descend` was
+  given no strategy for them.
+
+  The goal left over is inside [0.else].
+```
 
 ### Why there is no `auto`
 

@@ -218,6 +218,9 @@ fn usage() {
     eprintln!("  inline               unfold every call on both sides");
     eprintln!("and these fork the goal, so they come last:");
     eprintln!("  descend(body: s), descend(then: s, else: s), s | s");
+    eprintln!("An arm left out of `descend` is a claim that it already matches,");
+    eprintln!("which is checked: `descend(else: cleanup)` proves the else arm and");
+    eprintln!("holds the then arms to being equal already.");
     eprintln!();
     eprintln!("Examples:");
     eprintln!("  rewrite tests two_spellings_of_one_test");
