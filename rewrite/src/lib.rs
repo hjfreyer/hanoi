@@ -78,6 +78,8 @@ pub(crate) struct Options {
     pub(crate) stack: bool,
     pub(crate) step: bool,
     pub(crate) show_script: bool,
+    /// The widest either column of a side-by-side listing may get.
+    pub(crate) width: usize,
 }
 
 impl Default for Options {
@@ -90,6 +92,7 @@ impl Default for Options {
             stack: false,
             step: false,
             show_script: false,
+            width: diff::DEFAULT_WIDTH,
         }
     }
 }

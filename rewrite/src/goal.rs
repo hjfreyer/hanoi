@@ -86,7 +86,7 @@ pub(crate) fn run(
                 writeln!(out, "{}", line)?;
             }
             writeln!(out)?;
-            for line in residual.diff(prog, opts.stack) {
+            for line in residual.diff(prog, opts.stack, opts.width) {
                 writeln!(out, "{}", line)?;
             }
             // A route that did not work out still cost what it cost, and what it

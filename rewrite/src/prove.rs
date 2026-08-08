@@ -62,6 +62,8 @@ pub(crate) struct Options {
     pub(crate) check: bool,
     pub(crate) show_script: bool,
     pub(crate) stack: bool,
+    /// The widest either column of a failure diff may get.
+    pub(crate) width: usize,
     pub(crate) tactic_files: Vec<PathBuf>,
     /// Where to write the derivations, in [`crate::serial`]'s format. `-` is
     /// stdout.
@@ -84,6 +86,7 @@ impl Default for Options {
             check: true,
             show_script: false,
             stack: false,
+            width: crate::diff::DEFAULT_WIDTH,
             tactic_files: Vec::new(),
             emit: None,
         }
@@ -514,7 +517,7 @@ enum Failure {
     /// A whole-term diff when the proof was one blind tactic, and the smallest
     /// disagreement — one branch arm, named — when it decomposed. That
     /// narrowing is worth having even for a proof that proves nothing new.
-    NotReached(Residual),
+    NotReached(Box<Residual>),
     /// The script does not reproduce the run. A bug here, not in the proof.
     Replay(String),
 }
@@ -667,7 +670,7 @@ impl Failure {
                 out.extend(residual.headline());
                 out.extend(cited(file, proof));
                 out.push(String::new());
-                out.extend(residual.diff(prog, opts.stack));
+                out.extend(residual.diff(prog, opts.stack, opts.width));
                 // The listing above is what is *written*, which is the useful
                 // orientation. When the difference is inside a call, the way to
                 // see it is to open both sides up — and `rewrite` addresses the
@@ -813,6 +816,14 @@ pub(crate) fn cli() -> i32 {
             "--no-check" => opts.check = false,
             "--show-script" => opts.show_script = true,
             "--stack" => opts.stack = true,
+            "--width" => match value("--width").map(|raw| raw.parse()) {
+                Some(Ok(v)) => opts.width = v,
+                Some(Err(_)) => {
+                    eprintln!("--width needs a number");
+                    return BROKEN;
+                }
+                None => return BROKEN,
+            },
             "-h" | "--help" => {
                 usage();
                 return OK;
@@ -858,6 +869,7 @@ fn usage() {
     eprintln!("                       in the portable format `replay` reads. What");
     eprintln!("                       the search found, handed to the checker.");
     eprintln!("  --stack              show what each slot holds, in a failure diff.");
+    eprintln!("  --width <n>          how wide each column of a diff may get.");
     eprintln!("  --fuel <n>           rule firings before giving up.");
     eprintln!("  --no-check           skip the net-stack-effect check on every step.");
     eprintln!("                       It is on by default here and opt-in in `rewrite`:");
@@ -1435,16 +1447,48 @@ mod tests {
         assert_eq!(code, OK, "{}", report);
     }
 
+    /// The two sides usually want different work, and a sequence of moves is
+    /// how a proof says so. Here the left needs `cleanup` and the right needs
+    /// one `unfold` — driving both with either would reach neither.
     #[test]
-    fn a_strategy_cannot_be_sequenced_with_a_semicolon() {
+    fn the_two_sides_can_be_driven_by_different_tactics() {
         let c = Corpus::new(
-            "sequenced",
-            TWO_SPELLINGS,
-            Some("proof foo = cleanup; normalize(cleanup);"),
+            "asymmetric",
+            BY_NAME,
+            Some("proof foo = cleanup; rhs(unfold_all);"),
+        );
+        let (code, report) = c.run();
+        assert_eq!(code, OK, "{}", report);
+        assert!(report.contains("meeting in the middle"), "{}", report);
+    }
+
+    /// `rhs(t)` alone, where the left-hand side is already where it needs to be.
+    #[test]
+    fn only_the_right_hand_side_need_move() {
+        let c = Corpus::new(
+            "rhs_only",
+            "identity foo { drop 0 push true } = { is_bool is_bool };",
+            Some("proof foo = rhs(cleanup);"),
+        );
+        let (code, report) = c.run();
+        assert_eq!(code, OK, "{}", report);
+        assert!(report.contains("meeting in the middle"), "{}", report);
+    }
+
+    /// An aimed step in a `rhs(...)` was aimed at the right-hand side on
+    /// purpose, so missing there is the author's mistake and fails the proof —
+    /// where the same tactic under `normalize` would be asking the right a
+    /// question it was never written to answer.
+    #[test]
+    fn a_miss_on_the_right_belongs_to_whoever_aimed_there() {
+        let c = Corpus::new(
+            "rhs_miss",
+            "identity foo { drop 0 push true } = { is_bool is_bool };",
+            Some("proof foo = rhs(at(9, sink); cleanup);"),
         );
         let (code, report) = c.run();
         assert_eq!(code, FAILED, "{}", report);
-        assert!(report.contains("cannot be sequenced"), "{}", report);
+        assert!(report.contains("matched nothing"), "{}", report);
     }
 
     // -----------------------------------------------------------------------
