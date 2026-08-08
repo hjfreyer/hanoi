@@ -1359,6 +1359,40 @@ mod tests {
         assert!(report.contains("[0.then]"), "{}", report);
     }
 
+    /// Either arm can be the one that moves, and the other is held to already
+    /// matching. That is the shape most branch goals have, since a difference is
+    /// usually in one arm — so both directions are worth pinning.
+    #[test]
+    fn either_arm_may_be_the_one_that_moves() {
+        for (name, hana, hant) in [
+            (
+                "then_moves",
+                "identity foo { branch { is_bool is_bool } { not } } \
+                 = { branch { is_int is_bool } { not } };",
+                "proof foo = descend(then: normalize(cleanup));",
+            ),
+            (
+                "else_moves",
+                "identity foo { branch { not } { is_bool is_bool } } \
+                 = { branch { not } { is_int is_bool } };",
+                "proof foo = descend(else: normalize(cleanup));",
+            ),
+            // ...and the claim about the arm that stays put can be said out
+            // loud rather than left to an absence.
+            (
+                "said_out_loud",
+                "identity foo { branch { is_bool is_bool } { not } } \
+                 = { branch { is_int is_bool } { not } };",
+                "proof foo = descend(then: normalize(cleanup), else: exact(id));",
+            ),
+        ] {
+            let c = Corpus::new(name, hana, Some(hant));
+            let (code, report) = c.run();
+            assert_eq!(code, OK, "{}: {}", name, report);
+            assert!(report.contains("in 2 parts"), "{}: {}", name, report);
+        }
+    }
+
     /// An arm with no strategy is a claim that it needs none, and the report
     /// says which arm broke it rather than diffing the whole term.
     #[test]
