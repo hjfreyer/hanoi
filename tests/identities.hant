@@ -37,3 +37,9 @@ proof two_spellings_of_one_test = normalize(cleanup);
 // the shared `drop` leaves a false goal behind. Where to cut is the author's
 // call, and this is where it is written down.
 proof a_test_inside_an_arm = descend(then: normalize(cleanup));
+
+// Narrow, then decompose. `descend` comes last because it is the one thing that
+// cannot be a move: a branch forks into two sub-goals and a sequence has one
+// place to put what follows, so what discharges each arm goes inside it.
+proof a_test_inside_an_arm_with_a_prefix =
+    peel ; descend(then: normalize(cleanup));

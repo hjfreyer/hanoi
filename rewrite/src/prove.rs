@@ -1389,7 +1389,7 @@ mod tests {
         let c = Corpus::new(
             "peel_nothing",
             TESTING_A_TEST,
-            Some("proof testing_a_test = peel(cleanup);"),
+            Some("proof testing_a_test = peel ; cleanup;"),
         );
         let (code, report) = c.run();
         assert_eq!(code, FAILED, "{}", report);
@@ -1406,7 +1406,7 @@ mod tests {
         let c = Corpus::new(
             "peeled",
             SHARED_SUFFIX,
-            Some("proof foo = peel(exact(id));"),
+            Some("proof foo = peel ; exact(id);"),
         );
         let (code, report) = c.run();
         assert_eq!(code, FAILED, "{}", report);
@@ -1428,7 +1428,7 @@ mod tests {
         let c = Corpus::new(
             "fallback",
             "identity foo { push 1 drop 0 } = { push 2 drop 0 };",
-            Some("proof foo = peel(exact(id)) | normalize(cleanup);"),
+            Some("proof foo = (peel ; exact(id)) | normalize(cleanup);"),
         );
         let (code, report) = c.run();
         assert_eq!(code, OK, "{}", report);

@@ -13,7 +13,7 @@ cargo run --bin prove -- tests
 ```
 
 ```
-Proving 9 identities...
+Proving 10 identities...
 identity identities::testing_a_test ... ok (2 steps)
 identity identities::a_value_tested_twice ... ok (6 steps)
 identity identities::copying_a_constant ... ok (3 steps)
@@ -21,10 +21,11 @@ identity identities::discarded_work_on_copies ... ok (3 steps)
 identity identities::testing_a_test_by_name ... ok (2 steps + 1 up to inlining)
 identity identities::two_spellings_of_one_test ... ok (4 steps meeting in the middle)
 identity identities::a_test_inside_an_arm ... ok (4 steps in 2 parts)
+identity identities::a_test_inside_an_arm_with_a_prefix ... ok (4 steps in 2 parts)
 identity probes::pair_check ... ok (0 steps)
 identity probes::state_check ... ok (0 steps)
 
-identity result: ok. 9 passed; 0 failed; 0 filtered out
+identity result: ok. 10 passed; 0 failed; 0 filtered out
 ```
 
 ## Stating one
@@ -204,11 +205,13 @@ A strategy is a sequence of **moves**. Each rewrites one side of the goal and
 leaves a goal behind, so they compose the way tactics do — and the sequence
 closes when the two sides agree by effect.
 
-| move | which side it drives |
+| move | what it does to the goal |
 |---|---|
-| `<tactic>`, `exact(t)` | the left |
-| `rhs(t)` | the right |
-| `normalize(t)` | both, with the same tactic |
+| `<tactic>`, `exact(t)` | drives the left |
+| `rhs(t)` | drives the right |
+| `normalize(t)` | drives both, with the same tactic |
+| `peel` | narrows it to what the two sides do *not* already share |
+| `inline` | unfolds every call on both sides |
 
 ```
 proof foo = cleanup ; rhs(unfold_all);
@@ -219,17 +222,21 @@ right-hand side written the way a person would write it often needs one step to
 meet a left-hand side that needed ten, and saying so beats driving both with a
 tactic that suits neither.
 
-The rest take the remaining proof as an argument rather than leaving a goal, so
-they are not moves and cannot be sequenced — `peel(a ; rhs(b))`, not
-`peel(a) ; rhs(b)`:
+`peel` narrowing the goal is what lets a decomposition follow one:
+
+```
+proof wrapped = peel ; descend(then: normalize(cleanup));
+```
+
+**`descend` has to come last**, and it is the only thing that does. A branch
+forks into two sub-goals and a sequence has one place to put what follows, so
+what discharges each arm goes *inside* it. A choice reads the same way.
 
 | strategy | what it does |
 |---|---|
 | `<tactic>` alone | run it on the left and compare, exactly or after unfolding both sides |
-| `peel(s)` | strip the common prefix and suffix, then `s` on what is left |
 | `descend(body: s)` | congruence into a frame |
 | `descend(then: s, else: s)` | congruence into the arms of a branch |
-| `inline(s)` | unfold every call on both sides, then `s` |
 | `s1 \| s2` | try, and fall back |
 
 **A bare tactic keeps its meaning.** A proof that names no strategy at all is

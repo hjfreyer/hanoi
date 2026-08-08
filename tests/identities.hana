@@ -298,3 +298,16 @@ identity two_spellings_of_one_test { is_bool is_bool } = { is_int is_bool };
 identity a_test_inside_an_arm
     { branch { is_bool is_bool } { not } }
   = { branch { is_int is_bool } { not } };
+
+// The same claim again, with something in front of it — so the goal has to be
+// narrowed before it can be decomposed.
+//
+// `peel` strips what the two sides already share at either end and leaves a
+// smaller goal, which is what makes it a *move* rather than something taking the
+// rest of the proof: `peel ; descend(...)` reads left to right, and every step
+// the descent finds comes back addressed past the peeled prefix. The listing
+// says `[1.then]` where the last one said `[0.then]`, and that one index is the
+// whole of what narrowing costs.
+identity a_test_inside_an_arm_with_a_prefix
+    { drop 0 branch { is_bool is_bool } { not } }
+  = { drop 0 branch { is_int is_bool } { not } };

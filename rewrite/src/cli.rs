@@ -214,13 +214,15 @@ fn usage() {
     eprintln!("  <tactic>, exact(t)   drive the left-hand side");
     eprintln!("  rhs(t)               drive the right-hand side");
     eprintln!("  normalize(t)         drive both with the same tactic");
-    eprintln!("and these take the rest as an argument rather than sequencing:");
-    eprintln!("  peel(s), inline(s), descend(body: s), descend(then: s, else: s), s | s");
+    eprintln!("  peel                 narrow to what the two sides do not share");
+    eprintln!("  inline               unfold every call on both sides");
+    eprintln!("and these fork the goal, so they come last:");
+    eprintln!("  descend(body: s), descend(then: s, else: s), s | s");
     eprintln!();
     eprintln!("Examples:");
     eprintln!("  rewrite tests two_spellings_of_one_test");
     eprintln!("  rewrite tests two_spellings_of_one_test -t 'normalize(cleanup)'");
     eprintln!("  rewrite tests testing_a_test_by_name -t 'cleanup; rhs(unfold_all)'");
-    eprintln!("  rewrite tests a_test_inside_an_arm -t 'descend(then: cleanup)'");
+    eprintln!("  rewrite tests a_test_inside_an_arm -t 'peel; descend(then: cleanup)'");
     eprintln!("  rewrite tests copying_a_constant -t 'dips; factoring' --step");
 }
