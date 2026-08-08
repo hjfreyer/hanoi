@@ -149,7 +149,7 @@ fn write_kind(prog: &Program, kind: &StepKind) -> Result<String, String> {
     let args = match kind {
         StepKind::Unfold { depth, target } => vec![
             ("depth", depth.to_string()),
-            ("target", write_sentence(prog, *target)?),
+            ("target", sentence_name(prog, *target)?),
         ],
         StepKind::Rule(rule) => write_rule(prog, rule)?,
     };
@@ -219,13 +219,13 @@ fn write_rule(prog: &Program, rule: &Rule) -> Result<Vec<(&'static str, String)>
             else_arm,
             ..
         } => vec![
-            ("c", write_value(prog, c)?),
+            ("c", value_text(prog, c)?),
             ("then", write_term(prog, then_arm)?),
             ("else", write_term(prog, else_arm)?),
         ],
         Rule::Eval { op, inputs } => {
             let values: Result<Vec<String>, String> =
-                inputs.iter().map(|v| write_value(prog, v)).collect();
+                inputs.iter().map(|v| value_text(prog, v)).collect();
             vec![
                 ("op", write_op(prog, op)?),
                 ("inputs", format!("[{}]", values?.join(", "))),
@@ -252,7 +252,7 @@ fn write_rule(prog: &Program, rule: &Rule) -> Result<Vec<(&'static str, String)>
             ("rest", write_term(prog, rest)?),
             ("other", write_term(prog, other)?),
         ],
-        Rule::CopyConst { c } => vec![("c", write_value(prog, c)?)],
+        Rule::CopyConst { c } => vec![("c", value_text(prog, c)?)],
         Rule::CopyAssoc { d } => vec![("d", d.to_string())],
         Rule::CopyNat { x, n, m } => vec![
             ("x", write_term(prog, x)?),
@@ -291,9 +291,9 @@ fn write_node(prog: &Program, node: &Node) -> Result<String, String> {
         // A plain jump and a call that hides something are one instruction in
         // the ISA and are spelled as two words here, the way the surface
         // language spells them.
-        Node::Call { depth: 0, target } => format!("jump {}", write_sentence(prog, *target)?),
+        Node::Call { depth: 0, target } => format!("jump {}", sentence_name(prog, *target)?),
         Node::Call { depth, target } => {
-            format!("dip {} {}", depth, write_sentence(prog, *target)?)
+            format!("dip {} {}", depth, sentence_name(prog, *target)?)
         }
         Node::Dip { depth, body, .. } => format!("dip {} {}", depth, write_term(prog, body)?),
         Node::Branch {
@@ -314,7 +314,7 @@ fn write_op(prog: &Program, inst: &Instruction) -> Result<String, String> {
         Instruction::Roll(d) => format!("roll {}", d),
         Instruction::Tuple(n) => format!("tuple {}", n),
         Instruction::Untuple(n) => format!("untuple {}", n),
-        Instruction::Push(v) => format!("push {}", write_value(prog, v)?),
+        Instruction::Push(v) => format!("push {}", value_text(prog, v)?),
         other => match plain_word(other) {
             Some(word) => word.to_string(),
             None => {
@@ -328,7 +328,10 @@ fn write_op(prog: &Program, inst: &Instruction) -> Result<String, String> {
 }
 
 /// A literal, with the program in hand so a symbol can be checked.
-fn write_value(prog: &Program, value: &Value) -> Result<String, String> {
+///
+/// Also what [`crate::egglog`] spells a value with, so that an opaque literal
+/// there and a literal on the wire are the same text.
+pub(crate) fn value_text(prog: &Program, value: &Value) -> Result<String, String> {
     match value {
         // A symbol is its identity, not its text: two declarations reading the
         // same are different symbols. So the path is only a *way to find* the
@@ -345,7 +348,7 @@ fn write_value(prog: &Program, value: &Value) -> Result<String, String> {
         Value::Tuple(elements) => {
             let mut parts = Vec::new();
             for element in elements {
-                parts.push(write_value(prog, element)?);
+                parts.push(value_text(prog, element)?);
             }
             Ok(match parts.len() {
                 // `(x)` is parenthesization in every language that has tuples;
@@ -380,11 +383,11 @@ fn write_bare_value(value: &Value) -> Result<String, String> {
         Value::ConstString(_) => {
             return Err("a const string holding a `\"` cannot be written down".to_string());
         }
-        // The two that need the library are handled by `write_value`, which
+        // The two that need the library are handled by `value_text`, which
         // is the only caller: a symbol has to be looked up and a tuple may
         // hold one.
         Value::Symbol(_) | Value::Tuple(_) => {
-            unreachable!("write_value handles the values that need a program")
+            unreachable!("value_text handles the values that need a program")
         }
     })
 }
@@ -398,7 +401,12 @@ fn write_bare_value(value: &Value) -> Result<String, String> {
 /// Under the tool's precondition this is unreachable: an unnamed `<inline>`
 /// block becomes a `Call` only when it recurses, and a recursive sentence is
 /// refused before any of this runs.
-fn write_sentence(prog: &Program, target: SentenceIndex) -> Result<String, String> {
+/// The fully qualified name of a sentence, refused unless it resolves back.
+///
+/// Shared with [`crate::egglog`], which needs the same guarantee for the same
+/// reason: a name that means something else in another assembly is worse than
+/// no name.
+pub(crate) fn sentence_name(prog: &Program, target: SentenceIndex) -> Result<String, String> {
     let name = &prog.library().names[target];
     match resolve_sentence(prog.library(), name) {
         Ok(found) if found == target => Ok(name.clone()),

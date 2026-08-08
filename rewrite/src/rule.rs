@@ -320,12 +320,12 @@ pub(crate) enum Rule {
 
     /// `push c ; branch { A } { B }` = the arm `c` selects.
     ///
-    /// **Any** literal decides, not only a `Bool`. A branch takes the then arm
-    /// exactly when the condition is `Bool(true)` and the else arm on
-    /// everything else, so `push 1; branch` is decided just as firmly as
-    /// `push false; branch` — it goes to the else arm. The selector is
-    /// [`Value::truthy`] and must stay that way: reading it as a test for
-    /// *being* a boolean would send junk down the wrong path.
+    /// **Any** literal decides, not only a `Bool`. `false` is the unique falsy
+    /// value, so a branch takes the else arm exactly when the condition is
+    /// `Bool(false)` and the then arm on everything else — `push 1; branch` is
+    /// decided just as firmly as `push false; branch`, and goes the other way.
+    /// The selector is [`Value::truthy`] and must stay that way: reading it as
+    /// a test for *being* a boolean would send junk down the wrong path.
     FoldBranch {
         c: Value,
         then_arm: Vec<Node>,

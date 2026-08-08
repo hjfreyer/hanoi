@@ -7,12 +7,29 @@ search taken away. Neither *finds* one. That is still a person with
 This is a design for the missing half: put both sides of an identity into an
 **e-graph**, apply the twenty-two equations until it saturates, ask whether the
 two sides landed in the same class, and read the answer out as a `.hand`
-derivation that `bin/replay` decides. Nothing below is implemented.
+derivation that `bin/replay` decides.
+
+**The first half of it exists.** `prove --emit-egglog` writes the corpus out as
+an egglog program — the equations as rewrite rules, the library as unfolding
+axioms, each identity as two terms and a `check`:
 
 ```bash
-prove tests --emit-egglog identities.egg   # the problem, as an egglog program
-egglog identities.egg > explanation.json   # somebody else's search
-hanoi-egglog explanation.json > out.hand   # the answer, in the format
+cargo run --bin prove -- tests --emit-egglog identities.egg
+egglog identities.egg
+```
+
+```text
+posed 5 identities to identities.egg
+```
+
+All five claims the corpus states close, in one file, in about a tenth of a
+second. What does *not* exist is the half that matters: nothing reads an answer
+back. Until an explanation comes out as a `.hand` and replays, an e-graph
+agreeing that two terms are equal is a rumour — see "Nothing here is trusted".
+
+```bash
+egglog identities.egg > explanation.json   # not yet: see the staging plan
+hanoi-egglog explanation.json > out.hand
 replay tests out.hand --complete           # the only part that has to be right
 ```
 
@@ -105,7 +122,7 @@ halves of this.
 | side conditions | `Condition` closures, in Rust | datalog relations over facts the encoder dumps |
 | arity | an `Analysis` with a `merge` | `(function … :merge …)`, lattice-valued, first-class |
 | scheduling | a `RewriteScheduler` | `:ruleset` and `(run … :until …)` |
-| proofs | `explain_equivalence` → a `FlatExplanation`: each term annotated with exactly one `forward_rule` or `backward_rule`, wrapped `(Rewrite=> name e)` or `(Rewrite<= name e)` | grown since the PLDI 2023 paper and covered in the PLDI 2025 tutorial; extraction is the newer half, and at least one 2024 project reports working without it |
+| proofs | `explain_equivalence` → a `FlatExplanation`: each term annotated with exactly one `forward_rule` or `backward_rule`, wrapped `(Rewrite=> name e)` or `(Rewrite<= name e)` | **not in 2.0.** Its changelog lists "proof preparation and term encoding", which is groundwork; no command hands back a chain of steps |
 
 The egglog column is better for four of the five rows, and the reasons are not
 incidental to this problem. Every Hanoi equation is stated once and read in both
@@ -118,11 +135,19 @@ The egg column is better for the row that decides whether any of this works.
 by name, a direction, and a position in a term. The translator described below
 is mostly a matter of reading that wrapper.
 
-**So: encode for egglog, and retire the proof-extraction risk first.** Stage 0
-is a spike that answers "does this build emit an explanation we can read"
-against the smallest possible identity, before any of the rest exists. If the
-answer is no, the same encoding drops onto egg with arity moving from a `:merge`
-to an `Analysis::merge` — the fallback is a port, not a rewrite.
+**So: encode for egglog, and treat the proofs row as the open risk.** That is
+what the emitter does, and running it settled the other four rows in egglog's
+favour — `birewrite`, the datalog side conditions, `:merge` on arity and
+`:ruleset` scheduling all do exactly what the encoding wants. The proofs row did
+not resolve: egglog 2.0 has the groundwork and not the feature, so the chain of
+steps a derivation needs cannot yet be read out of it.
+
+That does not invalidate the encoding, and it is worth being precise about why.
+Everything below is a statement about *what the equations look like as rewrite
+rules*, which is engine-independent; only the last step, reading an explanation,
+is not. If it has to move to egg, arity goes from a `:merge` to an
+`Analysis::merge` and the side conditions go from relations to `Condition`
+closures. That is a port, not a rewrite.
 
 ## Encoding a term
 
@@ -183,13 +208,29 @@ at all", and read backward it is `introduce`, which is how a cancelling pair
 gets into a term in the first place. A search that cannot use it backward cannot
 find most of the interesting proofs.
 
-**And associativity is where equality saturation blows up.** Nothing here makes
-that untrue. The plan is to measure it rather than argue about it: stages 1 and
-2 use the cons-shaped subset — right-associated `Cat`, no associativity ruleset
-— which covers the fifteen laws with fixed-width windows, and reaches whichever
-of the corpus identities those fifteen suffice for. Stage 3 turns it on as its
-**own ruleset**, run on its own schedule, and reports e-graph size. If it does
-not hold up, the fallback is that the sequence-quantified laws fire only at
+**And associativity is where equality saturation blows up.** That much was
+predicted, and it is true. What was *not* predicted is the other half, which the
+first run settled:
+
+> Associativity is both the blowup and unnecessary — for this corpus, so far.
+
+With `(saturate (run assoc))` in the schedule, `discarded_work_on_copies` runs
+past ninety seconds without closing. With it off, the same claim proves in about
+twenty milliseconds, and so do the other four. The reason is that a term is
+emitted **right-associated** and every law is written against that spine, so a
+window whose sequence variable is a single node or a suffix is already matchable
+— and that is most of them, `annihilate` included. Re-association earns its cost
+only for a variable spanning several nodes away from a spine boundary, and
+nothing in the corpus needs one yet.
+
+So associativity is emitted, in its own ruleset, and left **out of the default
+schedule** with a note saying when to reach for it. The unit laws are a separate
+ruleset and are always on: they only ever shrink a term, and they are not
+optional, because a law that leaves nothing behind leaves an `(Empty)` in the
+spine that a one-node right-hand side has to meet. `testing_a_test_by_name` is
+the claim that says so — it fails without them.
+
+The fallback if a claim ever does need mid-sequence matching is unchanged:
 bounded widths, which is what a matcher does today anyway — `docs/tactics.md`
 observes that "a matcher's width is fixed before it looks".
 
@@ -296,6 +337,33 @@ classes. When the translator emits `annihilate(x = { … }, n = 1, m = 1)`, the
 uses over the concrete `x` it found at that position in `t_i`. The lattice value
 is only ever consulted to decide whether a rule was worth firing, where being
 conservative costs a missed step and nothing else.
+
+### The real limitation is a generative reading, not associativity
+
+An egglog pattern may only build what its left side binds. That rules out every
+backward reading which invents material the pattern cannot name — `counit`
+backward has to produce a `d` from nothing, `annihilate` backward an entire `X`
+— and those are not emitted at all. `annihilate` backward is `introduce`, which
+is how a cancelling pair gets into a term, so this is a real loss rather than a
+bookkeeping one.
+
+But "generative" turns out to be two things, and only one of them is fatal:
+
+| | example | emitted? |
+|---|---|---|
+| the pattern cannot bind what the result needs | `counit`, `annihilate`, `fuse`, `cancel_tuple` backward | no — egglog would refuse the rule |
+| everything is bound, but it fires on its own output forever | `elim_dip0` backward, `commute` backward | yes, if it is **run** rather than **saturated** |
+
+The second row is the useful discovery. `elim_dip0` backward puts a frame that
+hides nothing around the head of a sequence, which is how factoring starts — a
+shared prefix has to be *in* a frame before `hoist` can lift it out of two arms.
+Saturating it nests frames forever. Running it once per round nests it exactly
+as deep as there are rounds, which is enough: `a_value_tested_twice` is the
+corpus claim that turns on this, and it does not close without it.
+
+So the distinction worth carrying forward is not generative versus not. It is
+**a reading that cannot be searched** versus **a reading that has to be
+scheduled**.
 
 ## From an explanation to a derivation
 
@@ -418,33 +486,47 @@ easier to find."
 
 Each stage ends at something runnable.
 
-0. **The spike, with a kill criterion.** Encode `testing_a_test` by hand — two
-   equations, no sequence variables, no unfold, no arity — and read the
-   explanation. If the engine will not produce one that names rules and
-   positions, stop and port to egg before building anything else.
-1. **The encoder.** `prove --emit-egglog <file>`: sorts, the fact tables, the
-   equations generated from `Rule`, and one `(check (= lhs rhs))` per identity
-   the corpus states. Verifiable on its own — the file either loads or it does
-   not.
+0. ~~**The spike.**~~ **Done, and it changed the plan.** The encoding loads and
+   all five corpus identities close — but egglog 2.0 ships proof *preparation*,
+   not proof extraction, so the kill criterion this stage existed to test has
+   not actually been met. That risk moves to stage 2, and it is now the whole
+   risk.
+1. ~~**The encoder.**~~ **Done.** `prove --emit-egglog <file>` — sorts, the fact
+   tables, the equations, the reachable library as unfolding axioms, and one
+   `(check (= lhs rhs))` per identity. `--filter` narrows it to one claim, which
+   is the only comfortable way to read a failure, since `check` stops the run at
+   the first one. It lives in `rewrite/src/egglog.rs`, and the shape of its
+   output is held by `tests::every_identity_poses_to_an_egraph` — nothing in the
+   build has an egglog to run, so that test is what keeps it from rotting.
 2. **The translator.** Explanation → `.hand`. **Gate: `replay tests out.hand`
-   accepts the corpus identities that the cons-shaped subset can reach.**
-3. **Sequence variables.** Associativity as its own ruleset. Report e-graph size
-   and time against stage 2's numbers; this is a measurement, and it is allowed
-   to come out badly.
-4. **`unfold`**, bounded by reachability and depth.
+   accepts all five.** Blocked on extraction: if egglog will not give a chain of
+   concrete terms with rule names and directions, this is where the port to egg
+   happens, and the encoding carries over with arity moving from a `:merge` to
+   an `Analysis::merge`.
+3. **The equations still missing.** `eval` wants a literal that is not opaque;
+   `copy_nat` and `unframe` are stated with repetition counts the way
+   `annihilate` is, and want the same instantiation. `copy_nat` is the one worth
+   reaching for, being the law that is genuinely independent.
+4. **Sequence variables**, if a claim ever needs one. Associativity is already
+   emitted and already off; turning it on is a schedule edit, and the numbers to
+   beat are in the section above.
 5. **Identities as rules**, and a `--complete` run over the whole corpus.
 
 ## What could go wrong
 
-- **Associativity blows the e-graph up.** The known risk, measured at stage 3,
-  with bounded-width firing as the retreat.
+- ~~**Associativity blows the e-graph up.**~~ Measured: it does, and it is not
+  needed. Off by default, with bounded-width firing still the retreat if a claim
+  ever wants it.
 - **The derivations are ugly.** Explanation length is not minimized in general.
   `proof copying_a_constant` is three steps written by hand; saturation may
   produce thirty that are all correct. `replay` will not care, and a person
   reading `--show-script` will. Shortest-explanation search exists and is not
   free.
-- **Proof extraction is the newest part of egglog.** Retired at stage 0 or not
-  at all.
+- **Proof extraction is the newest part of egglog, and 2.0 does not have it.**
+  Its changelog lists "proof preparation and term encoding", which is the
+  groundwork rather than the feature. This is the only thing now standing
+  between the emitter and a derivation, which is why stage 2 carries an explicit
+  port-to-egg branch rather than a hope.
 - **The encoder drifts from `rule.rs`.** Mitigated by generating it, and by the
   fact that drift shows up as proofs that stop closing.
 

@@ -1161,6 +1161,80 @@ fn rewrites_preserve_arity_across_the_corpus() {
 /// Every `run` in this file already replays its own script; this says so about
 /// the corpus specifically, and about a tactic doing enough work for the answer
 /// to mean something.
+/// The whole corpus poses, and what comes out has the shape egglog reads.
+///
+/// Not a proof of anything — `docs/egglog.md` is explicit that an e-graph's
+/// answer means nothing until it comes back as a `.hand` and replays. What this
+/// guards is that the emitter still runs over every identity the corpus states
+/// and still writes one claim per identity, which is the part that would
+/// otherwise rot silently: nothing in the build has an egglog to run.
+#[test]
+fn every_identity_poses_to_an_egraph() {
+    let Some((library, prog)) = corpus() else {
+        return;
+    };
+
+    let posed: Vec<crate::egglog::Posed> = library
+        .identities
+        .iter()
+        .map(|id| crate::egglog::Posed {
+            name: id.name.clone(),
+            lhs: id.lhs,
+            rhs: id.rhs,
+        })
+        .collect();
+    assert!(!posed.is_empty(), "the corpus states no identities");
+
+    let text = crate::egglog::emit(prog, &posed, crate::egglog::DEFAULT_BOUND)
+        .expect("the corpus poses");
+
+    // One claim per identity, and both sides of each bound to a name.
+    for id in &posed {
+        let global: String = id
+            .name
+            .chars()
+            .map(|c| if c.is_alphanumeric() { c } else { '_' })
+            .collect();
+        for side in ["lhs", "rhs"] {
+            assert!(
+                text.contains(&format!("(let ${}__{} ", global, side)),
+                "{} has no {}",
+                id.name,
+                side
+            );
+        }
+        assert!(
+            text.contains(&format!("(check (= ${}__lhs ${}__rhs))", global, global)),
+            "{} is never checked",
+            id.name
+        );
+    }
+
+    // Balanced, ignoring what is inside a comment or a string. A stray paren is
+    // the one way this can be wrong that reads as fine.
+    let mut depth = 0i64;
+    for line in text.lines() {
+        let code = match line.find(";;") {
+            Some(at) => &line[..at],
+            None => line,
+        };
+        let mut in_string = false;
+        let mut escaped = false;
+        for c in code.chars() {
+            match c {
+                _ if escaped => escaped = false,
+                '\\' if in_string => escaped = true,
+                '"' => in_string = !in_string,
+                '(' if !in_string => depth += 1,
+                ')' if !in_string => depth -= 1,
+                _ => {}
+            }
+        }
+        assert!(depth >= 0, "a paren closes what was never opened: {}", line);
+    }
+    assert_eq!(depth, 0, "the emitted program does not close");
+}
+
 #[test]
 fn corpus_derivations_replay() {
     let Some((library, prog)) = corpus() else {

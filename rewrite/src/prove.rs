@@ -68,6 +68,15 @@ pub(crate) struct Options {
     /// what makes the format worth anything. It is also the reference a
     /// producer in another language is written against.
     pub(crate) emit: Option<PathBuf>,
+    /// Where to write the corpus as an egglog program. `-` is stdout.
+    ///
+    /// A different kind of output from `emit`: that is a proof this tool
+    /// found, and this is the *question*, handed to a search that has not run
+    /// yet. Nothing reads the answer back, so setting this writes the file and
+    /// stops — see `docs/egglog.md`.
+    pub(crate) emit_egglog: Option<PathBuf>,
+    /// How wide the laws stated with a repetition count are spelled out.
+    pub(crate) egglog_bound: i64,
 }
 
 impl Default for Options {
@@ -83,6 +92,8 @@ impl Default for Options {
             stack: false,
             tactic_files: Vec::new(),
             emit: None,
+            emit_egglog: None,
+            egglog_bound: crate::egglog::DEFAULT_BOUND,
         }
     }
 }
@@ -143,6 +154,13 @@ pub(crate) fn run(opts: &Options, out: &mut dyn std::io::Write) -> std::io::Resu
         }
     };
 
+    // Before `collect`, which insists every identity has a proof beside it. The
+    // point of this output is to look for one, so demanding one first would be
+    // the wrong way round.
+    if let Some(path) = &opts.emit_egglog {
+        return pose(&library, &prog, opts, path, out);
+    }
+
     let files = match collect(&opts.dir, &sources, &library, &prog, &base) {
         Ok(files) => files,
         Err(problems) => {
@@ -156,6 +174,58 @@ pub(crate) fn run(opts: &Options, out: &mut dyn std::io::Write) -> std::io::Resu
     };
 
     check_all(&library, &prog, &files, &inline, opts, out)
+}
+
+/// Writes the corpus out as an egglog program and stops.
+fn pose(
+    library: &Library,
+    prog: &Program,
+    opts: &Options,
+    path: &Path,
+    out: &mut dyn std::io::Write,
+) -> std::io::Result<i32> {
+    let posed: Vec<crate::egglog::Posed> = library
+        .identities
+        .iter()
+        .filter(|id| match &opts.filter {
+            Some(needle) => id.name.contains(needle),
+            None => true,
+        })
+        .map(|id| crate::egglog::Posed {
+            name: id.name.clone(),
+            lhs: id.lhs,
+            rhs: id.rhs,
+        })
+        .collect();
+
+    if posed.is_empty() {
+        writeln!(out, "no identities to pose.")?;
+        return Ok(FAILED);
+    }
+
+    let text = match crate::egglog::emit(prog, &posed, opts.egglog_bound) {
+        Ok(text) => text,
+        Err(err) => {
+            writeln!(out, "error: {}", err)?;
+            return Ok(BROKEN);
+        }
+    };
+
+    if path == Path::new("-") {
+        write!(out, "{}", text)?;
+    } else if let Err(err) = std::fs::write(path, &text) {
+        writeln!(out, "error: writing '{}': {}", path.display(), err)?;
+        return Ok(BROKEN);
+    } else {
+        writeln!(
+            out,
+            "posed {} identit{} to {}",
+            posed.len(),
+            if posed.len() == 1 { "y" } else { "ies" },
+            path.display()
+        )?;
+    }
+    Ok(OK)
 }
 
 // ---------------------------------------------------------------------------
@@ -891,6 +961,18 @@ pub(crate) fn cli() -> i32 {
                 }
                 None => return BROKEN,
             },
+            "--emit-egglog" => match value("--emit-egglog") {
+                Some(v) => opts.emit_egglog = Some(PathBuf::from(v)),
+                None => return BROKEN,
+            },
+            "--egglog-bound" => match value("--egglog-bound").map(|raw| raw.parse()) {
+                Some(Ok(v)) => opts.egglog_bound = v,
+                Some(Err(_)) => {
+                    eprintln!("--egglog-bound needs a number");
+                    return BROKEN;
+                }
+                None => return BROKEN,
+            },
             "--emit" => match value("--emit") {
                 Some(v) => opts.emit = Some(PathBuf::from(v)),
                 None => return BROKEN,
@@ -942,6 +1024,12 @@ fn usage() {
     eprintln!("  --emit <file>        write every derivation to <file> (`-` is stdout)");
     eprintln!("                       in the portable format `replay` reads. What");
     eprintln!("                       the search found, handed to the checker.");
+    eprintln!("  --emit-egglog <file> write the corpus as an egglog program and stop.");
+    eprintln!("                       The question rather than an answer: the equations");
+    eprintln!("                       as rewrite rules and each identity as a `check`.");
+    eprintln!("                       See docs/egglog.md. `-` is stdout.");
+    eprintln!("  --egglog-bound <n>   how wide the laws with a repetition count are");
+    eprintln!("                       spelled out. Default 3.");
     eprintln!("  --stack              show what each slot holds, in a failure diff.");
     eprintln!("  --fuel <n>           rule firings before giving up.");
     eprintln!("  --no-check           skip the net-stack-effect check on every step.");
