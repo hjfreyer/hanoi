@@ -22,10 +22,14 @@ egglog identities.egg
 posed 5 identities to identities.egg
 ```
 
-All five claims the corpus states close, in one file, in about a tenth of a
-second. What does *not* exist is the half that matters: nothing reads an answer
-back. Until an explanation comes out as a `.hand` and replays, an e-graph
-agreeing that two terms are equal is a rumour — see "Nothing here is trusted".
+All five claims the corpus states close, in one file, in about forty
+milliseconds — each in its own `push`/`pop` scope, because identities are
+independent claims and sharing an e-graph between them makes each one's cost
+depend on its neighbours.
+
+What does *not* exist is the half that matters: nothing reads an answer back.
+Until an explanation comes out as a `.hand` and replays, an e-graph agreeing
+that two terms are equal is a rumour — see "Nothing here is trusted".
 
 ```bash
 egglog identities.egg > explanation.json   # not yet: see the staging plan
@@ -172,68 +176,74 @@ two identical blocks compiled from different places would sit in different
 classes and congruence would find nothing. The encoding's notion of identity has
 to be `same_effect`, and dropping provenance is what makes it so.
 
-### Sequences are the whole problem
+### A sequence is a cons list, and that is the whole design
 
 ```text
-(datatype Seq
-  (Empty)
-  (Cat Seq Seq))
-(birewrite (Cat (Cat a b) c) (Cat a (Cat b c)))
-(birewrite (Cat (Empty) a) a)
-(birewrite (Cat a (Empty)) a)
+(datatype*
+  (Node (Op Instr) (Call i64 String) (Dip i64 Seq) (Branch Seq Seq))
+  (Seq  (Empty) (Cons Node Seq)))
+
+(constructor app (Seq Seq) Seq)
+(rewrite (app (Empty) b) b            :ruleset splice)
+(rewrite (app (Cons n a) b) (Cons n (app a b)) :ruleset splice)
 ```
 
-A monoid, with associativity and unit as rules. This is the piece that decides
-whether the design is practical, and it should be said plainly rather than
-discovered in stage 4.
+The obvious encoding of a concatenative language is a **monoid** — `Cat`, with
+associativity as a rewrite — and it is a trap. Every re-association of a term is
+a distinct e-node, a window will not match until they all exist, and building
+them all is where equality saturation goes to die. Measured, on this corpus:
+with associativity saturating, `discarded_work_on_copies` runs past ninety
+seconds without closing; without it, twenty milliseconds.
 
-**Why not a cons list.** `(datatype Seq (Nil) (Cons Node Seq))` is cheaper and
-has no associativity rules at all, and a fixed-width window anchored at the head
-of any suffix matches fine — every suffix of every term is its own class. It
-cannot bind a *middle segment*. Seven of the twenty-two laws do exactly that:
+A **cons list** gives a sequence exactly one spelling, so a window matches where
+it sits, with nothing normalized first. There is no associativity ruleset at all
+— not one that is off by default, one that does not exist.
 
-| law | the sequence variable |
+What a cons list costs is concatenation, which five laws need on their
+right-hand sides: `elim_dip0`, `fuse`, `distribute`, `fold_branch`, `retest`.
+That is bought back with `app` and two reduction rules, and the reason it is not
+associativity wearing a hat is the property to hold onto:
+
+> **No pattern contains an `app`.** It is built and reduced away, never searched
+> for.
+
+Reduction walks one cons cell at a time and terminates. Search does not.
+
+#### A whole subsequence is a node
+
+Seven laws quantify over a subsequence. Four of them — `collapse`, `hoist`,
+`fuse`, `distribute` — want a Dip body or a branch arm, which is a *field* of a
+node rather than a span of the spine, and a cons list binds those without
+trouble.
+
+The other three — `annihilate`, `interchange`, `copy_nat` — want a run of nodes
+sitting in the sequence. They take a single `Node` instead, and the packaging is
+done by the calculus:
+
+| step | what it does |
 |---|---|
-| `annihilate` | `X ; drop^m` = `drop^n` — `X` is a whole sequence |
-| `distribute` | `branch { A } { B } ; C` — `C` is a whole sequence |
-| `hoist` | `X` under the frame, `A` and `B` the arms |
-| `fuse` | `A` and `B`, the two bodies |
-| `collapse` | `A`, the inner body |
-| `elim_dip0` | `A`, the body being spliced |
-| `copy_nat` | `X`, the computation being copied |
+| `elim_dip0` backward, twice | each of two nodes becomes `dip 0 { · }` |
+| `fuse` at `k = 0` | the two frames become one, holding both |
+| `annihilate` | fires, with the frame as its single `X` |
+| `elim_dip0` forward | the survivor is spliced back |
 
-`annihilate` alone is the reason: `docs/tactics.md` notes it "subsumes the old
-`annihilate_drop` (m=1), `annihilate_flagged` (m=2) and the case with no drops
-at all", and read backward it is `introduce`, which is how a cancelling pair
-gets into a term in the first place. A search that cannot use it backward cannot
-find most of the interesting proofs.
+Every one of those is an instance of a law. That is the same trade
+`docs/tactics.md` already makes for factoring — "three steps, each of which is
+an instance of a law, instead of one rule that knew a whole procedure" — and it
+is why the encoding needs no rule that spans the spine.
 
-**And associativity is where equality saturation blows up.** That much was
-predicted, and it is true. What was *not* predicted is the other half, which the
-first run settled:
+`Node::Call` is this idea already in the language: a whole sentence body, worn
+as one node. Which is why unfolding is stated at the node level and needs no
+splicing at all — see "`unfold` and the library".
 
-> Associativity is both the blowup and unnecessary — for this corpus, so far.
+#### What it gives up
 
-With `(saturate (run assoc))` in the schedule, `discarded_work_on_copies` runs
-past ninety seconds without closing. With it off, the same claim proves in about
-twenty milliseconds, and so do the other four. The reason is that a term is
-emitted **right-associated** and every law is written against that spine, so a
-window whose sequence variable is a single node or a suffix is already matchable
-— and that is most of them, `annihilate` included. Re-association earns its cost
-only for a variable spanning several nodes away from a spine boundary, and
-nothing in the corpus needs one yet.
-
-So associativity is emitted, in its own ruleset, and left **out of the default
-schedule** with a note saying when to reach for it. The unit laws are a separate
-ruleset and are always on: they only ever shrink a term, and they are not
-optional, because a law that leaves nothing behind leaves an `(Empty)` in the
-spine that a one-node right-hand side has to meet. `testing_a_test_by_name` is
-the claim that says so — it fails without them.
-
-The fallback if a claim ever does need mid-sequence matching is unchanged:
-bounded widths, which is what a matcher does today anyway — `docs/tactics.md`
-observes that "a matcher's width is fixed before it looks".
-
+`distribute` backward, which factors a shared *suffix* out of two branch arms.
+Finding one means splitting a cons list at a point nothing names, and that is
+exactly the search a monoid would have paid for. `docs/tactics.md` notes this
+reading is one "the old set could not do at all", so nothing regresses — but it
+is the one thing on the other side of the ledger, and it is worth knowing which
+way the trade went.
 ### Instructions and values
 
 `Instr` mirrors `bytecode::Instruction` and `Val` mirrors `bytecode::Value`, one
@@ -253,31 +263,47 @@ fail, and the global precondition is checked before any of this runs.
 
 Twenty-two `birewrite`s, generated from `Rule`. Three worth showing.
 
-**`counit` — `pick d ; drop` = nothing.** No conditions, no sequence variables:
+**`counit` — `pick d ; drop` = nothing.** No conditions, no sequence variables.
+Forward only: read backward it has to invent a `d`, and then another.
 
 ```text
-(birewrite (Cat (Op (Pick d)) (Cat (Op (Drop)) rest)) rest)
+(rewrite (Cons (Op (Pick d)) (Cons (Op (Drop)) rest)) rest :ruleset laws)
 ```
 
 **`interchange` — `X ; D_k` = `D_(k-m+n) ; X`, for `X : n -> m`, `k >= m`.** The
 one piece of real arithmetic, and the first rule that needs a fact:
 
 ```text
-(rule ((= lhs (Cat x (Cat (Dip k body) rest)))
-       (= (arity x) (Ar n m))
-       (>= k m))
-      ((union lhs (Cat (Dip (+ (- k m) n) body) (Cat x rest)))))
+(rule ((= s (Cons x (Cons (Dip k b) rest)))
+       (= i (ar-in x)) (= v (ar-net x)) (>= k (+ i v)))
+      ((union s (Cons (Dip (- k v) b) (Cons x rest))))
+      :ruleset laws)
 ```
 
 Written as a `rule` rather than a `birewrite` because the condition names `k`
-and `m` from one side; the reverse reading is a second `rule` generated
+and the arity from one side; the reverse reading is a second `rule` generated
 alongside it, with `j >= n` — which `docs/tactics.md` notes is the same
-condition read from the other end.
+condition read from the other end. And `x` is one `Node`, per the section above,
+so a `dip 0` frame carries a multi-node `X` through the same rule.
 
-**`copy_nat` — `pick (n-1)^n ; X ; dip m { X }` = `X ; pick (m-1)^m`.** Both
-hard things at once: a sequence variable and an arity. It is also the law that
-needs `X` to be deterministic, which the encoding gets for free — an e-graph has
-no notion of a term that answers differently on two occasions.
+**`fuse` — `dip k { A } ; dip k { B }` = `dip k { A B }`.** The concatenation
+case, and the one that has to be built rather than matched:
+
+```text
+(rewrite (Cons (Dip k a) (Cons (Dip k b) rest))
+         (Cons (Dip k (app a b)) rest)
+         :ruleset laws)
+```
+
+Forward only — read backward the split point is free. At `k = 0` this is also
+the step that turns two framed nodes into one framed pair, which is how a
+multi-node window gets packaged.
+
+**`copy_nat` — `pick (n-1)^n ; X ; dip m { X }` = `X ; pick (m-1)^m`.** Not
+emitted yet: the repetition counts want the same instantiation `annihilate`
+gets. Worth noting anyway that the one condition it carries for free is the
+hard one — it needs `X` deterministic, and an e-graph has no notion of a term
+that answers differently on two occasions.
 
 ## Facts the searcher cannot re-derive
 
@@ -357,13 +383,21 @@ But "generative" turns out to be two things, and only one of them is fatal:
 The second row is the useful discovery. `elim_dip0` backward puts a frame that
 hides nothing around the head of a sequence, which is how factoring starts — a
 shared prefix has to be *in* a frame before `hoist` can lift it out of two arms.
-Saturating it nests frames forever. Running it once per round nests it exactly
-as deep as there are rounds, which is enough: `a_value_tested_twice` is the
-corpus claim that turns on this, and it does not close without it.
+`a_value_tested_twice` is the corpus claim that turns on it, and does not close
+without it.
 
-So the distinction worth carrying forward is not generative versus not. It is
-**a reading that cannot be searched** versus **a reading that has to be
-scheduled**.
+Bounding it by schedule alone is not enough. Framing every head, once per round,
+puts a fresh `dip 0` on every cons cell, `elim_dip0` unwraps each one back
+through `app`, and `discarded_work_on_copies` stops finishing. What works is
+**aiming** it: fire only where both branch arms already begin with the same
+node, which is exactly the precondition of the step that consumes the result.
+Cost then is nothing measurable.
+
+That is not a new axiom — it is two instances of `elim_dip0` at named positions,
+which is precisely what a matcher is. So the distinction worth carrying forward
+is not generative versus not. It is **a reading that cannot be searched**, a
+reading that has to be **scheduled**, and a reading that has to be **aimed** —
+and the third is the one that looks like the tactic layer, because it is.
 
 ## From an explanation to a derivation
 
@@ -393,14 +427,18 @@ Two things fall out that are worth stating rather than rediscovering.
 not exist when step 4 was written." Here it is automatic, because `t_i` *is*
 that tree. The translator never has to reason about it.
 
-**Associativity and unit steps are dropped, not translated.**
-`(Cat (Cat a b) c)` and `(Cat a (Cat b c))` are the same `Vec<Node>`. Those
-rules are bookkeeping in the encoding, not equations of the calculus, and they
-have no `.hand` spelling because there is nothing for them to say. So the
-translator flattens each `t_i` to a `Vec<Node>` and skips any pair whose two
-sides flatten identically. This is the one place where the encoding's rules and
-the language's laws must be told apart, and the test for it is that the emitted
-derivation's step count matches the number of non-bookkeeping pairs.
+**`splice` steps are dropped, not translated.** `(app a b)` and the cons list it
+reduces to are the same `Vec<Node>`. Those two rules are bookkeeping in the
+encoding, not equations of the calculus, and they have no `.hand` spelling
+because there is nothing for them to say. So the translator flattens each `t_i`
+to a `Vec<Node>` and skips any pair whose two sides flatten identically. This is
+the one place where the encoding's rules and the language's laws must be told
+apart, and the test for it is that the emitted derivation's step count matches
+the number of non-bookkeeping pairs.
+
+The cons encoding earns something here that a monoid would not have: there is
+one bookkeeping rule set instead of two, and it only ever *shrinks*, so the
+skipping is a local check rather than a normalization pass.
 
 ### A worked one
 
@@ -434,20 +472,29 @@ and the check is `replay`, not a diff.
 
 `unfold` is not an equation of the calculus. It is "the axiom the *library*
 contributes by defining `S`", and a script names a sentence and never quotes it.
-In the e-graph it is one rule over the `body` table:
+In the e-graph it is one `birewrite` per sentence, stated at the **node** level:
 
 ```text
-(rewrite (Call 0 s) (body s))
-(rewrite (Dip k (body s)) (Call k s))   ; the same, read the other way
+(let $b_drop_and_true
+  (Cons (Op (Drop)) (Cons (Op (Push (Lit "true"))) (Empty))))
+(birewrite (Call k "identities::drop_and_true") (Dip k $b_drop_and_true)
+           :ruleset unfold)
 ```
 
-The second line is the interesting one. `docs/identities.md` calls folding a
-body back into a call "the real gap", because "nothing can read a window and say
-which sentence to fold into" — a limitation on searching, which is why the
-fold-back today is generated by inverting the right-hand side's own unfold
-script. Congruence does not have that limitation: the body is in a class, the
-class contains the call, and the merge is already there. `inv(unfold)` becomes
-an ordinary step the search can find.
+`k` is free on both sides, so one rule covers every depth, and **nothing is
+spliced**. That is not a trick to dodge concatenation: `ir::frame_depth` already
+treats a `Call` and a `Dip` as the same thing differing only in whether the body
+is written out. Getting from `(Dip 0 body)` into the enclosing sequence is then
+`elim_dip0` — an equation, with a name, that shows up in the derivation —
+rather than something the unfolding rule does on the side.
+
+Read backward it folds, and that is the interesting direction.
+`docs/identities.md` calls folding a body back into a call "the real gap",
+because "nothing can read a window and say which sentence to fold into" — a
+limitation on searching, which is why the fold-back today is generated by
+inverting the right-hand side's own unfold script. Congruence does not have that
+limitation: the body is in a class, the class contains the call, and the merge
+is already there. `inv(unfold)` becomes an ordinary step the search can find.
 
 The cost is the obvious one. Expansion is finite — the global precondition
 refuses `#[recursive]` sentences, so there is no infinite unfolding — but finite
@@ -514,9 +561,15 @@ Each stage ends at something runnable.
 
 ## What could go wrong
 
-- ~~**Associativity blows the e-graph up.**~~ Measured: it does, and it is not
-  needed. Off by default, with bounded-width firing still the retreat if a claim
-  ever wants it.
+- ~~**Associativity blows the e-graph up.**~~ Measured: it does. It is also not
+  needed — the encoding is a cons list and has no associativity ruleset at all.
+  What replaced it is `app`, which is only ever built and never matched.
+- **A claim proved to be `nothing` poisons the empty sequence.**
+  `discarded_work_on_copies` puts a four-node program into `(Empty)`'s class,
+  and `(Empty)` is the tail of every term in the file — so every suffix position
+  in every other claim starts matching a program. That is why each identity gets
+  its own `push`/`pop` scope, and it is a hazard for any future encoding that
+  shares one graph across claims.
 - **The derivations are ugly.** Explanation length is not minimized in general.
   `proof copying_a_constant` is three steps written by hand; saturation may
   produce thirty that are all correct. `replay` will not care, and a person

@@ -29,6 +29,26 @@
 //! - **The laws with a repetition count** — `drop^m`, `(roll d)^(d+1)` — have no
 //!   single pattern, so they are emitted instantiated at every width up to a
 //!   bound.
+//!
+//! ## A sequence is a cons list
+//!
+//! The choice that decides everything else. A monoid — `Cat`, associativity as
+//! a rewrite — is the obvious encoding of a concatenative language and it is a
+//! trap: every re-association of a term is a distinct e-node, and a window will
+//! not match until they all exist. A cons list gives a sequence exactly one
+//! spelling, so a window matches where it sits.
+//!
+//! What that costs is concatenation, which five laws need. It is bought back
+//! with an `app` constructor and two reduction rules, and the reason it is not
+//! associativity in disguise is that **no pattern here contains an `app`**: it
+//! is built on right-hand sides and reduced away, never searched for.
+//!
+//! A law that wants a *whole subsequence* — `annihilate`, `interchange` — takes
+//! a single [`Node`] instead, because a `dip 0` frame is a subsequence wearing
+//! one node's clothes. Packaging a window is then a derivation in the calculus
+//! — frame, `fuse`, apply, unframe — rather than a rule that spans the spine.
+//! [`Node::Call`] is the same idea already in the language, which is why
+//! unfolding is stated as `(Call k S) = (Dip k body)` and needs no splicing.
 
 use std::collections::{BTreeSet, HashSet};
 use std::fmt::Write as _;
@@ -62,14 +82,14 @@ pub(crate) fn emit(prog: &Program, posed: &[Posed], bound: i64) -> Result<String
     sorts(&mut out);
     facts(&mut out)?;
     arity_rules(&mut out);
-    assoc(&mut out);
+    splice(&mut out);
     laws(&mut out, bound);
     roll_laws(&mut out, bound);
 
     let sentences = reachable(prog, posed);
     unfolding(&mut out, prog, &sentences)?;
     corpus(&mut out, prog, posed)?;
-    schedule(&mut out, posed);
+    notes(&mut out);
 
     Ok(out)
 }
@@ -101,16 +121,19 @@ fn header(out: &mut String, posed: &[Posed], bound: i64) {
 ;;   eval          needs to compute on a literal, and a literal is opaque here
 ;;   unframe       stated with a repetition count on both sides at once
 ;;   copy_nat      the same, and it is the law worth reaching for next
-;;   annihilate    emitted, but only for m = 1 and m = 2 (the flagged and
-;;                 unflagged readings); m = 0 would fire on every `Cat`
+;;   annihilate    emitted, but only for m = 1 and m = 2 (the flagged and the
+;;                 unflagged reading); m = 0 would fire on every `Cons`
+;;   distribute    forward only; backward means splitting a cons list at a
+;;                 point nothing names
 ;;
 ;; and the readings that are emitted forward only, each marked below:
-;; `counit`, `counit_under`, `collapse`, `fuse`, `fold_branch`, `commute`,
-;; `split_bool`, `retest`, `cancel_tuple`, `annihilate`.
+;; `collapse`, `elim_dip0`, `fuse`, `distribute`, `fold_branch`, `commute`,
+;; `split_bool`, `counit`, `counit_under`, `retest`, `cancel_tuple`,
+;; `annihilate`.
 ;;
-;; `elim_dip0` is the exception: its backward reading invents a frame, which
-;; under saturation never stops, so it is emitted into its own ruleset and
-;; *run* once a round rather than saturated.
+;; `elim_dip0` backward is the exception, in the `framing` ruleset: it invents a
+;; frame, which nothing bounds, so it is *aimed* at the one place the next step
+;; can use it — the head of two branch arms that already agree.
 
 "#,
         posed.len(),
@@ -142,10 +165,12 @@ fn sorts(out: &mut String) {
   (Untuple i64)
   (Prim String))
 
-;; A term is a sequence of nodes, and a sequence is a monoid — not a cons list.
-;; Seven of the twenty-two laws bind a whole subsequence, and `elim_dip0` alone
-;; settles it: splicing a frame's body into the enclosing sequence *is*
-;; concatenation. `One` rather than `Unit`, which egglog has taken.
+;; A term is a sequence of nodes, and a sequence is a **cons list**. Not a
+;; monoid: with `Cat` every re-association of a term is a distinct e-node and
+;; every window needs associativity saturated before it will match, which is
+;; where equality saturation goes to die. A cons list gives every suffix exactly
+;; one representation, so a fixed-width window matches with no normalization at
+;; all.
 ;;
 ;; A `Call` names its sentence, never an index: an index is an offset into one
 ;; assembly of one corpus.
@@ -157,8 +182,21 @@ fn sorts(out: &mut String) {
     (Branch Seq Seq))
   (Seq
     (Empty)
-    (One Node)
-    (Cat Seq Seq)))
+    (Cons Node Seq)))
+
+;; Concatenation, which a cons list does not have for free.
+;;
+;; **It is only ever built, never matched.** Five laws construct a concatenation
+;; on their right-hand side — `elim_dip0`, `fuse`, `distribute`, `fold_branch`,
+;; `retest` — and no law's pattern contains an `app`. That is the whole
+;; difference from associativity: these two rules *reduce*, deterministically,
+;; down the spine of a list that is already built, where a `Cat` birewrite
+;; searches. So concatenation costs a linear rewrite and buys no combinatorics.
+;;
+;; A reading that would have to *match* one is a reading this encoding does not
+;; have: `distribute` backward factors a shared suffix out of two arms, and
+;; finding it means splitting a cons list at a point nothing names.
+(constructor app (Seq Seq) Seq)
 
 "#,
     );
@@ -270,56 +308,42 @@ fn arity_rules(out: &mut String) {
       ((set (ar-in n) (+ 1 (max it ie))) (set (ar-net n) (- vt 1))) :ruleset analysis)
 
 (rule ((= s (Empty))) ((set (sq-in s) 0) (set (sq-net s) 0)) :ruleset analysis)
-(rule ((= s (One n)) (= i (ar-in n)) (= v (ar-net n)))
-      ((set (sq-in s) i) (set (sq-net s) v)) :ruleset analysis)
 
-;; Composition: the second half's requirement is met by whatever the first half
-;; left, so what the whole needs is the larger of the two, measured in the same
-;; place.
-(rule ((= s (Cat a b)) (= ia (sq-in a)) (= va (sq-net a)) (= ib (sq-in b)))
+;; Composition, one cons cell at a time: what the tail needs is met by whatever
+;; the head left, so what the whole needs is the larger of the two, measured in
+;; the same place.
+(rule ((= s (Cons n r)) (= i (ar-in n)) (= v (ar-net n)) (= ir (sq-in r)))
+      ((set (sq-in s) (max i (- ir v)))) :ruleset analysis)
+(rule ((= s (Cons n r)) (= v (ar-net n)) (= vr (sq-net r)))
+      ((set (sq-net s) (+ v vr))) :ruleset analysis)
+
+;; The same, for a concatenation that has not reduced yet. Without this a law
+;; reading an arity has to wait a round for `splice` to walk the list.
+(rule ((= s (app a b)) (= ia (sq-in a)) (= va (sq-net a)) (= ib (sq-in b)))
       ((set (sq-in s) (max ia (- ib va)))) :ruleset analysis)
-(rule ((= s (Cat a b)) (= va (sq-net a)) (= vb (sq-net b)))
+(rule ((= s (app a b)) (= va (sq-net a)) (= vb (sq-net b)))
       ((set (sq-net s) (+ va vb))) :ruleset analysis)
 
 "#,
     );
 }
 
-fn assoc(out: &mut String) {
+fn splice(out: &mut String) {
     out.push_str(
         r#";; ---------------------------------------------------------------------------
-;; The monoid
+;; Reducing a concatenation
 ;; ---------------------------------------------------------------------------
 
-;; Bookkeeping, not a law: two `Seq` terms that differ only by association are
-;; the same `Vec<Node>`, so a translator reading a proof out of here drops these
-;; steps rather than spelling them.
+;; Bookkeeping, not laws. Two `Seq` terms that differ only by how a
+;; concatenation was spelled are the same `Vec<Node>`, so a translator reading a
+;; proof out of here drops these steps rather than writing them down.
 ;;
-;; **Off by default, and that is a measurement rather than a guess.** Turning it
-;; on is what makes `discarded_work_on_copies` run past ninety seconds without
-;; closing; with it off the same claim proves in well under a second. The reason
-;; is that a term is emitted right-associated and every law below is written
-;; against that spine, so a window whose sequence variable is a single node or a
-;; suffix is already matchable — which is most of them. Re-association earns its
-;; cost only for a variable spanning several nodes away from a spine boundary,
-;; and nothing in the corpus needs one yet.
-;;
-;; So: add `(saturate (run assoc))` to the schedule when a claim will not close
-;; and you think a mid-sequence window is why. Expect it to be expensive.
-;;
-;; The *unit* laws are a separate ruleset and are always on. They are cheap —
-;; they only ever shrink a term — and they are not optional: a law that leaves
-;; nothing behind leaves `(Empty)` sitting in a spine, and a right-hand side one
-;; node long has to meet it. `testing_a_test_by_name` is the case that says so.
-;;
-;; Both are one-directional on purpose. Read the other way they build
-;; `(Cat (Empty) (Cat (Empty) ...))` forever.
-(ruleset units)
-(rewrite (Cat (Empty) a) a :ruleset units)
-(rewrite (Cat a (Empty)) a :ruleset units)
-
-(ruleset assoc)
-(birewrite (Cat (Cat a b) c) (Cat a (Cat b c)) :ruleset assoc)
+;; Saturated every round, and cheap: an application walks one cons cell, and a
+;; list is finite. This is the whole of what associativity was for, done by
+;; reduction instead of by search.
+(ruleset splice)
+(rewrite (app (Empty) b) b :ruleset splice)
+(rewrite (app (Cons n a) b) (Cons n (app a b)) :ruleset splice)
 
 "#,
     );
@@ -335,135 +359,144 @@ fn laws(out: &mut String, bound: i64) {
 (ruleset laws)
 
 ;; collapse: dip k { dip j { A } } = dip (k+j) { A }
-;; Forward only: k+j does not say which k and which j.
-(rule ((= n (Dip k (One (Dip j a)))))
+;; `A` is a whole Dip body, which is a field rather than a span of the spine, so
+;; a cons list binds it with no trouble. Forward only: k+j does not say which k
+;; and which j.
+(rule ((= n (Dip k (Cons (Dip j a) (Empty)))))
       ((union n (Dip (+ k j) a)))
       :ruleset laws)
 
 ;; elim_dip0: dip 0 { A } = A
-;; Forward only: read backward it wraps any run in a frame, and then wraps that.
-(rewrite (Cat (One (Dip 0 a)) rest) (Cat a rest) :ruleset laws)
+;; The first place concatenation is needed, and it is needed only on the right.
+;; Forward only here; the backward reading is the framing ruleset below.
+(rewrite (Cons (Dip 0 a) rest) (app a rest) :ruleset laws)
 
 ;; interchange: X ; D_k = D_(k-m+n) ; X, for X : n -> m, k >= m
-;; X is one node here, which is where most of its work is; a whole-sequence X
-;; wants the same rule with `x` a `Seq`, and costs an associativity match.
-(rule ((= s (Cat (One x) (Cat (One (Dip k b)) rest)))
+;; X is one node, which under a cons list is what a spine variable *is*. A
+;; multi-node X is a `dip 0` frame, which is also one node — so this covers both
+;; without a second rule, and the packaging is a derivation rather than a case.
+(rule ((= s (Cons x (Cons (Dip k b) rest)))
        (= i (ar-in x)) (= v (ar-net x)) (>= k (+ i v)))
-      ((union s (Cat (One (Dip (- k v) b)) (Cat (One x) rest))))
+      ((union s (Cons (Dip (- k v) b) (Cons x rest))))
       :ruleset laws)
-(rule ((= s (Cat (One (Dip k b)) (Cat (One x) rest)))
+(rule ((= s (Cons (Dip k b) (Cons x rest)))
        (= i (ar-in x)) (= v (ar-net x)) (>= k i))
-      ((union s (Cat (One x) (Cat (One (Dip (+ k v) b)) rest))))
+      ((union s (Cons x (Cons (Dip (+ k v) b) rest))))
       :ruleset laws)
 
 ;; fuse: dip k { A } ; dip k { B } = dip k { A B }
-;; Forward only: read backward the split point is free.
-(rewrite (Cat (One (Dip k a)) (Cat (One (Dip k b)) rest))
-         (Cat (One (Dip k (Cat a b))) rest)
+;; Forward only: read backward the split point is free. At k = 0 this is what
+;; turns two framed nodes into one framed pair, which is how a multi-node window
+;; gets packaged for the laws that want a single X.
+(rewrite (Cons (Dip k a) (Cons (Dip k b) rest))
+         (Cons (Dip k (app a b)) rest)
          :ruleset laws)
 
 ;; hoist: dip (k+1) { X } ; branch { A } { B }
 ;;      = branch { dip k { X } ; A } { dip k { X } ; B }
-;; Both readings: forward pushes a computation into both arms, backward is the
-;; last step of factoring a shared prefix out.
-(rule ((= s (Cat (One (Dip k x)) (Cat (One (Branch a b)) rest))) (> k 0))
-      ((union s (Cat (One (Branch (Cat (One (Dip (- k 1) x)) a)
-                                  (Cat (One (Dip (- k 1) x)) b))) rest)))
+;; Both readings, and neither needs `app`: the arms are fields, and the frame is
+;; consed onto the front of each.
+(rule ((= s (Cons (Dip k x) (Cons (Branch a b) rest))) (> k 0))
+      ((union s (Cons (Branch (Cons (Dip (- k 1) x) a)
+                              (Cons (Dip (- k 1) x) b)) rest)))
       :ruleset laws)
-(rule ((= s (Cat (One (Branch (Cat (One (Dip k x)) a)
-                              (Cat (One (Dip k x)) b))) rest)))
-      ((union s (Cat (One (Dip (+ k 1) x)) (Cat (One (Branch a b)) rest))))
+(rule ((= s (Cons (Branch (Cons (Dip k x) a) (Cons (Dip k x) b)) rest)))
+      ((union s (Cons (Dip (+ k 1) x) (Cons (Branch a b) rest))))
       :ruleset laws)
 
 ;; distribute: branch { A } { B } ; C = branch { A C } { B C }
-;; Both readings; backward factors a shared suffix, which no matcher can do.
-(birewrite (Cat (One (Branch a b)) c) (One (Branch (Cat a c) (Cat b c)))
-           :ruleset laws)
+;; Forward only. Backward factors a shared suffix out of two arms, which means
+;; splitting a cons list at a point nothing names — the one reading a monoid
+;; would have bought, and the price of it was the whole e-graph.
+;; The guard is not decoration: without it the rule matches its own output with
+;; `c = (Empty)` and distributes nothing into the arms, forever.
+(rule ((= s (Cons (Branch a b) c)) (!= c (Empty)))
+      ((union s (Cons (Branch (app a c) (app b c)) (Empty))))
+      :ruleset laws)
 
 ;; fold_branch: push c ; branch { A } { B } = the arm c selects
 ;; Selected by truthiness, and `false` is the only falsy value — so `push 1`
 ;; takes the *then* arm, as firmly as `push false` takes the else arm.
 ;; Forward only: an arm does not say what condition chose it.
-(rule ((= s (Cat (One (Op (Push c))) (Cat (One (Branch a b)) rest)))
-       (!= c (Lit "false")))
-      ((union s (Cat a rest)))
+(rule ((= s (Cons (Op (Push c)) (Cons (Branch a b) rest))) (!= c (Lit "false")))
+      ((union s (app a rest)))
       :ruleset laws)
-(rule ((= s (Cat (One (Op (Push (Lit "false")))) (Cat (One (Branch a b)) rest))))
-      ((union s (Cat b rest)))
+(rule ((= s (Cons (Op (Push (Lit "false"))) (Cons (Branch a b) rest))))
+      ((union s (app b rest)))
       :ruleset laws)
 
 ;; commute: roll 1 ; op = op, for a commutative op
 ;; Forward only: read backward it prepends a `roll 1` forever.
-(rule ((= s (Cat (One (Op (Roll 1))) (Cat (One (Op o)) rest))) (commutative o))
-      ((union s (Cat (One (Op o)) rest)))
+(rule ((= s (Cons (Op (Roll 1)) (Cons (Op o) rest))) (commutative o))
+      ((union s (Cons (Op o) rest)))
       :ruleset laws)
 
 ;; split_bool: pick 0 ; is_bool ; branch { branch { push true } { push false } } { }
 ;;           = nothing
 ;; Forward only: backward is a case split, which needs somewhere to stand.
-(rewrite (Cat (One (Op (Pick 0)))
-              (Cat (One (Op (Prim "is_bool")))
-                   (Cat (One (Branch (One (Branch (One (Op (Push (Lit "true"))))
-                                                  (One (Op (Push (Lit "false"))))))
-                                     (Empty)))
-                        rest)))
+(rewrite (Cons (Op (Pick 0))
+               (Cons (Op (Prim "is_bool"))
+                     (Cons (Branch (Cons (Branch (Cons (Op (Push (Lit "true"))) (Empty))
+                                                 (Cons (Op (Push (Lit "false"))) (Empty)))
+                                         (Empty))
+                                   (Empty))
+                           rest)))
          rest
          :ruleset laws)
 
 ;; counit: pick d ; drop = nothing            (copy, discard the copy)
 ;; counit_under: pick 0 ; dip 1 { drop } = nothing   (discard the original)
 ;; Forward only: backward has to invent a `d`, and then another.
-(rewrite (Cat (One (Op (Pick d))) (Cat (One (Op (Drop))) rest)) rest :ruleset laws)
-(rewrite (Cat (One (Op (Pick 0))) (Cat (One (Dip 1 (One (Op (Drop))))) rest)) rest
+(rewrite (Cons (Op (Pick d)) (Cons (Op (Drop)) rest)) rest :ruleset laws)
+(rewrite (Cons (Op (Pick 0)) (Cons (Dip 1 (Cons (Op (Drop)) (Empty))) rest)) rest
          :ruleset laws)
 
 ;; retest: pick 0 ; branch { branch { A } { B } ; R } { Q }
 ;;       = pick 0 ; branch { drop ; A ; R } { Q },  and the mirror
 ;; The same value tested twice answers the same, so the other inner arm is dead.
 ;; Forward only: the dead arm is not recoverable from the collapsed one.
-(rule ((= s (Cat (One (Op (Pick 0)))
-                 (Cat (One (Branch (Cat (One (Branch a b)) r) q)) rest))))
-      ((union s (Cat (One (Op (Pick 0)))
-                     (Cat (One (Branch (Cat (One (Op (Drop))) (Cat a r)) q)) rest))))
+(rule ((= s (Cons (Op (Pick 0))
+                  (Cons (Branch (Cons (Branch a b) r) q) rest))))
+      ((union s (Cons (Op (Pick 0))
+                      (Cons (Branch (Cons (Op (Drop)) (app a r)) q) rest))))
       :ruleset laws)
-(rule ((= s (Cat (One (Op (Pick 0)))
-                 (Cat (One (Branch q (Cat (One (Branch a b)) r))) rest))))
-      ((union s (Cat (One (Op (Pick 0)))
-                     (Cat (One (Branch q (Cat (One (Op (Drop))) (Cat b r)))) rest))))
+(rule ((= s (Cons (Op (Pick 0))
+                  (Cons (Branch q (Cons (Branch a b) r)) rest))))
+      ((union s (Cons (Op (Pick 0))
+                      (Cons (Branch q (Cons (Op (Drop)) (app b r))) rest))))
       :ruleset laws)
 
 ;; copy_const: push c ; pick 0 = push c ; push c
-(birewrite (Cat (One (Op (Push c))) (Cat (One (Op (Pick 0))) rest))
-           (Cat (One (Op (Push c))) (Cat (One (Op (Push c))) rest))
+(birewrite (Cons (Op (Push c)) (Cons (Op (Pick 0)) rest))
+           (Cons (Op (Push c)) (Cons (Op (Push c)) rest))
            :ruleset laws)
 
 ;; copy_assoc: pick d ; pick 0 = pick d ; dip 1 { pick d }
 ;; Neither side is smaller; the point is that one copy ends up in a frame.
-(birewrite (Cat (One (Op (Pick d))) (Cat (One (Op (Pick 0))) rest))
-           (Cat (One (Op (Pick d))) (Cat (One (Dip 1 (One (Op (Pick d))))) rest))
+(birewrite (Cons (Op (Pick d)) (Cons (Op (Pick 0)) rest))
+           (Cons (Op (Pick d)) (Cons (Dip 1 (Cons (Op (Pick d)) (Empty))) rest))
            :ruleset laws)
 
 ;; bool_result: op ; is_bool = op ; drop ; push true, for an op yielding a bool
 ;; The only fact here about an instruction's codomain, and the only one no
 ;; rewriting could reach.
-(rule ((= s (Cat (One (Op o)) (Cat (One (Op (Prim "is_bool"))) rest)))
-       (yields-bool o))
-      ((union s (Cat (One (Op o))
-                     (Cat (One (Op (Drop)))
-                          (Cat (One (Op (Push (Lit "true")))) rest)))))
+(rule ((= s (Cons (Op o) (Cons (Op (Prim "is_bool")) rest))) (yields-bool o))
+      ((union s (Cons (Op o)
+                      (Cons (Op (Drop))
+                            (Cons (Op (Push (Lit "true"))) rest)))))
       :ruleset laws)
-(rule ((= s (Cat (One (Op o))
-                 (Cat (One (Op (Drop)))
-                      (Cat (One (Op (Push (Lit "true")))) rest))))
+(rule ((= s (Cons (Op o)
+                  (Cons (Op (Drop))
+                        (Cons (Op (Push (Lit "true"))) rest))))
        (yields-bool o))
-      ((union s (Cat (One (Op o)) (Cat (One (Op (Prim "is_bool"))) rest))))
+      ((union s (Cons (Op o) (Cons (Op (Prim "is_bool")) rest))))
       :ruleset laws)
 
 ;; cancel_tuple: tuple n ; untuple n = push true
 ;; Forward only: `push true` does not say which n. The converse order is not a
 ;; no-op and has no equation.
-(rewrite (Cat (One (Op (Tuple n))) (Cat (One (Op (Untuple n))) rest))
-         (Cat (One (Op (Push (Lit "true")))) rest)
+(rewrite (Cons (Op (Tuple n)) (Cons (Op (Untuple n)) rest))
+         (Cons (Op (Push (Lit "true"))) rest)
          :ruleset laws)
 
 "#,
@@ -475,8 +508,12 @@ fn laws(out: &mut String, bound: i64) {
 /// `X ; drop^m` = `drop^n`, one rule per `(n, m)` up to the bound.
 ///
 /// The count is on both sides and a pattern cannot hold one, so the law is
-/// spelled out. `m = 0` is left out: its pattern is a bare `Cat`, which is every
-/// sequence in the file.
+/// spelled out. `m = 0` is left out: its pattern is a bare `Cons`, which is
+/// every non-empty sequence in the file.
+///
+/// `X` is a single [`Node`], which under a cons list is what a spine variable
+/// is. It reaches a multi-node `X` through the packaging the framing ruleset
+/// starts and `fuse` finishes, rather than through a rule that spans the spine.
 fn annihilate(out: &mut String, bound: i64) {
     out.push_str(
         r#";; annihilate: X ; drop^m = drop^n, for X : n -> m
@@ -484,13 +521,16 @@ fn annihilate(out: &mut String, bound: i64) {
 ;; spelled out once per width. Forward only: read backward it introduces an X
 ;; the pattern cannot name, which is `introduce`, and which is exactly the step
 ;; a search here cannot take. Widths below are m in 1..=2, n in 0..=bound.
+;;
+;; `x` is one node. A multi-node X is a `dip 0` frame, which is also one node,
+;; so this rule reaches both — see the framing ruleset.
 "#,
     );
     for m in 1..=2i64 {
         for n in 0..=bound {
             let _ = writeln!(
                 out,
-                "(rule ((= s (Cat x {}))\n       (= (sq-in x) {}) (= (sq-net x) {}))\n      \
+                "(rule ((= s (Cons x {}))\n       (= (ar-in x) {}) (= (ar-net x) {}))\n      \
                  ((union s {}))\n      :ruleset laws)",
                 drops(m, "rest"),
                 n,
@@ -506,7 +546,7 @@ fn annihilate(out: &mut String, bound: i64) {
 fn drops(k: i64, tail: &str) -> String {
     let mut s = tail.to_string();
     for _ in 0..k {
-        s = format!("(Cat (One (Op (Drop))) {})", s);
+        s = format!("(Cons (Op (Drop)) {})", s);
     }
     s
 }
@@ -515,7 +555,7 @@ fn drops(k: i64, tail: &str) -> String {
 fn rolls(d: i64, k: i64, tail: &str) -> String {
     let mut s = tail.to_string();
     for _ in 0..k {
-        s = format!("(Cat (One (Op (Roll {}))) {})", d, s);
+        s = format!("(Cons (Op (Roll {})) {})", d, s);
     }
     s
 }
@@ -526,20 +566,29 @@ fn roll_laws(out: &mut String, bound: i64) {
 ;; The one generative reading that is emitted
 ;; ---------------------------------------------------------------------------
 
-;; elim_dip0 backward: put a frame that hides nothing around the head of a
-;; sequence. Read forward it splices; read backward, here, it *introduces*, and
-;; introducing is how factoring starts — a shared prefix has to be in a frame
-;; before `hoist` can lift it out of two arms.
+;; elim_dip0 backward, twice, at the head of each arm of a branch. Read forward
+;; the equation splices; read backward it *introduces* a frame, and introducing
+;; is how factoring starts — a shared prefix has to be in a frame before `hoist`
+;; can lift it out of two arms.
 ;;
-;; Every other backward reading that invents material is left out, because under
-;; saturation it never stops. This one is emitted anyway because it does not have
-;; to be saturated: the schedule says `(run framing)`, one application per round,
-;; so the nesting goes exactly as deep as there are rounds. That is the
-;; difference between a reading that cannot be searched and one that has to be
-;; *scheduled* — `a_value_tested_twice` is the corpus claim that turns on it, and
-;; it does not close without this.
+;; Every other backward reading that invents material is left out, because it
+;; never stops. This one is emitted because it can be **aimed**: it fires only
+;; where both arms already begin with the same node, which is exactly the
+;; precondition of the step that consumes it. That is not a new axiom — it is
+;; two instances of `elim_dip0` at named positions, which is what a matcher is —
+;; and it is the difference between a rule that generates and a rule that
+;; generates *somewhere useful*.
+;;
+;; Aiming is not a nicety here. The unaimed version — frame the head of every
+;; sequence — wraps every cons cell, `elim_dip0` unwraps each one back through
+;; `app`, and `discarded_work_on_copies` stops finishing at all. This one costs
+;; nothing measurable and `a_value_tested_twice`, which does not close without
+;; it, proves in about thirty milliseconds.
 (ruleset framing)
-(rule ((= s (Cat x rest))) ((union s (Cat (One (Dip 0 x)) rest))) :ruleset framing)
+(rule ((= n (Branch (Cons h a) (Cons h b))))
+      ((union n (Branch (Cons (Dip 0 (Cons h (Empty))) a)
+                        (Cons (Dip 0 (Cons h (Empty))) b))))
+      :ruleset framing)
 
 ;; ---------------------------------------------------------------------------
 ;; The roll laws, which nothing places yet
@@ -555,8 +604,8 @@ fn roll_laws(out: &mut String, bound: i64) {
 (ruleset rolls)
 
 ;; pick_roll: pick d = dip d { pick 0 } ; roll d
-(birewrite (Cat (One (Op (Pick d))) rest)
-           (Cat (One (Dip d (One (Op (Pick 0))))) (Cat (One (Op (Roll d))) rest))
+(birewrite (Cons (Op (Pick d)) rest)
+           (Cons (Dip d (Cons (Op (Pick 0)) (Empty))) (Cons (Op (Roll d)) rest))
            :ruleset rolls)
 
 ;; roll_cycle: (roll d)^(d+1) = nothing. A rotation of d+1 things has order d+1.
@@ -593,6 +642,13 @@ fn unfolding(
 ;; about any other sentence. So it is one birewrite per sentence rather than a
 ;; rule, and only for the sentences the identities can reach.
 ;;
+;; It is stated at the **node** level, `(Call k S) = (Dip k body)`, which is one
+;; rule for every depth at once and needs no concatenation. That is not a trick:
+;; `ir::frame_depth` already treats a call and a dip as the same thing wearing
+;; different clothes, differing only in whether the body is written out. Getting
+;; from `(Dip 0 body)` into the enclosing sequence is then `elim_dip0`, an
+;; equation, rather than something the unfolding rule does on the side.
+;;
 ;; Read backward it folds, which `docs/identities.md` calls the real gap because
 ;; nothing can read a window and say which sentence to fold into. Congruence
 ;; does not have that problem: the body is in a class and so is the call.
@@ -612,15 +668,9 @@ fn unfolding(
         );
         let _ = writeln!(
             out,
-            "(birewrite (One (Call 0 \"{}\")) ${} :ruleset unfold)",
+            "(birewrite (Call k \"{}\") (Dip k ${}) :ruleset unfold)\n",
             name,
             global(&name)
-        );
-        let _ = writeln!(
-            out,
-            "(birewrite (Dip k ${}) (Call k \"{}\") :ruleset unfold)\n",
-            global(&name),
-            name
         );
     }
 
@@ -636,85 +686,96 @@ fn corpus(out: &mut String, prog: &Program, posed: &[Posed]) -> Result<(), Strin
 ;; The claims
 ;; ---------------------------------------------------------------------------
 
+;; **One `push`/`pop` scope each, and that is not tidiness.** Identities are
+;; independent claims, and sharing an e-graph between them makes each one's cost
+;; depend on its neighbours — badly. `discarded_work_on_copies` says
+;; `X = nothing`, so proving it puts a four-node program into `(Empty)`'s class;
+;; `(Empty)` is the tail of every term in the file, so every suffix position in
+;; every other claim starts matching a program. All five together stop finishing
+;; at the fourth round. Scoped, each proves in about twenty milliseconds and the
+;; total is the sum.
+;;
+;; What stays outside a scope is what is genuinely shared: the sorts, the
+;; equations, and the library's sentence bodies. That is the theory. What goes
+;; inside is one question.
+
 "#,
     );
+
     for id in posed {
         let lhs = ir::build(prog.library(), id.lhs, &mut HashSet::new());
         let rhs = ir::build(prog.library(), id.rhs, &mut HashSet::new());
+        let g = global(&id.name);
         let _ = writeln!(out, ";; identity {}", id.name);
-        let _ = writeln!(
-            out,
-            "(let ${}__lhs {})",
-            global(&id.name),
-            seq(prog, &lhs)?
-        );
-        let _ = writeln!(
-            out,
-            "(let ${}__rhs {})\n",
-            global(&id.name),
-            seq(prog, &rhs)?
-        );
+        let _ = writeln!(out, "(push)");
+        let _ = writeln!(out, "(let ${}__lhs {})", g, seq(prog, &lhs)?);
+        let _ = writeln!(out, "(let ${}__rhs {})", g, seq(prog, &rhs)?);
+        out.push_str(SCHEDULE);
+        let _ = writeln!(out, "(check (= ${}__lhs ${}__rhs))", g, g);
+        let _ = writeln!(out, "(pop)\n");
     }
     Ok(())
 }
 
-fn schedule(out: &mut String, posed: &[Posed]) {
-    out.push_str(
-        r#";; ---------------------------------------------------------------------------
-;; Running it
-;; ---------------------------------------------------------------------------
-
-;; Analysis saturates before every round, because a law that reads an arity
-;; cannot fire until the arity is there. `repeat` rather than `saturate` on the
-;; laws: several of them grow the term, so this does not converge, and how far
-;; it gets before it stops being affordable is what the file is for.
-(run-schedule
+/// What every claim is run with.
+///
+/// `splice` and `analysis` saturate between every step — a concatenation has to
+/// reduce before a window can match through it, and a law that reads an arity
+/// cannot fire until the arity is there. Both are cheap and both terminate.
+///
+/// `unfold`, `framing` and `laws` are *run*, not saturated: each can fire on its
+/// own output, so the `repeat` is what bounds them, and how far it gets before
+/// it stops being affordable is what the file is for.
+const SCHEDULE: &str = r#"(run-schedule
+  (saturate (run splice))
+  (saturate (run analysis))
   (repeat 4
-    (saturate (run units))
-    (saturate (run analysis))
     (run unfold)
     (run framing)
-    (run laws)))
+    (run laws)
+    (saturate (run splice))
+    (saturate (run analysis))))
+"#;
 
-;; Associativity, when a mid-sequence window is what a claim is missing. This is
-;; the expensive one — see the note above the ruleset.
-;; (run-schedule (repeat 2 (saturate (run units)) (saturate (run analysis)) (saturate (run assoc)) (run laws)))
+/// Schedules worth trying by hand, written out once at the end.
+fn notes(out: &mut String) {
+    out.push_str(
+        r#";; ---------------------------------------------------------------------------
+;; Other things to try
+;; ---------------------------------------------------------------------------
 
-;; The roll laws, which grow the term on purpose.
-;; (run-schedule (repeat 3 (saturate (run units)) (saturate (run analysis)) (run rolls) (run laws)))
-
-(print-stats)
-
+;; Paste one of these over a claim's `run-schedule`, inside its own scope.
+;;
+;; The roll laws, which grow the term on purpose and which nothing places today:
+;;
+;;   (run-schedule (repeat 3 (run rolls) (run laws)
+;;                           (saturate (run splice)) (saturate (run analysis))))
+;;
+;; Deeper, when a claim looks close and merely runs out of rounds. Watch the
+;; clock: several laws grow the term, so this is not free.
+;;
+;;   (run-schedule (saturate (run splice)) (saturate (run analysis))
+;;                 (repeat 8 (run unfold) (run framing) (run laws)
+;;                           (saturate (run splice)) (saturate (run analysis))))
+;;
+;; `(print-stats)` before a `(check ...)` says which rules were doing the work.
 "#,
     );
-
-    out.push_str(";; One per line, because `check` stops the run at the first failure.\n");
-    for id in posed {
-        let _ = writeln!(
-            out,
-            "(check (= ${}__lhs ${}__rhs))   ;; {}",
-            global(&id.name),
-            global(&id.name),
-            id.name
-        );
-    }
 }
 
 // ---------------------------------------------------------------------------
 // Terms
 // ---------------------------------------------------------------------------
 
-/// A node sequence, right-associated and always closed with `(Empty)`.
+/// A node sequence, as a cons list: `[a, b]` is `(Cons a (Cons b (Empty)))`.
 ///
-/// The `(Empty)` is not decoration. Every law below is written as a window with
-/// a `rest` behind it, so a window that runs to the end of a sequence has to
-/// have something there to bind — drop the terminator and `push 9 ; pick 0`
-/// stops matching `copy_const`, whose pattern needs a `Cat` where the bare form
-/// leaves a `One`.
+/// There is exactly one spelling of a given sequence, which is the property the
+/// whole encoding rests on — a window matches where it sits, with nothing
+/// normalized first.
 fn seq(prog: &Program, nodes: &[Node]) -> Result<String, String> {
     let mut out = "(Empty)".to_string();
     for n in nodes.iter().rev() {
-        out = format!("(Cat (One {}) {})", node(prog, n)?, out);
+        out = format!("(Cons {} {})", node(prog, n)?, out);
     }
     Ok(out)
 }
@@ -856,12 +917,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_sequence_is_right_associated_and_ends_in_empty() {
+    fn a_repeated_instruction_conses_onto_the_tail() {
         assert_eq!(drops(0, "rest"), "rest");
-        assert_eq!(drops(1, "rest"), "(Cat (One (Op (Drop))) rest)");
+        assert_eq!(drops(1, "rest"), "(Cons (Op (Drop)) rest)");
         assert_eq!(
             drops(2, "rest"),
-            "(Cat (One (Op (Drop))) (Cat (One (Op (Drop))) rest))"
+            "(Cons (Op (Drop)) (Cons (Op (Drop)) rest))"
         );
     }
 
@@ -869,7 +930,7 @@ mod tests {
     fn a_roll_run_repeats_the_same_depth() {
         assert_eq!(
             rolls(2, 2, "rest"),
-            "(Cat (One (Op (Roll 2))) (Cat (One (Op (Roll 2))) rest))"
+            "(Cons (Op (Roll 2)) (Cons (Op (Roll 2)) rest))"
         );
     }
 
