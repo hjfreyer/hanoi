@@ -2,19 +2,28 @@
 //!
 //! ```text
 //! script := def*
-//! def    := "tactic" ident "=" expr ";"
-//!         | "proof"  path  "=" expr ";"      // .hant only
+//! def    := "tactic"   ident "=" expr ";"
+//!         | "strategy" ident "=" expr ";"
+//!         | "proof"    path  "=" expr ";"      // .hant only
 //! path   := ident ("::" ident)*
 //! expr   := choice
 //! choice := seq ("|" seq)*
 //! seq    := prim (";" prim)*
 //! prim   := ident | ident "(" args ")" | "(" expr ")"
+//! arg    := int | expr | ident ":" expr
 //! ```
 //!
 //! A `.hant` is this language with `proof` added: the file beside a `.hana`,
 //! holding a proof of each identity that `.hana` states. A `--tactics` file is
 //! the same language without it, since a claim discharged has nowhere to land
 //! when there is no corpus to state it.
+//!
+//! One grammar, two languages. A `tactic` transforms a term and a `strategy`
+//! discharges a goal, and both are written with the same names, calls and `|` —
+//! what differs is the table each is resolved against. A proof body is resolved
+//! as a strategy, and one that names no strategy is resolved as a tactic and
+//! read as [`Strategy::Blind`], so a `.hant` written before the third layer
+//! existed means exactly what it always did. See [`crate::prover`].
 //!
 //! Two precedence levels, one more than the rest of the codebase has. Hand
 //! written recursive descent, like the `.hana` parser.
@@ -35,6 +44,7 @@ use crate::matcher::{
     matcher_with_term, term_matcher_names,
 };
 use crate::program::{Program, resolve_sentence, resolve_symbol};
+use crate::prover::{Descent, Strategy};
 
 /// The named tactics every session starts with.
 ///
@@ -194,10 +204,12 @@ enum Tok {
     Int(usize),
     Str(String),
     Tactic,
+    Strategy,
     Proof,
     Eq,
     Semi,
     Comma,
+    Colon,
     Pipe,
     LParen,
     RParen,
@@ -242,6 +254,13 @@ fn tokenize(src: &str) -> Result<Vec<Spanned>, ScriptError> {
             ',' => {
                 i += 1;
                 Tok::Comma
+            }
+            // Names a part of a `descend`. A lone colon only: `::` is glued
+            // into an identifier by the word scanner below, so a path never
+            // reaches here.
+            ':' => {
+                i += 1;
+                Tok::Colon
             }
             '|' => {
                 i += 1;
@@ -307,6 +326,7 @@ fn tokenize(src: &str) -> Result<Vec<Spanned>, ScriptError> {
                 }
                 match &src[start..i] {
                     "tactic" => Tok::Tactic,
+                    "strategy" => Tok::Strategy,
                     "proof" => Tok::Proof,
                     word => Tok::Ident(word.to_string()),
                 }
@@ -351,6 +371,12 @@ enum Expr {
 enum Arg {
     Expr(Expr),
     Int(usize),
+    /// `then: cleanup` — a part of a `descend`, which is the one form whose
+    /// arguments are not interchangeable.
+    ///
+    /// A branch decomposes into *two* goals and both have to be discharged, so
+    /// naming them beats an order nobody would remember.
+    Named(String, Span, Expr),
 }
 
 struct Parser<'a> {
@@ -497,6 +523,17 @@ impl<'a> Parser<'a> {
             let n = *n;
             self.bump();
             return Ok(Arg::Int(n));
+        }
+        // `name: expr`. Two tokens of lookahead, since a bare name is a tactic
+        // and only the colon says otherwise.
+        if let Some(Tok::Ident(name)) = self.peek()
+            && self.toks.get(self.pos + 1).map(|s| &s.tok) == Some(&Tok::Colon)
+        {
+            let name = name.clone();
+            let span = self.span();
+            self.bump();
+            self.bump();
+            return Ok(Arg::Named(name, span, self.expr()?));
         }
         Ok(Arg::Expr(self.expr()?))
     }
@@ -841,10 +878,12 @@ fn describe(tok: &Tok) -> String {
         Tok::Int(n) => format!("'{}'", n),
         Tok::Str(text) => format!("string literal \"{}\"", text),
         Tok::Tactic => "'tactic'".to_string(),
+        Tok::Strategy => "'strategy'".to_string(),
         Tok::Proof => "'proof'".to_string(),
         Tok::Eq => "'='".to_string(),
         Tok::Semi => "';'".to_string(),
         Tok::Comma => "','".to_string(),
+        Tok::Colon => "':'".to_string(),
         Tok::Pipe => "'|'".to_string(),
         Tok::LBrace => "'{'".to_string(),
         Tok::RBrace => "'}'".to_string(),
@@ -915,18 +954,31 @@ impl ProofFile {
     }
 
     /// Resolves one proof's expression against this file's definitions.
-    pub(crate) fn compile(&self, proof: &ProofDef, prog: &Program) -> Result<Tactic, ScriptError> {
-        self.defs
-            .resolve(&proof.body, Some(prog), &mut HashSet::new())
+    ///
+    /// A proof is a strategy, and a bare tactic is the strategy that runs it
+    /// blind — see [`Definitions::resolve_proof`].
+    pub(crate) fn compile(
+        &self,
+        proof: &ProofDef,
+        prog: &Program,
+    ) -> Result<Strategy, ScriptError> {
+        self.defs.resolve_proof(&proof.body, Some(prog))
     }
 }
 
-/// A set of named tactics, built from the prelude plus any user script.
+/// A set of named tactics and strategies, built from the prelude plus any user
+/// script.
 #[derive(Clone)]
 pub(crate) struct Definitions {
     defs: HashMap<String, Expr>,
     /// Declaration order, for `--list-tactics`.
     order: Vec<String>,
+    /// Named strategies, in their own namespace.
+    ///
+    /// Empty until someone writes one: there is no strategy prelude, because a
+    /// default route through a goal is the thing this layer deliberately does
+    /// not have. See [`crate::prover`].
+    strategies: HashMap<String, Expr>,
 }
 
 impl Definitions {
@@ -934,6 +986,7 @@ impl Definitions {
         Definitions {
             defs: HashMap::new(),
             order: Vec::new(),
+            strategies: HashMap::new(),
         }
     }
 
@@ -957,17 +1010,25 @@ impl Definitions {
     ///
     /// `proofs` is what tells the two apart. Given `None` a `proof` is refused
     /// by name rather than by a parse failure, so a `.hant` handed to
-    /// `--tactics` says what is wrong with it.
+    /// `--tactics` says what is wrong with it. A `strategy` is allowed either
+    /// way: it names a route through a goal without discharging one, which is
+    /// as shareable across a corpus as a tactic is.
     fn parse_defs(
         &mut self,
         p: &mut Parser,
         mut proofs: Option<&mut Vec<ProofDef>>,
     ) -> Result<(), ScriptError> {
         while let Some(tok) = p.peek() {
-            let is_proof = match tok {
-                Tok::Tactic => false,
-                Tok::Proof => true,
-                _ => return Err(ScriptError::new("expected 'tactic' or 'proof'", p.span())),
+            let kind = match tok {
+                Tok::Tactic => Def::Tactic,
+                Tok::Strategy => Def::Strategy,
+                Tok::Proof => Def::Proof,
+                _ => {
+                    return Err(ScriptError::new(
+                        "expected 'tactic', 'strategy' or 'proof'",
+                        p.span(),
+                    ));
+                }
             };
             let keyword_span = p.span();
             p.bump();
@@ -979,16 +1040,46 @@ impl Definitions {
                     ..
                 }) => name.clone(),
                 _ => {
-                    let what = if is_proof {
-                        "expected the name of an identity"
-                    } else {
-                        "expected a tactic name"
+                    let what = match kind {
+                        Def::Proof => "expected the name of an identity",
+                        Def::Strategy => "expected a strategy name",
+                        Def::Tactic => "expected a tactic name",
                     };
                     return Err(ScriptError::new(what, name_span));
                 }
             };
 
-            if is_proof {
+            if kind == Def::Strategy {
+                // Three namespaces now, and a name that lived in two of them
+                // would make a proof unreadable: which layer `foo` belonged to
+                // would decide whether it transformed a term or discharged a
+                // goal.
+                if STRATEGY_FORMS.contains(&name.as_str()) {
+                    return Err(ScriptError::new(
+                        format!("'{}' is a strategy form", name),
+                        name_span,
+                    )
+                    .with_help("pick another name"));
+                }
+                if self.defs.contains_key(&name) || matcher_by_name(&name).is_some() {
+                    return Err(ScriptError::new(
+                        format!("'{}' is already a name", name),
+                        name_span,
+                    )
+                    .with_help(
+                        "rules, tactics and strategies are separate namespaces; \
+                                 a name in two of them would not say which layer it \
+                                 belongs to",
+                    ));
+                }
+                p.expect(Tok::Eq, "'='")?;
+                let body = p.expr()?;
+                p.expect(Tok::Semi, "';'")?;
+                self.strategies.insert(name, body);
+                continue;
+            }
+
+            if kind == Def::Proof {
                 let Some(proofs) = proofs.as_deref_mut() else {
                     return Err(ScriptError::new(
                         "`proof` is not a tactic definition",
@@ -1034,8 +1125,19 @@ impl Definitions {
 
             if matcher_by_name(&name).is_some() {
                 return Err(
-                    ScriptError::new(format!("'{}' is a rule name", name), name_span)
-                        .with_help("rules and tactics are separate namespaces; pick another name"),
+                    ScriptError::new(format!("'{}' is a rule name", name), name_span).with_help(
+                        "rules, tactics and strategies are separate namespaces; pick \
+                         another name",
+                    ),
+                );
+            }
+            if self.strategies.contains_key(&name) {
+                return Err(
+                    ScriptError::new(format!("'{}' is a strategy name", name), name_span)
+                        .with_help(
+                            "a strategy discharges a goal and a tactic transforms a term; \
+                             one name cannot mean both",
+                        ),
                 );
             }
             if name == "inv" {
@@ -1059,6 +1161,220 @@ impl Definitions {
 
     pub(crate) fn names(&self) -> &[String] {
         &self.order
+    }
+
+    // -----------------------------------------------------------------------
+    // Strategies
+    // -----------------------------------------------------------------------
+
+    /// Resolves a proof body, which is a strategy.
+    ///
+    /// **A bare tactic keeps its meaning.** An expression that names no
+    /// strategy is resolved as a tactic and wrapped in [`Strategy::Blind`],
+    /// which is what a `.hant` written before this layer existed says and does.
+    /// The coercion is the mirror of the error a *rule* gets in tactic position:
+    /// there it is refused because `each(r)` and `once(r)` are both plausible,
+    /// and here it is taken because there is only one thing a tactic can mean
+    /// when it is handed a goal.
+    fn resolve_proof(&self, expr: &Expr, prog: Option<&Program>) -> Result<Strategy, ScriptError> {
+        if self.mentions_strategy(expr) {
+            self.resolve_strategy(expr, prog, &mut HashSet::new(), &mut HashSet::new())
+        } else {
+            Ok(Strategy::Blind(self.resolve(
+                expr,
+                prog,
+                &mut HashSet::new(),
+            )?))
+        }
+    }
+
+    /// Whether this expression is written in the strategy language at all.
+    ///
+    /// Only the positions a strategy could legitimately occupy are looked at —
+    /// the top level, and through `|` and `;`. The arguments of `each` are
+    /// rules and the arguments of `repeat` are tactics, so a strategy form
+    /// appearing inside one is a mistake to be reported by the tactic
+    /// resolver in its own words, not a signal about the whole expression.
+    fn mentions_strategy(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::Name(name, _) => self.strategies.contains_key(name),
+            Expr::Call(name, _, _) => {
+                STRATEGY_FORMS.contains(&name.as_str()) || self.strategies.contains_key(name)
+            }
+            Expr::Seq(parts) | Expr::Choice(parts) => {
+                parts.iter().any(|e| self.mentions_strategy(e))
+            }
+            Expr::Term(_, _, _) => false,
+        }
+    }
+
+    fn resolve_strategy(
+        &self,
+        expr: &Expr,
+        prog: Option<&Program>,
+        visiting: &mut HashSet<String>,
+        tactics: &mut HashSet<String>,
+    ) -> Result<Strategy, ScriptError> {
+        match expr {
+            Expr::Choice(parts) => Ok(Strategy::Choice(
+                parts
+                    .iter()
+                    .map(|e| self.resolve_strategy(e, prog, visiting, tactics))
+                    .collect::<Result<_, _>>()?,
+            )),
+
+            // `;` composes tactics, which each take a term and return one.
+            // Strategies do not compose that way: each one discharges the whole
+            // goal or does not, so there is nothing for a second to be handed.
+            Expr::Seq(parts) => {
+                let span = parts
+                    .iter()
+                    .find(|e| self.mentions_strategy(e))
+                    .and_then(span_of)
+                    .unwrap_or((0, 0));
+                Err(
+                    ScriptError::new("a strategy cannot be sequenced with `;`", span).with_help(
+                        "`;` runs one tactic after another on a term. A strategy \
+                         discharges a goal, so write `|` to try one and fall back, \
+                         or nest them: `peel(descend(then: ...))`",
+                    ),
+                )
+            }
+
+            Expr::Name(name, span) if self.strategies.contains_key(name) => {
+                let body = &self.strategies[name];
+                if !visiting.insert(name.to_string()) {
+                    return Err(ScriptError::new(
+                        format!("strategy '{}' is defined in terms of itself", name),
+                        *span,
+                    )
+                    .with_help(
+                        "strategy definitions may not recurse, for the reason tactic \
+                         definitions may not: there is no measure that says a goal is \
+                         getting smaller. Write the depth you mean",
+                    ));
+                }
+                let out = self.resolve_strategy(body, prog, visiting, tactics);
+                visiting.remove(name);
+                out
+            }
+
+            Expr::Call(name, span, args) if self.strategies.contains_key(name) => Err(
+                ScriptError::new(format!("strategy '{}' takes no arguments", name), *span)
+                    .with_help("only the strategy forms take arguments; write it bare"),
+            ),
+
+            Expr::Call(name, span, args) if STRATEGY_FORMS.contains(&name.as_str()) => {
+                self.strategy_form(name, *span, args, prog, visiting, tactics)
+            }
+
+            // Everything else is a tactic, which means today's reading.
+            other => Ok(Strategy::Blind(self.resolve(other, prog, tactics)?)),
+        }
+    }
+
+    fn strategy_form(
+        &self,
+        name: &str,
+        span: Span,
+        args: &[Arg],
+        prog: Option<&Program>,
+        visiting: &mut HashSet<String>,
+        tactics: &mut HashSet<String>,
+    ) -> Result<Strategy, ScriptError> {
+        // The two that take a tactic and run it, and the two that take a
+        // strategy and cut the goal up first.
+        let one_tactic = |what: &str| -> Result<Tactic, ScriptError> {
+            let [Arg::Expr(inner)] = args else {
+                return Err(
+                    ScriptError::new(format!("`{}` takes exactly one tactic", name), span)
+                        .with_help(format!("for example `{}(cleanup)`", what)),
+                );
+            };
+            self.resolve(inner, prog, &mut HashSet::new())
+        };
+
+        match name {
+            "exact" => Ok(Strategy::Exact(one_tactic("exact")?)),
+            "normalize" => Ok(Strategy::Normalize(one_tactic("normalize")?)),
+            "peel" | "inline" => {
+                let [Arg::Expr(inner)] = args else {
+                    return Err(ScriptError::new(
+                        format!("`{}` takes exactly one strategy", name),
+                        span,
+                    )
+                    .with_help(format!("for example `{}(cleanup)`", name)));
+                };
+                let inner = Box::new(self.resolve_strategy(inner, prog, visiting, tactics)?);
+                Ok(match name {
+                    "peel" => Strategy::Peel(inner),
+                    _ => Strategy::Inline(inner),
+                })
+            }
+            _ => self.descend(span, args, prog, visiting, tactics),
+        }
+    }
+
+    /// `descend(body: s)`, or `descend(then: s, else: s)`.
+    ///
+    /// Named parts rather than an order, because a branch has two children and
+    /// both have to be discharged — and because which arm a strategy was meant
+    /// for is exactly the thing a reader of a proof needs to see.
+    fn descend(
+        &self,
+        span: Span,
+        args: &[Arg],
+        prog: Option<&Program>,
+        visiting: &mut HashSet<String>,
+        tactics: &mut HashSet<String>,
+    ) -> Result<Strategy, ScriptError> {
+        let (mut body, mut then, mut els) = (None, None, None);
+        for arg in args {
+            let Arg::Named(part, part_span, inner) = arg else {
+                return Err(
+                    ScriptError::new("`descend` takes named parts", span).with_help(
+                        "`descend(body: t)` reaches into a frame, and \
+                         `descend(then: t, else: t)` into the arms of a branch",
+                    ),
+                );
+            };
+            let slot = match part.as_str() {
+                "body" => &mut body,
+                "then" => &mut then,
+                "else" => &mut els,
+                other => {
+                    return Err(ScriptError::new(
+                        format!("'{}' is not a part a node has", other),
+                        *part_span,
+                    )
+                    .with_help("the parts are `body`, `then` and `else`"));
+                }
+            };
+            if slot.is_some() {
+                return Err(ScriptError::new(
+                    format!("`{}` is given twice", part),
+                    *part_span,
+                ));
+            }
+            *slot = Some(Box::new(
+                self.resolve_strategy(inner, prog, visiting, tactics)?,
+            ));
+        }
+
+        match (body, then, els) {
+            (None, None, None) => Err(ScriptError::new(
+                "`descend` needs a part to descend into",
+                span,
+            )
+            .with_help("`descend(body: t)` for a frame, `descend(then: t, else: t)` for a branch")),
+            (Some(body), None, None) => Ok(Strategy::Descend(Descent::Body(body))),
+            (Some(_), _, _) => Err(ScriptError::new(
+                "`descend` mixes a body with branch arms",
+                span,
+            )
+            .with_help("a frame has a body and a branch has two arms; no node has both")),
+            (None, then, els) => Ok(Strategy::Descend(Descent::Arms { then, els })),
+        }
     }
 
     /// Parses and resolves a single expression against these definitions.
@@ -1477,6 +1793,30 @@ enum Shape {
     Rules,
     One,
     CountAndOne,
+}
+
+/// Which of the three things a definition defines.
+#[derive(PartialEq, Eq, Clone, Copy)]
+enum Def {
+    Tactic,
+    Strategy,
+    Proof,
+}
+
+/// The strategy vocabulary.
+///
+/// Deliberately no `auto`, and deliberately no overlap with [`COMBINATORS`]:
+/// `then(t)` is a tactic that reaches into every then arm, and it would be a
+/// trap for the goal-directed descent to answer to the same word. `descend`
+/// takes the arm by name instead.
+const STRATEGY_FORMS: &[&str] = &["exact", "normalize", "peel", "descend", "inline"];
+
+/// Where an expression starts, for an error that has to point at one.
+fn span_of(expr: &Expr) -> Option<Span> {
+    match expr {
+        Expr::Name(_, span) | Expr::Call(_, span, _) | Expr::Term(_, span, _) => Some(*span),
+        Expr::Seq(parts) | Expr::Choice(parts) => parts.first().and_then(span_of),
+    }
 }
 
 const COMBINATORS: &[(&str, Shape)] = &[
@@ -2016,12 +2356,134 @@ mod tests {
         hant(&lib, "proof foo = try(once(share { jump classify }));").expect("parses");
     }
 
+    // -----------------------------------------------------------------------
+    // The strategy language
+    // -----------------------------------------------------------------------
+
+    /// One grammar, two languages, and the deciding question is which table a
+    /// name resolves against.
+    #[test]
+    fn a_proof_naming_no_strategy_is_still_a_tactic() {
+        let lib = corpus("identity foo { drop 0 } = { drop 0 };");
+        let prog = Program::new(&lib);
+        for source in [
+            "proof foo = cleanup;",
+            // `;` and `|` and the combinators all keep their tactic reading,
+            // which is what makes this change invisible to every `.hant` that
+            // came before it.
+            "proof foo = dips; cleanup;",
+            "proof foo = try(at(9, sink)) | id;",
+            "proof foo = then(cleanup);",
+        ] {
+            let file = hant(&lib, source).expect("parses");
+            let compiled = file
+                .compile(&file.proofs[0], &prog)
+                .unwrap_or_else(|e| panic!("{}", e.render_in(source, "x.hant")));
+            assert!(
+                matches!(compiled, Strategy::Blind(_)),
+                "`{}` should read as a blind tactic",
+                source
+            );
+        }
+    }
+
+    /// ...and `then` keeps meaning the traversal, not the goal-descent. Two
+    /// readings of one word would be a trap, so the descent is spelled
+    /// `descend(then: ...)` and nothing collides.
+    #[test]
+    fn the_descent_does_not_take_a_traversals_name() {
+        assert!(
+            COMBINATORS.iter().all(|(n, _)| !STRATEGY_FORMS.contains(n)),
+            "a strategy form shares a name with a tactic combinator"
+        );
+    }
+
+    #[test]
+    fn a_strategy_cannot_be_sequenced_with_a_semicolon() {
+        let lib = corpus("identity foo { drop 0 } = { drop 0 };");
+        let rendered = proof_err(&lib, "proof foo = cleanup; peel(cleanup);");
+        assert!(rendered.contains("cannot be sequenced"), "{}", rendered);
+        assert!(rendered.contains("try one and fall back"), "{}", rendered);
+    }
+
+    #[test]
+    fn descend_takes_its_parts_by_name() {
+        let lib = corpus("identity foo { drop 0 } = { drop 0 };");
+        let rendered = proof_err(&lib, "proof foo = descend(cleanup);");
+        assert!(rendered.contains("takes named parts"), "{}", rendered);
+
+        let rendered = proof_err(&lib, "proof foo = descend(arm: cleanup);");
+        assert!(rendered.contains("not a part a node has"), "{}", rendered);
+
+        let rendered = proof_err(&lib, "proof foo = descend(then: id, then: id);");
+        assert!(rendered.contains("given twice"), "{}", rendered);
+
+        let rendered = proof_err(&lib, "proof foo = descend(body: id, then: id);");
+        assert!(
+            rendered.contains("mixes a body with branch arms"),
+            "{}",
+            rendered
+        );
+    }
+
+    /// A frame has a body and a branch has two arms, and no node has both — so
+    /// the two shapes are the two forms, and each resolves.
+    #[test]
+    fn both_shapes_of_descend_resolve() {
+        let lib = corpus("identity foo { drop 0 } = { drop 0 };");
+        for source in [
+            "proof foo = descend(body: cleanup);",
+            "proof foo = descend(then: cleanup, else: dips);",
+            // One arm named is the claim that the other needs no proof.
+            "proof foo = descend(then: cleanup);",
+            "proof foo = peel(descend(then: normalize(all)));",
+            "proof foo = inline(exact(cleanup));",
+        ] {
+            let prog = Program::new(&lib);
+            let file = hant(&lib, source).expect("parses");
+            file.compile(&file.proofs[0], &prog)
+                .unwrap_or_else(|e| panic!("{}", e.render_in(source, "x.hant")));
+        }
+    }
+
+    /// Three namespaces, and a name in two of them would not say which layer it
+    /// belonged to.
+    #[test]
+    fn a_strategy_may_not_take_a_name_that_is_taken() {
+        let lib = corpus("identity foo { drop 0 } = { drop 0 };");
+        let rendered = hant_err(&lib, "strategy cleanup = normalize(all);\nproof foo = id;");
+        assert!(rendered.contains("already a name"), "{}", rendered);
+
+        let rendered = hant_err(&lib, "strategy peel = normalize(all);\nproof foo = id;");
+        assert!(rendered.contains("is a strategy form"), "{}", rendered);
+
+        let rendered = hant_err(
+            &lib,
+            "strategy mine = normalize(all);\ntactic mine = cleanup;\nproof foo = id;",
+        );
+        assert!(rendered.contains("is a strategy name"), "{}", rendered);
+    }
+
+    /// The rule tactics are held to, for the reason tactics are held to it:
+    /// nothing here measures a goal getting smaller, so the depth is written.
+    #[test]
+    fn a_strategy_may_not_recurse() {
+        let lib = corpus("identity foo { drop 0 } = { drop 0 };");
+        let rendered = proof_err(&lib, "strategy loop = peel(loop);\nproof foo = loop;");
+        assert!(
+            rendered.contains("defined in terms of itself"),
+            "{}",
+            rendered
+        );
+        assert!(rendered.contains("no measure"), "{}", rendered);
+    }
+
     #[test]
     fn a_hant_that_is_not_a_definition_says_so() {
         let lib = corpus("identity foo { drop 0 } = { drop 0 };");
         let rendered = hant_err(&lib, "cleanup;");
         assert!(
-            rendered.contains("expected 'tactic' or 'proof'"),
+            rendered.contains("expected 'tactic', 'strategy' or 'proof'"),
             "{}",
             rendered
         );

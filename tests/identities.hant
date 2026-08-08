@@ -21,3 +21,19 @@ proof discarded_work_on_copies = cleanup;
 // which names a sentence rather than spelling it out — so this one closes up to
 // inlining where that one closes exactly.
 proof testing_a_test_by_name = cleanup;
+
+// Neither side is the normal form, so neither can be derived from the other by
+// rewriting one of them. `normalize` runs the tactic on both and meets, and the
+// derivation is the left's steps followed by the right's inverted.
+proof two_spellings_of_one_test = normalize(cleanup);
+
+// Congruence, said out loud: the goal is cut into one sub-goal per arm, the
+// `then` arms get the proof above, and the `else` arms are claimed equal
+// already — which `descend` checks rather than assumes.
+//
+// Nothing here is inferred. There is no strategy that would have decomposed on
+// its own initiative, because decomposition can turn a provable goal into an
+// unprovable one: `push 1 ; drop` and `push 2 ; drop` are equal, and peeling
+// the shared `drop` leaves a false goal behind. Where to cut is the author's
+// call, and this is where it is written down.
+proof a_test_inside_an_arm = descend(then: normalize(cleanup));

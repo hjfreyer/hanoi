@@ -35,6 +35,15 @@ nothing and guesses at nothing.
 combinators say in what order and where to look. Nothing up here rewrites a
 tree — it only produces scripts, which the lower layer then applies.
 
+Both layers are **blind**: a matcher reads one window of one term, and a tactic
+threads a single tree. Neither can know what the term is being rewritten
+*towards*. That is deliberate, and everything in this document stays inside it.
+`bin/prove` adds a third layer on top — a **strategy**, which discharges a goal
+by cutting it into smaller goals and handing each to an ordinary blind tactic —
+and the direction of the dependency is what keeps the two layers here intact: a
+strategy calls tactics, and nothing below it knows a goal exists. See
+`docs/identities.md`.
+
 So a run leaves behind a derivation:
 
 ```
@@ -1335,6 +1344,13 @@ consulting an analysis.
   an answer for what `equal` does to it, which `--stack` already declines to
   guess at.
 - **A smarter upper layer.** Matchers and combinators are the whole of the
-  search today. Everything above is deliberately arranged so that a better
+  search *here*. Everything above is deliberately arranged so that a better
   generator can be dropped in without the lower layer noticing: whatever finds
   the derivation, it still has to hand over a script that the applier checks.
+
+  `bin/prove`'s strategies are the first thing to take that up. They sit above
+  both layers rather than inside either, and what they hand back is an ordinary
+  `Script` — a sub-proof found inside a branch arm comes back out addressed to
+  the whole term, by way of `Location::under`. So nothing in this document
+  changed to make them possible, which is the property worth keeping when the
+  next one arrives.
