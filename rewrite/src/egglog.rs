@@ -121,8 +121,9 @@ fn header(out: &mut String, posed: &[Posed], bound: i64) {
 ;;   eval          needs to compute on a literal, and a literal is opaque here
 ;;   unframe       stated with a repetition count on both sides at once
 ;;   copy_nat      the same, and it is the law worth reaching for next
-;;   annihilate    emitted, but only for m = 1 and m = 2 (the flagged and the
-;;                 unflagged reading); m = 0 would fire on every `Cons`
+;;   annihilate    emitted for m in 0..=2 — the void, unflagged and flagged
+;;                 readings. `node-arity` is what makes m = 0 affordable: the
+;;                 pattern is a bare `Cons`, and the arity fact is the guard
 ;;   distribute    forward only; backward means splitting a cons list at a
 ;;                 point nothing names
 ;;
@@ -261,10 +262,14 @@ fn facts(out: &mut String) -> Result<(), String> {
 ;; step's arguments have to be recomputed from the concrete term. See
 ;; `docs/egglog.md`.
 
-(function ar-in  (Node) i64 :merge (min old new))
-(function ar-net (Node) i64 :no-merge)
-(function sq-in  (Seq) i64 :merge (min old new))
-(function sq-net (Seq) i64 :no-merge)
+;; Arity is a *relation*, and it is upward closed: anything of arity (n, m) is
+;; also of arity (n+1, m+1), because a program that ignores what is under it
+;; ignores one more just as happily. So a term carries a set of arities rather
+;; than a number, two terms in a class simply contribute their facts to the same
+;; set, and there is nothing to merge and nothing to conflict.
+(relation instr-arity (Instr i64 i64))
+(relation node-arity (Node i64 i64))
+(relation seq-arity (Seq i64 i64))
 
 ;; The primitive instructions, from `bytecode::arity::op_arity`.
 (relation prim-arity (String i64 i64))
@@ -275,7 +280,7 @@ fn facts(out: &mut String) -> Result<(), String> {
         let name = format!("{}", inst);
         let (n, m) = op_arity(&inst)
             .ok_or_else(|| format!("`{}` has no arity, which should not happen", name))?;
-        let _ = writeln!(out, "(prim-arity \"{}\" {} {})", name, n, m - n);
+        let _ = writeln!(out, "(prim-arity \"{}\" {} {})", name, n, m);
     }
 
     out.push('\n');
@@ -290,43 +295,57 @@ fn arity_rules(out: &mut String) {
 
 ;; `pick d` is (d+1 -> d+2), `roll d` is (d+1 -> d+1), `tuple n` is (n -> 1),
 ;; `untuple n` is (1 -> n+1) — the parametric ones are rules rather than rows.
-(rule ((= n (Op (Push c))))    ((set (ar-in n) 0)     (set (ar-net n) 1)) :ruleset analysis)
-(rule ((= n (Op (Drop))))      ((set (ar-in n) 1)     (set (ar-net n) -1)) :ruleset analysis)
-(rule ((= n (Op (Pick d))))    ((set (ar-in n) (+ d 1)) (set (ar-net n) 1)) :ruleset analysis)
-(rule ((= n (Op (Roll d))))    ((set (ar-in n) (+ d 1)) (set (ar-net n) 0)) :ruleset analysis)
-(rule ((= n (Op (Tuple k))))   ((set (ar-in n) k)     (set (ar-net n) (- 1 k))) :ruleset analysis)
-(rule ((= n (Op (Untuple k)))) ((set (ar-in n) 1)     (set (ar-net n) k)) :ruleset analysis)
-(rule ((= n (Op (Prim p))) (prim-arity p i v)) ((set (ar-in n) i) (set (ar-net n) v)) :ruleset analysis)
+(rule ((= i (Push c)))    ((instr-arity i 0 1)) :ruleset analysis)
+(rule ((= i (Drop)))      ((instr-arity i 1 0)) :ruleset analysis)
+(rule ((= i (Pick d)))    ((instr-arity i (+ d 1) (+ d 2))) :ruleset analysis)
+(rule ((= i (Roll d)))    ((instr-arity i (+ d 1) (+ d 1))) :ruleset analysis)
+(rule ((= i (Tuple k)))   ((instr-arity i k 1)) :ruleset analysis)
+(rule ((= i (Untuple k))) ((instr-arity i 1 (+ k 1))) :ruleset analysis)
+(rule ((= i (Prim p)) (prim-arity p n m)) ((instr-arity i n m)) :ruleset analysis)
 
-;; A frame adds its depth to what the body needs and changes nothing else.
-(rule ((= n (Dip k b)) (= i (sq-in b)) (= v (sq-net b)))
-      ((set (ar-in n) (+ k i)) (set (ar-net n) v)) :ruleset analysis)
+(rule ((= x (Op i)) (instr-arity i n m)) ((node-arity x n m)) :ruleset analysis)
 
-;; A branch pops the condition, then runs an arm. Both arms leave the same net
-;; or the sentence would not have compiled, so either one answers.
-(rule ((= n (Branch t e)) (= it (sq-in t)) (= ie (sq-in e)) (= vt (sq-net t)))
-      ((set (ar-in n) (+ 1 (max it ie))) (set (ar-net n) (- vt 1))) :ruleset analysis)
+;; A frame adds its depth to both ends and changes nothing else.
+(rule ((= x (Dip k b)) (seq-arity b n m))
+      ((node-arity x (+ k n) (+ k m))) :ruleset analysis)
 
-(rule ((= s (Empty))) ((set (sq-in s) 0) (set (sq-net s) 0)) :ruleset analysis)
+;; A branch pops the condition, then runs an arm. Both arms have to be measured
+;; at the same level, which is what the closure below is for.
+(rule ((= x (Branch t e)) (seq-arity t n m) (seq-arity e n m))
+      ((node-arity x (+ n 1) m)) :ruleset analysis)
 
-;; Composition, one cons cell at a time: what the tail needs is met by whatever
-;; the head left, so what the whole needs is the larger of the two, measured in
-;; the same place.
-(rule ((= s (Cons n r)) (= i (ar-in n)) (= v (ar-net n)) (= ir (sq-in r)))
-      ((set (sq-in s) (max i (- ir v)))) :ruleset analysis)
-(rule ((= s (Cons n r)) (= v (ar-net n)) (= vr (sq-net r)))
-      ((set (sq-net s) (+ v vr))) :ruleset analysis)
+(rule ((= s (Empty))) ((seq-arity s 0 0)) :ruleset analysis)
 
-;; The same, for a concatenation that has not reduced yet. Without this a law
-;; reading an arity has to wait a round for `splice` to walk the list.
-(rule ((= s (app a b)) (= ia (sq-in a)) (= va (sq-net a)) (= ib (sq-in b)))
-      ((set (sq-in s) (max ia (- ib va)))) :ruleset analysis)
-(rule ((= s (app a b)) (= va (sq-net a)) (= vb (sq-net b)))
-      ((set (sq-net s) (+ va vb))) :ruleset analysis)
+;; Composition: the head leaves what the tail takes. The middle has to line up
+;; exactly, and lifting is how it comes to.
+(rule ((= s (Cons n r)) (node-arity n a b) (seq-arity r b d))
+      ((seq-arity s a d)) :ruleset analysis)
+(rule ((= s (app a b)) (seq-arity a n k) (seq-arity b k m))
+      ((seq-arity s n m)) :ruleset analysis)
 
 "#,
     );
+
+    let _ = write!(
+        out,
+        r#";; The closure, bounded. Unbounded it is an infinite set of facts; the bound
+;; is how deep a stack any of this reasons about, and it has to be at least as
+;; deep as the widest middle a composition has to line up on.
+(rule ((instr-arity i n m) (< n {lift})) ((instr-arity i (+ n 1) (+ m 1))) :ruleset analysis)
+(rule ((node-arity x n m) (< n {lift})) ((node-arity x (+ n 1) (+ m 1))) :ruleset analysis)
+(rule ((seq-arity s n m) (< n {lift})) ((seq-arity s (+ n 1) (+ m 1))) :ruleset analysis)
+
+"#,
+        lift = LIFT
+    );
 }
+
+/// How far arity facts are lifted.
+///
+/// Composition needs the head's outputs and the tail's inputs to be the same
+/// number, and lifting is what makes them meet — so this has to clear the
+/// deepest stack any window in the corpus stands on, not the widest law.
+const LIFT: i64 = 6;
 
 fn splice(out: &mut String) {
     out.push_str(
@@ -375,13 +394,11 @@ fn laws(out: &mut String, bound: i64) {
 ;; X is one node, which under a cons list is what a spine variable *is*. A
 ;; multi-node X is a `dip 0` frame, which is also one node — so this covers both
 ;; without a second rule, and the packaging is a derivation rather than a case.
-(rule ((= s (Cons x (Cons (Dip k b) rest)))
-       (= i (ar-in x)) (= v (ar-net x)) (>= k (+ i v)))
-      ((union s (Cons (Dip (- k v) b) (Cons x rest))))
+(rule ((= s (Cons x (Cons (Dip k b) rest))) (node-arity x n m) (>= k m))
+      ((union s (Cons (Dip (+ (- k m) n) b) (Cons x rest))))
       :ruleset laws)
-(rule ((= s (Cons (Dip k b) (Cons x rest)))
-       (= i (ar-in x)) (= v (ar-net x)) (>= k i))
-      ((union s (Cons x (Cons (Dip (+ k v) b) rest))))
+(rule ((= s (Cons (Dip k b) (Cons x rest))) (node-arity x n m) (>= k n))
+      ((union s (Cons x (Cons (Dip (+ (- k n) m) b) rest))))
       :ruleset laws)
 
 ;; fuse: dip k { A } ; dip k { B } = dip k { A B }
@@ -508,8 +525,9 @@ fn laws(out: &mut String, bound: i64) {
 /// `X ; drop^m` = `drop^n`, one rule per `(n, m)` up to the bound.
 ///
 /// The count is on both sides and a pattern cannot hold one, so the law is
-/// spelled out. `m = 0` is left out: its pattern is a bare `Cons`, which is
-/// every non-empty sequence in the file.
+/// spelled out. `m = 0` has a bare `Cons` for a pattern — every non-empty
+/// sequence in the file — and is affordable only because `node-arity` is a
+/// relation: the arity fact does the constraining the pattern cannot.
 ///
 /// `X` is a single [`Node`], which under a cons list is what a spine variable
 /// is. It reaches a multi-node `X` through the packaging the framing ruleset
@@ -526,15 +544,15 @@ fn annihilate(out: &mut String, bound: i64) {
 ;; so this rule reaches both — see the framing ruleset.
 "#,
     );
-    for m in 1..=2i64 {
+    for m in 0..=2i64 {
         for n in 0..=bound {
             let _ = writeln!(
                 out,
-                "(rule ((= s (Cons x {}))\n       (= (ar-in x) {}) (= (ar-net x) {}))\n      \
+                "(rule ((= s (Cons x {})) (node-arity x {} {}))\n      \
                  ((union s {}))\n      :ruleset laws)",
                 drops(m, "rest"),
                 n,
-                m - n,
+                m,
                 drops(n, "rest"),
             );
         }
