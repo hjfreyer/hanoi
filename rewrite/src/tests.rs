@@ -814,7 +814,7 @@ fn work_in_arms(nodes: &[Node]) -> usize {
 /// `emit_does_pre_and_post` is a precondition, a computation and a
 /// postcondition, and every condition it tests is buried in an arm of the test
 /// before it. Hoisting them by hand took one `speculate { … }` per firing;
-/// `lifting` places ninety of them.
+/// `lifting` places twenty-three of them without being told any of the terms.
 #[test]
 fn lifting_empties_the_arms_of_the_barista_probe() {
     let Some((library, prog)) = corpus() else {

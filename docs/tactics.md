@@ -664,6 +664,9 @@ $ rewrite tests emit_pre_and_post -t 'exact(unfold_all; lifting)' --trace
   collapse            1
 ```
 
+The histogram is in **steps**, as everywhere else, so that is twenty-three
+`lift` firings at four steps each and one `factor` at three.
+
 That term is a precondition, a computation and a postcondition, and every
 condition in it is buried in an arm of the test before it. What comes out has
 all four state comparisons in one frame at the top and branch arms holding
