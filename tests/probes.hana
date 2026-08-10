@@ -25,3 +25,12 @@ identity pair_check
 identity state_check
     { jump super::queue::State::check }
   = { jump super::queue::State::check };
+
+// The term `lifting` is written for: a precondition, a computation and a
+// postcondition, all of it buried in branch arms that test the same four
+// symbols over and over. `barista.hana` states the claim that it is constantly
+// `true`; this one claims nothing and is only the address the tactic
+// documentation reaches for.
+identity emit_pre_and_post
+    { jump super::barista::customer_impl::emit_does_pre_and_post }
+  = { jump super::barista::customer_impl::emit_does_pre_and_post };

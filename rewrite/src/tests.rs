@@ -774,6 +774,95 @@ fn the_arm_that_did_not_want_it_drops_the_results() {
 }
 
 // ---------------------------------------------------------------------------
+// Emptying the arms: `lift`
+// ---------------------------------------------------------------------------
+
+/// `lift`'s own measure: every node that is not a `branch`, a `drop` or a
+/// `pick`, weighted by how many branch arms deep it sits.
+///
+/// A frame does not count as a level, since `lift` is what puts one there —
+/// `dip 1 { X }` in front of a branch is `X` out of that branch's arms, and a
+/// measure that read it otherwise would say the pass had gone backwards. What
+/// it is held to is a number rather than a listing, because the claim is about
+/// a shape and a listing would churn on every unrelated change to the corpus.
+fn work_in_arms(nodes: &[Node]) -> usize {
+    fn walk(nodes: &[Node], depth: usize, found: &mut usize) {
+        for node in nodes {
+            match node {
+                Node::Branch {
+                    then_body,
+                    else_body,
+                    ..
+                } => {
+                    walk(then_body, depth + 1, found);
+                    walk(else_body, depth + 1, found);
+                }
+                Node::Op(Instruction::Drop | Instruction::Pick(_)) => {}
+                Node::Dip { body, .. } => walk(body, depth, found),
+                _ => *found += depth,
+            }
+        }
+    }
+    let mut found = 0;
+    walk(nodes, 0, &mut found);
+    found
+}
+
+/// `lift` is `speculate` with the term found rather than named, and this is
+/// what that buys, measured on the term it was written for.
+///
+/// `emit_does_pre_and_post` is a precondition, a computation and a
+/// postcondition, and every condition it tests is buried in an arm of the test
+/// before it. Hoisting them by hand took one `speculate { … }` per firing;
+/// `lifting` places ninety of them.
+#[test]
+fn lifting_empties_the_arms_of_the_barista_probe() {
+    let Some((library, prog)) = corpus() else {
+        return;
+    };
+    let Ok(idx) =
+        crate::program::resolve_sentence(library, "customer_impl::emit_does_pre_and_post")
+    else {
+        return;
+    };
+
+    let plain = run(prog, build(library, idx, &mut HashSet::new()), "unfold_all");
+    let before = work_in_arms(&plain);
+    let lifted = run(prog, plain, "lifting");
+    let after = work_in_arms(&lifted);
+
+    assert!(
+        before > 400 && after * 2 < before,
+        "work buried in arms: {} before lifting, {} after",
+        before,
+        after
+    );
+}
+
+/// What it cannot reach, stated rather than left to be rediscovered.
+///
+/// A prefix that *consumes* the values the other arm still needs can only be
+/// lifted onto copies of them, and the copies have to be paid for: `n`
+/// backward `counit`s put `pick (n-1)^n ; drop^n` in, and turning those drops
+/// back into the originals wants `pick (n-1)^n ; dip n { drop^n }` = nothing.
+/// That is `counit_under` at `n = 1` and a `roll` for anything above it —
+/// `pick_drop_to_roll`, which is on the list in `docs/tactics.md` and not
+/// written. So the arms that build `emit`'s answer keep their work.
+#[test]
+fn lifting_stops_where_the_arms_build_different_values() {
+    let (prog, plain) = tree_of(
+        r#"
+        #[total] #[arity(3, 1)]
+        sentence probe { branch { tuple 2 } { add drop 0 } }
+        "#,
+        "id",
+    );
+    // The then arm consumes two values the else arm goes on to use, and the
+    // else arm has no drops in front of them to stand in.
+    assert_eq!(shape(&run(prog, plain.clone(), "lifting")), shape(&plain));
+}
+
+// ---------------------------------------------------------------------------
 // Testing the same value twice
 // ---------------------------------------------------------------------------
 

@@ -134,6 +134,7 @@ pub(crate) fn matcher_by_name(name: &str) -> Option<Box<dyn Matcher>> {
         "float" => Box::new(Float),
         "fold_branch" => Box::new(FoldBranch),
         "fuse" => Box::new(Fuse),
+        "lift" => Box::new(Lift),
         "sink" => Box::new(Sink),
         "split_bool" => Box::new(SplitBool),
         "swap" => Box::new(Swap),
@@ -167,6 +168,7 @@ pub(crate) fn matcher_names() -> Vec<&'static str> {
         "float",
         "fold_branch",
         "fuse",
+        "lift",
         "sink",
         "split_bool",
         "swap",
@@ -1746,6 +1748,279 @@ impl Matcher for Speculate {
     }
 }
 
+/// A node an arm is allowed to keep: `drop`, `pick`, and a `branch`.
+///
+/// The three that say *which* values a branch is choosing between rather than
+/// computing anything with them. Everything else is what [`Lift`] is trying to
+/// get out, and the distinction is what stops it from lifting the drops it
+/// just put in.
+fn is_trivial(node: &Node) -> bool {
+    matches!(
+        node,
+        Node::Op(Instruction::Drop) | Node::Op(Instruction::Pick(_)) | Node::Branch { .. }
+    )
+}
+
+/// Hoists the computation an arm opens with out of the branch — [`Speculate`]
+/// with the term **found** rather than named.
+///
+/// `speculate { X }` and `introduce { X } ; factor` are both aimed: they need
+/// the prefix written into the tactic expression, which means one line per
+/// firing and a rewrite of every one of them when the library moves underneath.
+/// This is the search that places them, so that "move every computation out of
+/// the arms it is buried in" is a pass rather than a transcript.
+///
+/// It reads an arm's longest **branch-free** prefix `X : n -> m` and takes the
+/// first of two routes to the same shape, `dip 1 { X } ; branch { … } { … }`:
+///
+/// ```text
+/// branch { X ; B } { drop^n ; C }     =  dip 1 { X } ; branch { B } { drop^m ; C }
+/// branch { pick (n-1)^n ; X ; B } { C }
+///                                     =  dip 1 { pick (n-1)^n ; X } ; branch { B } { drop^m ; C }
+/// ```
+///
+/// The first is the cheaper one and is tried first: the other arm was going to
+/// discard those `n` values anyway, so [`Rule::Annihilate`] read backwards puts
+/// `X` in front of the drops it already has and the two arms now share a
+/// prefix that [`Factor`]'s last three steps lift out. Nothing is copied and
+/// nothing is left behind. The second is [`Speculate`], for an arm that
+/// computes on copies where the other has no drops to stand in — `X` runs on
+/// the path that did not want it, but only ever on copies.
+///
+/// **Why the prefix has to be branch-free.** A branch is the one node whose
+/// arms cannot see out of it, so lifting one would have to lift both of its
+/// arms with it. Stopping in front of it is also what makes the pass
+/// terminate: the arm that was rewritten now opens with that branch, so this
+/// cannot fire on it a second time.
+///
+/// It declines two shapes. Two arms that open with the *same* node are
+/// [`Factor`]'s, which needs neither drops nor copies; and a prefix of nothing
+/// but `drop`s and `pick`s is not a computation, so lifting one would take
+/// straight back out the `drop^m` the last firing put in. A prefix whose `n`
+/// the other arm cannot pay for is not declined but **shortened**, until it
+/// can.
+///
+/// Measure: the number of non-trivial nodes inside branch arms, weighted by how
+/// many arms deep each one sits, and it strictly decreases — `X` moves from
+/// inside an arm to the sequence the branch itself is in. What replaces it is
+/// drops, which this rule will not read.
+#[derive(Debug)]
+pub(crate) struct Lift;
+
+/// What one arm of a branch offers to have lifted out of it.
+struct Candidate {
+    /// The whole prefix that leaves the arm, copies included.
+    prefix: Vec<Node>,
+    /// What the arm keeps.
+    rest: Vec<Node>,
+    /// The prefix's arity: what it consumes, and what the other arm must
+    /// therefore discard once it has been lifted.
+    n: usize,
+    m: usize,
+}
+
+impl Lift {
+    /// The longest branch-free prefix of `arm` the other arm can pay for.
+    ///
+    /// `copies` is how much of that prefix is a leading `pick (n-1)^n` block
+    /// that belongs to `X` rather than to what `X` consumes — nought for the
+    /// annihilation route, and the block itself for the speculating one.
+    fn candidate(
+        prog: &Program,
+        arm: &[Node],
+        copies: usize,
+        affordable: &dyn Fn(usize) -> bool,
+    ) -> Option<Candidate> {
+        let limit = arm
+            .iter()
+            .position(|node| matches!(node, Node::Branch { .. }))
+            .unwrap_or(arm.len());
+        for len in (copies + 1..=limit).rev() {
+            let prefix = &arm[..len];
+            if prefix[copies..].iter().all(is_trivial) {
+                continue;
+            }
+            let Some((n, m)) = full_arity(prog, &prefix[copies..]) else {
+                continue;
+            };
+            let (Ok(n), Ok(m)) = (usize::try_from(n), usize::try_from(m)) else {
+                continue;
+            };
+            if !affordable(n) {
+                continue;
+            }
+            return Some(Candidate {
+                prefix: prefix.to_vec(),
+                rest: arm[len..].to_vec(),
+                n,
+                m,
+            });
+        }
+        None
+    }
+
+    /// The lift itself, once an arm has said what it is offering: stand the
+    /// prefix in front of the drops the other arm already has, then
+    /// [`Factor`]'s three steps.
+    fn steps(
+        prog: &Program,
+        branch: &Node,
+        arm: Selector,
+        found: Candidate,
+    ) -> Option<Vec<PlannedStep>> {
+        let Node::Branch {
+            then_origin,
+            then_body,
+            else_origin,
+            else_body,
+        } = branch
+        else {
+            return None;
+        };
+        let (other, opposite) = match arm {
+            Selector::Then => (else_body, Selector::Else),
+            _ => (then_body, Selector::Then),
+        };
+
+        // The annihilation law backwards: the `n` drops the other arm opens
+        // with become `X ; drop^m`, both sides discarding the same values.
+        let conjure = Rule::Annihilate {
+            x: found.prefix.clone(),
+            n: found.n,
+            m: found.m,
+        };
+        conjure.check(prog).ok()?;
+        let conjure = PlannedStep {
+            kind: StepKind::Rule(conjure),
+            dir: Direction::Reverse,
+            rel: Location {
+                descent: vec![(0, opposite)],
+                at: 0,
+            },
+        };
+
+        // What each arm holds once the prefix is in front of both of them: the
+        // matched arm keeps what followed it, and the other arm discards the
+        // `m` results in place of the `n` values it was discarding before.
+        let mut paid: Vec<Node> =
+            std::iter::repeat_n(Node::Op(Instruction::Drop), found.m).collect();
+        paid.extend(other[found.n..].iter().cloned());
+        let (then_arm, else_arm) = match arm {
+            Selector::Then => (found.rest, paid),
+            _ => (paid, found.rest),
+        };
+
+        let wrap = |sel: Selector| PlannedStep {
+            kind: StepKind::Rule(Rule::ElimDip0 {
+                a: found.prefix.clone(),
+                origins: Vec::new(),
+            }),
+            dir: Direction::Reverse,
+            rel: Location {
+                descent: vec![(0, sel)],
+                at: 0,
+            },
+        };
+        let hoist = Rule::Hoist {
+            k: 0,
+            x: found.prefix.clone(),
+            origins: Vec::new(),
+            then_arm,
+            else_arm,
+            then_origin: then_origin.clone(),
+            else_origin: else_origin.clone(),
+        };
+        hoist.check(prog).ok()?;
+
+        Some(vec![
+            conjure,
+            wrap(Selector::Then),
+            wrap(Selector::Else),
+            PlannedStep {
+                kind: StepKind::Rule(hoist),
+                dir: Direction::Reverse,
+                rel: Location::root(0),
+            },
+        ])
+    }
+}
+
+impl Matcher for Lift {
+    fn name(&self) -> &'static str {
+        "lift"
+    }
+    fn width(&self) -> usize {
+        1
+    }
+    fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
+        Err("`lift` is a firing of several steps over three different \
+             equations, so there is no single one to read backwards. \
+             `unfactor` pushes the frame back into both arms, and `annihilate` \
+             forwards takes the conjured copy of the computation out again"
+            .to_string())
+    }
+    fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
+        let branch @ Node::Branch {
+            then_body,
+            else_body,
+            ..
+        } = &window[0]
+        else {
+            return None;
+        };
+
+        for (arm, matched, other) in [
+            (Selector::Then, then_body, else_body),
+            (Selector::Else, else_body, then_body),
+        ] {
+            // A shared opening node is `factor`'s, and factoring pays for
+            // neither drops nor copies.
+            if let ([a, ..], [b, ..]) = (&matched[..], &other[..])
+                && same_effect(a, b)
+            {
+                continue;
+            }
+            // The annihilation route: the other arm is already discarding the
+            // values `X` would consume, so it can be given `X` for nothing.
+            let drops = other.iter().take_while(|node| is_drop(node)).count();
+            if let Some(found) = Lift::candidate(prog, matched, 0, &|n| n <= drops)
+                && let Some(steps) = Lift::steps(prog, branch, arm, found)
+            {
+                return Some(steps);
+            }
+
+            // The speculating route: no drops to stand in front of, but the
+            // arm computes on copies, so the copies can be conjured instead.
+            let copies = leading_copy_block(matched);
+            if copies > 0
+                && let Some(found) = Lift::candidate(prog, matched, copies, &|n| n == copies)
+                && let Ok(speculate) = Speculate::new(Some(prog), found.prefix[copies..].to_vec())
+                && let Some(steps) = speculate.plan(prog, window)
+            {
+                return Some(steps);
+            }
+        }
+        None
+    }
+}
+
+/// The `pick (n-1)^n` a computation on copies opens with, or nought.
+///
+/// `n` is read off the depth rather than guessed at: a block that copies `n`
+/// values is `n` picks at depth `n-1`, so the first pick says how many there
+/// should be and the rest have to agree.
+fn leading_copy_block(arm: &[Node]) -> usize {
+    let Some(Node::Op(Instruction::Pick(d))) = arm.first() else {
+        return 0;
+    };
+    let n = d + 1;
+    if arm.len() >= n && arm[..n].iter().all(|node| same_effect(node, &arm[0])) {
+        n
+    } else {
+        0
+    }
+}
+
 /// The arity of a term written in a tactic expression.
 ///
 /// Terms are built from instructions and frames and never name a sentence, so
@@ -3015,6 +3290,156 @@ mod tests {
             panic!("expected a frame and a branch, got {:?}", got)
         };
         assert_eq!(else_body, &vec![op(Instruction::Drop)]);
+    }
+
+    #[test]
+    fn lift_pays_for_the_prefix_with_the_drops_the_other_arm_has() {
+        // `equal` is (2 -> 1), and the else arm was discarding those two
+        // values anyway — so the annihilation law backwards puts `equal` in
+        // front of the drops it already has, and both arms now open with it.
+        let w = [branch(
+            vec![op(Instruction::Equal)],
+            vec![
+                op(Instruction::Drop),
+                op(Instruction::Drop),
+                op(Instruction::IsBool),
+            ],
+        )];
+        assert_eq!(
+            fire(&Lift, &prog(), &w),
+            Some(vec![
+                dip(1, vec![op(Instruction::Equal)]),
+                branch(
+                    Vec::new(),
+                    vec![op(Instruction::Drop), op(Instruction::IsBool)]
+                ),
+            ]),
+            "two drops in, one out: the arm discards `equal`'s result instead"
+        );
+        // One conjuring and factor's three. Nothing is copied.
+        assert_eq!(Lift.plan(&prog(), &w).unwrap().len(), 1 + 3);
+    }
+
+    #[test]
+    fn lift_takes_the_longest_run_the_other_arm_can_pay_for() {
+        // `not` is (1 -> 1) and `not ; equal` is (2 -> 1), so how much goes is
+        // decided by how many values the other arm was discarding.
+        let arm = || vec![op(Instruction::Not), op(Instruction::Equal)];
+        let lifted = |other: Vec<Node>| {
+            let got = fire(&Lift, &prog(), &[branch(arm(), other)]).expect("declined");
+            let [Node::Dip { body, .. }, ..] = &got[..] else {
+                panic!("expected a frame and a branch, got {:?}", got)
+            };
+            body.clone()
+        };
+        assert_eq!(
+            lifted(vec![op(Instruction::Drop), op(Instruction::Drop)]),
+            arm(),
+            "two drops, so the whole run goes"
+        );
+        assert_eq!(
+            lifted(vec![op(Instruction::Drop)]),
+            vec![op(Instruction::Not)],
+            "one drop, so the run is shortened until the other arm can pay"
+        );
+    }
+
+    #[test]
+    fn lift_falls_back_to_speculating_when_there_are_no_drops() {
+        // No drops in the else arm, but the then arm computes on copies — so
+        // the copies are conjured instead, which is `speculate` with the
+        // prefix found rather than named.
+        let prefix = || {
+            vec![
+                op(Instruction::Pick(1)),
+                op(Instruction::Pick(1)),
+                op(Instruction::Equal),
+            ]
+        };
+        let mut then_arm = prefix();
+        then_arm.push(op(Instruction::And));
+        assert_eq!(
+            fire(
+                &Lift,
+                &prog(),
+                &[branch(then_arm, vec![op(Instruction::Not)])]
+            ),
+            Some(vec![
+                dip(1, prefix()),
+                branch(
+                    vec![op(Instruction::And)],
+                    vec![op(Instruction::Drop), op(Instruction::Not)]
+                ),
+            ])
+        );
+    }
+
+    #[test]
+    fn lift_leaves_the_arms_what_a_branch_is_for() {
+        // Nothing but `drop`s and `pick`s is not a computation, and lifting
+        // one would take straight back out the drops the last firing put in.
+        assert!(
+            Lift.plan(
+                &prog(),
+                &[branch(
+                    vec![op(Instruction::Pick(0)), op(Instruction::Drop)],
+                    vec![op(Instruction::Drop), op(Instruction::Drop)]
+                )]
+            )
+            .is_none()
+        );
+        // A shared opening node is `factor`'s, which pays for neither drops
+        // nor copies.
+        assert!(
+            Lift.plan(
+                &prog(),
+                &[branch(
+                    vec![op(Instruction::Equal)],
+                    vec![op(Instruction::Equal)]
+                )]
+            )
+            .is_none()
+        );
+        // A branch is the node whose arms cannot see out of it, so the run
+        // stops in front of one — and an arm that opens with one offers
+        // nothing.
+        assert!(
+            Lift.plan(
+                &prog(),
+                &[branch(
+                    vec![branch(Vec::new(), Vec::new()), op(Instruction::Not)],
+                    vec![op(Instruction::Drop), op(Instruction::Drop)]
+                )]
+            )
+            .is_none()
+        );
+        // Reading it backwards is three equations, not one.
+        assert!(Lift.inverse().is_err());
+    }
+
+    /// The measure, asserted rather than described: what `lift` leaves behind
+    /// is drops, and it will not read those back out again.
+    #[test]
+    fn lift_cannot_fire_on_its_own_output() {
+        let got = fire(
+            &Lift,
+            &prog(),
+            &[branch(
+                vec![op(Instruction::Equal)],
+                vec![
+                    op(Instruction::Drop),
+                    op(Instruction::Drop),
+                    op(Instruction::IsBool),
+                ],
+            )],
+        )
+        .expect("declined");
+        assert!(
+            Lift.plan(&prog(), &got[1..]).is_none(),
+            "the arm it emptied offers nothing and the drops it left are not a \
+             computation, so a `repeat` settles here: {:?}",
+            got
+        );
     }
 
     #[test]

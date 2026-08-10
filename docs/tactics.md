@@ -272,6 +272,7 @@ different thing to look for even though the arithmetic is the same:
 | `introduce { .. }` | n | annihilate backwards — see below |
 | `share { .. }` | n+\|X\|+1 | `copy_nat` forward — see below |
 | `speculate { .. }` | 1 | hoist out of the one arm that has it — see below. `n + 4` steps, no new law |
+| `lift` | 1 | the same move with the prefix **found** rather than named — see below. 4 steps, or `speculate`'s |
 | `bool_result` | 2 | `op ; is_bool` forward; backward is `inv(bool_result)` |
 | `retest` | 2 | one arm per firing, then arm first; no backward reading |
 | `counit_under` / `inv(counit_under)` | 2 / 1 | the other counit, found or *put in* |
@@ -609,6 +610,93 @@ factoring needs no copies and no drops. It has no measure and grows the term by
 the frame and the `m` drops, so it is in no default pass; but it cannot fire on
 its own output, since the arm it rewrote no longer opens with the prefix and
 the other now opens with drops.
+
+### Emptying the arms: `lift`
+
+`speculate { X }` and `introduce { X } ; factoring` are both **aimed**: the
+prefix is written into the tactic expression, which is one line per firing and a
+rewrite of every one of them when the library moves underneath. `lift` is the
+search that places them, so that "get every computation out of the arms it is
+buried in" is a pass rather than a transcript.
+
+It reads an arm's longest **branch-free** prefix `X : n -> m` and takes the
+first of two routes to the same shape:
+
+```text
+branch { X ; B } { drop^n ; C }        =  dip 1 { X } ; branch { B } { drop^m ; C }
+branch { pick (n-1)^n ; X ; B } { C }  =  dip 1 { pick (n-1)^n ; X } ; branch { B } { drop^m ; C }
+```
+
+The first is the cheaper one and is tried first. The other arm was going to
+discard those `n` values anyway, so `annihilate` read backwards stands `X` in
+front of the drops it already has, and the two arms now share a prefix that
+`factor`'s last three steps lift out — four steps, nothing copied, nothing left
+behind. The second is `speculate`, for an arm that computes on copies where the
+other has no drops to stand in.
+
+**Why the prefix has to be branch-free.** A branch is the one node whose arms
+cannot see out of it, so lifting one would mean lifting both of its arms with
+it. Stopping in front of it is also what makes the pass terminate: the arm that
+was rewritten now opens with that branch, so `lift` cannot fire on it again.
+
+**Why `drop` and `pick` are not lifted.** They say *which* values a branch is
+choosing between rather than computing anything with them — and `drop^m` is
+exactly what the last firing put into the other arm, so a rule that read those
+back out would take turns with itself forever.
+
+The measure is real, and it is the number of non-trivial nodes inside branch
+arms weighted by how many arms deep each one sits. A frame is not a level: `X`
+moving from inside an arm into a `dip 1 { X }` in front of the branch is `X`
+leaving that arm, which is the whole point. `tests::\
+lifting_empties_the_arms_of_the_barista_probe` measures it over the corpus
+rather than asserting the shape.
+
+`lifting` is the pass, and it alternates with the frame laws — every firing
+leaves a `dip 1 { X }` behind, and collapsing and sinking those is what lets the
+next one see a prefix rather than a pile of frames:
+
+```
+$ rewrite tests emit_pre_and_post -t 'exact(unfold_all; lifting)' --trace
+  lift               92
+  sink               50
+  unfold             10
+  factor              3
+  collapse            1
+```
+
+That term is a precondition, a computation and a postcondition, and every
+condition in it is buried in an arm of the test before it. What comes out has
+all four state comparisons in one frame at the top and branch arms holding
+nothing but branches, drops and the literal each one selects:
+
+```
+   0 │      1 │ pick 0
+   1 │      2 │ dip 1 {
+   0 │      2 │   untuple 3
+   1 │      5 │   dip 1 { pick 0 ; push state::thirsty ; equal }
+     │        │ }
+   2 │      6 │ untuple 3
+   3 │      9 │ dip 1 {
+     │        │   …the four comparisons, nested one per else arm…
+   4 │     12 │   push state::idle
+   5 │     13 │   equal
+     │        │ }
+   4 │     12 │ branch then {
+   0 │     11 │   branch then {
+   0 │     10 │     drop
+   1 │      9 │     drop
+   2 │      8 │     drop
+   3 │      7 │     push true
+```
+
+**What it cannot reach.** A prefix that *consumes* values the other arm still
+needs can only be lifted onto copies, and the copies have to be paid for:
+`pick (n-1)^n ; X ; dip m { drop^n }` = `X` is what would license it, which is
+one `interchange` and then `pick (n-1)^n ; dip n { drop^n }` = nothing — which
+is `counit_under` at `n = 1` and a **roll** for anything above it. That is
+`pick_drop_to_roll`, on the list under "what is not here yet", so an arm that
+builds a value out of operands the other arm goes on to use keeps its work. In
+the term above that is `emit`'s answer and nothing else.
 
 ### Terms
 
@@ -1046,8 +1134,8 @@ one place and nowhere else.
 ## Named tactics
 
 `--list-tactics` prints them. `unfold_all`, `dips`, `unary`, `factoring`,
-`annihilation`, `values`, `commuting`, `cleanup`, `distribution`, `flattening`,
-`all`, `dip_normalize`.
+`annihilation`, `values`, `commuting`, `cleanup`, `lifting`, `distribution`,
+`flattening`, `all`, `dip_normalize`.
 
 A tactic may not take a matcher's name, so where a pass and the matcher at its
 heart would collide the pass gives way: `annihilation` drives `annihilate`,
@@ -1356,8 +1444,9 @@ consulting an analysis.
   company: `unframe` and `pick_roll` are what make a roll worth writing, since
   alone it only moves a value and nothing could say what that bought.
   `pick_drop_to_roll` — `pick d ; dip (d+1) { drop }` = `roll d`, which is
-  `counit_under` at depth and would demote it — is still not written, nothing
-  having wanted it.
+  `counit_under` at depth and would demote it — is still not written, but
+  something wants it now: it is what would let `lift` reach a prefix that
+  consumes more than one value the other arm still needs.
 
 - **Matchers for the three roll laws.** Six readings, and each has a real
   question behind it: the width of `roll_cycle` is its own argument, its
