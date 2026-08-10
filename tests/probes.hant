@@ -4,3 +4,4 @@
 // worth paying to keep `rewrite` addressing one kind of thing.
 proof pair_check = id;
 proof state_check = id;
+proof emit_pre_and_post = id;

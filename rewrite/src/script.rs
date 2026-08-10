@@ -105,6 +105,19 @@ tactic cleanup = repeat(bu(each(annihilate, annihilate_flagged, annihilate_void,
                                 counit, counit_under, comm, fold_branch, retest);
                            each(eval1, eval2, bool_result, cancel_tuple, copy_const)));
 
+// Empty every branch arm of everything but `branch`, `drop` and `pick`, so
+// that what is left of a branch is the choice it makes and none of the work it
+// was doing. `factor` takes what both arms share and `lift` takes what one arm
+// has — either way the computation ends up in front of the branch, where the
+// laws that fold values can reach it and where two arms testing the same thing
+// come to be testing the *same* node.
+//
+// Alternated with `dips` rather than run to a fixpoint first: every firing
+// leaves a `dip 1 { X }` behind, and collapsing and sinking those is what
+// lets the next one see a prefix rather than a pile of frames.
+tactic lifting = repeat(bu(each(factor); each(lift);
+                           each(collapse); each(sink); each(fuse)));
+
 // Push what follows a branch into both of its arms, so a law that only holds on
 // one side can see it. Kept out of `all` and `cleanup`: it duplicates code on
 // purpose, which is the opposite of what those two are for.
