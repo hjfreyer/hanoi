@@ -9,6 +9,6 @@
 // This used to be one `speculate { … }` per condition, written out by hand and
 // aimed with `td(once(…))` — five of them, plus an `introduce` and three
 // `inv(flatten)`s to reach the arm the last one was hiding in. `lifting` places
-// all of it: ninety-two firings, and nothing named.
+// all of it: twenty-three firings, ninety-two steps, and nothing named.
 
 exact(unfold_all; lifting; cleanup)
