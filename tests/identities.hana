@@ -205,6 +205,30 @@ test sentence a_framed_computation_is_a_rolled_one {
     assert  push 3 assert_eq  push 9 assert_eq  push 8 assert_eq
 }
 
+// `push v1 … push vn ; op` = the pushes of what `op` answers — for `tuple` and
+// `untuple`, which `eval` did not know.
+//
+// What `eval` owes is not a licence but an obligation: to agree with the
+// interpreter exactly, on junk as much as on anything else. So the element
+// order is measured here rather than reasoned about — `tuple n` takes the top
+// `n` and the *topmost* becomes the first element — and so is what `untuple`
+// hands back when the width does not match: the value in the deepest slot it
+// filled, `()` in the rest, and `false` on top.
+test sentence building_and_taking_apart_literals {
+    push 1 push 2 tuple 2       push (2, 1) assert_eq
+    push some_sym push 1 tuple 2
+                                push (1, some_sym) assert_eq
+
+    push (2, 1) untuple 2       assert   push 2 assert_eq   push 1 assert_eq
+    push 2 untuple 2            not assert   push () assert_eq   push 2 assert_eq
+
+    // `tuple 0` is the one an operator with no operands at all answers.
+    tuple 0                     push () assert_eq
+
+    // At `n = 0` there is no room for the value: the flag is the whole answer.
+    push 7 untuple 0            not assert
+}
+
 // `X ; drop^m` = `drop^n`, and `pick d ; drop` = nothing.
 test sentence discarded_work_is_no_work {
     push 9
@@ -393,3 +417,15 @@ identity the_guard_a_split_leaves { equal pick 0 is_bool } = { equal push true }
 // the frame, `d` is on the node and `n` and `m` are its body's arity, so the
 // window is one node and all three are known.
 identity taking_a_frame_off { dip 1 { not } } = { roll 1 not roll 1 };
+
+// `push a ; push b ; tuple 2 ; … ; equal` decided, which needs `eval` to know
+// how to build a tuple and how to take one apart.
+//
+// It did not. Every value law is stated about literals, and a constructed tuple
+// was not one — so a postcondition comparing what a function just built against
+// what it should have built stalled with both operands right there. Widening
+// `eval_op` is not a new law: `Rule::Eval` already says "the pushes of what the
+// operator answers", and `tuple` is an operator that answers.
+identity comparing_two_built_tuples
+    { push some_sym push 1 tuple 2 push some_sym push 1 tuple 2 equal }
+  = { push true };

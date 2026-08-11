@@ -116,11 +116,17 @@ function number_does_pre_and_post {
 //
 //     …; must(at(7, unframe)); must(at(10, split_bool)); values; cleanup
 //
-// What is left is a *third* copy of the `v == t2` test, two frames deep inside
-// what `number` builds. Sharing it with the one already split is the same job
-// the first share was, and the alignment has to be found rather than aimed —
-// which is a search problem now rather than a missing law. So this stays a
-// comment until a strategy for it is written down.
+// **Folding what the function built.** `eval` did not know `tuple` or
+// `untuple`, so a postcondition comparing a *constructed* pair against the pair
+// it should have built stalled with both operands sitting right there. It knows
+// them now, and `eval0` reaches `tuple 0`, which reads no operands at all.
+//
+// With all four in place the aimed proof gets most of the way: several leaves
+// fold to `push true` outright and the residue is a third the size it was. What
+// is left is a literal on the stack whose reader is a `pick 0` several nodes
+// later — `copy_const` wants them adjacent, and bringing them together means
+// pushing the producer forward into the branch that reads it. That is a search
+// problem now rather than a missing law, which is why this is still a comment.
 //
 // `probes::number_pre_and_post` is the address to work it at.
 //
