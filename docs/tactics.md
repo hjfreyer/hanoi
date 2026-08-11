@@ -274,6 +274,7 @@ different thing to look for even though the arithmetic is the same:
 | `speculate { .. }` | 1 | hoist out of the one arm that has it — see below. `n + 4` steps, no new law |
 | `lift` | 1 | the same move with the prefix **found** rather than named — see below. 4 steps, or `speculate`'s |
 | `bool_result` | 2 | `op ; is_bool` forward; backward is `inv(bool_result)` |
+| `bool_result_copied` | 3 | the same fact through a copy — `op ; pick 0 ; is_bool`, which is the guard `split_bool` leaves. 8 steps, no new law |
 | `retest` | 2 | one arm per firing, then arm first; no backward reading |
 | `counit_under` / `inv(counit_under)` | 2 / 1 | the other counit, found or *put in* |
 | `counit` / `counit(d)` / `inv(counit(d))` | 2 / 2 / 1 | the copy-and-discard law: found, found at one depth, or *put in* |
@@ -981,6 +982,53 @@ the right does not; that asymmetry is `counit`'s, and `--check` allows it.
 `unsplit_bool` is the forward reading, for taking a split back out once its arms
 have been folded down to nothing interesting.
 
+#### The guard it leaves: `bool_result_copied`
+
+```text
+op ; pick 0 ; is_bool  =  op ; push true       for an op that yields a boolean
+```
+
+The split asks `is_bool` **behind a `pick 0`**, because the value it is about to
+branch on has to survive the question. `bool_result` reads `op ; is_bool`, and a
+matcher's width is fixed before it looks — so the copy in the middle put the
+answer out of reach, and a split placed on an operator's result stalled holding
+a question the equation set could already discharge. The two laws built to
+compose could not meet, and `values` walked straight past the term.
+
+```
+$ rewrite mini probe -t 'exact(at(1, split_bool); values; cleanup)'
+   0 │ equal
+   1 │ branch then → true { push true } else → false { push false }
+```
+
+That is the whole point of the case split — an unknown boolean replaced by a
+literal in each arm — and until this window existed it did not happen.
+
+**It is a lemma, and the derivation is the argument.** Un-sharing is what makes
+it go: `copy_nat` backwards turns the copy into a *second run of `op`*, which is
+what puts an `op` next to the `is_bool`, and the run left over is exactly what
+the annihilation and counits the copies paid for take away again.
+
+```
+$ rewrite mini guard -t 'exact(must(once(bool_result_copied)))' --show-script
+     0  copy_nat    <- @0   equal ; pick 0        ⇒ pick 1 ; pick 1 ; equal ; …
+     1  interchange <- @3   dip 1 { equal } ; is_bool ⇒ is_bool ; dip 1 { equal }
+     2  bool_result -> @2   equal ; is_bool       ⇒ equal ; drop ; push true
+     3  annihilate  -> @2   equal ; drop          ⇒ drop ; drop
+     4  counit      -> @1                         ⇒ (nothing)
+     5  counit      -> @0                         ⇒ (nothing)
+     6  interchange -> @0   push true ; dip 1 { equal } ⇒ dip 0 { equal } ; push true
+     7  elim_dip0   -> @0                         ⇒ equal
+```
+
+`tests::the_guard_a_split_leaves_is_derivable` runs both routes and holds them
+to the same answer, and `identities::the_guard_a_split_leaves` states the claim
+in the language.
+
+It reads `op : n -> 1` only. A flag-leaving operator is `(n -> 2)` and the
+annihilation in the middle has nothing to say about it — where plain
+`bool_result` covers a flag happily, since it deletes nothing.
+
 ### It is not a normalizing pass
 
 `introduce` grows the term and has no measure, so it belongs in no `repeat`;
@@ -1468,6 +1516,14 @@ consulting an analysis.
   it has to say which value it folded — but a float written by hand would want
   an answer for what `equal` does to it, which `--stack` already declines to
   guess at.
+- **A matcher for `unframe`.** The value laws are stated about the top of the
+  stack, and `bool_result_copied` closed one instance of that
+  — a boolean under a *copy*. A boolean under a **frame** is the other, and it
+  is what stops `probes::number_pre_and_post` from closing: `v == t2` is
+  computed inside a `dip 1 { … }`, so `split_bool` cannot reach it. `unframe`
+  is the equation that brings a framed computation's operands to the top and
+  it has no matcher, which is the same gap the roll laws have generally.
+
 - **A smarter upper layer.** Matchers and combinators are the whole of the
   search *here*. Everything above is deliberately arranged so that a better
   generator can be dropped in without the lower layer noticing: whatever finds

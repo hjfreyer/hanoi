@@ -117,6 +117,7 @@ pub(crate) fn matcher_by_name(name: &str) -> Option<Box<dyn Matcher>> {
         "annihilate_flagged" => Box::new(AnnihilateFlagged),
         "annihilate_void" => Box::new(AnnihilateVoid),
         "bool_result" => Box::new(BoolResult),
+        "bool_result_copied" => Box::new(BoolResultCopied),
         "cancel_tuple" => Box::new(CancelTuple),
         "counit_under" => Box::new(CounitUnder),
         "retest" => Box::new(Retest),
@@ -152,6 +153,7 @@ pub(crate) fn matcher_names() -> Vec<&'static str> {
         "annihilate_flagged",
         "annihilate_void",
         "bool_result",
+        "bool_result_copied",
         "cancel_tuple",
         "collapse",
         "comm",
@@ -2101,6 +2103,149 @@ impl Matcher for BoolResult {
     }
 }
 
+/// `op ; pick 0 ; is_bool` becomes `op ; push true`.
+///
+/// The same fact as [`BoolResult`], read through a **copy** — and it is a
+/// second matcher for the reason [`Annihilate`] has three: a matcher's width is
+/// fixed before it looks, and the `pick 0` in the middle makes this window
+/// three nodes where that one reads two.
+///
+/// **What wants it is [`SplitBool`].** The case split is the only law that can
+/// put a `branch` on an unknown condition into a term, and it pays for being
+/// unconditional by asking `is_bool` in the term — behind a `pick 0`, because
+/// the value has to survive for the branch that follows. So the guard it leaves
+/// is `pick 0 ; is_bool`, which `bool_result` cannot read, and a split placed on
+/// the result of an operator stalls holding a question the equation set can
+/// already answer. The two laws that were built to compose could not meet, and
+/// this is the window where they do.
+///
+/// **It is a lemma, not an axiom.** Eight steps of equations the set already
+/// has, and `tests::the_guard_a_split_leaves_is_derivable` runs them:
+///
+/// ```text
+/// op ; pick 0 ; is_bool
+///   = pick (n-1)^n ; op ; dip 1 { op } ; is_bool     copy_nat backwards
+///   = pick (n-1)^n ; op ; is_bool ; dip 1 { op }     interchange
+///   = pick (n-1)^n ; op ; drop ; push true ; …       bool_result
+///   = pick (n-1)^n ; drop^n ; push true ; …          annihilate
+///   = push true ; dip 1 { op }                       counit, n times
+///   = op ; push true                                 interchange, elim_dip0
+/// ```
+///
+/// Un-sharing is what makes it go: the copy becomes a second run of `op`, which
+/// puts an `op` next to the `is_bool` where `bool_result` can see it, and the
+/// run that is left over is discarded by the annihilation the copies paid for.
+///
+/// It reads `op : n -> 1` only. A flag-leaving operator is `(n -> 2)` and the
+/// annihilation in the middle of that derivation has nothing to say about it —
+/// where plain `bool_result` covers a flag happily, since it deletes nothing.
+///
+/// Measure: three nodes become two, so it strictly shrinks and is safe in a
+/// fixpoint beside the other value laws.
+#[derive(Debug)]
+pub(crate) struct BoolResultCopied;
+
+impl Matcher for BoolResultCopied {
+    fn name(&self) -> &'static str {
+        "bool_result_copied"
+    }
+    fn width(&self) -> usize {
+        3
+    }
+    fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
+        Err(
+            "`bool_result_copied` is a firing of several steps over five \
+             different equations, so there is no single one to read backwards. \
+             `inv(bool_result)` puts the question back where there is no copy \
+             in the way, and `inv(share { op })` is what puts the copy in"
+                .to_string(),
+        )
+    }
+    fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
+        let [
+            Node::Op(op),
+            Node::Op(Instruction::Pick(0)),
+            Node::Op(Instruction::IsBool),
+        ] = window
+        else {
+            return None;
+        };
+        if !op.yields_bool() {
+            return None;
+        }
+        let (n, m) = bytecode::arity::op_arity(op)?;
+        // `m == 1` is what the annihilation in the middle needs: the whole of
+        // what `op` left is the boolean, so discarding it discards `op`.
+        if m != 1 {
+            return None;
+        }
+        let n = usize::try_from(n).ok()?;
+        let node = || Node::Op(op.clone());
+        let framed = Node::Dip {
+            depth: 1,
+            origins: Vec::new(),
+            body: vec![node()],
+        };
+
+        let at = |kind, dir, at| PlannedStep {
+            kind: StepKind::Rule(kind),
+            dir,
+            rel: Location::root(at),
+        };
+        let unshare = Rule::CopyNat {
+            x: vec![node()],
+            n,
+            m: 1,
+        };
+        let float = Rule::Interchange {
+            x: Node::Op(Instruction::IsBool),
+            framed,
+            n: 1,
+            m: 1,
+        };
+        let fold = Rule::BoolResult { op: op.clone() };
+        let discard = Rule::Annihilate {
+            x: vec![node()],
+            n,
+            m: 1,
+        };
+        let put_back = Rule::Interchange {
+            x: Node::Op(Instruction::Push(Value::Bool(true))),
+            framed: Node::Dip {
+                depth: 1,
+                origins: Vec::new(),
+                body: vec![node()],
+            },
+            n: 0,
+            m: 1,
+        };
+        let unwrap = Rule::ElimDip0 {
+            a: vec![node()],
+            origins: Vec::new(),
+        };
+        for rule in [&unshare, &float, &fold, &discard, &put_back, &unwrap] {
+            rule.check(prog).ok()?;
+        }
+
+        let mut steps = vec![
+            // `op ; pick 0` is one run of `op` and a copy; un-share it into two
+            // runs, which is what puts an `op` in front of the `is_bool`.
+            at(unshare, Direction::Reverse, 0),
+            at(float, Direction::Reverse, n + 1),
+            at(fold, Direction::Forward, n),
+            at(discard, Direction::Forward, n),
+        ];
+        // The copies were made only to be discarded, and the drops the
+        // annihilation left are what they cancel against — innermost first.
+        for i in (0..n).rev() {
+            steps.push(at(Rule::Counit { d: n - 1 }, Direction::Forward, i));
+        }
+        steps.push(at(put_back, Direction::Forward, 0));
+        steps.push(at(unwrap, Direction::Forward, 0));
+        Some(steps)
+    }
+}
+
 /// `op ; drop ; push true` becomes `op ; is_bool`.
 ///
 /// [`Rule::BoolResult`] read backwards, putting the question back. It is the
@@ -3440,6 +3585,77 @@ mod tests {
              computation, so a `repeat` settles here: {:?}",
             got
         );
+    }
+
+    /// The window `split_bool` leaves, and the eight steps that answer it.
+    #[test]
+    fn bool_result_reads_through_the_copy_a_split_leaves() {
+        let w = [
+            op(Instruction::Equal),
+            op(Instruction::Pick(0)),
+            op(Instruction::IsBool),
+        ];
+        assert_eq!(
+            fire(&BoolResultCopied, &prog(), &w),
+            Some(vec![
+                op(Instruction::Equal),
+                op(Instruction::Push(Value::Bool(true))),
+            ]),
+            "asking whether a copy of a boolean is a boolean asks nothing"
+        );
+        // `equal` is (2 -> 1), so two copies are made and two counits take
+        // them back: copy_nat, interchange, bool_result, annihilate, two
+        // counits, interchange, elim_dip0.
+        assert_eq!(BoolResultCopied.plan(&prog(), &w).unwrap().len(), 8);
+    }
+
+    #[test]
+    fn bool_result_copied_asks_the_same_thing_of_the_operator() {
+        // Not a boolean codomain, so there is nothing to fold — the same
+        // refusal `bool_result` makes, through the copy.
+        assert!(
+            BoolResultCopied
+                .plan(
+                    &prog(),
+                    &[
+                        op(Instruction::Push(Value::Bool(true))),
+                        op(Instruction::Pick(0)),
+                        op(Instruction::IsBool)
+                    ]
+                )
+                .is_none(),
+            "a literal's type is known better than this law says"
+        );
+        // A flag-leaving operator is `(n -> 2)`, and the annihilation in the
+        // middle of the derivation has nothing to say about it — where plain
+        // `bool_result` covers a flag happily, since it deletes nothing.
+        assert!(
+            BoolResultCopied
+                .plan(
+                    &prog(),
+                    &[
+                        op(Instruction::Add),
+                        op(Instruction::Pick(0)),
+                        op(Instruction::IsBool)
+                    ]
+                )
+                .is_none()
+        );
+        // And the copy has to be the one the split makes: at depth, it is a
+        // different value being asked about.
+        assert!(
+            BoolResultCopied
+                .plan(
+                    &prog(),
+                    &[
+                        op(Instruction::Equal),
+                        op(Instruction::Pick(1)),
+                        op(Instruction::IsBool)
+                    ]
+                )
+                .is_none()
+        );
+        assert!(BoolResultCopied.inverse().is_err());
     }
 
     #[test]

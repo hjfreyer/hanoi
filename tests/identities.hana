@@ -152,6 +152,32 @@ test sentence a_test_on_something_already_boolean_is_decided {
                                     push true assert_eq  drop 0
 }
 
+// `op ; pick 0 ; is_bool` = `op ; push true`, for an op that yields a boolean.
+//
+// The same fact as the law above, read through a **copy** — and the copy is
+// what makes it a claim worth stating separately. `split_bool` is the only law
+// that can put a branch on an unknown condition into a term, and it pays for
+// being unconditional by asking `is_bool` in the term; the value has to survive
+// for the branch that follows, so what it asks is `pick 0 ; is_bool`, which
+// `bool_result` cannot read. The two laws built to compose could not meet.
+//
+// It is a lemma and the proof says so: un-share the copy into a second run of
+// the operator, which puts an `op` next to the `is_bool`, fold that, and let
+// the annihilation and the counits take the second run away again.
+test sentence asking_whether_a_copy_of_a_test_is_a_test {
+    push 3 push 4 equal pick 0 is_bool
+    push true assert_eq   push false assert_eq
+
+    push 3 push 4 equal push true
+    push true assert_eq   push false assert_eq
+
+    push 5 push 5 equal pick 0 is_bool
+    push true assert_eq   push true assert_eq
+
+    push 5 push 5 equal push true
+    push true assert_eq   push true assert_eq
+}
+
 // `X ; drop^m` = `drop^n`, and `pick d ; drop` = nothing.
 test sentence discarded_work_is_no_work {
     push 9
@@ -311,3 +337,17 @@ identity a_test_inside_an_arm
 identity a_test_inside_an_arm_with_a_prefix
     { drop 0 branch { is_bool is_bool } { not } }
   = { drop 0 branch { is_int is_bool } { not } };
+
+// `op ; pick 0 ; is_bool` = `op ; push true` — the guard a case split leaves.
+//
+// `split_bool` asks `is_bool` behind a `pick 0`, because the value it is about
+// to branch on has to survive the question. `bool_result` reads `op ; is_bool`
+// and a matcher's width is fixed before it looks, so the copy in the middle put
+// the answer out of reach and a split placed on an operator's result stalled
+// holding a question the equation set could already discharge.
+//
+// Eight steps, no new law: `inv(share { equal })` turns the copy into a second
+// run of `equal`, which is what puts an `equal` in front of the `is_bool`;
+// `bool_result` folds that; and the run left over is exactly what the
+// annihilation and two counits the copies paid for take away again.
+identity the_guard_a_split_leaves { equal pick 0 is_bool } = { equal push true };

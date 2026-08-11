@@ -863,6 +863,91 @@ fn lifting_stops_where_the_arms_build_different_values() {
 }
 
 // ---------------------------------------------------------------------------
+// The guard a case split leaves
+// ---------------------------------------------------------------------------
+
+const A_TEST: &str = r#"
+    #[total] #[arity(2, 1)]
+    sentence probe { equal not }
+"#;
+
+/// `bool_result_copied` is shorthand, and this says so literally.
+///
+/// Nothing new is assumed: the firing is `copy_nat` backwards to turn the copy
+/// into a second run of the operator, `bool_result` on the pair that puts in
+/// front of the `is_bool`, and then the annihilation and counits the copies
+/// paid for. Both routes are held to the same answer, so the shorthand cannot
+/// drift from what it abbreviates.
+#[test]
+fn the_guard_a_split_leaves_is_derivable() {
+    let (prog, plain) = tree_of(A_TEST, "must(at(1, split_bool))");
+
+    let by_hand = run(
+        prog,
+        plain.clone(),
+        "must(once(inv(share { equal })));             must(at(3, float));             must(at(2, bool_result));             annihilation;             must(at(0, sink));             must(at(0, flatten))",
+    );
+    let (shorthand, script) = with_script(prog, plain, "must(once(bool_result_copied))");
+
+    assert_eq!(shape(&shorthand), shape(&by_hand));
+    assert_eq!(
+        shape(&shorthand),
+        vec!["equal", "push true", "branch", "not"],
+        "{:?}",
+        shape(&shorthand)
+    );
+
+    // Every step is an equation the tool already had — no new law rode in.
+    let laws: Vec<&str> = script.iter().map(|s| s.kind.name()).collect();
+    assert_eq!(
+        laws,
+        vec![
+            "copy_nat",
+            "interchange",
+            "bool_result",
+            "annihilate",
+            "counit",
+            "counit",
+            "interchange",
+            "elim_dip0",
+        ]
+    );
+}
+
+/// The point of the whole thing: with the guard readable, a case split on a
+/// value that did not arrive as a literal goes through on its own.
+///
+/// `split_bool` is the only law that can put a branch on an unknown condition
+/// into a term, and the docs called it the only way to learn anything about
+/// such a value. It was not, quite — it stalled holding a question nothing
+/// could read, and `values` walked past it. Now it does not.
+#[test]
+fn a_split_on_an_operator_result_folds_to_the_two_cases() {
+    let (prog, plain) = tree_of(A_TEST, "id");
+    let got = run(prog, plain, "must(at(1, split_bool)); values; cleanup");
+    assert_eq!(
+        shape(&got),
+        vec!["equal", "branch", "not"],
+        "the guard is gone and what is left is the case split: {:?}",
+        shape(&got)
+    );
+    let [
+        _,
+        Node::Branch {
+            then_body,
+            else_body,
+            ..
+        },
+        _,
+    ] = &got[..]
+    else {
+        panic!("expected a branch, got {:?}", shape(&got))
+    };
+    assert_eq!(shape(then_body), vec!["push true"]);
+    assert_eq!(shape(else_body), vec!["push false"]);
+}
+
+// ---------------------------------------------------------------------------
 // Testing the same value twice
 // ---------------------------------------------------------------------------
 

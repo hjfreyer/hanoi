@@ -43,3 +43,8 @@ proof a_test_inside_an_arm = descend(then: normalize(cleanup));
 // place to put what follows, so what discharges each arm goes inside it.
 proof a_test_inside_an_arm_with_a_prefix =
     peel ; descend(then: normalize(cleanup));
+
+// One firing of `bool_result_copied`, which is the eight steps above placed by
+// a matcher rather than aimed one at a time. `must` because the point is that
+// something *finds* it: writing the eight out by hand was always possible.
+proof the_guard_a_split_leaves = must(once(bool_result_copied));

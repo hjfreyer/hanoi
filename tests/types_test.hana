@@ -1,0 +1,121 @@
+// The shape of `barista::customer_impl::emit_does_pre_and_post`, with
+// everything but the shape taken away.
+//
+// A function guarded by a precondition and answering a postcondition is
+// *constantly true* when you ask "either the precondition failed, or the answer
+// satisfies the postcondition" — that is what a contract means, and it is a
+// claim about the code rather than about any value it runs on. The barista's
+// version of that claim is buried under four states, a tuple of three and an
+// event enum. This one has two symbols and a pair, and states the same thing.
+
+symbol t1
+symbol t2
+
+// The precondition: the input is one of the two symbols we know.
+#[total]
+function is_tag {
+    pick 0
+    push t1
+    equal
+    branch {
+        drop 0
+        push true
+    } {
+        push t2
+        equal
+    }
+}
+
+// The postcondition: the answer is one of the two pairs we make.
+#[total]
+function is_numbered {
+    pick 0
+    push t1
+    push 1
+    tuple 2
+    equal
+    branch {
+        drop 0
+        push true
+    } {
+        push t2
+        push 2
+        tuple 2
+        equal
+    }
+}
+
+// The function under contract: `t1` numbers as 1, `t2` as 2, and anything else
+// gets the empty tuple — which is exactly the answer the postcondition rejects,
+// and exactly the input the precondition rules out.
+#[precondition(is_tag)]
+#[postcondition(is_numbered)]
+#[total]
+function number {
+    pick 0
+    push t1
+    equal
+    branch {
+        drop 0
+        push t1
+        push 1
+        tuple 2
+    } {
+        pick 0
+        push t2
+        equal
+        branch {
+            drop 0
+            push t2
+            push 2
+            tuple 2
+        } {
+            drop 0
+            tuple 0
+        }
+    }
+}
+
+// `not precondition or (function ; postcondition)`, written the way a branch
+// writes it. Nothing about this reads as constant — it copies its input, tests
+// it, and on one path runs the whole of `number` and checks the answer.
+#[total]
+function number_does_pre_and_post {
+    pick 0
+    jump is_tag
+    branch {
+        jump number
+        jump is_numbered
+    } {
+        drop 0
+        push true
+    }
+}
+
+// The claim, and it is not proved yet. Two things stand between the term and
+// `drop 0 push true`, and only one of them has been dealt with.
+//
+// **Identifying the two tests.** `is_tag` asks `v == t1` and `number` asks it
+// again; nothing is decidable until the rewriter knows those are the same
+// question. `copy_nat` is the law that says so and `share { … }` places it, but
+// its window wants `pick 0 ; X ; dip m { X }` adjacent — so `number`'s copy has
+// to be lifted out of the arm (`lift`), sunk past the branch (`sink`), and
+// split out of the frame it lands in (`inv(fuse)`, `fuse`) first. Eight aimed
+// steps, all of them existing laws.
+//
+// **Splitting the boolean.** With one test shared, `split_bool` puts a literal
+// where the boolean was — and used to stall holding `pick 0 ; is_bool`, a
+// question the equation set could answer and no matcher could read. That gap is
+// closed: see `identities::the_guard_a_split_leaves`.
+//
+// What is left is the third instance of the same obstacle. `v == t2` is
+// computed under a frame, so it is not on top, and every law about *what a
+// value is* is stated about the top of the stack. Bringing it up is `unframe`,
+// which is an equation the set already has and which nothing can place. So this
+// stays a comment until there is a matcher for it.
+//
+// `probes::number_pre_and_post` is the address to work it at.
+//
+// identity number_does_pre_and_post_is_constant
+//     { jump number_does_pre_and_post }
+//   = { drop 0 push true };
