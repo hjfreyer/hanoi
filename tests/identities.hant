@@ -48,3 +48,7 @@ proof a_test_inside_an_arm_with_a_prefix =
 // a matcher rather than aimed one at a time. `must` because the point is that
 // something *finds* it: writing the eight out by hand was always possible.
 proof the_guard_a_split_leaves = must(once(bool_result_copied));
+
+// `inv(roll_cycle)` to put a cycle of rolls in, then the law itself. Placed by
+// one matcher reading the frame, which is the whole of what was missing.
+proof taking_a_frame_off = must(once(unframe));

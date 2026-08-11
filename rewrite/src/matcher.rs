@@ -141,6 +141,7 @@ pub(crate) fn matcher_by_name(name: &str) -> Option<Box<dyn Matcher>> {
         "swap" => Box::new(Swap),
         "unsplit_bool" => Box::new(UnsplitBool),
         "unfactor" => Box::new(Unfactor),
+        "unframe" => Box::new(Unframe),
         "unfold" => Box::new(Unfold),
         _ => return None,
     })
@@ -175,6 +176,7 @@ pub(crate) fn matcher_names() -> Vec<&'static str> {
         "split_bool",
         "swap",
         "unfactor",
+        "unframe",
         "unsplit_bool",
         "unfold",
         "retest",
@@ -2629,6 +2631,110 @@ impl Matcher for SplitBool {
     }
 }
 
+/// `dip d { X }` becomes `(roll (d+n-1))^n ; X ; (roll (d+m-1))^d`.
+///
+/// [`Rule::Unframe`] forward, with the rolls it needs conjured first. **A
+/// framed computation is a rolled one**: reach under the top `d` values with a
+/// frame, or roll the operands up, compute at the top, and leave the answers
+/// there. Read this way it brings the operands *to the top*, which is the whole
+/// point of the law.
+///
+/// **What wants it.** Every law about what a value *is* — [`SplitBool`],
+/// [`BoolResult`], [`CopyConst`], `eval` — is stated about the top of the
+/// stack, because `branch` observes the top and nothing else does. A value
+/// under a frame is out of all of their reach, and descending into the body
+/// with `body(t)` does not help: a `branch` inside a frame cannot show its two
+/// cases to the code outside it, so a case split at depth is an identity
+/// insertion that tells the continuation nothing. This is the law that moves
+/// the value instead of the reasoning.
+///
+/// **The rolls have to be put in first.** The equation has rolls on *both*
+/// sides, and a term that holds none matches neither. [`Rule::RollCycle`]
+/// backwards is the only way to introduce one — a full cycle of `d+m` copies —
+/// and the unframing then eats `m` of them, so `d` are left over:
+///
+/// ```text
+/// dip 1 { push t2 ; equal }
+///   = dip 1 { push t2 ; equal } ; roll 1 ; roll 1      inv(roll_cycle)
+///   = roll 1 ; push t2 ; equal ; roll 1                unframe
+/// ```
+///
+/// Two steps there, and `equal` now sits at the top level with its result on
+/// top — which is the window `split_bool` needs and could not reach.
+///
+/// **Why the width is one.** `docs/tactics.md` gave the obstacle as "`unframe`
+/// can only fix one of `n` and `m` before it looks", which is true of a matcher
+/// reading the *rolls*: how many there are is `m`, and a matcher's width is
+/// fixed before it looks. Reading the **frame** instead, `d` is on the node and
+/// `n` and `m` are its body's arity, so all three are known and the window is
+/// one node. The obstacle was in which side to search from.
+///
+/// It declines `dip 0 { X }`, which is [`Flatten`]'s and needs no rolls at all.
+///
+/// Measure: frame nodes, which it strictly reduces — the body's own frames
+/// come up a level but are neither created nor destroyed. But it **pays `d+1`
+/// rolls per firing**, and nothing deletes a roll except `roll_cycle`
+/// completing a cycle, so a term driven to a fixpoint on this grows with the
+/// depth of what it unwraps. It is in no default pass; aim it.
+#[derive(Debug)]
+pub(crate) struct Unframe;
+
+impl Matcher for Unframe {
+    fn name(&self) -> &'static str {
+        "unframe"
+    }
+    fn width(&self) -> usize {
+        1
+    }
+    fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
+        Err(
+            "`unframe` is a firing of two different equations, so there is no \
+             single one to read backwards. Putting a computation back under a \
+             frame is `inv(unframe)` on the equation itself, which no window \
+             says where to start: the roll depth gives `d` away but nothing \
+             marks where the body begins"
+                .to_string(),
+        )
+    }
+    fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
+        let framed = &window[0];
+        let (depth, body) = crate::rule::framed_body(framed)?;
+        // `dip 0 { X }` is `flatten`'s: there is no depth to reach past, and
+        // the law would conjure a cycle of rolls to say nothing.
+        if depth == 0 {
+            return None;
+        }
+        let (n, m) = full_arity(prog, &body)?;
+        let (Ok(n), Ok(m)) = (usize::try_from(n), usize::try_from(m)) else {
+            return None;
+        };
+
+        let unframe = Rule::Unframe {
+            framed: framed.clone(),
+            n,
+            m,
+        };
+        unframe.check(prog).ok()?;
+
+        let mut steps = Vec::new();
+        // A computation that leaves nothing needs no rolls on the left, so
+        // there is nothing to conjure and the firing is one step.
+        if m > 0 {
+            steps.push(PlannedStep {
+                kind: StepKind::Rule(Rule::RollCycle { d: depth + m - 1 }),
+                dir: Direction::Reverse,
+                rel: Location::root(1),
+            });
+        }
+        steps.push(PlannedStep {
+            kind: StepKind::Rule(unframe),
+            dir: Direction::Forward,
+            rel: Location::root(0),
+        });
+        Some(steps)
+    }
+}
+
 /// Removes a case split that has served its purpose.
 ///
 /// [`SplitBool`] read forward: the whole guarded block is the identity, so once
@@ -3656,6 +3762,49 @@ mod tests {
                 .is_none()
         );
         assert!(BoolResultCopied.inverse().is_err());
+    }
+
+    #[test]
+    fn unframe_brings_the_operands_to_the_top() {
+        // `not` is (1 -> 1) at depth 1, so one roll is eaten and one is left.
+        let w = [dip(1, vec![op(Instruction::Not)])];
+        assert_eq!(
+            fire(&Unframe, &prog(), &w),
+            Some(vec![
+                op(Instruction::Roll(1)),
+                op(Instruction::Not),
+                op(Instruction::Roll(1)),
+            ])
+        );
+        // `inv(roll_cycle)` to put a cycle in, then the law.
+        assert_eq!(Unframe.plan(&prog(), &w).unwrap().len(), 2);
+
+        // Deeper, and the leftover run is `d` long: a cycle of `d+m` rolls
+        // goes in and the unframing eats `m`.
+        let got = fire(&Unframe, &prog(), &[dip(3, vec![op(Instruction::Not)])]).unwrap();
+        assert_eq!(
+            got.iter()
+                .filter(|n| matches!(n, Node::Op(Instruction::Roll(3))))
+                .count(),
+            4,
+            "one rolled up, three carrying the answer back: {:?}",
+            got
+        );
+    }
+
+    #[test]
+    fn unframe_declines_a_frame_that_hides_nothing() {
+        // `dip 0 { X }` is `flatten`'s — there is no depth to reach past, and
+        // this would conjure a cycle of rolls to say nothing.
+        assert!(
+            Unframe
+                .plan(&prog(), &[dip(0, vec![op(Instruction::Not)])])
+                .is_none()
+        );
+        // It reads a frame, and a bare node is not one.
+        assert!(Unframe.plan(&prog(), &[op(Instruction::Not)]).is_none());
+        // Two equations, so there is no single one to read backwards.
+        assert!(Unframe.inverse().is_err());
     }
 
     #[test]

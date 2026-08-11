@@ -275,6 +275,7 @@ different thing to look for even though the arithmetic is the same:
 | `lift` | 1 | the same move with the prefix **found** rather than named — see below. 4 steps, or `speculate`'s |
 | `bool_result` | 2 | `op ; is_bool` forward; backward is `inv(bool_result)` |
 | `bool_result_copied` | 3 | the same fact through a copy — `op ; pick 0 ; is_bool`, which is the guard `split_bool` leaves. 8 steps, no new law |
+| `unframe` | 1 | takes a frame off, bringing the operands to the top — see below. 2 steps, no new law |
 | `retest` | 2 | one arm per firing, then arm first; no backward reading |
 | `counit_under` / `inv(counit_under)` | 2 / 1 | the other counit, found or *put in* |
 | `counit` / `counit(d)` / `inv(counit(d))` | 2 / 2 / 1 | the copy-and-discard law: found, found at one depth, or *put in* |
@@ -336,12 +337,49 @@ No `unroll` instruction was needed. `roll d` rotates `d+1` values, so
 `(roll d)^d` already inverts it, and `roll 0 = ε` is `roll_cycle` at `d = 0`
 rather than a law of its own.
 
-**Nothing places these yet.** They are equations and a script may name them, but
-there is no matcher for any of the three, so a tactic cannot ask for one. That
-is deliberate: what each of the six readings should look for is a question about
-search rather than about truth — `roll_cycle` alone is `d+1` nodes wide, and its
-backward reading has the same "somewhere to stand" problem `inv(counit(d))` has
-— and the laws are worth landing before the answer to it is.
+### Placing one: `unframe`
+
+`unframe` has a matcher now, and what unblocked it was reading the other side.
+
+```text
+dip d { X } ; (roll (d+m-1))^m  =  (roll (d+n-1))^n ; X       for X : n -> m
+```
+
+The obstacle recorded here was that a matcher "can only fix one of `n` and `m`
+before it looks" — true of one reading the **rolls**, since how many there are
+is `m` and a width is fixed before looking. Reading the **frame** instead, `d`
+is on the node and `n` and `m` are its body's arity, so the window is one node
+and all three are known. The obstacle was in which side to search from.
+
+The equation has rolls on both sides and a term usually holds none, so the
+firing puts them in first — `roll_cycle` backwards is the only way to introduce
+a roll at all, and it introduces a whole cycle, of which the unframing eats `m`
+and leaves `d`:
+
+```
+$ rewrite mini unframing -t 'exact(must(once(unframe)))' --show-script
+closed — 2 steps
+     0  roll_cycle <- @1   (nothing)                     ⇒  roll 1 ; roll 1
+     1  unframe    -> @0   dip 1 { push t2 ; equal } ; roll 1
+                                                         ⇒  roll 1 ; push t2 ; equal
+```
+
+What that buys is the middle: `equal` is now at the top level with its result on
+**top of the stack**, which is the window `split_bool` needs and could not reach
+while the value sat under a frame. `identities::taking_a_frame_off` states the
+claim and `a_framed_computation_is_a_rolled_one` runs both sides.
+
+It declines `dip 0 { X }`, which is `flatten`'s and needs no rolls.
+
+**It is not free.** Each firing pays `d+1` rolls, and nothing deletes a roll
+except `roll_cycle` completing a full cycle — so a term driven to a fixpoint on
+this grows with the depth of what it unwraps: `dip 8 { is_symbol }` comes out as
+`roll 8 ; is_symbol ; (roll 8)^8`. It is in no default pass; aim it at the frame
+whose operand you actually need.
+
+**The other five readings are still unplaced.** `roll_cycle` forward is `d+1`
+nodes wide, its backward reading has the "somewhere to stand" problem
+`inv(counit(d))` has, and `pick_roll` is waiting for something to want it.
 
 ### Three matchers, one annihilation
 
@@ -1499,10 +1537,11 @@ consulting an analysis.
   something wants it now: it is what would let `lift` reach a prefix that
   consumes more than one value the other arm still needs.
 
-- **Matchers for the three roll laws.** Six readings, and each has a real
-  question behind it: the width of `roll_cycle` is its own argument, its
-  backward reading needs somewhere to stand, and `unframe` can only fix one of
-  `n` and `m` before it looks.
+- **Matchers for the other five roll readings.** `unframe` forward has one now
+  — see "placing one" above, where the answer was to read the frame rather than
+  the rolls. The rest still have real questions behind them: the width of
+  `roll_cycle` is its own argument, and its backward reading needs somewhere to
+  stand.
 
   Two that used to be on this list are not any more. `bool_identity` and
   `retain_condition` both existed to tell an arm what its condition was, and
@@ -1516,14 +1555,6 @@ consulting an analysis.
   it has to say which value it folded — but a float written by hand would want
   an answer for what `equal` does to it, which `--stack` already declines to
   guess at.
-- **A matcher for `unframe`.** The value laws are stated about the top of the
-  stack, and `bool_result_copied` closed one instance of that
-  — a boolean under a *copy*. A boolean under a **frame** is the other, and it
-  is what stops `probes::number_pre_and_post` from closing: `v == t2` is
-  computed inside a `dip 1 { … }`, so `split_bool` cannot reach it. `unframe`
-  is the equation that brings a framed computation's operands to the top and
-  it has no matcher, which is the same gap the roll laws have generally.
-
 - **A smarter upper layer.** Matchers and combinators are the whole of the
   search *here*. Everything above is deliberately arranged so that a better
   generator can be dropped in without the lower layer noticing: whatever finds

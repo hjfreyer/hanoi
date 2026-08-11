@@ -108,11 +108,19 @@ function number_does_pre_and_post {
 // question the equation set could answer and no matcher could read. That gap is
 // closed: see `identities::the_guard_a_split_leaves`.
 //
-// What is left is the third instance of the same obstacle. `v == t2` is
-// computed under a frame, so it is not on top, and every law about *what a
-// value is* is stated about the top of the stack. Bringing it up is `unframe`,
-// which is an equation the set already has and which nothing can place. So this
-// stays a comment until there is a matcher for it.
+// **Getting the second boolean to the top.** `v == t2` is computed under a
+// frame, so it is not on top, and every law about *what a value is* is stated
+// about the top of the stack. `unframe` is the law that moves the value instead
+// of the reasoning, and it has a matcher now — two steps, and `equal` comes out
+// at the top level where `split_bool` can reach it. Both booleans split:
+//
+//     …; must(at(7, unframe)); must(at(10, split_bool)); values; cleanup
+//
+// What is left is a *third* copy of the `v == t2` test, two frames deep inside
+// what `number` builds. Sharing it with the one already split is the same job
+// the first share was, and the alignment has to be found rather than aimed —
+// which is a search problem now rather than a missing law. So this stays a
+// comment until a strategy for it is written down.
 //
 // `probes::number_pre_and_post` is the address to work it at.
 //
