@@ -107,7 +107,7 @@ three.
 | `hoist` | `dip (k+1) { X } ; branch { A } { B }` = `branch { dip k { X } ; A } { dip k { X } ; B }` | forward is `unfactor`; backward is the last step of `factor` |
 | `distribute` | `branch { A } { B } ; C` = `branch { A C } { B C }` | `C` is a whole sequence. Backward factors a shared *suffix*, which the old set could not do at all |
 | `fold_branch` | `push c ; branch { A } { B }` = the arm `c` selects | selected by `truthy`, and `false` is the only falsy value, so `push 1; branch` takes the **then** arm |
-| `eval` | `push v1 … push vn ; op` = the pushes of what `op` answers | subsumes the old `fold_const` and `fold_const_unary` |
+| `eval` | `push v1 … push vn ; op` = the pushes of what `op` answers | subsumes the old `fold_const` and `fold_const_unary`. `tuple` and `untuple` are operators that answer, so they fold too |
 | `annihilate` | `X ; drop^m` = `drop^n`, for `X : n -> m` | `X` is a whole sequence. Forward subsumes `annihilate_drop` (m=1), `annihilate_flagged` (m=2) and the case with no drops at all (m=0, where `branch { } { }` = `drop`); backward is `introduce`, below |
 | `commute` | `roll 1 ; op` = `op`, for a commutative `op` | `roll 1` swaps the top two, and `add`, `multiply`, `and`, `or`, `equal` cannot tell. Forward is `comm`, backward is `swap` |
 | `split_bool` | `pick 0 ; is_bool ; branch { branch { push true } { push false } } { }` = nothing | a boolean is either `true` or `false`. Backward it is a case split; forward is `unsplit_bool` |
@@ -265,7 +265,7 @@ different thing to look for even though the arithmetic is the same:
 | `factor` / `unfactor` | 1 / 2 | hoist, either way (factor is three steps) |
 | `distribute` | 2 | |
 | `fold_branch` | 2 | |
-| `eval1` / `eval2` | 2 / 3 | one operand or two |
+| `eval0` / `eval1` / `eval2` | 1 / 2 / 3 | no operands, one, or two |
 | `annihilate` / `annihilate_flagged` / `annihilate_void` | 2 / 3 / 1 | one output, two, or none |
 | `comm` / `swap` | 2 / 1 | commutativity, either way |
 | `split_bool` / `unsplit_bool` | 1 / 3 | the case split, either way |
@@ -1422,6 +1422,23 @@ value.
 `fold_branch` selects by the same `truthy`, which is why `push 1; branch` is
 decided just as firmly as `push false; branch`: it takes the **then** arm.
 Reading it as a test for *being* a boolean would send junk down the wrong path.
+
+**`tuple` and `untuple` are operators that answer**, and for a long time `eval`
+did not know it. Every value law is stated about literals and a *constructed*
+tuple was not one, so a postcondition comparing what a function just built
+against what it should have built stalled with both operands sitting right
+there. Widening `eval_op` is not a new law — `Rule::Eval` already says "the
+pushes of what the operator answers".
+
+Both directions owe the interpreter exactly, junk included: `tuple n` takes the
+top `n` and the **topmost becomes the first element**, so `push 1 ; push 2 ;
+tuple 2` is `push (2, 1)`; and an `untuple n` whose width does not match leaves
+the value in the deepest slot it filled, `()` in the rest, and `false` on top.
+`identities::building_and_taking_apart_literals` measures both against the
+machine rather than restating them.
+
+`eval0` is the third matcher for the reason there are three annihilations: a
+width is fixed before it looks, and `tuple 0` reads no operands at all.
 
 ## Four things that are easy to get wrong
 

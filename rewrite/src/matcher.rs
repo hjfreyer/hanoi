@@ -127,6 +127,7 @@ pub(crate) fn matcher_by_name(name: &str) -> Option<Box<dyn Matcher>> {
         "copy_const" => Box::new(CopyConst),
         "counit" => Box::new(Counit),
         "distribute" => Box::new(Distribute),
+        "eval0" => Box::new(EvalNullary),
         "eval1" => Box::new(EvalUnary),
         "eval2" => Box::new(EvalBinary),
         "expand" => Box::new(Expand),
@@ -163,6 +164,7 @@ pub(crate) fn matcher_names() -> Vec<&'static str> {
         "counit",
         "counit_under",
         "distribute",
+        "eval0",
         "eval1",
         "eval2",
         "expand",
@@ -1154,6 +1156,48 @@ impl Matcher for EvalBinary {
             Rule::Eval {
                 op: inst.clone(),
                 inputs: vec![a.clone(), b.clone()],
+            },
+            Direction::Forward,
+        )
+    }
+}
+
+/// Evaluates an operator that reads **no** operands.
+///
+/// The third of the eval matchers for the reason there are three annihilations:
+/// a matcher's width is fixed before it looks, and here it is one. `tuple 0` is
+/// the only instruction it reaches — everything else takes at least one operand
+/// — and what it answers is the empty tuple, which is a literal the folding laws
+/// can then read. `push` is not among them, since a literal is already folded.
+///
+/// Measure: it neither grows nor shrinks the term, but its output is a `push`
+/// and `eval` never reads one, so it cannot fire on what it left.
+#[derive(Debug)]
+pub(crate) struct EvalNullary;
+
+impl Matcher for EvalNullary {
+    fn name(&self) -> &'static str {
+        "eval0"
+    }
+    fn width(&self) -> usize {
+        1
+    }
+    fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
+        Err(
+            "reading `eval` backwards would have to invent the operator that \
+             produced the literal"
+                .to_string(),
+        )
+    }
+    fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
+        let [Node::Op(inst)] = window else {
+            return None;
+        };
+        at_window(
+            prog,
+            Rule::Eval {
+                op: inst.clone(),
+                inputs: Vec::new(),
             },
             Direction::Forward,
         )
@@ -3762,6 +3806,78 @@ mod tests {
                 .is_none()
         );
         assert!(BoolResultCopied.inverse().is_err());
+    }
+
+    #[test]
+    fn eval_builds_and_takes_apart_a_tuple() {
+        // The order is the machine's: the topmost operand becomes the first
+        // element. `identities::building_and_taking_apart_literals` measures
+        // that against the interpreter.
+        let pair = Value::Tuple(vec![Value::Int(2), Value::Int(1)]);
+        assert_eq!(
+            fire(
+                &EvalBinary,
+                &prog(),
+                &[
+                    op(Instruction::Push(Value::Int(1))),
+                    op(Instruction::Push(Value::Int(2))),
+                    op(Instruction::Tuple(2)),
+                ]
+            ),
+            Some(vec![op(Instruction::Push(pair.clone()))])
+        );
+        // And back, with the flag the untupling leaves.
+        assert_eq!(
+            fire(
+                &EvalUnary,
+                &prog(),
+                &[op(Instruction::Push(pair)), op(Instruction::Untuple(2))]
+            ),
+            Some(vec![
+                op(Instruction::Push(Value::Int(1))),
+                op(Instruction::Push(Value::Int(2))),
+                op(Instruction::Push(Value::Bool(true))),
+            ])
+        );
+        // Junk as much as anything else: the value in the deepest slot it
+        // filled, `()` in the rest, and `false` on top.
+        assert_eq!(
+            fire(
+                &EvalUnary,
+                &prog(),
+                &[
+                    op(Instruction::Push(Value::Int(7))),
+                    op(Instruction::Untuple(2))
+                ]
+            ),
+            Some(vec![
+                op(Instruction::Push(Value::Int(7))),
+                op(Instruction::Push(Value::Tuple(Vec::new()))),
+                op(Instruction::Push(Value::Bool(false))),
+            ])
+        );
+    }
+
+    #[test]
+    fn eval0_reaches_the_operator_with_no_operands() {
+        // `tuple 0` is the only one, and the empty tuple is a literal the
+        // folding laws can then read.
+        assert_eq!(
+            fire(&EvalNullary, &prog(), &[op(Instruction::Tuple(0))]),
+            Some(vec![op(Instruction::Push(Value::Tuple(Vec::new())))])
+        );
+        // A literal is already folded, so it cannot fire on its own output.
+        assert!(
+            EvalNullary
+                .plan(&prog(), &[op(Instruction::Push(Value::Int(1)))])
+                .is_none()
+        );
+        // And an operator that wants operands is the other two matchers'.
+        assert!(
+            EvalNullary
+                .plan(&prog(), &[op(Instruction::Equal)])
+                .is_none()
+        );
     }
 
     #[test]

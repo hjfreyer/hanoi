@@ -88,7 +88,7 @@ tactic annihilation =
 // values rather than about shape, and the equation underneath declines anything
 // it has no answer for — so `eval2` folds `equal` on any pair and simply does
 // not fire on `add`.
-tactic values = repeat(bu(each(eval1, eval2, bool_result, bool_result_copied,
+tactic values = repeat(bu(each(eval0, eval1, eval2, bool_result, bool_result_copied,
                               cancel_tuple, copy_const)));
 
 // Delete shuffles an operator cannot see. `comm` is the only law here and it
@@ -104,7 +104,7 @@ tactic commuting = repeat(bu(each(comm)));
 // delete an arm that cannot run, which is cleanup by any reading.
 tactic cleanup = repeat(bu(each(annihilate, annihilate_flagged, annihilate_void,
                                 counit, counit_under, comm, fold_branch, retest);
-                           each(eval1, eval2, bool_result, bool_result_copied,
+                           each(eval0, eval1, eval2, bool_result, bool_result_copied,
                                 cancel_tuple, copy_const)));
 
 // Empty every branch arm of everything but `branch`, `drop` and `pick`, so
@@ -134,7 +134,7 @@ tactic flattening = repeat(bu(each(flatten)));
 // Everything that makes a term smaller, at once.
 tactic all = repeat(bu(each(annihilate, annihilate_flagged, annihilate_void,
                             counit, counit_under, comm, fold_branch, retest);
-                       each(eval1, eval2, bool_result, bool_result_copied,
+                       each(eval0, eval1, eval2, bool_result, bool_result_copied,
                             cancel_tuple, copy_const);
                        each(factor);
                        each(collapse); each(sink); each(fuse)));

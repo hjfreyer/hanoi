@@ -52,3 +52,6 @@ proof the_guard_a_split_leaves = must(once(bool_result_copied));
 // `inv(roll_cycle)` to put a cycle of rolls in, then the law itself. Placed by
 // one matcher reading the frame, which is the whole of what was missing.
 proof taking_a_frame_off = must(once(unframe));
+
+// Two evaluations and a third, which is all it ever needed to be.
+proof comparing_two_built_tuples = values;
