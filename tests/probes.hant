@@ -5,3 +5,4 @@
 proof pair_check = id;
 proof state_check = id;
 proof emit_pre_and_post = id;
+proof number_pre_and_post = id;

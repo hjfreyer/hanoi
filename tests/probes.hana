@@ -34,3 +34,10 @@ identity state_check
 identity emit_pre_and_post
     { jump super::barista::customer_impl::emit_does_pre_and_post }
   = { jump super::barista::customer_impl::emit_does_pre_and_post };
+
+// The same shape as `emit_pre_and_post`, with two symbols where that has four
+// states and a pair where it has an event enum — small enough to read a whole
+// derivation off. `types_test.hana` says what still blocks the claim.
+identity number_pre_and_post
+    { jump super::types_test::number_does_pre_and_post }
+  = { jump super::types_test::number_does_pre_and_post };

@@ -29,5 +29,6 @@ mod machine_tests;
 mod arity_tests;
 mod typecheck_test;
 mod type_tests;
+mod types_test;
 
 
