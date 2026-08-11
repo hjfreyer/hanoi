@@ -178,6 +178,33 @@ test sentence asking_whether_a_copy_of_a_test_is_a_test {
     push true assert_eq   push true assert_eq
 }
 
+// `dip d { X } ; (roll (d+m-1))^m` = `(roll (d+n-1))^n ; X`, for `X : n -> m`.
+//
+// A framed computation is a rolled one. Both sides apply `X` to the `n` values
+// under the top `d` and leave its `m` results on top of those `d` — the left by
+// reaching under them with a frame, the right by rolling the operands up,
+// computing at the top, and leaving the answers there.
+//
+// It is what brings a value to where the folding laws can see it: every law
+// about what a value *is* is stated about the top of the stack, and a branch
+// inside a frame cannot show its cases to the code outside one.
+test sentence a_framed_computation_is_a_rolled_one {
+    // d = 1, X = not : 1 -> 1, so one roll either side.
+    push 9 push true  dip 1 { not }
+    push true assert_eq   push false assert_eq
+
+    push 9 push true  roll 1 not roll 1
+    push true assert_eq   push false assert_eq
+
+    // d = 2, X = add : 2 -> 2 — the rolls are all at one depth because a
+    // rotation does not change how many values there are.
+    push 1 push 2 push 8 push 9  dip 2 { add } roll 3 roll 3
+    assert  push 3 assert_eq  push 9 assert_eq  push 8 assert_eq
+
+    push 1 push 2 push 8 push 9  roll 3 roll 3 add
+    assert  push 3 assert_eq  push 9 assert_eq  push 8 assert_eq
+}
+
 // `X ; drop^m` = `drop^n`, and `pick d ; drop` = nothing.
 test sentence discarded_work_is_no_work {
     push 9
@@ -351,3 +378,18 @@ identity a_test_inside_an_arm_with_a_prefix
 // `bool_result` folds that; and the run left over is exactly what the
 // annihilation and two counits the copies paid for take away again.
 identity the_guard_a_split_leaves { equal pick 0 is_bool } = { equal push true };
+
+// `dip d { X }` = `(roll (d+n-1))^n ; X ; (roll (d+m-1))^d` — a frame taken off.
+//
+// The equation has rolls on both sides and the term holds none, so the firing
+// puts them in first: `roll_cycle` backwards is the only way to introduce a
+// roll at all, and it introduces a whole cycle, of which the unframing eats
+// `m` and leaves `d`.
+//
+// Two steps, and what they buy is the operand at the **top of the stack**,
+// where `split_bool` and the folding laws are stated. `docs/tactics.md` gave
+// the reason there was no matcher as "`unframe` can only fix one of `n` and `m`
+// before it looks" — true of one reading the rolls, whose count is `m`. Reading
+// the frame, `d` is on the node and `n` and `m` are its body's arity, so the
+// window is one node and all three are known.
+identity taking_a_frame_off { dip 1 { not } } = { roll 1 not roll 1 };

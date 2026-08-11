@@ -1236,7 +1236,7 @@ fn rolls(d: usize, count: usize) -> Vec<Node> {
 /// A `dip` carries its body inline; a call at depth carries it in the library,
 /// so what comes back is the call itself, re-read at depth 0. Either way the
 /// answer is a program equal to what the frame runs.
-fn framed_body(node: &Node) -> Option<(usize, Vec<Node>)> {
+pub(crate) fn framed_body(node: &Node) -> Option<(usize, Vec<Node>)> {
     match node {
         Node::Dip { depth, body, .. } => Some((*depth, body.clone())),
         Node::Call { depth, target } if *depth > 0 => Some((
