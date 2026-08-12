@@ -1,5 +1,5 @@
 // An arbitrary queue element (or option payload): any runtime value.
-type Elem int | bool | float | symbol | tuple;
+type Elem int | bool | symbol | tuple;
 
 // (super::prelude::some, (val, ())) | (super::prelude::none, ())
 type Opt (super::prelude::some, tuple) | (super::prelude::none, ());

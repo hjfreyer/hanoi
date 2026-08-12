@@ -23,7 +23,6 @@ pub type SourceAnnotation = Annotation<Path>;
 pub enum ParsedValue {
     Bool(bool),
     Int(i64),
-    Float(f64),
     ConstString(String),
     Tuple(Vec<ParsedValue>),
     Ref(Path),
@@ -80,7 +79,6 @@ pub enum ParsedInstruction {
     ConstStringCharAt,
     IsInt,
     IsBool,
-    IsFloat,
     IsConstString,
     IsSymbol,
     IsTuple,
@@ -159,7 +157,6 @@ pub enum TypeSpec {
 pub enum PrimitiveType {
     Int,
     Bool,
-    Float,
     ConstString,
     Symbol,
     Tuple,
@@ -170,7 +167,6 @@ impl std::fmt::Display for ParsedValue {
         match self {
             ParsedValue::Bool(b) => write!(f, "{}", b),
             ParsedValue::Int(i) => write!(f, "{}", i),
-            ParsedValue::Float(fl) => write!(f, "{}", fl),
             // Quoted, because composer templates are rendered as text and
             // re-parsed: what this prints has to lex back to the same literal.
             ParsedValue::ConstString(s) => write!(f, "{:?}", s),

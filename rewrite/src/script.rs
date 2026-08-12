@@ -739,7 +739,7 @@ impl<'a> Parser<'a> {
             }
             _ => Err(ScriptError::new("`push` needs a literal", span).with_help(
                 "an integer, `true`/`false`, a `\"const string\"`, or a symbol \
-                 by name. Floats have no syntax here yet",
+                 by name",
             )),
         }
     }
@@ -768,7 +768,6 @@ pub(crate) fn plain_instruction(word: &str) -> Option<Instruction> {
         "or" => Instruction::Or,
         "is_int" => Instruction::IsInt,
         "is_bool" => Instruction::IsBool,
-        "is_float" => Instruction::IsFloat,
         "is_const_string" => Instruction::IsConstString,
         "is_symbol" => Instruction::IsSymbol,
         "is_tuple" => Instruction::IsTuple,
@@ -803,7 +802,6 @@ pub(crate) fn plain_word(inst: &Instruction) -> Option<&'static str> {
         Instruction::Or => "or",
         Instruction::IsInt => "is_int",
         Instruction::IsBool => "is_bool",
-        Instruction::IsFloat => "is_float",
         Instruction::IsConstString => "is_const_string",
         Instruction::IsSymbol => "is_symbol",
         Instruction::IsTuple => "is_tuple",
@@ -833,7 +831,6 @@ const PLAIN_WORDS: &[&str] = &[
     "or",
     "is_int",
     "is_bool",
-    "is_float",
     "is_const_string",
     "is_symbol",
     "is_tuple",
@@ -879,7 +876,6 @@ const INSTRUCTION_WORDS: &[&str] = &[
     "or",
     "is_int",
     "is_bool",
-    "is_float",
     "is_const_string",
     "is_symbol",
     "is_tuple",

@@ -24,14 +24,18 @@ impl PartialEq for Symbol {
 }
 
 /// Represents any value that can be operated on or stored by the VM.
-#[derive(Clone, PartialEq)]
+///
+/// Equality here is structural **identity**: two values compare equal exactly
+/// when nothing in the language can tell them apart. That is what makes `Eq`
+/// derivable, and it is what [`crate::opcode::Instruction::Equal`] means.
+/// Floats were the one exception — `0.0 == -0.0` on two values that stay
+/// distinguishable — and they are gone.
+#[derive(Clone, PartialEq, Eq)]
 pub enum Value {
     /// A boolean value (true or false).
     Bool(bool),
     /// A signed 64-bit integer.
     Int(i64),
-    /// A 64-bit floating-point number.
-    Float(f64),
     /// An immutable string of characters.
     ///
     /// Unlike a [`Symbol`], it is exactly its text: two const strings reading
@@ -78,17 +82,14 @@ impl Value {
     }
 }
 
-/// Compares two values numerically, promoting a mixed `Int`/`Float` pair.
+/// Compares two values numerically.
 ///
-/// `None` covers both reasons an ordering may not exist — an operand that is
-/// not a number at all, and a NaN — because `greater` and `less` answer
-/// `false` in either case and have no need to tell them apart.
+/// `None` says there is no ordering, which since `Int` is the only number is
+/// exactly the case where an operand is not a number at all: `greater` and
+/// `less` answer `false` and fail there.
 pub fn numeric_cmp(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
     match (a, b) {
         (Value::Int(x), Value::Int(y)) => Some(x.cmp(y)),
-        (Value::Float(x), Value::Float(y)) => x.partial_cmp(y),
-        (Value::Int(x), Value::Float(y)) => (*x as f64).partial_cmp(y),
-        (Value::Float(x), Value::Int(y)) => x.partial_cmp(&(*y as f64)),
         _ => None,
     }
 }
@@ -98,7 +99,6 @@ impl fmt::Display for Value {
         match self {
             Value::Bool(b) => write!(f, "{}", b),
             Value::Int(i) => write!(f, "{}", i),
-            Value::Float(val) => write!(f, "{}", val),
             Value::Tuple(elements) => {
                 write!(f, "(")?;
                 for (idx, elem) in elements.iter().enumerate() {

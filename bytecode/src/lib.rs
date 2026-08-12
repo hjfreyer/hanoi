@@ -23,7 +23,6 @@ mod tests {
     fn test_value_display() {
         assert_eq!(format!("{}", Value::Bool(true)), "true");
         assert_eq!(format!("{}", Value::Int(42)), "42");
-        assert_eq!(format!("{}", Value::Float(1.5)), "1.5");
     }
 
     #[test]
@@ -982,14 +981,13 @@ mod tests {
         let code = r#"
             type MyInt int;
             type MyBool bool;
-            type MyFloat float;
             type MySymbol symbol;
             type MyTuple tuple;
         "#;
         let res = assemble(code).unwrap();
-        assert_eq!(res.sentences.len(), 5);
+        assert_eq!(res.sentences.len(), 4);
 
-        for idx in 0..5 {
+        for idx in 0..4 {
             let s_idx = SentenceIndex::from(idx);
             assert!(res.annotations[s_idx].contains(&Annotation::Total));
         }
@@ -1006,7 +1004,7 @@ mod tests {
         let code = r#"
             type IntOrBool int | bool;
             type Pair (int, bool);
-            type Nested (IntOrBool, Pair | float);
+            type Nested (IntOrBool, Pair | symbol);
             type Empty ();
         "#;
         let res = assemble(code).unwrap();
@@ -1024,8 +1022,8 @@ mod tests {
         // Element checks are dipped under the accumulated result rather than
         // rolled around it, so lowering no longer emits any roll at all.
         let code = r#"
-            type Triple (int, bool, float);
-            type Nested (int, (bool, float), symbol);
+            type Triple (int, bool, symbol);
+            type Nested (int, (bool, tuple), symbol);
             enum E { A(int, bool), B(symbol, symbol, int) }
         "#;
         let res = assemble(code).unwrap();
@@ -1044,7 +1042,7 @@ mod tests {
             symbol my_sym
             type OnlySym my_sym;
             type Only42 42;
-            type TrueOr314 true | 3.14;
+            type TrueOrHi true | "hi";
         "#;
         let res = assemble(code).unwrap();
         assert_eq!(res.sentences.len(), 5);

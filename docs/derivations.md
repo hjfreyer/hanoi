@@ -157,7 +157,7 @@ tactic did not:
 { dip 2 { push 9 add } }        a block, written out
 { dip 2 queue::accept }         a call that hides two values
 { jump queue::accept }          the same at depth 0
-{ push 1.5 push (1, 2) }        floats and tuples
+{ push (1, 2) }                 tuples
 ```
 
 `panic`, `assert` and `assert_eq` have no spelling on purpose: every equation

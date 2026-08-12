@@ -169,7 +169,7 @@ its answer was computed or invented, by leaving a `bool` on top of its result.
 | instruction | arity | on success | off its domain |
 |---|---|---|---|
 | `push c`, `pick d`, `roll d`, `drop` | unchanged | — | cannot fail |
-| `equal`, `is_int`, `is_bool`, `is_float`, `is_const_string`, `is_symbol`, `is_tuple` | unchanged | — | cannot fail |
+| `equal`, `is_int`, `is_bool`, `is_const_string`, `is_symbol`, `is_tuple` | unchanged | — | cannot fail |
 | `not`, `and`, `or`, `tuple n` | unchanged | — | cannot fail |
 | `add`, `subtract`, `multiply` | `2 -> 2` | sum, `true` | `Int 0`, `false` |
 | `divide`, `modulo` | `2 -> 2` | quotient, `true` | `Int 0`, `false` |
@@ -203,20 +203,14 @@ parts rebuild the value or the value is still sitting there. `Tuple` stays a
 free constructor and no hana program can write a junk value, because there is
 no junk value to write.
 
-Where an instruction takes two numbers, a mixed `Int`/`Float` pair is in-domain
-and promotes to `Float`. Integer arithmetic wraps, so `i64::MIN` is not a
-special case anywhere, including `i64::MIN / -1`.
+`Int` is the whole of arithmetic: an instruction that takes two numbers is
+in-domain on two `Int`s and out of it on anything else. Integer arithmetic
+wraps, so `i64::MIN` is not a special case anywhere, including `i64::MIN / -1`.
 
 ### Division by zero
 
-Two worlds, deliberately kept apart:
-
-- **Integer**: `Int x / Int 0` and `Int x % Int 0` **fail**, leaving `0` and
-  `false`. There is no answer to report and now no need to invent one.
-- **Float**: uniformly IEEE, and a **success**. `1.0 / 0` is `inf` and `1.0 % 0`
-  is `NaN`, which is what `1.0 / 0.0` already did — an `Int` divisor coerces
-  like any other mixed operand rather than being an excuse to leave the float
-  world.
+`Int x / Int 0` and `Int x % Int 0` **fail**, leaving `0` and `false`. There is
+no answer to report and no need to invent one.
 
 ### What the flag is not
 
@@ -432,9 +426,6 @@ mechanical and long, and nothing in it is known to be blocked.
 
 ## What is not covered
 
-- **Float `equal`.** `0.0 == -0.0` holds while the two stay distinguishable, so
-  `equal` is not identity. That predates this change and is why
-  `specialize_equal` declines anything with a float in it.
 - **A static safety judgment.** "This program never computes on junk" is exactly
   the question this document makes askable, and nothing here answers it. The
   previous Z3 typechecker modelled the old partial semantics and has been

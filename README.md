@@ -13,7 +13,7 @@ Hanoi is a stack-oriented, VM-executed language designed to explore static analy
 - **Scoped Stack Frames**: `dip N { ... }` runs a block with the top `N` stack values hidden from it, so the arity checker can treat those values as unchanged across the call rather than tracking them through it.
 - **CSP State Machine Modeling**: Fully implements Communicating Sequential Processes (CSP) state machines. State machines are represented as modules with standardized hooks for managing state transitions, internal execution steps, and termination. See the [CSP Machines Documentation](docs/machines.md) for details.
 - **Static Safety & Behavior Contracts** *(annotations only — verifier temporarily removed)*: Functions can be annotated with a precondition (`#[precondition(fn_name)]`), a postcondition (`#[postcondition(fn_name)]`), or a totality claim (`#[total]`). `#[total]` is checked by the compiler; the precondition and postcondition annotations are parsed and preserved, but the Z3-backed static verifier that proved them has been removed for now. See [docs/typecheck.md](docs/typecheck.md) for the design.
-- **`type` / `enum` Predicate Sugar**: Declare reusable value predicates with `type Name <spec>;` (primitives — `int`, `bool`, `float`, `const_string`, `symbol`, `tuple` — literals, tuples, and `|`-unions) or `enum Name { Variant(spec, ...), ... }`, which expand into `Name::check` sentences usable directly as preconditions/postconditions.
+- **`type` / `enum` Predicate Sugar**: Declare reusable value predicates with `type Name <spec>;` (primitives — `int`, `bool`, `const_string`, `symbol`, `tuple` — literals, tuples, and `|`-unions) or `enum Name { Variant(spec, ...), ... }`, which expand into `Name::check` sentences usable directly as preconditions/postconditions.
 - **Static Arity Verification**: An arity checker runs before execution to ensure that stack push/pop operations match function signatures, avoiding runtime stack underflows.
 - **Namespacing & Modularity**: Hierarchical module declarations (`mod name { ... }` or `mod name;`) with file-import support, relative/absolute path routing, and name visibility exports.
 - **Stated Identities & Out-of-Line Proofs**: `identity A = B;` states that two programs are interchangeable; the tactic that proves it lives in the `.hant` beside the `.hana`, and `bin/prove` checks that every stated identity has a proof that discharges it. See [docs/identities.md](docs/identities.md).
@@ -128,7 +128,7 @@ The Hanoi VM supports a rich instruction set categorized into five main domains:
 | **Arithmetic & Logic** | `Add`, `Subtract`, `Multiply`, `Divide`, `Modulo`, `Negate`, `Equal`, `Greater`, `Less`, `Not`, `And`, `Or` | Basic mathematical and Boolean logic operations. |
 | **Control Flow** | `Dip(n, S)`, `Branch(S1, S2)`, `Panic`, `Assert`, `AssertEqual` | Subroutine execution under a hidden region of the stack (a plain `jump` is `Dip(0, S)`), conditional branching, and explicit panics. |
 | **Composite Types** | `Tuple(n)`, `Untuple(n)`, `ConstStringLen`, `ConstStringCharAt`, `TupleLength` | Constructing and destructuring tuples, and reading the length and characters of const strings. |
-| **Type Predicates** | `IsInt`, `IsBool`, `IsFloat`, `IsConstString`, `IsSymbol`, `IsTuple` | Runtime type tests, also used internally to compile `type`/`enum` predicates. |
+| **Type Predicates** | `IsInt`, `IsBool`, `IsConstString`, `IsSymbol`, `IsTuple` | Runtime type tests, also used internally to compile `type`/`enum` predicates. |
 
 ---
 

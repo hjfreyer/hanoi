@@ -79,7 +79,7 @@ To prove totality, Typecheck attempts to find any input $x$ that causes $F(x) = 
 ### Monadic `Result` Type and Panic Propagation
 To represent and propagate runtime panics, Typecheck wraps all stack variables and function returns in a monadic `Result` datatype containing either `Ok Val` or `Panic`:
 
-* **Val**: Represents runtime values of types `Int`, `Bool`, `Float`, `ConstString`, `Symbol`, and `Tuple` (represented as Z3 ADT constructors).
+* **Val**: Represents runtime values of types `Int`, `Bool`, `ConstString`, `Symbol`, and `Tuple` (represented as Z3 ADT constructors).
 * **Result**: Represents either a successful computation (`Ok`) wrapping a `Val`, or a execution abort (`Panic`).
 
 ### Preconditions & Primitive Operations
