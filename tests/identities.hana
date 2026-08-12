@@ -229,6 +229,39 @@ test sentence building_and_taking_apart_literals {
     push 7 untuple 0            not assert
 }
 
+// `pick 0 ; push c ; equal ; branch { A } { B }`
+//   = `pick 0 ; push c ; equal ; branch { drop ; push c ; A } { B }`.
+//
+// A value that tested equal to a literal *is* that literal. The condition is a
+// copy, so the arm still holds the value the `equal` looked at, and in the then
+// arm the two are names for one thing.
+//
+// The float is where that stops being true and is why the law declines one:
+// `0.0 == -0.0` answers `true` on two values that stay distinguishable, so
+// there `equal` is equality rather than identity. The last two lines are that
+// negative case, run rather than argued.
+#[total] #[arity(1,1)] function specialize_lhs {
+    pick 0 push 7 equal branch { push 7 equal } { drop 0 push false } }
+#[total] #[arity(1,1)] function specialize_rhs {
+    pick 0 push 7 equal branch { drop 0 push 7 push 7 equal } { drop 0 push false } }
+
+test sentence a_value_equal_to_a_literal_is_that_literal {
+    push 7        jump specialize_lhs   push true  assert_eq
+    push 7        jump specialize_rhs   push true  assert_eq
+    push 8        jump specialize_lhs   push false assert_eq
+    push 8        jump specialize_rhs   push false assert_eq
+    push some_sym jump specialize_lhs   push false assert_eq
+    push some_sym jump specialize_rhs   push false assert_eq
+
+    // Equal, and not the same value: the one case the law refuses, with the
+    // witness that they stay distinguishable rather than an argument that they
+    // do. `1.0/0.0` and `1.0/-0.0` are the two infinities.
+    push 0.0 push -0.0 equal    assert
+    push 1.0 push 0.0  divide   assert
+    push 1.0 push -0.0 divide   assert
+    equal not assert
+}
+
 // `X ; drop^m` = `drop^n`, and `pick d ; drop` = nothing.
 test sentence discarded_work_is_no_work {
     push 9
@@ -429,3 +462,15 @@ identity taking_a_frame_off { dip 1 { not } } = { roll 1 not roll 1 };
 identity comparing_two_built_tuples
     { push some_sym push 1 tuple 2 push some_sym push 1 tuple 2 equal }
   = { push true };
+
+// The value an arm tested equal to, written into the arm.
+//
+// One step, and what it buys is the second line: once the literal is there,
+// `eval` reads a window it could not read before, and the arm folds to the
+// constant the whole proof was after. That is the entire content of the law —
+// it is the first fact here about what an instruction *computes* rather than
+// about shape, and nothing in the set reaches it, since `split_bool` splits the
+// boolean and leaves the value opaque in both arms.
+identity specializing_a_tested_value
+    { pick 0 push 7 equal branch { push 7 equal } { drop 0 push false } }
+  = { pick 0 push 7 equal branch { drop 0 push true } { drop 0 push false } };

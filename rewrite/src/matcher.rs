@@ -138,6 +138,7 @@ pub(crate) fn matcher_by_name(name: &str) -> Option<Box<dyn Matcher>> {
         "fuse" => Box::new(Fuse),
         "lift" => Box::new(Lift),
         "sink" => Box::new(Sink),
+        "specialize_equal" => Box::new(SpecializeEqual),
         "split_bool" => Box::new(SplitBool),
         "swap" => Box::new(Swap),
         "unsplit_bool" => Box::new(UnsplitBool),
@@ -175,6 +176,7 @@ pub(crate) fn matcher_names() -> Vec<&'static str> {
         "fuse",
         "lift",
         "sink",
+        "specialize_equal",
         "split_bool",
         "swap",
         "unfactor",
@@ -2512,6 +2514,133 @@ impl Matcher for Retest {
     }
 }
 
+/// Writes a literal into the arm that tested equal to it.
+///
+/// [`Rule::SpecializeEqual`] forward: the condition is a copy, so the `then`
+/// arm still holds the value the `equal` looked at, and there that value **is**
+/// the literal. `drop ; push c` says so, and what was opaque to every folding
+/// law is now something [`EvalUnary`] and [`EvalBinary`] can read.
+///
+/// It is [`Retest`]'s sibling, and between them they cover the two ways an arm
+/// can learn its own condition. A branch observes truthiness and nothing else,
+/// so `retest` recovers *which way a second branch goes*; `equal` observes the
+/// whole value, so this recovers *the value*.
+///
+/// **The `then` arm only.** The `else` arm knows the value is not `c`, and a
+/// negative fact has nothing to write down — so unlike `retest` this is one
+/// equation read at one arm rather than either.
+///
+/// It declines a `c` holding a float, where `equal` is equality rather than
+/// identity; the equation refuses it too, and the matcher asks first so that
+/// nothing is proposed the applier would turn down. It also declines an arm
+/// that already opens with `drop ; push c`, which is the guard that keeps it
+/// out of its own output — without it, the window still matches after the
+/// firing and `each` would write the literal in forever.
+///
+/// Measure: none. It grows the arm by two nodes, and the guard above is what
+/// makes it safe in a `repeat` regardless.
+#[derive(Debug)]
+pub(crate) struct SpecializeEqual;
+
+/// The literal, and the two arms with their origins.
+type SpecializeWindow<'a> = (&'a Value, &'a String, &'a [Node], &'a String, &'a [Node]);
+
+/// The window both readings share: `pick 0 ; push c ; equal ; branch`.
+fn specialize_window(window: &[Node]) -> Option<SpecializeWindow<'_>> {
+    let [
+        Node::Op(Instruction::Pick(0)),
+        Node::Op(Instruction::Push(c)),
+        Node::Op(Instruction::Equal),
+        Node::Branch {
+            then_origin,
+            then_body,
+            else_origin,
+            else_body,
+        },
+    ] = window
+    else {
+        return None;
+    };
+    Some((c, then_origin, then_body, else_origin, else_body))
+}
+
+/// Whether an arm already opens with the literal written in.
+fn opens_specialized(c: &Value, arm: &[Node]) -> bool {
+    matches!(arm, [Node::Op(Instruction::Drop), Node::Op(Instruction::Push(d)), ..] if d == c)
+}
+
+impl Matcher for SpecializeEqual {
+    fn name(&self) -> &'static str {
+        "specialize_equal"
+    }
+    fn width(&self) -> usize {
+        4
+    }
+    fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
+        Ok(Box::new(InvSpecializeEqual))
+    }
+    fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
+        let (c, then_origin, then_body, else_origin, else_body) = specialize_window(window)?;
+        if opens_specialized(c, then_body) {
+            return None;
+        }
+        at_window(
+            prog,
+            Rule::SpecializeEqual {
+                c: c.clone(),
+                then_arm: then_body.to_vec(),
+                else_arm: else_body.to_vec(),
+                then_origin: then_origin.clone(),
+                else_origin: else_origin.clone(),
+            },
+            Direction::Forward,
+        )
+    }
+}
+
+/// Takes the literal back out of the arm that tested equal to it.
+///
+/// [`Rule::SpecializeEqual`] read backwards. Unlike most introductions this one
+/// recognizes its side exactly — the `drop ; push c` it removes is the same `c`
+/// the window's `equal` tested — so there is nothing to invent and no argument
+/// to guess.
+///
+/// No name of its own: it is `inv(specialize_equal)`.
+///
+/// Measure: node count, which it reduces. Never put it in a `repeat` beside
+/// [`SpecializeEqual`].
+#[derive(Debug)]
+pub(crate) struct InvSpecializeEqual;
+
+impl Matcher for InvSpecializeEqual {
+    fn name(&self) -> &'static str {
+        "inv(specialize_equal)"
+    }
+    fn width(&self) -> usize {
+        4
+    }
+    fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
+        Ok(Box::new(SpecializeEqual))
+    }
+    fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
+        let (c, then_origin, then_body, else_origin, else_body) = specialize_window(window)?;
+        if !opens_specialized(c, then_body) {
+            return None;
+        }
+        at_window(
+            prog,
+            Rule::SpecializeEqual {
+                c: c.clone(),
+                then_arm: then_body[2..].to_vec(),
+                else_arm: else_body.to_vec(),
+                then_origin: then_origin.clone(),
+                else_origin: else_origin.clone(),
+            },
+            Direction::Reverse,
+        )
+    }
+}
+
 /// `pick 0 ; dip 1 { drop }` becomes nothing.
 ///
 /// [`Rule::CounitUnder`] forward: copy a value and discard the original. The
@@ -3330,6 +3459,130 @@ mod tests {
         );
         // Reading it backwards would have to invent the arm that cannot run.
         assert!(Retest.inverse().is_err());
+    }
+
+    /// A value that tested equal to a literal is that literal, and saying so
+    /// is what turns an opaque value into one the folding laws can read.
+    #[test]
+    fn specialize_equal_writes_the_literal_into_the_arm() {
+        let c = Value::Int(7);
+        let w = |then_body: Vec<Node>| {
+            [
+                op(Instruction::Pick(0)),
+                op(Instruction::Push(c.clone())),
+                op(Instruction::Equal),
+                branch(then_body, vec![op(Instruction::IsBool)]),
+            ]
+        };
+        let arm = || vec![op(Instruction::Push(c.clone())), op(Instruction::Equal)];
+
+        let got = fire(&SpecializeEqual, &prog(), &w(arm())).unwrap();
+        let [
+            _,
+            _,
+            _,
+            Node::Branch {
+                then_body,
+                else_body,
+                ..
+            },
+        ] = &got[..]
+        else {
+            panic!("expected the same four nodes, got {:?}", got)
+        };
+        let mut want = vec![op(Instruction::Drop), op(Instruction::Push(c.clone()))];
+        want.extend(arm());
+        assert_eq!(then_body, &want);
+        assert_eq!(
+            else_body,
+            &vec![op(Instruction::IsBool)],
+            "the else arm knows only that the value is *not* `c`, and a \
+             negative fact has nothing to write down"
+        );
+
+        // The guard that keeps it out of its own output: fire once and the
+        // window still matches, so without this `each` would write the literal
+        // in forever.
+        assert!(
+            SpecializeEqual.plan(&prog(), &got).is_none(),
+            "it fired on its own output: {:?}",
+            got
+        );
+
+        // And the backward reading takes it out again, exactly.
+        round_trip(&SpecializeEqual, &w(arm()));
+    }
+
+    #[test]
+    fn specialize_equal_declines_a_float() {
+        // `0.0 == -0.0` is true and the two stay distinguishable, so there
+        // derived equality is coarser than identity and writing the literal
+        // down would be a claim rather than a renaming.
+        let w = |c: Value| {
+            [
+                op(Instruction::Pick(0)),
+                op(Instruction::Push(c)),
+                op(Instruction::Equal),
+                branch(vec![op(Instruction::Not)], Vec::new()),
+            ]
+        };
+        assert!(
+            SpecializeEqual
+                .plan(&prog(), &w(Value::Float(0.0)))
+                .is_none()
+        );
+        // Tuples included: the check reads the whole value.
+        assert!(
+            SpecializeEqual
+                .plan(
+                    &prog(),
+                    &w(Value::Tuple(vec![Value::Int(1), Value::Float(2.0)]))
+                )
+                .is_none()
+        );
+        // An int of the same shape is fine, which is what says the refusal is
+        // about the float and not about tuples.
+        assert!(
+            SpecializeEqual
+                .plan(
+                    &prog(),
+                    &w(Value::Tuple(vec![Value::Int(1), Value::Int(2)]))
+                )
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn specialize_equal_needs_the_condition_to_be_a_copy() {
+        let c = Value::Int(9);
+        // No `pick 0`, so the value the arm holds is not the one tested.
+        assert!(
+            SpecializeEqual
+                .plan(
+                    &prog(),
+                    &[
+                        op(Instruction::Not),
+                        op(Instruction::Push(c.clone())),
+                        op(Instruction::Equal),
+                        branch(Vec::new(), Vec::new()),
+                    ]
+                )
+                .is_none()
+        );
+        // And the test has to be `equal`: nothing else observes the value.
+        assert!(
+            SpecializeEqual
+                .plan(
+                    &prog(),
+                    &[
+                        op(Instruction::Pick(0)),
+                        op(Instruction::Push(c)),
+                        op(Instruction::Greater),
+                        branch(Vec::new(), Vec::new()),
+                    ]
+                )
+                .is_none()
+        );
     }
 
     #[test]
