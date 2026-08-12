@@ -55,3 +55,6 @@ proof taking_a_frame_off = must(once(unframe));
 
 // Two evaluations and a third, which is all it ever needed to be.
 proof comparing_two_built_tuples = values;
+
+// `specialize_equal` writes the literal in, and `values` reads what it wrote.
+proof specializing_a_tested_value = must(once(specialize_equal)); values;

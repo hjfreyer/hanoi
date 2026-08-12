@@ -252,6 +252,16 @@ fn write_rule(prog: &Program, rule: &Rule) -> Result<Vec<(&'static str, String)>
             ("rest", write_term(prog, rest)?),
             ("other", write_term(prog, other)?),
         ],
+        Rule::SpecializeEqual {
+            c,
+            then_arm,
+            else_arm,
+            ..
+        } => vec![
+            ("c", write_value(prog, c)?),
+            ("then", write_term(prog, then_arm)?),
+            ("else", write_term(prog, else_arm)?),
+        ],
         Rule::CopyConst { c } => vec![("c", write_value(prog, c)?)],
         Rule::CopyAssoc { d } => vec![("d", d.to_string())],
         Rule::CopyNat { x, n, m } => vec![
@@ -1201,6 +1211,13 @@ impl<'a> Parser<'a> {
                 then_origin: TERM_ORIGIN.to_string(),
                 else_origin: TERM_ORIGIN.to_string(),
             }),
+            "specialize_equal" => StepKind::Rule(Rule::SpecializeEqual {
+                c: f.literal("c", prog)?,
+                then_arm: f.term("then")?,
+                else_arm: f.term("else")?,
+                then_origin: TERM_ORIGIN.to_string(),
+                else_origin: TERM_ORIGIN.to_string(),
+            }),
             "copy_const" => StepKind::Rule(Rule::CopyConst {
                 c: f.literal("c", prog)?,
             }),
@@ -1512,6 +1529,7 @@ pub(crate) fn equation_names() -> Vec<&'static str> {
         "counit",
         "counit_under",
         "retest",
+        "specialize_equal",
         "copy_const",
         "copy_assoc",
         "copy_nat",
@@ -1694,6 +1712,13 @@ mod tests {
                 m: 2,
             },
             Rule::PickRoll { d: 3 },
+            Rule::SpecializeEqual {
+                c: Value::Int(9),
+                then_arm: vec![op(Instruction::Not)],
+                else_arm: vec![op(Instruction::IsBool)],
+                then_origin: TERM_ORIGIN.to_string(),
+                else_origin: TERM_ORIGIN.to_string(),
+            },
         ];
         // Every name in the table is covered, so a new equation shows up here
         // as a missing case rather than as a file nobody can write.

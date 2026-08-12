@@ -112,6 +112,10 @@ pub(crate) enum SideCondition {
     NotBoolResult { op: String },
     /// `retest` was handed something other than a branch to collapse.
     NotABranch { arm: &'static str, found: String },
+    /// `specialize_equal` was handed a literal on which `equal` is equality
+    /// rather than identity, so writing it in place of the value would be a
+    /// claim rather than a renaming.
+    NotSubstitutable { c: String },
 }
 
 impl std::fmt::Display for SideCondition {
@@ -166,6 +170,12 @@ impl std::fmt::Display for SideCondition {
                     arm, found
                 )
             }
+            SideCondition::NotSubstitutable { c } => write!(
+                f,
+                "`{}` holds a float, and `0.0 == -0.0` on two values that stay \
+                 distinguishable — so testing equal to it is not being it",
+                c
+            ),
         }
     }
 }
@@ -489,6 +499,60 @@ pub(crate) enum Rule {
         else_origin: String,
     },
 
+    /// `pick 0 ; push c ; equal ; branch { A } { B }`
+    ///   = `pick 0 ; push c ; equal ; branch { drop ; push c ; A } { B }`.
+    ///
+    /// **A value that tested equal to a literal *is* that literal.** The
+    /// condition is a copy, so the arm the branch took still holds the value it
+    /// tested; in the `then` arm the test answered `true`, and there the value
+    /// and `c` are two names for one thing. Writing the literal down is what
+    /// turns an opaque value into something [`Rule::Eval`] can read.
+    ///
+    /// It is the sibling of [`Rule::Retest`] and the two divide the ways an arm
+    /// can know its own condition. `retest` learns from a *branch*, which
+    /// observes truthiness and nothing else, so what it recovers is which way a
+    /// second branch goes. This learns from `equal`, which observes the whole
+    /// value, so what it recovers is the value.
+    ///
+    /// ## Why it is an axiom
+    ///
+    /// It is the first fact here about what an instruction *computes* rather
+    /// than about shape — [`Rule::BoolResult`] is about a codomain, and `eval`
+    /// is evaluation. Nothing in the set relates `equal`'s answer to its
+    /// operands, so no rewriting reaches it: [`Rule::SplitBool`] splits the
+    /// boolean and leaves the value opaque in both arms, which is the same
+    /// stall `bool_result` has.
+    ///
+    /// What makes it *true* is narrow and worth stating: `equal` is exactly
+    /// `Value`'s derived `PartialEq`, and on a value that holds no float that
+    /// equality **is** structural identity. So the law claims nothing about
+    /// values being interchangeable in general — it says two spellings of one
+    /// value may be swapped.
+    ///
+    /// ## The float
+    ///
+    /// `0.0 == -0.0` is true and the two stay distinguishable, so there derived
+    /// equality is coarser than identity and the substitution would be a real
+    /// claim rather than a renaming. [`Rule::check`] therefore refuses a `c`
+    /// holding a float anywhere, tuples included. Checking `c` is enough:
+    /// derived equality never crosses variants, so a `c` with no float can only
+    /// have tested equal to a value with none either.
+    ///
+    /// ## What the other arm learns, which is nothing
+    ///
+    /// The `else` arm knows the value is *not* `c`, and no equation can use a
+    /// negative fact — there is nothing to write down in place of the value. So
+    /// the law is one-sided, where `retest` reads at either arm.
+    SpecializeEqual {
+        c: Value,
+        /// The `then` arm as it stands on the left-hand side, before the
+        /// literal is written into it.
+        then_arm: Vec<Node>,
+        else_arm: Vec<Node>,
+        then_origin: String,
+        else_origin: String,
+    },
+
     /// `pick 0 ; dip 1 { drop }` = nothing.
     ///
     /// Copy a value and discard the **original**: the copy is the same value,
@@ -723,6 +787,7 @@ impl Rule {
             Rule::Counit { .. } => "counit",
             Rule::CounitUnder => "counit_under",
             Rule::Retest { .. } => "retest",
+            Rule::SpecializeEqual { .. } => "specialize_equal",
             Rule::CopyConst { .. } => "copy_const",
             Rule::CopyAssoc { .. } => "copy_assoc",
             Rule::CopyNat { .. } => "copy_nat",
@@ -776,6 +841,18 @@ impl Rule {
                         arm: arm.name(),
                         found: crate::ir::sketch(std::slice::from_ref(inner)),
                     })
+                }
+            }
+            // The one thing the law rests on: that `equal` on this literal is
+            // identity and not merely equality. A float is where the two part
+            // company, so a `c` holding one anywhere is refused.
+            Rule::SpecializeEqual { c, .. } => {
+                if holds_a_float(c) {
+                    Err(SideCondition::NotSubstitutable {
+                        c: format!("{}", c),
+                    })
+                } else {
+                    Ok(())
                 }
             }
             Rule::BoolResult { op } => {
@@ -932,6 +1009,20 @@ impl Rule {
                     else_body: else_arm.clone(),
                 },
             ],
+
+            Rule::SpecializeEqual {
+                c,
+                then_arm,
+                else_arm,
+                then_origin,
+                else_origin,
+            } => specialize_shape(
+                c,
+                then_arm.clone(),
+                else_arm.clone(),
+                then_origin,
+                else_origin,
+            ),
 
             Rule::Eval { op, inputs } => {
                 let mut out: Vec<Node> = inputs.iter().cloned().map(push).collect();
@@ -1137,6 +1228,20 @@ impl Rule {
                 }
             }
 
+            Rule::SpecializeEqual {
+                c,
+                then_arm,
+                else_arm,
+                then_origin,
+                else_origin,
+            } => specialize_shape(
+                c,
+                specialized(c, then_arm),
+                else_arm.clone(),
+                then_origin,
+                else_origin,
+            ),
+
             Rule::Eval { op, inputs } => eval_op(op, inputs)
                 .expect("check() accepted an operator that cannot be folded")
                 .into_iter()
@@ -1223,6 +1328,48 @@ impl Rule {
                 nodes
             }
         }
+    }
+}
+
+/// `pick 0 ; push c ; equal ; branch { .. } { .. }`, which both sides of
+/// [`Rule::SpecializeEqual`] are — they differ only in what the `then` arm
+/// opens with, the way both sides of [`Rule::Retest`] are one shape.
+fn specialize_shape(
+    c: &Value,
+    then_body: Vec<Node>,
+    else_body: Vec<Node>,
+    then_origin: &str,
+    else_origin: &str,
+) -> Vec<Node> {
+    vec![
+        Node::Op(Instruction::Pick(0)),
+        push(c.clone()),
+        Node::Op(Instruction::Equal),
+        Node::Branch {
+            then_origin: then_origin.to_string(),
+            then_body,
+            else_origin: else_origin.to_string(),
+            else_body,
+        },
+    ]
+}
+
+/// What the `then` arm gains: the value dropped and the literal written down.
+fn specialized(c: &Value, then_arm: &[Node]) -> Vec<Node> {
+    let mut out = vec![Node::Op(Instruction::Drop), push(c.clone())];
+    out.extend(then_arm.iter().cloned());
+    out
+}
+
+/// Whether a value holds a float anywhere, tuples included.
+///
+/// The one place `Value`'s derived equality is coarser than identity, and so
+/// the one place [`Rule::SpecializeEqual`] has to decline.
+pub(crate) fn holds_a_float(v: &Value) -> bool {
+    match v {
+        Value::Float(_) => true,
+        Value::Tuple(elements) => elements.iter().any(holds_a_float),
+        _ => false,
     }
 }
 

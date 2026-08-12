@@ -114,6 +114,7 @@ three.
 | `counit` | `pick d ; drop` = nothing | copy, discard the **copy**. *Not* an annihilation: `pick d` is `(d+1 -> d+2)` |
 | `counit_under` | `pick 0 ; dip 1 { drop }` = nothing | copy, discard the **original**. The other counit law; only at depth 0, since deeper it is a `roll` |
 | `retest` | `pick 0 ; branch { branch { A } { B } ; R } { Q }` = `pick 0 ; branch { drop ; A ; R } { Q }`, and the mirror | the same value tested twice answers the same, so the other inner arm is dead. One equation read at either arm |
+| `specialize_equal` | `pick 0 ; push c ; equal ; branch { A } { B }` = `… branch { drop ; push c ; A } { B }` | a value that tested equal to a literal **is** that literal. Refuses a `c` holding a float, where `equal` is equality rather than identity |
 | `copy_const` | `push c ; pick 0` = `push c ; push c` | |
 | `copy_assoc` | `pick d ; pick 0` = `pick d ; dip 1 { pick d }` | neither side is smaller; the point is that one copy ends up **in a frame**, and a framed computation is one `float` can carry |
 | `copy_nat` | `pick (n-1)^n ; X ; dip m { X }` = `X ; pick (m-1)^m`, for `X : n -> m` | copying is natural. Forward is common-subexpression elimination; the only law that needs `X` to be **deterministic** |
@@ -277,6 +278,7 @@ different thing to look for even though the arithmetic is the same:
 | `bool_result_copied` | 3 | the same fact through a copy — `op ; pick 0 ; is_bool`, which is the guard `split_bool` leaves. 8 steps, no new law |
 | `unframe` | 1 | takes a frame off, bringing the operands to the top — see below. 2 steps, no new law |
 | `retest` | 2 | one arm per firing, then arm first; no backward reading |
+| `specialize_equal` | 4 | writes the literal into the arm that tested equal to it; backward is `inv(specialize_equal)` |
 | `counit_under` / `inv(counit_under)` | 2 / 1 | the other counit, found or *put in* |
 | `counit` / `counit(d)` / `inv(counit(d))` | 2 / 2 / 1 | the copy-and-discard law: found, found at one depth, or *put in* |
 | `copy_const`, `copy_assoc`, `cancel_tuple` | 2 | |
@@ -903,6 +905,54 @@ content of `retest` is that the **off-diagonal arms are dead** — and nothing
 reaches that, because an arm cannot see the branch it is inside. Driving it
 through `split_bool` stalls in the same "not a bool" arm that `bool_result`
 does, holding the original problem verbatim.
+
+### The value an arm tested equal to: `specialize_equal`
+
+```text
+pick 0 ; push c ; equal ; branch { A } { B }
+  =  pick 0 ; push c ; equal ; branch { drop ; push c ; A } { B }
+```
+
+`retest`'s sibling, and between them they cover the two ways an arm can learn
+its own condition. A branch observes **truthiness** and nothing else, so what
+`retest` recovers is which way a second branch goes. `equal` observes the
+**whole value**, so what this recovers is the value — and writing it down is
+what turns something opaque into a literal `eval` can read.
+
+```
+$ rewrite mini spec -t 'exact(must(once(specialize_equal)); values)' --show-script
+closed — 2 steps
+     0  specialize_equal -> @0   branch { push t1 ; equal } ⇒ branch { drop ; push t1 ; push t1 ; equal }
+     1  eval             -> …    push t1 ; push t1 ; equal  ⇒ push true
+```
+
+**The `then` arm only.** The `else` arm knows the value is *not* `c`, and no
+equation can use a negative fact — there is nothing to write in place of the
+value. So this is one equation read at one arm where `retest` is read at either.
+
+**It is an axiom, and the first here about what an instruction *computes*.**
+`bool_result` is about a codomain and `eval` is evaluation; nothing in the set
+relates `equal`'s answer to its operands, and no rewriting reaches it —
+`split_bool` splits the boolean and leaves the value opaque in both arms, which
+is the same stall `bool_result` has.
+
+What makes it true is narrow and worth stating plainly: `equal` is exactly
+`Value`'s derived `PartialEq`, and on a value holding no float that equality
+**is** structural identity. The law therefore claims nothing about equal values
+being interchangeable in general — it says two spellings of one value may be
+swapped.
+
+**The float is the exception, and it is measured rather than argued.**
+`0.0 == -0.0` answers `true` on two values that stay distinguishable —
+`identities::a_value_equal_to_a_literal_is_that_literal` runs `1.0/0.0` against
+`1.0/-0.0` and gets the two infinities. So `check` refuses a `c` holding a float
+anywhere, tuples included. Checking `c` is enough: derived equality never
+crosses variants, so a float-free `c` can only have tested equal to a
+float-free value.
+
+It declines an arm that already opens with `drop ; push c`, which is what keeps
+it out of its own output — the window still matches after a firing, and without
+the guard `each` would write the literal in forever.
 
 ### Two counits, not one
 
@@ -1541,9 +1591,11 @@ consulting an analysis.
 
 ## What is not here yet
 
-- **Tranche two.** `specialize_equal`, `dup_natural`, `rebuild_copy`, and
-  `dip k { } = ε`. All are expressible as equations in this framework; none is
-  written yet.
+- **Tranche two.** `dup_natural`, `rebuild_copy`, and `dip k { } = ε`. All are
+  expressible as equations in this framework; none is written yet.
+  `specialize_equal` was on this list and is now in the set — see "the value an
+  arm tested equal to", which is also where the float it declines is written
+  down.
 
   Two that used to be on this list are now in the set, as equations without
   matchers. `roll 0 = ε` is `roll_cycle` at `d = 0`, and the rolls arrived with
