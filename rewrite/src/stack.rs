@@ -37,7 +37,8 @@ pub(crate) enum Term {
     Opaque(usize),
     /// Element `i` of a tuple that was never built here.
     Proj(usize, Rc<Term>),
-    /// A tuple built here. Index 0 first.
+    /// A tuple built here. Index 0 first, which is the element that sat
+    /// deepest on the stack.
     Tup(Vec<Rc<Term>>),
     /// The result of an operator, by name.
     App(&'static str, Vec<Rc<Term>>),
@@ -189,17 +190,16 @@ fn op(inst: &Instruction, s: &mut Vec<Rc<Term>>, fresh: &mut Fresh) -> bool {
             if *n > s.len() {
                 return false;
             }
-            // `tuple n` makes the top element index 0.
-            let mut es: Vec<_> = s.split_off(s.len() - n);
-            es.reverse();
+            // `tuple n` keeps stack order: the deepest element is index 0.
+            let es: Vec<_> = s.split_off(s.len() - n);
             s.push(Rc::new(Term::Tup(es)));
         }
         Instruction::Untuple(n) => {
             let t = pop!();
             match &*t {
                 Term::Tup(es) if es.len() == *n => {
-                    // Index 0 ends on top, so push in reverse.
-                    for e in es.iter().rev() {
+                    // Index 0 goes back to the deepest slot, so push in order.
+                    for e in es {
                         s.push(e.clone());
                     }
                     // A tuple this wide always comes apart, and the view knows
@@ -207,7 +207,7 @@ fn op(inst: &Instruction, s: &mut Vec<Rc<Term>>, fresh: &mut Fresh) -> bool {
                     s.push(Rc::new(Term::Const(ConstKey::new(&Value::Bool(true)))));
                 }
                 _ => {
-                    for i in (0..*n).rev() {
+                    for i in 0..*n {
                         s.push(Rc::new(Term::Proj(i, t.clone())));
                     }
                     s.push(fresh.next());

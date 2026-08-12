@@ -18,20 +18,22 @@ pub fn extract_putch_char(
     std_stdout: &Option<Value>,
     std_putch: &Option<Value>,
 ) -> Option<char> {
-    // Matches the nested pair (io, (stdout, (putch, char))).
+    // Matches the nested pair (((((), char), putch), stdout), io) — each
+    // channel name sits on top of what it carries, so it is the element the
+    // tuple names last.
     if let (Some(io_val), Some(stdout_val), Some(putch_val)) = (std_io, std_stdout, std_putch)
         && let Value::Tuple(elems) = value
         && elems.len() == 2
-        && &elems[0] == io_val
-        && let Value::Tuple(elems2) = &elems[1]
+        && &elems[1] == io_val
+        && let Value::Tuple(elems2) = &elems[0]
         && elems2.len() == 2
-        && &elems2[0] == stdout_val
-        && let Value::Tuple(elems3) = &elems2[1]
+        && &elems2[1] == stdout_val
+        && let Value::Tuple(elems3) = &elems2[0]
         && elems3.len() == 2
-        && &elems3[0] == putch_val
-        && let Value::Tuple(elems4) = &elems3[1]
+        && &elems3[1] == putch_val
+        && let Value::Tuple(elems4) = &elems3[0]
         && elems4.len() == 2
-        && let Value::Int(n) = elems4[0]
+        && let Value::Int(n) = elems4[1]
     {
         return char::from_u32(n as u32);
     }
@@ -302,7 +304,8 @@ impl<E: Environment> Runtime<E> {
                 self.vm.stack
             ));
         }
-        let pair = Value::Tuple(vec![state, event]);
+        // The state is the top of the pair, so it is the *last* element.
+        let pair = Value::Tuple(vec![event, state]);
         self.vm.stack.push(pair);
         self.vm.execute(self.main_accept)?;
         let res = self.vm.pop()?;
@@ -333,11 +336,12 @@ impl<E: Environment> Runtime<E> {
         }
         match res {
             Value::Tuple(mut elems) if elems.len() == 2 => {
-                let new_state = elems.pop().unwrap();
+                // The flag is on top, so it is the last element.
                 let did_reduce = match elems.pop().unwrap() {
                     Value::Bool(b) => b,
                     v => return Err(format!("Expected bool for did_reduce, found {:?}", v)),
                 };
+                let new_state = elems.pop().unwrap();
                 Ok((new_state, did_reduce))
             }
             other => Err(format!(
@@ -359,11 +363,12 @@ impl<E: Environment> Runtime<E> {
         }
         match res {
             Value::Tuple(mut elems) if elems.len() == 2 => {
-                let event = elems.pop().unwrap();
+                // The flag is on top, so it is the last element.
                 let has_event = match elems.pop().unwrap() {
                     Value::Bool(b) => b,
                     v => return Err(format!("Expected bool for has_event, found {:?}", v)),
                 };
+                let event = elems.pop().unwrap();
                 Ok((event, has_event))
             }
             other => Err(format!(
@@ -380,7 +385,7 @@ impl<E: Environment> Runtime<E> {
                 self.vm.stack
             ));
         }
-        self.vm.stack.push(Value::Tuple(vec![state, event]));
+        self.vm.stack.push(Value::Tuple(vec![event, state]));
         self.vm.execute(self.main_process)?;
         let res = self.vm.pop()?;
         if !self.vm.stack.is_empty() {

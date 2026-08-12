@@ -11,7 +11,7 @@ function init {
 
 
 function accept {
-    // Stack: [(state, event)]
+    // Stack: [(event, state)]
     jump {{machine}}::accept
     // Stack: [Bool]
 }
@@ -19,11 +19,11 @@ function accept {
 function emit {
     // Stack: [state]
     jump {{machine}}::emit
-    // Stack: [(has_event, event)]
+    // Stack: [(event, has_event)]
 }
 
 function process {
-    // Stack: [(state, event)]
+    // Stack: [(event, state)]
     jump {{machine}}::process
     // Stack: [next_state]
 }
@@ -31,7 +31,7 @@ function process {
 function tau_reduce {
     // Stack: [state]
     jump {{machine}}::tau_reduce
-    // Stack: [(did_reduce, next_state)]
+    // Stack: [(next_state, did_reduce)]
 }
 
 function is_done {

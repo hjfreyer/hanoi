@@ -85,7 +85,7 @@ sentence test_type_and_enum {
     jump TestInt::check
     assert
 
-    push (MyEnum::Case1::tag, (42, true))
+    push ((42, true), MyEnum::Case1::tag)
     jump MyEnum::check
     assert
 }

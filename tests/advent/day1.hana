@@ -70,9 +70,9 @@ mod sut compose_hidden(
 mod harness compose_accept_static(
     crate::prelude::start,
     compose_emit_static(
-        (crate::string::parseint::out, (crate::string::copy, ())),
+        (((), crate::string::copy), crate::string::parseint::out),
         compose_accept_static(
-            (crate::string::parseint::out, (crate::string::value, (crate::string::ok, 39472))),
+            (((39472, crate::string::ok), crate::string::value), crate::string::parseint::out),
             compose_emit_static(
                 crate::prelude::pass,
                 compose_done()

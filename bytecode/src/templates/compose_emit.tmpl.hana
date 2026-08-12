@@ -5,12 +5,12 @@ function init {
     push 0
     // Stack: [machine_state, 0]
     tuple 2
-    // Stack: [(0, machine_state)]
+    // Stack: [(machine_state, 0)]
 }
 
 
 function accept {
-    // Stack: [(state, event)]
+    // Stack: [(event, state)]
     untuple 2
     assert
     // Stack: [event, state]
@@ -32,7 +32,7 @@ function accept {
     } {
         // Stack: [event, machine_state]
         tuple 2
-        // Stack: [(machine_state, event)]
+        // Stack: [(event, machine_state)]
         jump {{machine}}::accept
         // Stack: [Bool]
     }
@@ -52,17 +52,17 @@ function tau_reduce {
     branch {
         // Stack: [machine_state, phase]
         tuple 2
-        // Stack: [(phase, machine_state)]
+        // Stack: [(machine_state, phase)]
         push false
-        // Stack: [(phase, machine_state), false]
+        // Stack: [(machine_state, phase), false]
         tuple 2
-        // Stack: [(false, (phase, machine_state))]
+        // Stack: [((machine_state, phase), false)]
     } {
         // Stack: [machine_state, phase]
         pick 1
         // Stack: [machine_state, phase, machine_state]
         jump {{machine}}::tau_reduce
-        // Stack: [machine_state, phase, (did_reduce, next_machine_state)]
+        // Stack: [machine_state, phase, (next_machine_state, did_reduce)]
         untuple 2
         assert
         // Stack: [machine_state, phase, next_machine_state, did_reduce]
@@ -75,21 +75,21 @@ function tau_reduce {
             drop 0
             // Stack: [next_machine_state, phase]
             tuple 2
-            // Stack: [(phase, next_machine_state)]
+            // Stack: [(next_machine_state, phase)]
             push true
-            // Stack: [(phase, next_machine_state), true]
+            // Stack: [(next_machine_state, phase), true]
             tuple 2
-            // Stack: [(true, (phase, next_machine_state))]
+            // Stack: [((next_machine_state, phase), true)]
         } {
             // Stack: [machine_state, phase, next_machine_state]
             drop 0
             // Stack: [machine_state, phase]
             tuple 2
-            // Stack: [(phase, machine_state)]
+            // Stack: [(machine_state, phase)]
             push false
-            // Stack: [(phase, machine_state), false]
+            // Stack: [(machine_state, phase), false]
             tuple 2
-            // Stack: [(false, (phase, machine_state))]
+            // Stack: [((machine_state, phase), false)]
         }
     }
 }
@@ -116,18 +116,18 @@ function emit {
         push false
         // Stack: [(), false]
         tuple 2
-        // Stack: [(false, ())]
+        // Stack: [((), false)]
     } {
         // Stack: [machine_state, phase]
         drop 0
         // Stack: [machine_state]
         jump {{machine}}::emit
-        // Stack: [(has_event, event)]
+        // Stack: [(event, has_event)]
     }
 }
 
 function process {
-    // Stack: [(state, event)]
+    // Stack: [(event, state)]
     untuple 2
     assert
     // Stack: [event, state]
@@ -155,19 +155,19 @@ function process {
         push 1
         // Stack: [initial_machine_state, 1]
         tuple 2
-        // Stack: [(1, initial_machine_state)]
+        // Stack: [(initial_machine_state, 1)]
     } {
         // Stack: [event, machine_state, phase]
         drop 0
         // Stack: [event, machine_state]
         tuple 2
-        // Stack: [(machine_state, event)]
+        // Stack: [(event, machine_state)]
         jump {{machine}}::process
         // Stack: [next_machine_state]
         push 1
         // Stack: [next_machine_state, 1]
         tuple 2
-        // Stack: [(1, next_machine_state)]
+        // Stack: [(next_machine_state, 1)]
     }
 }
 

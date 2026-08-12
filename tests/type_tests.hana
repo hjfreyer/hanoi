@@ -10,12 +10,12 @@ type TestTuple tuple;
 type IntOrBool int | bool;
 type SymOr42 test_sym | 42;
 
-type SimpleTuple (int, bool);
-type NestedTuple (SimpleTuple, int | test_sym);
+type SimpleTuple (bool, int);
+type NestedTuple (int | test_sym, SimpleTuple);
 type EmptyTuple ();
 
 enum MyEnum {
-    Case1(int, bool),
+    Case1(bool, int),
     Case2(symbol),
     Case3(),
 }
@@ -66,7 +66,7 @@ test sentence test_primitive_checks {
     assert
 
     // Test tuple
-    push (1, 2)
+    push (2, 1)
     jump TestTuple::check
     assert
 
@@ -110,19 +110,19 @@ test sentence test_union_checks {
 }
 
 test sentence test_tuple_checks {
-    // SimpleTuple = (int, bool)
-    push (42, true)
+    // SimpleTuple = (bool, int)
+    push (true, 42)
     jump SimpleTuple::check
     assert
 
     // Wrong types
-    push (42, 43)
+    push (43, 42)
     jump SimpleTuple::check
     not
     assert
 
     // Wrong length
-    push (42, true, 44)
+    push (44, true, 42)
     jump SimpleTuple::check
     not
     assert
@@ -133,16 +133,16 @@ test sentence test_tuple_checks {
     not
     assert
 
-    // NestedTuple = (SimpleTuple, int | test_sym)
-    push ((10, false), 3)
+    // NestedTuple = (int | test_sym, SimpleTuple)
+    push (3, (false, 10))
     jump NestedTuple::check
     assert
 
-    push ((10, false), test_sym)
+    push (test_sym, (false, 10))
     jump NestedTuple::check
     assert
 
-    push ((10, false), other_sym)
+    push (other_sym, (false, 10))
     jump NestedTuple::check
     not
     assert
@@ -165,24 +165,24 @@ test sentence test_tuple_checks {
 
 test sentence test_enum_checks {
     // Test MyEnum::Case1
-    push (MyEnum::Case1::tag, (42, true))
+    push ((true, 42), MyEnum::Case1::tag)
     jump MyEnum::check
     assert
 
-    push (MyEnum::Case1::tag, (42, true))
+    push ((true, 42), MyEnum::Case1::tag)
     jump MyEnum::Case1::check
     assert
 
-    push (42, true)
+    push (true, 42)
     jump MyEnum::Case1::Body::check
     assert
 
     // Test MyEnum::Case2
-    push (MyEnum::Case2::tag, (test_sym))
+    push ((test_sym), MyEnum::Case2::tag)
     jump MyEnum::check
     assert
 
-    push (MyEnum::Case2::tag, (test_sym))
+    push ((test_sym), MyEnum::Case2::tag)
     jump MyEnum::Case2::check
     assert
 
@@ -191,11 +191,11 @@ test sentence test_enum_checks {
     assert
 
     // Test MyEnum::Case3
-    push (MyEnum::Case3::tag, ())
+    push ((), MyEnum::Case3::tag)
     jump MyEnum::check
     assert
 
-    push (MyEnum::Case3::tag, ())
+    push ((), MyEnum::Case3::tag)
     jump MyEnum::Case3::check
     assert
 
@@ -204,23 +204,23 @@ test sentence test_enum_checks {
     assert
 
     // Test invalid variant
-    push (MyEnum::Case1::tag, ())
+    push ((), MyEnum::Case1::tag)
     jump MyEnum::Case1::check
     not
     assert
 
-    push (MyEnum::Case2::tag, (42))
+    push ((42), MyEnum::Case2::tag)
     jump MyEnum::Case2::check
     not
     assert
 
-    push (MyEnum::Case3::tag, (1))
+    push ((1), MyEnum::Case3::tag)
     jump MyEnum::Case3::check
     not
     assert
 
     // Test invalid tags
-    push (test_sym, (42, true))
+    push ((true, 42), test_sym)
     jump MyEnum::check
     not
     assert
@@ -234,7 +234,7 @@ type Small int | bool;
 
 enum RelEnum {
     Wraps(Small),
-    Pair(Small, other_sym),
+    Pair(other_sym, Small),
 }
 
 mod nested {
@@ -245,25 +245,25 @@ mod nested {
 }
 
 test sentence test_enum_relative_payload_paths {
-    push (RelEnum::Wraps::tag, (42))
+    push ((42), RelEnum::Wraps::tag)
     jump RelEnum::check
     assert
 
-    push (RelEnum::Wraps::tag, (true))
+    push ((true), RelEnum::Wraps::tag)
     jump RelEnum::check
     assert
 
     // A const string is not `Small`, so the payload check must reject it.
-    push (RelEnum::Wraps::tag, ("no"))
+    push (("no"), RelEnum::Wraps::tag)
     jump RelEnum::check
     not
     assert
 
-    push (RelEnum::Pair::tag, (42, other_sym))
+    push ((other_sym, 42), RelEnum::Pair::tag)
     jump RelEnum::check
     assert
 
-    push (RelEnum::Pair::tag, (42, test_sym))
+    push ((test_sym, 42), RelEnum::Pair::tag)
     jump RelEnum::check
     not
     assert
@@ -277,11 +277,11 @@ test sentence test_enum_relative_payload_paths {
     not
     assert
 
-    push (nested::Outer::Holds::tag, (true))
+    push ((true), nested::Outer::Holds::tag)
     jump nested::Outer::check
     assert
 
-    push (nested::Outer::Holds::tag, ("no"))
+    push (("no"), nested::Outer::Holds::tag)
     jump nested::Outer::check
     not
     assert

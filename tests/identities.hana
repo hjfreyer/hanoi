@@ -30,7 +30,7 @@ test sentence split_bool_is_the_identity {
     push "hi"     jump split_bool   push "hi"     assert_eq
     push some_sym jump split_bool   push some_sym assert_eq
     push ()       jump split_bool   push ()       assert_eq
-    push (1, 2)   jump split_bool   push (1, 2)   assert_eq
+    push (2, 1)   jump split_bool   push (2, 1)   assert_eq
 }
 
 // `roll 1 ; op` = `op`, for the commutative operators.
@@ -137,7 +137,7 @@ test sentence a_test_on_something_already_boolean_is_decided {
     push 42       is_bool is_bool  push true assert_eq
     push "hi"     is_bool is_bool  push true assert_eq
     push some_sym is_bool is_bool  push true assert_eq
-    push (1, 2)   is_bool is_bool  push true assert_eq
+    push (2, 1)   is_bool is_bool  push true assert_eq
 
     // The right-hand side, once `annihilate` has taken the operator away.
     push 42       drop 0 push true  push true assert_eq
@@ -211,15 +211,16 @@ test sentence a_framed_computation_is_a_rolled_one {
 // What `eval` owes is not a licence but an obligation: to agree with the
 // interpreter exactly, on junk as much as on anything else. So the element
 // order is measured here rather than reasoned about — `tuple n` takes the top
-// `n` and the *topmost* becomes the first element — and so is what `untuple`
+// `n` in the order they sit on the stack, so the *topmost* becomes the last
+// element — and so is what `untuple`
 // hands back when the width does not match: the value in the deepest slot it
 // filled, `()` in the rest, and `false` on top.
 test sentence building_and_taking_apart_literals {
-    push 1 push 2 tuple 2       push (2, 1) assert_eq
+    push 1 push 2 tuple 2       push (1, 2) assert_eq
     push some_sym push 1 tuple 2
-                                push (1, some_sym) assert_eq
+                                push (some_sym, 1) assert_eq
 
-    push (2, 1) untuple 2       assert   push 2 assert_eq   push 1 assert_eq
+    push (1, 2) untuple 2       assert   push 2 assert_eq   push 1 assert_eq
     push 2 untuple 2            not assert   push () assert_eq   push 2 assert_eq
 
     // `tuple 0` is the one an operator with no operands at all answers.
@@ -253,8 +254,8 @@ test sentence a_value_equal_to_a_literal_is_that_literal {
     push some_sym jump specialize_rhs   push false assert_eq
 
     // A tuple too: `equal` reads the whole value, so the law reads it whole.
-    push (1, 2)   jump specialize_lhs   push false assert_eq
-    push (1, 2)   jump specialize_rhs   push false assert_eq
+    push (2, 1)   jump specialize_lhs   push false assert_eq
+    push (2, 1)   jump specialize_rhs   push false assert_eq
 }
 
 // `X ; drop^m` = `drop^n`, and `pick d ; drop` = nothing.

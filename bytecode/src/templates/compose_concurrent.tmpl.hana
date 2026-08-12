@@ -9,12 +9,12 @@ function init {
     jump {{p2}}::init
     // Stack: [s1, s2]
     tuple 2
-    // Stack: [(s2, s1)]
+    // Stack: [(s1, s2)]
 }
 
 
 function accept {
-    // Stack: [(state, event)]
+    // Stack: [(event, state)]
     untuple 2
     assert
     // Stack: [event, state]
@@ -32,7 +32,7 @@ function accept {
         pick 2
         // Stack: [event, s1, s2, event, s1]
         tuple 2
-        // Stack: [event, s1, s2, (s1, event)]
+        // Stack: [event, s1, s2, (event, s1)]
         jump {{p1}}::accept
         // Stack: [event, s1, s2, accepts_p1]
         branch {
@@ -42,7 +42,7 @@ function accept {
             pick 1
             // Stack: [event, s1, s2, event, s2]
             tuple 2
-            // Stack: [event, s1, s2, (s2, event)]
+            // Stack: [event, s1, s2, (event, s2)]
             jump {{p2}}::accept
             // Stack: [event, s1, s2, accepts_p2]
             roll 1
@@ -75,7 +75,7 @@ function accept {
         pick 2
         // Stack: [event, s1, s2, event, s1]
         tuple 2
-        // Stack: [event, s1, s2, (s1, event)]
+        // Stack: [event, s1, s2, (event, s1)]
         jump {{p1}}::accept
         // Stack: [event, s1, s2, accepts_p1]
         branch {
@@ -95,7 +95,7 @@ function accept {
             pick 1
             // Stack: [event, s1, s2, event, s2]
             tuple 2
-            // Stack: [event, s1, s2, (s2, event)]
+            // Stack: [event, s1, s2, (event, s2)]
             jump {{p2}}::accept
             // Stack: [event, s1, s2, accepts_p2]
             roll 1
@@ -126,7 +126,7 @@ function emit {
     roll 1
     // Stack: [s2, s1, s1]
     jump {{p1}}::emit
-    // Stack: [s2, s1, (has_e1, e1)]
+    // Stack: [s2, s1, (e1, has_e1)]
     untuple 2
     assert
     // Stack: [s2, s1, e1, has_e1]
@@ -137,7 +137,7 @@ function emit {
     roll 1
     // Stack: [s1, e1, has_e1, s2, s2]
     jump {{p2}}::emit
-    // Stack: [s1, e1, has_e1, s2, (has_e2, e2)]
+    // Stack: [s1, e1, has_e1, s2, (e2, has_e2)]
     untuple 2
     assert
     // Stack: [s1, e1, has_e1, s2, e2, has_e2]
@@ -160,7 +160,7 @@ function emit {
             roll 1
             // Stack: [s1, e1, has_e1, s2, e2, has_e2, e1, s2]
             tuple 2
-            // Stack: [s1, e1, has_e1, s2, e2, has_e2, (s2, e1)]
+            // Stack: [s1, e1, has_e1, s2, e2, has_e2, (e1, s2)]
             jump {{p2}}::accept
             // Stack: [s1, e1, has_e1, s2, e2, has_e2, accepts_p2_e1]
             branch {
@@ -171,19 +171,19 @@ function emit {
                 push true
                 // Stack: [s1, e1, has_e1, s2, e2, has_e2, e1, true]
                 tuple 2
-                // Stack: [s1, e1, has_e1, s2, e2, has_e2, (true, e1)]
+                // Stack: [s1, e1, has_e1, s2, e2, has_e2, (e1, true)]
                 drop 1
-                // Stack: [s1, e1, has_e1, s2, e2, (true, e1)]
+                // Stack: [s1, e1, has_e1, s2, e2, (e1, true)]
                 drop 1
-                // Stack: [s1, e1, has_e1, s2, (true, e1)]
+                // Stack: [s1, e1, has_e1, s2, (e1, true)]
                 drop 1
-                // Stack: [s1, e1, has_e1, (true, e1)]
+                // Stack: [s1, e1, has_e1, (e1, true)]
                 drop 1
-                // Stack: [s1, e1, (true, e1)]
+                // Stack: [s1, e1, (e1, true)]
                 drop 1
-                // Stack: [s1, (true, e1)]
+                // Stack: [s1, (e1, true)]
                 drop 1
-                // Stack: [(true, e1)]
+                // Stack: [(e1, true)]
             } {
                 // Stack: [s1, e1, has_e1, s2, e2, has_e2]
                 pick 0
@@ -204,19 +204,19 @@ function emit {
                         push true
                         // Stack: [s1, e1, has_e1, s2, e2, has_e2, e1, true]
                         tuple 2
-                        // Stack: [s1, e1, has_e1, s2, e2, has_e2, (true, e1)]
+                        // Stack: [s1, e1, has_e1, s2, e2, has_e2, (e1, true)]
                         drop 1
-                        // Stack: [s1, e1, has_e1, s2, e2, (true, e1)]
+                        // Stack: [s1, e1, has_e1, s2, e2, (e1, true)]
                         drop 1
-                        // Stack: [s1, e1, has_e1, s2, (true, e1)]
+                        // Stack: [s1, e1, has_e1, s2, (e1, true)]
                         drop 1
-                        // Stack: [s1, e1, has_e1, (true, e1)]
+                        // Stack: [s1, e1, has_e1, (e1, true)]
                         drop 1
-                        // Stack: [s1, e1, (true, e1)]
+                        // Stack: [s1, e1, (e1, true)]
                         drop 1
-                        // Stack: [s1, (true, e1)]
+                        // Stack: [s1, (e1, true)]
                         drop 1
-                        // Stack: [(true, e1)]
+                        // Stack: [(e1, true)]
                     } {
                         // check_e2 (nested)
                         // Stack: [s1, e1, has_e1, s2, e2, has_e2]
@@ -237,7 +237,7 @@ function emit {
                                 roll 1
                                 // Stack: [s1, e1, has_e1, s2, e2, has_e2, e2, s1]
                                 tuple 2
-                                // Stack: [s1, e1, has_e1, s2, e2, has_e2, (s1, e2)]
+                                // Stack: [s1, e1, has_e1, s2, e2, has_e2, (e2, s1)]
                                 jump {{p1}}::accept
                                 // Stack: [s1, e1, has_e1, s2, e2, has_e2, accepts_p1_e2]
                                 branch {
@@ -248,19 +248,19 @@ function emit {
                                     push true
                                     // Stack: [s1, e1, has_e1, s2, e2, has_e2, e2, true]
                                     tuple 2
-                                    // Stack: [s1, e1, has_e1, s2, e2, has_e2, (true, e2)]
+                                    // Stack: [s1, e1, has_e1, s2, e2, has_e2, (e2, true)]
                                     drop 1
-                                    // Stack: [s1, e1, has_e1, s2, e2, (true, e2)]
+                                    // Stack: [s1, e1, has_e1, s2, e2, (e2, true)]
                                     drop 1
-                                    // Stack: [s1, e1, has_e1, s2, (true, e2)]
+                                    // Stack: [s1, e1, has_e1, s2, (e2, true)]
                                     drop 1
-                                    // Stack: [s1, e1, has_e1, (true, e2)]
+                                    // Stack: [s1, e1, has_e1, (e2, true)]
                                     drop 1
-                                    // Stack: [s1, e1, (true, e2)]
+                                    // Stack: [s1, e1, (e2, true)]
                                     drop 1
-                                    // Stack: [s1, (true, e2)]
+                                    // Stack: [s1, (e2, true)]
                                     drop 1
-                                    // Stack: [(true, e2)]
+                                    // Stack: [(e2, true)]
                                 } {
                                     // return_none
                                     // Stack: [s1, e1, has_e1, s2, e2, has_e2]
@@ -269,19 +269,19 @@ function emit {
                                     push false
                                     // Stack: [s1, e1, has_e1, s2, e2, has_e2, (), false]
                                     tuple 2
-                                    // Stack: [s1, e1, has_e1, s2, e2, has_e2, (false, ())]
+                                    // Stack: [s1, e1, has_e1, s2, e2, has_e2, ((), false)]
                                     drop 1
-                                    // Stack: [s1, e1, has_e1, s2, e2, (false, ())]
+                                    // Stack: [s1, e1, has_e1, s2, e2, ((), false)]
                                     drop 1
-                                    // Stack: [s1, e1, has_e1, s2, (false, ())]
+                                    // Stack: [s1, e1, has_e1, s2, ((), false)]
                                     drop 1
-                                    // Stack: [s1, e1, has_e1, (false, ())]
+                                    // Stack: [s1, e1, has_e1, ((), false)]
                                     drop 1
-                                    // Stack: [s1, e1, (false, ())]
+                                    // Stack: [s1, e1, ((), false)]
                                     drop 1
-                                    // Stack: [s1, (false, ())]
+                                    // Stack: [s1, ((), false)]
                                     drop 1
-                                    // Stack: [(false, ())]
+                                    // Stack: [((), false)]
                                 }
                             } {
                                 // return_e2
@@ -291,19 +291,19 @@ function emit {
                                 push true
                                 // Stack: [s1, e1, has_e1, s2, e2, has_e2, e2, true]
                                 tuple 2
-                                // Stack: [s1, e1, has_e1, s2, e2, has_e2, (true, e2)]
+                                // Stack: [s1, e1, has_e1, s2, e2, has_e2, (e2, true)]
                                 drop 1
-                                // Stack: [s1, e1, has_e1, s2, e2, (true, e2)]
+                                // Stack: [s1, e1, has_e1, s2, e2, (e2, true)]
                                 drop 1
-                                // Stack: [s1, e1, has_e1, s2, (true, e2)]
+                                // Stack: [s1, e1, has_e1, s2, (e2, true)]
                                 drop 1
-                                // Stack: [s1, e1, has_e1, (true, e2)]
+                                // Stack: [s1, e1, has_e1, (e2, true)]
                                 drop 1
-                                // Stack: [s1, e1, (true, e2)]
+                                // Stack: [s1, e1, (e2, true)]
                                 drop 1
-                                // Stack: [s1, (true, e2)]
+                                // Stack: [s1, (e2, true)]
                                 drop 1
-                                // Stack: [(true, e2)]
+                                // Stack: [(e2, true)]
                             }
                         } {
                             // return_none
@@ -313,19 +313,19 @@ function emit {
                             push false
                             // Stack: [s1, e1, has_e1, s2, e2, has_e2, (), false]
                             tuple 2
-                            // Stack: [s1, e1, has_e1, s2, e2, has_e2, (false, ())]
+                            // Stack: [s1, e1, has_e1, s2, e2, has_e2, ((), false)]
                             drop 1
-                            // Stack: [s1, e1, has_e1, s2, e2, (false, ())]
+                            // Stack: [s1, e1, has_e1, s2, e2, ((), false)]
                             drop 1
-                            // Stack: [s1, e1, has_e1, s2, (false, ())]
+                            // Stack: [s1, e1, has_e1, s2, ((), false)]
                             drop 1
-                            // Stack: [s1, e1, has_e1, (false, ())]
+                            // Stack: [s1, e1, has_e1, ((), false)]
                             drop 1
-                            // Stack: [s1, e1, (false, ())]
+                            // Stack: [s1, e1, ((), false)]
                             drop 1
-                            // Stack: [s1, (false, ())]
+                            // Stack: [s1, ((), false)]
                             drop 1
-                            // Stack: [(false, ())]
+                            // Stack: [((), false)]
                         }
                     }
                 } {
@@ -336,19 +336,19 @@ function emit {
                     push false
                     // Stack: [s1, e1, has_e1, s2, e2, has_e2, (), false]
                     tuple 2
-                    // Stack: [s1, e1, has_e1, s2, e2, has_e2, (false, ())]
+                    // Stack: [s1, e1, has_e1, s2, e2, has_e2, ((), false)]
                     drop 1
-                    // Stack: [s1, e1, has_e1, s2, e2, (false, ())]
+                    // Stack: [s1, e1, has_e1, s2, e2, ((), false)]
                     drop 1
-                    // Stack: [s1, e1, has_e1, s2, (false, ())]
+                    // Stack: [s1, e1, has_e1, s2, ((), false)]
                     drop 1
-                    // Stack: [s1, e1, has_e1, (false, ())]
+                    // Stack: [s1, e1, has_e1, ((), false)]
                     drop 1
-                    // Stack: [s1, e1, (false, ())]
+                    // Stack: [s1, e1, ((), false)]
                     drop 1
-                    // Stack: [s1, (false, ())]
+                    // Stack: [s1, ((), false)]
                     drop 1
-                    // Stack: [(false, ())]
+                    // Stack: [((), false)]
                 }
             }
         } {
@@ -359,19 +359,19 @@ function emit {
             push true
             // Stack: [s1, e1, has_e1, s2, e2, has_e2, e1, true]
             tuple 2
-            // Stack: [s1, e1, has_e1, s2, e2, has_e2, (true, e1)]
+            // Stack: [s1, e1, has_e1, s2, e2, has_e2, (e1, true)]
             drop 1
-            // Stack: [s1, e1, has_e1, s2, e2, (true, e1)]
+            // Stack: [s1, e1, has_e1, s2, e2, (e1, true)]
             drop 1
-            // Stack: [s1, e1, has_e1, s2, (true, e1)]
+            // Stack: [s1, e1, has_e1, s2, (e1, true)]
             drop 1
-            // Stack: [s1, e1, has_e1, (true, e1)]
+            // Stack: [s1, e1, has_e1, (e1, true)]
             drop 1
-            // Stack: [s1, e1, (true, e1)]
+            // Stack: [s1, e1, (e1, true)]
             drop 1
-            // Stack: [s1, (true, e1)]
+            // Stack: [s1, (e1, true)]
             drop 1
-            // Stack: [(true, e1)]
+            // Stack: [(e1, true)]
         }
     } {
         // check_e2 (direct)
@@ -393,7 +393,7 @@ function emit {
                 roll 1
                 // Stack: [s1, e1, has_e1, s2, e2, has_e2, e2, s1]
                 tuple 2
-                // Stack: [s1, e1, has_e1, s2, e2, has_e2, (s1, e2)]
+                // Stack: [s1, e1, has_e1, s2, e2, has_e2, (e2, s1)]
                 jump {{p1}}::accept
                 // Stack: [s1, e1, has_e1, s2, e2, has_e2, accepts_p1_e2]
                 branch {
@@ -404,19 +404,19 @@ function emit {
                     push true
                     // Stack: [s1, e1, has_e1, s2, e2, has_e2, e2, true]
                     tuple 2
-                    // Stack: [s1, e1, has_e1, s2, e2, has_e2, (true, e2)]
+                    // Stack: [s1, e1, has_e1, s2, e2, has_e2, (e2, true)]
                     drop 1
-                    // Stack: [s1, e1, has_e1, s2, e2, (true, e2)]
+                    // Stack: [s1, e1, has_e1, s2, e2, (e2, true)]
                     drop 1
-                    // Stack: [s1, e1, has_e1, s2, (true, e2)]
+                    // Stack: [s1, e1, has_e1, s2, (e2, true)]
                     drop 1
-                    // Stack: [s1, e1, has_e1, (true, e2)]
+                    // Stack: [s1, e1, has_e1, (e2, true)]
                     drop 1
-                    // Stack: [s1, e1, (true, e2)]
+                    // Stack: [s1, e1, (e2, true)]
                     drop 1
-                    // Stack: [s1, (true, e2)]
+                    // Stack: [s1, (e2, true)]
                     drop 1
-                    // Stack: [(true, e2)]
+                    // Stack: [(e2, true)]
                 } {
                     // return_none
                     // Stack: [s1, e1, has_e1, s2, e2, has_e2]
@@ -425,19 +425,19 @@ function emit {
                     push false
                     // Stack: [s1, e1, has_e1, s2, e2, has_e2, (), false]
                     tuple 2
-                    // Stack: [s1, e1, has_e1, s2, e2, has_e2, (false, ())]
+                    // Stack: [s1, e1, has_e1, s2, e2, has_e2, ((), false)]
                     drop 1
-                    // Stack: [s1, e1, has_e1, s2, e2, (false, ())]
+                    // Stack: [s1, e1, has_e1, s2, e2, ((), false)]
                     drop 1
-                    // Stack: [s1, e1, has_e1, s2, (false, ())]
+                    // Stack: [s1, e1, has_e1, s2, ((), false)]
                     drop 1
-                    // Stack: [s1, e1, has_e1, (false, ())]
+                    // Stack: [s1, e1, has_e1, ((), false)]
                     drop 1
-                    // Stack: [s1, e1, (false, ())]
+                    // Stack: [s1, e1, ((), false)]
                     drop 1
-                    // Stack: [s1, (false, ())]
+                    // Stack: [s1, ((), false)]
                     drop 1
-                    // Stack: [(false, ())]
+                    // Stack: [((), false)]
                 }
             } {
                 // return_e2
@@ -447,19 +447,19 @@ function emit {
                 push true
                 // Stack: [s1, e1, has_e1, s2, e2, has_e2, e2, true]
                 tuple 2
-                // Stack: [s1, e1, has_e1, s2, e2, has_e2, (true, e2)]
+                // Stack: [s1, e1, has_e1, s2, e2, has_e2, (e2, true)]
                 drop 1
-                // Stack: [s1, e1, has_e1, s2, e2, (true, e2)]
+                // Stack: [s1, e1, has_e1, s2, e2, (e2, true)]
                 drop 1
-                // Stack: [s1, e1, has_e1, s2, (true, e2)]
+                // Stack: [s1, e1, has_e1, s2, (e2, true)]
                 drop 1
-                // Stack: [s1, e1, has_e1, (true, e2)]
+                // Stack: [s1, e1, has_e1, (e2, true)]
                 drop 1
-                // Stack: [s1, e1, (true, e2)]
+                // Stack: [s1, e1, (e2, true)]
                 drop 1
-                // Stack: [s1, (true, e2)]
+                // Stack: [s1, (e2, true)]
                 drop 1
-                // Stack: [(true, e2)]
+                // Stack: [(e2, true)]
             }
         } {
             // return_none
@@ -469,25 +469,25 @@ function emit {
             push false
             // Stack: [s1, e1, has_e1, s2, e2, has_e2, (), false]
             tuple 2
-            // Stack: [s1, e1, has_e1, s2, e2, has_e2, (false, ())]
+            // Stack: [s1, e1, has_e1, s2, e2, has_e2, ((), false)]
             drop 1
-            // Stack: [s1, e1, has_e1, s2, e2, (false, ())]
+            // Stack: [s1, e1, has_e1, s2, e2, ((), false)]
             drop 1
-            // Stack: [s1, e1, has_e1, s2, (false, ())]
+            // Stack: [s1, e1, has_e1, s2, ((), false)]
             drop 1
-            // Stack: [s1, e1, has_e1, (false, ())]
+            // Stack: [s1, e1, has_e1, ((), false)]
             drop 1
-            // Stack: [s1, e1, (false, ())]
+            // Stack: [s1, e1, ((), false)]
             drop 1
-            // Stack: [s1, (false, ())]
+            // Stack: [s1, ((), false)]
             drop 1
-            // Stack: [(false, ())]
+            // Stack: [((), false)]
         }
     }
 }
 
 function process {
-    // Stack: [(state, event)]
+    // Stack: [(event, state)]
     untuple 2
     assert
     // Stack: [event, state]
@@ -509,7 +509,7 @@ function process {
         roll 2
         // Stack: [event, s2, event, s1]
         tuple 2
-        // Stack: [event, s2, (s1, event)]
+        // Stack: [event, s2, (event, s1)]
         jump {{p1}}::process
         // Stack: [event, s2, next_s1]
         roll 1
@@ -519,11 +519,11 @@ function process {
         roll 1
         // Stack: [next_s1, event, s2]
         tuple 2
-        // Stack: [next_s1, (s2, event)]
+        // Stack: [next_s1, (event, s2)]
         jump {{p2}}::process
         // Stack: [next_s1, next_s2]
         tuple 2
-        // Stack: [(next_s2, next_s1)]
+        // Stack: [(next_s1, next_s2)]
     } {
         // Stack: [state, event]
         roll 1
@@ -540,7 +540,7 @@ function process {
         roll 1
         // Stack: [event, s1, s2, event, s1]
         tuple 2
-        // Stack: [event, s1, s2, (s1, event)]
+        // Stack: [event, s1, s2, (event, s1)]
         jump {{p1}}::accept
         // Stack: [event, s1, s2, p1_accepts]
         branch {
@@ -552,7 +552,7 @@ function process {
             pick 1
             // Stack: [event, s1, s2, s1]
             jump {{p1}}::emit
-            // Stack: [event, s1, s2, (has_e1, e1)]
+            // Stack: [event, s1, s2, (e1, has_e1)]
             untuple 2
             assert
             // Stack: [event, s1, s2, e1, has_e1]
@@ -579,7 +579,7 @@ function process {
         roll 1
         // Stack: [event, s1, s2, p1_participates, event, s2]
         tuple 2
-        // Stack: [event, s1, s2, p1_participates, (s2, event)]
+        // Stack: [event, s1, s2, p1_participates, (event, s2)]
         jump {{p2}}::accept
         // Stack: [event, s1, s2, p1_participates, p2_accepts]
         branch {
@@ -591,7 +591,7 @@ function process {
             pick 1
             // Stack: [event, s1, s2, p1_participates, s2]
             jump {{p2}}::emit
-            // Stack: [event, s1, s2, p1_participates, (has_e2, e2)]
+            // Stack: [event, s1, s2, p1_participates, (e2, has_e2)]
             untuple 2
             assert
             // Stack: [event, s1, s2, p1_participates, e2, has_e2]
@@ -622,7 +622,7 @@ function process {
             roll 2
             // Stack: [event, s2, event, s1]
             tuple 2
-            // Stack: [event, s2, (s1, event)]
+            // Stack: [event, s2, (event, s1)]
             jump {{p1}}::process
             // Stack: [event, s2, next_s1]
             roll 2
@@ -632,7 +632,7 @@ function process {
             roll 1
             // Stack: [next_s1, s2]
             tuple 2
-            // Stack: [(s2, next_s1)]
+            // Stack: [(next_s1, s2)]
         } {
             // Stack: [event, s1, s2, p2_participates]
             branch {
@@ -642,7 +642,7 @@ function process {
                 roll 1
                 // Stack: [event, s1, event, s2]
                 tuple 2
-                // Stack: [event, s1, (s2, event)]
+                // Stack: [event, s1, (event, s2)]
                 jump {{p2}}::process
                 // Stack: [event, s1, next_s2]
                 roll 2
@@ -650,7 +650,7 @@ function process {
                 drop 0
                 // Stack: [s1, next_s2]
                 tuple 2
-                // Stack: [(next_s2, s1)]
+                // Stack: [(s1, next_s2)]
             } {
                 // Stack: [event, s1, s2]
                 panic
@@ -667,7 +667,7 @@ function tau_reduce {
     pick 1
     // Stack: [s1, s2, s1]
     jump {{p1}}::tau_reduce
-    // Stack: [s1, s2, (did_reduce_p1, next_s1)]
+    // Stack: [s1, s2, (next_s1, did_reduce_p1)]
     untuple 2
     assert
     // Stack: [s1, s2, next_s1, did_reduce_p1]
@@ -680,11 +680,11 @@ function tau_reduce {
         roll 1
         // Stack: [next_s1, s2]
         tuple 2
-        // Stack: [(s2, next_s1)]
+        // Stack: [(next_s1, s2)]
         push true
-        // Stack: [(s2, next_s1), true]
+        // Stack: [(next_s1, s2), true]
         tuple 2
-        // Stack: [(true, (s2, next_s1))]
+        // Stack: [((next_s1, s2), true)]
     } {
         // Stack: [s1, s2, next_s1]
         roll 1
@@ -697,7 +697,7 @@ function tau_reduce {
         pick 0
         // Stack: [next_s1, s2, s2]
         jump {{p2}}::tau_reduce
-        // Stack: [next_s1, s2, (did_reduce_p2, next_s2)]
+        // Stack: [next_s1, s2, (next_s2, did_reduce_p2)]
         untuple 2
         assert
         // Stack: [next_s1, s2, next_s2, did_reduce_p2]
@@ -711,11 +711,11 @@ function tau_reduce {
         roll 2
         // Stack: [did_reduce_p2, next_s1, next_s2]
         tuple 2
-        // Stack: [did_reduce_p2, (next_s2, next_s1)]
+        // Stack: [did_reduce_p2, (next_s1, next_s2)]
         roll 1
-        // Stack: [(next_s2, next_s1), did_reduce_p2]
+        // Stack: [(next_s1, next_s2), did_reduce_p2]
         tuple 2
-        // Stack: [(did_reduce_p2, (next_s2, next_s1))]
+        // Stack: [((next_s1, next_s2), did_reduce_p2)]
     }
 }
 

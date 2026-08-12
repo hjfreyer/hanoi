@@ -1471,21 +1471,22 @@ pub(crate) fn eval_op(inst: &Instruction, inputs: &[Value]) -> Option<Vec<Value>
         }),
 
         // Building a tuple out of literals is a literal, and the order is the
-        // machine's: `tuple n` takes the top `n` and the *topmost* becomes the
-        // first element, so `push 1 ; push 2 ; tuple 2` is `push (2, 1)`.
+        // machine's: `tuple n` takes the top `n` in the order they sit on the
+        // stack, so `push 1 ; push 2 ; tuple 2` is `push (1, 2)`.
         // `identities::building_a_tuple_out_of_literals` measures that against
         // the interpreter rather than restating it.
+        //
+        // `inputs` is in stack order, deepest first, which is the tuple's own
+        // order.
         (Instruction::Tuple(n), inputs) if inputs.len() == *n => {
-            let mut elements = inputs.to_vec();
-            elements.reverse();
-            Some(vec![Value::Tuple(elements)])
+            Some(vec![Value::Tuple(inputs.to_vec())])
         }
         // And taking one apart, junk included — which is the whole obligation
         // `eval` is under. A width that does not match leaves the value in the
         // deepest slot it filled, `()` in the rest, and `false` on top.
         (Instruction::Untuple(n), [a]) => Some(match a {
             Value::Tuple(t) if t.len() == *n => {
-                let mut out: Vec<Value> = t.iter().rev().cloned().collect();
+                let mut out: Vec<Value> = t.to_vec();
                 out.push(Value::Bool(true));
                 out
             }

@@ -336,6 +336,10 @@ impl TokenStream {
 }
 
 /// Parses values into ParsedValue AST nodes.
+///
+/// A tuple literal is written in the order `tuple n` would have taken its
+/// elements off the stack, so `push (1, 2)` is `push 1 ; push 2 ; tuple 2` —
+/// see [`crate::value::Value::Tuple`].
 fn parse_value(stream: &mut TokenStream) -> Result<ParsedValue, Error> {
     let err = stream.expected("a value");
     match stream.next() {

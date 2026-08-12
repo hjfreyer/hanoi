@@ -337,9 +337,11 @@ impl VM {
                             self.stack.len()
                         ));
                     }
+                    // The elements keep the order they had on the stack, so the
+                    // *deepest* becomes element 0 and the topmost the last:
+                    // `push 1 ; push 2 ; tuple 2` is `(1, 2)`.
                     let index = self.stack.len() - n;
-                    let mut elements = self.stack.split_off(index);
-                    elements.reverse();
+                    let elements = self.stack.split_off(index);
                     self.stack.push(Value::Tuple(elements));
                 }
                 Instruction::Untuple(n) => {
@@ -352,7 +354,9 @@ impl VM {
                     let val = self.pop()?;
                     match val {
                         Value::Tuple(elements) if elements.len() == n => {
-                            for elem in elements.into_iter().rev() {
+                            // Element 0 goes back to the deepest slot, which is
+                            // where `tuple n` found it.
+                            for elem in elements {
                                 self.stack.push(elem);
                             }
                             self.stack.push(Value::Bool(true));
@@ -613,7 +617,7 @@ mod tests {
     #[test]
     fn test_tuples() {
         let mut library = Library::new();
-        // push 1, push 2, push 3, tuple(3) -> Tuple(3, 2, 1)
+        // push 1, push 2, push 3, tuple(3) -> Tuple(1, 2, 3)
         // untuple(3) -> pushes 1, 2, 3 back.
         let sentence = vec![
             Instruction::Push(Value::Int(1)),
@@ -1990,16 +1994,16 @@ mod runtime_tests {
                         const_string_char_at
                         assert
                         
-                        tuple 2 // (char, ())
+                        tuple 2 // ((), char)
                         
                         push crate::std::io::stdout::putch
-                        tuple 2 // (putch, (char, ()))
+                        tuple 2 // (((), char), putch)
                         
                         push crate::std::io::stdout::stdout
-                        tuple 2 // (stdout, (putch, (char, ())))
+                        tuple 2 // ((((), char), putch), stdout)
                         
                         push crate::std::io::io
-                        tuple 2 // (io, (stdout, (putch, (char, ()))))
+                        tuple 2 // (((((), char), putch), stdout), io)
                         
                         // Stack is [index, event]
                         // We swap to [event, index], drop index, then push true and wrap

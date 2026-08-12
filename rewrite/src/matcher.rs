@@ -4043,10 +4043,11 @@ mod tests {
 
     #[test]
     fn eval_builds_and_takes_apart_a_tuple() {
-        // The order is the machine's: the topmost operand becomes the first
-        // element. `identities::building_and_taking_apart_literals` measures
-        // that against the interpreter.
-        let pair = Value::Tuple(vec![Value::Int(2), Value::Int(1)]);
+        // The order is the machine's: the operands keep the order they sat in
+        // on the stack, so the topmost becomes the *last* element.
+        // `identities::building_and_taking_apart_literals` measures that
+        // against the interpreter.
+        let pair = Value::Tuple(vec![Value::Int(1), Value::Int(2)]);
         assert_eq!(
             fire(
                 &EvalBinary,

@@ -61,10 +61,14 @@ pub enum Instruction {
     /// Pop the top two values off the stack and panic if they are not equal.
     AssertEqual,
 
-    /// Pops the top N values off the stack and packages them into a single Tuple.
+    /// Pops the top N values off the stack and packages them into a single
+    /// Tuple, keeping the order they were in on the stack: the deepest of them
+    /// is element 0 and the topmost is the last, so `push 1 ; push 2 ; tuple 2`
+    /// is `(1, 2)`.
     Tuple(usize),
     /// Pops a Tuple off the stack, checks that it contains exactly N elements,
-    /// and pushes each of those elements back onto the stack in order.
+    /// and pushes each of those elements back onto the stack, element 0 first —
+    /// undoing [`Instruction::Tuple`] slot for slot.
     Untuple(usize),
 
     /// Pop the top two values on the stack, evaluate logical AND on their truthiness, and push the result.

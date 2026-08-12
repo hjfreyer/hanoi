@@ -36,12 +36,16 @@ sentence example {
 
 ---
 
-## 2. Crucial Gotcha: Tuple and Untuple Ordering
+## 2. Tuple and Untuple Ordering
 
-Because Hanoi is stack-based, constructing and destructuring tuples has a reversing effect on elements relative to their push order.
+A tuple keeps the order its elements had on the stack: `tuple N` is a bracket
+drawn around the top $N$ slots, and nothing inside it moves.
 
-### The Tuple Reversing Behavior
-When you call `tuple N` (where $N > 0$), the VM pops $N$ elements from the stack one by one. The **top of the stack** (which was pushed last) is popped first and becomes **index 0** of the tuple. The element below it becomes index 1, and so on.
+### Building a tuple
+When you call `tuple N` (where $N > 0$), the top $N$ values leave the stack and
+become the tuple's elements in the order they were sitting in. The **deepest**
+of them is index 0 and the **top of the stack** — the one pushed last — is the
+last element.
 
 #### Example:
 ```hana
@@ -51,27 +55,31 @@ tuple 2
 ```
 1. `push bar` puts `bar` on the stack.
 2. `push foo` puts `foo` on the stack (at the top).
-3. `tuple 2` pops two elements:
-   - First pop: `foo` (becomes index 0 of the tuple).
-   - Second pop: `bar` (becomes index 1 of the tuple).
+3. `tuple 2` takes both, `bar` first because it is deeper.
 
 The resulting tuple on the stack is:
-`(foo, bar)`
+`(bar, foo)`
+
+Written out, a tuple literal reads in push order: `push (bar, foo)` leaves the
+same value as the three lines above.
 
 ### Symmetrical Destructuring with Untuple
-To maintain symmetry, `untuple N` pops a tuple and pushes its elements back onto the stack in **reverse index order** (from index $N-1$ down to 0). This places **index 0 at the top of the stack**.
+`untuple N` pops a tuple and pushes its elements back in index order, index 0
+first, so the **last element ends up on top** — exactly the slot it came from.
 
 #### Example:
 ```hana
-// Stack: [(foo, bar)]
+// Stack: [(bar, foo)]
 untuple 2
 // Stack now: [bar, foo] (where foo is at the top of the stack)
 ```
 
-This symmetry allows a sequence of `tuple N` followed by `untuple N` to restore the stack to its exact original state prior to tuple creation.
+This symmetry allows a sequence of `tuple N` followed by `untuple N` to restore
+the stack to its exact original state prior to tuple creation.
 
-> [!WARNING]
-> Always remember that the last item pushed before a `tuple N` instruction becomes the first item (index 0) in the resulting tuple, and it will be at the top of the stack after calling `untuple N`.
+> [!NOTE]
+> A stack listing and a tuple read the same way round: the rightmost element of
+> `(bar, foo)` is the top of the stack, just as it is in `[bar, foo]`.
 
 ---
 
@@ -134,7 +142,7 @@ Hanoi supports static assertion checking at compile time via attributes. `#[arit
 Precondition/postcondition functions are ordinary `1 -> 1` functions, but they are commonly generated with the `type`/`enum` sugar rather than written by hand:
 
 - `type Name <spec>;` declares a value predicate from a spec of primitive type names (`int`, `bool`, `const_string`, `symbol`, `tuple`), literal values (including `"strings"`), tuples (`(spec, spec, ...)`), `|`-separated unions, or paths to other `type`/`enum` checks or `symbol`s. It expands to `mod Name { sentence check { ... } }`, exported and automatically annotated `#[total]`.
-- `enum Name { Variant(spec, ...), ... }` declares a tagged union: each `Variant` gets its own submodule with a fresh `tag` symbol and a `Body::check` for its payload tuple, and `Name::check` accepts any `(tag, payload)` pair matching one of the variants.
+- `enum Name { Variant(spec, ...), ... }` declares a tagged union: each `Variant` gets its own submodule with a fresh `tag` symbol and a `Body::check` for its payload tuple, and `Name::check` accepts any `(payload, tag)` pair matching one of the variants — the tag on top, where the code that reads it wants it.
 
 ### Example
 ```hana
