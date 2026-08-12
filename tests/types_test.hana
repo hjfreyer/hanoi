@@ -92,44 +92,6 @@ function number_does_pre_and_post {
     }
 }
 
-// The claim, and it is not proved yet. Two things stand between the term and
-// `drop 0 push true`, and only one of them has been dealt with.
-//
-// **Identifying the two tests.** `is_tag` asks `v == t1` and `number` asks it
-// again; nothing is decidable until the rewriter knows those are the same
-// question. `copy_nat` is the law that says so and `share { … }` places it, but
-// its window wants `pick 0 ; X ; dip m { X }` adjacent — so `number`'s copy has
-// to be lifted out of the arm (`lift`), sunk past the branch (`sink`), and
-// split out of the frame it lands in (`inv(fuse)`, `fuse`) first. Eight aimed
-// steps, all of them existing laws.
-//
-// **Splitting the boolean.** With one test shared, `split_bool` puts a literal
-// where the boolean was — and used to stall holding `pick 0 ; is_bool`, a
-// question the equation set could answer and no matcher could read. That gap is
-// closed: see `identities::the_guard_a_split_leaves`.
-//
-// **Getting the second boolean to the top.** `v == t2` is computed under a
-// frame, so it is not on top, and every law about *what a value is* is stated
-// about the top of the stack. `unframe` is the law that moves the value instead
-// of the reasoning, and it has a matcher now — two steps, and `equal` comes out
-// at the top level where `split_bool` can reach it. Both booleans split:
-//
-//     …; must(at(7, unframe)); must(at(10, split_bool)); values; cleanup
-//
-// **Folding what the function built.** `eval` did not know `tuple` or
-// `untuple`, so a postcondition comparing a *constructed* pair against the pair
-// it should have built stalled with both operands sitting right there. It knows
-// them now, and `eval0` reaches `tuple 0`, which reads no operands at all.
-//
-// With all four in place the aimed proof gets most of the way: several leaves
-// fold to `push true` outright and the residue is a third the size it was. What
-// is left is a literal on the stack whose reader is a `pick 0` several nodes
-// later — `copy_const` wants them adjacent, and bringing them together means
-// pushing the producer forward into the branch that reads it. That is a search
-// problem now rather than a missing law, which is why this is still a comment.
-//
-// `probes::number_pre_and_post` is the address to work it at.
-//
-// identity number_does_pre_and_post_is_constant
-//     { jump number_does_pre_and_post }
-//   = { drop 0 push true };
+identity number_does_pre_and_post_is_constant
+    { jump number_does_pre_and_post }
+  = { drop 0 push true };
