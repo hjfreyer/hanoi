@@ -1635,6 +1635,7 @@ test sentence iterate_string_ascii {
     
     // Clean up state from stack
     drop 0
+    push crate::prelude::pass
 }
 
 mod str_123_hidden compose_hidden(
@@ -1782,6 +1783,7 @@ test sentence parseint_valid_number {
     jump parseint_123_system::process
     
     drop 0
+    push crate::prelude::pass
 }
 
 mod str_45a_hidden compose_hidden(
@@ -1881,6 +1883,7 @@ test sentence parseint_invalid_char {
     jump parseint_45a_system::process
     
     drop 0
+    push crate::prelude::pass
 }
 
 mod parseint_empty_system compose_hidden(
@@ -1947,6 +1950,7 @@ test sentence parseint_empty_string {
     jump parseint_empty_system::process
     
     drop 0
+    push crate::prelude::pass
 }
 
 test sentence verify_string_ref {
@@ -2055,6 +2059,7 @@ test sentence verify_string_ref {
     assert_eq
     push xyz_str
     assert_eq
+    push crate::prelude::pass
 }
 
 mod xyz_string_ref_instance compose_prefix(compose_static_closure(string_ref, xyz_str), char_iterator::in);
@@ -2105,6 +2110,7 @@ test sentence verify_prefixed_string_ref {
     assert_eq
     push xyz_str
     assert_eq
+    push crate::prelude::pass
 }
 
 mod empty_string_hidden compose_hidden(
@@ -2153,6 +2159,7 @@ test sentence iterate_empty {
     jump empty_string_hidden::process
     
     drop 0
+    push crate::prelude::pass
 }
 
 mod cafe_string_hidden compose_hidden(
@@ -2319,6 +2326,7 @@ test sentence iterate_unicode {
     jump cafe_string_hidden::process
     
     drop 0
+    push crate::prelude::pass
 }
 
 const_string comma_str "a,b"
@@ -2624,4 +2632,5 @@ test sentence split_string {
     jump split_system::process
     
     drop 0
+    push crate::prelude::pass
 }

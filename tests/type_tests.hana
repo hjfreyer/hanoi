@@ -74,6 +74,7 @@ test sentence test_primitive_checks {
     jump TestTuple::check
     not
     assert
+    push crate::prelude::pass
 }
 
 test sentence test_union_checks {
@@ -107,6 +108,7 @@ test sentence test_union_checks {
     jump SymOr42::check
     not
     assert
+    push crate::prelude::pass
 }
 
 test sentence test_tuple_checks {
@@ -161,6 +163,7 @@ test sentence test_tuple_checks {
     jump EmptyTuple::check
     not
     assert
+    push crate::prelude::pass
 }
 
 test sentence test_enum_checks {
@@ -224,6 +227,7 @@ test sentence test_enum_checks {
     jump MyEnum::check
     not
     assert
+    push crate::prelude::pass
 }
 
 // A variant payload naming a sibling by a *relative* path. The check for this
@@ -285,4 +289,5 @@ test sentence test_enum_relative_payload_paths {
     jump nested::Outer::check
     not
     assert
+    push crate::prelude::pass
 }

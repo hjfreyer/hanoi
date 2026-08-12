@@ -162,4 +162,5 @@ test sentence verify_day1_manually {
     assert
     
     drop 0
+    push crate::prelude::pass
 }

@@ -3,6 +3,7 @@
 test sentence unconditional_jump {
     push 100
     jump target_sentence
+    push crate::prelude::pass
 }
 
 sentence target_sentence {
@@ -20,12 +21,14 @@ test sentence conditional_branch {
     }
     push 10
     assert_eq
+    push crate::prelude::pass
 }
 
 #[recursive]
 test sentence recursion_and_returns {
     push 10
     jump recursive_helper
+    push crate::prelude::pass
 }
 
 #[recursive]

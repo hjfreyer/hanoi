@@ -886,4 +886,5 @@ test sentence verify_queue_machine {
     jump queue::process
     
     drop 0 // clean up state
+    push crate::prelude::pass
 }

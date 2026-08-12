@@ -10,6 +10,7 @@ test sentence symbol_equality {
     push sym_a
     equal
     assert
+    push crate::prelude::pass
 }
 
 test sentence symbol_inequality {
@@ -25,11 +26,13 @@ test sentence symbol_inequality {
     equal
     not
     assert
+    push crate::prelude::pass
 }
 
 test sentence symbol_cross_sentence {
     push sym_c
     jump check_symbol
+    push crate::prelude::pass
 }
 
 sentence check_symbol {
@@ -55,6 +58,7 @@ test sentence a_symbol_carries_no_text {
     assert
     push 0
     assert_eq
+    push crate::prelude::pass
 }
 
 test sentence a_symbol_is_not_a_const_string {
@@ -71,4 +75,5 @@ test sentence a_symbol_is_not_a_const_string {
     is_symbol
     not
     assert
+    push crate::prelude::pass
 }

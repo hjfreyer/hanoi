@@ -11,6 +11,7 @@ test sentence dip_hides_one_value {
     assert_eq
     push 3
     assert_eq
+    push crate::prelude::pass
 }
 
 // The count is optional and defaults to 1.
@@ -23,6 +24,7 @@ test sentence dip_explicit_count_of_one {
     assert_eq
     push 3
     assert_eq
+    push crate::prelude::pass
 }
 
 test sentence dip_hides_several_values {
@@ -38,6 +40,7 @@ test sentence dip_hides_several_values {
     assert_eq
     push 3
     assert_eq
+    push crate::prelude::pass
 }
 
 // dip 0 gives the callee the whole top of stack, exactly like jump.
@@ -47,6 +50,7 @@ test sentence dip_zero_is_jump {
     dip 0 { add assert }
     push 42
     assert_eq
+    push crate::prelude::pass
 }
 
 // An empty hidden region and an empty block are both no-ops.
@@ -55,6 +59,7 @@ test sentence dip_of_nothing {
     dip { }
     push 42
     assert_eq
+    push crate::prelude::pass
 }
 
 #[arity(2, 1)]
@@ -73,6 +78,7 @@ test sentence dip_to_label {
     assert_eq
     push 3
     assert_eq
+    push crate::prelude::pass
 }
 
 // Hidden regions accumulate as dips nest.
@@ -88,6 +94,7 @@ test sentence dip_nests {
     assert_eq
     push 3
     assert_eq
+    push crate::prelude::pass
 }
 
 // The block sees the stack below the hidden region as its own top, so it can
@@ -104,6 +111,7 @@ test sentence dip_block_indexes_below_the_hidden_region {
     assert_eq
     push 7
     assert_eq
+    push crate::prelude::pass
 }
 
 // dip composes with branch: the condition is taken from below the hidden
@@ -118,6 +126,7 @@ test sentence dip_over_branch {
     assert_eq
     push 10
     assert_eq
+    push crate::prelude::pass
 }
 
 // A value hidden by dip is untouched even when the block replaces everything
@@ -137,4 +146,5 @@ test sentence dip_preserves_hidden_across_rewrite {
     assert_eq
     push 42
     assert_eq
+    push crate::prelude::pass
 }

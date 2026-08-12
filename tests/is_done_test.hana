@@ -38,6 +38,7 @@ test sentence verify_is_done_basic_machines {
     jump super::string::split::is_done
     push true
     assert_eq
+    push crate::prelude::pass
 }
 
 test sentence verify_is_ready_to_finish_basic_machines {
@@ -78,6 +79,7 @@ test sentence verify_is_ready_to_finish_basic_machines {
     jump super::string::split::is_ready_to_finish
     push true
     assert_eq
+    push crate::prelude::pass
 }
 
 test sentence verify_is_done_compositions {
@@ -101,6 +103,7 @@ test sentence verify_is_done_compositions {
     jump super::barista::hidden::is_done
     push false
     assert_eq
+    push crate::prelude::pass
 }
 
 test sentence verify_is_ready_to_finish_compositions {
@@ -117,4 +120,5 @@ test sentence verify_is_ready_to_finish_compositions {
     jump super::barista::customers::is_ready_to_finish
     push true
     assert_eq
+    push crate::prelude::pass
 }

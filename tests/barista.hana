@@ -367,6 +367,7 @@ test sentence verify_customer_is_event {
     jump customer_impl::is_event::check
     not
     assert
+    push crate::prelude::pass
 }
 
 test sentence verify_customer_logic {
@@ -430,6 +431,7 @@ test sentence verify_customer_logic {
     jump customer_impl::process
     
     drop 0
+    push crate::prelude::pass
 }
 
 // emit, its postcondition, and the combined check are #[total]: off their
@@ -467,6 +469,7 @@ test sentence verify_emit_totality {
     push (customer_id::c1, event::latte, customer_impl::state::thirsty)
     jump customer_impl::emit_does_pre_and_post
     assert
+    push crate::prelude::pass
 }
 
 mod customer1 compose_static_closure(customer_impl, (super::customer_id::c1, super::event::latte, super::customer_impl::state::idle));
@@ -1000,6 +1003,7 @@ test sentence verify_hidden_system {
     assert
     
     drop 0 // clean up state
+    push crate::prelude::pass
 }
 
 // Test the concurrent joint Customer-Queue-Barista system
@@ -1268,6 +1272,7 @@ test sentence verify_concurrent_system {
     assert
     
     drop 0 // clean up state
+    push crate::prelude::pass
 }
 
 // Test the rejection of invalid events for Barista
@@ -1357,4 +1362,5 @@ test sentence verify_barista_rejection {
     not
     assert
     drop 0
+    push crate::prelude::pass
 }

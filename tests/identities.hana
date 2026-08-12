@@ -31,6 +31,7 @@ test sentence split_bool_is_the_identity {
     push some_sym jump split_bool   push some_sym assert_eq
     push ()       jump split_bool   push ()       assert_eq
     push (2, 1)   jump split_bool   push (2, 1)   assert_eq
+    push crate::prelude::pass
 }
 
 // `roll 1 ; op` = `op`, for the commutative operators.
@@ -45,6 +46,7 @@ test sentence commuting_operands_changes_nothing {
     push true push false roll 1 and     push false assert_eq
     push true push false roll 1 or      push true  assert_eq
     push 3 push some_sym roll 1 equal   push false assert_eq
+    push crate::prelude::pass
 }
 
 // `X` = `drop^n` where `X : n -> 0` — the annihilation with nothing to read.
@@ -68,6 +70,7 @@ test sentence a_computation_that_leaves_nothing_is_a_drop {
 
     push 9  push 1 push true  drop 0 drop 0
     push 9 assert_eq
+    push crate::prelude::pass
 }
 
 // `pick 0 ; branch { branch { A } { B } ; R } { Q }`
@@ -110,6 +113,7 @@ test sentence a_value_tested_twice_answers_the_same {
     push false jump retest_both_rhs push 4 assert_eq
     push 42    jump retest_both_lhs push 1 assert_eq
     push 42    jump retest_both_rhs push 1 assert_eq
+    push crate::prelude::pass
 }
 
 // `pick 0 ; dip 1 { drop }` = nothing — the other counit.
@@ -124,6 +128,7 @@ test sentence copying_and_discarding_the_original_is_nothing {
 
     push 7 push 8
     push 8 assert_eq   push 7 assert_eq
+    push crate::prelude::pass
 }
 
 // `op ; is_bool` = `op ; drop ; push true`, for an op that yields a boolean.
@@ -150,6 +155,7 @@ test sentence a_test_on_something_already_boolean_is_decided {
     // And one that fails, where the flag says so and is still a boolean.
     push some_sym push 4 add is_bool
                                     push true assert_eq  drop 0
+    push crate::prelude::pass
 }
 
 // `op ; pick 0 ; is_bool` = `op ; push true`, for an op that yields a boolean.
@@ -176,6 +182,7 @@ test sentence asking_whether_a_copy_of_a_test_is_a_test {
 
     push 5 push 5 equal push true
     push true assert_eq   push true assert_eq
+    push crate::prelude::pass
 }
 
 // `dip d { X } ; (roll (d+m-1))^m` = `(roll (d+n-1))^n ; X`, for `X : n -> m`.
@@ -203,6 +210,7 @@ test sentence a_framed_computation_is_a_rolled_one {
 
     push 1 push 2 push 8 push 9  roll 3 roll 3 add
     assert  push 3 assert_eq  push 9 assert_eq  push 8 assert_eq
+    push crate::prelude::pass
 }
 
 // `push v1 … push vn ; op` = the pushes of what `op` answers — for `tuple` and
@@ -228,6 +236,7 @@ test sentence building_and_taking_apart_literals {
 
     // At `n = 0` there is no room for the value: the flag is the whole answer.
     push 7 untuple 0            not assert
+    push crate::prelude::pass
 }
 
 // `pick 0 ; push c ; equal ; branch { A } { B }`
@@ -256,6 +265,7 @@ test sentence a_value_equal_to_a_literal_is_that_literal {
     // A tuple too: `equal` reads the whole value, so the law reads it whole.
     push (2, 1)   jump specialize_lhs   push false assert_eq
     push (2, 1)   jump specialize_rhs   push false assert_eq
+    push crate::prelude::pass
 }
 
 // `X ; drop^m` = `drop^n`, and `pick d ; drop` = nothing.
@@ -267,6 +277,7 @@ test sentence discarded_work_is_no_work {
     push 9
     pick 0 drop 0
     push 9 assert_eq
+    push crate::prelude::pass
 }
 
 // `tuple n ; untuple n` = `push true`.
@@ -276,6 +287,7 @@ test sentence building_and_taking_apart_leaves_the_flag {
     assert
     push 2 assert_eq
     push 1 assert_eq
+    push crate::prelude::pass
 }
 
 // `pick (n-1)^n ; X ; dip m { X }` = `X ; pick (m-1)^m`, for `X : n -> m`.
@@ -318,6 +330,7 @@ test sentence copying_inputs_is_copying_outputs {
     push 9 assert_eq   push 9 assert_eq
     push 9 pick 0
     push 9 assert_eq   push 9 assert_eq
+    push crate::prelude::pass
 }
 
 // ---------------------------------------------------------------------------

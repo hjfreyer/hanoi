@@ -24,6 +24,7 @@ test sentence a_const_string_is_its_text {
     equal
     not
     assert
+    push crate::prelude::pass
 }
 
 test sentence const_string_len_counts_characters {
@@ -45,6 +46,7 @@ test sentence const_string_len_counts_characters {
     assert
     push 4
     assert_eq
+    push crate::prelude::pass
 }
 
 test sentence const_string_len_fails_off_the_strings {
@@ -55,6 +57,7 @@ test sentence const_string_len_fails_off_the_strings {
     assert
     push 3
     assert_eq
+    push crate::prelude::pass
 }
 
 test sentence const_string_char_at_reads_a_code_point {
@@ -78,6 +81,7 @@ test sentence const_string_char_at_reads_a_code_point {
     assert
     push 233 // 'é'
     assert_eq
+    push crate::prelude::pass
 }
 
 test sentence const_string_char_at_fails_out_of_range {
@@ -107,6 +111,7 @@ test sentence const_string_char_at_fails_out_of_range {
     assert
     push 0
     assert_eq
+    push crate::prelude::pass
 }
 
 test sentence is_const_string_answers_on_every_shape {
@@ -127,6 +132,7 @@ test sentence is_const_string_answers_on_every_shape {
     is_const_string
     not
     assert
+    push crate::prelude::pass
 }
 
 // A const string is a value like any other, so it works as a type spec too.
@@ -151,4 +157,5 @@ test sentence const_string_type_checks {
     jump Hello::check
     not
     assert
+    push crate::prelude::pass
 }

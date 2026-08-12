@@ -6,4 +6,5 @@ test sentence verify_import {
     push sub_module::my_val
     equal
     assert
+    push crate::prelude::pass
 }

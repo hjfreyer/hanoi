@@ -33,6 +33,7 @@ mod foo {
             // Jump to parent's sentence using super::target_sentence
             push 42
             jump super::target_sentence
+            push crate::prelude::pass
         }
     }
 
@@ -41,6 +42,7 @@ mod foo {
         push inner_sym
         equal
         assert
+        push crate::prelude::pass
     }
 }
 
@@ -61,4 +63,5 @@ test sentence check_root {
     // Jump to nested sentence using path
     push 42
     jump foo::target_sentence
+    push crate::prelude::pass
 }

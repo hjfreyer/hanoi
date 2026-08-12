@@ -13,6 +13,7 @@ test sentence simple_tuple {
     assert_eq
     push 1
     assert_eq
+    push crate::prelude::pass
 }
 
 test sentence nested_tuples {
@@ -34,4 +35,5 @@ test sentence nested_tuples {
     assert_eq
     push 10
     assert_eq
+    push crate::prelude::pass
 }

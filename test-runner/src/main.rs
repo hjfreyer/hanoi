@@ -88,6 +88,21 @@ async fn main() {
         return;
     }
 
+    // Every test reports its verdict with the prelude's symbols: a sentence
+    // ends by pushing `pass`, and a machine emits `pass` or `fail`. Resolving
+    // them once, up front, keeps a missing prelude from being reported once per
+    // test when it is really one problem with the suite.
+    let symbol = |name: &str| match res.symbols.get(name).cloned() {
+        Some(v) => v,
+        None => {
+            eprintln!("Error: '{}' symbol not found in '{}'", name, path);
+            process::exit(1);
+        }
+    };
+    let start_val = symbol("prelude::start");
+    let pass_val = symbol("prelude::pass");
+    let fail_val = symbol("prelude::fail");
+
     let tests_run = all_tests.len();
     let filtered_out = total_tests - tests_run;
     println!("Running {} tests...", tests_run);
@@ -117,46 +132,6 @@ async fn main() {
             };
             runtime.vm_mut().set_tracing(trace);
             runtime.vm_mut().set_gas_limit(Some(gas_limit));
-
-            let start_val = match res.symbols.get("prelude::start").cloned() {
-                Some(v) => v,
-                None => {
-                    let err = "prelude::start symbol not found";
-                    if trace {
-                        println!("result: FAILED ({})", err);
-                    } else {
-                        println!("FAILED ({})", err);
-                    }
-                    failed += 1;
-                    continue;
-                }
-            };
-            let pass_val = match res.symbols.get("prelude::pass").cloned() {
-                Some(v) => v,
-                None => {
-                    let err = "prelude::pass symbol not found";
-                    if trace {
-                        println!("result: FAILED ({})", err);
-                    } else {
-                        println!("FAILED ({})", err);
-                    }
-                    failed += 1;
-                    continue;
-                }
-            };
-            let fail_val = match res.symbols.get("prelude::fail").cloned() {
-                Some(v) => v,
-                None => {
-                    let err = "prelude::fail symbol not found";
-                    if trace {
-                        println!("result: FAILED ({})", err);
-                    } else {
-                        println!("FAILED ({})", err);
-                    }
-                    failed += 1;
-                    continue;
-                }
-            };
 
             match runtime.run_test(&start_val, &pass_val, &fail_val).await {
                 Ok(()) => {
@@ -203,7 +178,12 @@ async fn main() {
             vm.set_gas_limit(Some(gas_limit));
             match vm.execute(index) {
                 Ok(()) => {
-                    if vm.stack().is_empty() {
+                    // A sentence test says it passed the way a machine test
+                    // does: by producing `prelude::pass`. Running to the end
+                    // without a verdict is not a pass — a test whose last
+                    // assertion was never reached would otherwise be
+                    // indistinguishable from one that ran clean.
+                    if vm.stack() == std::slice::from_ref(&pass_val) {
                         if trace {
                             println!("result: ok ({} steps)", vm.steps_executed());
                         } else {
@@ -212,13 +192,13 @@ async fn main() {
                     } else {
                         if trace {
                             println!(
-                                "result: FAILED (stack was not empty: {:?}) ({} steps)",
+                                "result: FAILED (stack was not exactly [prelude::pass]: {:?}) ({} steps)",
                                 vm.stack(),
                                 vm.steps_executed()
                             );
                         } else {
                             println!(
-                                "FAILED (stack was not empty: {:?}) ({} steps)",
+                                "FAILED (stack was not exactly [prelude::pass]: {:?}) ({} steps)",
                                 vm.stack(),
                                 vm.steps_executed()
                             );

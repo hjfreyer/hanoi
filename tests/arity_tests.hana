@@ -23,12 +23,14 @@ test sentence test_arity_add_two {
     jump add_two
     push 42
     assert_eq
+    push crate::prelude::pass
 }
 
 test sentence test_arity_push_val {
     jump push_val
     push 100
     assert_eq
+    push crate::prelude::pass
 }
 
 test sentence test_arity_double {
@@ -36,6 +38,7 @@ test sentence test_arity_double {
     jump double_val
     push 42
     assert_eq
+    push crate::prelude::pass
 }
 
 function recursive_helper {
@@ -54,6 +57,7 @@ test sentence test_arity_nested_calls {
     jump nested_arity_calls
     push 12
     assert_eq
+    push crate::prelude::pass
 }
 
 function square {
@@ -67,4 +71,5 @@ test sentence test_function_keyword {
     jump square
     push 36
     assert_eq
+    push crate::prelude::pass
 }
