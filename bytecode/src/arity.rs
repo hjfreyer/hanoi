@@ -386,7 +386,6 @@ pub fn op_arity(inst: &Instruction) -> Option<(i64, i64)> {
         Instruction::Not
         | Instruction::IsInt
         | Instruction::IsBool
-        | Instruction::IsFloat
         | Instruction::IsConstString
         | Instruction::IsSymbol
         | Instruction::IsTuple => (1, 1),

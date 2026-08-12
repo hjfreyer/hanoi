@@ -50,7 +50,7 @@
 //! location:= descent? "@" INT
 //! descent := "[" INT "." kind ("," INT "." kind)* "]"
 //! kind    := "then" | "else" | "body"
-//! value   := INT | FLOAT | STRING | ident INT? | term | list | tuple
+//! value   := INT | STRING | ident INT? | term | list | tuple
 //! term    := "{" instruction* "}"
 //! list    := "[" (value ("," value)*)? "]"
 //! tuple   := "(" (value ("," value)*)? ")"
@@ -67,7 +67,7 @@
 //! things are written here that a tactic cannot write, because a derivation may
 //! hold them and a hand-written term never needed to: a call at depth, as `dip
 //! k <sentence>` beside the `jump <sentence>` that is one at depth 0, and the
-//! literal shapes a corpus can hold but a tactic had no syntax for — floats and
+//! one literal shape a corpus can hold but a tactic had no syntax for —
 //! tuples.
 
 use bytecode::{Instruction, SentenceIndex, Value};
@@ -375,15 +375,6 @@ fn write_bare_value(value: &Value) -> Result<String, String> {
     Ok(match value {
         Value::Bool(b) => b.to_string(),
         Value::Int(i) => i.to_string(),
-        // `{:?}` rather than `{}`: a float prints as `1` under `Display` and
-        // would read back as an integer, which is a different value.
-        Value::Float(f) if f.is_finite() => format!("{:?}", f),
-        Value::Float(f) => {
-            return Err(format!(
-                "`{}` is not a finite number, and the format has no spelling for one",
-                f
-            ));
-        }
         // The same escape-free strings `.hana` has, so a quote inside one has
         // no spelling in either language.
         Value::ConstString(s) if !s.contains('"') => format!("{:?}", s),
@@ -429,7 +420,6 @@ fn write_sentence(prog: &Program, target: SentenceIndex) -> Result<String, Strin
 enum Tok {
     Ident(String),
     Int(i64),
-    Float(f64),
     Str(String),
     /// `->` or `<-`.
     Arrow(Direction),
@@ -577,43 +567,12 @@ fn tokenize(src: &str) -> Result<Vec<Spanned>, ScriptError> {
     Ok(out)
 }
 
-/// An integer, or a float when it has a point or an exponent.
-///
-/// The distinction is the literal's *type*, not its magnitude: `1` and `1.0`
-/// are different values, and a program that pushes one is not the program that
-/// pushes the other.
+/// An integer, which is the only number the language has.
 fn number(src: &str, bytes: &[u8], i: &mut usize, start: usize) -> Result<Tok, ScriptError> {
-    let digits = |i: &mut usize| {
-        while *i < bytes.len() && (bytes[*i] as char).is_ascii_digit() {
-            *i += 1;
-        }
-    };
-    digits(i);
-    let mut is_float = false;
-    if bytes.get(*i) == Some(&b'.')
-        && bytes
-            .get(*i + 1)
-            .is_some_and(|c| (*c as char).is_ascii_digit())
-    {
-        is_float = true;
+    while *i < bytes.len() && (bytes[*i] as char).is_ascii_digit() {
         *i += 1;
-        digits(i);
-    }
-    if matches!(bytes.get(*i), Some(b'e') | Some(b'E')) {
-        is_float = true;
-        *i += 1;
-        if matches!(bytes.get(*i), Some(b'+') | Some(b'-')) {
-            *i += 1;
-        }
-        digits(i);
     }
     let text = &src[start..*i];
-    if is_float {
-        return text
-            .parse::<f64>()
-            .map(Tok::Float)
-            .map_err(|_| ScriptError::new(format!("'{}' is not a number", text), (start, *i)));
-    }
     text.parse::<i64>()
         .map(Tok::Int)
         .map_err(|_| ScriptError::new(format!("'{}' is too large a number", text), (start, *i)))
@@ -655,7 +614,6 @@ enum Val {
     /// `then`, `queue::accept`.
     Word(String, Option<i64>, Span),
     Int(i64, Span),
-    Float(f64, Span),
     Str(String, Span),
     Term(Vec<Node>, Span),
     List(Vec<Val>, Span),
@@ -667,7 +625,6 @@ impl Val {
         match self {
             Val::Word(_, _, s)
             | Val::Int(_, s)
-            | Val::Float(_, s)
             | Val::Str(_, s)
             | Val::Term(_, s)
             | Val::List(_, s)
@@ -679,7 +636,6 @@ impl Val {
         match self {
             Val::Word(..) => "a word",
             Val::Int(..) => "an integer",
-            Val::Float(..) => "a float",
             Val::Str(..) => "a string",
             Val::Term(..) => "a term",
             Val::List(..) => "a list",
@@ -947,24 +903,17 @@ impl<'a> Parser<'a> {
                 let end = self.toks[self.pos.saturating_sub(1)].span.1;
                 Ok(Val::Word(name, count, (span.0, end)))
             }
-            Some(Tok::Int(_)) | Some(Tok::Float(_)) | Some(Tok::Dash) => {
+            Some(Tok::Int(_)) | Some(Tok::Dash) => {
                 let negative = self.peek() == Some(&Tok::Dash);
                 if negative {
                     self.bump();
                 }
-                let end_of = |p: &Parser| p.toks[p.pos].span.1;
                 match self.peek() {
                     Some(Tok::Int(n)) => {
                         let n = if negative { -*n } else { *n };
-                        let end = end_of(self);
+                        let end = self.toks[self.pos].span.1;
                         self.bump();
                         Ok(Val::Int(n, (span.0, end)))
-                    }
-                    Some(Tok::Float(f)) => {
-                        let f = if negative { -*f } else { *f };
-                        let end = end_of(self);
-                        self.bump();
-                        Ok(Val::Float(f, (span.0, end)))
                     }
                     _ => Err(ScriptError::new("expected a number after '-'", self.span())),
                 }
@@ -1427,7 +1376,6 @@ fn wanted(name: &str, what: &str, got: &Val) -> ScriptError {
 fn literal(val: &Val, prog: &Program) -> Result<Value, ScriptError> {
     Ok(match val {
         Val::Int(n, _) => Value::Int(*n),
-        Val::Float(f, _) => Value::Float(*f),
         Val::Str(text, _) => Value::ConstString(text.clone()),
         Val::Word(word, None, _) if word == "true" => Value::Bool(true),
         Val::Word(word, None, _) if word == "false" => Value::Bool(false),
@@ -1446,7 +1394,7 @@ fn literal(val: &Val, prog: &Program) -> Result<Value, ScriptError> {
                 other.span(),
             )
             .with_help(
-                "an integer, a float, `true`/`false`, a `\"const string\"`, a \
+                "an integer, `true`/`false`, a `\"const string\"`, a \
                  symbol by name, or a `(tuple, of, them)`",
             ));
         }
@@ -1457,7 +1405,6 @@ fn describe(tok: &Tok) -> String {
     match tok {
         Tok::Ident(name) => format!("'{}'", name),
         Tok::Int(n) => format!("'{}'", n),
-        Tok::Float(f) => format!("'{}'", f),
         Tok::Str(text) => format!("string literal \"{}\"", text),
         Tok::Arrow(Direction::Forward) => "'->'".to_string(),
         Tok::Arrow(Direction::Reverse) => "'<-'".to_string(),
@@ -1772,8 +1719,6 @@ mod tests {
         for value in [
             Value::Int(-3),
             Value::Bool(false),
-            Value::Float(1.0),
-            Value::Float(-0.5),
             Value::ConstString("hi there".to_string()),
             sym.clone(),
             Value::unit(),
@@ -1787,27 +1732,6 @@ mod tests {
             )];
             assert_eq!(round_trip(prog, &steps), steps, "{:?}", value);
         }
-    }
-
-    /// `1` and `1.0` are different values, so they must not share a spelling.
-    #[test]
-    fn a_float_does_not_read_back_as_an_integer() {
-        let prog = empty();
-        let text = write(
-            prog,
-            &[(
-                "x",
-                &[step(
-                    StepKind::Rule(Rule::CopyConst {
-                        c: Value::Float(1.0),
-                    }),
-                    Direction::Forward,
-                    Location::root(0),
-                )],
-            )],
-        )
-        .unwrap();
-        assert!(text.contains("1.0"), "{}", text);
     }
 
     fn err(source: &str) -> String {

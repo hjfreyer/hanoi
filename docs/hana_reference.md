@@ -47,7 +47,7 @@ These instructions perform mathematical or Boolean logic operations on stack val
 | `add` ⚑ | — | `[..., a, b] -> [..., a + b, ok]` | Pops the top two numbers, adds them, and pushes the result. |
 | `subtract` ⚑ | `sub` | `[..., a, b] -> [..., a - b, ok]` | Pops the top two numbers, subtracts $b$ (TOS) from $a$ (second-to-top), and pushes the result. |
 | `multiply` ⚑ | `mul` | `[..., a, b] -> [..., a * b, ok]` | Pops the top two numbers, multiplies them, and pushes the result. |
-| `divide` ⚑ | `div` | `[..., a, b] -> [..., a / b, ok]` | Pops the top two numbers, divides $a$ by $b$ (TOS), and pushes the result. Integer division by zero **fails**, answering `0`; the float world stays IEEE, so `1.0 / 0` succeeds with `inf`. |
+| `divide` ⚑ | `div` | `[..., a, b] -> [..., a / b, ok]` | Pops the top two numbers, divides $a$ by $b$ (TOS), and pushes the result. Division by zero **fails**, answering `0`. |
 | `modulo` ⚑ | `mod` | `[..., a, b] -> [..., a % b, ok]` | Pops the top two numbers, computes the remainder of $a / b$, and pushes the result. Integer modulo by zero **fails**; `1.0 % 0` succeeds with `NaN`. |
 | `negate` ⚑ | `neg` | `[..., a] -> [..., -a, ok]` | Pops the top number, negates it numerically, and pushes the result. |
 | `not` | — | `[..., v] -> [..., !truthy(v)]` | Pops the top value and pushes `false` unless it was exactly `false`. |
@@ -117,7 +117,6 @@ These instructions test the runtime type of the top stack value, pushing a Bool.
 | :--- | :--- | :--- | :--- |
 | `is_int` | `is_int` | `[..., v] -> [..., is_int]` | Pops a value and pushes `true` if it is an Int, else `false`. |
 | `is_bool` | `is_bool` | `[..., v] -> [..., is_bool]` | Pops a value and pushes `true` if it is a Bool, else `false`. |
-| `is_float` | `is_float` | `[..., v] -> [..., is_float]` | Pops a value and pushes `true` if it is a Float, else `false`. |
 | `is_const_string` | `is_const_string` | `[..., v] -> [..., is_const_string]` | Pops a value and pushes `true` if it is a ConstString, else `false`. |
 | `is_symbol` | `is_symbol` | `[..., v] -> [..., is_symbol]` | Pops a value and pushes `true` if it is a Symbol, else `false`. |
 | `is_tuple` | `is_tuple` | `[..., v] -> [..., is_tuple]` | Pops a value and pushes `true` if it is a Tuple, else `false`. |

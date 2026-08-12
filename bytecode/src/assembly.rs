@@ -44,7 +44,6 @@ enum Token {
     Colon,
     Pipe,
     Int(i64),
-    Float(f64),
     Bool(bool),
 }
 
@@ -79,7 +78,6 @@ fn describe(token: &Token) -> String {
         Token::Identifier(name) => return format!("`{}`", name),
         Token::StringLiteral(s) => return format!("string literal \"{}\"", s),
         Token::Int(i) => return format!("`{}`", i),
-        Token::Float(f) => return format!("`{}`", f),
         Token::Bool(b) => return format!("`{}`", b),
     };
     format!("`{}`", literal)
@@ -224,37 +222,15 @@ fn tokenize(input: &str, file: FileId) -> Result<Vec<SpannedToken>, Error> {
                     }
                 }
 
-                let mut is_float = false;
-                if let Some(&(_, '.')) = chars.peek() {
-                    chars.next(); // consume '.'
-                    number_str.push('.');
-                    is_float = true;
-
-                    while let Some(&(_, next_c)) = chars.peek() {
-                        if next_c.is_ascii_digit() {
-                            number_str.push(chars.next().unwrap().1);
-                        } else {
-                            break;
-                        }
-                    }
-                }
-
                 let end = chars.peek().map_or(input.len(), |&(i, _)| i);
                 let span = Span::new(file, start, end);
-                if is_float {
-                    let val = number_str.parse::<f64>().map_err(|e| {
-                        Error::at(format!("invalid float `{}`: {}", number_str, e), span)
-                    })?;
-                    push!(tokens, start, chars, Token::Float(val));
-                } else {
-                    if number_str == "-" {
-                        return Err(Error::at("minus sign without digits", span));
-                    }
-                    let val = number_str.parse::<i64>().map_err(|e| {
-                        Error::at(format!("invalid integer `{}`: {}", number_str, e), span)
-                    })?;
-                    push!(tokens, start, chars, Token::Int(val));
+                if number_str == "-" {
+                    return Err(Error::at("minus sign without digits", span));
                 }
+                let val = number_str.parse::<i64>().map_err(|e| {
+                    Error::at(format!("invalid integer `{}`: {}", number_str, e), span)
+                })?;
+                push!(tokens, start, chars, Token::Int(val));
             }
             c if c.is_ascii_alphabetic() || c == '_' => {
                 let mut ident = String::new();
@@ -365,7 +341,6 @@ fn parse_value(stream: &mut TokenStream) -> Result<ParsedValue, Error> {
     match stream.next() {
         Some(Token::Bool(b)) => Ok(ParsedValue::Bool(b)),
         Some(Token::Int(i)) => Ok(ParsedValue::Int(i)),
-        Some(Token::Float(f)) => Ok(ParsedValue::Float(f)),
         Some(Token::StringLiteral(s)) => Ok(ParsedValue::ConstString(s)),
         Some(Token::Identifier(name)) => {
             let path = parse_path(stream, name)?;
@@ -480,10 +455,6 @@ fn parse_type_primary(stream: &mut TokenStream) -> Result<TypeSpec, Error> {
             stream.next();
             Ok(TypeSpec::Literal(ParsedValue::Int(i)))
         }
-        Some(&Token::Float(f)) => {
-            stream.next();
-            Ok(TypeSpec::Literal(ParsedValue::Float(f)))
-        }
         Some(Token::StringLiteral(s)) => {
             let s = s.clone();
             stream.next();
@@ -505,7 +476,6 @@ fn parse_type_primary(stream: &mut TokenStream) -> Result<TypeSpec, Error> {
             match name_cloned.as_str() {
                 "int" => Ok(TypeSpec::Primitive(PrimitiveType::Int)),
                 "bool" => Ok(TypeSpec::Primitive(PrimitiveType::Bool)),
-                "float" => Ok(TypeSpec::Primitive(PrimitiveType::Float)),
                 "symbol" => Ok(TypeSpec::Primitive(PrimitiveType::Symbol)),
                 "tuple" => Ok(TypeSpec::Primitive(PrimitiveType::Tuple)),
                 _ => {
@@ -640,7 +610,6 @@ fn parse_instruction(stream: &mut TokenStream) -> Result<ParsedInstruction, Erro
         "const_string_char_at" => Ok(ParsedInstruction::ConstStringCharAt),
         "is_int" => Ok(ParsedInstruction::IsInt),
         "is_bool" => Ok(ParsedInstruction::IsBool),
-        "is_float" => Ok(ParsedInstruction::IsFloat),
         "is_const_string" => Ok(ParsedInstruction::IsConstString),
         "is_symbol" => Ok(ParsedInstruction::IsSymbol),
         "is_tuple" => Ok(ParsedInstruction::IsTuple),
@@ -1374,7 +1343,6 @@ impl<'a> Compiler<'a> {
         match parsed {
             ParsedValue::Bool(b) => Ok(Value::Bool(b)),
             ParsedValue::Int(i) => Ok(Value::Int(i)),
-            ParsedValue::Float(f) => Ok(Value::Float(f)),
             ParsedValue::ConstString(s) => Ok(Value::ConstString(s)),
             ParsedValue::Tuple(elements) => {
                 let mut compiled_elements = Vec::new();
@@ -1437,7 +1405,6 @@ impl<'a> Compiler<'a> {
                 ParsedInstruction::ConstStringCharAt => Instruction::ConstStringCharAt,
                 ParsedInstruction::IsInt => Instruction::IsInt,
                 ParsedInstruction::IsBool => Instruction::IsBool,
-                ParsedInstruction::IsFloat => Instruction::IsFloat,
                 ParsedInstruction::IsConstString => Instruction::IsConstString,
                 ParsedInstruction::IsSymbol => Instruction::IsSymbol,
                 ParsedInstruction::IsTuple => Instruction::IsTuple,
@@ -1670,9 +1637,9 @@ mod tests {
 
     #[test]
     fn spans_survive_comments_and_blank_lines() {
-        let toks = spans("// leading\n\n  push  3.5\n");
+        let toks = spans("// leading\n\n  push  -35\n");
         let slices: Vec<&str> = toks.iter().map(|(_, s)| *s).collect();
-        assert_eq!(slices, vec!["push", "3.5"]);
+        assert_eq!(slices, vec!["push", "-35"]);
     }
 
     #[test]

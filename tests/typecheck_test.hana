@@ -62,10 +62,6 @@ function test_is_bool {
     is_bool
 }
 
-function test_is_float {
-    is_float
-}
-
 function test_is_symbol {
     is_symbol
 }

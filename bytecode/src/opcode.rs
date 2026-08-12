@@ -81,8 +81,6 @@ pub enum Instruction {
     IsInt,
     /// Pop the top value and push true if it is a Bool, else false.
     IsBool,
-    /// Pop the top value and push true if it is a Float, else false.
-    IsFloat,
     /// Pop the top value and push true if it is a ConstString, else false.
     IsConstString,
     /// Pop the top value and push true if it is a Symbol, else false.
@@ -116,10 +114,6 @@ impl Instruction {
     /// observably different — `vm` measures this and the sweep reports the
     /// witness. Nothing is lost by leaving it out: `bin/rewrite` refuses any
     /// sentence that can reach an `assert_eq` at all.
-    ///
-    /// Floats are commutative for these operations including on NaN, where both
-    /// orders produce a NaN; that the two do not compare *equal* is a fact about
-    /// `equal`, not about the operation.
     pub fn commutative(&self) -> bool {
         matches!(
             self,
@@ -177,7 +171,6 @@ impl Instruction {
                 | Instruction::ConstStringCharAt
                 | Instruction::IsInt
                 | Instruction::IsBool
-                | Instruction::IsFloat
                 | Instruction::IsConstString
                 | Instruction::IsSymbol
                 | Instruction::IsTuple
@@ -218,7 +211,6 @@ impl std::fmt::Display for Instruction {
             Instruction::ConstStringCharAt => write!(f, "const_string_char_at"),
             Instruction::IsInt => write!(f, "is_int"),
             Instruction::IsBool => write!(f, "is_bool"),
-            Instruction::IsFloat => write!(f, "is_float"),
             Instruction::IsConstString => write!(f, "is_const_string"),
             Instruction::IsSymbol => write!(f, "is_symbol"),
             Instruction::IsTuple => write!(f, "is_tuple"),

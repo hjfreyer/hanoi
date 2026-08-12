@@ -45,7 +45,7 @@ fn shift_path(path: &Path, levels: usize) -> Path {
 }
 
 /// Applies [`shift_path`] to every path a spec mentions. `Literal` holds only
-/// bools, ints, floats and const strings, so it has no paths to shift.
+/// bools, ints and const strings, so it has no paths to shift.
 fn shift_spec(spec: &TypeSpec, levels: usize) -> TypeSpec {
     match spec {
         TypeSpec::Path(path) => TypeSpec::Path(shift_path(path, levels)),
@@ -441,7 +441,6 @@ fn compile_type_spec(spec: &TypeSpec) -> Result<Vec<ParsedInstruction>, String> 
         TypeSpec::Primitive(prim) => Ok(vec![match prim {
             PrimitiveType::Int => ParsedInstruction::IsInt,
             PrimitiveType::Bool => ParsedInstruction::IsBool,
-            PrimitiveType::Float => ParsedInstruction::IsFloat,
             PrimitiveType::ConstString => ParsedInstruction::IsConstString,
             PrimitiveType::Symbol => ParsedInstruction::IsSymbol,
             PrimitiveType::Tuple => ParsedInstruction::IsTuple,

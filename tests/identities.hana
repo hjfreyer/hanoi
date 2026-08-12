@@ -27,7 +27,7 @@ test sentence split_bool_is_the_identity {
     push false    jump split_bool   push false    assert_eq
     push 42       jump split_bool   push 42       assert_eq
     push 0        jump split_bool   push 0        assert_eq
-    push 3.5      jump split_bool   push 3.5      assert_eq
+    push "hi"     jump split_bool   push "hi"     assert_eq
     push some_sym jump split_bool   push some_sym assert_eq
     push ()       jump split_bool   push ()       assert_eq
     push (1, 2)   jump split_bool   push (1, 2)   assert_eq
@@ -135,7 +135,7 @@ test sentence a_test_on_something_already_boolean_is_decided {
     push true     is_bool is_bool  push true assert_eq
     push false    is_bool is_bool  push true assert_eq
     push 42       is_bool is_bool  push true assert_eq
-    push 3.5      is_bool is_bool  push true assert_eq
+    push "hi"     is_bool is_bool  push true assert_eq
     push some_sym is_bool is_bool  push true assert_eq
     push (1, 2)   is_bool is_bool  push true assert_eq
 
@@ -236,10 +236,9 @@ test sentence building_and_taking_apart_literals {
 // copy, so the arm still holds the value the `equal` looked at, and in the then
 // arm the two are names for one thing.
 //
-// The float is where that stops being true and is why the law declines one:
-// `0.0 == -0.0` answers `true` on two values that stay distinguishable, so
-// there `equal` is equality rather than identity. The last two lines are that
-// negative case, run rather than argued.
+// `equal` is structural identity on every value the machine has, so the law
+// holds unconditionally — floats, where `0.0 == -0.0` answers `true` on two
+// values that stay distinguishable, were the one exception and are gone.
 #[total] #[arity(1,1)] function specialize_lhs {
     pick 0 push 7 equal branch { push 7 equal } { drop 0 push false } }
 #[total] #[arity(1,1)] function specialize_rhs {
@@ -253,13 +252,9 @@ test sentence a_value_equal_to_a_literal_is_that_literal {
     push some_sym jump specialize_lhs   push false assert_eq
     push some_sym jump specialize_rhs   push false assert_eq
 
-    // Equal, and not the same value: the one case the law refuses, with the
-    // witness that they stay distinguishable rather than an argument that they
-    // do. `1.0/0.0` and `1.0/-0.0` are the two infinities.
-    push 0.0 push -0.0 equal    assert
-    push 1.0 push 0.0  divide   assert
-    push 1.0 push -0.0 divide   assert
-    equal not assert
+    // A tuple too: `equal` reads the whole value, so the law reads it whole.
+    push (1, 2)   jump specialize_lhs   push false assert_eq
+    push (1, 2)   jump specialize_rhs   push false assert_eq
 }
 
 // `X ; drop^m` = `drop^n`, and `pick d ; drop` = nothing.

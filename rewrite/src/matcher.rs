@@ -2530,12 +2530,9 @@ impl Matcher for Retest {
 /// negative fact has nothing to write down — so unlike `retest` this is one
 /// equation read at one arm rather than either.
 ///
-/// It declines a `c` holding a float, where `equal` is equality rather than
-/// identity; the equation refuses it too, and the matcher asks first so that
-/// nothing is proposed the applier would turn down. It also declines an arm
-/// that already opens with `drop ; push c`, which is the guard that keeps it
-/// out of its own output — without it, the window still matches after the
-/// firing and `each` would write the literal in forever.
+/// It declines an arm that already opens with `drop ; push c`, which is the
+/// guard that keeps it out of its own output — without it, the window still
+/// matches after the firing and `each` would write the literal in forever.
 ///
 /// Measure: none. It grows the arm by two nodes, and the guard above is what
 /// makes it safe in a `repeat` regardless.
@@ -3514,10 +3511,9 @@ mod tests {
     }
 
     #[test]
-    fn specialize_equal_declines_a_float() {
-        // `0.0 == -0.0` is true and the two stay distinguishable, so there
-        // derived equality is coarser than identity and writing the literal
-        // down would be a claim rather than a renaming.
+    fn specialize_equal_reads_a_whole_value() {
+        // `equal` observes the whole value, tuples included, and every value
+        // it can compare is one the literal may be written in place of.
         let w = |c: Value| {
             [
                 op(Instruction::Pick(0)),
@@ -3526,22 +3522,6 @@ mod tests {
                 branch(vec![op(Instruction::Not)], Vec::new()),
             ]
         };
-        assert!(
-            SpecializeEqual
-                .plan(&prog(), &w(Value::Float(0.0)))
-                .is_none()
-        );
-        // Tuples included: the check reads the whole value.
-        assert!(
-            SpecializeEqual
-                .plan(
-                    &prog(),
-                    &w(Value::Tuple(vec![Value::Int(1), Value::Float(2.0)]))
-                )
-                .is_none()
-        );
-        // An int of the same shape is fine, which is what says the refusal is
-        // about the float and not about tuples.
         assert!(
             SpecializeEqual
                 .plan(

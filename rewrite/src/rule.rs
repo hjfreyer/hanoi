@@ -112,10 +112,6 @@ pub(crate) enum SideCondition {
     NotBoolResult { op: String },
     /// `retest` was handed something other than a branch to collapse.
     NotABranch { arm: &'static str, found: String },
-    /// `specialize_equal` was handed a literal on which `equal` is equality
-    /// rather than identity, so writing it in place of the value would be a
-    /// claim rather than a renaming.
-    NotSubstitutable { c: String },
 }
 
 impl std::fmt::Display for SideCondition {
@@ -170,12 +166,6 @@ impl std::fmt::Display for SideCondition {
                     arm, found
                 )
             }
-            SideCondition::NotSubstitutable { c } => write!(
-                f,
-                "`{}` holds a float, and `0.0 == -0.0` on two values that stay \
-                 distinguishable — so testing equal to it is not being it",
-                c
-            ),
         }
     }
 }
@@ -524,19 +514,16 @@ pub(crate) enum Rule {
     /// stall `bool_result` has.
     ///
     /// What makes it *true* is narrow and worth stating: `equal` is exactly
-    /// `Value`'s derived `PartialEq`, and on a value that holds no float that
-    /// equality **is** structural identity. So the law claims nothing about
-    /// values being interchangeable in general — it says two spellings of one
-    /// value may be swapped.
+    /// `Value`'s derived `PartialEq`, and that equality **is** structural
+    /// identity — nothing the VM has compares equal to a value it stays
+    /// distinguishable from. So the law claims nothing about values being
+    /// interchangeable in general; it says two spellings of one value may be
+    /// swapped, and there is nothing left for [`Rule::check`] to verify.
     ///
-    /// ## The float
-    ///
-    /// `0.0 == -0.0` is true and the two stay distinguishable, so there derived
-    /// equality is coarser than identity and the substitution would be a real
-    /// claim rather than a renaming. [`Rule::check`] therefore refuses a `c`
-    /// holding a float anywhere, tuples included. Checking `c` is enough:
-    /// derived equality never crosses variants, so a `c` with no float can only
-    /// have tested equal to a value with none either.
+    /// Floats were the exception that made this a checked law rather than a
+    /// schematic one: `0.0 == -0.0` is true on two values that print
+    /// differently, so substituting there would have been a real claim. They
+    /// are gone, and with them the side condition.
     ///
     /// ## What the other arm learns, which is nothing
     ///
@@ -843,18 +830,6 @@ impl Rule {
                     })
                 }
             }
-            // The one thing the law rests on: that `equal` on this literal is
-            // identity and not merely equality. A float is where the two part
-            // company, so a `c` holding one anywhere is refused.
-            Rule::SpecializeEqual { c, .. } => {
-                if holds_a_float(c) {
-                    Err(SideCondition::NotSubstitutable {
-                        c: format!("{}", c),
-                    })
-                } else {
-                    Ok(())
-                }
-            }
             Rule::BoolResult { op } => {
                 if op.yields_bool() {
                     Ok(())
@@ -901,6 +876,7 @@ impl Rule {
             | Rule::Distribute { .. }
             | Rule::FoldBranch { .. }
             | Rule::SplitBool
+            | Rule::SpecializeEqual { .. }
             | Rule::Counit { .. }
             | Rule::CounitUnder
             | Rule::CopyConst { .. }
@@ -1361,18 +1337,6 @@ fn specialized(c: &Value, then_arm: &[Node]) -> Vec<Node> {
     out
 }
 
-/// Whether a value holds a float anywhere, tuples included.
-///
-/// The one place `Value`'s derived equality is coarser than identity, and so
-/// the one place [`Rule::SpecializeEqual`] has to decline.
-pub(crate) fn holds_a_float(v: &Value) -> bool {
-    match v {
-        Value::Float(_) => true,
-        Value::Tuple(elements) => elements.iter().any(holds_a_float),
-        _ => false,
-    }
-}
-
 /// `count` copies of `roll d`.
 fn rolls(d: usize, count: usize) -> Vec<Node> {
     std::iter::repeat_n(Node::Op(Instruction::Roll(d)), count).collect()
@@ -1493,7 +1457,6 @@ pub(crate) fn eval_op(inst: &Instruction, inputs: &[Value]) -> Option<Vec<Value>
 
         (Instruction::IsInt, [a]) => Some(vec![Value::Bool(matches!(a, Value::Int(_)))]),
         (Instruction::IsBool, [a]) => Some(vec![Value::Bool(matches!(a, Value::Bool(_)))]),
-        (Instruction::IsFloat, [a]) => Some(vec![Value::Bool(matches!(a, Value::Float(_)))]),
         (Instruction::IsConstString, [a]) => {
             Some(vec![Value::Bool(matches!(a, Value::ConstString(_)))])
         }

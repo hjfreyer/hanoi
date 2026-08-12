@@ -43,28 +43,15 @@ pub(crate) enum Term {
     App(&'static str, Vec<Rc<Term>>),
 }
 
-/// `Value` is not `Hash`/`Eq` (floats), so terms key on its rendering instead.
-/// Two constants are the same term exactly when they print the same, which for
-/// everything but floats is the same as being the same value — and floats are
-/// where equality is not identity anyway.
+/// `Value` is not `Hash`, so terms key on its rendering instead. Two constants
+/// are the same term exactly when they print the same, which is the same as
+/// being the same value: the rendering is faithful and `equal` is identity.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct ConstKey(String, bool);
+pub(crate) struct ConstKey(String);
 
 impl ConstKey {
     fn new(v: &Value) -> Self {
-        ConstKey(render_value(v), is_float_free(v))
-    }
-    /// Whether substituting this constant for an equal one is invisible.
-    fn exact(&self) -> bool {
-        self.1
-    }
-}
-
-fn is_float_free(v: &Value) -> bool {
-    match v {
-        Value::Float(_) => false,
-        Value::Tuple(es) => es.iter().all(is_float_free),
-        _ => true,
+        ConstKey(render_value(v))
     }
 }
 
@@ -72,7 +59,6 @@ fn render_value(v: &Value) -> String {
     match v {
         Value::Bool(b) => b.to_string(),
         Value::Int(i) => i.to_string(),
-        Value::Float(f) => format!("{}", f),
         Value::ConstString(s) => format!("{:?}", s),
         Value::Symbol(s) => format!("'{}", short_symbol(&s.path)),
         Value::Tuple(es) => {
@@ -236,7 +222,6 @@ fn op(inst: &Instruction, s: &mut Vec<Rc<Term>>, fresh: &mut Fresh) -> bool {
         Instruction::Not
         | Instruction::IsInt
         | Instruction::IsBool
-        | Instruction::IsFloat
         | Instruction::IsConstString
         | Instruction::IsSymbol
         | Instruction::IsTuple => {
@@ -288,29 +273,15 @@ fn op(inst: &Instruction, s: &mut Vec<Rc<Term>>, fresh: &mut Fresh) -> bool {
 /// same term hold the same value, so the comparison is already decided.
 fn equality(a: &Rc<Term>, b: &Rc<Term>) -> Rc<Term> {
     let decided = |v: bool| Rc::new(Term::Const(ConstKey::new(&Value::Bool(v))));
-    match (as_const(a), as_const(b)) {
-        (Some(x), Some(y)) if x.exact() && y.exact() => return decided(x == y),
-        _ => {}
+    if let (Some(x), Some(y)) = (as_const(a), as_const(b)) {
+        return decided(x == y);
     }
-    // Same term, so the same value — unless it is a float, where equality is
-    // not identity and the term says nothing about which.
-    if a == b && exact(a) {
+    // Same term, so the same value, and `equal` on a value with itself is true
+    // for every value the VM has.
+    if a == b {
         return decided(true);
     }
     Rc::new(Term::App("==", vec![a.clone(), b.clone()]))
-}
-
-/// Whether a term's identity pins its value, floats being the exception.
-fn exact(t: &Term) -> bool {
-    match t {
-        Term::Const(k) => k.exact(),
-        Term::Tup(es) => es.iter().all(|e| exact(e)),
-        // An input, an opaque value or a projection could be a float, but it is *the same*
-        // float on both sides, and `equal` on one value with itself is true for
-        // every value the VM has. NaN would break this; the VM has no way to
-        // make one.
-        _ => true,
-    }
 }
 
 fn unary(inst: &Instruction, a: &Rc<Term>) -> Rc<Term> {
@@ -329,7 +300,6 @@ fn unary(inst: &Instruction, a: &Rc<Term>) -> Rc<Term> {
             }
             Instruction::IsInt
             | Instruction::IsBool
-            | Instruction::IsFloat
             | Instruction::IsConstString
             | Instruction::IsSymbol => {
                 return Rc::new(Term::Const(ConstKey::new(&Value::Bool(false))));
@@ -349,12 +319,10 @@ fn fold_unary(inst: &Instruction, k: &ConstKey) -> Option<Value> {
     let sym = r.starts_with('\'');
     let tup = r.starts_with('(');
     let string = r.starts_with('"');
-    let float = !k.exact();
-    let int = !bool_lit && !sym && !tup && !string && !float && r.parse::<i64>().is_ok();
+    let int = !bool_lit && !sym && !tup && !string && r.parse::<i64>().is_ok();
     match inst {
         Instruction::IsBool => is(bool_lit),
         Instruction::IsInt => is(int),
-        Instruction::IsFloat => is(float),
         Instruction::IsConstString => is(string),
         Instruction::IsSymbol => is(sym),
         Instruction::IsTuple => is(tup),
@@ -369,7 +337,6 @@ fn op_name(inst: &Instruction) -> &'static str {
         Instruction::Negate => "neg",
         Instruction::IsInt => "is_int",
         Instruction::IsBool => "is_bool",
-        Instruction::IsFloat => "is_float",
         Instruction::IsConstString => "is_const_string",
         Instruction::IsSymbol => "is_symbol",
         Instruction::IsTuple => "is_tuple",

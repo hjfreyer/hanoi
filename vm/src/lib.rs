@@ -206,9 +206,6 @@ impl VM {
                     let a = self.pop()?;
                     match (a, b) {
                         (Value::Int(x), Value::Int(y)) => self.ok(Value::Int(x.wrapping_add(y))),
-                        (Value::Float(x), Value::Float(y)) => self.ok(Value::Float(x + y)),
-                        (Value::Int(x), Value::Float(y)) => self.ok(Value::Float((x as f64) + y)),
-                        (Value::Float(x), Value::Int(y)) => self.ok(Value::Float(x + (y as f64))),
                         _ => self.failed(Value::Int(0)),
                     }
                 }
@@ -217,9 +214,6 @@ impl VM {
                     let a = self.pop()?;
                     match (a, b) {
                         (Value::Int(x), Value::Int(y)) => self.ok(Value::Int(x.wrapping_sub(y))),
-                        (Value::Float(x), Value::Float(y)) => self.ok(Value::Float(x - y)),
-                        (Value::Int(x), Value::Float(y)) => self.ok(Value::Float((x as f64) - y)),
-                        (Value::Float(x), Value::Int(y)) => self.ok(Value::Float(x - (y as f64))),
                         _ => self.failed(Value::Int(0)),
                     }
                 }
@@ -228,9 +222,6 @@ impl VM {
                     let a = self.pop()?;
                     match (a, b) {
                         (Value::Int(x), Value::Int(y)) => self.ok(Value::Int(x.wrapping_mul(y))),
-                        (Value::Float(x), Value::Float(y)) => self.ok(Value::Float(x * y)),
-                        (Value::Int(x), Value::Float(y)) => self.ok(Value::Float((x as f64) * y)),
-                        (Value::Float(x), Value::Int(y)) => self.ok(Value::Float(x * (y as f64))),
                         _ => self.failed(Value::Int(0)),
                     }
                 }
@@ -238,19 +229,12 @@ impl VM {
                     let b = self.pop()?;
                     let a = self.pop()?;
                     match (a, b) {
-                        // Integer division by zero has no answer to report, and
-                        // now it can say so rather than inventing one.
+                        // Division by zero has no answer to report, and it
+                        // says so rather than inventing one.
                         (Value::Int(_), Value::Int(0)) => self.failed(Value::Int(0)),
                         // `wrapping_div` keeps `i64::MIN / -1` from being a
                         // host-level overflow.
                         (Value::Int(x), Value::Int(y)) => self.ok(Value::Int(x.wrapping_div(y))),
-                        // The float world is uniformly IEEE, and `inf` is an
-                        // answer rather than a failure: an `Int` divisor coerces
-                        // like any other mixed operand rather than being an
-                        // excuse to leave that world.
-                        (Value::Float(x), Value::Float(y)) => self.ok(Value::Float(x / y)),
-                        (Value::Int(x), Value::Float(y)) => self.ok(Value::Float((x as f64) / y)),
-                        (Value::Float(x), Value::Int(y)) => self.ok(Value::Float(x / (y as f64))),
                         _ => self.failed(Value::Int(0)),
                     }
                 }
@@ -260,9 +244,6 @@ impl VM {
                     match (a, b) {
                         (Value::Int(_), Value::Int(0)) => self.failed(Value::Int(0)),
                         (Value::Int(x), Value::Int(y)) => self.ok(Value::Int(x.wrapping_rem(y))),
-                        (Value::Float(x), Value::Float(y)) => self.ok(Value::Float(x % y)),
-                        (Value::Int(x), Value::Float(y)) => self.ok(Value::Float((x as f64) % y)),
-                        (Value::Float(x), Value::Int(y)) => self.ok(Value::Float(x % (y as f64))),
                         _ => self.failed(Value::Int(0)),
                     }
                 }
@@ -285,7 +266,6 @@ impl VM {
                     let val = self.pop()?;
                     match val {
                         Value::Int(x) => self.ok(Value::Int(x.wrapping_neg())),
-                        Value::Float(x) => self.ok(Value::Float(-x)),
                         other => self.failed(other),
                     }
                 }
@@ -393,10 +373,6 @@ impl VM {
                 Instruction::IsBool => {
                     let val = self.pop()?;
                     self.stack.push(Value::Bool(matches!(val, Value::Bool(_))));
-                }
-                Instruction::IsFloat => {
-                    let val = self.pop()?;
-                    self.stack.push(Value::Bool(matches!(val, Value::Float(_))));
                 }
                 Instruction::IsConstString => {
                     let val = self.pop()?;
@@ -677,11 +653,6 @@ mod tests {
             // test is_bool
             Instruction::Push(Value::Bool(true)),
             Instruction::IsBool,
-            Instruction::Push(Value::Bool(true)),
-            Instruction::AssertEqual,
-            // test is_float
-            Instruction::Push(Value::Float(1.5)),
-            Instruction::IsFloat,
             Instruction::Push(Value::Bool(true)),
             Instruction::AssertEqual,
             // test is_tuple
@@ -1262,7 +1233,6 @@ mod totality_tests {
             Value::Bool(false),
             Value::Int(0),
             Value::Int(-3),
-            Value::Float(1.5),
             cs("hi"),
             cs(""),
             sym(7),
@@ -1365,7 +1335,6 @@ mod totality_tests {
             Instruction::ConstStringCharAt,
             Instruction::IsInt,
             Instruction::IsBool,
-            Instruction::IsFloat,
             Instruction::IsConstString,
             Instruction::IsSymbol,
             Instruction::IsTuple,
@@ -1704,7 +1673,6 @@ mod totality_tests {
             for (inst, want) in [
                 (Instruction::IsInt, matches!(a, Value::Int(_))),
                 (Instruction::IsBool, matches!(a, Value::Bool(_))),
-                (Instruction::IsFloat, matches!(a, Value::Float(_))),
                 (
                     Instruction::IsConstString,
                     matches!(a, Value::ConstString(_)),
@@ -1726,27 +1694,17 @@ mod totality_tests {
     // -- Numbers ------------------------------------------------------------
 
     #[test]
-    fn the_float_world_stays_ieee_even_with_an_int_divisor() {
-        // `inf` and `NaN` are answers rather than failures: an `Int` zero
-        // coerces like any other mixed operand rather than dragging the
-        // expression back into the integer convention.
-        let (out, ok) = flagged(&[Value::Float(1.0), Value::Int(0)], Instruction::Divide);
-        assert!(ok, "1.0 / 0 is an IEEE answer, not a failure");
-        let [Value::Float(q)] = out[..] else {
-            panic!("expected a float")
-        };
-        assert!(
-            q.is_infinite() && q > 0.0,
-            "1.0 / 0 should be inf, got {}",
-            q
+    fn division_by_zero_reports_rather_than_answering() {
+        // `int` is the whole of arithmetic, so a zero divisor has no answer to
+        // report and says so on the flag rather than inventing one.
+        assert_eq!(
+            flagged(&[Value::Int(1), Value::Int(0)], Instruction::Divide),
+            (vec![Value::Int(0)], false)
         );
-
-        let (out, ok) = flagged(&[Value::Float(1.0), Value::Int(0)], Instruction::Modulo);
-        assert!(ok);
-        let [Value::Float(r)] = out[..] else {
-            panic!("expected a float")
-        };
-        assert!(r.is_nan(), "1.0 % 0 should be NaN, got {}", r);
+        assert_eq!(
+            flagged(&[Value::Int(1), Value::Int(0)], Instruction::Modulo),
+            (vec![Value::Int(0)], false)
+        );
     }
 
     #[test]
@@ -1762,17 +1720,15 @@ mod totality_tests {
     }
 
     #[test]
-    fn comparisons_answer_on_a_mixed_numeric_pair_and_fail_off_the_numbers() {
+    fn comparisons_answer_on_two_ints_and_fail_off_the_numbers() {
         assert_eq!(
-            flagged(&[Value::Int(1), Value::Float(1.5)], Instruction::Less),
+            flagged(&[Value::Int(1), Value::Int(2)], Instruction::Less),
             (vec![Value::Bool(true)], true)
         );
-        // A NaN is unordered rather than non-numeric, and fails alike.
-        let (_, ok) = flagged(
-            &[Value::Float(f64::NAN), Value::Float(1.0)],
-            Instruction::Less,
-        );
-        assert!(!ok, "an unordered pair is not a comparison");
+        // Anything that is not a pair of ints is not a comparison, and the
+        // instruction reports that rather than ordering it somehow.
+        let (_, ok) = flagged(&[cs("a"), Value::Int(1)], Instruction::Less);
+        assert!(!ok, "a non-numeric operand is not a comparison");
     }
 
     // -- What is still partial ----------------------------------------------
