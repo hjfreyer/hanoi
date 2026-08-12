@@ -184,6 +184,43 @@ fn a_branch_takes_what_the_hungrier_arm_takes() {
     assert_eq!(node_arity(prog, inner), Some((2, 0)));
 }
 
+/// The tree never asks for less than the sentence it was built from.
+///
+/// `build` opens some `par`s up — a trailing `id` is a frame, and the padding
+/// `bytecode::balance` puts on a narrow branch arm is dropped because the
+/// sibling arm still carries the demand. Neither may lose an input, for the
+/// same reason the branch above may not: `annihilate` asks only for an arity,
+/// so a tree that understates one licenses a rewrite that changes what the
+/// code means.
+///
+/// The hand-written case is the one with no sibling to fall back on, and it is
+/// why the padding is opened by name rather than by shape.
+#[test]
+fn opening_a_par_never_understates_what_it_takes() {
+    for code in [
+        // The compiler's own padding, on the narrow arm of a branch.
+        "sentence probe { pick 0 branch { } { drop 0 push true } }",
+        // A trailing identity, which is a dip and says so.
+        "sentence probe { par { add } { id 2 } }",
+        // A leading identity nobody but the author asked for. Opening this one
+        // would report (2 -> 2) for a sentence that is really (5 -> 5).
+        "sentence probe { par { id 3 } { add } }",
+        // And the two at once.
+        "sentence probe { par { id 3 } { add } { id 2 } }",
+    ] {
+        let prog = program_of(code);
+        let s_idx = SentenceIndex::from(0);
+        let body = build(prog.library(), s_idx, &mut HashSet::new());
+        assert_eq!(
+            seq_full(prog, &body),
+            prog.arity(s_idx),
+            "the tree disagrees with the sentence for `{}`: {:?}",
+            code,
+            shape(&body)
+        );
+    }
+}
+
 /// The rewrite that understating a branch's arity used to license.
 ///
 /// `test_always_true` returns `true` for every input — it is `drop ; push

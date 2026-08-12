@@ -41,6 +41,22 @@
 //! fixpoint. Widths only ever grow and are bounded by the widest arity in the
 //! program, and each round settles every mismatch currently visible, so the
 //! number of rounds is bounded by the depth of the call tree.
+//!
+//! # The padding this pass inserts
+//!
+//! [`PADDED_ARM`] names the wrappers, and the name is load-bearing rather than
+//! decorative: `bin/rewrite` opens `par { id k } { X }` back into plain `X`,
+//! and it is sound to do that **only** for a wrapper from here.
+//!
+//! Dropping the `id k` drops a demand for `k` values, and a node sequence has
+//! nowhere to put one — its nodes already have whatever they do not touch
+//! beneath them. For a wrapper from this pass that costs nothing, because the
+//! demand is guaranteed to survive elsewhere: padding goes to the *wider* of
+//! the two arms, so the sibling still asks for every value the `id` was asking
+//! for, and the rewriter reads a branch's arity off the hungrier arm. For a
+//! `par` somebody wrote by hand there is no sibling and no such guarantee, so
+//! the demand would simply vanish — and an understated arity is a soundness
+//! bug rather than an imprecision.
 
 use std::collections::HashMap;
 
@@ -53,7 +69,11 @@ use crate::opcode::Instruction;
 /// Distinct from `<inline>`, which is what phase 4 calls a block the user
 /// wrote: nobody wrote this one, and a dump that called it `<inline>` would
 /// send a reader looking for source that is not there.
-const PADDED: &str = "<padded arm>";
+///
+/// Public because `bin/rewrite` reads the padding back off, and it is allowed
+/// to do that **only** for a wrapper this pass inserted — see
+/// [`the_padding_this_pass_inserts`](self#the-padding-this-pass-inserts).
+pub const PADDED_ARM: &str = "<padded arm>";
 
 /// The name given to the `id n` sentence that fills a wrapper's other arm.
 const IDENTITY: &str = "<id>";
@@ -141,7 +161,7 @@ fn pad(library: &mut Library, arm: SentenceIndex, width: i64) -> SentenceIndex {
         return arm;
     }
     let id = push(library, vec![Instruction::Id(width as usize)], IDENTITY);
-    push(library, vec![Instruction::Par(vec![id, arm])], PADDED)
+    push(library, vec![Instruction::Par(vec![id, arm])], PADDED_ARM)
 }
 
 fn push(library: &mut Library, body: Sentence, name: &str) -> SentenceIndex {
