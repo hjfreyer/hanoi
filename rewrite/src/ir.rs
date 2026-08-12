@@ -68,15 +68,18 @@ pub(crate) fn build(
 
     let out = library.sentences[s_idx]
         .iter()
-        .map(|inst| match inst {
-            Instruction::Dip(depth, target) => build_dip(library, *depth, *target, in_progress),
-            Instruction::Branch(then_t, else_t) => Node::Branch {
+        .flat_map(|inst| match inst {
+            Instruction::Dip(depth, target) => {
+                vec![build_dip(library, *depth, *target, in_progress)]
+            }
+            Instruction::Branch(then_t, else_t) => vec![Node::Branch {
                 then_origin: label(library, *then_t),
                 then_body: build_arm(library, *then_t, in_progress),
                 else_origin: label(library, *else_t),
                 else_body: build_arm(library, *else_t, in_progress),
-            },
-            other => Node::Op(other.clone()),
+            }],
+            Instruction::Par(arms) => build_par(library, arms, in_progress),
+            other => vec![Node::Op(other.clone())],
         })
         .collect();
 
@@ -98,6 +101,70 @@ fn build_dip(
         }
     } else {
         Node::Call { depth, target }
+    }
+}
+
+/// A `par` opened up, where the shape allows it.
+///
+/// `par { id a } { X } { id b }` runs `X` with `a` values below it and `b`
+/// above, which is `dip b { X }` — the `a` below is what every node in a
+/// sequence already has under it, since nothing addresses past its own inputs.
+/// So `par { X } { id b }` really is `dip b { X }`, and the padding
+/// [`bytecode::balance`] puts on a narrow branch arm, `par { id a } { X }`,
+/// opens straight back into `X`: the tool goes on seeing the program the user
+/// wrote rather than the compiler's normal form of it.
+///
+/// Nothing is lost by dropping the `id`. What it says is that the arm demands
+/// `a` more values than it touches, and a branch's arity is read from the
+/// hungrier arm anyway ([`crate::arity`]), which is where that demand came
+/// from in the first place.
+///
+/// A `par` with two arms that actually do something is a different matter, and
+/// stays an opaque `Op`: the tree has no node for running two programs side by
+/// side, and inventing one is a larger change than reading them.
+fn build_par(
+    library: &Library,
+    arms: &[SentenceIndex],
+    in_progress: &mut HashSet<SentenceIndex>,
+) -> Vec<Node> {
+    let Some((above, body)) = only_working_arm(library, arms) else {
+        return vec![Node::Op(Instruction::Par(arms.to_vec()))];
+    };
+    if above == 0 && is_inline_block(library, body) && !in_progress.contains(&body) {
+        // Spliced rather than framed: a `dip 0` around it would be a frame
+        // that hides nothing, which is a real node the tool would then have to
+        // eliminate before any rule could reach inside.
+        return build(library, body, in_progress);
+    }
+    vec![build_dip(library, above, body, in_progress)]
+}
+
+/// The one arm of a `par` that is not an `id`, and how much `id` sits above it.
+///
+/// `None` when there is no such arm or more than one.
+fn only_working_arm(library: &Library, arms: &[SentenceIndex]) -> Option<(usize, SentenceIndex)> {
+    let mut above = 0usize;
+    let mut body: Option<SentenceIndex> = None;
+    for arm in arms {
+        match id_width(library, *arm) {
+            // Below the working arm it is implicit; above it, it is a frame.
+            Some(width) => above += if body.is_some() { width } else { 0 },
+            None => {
+                if body.is_some() {
+                    return None;
+                }
+                body = Some(*arm);
+            }
+        }
+    }
+    body.map(|body| (above, body))
+}
+
+/// How wide the identity is, for a sentence that is nothing but one.
+fn id_width(library: &Library, s_idx: SentenceIndex) -> Option<usize> {
+    match library.sentences[s_idx].as_slice() {
+        [Instruction::Id(width)] => Some(*width),
+        _ => None,
     }
 }
 

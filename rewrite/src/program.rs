@@ -298,6 +298,11 @@ mod invariant {
                         walk(library, *then_t, colour, path, cyclic);
                         walk(library, *else_t, colour, path, cyclic);
                     }
+                    Instruction::Par(arms) => {
+                        for arm in arms {
+                            walk(library, *arm, colour, path, cyclic);
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -342,6 +347,9 @@ mod invariant {
                                 || in_cycle.contains(b)
                                 || out.contains(b)
                         }
+                        Instruction::Par(arms) => arms
+                            .iter()
+                            .any(|arm| in_cycle.contains(arm) || out.contains(arm)),
                         _ => false,
                     });
                 if hit {

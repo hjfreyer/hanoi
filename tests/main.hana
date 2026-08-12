@@ -14,6 +14,7 @@ mod control_flow;
 mod identities;
 mod probes;
 mod dip;
+mod par;
 mod barista;
 mod file_mods;
 mod namespacing;

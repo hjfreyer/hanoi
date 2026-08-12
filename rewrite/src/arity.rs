@@ -5,6 +5,7 @@
 //! price of making inlining a rule; the gain is that a recursive call now has
 //! an arity where the old `Cut` had none.
 
+use bytecode::Instruction;
 use bytecode::arity::op_arity;
 
 use crate::ir::Node;
@@ -16,6 +17,20 @@ use crate::program::Program;
 /// follows.
 pub(crate) fn node_arity(prog: &Program, node: &Node) -> Option<(i64, i64)> {
     match node {
+        // A `par`'s arms each take their own window, so the arities add. It
+        // arrives as an opaque `Op` — `build` has no node for it — and without
+        // this it would have no arity at all, which stops the reckoning for
+        // everything after it in the sentence.
+        Node::Op(Instruction::Par(arms)) => {
+            let mut inputs = 0;
+            let mut outputs = 0;
+            for arm in arms {
+                let (n, m) = prog.arity(*arm)?;
+                inputs += n;
+                outputs += m;
+            }
+            Some((inputs, outputs))
+        }
         Node::Op(inst) => op_arity(inst),
         Node::Call { depth, target } => {
             let (n, m) = prog.arity(*target)?;

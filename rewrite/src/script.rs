@@ -625,6 +625,7 @@ impl<'a> Parser<'a> {
         }
 
         let inst = match word.as_str() {
+            "id" => Instruction::Id(self.count(&word, span)?),
             "pick" => Instruction::Pick(self.count(&word, span)?),
             "roll" => Instruction::Roll(self.count(&word, span)?),
             "tuple" => Instruction::Tuple(self.count(&word, span)?),
@@ -854,6 +855,7 @@ pub(crate) const TERM_ORIGIN: &str = "<term>";
 /// cannot. Introducing one would break the precondition every equation is
 /// stated under.
 const INSTRUCTION_WORDS: &[&str] = &[
+    "id n",
     "pick n",
     "branch { .. } { .. }",
     "roll n",

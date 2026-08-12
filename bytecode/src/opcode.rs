@@ -54,6 +54,26 @@ pub enum Instruction {
     /// otherwise, jump to the second SentenceIndex.
     Branch(SentenceIndex, SentenceIndex),
 
+    /// The identity on the top `usize` values: requires them, and leaves them.
+    ///
+    /// A no-op at run time and the point is that it is not one to the arity
+    /// checker. `id n` is the only way to write down a *demand* for stack that
+    /// nothing consumes, which is what padding a narrower program up to a wider
+    /// one needs — see [`Instruction::Par`].
+    Id(usize),
+    /// Cuts the stack into one window per arm and runs the arms side by side,
+    /// then puts the results back in the same order.
+    ///
+    /// The **first arm is the deepest**: `par { A } { B }` gives `A` the values
+    /// below `B`'s, so `dip n { X }` is exactly `par { X } { id n }`. Each arm
+    /// takes as many values as its own arity asks for, so the cut is decided by
+    /// the callees rather than by an operand here.
+    ///
+    /// No arm can see another's window, which is the whole content of the
+    /// instruction: the arms are independent, so they may be reordered,
+    /// analysed one at a time, or — one day — actually run at the same time.
+    Par(Vec<SentenceIndex>),
+
     /// Abort execution immediately.
     Panic,
     /// Pop the top value off the stack and panic if it is falsey.
@@ -204,6 +224,14 @@ impl std::fmt::Display for Instruction {
             Instruction::Dip(0, s) => write!(f, "jump {:?}", s),
             Instruction::Dip(d, s) => write!(f, "dip {} {:?}", d, s),
             Instruction::Branch(t, e) => write!(f, "branch {:?} {:?}", t, e),
+            Instruction::Id(n) => write!(f, "id {}", n),
+            Instruction::Par(arms) => {
+                write!(f, "par")?;
+                for arm in arms {
+                    write!(f, " {:?}", arm)?;
+                }
+                Ok(())
+            }
             Instruction::Panic => write!(f, "panic"),
             Instruction::Assert => write!(f, "assert"),
             Instruction::AssertEqual => write!(f, "assert_eq"),

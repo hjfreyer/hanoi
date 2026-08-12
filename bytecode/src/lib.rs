@@ -1,6 +1,7 @@
 pub mod arity;
 pub mod assembly;
 pub mod ast;
+pub mod balance;
 pub mod library;
 pub mod lower;
 pub mod opcode;
@@ -10,6 +11,7 @@ pub mod value;
 
 pub use arity::{check_arities, check_totality, failure_reachability};
 pub use assembly::{assemble, assemble_source, assemble_with_path};
+pub use balance::balance;
 pub use library::{Annotation, Arity, Identity, IdentityIndex, Library, Sentence, SentenceIndex};
 pub use opcode::Instruction;
 pub use source::{Error, FileId, SourceMap, Span};

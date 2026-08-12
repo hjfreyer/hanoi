@@ -1,0 +1,214 @@
+// Tests for `id` and `par`.
+//
+// `id n` is the identity on the top n values: it insists they are there and
+// does nothing to them. `par` cuts the stack into one window per arm, runs the
+// arms side by side, and glues the results back together in the same order —
+// the FIRST arm getting the DEEPEST window.
+
+test sentence id_leaves_the_stack_alone {
+    push 1
+    push 2
+    push 3
+    id 3
+    push 3
+    assert_eq
+    push 2
+    assert_eq
+    push 1
+    assert_eq
+}
+
+// `id 0` demands nothing and does nothing, which is the unit the padding pass
+// leans on: widening by nothing is not a change.
+test sentence id_zero_is_nothing {
+    push 42
+    id 0
+    push 42
+    assert_eq
+}
+
+// Each arm sees its own window and only its own window: `add` here reaches the
+// two values given to it and cannot touch the pair below.
+test sentence par_cuts_the_stack_by_arity {
+    push 1
+    push 2
+    push 10
+    push 20
+    par { add assert } { add assert }
+    // [3, 30]
+    push 30
+    assert_eq
+    push 3
+    assert_eq
+}
+
+// The first arm is the deepest, so the two arms are not interchangeable in
+// where they land even though neither can see the other.
+test sentence the_first_arm_takes_the_deepest_window {
+    push 1
+    push 2
+    push 3
+    par { add assert } { push 100 add assert }
+    // [3, 103]
+    push 103
+    assert_eq
+    push 3
+    assert_eq
+}
+
+// An arm may leave a different number of values than it took; the results are
+// simply concatenated in arm order.
+test sentence arms_may_change_their_windows_width {
+    push 1
+    push 2
+    push 7
+    par { add assert } { pick 0 }
+    // [3, 7, 7]
+    push 7
+    assert_eq
+    push 7
+    assert_eq
+    push 3
+    assert_eq
+}
+
+// A single arm is a plain call, and an arm may be a sentence that already
+// exists — written as a block, since that is the only way an arm is written.
+#[arity(2, 1)]
+sentence add_two {
+    add
+    assert
+}
+
+test sentence a_par_arm_may_name_a_sentence {
+    push 40
+    push 2
+    par { jump add_two }
+    push 42
+    assert_eq
+}
+
+// -----------------------------------------------------------------------
+// `dip n { X }` is `par { X } { id n }`
+// -----------------------------------------------------------------------
+//
+// The equivalence the whole design turns on: hiding the top n values from a
+// block is running the block and the identity side by side, with the identity
+// on top.
+
+test sentence par_with_a_trailing_id_is_a_dip {
+    push 1
+    push 2
+    push 99
+    par { add assert } { id 1 }
+    // Exactly what `dip { add assert }` leaves: [3, 99]
+    push 99
+    assert_eq
+    push 3
+    assert_eq
+}
+
+test sentence a_deeper_id_is_a_deeper_dip {
+    push 1
+    push 2
+    push 8
+    push 9
+    par { add assert } { id 2 }
+    push 9
+    assert_eq
+    push 8
+    assert_eq
+    push 3
+    assert_eq
+}
+
+// And the other way round: a leading `id` is padding underneath, which is what
+// every instruction in a sentence already has under it.
+test sentence a_leading_id_pads_from_below {
+    push 1
+    push 2
+    push 3
+    par { id 1 } { add assert }
+    // [1, 5]
+    push 5
+    assert_eq
+    push 1
+    assert_eq
+}
+
+// -----------------------------------------------------------------------
+// Branch arms are padded to one arity
+// -----------------------------------------------------------------------
+//
+// `{ }` is (0 -> 0) and `{ drop 0  push true }` is (1 -> 1). The compiler pads
+// the empty arm into `par { id 1 } { }` so both arms have one arity; the
+// program keeps meaning what it did.
+
+test sentence a_padded_arm_runs_as_written {
+    push 7
+    push true
+    pick 0
+    branch { } { drop 0 push true }
+    // The then arm ran, so the flag it was given is still there.
+    assert
+    push 7
+    assert_eq
+}
+
+test sentence the_other_arm_of_a_padded_branch_runs_as_written {
+    push 7
+    push false
+    pick 0
+    branch { } { drop 0 push true }
+    assert
+    push 7
+    assert_eq
+}
+
+// A `par` inside a recursive sentence. The arms are inline blocks, so they
+// wear the `#[recursive]` marker of whoever wrote them — but neither recurses,
+// so both have perfectly ordinary arities and the cut can be made.
+// Counts `n` down to zero, adding one to `acc` each time. Stack is
+// [acc, n] with the counter on top.
+#[recursive]
+#[arity(2, 1)]
+sentence count_down {
+    // Copy the counter without the accumulator's window being in reach.
+    par { id 1 } { pick 0 }
+    push 0
+    equal
+    branch {
+        // Done: discard the spent counter and keep the total.
+        drop 0
+    } {
+        // One step on each half, side by side.
+        par { push 1 add assert } { push 1 sub assert }
+        jump count_down
+    }
+}
+
+#[recursive]
+test sentence par_inside_a_loop {
+    push 100
+    push 3
+    jump count_down
+    push 103
+    assert_eq
+}
+
+// A branch inside a dip, where the padding has to survive being run in a
+// frame it did not know about.
+test sentence a_padded_arm_inside_a_frame {
+    push 7
+    push true
+    push 99
+    dip {
+        pick 0
+        branch { } { drop 0 push true }
+    }
+    push 99
+    assert_eq
+    assert
+    push 7
+    assert_eq
+}

@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use bytecode::{Instruction, Library, SentenceIndex, Value};
 
 pub mod runtime;
@@ -23,6 +25,8 @@ pub struct VM {
     tracing: bool,
     gas_limit: Option<u64>,
     steps_executed: u64,
+    /// How wide each `par` arm's window is, filled in as arms are first met.
+    arm_widths: HashMap<SentenceIndex, usize>,
 }
 
 impl VM {
@@ -35,6 +39,7 @@ impl VM {
             tracing: false,
             gas_limit: None,
             steps_executed: 0,
+            arm_widths: HashMap::new(),
         }
     }
 
@@ -92,9 +97,64 @@ impl VM {
     /// Reaching the end of a sentence pops the call stack to return to the caller.
     /// Execution terminates when the call stack is empty and the current sentence ends.
     pub fn execute(&mut self, start_sentence: SentenceIndex) -> Result<(), String> {
+        self.steps_executed = 0;
+        self.run(start_sentence)
+    }
+
+    /// How many values a `par` arm takes off the stack, memoized.
+    ///
+    /// A `par` cuts the stack by its arms' arities rather than by an operand,
+    /// so the cut is a question about the callee. Inference answers it, and the
+    /// answer cannot change while a library is loaded, so it is asked once per
+    /// arm rather than once per execution.
+    fn arm_width(&mut self, arm: SentenceIndex) -> Result<usize, String> {
+        if let Some(width) = self.arm_widths.get(&arm) {
+            return Ok(*width);
+        }
+        let arity = bytecode::arity::arm_arity(&self.library, arm).ok_or_else(|| {
+            format!(
+                "`par` arm {:?} has no knowable arity, so the stack cannot be cut for it",
+                arm
+            )
+        })?;
+        let width = usize::try_from(arity.inputs())
+            .map_err(|_| format!("`par` arm {:?} has a negative input count", arm))?;
+        self.arm_widths.insert(arm, width);
+        Ok(width)
+    }
+
+    /// Runs `target` seeing `window` and nothing else, and returns what it left.
+    ///
+    /// This is what makes a `par` arm's window a window: the arm gets a stack
+    /// of its own, so it cannot reach past its own inputs however it is
+    /// written. The caller's stack and call stack are set aside for the
+    /// duration, and the gas counter is not — an arm's steps are the same
+    /// steps.
+    ///
+    /// Nested rather than threaded through the main loop, so a `par` inside a
+    /// `par` costs a native frame. For straight-line code the nesting is the
+    /// program's own and finite. A recursive sentence whose recursive call sits
+    /// inside a `par` arm deepens it once per iteration, and there the gas limit
+    /// is what stops it — with no limit set, such a loop exhausts the native
+    /// stack rather than returning an error, which is the one way a `par` is
+    /// worse behaved than a `dip`.
+    fn run_windowed(
+        &mut self,
+        target: SentenceIndex,
+        window: Vec<Value>,
+    ) -> Result<Vec<Value>, String> {
+        let outer_stack = std::mem::replace(&mut self.stack, window);
+        let outer_calls = std::mem::take(&mut self.call_stack);
+        let result = self.run(target);
+        let produced = std::mem::replace(&mut self.stack, outer_stack);
+        self.call_stack = outer_calls;
+        result?;
+        Ok(produced)
+    }
+
+    fn run(&mut self, start_sentence: SentenceIndex) -> Result<(), String> {
         let mut current_sentence = start_sentence;
         let mut ip = 0;
-        self.steps_executed = 0;
 
         loop {
             // Get the sentence reference
@@ -305,6 +365,45 @@ impl VM {
                         current_sentence = else_target;
                     }
                     ip = 0;
+                }
+                Instruction::Id(width) => {
+                    // Nothing to do but insist the values are there: `id` is
+                    // exactly a demand the arity checker can see and the
+                    // machine cannot.
+                    if self.stack.len() < width {
+                        return Err(format!(
+                            "Stack underflow on Id: width {} but stack size {}",
+                            width,
+                            self.stack.len()
+                        ));
+                    }
+                }
+                Instruction::Par(arms) => {
+                    let mut widths = Vec::with_capacity(arms.len());
+                    let mut total = 0usize;
+                    for arm in &arms {
+                        let width = self.arm_width(*arm)?;
+                        widths.push(width);
+                        total += width;
+                    }
+                    if self.stack.len() < total {
+                        return Err(format!(
+                            "Stack underflow on Par: needs {} but stack size {}",
+                            total,
+                            self.stack.len()
+                        ));
+                    }
+                    // Cut once, deepest window first, then glue the results
+                    // back on in the same order. Running the arms one after
+                    // another is an implementation of "side by side" and not a
+                    // weakening of it: no arm can observe another's window, so
+                    // no order is distinguishable from any other.
+                    let mut windows = self.stack.split_off(self.stack.len() - total);
+                    for (arm, width) in arms.iter().zip(widths) {
+                        let window: Vec<Value> = windows.drain(..width).collect();
+                        let produced = self.run_windowed(*arm, window)?;
+                        self.stack.extend(produced);
+                    }
                 }
                 Instruction::Panic => {
                     return Err("Panic instruction executed".to_string());
@@ -694,6 +793,109 @@ mod tests {
         let res = vm.execute(idx);
         assert!(res.is_err());
         assert!(res.unwrap_err().contains("Assertion failed"));
+    }
+
+    /// Runs `start` and returns the stack it leaves, bottom first.
+    fn stack_after(code: &str) -> Result<Vec<Value>, String> {
+        let library = bytecode::assemble(code).map_err(|e| e.to_string())?;
+        let start = *library.exports.get("start").expect("no exported `start`");
+        let mut vm = VM::new(library);
+        vm.set_gas_limit(Some(100_000));
+        vm.execute(start)?;
+        Ok(vm.stack().to_vec())
+    }
+
+    #[test]
+    fn the_identity_does_nothing_but_insist() {
+        assert_eq!(
+            stack_after("export sentence start { push 1 push 2 id 2 }").unwrap(),
+            vec![Value::Int(1), Value::Int(2)]
+        );
+    }
+
+    #[test]
+    fn a_par_arm_sees_only_its_own_window() {
+        // The stack is cut into [1, 2] for the first arm and [3] for the
+        // second. `pick 1` inside the first arm therefore copies the 1 — on an
+        // uncut stack the very same `pick 1` would have found the 2.
+        assert_eq!(
+            stack_after(
+                r#"
+            export sentence start {
+                push 1
+                push 2
+                push 3
+                par { pick 1 } { id 1 }
+            }
+        "#
+            )
+            .unwrap(),
+            vec![Value::Int(1), Value::Int(2), Value::Int(1), Value::Int(3)]
+        );
+    }
+
+    #[test]
+    fn a_par_glues_its_arms_results_back_in_order() {
+        assert_eq!(
+            stack_after(
+                r#"
+            export sentence start {
+                push 1
+                push 2
+                push 10
+                push 20
+                par { add assert } { add assert }
+            }
+        "#
+            )
+            .unwrap(),
+            vec![Value::Int(3), Value::Int(30)]
+        );
+    }
+
+    #[test]
+    fn a_par_with_a_trailing_identity_runs_as_the_dip_it_is() {
+        // The equivalence, measured rather than argued: same stack, both ways.
+        let body = |combinator: &str| {
+            format!(
+                "export sentence start {{ push 1 push 2 push 99 {} }}",
+                combinator
+            )
+        };
+        assert_eq!(
+            stack_after(&body("dip 1 { add assert }")).unwrap(),
+            stack_after(&body("par { add assert } { id 1 }")).unwrap()
+        );
+        assert_eq!(
+            stack_after(&body("dip 1 { add assert }")).unwrap(),
+            vec![Value::Int(3), Value::Int(99)]
+        );
+    }
+
+    /// A branch arm the compiler widened has to behave exactly as written.
+    ///
+    /// `{ }` is padded into `par { id 1 } { }` so both arms have one arity;
+    /// `id` is a no-op, so nothing about the run may change.
+    #[test]
+    fn a_padded_branch_arm_runs_as_the_arm_it_wraps() {
+        let body = |cond: &str| {
+            format!(
+                "export sentence start {{ push 7 push {} pick 0 branch {{ }} {{ drop 0 push true }} }}",
+                cond
+            )
+        };
+        assert_eq!(
+            stack_after(&body("true")).unwrap(),
+            vec![Value::Int(7), Value::Bool(true)]
+        );
+        // The else arm replaces the condition with `true` and always has, so
+        // both readings agree here; what is being pinned is that the then arm
+        // still leaves the value it was given rather than one the padding
+        // invented.
+        assert_eq!(
+            stack_after(&body("false")).unwrap(),
+            vec![Value::Int(7), Value::Bool(true)]
+        );
     }
 
     #[test]

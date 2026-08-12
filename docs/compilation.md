@@ -25,6 +25,7 @@ write a `SentenceIndex`, so bytecode is not core.
 | references | `Path` (names) | `SentenceIndex` (indices) |
 | constants | `Ref(Path)` | `Value::Symbol { id, path }`, `Value::ConstString(text)` |
 | branch targets | `Target::Label` or inline block | `SentenceIndex` |
+| `par` arms | inline blocks | `SentenceIndex` |
 | type checks | `TypeCheckPath(Path)` | `Dip(0, idx)`, or `Push(v); Equal` |
 | calls | `Jump`, `Dip` | `Dip` only — `jump` is `Dip(0, idx)` |
 | deep drops | `Drop(d)` | `Dip(d, idx)` around a plain `Drop` |
@@ -229,8 +230,8 @@ sentence is declared in* — no special case for type checks.
 Resolution is `ModuleTree::resolve(scope, path)` — one entry point, one set of
 rules, for every path in the language.
 
-Phase 5 then runs `check_arities` over the resulting `Library`, followed by
-`check_totality` and `check_identities`. A Z3-backed
+Phase 5 then runs `balance` over the resulting `Library`, followed by
+`check_arities`, `check_totality` and `check_identities`. A Z3-backed
 precondition/postcondition/total checker previously ran separately via
 `bin/typecheck`; it has been removed from the codebase for now (see
 [docs/typecheck.md](typecheck.md) for the design).
@@ -283,6 +284,78 @@ that trade.** It replaces one instruction with `O(d)` instructions and `O(d)`
 calls, and each expansion still bottoms out in a frame-crossing `roll 1`, so
 the hard case is multiplied rather than removed. A minimal primitive set makes
 the metatheory smaller and the analysis larger; here the analysis is the point.
+
+## Where `par` fits
+
+`par { A } { B }` cuts the stack into one window per arm, runs the arms side by
+side, and puts the results back in the same order — the **first arm getting the
+deepest window**. It is **core**, and like `dip` it needs the argument rather
+than the inspection: the cut is decided by the arms' own arities, which phase 2
+cannot know, so a lowering into rolls and dips is not available to it. Phase 4
+resolves its arms exactly as it resolves a branch's, inline blocks and all.
+
+The arms are written as blocks and **only** as blocks. Naming two sentences that
+already exist is `par { jump a } { jump b }`, so one form covers both cases —
+the same reasoning `identity` is parsed under — and the list has an
+unambiguous end without a count or a closing delimiter.
+
+Two facts about it are worth stating in one place, because everything else here
+follows from them:
+
+- **`dip n { X }` is `par { X } { id n }`.** Hiding the top `n` values from a
+  block is running the block and the identity side by side, with the identity on
+  top. `id n` is the identity on `n` values: a no-op at run time, and a demand
+  for `n` values to the arity checker — which is the only thing in the language
+  that states a requirement nothing consumes.
+- **An arm cannot observe another arm's window.** That is the whole content of
+  the instruction, and it is what the VM implements literally: it splits the
+  stack, runs each arm on a stack of its own, and concatenates. Running them one
+  after another is an implementation of "side by side" rather than a weakening
+  of it, since no order is distinguishable from any other.
+
+Arities add: a `par` asks for what all its arms together ask for and leaves what
+they all together leave, so nothing analysing one has to reason about where the
+cuts fall.
+
+## Phase 5a: balance
+
+`check_arities` holds a branch's two arms to the **same arity**, not merely the
+same net stack change. The arms are alternatives for one position in the
+program, so whatever composes with the branch composes with each of them; an arm
+asking for less than its sibling would be a program whose demand on the stack
+depended on a value.
+
+Written out longhand that is a nuisance — `branch { } { drop 0  push true }`
+is `(0 -> 0)` against `(1 -> 1)` and means exactly what it looks like — so
+`balance` runs first and writes it for the user: the narrower arm becomes
+`par { id k } { arm }`, which is the same program run in a frame `k` values
+wider. The pass is idempotent on code that already balances, and preserves the
+arity every sentence had, since padding closes a gap the hungrier arm was
+previously deciding on its own.
+
+**The padding is materialized at branch arms and nowhere else.** A branch arm is
+the one place in the ISA where two programs meet and neither has anywhere to put
+the difference. Everywhere else it is already written down, or is not a
+difference:
+
+- Along a sentence, an instruction applies to the top of whatever stack it
+  finds, so `push 1 ; add` *is* `push 1 ; par { id 1 } { add }`. The wider frame
+  is the sentence's own; materializing it would say nothing new while tripling
+  the instruction count and putting a `par` in front of every rule the rewriter
+  has.
+- `dip k { X }` carries its padding in the operand — it is the `k`.
+- A `par`'s own arms are independent by construction and have no shared width to
+  agree about.
+
+Padding widens the branch, which widens the sentence holding it, which can
+uncover a mismatch one level out, so the pass runs to a fixpoint. Widths only
+grow and are bounded by the widest arity in the program.
+
+`bin/rewrite` reads the padding back off: `par { id k } { X }` is built as plain
+`X`, since a node in a sequence already has whatever it does not touch beneath
+it, and a branch's arity there is read from the hungrier arm anyway. So the
+tool goes on seeing the program the user wrote rather than the compiler's normal
+form of it, and every derivation still replays.
 
 ## Where `identity` fits
 

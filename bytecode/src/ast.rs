@@ -68,6 +68,15 @@ pub enum ParsedInstruction {
     /// Run the target with the top `usize` values of the stack hidden from it.
     Dip(usize, Target),
     Branch(Target, Target),
+    /// The identity on the top `usize` values.
+    Id(usize),
+    /// Run each target on its own window of the stack, first target deepest.
+    ///
+    /// The arms are written as blocks and only as blocks: naming a sentence
+    /// that already exists is `par { jump a } { jump b }`, so one form covers
+    /// both cases — the same reasoning `identity` is parsed under — and the
+    /// list has an unambiguous end without a count or a delimiter.
+    Par(Vec<Target>),
     Panic,
     Assert,
     AssertEqual,

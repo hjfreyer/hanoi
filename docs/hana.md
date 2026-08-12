@@ -172,8 +172,28 @@ enum MyEnum {
 
 - **Jumps**: Subroutine execution is initiated via `jump S`, which pushes the return address to a call stack and jumps to sentence `S`. Reaching the end of `S` pops the return address and returns control to the caller.
 - **Dips**: `dip N { block }` (or `dip N S`) runs a block with the top `N` stack values hidden from it, restoring them on top of whatever the block leaves behind. `N` may be omitted, in which case it is 1. This is `jump` with an offset into the stack: `dip 0 S` and `jump S` are the same instruction.
-- **Branches**: Conditional execution is implemented via `branch { then_block } { else_block }`. The VM pops the top stack element; if it is truthy, it executes `then_block`, otherwise it executes `else_block`. Truthiness is `v != false`, so only a literal `false` reaches the else block.
+- **Pars**: `par { A } { B } ...` cuts the stack into one window per arm, sized by each arm's own arity, runs the arms side by side, and glues the results back together in the same order. The **first arm gets the deepest window**. Arms are written as blocks and only as blocks — `par { jump f } { jump g }` names sentences that already exist, so there is one form rather than two and the list has an unambiguous end. No arm can observe another's window.
+- **Branches**: Conditional execution is implemented via `branch { then_block } { else_block }`. The VM pops the top stack element; if it is truthy, it executes `then_block`, otherwise it executes `else_block`. Truthiness is `v != false`, so only a literal `false` reaches the else block. The two arms are held to the **same arity**, not merely the same net stack change; the compiler pads the narrower one first, so this is not something to write out.
 - **Panics**: If a condition fails, `panic` immediately halts VM execution. Safe assertion operations `assert` and `assert_eq` verify preconditions and abort the program on failure.
+
+### `dip` is `par` with an identity
+
+`id N` is the identity on the top `N` values: it insists they are there and
+does nothing to them. That makes it a no-op at run time and, deliberately, not
+one to the arity checker — it is the only way in the language to write down a
+demand for stack that nothing consumes.
+
+With it, `dip` is not a separate idea:
+
+```hana
+dip N { X }   ==   par { X } { id N }
+```
+
+Hiding the top `N` values from a block *is* running the block and the identity
+side by side, with the identity on top. The same reading the other way round —
+`par { id K } { X }` — is `X` running with `K` values underneath it, which is
+what every instruction in a sentence already has, and is exactly the padding
+the compiler puts on a narrow `branch` arm.
 
 ### Why `dip` and not `roll`
 

@@ -320,6 +320,7 @@ fn write_node(prog: &Program, node: &Node) -> Result<String, String> {
 
 fn write_op(prog: &Program, inst: &Instruction) -> Result<String, String> {
     Ok(match inst {
+        Instruction::Id(n) => format!("id {}", n),
         Instruction::Pick(d) => format!("pick {}", d),
         Instruction::Roll(d) => format!("roll {}", d),
         Instruction::Tuple(n) => format!("tuple {}", n),
@@ -1023,6 +1024,7 @@ impl<'a> Parser<'a> {
         }
 
         let inst = match word.as_str() {
+            "id" => Instruction::Id(self.usize_count(&word, span)?),
             "pick" => Instruction::Pick(self.usize_count(&word, span)?),
             "roll" => Instruction::Roll(self.usize_count(&word, span)?),
             "tuple" => Instruction::Tuple(self.usize_count(&word, span)?),
@@ -1308,6 +1310,7 @@ impl Fields {
             return Err(wanted(name, "an instruction", &val));
         };
         let inst = match (word.as_str(), count) {
+            ("id", Some(n)) => Instruction::Id(nonneg(*n, span)?),
             ("pick", Some(n)) => Instruction::Pick(nonneg(*n, span)?),
             ("roll", Some(n)) => Instruction::Roll(nonneg(*n, span)?),
             ("tuple", Some(n)) => Instruction::Tuple(nonneg(*n, span)?),

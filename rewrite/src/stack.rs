@@ -253,6 +253,13 @@ fn op(inst: &Instruction, s: &mut Vec<Rc<Term>>, fresh: &mut Fresh) -> bool {
             // flag is a fresh opaque slot rather than a claim.
             s.push(fresh.next());
         }
+        // The identity: it insists on the values and does nothing to them, so
+        // the view is unchanged so long as they are there.
+        Instruction::Id(n) => {
+            if *n > s.len() {
+                return false;
+            }
+        }
         Instruction::Assert => {
             pop!();
         }

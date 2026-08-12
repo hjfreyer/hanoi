@@ -599,6 +599,30 @@ fn parse_instruction(stream: &mut TokenStream) -> Result<ParsedInstruction, Erro
             let target_false = parse_target(stream)?;
             Ok(ParsedInstruction::Branch(target_true, target_false))
         }
+        "id" => {
+            let width = parse_usize(stream)?;
+            Ok(ParsedInstruction::Id(width))
+        }
+        "par" => {
+            // Blocks and only blocks, so the list ends at the first token that
+            // is not a `{` — a label would leave no way to tell an arm from the
+            // instruction after the `par`. At least one is required, since
+            // `par` followed by anything else would otherwise be a silent
+            // zero-arm `par` rather than the mistake it is.
+            let mut arms = Vec::new();
+            while stream.peek() == Some(&Token::LBrace) {
+                arms.push(Target::Inline(parse_sentence_body(stream)?));
+            }
+            if arms.is_empty() {
+                return Err(stream
+                    .expected("an inline `{` block, the first arm of the `par`")
+                    .with_help(
+                        "a `par` arm is always a block; write `par { jump a } { jump b }` \
+                         to run two sentences that already exist",
+                    ));
+            }
+            Ok(ParsedInstruction::Par(arms))
+        }
         "panic" => Ok(ParsedInstruction::Panic),
         "assert" => Ok(ParsedInstruction::Assert),
         "assert_equal" | "assert_eq" => Ok(ParsedInstruction::AssertEqual),
@@ -1427,6 +1451,14 @@ impl<'a> Compiler<'a> {
                     let idx2 = self.resolve_target(scope, t2)?;
                     Instruction::Branch(idx1, idx2)
                 }
+                ParsedInstruction::Id(width) => Instruction::Id(width),
+                ParsedInstruction::Par(targets) => {
+                    let mut arms = Vec::with_capacity(targets.len());
+                    for target in targets {
+                        arms.push(self.resolve_target(scope, target)?);
+                    }
+                    Instruction::Par(arms)
+                }
                 ParsedInstruction::TypeCheckPath(path) => {
                     let resolved = match self.tree.resolve(scope, &path) {
                         Ok(res) => res,
@@ -1598,6 +1630,10 @@ pub fn assemble_source(
 
     library.symbols = tree.symbol_map();
     library.identities = identities.into();
+
+    // Phase 5a, before anything asks a question about arity: pad branch arms so
+    // the two sides of every branch have one arity to answer with.
+    crate::balance::balance(&mut library);
 
     crate::arity::check_arities(&mut library)?;
     crate::arity::check_totality(&library)?;

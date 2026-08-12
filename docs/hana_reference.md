@@ -35,6 +35,7 @@ These opcodes manipulate the stack directly without modifying values.
 | `drop` | `drop <depth>` | `[..., v_d, v_{d-1}, ..., v_0] -> [..., v_{d-1}, ..., v_0]` | Discards the stack element at the specified 0-indexed depth from the top (e.g., `drop 0` pops/drops the TOS). |
 | `pick` | `pick <depth>` | `[..., v_d, ..., v_0] -> [..., v_d, ..., v_0, v_d]` | Copies the element at `<depth>` from the top and pushes the copy to the top. `pick 0` is equivalent to `dup`. |
 | `roll` | `roll <depth>` | `[..., v_d, v_{d-1}, ..., v_0] -> [..., v_{d-1}, ..., v_0, v_d]` | Rotates the element at `<depth>` to the top, shifting intermediate elements down. `roll 1` is equivalent to `swap`. |
+| `id` | `id <width>` | `[..., v_{k-1}, ..., v_0] -> [..., v_{k-1}, ..., v_0]` | The identity on the top `<width>` values: requires them and leaves them exactly as they were. A no-op at run time, and deliberately not one to the arity checker — `id <k>` is the only way to write a demand for stack that nothing consumes, which is what padding a narrow program up to a wide one takes. See `par`. |
 
 ---
 
@@ -88,7 +89,8 @@ These instructions control execution flow, jumps, and validation assertions.
 | :--- | :--- | :--- | :--- |
 | `jump` | `jump <target>` | `[...] -> [...]` | Pushes the return address onto the call stack and transfers execution to the subroutine `<target>`. |
 | `dip` | `dip <count>? <target>` | `[..., v_{k-1}, ..., v_0] -> [..., v_{k-1}, ..., v_0]` | Hides the top `<count>` values (default 1), runs `<target>` on what remains, then restores the hidden values on top of its results. `dip 0 <target>` is exactly `jump <target>`. |
-| `branch` | `branch { then } { else }` | `[..., cond] -> [...]` | Pops $cond$. Executes the `then` block if $cond$ is exactly `true`, and the `else` block on **every** other value. |
+| `par` | `par { a } { b } …` | `[..., A, B] -> [..., A', B']` | Cuts the stack into one window per arm, sized by each arm's own arity, runs the arms side by side, and puts the results back in the same order. The **first arm gets the deepest window**. Arms are written as blocks and only as blocks: `par { jump f } { jump g }` names sentences that already exist. `dip <n> { X }` is exactly `par { X } { id <n> }`. |
+| `branch` | `branch { then } { else }` | `[..., cond] -> [...]` | Pops $cond$. Executes the `then` block if $cond$ is exactly `true`, and the `else` block on **every** other value. Both arms are held to the **same arity**, not merely the same net change; the compiler pads the narrower one with `par { id <k> } { arm }` so this need not be written out. |
 | `panic` | `panic` | `[...] -> [halt]` | Halts VM execution immediately with a failure status. This and the two below are the only instructions that can, and a sentence reaching any of them cannot claim `#[total]`. |
 | `assert` | `assert` | `[..., cond] -> [...]` | Pops $cond$. Halts and panics only if $cond$ is exactly `false`; anything else is truthy and passes. See `docs/totality.md`. |
 | `assert_equal` | `assert_eq` | `[..., a, b] -> [...]` | Pops $a$ and $b$. Halts and panics if $a \neq b$. |

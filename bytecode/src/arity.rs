@@ -6,6 +6,8 @@ use std::collections::{HashMap, HashSet};
 /// Checks whether all sentences in the library obey their declared arity,
 /// and populates the instruction_arities field in Library.
 pub fn check_arities(library: &mut Library) -> Result<(), String> {
+    check_par_arms(library)?;
+
     let mut memo = HashMap::new();
     let mut instruction_arities = HashMap::new();
 
@@ -79,6 +81,66 @@ pub fn check_arities(library: &mut Library) -> Result<(), String> {
     Ok(())
 }
 
+/// What a `par` arm takes off the stack: the number the cut is made by.
+///
+/// Unlike [`sentence_arity`] this does not give up the moment it sees a
+/// `#[recursive]` marker. A `par` arm is an inline block, and an inline block
+/// inherits that marker from the sentence that wrote it whether or not the
+/// block itself recurses — so the arms of `par { add } { drop 0 }` inside a
+/// recursive sentence are wearing a marker that is not about them. Inference is
+/// tried first and answers for those; a declaration answers where inference
+/// cannot; an arm that really does recurse and declares nothing has no answer
+/// at all, and [`check_par_arms`] refuses it.
+///
+/// Public because the VM asks the same question for the same reason: the cut
+/// has to be the one the checker signed off on.
+pub fn arm_arity(library: &Library, s_idx: SentenceIndex) -> Option<Arity> {
+    let mut memo = HashMap::new();
+    let mut in_progress = HashSet::new();
+    let mut instruction_arities = HashMap::new();
+    get_or_infer_arity(
+        s_idx,
+        library,
+        &mut memo,
+        &mut in_progress,
+        &mut instruction_arities,
+    )
+    .ok()
+    .or_else(|| declared_arity(library, s_idx))
+}
+
+/// Every `par` arm's arity must be knowable, because it is the cut.
+///
+/// A `par` decides how much stack each arm gets from the arm's own arity, so an
+/// arm whose arity nobody can work out is a cut nobody can make. Everywhere
+/// else an unknown arity only costs precision; here it costs the instruction
+/// its meaning.
+///
+/// Swept over **every** sentence, `#[recursive]` ones included. Those are the
+/// only place the problem can survive: inference skips them, so a `par` inside
+/// one is never looked at by the pass below, and without this the failure would
+/// wait until the machine tried to run it.
+fn check_par_arms(library: &Library) -> Result<(), String> {
+    for (s_idx, sentence) in library.sentences.iter_enumerated() {
+        for inst in sentence {
+            let Instruction::Par(arms) = inst else {
+                continue;
+            };
+            for arm in arms {
+                if arm_arity(library, *arm).is_none() {
+                    return Err(format!(
+                        "Sentence '{}' runs a `par` over '{}', whose arity is not knowable, \
+                         so there is no way to say how much stack that arm gets. \
+                         A `par` arm may not recurse without saying what it takes and leaves.",
+                        library.names[s_idx], library.names[*arm]
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn is_recursive(s_idx: SentenceIndex, library: &Library) -> bool {
     library.annotations[s_idx]
         .iter()
@@ -109,6 +171,7 @@ fn callees(inst: &Instruction) -> Vec<SentenceIndex> {
     match inst {
         Instruction::Dip(_, target) => vec![*target],
         Instruction::Branch(then_t, else_t) => vec![*then_t, *else_t],
+        Instruction::Par(arms) => arms.clone(),
         _ => Vec::new(),
     }
 }
@@ -353,6 +416,42 @@ pub fn sentence_arity(library: &Library, s_idx: SentenceIndex) -> Option<Arity> 
     .ok()
 }
 
+/// Every sentence's *inferred* arity, in one memoized sweep of the library.
+///
+/// [`sentence_arity`] answers for one sentence and starts from nothing each
+/// time, which is quadratic when the question is asked about all of them —
+/// which is exactly what [`crate::balance`] asks, once per round.
+///
+/// A sentence whose arity inference cannot settle is simply absent: a
+/// `#[recursive]` one, which inference skips by construction, and one whose
+/// inference failed. **Recursive sentences are left out rather than falling
+/// back to their `#[arity]`**, which is the difference from `sentence_arity`
+/// and is deliberate: a caller of one is an error that [`check_arities`]
+/// reports against the sentence the user wrote, and `balance` inserting a
+/// wrapper first would move that error onto a sentence they did not write.
+pub fn inferred_arities(library: &Library) -> HashMap<SentenceIndex, Arity> {
+    let mut memo = HashMap::new();
+    let mut instruction_arities = HashMap::new();
+    for s_idx_raw in 0..library.sentences.len() {
+        let s_idx = SentenceIndex::from(s_idx_raw);
+        if is_recursive(s_idx, library) {
+            continue;
+        }
+        let mut in_progress = HashSet::new();
+        // An error here is a cycle or a call into one, and `check_arities`
+        // reports it properly a moment later; what matters here is that the
+        // sentences that *do* have an arity are in the map.
+        let _ = get_or_infer_arity(
+            s_idx,
+            library,
+            &mut memo,
+            &mut in_progress,
+            &mut instruction_arities,
+        );
+    }
+    memo
+}
+
 fn declared_arity(library: &Library, s_idx: SentenceIndex) -> Option<Arity> {
     library.annotations[s_idx].iter().find_map(|ann| match ann {
         Annotation::Arity(inputs, outputs) => Some(Arity::Normal {
@@ -404,7 +503,13 @@ pub fn op_arity(inst: &Instruction) -> Option<(i64, i64)> {
         Instruction::Untuple(n) => (1, *n as i64 + 1),
         Instruction::AssertEqual => (2, 0),
         Instruction::Tuple(n) => (*n as i64, 1),
-        Instruction::Panic | Instruction::Dip(..) | Instruction::Branch(..) => return None,
+        // The identity's whole purpose: a demand for stack that nothing
+        // consumes, so that a narrower program can be padded up to a wider one.
+        Instruction::Id(n) => (*n as i64, *n as i64),
+        Instruction::Panic
+        | Instruction::Dip(..)
+        | Instruction::Branch(..)
+        | Instruction::Par(..) => return None,
     })
 }
 
@@ -530,6 +635,53 @@ fn infer_arity_of_instructions(
                     return Ok((sentence_arity, arities));
                 }
             }
+            Instruction::Par(arms) => {
+                // Each arm gets its own window, so the arities add: the par
+                // asks for what all of them together ask for, and leaves what
+                // all of them together leave. Nothing here has to reason about
+                // *where* the cuts fall, which is the point of the instruction.
+                let mut inputs = 0i64;
+                let mut outputs = 0i64;
+                let mut panics = false;
+                for arm in arms {
+                    if is_recursive(*arm, library) {
+                        return Err(format!(
+                            "Sentence '{}' calls recursive sentence '{}' but is not annotated with #[recursive]",
+                            library.names[s_idx], library.names[*arm]
+                        ));
+                    }
+                    let arm_arity =
+                        get_or_infer_arity(*arm, library, memo, in_progress, instruction_arities)?;
+                    inputs += arm_arity.inputs();
+                    match arm_arity {
+                        // An arm that always fails takes the whole `par` with
+                        // it — the arms run side by side, not one after the
+                        // other, so there is no "after" for the rest to reach.
+                        Arity::Panic { .. } => panics = true,
+                        Arity::Normal { outputs: m, .. } => outputs += m,
+                    }
+                }
+
+                if current_size < inputs {
+                    initial_req += inputs - current_size;
+                    current_size = inputs;
+                }
+                if panics {
+                    let sentence_arity = Arity::Panic {
+                        inputs: initial_req,
+                    };
+                    let n = sentence_arity.inputs();
+                    let arities = depths
+                        .into_iter()
+                        .map(|d| Arity::Normal {
+                            inputs: n,
+                            outputs: d,
+                        })
+                        .collect();
+                    return Ok((sentence_arity, arities));
+                }
+                current_size = current_size - inputs + outputs;
+            }
             Instruction::Branch(then_t, else_t) => {
                 if is_recursive(*then_t, library) {
                     return Err(format!(
@@ -619,61 +771,51 @@ fn infer_arity_of_instructions(
     Ok((sentence_arity, arities))
 }
 
+/// The arity of a branch, from two arms that must already agree on it.
+///
+/// **Both arms must have the same arity, not merely the same net change.** The
+/// two are alternatives for one position in the program, so anything that
+/// composes with the branch composes with each arm; an arm that asked for less
+/// than its sibling would be a program whose demand on the stack depended on a
+/// value. [`crate::balance`] is what makes this hold without the user writing
+/// it out: it pads the narrower arm with `par { id k } { arm }` before this
+/// ever runs, so by the time inference gets here the widths already match.
+///
+/// A `panic` arm still constrains only its input count, since it has no outputs
+/// to agree about — an arm that does not return says nothing about what the
+/// branch leaves. Its input count is padded like any other.
 fn combine_branch_arities(then: Arity, el: Arity) -> Result<Arity, String> {
+    let (n_then, n_else) = (then.inputs(), el.inputs());
+    if n_then != n_else {
+        // Unreachable for anything `balance` could reach — it pads exactly this
+        // gap — so getting here means an arm's arity was not knowable then.
+        return Err(format!(
+            "then requires {} inputs, else requires {}",
+            n_then, n_else
+        ));
+    }
     match (then, el) {
-        (Arity::Panic { inputs: n_then }, Arity::Panic { inputs: n_else }) => Ok(Arity::Panic {
-            inputs: std::cmp::max(n_then, n_else),
-        }),
-        (
-            Arity::Panic { inputs: n_then },
-            Arity::Normal {
-                inputs: n_else,
-                outputs: m_else,
-            },
-        ) => {
-            let net_else = m_else - n_else;
-            let n_b = std::cmp::max(n_then, n_else);
-            Ok(Arity::Normal {
-                inputs: n_b,
-                outputs: n_b + net_else,
-            })
-        }
+        (Arity::Panic { inputs }, Arity::Panic { .. }) => Ok(Arity::Panic { inputs }),
+        (Arity::Panic { .. }, normal) | (normal, Arity::Panic { .. }) => Ok(normal),
         (
             Arity::Normal {
-                inputs: n_then,
-                outputs: m_then,
-            },
-            Arity::Panic { inputs: n_else },
-        ) => {
-            let net_then = m_then - n_then;
-            let n_b = std::cmp::max(n_then, n_else);
-            Ok(Arity::Normal {
-                inputs: n_b,
-                outputs: n_b + net_then,
-            })
-        }
-        (
-            Arity::Normal {
-                inputs: n_then,
+                inputs,
                 outputs: m_then,
             },
             Arity::Normal {
-                inputs: n_else,
-                outputs: m_else,
+                outputs: m_else, ..
             },
         ) => {
-            let net_then = m_then - n_then;
-            let net_else = m_else - n_else;
-            if net_then != net_else {
+            if m_then != m_else {
                 return Err(format!(
                     "then has net change {}, else has net change {}",
-                    net_then, net_else
+                    m_then - inputs,
+                    m_else - inputs
                 ));
             }
-            let n_b = std::cmp::max(n_then, n_else);
             Ok(Arity::Normal {
-                inputs: n_b,
-                outputs: n_b + net_then,
+                inputs,
+                outputs: m_then,
             })
         }
     }
@@ -748,6 +890,130 @@ mod tests {
                 outputs: 1
             })
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // `id` and `par`
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn the_identity_asks_for_what_it_leaves() {
+        for width in 0..4 {
+            assert_eq!(
+                arity_of(&format!("sentence probe {{ id {} }}", width), "probe"),
+                Some(Arity::Normal {
+                    inputs: width,
+                    outputs: width
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn the_identity_is_a_demand_a_body_cannot_otherwise_state() {
+        // The whole reason it exists: `id` is the only way to make a sentence
+        // require values it does not touch, which is what padding needs.
+        let got = arity_of("sentence probe { id 3 push 1 }", "probe");
+        assert_eq!(
+            got,
+            Some(Arity::Normal {
+                inputs: 3,
+                outputs: 4
+            })
+        );
+    }
+
+    #[test]
+    fn a_par_adds_up_its_arms() {
+        // Each arm has its own window, so nothing here reasons about where the
+        // cuts fall — the arities simply add.
+        let got = arity_of("sentence probe { par { add } { untuple 2 } }", "probe");
+        assert_eq!(
+            got,
+            Some(Arity::Normal {
+                inputs: 3,
+                outputs: 5
+            })
+        );
+    }
+
+    #[test]
+    fn a_dip_is_a_par_with_a_trailing_identity() {
+        // The equivalence the design turns on, as an equation between arities.
+        for depth in 0..4 {
+            let dipped = arity_of(
+                &format!("sentence probe {{ dip {} {{ add }} }}", depth),
+                "probe",
+            );
+            let paired = arity_of(
+                &format!("sentence probe {{ par {{ add }} {{ id {} }} }}", depth),
+                "probe",
+            );
+            assert_eq!(dipped, paired, "at depth {}", depth);
+        }
+    }
+
+    #[test]
+    fn an_arm_that_always_fails_takes_the_whole_par_with_it() {
+        // The arms run side by side rather than one after another, so there is
+        // no "after" for the surviving arms to reach — but the failing arm
+        // still asks for its window.
+        let got = arity_of("sentence probe { par { add } { panic } }", "probe");
+        assert_eq!(got, Some(Arity::Panic { inputs: 2 }));
+    }
+
+    #[test]
+    fn a_par_arm_counts_towards_reachable_failure() {
+        // `#[total]` is a claim about everything a sentence can reach, and an
+        // arm is reachable.
+        let msg = totality_error("#[total] sentence claims { par { drop 0 } { assert } }");
+        assert!(msg.contains("#[total]"), "{}", msg);
+        assert!(msg.contains("assert"), "{}", msg);
+    }
+
+    #[test]
+    fn a_par_arm_must_have_a_knowable_arity() {
+        // The one thing that is fatal rather than merely imprecise: the arity
+        // *is* the cut. A `#[recursive]` sentence is where it can hide, since
+        // inference skips those entirely and nothing else would look.
+        for code in [
+            "#[recursive] sentence loops { par { jump loops } }",
+            "#[recursive] #[arity(1, 1)] sentence loops { par { jump loops } }",
+        ] {
+            let err = assemble(code).unwrap_err();
+            assert!(err.contains("arity is not knowable"), "{}", err);
+            assert!(err.contains("may not recurse"), "{}", err);
+        }
+    }
+
+    #[test]
+    fn an_ordinary_par_inside_a_recursive_sentence_is_fine() {
+        // An inline block wears the `#[recursive]` marker of whoever wrote it,
+        // which says nothing about the block. These arms are ordinary and are
+        // inferred as such — refusing them would make `par` unusable inside
+        // every loop in a program.
+        assert!(
+            assemble(
+                r#"
+            #[recursive]
+            #[arity(3, 3)]
+            sentence loops {
+                par { add } { drop 0 push 1 }
+                pick 0 is_int branch { } { jump loops }
+            }
+        "#
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn a_par_needs_at_least_one_arm() {
+        // Otherwise `par add` would parse as a zero-arm `par` followed by an
+        // `add`, which is a silent misreading of a typo.
+        let err = assemble("sentence probe { par add }").unwrap_err();
+        assert!(err.contains("the first arm of the `par`"), "{}", err);
+        assert!(err.contains("par { jump a } { jump b }"), "{}", err);
     }
 
     // -----------------------------------------------------------------------
