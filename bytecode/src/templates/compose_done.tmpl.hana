@@ -9,7 +9,7 @@ function init {
 
 
 function accept {
-    // Stack: [(state, event)]
+    // Stack: [(event, state)]
     untuple 2
     assert
     // Stack: [event, state]
@@ -30,11 +30,11 @@ function emit {
     push false
     // Stack: [(), false]
     tuple 2
-    // Stack: [(false, ())]
+    // Stack: [((), false)]
 }
 
 function process {
-    // Stack: [(state, event)]
+    // Stack: [(event, state)]
     untuple 2
     assert
     // Stack: [event, state]
@@ -47,7 +47,7 @@ function tau_reduce {
     push false
     // Stack: [state, false]
     tuple 2
-    // Stack: [(false, state)]
+    // Stack: [(state, false)]
 }
 
 function is_done {

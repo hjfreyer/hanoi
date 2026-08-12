@@ -1478,8 +1478,9 @@ there. Widening `eval_op` is not a new law — `Rule::Eval` already says "the
 pushes of what the operator answers".
 
 Both directions owe the interpreter exactly, junk included: `tuple n` takes the
-top `n` and the **topmost becomes the first element**, so `push 1 ; push 2 ;
-tuple 2` is `push (2, 1)`; and an `untuple n` whose width does not match leaves
+top `n` in the order they sit on the stack, so the **topmost becomes the last
+element** and `push 1 ; push 2 ; tuple 2` is `push (1, 2)`; and an `untuple n`
+whose width does not match leaves
 the value in the deepest slot it filled, `()` in the rest, and `false` on top.
 `identities::building_and_taking_apart_literals` measures both against the
 machine rather than restating them.

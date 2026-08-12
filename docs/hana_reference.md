@@ -101,8 +101,8 @@ These operations construct, destructure, or query structured data types.
 
 | Mnemonic | Syntax | Stack Transition | Description |
 | :--- | :--- | :--- | :--- |
-| `tuple` | `tuple <size>` | `[..., v_{N-1}, ..., v_0] -> [..., (v_0, ..., v_{N-1})]` | Pops $N$ elements and packages them into a tuple. **Gotcha**: The TOS element $v_0$ becomes index 0 of the tuple. |
-| `untuple` ⚑ | `untuple <size>` | `[..., (v_0, ..., v_{N-1})] -> [..., v_{N-1}, ..., v_0, ok]` | Pops a tuple of size $N$ and pushes its elements back onto the stack in reverse index order, leaving index 0 ($v_0$) at the top. Anything else **fails**, leaving the value itself in the deepest of the $N$ slots with `()` padding above it — so a caller that reads the flag has lost nothing. |
+| `tuple` | `tuple <size>` | `[..., v_0, ..., v_{N-1}] -> [..., (v_0, ..., v_{N-1})]` | Pops $N$ elements and packages them into a tuple, keeping their stack order: the deepest becomes index 0 and the TOS element $v_{N-1}$ becomes the last. |
+| `untuple` ⚑ | `untuple <size>` | `[..., (v_0, ..., v_{N-1})] -> [..., v_0, ..., v_{N-1}, ok]` | Pops a tuple of size $N$ and pushes its elements back onto the stack in index order, leaving the last element ($v_{N-1}$) at the top — the slot it came from. Anything else **fails**, leaving the value itself in the deepest of the $N$ slots with `()` padding above it — so a caller that reads the flag has lost nothing. |
 | `const_string_len` ⚑ | `const_string_len` | `[..., str] -> [..., len, ok]` | Pops a const string and pushes its character length as an Int. Fails on anything else, handing the value back. |
 | `const_string_char_at` ⚑ | `const_string_char_at` | `[..., str, idx] -> [..., char, ok]` | Pops index $idx$ and const string $str$, then pushes the Unicode code point of the character at that index as an Int. Fails, answering `0`, if the index is out of range or either operand is the wrong type. |
 | `tuple_length` ⚑ | `tuple_length` | `[..., tup] -> [..., len, ok]` | Pops a Tuple and pushes its element count as an Int. Fails on a non-tuple, handing the value back. |

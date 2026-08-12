@@ -10,7 +10,7 @@ test sentence verify_is_done_basic_machines {
     assert_eq
 
     // 2. queue: state ((), (), (), idle) -> is_done = false
-    push (super::queue::State::Idle::tag, (())) // state
+    push ((()), super::queue::State::Idle::tag) // state
     jump super::queue::queue::is_done
     push false
     assert_eq
@@ -50,7 +50,7 @@ test sentence verify_is_ready_to_finish_basic_machines {
     assert_eq
 
     // 2. queue: state ((), (), (), idle) -> is_ready_to_finish = true
-    push (super::queue::State::Idle::tag, (())) // state
+    push ((()), super::queue::State::Idle::tag) // state
     jump super::queue::queue::is_ready_to_finish
     push true
     assert_eq

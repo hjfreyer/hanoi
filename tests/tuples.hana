@@ -17,7 +17,7 @@ test sentence simple_tuple {
 
 test sentence nested_tuples {
     push 10
-    push (20, 30)
+    push (30, 20)
     tuple 2
     
     // Destructure outer tuple

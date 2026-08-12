@@ -366,7 +366,10 @@ fn lower_type(decl: sugar::TypeDecl) -> Result<core::Item, String> {
 
 /// `enum Name { V(specs), … }` becomes a module per variant, each holding a
 /// fresh `tag` symbol, a `Body` predicate for the payload, and a `check` for
-/// the `(tag, Body)` pair — plus a `check` over the union of variants.
+/// the `(Body, tag)` pair — plus a `check` over the union of variants.
+///
+/// The tag sits on top of the payload, which is the *last* element of a pair:
+/// a value of the variant is `push …body… ; push tag ; tuple 2`.
 fn lower_enum(decl: sugar::EnumDecl) -> Result<core::Item, String> {
     let mut items = Vec::new();
     let mut variant_specs = Vec::new();
@@ -386,8 +389,8 @@ fn lower_enum(decl: sugar::EnumDecl) -> Result<core::Item, String> {
         // `Variant::check` lands in `Name::Variant`, and `tag` and `Body` are
         // its own children, so these generated paths need no prefix.
         let variant_spec = TypeSpec::Tuple(vec![
-            TypeSpec::Path(ident_path(&["tag"])),
             TypeSpec::Path(ident_path(&["Body"])),
+            TypeSpec::Path(ident_path(&["tag"])),
         ]);
         let variant_check = check_sentence(&variant_spec, Vec::new())?;
 
@@ -464,9 +467,12 @@ fn compile_type_spec(spec: &TypeSpec) -> Result<Vec<ParsedInstruction>, String> 
                 return Ok(vec![ParsedInstruction::Untuple(0)]);
             }
 
+            // `untuple n` leaves the last element on top and element 0 in the
+            // deepest slot, so the elements are checked back to front: the one
+            // this spec names last is the one already under the nose.
             let then_untupled = {
-                let mut insts = compile_type_spec(&elements[0])?;
-                for elem in elements.iter().skip(1) {
+                let mut insts = compile_type_spec(&elements[n - 1])?;
+                for elem in elements.iter().rev().skip(1) {
                     // The result accumulated so far sits on top of the elements
                     // still to check. Hide it rather than rolling it out of the
                     // way, so each element's check runs in a frame that cannot

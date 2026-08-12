@@ -25,12 +25,12 @@ Every machine module can implement seven standard sentences or functions: `init`
      [event]               [state]               [event]
         │                     │                     │
         ▼                     ▼                     ▼
-   (state, event)          ┌──┴──┐           (event, state)
+   (event, state)          ┌──┴──┐           (event, state)
         │                  │emit │                  │
         ▼                  └──┬──┘                  ▼
     ┌───┴──┐                  │                  ┌───┴───┐
     │accept│                  ▼                  │process│
-    └───┬──┘          (has_event, event)         └───┬───┘
+    └───┬──┘          (event, has_event)         └───┬───┘
         │                                            │
         ▼                                            ▼
       [Bool]                                    [next_state]
@@ -43,17 +43,17 @@ Initializes and pushes the starting state of the machine onto the stack.
 
 ### 2. `accept`
 Calculates whether the machine is willing to accept a specific passive input event in its current state.
-* **Stack Input:** A tuple `(state, event)` where index 0 is the current machine `state` and index 1 is the `event` to evaluate.
+* **Stack Input:** A tuple `(event, state)` where index 1 is the current machine `state` — on top, where `untuple 2` leaves it — and index 0 is the `event` to evaluate.
 * **Stack Output:** A `Bool` (`true` if the event is accepted, `false` otherwise).
 
 ### 3. `emit`
 Calculates and returns a single event that the machine proactively emits.
 * **Stack Input:** The current machine `state`.
-* **Stack Output:** A tuple `(has_event, event)` where index 0 is `has_event` (`Bool`) indicating whether an event is emitted, and index 1 is the `event` itself (or `()` if `has_event` is `false`).
+* **Stack Output:** A tuple `(event, has_event)` where index 1 is `has_event` (`Bool`) indicating whether an event is emitted, and index 0 is the `event` itself (or `()` if `has_event` is `false`).
 
 ### 4. `process`
 Computes the next state of the machine after executing a chosen event.
-* **Stack Input:** A tuple `(state, event)` where index 0 is the current machine `state` and index 1 is the executed `event`.
+* **Stack Input:** A tuple `(event, state)` where index 1 is the current machine `state` and index 0 is the executed `event`.
 * **Stack Output:** Pushes the updated `next_state`.
 
 ### 5. `is_done`
@@ -69,28 +69,28 @@ Determines if the machine is in a state where it is ready to finish (note that m
 ### 7. `tau_reduce`
 Computes an internal/silent transition (tau step) on the state without interacting with the environment.
 * **Stack Input:** The current machine `state`.
-* **Stack Output:** A tuple `(did_reduce, new_state)` where index 0 is `did_reduce` (`Bool`) indicating if an internal transition was performed, and index 1 is the updated `new_state` (or the original `state` if `did_reduce` is `false`).
+* **Stack Output:** A tuple `(new_state, did_reduce)` where index 1 is `did_reduce` (`Bool`) indicating if an internal transition was performed, and index 0 is the updated `new_state` (or the original `state` if `did_reduce` is `false`).
 
 ---
 
 ## Design Patterns & Conventions
 
-Under the `(tag, args)` convention, the tag or state symbol is placed at the first index of the tuple (index 0). Symmetrically, calling `untuple(N)` on a tuple pushes elements onto the stack in reverse order of the tuple's elements, placing index 0 (the tag or state symbol) at the top of the stack.
+Under the `(args, tag)` convention, the tag or state symbol is placed at the *last* index of the tuple, which is the one `tuple N` took off the top of the stack. Symmetrically, `untuple N` pushes the elements back in index order, so the tag or state symbol lands on top again, where the code that dispatches on it wants it.
 
 ### State Representation
-Machine state is typically represented as a `Tuple` starting with the current state symbol:
-* **Customer State:** `(internal_state_symbol, (preferred_drink, id))`
-* **Character Iterator State:** `(const_string, current_index)`
+Machine state is typically represented as a `Tuple` ending with the current state symbol:
+* **Customer State:** `((id, preferred_drink), internal_state_symbol)`
+* **Character Iterator State:** `(current_index, const_string)`
 
 ### Event Representation
-Events are usually represented as a `Tuple` starting with the event identifier symbol:
-* **Coffee Order Event:** `(order, (drink_symbol, customer_id))`
-* **Iterator Step Event:** `(next, character_unicode_codepoint)`
-* **Iterator Finished Event:** `(done, ())`
+Events are usually represented as a `Tuple` ending with the event identifier symbol:
+* **Coffee Order Event:** `((customer_id, drink_symbol), order)`
+* **Iterator Step Event:** `(character_unicode_codepoint, next)`
+* **Iterator Finished Event:** `((), done)`
 
 ### Path Notation
 Events can also be structured using **Path Notation** (dot notation) to represent hierarchical namespaces.
-* **Path Notation:** `foo.bar.baz` corresponds to `(foo, (bar, (baz, ())))` (where `foo` is the outermost tag and `baz` is the innermost event).
+* **Path Notation:** `foo.bar.baz` corresponds to `((((), baz), bar), foo)` (where `foo` is the outermost tag and `baz` is the innermost event).
 
 ---
 
@@ -103,7 +103,7 @@ symbol next
 symbol done
 
 mod char_iterator {
-    // init: takes the parameter () and returns the initial state (sym, 0)
+    // init: takes the parameter () and returns the initial state (0, sym)
     function init {
         untuple 0
         push 0
@@ -111,8 +111,8 @@ mod char_iterator {
         tuple 2
     }
     
-    // accept: takes (state, event) and returns a Bool indicating if the event is accepted.
-    // It accepts (next, ch) if idx < len, and (done, ()) if idx == len.
+    // accept: takes (event, state) and returns a Bool indicating if the event is accepted.
+    // It accepts (ch, next) if idx < len, and ((), done) if idx == len.
     function accept {
         untuple 2
         // Stack: [event, state]
@@ -126,16 +126,16 @@ mod char_iterator {
         pick 1 // len
         less
         branch {
-            // idx < len: accepts (next, ch) where ch is char at idx
+            // idx < len: accepts (ch, next) where ch is char at idx
             pick 1 // sym
             pick 3 // idx
             const_string_char_at // ch (stack: [event, idx, sym, len, ch])
             
             push super::next
-            tuple 2 // (next, ch) (stack: [event, idx, sym, len, (next, ch)])
+            tuple 2 // (ch, next) (stack: [event, idx, sym, len, (ch, next)])
             
-            roll 4 // Stack: [idx, sym, len, (next, ch), event]
-            equal // check if event == (next, ch)
+            roll 4 // Stack: [idx, sym, len, (ch, next), event]
+            equal // check if event == (ch, next)
             
             // Clean up: stack has [idx, sym, len, result]
             roll 3 // [sym, len, result, idx]
@@ -150,12 +150,12 @@ mod char_iterator {
             pick 1 // len
             equal
             branch {
-                // idx == len: accepts (done, ())
+                // idx == len: accepts ((), done)
                 push ()
                 push super::done
-                tuple 2 // (done, ())
+                tuple 2 // ((), done)
                 
-                roll 4 // [idx, sym, len, (done, ()), event]
+                roll 4 // [idx, sym, len, ((), done), event]
                 equal
                 
                 roll 3; drop 0
@@ -170,7 +170,7 @@ mod char_iterator {
         }
     }
     
-    // process: takes (state, event) and transitions (sym, idx) -> (sym, idx + 1)
+    // process: takes (event, state) and transitions (idx, sym) -> (idx + 1, sym)
     function process {
         untuple 2
         // Stack: [event, state]
@@ -183,7 +183,7 @@ mod char_iterator {
         tuple 2
     }
 
-    // is_done: takes state (sym, idx) and returns true if idx >= len
+    // is_done: takes state (idx, sym) and returns true if idx >= len
     function is_done {
         untuple 2 // Stack: [idx, sym]
         pick 0 // sym

@@ -6,7 +6,7 @@ function init {
 
 
 function accept {
-    // Stack: [(state, event)]
+    // Stack: [(event, state)]
     untuple 2
     assert
     // Stack: [event, state]
@@ -43,7 +43,7 @@ function accept {
             roll 1
             // Stack: [payload, state]
             tuple 2
-            // Stack: [(state, payload)]
+            // Stack: [(payload, state)]
             jump {{target}}::accept
             // Stack: [Bool]
         } {
@@ -59,7 +59,7 @@ function accept {
 function emit {
     // Stack: [state]
     jump {{target}}::emit
-    // Stack: [(has_event, event)]
+    // Stack: [(event, has_event)]
     untuple 2
     assert
     // Stack: [event, has_event]
@@ -68,11 +68,11 @@ function emit {
         push {{prefix}}
         // Stack: [event, {{prefix}}]
         tuple 2
-        // Stack: [({{prefix}}, event)]
+        // Stack: [(event, {{prefix}})]
         push true
-        // Stack: [({{prefix}}, event), true]
+        // Stack: [(event, {{prefix}}), true]
         tuple 2
-        // Stack: [(true, ({{prefix}}, event))]
+        // Stack: [((event, {{prefix}}), true)]
     } {
         // Stack: [event]
         drop 0
@@ -82,12 +82,12 @@ function emit {
         push false
         // Stack: [(), false]
         tuple 2
-        // Stack: [(false, ())]
+        // Stack: [((), false)]
     }
 }
 
 function process {
-    // Stack: [(state, event)]
+    // Stack: [(event, state)]
     untuple 2
     assert
     // Stack: [event, state]
@@ -103,7 +103,7 @@ function process {
     roll 1
     // Stack: [payload, state]
     tuple 2
-    // Stack: [(state, payload)]
+    // Stack: [(payload, state)]
     jump {{target}}::process
     // Stack: [next_state]
 }
@@ -113,7 +113,7 @@ function tau_reduce {
     push false
     // Stack: [state, false]
     tuple 2
-    // Stack: [(false, state)]
+    // Stack: [(state, false)]
 }
 
 function is_done {

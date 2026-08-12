@@ -43,6 +43,13 @@ pub enum Value {
     /// `const_string_char_at` read it.
     ConstString(String),
     /// A conceptual tuple containing multiple values.
+    ///
+    /// The elements are in **stack order**: element 0 is the one that sat
+    /// deepest, and the last is the one that was on top. That is what
+    /// [`crate::opcode::Instruction::Tuple`] leaves and what the literal
+    /// `(1, 2)` parses to, so `push 1 ; push 2 ; tuple 2` and `push (1, 2)`
+    /// agree, and a tuple reads the same way round as a listing of the stack
+    /// it came off.
     Tuple(Vec<Value>),
     /// A unique symbol value.
     Symbol(Symbol),

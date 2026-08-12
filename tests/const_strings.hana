@@ -123,7 +123,7 @@ test sentence is_const_string_answers_on_every_shape {
     not
     assert
 
-    push (greeting, 1)
+    push (1, greeting)
     is_const_string
     not
     assert
