@@ -551,7 +551,14 @@ pub(crate) enum Rule {
     /// Only at depth 0. Deeper, `pick d ; dip (d+1) { drop }` is not the
     /// identity at all but a `roll d`: copying to the top and deleting the
     /// original *moves* the value. That is a different law and is not written.
-    CounitUnder,
+    CounitUnder {
+        /// The frame's origins, carried so reading the step backwards puts back
+        /// the `dip` that was there rather than an anonymous one. The law does
+        /// not read them — provenance is not part of what a term does — and
+        /// [`Rule::ElimDip0`] carries its frame's the same way and for the same
+        /// reason.
+        origins: Vec<String>,
+    },
 
     /// `push c ; pick 0` = `push c ; push c`.
     ///
@@ -772,7 +779,7 @@ impl Rule {
             Rule::Commute { .. } => "commute",
             Rule::SplitBool => "split_bool",
             Rule::Counit { .. } => "counit",
-            Rule::CounitUnder => "counit_under",
+            Rule::CounitUnder { .. } => "counit_under",
             Rule::Retest { .. } => "retest",
             Rule::SpecializeEqual { .. } => "specialize_equal",
             Rule::CopyConst { .. } => "copy_const",
@@ -878,7 +885,7 @@ impl Rule {
             | Rule::SplitBool
             | Rule::SpecializeEqual { .. }
             | Rule::Counit { .. }
-            | Rule::CounitUnder
+            | Rule::CounitUnder { .. }
             | Rule::CopyConst { .. }
             | Rule::CopyAssoc { .. }
             | Rule::CancelTuple { .. } => Ok(()),
@@ -1036,11 +1043,11 @@ impl Rule {
                 vec![Node::Op(Instruction::Pick(*d)), Node::Op(Instruction::Drop)]
             }
 
-            Rule::CounitUnder => vec![
+            Rule::CounitUnder { origins } => vec![
                 Node::Op(Instruction::Pick(0)),
                 Node::Dip {
                     depth: 1,
-                    origins: Vec::new(),
+                    origins: origins.clone(),
                     body: vec![Node::Op(Instruction::Drop)],
                 },
             ],
@@ -1230,7 +1237,7 @@ impl Rule {
 
             Rule::Commute { op } => vec![Node::Op(op.clone())],
 
-            Rule::SplitBool | Rule::Counit { .. } | Rule::CounitUnder => Vec::new(),
+            Rule::SplitBool | Rule::Counit { .. } | Rule::CounitUnder { .. } => Vec::new(),
 
             Rule::Retest {
                 arm,
@@ -2351,13 +2358,22 @@ pub(crate) mod tests {
             vec![op(Instruction::Pick(0)), op(Instruction::Drop)]
         );
         assert_eq!(
-            Rule::CounitUnder.lhs(),
+            Rule::CounitUnder {
+                origins: Vec::new()
+            }
+            .lhs(),
             vec![
                 op(Instruction::Pick(0)),
                 dip(1, vec![op(Instruction::Drop)])
             ]
         );
-        assert_eq!(Rule::CounitUnder.rhs(), Vec::new());
+        assert_eq!(
+            Rule::CounitUnder {
+                origins: Vec::new()
+            }
+            .rhs(),
+            Vec::new()
+        );
     }
 
     #[test]
@@ -2439,7 +2455,9 @@ pub(crate) mod tests {
             Rule::BoolResult {
                 op: Instruction::IsBool,
             },
-            Rule::CounitUnder,
+            Rule::CounitUnder {
+                origins: Vec::new(),
+            },
             Rule::Retest {
                 arm: Arm::Then,
                 inner: branch(vec![op(Instruction::Not)], vec![op(Instruction::IsBool)]),

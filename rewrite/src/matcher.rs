@@ -2661,7 +2661,11 @@ impl Matcher for CounitUnder {
     fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
         let [
             Node::Op(Instruction::Pick(0)),
-            Node::Dip { depth: 1, body, .. },
+            Node::Dip {
+                depth: 1,
+                origins,
+                body,
+            },
         ] = window
         else {
             return None;
@@ -2669,7 +2673,13 @@ impl Matcher for CounitUnder {
         let [Node::Op(Instruction::Drop)] = &body[..] else {
             return None;
         };
-        at_window(prog, Rule::CounitUnder, Direction::Forward)
+        at_window(
+            prog,
+            Rule::CounitUnder {
+                origins: origins.clone(),
+            },
+            Direction::Forward,
+        )
     }
 }
 
@@ -2699,7 +2709,15 @@ impl Matcher for InvCounitUnder {
         Ok(Box::new(CounitUnder))
     }
     fn plan(&self, prog: &Program, _window: &[Node]) -> Option<Vec<PlannedStep>> {
-        at_window(prog, Rule::CounitUnder, Direction::Reverse)
+        // Inserted out of nothing, so the frame it puts down came from nowhere
+        // and says so.
+        at_window(
+            prog,
+            Rule::CounitUnder {
+                origins: Vec::new(),
+            },
+            Direction::Reverse,
+        )
     }
 }
 

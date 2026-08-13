@@ -239,7 +239,7 @@ fn write_rule(prog: &Program, rule: &Rule) -> Result<Vec<(&'static str, String)>
         Rule::Commute { op } => vec![("op", write_op(prog, op)?)],
         Rule::SplitBool => Vec::new(),
         Rule::Counit { d } => vec![("d", d.to_string())],
-        Rule::CounitUnder => Vec::new(),
+        Rule::CounitUnder { .. } => Vec::new(),
         Rule::Retest {
             arm,
             inner,
@@ -1151,7 +1151,9 @@ impl<'a> Parser<'a> {
             "commute" => StepKind::Rule(Rule::Commute { op: f.op("op")? }),
             "split_bool" => StepKind::Rule(Rule::SplitBool),
             "counit" => StepKind::Rule(Rule::Counit { d: f.count("d")? }),
-            "counit_under" => StepKind::Rule(Rule::CounitUnder),
+            "counit_under" => StepKind::Rule(Rule::CounitUnder {
+                origins: Vec::new(),
+            }),
             "retest" => StepKind::Rule(Rule::Retest {
                 arm: f.arm("arm")?,
                 inner: f.node("inner")?,
@@ -1628,7 +1630,9 @@ mod tests {
             },
             Rule::SplitBool,
             Rule::Counit { d: 4 },
-            Rule::CounitUnder,
+            Rule::CounitUnder {
+                origins: Vec::new(),
+            },
             Rule::Retest {
                 arm: Arm::Else,
                 inner: branch.clone(),
