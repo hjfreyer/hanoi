@@ -128,7 +128,7 @@ pub(crate) fn balance_early_returns(
             deep_drop = Some(idx);
         }
         for _ in 0..drops {
-            library.sentences[site.fail].push(Instruction::Dip(1, deep_drop.unwrap()));
+            library.sentences[site.fail].push(Instruction::Dip(deep_drop.unwrap()));
         }
     }
     Ok(())
@@ -261,10 +261,8 @@ pub fn op_arity(inst: &Instruction) -> Option<(i64, i64)> {
     Some(match inst {
         Instruction::Push(_) => (0, 1),
         Instruction::Drop => (1, 0),
-        // Pick reads at `d` and copies it to the top, so it touches everything
-        // down to that depth even though it consumes nothing.
-        Instruction::Pick(d) => (*d as i64 + 1, *d as i64 + 2),
-        Instruction::Roll(d) => (*d as i64 + 1, *d as i64 + 1),
+        Instruction::Copy => (1, 2),
+        Instruction::Swap => (2, 2),
         Instruction::Equal | Instruction::And | Instruction::Or => (2, 1),
         Instruction::Not
         | Instruction::IsInt
@@ -286,7 +284,7 @@ pub fn op_arity(inst: &Instruction) -> Option<(i64, i64)> {
         Instruction::Negate | Instruction::ConstStringLen | Instruction::TupleLength => (1, 2),
         Instruction::Untuple(n) => (1, *n as i64 + 1),
         Instruction::Tuple(n) => (*n as i64, 1),
-        Instruction::Dip(..) | Instruction::Branch(..) => return None,
+        Instruction::Jump(..) | Instruction::Dip(..) | Instruction::Branch(..) => return None,
     })
 }
 
@@ -339,13 +337,18 @@ fn infer_arity_of_instructions(
     for inst in sentence {
         depths.push(current_size);
         match inst {
-            Instruction::Dip(depth, target) => {
+            // Both call instructions, reached through the accessor so that
+            // neither can be walked past: `jump` hides nothing and `dip` hides
+            // one, and that is the whole of what separates them here.
+            call if call.callee().is_some() => {
+                let target = call.callee().expect("guarded by the arm");
+                let depth = call.hidden().expect("a call hides a known amount");
                 let target_arity =
-                    get_or_infer_arity(*target, library, memo, in_progress, instruction_arities)?;
+                    get_or_infer_arity(target, library, memo, in_progress, instruction_arities)?;
                 let (n_target, m_target) = (target_arity.inputs, target_arity.outputs);
-                // The hidden values sit above the callee's window, so they count
+                // The hidden value sits above the callee's window, so it counts
                 // towards the requirement but not towards the net change.
-                let req = *depth as i64 + n_target;
+                let req = depth as i64 + n_target;
                 if current_size < req {
                     let diff = req - current_size;
                     initial_req += diff;

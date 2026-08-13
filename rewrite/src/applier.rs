@@ -393,11 +393,11 @@ mod tests {
         // `counit` takes two nodes and leaves none.
         let mut tree = vec![
             op(Instruction::Not),
-            op(Instruction::Pick(2)),
+            op(Instruction::Copy),
             op(Instruction::Drop),
             op(Instruction::Add),
         ];
-        let s = step(Rule::Counit { d: 2 }, Direction::Forward, Location::root(1));
+        let s = step(Rule::Counit { d: 0 }, Direction::Forward, Location::root(1));
         let info = apply_step(&prog(), &mut tree, &s, 0, true).unwrap();
         assert_eq!(
             info,
@@ -501,7 +501,7 @@ mod tests {
             },
             Rule::Counit { d: 3 },
             Rule::CopyConst { c: Value::Int(7) },
-            Rule::CopyAssoc { d: 2 },
+            Rule::CopyAssoc,
             Rule::CancelTuple { n: 3 },
         ]
     }
@@ -556,7 +556,7 @@ mod tests {
 
     #[test]
     fn a_window_running_off_the_end_is_refused() {
-        let mut tree = vec![op(Instruction::Pick(0))];
+        let mut tree = vec![op(Instruction::Copy)];
         let s = step(Rule::Counit { d: 0 }, Direction::Forward, Location::root(0));
         assert!(matches!(
             apply_step(&prog(), &mut tree, &s, 0, false)
@@ -572,7 +572,7 @@ mod tests {
 
     #[test]
     fn a_window_that_is_not_what_the_equation_says_is_refused() {
-        let mut tree = vec![op(Instruction::Pick(0)), op(Instruction::Add)];
+        let mut tree = vec![op(Instruction::Copy), op(Instruction::Add)];
         let s = step(Rule::Counit { d: 0 }, Direction::Forward, Location::root(0));
         let err = apply_step(&prog(), &mut tree, &s, 0, false).unwrap_err();
         let Cause::WindowMismatch { expected, found } = &err.cause else {
@@ -608,7 +608,7 @@ mod tests {
 
     #[test]
     fn a_failed_step_leaves_the_tree_alone() {
-        let before = vec![op(Instruction::Pick(0)), op(Instruction::Add)];
+        let before = vec![op(Instruction::Copy), op(Instruction::Add)];
         let mut tree = before.clone();
         let s = step(Rule::Counit { d: 0 }, Direction::Forward, Location::root(0));
         assert!(apply_step(&prog(), &mut tree, &s, 0, false).is_err());
@@ -636,7 +636,7 @@ mod tests {
             tree,
             vec![
                 op(Instruction::Not),
-                op(Instruction::Pick(0)),
+                op(Instruction::Copy),
                 op(Instruction::Drop),
                 op(Instruction::Add),
             ]
@@ -659,12 +659,15 @@ mod tests {
             (op(Instruction::Untuple(2)), 1, 3),
             (op(Instruction::Not), 1, 1),
         ] {
+            // A `pick (n-1)` is one node at depth 0 and two under frames, so
+            // the `i`th pair goes in past what the `i` before it wrote.
+            let wide = crate::rule::pick(n - 1).len();
             let mut script: Vec<Step> = (0..n)
                 .map(|i| {
                     step(
                         Rule::Counit { d: n - 1 },
                         Direction::Reverse,
-                        Location::root(i),
+                        Location::root(i * wide),
                     )
                 })
                 .collect();
@@ -675,7 +678,7 @@ mod tests {
                     m,
                 },
                 Direction::Reverse,
-                Location::root(n),
+                Location::root(n * wide),
             ));
 
             let mut tree: Vec<Node> = Vec::new();
@@ -712,7 +715,7 @@ mod tests {
     fn copy_const_is_derivable_from_copy_nat() {
         // Is `copy_const` an axiom, or a lemma? Run the derivation and find out.
         //
-        //   push c ; pick 0
+        //   push c ; copy
         //     copy_nat backwards, at n = 0        -> push c ; dip 1 { push c }
         //     interchange forwards                -> dip 0 { push c } ; push c
         //     elim_dip0 forwards                  -> push c ; push c
@@ -784,38 +787,39 @@ mod tests {
     }
 
     #[test]
-    fn copy_const_at_depth_is_derivable_from_the_roll_laws() {
-        // The question the roll laws exist to answer: does a literal held
+    fn copy_const_at_depth_is_derivable_from_the_movement_laws() {
+        // The question the movement laws exist to answer: does a literal held
         // *below* the top of the stack still read as a literal? `copy_const` is
-        // stated at depth 0, and the slot is read with `pick d`, which is
-        // opaque to every law that folds. Run the derivation and find out.
+        // stated at the top, and the slot below is read with `pick 1`, which
+        // phase 4 writes as `dip { copy } ; swap`. Run the derivation and find
+        // out.
         //
-        //   dip d { push c } ; pick d
-        //     pick_roll forwards      -> dip d { push c } ; dip d { pick 0 } ; roll d
-        //     fuse forwards           -> dip d { push c ; pick 0 } ; roll d
-        //     copy_const, in the body -> dip d { push c ; push c } ; roll d
-        //     fuse backwards          -> dip d { push c } ; dip d { push c } ; roll d
-        //     unframe forwards        -> dip d { push c } ; push c
+        //   dip { push c } ; dip { copy } ; swap
+        //     fuse forwards           -> dip { push c ; copy } ; swap
+        //     copy_const, in the body -> dip { push c ; push c } ; swap
+        //     fuse backwards          -> dip { push c } ; dip { push c } ; swap
+        //     unframe forwards        -> dip { push c } ; push c
         //
-        // So `copy_const` needs no depth reading of its own, and neither does
-        // anything else: the roll laws move the value to where the law already
-        // applies, rather than restating the law where the value is.
-        let d = 3;
+        // Four steps where it used to be five: the derivation opened with
+        // `pick_roll`, the equation saying `pick d` is a framed copy rolled up,
+        // and that equation is now what the compiler emits rather than
+        // something a proof has to reach for. What is left moves the value to
+        // where the law already applies, rather than restating the law where
+        // the value is.
         let c = Value::Int(7);
         let push_c = || op(Instruction::Push(c.clone()));
         let framed = |body: Vec<Node>| Node::Dip {
-            depth: d,
+            depth: 1,
             origins: Vec::new(),
             body,
         };
 
         let script = vec![
-            step(Rule::PickRoll { d }, Direction::Forward, Location::root(1)),
             step(
                 Rule::Fuse {
-                    k: d,
+                    k: 1,
                     a: vec![push_c()],
-                    b: vec![op(Instruction::Pick(0))],
+                    b: vec![op(Instruction::Copy)],
                     a_origins: Vec::new(),
                     b_origins: Vec::new(),
                 },
@@ -832,7 +836,7 @@ mod tests {
             ),
             step(
                 Rule::Fuse {
-                    k: d,
+                    k: 1,
                     a: vec![push_c()],
                     b: vec![push_c()],
                     a_origins: Vec::new(),
@@ -852,7 +856,15 @@ mod tests {
             ),
         ];
 
-        let mut tree = vec![framed(vec![push_c()]), op(Instruction::Pick(d))];
+        // `pick 1`, as phase 4 writes it.
+        let pick_one = || vec![framed(vec![op(Instruction::Copy)]), op(Instruction::Swap)];
+        let start = || {
+            let mut t = vec![framed(vec![push_c()])];
+            t.extend(pick_one());
+            t
+        };
+
+        let mut tree = start();
         apply_script(&prog(), &mut tree, &script, true)
             .unwrap_or_else(|e| panic!("deriving copy_const at depth: {}", e));
         assert_eq!(
@@ -872,7 +884,7 @@ mod tests {
             .collect();
         apply_script(&prog(), &mut tree, &back, true)
             .unwrap_or_else(|e| panic!("undoing the derivation: {}", e));
-        assert_eq!(tree, vec![framed(vec![push_c()]), op(Instruction::Pick(d))]);
+        assert_eq!(tree, start());
     }
 
     // -- provenance is not identity -----------------------------------------

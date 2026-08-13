@@ -154,29 +154,22 @@ impl VM {
                     }
                     self.stack.pop();
                 }
-                Instruction::Pick(depth) => {
-                    if self.stack.len() <= depth {
-                        return Err(format!(
-                            "Stack underflow on Pick: depth {} but stack size {}",
-                            depth,
-                            self.stack.len()
-                        ));
-                    }
-                    let index = self.stack.len() - 1 - depth;
-                    let val = self.stack[index].clone();
+                Instruction::Copy => {
+                    let Some(top) = self.stack.last() else {
+                        return Err("Stack underflow on Copy".to_string());
+                    };
+                    let val = top.clone();
                     self.stack.push(val);
                 }
-                Instruction::Roll(depth) => {
-                    if self.stack.len() <= depth {
+                Instruction::Swap => {
+                    if self.stack.len() < 2 {
                         return Err(format!(
-                            "Stack underflow on Roll: depth {} but stack size {}",
-                            depth,
+                            "Stack underflow on Swap: stack size {}",
                             self.stack.len()
                         ));
                     }
-                    let index = self.stack.len() - 1 - depth;
-                    let val = self.stack.remove(index);
-                    self.stack.push(val);
+                    let top = self.stack.len() - 1;
+                    self.stack.swap(top, top - 1);
                 }
                 Instruction::Equal => {
                     let b = self.pop()?;
@@ -269,20 +262,26 @@ impl VM {
                         other => self.failed(other),
                     }
                 }
-                Instruction::Dip(depth, target) => {
-                    if self.stack.len() < depth {
-                        return Err(format!(
-                            "Stack underflow on Dip: depth {} but stack size {}",
-                            depth,
-                            self.stack.len()
-                        ));
-                    }
-                    // Withhold the top `depth` values for the duration of the call.
-                    let hidden = self.stack.split_off(self.stack.len() - depth);
+                Instruction::Jump(target) => {
                     self.call_stack.push(Frame {
                         sentence: current_sentence,
                         ip,
-                        hidden,
+                        hidden: Vec::new(),
+                    });
+                    current_sentence = target;
+                    ip = 0;
+                }
+                Instruction::Dip(target) => {
+                    // Withhold the top value for the duration of the call. One
+                    // value, always: a deeper region is this many frames deep,
+                    // and each of them hides its own.
+                    let Some(hidden) = self.stack.pop() else {
+                        return Err("Stack underflow on Dip".to_string());
+                    };
+                    self.call_stack.push(Frame {
+                        sentence: current_sentence,
+                        ip,
+                        hidden: vec![hidden],
                     });
                     current_sentence = target;
                     ip = 0;
@@ -442,9 +441,9 @@ mod tests {
         let mut library = Library::new();
         let sentence = vec![
             Instruction::Push(Value::Int(5)),
-            Instruction::Pick(0), // Dup
+            Instruction::Copy,
             Instruction::Push(Value::Int(10)),
-            Instruction::Roll(1), // Swap top two
+            Instruction::Swap,
         ];
         library.sentences.push(sentence);
         let idx = SentenceIndex::from(0);
@@ -484,7 +483,7 @@ mod tests {
         // sentence 1 ran and returned here.
         let s0 = vec![
             Instruction::Push(Value::Int(10)),
-            Instruction::Dip(0, SentenceIndex::from(1)),
+            Instruction::Jump(SentenceIndex::from(1)),
             Instruction::Equal,
         ];
 
@@ -508,7 +507,7 @@ mod tests {
             Instruction::Push(Value::Int(1)),
             Instruction::Push(Value::Int(2)),
             Instruction::Push(Value::Int(99)),
-            Instruction::Dip(1, SentenceIndex::from(1)),
+            Instruction::Dip(SentenceIndex::from(1)),
         ];
         let s1 = vec![Instruction::Add, Instruction::Drop];
 
@@ -527,7 +526,7 @@ mod tests {
         let s0 = vec![
             Instruction::Push(Value::Int(1)),
             Instruction::Push(Value::Int(2)),
-            Instruction::Dip(0, SentenceIndex::from(1)),
+            Instruction::Jump(SentenceIndex::from(1)),
         ];
         let s1 = vec![Instruction::Add, Instruction::Drop];
 
@@ -550,9 +549,9 @@ mod tests {
             Instruction::Push(Value::Int(2)),
             Instruction::Push(Value::Int(8)),
             Instruction::Push(Value::Int(9)),
-            Instruction::Dip(1, SentenceIndex::from(1)),
+            Instruction::Dip(SentenceIndex::from(1)),
         ];
-        let s1 = vec![Instruction::Dip(1, SentenceIndex::from(2))];
+        let s1 = vec![Instruction::Dip(SentenceIndex::from(2))];
         let s2 = vec![Instruction::Add, Instruction::Drop];
 
         library.sentences.push(s0);
@@ -568,10 +567,9 @@ mod tests {
     fn test_dip_underflow() {
         let mut library = Library::new();
 
-        let s0 = vec![
-            Instruction::Push(Value::Int(1)),
-            Instruction::Dip(3, SentenceIndex::from(1)),
-        ];
+        // A frame hides one value, so an empty stack is the whole of what it
+        // takes to have nothing to hide.
+        let s0 = vec![Instruction::Dip(SentenceIndex::from(1))];
         let s1 = vec![];
 
         library.sentences.push(s0);
@@ -1693,8 +1691,8 @@ mod totality_tests {
         // would underflow does not assemble in the first place.
         for body in [
             vec![Instruction::Drop],
-            vec![Instruction::Pick(0)],
-            vec![Instruction::Roll(2)],
+            vec![Instruction::Copy],
+            vec![Instruction::Swap],
             vec![Instruction::Tuple(1)],
             vec![Instruction::Add],
         ] {
@@ -1989,78 +1987,167 @@ mod runtime_tests {
     }
 }
 
-/// The three laws relating `dip` to `roll`, measured against the machine.
+/// What the movement macros mean, measured against the machine.
 ///
-/// `bin/rewrite` rewrites on the strength of these — they are what lets a law
-/// stated about the top of the stack reach a value held below it — so, like
-/// `Instruction::commutative` and `Instruction::yields_bool`, they are run
-/// rather than asserted. Each test builds both sides of one equation and
-/// checks they leave the same stack, over every depth and every shape of
-/// operand the sweep can reach.
+/// `pick d`, `roll d` and `drop d` are not instructions: phase 4 expands each
+/// into frames around `copy`, `swap` and `drop`, and a program never sees the
+/// depth again. What that expansion is *supposed* to compute is the indexed
+/// operation it replaced — copy the value at depth `d` to the top, move it to
+/// the top, discard it — and the expansion being right is a claim about the
+/// compiler that nothing in the compiler can check.
+///
+/// So it is measured, the way [`Instruction::commutative`] and
+/// [`Instruction::yields_bool`] are: both sides are run and compared, over
+/// every depth and every stack size the sweep reaches. A wrong recursion is a
+/// silently wrong program, and this is what stands between the two.
 #[cfg(test)]
-mod roll_law_tests {
-    use super::*;
-    use bytecode::value::Symbol;
+mod movement_tests {
+    use crate::VM;
+    use bytecode::{Value, assemble};
 
-    /// Distinct values, so a law that permuted them wrongly could not pass.
-    fn stack_of(size: usize) -> Vec<Instruction> {
-        (0..size)
-            .map(|i| Instruction::Push(Value::Int(i as i64)))
-            .collect()
-    }
+    /// The deepest reach the sweep goes to. The corpus's deepest is `pick 5`;
+    /// this covers past it, and the expansion is a recursion, so a depth that
+    /// works at seven works at seventy.
+    const DEEPEST: usize = 7;
 
-    /// Runs `body` with `helpers` reachable as sentences 1, 2, … and hands
-    /// back the stack it left.
-    fn run_with(body: Vec<Instruction>, helpers: Vec<Vec<Instruction>>) -> Vec<Value> {
-        let mut library = Library::new();
-        library.sentences.push(body);
-        for h in helpers {
-            library.sentences.push(h);
-        }
-        let mut vm = VM::new(library);
-        vm.execute(SentenceIndex::from(0))
-            .unwrap_or_else(|e| panic!("the law's own side failed to run: {}", e));
+    /// Runs `body` over a stack of `size` distinct ints and hands back what it
+    /// left, bottom first.
+    ///
+    /// The values are `0 … size-1`, all different, so a permutation that went
+    /// wrong cannot pass by coincidence.
+    fn run(size: usize, body: &str) -> Vec<Value> {
+        let pushes: String = (0..size).map(|i| format!("push {} ", i)).collect();
+        let src = format!("export sentence probe {{ {}{} }}", pushes, body);
+        let lib = assemble(&src).unwrap_or_else(|e| panic!("`{}` did not assemble: {}", body, e));
+        let idx = *lib.exports.get("probe").unwrap();
+        let mut vm = VM::new(lib);
+        vm.execute(idx)
+            .unwrap_or_else(|e| panic!("`{}` did not run: {}", body, e));
         vm.stack().to_vec()
     }
 
-    fn rolls(d: usize, count: usize) -> Vec<Instruction> {
-        std::iter::repeat_n(Instruction::Roll(d), count).collect()
+    fn ints(values: &[i64]) -> Vec<Value> {
+        values.iter().map(|v| Value::Int(*v)).collect()
     }
 
-    /// The computations the sweep uses for `X`, with their arities.
-    fn bodies() -> Vec<(Vec<Instruction>, usize, usize)> {
-        vec![
-            (vec![Instruction::IsSymbol], 1, 1),
-            (vec![Instruction::Not], 1, 1),
-            (vec![Instruction::Push(Value::Bool(true))], 0, 1),
-            (vec![Instruction::Add], 2, 2),
-            (vec![Instruction::And], 2, 1),
-            (vec![Instruction::Drop], 1, 0),
-            (
-                vec![
-                    Instruction::Push(Value::Symbol(Symbol {
-                        id: 7,
-                        path: "s7".to_string(),
-                    })),
-                    Instruction::Equal,
-                ],
-                1,
-                1,
-            ),
-        ]
-    }
-
-    /// `(roll d)^(d+1)` = nothing.
+    /// `pick d` leaves the stack alone and puts a copy of its `d`th value on
+    /// top, counting from the top at zero.
     #[test]
-    fn rolling_the_whole_way_round_is_the_identity() {
-        for d in 0..6 {
+    fn pick_copies_the_value_at_that_depth_to_the_top() {
+        for d in 0..DEEPEST {
             for extra in 0..3 {
                 let size = d + 1 + extra;
-                let mut lhs = stack_of(size);
-                lhs.extend(rolls(d, d + 1));
+                let mut want: Vec<i64> = (0..size as i64).collect();
+                want.push(want[size - 1 - d]);
                 assert_eq!(
-                    run_with(lhs, Vec::new()),
-                    run_with(stack_of(size), Vec::new()),
+                    run(size, &format!("pick {}", d)),
+                    ints(&want),
+                    "pick {} on a stack of {}",
+                    d,
+                    size
+                );
+            }
+        }
+    }
+
+    /// `roll d` lifts its `d`th value to the top, shifting the rest down.
+    #[test]
+    fn roll_moves_the_value_at_that_depth_to_the_top() {
+        for d in 0..DEEPEST {
+            for extra in 0..3 {
+                let size = d + 1 + extra;
+                let mut want: Vec<i64> = (0..size as i64).collect();
+                let moved = want.remove(size - 1 - d);
+                want.push(moved);
+                assert_eq!(
+                    run(size, &format!("roll {}", d)),
+                    ints(&want),
+                    "roll {} on a stack of {}",
+                    d,
+                    size
+                );
+            }
+        }
+    }
+
+    /// `drop d` removes its `d`th value and shifts the rest down.
+    #[test]
+    fn drop_discards_the_value_at_that_depth() {
+        for d in 0..DEEPEST {
+            for extra in 0..3 {
+                let size = d + 1 + extra;
+                let mut want: Vec<i64> = (0..size as i64).collect();
+                want.remove(size - 1 - d);
+                assert_eq!(
+                    run(size, &format!("drop {}", d)),
+                    ints(&want),
+                    "drop {} on a stack of {}",
+                    d,
+                    size
+                );
+            }
+        }
+    }
+
+    /// `dip N { X }` hides the top `N` values from `X` and puts them back.
+    ///
+    /// The width is no longer on the instruction — `dip 3` is three frames —
+    /// so what is measured here is that the nesting hides what the width used
+    /// to name, and in the same order.
+    #[test]
+    fn a_nest_of_frames_hides_what_a_width_named() {
+        for n in 0..DEEPEST {
+            let size = n + 2;
+            let mut want: Vec<i64> = (0..size as i64).collect();
+            // The block replaces the two values under the hidden region with
+            // one, which is the arity that makes the restore observable.
+            want.splice(size - n - 2..size - n, [99]);
+            assert_eq!(
+                run(size, &format!("dip {} {{ add drop 0 push 99 drop 1 }}", n)),
+                ints(&want),
+                "dip {} left the hidden values wrong",
+                n
+            );
+        }
+    }
+
+    /// The two spellings of a copy at depth agree: `pick d` is a copy made
+    /// under the frame and rolled up.
+    ///
+    /// This was `Rule::PickRoll`, an axiom of the rewriter. It is now the
+    /// compiler's own definition read at one remove, and the sweep keeps the
+    /// two spellings honest about being one thing.
+    #[test]
+    fn copying_from_depth_is_copying_at_depth_and_rolling_up() {
+        for d in 0..DEEPEST {
+            for extra in 0..3 {
+                let size = d + 1 + extra;
+                assert_eq!(
+                    run(size, &format!("pick {}", d)),
+                    run(size, &format!("dip {} {{ pick 0 }} roll {}", d, d)),
+                    "pick {} is not the framed copy rolled up, on a stack of {}",
+                    d,
+                    size
+                );
+            }
+        }
+    }
+
+    /// `(roll d)^(d+1)` = nothing: a rotation of `d+1` things has order `d+1`.
+    ///
+    /// The law that used to be `Rule::RollCycle`, an axiom for every `d`. What
+    /// the rewriter now assumes is the `d = 1` case, `swap ; swap` = nothing,
+    /// and every other depth is a consequence of the expansion — so the sweep
+    /// is what says the consequence really follows.
+    #[test]
+    fn rolling_the_whole_way_round_is_the_identity() {
+        for d in 0..DEEPEST {
+            for extra in 0..3 {
+                let size = d + 1 + extra;
+                let cycle = format!("roll {} ", d).repeat(d + 1);
+                assert_eq!(
+                    run(size, &cycle),
+                    run(size, ""),
                     "(roll {})^{} moved something, on a stack of {}",
                     d,
                     d + 1,
@@ -2070,54 +2157,45 @@ mod roll_law_tests {
         }
     }
 
-    /// `dip d { X } ; (roll (d+m-1))^m` = `(roll (d+n-1))^n ; X`.
+    /// `dip d { X } ; (roll (d+m-1))^m` = `(roll (d+n-1))^n ; X`, for `X : n -> m`.
+    ///
+    /// A framed computation is a rolled one — the law that brings a value out
+    /// from under a frame to where the folding equations can read it.
     #[test]
     fn a_framed_computation_is_a_rolled_one() {
-        for (body, n, m) in bodies() {
+        // Each body with the arity it has, since the law counts both.
+        let bodies: [(&str, usize, usize); 6] = [
+            ("is_symbol", 1, 1),
+            ("not", 1, 1),
+            ("push true", 0, 1),
+            ("add", 2, 2),
+            ("and", 2, 1),
+            ("drop 0", 1, 0),
+        ];
+        for (body, n, m) in bodies {
             for d in 0..5 {
                 for extra in 0..2 {
                     let size = d + n + extra;
-                    let mut lhs = stack_of(size);
-                    lhs.push(Instruction::Dip(d, SentenceIndex::from(1)));
-                    lhs.extend(rolls(d + m.saturating_sub(1), m));
-
-                    let mut rhs = stack_of(size);
-                    rhs.extend(rolls(d + n.saturating_sub(1), n));
-                    rhs.push(Instruction::Dip(0, SentenceIndex::from(1)));
-
+                    let lhs = format!(
+                        "dip {} {{ {} }} {}",
+                        d,
+                        body,
+                        format!("roll {} ", d + m.saturating_sub(1)).repeat(m)
+                    );
+                    let rhs = format!(
+                        "{}{}",
+                        format!("roll {} ", d + n.saturating_sub(1)).repeat(n),
+                        body
+                    );
                     assert_eq!(
-                        run_with(lhs, vec![body.clone()]),
-                        run_with(rhs, vec![body.clone()]),
-                        "dip {} {{ {:?} }} is not the rolled form, on a stack of {}",
+                        run(size, &lhs),
+                        run(size, &rhs),
+                        "dip {} {{ {} }} is not the rolled form, on a stack of {}",
                         d,
                         body,
                         size
                     );
                 }
-            }
-        }
-    }
-
-    /// `pick d` = `dip d { pick 0 } ; roll d`.
-    #[test]
-    fn copying_from_depth_is_copying_at_depth_and_rolling_up() {
-        for d in 0..6 {
-            for extra in 0..3 {
-                let size = d + 1 + extra;
-                let mut lhs = stack_of(size);
-                lhs.push(Instruction::Pick(d));
-
-                let mut rhs = stack_of(size);
-                rhs.push(Instruction::Dip(d, SentenceIndex::from(1)));
-                rhs.push(Instruction::Roll(d));
-
-                assert_eq!(
-                    run_with(lhs, vec![vec![Instruction::Pick(0)]]),
-                    run_with(rhs, vec![vec![Instruction::Pick(0)]]),
-                    "pick {} is not the framed copy rolled up, on a stack of {}",
-                    d,
-                    size
-                );
             }
         }
     }

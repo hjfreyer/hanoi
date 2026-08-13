@@ -461,7 +461,11 @@ frame away, which is the argument that `copy_const` is a lemma and not an axiom.
 originals were never touched. It is the law that looked essential and turned out
 to be derivable: one annihilation and two counits. It is also the identity whose
 two sides need different amounts of stack, which is why an identity is held to
-its net change.
+its net change. Its annihilation is *aimed*, which is a cost of writing the
+depths out: a `pick 1` is `dip { copy } ; swap` now, and an unaimed
+`annihilate` reads the longest window it can — taking the `swap` along with the
+computation, which is a true equation that leaves the copies nothing to cancel
+against.
 
 **`testing_a_test_by_name`** — the same law as `testing_a_test`, with the
 right-hand side written as the call it is rather than pasted out. Nothing the

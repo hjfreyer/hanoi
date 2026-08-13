@@ -162,7 +162,7 @@ pub(crate) fn rule_listing() -> Vec<String> {
     out.push("rules that take a term, saying what code the window cannot:".to_string());
     for name in term_matcher_names() {
         out.push(format!(
-            "  {} {{ ... }}     e.g. `once({} {{ pick 0 }})`",
+            "  {} {{ ... }}     e.g. `once({} {{ copy }})`",
             name, name
         ));
     }

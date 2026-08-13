@@ -15,7 +15,13 @@ proof copying_a_constant =
 // that this is a lemma rather than an axiom. `applier::tests::\
 // vacuous_is_derivable_from_annihilate_and_counit` runs the same derivation
 // over an opaque `X`; here it is a concrete one, stated in the language.
-proof discarded_work_on_copies = cleanup;
+//
+// The annihilation is aimed, where `cleanup` used to place it. A `pick 1` is
+// `dip { copy } ; swap` now, and an unaimed `annihilate` reads the longest
+// window it can: it takes the `swap` along with the `equal`, which is a true
+// equation and leaves the copies with nothing to cancel against. Naming the
+// position says which computation is the discarded one.
+proof discarded_work_on_copies = must(at(4, annihilate)); cleanup;
 
 // The same proof as `testing_a_test`. What differs is the right-hand side,
 // which names a sentence rather than spelling it out — so this one closes up to

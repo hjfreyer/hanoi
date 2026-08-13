@@ -381,7 +381,7 @@ pub(crate) enum Tactic {
     /// Apply these matchers at every position, left to right, to exhaustion.
     ///
     /// Owned rather than borrowed, because a matcher may carry an argument:
-    /// `introduce { pick 0 }` is a different matcher from `introduce { drop }`
+    /// `introduce { copy }` is a different matcher from `introduce { drop }`
     /// and neither exists until a tactic names it.
     Each(Vec<Box<dyn Matcher>>),
     /// Apply the first matcher that matches, at the first position it matches.
@@ -1773,7 +1773,7 @@ mod tests {
 
     #[test]
     fn a_matcher_that_rebuilds_its_own_window_does_not_settle() {
-        // `swap` puts a `roll 1` in front of the operator it matched, and the
+        // `swap` puts a `swap` in front of the operator it matched, and the
         // operator is still there — so `each` finds it again one along. That is
         // the same shape as `introduce`, and the reason both say to aim rather
         // than sweep. The budget is what says so out loud.
@@ -1785,6 +1785,6 @@ mod tests {
         // Aimed, it does exactly one thing.
         let (after, script) = run_checked(&prog, &once_of(&["swap"]), vec![op(Instruction::Add)]);
         assert_eq!(script.len(), 1);
-        assert_eq!(after, vec![op(Instruction::Roll(1)), op(Instruction::Add)]);
+        assert_eq!(after, vec![op(Instruction::Swap), op(Instruction::Add)]);
     }
 }

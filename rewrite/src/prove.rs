@@ -961,8 +961,8 @@ mod tests {
     fn a_failure_diff_does_not_report_provenance() {
         let c = Corpus::new(
             "provenance",
-            "identity foo { pick 0 branch { push 1 } { push 2 } } \
-             = { pick 0 branch { push 1 } { push 9 } };",
+            "identity foo { copy branch { push 1 } { push 2 } } \
+             = { copy branch { push 1 } { push 9 } };",
             Some("proof foo = id;"),
         );
         let (code, report) = c.run();

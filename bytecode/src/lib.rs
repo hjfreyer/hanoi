@@ -74,7 +74,7 @@ mod tests {
                     Value::Int(2),
                     Value::Tuple(vec![Value::Int(3), Value::Bool(false)])
                 ])),
-                Instruction::Dip(1, SentenceIndex::from(1)),
+                Instruction::Dip(SentenceIndex::from(1)),
             ]
         );
         assert_eq!(
@@ -161,7 +161,7 @@ mod tests {
         let [
             Instruction::Push(ref e),
             Instruction::Tuple(2),
-            Instruction::Dip(1, deep),
+            Instruction::Dip(deep),
         ] = res.sentences[fail][..]
         else {
             panic!("expected one drop, got {:?}", res.sentences[fail]);
@@ -224,7 +224,7 @@ mod tests {
         .unwrap();
         let with_drops = blocks(&res)
             .iter()
-            .filter(|b| b.iter().any(|i| matches!(i, Instruction::Dip(1, _))))
+            .filter(|b| b.iter().any(|i| matches!(i, Instruction::Dip(_))))
             .count();
         assert_eq!(with_drops, 2, "both early returns drop");
     }
@@ -264,6 +264,50 @@ mod tests {
     }
 
     #[test]
+    fn a_reach_at_depth_is_the_frames_it_stands_for() {
+        // `pick 2` is `dip { pick 1 } ; swap`, and `pick 1` is
+        // `dip { copy } ; swap` — the recursion written out, two nodes at every
+        // depth but the bottom.
+        let res = assemble("#[arity(3, 4)] sentence entry { pick 2 }").unwrap();
+        let [Instruction::Dip(one), Instruction::Swap] = res.sentences[SentenceIndex::from(0)][..]
+        else {
+            panic!(
+                "expected a frame and an exchange: {:?}",
+                res.sentences[SentenceIndex::from(0)]
+            )
+        };
+        let [Instruction::Dip(zero), Instruction::Swap] = res.sentences[one][..] else {
+            panic!("expected the same one shallower: {:?}", res.sentences[one])
+        };
+        assert_eq!(res.sentences[zero], vec![Instruction::Copy]);
+    }
+
+    #[test]
+    fn every_site_at_one_depth_shares_one_chain() {
+        // The expansion costs `O(d)` blocks for the *program*, not for each
+        // mention: what a reach stands for holds nothing from the site, so one
+        // chain per (reach, depth) serves them all. Three `pick 4`s and a
+        // `roll 4` cost the four blocks a single `pick 4` costs, plus the three
+        // a `roll 4` needs — and the `roll` chain is not the `pick` chain,
+        // since they differ at the bottom.
+        let once = assemble("#[arity(5, 6)] sentence entry { pick 4 }")
+            .unwrap()
+            .sentences
+            .len();
+        let thrice = assemble("#[arity(5, 8)] sentence entry { pick 4 pick 4 pick 4 }")
+            .unwrap()
+            .sentences
+            .len();
+        assert_eq!(once, thrice, "a second mention should cost nothing");
+
+        let mixed = assemble("#[arity(5, 6)] sentence entry { pick 4 roll 4 }")
+            .unwrap()
+            .sentences
+            .len();
+        assert_eq!(mixed, once + 3, "a roll bottoms out one level shallower");
+    }
+
+    #[test]
     fn test_assemble_dip() {
         let code = r#"
             #[arity(3, 3)]
@@ -278,7 +322,7 @@ mod tests {
         assert_eq!(res.sentences.len(), 2);
         assert_eq!(
             res.sentences[SentenceIndex::from(0)],
-            vec![Instruction::Dip(1, SentenceIndex::from(1))]
+            vec![Instruction::Dip(SentenceIndex::from(1))]
         );
         // `add` stands alone: the flag it leaves is the block's third output,
         // not something the assembler splices a drop in to remove.
@@ -299,7 +343,7 @@ mod tests {
         let res = assemble(code).unwrap();
         assert_eq!(
             res.sentences[SentenceIndex::from(0)],
-            vec![Instruction::Dip(1, SentenceIndex::from(1))]
+            vec![Instruction::Dip(SentenceIndex::from(1))]
         );
     }
 
@@ -316,10 +360,16 @@ mod tests {
             }
         "#;
         let res = assemble(code).unwrap();
-        assert_eq!(res.sentences.len(), 2);
+        // Two named sentences and the frame `dip 2` nests through: the outer
+        // dip hides one value and calls a block that hides the second.
+        assert_eq!(res.sentences.len(), 3);
         assert_eq!(
             res.sentences[SentenceIndex::from(1)],
-            vec![Instruction::Dip(2, SentenceIndex::from(0))]
+            vec![Instruction::Dip(SentenceIndex::from(2))]
+        );
+        assert_eq!(
+            res.sentences[SentenceIndex::from(2)],
+            vec![Instruction::Dip(SentenceIndex::from(0))]
         );
     }
 
@@ -396,7 +446,7 @@ mod tests {
         );
         assert_eq!(
             res.sentences[SentenceIndex::from(3)],
-            vec![Instruction::Dip(0, SentenceIndex::from(0))]
+            vec![Instruction::Jump(SentenceIndex::from(0))]
         );
     }
 
@@ -1141,7 +1191,9 @@ mod tests {
     #[test]
     fn test_generated_type_checks_contain_no_roll() {
         // Element checks are dipped under the accumulated result rather than
-        // rolled around it, so lowering no longer emits any roll at all.
+        // rolled around it, so lowering no longer emits any roll at all — and
+        // `swap` is what a roll expands to, so it is what there should be none
+        // of once the depths have been compiled away.
         let code = r#"
             type Triple (int, bool, symbol);
             type Nested (int, (bool, tuple), symbol);
@@ -1150,7 +1202,7 @@ mod tests {
         let res = assemble(code).unwrap();
         for sentence in res.sentences.iter() {
             assert!(
-                !sentence.iter().any(|i| matches!(i, Instruction::Roll(_))),
+                !sentence.iter().any(|i| matches!(i, Instruction::Swap)),
                 "generated check should contain no roll: {:?}",
                 sentence
             );
