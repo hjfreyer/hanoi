@@ -5,10 +5,11 @@ test sentence dip_hides_one_value {
     push 1
     push 2
     push 99
-    // The `assert` stays inside the block here and in the tests below: `?`
-    // leaves the block it is written in, so a check in there could not answer
-    // for the test. What it reads is `1 + 2`'s flag, which cannot say no.
-    dip { add assert }
+    // The flag `add` leaves is dropped rather than checked, here and in the
+    // tests below: the block's answer is the sum whatever the flag says, so
+    // there is nothing for a check in there to change. The `check_equals`
+    // afterwards is what catches a sum that came out wrong.
+    dip { add drop 0 }
     // Stack: [3, 99]
     push 99
     jump crate::prelude::check_equals
@@ -23,7 +24,7 @@ test sentence dip_explicit_count_of_one {
     push 1
     push 2
     push 99
-    dip 1 { add assert }
+    dip 1 { add drop 0 }
     push 99
     jump crate::prelude::check_equals
     ?
@@ -37,7 +38,7 @@ test sentence dip_hides_several_values {
     push 2
     push 8
     push 9
-    dip 2 { add assert }
+    dip 2 { add drop 0 }
     // Stack: [3, 8, 9]
     push 9
     jump crate::prelude::check_equals
@@ -55,7 +56,7 @@ test sentence dip_hides_several_values {
 test sentence dip_zero_is_jump {
     push 20
     push 22
-    dip 0 { add assert }
+    dip 0 { add drop 0 }
     push 42
     jump crate::prelude::check_equals
 }
@@ -96,7 +97,7 @@ test sentence dip_nests {
     push 2
     push 8
     push 9
-    dip { dip { add assert } }
+    dip { dip { add drop 0 } }
     push 9
     jump crate::prelude::check_equals
     ?

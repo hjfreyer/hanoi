@@ -2,8 +2,10 @@ test mod verify_print_hello {
     const_string hello "Hello from Hanoi VM Async Runtime!\n"
 
     export function init {
+        // `untuple 0` takes the argument either way, so the flag is the whole
+        // answer and there is nothing to answer differently about.
         untuple 0
-        assert
+        drop 0
         push 0 // phase
         push 0 // data (char index)
         tuple 2
@@ -11,16 +13,27 @@ test mod verify_print_hello {
 
     export function accept {
         untuple 2
-        assert
-        untuple 2
-        assert
-        drop 0 // drop data
-        push 0
-        equal
         branch {
-            push crate::prelude::start
-            equal
+            untuple 2
+            branch {
+                drop 0 // drop data
+                push 0
+                equal
+                branch {
+                    push crate::prelude::start
+                    equal
+                } {
+                    drop 0
+                    push false
+                }
+            } {
+                drop 0
+                drop 0
+                drop 0
+                push false
+            }
         } {
+            drop 0
             drop 0
             push false
         }
@@ -29,36 +42,48 @@ test mod verify_print_hello {
     export function tau_reduce {
         // Stack: [state]
         untuple 2
-        assert
-        // Stack: [phase, data]
-        pick 1
-        push 1
-        equal
         branch {
-            // Phase is 1. Check if data == hello.len()
-            pick 0
-            push hello
-            const_string_len
-            assert
+            // Stack: [phase, data]
+            pick 1
+            push 1
             equal
             branch {
-                // data == hello.len(), transition to phase 2
-                drop 0
-                drop 0
-                push 2 // phase
-                push 0 // data
-                tuple 2
-                push true
-                tuple 2
+                // Phase is 1. Check if data == hello.len()
+                pick 0
+                push hello
+                const_string_len
+                branch {
+                    equal
+                    branch {
+                        // data == hello.len(), transition to phase 2
+                        drop 0
+                        drop 0
+                        push 2 // phase
+                        push 0 // data
+                        tuple 2
+                        push true
+                        tuple 2
+                    } {
+                        // data != hello.len(), no reduction
+                        tuple 2
+                        push false
+                        tuple 2
+                    }
+                } {
+                    drop 0
+                    drop 0
+                    tuple 2
+                    push false
+                    tuple 2
+                }
             } {
-                // data != hello.len(), no reduction
+                // Phase is not 1, no reduction
                 tuple 2
                 push false
                 tuple 2
             }
         } {
-            // Phase is not 1, no reduction
-            tuple 2
+            drop 0
             push false
             tuple 2
         }
@@ -67,122 +92,165 @@ test mod verify_print_hello {
     export function emit {
         // Stack: [state]
         untuple 2
-        assert
-        // Stack: [phase, data]
-        pick 1
-        push 1
-        equal
         branch {
-            // Phase is 1. Emit print character.
-            push crate::std::io::io
-            push crate::std::io::stdout::stdout
-            push crate::std::io::stdout::putch
-            
-            push hello
-            pick 4 // data
-            const_string_char_at
-            assert
-            
-            push ()
-            tuple 2
-            tuple 2
-            tuple 2
-            tuple 2
-            
-            // Stack: [phase, data, event]
-            roll 2
-            drop 0
-            roll 1
-            drop 0
-            // Stack: [event]
-            push true
-            tuple 2
-        } {
-            pick 1
-            push 2
-            equal
-            branch {
-                // Phase is 2. Emit pass.
-                drop 0
-                drop 0
-                push crate::prelude::pass
-                push true
-                tuple 2
-            } {
-                // Other phase, no emit.
-                drop 0
-                drop 0
-                tuple 0
-                push false
-                tuple 2
-            }
-        }
-    }
-
-    export function process {
-        untuple 2
-        assert
-        // Stack: [event, state]
-        untuple 2
-        assert
-        // Stack: [event, data, phase]
-        pick 1
-        push 0
-        equal
-        branch {
-            // Phase 0: expect start event.
-            roll 2 // event
-            push crate::prelude::start
-            assert_eq
-            drop 0 // drop data
-            drop 0 // drop phase
-            push 1 // phase 1
-            push 0 // data 0
-            tuple 2
-        } {
+            // Stack: [phase, data]
             pick 1
             push 1
             equal
             branch {
-                // Phase 1: expect print event to have been processed.
-                roll 2
-                drop 0 // drop event
-                // Stack: [phase, data] (data is index 0)
-                push 1
-                add
-                assert
-                // Stack: [phase, data+1]
-                tuple 2
+                // Phase is 1. Emit print character.
+                push crate::std::io::io
+                push crate::std::io::stdout::stdout
+                push crate::std::io::stdout::putch
+            
+                push hello
+                pick 4 // data
+                const_string_char_at
+                branch {
+            
+                    push ()
+                    tuple 2
+                    tuple 2
+                    tuple 2
+                    tuple 2
+            
+                    // Stack: [phase, data, event]
+                    roll 2
+                    drop 0
+                    roll 1
+                    drop 0
+                    // Stack: [event]
+                    push true
+                    tuple 2
+                } {
+                    drop 0
+                    drop 0
+                    drop 0
+                    drop 0
+                    drop 0
+                    drop 0
+                    push ((), false)
+                }
             } {
                 pick 1
                 push 2
                 equal
                 branch {
-                    // Phase 2: expect pass event.
-                    roll 2
+                    // Phase is 2. Emit pass.
+                    drop 0
+                    drop 0
                     push crate::prelude::pass
-                    assert_eq
-                    drop 0 // drop data
-                    drop 0 // drop phase
-                    push 3
-                    push 0
+                    push true
                     tuple 2
                 } {
-                    // Phase 3 or other: do nothing.
-                    roll 2
+                    // Other phase, no emit.
                     drop 0
+                    drop 0
+                    tuple 0
+                    push false
                     tuple 2
                 }
             }
+        } {
+            drop 0
+            drop 0
+            push ((), false)
+        }
+    }
+
+    export function process {
+        untuple 2
+        branch {
+            // Stack: [event, state]
+            untuple 2
+            branch {
+                // Stack: [event, data, phase]
+                pick 1
+                push 0
+                equal
+                branch {
+                    // Phase 0: expect start event.
+                    roll 2 // event
+                    push crate::prelude::start
+                    equal
+                    branch {
+                        drop 0 // drop data
+                        drop 0 // drop phase
+                        push 1 // phase 1
+                        push 0 // data 0
+                        tuple 2
+                    } {
+                        roll 1
+                        tuple 2
+                    }
+                } {
+                    pick 1
+                    push 1
+                    equal
+                    branch {
+                        // Phase 1: expect print event to have been processed.
+                        roll 2
+                        drop 0 // drop event
+                        // Stack: [phase, data] (data is index 0)
+                        push 1
+                        add
+                        branch {
+                            // Stack: [phase, data+1]
+                            tuple 2
+                        } {
+                            drop 0
+                        }
+                    } {
+                        pick 1
+                        push 2
+                        equal
+                        branch {
+                            // Phase 2: expect pass event.
+                            roll 2
+                            push crate::prelude::pass
+                            equal
+                            branch {
+                                drop 0 // drop data
+                                drop 0 // drop phase
+                                push 3
+                                push 0
+                                tuple 2
+                            } {
+                                roll 1
+                                tuple 2
+                            }
+                        } {
+                            // Phase 3 or other: do nothing.
+                            roll 2
+                            drop 0
+                            tuple 2
+                        }
+                    }
+                }
+            } {
+                drop 0
+                drop 0
+                drop 0
+                push ()
+            }
+        } {
+            drop 0
+            drop 0
+            push ()
         }
     }
 
     export function is_done {
         untuple 2
-        assert
-        drop 0
-        push 3
-        equal
+        branch {
+            drop 0
+            push 3
+            equal
+        } {
+            drop 0
+            drop 0
+            push false
+        }
     }
 
     export function is_ready_to_finish {
