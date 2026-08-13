@@ -38,15 +38,15 @@ test sentence test_arity_double {
     assert_eq
 }
 
-function recursive_helper {
+function increment_helper {
     push 1
     add
     assert
 }
 
 function nested_arity_calls {
-    jump recursive_helper
-    jump recursive_helper
+    jump increment_helper
+    jump increment_helper
 }
 
 test sentence test_arity_nested_calls {
