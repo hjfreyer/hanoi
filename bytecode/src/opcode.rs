@@ -54,13 +54,6 @@ pub enum Instruction {
     /// otherwise, jump to the second SentenceIndex.
     Branch(SentenceIndex, SentenceIndex),
 
-    /// Abort execution immediately.
-    Panic,
-    /// Pop the top value off the stack and panic if it is falsey.
-    Assert,
-    /// Pop the top two values off the stack and panic if they are not equal.
-    AssertEqual,
-
     /// Pops the top N values off the stack and packages them into a single
     /// Tuple, keeping the order they were in on the stack: the deepest of them
     /// is element 0 and the topmost is the last, so `push 1 ; push 2 ; tuple 2`
@@ -112,12 +105,6 @@ impl Instruction {
     /// The flag a fallible one leaves is symmetric too: `add` on a symbol and an
     /// int fails whichever order they arrive in, answering `0, false` both ways.
     ///
-    /// `assert_eq` looks like it belongs and does not. It fails exactly when
-    /// `a != b`, which is symmetric, but the diagnostic it fails *with* names
-    /// the operands in the order they were given, so the two readings are
-    /// observably different — `vm` measures this and the sweep reports the
-    /// witness. Nothing is lost by leaving it out: `bin/rewrite` refuses any
-    /// sentence that can reach an `assert_eq` at all.
     pub fn commutative(&self) -> bool {
         matches!(
             self,
@@ -204,9 +191,6 @@ impl std::fmt::Display for Instruction {
             Instruction::Dip(0, s) => write!(f, "jump {:?}", s),
             Instruction::Dip(d, s) => write!(f, "dip {} {:?}", d, s),
             Instruction::Branch(t, e) => write!(f, "branch {:?} {:?}", t, e),
-            Instruction::Panic => write!(f, "panic"),
-            Instruction::Assert => write!(f, "assert"),
-            Instruction::AssertEqual => write!(f, "assert_eq"),
             Instruction::Tuple(n) => write!(f, "tuple {}", n),
             Instruction::Untuple(n) => write!(f, "untuple {}", n),
             Instruction::And => write!(f, "and"),

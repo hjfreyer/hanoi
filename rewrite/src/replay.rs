@@ -40,7 +40,6 @@ use crate::program::Program;
 use crate::prove::{BROKEN, FAILED, OK};
 use crate::script::ScriptError;
 use crate::serial::{self, Derivation};
-use crate::{Precondition, check_preconditions, precondition_explanation};
 
 pub(crate) struct Options {
     pub(crate) dir: PathBuf,
@@ -217,8 +216,6 @@ struct ParsedFile {
 enum Failure {
     /// The corpus states no such identity, or more than one it could be.
     NoSuchIdentity(String),
-    /// A side the equations cannot speak about at all.
-    Side(Precondition, &'static str, String),
     /// A step did not fit the tree the steps before it left.
     Step(Box<crate::applier::ApplyError>),
     /// Every step applied, and the last one did not leave the right-hand side.
@@ -237,15 +234,6 @@ fn check(
         .identity_by_name(&derivation.identity)
         .map_err(Failure::NoSuchIdentity)?;
     let identity: &Identity = &library.identities[index];
-
-    // Both sides, exactly as `prove` does it: the right-hand side is the term
-    // the claim is measured against, so it has to be one the equations can
-    // speak about too.
-    for (side, which) in [(identity.lhs, "left-hand"), (identity.rhs, "right-hand")] {
-        if let Err(p) = check_preconditions(prog, side) {
-            return Err(Failure::Side(p, which, library.names[side].clone()));
-        }
-    }
 
     let mut tree = build_tree(prog, identity.lhs);
     apply_script(prog, &mut tree, &derivation.steps, opts.check)
@@ -281,13 +269,6 @@ impl Failure {
                 out.push(format!("  {}", why));
                 out.push(String::new());
                 out.extend(cite(file, derivation.identity_span));
-            }
-            Failure::Side(p, which, name) => {
-                let lines = precondition_explanation(*p, name);
-                out.push(format!("  the {} side cannot be rewritten.", which));
-                out.push(String::new());
-                out.push(format!("  {}", lines[0]));
-                out.extend(lines[1..].iter().cloned());
             }
             Failure::Step(err) => {
                 out.push("  a step does not fit.".to_string());
@@ -619,14 +600,5 @@ proof testing_a_test {
         // ...and without it, the same file is a clean bill of health.
         let (code, report) = c.with("derivation 1;\nproof a { }\n");
         assert_eq!(code, OK, "{}", report);
-    }
-
-    #[test]
-    fn a_side_that_can_fail_is_refused_in_rewrites_own_words() {
-        let c = Corpus::new("fallible", "identity bad { assert } = { assert };");
-        let (code, report) = c.with("derivation 1;\nproof bad { }\n");
-        assert_eq!(code, FAILED, "{}", report);
-        assert!(report.contains("can fail"), "{}", report);
-        assert!(report.contains("docs/totality.md"), "{}", report);
     }
 }

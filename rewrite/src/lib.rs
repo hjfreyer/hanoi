@@ -59,7 +59,7 @@ mod tests;
 use std::fs;
 use std::path::Path;
 
-use bytecode::{Library, SentenceIndex, SourceMap};
+use bytecode::{Library, SourceMap};
 
 use crate::matcher::{count_matcher_names, matcher_by_name, matcher_names, term_matcher_names};
 use crate::program::Program;
@@ -231,51 +231,4 @@ pub(crate) fn derivation_lines(prog: &Program, title: &str, script: &[Step]) -> 
         }
     }
     out
-}
-
-// ---------------------------------------------------------------------------
-// The preconditions every equation is stated under
-// ---------------------------------------------------------------------------
-
-/// What disqualifies a program from being rewritten at all.
-///
-/// The property is closed over reachability, so refusing a root refuses every
-/// node any tree built from it can come to hold — which is what lets an
-/// annihilation ask only for an arity, and what makes running a computation on
-/// copies and discarding the results the identity.
-///
-/// There used to be a second one, that the sentence had a finite expansion.
-/// Recursion is forbidden now and `check_arities` refuses it, so every sentence
-/// in a library that compiled has one, and there is nothing left to ask.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Precondition {
-    /// Reaches a `panic`, an `assert` or an `assert_eq`.
-    CanFail,
-}
-
-/// Whether this sentence may be rewritten. Both tools ask, and both refuse.
-pub(crate) fn check_preconditions(prog: &Program, root: SentenceIndex) -> Result<(), Precondition> {
-    if prog.can_fail(root) {
-        return Err(Precondition::CanFail);
-    }
-    Ok(())
-}
-
-/// Why a refusal was right, as lines. One text, so both tools say it the same.
-pub(crate) fn precondition_explanation(p: Precondition, name: &str) -> Vec<String> {
-    match p {
-        Precondition::CanFail => vec![
-            format!("'{}' can fail", name),
-            String::new(),
-            "  It reaches a `panic`, an `assert` or an `assert_eq`, directly or".to_string(),
-            "  through a call. Every law this tool rewrites by assumes the code".to_string(),
-            "  it is given is total: that is what lets a computation be moved,".to_string(),
-            "  duplicated onto a path that would not have run it, or dropped".to_string(),
-            "  along with its results. Rewriting a sentence that can fail would".to_string(),
-            "  move, invent or erase the failure.".to_string(),
-            String::new(),
-            "  See docs/totality.md. `#[total]` is the annotation that claims".to_string(),
-            "  the property; this is the check that answers for every sentence.".to_string(),
-        ],
-    }
 }

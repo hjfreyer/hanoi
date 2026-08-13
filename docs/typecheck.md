@@ -5,7 +5,7 @@
 >
 > **The recursion model below is stale too.** `#[recursive]` no longer exists and recursion is forbidden outright (see [hana.md](hana.md#recursion-is-forbidden)), so a reimplementation has no cycles to annotate, validate, or encode as Z3 recursive definitions: every sentence unfolds finitely.
 >
-> **The panic model below is stale.** It was written against a VM in which any operator could reject an operand — division by zero, `untuple` on a non-tuple, `and` on two ints. Every data operation is now total (see [docs/totality.md](totality.md)), so `Panic` is reachable only through `panic`, `assert` and `assert_eq`, and the interesting judgment has changed from "does this program panic" to "does this program compute on junk". A reimplementation should be generated from the junk table in `totality.md` rather than from the encoding described here.
+> **The panic model below is stale.** It was written against a VM in which any operator could reject an operand — division by zero, `untuple` on a non-tuple, `and` on two ints. Every operation is now total (see [docs/totality.md](totality.md)), and the three instructions that existed to fail — `panic`, `assert` and `assert_eq` — have been removed along with the `#[total]` annotation that claimed a sentence avoided them. `Panic` is therefore unreachable, and the interesting judgment has changed from "does this program panic" to "does this program compute on junk". A reimplementation should be generated from the junk table in `totality.md` rather than from the encoding described here.
 
 Typecheck is a static analysis and formal safety verification tool for Hanoi. It allows developers to prove that specific functions never trigger a runtime panic under designated precondition checks. 
 
@@ -60,18 +60,6 @@ It does this by searching for a counterexample $x$ where:
 2. $Q(F(x)) \neq \text{true}$ (or $F(x)$ panics, or $Q$ panics)
 
 If no such counterexample is found, the postcondition is proven.
-
-### Total Functions
-You can also annotate a function with `#[total]`. A total function assertion ensures that the function never triggers a runtime panic on *any* possible input.
-
-```hana
-#[total]
-function identity {
-    // returns input (never panics)
-}
-```
-
-To prove totality, Typecheck attempts to find any input $x$ that causes $F(x) = \text{Panic}$. If no such input exists (the assertion is Unsat), the function is proven to be total.
 
 ---
 

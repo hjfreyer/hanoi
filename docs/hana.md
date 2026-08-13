@@ -30,7 +30,7 @@ sentence example {
 
     push greeting
     const_string_len   // 5, true
-    assert
+    drop 0
 }
 ```
 
@@ -124,7 +124,7 @@ The checks come from `crate::prelude`, which is also where the tags come from:
 
 - `check_equals` compares the top two values, and answers `((), ok)` or
   `((a, b), err)` with the pair that did not match.
-- `check_true` is `check_equals` against `true`, which is what an `assert` was.
+- `check_true` is `check_equals` against `true`.
 
 Each check is followed by [`?`](#the--operator), which carries the first failure
 out of the test and leaves the `()` an ok carries for the `drop 0` after it. The
@@ -146,11 +146,9 @@ test sentence add_numbers {
 A test that ends on something else — cleaning up a machine state, say — says so
 itself with `push ((), crate::prelude::ok)`.
 
-This is why `assert_eq` has all but disappeared from `tests/`: what is left of
-it is inside a `dip` body or a branch arm, where `?` cannot reach out to the
-test (see [the `?` operator](#the--operator)), and in the machine
-implementations, whose internal checks are library code rather than a claim the
-test is making.
+A check inside a `dip` body or a branch arm cannot use `?`, since `?` reaches
+only to the end of the sentence it is written in (see [the `?`
+operator](#the--operator)). Such a check has to carry its answer out by hand.
 
 A **test machine** — `test mod` — is a different thing with a different
 protocol, driven by `prelude::start`, `prelude::pass` and `prelude::fail`. See
@@ -170,7 +168,7 @@ checks that the two sides leave the stack the same — the net change, not the
 arity, since `pick 1 ; drop` = nothing is `(2 -> 2)` against `(0 -> 0)`.
 
 Nothing calls an identity and nothing runs it, so it takes no `export` or `test`
-marker, and only `#[arity]` and `#[total]` mean anything on one. The tactic that
+marker, and only `#[arity]` means anything on one. The tactic that
 *proves* it lives out of line, in the `.hant` beside the `.hana`, and
 `bin/prove` checks that every stated identity has one. See
 [docs/identities.md](identities.md).
@@ -179,16 +177,15 @@ marker, and only `#[arity]` and `#[total]` mean anything on one. The tactic that
 
 ## 4. Contract Annotations
 
-Hanoi supports static assertion checking at compile time via attributes. `#[arity]` and `#[total]` are checked by the compiler today; `#[precondition]` and `#[postcondition]` were verified by the `typecheck` tool, currently removed from the codebase along with its Z3 dependency (see [docs/typecheck.md](typecheck.md) for the design):
+Hanoi supports static checking at compile time via attributes. `#[arity]` is checked by the compiler today; `#[precondition]` and `#[postcondition]` were verified by the `typecheck` tool, currently removed from the codebase along with its Z3 dependency (see [docs/typecheck.md](typecheck.md) for the design):
 
 - `#[arity(inputs, outputs)]`: Declares the stack arity (required for sentences that do not use the default `function` arity of `1 -> 1`).
 - `#[precondition(fn_name)]`: Names a `1 -> 1` function that must evaluate to `true` on the input for the annotated function to be considered safe to call.
 - `#[postcondition(fn_name)]`: Names a `1 -> 1` function that must evaluate to `true` on the output, given the precondition (if any) held on the input.
-- `#[total]`: Declares that the sentence cannot fail — it neither executes `panic`, `assert` or `assert_eq` nor reaches anything that does. **Checked** by the compiler, and opt-in: an unannotated sentence makes no claim, so generated code and branch arms need no annotation. See [docs/totality.md](totality.md).
 
 Precondition/postcondition functions are ordinary `1 -> 1` functions, but they are commonly generated with the `type`/`enum` sugar rather than written by hand:
 
-- `type Name <spec>;` declares a value predicate from a spec of primitive type names (`int`, `bool`, `const_string`, `symbol`, `tuple`), literal values (including `"strings"`), tuples (`(spec, spec, ...)`), `|`-separated unions, or paths to other `type`/`enum` checks or `symbol`s. It expands to `mod Name { sentence check { ... } }`, exported and automatically annotated `#[total]`.
+- `type Name <spec>;` declares a value predicate from a spec of primitive type names (`int`, `bool`, `const_string`, `symbol`, `tuple`), literal values (including `"strings"`), tuples (`(spec, spec, ...)`), `|`-separated unions, or paths to other `type`/`enum` checks or `symbol`s. It expands to `mod Name { sentence check { ... } }`, exported.
 - `enum Name { Variant(spec, ...), ... }` declares a tagged union: each `Variant` gets its own submodule with a fresh `tag` symbol and a `Body::check` for its payload tuple, and `Name::check` accepts any `(payload, tag)` pair matching one of the variants — the tag on top, where the code that reads it wants it.
 
 ### Example
@@ -220,7 +217,7 @@ enum MyEnum {
 - **Jumps**: Subroutine execution is initiated via `jump S`, which pushes the return address to a call stack and jumps to sentence `S`. Reaching the end of `S` pops the return address and returns control to the caller.
 - **Dips**: `dip N { block }` (or `dip N S`) runs a block with the top `N` stack values hidden from it, restoring them on top of whatever the block leaves behind. `N` may be omitted, in which case it is 1. This is `jump` with an offset into the stack: `dip 0 S` and `jump S` are the same instruction.
 - **Branches**: Conditional execution is implemented via `branch { then_block } { else_block }`. The VM pops the top stack element; if it is truthy, it executes `then_block`, otherwise it executes `else_block`. Truthiness is `v != false`, so only a literal `false` reaches the else block.
-- **Panics**: If a condition fails, `panic` immediately halts VM execution. Safe assertion operations `assert` and `assert_eq` verify preconditions and abort the program on failure.
+- **Nothing halts**: there is no instruction that ends a run over a value. A sentence that finds its input the wrong shape says so by answering — see [`?`](#the--operator) and [docs/totality.md](totality.md).
 
 ### Recursion is forbidden
 
@@ -246,23 +243,31 @@ cannot terminate: working out what a sentence leaves on the stack would mean
 working out what that same sentence leaves on the stack.
 
 So a loop is written as the steps it takes. Where a program used to call itself
-until a machine stopped reducing, it now runs the reductions it takes and
-asserts that each one was there to make:
+until a machine stopped reducing, it now runs the reductions it takes and says
+so when one was not there to make:
 
 ```hana
-// One tau reduction, which must be available to take.
+// One tau reduction, which the caller says must be available.
 sentence tau_step {
     jump machine::tau_reduce
     untuple 2
-    assert // the untuple
-    assert // ... and did_reduce
+    branch {
+        // Stack: [new_state, did_reduce]
+        branch { push crate::prelude::ok } { push crate::prelude::err }
+        tuple 2
+    } {
+        // Not a (new_state, did_reduce) pair at all.
+        drop 0
+        push crate::prelude::err
+        tuple 2
+    }
 }
 
 test sentence drives_two_steps {
     tuple 0
     jump machine::init
-    jump tau_step
-    jump tau_step
+    jump tau_step ?
+    jump tau_step ?
     // ... and the machine is where the test says it is
 }
 ```
@@ -327,11 +332,10 @@ branch { ...the rest of the block... } { push crate::prelude::err tuple 2 }
 
 Three things follow from that shape:
 
-- **`?` cannot fail.** The first branch reads the flag `untuple` leaves rather
-  than asserting on it: a value that is not a 2-tuple is not a result, so `?`
-  calls it an error carrying that value — which is exactly what `untuple` hands
-  back (see [docs/totality.md](totality.md)). A sentence whose only novelty is a
-  `?` can still claim `#[total]`.
+- **`?` answers on every input.** The first branch reads the flag `untuple`
+  leaves: a value that is not a 2-tuple is not a result, so `?` calls it an
+  error carrying that value — which is exactly what `untuple` hands back (see
+  [docs/totality.md](totality.md)).
 - **The early return drops what the rest of the block would have consumed.** The
   two arms of a branch must agree on their net stack effect, and the arm that
   leaves early has not run the code that would have eaten the values underneath.
@@ -363,7 +367,7 @@ and the Z3 encoding threads them through as the same terms rather than
 rebuilding them.
 
 The alternative — `tuple N`, shuffle, `untuple N` — is worse than it looks.
-`untuple` no longer panics on a value that is not a tuple of exactly that size,
+`untuple` does not halt on a value that is not a tuple of exactly that size,
 but it does *fail*: it reports `false` and hands the value back (see
 [docs/totality.md](totality.md)). Saving and restoring `N` values that way adds
 `N` failure flags to reason about, purely as an artifact of the encoding. `dip`

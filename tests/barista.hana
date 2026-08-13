@@ -128,7 +128,6 @@ mod customer_impl {
         tuple 2
     }
 
-    #[total]
     function emit_postcondition {
         untuple 2
         branch {
@@ -155,7 +154,6 @@ mod customer_impl {
         }
     }
 
-    #[total]
     function emit_does_pre_and_post {
         pick 0
         jump is_state::check
@@ -173,7 +171,6 @@ mod customer_impl {
     // emit takes state: (id, preferred_drink, internal_state) and returns ValueSet of emitted events.
     #[precondition(is_state::check)]
     #[postcondition(emit_postcondition)]
-    #[total]
     function emit {
         untuple 3
         branch {
@@ -566,8 +563,8 @@ test sentence verify_customer_logic {
     push ((), crate::prelude::ok)
 }
 
-// emit, its postcondition, and the combined check are #[total]: off their
-// intended domain they answer negatively instead of panicking.
+// emit, its postcondition, and the combined check all answer on every input:
+// off their intended domain they answer negatively rather than halting.
 test sentence verify_emit_totality {
     // Not a triple at all: emit nothing.
     push 42

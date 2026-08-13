@@ -612,9 +612,6 @@ fn parse_instruction(stream: &mut TokenStream) -> Result<ParsedInstruction, Erro
             let target_false = parse_target(stream)?;
             Ok(ParsedInstruction::Branch(target_true, target_false))
         }
-        "panic" => Ok(ParsedInstruction::Panic),
-        "assert" => Ok(ParsedInstruction::Assert),
-        "assert_equal" | "assert_eq" => Ok(ParsedInstruction::AssertEqual),
         "tuple" => {
             let size = parse_usize(stream)?;
             Ok(ParsedInstruction::Tuple(size))
@@ -739,7 +736,19 @@ fn parse_annotations(stream: &mut TokenStream) -> Result<Vec<SourceAnnotation>, 
             "postcondition" => {
                 Annotation::Postcondition(parse_annotation_path(stream, "postcondition")?)
             }
-            "total" => Annotation::Total,
+            // `total` claimed a sentence could not fail. Nothing can fail now
+            // — `panic`, `assert` and `assert_eq` are gone — so every sentence
+            // is total and the claim says nothing.
+            "total" => {
+                return Err(Error::at(
+                    "`#[total]` is not an annotation: nothing can fail".to_string(),
+                    name_span,
+                )
+                .with_help(
+                    "the instructions that could halt a run are gone, so every \
+                     sentence is total and there is nothing to claim",
+                ));
+            }
             // `recursive` was the annotation that let a sentence reach itself.
             // Recursion is forbidden now, so the word is not an annotation
             // whose spelling went wrong — it is a thing the language stopped
@@ -757,7 +766,7 @@ fn parse_annotations(stream: &mut TokenStream) -> Result<Vec<SourceAnnotation>, 
             other => {
                 return Err(
                     Error::at(format!("unsupported annotation `{}`", other), name_span)
-                        .with_help("known annotations: arity, precondition, postcondition, total"),
+                        .with_help("known annotations: arity, precondition, postcondition"),
                 );
             }
         };
@@ -766,7 +775,7 @@ fn parse_annotations(stream: &mut TokenStream) -> Result<Vec<SourceAnnotation>, 
         // A declaration carries at most one of each contract. Verification reads
         // a single precondition and a single postcondition, so a second would be
         // silently ignored rather than conjoined. `arity` is exempt because every
-        // one of those is checked, and `total` is an idempotent flag.
+        // one of those is checked.
         let has = |f: fn(&SourceAnnotation) -> bool| annotations.iter().any(f);
         let duplicate = match &ann {
             Annotation::Precondition(_) if has(|a| matches!(a, Annotation::Precondition(_))) => {
@@ -1001,14 +1010,14 @@ fn parse_items(
 
 /// The annotations an identity may carry.
 ///
-/// `#[arity(n, m)]` pins the shape both sides must have, and `#[total]` is a
-/// claim each of them answers for. The rest name properties of a sentence
-/// *being called* — which an identity is not — so they are refused rather than
-/// ignored, on the principle that an annotation nothing reads is a lie.
+/// `#[arity(n, m)]` pins the shape both sides must have. The rest name
+/// properties of a sentence *being called* — which an identity is not — so they
+/// are refused rather than ignored, on the principle that an annotation nothing
+/// reads is a lie.
 fn check_identity_annotations(annotations: &[SourceAnnotation], span: Span) -> Result<(), Error> {
     for ann in annotations {
         let (name, why) = match ann {
-            Annotation::Arity(..) | Annotation::Total => continue,
+            Annotation::Arity(..) => continue,
             Annotation::Precondition(_) => (
                 "precondition",
                 "a contract constrains what a caller may pass; an identity has no caller",
@@ -1019,12 +1028,8 @@ fn check_identity_annotations(annotations: &[SourceAnnotation], span: Span) -> R
             ),
         };
         return Err(
-            Error::at(format!("`#[{}]` is not an identity annotation", name), span).with_help(
-                format!(
-                    "{}. `#[arity(n, m)]` and `#[total]` are the two that are",
-                    why
-                ),
-            ),
+            Error::at(format!("`#[{}]` is not an identity annotation", name), span)
+                .with_help(format!("{}. `#[arity(n, m)]` is the one that is", why)),
         );
     }
     Ok(())
@@ -1339,7 +1344,6 @@ impl<'a> Compiler<'a> {
                         self.resolve_contract_fn("postcondition", scope, path)?,
                     ),
                     Annotation::Arity(n, m) => Annotation::Arity(*n, *m),
-                    Annotation::Total => Annotation::Total,
                 })
             })
             .collect()
@@ -1422,9 +1426,6 @@ impl<'a> Compiler<'a> {
                 ParsedInstruction::Modulo => Instruction::Modulo,
                 ParsedInstruction::Not => Instruction::Not,
                 ParsedInstruction::Negate => Instruction::Negate,
-                ParsedInstruction::Panic => Instruction::Panic,
-                ParsedInstruction::Assert => Instruction::Assert,
-                ParsedInstruction::AssertEqual => Instruction::AssertEqual,
                 ParsedInstruction::Tuple(n) => Instruction::Tuple(n),
                 ParsedInstruction::Untuple(n) => Instruction::Untuple(n),
                 ParsedInstruction::And => Instruction::And,
@@ -1721,7 +1722,6 @@ pub fn assemble_source(
 
     crate::arity::balance_early_returns(&mut library, &early_returns)?;
     crate::arity::check_arities(&mut library)?;
-    crate::arity::check_totality(&library)?;
     crate::arity::check_identities(&library)?;
 
     Ok(library)
@@ -1950,13 +1950,6 @@ mod tests {
     #[test]
     fn sides_may_need_different_amounts_so_long_as_they_leave_the_same() {
         assemble("identity counit { pick 1 drop 0 } = { };").expect("assembles");
-    }
-
-    #[test]
-    fn a_side_that_always_fails_is_refused() {
-        let rendered = assemble_error("identity always { panic } = { };");
-        assert!(rendered.contains("has no stack effect"), "{}", rendered);
-        assert!(rendered.contains("it always fails"), "{}", rendered);
     }
 
     #[test]

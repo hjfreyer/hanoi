@@ -27,14 +27,14 @@
 //!
 //! ## The global precondition
 //!
-//! The tool works only on sentences that cannot fail, and refuses others up
-//! front (see `main`). The property is closed over reachability, so every node
-//! any tree here can hold is total. Several conditions the old rules needed
-//! therefore collapse:
+//! The equations are stated about code that cannot fail, and nothing can:
+//! every instruction answers on every input, so every node any tree here can
+//! hold is total. The tool used to refuse roots that reached `panic`, `assert`
+//! or `assert_eq`, and those three instructions are gone from the language.
+//! Several conditions the old rules needed therefore collapse:
 //! [`Rule::Annihilate`] asks only for an arity where `speculable` used to
-//! require a syntactic whitelist, because there is no `assert` left to run on a
-//! path that would not have run it. Each such place says so, since lifting the
-//! restriction means putting the condition back.
+//! require a syntactic whitelist, because there is nothing left to run on a
+//! path that would not have run it.
 
 use bytecode::value::numeric_cmp;
 use bytecode::{Instruction, SentenceIndex, Value};
@@ -350,10 +350,9 @@ pub(crate) enum Rule {
     ///
     /// The arity is the *whole* condition, which it was not before. The old
     /// rules asked for a syntactic whitelist so that an `assert` buried in a
-    /// dip body could not be dropped along with its results; under the global
-    /// precondition no such node exists, so this reaches calls, dips and
-    /// branches that used to be refused. Lifting that restriction means
-    /// bringing the predicate back.
+    /// dip body could not be dropped along with its results; nothing can fail
+    /// any more, so this reaches calls, dips and branches that used to be
+    /// refused.
     /// `X` is a whole sequence, not a single node. Read backward that is what
     /// makes this the introduction rule: the arguments say *what computation to
     /// conjure*, and nothing in the window it replaces could have said it.
@@ -2015,9 +2014,8 @@ pub(crate) mod tests {
 
     #[test]
     fn annihilate_reaches_a_dip_that_the_old_whitelist_refused() {
-        // Under the global precondition there is no hidden `assert`, so a
-        // framed computation annihilates like any other. `dip 1 { add }` is
-        // (3 -> 3).
+        // Nothing can fail, so a framed computation annihilates like any
+        // other. `dip 1 { add }` is (3 -> 3).
         let x = dip(1, vec![op(Instruction::Add)]);
         let r = Rule::Annihilate {
             x: vec![x],

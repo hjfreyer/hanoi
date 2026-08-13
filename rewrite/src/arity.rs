@@ -11,9 +11,8 @@ use crate::ir::Node;
 use crate::program::Program;
 
 /// How many values a node takes off the stack and leaves on it, counted from
-/// the top. `None` means the reckoning stops there: a panic runs nothing after
-/// it, and a call whose target's arity is unknown tells us nothing about what
-/// follows.
+/// the top. `None` means the reckoning stops there: a call whose target's arity
+/// is unknown tells us nothing about what follows.
 pub(crate) fn node_arity(prog: &Program, node: &Node) -> Option<(i64, i64)> {
     match node {
         Node::Op(inst) => op_arity(inst),
@@ -51,12 +50,10 @@ pub(crate) fn node_arity(prog: &Program, node: &Node) -> Option<(i64, i64)> {
 /// and leaves what that implies. Both arms agree on the answer because they
 /// agree on the net.
 ///
-/// An arm whose own reckoning stops — one that reaches a `panic` — answers for
-/// neither, and the other arm stands alone: an arm that does not return
-/// constrains nothing about what the branch leaves. That is the only case in
-/// which one arm decides, and it is unreachable under the tool's precondition,
-/// where nothing can panic. It is kept because the depth gutter is printed for
-/// sentences the rewriter would refuse.
+/// An arm whose own reckoning stops — one holding a call whose arity is not
+/// known — answers for neither, and the other arm stands alone. That is the
+/// only case in which one arm decides, and it is out of reach of a library that
+/// compiled, since inference answers for every sentence in one.
 ///
 /// `None` when neither arm answers, or when the two disagree on net change.
 /// Neither is reachable from code the arity checker accepted — but an arity

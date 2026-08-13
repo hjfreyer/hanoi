@@ -1035,8 +1035,8 @@ impl<'a> Parser<'a> {
                         span,
                     )
                     .with_help(
-                        "`panic`, `assert` and `assert_eq` are absent on purpose: \
-                         every equation here is stated about code that cannot fail",
+                        "every instruction has a spelling; `--list-rules` \
+                         describes the shape of a term",
                     ));
                 }
             },
@@ -1786,10 +1786,10 @@ mod tests {
     }
 
     #[test]
-    fn an_instruction_that_can_fail_has_no_spelling() {
+    fn a_word_that_is_not_an_instruction_says_so() {
         let msg = err("derivation 1; proof x { elim_dip0(a = { assert }) -> @0; }");
         assert!(msg.contains("'assert' is not an instruction"), "{}", msg);
-        assert!(msg.contains("cannot fail"), "{}", msg);
+        assert!(msg.contains("every instruction has a spelling"), "{}", msg);
     }
 
     #[test]

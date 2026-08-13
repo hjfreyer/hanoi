@@ -1,11 +1,10 @@
 # Totality
 
-Every **data** operation in the hanoi bytecode is a total function. An
-operation applied to operands it was not written for does not fail; it returns
-a **deterministic default**, called *junk* below, and — if it is one of the
-twelve **fallible** instructions — a `bool` saying so. Failure is a separate
-thing, reached only by the three instructions whose whole job is to fail, and
-ruled out by `#[total]`.
+Every operation in the hanoi bytecode is a total function. An operation applied
+to operands it was not written for does not fail; it returns a **deterministic
+default**, called *junk* below, and — if it is one of the twelve **fallible**
+instructions — a `bool` saying so. No instruction can end a run for a reason
+about values: there is nothing left to fail.
 
 This document is the normative specification of that. The fallible table is the
 spec; `vm::totality_tests` is its executable mirror.
@@ -33,19 +32,15 @@ total functions, which a local window can decide. Whether a program is
 *meaningful* — whether it ever computes on junk — becomes a separate static
 judgment, layered on top rather than tangled into the equational theory.
 
-## The partiality contract
+## What can still stop a run
 
-Exactly three instructions can fail for a **semantic** reason, and they are the
-three that exist to:
+Nothing about the values. There were once three instructions that could —
+`panic`, `assert` and `assert_eq`, whose whole job was to fail — and they are
+gone, along with the `#[total]` annotation that existed to say a sentence did
+not reach them. A sentence that wants to report a problem answers with a value:
+see the `?` operator and `check_equals` in [hana.md](hana.md).
 
-| instruction | fails when |
-|---|---|
-| `panic` | always |
-| `assert` | `!truthy(v)`, i.e. `v == Bool(false)` |
-| `assert_eq` | `a != b` |
-
-Everything else that can still stop a run is **meta-level or structural**, not a
-property of the values:
+What is left is **meta-level or structural**, not a property of the values:
 
 | fault | where |
 |---|---|
@@ -59,49 +54,27 @@ a sentence that would underflow does not assemble. The one remaining gap is an
 entry point whose inferred arity has `inputs > 0` — it assembles, and then
 underflows when run with an empty stack.
 
-### Claiming otherwise: `#[total]`
+### Why there is no annotation for it
 
-A sentence may declare that it *cannot* fail — that it neither executes one of
-those three nor reaches anything that does, through a `jump`, a `dip` or either
-branch arm. That is `#[total]`, and the compiler checks it.
+`#[total]` was opt-in, and for a while it was the useful thing to say. A
+sentence carrying it promised it neither executed one of those three
+instructions nor reached anything that did, through a `jump`, a `dip` or either
+branch arm, and the compiler checked the promise against a least fixpoint over
+the call graph.
 
-The claim is **opt-in**, and the polarity is the whole design. The opposite —
-requiring `#[partial]` on anything that can fail — was tried and collapsed under
-its own coverage. It needed an exemption for branch arms, which have no source
-to annotate; another for `test` declarations, where asserting is the point; and
-worst of all one for composer templates, which are generic over the machine they
-wrap and so are partial exactly when their argument is. Marking those partial
-would have made *every* composed machine partial, and in a corpus where nearly
-everything is composed that is enough to make the annotation say nothing.
+Removing the three instructions removes the claim, because every sentence now
+satisfies it. An annotation that everything qualifies for distinguishes
+nothing, so `#[total]` is an error rather than a no-op: writing it gets you told
+that there is nothing left to claim.
 
-Turning it around removes all three cases at once. Nothing is obliged to carry
-an annotation, so generated code, inline blocks and tests need no special
-treatment — they simply make no claim. What is checked is exactly what somebody
-asserted.
+Note what totality does *not* have to cover, and never did: a sentence that
+never returns. Recursion is forbidden (see
+[hana.md](hana.md#recursion-is-forbidden)), so divergence is not one of the ways
+a Hanoi program can fail to produce an answer.
 
-And the *fact* is available everywhere regardless. `failure_reachability` is a
-least fixpoint over the call graph and answers for every sentence, annotated or
-not; `check_totality` is just the part that compares it against the claims. On
-the `tests/` corpus **2189 of 3409 sentences are provably total**, with 58
-carrying a checked `#[total]` — the `type` and `enum` sugar puts one on each
-predicate it generates, which used to be an unverified assertion.
-
-That count went *down* when the corpus started reading its flags rather than
-having them dropped for it, and the drop is the measurement getting honest
-rather than the corpus getting worse. A discarded flag cannot fail, so every
-sentence that untupled a value it had no reason to trust counted as total while
-quietly computing on junk. Saying `assert` instead records the reliance those
-sentences always had — the reliance the pre-totality `untuple` enforced by
-panicking.
-
-The check is syntactic and therefore conservative: an `assert` on a branch that
-cannot be taken still counts against the claim. That is what keeps this a
-reachability question rather than a proof obligation.
-
-Note what the claim does *not* have to cover: a sentence that never returns.
-Recursion is forbidden (see [hana.md](hana.md#recursion-is-forbidden)), so
-divergence is not one of the ways a Hanoi program can fail to produce an
-answer, and `#[total]` is about failure alone.
+What remains open is the question this document makes askable and does not
+answer: whether a program ever *computes on junk*. That is a static judgment
+over the table below, not a property of the instruction set.
 
 ## Truthiness
 
@@ -121,7 +94,6 @@ it:
 | `a and b` | `Bool(truthy(a) && truthy(b))` |
 | `a or b` | `Bool(truthy(a) \|\| truthy(b))` |
 | `branch { A } { B }` | `A` iff `truthy(cond)`, else `B` |
-| `assert v` | fails iff `!truthy(v)` |
 
 Per-operand coercion is load-bearing rather than incidental. It is what makes De
 Morgan hold on *all* values, not just booleans: `not (a and b)` is
@@ -153,12 +125,10 @@ under either rule. What differs is only what happens to a value that was never
 a boolean at all, and there "carry on" is the less surprising reading than
 "take the failure path".
 
-What it costs is `assert`, which fails exactly when its operand is falsy and so
-now **passes on junk**. Only a literal `false` fails an assertion. An `assert`
-here therefore checks that something did not definitely go wrong, rather than
-that it definitely went right; a check that wants the stronger reading has to
-say `push true equal assert` — or, better, come from an instruction that reports
-with a flag, which is what the flags are for.
+What it costs is that a check written as "is this not false" **passes on junk**.
+A test that wants the stronger reading has to say `push true equal` — or,
+better, read a flag from the instruction that reported it, which is what the
+flags are for.
 
 The change was made deliberately and is invisible to the corpus: every one of
 the 64 `.hana` integration tests runs the identical number of VM steps under
@@ -184,7 +154,6 @@ its answer was computed or invented, by leaving a `bool` on top of its result.
 | `const_string_char_at` | `2 -> 2` | the code point, `true` | `Int 0`, `false` |
 | `untuple n` | `1 -> n+1` | the `n` elements, `true` | **`x`**, `()` × (n-1), `false` |
 | `branch` | unchanged | then arm unless `Bool(false)` | cannot fail |
-| `assert`, `assert_eq`, `panic` | unchanged | — | **panics** |
 
 Two rules govern the rest of the table.
 
@@ -244,23 +213,23 @@ arities kept working while the corpus was converted. That scaffolding is gone
 now that every sentence has been converted, which is what keeps a branch arm
 from having a different instruction set than the sentence that wrote it.
 
-Converting took the two answers a flag admits, and which one a site wants is
-not a matter of taste:
+A flag admits two honest answers, and which one a site wants is not a matter of
+taste:
 
-* **`assert` the flag.** The sentence relies on its input being the shape it
-  expected, so it says so. This is what the pre-totality instruction did, which
-  is why the whole suite kept its step counts across the conversion: one
-  flag-drop `assemble` used to splice in became one `assert` in the source.
-* **Read it.** Where the code was already computing the answer the flag
-  carries, the guard goes and the branch reads the flag instead — see the sugar
-  below. This is the only answer available to a `#[total]` sentence, since
-  `assert` would cost it the claim.
+* **Read it.** Branch on the flag and say what the false side does. Where the
+  code was already computing the answer the flag carries, the guard goes and the
+  branch reads the flag instead — see the sugar below.
+* **Drop it**, where the flag genuinely has nothing left to say. `untuple 0`
+  takes its argument whether or not the argument was `()`, so its flag is a
+  question already answered; a `const_string_len` on a literal is another. Each
+  such site is worth a comment saying which.
 
-A third answer is honest only where the code genuinely does not care: an
-explicit `drop`. It appears in rewriter fixtures whose subject is a rule's
-window rather than the value, and nowhere in the corpus — a program that drops
-a flag is a program that has decided to compute on junk, which is what the
-implicit drop did for everyone.
+Dropping a flag that *was* carrying information is a program deciding to compute
+on junk. There is no longer an instruction that turns that decision into a
+halt — asserting the flag is what a sentence used to do — so a site that relies
+on its input's shape now has to say what it does when the shape is wrong. The
+[`?` operator](hana.md) is the short way to say "hand the problem back to my
+caller".
 
 ### What the sugar does with it
 
@@ -275,9 +244,8 @@ branch { ...element checks... }
 ```
 
 The else arm clears the slots `untuple` filled — the value itself in the
-deepest, `()` padding above it — and answers `false`. No `assert` anywhere, so
-the check keeps its `#[total]`. At `n = 0` the flag *is* the predicate and the
-body is a bare `untuple 0`.
+deepest, `()` padding above it — and answers `false`. At `n = 0` the flag *is*
+the predicate and the body is a bare `untuple 0`.
 
 ## What the laws buy, and what they cost
 
@@ -365,10 +333,11 @@ What this needs is exactly what this document establishes:
 
 - `X` must be **total**, or the speculation fails on a path the original left
   alone. This is the whole reason the rule is possible; under the old semantics
-  it was unsound for precisely the `untuple` case that matters.
+  it was unsound for precisely the `untuple` case that matters, and it is why
+  everything now is.
 - `X` must have **no effect but the stack**.
-- `X`'s arity must be **known locally**, which excludes calls — their bodies may
-  hold an `assert`.
+- `X`'s arity must be **known locally**, which excludes calls — a call's arity
+  lives in the library rather than the window.
 
 That is `speculate_branch` in `bin/rewrite`, and
 `the_direct_route_closes_by_speculating` runs the whole derivation the sharing
@@ -382,7 +351,6 @@ this document says is missing — *does this program ever compute on junk?* —
 written as a program rather than a claim:
 
 ```
-#[total]
 function emit_does_pre_and_post {
     pick 0
     jump is_state::check
@@ -408,7 +376,7 @@ have to become one.
 `--check` accepts every one:
 
 1. `speculate { jump emit jump emit_postcondition }` hoists the whole then arm
-   out of the branch, which is sound precisely because both are now `#[total]`.
+   out of the branch, which is sound precisely because both are total.
    What is left is `check ; dip 1 { … } ; branch { dip 1 { drop } } { … }`.
 2. `share { untuple 3 }` merges the check's destructuring with `emit`'s, so
    both read one set of parts.

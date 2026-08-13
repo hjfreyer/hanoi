@@ -45,6 +45,7 @@ use std::path::{Path, PathBuf};
 
 use bytecode::{Identity, IdentityIndex, Library, SentenceIndex, SourceMap};
 
+use crate::DEFAULT_FUEL;
 use crate::applier::apply_script;
 use crate::engine::{Tactic, TacticError, miss_report};
 use crate::ir::{Node, build, same_effect_seq};
@@ -53,7 +54,6 @@ use crate::prover::{self, Closed, Goal, Residual, Strategy, Unproved};
 use crate::rule::{Script, Step};
 use crate::script::{Definitions, PRELUDE, ProofFile, ScriptError};
 use crate::serial;
-use crate::{DEFAULT_FUEL, Precondition, check_preconditions, precondition_explanation};
 
 pub(crate) struct Options {
     pub(crate) dir: PathBuf,
@@ -497,8 +497,6 @@ fn emit(
 
 /// Why an identity did not come out proved.
 enum Failure {
-    /// A side the equations cannot speak about at all.
-    Side(Precondition, &'static str, String),
     /// The proof expression does not resolve.
     Proof(String),
     /// The tactic ran out of fuel, was refused, or failed.
@@ -544,17 +542,6 @@ fn check(
     inline: &Tactic,
     opts: &Options,
 ) -> Result<Proven, Failure> {
-    // Both sides, not only the one that gets rewritten: the right-hand side is
-    // the term the claim is measured against, so it has to be one the equations
-    // can speak about too. (The inlining below terminates for a reason that is
-    // not this one: recursion is forbidden, so every call has a finite
-    // expansion.)
-    for (side, which) in [(identity.lhs, "left-hand"), (identity.rhs, "right-hand")] {
-        if let Err(p) = check_preconditions(prog, side) {
-            return Err(Failure::Side(p, which, prog.library().names[side].clone()));
-        }
-    }
-
     let strategy = compile(prog, file, proof)?;
     let lhs = tree(prog, identity.lhs);
     let rhs = tree(prog, identity.rhs);
@@ -620,13 +607,6 @@ impl Failure {
     ) -> Vec<String> {
         let mut out = Vec::new();
         match self {
-            Failure::Side(p, which, name) => {
-                let lines = precondition_explanation(*p, name);
-                out.push(format!("  the {} side cannot be rewritten.", which));
-                out.push(String::new());
-                out.push(format!("  {}", lines[0]));
-                out.extend(lines[1..].iter().cloned());
-            }
             Failure::Proof(rendered) => {
                 out.push("  the proof does not compile.".to_string());
                 out.push(String::new());
@@ -1100,24 +1080,6 @@ mod tests {
     }
 
     #[test]
-    fn a_side_that_can_fail_is_refused_in_rewrites_own_words() {
-        let c = Corpus::new(
-            "fallible",
-            "identity bad { assert } = { assert };",
-            Some("proof bad = id;"),
-        );
-        let (code, report) = c.run();
-        assert_eq!(code, FAILED, "{}", report);
-        assert!(
-            report.contains("the left-hand side cannot be rewritten"),
-            "{}",
-            report
-        );
-        assert!(report.contains("can fail"), "{}", report);
-        assert!(report.contains("docs/totality.md"), "{}", report);
-    }
-
-    #[test]
     fn a_proof_that_does_not_compile_points_at_the_word() {
         let c = Corpus::new(
             "badproof",
@@ -1202,7 +1164,7 @@ mod tests {
     /// The case the whole meet-in-the-middle change is for: the right-hand side
     /// names a sentence the proof does not leave standing, so nothing the
     /// tactic does could ever land on it as written.
-    const BY_NAME: &str = "#[total] function f { drop 0 push true }\n\
+    const BY_NAME: &str = "function f { drop 0 push true }\n\
                            identity foo { is_bool is_bool } = { jump f };";
 
     #[test]
@@ -1261,7 +1223,7 @@ mod tests {
     fn inlining_that_does_not_reconcile_still_fails() {
         let c = Corpus::new(
             "no_reconcile",
-            "#[total] function f { drop 0 push false }\n\
+            "function f { drop 0 push false }\n\
              identity foo { is_bool is_bool } = { jump f };",
             Some("proof foo = cleanup;"),
         );
@@ -1288,8 +1250,8 @@ mod tests {
     fn both_sides_may_need_inlining() {
         let c = Corpus::new(
             "both",
-            "#[total] function l { is_bool is_bool }\n\
-             #[total] function r { drop 0 push true }\n\
+            "function l { is_bool is_bool }\n\
+             function r { drop 0 push true }\n\
              identity foo { jump l } = { jump r };",
             Some("proof foo = unfold_all; cleanup;"),
         );

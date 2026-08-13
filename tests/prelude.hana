@@ -11,11 +11,9 @@ symbol err
 // `((), ok)` when the top two values are equal, and `((a, b), err)` when they
 // are not — the pair that did not match, in the order it sat on the stack.
 //
-// This is what a test writes where it would have written `assert_eq`. The
-// difference is what happens when the check does not hold: `assert_eq` halts
-// the machine, and this hands back a value saying what it saw, which the test
-// can carry out with `?` and the runner can print.
-#[total]
+// This is how a test states a check. Nothing in the language halts a run any
+// more, so a check that does not hold hands back a value saying what it saw,
+// which the test carries out with `?` and the runner prints.
 #[arity(2, 1)]
 sentence check_equals {
     pick 1
@@ -35,8 +33,7 @@ sentence check_equals {
 }
 
 // `((), ok)` when the top value is `true`, and `((v, true), err)` when it is
-// anything else. `check_equals` against `true`, which is what an `assert` was.
-#[total]
+// anything else — `check_equals` against `true`, which is what most flags want.
 #[arity(1, 1)]
 sentence check_true {
     push true

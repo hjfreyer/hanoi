@@ -37,7 +37,7 @@ use crate::print::render_nodes;
 use crate::program::Program;
 use crate::prover::{self, Goal, Solved, Unproved};
 
-use crate::{Options, check_preconditions, derivation_lines, precondition_explanation};
+use crate::{Options, derivation_lines};
 
 /// The run was clean, whether or not the goal closed.
 pub(crate) const OK: i32 = 0;
@@ -57,22 +57,6 @@ pub(crate) fn run(
     opts: &Options,
     out: &mut dyn std::io::Write,
 ) -> std::io::Result<i32> {
-    // Both sides, not only the one a blind tactic would rewrite: the right-hand
-    // side is the term the claim is measured against, so it has to be one the
-    // equations can speak about too.
-    for (side, which) in [(identity.lhs, "left-hand"), (identity.rhs, "right-hand")] {
-        if let Err(p) = check_preconditions(prog, side) {
-            let lines = precondition_explanation(p, &prog.library().names[side]);
-            writeln!(out, "error: the {} side cannot be rewritten.", which)?;
-            writeln!(out)?;
-            writeln!(out, "  {}", lines[0])?;
-            for line in &lines[1..] {
-                writeln!(out, "{}", line)?;
-            }
-            return Ok(PROBLEM);
-        }
-    }
-
     let goal = Goal::root(tree(prog, identity.lhs), tree(prog, identity.rhs));
     let (found, firings) = prover::work(prog, inline, &goal, strategy, opts.fuel, opts.check);
     let solved = match found {
@@ -330,7 +314,7 @@ mod tests {
     /// started.
     #[test]
     fn a_reflexive_goal_is_an_exploration_vehicle() {
-        const PROBE: &str = "#[total] function f { drop 0 push true }\n\
+        const PROBE: &str = "function f { drop 0 push true }\n\
                              identity foo { jump f } = { jump f };";
 
         // Closed by `id`, and what it shows is the term itself.
@@ -361,18 +345,6 @@ mod tests {
         let listing = report.find("closed").expect("a listing");
         let miss = report.find("matched nothing").expect("a miss");
         assert!(listing < miss, "the miss belongs under the listing");
-    }
-
-    #[test]
-    fn a_side_that_can_fail_is_refused() {
-        let (code, report) = work("identity foo { assert } = { assert };", "id", with("id"));
-        assert_eq!(code, PROBLEM, "{}", report);
-        assert!(
-            report.contains("left-hand side cannot be rewritten"),
-            "{}",
-            report
-        );
-        assert!(report.contains("can fail"), "{}", report);
     }
 
     #[test]

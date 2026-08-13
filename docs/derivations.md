@@ -160,15 +160,15 @@ tactic did not:
 { push (1, 2) }                 tuples
 ```
 
-`panic`, `assert` and `assert_eq` have no spelling on purpose: every equation
-here is stated about code that cannot fail, and a term that could introduce one
-would break the precondition the whole calculus rests on.
+Every instruction has a spelling. Three once did not — `panic`, `assert` and
+`assert_eq`, the three that could fail — since every equation here is stated
+about code that cannot fail. They are gone from the language, so the exception
+is too.
 
 ## What `replay` checks
 
 Everything `prove` checks of its own derivation, in the same code:
 
-- both sides of the identity may be rewritten at all — neither can fail;
 - **every step applies**: the descent reaches a real node of a kind that has the
   part named, the window is in range and matches what the equation regenerates
   (compared by effect), the equation's side conditions hold against *this*

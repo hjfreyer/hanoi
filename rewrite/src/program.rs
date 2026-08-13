@@ -10,59 +10,32 @@
 //! a fact about the whole library, never about where in the tree a rule is
 //! being applied.
 
-use bytecode::arity::{failure_reachability, sentence_arity};
-use bytecode::{Arity, Library, SentenceIndex, Value};
+use bytecode::arity::sentence_arity;
+use bytecode::{Library, SentenceIndex, Value};
 
 pub(crate) struct Program<'a> {
     library: &'a Library,
     /// Indexed by `usize::from(SentenceIndex)`.
     arities: Vec<Option<(i64, i64)>>,
-    /// Indexed the same way. A whole-library fixpoint, so it is computed once:
-    /// `prove` asks it twice per identity, and there may be many.
-    can_fail: Vec<bool>,
 }
 
 impl<'a> Program<'a> {
     pub(crate) fn new(library: &'a Library) -> Self {
         let arities = (0..library.sentences.len())
-            .map(|i| match sentence_arity(library, SentenceIndex::from(i)) {
-                Some(Arity::Normal { inputs, outputs }) => Some((inputs, outputs)),
-                // A sentence that always panics has no output count, and one
-                // whose arity could not be inferred has neither.
-                Some(Arity::Panic { .. }) | None => None,
-            })
+            .map(|i| sentence_arity(library, SentenceIndex::from(i)).map(|a| (a.inputs, a.outputs)))
             .collect();
 
-        Program {
-            library,
-            arities,
-            can_fail: failure_reachability(library),
-        }
+        Program { library, arities }
     }
 
     pub(crate) fn library(&self) -> &'a Library {
         self.library
     }
 
-    /// What the sentence takes and leaves, or `None` when that is not known —
-    /// a sentence that always panics.
+    /// What the sentence takes and leaves, or `None` where inference could not
+    /// say.
     pub(crate) fn arity(&self, s_idx: SentenceIndex) -> Option<(i64, i64)> {
         self.arities.get(usize::from(s_idx)).copied().flatten()
-    }
-
-    /// Whether the sentence reaches a `panic`, an `assert` or an `assert_eq`,
-    /// directly or through a call.
-    ///
-    /// The precondition the equations are stated under. It is closed over
-    /// reachability, so a root that answers `false` answers for every node a
-    /// tree built from it can hold.
-    ///
-    /// The other thing this tool needs — that expanding a call terminates — is
-    /// not a question it has to ask. Recursion is forbidden, and
-    /// `check_arities` refuses it, so every sentence in a library that compiled
-    /// has a finite expansion.
-    pub(crate) fn can_fail(&self, s_idx: SentenceIndex) -> bool {
-        self.can_fail[usize::from(s_idx)]
     }
 
     pub(crate) fn label(&self, s_idx: SentenceIndex) -> String {

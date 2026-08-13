@@ -12,7 +12,6 @@ symbol t1
 symbol t2
 
 // The precondition: the input is one of the two symbols we know.
-#[total]
 function is_tag {
     pick 0
     push t1
@@ -27,7 +26,6 @@ function is_tag {
 }
 
 // The postcondition: the answer is one of the two pairs we make.
-#[total]
 function is_numbered {
     pick 0
     push t1
@@ -50,7 +48,6 @@ function is_numbered {
 // and exactly the input the precondition rules out.
 #[precondition(is_tag)]
 #[postcondition(is_numbered)]
-#[total]
 function number {
     pick 0
     push t1
@@ -79,7 +76,6 @@ function number {
 // `not precondition or (function ; postcondition)`, written the way a branch
 // writes it. Nothing about this reads as constant — it copies its input, tests
 // it, and on one path runs the whole of `number` and checks the answer.
-#[total]
 function number_does_pre_and_post {
     pick 0
     jump is_tag

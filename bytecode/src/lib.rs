@@ -8,7 +8,7 @@ pub mod resolve;
 pub mod source;
 pub mod value;
 
-pub use arity::{check_arities, check_totality, failure_reachability};
+pub use arity::check_arities;
 pub use assembly::{assemble, assemble_source, assemble_with_path};
 pub use library::{Annotation, Arity, Identity, IdentityIndex, Library, Sentence, SentenceIndex};
 pub use opcode::Instruction;
@@ -104,7 +104,7 @@ mod tests {
     #[test]
     fn a_question_mark_becomes_two_branches_and_takes_the_rest_with_it() {
         let res = assemble(&with_prelude(
-            "#[arity(1, 1)] sentence s { ? push 1 add assert }",
+            "#[arity(1, 1)] sentence s { ? push 1 add drop 0 }",
         ))
         .unwrap();
 
@@ -139,7 +139,7 @@ mod tests {
             vec![
                 Instruction::Push(Value::Int(1)),
                 Instruction::Add,
-                Instruction::Assert
+                Instruction::Drop
             ]
         );
         assert_eq!(
@@ -153,7 +153,7 @@ mod tests {
         // The rest arm is (2 -> 1): it eats the value the `?` unwrapped *and*
         // the one underneath. The early return eats only its own, so it drops
         // the difference from under the error it is carrying out.
-        let res = assemble(&with_prelude("#[arity(2, 1)] sentence s { ? add assert }")).unwrap();
+        let res = assemble(&with_prelude("#[arity(2, 1)] sentence s { ? add drop 0 }")).unwrap();
         let [.., Instruction::Branch(_, fail)] = res.sentences[SentenceIndex::from(0)][..] else {
             panic!("expected the `?` expansion");
         };
@@ -196,7 +196,7 @@ mod tests {
         let res = assemble(&with_prelude(
             r#"
             #[arity(3, 1)] sentence s { ? jump eats }
-            #[arity(3, 1)] sentence eats { add assert add assert }
+            #[arity(3, 1)] sentence eats { add drop 0 add drop 0 }
         "#,
         ))
         .unwrap();
@@ -217,7 +217,7 @@ mod tests {
         // The outer one can only be measured once the inner one balances.
         let res = assemble(&with_prelude(
             r#"
-            #[arity(3, 1)] sentence s { ? add assert jump maybe ? add assert }
+            #[arity(3, 1)] sentence s { ? add drop 0 jump maybe ? add drop 0 }
             #[arity(1, 1)] sentence maybe { push crate::prelude::ok tuple 2 }
         "#,
         ))
@@ -515,7 +515,7 @@ mod tests {
                 export function accept { drop 0 push false }
                 export function tau_reduce { push false tuple 2 }
                 export function emit { drop 0 tuple 0 push false tuple 2 }
-                export function process { untuple 2 assert drop 0 }
+                export function process { untuple 2 drop 0 drop 0 }
                 export function is_done { drop 0 push false }
                 export function is_ready_to_finish { drop 0 push false }
             }
@@ -536,11 +536,11 @@ mod tests {
         let code = r#"
             test sentence my_test {
                 push 1
-                assert
+                drop 0
             }
             export test sentence my_exported_test {
                 push 2
-                assert
+                drop 0
             }
         "#;
         let res = assemble(code).unwrap();
@@ -698,43 +698,23 @@ mod tests {
         assert_eq!(
             res3.instruction_arities[SentenceIndex::from(0)],
             vec![
-                Arity::Normal {
+                Arity {
                     inputs: 0,
                     outputs: 0
                 },
-                Arity::Normal {
+                Arity {
                     inputs: 0,
                     outputs: 1
                 },
-                Arity::Normal {
+                Arity {
                     inputs: 0,
                     outputs: 2
                 },
-                Arity::Normal {
+                Arity {
                     inputs: 0,
                     outputs: 2
                 },
             ]
-        );
-
-        // 2. Verifying panic arity and _just_ panic sentence arity
-        let code4 = r#"
-            sentence just_panic {
-                panic
-            }
-            #[arity(2, 0)]
-            sentence annotated_panic {
-                panic
-            }
-        "#;
-        let res4 = assemble(code4).unwrap();
-        assert_eq!(
-            res4.instruction_arities[SentenceIndex::from(0)],
-            vec![Arity::Panic { inputs: 0 }]
-        );
-        assert_eq!(
-            res4.instruction_arities[SentenceIndex::from(1)],
-            vec![Arity::Panic { inputs: 2 }]
         );
     }
 
@@ -835,7 +815,7 @@ mod tests {
                         push super::super::s
                         push crate::s
                         equal
-                        assert
+                        drop 0
                     }
                 }
             }
@@ -866,7 +846,7 @@ mod tests {
                         push super::my_sym
                         push crate::a::my_sym
                         equal
-                        assert
+                        drop 0
                     }
                 }
             }
@@ -906,7 +886,7 @@ mod tests {
                 push helper::val
                 push helper::val
                 equal
-                assert
+                drop 0
             }
         "#;
 
@@ -1114,27 +1094,12 @@ mod tests {
         );
     }
 
+    /// The annotation that claimed a sentence could not fail says what became
+    /// of it, rather than coming back as a name that might be misspelled.
     #[test]
-    fn test_assemble_total_annotation() {
-        let code = r#"
-            #[total]
-            function my_func {
-                drop 0
-                push false
-            }
-        "#;
-        let res = assemble(code).unwrap();
-        let my_func_idx = res
-            .names
-            .iter()
-            .position(|n| n == "my_func")
-            .map(SentenceIndex::from)
-            .unwrap();
-
-        assert_eq!(
-            res.annotations[my_func_idx],
-            vec![Annotation::Total, Annotation::Arity(1, 1)]
-        );
+    fn test_the_total_annotation_is_gone() {
+        let err = assemble("#[total] sentence s { push 1 }").unwrap_err();
+        assert!(err.contains("nothing can fail"), "{}", err);
     }
 
     #[test]
@@ -1147,11 +1112,6 @@ mod tests {
         "#;
         let res = assemble(code).unwrap();
         assert_eq!(res.sentences.len(), 4);
-
-        for idx in 0..4 {
-            let s_idx = SentenceIndex::from(idx);
-            assert!(res.annotations[s_idx].contains(&Annotation::Total));
-        }
 
         // uppercase 'Int' should fail because it is case-sensitive
         let bad_code = r#"

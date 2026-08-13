@@ -68,9 +68,6 @@ pub enum ParsedInstruction {
     /// Run the target with the top `usize` values of the stack hidden from it.
     Dip(usize, Target),
     Branch(Target, Target),
-    Panic,
-    Assert,
-    AssertEqual,
     Tuple(usize),
     Untuple(usize),
     And,

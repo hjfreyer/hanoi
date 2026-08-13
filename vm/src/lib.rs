@@ -306,29 +306,6 @@ impl VM {
                     }
                     ip = 0;
                 }
-                Instruction::Panic => {
-                    return Err("Panic instruction executed".to_string());
-                }
-                Instruction::Assert => {
-                    // One of the three instructions that may still fail, and
-                    // it fails on anything that is not `Bool(true)` — a
-                    // non-boolean is a failed assertion rather than a
-                    // separate kind of error.
-                    let val = self.pop()?;
-                    if !val.truthy() {
-                        return Err(format!("Assertion failed: {:?} is not true", val));
-                    }
-                }
-                Instruction::AssertEqual => {
-                    let b = self.pop()?;
-                    let a = self.pop()?;
-                    if a != b {
-                        return Err(format!(
-                            "Assertion failed: values are not equal: {:?} != {:?}",
-                            a, b
-                        ));
-                    }
-                }
                 Instruction::Tuple(n) => {
                     if self.stack.len() < n {
                         return Err(format!(
@@ -449,18 +426,15 @@ mod tests {
             Instruction::Push(Value::Int(10)),
             Instruction::Push(Value::Int(20)),
             Instruction::Add,
-            // `add` is fallible, so this drops the flag it leaves. Source would
-            // say `assert`; hand-written bytecode says what it means.
+            // `add` is fallible, so this drops the flag it leaves.
             Instruction::Drop,
-            Instruction::Push(Value::Int(30)),
-            Instruction::AssertEqual,
         ];
         library.sentences.push(sentence);
         let idx = SentenceIndex::from(0);
 
         let mut vm = VM::new(library);
         assert!(vm.execute(idx).is_ok());
-        assert!(vm.stack().is_empty()); // AssertEqual popped both
+        assert_eq!(vm.stack(), &[Value::Int(30)]);
     }
 
     #[test]
@@ -468,37 +442,30 @@ mod tests {
         let mut library = Library::new();
         let sentence = vec![
             Instruction::Push(Value::Int(5)),
-            Instruction::Pick(0),     // Dup
-            Instruction::AssertEqual, // pop both, check equal
-            Instruction::Push(Value::Int(5)),
+            Instruction::Pick(0), // Dup
             Instruction::Push(Value::Int(10)),
             Instruction::Roll(1), // Swap top two
-            Instruction::Push(Value::Int(5)),
-            Instruction::AssertEqual,
-            Instruction::Push(Value::Int(10)),
-            Instruction::AssertEqual,
         ];
         library.sentences.push(sentence);
         let idx = SentenceIndex::from(0);
 
         let mut vm = VM::new(library);
         assert!(vm.execute(idx).is_ok());
-        assert!(vm.stack().is_empty());
+        assert_eq!(vm.stack(), &[Value::Int(5), Value::Int(10), Value::Int(5)]);
     }
 
     #[test]
     fn test_branching() {
         let mut library = Library::new();
 
-        // idx 0: Push true, Branch to idx 1, else idx 2 (which asserts false)
-        // idx 1: Push 42, return (reaches end, returns to idx 0 which then reaches end and completes)
-        // idx 2: Push false, Assert (panics)
+        // idx 0: Push true, Branch to idx 1, else idx 2. The arm that runs is
+        // the one the stack says, and which value comes back says which.
         let s0 = vec![
             Instruction::Push(Value::Bool(true)),
             Instruction::Branch(SentenceIndex::from(1), SentenceIndex::from(2)),
         ];
         let s1 = vec![Instruction::Push(Value::Int(42))];
-        let s2 = vec![Instruction::Push(Value::Bool(false)), Instruction::Assert];
+        let s2 = vec![Instruction::Push(Value::Int(0))];
 
         library.sentences.push(s0);
         library.sentences.push(s1);
@@ -513,11 +480,12 @@ mod tests {
     fn test_call_stack_return() {
         let mut library = Library::new();
 
-        // sentence 0: Push 10, call sentence 1, then AssertEqual (verifying that sentence 1 ran and returned to s0)
+        // sentence 0: Push 10, call sentence 1, and what comes back says that
+        // sentence 1 ran and returned here.
         let s0 = vec![
             Instruction::Push(Value::Int(10)),
             Instruction::Dip(0, SentenceIndex::from(1)),
-            Instruction::AssertEqual,
+            Instruction::Equal,
         ];
 
         // sentence 1: Push 10
@@ -528,7 +496,7 @@ mod tests {
 
         let mut vm = VM::new(library);
         assert!(vm.execute(SentenceIndex::from(0)).is_ok());
-        assert!(vm.stack().is_empty());
+        assert_eq!(vm.stack(), &[Value::Bool(true)]);
     }
 
     #[test]
@@ -626,74 +594,51 @@ mod tests {
             Instruction::Tuple(3),
             Instruction::Untuple(3),
             Instruction::Drop, // the untuple's success flag
-            Instruction::Push(Value::Int(3)),
-            Instruction::AssertEqual,
-            Instruction::Push(Value::Int(2)),
-            Instruction::AssertEqual,
-            Instruction::Push(Value::Int(1)),
-            Instruction::AssertEqual,
         ];
         library.sentences.push(sentence);
         let idx = SentenceIndex::from(0);
 
         let mut vm = VM::new(library);
         assert!(vm.execute(idx).is_ok());
-        assert!(vm.stack().is_empty());
+        assert_eq!(vm.stack(), &[Value::Int(1), Value::Int(2), Value::Int(3)]);
     }
 
     #[test]
     fn test_type_checks_and_tuple_length() {
         let mut library = Library::new();
+        // Each answer is left where the assertion below can read it.
         let sentence = vec![
-            // test is_int
             Instruction::Push(Value::Int(42)),
             Instruction::IsInt,
             Instruction::Push(Value::Bool(true)),
-            Instruction::AssertEqual,
-            Instruction::Push(Value::Bool(true)),
             Instruction::IsInt,
-            Instruction::Push(Value::Bool(false)),
-            Instruction::AssertEqual,
-            // test is_bool
             Instruction::Push(Value::Bool(true)),
             Instruction::IsBool,
-            Instruction::Push(Value::Bool(true)),
-            Instruction::AssertEqual,
-            // test is_tuple
             Instruction::Push(Value::Int(1)),
             Instruction::Push(Value::Int(2)),
             Instruction::Tuple(2),
             Instruction::IsTuple,
-            Instruction::Push(Value::Bool(true)),
-            Instruction::AssertEqual,
-            // test tuple_length
             Instruction::Push(Value::Int(1)),
             Instruction::Push(Value::Int(2)),
             Instruction::Tuple(2),
             Instruction::TupleLength,
             Instruction::Drop, // the tuple_length's success flag
-            Instruction::Push(Value::Int(2)),
-            Instruction::AssertEqual,
         ];
         library.sentences.push(sentence);
         let idx = SentenceIndex::from(0);
 
         let mut vm = VM::new(library);
         assert!(vm.execute(idx).is_ok());
-        assert!(vm.stack().is_empty());
-    }
-
-    #[test]
-    fn test_assertion_failure() {
-        let mut library = Library::new();
-        let sentence = vec![Instruction::Push(Value::Bool(false)), Instruction::Assert];
-        library.sentences.push(sentence);
-        let idx = SentenceIndex::from(0);
-
-        let mut vm = VM::new(library);
-        let res = vm.execute(idx);
-        assert!(res.is_err());
-        assert!(res.unwrap_err().contains("Assertion failed"));
+        assert_eq!(
+            vm.stack(),
+            &[
+                Value::Bool(true),  // 42 is an int
+                Value::Bool(false), // true is not
+                Value::Bool(true),  // true is a bool
+                Value::Bool(true),  // (1, 2) is a tuple
+                Value::Int(2),      // and two long
+            ]
+        );
     }
 
     #[test]
@@ -703,21 +648,16 @@ mod tests {
                 push 10
                 push 20
                 add
-                assert
-                push 30
-                assert_eq
-                
+                // Stack: [30, true]
+
                 // Test branching with inline targets
                 push true
                 branch {
                     push 100
                 } {
-                    panic
+                    push 200
                 }
-                
-                // Check that the branch returned and we continue here
-                push 100
-                assert_eq
+                // Stack: [30, true, 100]
             }
         "#;
         let res = bytecode::assemble(code).unwrap();
@@ -725,7 +665,10 @@ mod tests {
 
         let mut vm = VM::new(res);
         assert!(vm.execute(start_idx).is_ok());
-        assert!(vm.stack().is_empty());
+        assert_eq!(
+            vm.stack(),
+            &[Value::Int(30), Value::Bool(true), Value::Int(100)]
+        );
     }
 
     #[test]
@@ -743,14 +686,12 @@ mod tests {
                 // Top of stack has the passed symbol. Compare it to status_ok.
                 push status_ok
                 equal
-                assert
-                
+
                 // Compare it to status_error (should not be equal)
                 push status_ok
                 push status_error
                 equal
                 not
-                assert
             }
         "#;
         let res = bytecode::assemble(code).unwrap();
@@ -758,7 +699,7 @@ mod tests {
 
         let mut vm = VM::new(res);
         assert!(vm.execute(entry_idx).is_ok());
-        assert!(vm.stack().is_empty());
+        assert_eq!(vm.stack(), &[Value::Bool(true), Value::Bool(true)]);
     }
 
     #[test]
@@ -770,65 +711,63 @@ mod tests {
             export sentence test_len {
                 push ascii_str
                 const_string_len
-                assert
-                push 5
-                assert_eq
-                
                 push unicode_str
                 const_string_len
-                assert
-                push 4
-                assert_eq
             }
-            
+
             export sentence test_char_at {
                 push ascii_str
                 push 1
                 const_string_char_at
-                assert
-                push 101
-                assert_eq
-                
                 push unicode_str
                 push 3
                 const_string_char_at
-                assert
-                push 233
-                assert_eq
             }
-            
+
             export sentence test_out_of_bounds {
                 push unicode_str
                 push 4
                 const_string_char_at
                 // Out of range, so the flag is the one place this differs from
                 // the two above: it says the 0 underneath was invented.
-                not
-                assert
-                push 0
-                assert_eq
             }
         "#;
         let res = bytecode::assemble(code).unwrap();
 
-        // Run test_len
+        // Run test_len: each length, and the flag saying it was read.
         let test_len_idx = *res.exports.get("test_len").unwrap();
         let mut vm = VM::new(res.clone());
         assert!(vm.execute(test_len_idx).is_ok());
-        assert!(vm.stack().is_empty());
+        assert_eq!(
+            vm.stack(),
+            &[
+                Value::Int(5),
+                Value::Bool(true),
+                Value::Int(4),
+                Value::Bool(true)
+            ]
+        );
 
         // Run test_char_at
         let test_char_idx = *res.exports.get("test_char_at").unwrap();
         let mut vm = VM::new(res.clone());
         assert!(vm.execute(test_char_idx).is_ok());
-        assert!(vm.stack().is_empty());
+        assert_eq!(
+            vm.stack(),
+            &[
+                Value::Int(101),
+                Value::Bool(true),
+                Value::Int(233),
+                Value::Bool(true)
+            ]
+        );
 
         // Run test_out_of_bounds: an index past the end answers 0 rather than
-        // failing, and reports that it did. The sentence asserts both halves.
+        // failing, and reports that it did.
         let oob_idx = *res.exports.get("test_out_of_bounds").unwrap();
         let mut vm = VM::new(res);
         assert!(vm.execute(oob_idx).is_ok());
-        assert!(vm.stack().is_empty());
+        assert_eq!(vm.stack(), &[Value::Int(0), Value::Bool(false)]);
     }
 
     #[test]
@@ -838,7 +777,6 @@ mod tests {
                 push 42
                 push 100
                 add
-                assert
             }
         "#;
         let res = bytecode::assemble(code).unwrap();
@@ -846,6 +784,7 @@ mod tests {
         let mut vm = VM::new(res);
         vm.set_tracing(true);
         assert!(vm.execute(entry_idx).is_ok());
+        assert_eq!(vm.stack(), &[Value::Int(142), Value::Bool(true)]);
     }
 
     #[test]
@@ -865,13 +804,18 @@ mod tests {
             symbol payload
             mod base {
                 export function init {
+                    // `untuple 0` takes the argument whether or not it was
+                    // `()`, so the flag has nothing left to say.
                     untuple 0
-                    assert
+                    drop 0
                     push 0
                 }
                 export function accept {
+                    // `untuple 2` leaves two values either way, so this reads
+                    // the same on a malformed event: it just answers about the
+                    // padding.
                     untuple 2
-                    assert
+                    drop 0
                     drop 0
                     push crate::payload
                     equal
@@ -884,7 +828,7 @@ mod tests {
                 }
                 export function process {
                     untuple 2
-                    assert
+                    drop 0
                     drop 0
                     drop 0
                     push 1
@@ -906,75 +850,76 @@ mod tests {
             mod prefixed compose_prefix(base, from_sym);
             mod renamed compose_rename_prefix(from_sym, to_sym, prefixed);
 
-            export sentence test_rename {
-                // Initialize state
+            // Each query is its own sentence, so what it answers is the whole
+            // stack the VM is left holding.
+            export sentence test_accept {
                 tuple 0
                 jump renamed::init
-                
                 // Stack: [state] (which is 0)
-                // Query accept
-                pick 0
                 push payload
                 push to_sym
                 tuple 2
                 roll 1
                 tuple 2
                 jump renamed::accept
-                assert
-                
-                // Query emit tuple
-                pick 0
+            }
+
+            export sentence test_emit {
+                tuple 0
+                jump renamed::init
                 jump renamed::emit
-                untuple 2
-                assert
-                assert
-                push payload
-                push to_sym
-                tuple 2
-                assert_eq
-                
+            }
+
+            export sentence test_process {
+                tuple 0
+                jump renamed::init
                 // Process event (payload, to_sym) -> rewrites to (payload, from_sym)
-                // Stack has [0]
                 push payload
                 push to_sym
                 tuple 2
                 roll 1
                 tuple 2
                 jump renamed::process
-                // Stack has [1] (new_state)
-                pick 0
-                push 1
-                assert_eq
-                // Query tau_reduce on state 1
-                pick 0
+                // Stack: [1] (new_state)
                 jump renamed::tau_reduce
-                untuple 2
-                assert
-                pick 0
-                not
-                assert
-                drop 0
-
-                // Assert state value is 1
-                push 1
-                assert_eq
             }
         "#;
         let res = bytecode::assemble(code).unwrap();
-        let test_idx = *res.exports.get("test_rename").unwrap();
+        let payload = res.symbols.get("payload").unwrap().clone();
+        let to_sym = res.symbols.get("to_sym").unwrap().clone();
+        let renamed_event = Value::Tuple(vec![payload, to_sym]);
 
+        // The renamed machine takes the event under its new name.
+        let idx = *res.exports.get("test_accept").unwrap();
+        let mut vm = VM::new(res.clone());
+        vm.execute(idx).expect("test_accept");
+        assert_eq!(vm.stack(), &[Value::Bool(true)]);
+
+        // And emits under it too.
+        let idx = *res.exports.get("test_emit").unwrap();
+        let mut vm = VM::new(res.clone());
+        vm.execute(idx).expect("test_emit");
+        assert_eq!(
+            vm.stack(),
+            &[Value::Tuple(vec![renamed_event, Value::Bool(true)])]
+        );
+
+        // Processing advances the state, and nothing reduces from there.
+        let idx = *res.exports.get("test_process").unwrap();
         let mut vm = VM::new(res);
-        if let Err(e) = vm.execute(test_idx) {
-            panic!("Execution failed: {}", e);
-        }
+        vm.execute(idx).expect("test_process");
+        assert_eq!(
+            vm.stack(),
+            &[Value::Tuple(vec![Value::Int(1), Value::Bool(false)])]
+        );
 
         // Also test argument count error
         let bad_code = r#"
             symbol a
             symbol b
             mod m {
-                export function init { untuple 0 assert push 0 }
-                export sentence accept { untuple 2 assert drop 0 drop 0 push false }
+                export function init { untuple 0 drop 0 push 0 }
+                export sentence accept { untuple 2 drop 0 drop 0 drop 0 push false }
                 export function emit { drop 0 tuple 0 push false tuple 2 }
                 export sentence process { }
             }
@@ -991,11 +936,11 @@ mod tests {
                     // Stack has the value pushed by the composer
                     push 10
                     add
-                    assert
+                    drop 0
                 }
                 export function accept {
                     untuple 2
-                    assert
+                    drop 0
                     drop 0
                     drop 0
                     push false
@@ -1008,11 +953,11 @@ mod tests {
                 }
                 export function process {
                     untuple 2
-                    assert
+                    drop 0
                     drop 1
                     push 100
                     add
-                    assert
+                    drop 0
                 }
                 export function tau_reduce {
                     push false
@@ -1030,30 +975,33 @@ mod tests {
 
             mod closed compose_static_closure(base, 42);
 
-            export sentence test_closure {
-                // Initialize state: should push 42, then call base::init which adds 10 -> returns 52
+            // Initialize state: should push 42, then call base::init which adds 10 -> returns 52
+            export sentence test_init {
                 tuple 0
                 jump closed::init
-                pick 0
-                push 52
-                assert_eq
+            }
 
-                // Call process: should push 100, then add -> 152
+            // Call process: should push 100, then add -> 152
+            export sentence test_process {
+                tuple 0
+                jump closed::init
                 push 0
                 roll 1
                 tuple 2
                 jump closed::process
-                push 152
-                assert_eq
             }
         "#;
         let res = bytecode::assemble(code).unwrap();
-        let test_idx = *res.exports.get("test_closure").unwrap();
 
+        let idx = *res.exports.get("test_init").unwrap();
+        let mut vm = VM::new(res.clone());
+        vm.execute(idx).expect("test_init");
+        assert_eq!(vm.stack(), &[Value::Int(52)]);
+
+        let idx = *res.exports.get("test_process").unwrap();
         let mut vm = VM::new(res);
-        if let Err(e) = vm.execute(test_idx) {
-            panic!("Execution failed: {}", e);
-        }
+        vm.execute(idx).expect("test_process");
+        assert_eq!(vm.stack(), &[Value::Int(152)]);
     }
 
     #[test]
@@ -1062,12 +1010,12 @@ mod tests {
             mod m_no_tau {
                 export function init {
                     untuple 0
-                    assert
+                    drop 0
                     push 0
                 }
                 export sentence accept {
                     untuple 2
-                    assert
+                    drop 0
                     drop 0
                     drop 0
                     push false
@@ -1084,7 +1032,7 @@ mod tests {
                 }
                 export function process {
                     untuple 2
-                    assert
+                    drop 0
                     drop 1
                 }
                 export function is_done {
@@ -1100,12 +1048,12 @@ mod tests {
             mod m_with_tau {
                 export function init {
                     untuple 0
-                    assert
+                    drop 0
                     push 0
                 }
                 export sentence accept {
                     untuple 2
-                    assert
+                    drop 0
                     drop 0
                     drop 0
                     push false
@@ -1124,7 +1072,7 @@ mod tests {
                 }
                 export function process {
                     untuple 2
-                    assert
+                    drop 0
                     drop 1
                 }
                 export function is_done {
@@ -1137,35 +1085,37 @@ mod tests {
                 }
             }
 
-            export sentence test_tau {
-                // Test m_no_tau
+            export sentence test_no_tau {
                 tuple 0
                 jump m_no_tau::init
                 jump m_no_tau::tau_reduce
-                untuple 2
-                assert
-                not
-                assert
-                drop 0
+            }
 
-                // Test m_with_tau
+            export sentence test_with_tau {
                 tuple 0
                 jump m_with_tau::init
                 jump m_with_tau::tau_reduce
-                untuple 2
-                assert
-                assert
-                push 1
-                assert_eq
             }
         "#;
         let res = bytecode::assemble(code).unwrap();
-        let test_idx = *res.exports.get("test_tau").unwrap();
 
+        // A machine with nothing to reduce says so and leaves its state alone.
+        let idx = *res.exports.get("test_no_tau").unwrap();
+        let mut vm = VM::new(res.clone());
+        vm.execute(idx).expect("test_no_tau");
+        assert_eq!(
+            vm.stack(),
+            &[Value::Tuple(vec![Value::Int(0), Value::Bool(false)])]
+        );
+
+        // One with a step to take hands back the state it stepped to.
+        let idx = *res.exports.get("test_with_tau").unwrap();
         let mut vm = VM::new(res);
-        if let Err(e) = vm.execute(test_idx) {
-            panic!("Execution failed: {}", e);
-        }
+        vm.execute(idx).expect("test_with_tau");
+        assert_eq!(
+            vm.stack(),
+            &[Value::Tuple(vec![Value::Int(1), Value::Bool(true)])]
+        );
     }
 }
 
@@ -1262,7 +1212,6 @@ mod totality_tests {
             Instruction::And,
             Instruction::Or,
             Instruction::ConstStringCharAt,
-            Instruction::AssertEqual,
             Instruction::Tuple(2),
         ]
     }
@@ -1735,58 +1684,12 @@ mod totality_tests {
         assert!(!ok, "a non-numeric operand is not a comparison");
     }
 
-    // -- What is still partial ----------------------------------------------
-
-    #[test]
-    fn assert_fails_only_on_false() {
-        // The sharp edge of the truthiness rule, and the reason to know which
-        // way round it goes: an assertion here checks that something did not
-        // definitely go wrong, not that it definitely went right. `assert` on
-        // junk passes.
-        for v in every_shape() {
-            let got = run(vec![Instruction::Push(v.clone()), Instruction::Assert]);
-            assert_eq!(
-                got.is_ok(),
-                v != Value::Bool(false),
-                "assert on {:?} gave {:?}",
-                v,
-                got
-            );
-        }
-        assert!(run(vec![Instruction::Push(Value::unit()), Instruction::Assert]).is_ok());
-        assert!(
-            run(vec![
-                Instruction::Push(Value::Bool(false)),
-                Instruction::Assert
-            ])
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn assert_eq_and_panic_are_the_other_two() {
-        assert!(
-            run(vec![
-                Instruction::Push(Value::Int(1)),
-                Instruction::Push(Value::Int(2)),
-                Instruction::AssertEqual,
-            ])
-            .is_err()
-        );
-        assert!(
-            run(vec![
-                Instruction::Push(Value::Int(1)),
-                Instruction::Push(Value::Int(1)),
-                Instruction::AssertEqual,
-            ])
-            .is_ok()
-        );
-        assert!(run(vec![Instruction::Panic]).is_err());
-    }
+    // -- What is still an error ---------------------------------------------
 
     #[test]
     fn underflow_is_still_an_error_because_it_is_structural() {
-        // Ruled out by arity checking rather than by a flag: a sentence that
+        // The only way a run can still end early, and it is structural rather
+        // than about values: ruled out by arity checking, so a sentence that
         // would underflow does not assemble in the first place.
         for body in [
             vec![Instruction::Drop],
@@ -1853,14 +1756,18 @@ mod runtime_tests {
                 }
 
                 export function init {
+                    // `untuple 0` takes the argument either way, so the flag
+                    // has nothing left to say.
                     untuple 0
-                    assert
+                    drop 0
                     push state::init
                 }
 
                 export sentence accept {
+                    // A malformed event untuples to itself and a `()`, which
+                    // matches no state and so is declined below.
                     untuple 2
-                    assert
+                    drop 0
                     // Stack: [event, state]
                     push state::waiting
                     equal
@@ -1894,17 +1801,33 @@ mod runtime_tests {
 
                 export function process {
                     untuple 2
-                    assert
+                    drop 0
+                    // Stack: [event, state]
+                    pick 0
                     push state::init
                     equal
                     branch {
+                        // In `init`, a ping is what moves us on. Anything
+                        // else — including a malformed event — leaves the
+                        // state where it was.
+                        drop 0
                         push event::ping
-                        assert_eq
-                        push state::waiting
+                        equal
+                        branch {
+                            push state::waiting
+                        } {
+                            push state::init
+                        }
                     } {
+                        // Stack: [event, state]
+                        roll 1
                         push event::pong
-                        assert_eq
-                        push state::done
+                        equal
+                        branch {
+                            drop 0
+                            push state::done
+                        } {
+                        }
                     }
                 }
 
@@ -1961,14 +1884,18 @@ mod runtime_tests {
                 const_string hello "Hello, World!"
 
                 export function init {
+                    // `untuple 0` takes the argument either way, so the flag
+                    // has nothing left to say.
                     untuple 0
-                    assert
+                    drop 0
                     push 0
                 }
 
                 export sentence accept {
+                    // This machine only writes, so nothing is accepted and
+                    // the shape of the event never comes up.
                     untuple 2
-                    assert
+                    drop 0
                     drop 0
                     drop 0
                     push false
@@ -1983,17 +1910,20 @@ mod runtime_tests {
                     pick 0
                     push hello
                     const_string_len
-                    assert
+                    // A literal always has a length, and the index is always
+                    // an int, so both flags are foregone conclusions here.
+                    drop 0
                     less
-                    assert
+                    drop 0
                     branch {
                         push ()
-                        
+
                         push hello
                         pick 2 // index
                         const_string_char_at
-                        assert
-                        
+                        // In range, since `less` is what got us into this arm.
+                        drop 0
+
                         tuple 2 // ((), char)
                         
                         push crate::std::io::stdout::putch
@@ -2021,19 +1951,19 @@ mod runtime_tests {
 
                 export function process {
                     untuple 2
-                    assert
+                    drop 0
                     drop 1 // drop event
                     push 1
                     add
-                    assert
+                    drop 0
                 }
 
                 export function is_done {
                     push hello
                     const_string_len
-                    assert
+                    drop 0
                     less
-                    assert
+                    drop 0
                     not
                 }
 

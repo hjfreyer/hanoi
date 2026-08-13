@@ -7,7 +7,6 @@
 //! prelude tactics over real `.hana` code, and the sweeps over the corpus that
 //! keep the claims in `docs/tactics.md` honest.
 
-use bytecode::arity::failure_reachability;
 use bytecode::{Instruction, Library, SentenceIndex, Value, assemble};
 use std::fs;
 use std::path::Path;
@@ -144,16 +143,6 @@ fn depth_counts_inputs_once() {
     );
 }
 
-#[test]
-fn depth_stops_being_known_after_a_panic() {
-    let prog = program_of("sentence probe { push 1 panic push 2 }");
-    let body = build(prog.library(), SentenceIndex::from(0));
-    let d = depths(prog, &body);
-    assert_eq!(d[0], Some(0));
-    assert_eq!(d[1], Some(1));
-    assert_eq!(d[2], None, "the reckoning should stop at the panic");
-}
-
 /// A branch's arity accounts for **both** arms, not whichever answered first.
 ///
 /// The arity checker holds the two arms to the same *net* change and to
@@ -170,15 +159,6 @@ fn a_branch_takes_what_the_hungrier_arm_takes() {
         panic!("expected a pick and a branch, got {:?}", shape(&body))
     };
     assert_eq!(node_arity(prog, inner), Some((2, 1)));
-
-    // An arm that never returns answers for neither, and the other stands
-    // alone — the one case where a single arm decides.
-    let prog = program_of("sentence probe { pick 0 branch { panic } { drop 0 } }");
-    let body = build(prog.library(), SentenceIndex::from(0));
-    let [_, inner] = &body[..] else {
-        panic!("expected a branch")
-    };
-    assert_eq!(node_arity(prog, inner), Some((2, 0)));
 }
 
 /// The rewrite that understating a branch's arity used to license.
@@ -196,7 +176,6 @@ fn a_branch_takes_what_the_hungrier_arm_takes() {
 #[test]
 fn a_function_that_is_not_the_identity_is_not_rewritten_into_one() {
     let code = r#"
-        #[total]
         function test_always_true {
             pick 0
             is_bool
@@ -411,9 +390,9 @@ fn an_operator_takes_its_operands_with_it() {
 #[test]
 fn a_computation_whose_results_all_go_reaches_a_frame() {
     // The old whitelist refused anything framed, for fear of an `assert`
-    // several levels down. Under the totality precondition there is none, so
-    // the arity is the whole condition: `dip 1 { drop 0 }` is (2 -> 1), and
-    // one drop after it takes both its inputs instead.
+    // several levels down. Nothing can fail now, so the arity is the whole
+    // condition: `dip 1 { drop 0 }` is (2 -> 1), and one drop after it takes
+    // both its inputs instead.
     let got = tree("sentence probe { dip 1 { drop 0 } drop 0 }", ANNIHILATE);
     assert_eq!(shape(&got), vec!["drop", "drop"], "{:?}", shape(&got));
 }
@@ -538,7 +517,6 @@ fn passes_compose() {
 fn introducing_a_copy_lets_factoring_reach_an_arm_that_lacked_it() {
     // A predicate whose then-arm copies the value and whose else-arm does not.
     let code = r#"
-        #[total]
         function probe {
             pick 0
             is_bool
@@ -606,7 +584,7 @@ fn introducing_preserves_what_the_program_does() {
 #[test]
 fn splitting_a_bool_lets_the_folding_laws_reach_an_opaque_value() {
     // `not` on an unknown value: nothing can be said about it.
-    let (prog, plain) = tree_of("#[total] function probe { not }", "id");
+    let (prog, plain) = tree_of("function probe { not }", "id");
     assert_eq!(shape(&plain), vec!["not"]);
     assert_eq!(run(prog, plain.clone(), "values"), plain);
 
@@ -686,7 +664,7 @@ fn a_branch_whose_arms_were_the_same_disappears_along_with_them() {
 // ---------------------------------------------------------------------------
 
 const SPECULATION: &str = r#"
-    #[total] #[arity(2, 2)]
+    #[arity(2, 2)]
     sentence probe { pick 0 branch { pick 1 pick 1 equal and } { not } }
 "#;
 
@@ -835,7 +813,7 @@ fn lifting_empties_the_arms_of_the_barista_probe() {
 fn lifting_stops_where_the_arms_build_different_values() {
     let (prog, plain) = tree_of(
         r#"
-        #[total] #[arity(3, 1)]
+        #[arity(3, 1)]
         sentence probe { branch { tuple 2 } { add drop 0 } }
         "#,
         "id",
@@ -850,7 +828,7 @@ fn lifting_stops_where_the_arms_build_different_values() {
 // ---------------------------------------------------------------------------
 
 const A_TEST: &str = r#"
-    #[total] #[arity(2, 1)]
+    #[arity(2, 1)]
     sentence probe { equal not }
 "#;
 
@@ -944,7 +922,7 @@ fn a_split_on_an_operator_result_folds_to_the_two_cases() {
 #[test]
 fn a_branch_repeated_in_both_arms_needs_no_new_law() {
     let code = r#"
-        #[total] #[arity(1, 1)]
+        #[arity(1, 1)]
         sentence probe {
             pick 0
             branch { branch { push 1 } { push 2 } } { branch { push 1 } { push 2 } }
@@ -965,7 +943,7 @@ fn a_branch_repeated_in_both_arms_needs_no_new_law() {
 #[test]
 fn four_different_arms_collapse_to_the_diagonal() {
     let code = r#"
-        #[total] #[arity(1, 1)]
+        #[arity(1, 1)]
         sentence probe {
             pick 0
             branch { branch { push 1 } { push 2 } } { branch { push 3 } { push 4 } }
@@ -1007,10 +985,7 @@ fn four_different_arms_collapse_to_the_diagonal() {
 #[test]
 fn sharing_a_call_runs_it_once_and_copies_what_it_left() {
     let code = r#"
-        #[total]
         function classify { pick 0 is_int branch { drop 0 push 7 } { drop 0 push 8 } }
-
-        #[total]
         #[arity(1, 2)]
         sentence twice { pick 0 jump classify dip 1 { jump classify } }
     "#;
@@ -1049,7 +1024,7 @@ fn sharing_a_call_runs_it_once_and_copies_what_it_left() {
 const SYMBOLS: &str = r#"
     symbol plain
     mod outer { symbol tag }
-    #[total] #[arity(1, 1)] sentence probe { drop 0 push 1 }
+    #[arity(1, 1)] sentence probe { drop 0 push 1 }
 "#;
 
 /// The symbol a term pushed, as the tool resolved it.
@@ -1190,7 +1165,7 @@ fn the_two_readings_of_a_law_are_one_law() {
 
 #[test]
 fn a_split_that_taught_nothing_can_be_taken_back_out() {
-    let (prog, plain) = tree_of("#[total] function probe { not }", "id");
+    let (prog, plain) = tree_of("function probe { not }", "id");
     let there = run(prog, plain.clone(), "at(0, split_bool)");
     assert_ne!(shape(&there), shape(&plain));
     assert_eq!(run(prog, there, "once(unsplit_bool)"), plain);
@@ -1209,43 +1184,6 @@ fn corpus() -> Option<(&'static Library, &'static Program<'static>)> {
     ));
     let prog: &'static Program<'static> = Box::leak(Box::new(Program::new(library)));
     Some((library, prog))
-}
-
-/// Every sentence the tool would agree to work on.
-///
-/// The refusal `main` makes, applied to the sweep: the equations are stated for
-/// code that cannot fail, so a sweep that ignored the precondition would be
-/// testing something the tool does not do. Nothing in the corpus asserts any
-/// more, so this is now every sentence there is.
-fn admissible(library: &Library, _prog: &Program) -> Vec<SentenceIndex> {
-    let can_fail = failure_reachability(library);
-    library
-        .names
-        .iter_enumerated()
-        .map(|(idx, _)| idx)
-        .filter(|idx| !can_fail[usize::from(*idx)])
-        .collect()
-}
-
-/// The precondition has to leave something to work on.
-///
-/// This used to say *most* of the corpus, and the sweeps that followed it
-/// worked on whichever part that was. Now that nothing in the corpus asserts,
-/// the interesting number is that there is no exception.
-#[test]
-fn the_whole_corpus_is_admissible() {
-    let Some((library, prog)) = corpus() else {
-        return;
-    };
-    let total = library.sentences.len();
-    let ok = admissible(library, prog).len();
-    assert_eq!(
-        ok,
-        total,
-        "{} of {} sentences can still fail",
-        total - ok,
-        total
-    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1351,50 +1289,14 @@ fn a_call_makes_its_result_opaque_rather_than_wrong() {
 }
 
 // ---------------------------------------------------------------------------
-// The tool's own refusals
+// What the equations rest on
 // ---------------------------------------------------------------------------
 
 #[test]
-fn a_sentence_that_can_fail_is_outside_the_preconditions() {
-    // The check `main` makes before it will rewrite anything. `assert` is one
-    // of the three instructions that can still fail.
-    let library = assemble("sentence risky { assert }").unwrap();
-    assert!(failure_reachability(&library)[0]);
-
-    // And it propagates through a call, which is what makes refusing the root
-    // enough.
-    let library = assemble(
-        r#"
-        #[arity(1, 0)] sentence risky { assert }
-        #[arity(1, 0)] sentence caller { jump risky }
-        "#,
-    )
-    .unwrap();
-    let caller = library
-        .names
-        .iter_enumerated()
-        .find(|(_, n)| *n == "caller")
-        .map(|(i, _)| i)
-        .unwrap();
-    assert!(
-        failure_reachability(&library)[usize::from(caller)],
-        "reaching a failure through a call has to count"
-    );
-}
-
-#[test]
-fn a_total_sentence_is_admitted() {
-    let library = assemble("sentence safe { push 1 drop 0 }").unwrap();
-    assert!(!failure_reachability(&library)[0]);
-}
-
-#[test]
 fn an_instruction_that_reports_with_a_flag_is_still_total() {
-    // `add` cannot fail; it answers with its result and a flag saying whether
-    // the answer was computed. That is the whole reason the equations may move
-    // it around.
-    let library = assemble("sentence probe { add drop 0 drop 0 }").unwrap();
-    assert!(!failure_reachability(&library)[0]);
+    // `add` answers with its result and a flag saying whether the answer was
+    // computed, rather than stopping. That is the whole reason the equations
+    // may move it around.
     assert_eq!(
         bytecode::arity::op_arity(&Instruction::Add),
         Some((2, 2)),
