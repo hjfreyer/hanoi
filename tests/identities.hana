@@ -23,14 +23,14 @@ function split_bool {
 }
 
 test sentence split_bool_is_the_identity {
-    push true     jump split_bool   push true     assert_eq
-    push false    jump split_bool   push false    assert_eq
-    push 42       jump split_bool   push 42       assert_eq
-    push 0        jump split_bool   push 0        assert_eq
-    push "hi"     jump split_bool   push "hi"     assert_eq
-    push some_sym jump split_bool   push some_sym assert_eq
-    push ()       jump split_bool   push ()       assert_eq
-    push (2, 1)   jump split_bool   push (2, 1)   assert_eq
+    push true     jump split_bool   push true     jump crate::prelude::check_equals ? drop 0
+    push false    jump split_bool   push false    jump crate::prelude::check_equals ? drop 0
+    push 42       jump split_bool   push 42       jump crate::prelude::check_equals ? drop 0
+    push 0        jump split_bool   push 0        jump crate::prelude::check_equals ? drop 0
+    push "hi"     jump split_bool   push "hi"     jump crate::prelude::check_equals ? drop 0
+    push some_sym jump split_bool   push some_sym jump crate::prelude::check_equals ? drop 0
+    push ()       jump split_bool   push ()       jump crate::prelude::check_equals ? drop 0
+    push (2, 1)   jump split_bool   push (2, 1)   jump crate::prelude::check_equals
 }
 
 // `roll 1 ; op` = `op`, for the commutative operators.
@@ -38,13 +38,16 @@ test sentence split_bool_is_the_identity {
 // `vm` measures the commutative set exhaustively over every pair of value
 // shapes; this checks the shape of the law the rewriter actually applies.
 test sentence commuting_operands_changes_nothing {
-    push 3 push 4 roll 1 add   assert   push 7    assert_eq
-    push 3 push 4 add          assert   push 7    assert_eq
+    push 3 push 4 roll 1 add jump crate::prelude::check_true ? drop 0
+    push 7 jump crate::prelude::check_equals ? drop 0
+    push 3 push 4 add jump crate::prelude::check_true ? drop 0
+    push 7 jump crate::prelude::check_equals ? drop 0
 
-    push 3 push 4 roll 1 mul   assert   push 12   assert_eq
-    push true push false roll 1 and     push false assert_eq
-    push true push false roll 1 or      push true  assert_eq
-    push 3 push some_sym roll 1 equal   push false assert_eq
+    push 3 push 4 roll 1 mul jump crate::prelude::check_true ? drop 0
+    push 12 jump crate::prelude::check_equals ? drop 0
+    push true push false roll 1 and     push false jump crate::prelude::check_equals ? drop 0
+    push true push false roll 1 or      push true  jump crate::prelude::check_equals ? drop 0
+    push 3 push some_sym roll 1 equal   push false jump crate::prelude::check_equals
 }
 
 // `X` = `drop^n` where `X : n -> 0` — the annihilation with nothing to read.
@@ -54,20 +57,20 @@ test sentence commuting_operands_changes_nothing {
 // the condition and do nothing else.
 test sentence a_computation_that_leaves_nothing_is_a_drop {
     push 9  push true  branch { } { }
-    push 9 assert_eq
+    push 9 jump crate::prelude::check_equals ? drop 0
 
     push 9  push false branch { } { }
-    push 9 assert_eq
+    push 9 jump crate::prelude::check_equals ? drop 0
 
     push 9  push true  drop 0
-    push 9 assert_eq
+    push 9 jump crate::prelude::check_equals ? drop 0
 
     // Arms that consume as well: (2 -> 0), so it is two drops.
     push 9  push 1 push true  branch { drop 0 } { drop 0 }
-    push 9 assert_eq
+    push 9 jump crate::prelude::check_equals ? drop 0
 
     push 9  push 1 push true  drop 0 drop 0
-    push 9 assert_eq
+    push 9 jump crate::prelude::check_equals
 }
 
 // `pick 0 ; branch { branch { A } { B } ; R } { Q }`
@@ -89,27 +92,27 @@ test sentence a_computation_that_leaves_nothing_is_a_drop {
 #[total] #[arity(1,1)] function retest_both_rhs { branch { push 1 } { push 4 } }
 
 test sentence a_value_tested_twice_answers_the_same {
-    push true  jump retest_then_lhs push 1 assert_eq
-    push true  jump retest_then_rhs push 1 assert_eq
-    push false jump retest_then_lhs push 9 assert_eq
-    push false jump retest_then_rhs push 9 assert_eq
-    push 42    jump retest_then_lhs push 1 assert_eq
-    push 42    jump retest_then_rhs push 1 assert_eq
+    push true  jump retest_then_lhs push 1 jump crate::prelude::check_equals ? drop 0
+    push true  jump retest_then_rhs push 1 jump crate::prelude::check_equals ? drop 0
+    push false jump retest_then_lhs push 9 jump crate::prelude::check_equals ? drop 0
+    push false jump retest_then_rhs push 9 jump crate::prelude::check_equals ? drop 0
+    push 42    jump retest_then_lhs push 1 jump crate::prelude::check_equals ? drop 0
+    push 42    jump retest_then_rhs push 1 jump crate::prelude::check_equals ? drop 0
 
-    push true  jump retest_else_lhs push 9 assert_eq
-    push true  jump retest_else_rhs push 9 assert_eq
-    push false jump retest_else_lhs push 4 assert_eq
-    push false jump retest_else_rhs push 4 assert_eq
-    push 42    jump retest_else_lhs push 9 assert_eq
-    push 42    jump retest_else_rhs push 9 assert_eq
+    push true  jump retest_else_lhs push 9 jump crate::prelude::check_equals ? drop 0
+    push true  jump retest_else_rhs push 9 jump crate::prelude::check_equals ? drop 0
+    push false jump retest_else_lhs push 4 jump crate::prelude::check_equals ? drop 0
+    push false jump retest_else_rhs push 4 jump crate::prelude::check_equals ? drop 0
+    push 42    jump retest_else_lhs push 9 jump crate::prelude::check_equals ? drop 0
+    push 42    jump retest_else_rhs push 9 jump crate::prelude::check_equals ? drop 0
 
     // Both arms, which is where the whole thing collapses to the diagonal.
-    push true  jump retest_both_lhs push 1 assert_eq
-    push true  jump retest_both_rhs push 1 assert_eq
-    push false jump retest_both_lhs push 4 assert_eq
-    push false jump retest_both_rhs push 4 assert_eq
-    push 42    jump retest_both_lhs push 1 assert_eq
-    push 42    jump retest_both_rhs push 1 assert_eq
+    push true  jump retest_both_lhs push 1 jump crate::prelude::check_equals ? drop 0
+    push true  jump retest_both_rhs push 1 jump crate::prelude::check_equals ? drop 0
+    push false jump retest_both_lhs push 4 jump crate::prelude::check_equals ? drop 0
+    push false jump retest_both_rhs push 4 jump crate::prelude::check_equals ? drop 0
+    push 42    jump retest_both_lhs push 1 jump crate::prelude::check_equals ? drop 0
+    push 42    jump retest_both_rhs push 1 jump crate::prelude::check_equals
 }
 
 // `pick 0 ; dip 1 { drop }` = nothing — the other counit.
@@ -120,10 +123,12 @@ test sentence a_value_tested_twice_answers_the_same {
 // dip 2 { drop }` moves the value, which is a `roll`.
 test sentence copying_and_discarding_the_original_is_nothing {
     push 7 push 8  pick 0 dip 1 { drop 0 }
-    push 8 assert_eq   push 7 assert_eq
+    push 8 jump crate::prelude::check_equals ? drop 0
+    push 7 jump crate::prelude::check_equals ? drop 0
 
     push 7 push 8
-    push 8 assert_eq   push 7 assert_eq
+    push 8 jump crate::prelude::check_equals ? drop 0
+    push 7 jump crate::prelude::check_equals
 }
 
 // `op ; is_bool` = `op ; drop ; push true`, for an op that yields a boolean.
@@ -132,24 +137,28 @@ test sentence copying_and_discarding_the_original_is_nothing {
 // case split discovers. `vm` measures which instructions qualify; this checks
 // the shape of the law the rewriter applies, on a predicate and on a flag.
 test sentence a_test_on_something_already_boolean_is_decided {
-    push true     is_bool is_bool  push true assert_eq
-    push false    is_bool is_bool  push true assert_eq
-    push 42       is_bool is_bool  push true assert_eq
-    push "hi"     is_bool is_bool  push true assert_eq
-    push some_sym is_bool is_bool  push true assert_eq
-    push (2, 1)   is_bool is_bool  push true assert_eq
+    push true     is_bool is_bool  push true jump crate::prelude::check_equals ? drop 0
+    push false    is_bool is_bool  push true jump crate::prelude::check_equals ? drop 0
+    push 42       is_bool is_bool  push true jump crate::prelude::check_equals ? drop 0
+    push "hi"     is_bool is_bool  push true jump crate::prelude::check_equals ? drop 0
+    push some_sym is_bool is_bool  push true jump crate::prelude::check_equals ? drop 0
+    push (2, 1)   is_bool is_bool  push true jump crate::prelude::check_equals ? drop 0
 
     // The right-hand side, once `annihilate` has taken the operator away.
-    push 42       drop 0 push true  push true assert_eq
+    push 42       drop 0 push true  push true jump crate::prelude::check_equals ? drop 0
 
     // A flag is a boolean, so it folds where the operator cannot be deleted.
-    push 3 push 4 add is_bool       push true assert_eq  push 7 assert_eq
+    push 3 push 4 add is_bool push true jump crate::prelude::check_equals ? drop 0
+    push 7 jump crate::prelude::check_equals ? drop 0
     push 3 push 4 add drop 0 push true
-                                    push true assert_eq  push 7 assert_eq
+                                    push true jump crate::prelude::check_equals ? drop 0
+                                    push 7 jump crate::prelude::check_equals ? drop 0
 
     // And one that fails, where the flag says so and is still a boolean.
     push some_sym push 4 add is_bool
-                                    push true assert_eq  drop 0
+                                    push true jump crate::prelude::check_equals ? drop 0
+                                    drop 0
+    push ((), crate::prelude::ok)
 }
 
 // `op ; pick 0 ; is_bool` = `op ; push true`, for an op that yields a boolean.
@@ -166,16 +175,20 @@ test sentence a_test_on_something_already_boolean_is_decided {
 // the annihilation and the counits take the second run away again.
 test sentence asking_whether_a_copy_of_a_test_is_a_test {
     push 3 push 4 equal pick 0 is_bool
-    push true assert_eq   push false assert_eq
+    push true jump crate::prelude::check_equals ? drop 0
+    push false jump crate::prelude::check_equals ? drop 0
 
     push 3 push 4 equal push true
-    push true assert_eq   push false assert_eq
+    push true jump crate::prelude::check_equals ? drop 0
+    push false jump crate::prelude::check_equals ? drop 0
 
     push 5 push 5 equal pick 0 is_bool
-    push true assert_eq   push true assert_eq
+    push true jump crate::prelude::check_equals ? drop 0
+    push true jump crate::prelude::check_equals ? drop 0
 
     push 5 push 5 equal push true
-    push true assert_eq   push true assert_eq
+    push true jump crate::prelude::check_equals ? drop 0
+    push true jump crate::prelude::check_equals
 }
 
 // `dip d { X } ; (roll (d+m-1))^m` = `(roll (d+n-1))^n ; X`, for `X : n -> m`.
@@ -191,18 +204,26 @@ test sentence asking_whether_a_copy_of_a_test_is_a_test {
 test sentence a_framed_computation_is_a_rolled_one {
     // d = 1, X = not : 1 -> 1, so one roll either side.
     push 9 push true  dip 1 { not }
-    push true assert_eq   push false assert_eq
+    push true jump crate::prelude::check_equals ? drop 0
+    push false jump crate::prelude::check_equals ? drop 0
 
     push 9 push true  roll 1 not roll 1
-    push true assert_eq   push false assert_eq
+    push true jump crate::prelude::check_equals ? drop 0
+    push false jump crate::prelude::check_equals ? drop 0
 
     // d = 2, X = add : 2 -> 2 — the rolls are all at one depth because a
     // rotation does not change how many values there are.
     push 1 push 2 push 8 push 9  dip 2 { add } roll 3 roll 3
-    assert  push 3 assert_eq  push 9 assert_eq  push 8 assert_eq
+    jump crate::prelude::check_true ? drop 0
+    push 3 jump crate::prelude::check_equals ? drop 0
+    push 9 jump crate::prelude::check_equals ? drop 0
+    push 8 jump crate::prelude::check_equals ? drop 0
 
     push 1 push 2 push 8 push 9  roll 3 roll 3 add
-    assert  push 3 assert_eq  push 9 assert_eq  push 8 assert_eq
+    jump crate::prelude::check_true ? drop 0
+    push 3 jump crate::prelude::check_equals ? drop 0
+    push 9 jump crate::prelude::check_equals ? drop 0
+    push 8 jump crate::prelude::check_equals
 }
 
 // `push v1 … push vn ; op` = the pushes of what `op` answers — for `tuple` and
@@ -216,18 +237,22 @@ test sentence a_framed_computation_is_a_rolled_one {
 // hands back when the width does not match: the value in the deepest slot it
 // filled, `()` in the rest, and `false` on top.
 test sentence building_and_taking_apart_literals {
-    push 1 push 2 tuple 2       push (1, 2) assert_eq
+    push 1 push 2 tuple 2       push (1, 2) jump crate::prelude::check_equals ? drop 0
     push some_sym push 1 tuple 2
-                                push (some_sym, 1) assert_eq
+                                push (some_sym, 1) jump crate::prelude::check_equals ? drop 0
 
-    push (1, 2) untuple 2       assert   push 2 assert_eq   push 1 assert_eq
-    push 2 untuple 2            not assert   push () assert_eq   push 2 assert_eq
+    push (1, 2) untuple 2 jump crate::prelude::check_true ? drop 0
+    push 2 jump crate::prelude::check_equals ? drop 0
+    push 1 jump crate::prelude::check_equals ? drop 0
+    push 2 untuple 2 not jump crate::prelude::check_true ? drop 0
+    push () jump crate::prelude::check_equals ? drop 0
+    push 2 jump crate::prelude::check_equals ? drop 0
 
     // `tuple 0` is the one an operator with no operands at all answers.
-    tuple 0                     push () assert_eq
+    tuple 0                     push () jump crate::prelude::check_equals ? drop 0
 
     // At `n = 0` there is no room for the value: the flag is the whole answer.
-    push 7 untuple 0            not assert
+    push 7 untuple 0            not jump crate::prelude::check_true
 }
 
 // `pick 0 ; push c ; equal ; branch { A } { B }`
@@ -246,36 +271,36 @@ test sentence building_and_taking_apart_literals {
     pick 0 push 7 equal branch { drop 0 push 7 push 7 equal } { drop 0 push false } }
 
 test sentence a_value_equal_to_a_literal_is_that_literal {
-    push 7        jump specialize_lhs   push true  assert_eq
-    push 7        jump specialize_rhs   push true  assert_eq
-    push 8        jump specialize_lhs   push false assert_eq
-    push 8        jump specialize_rhs   push false assert_eq
-    push some_sym jump specialize_lhs   push false assert_eq
-    push some_sym jump specialize_rhs   push false assert_eq
+    push 7        jump specialize_lhs   push true  jump crate::prelude::check_equals ? drop 0
+    push 7        jump specialize_rhs   push true  jump crate::prelude::check_equals ? drop 0
+    push 8        jump specialize_lhs   push false jump crate::prelude::check_equals ? drop 0
+    push 8        jump specialize_rhs   push false jump crate::prelude::check_equals ? drop 0
+    push some_sym jump specialize_lhs   push false jump crate::prelude::check_equals ? drop 0
+    push some_sym jump specialize_rhs   push false jump crate::prelude::check_equals ? drop 0
 
     // A tuple too: `equal` reads the whole value, so the law reads it whole.
-    push (2, 1)   jump specialize_lhs   push false assert_eq
-    push (2, 1)   jump specialize_rhs   push false assert_eq
+    push (2, 1)   jump specialize_lhs   push false jump crate::prelude::check_equals ? drop 0
+    push (2, 1)   jump specialize_rhs   push false jump crate::prelude::check_equals
 }
 
 // `X ; drop^m` = `drop^n`, and `pick d ; drop` = nothing.
 test sentence discarded_work_is_no_work {
     push 9
     push 3 push 4 add drop 0 drop 0
-    push 9 assert_eq
+    push 9 jump crate::prelude::check_equals ? drop 0
 
     push 9
     pick 0 drop 0
-    push 9 assert_eq
+    push 9 jump crate::prelude::check_equals
 }
 
 // `tuple n ; untuple n` = `push true`.
 test sentence building_and_taking_apart_leaves_the_flag {
     push 1 push 2
     tuple 2 untuple 2
-    assert
-    push 2 assert_eq
-    push 1 assert_eq
+    jump crate::prelude::check_true ? drop 0
+    push 2 jump crate::prelude::check_equals ? drop 0
+    push 1 jump crate::prelude::check_equals
 }
 
 // `pick (n-1)^n ; X ; dip m { X }` = `X ; pick (m-1)^m`, for `X : n -> m`.
@@ -290,34 +315,46 @@ function classify { pick 0 is_int branch { drop 0 push 7 } { drop 0 push 8 } }
 test sentence copying_inputs_is_copying_outputs {
     // X = equal : 2 -> 1
     push 3 push 4  pick 1 pick 1 equal dip 1 { equal }
-    push false assert_eq   push false assert_eq
+    push false jump crate::prelude::check_equals ? drop 0
+    push false jump crate::prelude::check_equals ? drop 0
     push 3 push 4  equal pick 0
-    push false assert_eq   push false assert_eq
+    push false jump crate::prelude::check_equals ? drop 0
+    push false jump crate::prelude::check_equals ? drop 0
 
     push 5 push 5  pick 1 pick 1 equal dip 1 { equal }
-    push true assert_eq    push true assert_eq
+    push true jump crate::prelude::check_equals ? drop 0
+    push true jump crate::prelude::check_equals ? drop 0
     push 5 push 5  equal pick 0
-    push true assert_eq    push true assert_eq
+    push true jump crate::prelude::check_equals ? drop 0
+    push true jump crate::prelude::check_equals ? drop 0
 
     // X = add : 2 -> 2, where the flag is copied too
     push 3 push 4  pick 1 pick 1 add dip 2 { add }
-    push true assert_eq  push 7 assert_eq
-    push true assert_eq  push 7 assert_eq
+    push true jump crate::prelude::check_equals ? drop 0
+    push 7 jump crate::prelude::check_equals ? drop 0
+    push true jump crate::prelude::check_equals ? drop 0
+    push 7 jump crate::prelude::check_equals ? drop 0
     push 3 push 4  add pick 1 pick 1
-    push true assert_eq  push 7 assert_eq
-    push true assert_eq  push 7 assert_eq
+    push true jump crate::prelude::check_equals ? drop 0
+    push 7 jump crate::prelude::check_equals ? drop 0
+    push true jump crate::prelude::check_equals ? drop 0
+    push 7 jump crate::prelude::check_equals ? drop 0
 
     // X = a call, which is the case `share { jump ... }` is for
     push 42  pick 0 jump classify dip 1 { jump classify }
-    push 7 assert_eq   push 7 assert_eq
+    push 7 jump crate::prelude::check_equals ? drop 0
+    push 7 jump crate::prelude::check_equals ? drop 0
     push 42  jump classify pick 0
-    push 7 assert_eq   push 7 assert_eq
+    push 7 jump crate::prelude::check_equals ? drop 0
+    push 7 jump crate::prelude::check_equals ? drop 0
 
     // X = push c : 0 -> 1, the constant case that makes `copy_const` a lemma
     push 9 dip 1 { push 9 }
-    push 9 assert_eq   push 9 assert_eq
+    push 9 jump crate::prelude::check_equals ? drop 0
+    push 9 jump crate::prelude::check_equals ? drop 0
     push 9 pick 0
-    push 9 assert_eq   push 9 assert_eq
+    push 9 jump crate::prelude::check_equals ? drop 0
+    push 9 jump crate::prelude::check_equals
 }
 
 // ---------------------------------------------------------------------------

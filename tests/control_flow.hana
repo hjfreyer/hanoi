@@ -5,9 +5,11 @@ test sentence unconditional_jump {
     jump target_sentence
 }
 
+// The check the test is making lives here, so it answers with a result and the
+// test hands that back.
 sentence target_sentence {
     push 100
-    assert_eq
+    jump crate::prelude::check_equals
 }
 
 test sentence conditional_branch {
@@ -16,10 +18,12 @@ test sentence conditional_branch {
         // Inline true block
         push 10
     } {
-        panic
+        // Reached only if the branch took the wrong arm, and the check below
+        // is what says so.
+        push 0
     }
     push 10
-    assert_eq
+    jump crate::prelude::check_equals
 }
 
 // A call returns to the instruction after the `jump`, however deep the calls
@@ -35,81 +39,123 @@ test sentence nesting_and_returns {
 sentence level_10 {
     jump decrement
     jump level_9
+    // Verification that we returned back up the stack, made past the result
+    // the level below handed back.
     push true
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 }
 
 sentence level_9 {
     jump decrement
     jump level_8
+    // Verification that we returned back up the stack, made past the result
+    // the level below handed back.
     push true
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 }
 
 sentence level_8 {
     jump decrement
     jump level_7
+    // Verification that we returned back up the stack, made past the result
+    // the level below handed back.
     push true
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 }
 
 sentence level_7 {
     jump decrement
     jump level_6
+    // Verification that we returned back up the stack, made past the result
+    // the level below handed back.
     push true
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 }
 
 sentence level_6 {
     jump decrement
     jump level_5
+    // Verification that we returned back up the stack, made past the result
+    // the level below handed back.
     push true
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 }
 
 sentence level_5 {
     jump decrement
     jump level_4
+    // Verification that we returned back up the stack, made past the result
+    // the level below handed back.
     push true
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 }
 
 sentence level_4 {
     jump decrement
     jump level_3
+    // Verification that we returned back up the stack, made past the result
+    // the level below handed back.
     push true
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 }
 
 sentence level_3 {
     jump decrement
     jump level_2
+    // Verification that we returned back up the stack, made past the result
+    // the level below handed back.
     push true
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 }
 
 sentence level_2 {
     jump decrement
     jump level_1
+    // Verification that we returned back up the stack, made past the result
+    // the level below handed back.
     push true
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 }
 
 sentence level_1 {
     jump decrement
     jump level_0
+    // Verification that we returned back up the stack, made past the result
+    // the level below handed back.
     push true
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 }
 
 // The bottom of the nest: ten decrements from ten leave zero.
 sentence level_0 {
     push 0
-    assert_eq
+    jump crate::prelude::check_equals
 }
 
 sentence decrement {
     push 1
     sub
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 }

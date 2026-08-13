@@ -1508,27 +1508,41 @@ test sentence iterate_string_ascii {
     // Step 0: drive tau (charat request)
     jump string_hidden::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     
     // drive tau (charat response)
     jump string_hidden::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     
     // Check emitted iterator event: ((97, next), char_iterator::out) ('a')
     pick 0
     jump string_hidden::emit
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     push 97
     push next
     tuple 2
     push char_iterator::out
     tuple 2
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
     
     // Process iterator event
     push 97
@@ -1543,24 +1557,38 @@ test sentence iterate_string_ascii {
     // Step 1: drive 2 taus for 'b' (98)
     jump string_hidden::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     jump string_hidden::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     
     pick 0
     jump string_hidden::emit
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     push 98
     push next
     tuple 2
     push char_iterator::out
     tuple 2
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
     
     push 98
     push next
@@ -1574,24 +1602,38 @@ test sentence iterate_string_ascii {
     // Step 2: drive 2 taus for 'c' (99)
     jump string_hidden::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     jump string_hidden::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     
     pick 0
     jump string_hidden::emit
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     push 99
     push next
     tuple 2
     push char_iterator::out
     tuple 2
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
     
     push 99
     push next
@@ -1605,24 +1647,38 @@ test sentence iterate_string_ascii {
     // Step 3: drive 2 taus for done
     jump string_hidden::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     jump string_hidden::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     
     pick 0
     jump string_hidden::emit
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     tuple 0
     push done
     tuple 2
     push char_iterator::out
     tuple 2
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
     
     tuple 0
     push done
@@ -1635,6 +1691,7 @@ test sentence iterate_string_ascii {
     
     // Clean up state from stack
     drop 0
+    push ((), crate::prelude::ok)
 }
 
 mod str_123_hidden compose_hidden(
@@ -1692,7 +1749,9 @@ test sentence parseint_valid_number {
     pick 1
     tuple 2
     jump parseint_123_system::accept
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
     
     // 2. Trigger (((), copy), parseint::out) -> transitions parseint to parsing
     tuple 0
@@ -1707,59 +1766,111 @@ test sentence parseint_valid_number {
     // 3. Drive 12 tau steps
     jump parseint_123_system::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     jump parseint_123_system::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     jump parseint_123_system::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     jump parseint_123_system::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     jump parseint_123_system::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     jump parseint_123_system::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     jump parseint_123_system::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     jump parseint_123_system::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     jump parseint_123_system::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     jump parseint_123_system::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     jump parseint_123_system::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     jump parseint_123_system::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     
     // 4. Check emitted result: (((123, ok), value), parseint::out)
     pick 0
     jump parseint_123_system::emit
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     push 123
     push ok
     tuple 2
@@ -1767,7 +1878,9 @@ test sentence parseint_valid_number {
     tuple 2
     push parseint::out
     tuple 2
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
     
     // Process emission event -> transitions back to idle
     push 123
@@ -1782,6 +1895,7 @@ test sentence parseint_valid_number {
     jump parseint_123_system::process
     
     drop 0
+    push ((), crate::prelude::ok)
 }
 
 mod str_45a_hidden compose_hidden(
@@ -1819,47 +1933,87 @@ test sentence parseint_invalid_char {
     // Drive 9 taus
     jump parseint_45a_system::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     jump parseint_45a_system::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     jump parseint_45a_system::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     jump parseint_45a_system::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     jump parseint_45a_system::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     jump parseint_45a_system::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     jump parseint_45a_system::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     jump parseint_45a_system::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     jump parseint_45a_system::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     
     // Check emitted result: ((((), err), value), parseint::out)
     pick 0
     jump parseint_45a_system::emit
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     tuple 0
     push err
     tuple 2
@@ -1867,7 +2021,9 @@ test sentence parseint_invalid_char {
     tuple 2
     push parseint::out
     tuple 2
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
     
     tuple 0
     push err
@@ -1881,6 +2037,7 @@ test sentence parseint_invalid_char {
     jump parseint_45a_system::process
     
     drop 0
+    push ((), crate::prelude::ok)
 }
 
 mod parseint_empty_system compose_hidden(
@@ -1909,23 +2066,39 @@ test sentence parseint_empty_string {
     // Drive 3 taus for done
     jump parseint_empty_system::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     jump parseint_empty_system::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     jump parseint_empty_system::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     
     // Check emitted result: ((((), err), value), parseint::out)
     pick 0
     jump parseint_empty_system::emit
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     tuple 0
     push err
     tuple 2
@@ -1933,7 +2106,9 @@ test sentence parseint_empty_string {
     tuple 2
     push parseint::out
     tuple 2
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
     
     tuple 0
     push err
@@ -1947,6 +2122,7 @@ test sentence parseint_empty_string {
     jump parseint_empty_system::process
     
     drop 0
+    push ((), crate::prelude::ok)
 }
 
 test sentence verify_string_ref {
@@ -1960,29 +2136,39 @@ test sentence verify_string_ref {
     pick 1
     tuple 2
     jump string_ref::accept
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
     
     // Check that it accepts (0, charat)
     push (0, string_ref::charat)
     pick 1
     tuple 2
     jump string_ref::accept
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
     
     // Check that it accepts (5, charat)
     push (5, string_ref::charat)
     pick 1
     tuple 2
     jump string_ref::accept
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
     
     // 2. Test emit set at rest
     pick 0
     jump string_ref::emit
     untuple 2
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
     not
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
     drop 0
         // 3. Query length -> [state] -> [next_state]
     push ((), string_ref::length)
@@ -1995,10 +2181,16 @@ test sentence verify_string_ref {
     pick 0
     jump string_ref::emit
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     push (3, string_ref::length_resp)
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
     
     // Process emission event -> transitions back to idle
     push (3, string_ref::length_resp)
@@ -2016,10 +2208,16 @@ test sentence verify_string_ref {
     pick 0
     jump string_ref::emit
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     push ((121, string_ref::some), string_ref::charat_resp)
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
     
     // Process emission event
     push ((121, string_ref::some), string_ref::charat_resp)
@@ -2037,10 +2235,16 @@ test sentence verify_string_ref {
     pick 0
     jump string_ref::emit
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     push (((), string_ref::none), string_ref::charat_resp)
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
     
     // Process emission event
     push (((), string_ref::none), string_ref::charat_resp)
@@ -2050,11 +2254,15 @@ test sentence verify_string_ref {
     
     // Verify final state is ("xyz", idle)
     untuple 2
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
     push string_ref::idle
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
     push xyz_str
-    assert_eq
+    jump crate::prelude::check_equals
 }
 
 mod xyz_string_ref_instance compose_prefix(compose_static_closure(string_ref, xyz_str), char_iterator::in);
@@ -2069,13 +2277,17 @@ test sentence verify_prefixed_string_ref {
     pick 1
     tuple 2
     jump xyz_string_ref_instance::accept
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
     
     push ((0, string_ref::charat), char_iterator::in)
     pick 1
     tuple 2
     jump xyz_string_ref_instance::accept
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
     
     // 2. Query charat 1
     push ((1, string_ref::charat), char_iterator::in)
@@ -2087,10 +2299,16 @@ test sentence verify_prefixed_string_ref {
     pick 0
     jump xyz_string_ref_instance::emit
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     push (((121, string_ref::some), string_ref::charat_resp), char_iterator::in)
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
     
     // Process emission back to idle
     push (((121, string_ref::some), string_ref::charat_resp), char_iterator::in)
@@ -2100,11 +2318,15 @@ test sentence verify_prefixed_string_ref {
     
     // Verify state is (xyz_str, idle)
     untuple 2
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
     push string_ref::idle
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
     push xyz_str
-    assert_eq
+    jump crate::prelude::check_equals
 }
 
 mod empty_string_hidden compose_hidden(
@@ -2123,25 +2345,39 @@ test sentence iterate_empty {
     // Drive 2 taus (charat query + charat_resp)
     jump empty_string_hidden::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     jump empty_string_hidden::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     
     // Check emitted iterator event: (((), done), char_iterator::out)
     pick 0
     jump empty_string_hidden::emit
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     tuple 0
     push done
     tuple 2
     push char_iterator::out
     tuple 2
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
     
     tuple 0
     push done
@@ -2153,6 +2389,7 @@ test sentence iterate_empty {
     jump empty_string_hidden::process
     
     drop 0
+    push ((), crate::prelude::ok)
 }
 
 mod cafe_string_hidden compose_hidden(
@@ -2171,24 +2408,38 @@ test sentence iterate_unicode {
     // 'c' (99)
     jump cafe_string_hidden::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     jump cafe_string_hidden::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     
     pick 0
     jump cafe_string_hidden::emit
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     push 99
     push next
     tuple 2
     push char_iterator::out
     tuple 2
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
     push 99
     push next
     tuple 2
@@ -2201,24 +2452,38 @@ test sentence iterate_unicode {
     // 'a' (97)
     jump cafe_string_hidden::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     jump cafe_string_hidden::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     
     pick 0
     jump cafe_string_hidden::emit
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     push 97
     push next
     tuple 2
     push char_iterator::out
     tuple 2
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
     push 97
     push next
     tuple 2
@@ -2231,24 +2496,38 @@ test sentence iterate_unicode {
     // 'f' (102)
     jump cafe_string_hidden::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     jump cafe_string_hidden::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     
     pick 0
     jump cafe_string_hidden::emit
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     push 102
     push next
     tuple 2
     push char_iterator::out
     tuple 2
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
     push 102
     push next
     tuple 2
@@ -2261,24 +2540,38 @@ test sentence iterate_unicode {
     // 'é' (233)
     jump cafe_string_hidden::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     jump cafe_string_hidden::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     
     pick 0
     jump cafe_string_hidden::emit
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     push 233
     push next
     tuple 2
     push char_iterator::out
     tuple 2
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
     push 233
     push next
     tuple 2
@@ -2291,24 +2584,38 @@ test sentence iterate_unicode {
     // done
     jump cafe_string_hidden::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     jump cafe_string_hidden::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     
     pick 0
     jump cafe_string_hidden::emit
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     tuple 0
     push done
     tuple 2
     push char_iterator::out
     tuple 2
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
     tuple 0
     push done
     tuple 2
@@ -2319,6 +2626,7 @@ test sentence iterate_unicode {
     jump cafe_string_hidden::process
     
     drop 0
+    push ((), crate::prelude::ok)
 }
 
 const_string comma_str "a,b"
@@ -2383,29 +2691,47 @@ test sentence split_string {
     // 2. Drive 3 taus (charat request + charat_resp + split::in sync)
     jump split_system::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     jump split_system::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     jump split_system::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     
     // 3. Check emitted: (((), split::start), split::out)
     pick 0
     jump split_system::emit
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     tuple 0
     push split::start
     tuple 2
     push split::out
     tuple 2
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
     
     // Process start event
     tuple 0
@@ -2421,8 +2747,12 @@ test sentence split_string {
     pick 0
     jump split_system::emit
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     push 97
     push next
     tuple 2
@@ -2430,7 +2760,9 @@ test sentence split_string {
     tuple 2
     push split::out
     tuple 2
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
     
     // Process item event
     push 97
@@ -2447,29 +2779,47 @@ test sentence split_string {
     // 5. Drive 3 taus for next char (',')
     jump split_system::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     jump split_system::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     jump split_system::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     
     // 6. Check emitted: (((), split::end), split::out)
     pick 0
     jump split_system::emit
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     tuple 0
     push split::end
     tuple 2
     push split::out
     tuple 2
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
     
     // Process end event
     tuple 0
@@ -2495,29 +2845,47 @@ test sentence split_string {
     // 8. Drive 3 taus for 'b'
     jump split_system::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     jump split_system::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     jump split_system::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     
     // 9. Check emitted: (((), split::start), split::out)
     pick 0
     jump split_system::emit
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     tuple 0
     push split::start
     tuple 2
     push split::out
     tuple 2
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
     
     tuple 0
     push split::start
@@ -2532,8 +2900,12 @@ test sentence split_string {
     pick 0
     jump split_system::emit
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     push 98
     push next
     tuple 2
@@ -2541,7 +2913,9 @@ test sentence split_string {
     tuple 2
     push split::out
     tuple 2
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
     
     push 98
     push next
@@ -2557,29 +2931,47 @@ test sentence split_string {
     // 11. Drive 3 taus for done
     jump split_system::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     jump split_system::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     jump split_system::tau_reduce
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     
     // 12. Check emitted: (((), split::end), split::out)
     pick 0
     jump split_system::emit
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     tuple 0
     push split::end
     tuple 2
     push split::out
     tuple 2
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
     
     tuple 0
     push split::end
@@ -2605,14 +2997,20 @@ test sentence split_string {
     pick 0
     jump split_system::emit
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     tuple 0
     push split::done
     tuple 2
     push split::out
     tuple 2
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
     
     tuple 0
     push split::done
@@ -2624,4 +3022,5 @@ test sentence split_string {
     jump split_system::process
     
     drop 0
+    push ((), crate::prelude::ok)
 }

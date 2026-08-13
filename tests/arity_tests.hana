@@ -3,7 +3,9 @@
 #[arity(2, 1)]
 sentence add_two {
     add
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 }
 
 #[arity(0, 1)]
@@ -14,7 +16,9 @@ sentence push_val {
 function double_val {
     pick 0
     add
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 }
 
 test sentence test_arity_add_two {
@@ -22,26 +26,28 @@ test sentence test_arity_add_two {
     push 2
     jump add_two
     push 42
-    assert_eq
+    jump crate::prelude::check_equals
 }
 
 test sentence test_arity_push_val {
     jump push_val
     push 100
-    assert_eq
+    jump crate::prelude::check_equals
 }
 
 test sentence test_arity_double {
     push 21
     jump double_val
     push 42
-    assert_eq
+    jump crate::prelude::check_equals
 }
 
 function increment_helper {
     push 1
     add
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 }
 
 function nested_arity_calls {
@@ -53,18 +59,20 @@ test sentence test_arity_nested_calls {
     push 10
     jump nested_arity_calls
     push 12
-    assert_eq
+    jump crate::prelude::check_equals
 }
 
 function square {
     pick 0
     multiply
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 }
 
 test sentence test_function_keyword {
     push 6
     jump square
     push 36
-    assert_eq
+    jump crate::prelude::check_equals
 }

@@ -1397,6 +1397,39 @@ fn corpus_derivations_survive_being_written_down() {
     );
 }
 
+/// The same tree with its provenance labels blanked.
+///
+/// An equation is stated as two programs and says nothing about where a block
+/// came from, so the `dip 1 { drop }` in `counit_under` is an anonymous one. A
+/// step that deletes a labelled dip therefore deletes the label with it, and
+/// inverting that step puts the dip back without it. What is being claimed
+/// below is that the inverse restores the *program*; the labels are how a
+/// listing says where something came from, and a rewritten term has no honest
+/// answer to that anyway.
+fn unlabelled(nodes: &[Node]) -> Vec<Node> {
+    nodes
+        .iter()
+        .map(|node| match node {
+            Node::Dip { depth, body, .. } => Node::Dip {
+                depth: *depth,
+                origins: Vec::new(),
+                body: unlabelled(body),
+            },
+            Node::Branch {
+                then_body,
+                else_body,
+                ..
+            } => Node::Branch {
+                then_origin: String::new(),
+                then_body: unlabelled(then_body),
+                else_origin: String::new(),
+                else_body: unlabelled(else_body),
+            },
+            other => other.clone(),
+        })
+        .collect()
+}
+
 /// A derivation read backwards returns the term to where it started.
 ///
 /// This is what `rule::invert` claims, held to the real corpus rather than to
@@ -1435,7 +1468,8 @@ fn inverting_a_corpus_derivation_returns_it_to_where_it_started() {
             )
         });
         assert_eq!(
-            back, before,
+            unlabelled(&back),
+            unlabelled(&before),
             "undoing {}'s derivation did not return it to where it started",
             library.names[s_idx]
         );

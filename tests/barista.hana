@@ -339,34 +339,44 @@ test sentence verify_customer_is_event {
     // 1. Valid want_coffee event
     push (((), customer_id::c1), event::want_coffee)
     jump customer_impl::is_event::check
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     // 2. Valid push_back event
     push (((customer_id::c1, event::latte)), super::queue::Event::PushBack::tag)
     jump customer_impl::is_event::check
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     // 3. Valid coffee event
     push ((customer_id::c1, event::latte), event::coffee)
     jump customer_impl::is_event::check
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     // 4. Valid enjoy event
     push (((), customer_id::c1), event::enjoy)
     jump customer_impl::is_event::check
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     // 5. Invalid event (wrong type)
     push 123
     jump customer_impl::is_event::check
     not
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     // 6. Invalid event (missing payload nesting)
     push (customer_id::c1, event::want_coffee)
     jump customer_impl::is_event::check
     not
-    assert
+    jump crate::prelude::check_true
 }
 
 test sentence verify_customer_logic {
@@ -380,7 +390,9 @@ test sentence verify_customer_logic {
     pick 1
     tuple 2
     jump customer_impl::accept
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
     
     // Process want_coffee -> thirsty
     push (((), customer_id::c1), event::want_coffee)
@@ -392,10 +404,16 @@ test sentence verify_customer_logic {
     pick 0
     jump customer_impl::emit
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     push (((customer_id::c1, event::latte)), super::queue::Event::PushBack::tag)
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
     
     // Process push_back -> ordered
     push (((customer_id::c1, event::latte)), super::queue::Event::PushBack::tag)
@@ -408,7 +426,9 @@ test sentence verify_customer_logic {
     pick 1
     tuple 2
     jump customer_impl::accept
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
     
     // Process coffee -> has_coffee
     push ((customer_id::c1, event::latte), event::coffee)
@@ -421,7 +441,9 @@ test sentence verify_customer_logic {
     pick 1
     tuple 2
     jump customer_impl::accept
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
     
     // Process enjoy -> idle
     push (((), customer_id::c1), event::enjoy)
@@ -430,6 +452,7 @@ test sentence verify_customer_logic {
     jump customer_impl::process
     
     drop 0
+    push ((), crate::prelude::ok)
 }
 
 // emit, its postcondition, and the combined check are #[total]: off their
@@ -439,34 +462,44 @@ test sentence verify_emit_totality {
     push 42
     jump customer_impl::emit
     push ((), false)
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
 
     // A triple whose internal state is unrecognized: emit nothing.
     push (customer_id::c1, event::latte, event::latte)
     jump customer_impl::emit
     push ((), false)
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
 
     // The postcondition rejects a value that is not an (event, flag) pair, ...
     push 42
     jump customer_impl::emit_postcondition
     not
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     // ... and holds for what emit answers on junk.
     push ((), false)
     jump customer_impl::emit_postcondition
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     // The combined check holds on a value that is not a state at all, ...
     push 42
     jump customer_impl::emit_does_pre_and_post
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     // ... and on a real state, where it runs emit and checks its output.
     push (customer_id::c1, event::latte, customer_impl::state::thirsty)
     jump customer_impl::emit_does_pre_and_post
-    assert
+    jump crate::prelude::check_true
 }
 
 mod customer1 compose_static_closure(customer_impl, (super::customer_id::c1, super::event::latte, super::customer_impl::state::idle));
@@ -839,7 +872,9 @@ test sentence verify_hidden_system {
     pick 1
     tuple 2
     jump hidden::accept
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
     
     // 2. Trigger event::want_coffee for c1
     push (((), customer_id::c1), event::want_coffee)
@@ -878,14 +913,18 @@ test sentence verify_hidden_system {
     
     tuple 2 // joint state
     equal
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
     
     // customer 2 wants coffee. Let's verify it is accepted.
     push (((), customer_id::c2), event::want_coffee)
     pick 1
     tuple 2
     jump hidden::accept
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
     
     // 4. Trigger event::want_coffee for c2
     push (((), customer_id::c2), event::want_coffee)
@@ -921,14 +960,18 @@ test sentence verify_hidden_system {
     
     tuple 2 // joint state
     equal
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
     
     // customer 1 enjoys coffee. Let's verify it is accepted.
     push (((), customer_id::c1), event::enjoy)
     pick 1
     tuple 2
     jump hidden::accept
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
     
     // 6. Trigger enjoy for c1
     push (((), customer_id::c1), event::enjoy)
@@ -958,14 +1001,18 @@ test sentence verify_hidden_system {
     
     tuple 2 // joint
     equal
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
     
     // customer 2 enjoys coffee. Let's verify it is accepted.
     push (((), customer_id::c2), event::enjoy)
     pick 1
     tuple 2
     jump hidden::accept
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
     
     // 7. Trigger enjoy for c2
     push (((), customer_id::c2), event::enjoy)
@@ -995,9 +1042,12 @@ test sentence verify_hidden_system {
     
     tuple 2 // joint
     equal
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
     
     drop 0 // clean up state
+    push ((), crate::prelude::ok)
 }
 
 // Test the concurrent joint Customer-Queue-Barista system
@@ -1010,8 +1060,12 @@ test sentence verify_concurrent_system {
     pick 0
     jump concurrent::emit
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     
     push ()
     push super::prelude::req
@@ -1019,7 +1073,9 @@ test sentence verify_concurrent_system {
     tuple 1
     push super::queue::Event::AwaitFront::tag
     tuple 2
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
     
     push ()
     push super::prelude::req
@@ -1036,7 +1092,9 @@ test sentence verify_concurrent_system {
     pick 1
     tuple 2
     jump concurrent::accept
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
     
     push (((), customer_id::c1), event::want_coffee)
     roll 1
@@ -1048,7 +1106,9 @@ test sentence verify_concurrent_system {
     pick 1
     tuple 2
     jump concurrent::accept
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
     
     push (((), customer_id::c2), event::want_coffee)
     roll 1
@@ -1059,13 +1119,19 @@ test sentence verify_concurrent_system {
     pick 0
     jump concurrent::emit
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     push (customer_id::c1, event::latte)
     tuple 1
     push super::queue::Event::PushBack::tag
     tuple 2
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
     
     push (customer_id::c1, event::latte)
     tuple 1
@@ -1081,8 +1147,12 @@ test sentence verify_concurrent_system {
     pick 0
     jump concurrent::emit
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     
     push ()
     push (customer_id::c1, event::latte)
@@ -1094,7 +1164,9 @@ test sentence verify_concurrent_system {
     tuple 1
     push super::queue::Event::AwaitFront::tag
     tuple 2
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
     
     push ()
     push (customer_id::c1, event::latte)
@@ -1114,13 +1186,19 @@ test sentence verify_concurrent_system {
     pick 0
     jump concurrent::emit
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     push (customer_id::c2, event::espresso)
     tuple 1
     push super::queue::Event::PushBack::tag
     tuple 2
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
     
     push (customer_id::c2, event::espresso)
     tuple 1
@@ -1136,10 +1214,16 @@ test sentence verify_concurrent_system {
     pick 0
     jump concurrent::emit
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     push ((customer_id::c1, event::latte), event::coffee)
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
     
     push ((customer_id::c1, event::latte), event::coffee)
     roll 1
@@ -1151,7 +1235,9 @@ test sentence verify_concurrent_system {
     pick 1
     tuple 2
     jump concurrent::accept
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
     
     push (((), customer_id::c1), event::enjoy)
     roll 1
@@ -1162,8 +1248,12 @@ test sentence verify_concurrent_system {
     pick 0
     jump concurrent::emit
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     
     push ()
     push super::prelude::req
@@ -1171,7 +1261,9 @@ test sentence verify_concurrent_system {
     tuple 1
     push super::queue::Event::AwaitFront::tag
     tuple 2
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
     
     push ()
     push super::prelude::req
@@ -1187,8 +1279,12 @@ test sentence verify_concurrent_system {
     pick 0
     jump concurrent::emit
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     
     push ()
     push (customer_id::c2, event::espresso)
@@ -1200,7 +1296,9 @@ test sentence verify_concurrent_system {
     tuple 1
     push super::queue::Event::AwaitFront::tag
     tuple 2
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
     
     push ()
     push (customer_id::c2, event::espresso)
@@ -1220,10 +1318,16 @@ test sentence verify_concurrent_system {
     pick 0
     jump concurrent::emit
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     push ((customer_id::c2, event::espresso), event::coffee)
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
     
     push ((customer_id::c2, event::espresso), event::coffee)
     roll 1
@@ -1235,7 +1339,9 @@ test sentence verify_concurrent_system {
     pick 1
     tuple 2
     jump concurrent::accept
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
     
     push (((), customer_id::c2), event::enjoy)
     roll 1
@@ -1264,9 +1370,12 @@ test sentence verify_concurrent_system {
     
     tuple 2 // joint
     equal
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
     
     drop 0 // clean up state
+    push ((), crate::prelude::ok)
 }
 
 // Test the rejection of invalid events for Barista
@@ -1280,7 +1389,9 @@ test sentence verify_barista_rejection {
     tuple 2
     jump barista::accept
     push false
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
 
     // 2. Test that barista in idle does NOT accept order directly (since orders are queued)
     tuple 0
@@ -1290,15 +1401,21 @@ test sentence verify_barista_rejection {
     tuple 2
     jump barista::accept
     push false
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
     
     // 3. Test that barista in idle emits await_front.req
     tuple 0
     jump barista::init
     jump barista::emit
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     
     tuple 0
     push super::prelude::req
@@ -1306,7 +1423,9 @@ test sentence verify_barista_rejection {
     tuple 1
     push super::queue::Event::AwaitFront::tag
     tuple 2
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
     
     // 4. Test that barista in awaiting_order accepts await_front.resp.some.val
     tuple 0
@@ -1335,7 +1454,9 @@ test sentence verify_barista_rejection {
     roll 1
     tuple 2
     jump barista::accept
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
     
     // 5. Test that barista in awaiting_order does NOT emit coffee
     tuple 0
@@ -1352,8 +1473,13 @@ test sentence verify_barista_rejection {
     
     jump barista::emit
     untuple 2
-    assert
-    not
-    assert
+    jump crate::prelude::check_true
+    ?
     drop 0
+    not
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    drop 0
+    push ((), crate::prelude::ok)
 }

@@ -53,14 +53,14 @@ test sentence unwrapping_an_ok_leaves_the_value {
     push (7, crate::prelude::ok)
     jump unwrap
     push 7
-    assert_eq
+    jump crate::prelude::check_equals
 }
 
 test sentence unwrapping_an_err_hands_it_back {
     push (7, crate::prelude::err)
     jump unwrap
     push (7, crate::prelude::err)
-    assert_eq
+    jump crate::prelude::check_equals
 }
 
 // A value that is not a 2-tuple is not a result, and `?` calls it an error
@@ -69,7 +69,7 @@ test sentence unwrapping_a_non_result_makes_it_an_error {
     push 7
     jump unwrap
     push (7, crate::prelude::err)
-    assert_eq
+    jump crate::prelude::check_equals
 }
 
 // Two halvings, the second reached only if the first succeeded.
@@ -84,21 +84,21 @@ test sentence a_quarter_of_twelve {
     push 12
     jump quarter
     push (3, crate::prelude::ok)
-    assert_eq
+    jump crate::prelude::check_equals
 }
 
 test sentence the_first_error_ends_it {
     push 5
     jump quarter
     push (5, crate::prelude::err)
-    assert_eq
+    jump crate::prelude::check_equals
 }
 
 test sentence the_second_error_ends_it_too {
     push 6
     jump quarter
     push (3, crate::prelude::err)
-    assert_eq
+    jump crate::prelude::check_equals
 }
 
 // Both `?`s here have work sitting under them — the other number, and then the
@@ -121,7 +121,7 @@ test sentence summing_two_halves {
     push 4
     jump sum_of_halves
     push (7, crate::prelude::ok)
-    assert_eq
+    jump crate::prelude::check_equals
 }
 
 test sentence the_second_half_fails_and_the_first_is_dropped {
@@ -129,7 +129,7 @@ test sentence the_second_half_fails_and_the_first_is_dropped {
     push 4
     jump sum_of_halves
     push (3, crate::prelude::err)
-    assert_eq
+    jump crate::prelude::check_equals
 }
 
 test sentence the_first_half_fails_and_the_second_is_never_taken {
@@ -137,7 +137,7 @@ test sentence the_first_half_fails_and_the_second_is_never_taken {
     push 5
     jump sum_of_halves
     push (5, crate::prelude::err)
-    assert_eq
+    jump crate::prelude::check_equals
 }
 
 // `?` leaves the block it is written in, and a branch arm is a block: the error
@@ -162,10 +162,40 @@ test sentence an_arm_is_the_block_that_is_left {
     push 8
     jump inside_an_arm
     push (104, crate::prelude::ok)
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
 
     push 5
     jump inside_an_arm
     push ((5, crate::prelude::err), crate::prelude::ok)
-    assert_eq
+    jump crate::prelude::check_equals
+}
+
+// -- crate::prelude::check_equals ------------------------------------------
+
+test sentence equal_values_check_out {
+    push 10
+    push 10
+    jump crate::prelude::check_equals
+}
+
+test sentence unequal_values_report_the_pair_that_did_not_match {
+    push 10
+    push 11
+    jump crate::prelude::check_equals
+    push ((10, 11), crate::prelude::err)
+    jump crate::prelude::check_equals
+}
+
+test sentence checking_true {
+    push true
+    jump crate::prelude::check_true
+}
+
+test sentence checking_something_that_is_not_true {
+    push 3
+    jump crate::prelude::check_true
+    push ((3, true), crate::prelude::err)
+    jump crate::prelude::check_equals
 }

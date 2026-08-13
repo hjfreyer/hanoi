@@ -23,6 +23,39 @@ struct Args {
     trace: bool,
 }
 
+/// What the test left behind, read as the result it was supposed to return.
+///
+/// A test ends by handing back `((), prelude::ok)` or `(payload, prelude::err)`
+/// — the `check_equals` in `tests/prelude.hana` builds both — so a test that
+/// fails says what it saw rather than halting the machine. Anything else on the
+/// stack is a test that did not answer the question it was asked.
+fn verdict(library: &bytecode::Library, stack: &[bytecode::Value]) -> Result<(), String> {
+    let ok = library.symbols.get("prelude::ok");
+    let err = library.symbols.get("prelude::err");
+    let (Some(ok), Some(err)) = (ok, err) else {
+        return Err(
+            "prelude::ok and prelude::err are what a test answers with, \
+                    and this program declares neither"
+                .to_string(),
+        );
+    };
+
+    let [result] = stack else {
+        return Err(format!(
+            "a test answers with one result, and this left {:?}",
+            stack
+        ));
+    };
+    match result {
+        bytecode::Value::Tuple(parts) => match &parts[..] {
+            [_, tag] if tag == ok => Ok(()),
+            [payload, tag] if tag == err => Err(format!("err {:?}", payload)),
+            _ => Err(format!("not a result: {:?}", result)),
+        },
+        _ => Err(format!("not a result: {:?}", result)),
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
@@ -201,36 +234,26 @@ async fn main() {
             let mut vm = vm::VM::new(res.clone());
             vm.set_tracing(trace);
             vm.set_gas_limit(Some(gas_limit));
-            match vm.execute(index) {
+            let outcome = match vm.execute(index) {
+                Ok(()) => verdict(&res, vm.stack()),
+                // A test that halts the machine has gone wrong in a way it was
+                // not written to report: every check it makes hands back a
+                // result instead.
+                Err(err) => Err(err),
+            };
+            match outcome {
                 Ok(()) => {
-                    if vm.stack().is_empty() {
-                        if trace {
-                            println!("result: ok ({} steps)", vm.steps_executed());
-                        } else {
-                            println!("ok ({} steps)", vm.steps_executed());
-                        }
+                    if trace {
+                        println!("result: ok ({} steps)", vm.steps_executed());
                     } else {
-                        if trace {
-                            println!(
-                                "result: FAILED (stack was not empty: {:?}) ({} steps)",
-                                vm.stack(),
-                                vm.steps_executed()
-                            );
-                        } else {
-                            println!(
-                                "FAILED (stack was not empty: {:?}) ({} steps)",
-                                vm.stack(),
-                                vm.steps_executed()
-                            );
-                        }
-                        failed += 1;
+                        println!("ok ({} steps)", vm.steps_executed());
                     }
                 }
-                Err(err) => {
+                Err(why) => {
                     if trace {
-                        println!("result: FAILED ({}) ({} steps)", err, vm.steps_executed());
+                        println!("result: FAILED ({}) ({} steps)", why, vm.steps_executed());
                     } else {
-                        println!("FAILED ({}) ({} steps)", err, vm.steps_executed());
+                        println!("FAILED ({}) ({} steps)", why, vm.steps_executed());
                     }
                     failed += 1;
                 }

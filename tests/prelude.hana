@@ -8,6 +8,41 @@ symbol resp
 symbol ok
 symbol err
 
+// `((), ok)` when the top two values are equal, and `((a, b), err)` when they
+// are not — the pair that did not match, in the order it sat on the stack.
+//
+// This is what a test writes where it would have written `assert_eq`. The
+// difference is what happens when the check does not hold: `assert_eq` halts
+// the machine, and this hands back a value saying what it saw, which the test
+// can carry out with `?` and the runner can print.
+#[total]
+#[arity(2, 1)]
+sentence check_equals {
+    pick 1
+    pick 1
+    equal
+    branch {
+        drop 0
+        drop 0
+        push ()
+        push ok
+        tuple 2
+    } {
+        tuple 2
+        push err
+        tuple 2
+    }
+}
+
+// `((), ok)` when the top value is `true`, and `((v, true), err)` when it is
+// anything else. `check_equals` against `true`, which is what an `assert` was.
+#[total]
+#[arity(1, 1)]
+sentence check_true {
+    push true
+    jump check_equals
+}
+
 symbol start
 symbol pass
 symbol fail
