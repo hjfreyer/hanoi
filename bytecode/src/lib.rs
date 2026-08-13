@@ -187,57 +187,51 @@ mod tests {
     }
 
     #[test]
-    fn test_dip_through_recursive_target_is_rejected() {
+    fn test_dip_through_a_cycle_is_rejected() {
         let code = r#"
-            #[recursive]
             sentence loops {
-                dip { jump loops }
-            }
-            #[arity(2, 2)]
-            sentence caller {
                 dip { jump loops }
             }
         "#;
         let res = assemble(code);
-        assert!(res.is_err());
-        assert!(
-            res.unwrap_err()
-                .contains("but is not annotated with #[recursive]")
-        );
+        assert!(res.unwrap_err().contains("reaches itself"));
     }
 
     #[test]
     fn test_assemble_nested_branching() {
         let code = r#"
-            #[recursive]
+            sentence elsewhere {
+                push 7
+            }
             sentence entry {
                 push true
                 branch {
                     push 42
                 } {
-                    jump entry
+                    jump elsewhere
                 }
             }
         "#;
         let res = assemble(code).unwrap();
-        // Should have compiled 3 sentences:
-        // Index 0: entry
-        // Index 1: inline true block
-        // Index 2: inline false block
-        assert_eq!(res.sentences.len(), 3);
+        // Should have compiled 4 sentences:
+        // Index 0: elsewhere
+        // Index 1: entry
+        // Index 2: inline true block
+        // Index 3: inline false block
+        assert_eq!(res.sentences.len(), 4);
         assert_eq!(
-            res.sentences[SentenceIndex::from(0)],
+            res.sentences[SentenceIndex::from(1)],
             vec![
                 Instruction::Push(Value::Bool(true)),
-                Instruction::Branch(SentenceIndex::from(1), SentenceIndex::from(2)),
+                Instruction::Branch(SentenceIndex::from(2), SentenceIndex::from(3)),
             ]
         );
         assert_eq!(
-            res.sentences[SentenceIndex::from(1)],
+            res.sentences[SentenceIndex::from(2)],
             vec![Instruction::Push(Value::Int(42))]
         );
         assert_eq!(
-            res.sentences[SentenceIndex::from(2)],
+            res.sentences[SentenceIndex::from(3)],
             vec![Instruction::Dip(0, SentenceIndex::from(0))]
         );
     }
@@ -482,46 +476,49 @@ mod tests {
         // 4. Recursion detected
         let code = r#"
             #[arity(0, 0)]
-            sentence recursive_s {
-                jump recursive_s
+            sentence loops {
+                jump loops
             }
         "#;
         let res = assemble(code);
-        assert!(res.is_err());
-        assert!(res.unwrap_err().contains("Recursion/cycle detected"));
+        assert!(res.unwrap_err().contains("reaches itself"));
+    }
+
+    /// Recursion is forbidden, and inference is what forbids it: a sentence
+    /// that reaches itself has no arity to work out. Every way of writing a
+    /// cycle goes through the same check, whether the call is a `jump`, a
+    /// `dip`, or a branch arm, and whether the sentence names itself or comes
+    /// back round through another.
+    #[test]
+    fn test_every_spelling_of_a_cycle_is_refused() {
+        for code in [
+            "sentence loops { jump loops }",
+            "sentence ping { jump pong } sentence pong { jump ping }",
+            "sentence viabranch { pick 0 branch { drop 0 } { jump viabranch } }",
+            "sentence entry { jump loops } sentence loops { jump loops }",
+        ] {
+            let res = assemble(code);
+            assert!(
+                res.as_ref()
+                    .is_err_and(|e| e.contains("recursion is forbidden")),
+                "expected {:?} to be refused, got {:?}",
+                code,
+                res.map(|_| ())
+            );
+        }
+    }
+
+    /// The annotation that used to license recursion says so itself, rather
+    /// than coming back as a name that might have been misspelled.
+    #[test]
+    fn test_the_recursive_annotation_is_gone() {
+        let err = assemble("#[recursive] sentence s { push 1 }").unwrap_err();
+        assert!(err.contains("recursion is forbidden"), "{}", err);
     }
 
     #[test]
-    fn test_recursive_annotation_and_instruction_arities() {
-        // 1. Recursive sentence annotated with #[recursive] compiles successfully
-        let code = r#"
-            #[recursive]
-            sentence rec {
-                jump rec
-            }
-        "#;
-        let res = assemble(code).unwrap();
-        assert_eq!(res.sentences.len(), 1);
-        assert_eq!(res.instruction_arities[SentenceIndex::from(0)], None);
-
-        // 2. Caller of recursive sentence must be annotated with #[recursive]
-        let code2 = r#"
-            #[recursive]
-            sentence rec {
-                jump rec
-            }
-            sentence caller {
-                jump rec
-            }
-        "#;
-        let res2 = assemble(code2);
-        assert!(res2.is_err());
-        assert!(
-            res2.unwrap_err()
-                .contains("calls recursive sentence 'rec' but is not annotated with #[recursive]")
-        );
-
-        // 3. Verifying instruction arities are correctly populated for standard instructions
+    fn test_instruction_arities() {
+        // 1. Verifying instruction arities are correctly populated for standard instructions
         let code3 = r#"
             sentence standard {
                 push 10
@@ -536,7 +533,7 @@ mod tests {
         // depth stays at 2 across it and the `drop 0` takes it back to 1.
         assert_eq!(
             res3.instruction_arities[SentenceIndex::from(0)],
-            Some(vec![
+            vec![
                 Arity::Normal {
                     inputs: 0,
                     outputs: 0
@@ -553,10 +550,10 @@ mod tests {
                     inputs: 0,
                     outputs: 2
                 },
-            ])
+            ]
         );
 
-        // 4. Verifying panic arity and _just_ panic sentence arity
+        // 2. Verifying panic arity and _just_ panic sentence arity
         let code4 = r#"
             sentence just_panic {
                 panic
@@ -569,11 +566,11 @@ mod tests {
         let res4 = assemble(code4).unwrap();
         assert_eq!(
             res4.instruction_arities[SentenceIndex::from(0)],
-            Some(vec![Arity::Panic { inputs: 0 }])
+            vec![Arity::Panic { inputs: 0 }]
         );
         assert_eq!(
             res4.instruction_arities[SentenceIndex::from(1)],
-            Some(vec![Arity::Panic { inputs: 2 }])
+            vec![Arity::Panic { inputs: 2 }]
         );
     }
 

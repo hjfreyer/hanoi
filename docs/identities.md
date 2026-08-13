@@ -105,11 +105,15 @@ every annihilation, which lowers the input requirement on purpose. `--check` in
 the rewriter allows the same asymmetry for the same reason; refusing it here
 would refuse exactly the equations the rewriter is built out of.
 
-Deliberately *not* checked by the compiler: non-recursive, and unable to fail.
-Those are the preconditions the rewriter's equations are stated under —
-conditions on provability rather than on well-formedness — and asking for them
-in `assemble_source` would tie the language to a particular rule set. `prove`
-asks, in the words `rewrite` uses.
+Deliberately *not* checked by the compiler: unable to fail. That is the
+precondition the rewriter's equations are stated under — a condition on
+provability rather than on well-formedness — and asking for it in
+`assemble_source` would tie the language to a particular rule set. `prove` asks,
+in the words `rewrite` uses.
+
+The other thing the rewriter needs, that expanding a call terminates, is not a
+precondition at all: recursion is forbidden, so every sentence in a library that
+compiled has a finite expansion.
 
 ## Proving one
 
@@ -303,8 +307,9 @@ fired and writing around it.
 So which route a proof takes is written in the proof, reviewed with it, and
 diffable when it changes. `strategy NAME = ...;` names one, which is where a
 shape that keeps coming up belongs: in the corpus, readable and changeable,
-rather than built in. Strategies do not recurse, for the reason tactics do not —
-nothing here measures a goal getting smaller — so the depth is written out.
+rather than built in. Strategy definitions do not recurse, for the reason tactic
+definitions do not — nothing here measures a goal getting smaller — so the depth
+is written out.
 `peel` and `descend` **fail when they decompose nothing**, so a strategy that no
 longer matches the term says so instead of quietly becoming a no-op.
 
@@ -373,9 +378,9 @@ is chosen, and a `.hant` only ever after one.
 
 Per identity, in order:
 
-1. **Both sides** are non-recursive and unable to fail. Both, not only the side
-   that gets rewritten: the right-hand side is the term the claim is measured
-   against, so it has to be one the equations can speak about too.
+1. **Both sides** are unable to fail. Both, not only the side that gets
+   rewritten: the right-hand side is the term the claim is measured against, so
+   it has to be one the equations can speak about too.
 2. The proof compiles, against its own file's definitions.
 3. The tactic runs on the left-hand side.
 4. **A miss fails it.**

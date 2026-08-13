@@ -1275,23 +1275,19 @@ one place and nowhere else.
 
 A tactic may not take a matcher's name, so where a pass and the matcher at its
 heart would collide the pass gives way: `annihilation` drives `annihilate`,
-`flattening` drives `flatten`. Definitions may not recurse — `repeat` is the
-only unbounded construct — and later definitions shadow earlier ones, so
+`flattening` drives `flatten`. Tactic definitions may not recurse — `repeat` is
+the only unbounded construct — and later definitions shadow earlier ones, so
 `--tactics <file>` can replace a prelude entry.
 
-## Preconditions: non-recursive, and total
+## Precondition: total
 
-The tool refuses two kinds of root.
+The tool refuses one kind of root.
 
-**Recursive**, because there is no finite expansion. Deciding that takes one
-annotation lookup, not a graph traversal: `check_arities` will not compile a
-sentence that calls a `#[recursive]` one without being `#[recursive]` itself, so
-the annotation has already propagated up the call graph and *its absence on a
-root is a proof that expanding that root terminates*. That claim is load-bearing
-and so is checked rather than assumed —
-`program::invariant::reaching_a_cycle_implies_the_recursive_annotation` computes
-the real cycles over the corpus and asserts every sentence reaching one carries
-the annotation.
+There used to be two. The other was a recursive root, which had no finite
+expansion to work with — but recursion is forbidden now, and `check_arities`
+refuses a sentence that reaches itself, so *every* sentence in a library that
+compiled has a finite expansion and there is nothing left to ask. See
+[hana.md](hana.md#recursion-is-forbidden).
 
 **Able to fail**, because the equations assume totality:
 
@@ -1404,8 +1400,7 @@ the un-expanded listing to usefully name on one line. Both are spelled out by
 
 A `dip N` or `jump` naming a real sentence is a different thing and stays a
 call: there the callee exists independently, `unfold` is a real choice, and the
-label is worth keeping. An inline block that would recurse also stays a call,
-which is what it becomes at run time anyway.
+label is worth keeping.
 
 ```
 $ rewrite tests state_check -t 'exact(once(unfold))'              #  50 lines

@@ -95,9 +95,13 @@ sentences always had — the reliance the pre-totality `untuple` enforced by
 panicking.
 
 The check is syntactic and therefore conservative: an `assert` on a branch that
-cannot be taken still counts against the claim. That is the same bargain
-`#[recursive]` makes, and it is what keeps this a reachability question rather
-than a proof obligation.
+cannot be taken still counts against the claim. That is what keeps this a
+reachability question rather than a proof obligation.
+
+Note what the claim does *not* have to cover: a sentence that never returns.
+Recursion is forbidden (see [hana.md](hana.md#recursion-is-forbidden)), so
+divergence is not one of the ways a Hanoi program can fail to produce an
+answer, and `#[total]` is about failure alone.
 
 ## Truthiness
 

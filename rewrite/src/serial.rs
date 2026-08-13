@@ -396,9 +396,9 @@ fn write_bare_value(value: &Value) -> Result<String, String> {
 /// one, or an index. What it will not do is invent one, so a sentence the
 /// library gives a name that means something else — or nothing — is refused
 /// here rather than written into a file that would replay somewhere else.
-/// Under the tool's precondition this is unreachable: an unnamed `<inline>`
-/// block becomes a `Call` only when it recurses, and a recursive sentence is
-/// refused before any of this runs.
+/// This is unreachable in practice: an unnamed `<inline>` block is expanded
+/// where it is met rather than left as a `Call`, so a `Call` always names a
+/// sentence somebody wrote.
 fn write_sentence(prog: &Program, target: SentenceIndex) -> Result<String, String> {
     let name = &prog.library().names[target];
     match resolve_sentence(prog.library(), name) {

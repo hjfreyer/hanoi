@@ -105,9 +105,9 @@ pub(crate) fn render_nodes(
 ) -> Vec<String> {
     let mut out = Vec::new();
 
-    // A sentence whose reckoning breaks immediately — a #[recursive] one, whose
-    // body is a cut edge — has no knowable entry depth. Counting from zero
-    // still shows every step's effect; the `+` marks the numbers as offsets.
+    // A sentence whose reckoning breaks immediately — one that opens on a call
+    // whose target always panics — has no knowable entry depth. Counting from
+    // zero still shows every step's effect; the `+` marks them as offsets.
     let (inputs, outputs) = seq_arity(prog, body);
     let relative = outputs.is_none() && inputs == 0;
 

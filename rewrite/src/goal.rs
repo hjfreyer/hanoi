@@ -29,7 +29,6 @@
 //! one-sided listing with a diff against where you started thrown in.
 
 use bytecode::{Identity, SentenceIndex};
-use std::collections::HashSet;
 
 use crate::debug;
 use crate::engine::{Tactic, miss_report};
@@ -219,7 +218,7 @@ fn broken(err: &Unproved) -> Vec<String> {
 }
 
 fn tree(prog: &Program, root: SentenceIndex) -> Vec<Node> {
-    build(prog.library(), root, &mut HashSet::new())
+    build(prog.library(), root)
 }
 
 /// Two spaces in front of a line, except an empty one — which would otherwise

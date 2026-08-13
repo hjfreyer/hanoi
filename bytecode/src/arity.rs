@@ -9,12 +9,11 @@ pub fn check_arities(library: &mut Library) -> Result<(), String> {
     let mut memo = HashMap::new();
     let mut instruction_arities = HashMap::new();
 
-    // 1. Check/infer all non-recursive sentences
+    // 1. Check/infer every sentence. Inference is what refuses recursion: a
+    // sentence that reaches itself has no arity to work out, and this is where
+    // that is discovered.
     for s_idx_raw in 0..library.sentences.len() {
         let s_idx = SentenceIndex::from(s_idx_raw);
-        if is_recursive(s_idx, library) {
-            continue;
-        }
         let mut in_progress = HashSet::new();
         let inferred = get_or_infer_arity(
             s_idx,
@@ -63,26 +62,19 @@ pub fn check_arities(library: &mut Library) -> Result<(), String> {
     }
 
     // 2. Store final instruction arities into library.instruction_arities.
-    // Recursive/opted-out sentences receive None, while checked ones receive Some(vec).
+    // Step 1 inferred every sentence, so every one of them has an entry.
     let mut final_arities = typed_index_collections::TiVec::with_capacity(library.sentences.len());
     for s_idx_raw in 0..library.sentences.len() {
         let s_idx = SentenceIndex::from(s_idx_raw);
-        if is_recursive(s_idx, library) {
-            final_arities.push(None);
-        } else {
-            let arities = instruction_arities.remove(&s_idx);
-            final_arities.push(arities);
-        }
+        final_arities.push(
+            instruction_arities
+                .remove(&s_idx)
+                .expect("step 1 infers every sentence, or fails"),
+        );
     }
     library.instruction_arities = final_arities;
 
     Ok(())
-}
-
-fn is_recursive(s_idx: SentenceIndex, library: &Library) -> bool {
-    library.annotations[s_idx]
-        .iter()
-        .any(|ann| matches!(ann, Annotation::Recursive))
 }
 
 fn is_total(s_idx: SentenceIndex, library: &Library) -> bool {
@@ -115,10 +107,9 @@ fn callees(inst: &Instruction) -> Vec<SentenceIndex> {
 
 /// Which sentences can fail: directly, or by reaching one that does.
 ///
-/// A least fixpoint over the call graph, so a cycle that never reaches a
-/// failing instruction comes out total rather than unknown. Unlike arity
-/// inference this is a reachability question, and needs no annotation to
-/// terminate.
+/// A least fixpoint over the call graph. The graph is acyclic — recursion is
+/// forbidden, and `check_arities` is what refuses it — so this is a plain
+/// propagation up the call graph rather than anything subtler.
 ///
 /// Public because it is the useful half of [`check_totality`], and it answers
 /// for *every* sentence rather than only the ones somebody annotated:
@@ -175,9 +166,8 @@ pub fn failure_reachability(library: &Library) -> Vec<bool> {
 /// of everything else.
 ///
 /// The check is syntactic and therefore conservative: an `assert` on a branch
-/// that cannot be taken still counts against the claim. That is the same
-/// bargain the `#[recursive]` rule makes, and what keeps this a reachability
-/// question rather than a proof obligation.
+/// that cannot be taken still counts against the claim. That is what keeps this
+/// a reachability question rather than a proof obligation.
 pub fn check_totality(library: &Library) -> Result<(), String> {
     let can = failure_reachability(library);
     for (s_idx, _) in library.sentences.iter_enumerated() {
@@ -214,11 +204,11 @@ pub fn check_totality(library: &Library) -> Result<(), String> {
 /// What it does still catch is a claim that leaves a different amount behind,
 /// which no proof could ever discharge.
 ///
-/// The preconditions the rewriter's equations are stated under — non-recursive,
-/// and unable to fail — are deliberately *not* checked here. They are
-/// conditions on provability rather than on well-formedness, and asking for
-/// them in the compiler would tie the language to a particular rule set.
-/// `bin/prove` asks, and refuses in the same words `rewrite` does.
+/// The precondition the rewriter's equations are stated under — that neither
+/// side can fail — is deliberately *not* checked here. It is a condition on
+/// provability rather than on well-formedness, and asking for it in the
+/// compiler would tie the language to a particular rule set. `bin/prove` asks,
+/// and refuses in the same words `rewrite` does.
 pub fn check_identities(library: &Library) -> Result<(), Error> {
     for identity in &library.identities {
         let effect = |side: SentenceIndex, which: &str| -> Result<(i64, i64), Error> {
@@ -310,8 +300,10 @@ fn get_or_infer_arity(
 
     if in_progress.contains(&s_idx) {
         return Err(format!(
-            "Recursion/cycle detected at sentence index {:?} ({})",
-            s_idx, name
+            "Sentence '{}' (index {:?}) reaches itself, and recursion is forbidden: \
+             a sentence must have a finite expansion, so a loop has to be written out \
+             as the steps it takes",
+            name, s_idx
         ));
     }
 
@@ -330,16 +322,9 @@ fn get_or_infer_arity(
 /// `Dip` — a sentence's declared `#[arity]` may ask for more inputs than it
 /// touches, and a caller cares about what is actually consumed.
 ///
-/// A `#[recursive]` sentence is skipped by inference entirely, so there the
-/// annotation is the only thing that can answer; without one the arity is
-/// genuinely unknown and this returns `None`.
-///
 /// Public for `bin/rewrite`, whose `Call` nodes need their target's arity to
 /// decide whether a dip may move past them.
 pub fn sentence_arity(library: &Library, s_idx: SentenceIndex) -> Option<Arity> {
-    if is_recursive(s_idx, library) {
-        return declared_arity(library, s_idx);
-    }
     let mut memo = HashMap::new();
     let mut in_progress = HashSet::new();
     let mut instruction_arities = HashMap::new();
@@ -351,16 +336,6 @@ pub fn sentence_arity(library: &Library, s_idx: SentenceIndex) -> Option<Arity> 
         &mut instruction_arities,
     )
     .ok()
-}
-
-fn declared_arity(library: &Library, s_idx: SentenceIndex) -> Option<Arity> {
-    library.annotations[s_idx].iter().find_map(|ann| match ann {
-        Annotation::Arity(inputs, outputs) => Some(Arity::Normal {
-            inputs: *inputs,
-            outputs: *outputs,
-        }),
-        _ => None,
-    })
 }
 
 /// What one instruction takes off the top of the stack and leaves there.
@@ -494,12 +469,6 @@ fn infer_arity_of_instructions(
                 return Ok((sentence_arity, arities));
             }
             Instruction::Dip(depth, target) => {
-                if is_recursive(*target, library) {
-                    return Err(format!(
-                        "Sentence '{}' calls recursive sentence '{}' but is not annotated with #[recursive]",
-                        library.names[s_idx], library.names[*target]
-                    ));
-                }
                 let target_arity =
                     get_or_infer_arity(*target, library, memo, in_progress, instruction_arities)?;
                 let (n_target, m_target, is_panic_target) = match target_arity {
@@ -531,18 +500,6 @@ fn infer_arity_of_instructions(
                 }
             }
             Instruction::Branch(then_t, else_t) => {
-                if is_recursive(*then_t, library) {
-                    return Err(format!(
-                        "Sentence '{}' calls recursive sentence '{}' but is not annotated with #[recursive]",
-                        library.names[s_idx], library.names[*then_t]
-                    ));
-                }
-                if is_recursive(*else_t, library) {
-                    return Err(format!(
-                        "Sentence '{}' calls recursive sentence '{}' but is not annotated with #[recursive]",
-                        library.names[s_idx], library.names[*else_t]
-                    ));
-                }
                 let req_cond = 1;
                 if current_size < req_cond {
                     let diff = req_cond - current_size;
@@ -729,27 +686,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_recursive_sentence_falls_back_to_its_annotation() {
-        // Inference skips #[recursive] entirely, so the annotation is the only
-        // thing left that can answer.
-        let got = arity_of(
-            r#"
-            #[recursive]
-            #[arity(1, 1)]
-            sentence loops { jump loops }
-        "#,
-            "loops",
-        );
-        assert_eq!(
-            got,
-            Some(Arity::Normal {
-                inputs: 1,
-                outputs: 1
-            })
-        );
-    }
-
     // -----------------------------------------------------------------------
     // #[total]
     // -----------------------------------------------------------------------
@@ -811,7 +747,7 @@ mod tests {
             "pick 0 is_int branch { drop 0 } { assert }",
             "dip 1 { drop 0 assert }",
         ] {
-            let code = format!("#[total] #[recursive] sentence claims {{ {} }}", body);
+            let code = format!("#[total] sentence claims {{ {} }}", body);
             let msg = totality_error(&code);
             assert!(msg.contains("claims"), "should name the sentence: {}", msg);
             assert!(
@@ -845,33 +781,6 @@ mod tests {
             )
             .is_ok()
         );
-    }
-
-    #[test]
-    fn a_cycle_that_never_fails_is_total() {
-        // Reachability, not a fixpoint over arities: a loop with no failing
-        // instruction anywhere in it satisfies the claim.
-        assert!(
-            assemble(
-                r#"
-            #[total]
-            #[recursive]
-            #[arity(1, 1)]
-            sentence loops { pick 0 is_int branch { } { jump loops } }
-        "#
-            )
-            .is_ok()
-        );
-        // And one that can reach a failure does not, however deep the cycle.
-        let msg = totality_error(
-            r#"
-            #[total]
-            #[recursive]
-            #[arity(1, 1)]
-            sentence loops { pick 0 is_int branch { assert push 1 } { jump loops } }
-        "#,
-        );
-        assert!(msg.contains("#[total]"), "{}", msg);
     }
 
     #[test]
@@ -913,17 +822,5 @@ mod tests {
             "reachability propagates without any annotation"
         );
         assert!(!of("safe"));
-    }
-
-    #[test]
-    fn an_unannotated_recursive_sentence_has_no_knowable_arity() {
-        let got = arity_of(
-            r#"
-            #[recursive]
-            sentence loops { jump loops }
-        "#,
-            "loops",
-        );
-        assert_eq!(got, None);
     }
 }

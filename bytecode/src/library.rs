@@ -50,7 +50,6 @@ pub struct Identity {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Annotation<Ref> {
     Arity(i64, i64),
-    Recursive,
     Precondition(Ref),
     Postcondition(Ref),
     /// This sentence cannot fail: it neither executes `panic`, `assert` or
@@ -98,7 +97,10 @@ pub struct Library {
     pub test_machines: HashSet<String>,
     pub annotations: TiVec<SentenceIndex, Vec<SentenceAnnotation>>,
     pub names: TiVec<SentenceIndex, String>,
-    pub instruction_arities: TiVec<SentenceIndex, Option<Vec<Arity>>>,
+    /// The stack depth reached at each instruction of each sentence. Every
+    /// sentence has one: inference answers for all of them, since a sentence
+    /// whose arity could not be worked out does not compile.
+    pub instruction_arities: TiVec<SentenceIndex, Vec<Arity>>,
     /// In declaration order, which is what makes a checker's output
     /// deterministic.
     pub identities: TiVec<IdentityIndex, Identity>,

@@ -131,13 +131,12 @@ marker, and only `#[arity]` and `#[total]` mean anything on one. The tactic that
 
 ## 4. Contract Annotations
 
-Hanoi supports static assertion checking at compile time via attributes. `#[arity]`, `#[total]` and `#[recursive]` are checked by the compiler today; `#[precondition]` and `#[postcondition]` were verified by the `typecheck` tool, currently removed from the codebase along with its Z3 dependency (see [docs/typecheck.md](typecheck.md) for the design):
+Hanoi supports static assertion checking at compile time via attributes. `#[arity]` and `#[total]` are checked by the compiler today; `#[precondition]` and `#[postcondition]` were verified by the `typecheck` tool, currently removed from the codebase along with its Z3 dependency (see [docs/typecheck.md](typecheck.md) for the design):
 
 - `#[arity(inputs, outputs)]`: Declares the stack arity (required for sentences that do not use the default `function` arity of `1 -> 1`).
 - `#[precondition(fn_name)]`: Names a `1 -> 1` function that must evaluate to `true` on the input for the annotated function to be considered safe to call.
 - `#[postcondition(fn_name)]`: Names a `1 -> 1` function that must evaluate to `true` on the output, given the precondition (if any) held on the input.
 - `#[total]`: Declares that the sentence cannot fail — it neither executes `panic`, `assert` or `assert_eq` nor reaches anything that does. **Checked** by the compiler, and opt-in: an unannotated sentence makes no claim, so generated code and branch arms need no annotation. See [docs/totality.md](totality.md).
-- `#[recursive]`: Marks a sentence participating in a recursive call cycle so the verifier can model it.
 
 Precondition/postcondition functions are ordinary `1 -> 1` functions, but they are commonly generated with the `type`/`enum` sugar rather than written by hand:
 
@@ -174,6 +173,70 @@ enum MyEnum {
 - **Dips**: `dip N { block }` (or `dip N S`) runs a block with the top `N` stack values hidden from it, restoring them on top of whatever the block leaves behind. `N` may be omitted, in which case it is 1. This is `jump` with an offset into the stack: `dip 0 S` and `jump S` are the same instruction.
 - **Branches**: Conditional execution is implemented via `branch { then_block } { else_block }`. The VM pops the top stack element; if it is truthy, it executes `then_block`, otherwise it executes `else_block`. Truthiness is `v != false`, so only a literal `false` reaches the else block.
 - **Panics**: If a condition fails, `panic` immediately halts VM execution. Safe assertion operations `assert` and `assert_eq` verify preconditions and abort the program on failure.
+
+### Recursion is forbidden
+
+**A sentence may not reach itself.** Not through a `jump`, not through a `dip`,
+not through a branch arm, and not by going round through other sentences. The
+call graph is acyclic, and the compiler refuses anything else:
+
+```
+error: Sentence 'loopy::counts_down' (index SentenceIndex(0)) reaches itself,
+and recursion is forbidden: a sentence must have a finite expansion, so a loop
+has to be written out as the steps it takes
+```
+
+The annotation that used to license a cycle, `#[recursive]`, is gone, and says
+so rather than coming back as a name that might have been misspelled:
+
+```
+error: `#[recursive]` is not an annotation: recursion is forbidden
+```
+
+Arity inference is what enforces it, because a cycle is exactly where inference
+cannot terminate: working out what a sentence leaves on the stack would mean
+working out what that same sentence leaves on the stack.
+
+So a loop is written as the steps it takes. Where a program used to call itself
+until a machine stopped reducing, it now runs the reductions it takes and
+asserts that each one was there to make:
+
+```hana
+// One tau reduction, which must be available to take.
+sentence tau_step {
+    jump machine::tau_reduce
+    untuple 2
+    assert // the untuple
+    assert // ... and did_reduce
+}
+
+test sentence drives_two_steps {
+    tuple 0
+    jump machine::init
+    jump tau_step
+    jump tau_step
+    // ... and the machine is where the test says it is
+}
+```
+
+That is a real restriction, and it is bought rather than free. What it buys:
+
+- **Every sentence has an arity**, inferred rather than declared, so `#[arity]`
+  is only ever a check on what the body does — never the last word on a body
+  inference could not read.
+- **Every sentence has a finite expansion.** `bin/rewrite` and `bin/prove` work
+  by expanding calls, and termination is a property of the language rather than
+  something a precondition has to ask about. See
+  [docs/identities.md](identities.md).
+- **Every analysis over the call graph terminates on its own.** Arity inference
+  and the rewriter's tree-building walk it with no cycle case to carry, and
+  failure reachability settles in one pass over each edge.
+- **A program's step count is bounded by its text**, which is what makes the
+  totality claim in [docs/totality.md](totality.md) about failure alone rather
+  than about failure and divergence.
+
+What it costs is unbounded iteration, which has to be expressed some other way —
+today, by writing the steps out.
 
 ### Why `dip` and not `roll`
 
