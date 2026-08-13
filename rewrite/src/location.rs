@@ -10,13 +10,13 @@ use std::fmt;
 
 use crate::ir::Selector;
 
-/// A window in the tree: how to get to a sequence, and where in it to look.
+/// A window in the term: how to get to a spine, and where in it to look.
 ///
 /// The `descent` is read from the root outwards. Each `(index, selector)` step
-/// picks the node at `index` in the sequence reached so far and descends into
-/// the child body that `selector` names — so `[(3, Then), (0, Body)]` is "the
-/// then arm of the node at 3, then the body of the node at 0 within it". `at`
-/// is where the window starts in the sequence that walk arrives at.
+/// picks the factor at `index` in the spine reached so far and descends into
+/// the sub-term that `selector` names — so `[(3, Then), (0, Left)]` is "the
+/// then arm of the factor at 3, then the left-hand side of the `par` at 0 within
+/// it". `at` is where the window starts in the spine that walk arrives at.
 ///
 /// **A location addresses the tree as the preceding steps left it.** Locations
 /// are not stable across a script: step 5 may name an index that did not exist
@@ -85,7 +85,8 @@ pub(crate) fn selector_name(sel: Selector) -> &'static str {
     match sel {
         Selector::Then => "then",
         Selector::Else => "else",
-        Selector::Body => "body",
+        Selector::Left => "left",
+        Selector::Right => "right",
     }
 }
 
@@ -101,10 +102,10 @@ mod tests {
     #[test]
     fn a_descent_prints_index_and_kind_outermost_first() {
         let loc = Location {
-            descent: vec![(3, Selector::Then), (0, Selector::Body)],
+            descent: vec![(3, Selector::Then), (0, Selector::Left)],
             at: 2,
         };
-        assert_eq!(loc.to_string(), "[3.then, 0.body] @2");
+        assert_eq!(loc.to_string(), "[3.then, 0.left] @2");
     }
 
     #[test]
@@ -123,9 +124,9 @@ mod tests {
             at: 0,
         };
         assert_eq!(
-            rel.under(&[(2, Selector::Body)], 7),
+            rel.under(&[(2, Selector::Left)], 7),
             Location {
-                descent: vec![(2, Selector::Body), (8, Selector::Then)],
+                descent: vec![(2, Selector::Left), (8, Selector::Then)],
                 at: 0,
             }
         );

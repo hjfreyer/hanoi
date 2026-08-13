@@ -32,9 +32,9 @@ use std::path::PathBuf;
 
 use bytecode::{Identity, Library, SentenceIndex};
 
-use crate::applier::apply_script;
+use crate::applier::apply_script_seq;
 use crate::diff::side_by_side;
-use crate::ir::{Node, build, same_effect_seq};
+use crate::ir::{Term, build, same_effect_seq};
 use crate::print::render_nodes;
 use crate::program::Program;
 use crate::prove::{BROKEN, FAILED, OK};
@@ -219,7 +219,7 @@ enum Failure {
     /// A step did not fit the tree the steps before it left.
     Step(Box<crate::applier::ApplyError>),
     /// Every step applied, and the last one did not leave the right-hand side.
-    NotReached(Vec<Node>, SentenceIndex),
+    NotReached(Vec<Term>, SentenceIndex),
 }
 
 /// One derivation, run against the corpus. The name it discharged comes back,
@@ -236,7 +236,7 @@ fn check(
     let identity: &Identity = &library.identities[index];
 
     let mut tree = build_tree(prog, identity.lhs);
-    apply_script(prog, &mut tree, &derivation.steps, opts.check)
+    apply_script_seq(prog, &mut tree, &derivation.steps, opts.check)
         .map_err(|e| Failure::Step(Box::new(e)))?;
 
     // By effect, not by `==`. The two sides were compiled from two sentences,
@@ -249,8 +249,8 @@ fn check(
     }
 }
 
-fn build_tree(prog: &Program, root: SentenceIndex) -> Vec<Node> {
-    build(prog.library(), root)
+fn build_tree(prog: &Program, root: SentenceIndex) -> Vec<Term> {
+    build(prog.library(), root).into_spine()
 }
 
 impl Failure {

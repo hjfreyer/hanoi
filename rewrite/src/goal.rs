@@ -32,7 +32,7 @@ use bytecode::{Identity, SentenceIndex};
 
 use crate::debug;
 use crate::engine::{Tactic, miss_report};
-use crate::ir::{Node, build};
+use crate::ir::{Term, build};
 use crate::print::render_nodes;
 use crate::program::Program;
 use crate::prover::{self, Goal, Solved, Unproved};
@@ -144,7 +144,7 @@ fn met(prog: &Program, lhs: SentenceIndex, solved: &Solved, opts: &Options) -> V
     let mut body = tree(prog, lhs);
     let upto = solved.closed.met_after(solved.script.len());
     if let Err(err) =
-        crate::applier::apply_script(prog, &mut body, &solved.script[..upto], opts.check)
+        crate::applier::apply_script_seq(prog, &mut body, &solved.script[..upto], opts.check)
     {
         // The final replay is `prove`'s job, and a script that will not apply is
         // a bug rather than a wrong claim — say so instead of printing a tree
@@ -201,8 +201,8 @@ fn broken(err: &Unproved) -> Vec<String> {
     }
 }
 
-fn tree(prog: &Program, root: SentenceIndex) -> Vec<Node> {
-    build(prog.library(), root)
+fn tree(prog: &Program, root: SentenceIndex) -> Vec<Term> {
+    build(prog.library(), root).into_spine()
 }
 
 /// Two spaces in front of a line, except an empty one — which would otherwise

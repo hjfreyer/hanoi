@@ -1,37 +1,51 @@
-//! Stack arities over the tree.
+//! Stack arities over the term.
 //!
-//! Mostly structural, but a [`Node::Call`] names a sentence rather than holding
+//! Mostly structural, but a [`Term::Call`] names a sentence rather than holding
 //! its body, so these take a [`Program`] to look the target up. That is the
 //! price of making inlining a rule; the gain is that an unexpanded call now has
-//! an arity where the old `Cut` had none.
+//! an arity where a cut edge had none.
 
 use bytecode::arity::op_arity;
 
-use crate::ir::Node;
+use crate::ir::Term;
 use crate::program::Program;
 
-/// How many values a node takes off the stack and leaves on it, counted from
+/// How many values a term takes off the stack and leaves on it, counted from
 /// the top. `None` means the reckoning stops there: a call whose target's arity
 /// is unknown tells us nothing about what follows.
-pub(crate) fn node_arity(prog: &Program, node: &Node) -> Option<(i64, i64)> {
-    match node {
-        Node::Op(inst) => op_arity(inst),
-        Node::Call { depth, target } => {
-            let (n, m) = prog.arity(*target)?;
-            let d = *depth as i64;
-            Some((d + n, d + m))
+pub(crate) fn term_arity(prog: &Program, term: &Term) -> Option<(i64, i64)> {
+    match term {
+        // The whole point of an arity-carrying identity: `par` carves the stack
+        // by what its two sides ask for, so the thing that passes `k` values
+        // through has to ask for `k`.
+        Term::Id(k) => Some((*k as i64, *k as i64)),
+        Term::Op(inst) => op_arity(inst),
+        Term::Call(target) => prog.arity(*target),
+        Term::Compose(a, b) => Some(compose(term_arity(prog, a)?, term_arity(prog, b)?)),
+        // Side by side on disjoint parts of one stack: the right runs on the
+        // top, the left on what is under it, and neither can see the other's
+        // values. So the two demands add, and so do the two results.
+        Term::Par { left, right, .. } => {
+            let (a, b) = term_arity(prog, left)?;
+            let (c, d) = term_arity(prog, right)?;
+            Some((a + c, b + d))
         }
-        Node::Dip { depth, body, .. } => {
-            let (n, m) = full_arity(prog, body)?;
-            let d = *depth as i64;
-            Some((d + n, d + m))
-        }
-        Node::Branch {
+        Term::Branch {
             then_body,
             else_body,
             ..
         } => branch_arity(prog, then_body, else_body),
     }
+}
+
+/// What running an `(n1 -> m1)` and then an `(n2 -> m2)` takes and leaves.
+fn compose((n1, m1): (i64, i64), (n2, m2): (i64, i64)) -> (i64, i64) {
+    // Whatever the second wants and the first did not leave has to come from
+    // below, and whatever the first left over and the second did not read stays
+    // there.
+    let short = (n2 - m1).max(0);
+    let spare = (m1 - n2).max(0);
+    (n1 + short, m2 + spare)
 }
 
 /// What a branch takes and leaves, from **both** arms.
@@ -58,8 +72,8 @@ pub(crate) fn node_arity(prog: &Program, node: &Node) -> Option<(i64, i64)> {
 /// `None` when neither arm answers, or when the two disagree on net change.
 /// Neither is reachable from code the arity checker accepted — but an arity
 /// that is not known declines a rewrite, where a wrong one performs it.
-fn branch_arity(prog: &Program, then_body: &[Node], else_body: &[Node]) -> Option<(i64, i64)> {
-    match (full_arity(prog, then_body), full_arity(prog, else_body)) {
+fn branch_arity(prog: &Program, then_body: &Term, else_body: &Term) -> Option<(i64, i64)> {
+    match (term_arity(prog, then_body), term_arity(prog, else_body)) {
         (Some((tn, tm)), Some((en, em))) => {
             if tm - tn != em - en {
                 return None;
@@ -72,18 +86,22 @@ fn branch_arity(prog: &Program, then_body: &[Node], else_body: &[Node]) -> Optio
     }
 }
 
-/// [`seq_arity`] when the whole sequence is statically known, which is what a
-/// node's own arity needs — a body that stops partway has no output count.
-pub(crate) fn full_arity(prog: &Program, nodes: &[Node]) -> Option<(i64, i64)> {
+/// [`seq_arity`] when the whole run is statically known, which is what a
+/// factor's own arity needs — a body that stops partway has no output count.
+pub(crate) fn full_arity(prog: &Program, nodes: &[Term]) -> Option<(i64, i64)> {
     let (inputs, outputs) = seq_arity(prog, nodes);
     Some((inputs, outputs?))
 }
 
-pub(crate) fn seq_arity(prog: &Program, nodes: &[Node]) -> (i64, Option<i64>) {
+/// The arity of a run of factors, stopping where the reckoning does.
+///
+/// Kept alongside [`term_arity`] because a listing wants the entry depth of
+/// every factor it prints, including the ones after the first it cannot read.
+pub(crate) fn seq_arity(prog: &Program, nodes: &[Term]) -> (i64, Option<i64>) {
     let mut inputs = 0i64;
     let mut size = 0i64;
     for node in nodes {
-        let Some((n, m)) = node_arity(prog, node) else {
+        let Some((n, m)) = term_arity(prog, node) else {
             return (inputs, None);
         };
         if size < n {

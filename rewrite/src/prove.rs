@@ -46,9 +46,9 @@ use std::path::{Path, PathBuf};
 use bytecode::{Identity, IdentityIndex, Library, SentenceIndex, SourceMap};
 
 use crate::DEFAULT_FUEL;
-use crate::applier::apply_script;
+use crate::applier::apply_script_seq;
 use crate::engine::{Tactic, TacticError, miss_report};
-use crate::ir::{Node, build, same_effect_seq};
+use crate::ir::{Term, build, same_effect_seq};
 use crate::program::Program;
 use crate::prover::{self, Closed, Goal, Residual, Strategy, Unproved};
 use crate::rule::{Script, Step};
@@ -563,7 +563,7 @@ fn check(
     // provenance with anything the left-hand side rewrote into — and provenance
     // is not part of a term's identity.
     let mut landed = lhs;
-    match apply_script(prog, &mut landed, &solved.script, opts.check) {
+    match apply_script_seq(prog, &mut landed, &solved.script, opts.check) {
         Ok(()) if same_effect_seq(&landed, &rhs) => Ok(Proven {
             script: solved.script,
             closed: solved.closed,
@@ -592,8 +592,8 @@ fn compile(prog: &Program, file: &ProvenFile, proof: usize) -> Result<Strategy, 
         .map_err(|e| Failure::Proof(e.render_in(&file.source, &file.hant.display().to_string())))
 }
 
-fn tree(prog: &Program, root: SentenceIndex) -> Vec<Node> {
-    build(prog.library(), root)
+fn tree(prog: &Program, root: SentenceIndex) -> Vec<Term> {
+    build(prog.library(), root).into_spine()
 }
 
 impl Failure {

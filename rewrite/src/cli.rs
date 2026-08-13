@@ -227,5 +227,5 @@ fn usage() {
     eprintln!("  rewrite tests two_spellings_of_one_test -t 'normalize(cleanup)'");
     eprintln!("  rewrite tests testing_a_test_by_name -t 'cleanup; rhs(unfold_all)'");
     eprintln!("  rewrite tests a_test_inside_an_arm -t 'peel; descend(then: cleanup)'");
-    eprintln!("  rewrite tests copying_a_constant -t 'dips; factoring' --step");
+    eprintln!("  rewrite tests copying_a_constant -t 'frames; factoring' --step");
 }

@@ -1,16 +1,16 @@
-//! The gutter listing: where each node is, and how deep the stack is there.
+//! The gutter listing: where each factor is, and how deep the stack is there.
 //!
 //! Two columns before the instruction. **Depth** is what the stack holds on the
 //! way in, and **position** is the node's index in the sequence it belongs to —
 //! which is the number `at(n, ...)` takes, and the number `then(n, t)` and its
-//! relatives take when read off a `branch` or `dip` line. Between them a window
-//! a script prints as `[1.then, 2.body] @2` can be read straight off the
+//! relatives take when read off a `branch` or `par` line. Between them a window
+//! a script prints as `[1.then, 2.left] @2` can be read straight off the
 //! listing instead of counted out by hand.
 
 use bytecode::SentenceIndex;
 
-use crate::arity::{node_arity, seq_arity};
-use crate::ir::Node;
+use crate::arity::{seq_arity, term_arity};
+use crate::ir::{Term, id_word};
 use crate::program::Program;
 use crate::stack::{self, Fresh, Names, Stack};
 
@@ -31,7 +31,7 @@ struct View<'a> {
 ///
 /// That is exactly the number `at(n, ...)` takes, and — read off a `branch` or
 /// a `dip` line — the number `then(n, t)`, `else(n, t)` and `body(n, t)` take.
-/// So a window a script prints as `[1.then, 2.body] @2` can be read straight
+/// So a window a script prints as `[1.then, 2.left] @2` can be read straight
 /// off the listing rather than counted out by hand.
 ///
 /// It restarts at every nesting level, which the indentation is what shows.
@@ -62,7 +62,7 @@ fn pos_cell(show: bool, index: Option<usize>) -> String {
 pub(crate) fn render_body(
     prog: &Program,
     root: SentenceIndex,
-    body: &[Node],
+    body: &[Term],
     source: &str,
     show_stack: bool,
     show_pos: bool,
@@ -98,7 +98,7 @@ pub(crate) fn render_body(
 /// is the term.
 pub(crate) fn render_nodes(
     prog: &Program,
-    body: &[Node],
+    body: &[Term],
     show_stack: bool,
     show_pos: bool,
     show_origins: bool,
@@ -196,7 +196,7 @@ pub(crate) fn render_nodes(
 #[allow(clippy::too_many_arguments)]
 fn render_seq(
     prog: &Program,
-    nodes: &[Node],
+    nodes: &[Term],
     indent: usize,
     entry: Option<i64>,
     relative: bool,
@@ -233,35 +233,61 @@ fn render_seq(
         let pad = "  ".repeat(indent);
 
         match node {
-            Node::Op(inst) => out.push(format!("{} │ {}{}", gutter, pad, inst)),
-            Node::Dip {
-                depth: k,
+            Term::Op(inst) => out.push(format!("{} │ {}{}", gutter, pad, inst)),
+            Term::Id(k) => out.push(format!("{} │ {}{}", gutter, pad, id_word(*k))),
+            Term::Call(target) => out.push(format!(
+                "{} │ {}jump → {}",
+                gutter,
+                pad,
+                prog.label(*target)
+            )),
+            // A composite is a spine, and a spine is what this function
+            // prints — so it is flattened into the level it sits in rather
+            // than indented. Nothing builds one here, since `render_seq` is
+            // handed a spine, but a `par`'s sides are terms and may be.
+            Term::Compose(..) => {
+                let inner: Vec<Term> = node.spine().into_iter().cloned().collect();
+                render_seq(
+                    prog,
+                    &inner,
+                    indent,
+                    depth,
+                    relative,
+                    stack.clone(),
+                    view.as_deref_mut(),
+                    show_pos,
+                    show_origins,
+                    out,
+                );
+            }
+            Term::Par {
                 origins,
-                body,
+                left,
+                right,
             } => {
-                let verb = if *k == 0 {
-                    "jump".to_string()
-                } else {
-                    format!("dip {}", k)
-                };
+                // The right-hand side runs on the top of the stack and the left
+                // on what is under it, so the carve is by the right's own input
+                // arity — which for a frame is the width of its identity.
+                let hidden = term_arity(prog, right).map(|(n, _)| n).unwrap_or(0);
+                let hidden = usize::try_from(hidden).unwrap_or(0);
                 // A wrapper level added by unary expansion has no origin of its
                 // own; only the level holding the body names a sentence.
                 let head = if origins.is_empty() || !show_origins {
-                    verb
+                    "par".to_string()
                 } else {
-                    format!("{} → {}", verb, origins.join(" + "))
+                    format!("par → {}", origins.join(" + "))
                 };
                 out.push(format!("{} │ {}{} {{", gutter, pad, head));
-                // The callee cannot reach the k dipped values, but they are
-                // still on the stack, so the inner frame's entry depth is the
-                // same number the dip itself was printed with — which is what
-                // makes the hidden region visible.
+                // The left cannot reach the hidden values, but they are still
+                // on the stack, so its entry depth is the same number the `par`
+                // itself was printed with — which is what makes the window
+                // visible.
                 let inner = stack
                     .as_ref()
-                    .and_then(|s| (*k <= s.len()).then(|| s[..s.len() - k].to_vec()));
+                    .and_then(|s| (hidden <= s.len()).then(|| s[..s.len() - hidden].to_vec()));
                 render_seq(
                     prog,
-                    body,
+                    &left.spine().into_iter().cloned().collect::<Vec<_>>(),
                     indent + 1,
                     depth,
                     relative,
@@ -271,9 +297,39 @@ fn render_seq(
                     show_origins,
                     out,
                 );
-                out.push(format!("{}{} │ {}}}", close(&view), blank, pad));
+                // An identity on the right is what a hidden window is, and it
+                // is written on the closing line rather than opened up: three
+                // lines to say `id 2` would bury every listing.
+                match &**right {
+                    Term::Id(k) => out.push(format!(
+                        "{}{} │ {}}} {{ {} }}",
+                        close(&view),
+                        blank,
+                        pad,
+                        id_word(*k)
+                    )),
+                    other => {
+                        out.push(format!("{}{} │ {}}} {{", close(&view), blank, pad));
+                        let upper = stack
+                            .as_ref()
+                            .and_then(|s| (hidden <= s.len()).then(|| s[s.len() - hidden..].to_vec()));
+                        render_seq(
+                            prog,
+                            &other.spine().into_iter().cloned().collect::<Vec<_>>(),
+                            indent + 1,
+                            Some(hidden as i64),
+                            relative,
+                            upper,
+                            view.as_deref_mut(),
+                            show_pos,
+                            show_origins,
+                            out,
+                        );
+                        out.push(format!("{}{} │ {}}}", close(&view), blank, pad));
+                    }
+                }
             }
-            Node::Branch {
+            Term::Branch {
                 then_origin,
                 then_body,
                 else_origin,
@@ -291,7 +347,7 @@ fn render_seq(
                 });
                 render_seq(
                     prog,
-                    then_body,
+                    &then_body.spine().into_iter().cloned().collect::<Vec<_>>(),
                     indent + 1,
                     arm_entry,
                     relative,
@@ -314,7 +370,7 @@ fn render_seq(
                 });
                 render_seq(
                     prog,
-                    else_body,
+                    &else_body.spine().into_iter().cloned().collect::<Vec<_>>(),
                     indent + 1,
                     arm_entry,
                     relative,
@@ -326,23 +382,9 @@ fn render_seq(
                 );
                 out.push(format!("{}{} │ {}}}", close(&view), blank, pad));
             }
-            Node::Call { depth: k, target } => {
-                let verb = if *k == 0 {
-                    "jump".to_string()
-                } else {
-                    format!("dip {}", k)
-                };
-                out.push(format!(
-                    "{} │ {}{} → {}",
-                    gutter,
-                    pad,
-                    verb,
-                    prog.label(*target)
-                ));
-            }
         }
 
-        depth = match (depth, node_arity(prog, node)) {
+        depth = match (depth, term_arity(prog, node)) {
             (Some(d), Some((n, m))) => Some(d - n + m),
             _ => None,
         };

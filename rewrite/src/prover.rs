@@ -43,10 +43,10 @@
 
 use std::cell::{Cell, RefCell};
 
-use crate::applier::apply_script;
+use crate::applier::apply_script_seq;
 use crate::diff::side_by_side;
 use crate::engine::{Env, Miss, Tactic, TacticError, run as run_tactic};
-use crate::ir::{Node, Selector, same_effect, same_effect_seq};
+use crate::ir::{Selector, Term, same_effect, same_effect_seq};
 use crate::location::Location;
 use crate::print::render_nodes;
 use crate::program::Program;
@@ -61,13 +61,13 @@ use crate::rule::{Script, Step, invert};
 /// handing back a whole-term diff.
 pub(crate) struct Goal {
     pub(crate) at: Vec<(usize, Selector)>,
-    pub(crate) lhs: Vec<Node>,
-    pub(crate) rhs: Vec<Node>,
+    pub(crate) lhs: Vec<Term>,
+    pub(crate) rhs: Vec<Term>,
 }
 
 impl Goal {
     /// The whole identity, which is where every proof starts.
-    pub(crate) fn root(lhs: Vec<Node>, rhs: Vec<Node>) -> Goal {
+    pub(crate) fn root(lhs: Vec<Term>, rhs: Vec<Term>) -> Goal {
         Goal {
             at: Vec::new(),
             lhs,
@@ -75,7 +75,7 @@ impl Goal {
         }
     }
 
-    fn under(&self, index: usize, sel: Selector, lhs: Vec<Node>, rhs: Vec<Node>) -> Goal {
+    fn under(&self, index: usize, sel: Selector, lhs: Vec<Term>, rhs: Vec<Term>) -> Goal {
         let mut at = self.at.clone();
         at.push((index, sel));
         Goal { at, lhs, rhs }
@@ -103,7 +103,7 @@ pub(crate) enum Strategy {
     ///
     /// This is the shape the language wanted all along. A move rewrites **one
     /// side** and leaves a goal behind, so moves compose the way tactics do —
-    /// `cleanup ; rhs(dips)` drives the left with one and the right with the
+    /// `cleanup ; rhs(frames)` drives the left with one and the right with the
     /// other, and the two meet or they do not. What closes the sequence is the
     /// same comparison as ever: the two sides agreeing by effect.
     ///
@@ -162,7 +162,13 @@ pub(crate) enum Move {
 /// to be sequenced. An arm with no strategy given must already agree by effect,
 /// which is a claim like any other and is checked.
 pub(crate) enum Descent {
-    Body(Box<Strategy>),
+    /// The two sides of a `par`. A frame's right-hand side is an identity and
+    /// needs no strategy — leaving it out is the claim that the two sides
+    /// already agree, which is checked rather than assumed.
+    Sides {
+        left: Option<Box<Strategy>>,
+        right: Option<Box<Strategy>>,
+    },
     Arms {
         then: Option<Box<Strategy>>,
         els: Option<Box<Strategy>>,
@@ -277,8 +283,8 @@ pub(crate) enum Unproved {
 /// The goal a strategy could not close, and where it is.
 pub(crate) struct Residual {
     pub(crate) at: Vec<(usize, Selector)>,
-    pub(crate) lhs: Vec<Node>,
-    pub(crate) rhs: Vec<Node>,
+    pub(crate) lhs: Vec<Term>,
+    pub(crate) rhs: Vec<Term>,
     /// What the strategy was trying to do when it gave up.
     pub(crate) why: String,
     /// What to call the two columns.
@@ -408,7 +414,7 @@ struct Prover<'a> {
 
 /// One run of the blind engine.
 struct Ran {
-    nodes: Vec<Node>,
+    nodes: Vec<Term>,
     script: Script,
     misses: Vec<Miss>,
 }
@@ -652,113 +658,116 @@ impl Prover<'_> {
 
         match (lhs, rhs, descent) {
             (
-                Node::Dip {
-                    depth: dl,
-                    body: bl,
+                Term::Par {
+                    left: ll,
+                    right: rl,
                     ..
                 },
-                Node::Dip {
-                    depth: dr,
-                    body: br,
+                Term::Par {
+                    left: lr,
+                    right: rr,
                     ..
                 },
-                Descent::Body(inner),
-            ) => {
-                // Equal depths or the congruence does not hold: `dip 1 { A }`
-                // and `dip 2 { B }` hide different amounts of the stack, so
-                // `A = B` says nothing about them.
-                if dl != dr {
-                    return refuse(format!(
-                        "the two frames hide different depths, {} against {},\n  \
-                         so proving their bodies equal would not make them equal.",
-                        dl, dr
-                    ));
-                }
-                let sub = goal.under(0, Selector::Body, bl.clone(), br.clone());
-                let solved = self.solve(&sub, inner)?;
-                let script = lift(solved.script, &[(0, Selector::Body)], 0);
-                Ok(Solved {
-                    closed: Closed::ByParts {
-                        steps: script.len(),
-                        parts: solved.closed.parts(),
-                    },
-                    script,
-                    misses: solved.misses,
-                })
-            }
+                Descent::Sides { left, right },
+            ) => self.congruence(
+                goal,
+                &[
+                    (Selector::Left, left.as_deref(), ll, lr),
+                    (Selector::Right, right.as_deref(), rl, rr),
+                ],
+            ),
 
             (
-                Node::Branch {
+                Term::Branch {
                     then_body: tl,
                     else_body: el,
                     ..
                 },
-                Node::Branch {
+                Term::Branch {
                     then_body: tr,
                     else_body: er,
                     ..
                 },
                 Descent::Arms { then, els },
-            ) => {
-                let mut script = Script::new();
-                let mut misses = Vec::new();
-                let mut parts = 0usize;
-                for (sel, strategy, l, r) in [
-                    (Selector::Then, then, tl, tr),
-                    (Selector::Else, els, el, er),
-                ] {
-                    let sub = goal.under(0, sel, l.clone(), r.clone());
-                    match strategy {
-                        Some(strategy) => {
-                            let solved = self.solve(&sub, strategy)?;
-                            parts += solved.closed.parts();
-                            misses.extend(solved.misses);
-                            script.extend(lift(solved.script, &[(0, sel)], 0));
-                        }
-                        // An arm with no strategy is a claim that it needs no
-                        // proof, and a claim gets checked.
-                        None if same_effect_seq(l, r) => parts += 1,
-                        None => {
-                            return Err(Unproved::residual(Residual {
-                                at: sub.at,
-                                lhs: sub.lhs,
-                                rhs: sub.rhs,
-                                why: format!(
-                                    "the two `{}` arms are not already equal, and \
-                                     `descend` was\n  given no strategy for them.",
-                                    crate::location::selector_name(sel)
-                                ),
-                                labels: ("the left-hand arm", "the right-hand arm"),
-                            }));
-                        }
-                    }
-                }
-                Ok(Solved {
-                    closed: Closed::ByParts {
-                        steps: script.len(),
-                        parts,
-                    },
-                    script,
-                    misses,
-                })
-            }
+            ) => self.congruence(
+                goal,
+                &[
+                    (Selector::Then, then.as_deref(), tl, tr),
+                    (Selector::Else, els.as_deref(), el, er),
+                ],
+            ),
 
-            (Node::Dip { .. }, Node::Dip { .. }, Descent::Arms { .. }) => refuse(
-                "both sides are frames, and `descend` was given branch arms.\n  \
-                 Write `descend(body: ...)`."
+            (Term::Par { .. }, Term::Par { .. }, Descent::Arms { .. }) => refuse(
+                "both sides are `par`s, and `descend` was given branch arms.\n  \
+                 Write `descend(left: ...)`."
                     .to_string(),
             ),
-            (Node::Branch { .. }, Node::Branch { .. }, Descent::Body(_)) => refuse(
-                "both sides are branches, and `descend` was given a body.\n  \
-                 Write `descend(then: ..., else: ...)`."
+            (Term::Branch { .. }, Term::Branch { .. }, Descent::Sides { .. }) => refuse(
+                "both sides are branches, and `descend` was given the sides of a \
+                 `par`.\n  Write `descend(then: ..., else: ...)`."
                     .to_string(),
             ),
             _ => refuse(
-                "the two sides are not the same kind of node, so there is no\n  \
+                "the two sides are not the same kind of term, so there is no\n  \
                  congruence to descend through."
                     .to_string(),
             ),
         }
+    }
+
+    /// One sub-goal per part, discharged and lifted back.
+    ///
+    /// The two congruences — into a `par`, and into a branch — differ only in
+    /// which parts they name, so the rule about what a missing strategy means
+    /// is written once: **it is a claim that the part needs no proof**, and the
+    /// claim is checked rather than assumed. That is what lets
+    /// `descend(left: t)` say nothing about the identity a frame's right-hand
+    /// side is.
+    fn congruence(
+        &self,
+        goal: &Goal,
+        parts: &[(Selector, Option<&Strategy>, &Term, &Term)],
+    ) -> Result<Solved, Unproved> {
+        let mut script = Script::new();
+        let mut misses = Vec::new();
+        let mut closed = 0usize;
+        for (sel, strategy, l, r) in parts {
+            let sub = goal.under(0, *sel, (*l).clone().into_spine(), (*r).clone().into_spine());
+            match strategy {
+                Some(strategy) => {
+                    let solved = self.solve(&sub, strategy)?;
+                    closed += solved.closed.parts();
+                    misses.extend(solved.misses);
+                    script.extend(lift(solved.script, &[(0, *sel)], 0));
+                }
+                None if same_effect(l, r) => closed += 1,
+                None => {
+                    return Err(Unproved::residual(Residual {
+                        at: sub.at,
+                        lhs: sub.lhs,
+                        rhs: sub.rhs,
+                        why: format!(
+                            "the two `{}` {} are not already equal, and \
+                             `descend` was\n  given no strategy for them.",
+                            crate::location::selector_name(*sel),
+                            match sel {
+                                Selector::Then | Selector::Else => "arms",
+                                Selector::Left | Selector::Right => "sides",
+                            }
+                        ),
+                        labels: ("the left-hand arm", "the right-hand arm"),
+                    }));
+                }
+            }
+        }
+        Ok(Solved {
+            closed: Closed::ByParts {
+                steps: script.len(),
+                parts: closed,
+            },
+            script,
+            misses,
+        })
     }
 
     /// `s1 | s2`: the first that closes the goal.
@@ -808,7 +817,7 @@ impl Prover<'_> {
     fn run(
         &self,
         tactic: &Tactic,
-        nodes: Vec<Node>,
+        nodes: Vec<Term>,
         wrap: impl Fn(Box<TacticError>) -> Unproved,
     ) -> Result<Ran, Unproved> {
         let env = Env::new(self.prog, self.fuel.get(), self.check);
@@ -819,7 +828,7 @@ impl Prover<'_> {
         let (got, script) = outcome.map_err(|e| wrap(Box::new(e)))?;
 
         let mut replayed = nodes;
-        match apply_script(self.prog, &mut replayed, &script, self.check) {
+        match apply_script_seq(self.prog, &mut replayed, &script, self.check) {
             Ok(()) if replayed == got => {}
             Ok(()) => {
                 return Err(Unproved::Replay("it produced a different tree".to_string()));
@@ -836,7 +845,7 @@ impl Prover<'_> {
 
     /// `unfold_all` on one side, which is the one tactic this module supplies
     /// for itself.
-    fn unfold(&self, nodes: Vec<Node>, which: &'static str) -> Result<Ran, Unproved> {
+    fn unfold(&self, nodes: Vec<Term>, which: &'static str) -> Result<Ran, Unproved> {
         self.run(self.inline, nodes, |e| Unproved::Inlining(which, e))
     }
 }
@@ -885,7 +894,7 @@ fn merge(into: &mut Vec<(&'static str, usize)>, from: Vec<(&'static str, usize)>
 ///
 /// The suffix never reaches past the prefix: two identical sequences are all
 /// prefix, and counting them twice would take the suffix off the front.
-fn ends(lhs: &[Node], rhs: &[Node]) -> (usize, usize) {
+fn ends(lhs: &[Term], rhs: &[Term]) -> (usize, usize) {
     let prefix = lhs
         .iter()
         .zip(rhs)
@@ -923,12 +932,12 @@ mod tests {
         d
     }
 
-    fn op(inst: Instruction) -> Node {
-        Node::Op(inst)
+    fn op(inst: Instruction) -> Term {
+        Term::Op(inst)
     }
 
-    fn push(n: i64) -> Node {
-        Node::Op(Instruction::Push(Value::Int(n)))
+    fn push(n: i64) -> Term {
+        Term::Op(Instruction::Push(Value::Int(n)))
     }
 
     /// Runs a strategy against a goal spelled out as nodes, and returns either
@@ -976,7 +985,7 @@ mod tests {
     #[test]
     fn peeling_strips_what_both_sides_share_and_proves_the_rest() {
         // `drop ; is_bool is_bool ; drop` against `drop ; drop 0 push true ; drop`.
-        let shared = |mid: Vec<Node>| {
+        let shared = |mid: Vec<Term>| {
             let mut out = vec![op(Instruction::Drop)];
             out.extend(mid);
             out.push(op(Instruction::Drop));
@@ -1056,11 +1065,13 @@ mod tests {
     /// inside a branch arm, which no amount of inlining reconciles.
     #[test]
     fn descending_proves_one_arm_and_checks_the_other() {
-        let branch = |then_body: Vec<Node>| Node::Branch {
-            then_origin: "<test>".to_string(),
-            then_body,
-            else_origin: "<test>".to_string(),
-            else_body: vec![op(Instruction::Drop)],
+        let branch = |then_body: Vec<Term>| {
+            Term::branch(
+                "<test>",
+                Term::seq(then_body),
+                "<test>",
+                op(Instruction::Drop),
+            )
         };
         let goal = Goal::root(
             vec![branch(vec![
@@ -1097,11 +1108,13 @@ mod tests {
     /// checked rather than assumed.
     #[test]
     fn an_arm_left_out_must_already_agree() {
-        let branch = |else_body: Vec<Node>| Node::Branch {
-            then_origin: "<test>".to_string(),
-            then_body: vec![op(Instruction::Drop)],
-            else_origin: "<test>".to_string(),
-            else_body,
+        let branch = |else_body: Vec<Term>| {
+            Term::branch(
+                "<test>",
+                op(Instruction::Drop),
+                "<test>",
+                Term::seq(else_body),
+            )
         };
         let goal = Goal::root(vec![branch(vec![push(1)])], vec![branch(vec![push(2)])]);
         let err = attempt(
@@ -1127,23 +1140,27 @@ mod tests {
     }
 
     #[test]
-    fn frames_hiding_different_depths_do_not_descend() {
-        let dip = |depth: usize| Node::Dip {
-            depth,
-            origins: Vec::new(),
-            body: vec![op(Instruction::Drop)],
-        };
-        let goal = Goal::root(vec![dip(1)], vec![dip(2)]);
+    fn pars_hiding_different_widths_do_not_descend() {
+        // `par { A } { id 1 }` and `par { B } { id 2 }` pass different amounts
+        // of the stack through, so `A = B` says nothing about them — and with
+        // no strategy given for the right-hand sides, the claim that those
+        // already agree is what fails.
+        let frame = |k: usize| Term::frame(Vec::new(), k, op(Instruction::Drop));
+        let goal = Goal::root(vec![frame(1)], vec![frame(2)]);
         let err = attempt(
             goal,
-            &Strategy::Descend(Descent::Body(Box::new(Strategy::Sequence {
-                moves: vec![Move::Left(id())],
-                then: None,
-            }))),
+            &Strategy::Descend(Descent::Sides {
+                left: Some(Box::new(Strategy::Sequence {
+                    moves: vec![Move::Left(id())],
+                    then: None,
+                })),
+                right: None,
+            }),
         )
         .err()
-        .expect("different depths");
-        assert!(why(err).contains("different depths"));
+        .expect("different widths");
+        let why = why(err);
+        assert!(why.contains("`right` sides are not already equal"), "{}", why);
     }
 
     #[test]
@@ -1154,10 +1171,13 @@ mod tests {
         );
         let err = attempt(
             goal,
-            &Strategy::Descend(Descent::Body(Box::new(Strategy::Sequence {
-                moves: vec![Move::Left(id())],
-                then: None,
-            }))),
+            &Strategy::Descend(Descent::Sides {
+                left: Some(Box::new(Strategy::Sequence {
+                    moves: vec![Move::Left(id())],
+                    then: None,
+                })),
+                right: None,
+            }),
         )
         .err()
         .expect("two nodes against one");
@@ -1251,7 +1271,6 @@ mod tests {
     fn a_lifted_script_addresses_the_enclosing_sequence() {
         let step = |loc: Location| Step {
             kind: StepKind::Unfold {
-                depth: 0,
                 target: SentenceIndex::from(0),
             },
             dir: Direction::Forward,
