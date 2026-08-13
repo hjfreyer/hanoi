@@ -52,38 +52,25 @@ pub enum Annotation<Ref> {
     Arity(i64, i64),
     Precondition(Ref),
     Postcondition(Ref),
-    /// This sentence cannot fail: it neither executes `panic`, `assert` or
-    /// `assert_eq` nor reaches anything that does.
-    ///
-    /// A claim, checked by [`crate::arity::check_totality`]. It is opt-in — an
-    /// unannotated sentence says nothing, rather than saying it may fail — so
-    /// generated code and branch arms need no special treatment. The `type` and
-    /// `enum` sugar puts it on the checks it generates.
-    Total,
 }
 
 /// An annotation as it appears in a compiled [`Library`].
 pub type SentenceAnnotation = Annotation<SentenceIndex>;
 
+/// What a sentence, or one instruction of one, takes off the stack and leaves
+/// on it.
+///
+/// A pair, with nothing to say about a program that does not answer: no
+/// instruction can end a run any more, so every sentence has both numbers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Arity {
-    Normal { inputs: i64, outputs: i64 },
-    Panic { inputs: i64 },
+pub struct Arity {
+    pub inputs: i64,
+    pub outputs: i64,
 }
 
 impl Arity {
-    pub fn inputs(&self) -> i64 {
-        match *self {
-            Arity::Normal { inputs, .. } => inputs,
-            Arity::Panic { inputs } => inputs,
-        }
-    }
-
-    pub fn outputs(&self) -> Option<i64> {
-        match *self {
-            Arity::Normal { outputs, .. } => Some(outputs),
-            Arity::Panic { .. } => None,
-        }
+    pub fn net(&self) -> i64 {
+        self.outputs - self.inputs
     }
 }
 

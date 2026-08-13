@@ -2072,8 +2072,8 @@ fn leading_copy_block(arm: &[Node]) -> usize {
 ///
 /// Terms are built from instructions and frames and never name a sentence, so
 /// this answers without a library — which is what lets a tactic be compiled
-/// before a program is loaded. `None` for anything whose reckoning stops, which
-/// for a term means a `panic`.
+/// before a program is loaded. `None` for a term that named a sentence after
+/// all, which is the one thing a library is needed for.
 pub(crate) fn term_arity(nodes: &[Node]) -> Option<(i64, i64)> {
     let mut inputs = 0i64;
     let mut size = 0i64;
@@ -4245,10 +4245,8 @@ mod tests {
 
     #[test]
     fn share_needs_a_term_it_can_state_the_law_at() {
-        assert!(Share::new(None, Vec::new()).is_err());
-        // `panic` has no arity, so there is no saying what it reads or leaves.
-        let err = Share::new(None, vec![op(Instruction::Panic)]).unwrap_err();
-        assert!(err.contains("arity"), "{}", err);
+        let err = Share::new(None, Vec::new()).unwrap_err();
+        assert!(err.contains("nothing there"), "{}", err);
     }
 
     #[test]
@@ -4390,13 +4388,6 @@ mod tests {
         let got = fire(&Sink, &prog(), &w).unwrap();
         assert!(matches!(got[0], Node::Call { depth: 2, .. }));
         assert_eq!(got[1], op(Instruction::Add));
-    }
-
-    #[test]
-    fn sink_declines_past_a_panic() {
-        // `panic` has no arity, so nothing can be said about moving past it.
-        let w = [op(Instruction::Panic), dip(3, vec![])];
-        assert!(Sink.plan(&prog(), &w).is_none());
     }
 
     #[test]
@@ -4686,9 +4677,8 @@ mod tests {
 
     #[test]
     fn annihilate_reaches_a_frame_the_old_whitelist_refused() {
-        // Under the global precondition there is no hidden `assert`, so a
-        // framed computation annihilates like any other. `dip 1 { equal }` is
-        // (3 -> 2).
+        // Nothing can fail, so a framed computation annihilates like any
+        // other. `dip 1 { equal }` is (3 -> 2).
         let w = [
             dip(1, vec![op(Instruction::Equal)]),
             op(Instruction::Drop),
@@ -4939,7 +4929,6 @@ mod tests {
     #[test]
     fn introduce_refuses_a_term_with_no_arity() {
         assert!(Introduce::new(None, Vec::new()).is_err());
-        assert!(Introduce::new(None, vec![op(Instruction::Panic)]).is_err());
     }
 
     #[test]
@@ -4965,7 +4954,6 @@ mod tests {
             Some((3, 2))
         );
         assert_eq!(term_arity(&[]), Some((0, 0)));
-        assert_eq!(term_arity(&[op(Instruction::Panic)]), None);
     }
 
     // -- the registry -------------------------------------------------------
@@ -5019,7 +5007,6 @@ mod tests {
             op(Instruction::Push(Value::Bool(true))),
             op(Instruction::Tuple(2)),
             op(Instruction::Untuple(2)),
-            op(Instruction::Panic),
             dip(0, vec![op(Instruction::Add)]),
             dip(1, vec![op(Instruction::Not)]),
             dip(2, vec![dip(1, vec![op(Instruction::Add)])]),

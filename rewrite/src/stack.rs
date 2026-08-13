@@ -253,14 +253,7 @@ fn op(inst: &Instruction, s: &mut Vec<Rc<Term>>, fresh: &mut Fresh) -> bool {
             // flag is a fresh opaque slot rather than a claim.
             s.push(fresh.next());
         }
-        Instruction::Assert => {
-            pop!();
-        }
-        Instruction::AssertEqual => {
-            pop!();
-            pop!();
-        }
-        // Panic ends the run; Dip/Branch never reach here.
+        // Dip and Branch never reach here.
         _ => {
             let _ = fresh;
             return false;

@@ -6,14 +6,12 @@
 // the error back as its own answer.
 
 mod result {
-    #[total]
     #[arity(1, 1)]
     sentence ok {
         push crate::prelude::ok
         tuple 2
     }
 
-    #[total]
     #[arity(1, 1)]
     sentence err {
         push crate::prelude::err
@@ -50,9 +48,9 @@ sentence halve {
     }
 }
 
-// Nothing but the unwrap: `?` adds no way to fail, so a sentence made of one
-// can claim totality.
-#[total]
+// Nothing but the unwrap: `?` reads the flag `untuple` leaves rather than
+// relying on the shape, so a value that is not a result comes back as an error
+// carrying that value.
 #[arity(1, 1)]
 sentence unwrap {
     ?

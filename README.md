@@ -12,9 +12,10 @@ Hanoi is a stack-oriented, VM-executed language designed to explore static analy
 - **Stack-Oriented Execution**: A clean, instruction-driven virtual machine that uses a stack for operations, featuring standard manipulations (`drop`, `pick`, `roll`), arithmetic, and tuple structuring.
 - **Scoped Stack Frames**: `dip N { ... }` runs a block with the top `N` stack values hidden from it, so the arity checker can treat those values as unchanged across the call rather than tracking them through it.
 - **CSP State Machine Modeling**: Fully implements Communicating Sequential Processes (CSP) state machines. State machines are represented as modules with standardized hooks for managing state transitions, internal execution steps, and termination. See the [CSP Machines Documentation](docs/machines.md) for details.
-- **Static Safety & Behavior Contracts** *(annotations only — verifier temporarily removed)*: Functions can be annotated with a precondition (`#[precondition(fn_name)]`), a postcondition (`#[postcondition(fn_name)]`), or a totality claim (`#[total]`). `#[total]` is checked by the compiler; the precondition and postcondition annotations are parsed and preserved, but the Z3-backed static verifier that proved them has been removed for now. See [docs/typecheck.md](docs/typecheck.md) for the design.
+- **Static Safety & Behavior Contracts** *(annotations only — verifier temporarily removed)*: Functions can be annotated with a precondition (`#[precondition(fn_name)]`) or a postcondition (`#[postcondition(fn_name)]`). Both are parsed and preserved, but the Z3-backed static verifier that proved them has been removed for now. See [docs/typecheck.md](docs/typecheck.md) for the design.
 - **`type` / `enum` Predicate Sugar**: Declare reusable value predicates with `type Name <spec>;` (primitives — `int`, `bool`, `const_string`, `symbol`, `tuple` — literals, tuples, and `|`-unions) or `enum Name { Variant(spec, ...), ... }`, which expand into `Name::check` sentences usable directly as preconditions/postconditions.
-- **Result-Answering Tests**: A `test sentence` hands back `((), ok)` or `(payload, err)` rather than halting the VM, built from `check_equals` and carried out by `?`. A failing test prints what it saw — `FAILED (err (5, 6))` — instead of stopping at an `assert`. See [the reference](docs/hana.md#tests).
+- **Nothing Fails**: Every instruction answers on every input. A data operation off its domain returns a deterministic default, and the twelve **fallible** ones leave a `bool` saying they did. There is no `panic`, no `assert`, and no way for a program to end a run over a value — a problem is reported by answering with one. See [docs/totality.md](docs/totality.md).
+- **Result-Answering Tests**: A `test sentence` hands back `((), ok)` or `(payload, err)` rather than halting the VM, built from `check_equals` and carried out by `?`. A failing test prints what it saw — `FAILED (err (5, 6))`. See [the reference](docs/hana.md#tests).
 - **`?` for Results**: A result is the 2-tuple `(value, ok)` or `(value, err)`, and `?` unwraps one or leaves the block early carrying the error. It is sugar for two branches with the rest of the block inside an arm — including the drops that make the early return leave the stack the way finishing would. See [the reference](docs/hana.md#the--operator).
 - **Static Arity Verification**: An arity checker runs before execution to ensure that stack push/pop operations match function signatures, avoiding runtime stack underflows.
 - **No Recursion**: A sentence may not reach itself, by any route, and the compiler refuses one that does. Arity inference is what enforces it — a cycle is where inference cannot terminate — so every sentence has an inferred arity and a finite expansion, and a loop is written as the steps it takes. See [the reference](docs/hana.md#recursion-is-forbidden).
@@ -48,7 +49,6 @@ Sentences and functions can be annotated with metadata used by the compiler and 
 - `#[arity(inputs, outputs)]`: Declares the expected stack transition (implicit `#[arity(1, 1)]` for `function`).
 - `#[precondition(fn_name)]`: Names a `1 -> 1` function that must evaluate to `true` on the input for the annotated function to be considered safe to call.
 - `#[postcondition(fn_name)]`: Names a `1 -> 1` function that must evaluate to `true` on the output, given the precondition (if any) held on the input.
-- `#[total]`: Declares that the sentence cannot fail — it neither executes `panic`, `assert` or `assert_eq` nor reaches anything that does. **Checked** by the compiler, and opt-in: an unannotated sentence makes no claim. See [docs/totality.md](docs/totality.md).
 
 ### Example: Contract Annotation & Verification
 ```hana
@@ -60,12 +60,6 @@ function is_int_fn {
 #[postcondition(is_int_fn)]
 function identity {
     // returns input unchanged
-}
-
-#[total]
-function noop {
-    pick 0
-    drop 1
 }
 ```
 
@@ -81,15 +75,15 @@ enum MyEnum {
     Case3(),
 }
 
-#[arity(0, 0)]
+#[arity(0, 2)]
 sentence test_type_and_enum {
     push 42
     jump TestInt::check
-    assert
+    // Stack: [true]
 
     push ((42, true), MyEnum::Case1::tag)
     jump MyEnum::check
-    assert
+    // Stack: [true, true]
 }
 ```
 Each `type`/`enum` declaration expands into a module with a `check` sentence (`Name::check`) that consumes a value and pushes a `Bool`, so it can be used directly as a `#[precondition(...)]` or `#[postcondition(...)]`. See [docs/typecheck.md](docs/typecheck.md) for the verification model design (currently unimplemented) and [docs/hana.md](docs/hana.md) for the complete `type`/`enum` grammar.
@@ -128,7 +122,7 @@ The Hanoi VM supports a rich instruction set categorized into five main domains:
 | :--- | :--- | :--- |
 | **Stack Ops** | `Push(V)`, `Drop`, `Pick(d)`, `Roll(d)` | Standard stack push, pop, copy/peek at depth, and rotate. `Pick` and `Roll` are the only instructions that address below the top of the stack. |
 | **Arithmetic & Logic** | `Add`, `Subtract`, `Multiply`, `Divide`, `Modulo`, `Negate`, `Equal`, `Greater`, `Less`, `Not`, `And`, `Or` | Basic mathematical and Boolean logic operations. |
-| **Control Flow** | `Dip(n, S)`, `Branch(S1, S2)`, `Panic`, `Assert`, `AssertEqual` | Subroutine execution under a hidden region of the stack (a plain `jump` is `Dip(0, S)`), conditional branching, and explicit panics. |
+| **Control Flow** | `Dip(n, S)`, `Branch(S1, S2)` | Subroutine execution under a hidden region of the stack (a plain `jump` is `Dip(0, S)`), and conditional branching. |
 | **Composite Types** | `Tuple(n)`, `Untuple(n)`, `ConstStringLen`, `ConstStringCharAt`, `TupleLength` | Constructing and destructuring tuples, and reading the length and characters of const strings. |
 | **Type Predicates** | `IsInt`, `IsBool`, `IsConstString`, `IsSymbol`, `IsTuple` | Runtime type tests, also used internally to compile `type`/`enum` predicates. |
 

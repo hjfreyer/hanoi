@@ -2,10 +2,11 @@
 
 This document catalogs every instruction (opcode) available in Hanoi Assembly, organized by functionality.
 
-**Every data operation is total.** An instruction applied to operands it was not
-written for does not fail; it returns a deterministic default. Only `panic`,
-`assert` and `assert_eq` can halt a run for a reason about values. A sentence
-may claim it reaches none of them with `#[total]`, which the compiler checks.
+**Every operation is total.** An instruction applied to operands it was not
+written for does not fail; it returns a deterministic default. Nothing here can
+halt a run for a reason about values — the three instructions that could
+(`panic`, `assert` and `assert_eq`) are gone, and so is the `#[total]`
+annotation that existed to say a sentence avoided them.
 
 Twelve instructions are additionally **fallible**: they leave a `bool` — written
 `ok` in the transitions below — on top of their result saying whether the answer
@@ -80,18 +81,17 @@ fails too, being unordered rather than non-numeric.
 
 ---
 
-## 4. Control Flow & Validation
+## 4. Control Flow
 
-These instructions control execution flow, jumps, and validation assertions.
+These instructions control execution flow and jumps. None of them can end a
+run: the way to report a problem is to answer with one, which is what `?` is
+for.
 
 | Mnemonic | Syntax | Stack Transition | Description |
 | :--- | :--- | :--- | :--- |
 | `jump` | `jump <target>` | `[...] -> [...]` | Pushes the return address onto the call stack and transfers execution to the subroutine `<target>`. |
 | `dip` | `dip <count>? <target>` | `[..., v_{k-1}, ..., v_0] -> [..., v_{k-1}, ..., v_0]` | Hides the top `<count>` values (default 1), runs `<target>` on what remains, then restores the hidden values on top of its results. `dip 0 <target>` is exactly `jump <target>`. |
 | `branch` | `branch { then } { else }` | `[..., cond] -> [...]` | Pops $cond$. Executes the `then` block if $cond$ is exactly `true`, and the `else` block on **every** other value. |
-| `panic` | `panic` | `[...] -> [halt]` | Halts VM execution immediately with a failure status. This and the two below are the only instructions that can, and a sentence reaching any of them cannot claim `#[total]`. |
-| `assert` | `assert` | `[..., cond] -> [...]` | Pops $cond$. Halts and panics only if $cond$ is exactly `false`; anything else is truthy and passes. See `docs/totality.md`. |
-| `assert_equal` | `assert_eq` | `[..., a, b] -> [...]` | Pops $a$ and $b$. Halts and panics if $a \neq b$. |
 | `try` | `?` | `[..., (v, ok)] -> [..., v]`, or the block ends with `[..., (v, err)]` | Unwraps a result, or leaves the block early carrying the error. Sugar: it compiles to two branches, with everything written after it inside an arm. Total — a value that is not a 2-tuple is treated as an error carrying that value. See [docs/hana.md](hana.md#the--operator). |
 
 ---

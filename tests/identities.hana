@@ -13,7 +13,6 @@ symbol some_sym
 // is, branch on it and push back the literal that branching just told you it
 // was. The guard is what makes it unconditional — on anything that is not a
 // boolean the block does nothing at all.
-#[total]
 function split_bool {
     pick 0
     is_bool
@@ -79,17 +78,17 @@ test sentence a_computation_that_leaves_nothing_is_a_drop {
 // The same value tested twice answers the same, so the arm the outer branch
 // took already decides the inner one. Read at the then arm the value is
 // truthy; at the else arm it is `false`, which is the only falsy value.
-#[total] #[arity(1,1)] function retest_then_lhs {
+#[arity(1,1)] function retest_then_lhs {
     pick 0 branch { branch { push 1 } { push 2 } } { drop 0 push 9 } }
-#[total] #[arity(1,1)] function retest_then_rhs {
+#[arity(1,1)] function retest_then_rhs {
     pick 0 branch { drop 0 push 1 } { drop 0 push 9 } }
-#[total] #[arity(1,1)] function retest_else_lhs {
+#[arity(1,1)] function retest_else_lhs {
     pick 0 branch { drop 0 push 9 } { branch { push 3 } { push 4 } } }
-#[total] #[arity(1,1)] function retest_else_rhs {
+#[arity(1,1)] function retest_else_rhs {
     pick 0 branch { drop 0 push 9 } { drop 0 push 4 } }
-#[total] #[arity(1,1)] function retest_both_lhs {
+#[arity(1,1)] function retest_both_lhs {
     pick 0 branch { branch { push 1 } { push 2 } } { branch { push 3 } { push 4 } } }
-#[total] #[arity(1,1)] function retest_both_rhs { branch { push 1 } { push 4 } }
+#[arity(1,1)] function retest_both_rhs { branch { push 1 } { push 4 } }
 
 test sentence a_value_tested_twice_answers_the_same {
     push true  jump retest_then_lhs push 1 jump crate::prelude::check_equals ? drop 0
@@ -265,9 +264,9 @@ test sentence building_and_taking_apart_literals {
 // `equal` is structural identity on every value the machine has, so the law
 // holds unconditionally — floats, where `0.0 == -0.0` answers `true` on two
 // values that stay distinguishable, were the one exception and are gone.
-#[total] #[arity(1,1)] function specialize_lhs {
+#[arity(1,1)] function specialize_lhs {
     pick 0 push 7 equal branch { push 7 equal } { drop 0 push false } }
-#[total] #[arity(1,1)] function specialize_rhs {
+#[arity(1,1)] function specialize_rhs {
     pick 0 push 7 equal branch { drop 0 push 7 push 7 equal } { drop 0 push false } }
 
 test sentence a_value_equal_to_a_literal_is_that_literal {
@@ -309,7 +308,6 @@ test sentence building_and_taking_apart_leaves_the_flag {
 // original, or run it once and copy the outputs. The one law here that needs X
 // to be *deterministic* — every other equation is sound even for an X that
 // answered differently each time — so it is the one most worth running.
-#[total]
 function classify { pick 0 is_int branch { drop 0 push 7 } { drop 0 push 8 } }
 
 test sentence copying_inputs_is_copying_outputs {
@@ -406,7 +404,6 @@ identity discarded_work_on_copies { pick 1 pick 1 equal drop 0 } = { };
 // what the left reached meeting what the right unfolds to. That is one
 // derivation still — the fold-back is the right-hand side's own unfold script,
 // read backwards.
-#[total]
 function drop_and_true { drop 0 push true }
 
 identity testing_a_test_by_name { is_bool is_bool } = { jump drop_and_true };

@@ -25,7 +25,6 @@ use crate::ast::{
     ParsedInstruction, ParsedSentence, ParsedValue, PrimitiveType, SentenceDecl, SourceAnnotation,
     SymbolDecl, Target, TypeSpec,
 };
-use crate::library::Annotation;
 use crate::resolve::{Path, PathSegment};
 
 /// Lowers a parsed module body into core items.
@@ -415,19 +414,15 @@ fn lower_enum(decl: sugar::EnumDecl) -> Result<core::Item, String> {
     Ok(plain_mod(decl.name, items))
 }
 
-/// Builds the exported, total `check` predicate for a spec.
+/// Builds the exported `check` predicate for a spec.
 ///
 /// A tuple spec asks `untuple` the shape question directly rather than guarding
-/// it, so the success flag *is* the test. That keeps the sentence total — the
-/// answer on the failing side is a `branch` arm, not an `assert`.
+/// it, so the success flag *is* the test: the answer on the failing side is a
+/// `branch` arm rather than something that stops.
 fn check_sentence(
     spec: &TypeSpec,
-    mut annotations: Vec<SourceAnnotation>,
+    annotations: Vec<SourceAnnotation>,
 ) -> Result<SentenceDecl, String> {
-    if !annotations.contains(&Annotation::Total) {
-        annotations.push(Annotation::Total);
-    }
-
     Ok(SentenceDecl {
         name: "check".to_string(),
         body: ParsedSentence {

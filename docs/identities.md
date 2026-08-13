@@ -40,10 +40,10 @@ second spelling would buy nothing and cost the consistency between them. A body
 is whatever a sentence body is, so `branch { } { }` and `dip 1 { ... }` work
 inside one for free.
 
-`#[arity(n, m)]` and `#[total]` are the annotations an identity may carry, each
-a claim both sides answer for independently. The rest name properties of a
-sentence *being called*, which an identity is not, so they are refused rather
-than ignored — an annotation nothing reads is a lie. `export` and `test` are
+`#[arity(n, m)]` is the annotation an identity may carry, a claim both sides
+answer for independently. The rest name properties of a sentence *being
+called*, which an identity is not, so they are refused rather than ignored — an
+annotation nothing reads is a lie. `export` and `test` are
 refused for the same reason: nothing calls an identity and nothing runs it.
 
 ### It is core, not sugar

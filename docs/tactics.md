@@ -750,9 +750,9 @@ A term is a run of instructions in braces. `pick n`, `roll n`, `tuple n`,
 (`drop`, `not`, `and`, `equal`, `is_bool`, `add`, …). `--list-rules` prints the
 list.
 
-`panic`, `assert` and `assert_eq` are absent on purpose: they are the three
-instructions that can fail, and introducing one would break the precondition
-every equation is stated under.
+Every instruction is spellable, which was not always so: `panic`, `assert` and
+`assert_eq` were left out on purpose, being the three that could fail. They are
+gone from the language now, so there is nothing to leave out.
 
 **A branch used to be absent too**, on the grounds that it needs two blocks and
 a condition and so reads as a program rather than a term. That was wrong about
@@ -839,11 +839,10 @@ silent hazard. **`vm` measures it** rather than restating it, running every
 binary instruction on every pair of value shapes both ways round and holding the
 list to what it finds.
 
-That measurement earned its keep immediately. `assert_eq` looks commutative — it
-fails exactly when `a != b`, which is symmetric — and is not: the diagnostic it
-fails *with* names the operands in the order given, so the two readings are
-observably different. It is excluded, and nothing is lost, because the tool
-refuses any sentence that can reach an `assert_eq` anyway.
+That measurement earned its keep immediately. `assert_eq` — an instruction the
+language has since dropped — looked commutative, failing exactly when `a != b`,
+which is symmetric. It was not: the diagnostic it failed *with* named the
+operands in the order given, so the two readings were observably different.
 
 The flag a fallible operator leaves is symmetric too, so this holds for `add` on
 operands it cannot add: `0, false` either way round.
@@ -1281,49 +1280,37 @@ the only unbounded construct — and later definitions shadow earlier ones, so
 
 ## Precondition: total
 
-The tool refuses one kind of root.
+The tool refuses no roots at all, and it is worth recording that it used to
+refuse two.
 
-There used to be two. The other was a recursive root, which had no finite
-expansion to work with — but recursion is forbidden now, and `check_arities`
-refuses a sentence that reaches itself, so *every* sentence in a library that
-compiled has a finite expansion and there is nothing left to ask. See
+One was a recursive root, which had no finite expansion to work with — but
+recursion is forbidden now, and `check_arities` refuses a sentence that reaches
+itself, so *every* sentence in a library that compiled has a finite expansion
+and there is nothing left to ask. See
 [hana.md](hana.md#recursion-is-forbidden).
 
-**Able to fail**, because the equations assume totality:
+The other was a root **able to fail**, because the equations assume totality.
+`panic`, `assert` and `assert_eq` were the three instructions that could fail,
+and a sentence reaching any of them — directly or through a call — was turned
+away. They are gone from the language, so every sentence is total and the
+precondition is discharged by construction rather than checked.
 
-```
-error: the left-hand side cannot be rewritten.
+That is what lets `annihilate` ask only for an arity where the old rule needed a
+syntactic whitelist to keep a buried `assert` from being dropped along with its
+results.
 
-  'queue::queue::accept' can fail
+### What that restriction cost, measured
 
-  It reaches a `panic`, an `assert` or an `assert_eq`, directly or
-  through a call. ...
-```
+It was expensive while it lasted, and the number is worth keeping because it is
+what motivated getting rid of it. Two thirds of the sentences were admissible —
+**but only about a fifth of the corpus by node count, and a few percent by
+rewriting work done.** The admissible sentences were the small generated
+accessors and predicates; the substantial code said `assert`, because a sentence
+that untupled a value it had no reason to trust said so, and saying so is what
+made it fallible.
 
-There is no command above that block, and there cannot be: both binaries check
-this before rewriting anything, and the only way to hand either one a fallible
-term is to state an identity over it — which a corpus that must prove everything
-it states will not accept. So the message is quoted rather than run.
-`prove::tests::a_side_that_can_fail_is_refused_in_rewrites_own_words` is what
-keeps the quote honest.
-
-Both properties are closed over reachability, so refusing the root refuses every
-node any tree can come to hold. That is what lets `annihilate` ask only for an
-arity where the old rule needed a syntactic whitelist to keep a buried `assert`
-from being dropped along with its results.
-
-### What that restriction costs, measured
-
-It is expensive on the current corpus, and the number is worth having in front
-of you. Two thirds of the sentences are admissible — **but only about a fifth of
-the corpus by node count, and a few percent by rewriting work done.** The
-admissible sentences are the small generated accessors and predicates; the
-substantial code says `assert`, because since fallible instructions started
-reporting with a flag, a sentence that untuples a value it has no reason to
-trust says so, and saying so is what makes it fallible (see `docs/totality.md`).
-
-The consequence is visible in a trace: the movement laws run freely while the
-value laws have almost nothing to act on.
+The consequence was visible in a trace: the movement laws ran freely while the
+value laws had almost nothing to act on.
 
 ```
 $ rewrite tests state_check -t 'exact(unfold_all; all)' --trace
@@ -1338,13 +1325,11 @@ inlining, and a closed goal prints where the two sides *met* rather than what
 the tactic did on the way. The counts are the search's and would be printed
 either way — a route that does not work out still cost what it cost.
 
-Worth knowing: only **two** of the thirteen equations actually need totality.
-`annihilate` needs it because dropping `X`'s results still has to run `X` if `X`
-can fail, and `interchange` needs it because reordering is only unobservable
-when the failure order cannot be seen. The other eleven are sound on fallible
-code as written. Lifting the restriction therefore means giving those two their
-own side conditions rather than taking one for the whole run.
-
+Worth knowing either way: only **two** of the thirteen equations actually need
+totality. `annihilate` needs it because dropping `X`'s results still has to run
+`X` if `X` can fail, and `interchange` needs it because reordering is only
+unobservable when the failure order cannot be seen. The other eleven were sound
+on fallible code as written.
 ## The governing invariant, in three parts
 
 The old rule was: *a tactic's result depends only on the sequence it is given,

@@ -849,10 +849,10 @@ pub(crate) const TERM_ORIGIN: &str = "<term>";
 
 /// What a term may hold, for an error message.
 ///
-/// `panic`, `assert` and `assert_eq` are absent on purpose: they are the three
-/// instructions that can fail, and the whole tool is restricted to code that
-/// cannot. Introducing one would break the precondition every equation is
-/// stated under.
+/// Every instruction is here. Three once were not — `panic`, `assert` and
+/// `assert_eq`, the three that could fail — since every equation is stated
+/// about code that cannot. They are gone from the language, so the exception
+/// is too.
 const INSTRUCTION_WORDS: &[&str] = &[
     "pick n",
     "branch { .. } { .. }",
@@ -2197,7 +2197,7 @@ mod tests {
 
     #[test]
     fn a_term_that_cannot_be_used_says_why() {
-        // `panic` has no arity, so there is no saying what it discards.
+        // `panic` is not a word the language has any more.
         let e = err("each(introduce { panic })");
         assert!(e.contains("not an instruction"), "{}", e);
         // And one that consumes nothing is refused with its own reason.
@@ -2478,7 +2478,7 @@ mod tests {
     #[test]
     fn a_proof_may_name_a_sentence_in_a_term() {
         let lib = corpus(
-            "#[total] function classify { pick 0 is_int branch { drop 0 push 7 } { drop 0 push 8 } }\n\
+            "function classify { pick 0 is_int branch { drop 0 push 7 } { drop 0 push 8 } }\n\
              identity foo { drop 0 } = { drop 0 };",
         );
         hant(&lib, "proof foo = try(once(share { jump classify }));").expect("parses");
