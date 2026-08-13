@@ -10,7 +10,8 @@ Hanoi is a stack-oriented, VM-executed language designed to explore static analy
 ## Key Features
 
 - **Stack-Oriented Execution**: A clean, instruction-driven virtual machine that uses a stack for operations, featuring standard manipulations (`drop`, `pick`, `roll`), arithmetic, and tuple structuring.
-- **Scoped Stack Frames**: `dip N { ... }` runs a block with the top `N` stack values hidden from it, so the arity checker can treat those values as unchanged across the call rather than tracking them through it.
+- **Scoped Stack Frames**: `dip N { ... }` runs a block with the top `N` stack values hidden from it, so the arity checker can treat those values as unchanged across the call rather than tracking them through it. The instruction hides exactly one; `N` of them nested is what a width means.
+- **Movement Without Depths**: the ISA moves values with `drop`, `copy`, `swap` and a one-deep `dip`, and nothing else. `pick d`, `roll d`, `drop d` and `dip N` are still what a program says, and the compiler writes each as the frames it stands for — a depth in an instruction is a pointer into the stack, and every law about one was an infinite family indexed by that pointer. See [docs/compilation.md](docs/compilation.md#why-the-depths-go-and-what-it-costs).
 - **CSP State Machine Modeling**: Fully implements Communicating Sequential Processes (CSP) state machines. State machines are represented as modules with standardized hooks for managing state transitions, internal execution steps, and termination. See the [CSP Machines Documentation](docs/machines.md) for details.
 - **Static Safety & Behavior Contracts** *(annotations only — verifier temporarily removed)*: Functions can be annotated with a precondition (`#[precondition(fn_name)]`) or a postcondition (`#[postcondition(fn_name)]`). Both are parsed and preserved, but the Z3-backed static verifier that proved them has been removed for now. See [docs/typecheck.md](docs/typecheck.md) for the design.
 - **`type` / `enum` Predicate Sugar**: Declare reusable value predicates with `type Name <spec>;` (primitives — `int`, `bool`, `const_string`, `symbol`, `tuple` — literals, tuples, and `|`-unions) or `enum Name { Variant(spec, ...), ... }`, which expand into `Name::check` sentences usable directly as preconditions/postconditions.
@@ -120,9 +121,9 @@ The Hanoi VM supports a rich instruction set categorized into five main domains:
 
 | Category | Instructions | Description |
 | :--- | :--- | :--- |
-| **Stack Ops** | `Push(V)`, `Drop`, `Pick(d)`, `Roll(d)` | Standard stack push, pop, copy/peek at depth, and rotate. `Pick` and `Roll` are the only instructions that address below the top of the stack. |
+| **Stack Ops** | `Push(V)`, `Drop`, `Copy`, `Swap` | Push, discard, duplicate the top value, exchange the top two. **No instruction takes a depth.** The surface language's `pick d`, `roll d` and `drop d` are spellings the compiler expands into frames around these. |
 | **Arithmetic & Logic** | `Add`, `Subtract`, `Multiply`, `Divide`, `Modulo`, `Negate`, `Equal`, `Greater`, `Less`, `Not`, `And`, `Or` | Basic mathematical and Boolean logic operations. |
-| **Control Flow** | `Dip(n, S)`, `Branch(S1, S2)` | Subroutine execution under a hidden region of the stack (a plain `jump` is `Dip(0, S)`), and conditional branching. |
+| **Control Flow** | `Jump(S)`, `Dip(S)`, `Branch(S1, S2)` | A call, a call under **one** hidden value, and conditional branching. `dip 3 { ... }` is three frames nested: a hidden region's width is a shape rather than a number, so no equation does arithmetic on it. |
 | **Composite Types** | `Tuple(n)`, `Untuple(n)`, `ConstStringLen`, `ConstStringCharAt`, `TupleLength` | Constructing and destructuring tuples, and reading the length and characters of const strings. |
 | **Type Predicates** | `IsInt`, `IsBool`, `IsConstString`, `IsSymbol`, `IsTuple` | Runtime type tests, also used internally to compile `type`/`enum` predicates. |
 

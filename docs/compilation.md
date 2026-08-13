@@ -25,9 +25,9 @@ write a `SentenceIndex`, so bytecode is not core.
 | references | `Path` (names) | `SentenceIndex` (indices) |
 | constants | `Ref(Path)` | `Value::Symbol { id, path }`, `Value::ConstString(text)` |
 | branch targets | `Target::Label` or inline block | `SentenceIndex` |
-| type checks | `TypeCheckPath(Path)` | `Dip(0, idx)`, or `Push(v); Equal` |
-| calls | `Jump`, `Dip` | `Dip` only — `jump` is `Dip(0, idx)` |
-| deep drops | `Drop(d)` | `Dip(d, idx)` around a plain `Drop` |
+| type checks | `TypeCheckPath(Path)` | `Jump(idx)`, or `Push(v); Equal` |
+| calls | `Jump`, `Dip(N)` | `Jump(idx)` and `Dip(idx)` — a frame hides one value, and `N` of them is that many nested |
+| movement at depth | `Drop(d)`, `Pick(d)`, `Roll(d)` | frames around `Drop`, `Copy` and `Swap`; no instruction takes a depth |
 | `?` | `Try` | `Untuple(2)` and two `Branch`es, the rest of the block in an arm |
 | declarations | `symbol`, `const_string`, `mod` | erased |
 | annotations | attached to the sentence | side table keyed by `SentenceIndex` |
@@ -224,8 +224,10 @@ sentence is declared in* — no special case for type checks.
 - `ParsedValue::Ref(path)` resolves to a `Value` — a symbol or a const string,
 - `Target::Label(path)` resolves to a `SentenceIndex`,
 - `Target::Inline(body)` is flattened into a freshly allocated sentence,
-- `TypeCheckPath(path)` resolves to `Dip(0, idx)` for a predicate sentence, or
-  `Push(v); Equal` for a path that names a value.
+- `TypeCheckPath(path)` resolves to `Jump(idx)` for a predicate sentence, or
+  `Push(v); Equal` for a path that names a value,
+- `pick d`, `roll d`, `drop d` and `dip N` lose their depths, expanding into
+  the core recursion — see [what phase 4 folds into it](#what-phase-4-folds-into-it).
 
 Resolution is `ModuleTree::resolve(scope, path)` — one entry point, one set of
 rules, for every path in the language.
@@ -261,33 +263,76 @@ lowering untouched — and phase 4 resolves its target exactly as it resolves
 
 ### What phase 4 folds into it
 
-Two core instructions have no bytecode of their own; phase 4 emits a `Dip` for
-each. Note this is the *other* direction from `TypeCheckPath`, which is one
-core instruction with two bytecode forms — there was never a rule that the two
-vocabularies correspond one to one.
+Several core constructs have no bytecode of their own; phase 4 emits the
+instructions they stand for. Note this is the *other* direction from
+`TypeCheckPath`, which is one core instruction with two bytecode forms — there
+was never a rule that the two vocabularies correspond one to one.
 
-- **`jump S` becomes `Dip(0, idx)`.** A plain call is a dip whose hidden region
-  is empty. The point is not the saved variant, it is that a traversal of the
-  ISA can no longer handle one call instruction and silently miss the other —
-  and one of the traversals that would have missed it is arity inference, which
-  is what refuses recursion.
 - **`?` becomes `Untuple(2)` and two branches.** The rest of the block moves
   into the arm that runs when the tag was `crate::prelude::ok`, and the other
   arm rebuilds the error and ends there. See [docs/hana.md](hana.md#the--operator)
   for the shape and why it cannot fail.
-- **`drop d` for `d > 0` becomes `Dip(d, idx)` around a plain `Drop`.** Dropping
-  at a depth was the only instruction that removed a value from the *middle* of
-  the stack. With it gone, `Pick` and `Roll` are the only instructions that
-  address below the top, which makes "this instruction crosses a frame" a
-  two-case question rather than a four-case one.
+- **`dip N { ... }` becomes `N` nested one-deep frames.** `dip 0` is a `Jump`
+  and `dip 1` is a `Dip`; anything deeper is a `Dip` around a block holding the
+  frame one shallower. The chain is shared per (depth, target), so a sentence
+  dipped to twice is wrapped once.
+- **`pick d`, `roll d` and `drop d` become frames around `copy`, `swap` and
+  `drop`.** One recursion, three ways, parting where there is nothing left to
+  reach past:
 
-`pick d` and `roll d` decompose the same way — `roll d` is
-`dip { roll (d-1) }; roll 1`, and `pick d` is `dip { pick (d-1) }; roll 1`, so
-`{dup, swap, drop, dip}` generates every shuffle in the language. **Do not take
-that trade.** It replaces one instruction with `O(d)` instructions and `O(d)`
-calls, and each expansion still bottoms out in a frame-crossing `roll 1`, so
-the hard case is multiplied rather than removed. A minimal primitive set makes
-the metatheory smaller and the analysis larger; here the analysis is the point.
+  ```text
+  drop 0 = drop            pick 0 = copy               roll 0 = ε
+  drop d = dip { drop (d-1) }
+  pick d = dip { pick (d-1) } ; swap
+  roll d = dip { roll (d-1) } ; swap
+  ```
+
+  The trailing `swap` brings the answer up from under the value the frame hid,
+  and `drop` has none because it leaves nothing to bring. `roll 1` is written
+  directly rather than through the recursion, which would call a block holding
+  nothing. One block per (reach, depth) is shared by every site that expands to
+  it, so a program pays for one chain per depth rather than one per mention —
+  and `vm::movement_tests` measures the expansion against the semantics it
+  replaced, at every depth up to seven and every stack size that fits.
+
+### Why the depths go, and what it costs
+
+A depth on an instruction is a **pointer into the stack**. A frame's width was
+one too. Every law about either is an infinite family indexed by that pointer,
+with arithmetic in its side conditions, and five of the rewriter's axioms
+existed only to say things about `pick d` and `roll d` that `copy`, `swap` and
+a one-deep `dip` say in a single equation each. `pick_roll` was the definition
+the compiler now performs; `roll_cycle` became `swap ; swap` = nothing;
+`collapse` stopped being how a term arrives and became a rewrite that a proof
+asks for. A frame's width is now a *shape* — how many frames — which no
+analysis can get wrong and no equation does arithmetic on.
+
+**This document used to argue the other way**, and the argument is worth
+recording because half of it was right:
+
+> `pick d` and `roll d` decompose the same way […] so `{dup, swap, drop, dip}`
+> generates every shuffle in the language. **Do not take that trade.** It
+> replaces one instruction with `O(d)` instructions and `O(d)` calls, and each
+> expansion still bottoms out in a frame-crossing `roll 1`, so the hard case is
+> multiplied rather than removed. A minimal primitive set makes the metatheory
+> smaller and the analysis larger; here the analysis is the point.
+
+The occurrences are multiplied; the *cases* go to one. An analysis pays per
+case — per rule variant, per match arm, per side condition, per instance of a
+family it has to be right about — and soundness risk scales with axiom families
+rather than with node count. The `O(d)` is real and small: across the corpus,
+96% of movement is already at depth ≤ 1, the deepest thing anyone has written
+is `pick 5`, and the shared blocks mean the whole program pays for about five
+chains rather than one per site.
+
+What the argument got right is that the expansion **creates frames**, and a
+frame is what the rewriter sees through worst — it is the reason `unframe` had
+to be assumed. A `pick 2` that was one visible node is now a `swap` behind two
+frames, and reaching it means opening them first. Two places in the corpus paid
+for that directly: an aimed `annihilate` in `discarded_work_on_copies`, because
+an unaimed one now reads a wider window than it used to, and the positions in
+the hand-written derivations that `speculate` and `bool_result_copied` stand
+for, which count nodes and so count the expansion.
 
 ## Where `?` fits
 

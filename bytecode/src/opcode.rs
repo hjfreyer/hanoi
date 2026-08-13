@@ -2,23 +2,49 @@ use crate::library::SentenceIndex;
 use crate::value::Value;
 
 /// A structured representation of a single bytecode instruction in the conceptual ISA.
+///
+/// # Moving values
+///
+/// Four instructions move values, and none of them takes a depth: [`Drop`],
+/// [`Copy`], [`Swap`] and [`Dip`], the last hiding exactly one value. Every
+/// deeper reach is written in terms of them, by a recursion the compiler
+/// performs and nothing here records:
+///
+/// ```text
+/// drop 0 = drop            pick 0 = copy               roll 0 = ε
+/// drop d = dip { drop (d-1) }
+/// pick d = dip { pick (d-1) } ; swap
+/// roll d = dip { roll (d-1) } ; swap
+/// ```
+///
+/// `pick` and `roll` are one recursion with two base cases, which is the whole
+/// of the difference between copying a value up and moving it up.
+///
+/// The surface language still spells all three, and `docs/hana.md` documents
+/// them; what is gone is the *indexed instruction*. A depth in an instruction
+/// is a pointer into the stack, and every law about one is an infinite family
+/// indexed by that pointer, with arithmetic in its side conditions — five of
+/// the rewriter's axioms existed only to say things about `pick d` and `roll d`
+/// that `copy`, `swap` and one-deep `dip` say in a single equation each. A
+/// frame's width was the same kind of index, and nesting is what replaces it.
+///
+/// See `docs/compilation.md` for what phase 4 emits, and `docs/movement.md` for
+/// why the trade is worth taking.
+///
+/// [`Drop`]: Instruction::Drop
+/// [`Copy`]: Instruction::Copy
+/// [`Swap`]: Instruction::Swap
+/// [`Dip`]: Instruction::Dip
 #[derive(Debug, Clone, PartialEq)]
 pub enum Instruction {
     /// Push a constant value onto the stack.
     Push(Value),
     /// Discards the value at the top of the stack.
-    ///
-    /// The surface language's `drop <depth>` reaches deeper than this; phase 4
-    /// expands it into a `Dip` around this instruction, so that nothing in the
-    /// ISA but `Pick` and `Roll` addresses below the top of the stack.
     Drop,
-    /// Copies a value at the given depth from the top (0-indexed) of the stack and pushes it to the top.
-    /// (e.g., depth=0 is equivalent to Dup, depth=1 is equivalent to Over).
-    Pick(usize),
-    /// Moves a value at the given depth from the top (0-indexed) to the top of the stack,
-    /// shifting all intermediate values down.
-    /// (e.g., depth=1 is equivalent to Swap).
-    Roll(usize),
+    /// Pushes a second copy of the value on top of the stack.
+    Copy,
+    /// Exchanges the top two values of the stack.
+    Swap,
 
     /// Compare the top two values on the stack for equality.
     Equal,
@@ -43,13 +69,22 @@ pub enum Instruction {
     /// Negate the numeric top value on the stack.
     Negate,
 
-    /// Hide the top `depth` values, call the sentence at the target SentenceIndex,
-    /// then restore the hidden values on top of its results.
+    /// Call the sentence at the target.
+    Jump(SentenceIndex),
+    /// Hide the top value, call the sentence at the target, then restore the
+    /// hidden value on top of its results.
     ///
-    /// This is the only call instruction: a plain `jump` is `Dip(0, s)`, whose
-    /// hidden region is empty. The hidden values are inaccessible to the
-    /// callee, so analyses may treat them as unchanged across the call.
-    Dip(usize, SentenceIndex),
+    /// **One value, never more.** `dip 3 { A }` is three of these nested, which
+    /// is what makes the width a *shape* rather than a number: no equation
+    /// about a frame does arithmetic on it, and no analysis has a depth to get
+    /// wrong. The hidden value is inaccessible to the callee, so it may be
+    /// treated as unchanged across the call.
+    ///
+    /// The two call instructions are the only ones, and [`Self::callee`] is how
+    /// a traversal reaches both — writing them as two variants is what makes
+    /// the hidden value part of the shape, and the accessor is what keeps a
+    /// walk from handling one and silently missing the other.
+    Dip(SentenceIndex),
     /// Conditionally branch: if the top value on the stack is truthy, jump to the first SentenceIndex;
     /// otherwise, jump to the second SentenceIndex.
     Branch(SentenceIndex, SentenceIndex),
@@ -88,16 +123,38 @@ pub enum Instruction {
     TupleLength,
 }
 
-/// Renders an instruction in source mnemonic form, for traces and dumps.
-///
-/// A zero-width dip prints as `jump`, which is how it was written and how it
-/// behaves; the derived `Debug` is still available where the distinction
-/// between the two spellings matters.
 impl Instruction {
+    /// The sentence this calls, if it calls one.
+    ///
+    /// The two call instructions differ in whether a value is hidden, and in
+    /// nothing else. A traversal that asks this reaches both; one that matches
+    /// on [`Instruction::Jump`] alone silently walks past every `dip`, and
+    /// arity inference — which is what refuses recursion — is one of the walks
+    /// that must not.
+    pub fn callee(&self) -> Option<SentenceIndex> {
+        match self {
+            Instruction::Jump(s) | Instruction::Dip(s) => Some(*s),
+            _ => None,
+        }
+    }
+
+    /// How many values this hides from the sentence it calls.
+    ///
+    /// `None` for anything that is not a call. `Some(0)` and `Some(1)` are the
+    /// only answers, which is the point: a frame is one value deep, and the
+    /// depth an old `Dip(n, _)` carried is now the number of these nested.
+    pub fn hidden(&self) -> Option<usize> {
+        match self {
+            Instruction::Jump(_) => Some(0),
+            Instruction::Dip(_) => Some(1),
+            _ => None,
+        }
+    }
+
     /// Whether this takes two operands and answers the same either way round.
     ///
-    /// `roll 1` swaps the top two values, so for these — and only these —
-    /// `roll 1 ; op` is `op`. That is what `bin/rewrite`'s `comm` law rests on,
+    /// `swap` exchanges the top two values, so for these — and only these —
+    /// `swap ; op` is `op`. That is what `bin/rewrite`'s `comm` law rests on,
     /// and it lives here rather than in the rewriter because it is a fact about
     /// the instruction set, the same way [`crate::arity::op_arity`] is; a second
     /// copy of the list would be a silent hazard rather than a duplication.
@@ -131,7 +188,7 @@ impl Instruction {
     ///
     /// - `tuple n` builds a tuple, and is the negative case the sweep needs to
     ///   stay honest about being a measurement.
-    /// - `drop`, `pick` and `roll` leave a value that came off the stack rather
+    /// - `drop`, `copy` and `swap` leave a value that came off the stack rather
     ///   than one they computed, so nothing about the instruction decides it.
     /// - `push` leaves exactly its literal, so the answer is known *better*
     ///   than this: `eval` folds `push c ; is_bool` to the literal it really
@@ -171,13 +228,14 @@ impl Instruction {
     }
 }
 
+/// Renders an instruction in source mnemonic form, for traces and dumps.
 impl std::fmt::Display for Instruction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Instruction::Push(v) => write!(f, "push {}", v),
             Instruction::Drop => write!(f, "drop"),
-            Instruction::Pick(d) => write!(f, "pick {}", d),
-            Instruction::Roll(d) => write!(f, "roll {}", d),
+            Instruction::Copy => write!(f, "copy"),
+            Instruction::Swap => write!(f, "swap"),
             Instruction::Equal => write!(f, "equal"),
             Instruction::Greater => write!(f, "greater"),
             Instruction::Less => write!(f, "less"),
@@ -188,8 +246,8 @@ impl std::fmt::Display for Instruction {
             Instruction::Modulo => write!(f, "modulo"),
             Instruction::Not => write!(f, "not"),
             Instruction::Negate => write!(f, "negate"),
-            Instruction::Dip(0, s) => write!(f, "jump {:?}", s),
-            Instruction::Dip(d, s) => write!(f, "dip {} {:?}", d, s),
+            Instruction::Jump(s) => write!(f, "jump {:?}", s),
+            Instruction::Dip(s) => write!(f, "dip {:?}", s),
             Instruction::Branch(t, e) => write!(f, "branch {:?} {:?}", t, e),
             Instruction::Tuple(n) => write!(f, "tuple {}", n),
             Instruction::Untuple(n) => write!(f, "untuple {}", n),

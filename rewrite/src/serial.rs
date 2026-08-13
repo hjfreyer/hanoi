@@ -263,7 +263,7 @@ fn write_rule(prog: &Program, rule: &Rule) -> Result<Vec<(&'static str, String)>
             ("else", write_term(prog, else_arm)?),
         ],
         Rule::CopyConst { c } => vec![("c", write_value(prog, c)?)],
-        Rule::CopyAssoc { d } => vec![("d", d.to_string())],
+        Rule::CopyAssoc => Vec::new(),
         Rule::CopyNat { x, n, m } => vec![
             ("x", write_term(prog, x)?),
             ("n", n.to_string()),
@@ -271,13 +271,12 @@ fn write_rule(prog: &Program, rule: &Rule) -> Result<Vec<(&'static str, String)>
         ],
         Rule::BoolResult { op } => vec![("op", write_op(prog, op)?)],
         Rule::CancelTuple { n } => vec![("n", n.to_string())],
-        Rule::RollCycle { d } => vec![("d", d.to_string())],
+        Rule::SwapCycle => Vec::new(),
         Rule::Unframe { framed, n, m } => vec![
             ("framed", write_term(prog, std::slice::from_ref(framed))?),
             ("n", n.to_string()),
             ("m", m.to_string()),
         ],
-        Rule::PickRoll { d } => vec![("d", d.to_string())],
     })
 }
 
@@ -320,8 +319,6 @@ fn write_node(prog: &Program, node: &Node) -> Result<String, String> {
 
 fn write_op(prog: &Program, inst: &Instruction) -> Result<String, String> {
     Ok(match inst {
-        Instruction::Pick(d) => format!("pick {}", d),
-        Instruction::Roll(d) => format!("roll {}", d),
         Instruction::Tuple(n) => format!("tuple {}", n),
         Instruction::Untuple(n) => format!("untuple {}", n),
         Instruction::Push(v) => format!("push {}", write_value(prog, v)?),
@@ -972,23 +969,37 @@ impl<'a> Parser<'a> {
     fn term(&mut self) -> Result<Vec<Node>, ScriptError> {
         let mut out = Vec::new();
         while !matches!(self.peek(), Some(&Tok::RBrace) | None) {
-            out.push(self.instruction()?);
+            out.extend(self.instruction()?);
         }
         Ok(out)
     }
 
-    fn instruction(&mut self) -> Result<Node, ScriptError> {
+    /// One written instruction, as the nodes it stands for.
+    ///
+    /// A `Vec` because `pick d` and `roll d` are spellings rather than
+    /// instructions: what they stand for is frames around a `copy` or a `swap`.
+    /// Nothing *writes* them — [`write_op`] has no depth to write — but the two
+    /// term languages are meant to be one, and a derivation may be written by
+    /// something other than this tool.
+    fn instruction(&mut self) -> Result<Vec<Node>, ScriptError> {
         let (word, span) = self.ident("an instruction")?;
+
+        if word == "pick" {
+            return Ok(crate::rule::pick(self.usize_count(&word, span)?));
+        }
+        if word == "roll" {
+            return Ok(crate::rule::roll(self.usize_count(&word, span)?));
+        }
 
         if word == "branch" {
             let then_body = self.block()?;
             let else_body = self.block()?;
-            return Ok(Node::Branch {
+            return Ok(vec![Node::Branch {
                 then_origin: TERM_ORIGIN.to_string(),
                 then_body,
                 else_origin: TERM_ORIGIN.to_string(),
                 else_body,
-            });
+            }]);
         }
 
         // `dip k { ... }` is a block written out; `dip k <sentence>` is a call
@@ -998,33 +1009,33 @@ impl<'a> Parser<'a> {
         if word == "dip" {
             let depth = self.usize_count(&word, span)?;
             if self.peek() == Some(&Tok::LBrace) {
-                return Ok(Node::Dip {
+                return Ok(vec![Node::Dip {
                     depth,
                     origins: Vec::new(),
                     body: self.block()?,
-                });
+                }]);
             }
-            return Ok(Node::Call {
+            return Ok(vec![Node::Call {
                 depth,
                 target: self.sentence(span)?,
-            });
+            }]);
         }
 
         if word == "jump" {
-            return Ok(Node::Call {
+            return Ok(vec![Node::Call {
                 depth: 0,
                 target: self.sentence(span)?,
-            });
+            }]);
         }
 
         if word == "push" {
             let value = self.value()?;
-            return Ok(Node::Op(Instruction::Push(literal(&value, self.prog)?)));
+            return Ok(vec![Node::Op(Instruction::Push(literal(
+                &value, self.prog,
+            )?))]);
         }
 
         let inst = match word.as_str() {
-            "pick" => Instruction::Pick(self.usize_count(&word, span)?),
-            "roll" => Instruction::Roll(self.usize_count(&word, span)?),
             "tuple" => Instruction::Tuple(self.usize_count(&word, span)?),
             "untuple" => Instruction::Untuple(self.usize_count(&word, span)?),
             other => match plain_instruction(other) {
@@ -1041,7 +1052,7 @@ impl<'a> Parser<'a> {
                 }
             },
         };
-        Ok(Node::Op(inst))
+        Ok(vec![Node::Op(inst)])
     }
 
     fn block(&mut self) -> Result<Vec<Node>, ScriptError> {
@@ -1170,7 +1181,7 @@ impl<'a> Parser<'a> {
             "copy_const" => StepKind::Rule(Rule::CopyConst {
                 c: f.literal("c", prog)?,
             }),
-            "copy_assoc" => StepKind::Rule(Rule::CopyAssoc { d: f.count("d")? }),
+            "copy_assoc" => StepKind::Rule(Rule::CopyAssoc),
             "copy_nat" => StepKind::Rule(Rule::CopyNat {
                 x: f.term("x")?,
                 n: f.count("n")?,
@@ -1178,13 +1189,12 @@ impl<'a> Parser<'a> {
             }),
             "bool_result" => StepKind::Rule(Rule::BoolResult { op: f.op("op")? }),
             "cancel_tuple" => StepKind::Rule(Rule::CancelTuple { n: f.count("n")? }),
-            "roll_cycle" => StepKind::Rule(Rule::RollCycle { d: f.count("d")? }),
+            "swap_cycle" => StepKind::Rule(Rule::SwapCycle),
             "unframe" => StepKind::Rule(Rule::Unframe {
                 framed: f.node("framed")?,
                 n: f.count("n")?,
                 m: f.count("m")?,
             }),
-            "pick_roll" => StepKind::Rule(Rule::PickRoll { d: f.count("d")? }),
             "unfold" => StepKind::Unfold {
                 depth: f.count("depth")?,
                 target: f.sentence("target", prog)?,
@@ -1308,8 +1318,6 @@ impl Fields {
             return Err(wanted(name, "an instruction", &val));
         };
         let inst = match (word.as_str(), count) {
-            ("pick", Some(n)) => Instruction::Pick(nonneg(*n, span)?),
-            ("roll", Some(n)) => Instruction::Roll(nonneg(*n, span)?),
             ("tuple", Some(n)) => Instruction::Tuple(nonneg(*n, span)?),
             ("untuple", Some(n)) => Instruction::Untuple(nonneg(*n, span)?),
             (other, None) => match plain_instruction(other) {
@@ -1446,13 +1454,12 @@ pub(crate) fn arg_names(rule: &str) -> Option<&'static [&'static str]> {
         "counit_under" => &[],
         "retest" => &["arm", "inner", "rest", "other"],
         "copy_const" => &["c"],
-        "copy_assoc" => &["d"],
+        "copy_assoc" => &[],
         "copy_nat" => &["x", "n", "m"],
         "bool_result" => &["op"],
         "cancel_tuple" => &["n"],
-        "roll_cycle" => &["d"],
+        "swap_cycle" => &[],
         "unframe" => &["framed", "n", "m"],
-        "pick_roll" => &["d"],
         "unfold" => &["depth", "target"],
         _ => return None,
     })
@@ -1482,9 +1489,8 @@ pub(crate) fn equation_names() -> Vec<&'static str> {
         "copy_nat",
         "bool_result",
         "cancel_tuple",
-        "roll_cycle",
+        "swap_cycle",
         "unframe",
-        "pick_roll",
         "unfold",
     ]
 }
@@ -1638,7 +1644,7 @@ mod tests {
                 else_origin: TERM_ORIGIN.to_string(),
             },
             Rule::CopyConst { c: Value::Int(9) },
-            Rule::CopyAssoc { d: 2 },
+            Rule::CopyAssoc,
             Rule::CopyNat {
                 x: vec![op(Instruction::Add)],
                 n: 2,
@@ -1648,17 +1654,16 @@ mod tests {
                 op: Instruction::IsBool,
             },
             Rule::CancelTuple { n: 3 },
-            Rule::RollCycle { d: 2 },
+            Rule::SwapCycle,
             Rule::Unframe {
                 framed: Node::Dip {
-                    depth: 2,
+                    depth: 1,
                     origins: Vec::new(),
                     body: vec![op(Instruction::Add)],
                 },
                 n: 2,
                 m: 2,
             },
-            Rule::PickRoll { d: 3 },
             Rule::SpecializeEqual {
                 c: Value::Int(9),
                 then_arm: vec![op(Instruction::Not)],
@@ -1761,14 +1766,14 @@ mod tests {
 
     #[test]
     fn an_argument_the_equation_does_not_read_is_refused() {
-        let msg = err("derivation 1; proof x { counit(d = 0, k = 1) -> @0; }");
+        let msg = err("derivation 1; proof x { cancel_tuple(n = 2, k = 1) -> @0; }");
         assert!(msg.contains("takes no argument `k`"), "{}", msg);
     }
 
     #[test]
     fn an_argument_of_the_wrong_shape_says_what_was_wanted() {
-        let msg = err("derivation 1; proof x { counit(d = { add }) -> @0; }");
-        assert!(msg.contains("`d` is a count"), "{}", msg);
+        let msg = err("derivation 1; proof x { cancel_tuple(n = { add }) -> @0; }");
+        assert!(msg.contains("`n` is a count"), "{}", msg);
         assert!(msg.contains("a term"), "{}", msg);
     }
 
@@ -1802,7 +1807,7 @@ mod tests {
 
     #[test]
     fn spans_point_at_the_offending_word() {
-        let src = "derivation 1; proof x { counit(d = 0) -> [0.thn] @0; }";
+        let src = "derivation 1; proof x { cancel_tuple(n = 0) -> [0.thn] @0; }";
         let e = parse(src, empty()).unwrap_err();
         assert_eq!(&src[e.span.0..e.span.1], "thn");
     }

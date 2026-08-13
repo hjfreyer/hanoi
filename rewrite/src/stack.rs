@@ -173,18 +173,16 @@ fn op(inst: &Instruction, s: &mut Vec<Rc<Term>>, fresh: &mut Fresh) -> bool {
         Instruction::Drop => {
             pop!();
         }
-        Instruction::Pick(d) => {
-            if *d >= s.len() {
+        Instruction::Copy => match s.last() {
+            Some(top) => s.push(top.clone()),
+            None => return false,
+        },
+        Instruction::Swap => {
+            if s.len() < 2 {
                 return false;
             }
-            s.push(s[s.len() - 1 - d].clone());
-        }
-        Instruction::Roll(d) => {
-            if *d >= s.len() {
-                return false;
-            }
-            let t = s.remove(s.len() - 1 - d);
-            s.push(t);
+            let top = s.len() - 1;
+            s.swap(top, top - 1);
         }
         Instruction::Tuple(n) => {
             if *n > s.len() {

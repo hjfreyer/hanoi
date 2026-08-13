@@ -119,20 +119,19 @@ text.
 | `counit_under` | — |
 | `retest` | `arm`, `inner`, `rest`, `other` |
 | `copy_const` | `c` |
-| `copy_assoc` | `d` |
+| `copy_assoc` | — |
 | `copy_nat` | `x`, `n`, `m` |
 | `bool_result` | `op` |
 | `cancel_tuple` | `n` |
-| `roll_cycle` | `d` |
+| `swap_cycle` | — |
 | `unframe` | `framed`, `n`, `m` |
-| `pick_roll` | `d` |
 | `unfold` | `depth`, `target` |
 
 Each equation's law is stated in `docs/tactics.md`, and its arguments are the
 letters that law is written with. An argument is one of:
 
 - **a count or a number** — `k = 2`, `n = -1`;
-- **a term**, in braces — `x = { push 9 pick 0 }`. Where an equation takes a
+- **a term**, in braces — `x = { push 9 copy }`. Where an equation takes a
   single node the term holds exactly one: `framed = { dip 1 { drop } }`;
 - **a literal** — `c = 9`, `c = true`, `c = "text"`, `c = 1.5`, `c = (1, 2)`,
   or a symbol by its declared path, `c = barista::state::thirsty`;
@@ -153,12 +152,19 @@ A term is the same small language a tactic writes a term in — see
 tactic did not:
 
 ```
-{ pick 0 is_bool branch { push true } { push false } }
+{ copy is_bool branch { push true } { push false } }
 { dip 2 { push 9 add } }        a block, written out
 { dip 2 queue::accept }         a call that hides two values
 { jump queue::accept }          the same at depth 0
 { push (1, 2) }                 tuples
+{ pick 2 }                      the frames a reach at depth stands for
 ```
+
+`pick d` and `roll d` are spellings, not instructions: reading one gives the
+frames around `copy` or `swap` that the compiler would have emitted, so a term
+written either way is the same term. Nothing *writes* them — the tool has no
+depth left to write — but a producer in another language may, and the two term
+languages are meant to be one.
 
 Every instruction has a spelling. Three once did not — `panic`, `assert` and
 `assert_eq`, the three that could fail — since every equation here is stated

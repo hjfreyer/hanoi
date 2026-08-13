@@ -581,6 +581,11 @@ fn parse_instruction(stream: &mut TokenStream) -> Result<ParsedInstruction, Erro
             let depth = parse_usize(stream)?;
             Ok(ParsedInstruction::Roll(depth))
         }
+        // The two depths that are instructions rather than expansions, so that
+        // code which means the primitive can say so. `pick 0` and `roll 1`
+        // compile to exactly these and stay the way to write them at a depth.
+        "copy" => Ok(ParsedInstruction::Pick(0)),
+        "swap" => Ok(ParsedInstruction::Roll(1)),
         "equal" => Ok(ParsedInstruction::Equal),
         "greater" => Ok(ParsedInstruction::Greater),
         "less" => Ok(ParsedInstruction::Less),
@@ -1323,6 +1328,33 @@ struct Compiler<'a> {
     early_returns: Vec<EarlyReturn>,
     /// The sentence being compiled, for errors about the blocks inside it.
     current_sentence: String,
+    /// One block per (reach, depth), shared by every site that expands to it.
+    ///
+    /// `roll 3` written in two places is the same three instructions either
+    /// time, and the blocks they nest through hold nothing that came from the
+    /// site. So the whole corpus pays for one chain per depth rather than one
+    /// per use — which is what makes the expansion cost `O(deepest reach)`
+    /// across a program rather than `O(d)` at every mention of it.
+    reaches: HashMap<(Reach, usize), SentenceIndex>,
+    /// The same, for the frames a `dip N { ... }` nests through. Keyed by the
+    /// target too, since these wrap a particular callee rather than a shape.
+    frames: HashMap<(usize, SentenceIndex), SentenceIndex>,
+}
+
+/// What a depth-carrying movement instruction does with the value it reaches.
+///
+/// The three share one recursion — reach past the top value with a frame, do
+/// the same thing one shallower inside it — and differ only in where they
+/// bottom out and whether the answer has to be brought back up. See
+/// [`Compiler::reach`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Reach {
+    /// `pick d`: leave the value where it is and bring a copy up.
+    Copy,
+    /// `roll d`: bring the value itself up.
+    Move,
+    /// `drop d`: discard it, bringing nothing up.
+    Discard,
 }
 
 impl<'a> Compiler<'a> {
@@ -1405,17 +1437,21 @@ impl<'a> Compiler<'a> {
                     let compiled_val = self.compile_value(scope, v)?;
                     Instruction::Push(compiled_val)
                 }
-                ParsedInstruction::Drop(0) => Instruction::Drop,
+                // The three that name a depth. None of them survives into the
+                // ISA: each expands into frames around the same movement one
+                // step shallower. See [`Compiler::reach`].
                 ParsedInstruction::Drop(d) => {
-                    // Reaching below the top is a dip around a plain drop.
-                    let target = Target::Inline(ParsedSentence {
-                        instructions: vec![ParsedInstruction::Drop(0)],
-                    });
-                    let target_idx = self.resolve_target(scope, target)?;
-                    Instruction::Dip(d, target_idx)
+                    compiled.extend(self.reach(Reach::Discard, d));
+                    continue;
                 }
-                ParsedInstruction::Pick(d) => Instruction::Pick(d),
-                ParsedInstruction::Roll(d) => Instruction::Roll(d),
+                ParsedInstruction::Pick(d) => {
+                    compiled.extend(self.reach(Reach::Copy, d));
+                    continue;
+                }
+                ParsedInstruction::Roll(d) => {
+                    compiled.extend(self.reach(Reach::Move, d));
+                    continue;
+                }
                 ParsedInstruction::Equal => Instruction::Equal,
                 ParsedInstruction::Greater => Instruction::Greater,
                 ParsedInstruction::Less => Instruction::Less,
@@ -1440,12 +1476,11 @@ impl<'a> Compiler<'a> {
                 ParsedInstruction::TupleLength => Instruction::TupleLength,
                 ParsedInstruction::Jump(target) => {
                     let target_idx = self.resolve_target(scope, target)?;
-                    // A plain call is a dip with an empty hidden region.
-                    Instruction::Dip(0, target_idx)
+                    Instruction::Jump(target_idx)
                 }
                 ParsedInstruction::Dip(depth, target) => {
                     let target_idx = self.resolve_target(scope, target)?;
-                    Instruction::Dip(depth, target_idx)
+                    self.frame(depth, target_idx)
                 }
                 ParsedInstruction::Branch(t1, t2) => {
                     let idx1 = self.resolve_target(scope, t1)?;
@@ -1473,7 +1508,7 @@ impl<'a> Compiler<'a> {
                         }
                     };
                     match resolved {
-                        ResolvedItem::Sentence(idx) => Instruction::Dip(0, idx),
+                        ResolvedItem::Sentence(idx) => Instruction::Jump(idx),
                         // A path that names a value is the predicate "equal to
                         // that value", whether it is a symbol or a const string.
                         ResolvedItem::Const(val) => {
@@ -1571,6 +1606,75 @@ impl<'a> Compiler<'a> {
                 "`crate::prelude::{}` names a sentence, but `?` compares against it as a value",
                 name
             )),
+        }
+    }
+
+    /// What `pick d`, `roll d` or `drop d` becomes: one recursion, three ways.
+    ///
+    /// Each of the three reaches past the top value with a frame and does the
+    /// same thing one shallower inside it. They part at the bottom, where there
+    /// is nothing left to reach past:
+    ///
+    /// ```text
+    /// drop 0 = drop            pick 0 = copy               roll 0 = ε
+    /// drop d = dip { drop (d-1) }
+    /// pick d = dip { pick (d-1) } ; swap
+    /// roll d = dip { roll (d-1) } ; swap
+    /// ```
+    ///
+    /// The trailing `swap` is what brings the answer up from under the value
+    /// the frame hid, and `drop` has none because it leaves nothing to bring.
+    /// `roll 1` needs no frame at all — reaching past one value to fetch the
+    /// one beneath it *is* the exchange — so it is the one case written
+    /// directly rather than through the recursion, which would otherwise call a
+    /// block containing nothing.
+    fn reach(&mut self, kind: Reach, depth: usize) -> Vec<Instruction> {
+        match (kind, depth) {
+            (Reach::Discard, 0) => vec![Instruction::Drop],
+            (Reach::Copy, 0) => vec![Instruction::Copy],
+            (Reach::Move, 0) => Vec::new(),
+            (Reach::Move, 1) => vec![Instruction::Swap],
+            (kind, depth) => {
+                let inner = self.reach_block(kind, depth - 1);
+                match kind {
+                    Reach::Discard => vec![Instruction::Dip(inner)],
+                    _ => vec![Instruction::Dip(inner), Instruction::Swap],
+                }
+            }
+        }
+    }
+
+    /// The same expansion, filed as a block and shared with every other site
+    /// that asks for that reach at that depth.
+    fn reach_block(&mut self, kind: Reach, depth: usize) -> SentenceIndex {
+        if let Some(idx) = self.reaches.get(&(kind, depth)) {
+            return *idx;
+        }
+        let body = self.reach(kind, depth);
+        let idx = self.push_block(body);
+        self.reaches.insert((kind, depth), idx);
+        idx
+    }
+
+    /// A call under `depth` hidden values, as that many one-deep frames.
+    ///
+    /// `dip 0` hides nothing and is a plain `jump`; `dip 1` is the frame
+    /// itself; anything deeper is a frame around a shallower one. Nesting is
+    /// the whole of what a width used to say, and the chain is shared per
+    /// (depth, target) so that a sentence dipped to twice is wrapped once.
+    fn frame(&mut self, depth: usize, target: SentenceIndex) -> Instruction {
+        match depth {
+            0 => Instruction::Jump(target),
+            1 => Instruction::Dip(target),
+            _ => {
+                if let Some(idx) = self.frames.get(&(depth, target)) {
+                    return Instruction::Dip(*idx);
+                }
+                let inner = self.frame(depth - 1, target);
+                let idx = self.push_block(vec![inner]);
+                self.frames.insert((depth, target), idx);
+                Instruction::Dip(idx)
+            }
         }
     }
 
@@ -1674,6 +1778,8 @@ pub fn assemble_source(
         annotations: Vec::new(),
         early_returns: Vec::new(),
         current_sentence: String::new(),
+        reaches: HashMap::new(),
+        frames: HashMap::new(),
     };
 
     // Pre-allocate space for all named sentences

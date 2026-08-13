@@ -372,7 +372,7 @@ fn tokenize(src: &str) -> Result<Vec<Spanned>, ScriptError> {
 enum Expr {
     Name(String, Span),
     Call(String, Span, Vec<Arg>),
-    /// A matcher and the term it is completed by: `introduce { pick 0 }`.
+    /// A matcher and the term it is completed by: `introduce { copy }`.
     ///
     /// Every other matcher rewrites what it found, so what it produces is a
     /// function of the window. An introduction has nothing to read — the code
@@ -564,12 +564,17 @@ impl<'a> Parser<'a> {
     fn term(&mut self) -> Result<Vec<Node>, ScriptError> {
         let mut out = Vec::new();
         while !matches!(self.peek(), Some(&Tok::RBrace) | None) {
-            out.push(self.instruction()?);
+            out.extend(self.instruction()?);
         }
         Ok(out)
     }
 
-    fn instruction(&mut self) -> Result<Node, ScriptError> {
+    /// One written instruction, as the nodes it stands for.
+    ///
+    /// A `Vec` rather than a node because `pick d` and `roll d` are spellings
+    /// rather than instructions: what they stand for is frames around a `copy`
+    /// or a `swap`, and a term may say either. Everything else is one node.
+    fn instruction(&mut self) -> Result<Vec<Node>, ScriptError> {
         let span = self.span();
         let Some(Spanned {
             tok: Tok::Ident(word),
@@ -587,30 +592,41 @@ impl<'a> Parser<'a> {
         // whatever the stack already holds. So it is a node like any other, and
         // excluding it left `annihilate` with no way to be read backwards at
         // `m = 0`: nothing could write the `branch { } { }` to introduce.
+
+        // The two spellings that stand for frames around a movement. Written
+        // the way the assembler takes them, and expanded the way phase 4
+        // expands them, so a term and a compiled sentence agree node for node.
+        if word == "pick" {
+            return Ok(crate::rule::pick(self.count(&word, span)?));
+        }
+        if word == "roll" {
+            return Ok(crate::rule::roll(self.count(&word, span)?));
+        }
+
         if word == "branch" {
             let then_body = self.block()?;
             let else_body = self.block()?;
-            return Ok(Node::Branch {
+            return Ok(vec![Node::Branch {
                 then_origin: TERM_ORIGIN.to_string(),
                 then_body,
                 else_origin: TERM_ORIGIN.to_string(),
                 else_body,
-            });
+            }]);
         }
 
         // `dip k { ... }` is the one nested form, and the only way to write a
         // term that hides part of the stack from itself.
         if word == "dip" {
             let depth = self.count(&word, span)?;
-            return Ok(Node::Dip {
+            return Ok(vec![Node::Dip {
                 depth,
                 origins: Vec::new(),
                 body: self.block()?,
-            });
+            }]);
         }
 
         if word == "push" {
-            return Ok(Node::Op(Instruction::Push(self.literal(span)?)));
+            return Ok(vec![Node::Op(Instruction::Push(self.literal(span)?))]);
         }
 
         // The one thing in a term that reaches outside it. A term used to hold
@@ -618,15 +634,13 @@ impl<'a> Parser<'a> {
         // written here rather than compiled from a sentence — but `share` is
         // about running *a function* twice, and the function has a name.
         if word == "jump" {
-            return Ok(Node::Call {
+            return Ok(vec![Node::Call {
                 depth: 0,
                 target: self.sentence(span)?,
-            });
+            }]);
         }
 
         let inst = match word.as_str() {
-            "pick" => Instruction::Pick(self.count(&word, span)?),
-            "roll" => Instruction::Roll(self.count(&word, span)?),
             "tuple" => Instruction::Tuple(self.count(&word, span)?),
             "untuple" => Instruction::Untuple(self.count(&word, span)?),
             other => match plain_instruction(other) {
@@ -640,7 +654,7 @@ impl<'a> Parser<'a> {
                 }
             },
         };
-        Ok(Node::Op(inst))
+        Ok(vec![Node::Op(inst)])
     }
 
     /// The sentence a term names, resolved the way the command line resolves
@@ -754,6 +768,8 @@ impl<'a> Parser<'a> {
 pub(crate) fn plain_instruction(word: &str) -> Option<Instruction> {
     Some(match word {
         "drop" => Instruction::Drop,
+        "copy" => Instruction::Copy,
+        "swap" => Instruction::Swap,
         "equal" => Instruction::Equal,
         "greater" => Instruction::Greater,
         "less" => Instruction::Less,
@@ -788,6 +804,8 @@ pub(crate) fn plain_instruction(word: &str) -> Option<Instruction> {
 pub(crate) fn plain_word(inst: &Instruction) -> Option<&'static str> {
     Some(match inst {
         Instruction::Drop => "drop",
+        Instruction::Copy => "copy",
+        Instruction::Swap => "swap",
         Instruction::Equal => "equal",
         Instruction::Greater => "greater",
         Instruction::Less => "less",
@@ -817,6 +835,8 @@ pub(crate) fn plain_word(inst: &Instruction) -> Option<&'static str> {
 #[cfg(test)]
 const PLAIN_WORDS: &[&str] = &[
     "drop",
+    "copy",
+    "swap",
     "equal",
     "greater",
     "less",
@@ -854,13 +874,15 @@ pub(crate) const TERM_ORIGIN: &str = "<term>";
 /// about code that cannot. They are gone from the language, so the exception
 /// is too.
 const INSTRUCTION_WORDS: &[&str] = &[
+    "copy",
+    "swap",
     "pick n",
-    "branch { .. } { .. }",
     "roll n",
+    "branch { .. } { .. }",
     "tuple n",
     "untuple n",
     "push <int|true|false|\"const string\"|symbol>",
-    "dip n { .. }",
+    "dip { .. }",
     "drop",
     "equal",
     "greater",
@@ -1813,10 +1835,7 @@ fn rule(
             if term_matcher_names().contains(&rule_name.as_str()) {
                 return Err(
                     ScriptError::new(format!("`{}` needs a term", rule_name), *rule_span)
-                        .with_help(format!(
-                            "say what to introduce: `{} {{ pick 0 }}`",
-                            rule_name
-                        )),
+                        .with_help(format!("say what to introduce: `{} {{ copy }}`", rule_name)),
                 );
             }
             matcher_by_name(rule_name).ok_or_else(|| {
@@ -2136,15 +2155,15 @@ mod tests {
 
     #[test]
     fn a_term_names_the_code_to_introduce() {
-        assert!(compiles("each(introduce { pick 0 })"));
-        assert!(compiles("once(introduce { pick 0 is_bool })"));
-        assert!(compiles("once(introduce { dip 1 { pick 0 } })"));
+        assert!(compiles("each(introduce { copy })"));
+        assert!(compiles("once(introduce { copy is_bool })"));
+        assert!(compiles("once(introduce { dip 1 { copy } })"));
         // A `push` has to be paired with something that consumes, or the term
         // takes no inputs and there is no drop for it to stand in front of.
         assert!(compiles("once(introduce { push 7 equal })"));
         assert!(compiles("once(introduce { push true and })"));
         // Mixed with ordinary rules in one placement.
-        assert!(compiles("each(sink, introduce { pick 0 }, fuse)"));
+        assert!(compiles("each(sink, introduce { copy }, fuse)"));
     }
 
     #[test]
@@ -2185,12 +2204,12 @@ mod tests {
     fn a_rule_that_needs_a_term_says_so_when_written_bare() {
         let e = err("each(introduce)");
         assert!(e.contains("needs a term"), "{}", e);
-        assert!(e.contains("pick 0"), "{}", e);
+        assert!(e.contains("copy"), "{}", e);
     }
 
     #[test]
     fn a_rule_that_takes_no_term_says_so_when_given_one() {
-        let e = err("each(sink { pick 0 })");
+        let e = err("each(sink { copy })");
         assert!(e.contains("does not take a term"), "{}", e);
         assert!(e.contains("bare"), "{}", e);
     }
@@ -2209,12 +2228,12 @@ mod tests {
     fn an_unknown_instruction_points_at_the_ones_that_exist() {
         let e = err("each(introduce { frobnicate })");
         assert!(e.contains("frobnicate"), "{}", e);
-        assert!(e.contains("pick n"), "{}", e);
+        assert!(e.contains("copy"), "{}", e);
     }
 
     #[test]
     fn an_instruction_missing_its_number_says_so() {
-        let e = err("each(introduce { pick })");
+        let e = err("each(introduce { tuple })");
         assert!(e.contains("needs a number"), "{}", e);
         let e = err("each(introduce { push })");
         assert!(e.contains("needs a literal"), "{}", e);
@@ -2222,18 +2241,14 @@ mod tests {
 
     #[test]
     fn a_term_matcher_still_has_to_be_placed() {
-        let e = err("introduce { pick 0 }");
+        let e = err("introduce { copy }");
         assert!(e.contains("not a tactic"), "{}", e);
         assert!(e.contains("once("), "{}", e);
     }
 
     #[test]
     fn an_unclosed_term_is_an_error_rather_than_a_silent_end() {
-        assert!(
-            Definitions::new()
-                .compile("each(introduce { pick 0")
-                .is_err()
-        );
+        assert!(Definitions::new().compile("each(introduce { copy").is_err());
     }
 
     // -- reading a rule backwards --------------------------------------------
@@ -2250,11 +2265,14 @@ mod tests {
         assert!(compiles("each(inv(inv(sink)))"));
         // Alongside ordinary rules in one placement, and over a term rule.
         assert!(compiles("each(collapse, inv(fuse), sink)"));
-        assert!(compiles("once(inv(introduce { pick 0 }))"));
+        assert!(compiles("once(inv(introduce { copy }))"));
     }
 
     #[test]
     fn a_rule_may_be_narrowed_by_a_number() {
+        // `counit` is the one that takes a number, and it is the depth of the
+        // `pick` it deletes — an index over spellings now, rather than over
+        // instructions, since the term holds frames and not a `pick d`.
         assert!(compiles("each(counit(0))"));
         assert!(compiles("at(2, inv(counit(0)))"));
         assert!(compiles("each(collapse, counit(3), sink)"));
@@ -2320,7 +2338,7 @@ mod tests {
     fn at_takes_a_position_and_then_rules() {
         assert!(compiles("at(0, sink)"));
         assert!(compiles("at(3, sink, fuse)"));
-        assert!(compiles("at(1, introduce { pick 0 })"));
+        assert!(compiles("at(1, introduce { copy })"));
         assert!(compiles("bu(at(0, collapse))"));
     }
 
@@ -2478,7 +2496,7 @@ mod tests {
     #[test]
     fn a_proof_may_name_a_sentence_in_a_term() {
         let lib = corpus(
-            "function classify { pick 0 is_int branch { drop 0 push 7 } { drop 0 push 8 } }\n\
+            "function classify { copy is_int branch { drop 0 push 7 } { drop 0 push 8 } }\n\
              identity foo { drop 0 } = { drop 0 };",
         );
         hant(&lib, "proof foo = try(once(share { jump classify }));").expect("parses");

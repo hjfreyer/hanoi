@@ -153,7 +153,7 @@ fn depth_counts_inputs_once() {
 fn a_branch_takes_what_the_hungrier_arm_takes() {
     // `{ }` is (0 -> 0) and `{ drop 0  push true }` is (1 -> 1): same net,
     // different demands. The branch needs the condition and the value.
-    let prog = program_of("sentence probe { pick 0 branch { } { drop 0 push true } }");
+    let prog = program_of("sentence probe { copy branch { } { drop 0 push true } }");
     let body = build(prog.library(), SentenceIndex::from(0));
     let [_, inner] = &body[..] else {
         panic!("expected a pick and a branch, got {:?}", shape(&body))
@@ -177,10 +177,10 @@ fn a_branch_takes_what_the_hungrier_arm_takes() {
 fn a_function_that_is_not_the_identity_is_not_rewritten_into_one() {
     let code = r#"
         function test_always_true {
-            pick 0
+            copy
             is_bool
             branch {
-                pick 0
+                copy
                 branch { } { drop 0 push true }
             } {
                 drop 0
@@ -246,16 +246,20 @@ fn expansion_preserves_arity() {
 
 #[test]
 fn a_dip_stops_at_a_pick_that_reaches_into_it() {
-    // `pick 2` is (3 -> 4): a window 3 deep does not clear the four values it
-    // leaves, so the frame cannot pass it.
+    // The frame `pick 2` opens with is (3 -> 4): a window 3 deep does not clear
+    // the four values it leaves, so the sinking frame cannot pass it. It does
+    // pass the `swap` the pick ends with, which is (2 -> 2) and clears.
     let got = tree("sentence probe { pick 2 dip 3 { drop 0 } }", DIPS);
-    assert_eq!(shape(&got), vec!["pick 2", "dip 3 { drop }"]);
+    assert_eq!(
+        shape(&got),
+        vec!["dip 1 { dip 1 { copy } swap }", "dip 3 { drop }", "swap"]
+    );
 }
 
 #[test]
 fn a_dip_sinks_past_a_pick_it_clears() {
-    let got = tree("sentence probe { pick 0 dip 2 { drop 0 } }", DIPS);
-    assert_eq!(shape(&got), vec!["dip 1 { drop }", "pick 0"]);
+    let got = tree("sentence probe { copy dip 2 { drop 0 } }", DIPS);
+    assert_eq!(shape(&got), vec!["dip 1 { drop }", "copy"]);
 }
 
 #[test]
@@ -290,7 +294,7 @@ fn fusing_records_every_origin() {
 
 fn arms(then_arm: &str, else_arm: &str) -> String {
     format!(
-        "sentence probe {{ pick 0 branch {{ {} }} {{ {} }} }}",
+        "sentence probe {{ copy branch {{ {} }} {{ {} }} }}",
         then_arm, else_arm
     )
 }
@@ -300,7 +304,7 @@ fn a_shared_branch_prefix_is_hoisted_under_a_dip() {
     let got = tree(&arms("drop 0 push 1", "drop 0 push 2"), FACTOR);
     assert_eq!(
         shape(&got),
-        vec!["pick 0", "dip 1 { drop }", "branch"],
+        vec!["copy", "dip 1 { drop }", "branch"],
         "{:?}",
         shape(&got)
     );
@@ -309,7 +313,7 @@ fn a_shared_branch_prefix_is_hoisted_under_a_dip() {
 #[test]
 fn factoring_takes_the_whole_shared_run() {
     let got = tree(&arms("drop 0 not push 1", "drop 0 not push 2"), FACTOR);
-    assert_eq!(shape(&got), vec!["pick 0", "dip 1 { drop not }", "branch"]);
+    assert_eq!(shape(&got), vec!["copy", "dip 1 { drop not }", "branch"]);
 }
 
 #[test]
@@ -317,7 +321,7 @@ fn factoring_stops_where_the_arms_diverge() {
     let got = tree(&arms("drop 0 push 1 not", "drop 0 push 2 not"), FACTOR);
     // The shared prefix comes out; the shared *suffix* is `distribute`'s
     // business read backwards and is not part of factoring.
-    assert_eq!(shape(&got), vec!["pick 0", "dip 1 { drop }", "branch"]);
+    assert_eq!(shape(&got), vec!["copy", "dip 1 { drop }", "branch"]);
 }
 
 #[test]
@@ -327,7 +331,7 @@ fn factoring_looks_past_provenance() {
     // contained a call.
     let code = r#"
         sentence probe {
-            pick 0
+            copy
             branch { dip 1 { push 7 } drop 0 } { dip 1 { push 7 } not drop 0 }
         }
     "#;
@@ -356,10 +360,10 @@ fn a_decided_branch_folds_to_the_arm_it_takes() {
 #[test]
 fn distribution_puts_what_follows_a_branch_inside_both_arms() {
     let got = tree(
-        "sentence probe { pick 0 branch { push 1 } { push 2 } drop 0 }",
+        "sentence probe { copy branch { push 1 } { push 2 } drop 0 }",
         "distribution",
     );
-    assert_eq!(shape(&got), vec!["pick 0", "branch"]);
+    assert_eq!(shape(&got), vec!["copy", "branch"]);
 }
 
 // ---------------------------------------------------------------------------
@@ -491,7 +495,7 @@ fn unfolding_puts_the_callee_in_reach_of_the_callers_laws() {
 fn passes_compose() {
     // Factoring exposes a frame, the dip passes move it, and cleanup cancels
     // what that brings together. Each alone leaves work the others finish.
-    let code = "sentence probe { pick 0 branch { drop 0 push 1 drop 0 } { drop 0 push 2 drop 0 } }";
+    let code = "sentence probe { copy branch { drop 0 push 1 drop 0 } { drop 0 push 2 drop 0 } }";
     let (prog, plain) = tree_of(code, "id");
     let separately = {
         let a = run(prog, plain.clone(), FACTOR);
@@ -509,7 +513,7 @@ fn passes_compose() {
 /// The move that makes factoring reachable when only one arm has the prefix.
 ///
 /// Every other matcher rewrites what it found, so a rule reading `drop` could
-/// never propose `pick 0` — nothing in the window says which computation ought
+/// never propose `copy` — nothing in the window says which computation ought
 /// to appear. The term comes from the tactic expression, and the annihilation
 /// law read backwards is what makes putting it there sound: both sides discard
 /// exactly the same value.
@@ -518,10 +522,10 @@ fn introducing_a_copy_lets_factoring_reach_an_arm_that_lacked_it() {
     // A predicate whose then-arm copies the value and whose else-arm does not.
     let code = r#"
         function probe {
-            pick 0
+            copy
             is_bool
             branch {
-                pick 0
+                copy
                 branch { } { drop 0 push true }
             } {
                 drop 0
@@ -539,11 +543,11 @@ fn introducing_a_copy_lets_factoring_reach_an_arm_that_lacked_it() {
         "there was a shared prefix"
     );
 
-    // Give the else arm a `pick 0` it immediately discards, and now there is.
-    let (got, script) = with_script(prog, plain, "else(once(introduce { pick 0 })); factoring");
+    // Give the else arm a `copy` it immediately discards, and now there is.
+    let (got, script) = with_script(prog, plain, "else(once(introduce { copy })); factoring");
     assert_eq!(
         shape(&got)[2],
-        "dip 1 { pick 0 }",
+        "dip 1 { copy }",
         "the copy was not hoisted: {:?}",
         shape(&got)
     );
@@ -560,7 +564,7 @@ fn what_introduce_puts_in_annihilate_takes_back_out() {
     // the term is where it started.
     let code = "sentence probe { drop 0 push 1 }";
     let (prog, plain) = tree_of(code, "id");
-    let there = run(prog, plain.clone(), "once(introduce { pick 0 })");
+    let there = run(prog, plain.clone(), "once(introduce { copy })");
     assert_ne!(shape(&there), shape(&plain));
     let back = run(prog, there, "annihilation");
     assert_eq!(shape(&back), shape(&plain));
@@ -619,13 +623,13 @@ fn splitting_a_bool_lets_the_folding_laws_reach_an_opaque_value() {
 /// reading, and needing no name of its own is the point.
 #[test]
 fn reading_distribute_backwards_factors_a_shared_suffix() {
-    let code = "sentence probe { pick 0 branch { drop 0 push 1 not } { drop 0 push 2 not } }";
+    let code = "sentence probe { copy branch { drop 0 push 1 not } { drop 0 push 2 not } }";
     let (prog, plain) = tree_of(code, "id");
 
     let got = run(prog, plain.clone(), "bu(each(inv(distribute)))");
     assert_eq!(
         shape(&got),
-        vec!["pick 0", "branch", "not"],
+        vec!["copy", "branch", "not"],
         "{:?}",
         shape(&got)
     );
@@ -642,14 +646,14 @@ fn reading_distribute_backwards_factors_a_shared_suffix() {
 /// for.
 #[test]
 fn a_branch_whose_arms_were_the_same_disappears_along_with_them() {
-    let code = "sentence probe { pick 0 branch { drop 0 } { drop 0 } }";
+    let code = "sentence probe { copy branch { drop 0 } { drop 0 } }";
     let (prog, plain) = tree_of(code, "id");
 
     // Factoring alone leaves the husk behind.
     let factored = run(prog, plain.clone(), FACTOR);
     assert_eq!(
         shape(&factored),
-        vec!["pick 0", "dip 1 { drop }", "branch"],
+        vec!["copy", "dip 1 { drop }", "branch"],
         "{:?}",
         shape(&factored)
     );
@@ -665,7 +669,7 @@ fn a_branch_whose_arms_were_the_same_disappears_along_with_them() {
 
 const SPECULATION: &str = r#"
     #[arity(2, 2)]
-    sentence probe { pick 0 branch { pick 1 pick 1 equal and } { not } }
+    sentence probe { copy branch { pick 1 pick 1 equal and } { not } }
 "#;
 
 /// `speculate { X }` is shorthand, and this says so literally.
@@ -681,14 +685,18 @@ fn speculating_is_what_the_three_rules_do_written_out() {
     let by_hand = run(
         prog,
         plain.clone(),
-        "must(else(at(0, inv(counit(1)))));          must(else(at(1, inv(counit(1)))));          must(else(at(2, introduce { equal })));          must(factoring)",
+        "must(else(at(0, inv(counit(1)))));          must(else(at(2, inv(counit(1)))));          must(else(at(4, introduce { equal })));          must(factoring)",
     );
     let (shorthand, script) = with_script(prog, plain, "must(once(speculate { equal }))");
 
     assert_eq!(shape(&shorthand), shape(&by_hand));
     assert_eq!(
         shape(&shorthand),
-        vec!["pick 0", "dip 1 { pick 1 pick 1 equal }", "branch"],
+        vec![
+            "copy",
+            "dip 1 { dip 1 { copy } swap dip 1 { copy } swap equal }",
+            "branch"
+        ],
         "{:?}",
         shape(&shorthand)
     );
@@ -758,7 +766,7 @@ fn work_in_arms(nodes: &[Node]) -> usize {
                     walk(then_body, depth + 1, found);
                     walk(else_body, depth + 1, found);
                 }
-                Node::Op(Instruction::Drop | Instruction::Pick(_)) => {}
+                Node::Op(Instruction::Drop | Instruction::Copy | Instruction::Swap) => {}
                 Node::Dip { body, .. } => walk(body, depth, found),
                 _ => *found += depth,
             }
@@ -846,7 +854,7 @@ fn the_guard_a_split_leaves_is_derivable() {
     let by_hand = run(
         prog,
         plain.clone(),
-        "must(once(inv(share { equal })));             must(at(3, float));             must(at(2, bool_result));             annihilation;             must(at(0, sink));             must(at(0, flatten))",
+        "must(once(inv(share { equal })));             must(at(5, float));             must(at(4, bool_result));             must(at(4, annihilate));             must(at(2, counit(1)));             must(at(0, counit(1)));             must(at(0, sink));             must(at(0, flatten))",
     );
     let (shorthand, script) = with_script(prog, plain, "must(once(bool_result_copied))");
 
@@ -924,7 +932,7 @@ fn a_branch_repeated_in_both_arms_needs_no_new_law() {
     let code = r#"
         #[arity(1, 1)]
         sentence probe {
-            pick 0
+            copy
             branch { branch { push 1 } { push 2 } } { branch { push 1 } { push 2 } }
         }
     "#;
@@ -945,7 +953,7 @@ fn four_different_arms_collapse_to_the_diagonal() {
     let code = r#"
         #[arity(1, 1)]
         sentence probe {
-            pick 0
+            copy
             branch { branch { push 1 } { push 2 } } { branch { push 3 } { push 4 } }
         }
     "#;
@@ -985,9 +993,9 @@ fn four_different_arms_collapse_to_the_diagonal() {
 #[test]
 fn sharing_a_call_runs_it_once_and_copies_what_it_left() {
     let code = r#"
-        function classify { pick 0 is_int branch { drop 0 push 7 } { drop 0 push 8 } }
+        function classify { copy is_int branch { drop 0 push 7 } { drop 0 push 8 } }
         #[arity(1, 2)]
-        sentence twice { pick 0 jump classify dip 1 { jump classify } }
+        sentence twice { copy jump classify dip 1 { jump classify } }
     "#;
     let (prog, plain) = raw(code, "twice");
     let tactic = compile_for(prog, "must(once(share { jump classify }))");
@@ -995,12 +1003,7 @@ fn sharing_a_call_runs_it_once_and_copies_what_it_left() {
     let env = Env::new(prog, 1_000_000, true);
     let (got, script) =
         run_tactic(&env, &tactic, plain.clone()).unwrap_or_else(|e| panic!("{}", e));
-    assert_eq!(
-        shape(&got),
-        vec!["call 0 #0", "pick 0"],
-        "{:?}",
-        shape(&got)
-    );
+    assert_eq!(shape(&got), vec!["call 0 #0", "copy"], "{:?}", shape(&got));
     assert_eq!(script.len(), 1, "one law, one step");
     assert_eq!(script[0].kind.name(), "copy_nat");
 
@@ -1144,8 +1147,11 @@ fn a_term_may_only_name_a_sentence_when_there_is_a_program() {
 #[test]
 fn the_two_readings_of_a_law_are_one_law() {
     // Every `inv` pair, over real code: there and back is where it started.
-    let code = "sentence probe { pick 0 dip 2 { push 1 drop 0 } branch { not } { is_bool } }";
-    let (prog, plain) = tree_of(code, "id");
+    let code = "sentence probe { copy dip 2 { push 1 drop 0 } branch { not } { is_bool } }";
+    // Collapsed first, so the term holds a frame two values deep: the ISA has
+    // only one-deep frames, and `expand` is about a width that a `collapse`
+    // arrived at.
+    let (prog, plain) = tree_of(code, "repeat(bu(each(collapse)))");
     for (there, back) in [
         ("once(inv(flatten))", "bu(each(flatten))"),
         ("once(inv(fuse))", "bu(each(fuse))"),
@@ -1199,7 +1205,7 @@ fn stack_of(code: &str, src: &str) -> Vec<String> {
 
 #[test]
 fn the_stack_view_gives_equal_values_the_same_name() {
-    let lines = stack_of("sentence probe { push 1 pick 0 }", "id");
+    let lines = stack_of("sentence probe { push 1 copy }", "id");
     assert!(
         lines.iter().any(|l| l.contains("stack")),
         "no stack column: {:?}",
@@ -1230,7 +1236,7 @@ fn positions(lines: &[String]) -> Vec<(String, String)> {
 
 #[test]
 fn the_listing_numbers_each_sequence_from_zero() {
-    let prog = program_of("sentence probe { push 1 pick 0 branch { not } { is_bool } }");
+    let prog = program_of("sentence probe { push 1 copy branch { not } { is_bool } }");
     let body = build(prog.library(), SentenceIndex::from(0));
     let lines = crate::print::render_body(prog, SentenceIndex::from(0), &body, "id", false, true);
     let rows = positions(&lines);

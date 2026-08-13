@@ -71,8 +71,8 @@ closed — 6 steps
 ...
   derivation — 6 step(s)
      1  retest -> @0
-        pick 0 ; branch { drop ; push 1 } { branch { push 3 } { push 4 } }
-     ⇒  pick 0 ; branch { drop ; push 1 } { drop ; push 4 }
+        copy ; branch { drop ; push 1 } { branch { push 3 } { push 4 } }
+     ⇒  copy ; branch { drop ; push 1 } { drop ; push 4 }
      4  hoist <- @1
         branch { jump { drop } ; push 1 } { jump { drop } ; push 4 }
      ⇒  dip 1 { drop } ; branch { push 1 } { push 4 }
@@ -109,20 +109,19 @@ three.
 | `fold_branch` | `push c ; branch { A } { B }` = the arm `c` selects | selected by `truthy`, and `false` is the only falsy value, so `push 1; branch` takes the **then** arm |
 | `eval` | `push v1 … push vn ; op` = the pushes of what `op` answers | subsumes the old `fold_const` and `fold_const_unary`. `tuple` and `untuple` are operators that answer, so they fold too |
 | `annihilate` | `X ; drop^m` = `drop^n`, for `X : n -> m` | `X` is a whole sequence. Forward subsumes `annihilate_drop` (m=1), `annihilate_flagged` (m=2) and the case with no drops at all (m=0, where `branch { } { }` = `drop`); backward is `introduce`, below |
-| `commute` | `roll 1 ; op` = `op`, for a commutative `op` | `roll 1` swaps the top two, and `add`, `multiply`, `and`, `or`, `equal` cannot tell. Forward is `comm`, backward is `swap` |
-| `split_bool` | `pick 0 ; is_bool ; branch { branch { push true } { push false } } { }` = nothing | a boolean is either `true` or `false`. Backward it is a case split; forward is `unsplit_bool` |
-| `counit` | `pick d ; drop` = nothing | copy, discard the **copy**. *Not* an annihilation: `pick d` is `(d+1 -> d+2)` |
-| `counit_under` | `pick 0 ; dip 1 { drop }` = nothing | copy, discard the **original**. The other counit law; only at depth 0, since deeper it is a `roll` |
-| `retest` | `pick 0 ; branch { branch { A } { B } ; R } { Q }` = `pick 0 ; branch { drop ; A ; R } { Q }`, and the mirror | the same value tested twice answers the same, so the other inner arm is dead. One equation read at either arm |
-| `specialize_equal` | `pick 0 ; push c ; equal ; branch { A } { B }` = `… branch { drop ; push c ; A } { B }` | a value that tested equal to a literal **is** that literal. No side condition: `equal` is structural identity on every value the machine has |
-| `copy_const` | `push c ; pick 0` = `push c ; push c` | |
-| `copy_assoc` | `pick d ; pick 0` = `pick d ; dip 1 { pick d }` | neither side is smaller; the point is that one copy ends up **in a frame**, and a framed computation is one `float` can carry |
+| `commute` | `swap ; op` = `op`, for a commutative `op` | `swap` exchanges the top two, and `add`, `multiply`, `and`, `or`, `equal` cannot tell. Forward is `comm`, backward is `swap` |
+| `split_bool` | `copy ; is_bool ; branch { branch { push true } { push false } } { }` = nothing | a boolean is either `true` or `false`. Backward it is a case split; forward is `unsplit_bool` |
+| `counit` | `pick d ; drop` = nothing | copy, discard the **copy**. *Not* an annihilation: `copy` is `(1 -> 2)`. `d` indexes a spelling rather than an instruction — the term holds the frames `pick d` expands to — and at `d = 0` it is `copy ; drop` |
+| `counit_under` | `copy ; dip { drop }` = nothing | copy, discard the **original**. The other counit law; only at the top, since deeper it is a `roll` |
+| `retest` | `copy ; branch { branch { A } { B } ; R } { Q }` = `copy ; branch { drop ; A ; R } { Q }`, and the mirror | the same value tested twice answers the same, so the other inner arm is dead. One equation read at either arm |
+| `specialize_equal` | `copy ; push c ; equal ; branch { A } { B }` = `… branch { drop ; push c ; A } { B }` | a value that tested equal to a literal **is** that literal. No side condition: `equal` is structural identity on every value the machine has |
+| `copy_const` | `push c ; copy` = `push c ; push c` | |
+| `copy_assoc` | `copy ; copy` = `copy ; dip { copy }` | neither side is smaller; the point is that one copy ends up **in a frame**, and a framed computation is one `float` can carry |
 | `copy_nat` | `pick (n-1)^n ; X ; dip m { X }` = `X ; pick (m-1)^m`, for `X : n -> m` | copying is natural. Forward is common-subexpression elimination; the only law that needs `X` to be **deterministic** |
 | `bool_result` | `op ; is_bool` = `op ; drop ; push true`, for an `op` that always leaves a boolean | the only fact here about an instruction's **codomain**, and the only one no rewriting could reach. `Instruction::yields_bool`, measured by `vm` |
 | `cancel_tuple` | `tuple n ; untuple n` = `push true` | the flag is the whole residue. The converse order is not a no-op and has no equation |
-| `roll_cycle` | `(roll d)^(d+1)` = nothing | a rotation of `d+1` things has order `d+1`. Backward it is the only way to put a roll into a term that holds none |
-| `unframe` | `dip d { X } ; (roll (d+m-1))^m` = `(roll (d+n-1))^n ; X`, for `X : n -> m` | a framed computation is a rolled one. Forward brings the operands to the top; backward puts the answer back under a frame |
-| `pick_roll` | `pick d` = `dip d { pick 0 } ; roll d` | copying from depth is copying at depth and rolling the copy up |
+| `swap_cycle` | `swap ; swap` = nothing | an exchange is its own inverse. Backward it is the only way to put a `swap` into a term that holds none |
+| `unframe` | `dip { X } ; sink m` = `sink n ; X`, for `X : n -> m` | a framed computation is a sunk one. Forward brings the operands to the top; backward puts the answer back under a frame. `sink k` puts the top value under the `k` beneath it |
 
 **`unfold` is not one of these.** That `Call { k, S }` may be replaced by `S`'s
 body is not a law of the calculus — it is the axiom the *library* contributes by
@@ -180,7 +179,7 @@ take this law with it and nothing else, so it is written down rather than
 assumed.
 
 Adding it demoted one: `copy_const` is the case `X = push c`. The `n = 0`
-instance reads `push c ; dip 1 { push c }` = `push c ; pick 0`, and one
+instance reads `push c ; dip 1 { push c }` = `push c ; copy`, and one
 `interchange` and one `elim_dip0` turn the left side into `push c ; push c`.
 See `applier::tests::copy_const_is_derivable_from_copy_nat`, which runs that
 derivation both ways. It keeps its one-step matcher because `values` and
@@ -275,7 +274,7 @@ different thing to look for even though the arithmetic is the same:
 | `speculate { .. }` | 1 | hoist out of the one arm that has it — see below. `n + 4` steps, no new law |
 | `lift` | 1 | the same move with the prefix **found** rather than named — see below. 4 steps, or `speculate`'s |
 | `bool_result` | 2 | `op ; is_bool` forward; backward is `inv(bool_result)` |
-| `bool_result_copied` | 3 | the same fact through a copy — `op ; pick 0 ; is_bool`, which is the guard `split_bool` leaves. 8 steps, no new law |
+| `bool_result_copied` | 3 | the same fact through a copy — `op ; copy ; is_bool`, which is the guard `split_bool` leaves. 8 steps, no new law |
 | `unframe` | 1 | takes a frame off, bringing the operands to the top — see below. 2 steps, no new law |
 | `retest` | 2 | one arm per firing, then arm first; no backward reading |
 | `specialize_equal` | 4 | writes the literal into the arm that tested equal to it; backward is `inv(specialize_equal)` |
@@ -313,75 +312,76 @@ Parameterizing the laws by depth is not it either. `split_bool(d)` would want
 read what it left, and each is the same fact restated in a new shape. The
 namespace grows and nothing composes.
 
-**The three roll laws move the value instead of the reasoning.** `roll d` lifts
-the value at depth `d` to the top, `roll_cycle` is what lets one be written down
-at all, and `unframe` is what a frame turns into. Applied to
-`dip 3 { is_symbol }` they leave
+**The movement laws move the value instead of the reasoning.** `swap_cycle` is
+what lets an exchange be written down at all, and `unframe` is what a frame
+turns into. Applied to `dip 3 { is_symbol }` — three frames nested, since the
+ISA has no other kind — they bring the value up to the top level, where the case
+analysis can happen on a `branch` that `distribute` can push a continuation
+into, and put it back down afterwards. That is the whole point: the fork has to
+happen where `branch` can express it.
 
-```
-untuple 3 ; roll 3 ; is_symbol ; …the split… ; roll 3 ; roll 3 ; roll 3
-```
+There is no third law about `pick`. There used to be: `pick d` was an
+instruction, every folding law was blind to it, and `pick_roll` said it was a
+framed copy rolled up so that `copy_const` could fire *inside* the frame. The
+compiler performs that equation now — a `pick d` in a term already **is**
+`dip { pick (d-1) } ; swap` — so what was an axiom is an expansion, and
+`applier::tests::copy_const_at_depth_is_derivable_from_the_movement_laws` runs
+the derivation that is left, four steps in both directions.
 
-— the case analysis on a top-level `branch`, where `distribute` can push the
-continuation into both arms and the value is a literal in each, and then three
-rolls that carry that literal back down to the slot it came from. That is the
-whole point: the fork has to happen where `branch` can express it.
-
-`pick_roll` is the third because a literal at depth is read with `pick d`, which
-every folding law is blind to. Opening it into `dip d { pick 0 } ; roll d` puts
-the literal and its copy adjacent *inside* the frame, where `copy_const` fires
-and `unframe` eats the leftover roll —
-`applier::tests::copy_const_at_depth_is_derivable_from_the_roll_laws` runs that
-derivation both ways. So `copy_const` needs no depth reading, and neither does
-anything else.
-
-No `unroll` instruction was needed. `roll d` rotates `d+1` values, so
-`(roll d)^d` already inverts it, and `roll 0 = ε` is `roll_cycle` at `d = 0`
-rather than a law of its own.
+No inverse instruction was needed for either. A `swap` inverts itself, and a
+deeper rotation is frames around one, so `roll 0 = ε` is not a law of its own
+but what the recursion says at the bottom.
 
 ### Placing one: `unframe`
 
 `unframe` has a matcher now, and what unblocked it was reading the other side.
 
 ```text
-dip d { X } ; (roll (d+m-1))^m  =  (roll (d+n-1))^n ; X       for X : n -> m
+dip { X } ; sink m  =  sink n ; X                              for X : n -> m
 ```
 
 The obstacle recorded here was that a matcher "can only fix one of `n` and `m`
-before it looks" — true of one reading the **rolls**, since how many there are
-is `m` and a width is fixed before looking. Reading the **frame** instead, `d`
-is on the node and `n` and `m` are its body's arity, so the window is one node
-and all three are known. The obstacle was in which side to search from.
+before it looks" — true of one reading the **movement**, since how much of it
+there is depends on `m` and a width is fixed before looking. Reading the
+**frame** instead, `n` and `m` are its body's arity, so the window is one node
+and both are known. The obstacle was in which side to search from.
 
-The equation has rolls on both sides and a term usually holds none, so the
-firing puts them in first — `roll_cycle` backwards is the only way to introduce
-a roll at all, and it introduces a whole cycle, of which the unframing eats `m`
-and leaves `d`:
+The equation has movement on both sides and a term usually holds none, so the
+firing puts it in first — `swap_cycle` backwards is the only way to introduce an
+exchange at all, and it introduces a cancelling pair, of which the unframing
+eats one:
 
 ```
 $ rewrite mini unframing -t 'exact(must(once(unframe)))' --show-script
 closed — 2 steps
-     0  roll_cycle <- @1   (nothing)                     ⇒  roll 1 ; roll 1
-     1  unframe    -> @0   dip 1 { push t2 ; equal } ; roll 1
-                                                         ⇒  roll 1 ; push t2 ; equal
+     0  swap_cycle <- @1   (nothing)                     ⇒  swap ; swap
+     1  unframe    -> @0   dip 1 { push t2 ; equal } ; swap
+                                                         ⇒  swap ; push t2 ; equal
 ```
 
 What that buys is the middle: `equal` is now at the top level with its result on
 **top of the stack**, which is the window `split_bool` needs and could not reach
 while the value sat under a frame. `identities::taking_a_frame_off` states the
-claim and `a_framed_computation_is_a_rolled_one` runs both sides.
+claim and `vm::movement_tests::a_framed_computation_is_a_rolled_one` runs both
+sides at every depth.
 
-It declines `dip 0 { X }`, which is `flatten`'s and needs no rolls.
+It declines two shapes. `dip 0 { X }` is `flatten`'s and needs no exchange; and
+a **nest** is more than the one frame the law is about, so a collapsed frame has
+to be opened with `inv(collapse)` before this reads the innermost one. That is
+the shape of the whole change: a width used to be a number the law did
+arithmetic on, and it is now a nesting the law reaches into one level at a time.
 
-**It is not free.** Each firing pays `d+1` rolls, and nothing deletes a roll
-except `roll_cycle` completing a full cycle — so a term driven to a fixpoint on
-this grows with the depth of what it unwraps: `dip 8 { is_symbol }` comes out as
-`roll 8 ; is_symbol ; (roll 8)^8`. It is in no default pass; aim it at the frame
-whose operand you actually need.
+**It is not free.** Each firing pays an exchange, and nothing deletes one except
+`swap_cycle` finding its pair, so a term driven to a fixpoint on this grows. It
+is in no default pass; aim it at the frame whose operand you actually need. It
+also declines `m > 1`, where the pair it would have to conjure is a derivation
+rather than a step — the law holds at every `m` and a derivation file may name
+it, but no matcher places it.
 
-**The other five readings are still unplaced.** `roll_cycle` forward is `d+1`
-nodes wide, its backward reading has the "somewhere to stand" problem
-`inv(counit(d))` has, and `pick_roll` is waiting for something to want it.
+**The other readings are still unplaced.** `swap_cycle` forward is placed by
+`cleanup` through `annihilate`; its backward reading has the "somewhere to
+stand" problem `inv(counit(d))` has, and `inv(unframe)` has nothing to mark
+where the body begins.
 
 ### Three matchers, one annihilation
 
@@ -403,7 +403,7 @@ were the same *all the way down*. So `factoring; all` now takes the husk with
 them:
 
 ```
-$ rewrite demo probe -t factoring      # pick 0 ; dip 1 { drop } ; branch { } { }
+$ rewrite demo probe -t factoring      # copy ; dip 1 { drop } ; branch { } { }
 $ rewrite demo probe -t 'factoring; all'                                 # drop
 ```
 
@@ -445,7 +445,7 @@ have:
 | `inv(fuse)` | split one node off the front of a frame's body, the way `expand` takes the canonical split of `collapse` |
 | `inv(unfactor)` | lift a frame **both arms open with** out in front of the branch. `factor`'s third step, at any depth rather than only `0` |
 | `inv(distribute)` | factor the longest shared **suffix** out of both arms — the end of a branch `factor` cannot reach, since it only ever worked on prefixes |
-| `inv(copy_const)` | `push c ; push c` = `push c ; pick 0` |
+| `inv(copy_const)` | `push c ; push c` = `push c ; copy` |
 | `inv(copy_assoc)` | take the second copy back out of its frame |
 | `inv(introduce { X })` | `X ; drop^m` = `drop^n` — `annihilate`'s law reading a whole *term*, where `annihilate` reads a single node |
 
@@ -464,12 +464,22 @@ the **`d`**: no window can say which value to copy. So the tactic says it.
 $ rewrite demo probe -t 'must(at(1, inv(counit(0))))' --show-script
      0  counit <- @1
         (nothing)
-     ⇒  pick 0 ; drop
+     ⇒  copy ; drop
 ```
 
 `counit(d)` is the forward reading narrowed to one depth, and `inv` flips it
 like any other pair. A rule taking a number reads the way `at(n, r)` does, and
-`counit` is the only one that takes one.
+`counit` is the only one that takes one — the last depth written down anywhere
+in the equation set.
+
+It survived the ISA losing its own depths, and the reason is exactly this
+paragraph. `d` no longer indexes an instruction: `pick 2 ; drop` in a term is
+frames around a `copy`, and the number says which spelling. But **a block copy
+is `n` of these nested**, and nothing else in the set builds one — `speculate`,
+`share` and the vacuous law all stand on it. Forward the law is a consequence
+of the `d = 0` case; backward it is the only thing that puts a copy of a value
+*at depth* where there was nothing at all, and a frame cannot be conjured to
+derive it inside.
 
 **It inserts *before* the window** and reads one node purely to have somewhere
 to stand — the same arrangement `split_bool` uses, and for the same reason: an
@@ -483,9 +493,9 @@ computation — which together spell out the vacuous law in the tactic language,
 where it belongs, since it is a lemma rather than an axiom:
 
 ```
-$ rewrite demo probe -t 'at(1, inv(counit(0))); at(2, introduce { pick 0 })'
-   1 │ pick 0        ⎫
-   2 │ pick 0        ⎬  pick (n-1)^n ; X ; drop^m  =  nothing
+$ rewrite demo probe -t 'at(1, inv(counit(0))); at(2, introduce { copy })'
+   1 │ copy        ⎫
+   2 │ copy        ⎬  pick (n-1)^n ; X ; drop^m  =  nothing
    3 │ drop          ⎪
    4 │ drop          ⎭
 ```
@@ -551,7 +561,7 @@ which computation ought to appear in front of it. The code has to be written
 down, and the tactic expression is where.
 
 ```
-once(introduce { pick 0 })
+once(introduce { copy })
 ```
 
 That is `annihilate` read backwards. The term names an `X : n -> m`; the matcher
@@ -564,16 +574,16 @@ When only one does, give the other the missing code in a place where it provably
 costs nothing, and the two arms now share it:
 
 ```
-$ rewrite probe test_always_true -t 'else(once(introduce { pick 0 })); factoring' --show-script
+$ rewrite probe test_always_true -t 'else(once(introduce { copy })); factoring' --show-script
   derivation — 4 step(s)
      0  annihilate <- [2.else] @0
         drop
-     ⇒  pick 0 ; drop ; drop
+     ⇒  copy ; drop ; drop
      1  elim_dip0 <- [2.then] @0
      2  elim_dip0 <- [2.else] @0
      3  hoist <- @2
-        branch { jump { pick 0 } ; … } { jump { pick 0 } ; … }
-     ⇒  dip 1 { pick 0 } ; branch { … } { … }
+        branch { jump { copy } ; … } { jump { copy } ; … }
+     ⇒  dip 1 { copy } ; branch { … } { … }
 ```
 
 The copy has been hoisted out of both arms, which is the move the old rule set
@@ -591,12 +601,12 @@ can even ask for a window, since a matcher's width is fixed before it looks.
 ```
 $ rewrite demo twice -t 'must(once(share { jump classify }))' --show-script
    0 │      1 │ jump → #0 classify
-   1 │      1 │ pick 0
+   1 │      1 │ copy
 
   derivation — 1 step(s)
      0  copy_nat -> @0
-        pick 0 ; jump → #0 ; dip 1 { jump → #0 }
-     ⇒  jump → #0 ; pick 0
+        copy ; jump → #0 ; dip 1 { jump → #0 }
+     ⇒  jump → #0 ; copy
 ```
 
 Backwards — `inv(share { X })` — it un-shares, running `X` a second time
@@ -714,10 +724,10 @@ all four state comparisons in one frame at the top and branch arms holding
 nothing but branches, drops and the literal each one selects:
 
 ```
-   0 │      1 │ pick 0
+   0 │      1 │ copy
    1 │      2 │ dip 1 {
    0 │      2 │   untuple 3
-   1 │      5 │   dip 1 { pick 0 ; push state::thirsty ; equal }
+   1 │      5 │   dip 1 { copy ; push state::thirsty ; equal }
      │        │ }
    2 │      6 │ untuple 3
    3 │      9 │ dip 1 {
@@ -829,7 +839,7 @@ compile time rather than at run time:
 `comm` deletes a swap that a commutative operator cannot see:
 
 ```
-roll 1 ; and   ⇒   and
+swap ; and   ⇒   and
 ```
 
 The set is `add`, `multiply`, `and`, `or` and `equal`. It lives on the
@@ -847,17 +857,17 @@ operands in the order given, so the two readings were observably different.
 The flag a fallible operator leaves is symmetric too, so this holds for `add` on
 operands it cannot add: `0, false` either way round.
 
-`swap` is the backward reading, putting a `roll 1` *in* so that what sits
+`swap` is the backward reading, putting a `swap` *in* so that what sits
 underneath the operands can be rearranged to line up with something else. It has
 no measure and grows the term — its output still contains the operator it
-matched, so `each` would put a second `roll 1` in front of it and keep going.
+matched, so `each` would put a second `swap` in front of it and keep going.
 Aim it, as with `introduce`.
 
 ### An arm knows its own condition: `retest`
 
 ```text
-pick 0 ; branch { branch { A } { B } ; R } { Q }  =  pick 0 ; branch { drop ; A ; R } { Q }
-pick 0 ; branch { P } { branch { C } { D } ; R }  =  pick 0 ; branch { P } { drop ; D ; R }
+copy ; branch { branch { A } { B } ; R } { Q }  =  copy ; branch { drop ; A ; R } { Q }
+copy ; branch { P } { branch { C } { D } ; R }  =  copy ; branch { P } { drop ; D ; R }
 ```
 
 The condition is a copy, so the arm the outer branch took already decides the
@@ -870,9 +880,9 @@ branch. Both arms and it fires twice, and `factor` and `counit_under` finish:
 
 ```
 $ rewrite demo four_arms -t all --show-script
-   0  retest -> @0    pick 0 ; branch { branch { push 1 } { push 2 } } { branch { push 3 } { push 4 } }
-                   ⇒  pick 0 ; branch { drop ; push 1 } { branch { push 3 } { push 4 } }
-   1  retest -> @0 ⇒  pick 0 ; branch { drop ; push 1 } { drop ; push 4 }
+   0  retest -> @0    copy ; branch { branch { push 1 } { push 2 } } { branch { push 3 } { push 4 } }
+                   ⇒  copy ; branch { drop ; push 1 } { branch { push 3 } { push 4 } }
+   1  retest -> @0 ⇒  copy ; branch { drop ; push 1 } { drop ; push 4 }
    2  elim_dip0 <- [1.then] @0            ⎫
    3  elim_dip0 <- [1.else] @0            ⎬  factor
    4  hoist     <- @1                     ⎭  ⇒ dip 1 { drop } ; branch { … } { … }
@@ -908,8 +918,8 @@ does, holding the original problem verbatim.
 ### The value an arm tested equal to: `specialize_equal`
 
 ```text
-pick 0 ; push c ; equal ; branch { A } { B }
-  =  pick 0 ; push c ; equal ; branch { drop ; push c ; A } { B }
+copy ; push c ; equal ; branch { A } { B }
+  =  copy ; push c ; equal ; branch { drop ; push c ; A } { B }
 ```
 
 `retest`'s sibling, and between them they cover the two ways an arm can learn
@@ -957,7 +967,7 @@ counit laws — discard the copy, or discard the original:
 
 ```text
 counit        pick d ; drop            = nothing
-counit_under  pick 0 ; dip 1 { drop }  = nothing
+counit_under  copy ; dip 1 { drop }  = nothing
 ```
 
 Only the first was here. The second is what `factor` leaves behind after
@@ -990,7 +1000,7 @@ arm does exactly that. The else arm does not:
 ```
 $ rewrite demo twice_bool -t 'at(1, split_bool); distribution; values; factoring; all'
    0 │ is_bool
-   1 │ pick 0
+   1 │ copy
    2 │ is_bool
    3 │ branch then → a bool {
      │   drop
@@ -1035,7 +1045,7 @@ literal. Everything else needs the fact already on the stack.
 $ rewrite demo probe -t 'at(0, split_bool); distribution; values'
  pos │  depth │ instruction
 ─────┼────────┼────────────
-   0 │      1 │ pick 0
+   0 │      1 │ copy
    1 │      2 │ is_bool
    2 │      2 │ branch then → a bool {
    0 │      1 │   branch then → true {
@@ -1069,10 +1079,10 @@ have been folded down to nothing interesting.
 #### The guard it leaves: `bool_result_copied`
 
 ```text
-op ; pick 0 ; is_bool  =  op ; push true       for an op that yields a boolean
+op ; copy ; is_bool  =  op ; push true       for an op that yields a boolean
 ```
 
-The split asks `is_bool` **behind a `pick 0`**, because the value it is about to
+The split asks `is_bool` **behind a `copy`**, because the value it is about to
 branch on has to survive the question. `bool_result` reads `op ; is_bool`, and a
 matcher's width is fixed before it looks — so the copy in the middle put the
 answer out of reach, and a split placed on an operator's result stalled holding
@@ -1095,7 +1105,7 @@ the annihilation and counits the copies paid for take away again.
 
 ```
 $ rewrite mini guard -t 'exact(must(once(bool_result_copied)))' --show-script
-     0  copy_nat    <- @0   equal ; pick 0        ⇒ pick 1 ; pick 1 ; equal ; …
+     0  copy_nat    <- @0   equal ; copy        ⇒ pick 1 ; pick 1 ; equal ; …
      1  interchange <- @3   dip 1 { equal } ; is_bool ⇒ is_bool ; dip 1 { equal }
      2  bool_result -> @2   equal ; is_bool       ⇒ equal ; drop ; push true
      3  annihilate  -> @2   equal ; drop          ⇒ drop ; drop
@@ -1190,7 +1200,7 @@ closed — 3 steps + 3 up to inlining
    2 │      2 │   dip 1 → #3500 <inline> {
    0 │      2 │     untuple 2
    1 │      4 │     branch then → #3496 <inline> {
-   0 │      3 │       pick 0
+   0 │      3 │       copy
    1 │      4 │       is_int
    2 │      4 │       branch then → #3489 <inline> {
 ```

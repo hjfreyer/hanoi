@@ -100,6 +100,10 @@ pub(crate) enum SideCondition {
     FrameTooShallow { depth: usize, outputs: i64 },
     /// A frame depth came out negative or too large to represent.
     DepthOverflow { shifted: i64 },
+    /// `unframe` was handed a nest rather than a frame. The law is about the
+    /// one value a `dip` hides, so a collapsed frame has to be opened back into
+    /// nested ones before it can fire.
+    FrameNotOneDeep { depth: usize },
     /// `eval` was handed an operator it has no answer for, or the wrong number
     /// of operands for one it does.
     NotEvaluable { op: String, operands: usize },
@@ -138,6 +142,12 @@ impl std::fmt::Display for SideCondition {
                     shifted
                 )
             }
+            SideCondition::FrameNotOneDeep { depth } => write!(
+                f,
+                "`unframe` is about the one value a frame hides, but this one is {} deep: \
+                 open it into nested frames first",
+                depth
+            ),
             SideCondition::NotEvaluable { op, operands } => {
                 write!(f, "`{}` cannot be folded on {} operand(s)", op, operands)
             }
@@ -358,9 +368,9 @@ pub(crate) enum Rule {
     /// conjure*, and nothing in the window it replaces could have said it.
     Annihilate { x: Vec<Node>, n: usize, m: usize },
 
-    /// `roll 1 ; op` = `op`, for a commutative `op`.
+    /// `swap ; op` = `op`, for a commutative `op`.
     ///
-    /// `roll 1` swaps the top two values, so for an operator that answers the
+    /// `swap` swaps the top two values, so for an operator that answers the
     /// same either way round the swap is invisible. The commutative set is
     /// `add`, `multiply`, `and`, `or` and `equal`, and it lives on the
     /// instruction ([`Instruction::commutative`]) rather than here — it is a
@@ -376,7 +386,7 @@ pub(crate) enum Rule {
     /// `add` on operands it cannot add: `0, false` either way round.
     Commute { op: Instruction },
 
-    /// `pick 0 ; is_bool ; branch { branch { push true } { push false } } { }`
+    /// `copy ; is_bool ; branch { branch { push true } { push false } } { }`
     /// = nothing.
     ///
     /// **A boolean is either `true` or `false`.** Copy the value, ask whether
@@ -408,13 +418,39 @@ pub(crate) enum Rule {
     /// may fall, what it *leaves* may not move.
     SplitBool,
 
-    /// `pick d ; drop` = nothing.
+    /// `pick d ; drop` = nothing, with the `pick` written out in core.
     ///
-    /// Copying a value and discarding the copy: neither happened. This is the
-    /// counit law of the comonoid whose comultiplication is `pick`, and it is
-    /// deliberately *not* an instance of [`Rule::Annihilate`] — `pick d` is
-    /// `(d+1 -> d+2)`, so that equation would ask for `d+2` drops and answer
-    /// with `d+1` of them.
+    /// Copying a value and discarding the copy: neither happened. At `d = 0`
+    /// this is `copy ; drop`, the counit law of the comonoid whose
+    /// comultiplication is `copy`, and it is deliberately *not* an instance of
+    /// [`Rule::Annihilate`] — `copy` is `(1 -> 2)`, so that equation would ask
+    /// for two drops and answer with one of them.
+    ///
+    /// ## Why the depth survived, when the instruction did not
+    ///
+    /// `pick d` is no longer an instruction, and [`pick`] is what this reads in
+    /// its place — so `d` indexes a *program* here rather than an opcode, and
+    /// what the equation says at `d > 0` is a consequence of what it says at
+    /// `d = 0`, not a separate assumption. The derivation is four steps:
+    ///
+    /// ```text
+    /// dip { pick (d-1) } ; swap ; drop
+    ///   = dip { pick (d-1) } ; dip { drop }      unframe backwards, n=1 m=0
+    ///   = dip { pick (d-1) ; drop }              fuse
+    ///   = dip { }                                this law at d-1
+    ///   = nothing                                the empty frame is nothing
+    /// ```
+    ///
+    /// It is kept as a schema anyway, for the reason `copy_const` is kept: read
+    /// **backwards** it is the only thing that puts a copy of a value *at
+    /// depth* into a term that holds nothing, and every block copy is built
+    /// that way — `n` of these nested is what [`copy_block`] is, which is what
+    /// `speculate`, `share` and the vacuous law all stand on. Deriving each
+    /// instance instead would mean conjuring the frame the derivation runs
+    /// inside, and a frame cannot be conjured: [`Rule::ElimDip0`] backwards
+    /// makes one that hides nothing, and only [`Rule::Interchange`] past a
+    /// `drop` deepens it. So the schema earns its place by what it introduces,
+    /// where the axiom earns its by what it deletes.
     ///
     /// Together with [`Rule::Annihilate`] this generates the **vacuous** law,
     ///
@@ -424,7 +460,7 @@ pub(crate) enum Rule {
     ///
     /// — compute on copies, discard the results, and the originals were never
     /// touched. That is a lemma rather than an axiom: `n` backward counits nest
-    /// a run of picks against a run of drops, and one backward annihilation
+    /// a run of copies against a run of drops, and one backward annihilation
     /// turns the drops into `X`. Backward it is the only way to introduce work
     /// into a term at all, which is how a cancelling pair gets in beside the
     /// value it will eventually meet. It belongs to the generator, which may
@@ -432,8 +468,8 @@ pub(crate) enum Rule {
     /// `applier::tests::vacuous_is_derivable_from_annihilate_and_counit`.
     Counit { d: usize },
 
-    /// `pick 0 ; branch { branch { A } { B } ; R } { Q }`
-    ///   = `pick 0 ; branch { drop ; A ; R } { Q }`, and the mirror of it.
+    /// `copy ; branch { branch { A } { B } ; R } { Q }`
+    ///   = `copy ; branch { drop ; A ; R } { Q }`, and the mirror of it.
     ///
     /// **The same value tested twice answers the same.** The condition is a
     /// copy, so an arm of the outer branch already knows which way its own
@@ -443,7 +479,7 @@ pub(crate) enum Rule {
     ///
     /// [`Arm`] says which arm the inner branch is in, so the two readings are
     /// one equation. Firing both — the outer branch has a branch in each arm —
-    /// leaves `pick 0 ; branch { drop ; A } { drop ; D }`, which [`Rule::Hoist`]
+    /// leaves `copy ; branch { drop ; A } { drop ; D }`, which [`Rule::Hoist`]
     /// backwards and [`Rule::CounitUnder`] finish as `branch { A } { D }`.
     ///
     /// ## Why the shape is what it is
@@ -481,8 +517,8 @@ pub(crate) enum Rule {
         else_origin: String,
     },
 
-    /// `pick 0 ; push c ; equal ; branch { A } { B }`
-    ///   = `pick 0 ; push c ; equal ; branch { drop ; push c ; A } { B }`.
+    /// `copy ; push c ; equal ; branch { A } { B }`
+    ///   = `copy ; push c ; equal ; branch { drop ; push c ; A } { B }`.
     ///
     /// **A value that tested equal to a literal *is* that literal.** The
     /// condition is a copy, so the arm the branch took still holds the value it
@@ -532,7 +568,7 @@ pub(crate) enum Rule {
         else_origin: String,
     },
 
-    /// `pick 0 ; dip 1 { drop }` = nothing.
+    /// `copy ; dip 1 { drop }` = nothing.
     ///
     /// Copy a value and discard the **original**: the copy is the same value,
     /// so neither happened. [`Rule::Counit`] is the other way round — copy and
@@ -545,7 +581,7 @@ pub(crate) enum Rule {
     /// original *moves* the value. That is a different law and is not written.
     CounitUnder,
 
-    /// `push c ; pick 0` = `push c ; push c`.
+    /// `push c ; copy` = `push c ; push c`.
     ///
     /// Copying a constant is pushing it again. It is what makes a refinement
     /// pay: code downstream reads a slot with `pick`, and a `pick` is opaque to
@@ -553,7 +589,7 @@ pub(crate) enum Rule {
     /// is what lets [`Rule::Eval`] see two constants and decide.
     CopyConst { c: Value },
 
-    /// `pick d ; pick 0` = `pick d ; dip 1 { pick d }`.
+    /// `copy ; copy` = `copy ; dip { copy }`.
     ///
     /// **Duplication is coassociative.** Making a third copy from the copy and
     /// making it from the original are the same thing, because they are the
@@ -561,9 +597,13 @@ pub(crate) enum Rule {
     ///
     /// Neither side is smaller, which is the point: the right-hand side puts a
     /// copy *in a frame*, and a framed computation is one [`Rule::Interchange`]
-    /// can carry. A bare `pick` cannot travel, so the copy a later step needs
+    /// can carry. A bare `copy` cannot travel, so the copy a later step needs
     /// would otherwise be stranded where it was made.
-    CopyAssoc { d: usize },
+    ///
+    /// Stated at the top of the stack and nowhere else, where it used to be
+    /// stated at every depth. A copy taken from below the top is a `copy` under
+    /// frames, and this equation reaches it once the frames have been opened.
+    CopyAssoc,
 
     /// `pick (n-1)^n ; X ; dip m { X }` = `X ; pick (m-1)^m`, for `X : n -> m`.
     ///
@@ -582,7 +622,7 @@ pub(crate) enum Rule {
     /// is its counit and [`Rule::CopyAssoc`] its coassociativity, and this says
     /// every `X` is a homomorphism for it. [`Rule::CopyConst`] is the case
     /// `X = push c`, and is now a lemma rather than an axiom — the `n = 0`
-    /// instance reads `push c ; dip 1 { push c }` = `push c ; pick 0`, and one
+    /// instance reads `push c ; dip 1 { push c }` = `push c ; copy`, and one
     /// [`Rule::Interchange`] and one [`Rule::ElimDip0`] turn the left side into
     /// `push c ; push c`. See
     /// `applier::tests::copy_const_is_derivable_from_copy_nat`, which runs the
@@ -651,42 +691,37 @@ pub(crate) enum Rule {
     /// one order and not the other.
     CancelTuple { n: usize },
 
-    /// `(roll d)^(d+1)` = nothing.
+    /// `swap ; swap` = nothing.
     ///
-    /// `roll d` lifts the value at depth `d` to the top, which rotates the top
-    /// `d+1` values by one and leaves everything under them alone. A rotation
-    /// of `d+1` things has order `d+1`, so doing it that many times puts every
-    /// one of them back where it started.
+    /// An exchange is its own inverse, so doing it twice puts both values back.
     ///
-    /// **This is what makes a roll writable at all.** Read forward it deletes a
-    /// run of rolls that has come back round; read backward it is the only way
-    /// to put a roll into a term that holds none, which is what
-    /// [`Rule::Unframe`] then has something to work with. `d = 0` is the
-    /// degenerate case — `roll 0` removes the top value and pushes it — and
-    /// falls out of the same statement rather than needing its own.
+    /// **This is what makes an exchange writable at all.** Read forward it
+    /// deletes a pair that has cancelled; read backward it is the only way to
+    /// put a `swap` into a term that holds none, which is what
+    /// [`Rule::Unframe`] then has something to work with.
     ///
-    /// No inverse is needed for the rotation itself: `(roll d)^d` already
-    /// undoes one `roll d`, so the tool needs no `unroll` instruction and the
-    /// machine needs no new opcode.
+    /// This was `(roll d)^(d+1)` = nothing, an axiom for every depth, standing
+    /// on a rotation of `d+1` things having order `d+1`. The rotations are gone
+    /// from the instruction set and the arithmetic went with them: a rotation
+    /// is now a nest of frames around this, and that it comes back round is a
+    /// consequence rather than an assumption — one `vm` measures, in
+    /// `movement_tests::rolling_the_whole_way_round_is_the_identity`.
     ///
-    /// No *matcher* places any of the three roll laws, so no tactic can ask for
-    /// one. Two other things construct them: the tests —`every_equation` sweeps
-    /// all three, and
-    /// `applier::tests::copy_const_at_depth_is_derivable_from_the_roll_laws`
-    /// runs two of them — and a derivation file naming one, which
-    /// [`crate::serial`] reads and writes like any other step. A law with no
-    /// search behind it is still a law something can spell out.
-    RollCycle { d: usize },
+    /// No *matcher* places this or [`Rule::Unframe`], so no tactic can ask for
+    /// one directly. Two other things construct them: the tests, and a
+    /// derivation file naming one, which [`crate::serial`] reads and writes
+    /// like any other step. A law with no search behind it is still a law
+    /// something can spell out.
+    SwapCycle,
 
-    /// `dip d { X } ; (roll (d+m-1))^m` = `(roll (d+n-1))^n ; X`,
-    /// for `X : n -> m`.
+    /// `dip { X } ; sink m` = `sink n ; X`, for `X : n -> m`.
     ///
-    /// **A framed computation is a rolled one.** Both sides apply `X` to the
-    /// `n` values sitting under the top `d`, and leave its `m` results on top
-    /// of those `d` — the left by reaching under them with a frame, the right
-    /// by rolling the operands up, computing at the top, and leaving the
-    /// answers there. The rolls are all at one depth because a rotation does
-    /// not change how many values there are.
+    /// **A framed computation is a sunk one.** Both sides apply `X` to the
+    /// values sitting under the hidden one and leave its results on top of it —
+    /// the left by reaching under with a frame, the right by sinking the hidden
+    /// value past the operands, computing at the top, and sinking nothing back.
+    /// `sink k` puts the top value under the `k` beneath it (see [`sink`]), so
+    /// the two sides differ only in whether that happens before or after `X`.
     ///
     /// ## What it is for
     ///
@@ -698,55 +733,33 @@ pub(crate) enum Rule {
     /// frame cannot show its two cases to the code outside it, so a case split
     /// at depth is an identity insertion that tells the continuation nothing.
     ///
-    /// This is the law that moves the value instead of the reasoning. Roll the
+    /// This is the law that moves the value instead of the reasoning. Bring the
     /// operand up, split it where every existing equation can see it, and the
     /// fork is at the top level of the sequence where [`Rule::Distribute`] can
     /// push the continuation into both arms.
     ///
     /// ## Why it is not derivable
     ///
-    /// Nothing else in the set mentions `roll` except [`Rule::Commute`], which
-    /// only says an operator cannot see one. `dip` and `roll` are the two ways
-    /// to address a value below the top, and no equation related them, so
-    /// neither could be rewritten into the other.
+    /// Nothing else in the set relates a frame to an exchange. `dip` and `swap`
+    /// are the two ways a value below the top gets reached, and without this
+    /// neither can be rewritten into the other.
     ///
-    /// The `d = 0` reading is `dip 0 { X } ; (roll (m-1))^m` =
-    /// `(roll (n-1))^n ; X`, which for `n = m = 1` is `X = X` — the law says
-    /// nothing where there is no depth to reach past, as it should.
-    /// No matcher places it yet; see [`Rule::RollCycle`].
+    /// ## One value deep, where it used to name a width
+    ///
+    /// The law read `dip d { X } ; (roll (d+m-1))^m` = `(roll (d+n-1))^n ; X`,
+    /// with two depths to get right and a rotation whose order had to be
+    /// counted. A frame hides one value, so `d` is gone; a deeper region is a
+    /// nest, and [`Rule::Collapse`] backwards is what opens one so this can
+    /// reach the innermost frame. At `n = m = 1` it is `dip { X } ; swap` =
+    /// `swap ; X`, which is the whole law in five nodes.
+    ///
+    /// No matcher places it; see [`Rule::SwapCycle`].
     Unframe {
         /// The frame, whole, so its origins survive the rewrite.
         framed: Node,
         n: usize,
         m: usize,
     },
-
-    /// `pick d` = `dip d { pick 0 } ; roll d`.
-    ///
-    /// **Copying from depth is copying at depth and rolling the copy up.** The
-    /// frame reaches past the top `d` values and duplicates the one under them;
-    /// the roll then lifts one of the two — they are the same value, so which
-    /// one does not matter — to the top, which is where `pick d` puts it.
-    ///
-    /// It is the third of the three laws that relate `dip` to `roll`, and the
-    /// one about `pick` rather than about a computation. [`Rule::Unframe`]
-    /// cannot reach it: `pick 0` is `1 -> 2`, so that law reads
-    /// `dip d { pick 0 } ; (roll (d+1))^2` = `roll d ; pick 0`, which is a
-    /// different pair of rolls and says nothing about a single `pick d`.
-    ///
-    /// ## What it is for
-    ///
-    /// [`Rule::CopyConst`] is what turns a slot back into a literal, and it is
-    /// stated at the top of the stack. Once a case split has put a literal at
-    /// depth, the code that reads that slot reads it with `pick d`, which is
-    /// opaque to every law that folds. This is what opens it up: rewriting the
-    /// `pick d` into a framed `pick 0` lets `copy_const` fire *inside* the
-    /// frame, where the literal and its copy are adjacent, and the leftover
-    /// roll is eaten by [`Rule::Unframe`]. Together they are `copy_const` at
-    /// depth, derived rather than restated.
-    ///
-    /// No matcher places it yet; see [`Rule::RollCycle`].
-    PickRoll { d: usize },
 }
 
 impl Rule {
@@ -768,13 +781,12 @@ impl Rule {
             Rule::Retest { .. } => "retest",
             Rule::SpecializeEqual { .. } => "specialize_equal",
             Rule::CopyConst { .. } => "copy_const",
-            Rule::CopyAssoc { .. } => "copy_assoc",
+            Rule::CopyAssoc => "copy_assoc",
             Rule::CopyNat { .. } => "copy_nat",
             Rule::BoolResult { .. } => "bool_result",
             Rule::CancelTuple { .. } => "cancel_tuple",
-            Rule::RollCycle { .. } => "roll_cycle",
+            Rule::SwapCycle => "swap_cycle",
             Rule::Unframe { .. } => "unframe",
-            Rule::PickRoll { .. } => "pick_roll",
         }
     }
 
@@ -852,15 +864,18 @@ impl Rule {
             // depths on both sides are computed from it, so a wrong `n` or `m`
             // would generate a different program rather than a wrong rewrite.
             Rule::Unframe { framed, n, m } => {
-                let (_, body) = framed_body(framed).ok_or_else(|| SideCondition::NotFramed {
-                    found: crate::ir::sketch(std::slice::from_ref(framed)),
-                })?;
+                let (depth, body) =
+                    framed_body(framed).ok_or_else(|| SideCondition::NotFramed {
+                        found: crate::ir::sketch(std::slice::from_ref(framed)),
+                    })?;
+                if depth != 1 {
+                    return Err(SideCondition::FrameNotOneDeep { depth });
+                }
                 claimed_arity(prog, &body, (*n as i64, *m as i64)).map(|_| ())
             }
             // The rest are schematic in their arguments and hold for every
             // instantiation, so there is nothing to check.
-            Rule::RollCycle { .. }
-            | Rule::PickRoll { .. }
+            Rule::SwapCycle
             | Rule::Collapse { .. }
             | Rule::ElimDip0 { .. }
             | Rule::Fuse { .. }
@@ -872,7 +887,7 @@ impl Rule {
             | Rule::Counit { .. }
             | Rule::CounitUnder
             | Rule::CopyConst { .. }
-            | Rule::CopyAssoc { .. }
+            | Rule::CopyAssoc
             | Rule::CancelTuple { .. } => Ok(()),
         }
     }
@@ -1005,11 +1020,11 @@ impl Rule {
             }
 
             Rule::Commute { op } => {
-                vec![Node::Op(Instruction::Roll(1)), Node::Op(op.clone())]
+                vec![Node::Op(Instruction::Swap), Node::Op(op.clone())]
             }
 
             Rule::SplitBool => vec![
-                Node::Op(Instruction::Pick(0)),
+                Node::Op(Instruction::Copy),
                 Node::Op(Instruction::IsBool),
                 Node::Branch {
                     then_origin: "a bool".to_string(),
@@ -1025,11 +1040,13 @@ impl Rule {
             ],
 
             Rule::Counit { d } => {
-                vec![Node::Op(Instruction::Pick(*d)), Node::Op(Instruction::Drop)]
+                let mut out = pick(*d);
+                out.push(Node::Op(Instruction::Drop));
+                out
             }
 
             Rule::CounitUnder => vec![
-                Node::Op(Instruction::Pick(0)),
+                Node::Op(Instruction::Copy),
                 Node::Dip {
                     depth: 1,
                     origins: Vec::new(),
@@ -1050,12 +1067,9 @@ impl Rule {
                 retest_shape(*arm, held, other, then_origin, else_origin)
             }
 
-            Rule::CopyConst { c } => vec![push(c.clone()), Node::Op(Instruction::Pick(0))],
+            Rule::CopyConst { c } => vec![push(c.clone()), Node::Op(Instruction::Copy)],
 
-            Rule::CopyAssoc { d } => vec![
-                Node::Op(Instruction::Pick(*d)),
-                Node::Op(Instruction::Pick(0)),
-            ],
+            Rule::CopyAssoc => vec![Node::Op(Instruction::Copy), Node::Op(Instruction::Copy)],
 
             Rule::CopyNat { x, n, m } => {
                 let mut out = copy_block(*n);
@@ -1075,14 +1089,11 @@ impl Rule {
                 Node::Op(Instruction::Untuple(*n)),
             ],
 
-            Rule::RollCycle { d } => rolls(*d, d + 1),
-
-            Rule::PickRoll { d } => vec![Node::Op(Instruction::Pick(*d))],
+            Rule::SwapCycle => vec![Node::Op(Instruction::Swap), Node::Op(Instruction::Swap)],
 
             Rule::Unframe { framed, m, .. } => {
-                let (depth, _) = framed_body(framed).expect("check() accepted an unframed node");
                 let mut nodes = vec![framed.clone()];
-                nodes.extend(rolls(depth + m.saturating_sub(1), *m));
+                nodes.extend(sink(*m));
                 nodes
             }
         }
@@ -1255,12 +1266,12 @@ impl Rule {
 
             Rule::CopyConst { c } => vec![push(c.clone()), push(c.clone())],
 
-            Rule::CopyAssoc { d } => vec![
-                Node::Op(Instruction::Pick(*d)),
+            Rule::CopyAssoc => vec![
+                Node::Op(Instruction::Copy),
                 Node::Dip {
                     depth: 1,
                     origins: Vec::new(),
-                    body: vec![Node::Op(Instruction::Pick(*d))],
+                    body: vec![Node::Op(Instruction::Copy)],
                 },
             ],
 
@@ -1278,20 +1289,11 @@ impl Rule {
 
             Rule::CancelTuple { .. } => vec![push(Value::Bool(true))],
 
-            Rule::RollCycle { .. } => Vec::new(),
-
-            Rule::PickRoll { d } => vec![
-                Node::Dip {
-                    depth: *d,
-                    origins: Vec::new(),
-                    body: vec![Node::Op(Instruction::Pick(0))],
-                },
-                Node::Op(Instruction::Roll(*d)),
-            ],
+            Rule::SwapCycle => Vec::new(),
 
             Rule::Unframe { framed, n, .. } => {
-                let (depth, body) = framed_body(framed).expect("check() accepted an unframed node");
-                let mut nodes = rolls(depth + n.saturating_sub(1), *n);
+                let (_, body) = framed_body(framed).expect("check() accepted an unframed node");
+                let mut nodes = sink(*n);
                 nodes.extend(body);
                 nodes
             }
@@ -1299,7 +1301,7 @@ impl Rule {
     }
 }
 
-/// `pick 0 ; push c ; equal ; branch { .. } { .. }`, which both sides of
+/// `copy ; push c ; equal ; branch { .. } { .. }`, which both sides of
 /// [`Rule::SpecializeEqual`] are — they differ only in what the `then` arm
 /// opens with, the way both sides of [`Rule::Retest`] are one shape.
 fn specialize_shape(
@@ -1310,7 +1312,7 @@ fn specialize_shape(
     else_origin: &str,
 ) -> Vec<Node> {
     vec![
-        Node::Op(Instruction::Pick(0)),
+        Node::Op(Instruction::Copy),
         push(c.clone()),
         Node::Op(Instruction::Equal),
         Node::Branch {
@@ -1329,9 +1331,33 @@ fn specialized(c: &Value, then_arm: &[Node]) -> Vec<Node> {
     out
 }
 
-/// `count` copies of `roll d`.
-fn rolls(d: usize, count: usize) -> Vec<Node> {
-    std::iter::repeat_n(Node::Op(Instruction::Roll(d)), count).collect()
+/// Puts the top value under the `k` beneath it, leaving their order alone.
+///
+/// `a1 … ak h` becomes `h a1 … ak`. This is what a rotation used to be written
+/// as — `(roll k)^k`, the inverse of one `roll k` — and it is the shape
+/// [`Rule::Unframe`] needs on both sides, since a frame *is* a value held above
+/// a computation.
+///
+/// The recursion is the same one the compiler expands a reach with: exchange
+/// with the value below, then sink the rest of the way under a frame that hides
+/// what was just passed.
+///
+/// ```text
+/// sink 0 = ε        sink 1 = swap        sink k = swap ; dip { sink (k-1) }
+/// ```
+pub(crate) fn sink(k: usize) -> Vec<Node> {
+    match k {
+        0 => Vec::new(),
+        1 => vec![Node::Op(Instruction::Swap)],
+        _ => vec![
+            Node::Op(Instruction::Swap),
+            Node::Dip {
+                depth: 1,
+                origins: Vec::new(),
+                body: sink(k - 1),
+            },
+        ],
+    }
 }
 
 /// A frame's depth and the body it hides that depth from.
@@ -1353,7 +1379,7 @@ pub(crate) fn framed_body(node: &Node) -> Option<(usize, Vec<Node>)> {
     }
 }
 
-/// `pick 0 ; branch { .. } { .. }` with `held` in the arm the law names.
+/// `copy ; branch { .. } { .. }` with `held` in the arm the law names.
 ///
 /// Both sides of [`Rule::Retest`] are this shape and differ only in what the
 /// arm holds, which is what makes the equation one law read at two arms rather
@@ -1370,7 +1396,7 @@ fn retest_shape(
         Arm::Else => (other.to_vec(), held),
     };
     vec![
-        Node::Op(Instruction::Pick(0)),
+        Node::Op(Instruction::Copy),
         Node::Branch {
             then_origin: then_origin.to_string(),
             then_body,
@@ -1389,12 +1415,78 @@ fn push(v: Value) -> Node {
 /// `a b` becomes `a b a b`. Each pick reaches past the copies made so far to
 /// the next original, which is why the depth does not change — after `j` of
 /// them the next original is still `k-1` down.
+///
+/// The picks are written out in core, since there is no `pick d` to write: at
+/// `k = 1` the block is a bare `copy`, and deeper it is the expansion phase 4
+/// emits, node for node, so a term built here and a term compiled from source
+/// are the same term.
 pub(crate) fn copy_block(k: usize) -> Vec<Node> {
     match k.checked_sub(1) {
-        Some(d) => std::iter::repeat_n(Node::Op(Instruction::Pick(d)), k).collect(),
+        Some(d) => std::iter::repeat_n(pick(d), k).flatten().collect(),
         // Nothing to copy: a computation that reads nothing needs no inputs
         // duplicated, which is what makes `copy_const` the `n = 0` case.
         None => Vec::new(),
+    }
+}
+
+/// The depth of a `pick` written out in core, if that is what these nodes are.
+///
+/// [`pick`] read backwards. A matcher window holds nodes rather than a depth,
+/// so recovering `d` is how an equation stated about `pick d` finds itself in a
+/// term that never mentions one.
+pub(crate) fn pick_depth(nodes: &[Node]) -> Option<usize> {
+    match nodes {
+        [Node::Op(Instruction::Copy)] => Some(0),
+        [
+            Node::Dip { depth: 1, body, .. },
+            Node::Op(Instruction::Swap),
+        ] => pick_depth(body).map(|d| d + 1),
+        _ => None,
+    }
+}
+
+/// `roll d`, as the frames and exchanges the compiler expands it into.
+///
+/// ```text
+/// roll 0 = ε        roll 1 = swap        roll d = dip { roll (d-1) } ; swap
+/// ```
+///
+/// The same recursion as [`pick`] with a different base case, which is the
+/// whole of the difference between moving a value up and copying it up.
+pub(crate) fn roll(d: usize) -> Vec<Node> {
+    match d {
+        0 => Vec::new(),
+        1 => vec![Node::Op(Instruction::Swap)],
+        _ => vec![
+            Node::Dip {
+                depth: 1,
+                origins: Vec::new(),
+                body: roll(d - 1),
+            },
+            Node::Op(Instruction::Swap),
+        ],
+    }
+}
+
+/// `pick d`, as the frames and exchanges the compiler expands it into.
+///
+/// ```text
+/// copy = copy        pick d = dip { pick (d-1) } ; swap
+/// ```
+///
+/// It matches [`crate::ir::build`] applied to what phase 4 emits, which is what
+/// lets a rule's window meet a compiled one.
+pub(crate) fn pick(d: usize) -> Vec<Node> {
+    match d {
+        0 => vec![Node::Op(Instruction::Copy)],
+        _ => vec![
+            Node::Dip {
+                depth: 1,
+                origins: Vec::new(),
+                body: pick(d - 1),
+            },
+            Node::Op(Instruction::Swap),
+        ],
     }
 }
 
@@ -2031,11 +2123,12 @@ pub(crate) mod tests {
         // `a b` becomes `a b a b`, not `a b b a` — the shape the vacuous
         // derivation builds.
         assert_eq!(copies(0), Vec::new());
-        assert_eq!(copies(1), vec![op(Instruction::Pick(0))]);
-        assert_eq!(
-            copies(2),
-            vec![op(Instruction::Pick(1)), op(Instruction::Pick(1))]
-        );
+        assert_eq!(copies(1), vec![op(Instruction::Copy)]);
+        // `pick 1` twice, written the way phase 4 writes one.
+        let pick_one = || vec![dip(1, vec![op(Instruction::Copy)]), op(Instruction::Swap)];
+        let mut want = pick_one();
+        want.extend(pick_one());
+        assert_eq!(copies(2), want);
     }
 
     #[test]
@@ -2044,10 +2137,7 @@ pub(crate) mod tests {
             op: Instruction::Add,
         };
         assert_eq!(r.check(&prog()), Ok(()));
-        assert_eq!(
-            r.lhs(),
-            vec![op(Instruction::Roll(1)), op(Instruction::Add)]
-        );
+        assert_eq!(r.lhs(), vec![op(Instruction::Swap), op(Instruction::Add)]);
         assert_eq!(r.rhs(), vec![op(Instruction::Add)]);
     }
 
@@ -2095,7 +2185,7 @@ pub(crate) mod tests {
         assert_eq!(r.check(&prog()), Ok(()));
         assert_eq!(r.rhs(), Vec::new());
         assert_eq!(r.lhs().len(), 3);
-        assert_eq!(r.lhs()[0], op(Instruction::Pick(0)));
+        assert_eq!(r.lhs()[0], op(Instruction::Copy));
         assert_eq!(r.lhs()[1], op(Instruction::IsBool));
 
         // The inner arms hold the literals, which is the whole point: after a
@@ -2130,25 +2220,20 @@ pub(crate) mod tests {
 
     #[test]
     fn counit_is_not_an_annihilation() {
-        // `pick d` is (d+1 -> d+2), so the annihilation equation would ask for
-        // d+2 drops. The counit law is the one that holds.
-        let r = Rule::Counit { d: 3 };
-        assert_eq!(
-            r.lhs(),
-            vec![op(Instruction::Pick(3)), op(Instruction::Drop)]
-        );
+        // `copy` is (1 -> 2), so the annihilation equation would ask for two
+        // drops. The counit law is the one that holds.
+        let r = Rule::Counit { d: 0 };
+        assert_eq!(r.lhs(), vec![op(Instruction::Copy), op(Instruction::Drop)]);
         assert_eq!(r.rhs(), Vec::new());
     }
 
     #[test]
     fn copy_assoc_puts_one_copy_in_a_frame() {
-        let r = Rule::CopyAssoc { d: 2 };
+        let r = Rule::CopyAssoc;
+        assert_eq!(r.lhs(), vec![op(Instruction::Copy), op(Instruction::Copy)]);
         assert_eq!(
             r.rhs(),
-            vec![
-                op(Instruction::Pick(2)),
-                dip(1, vec![op(Instruction::Pick(2))])
-            ]
+            vec![op(Instruction::Copy), dip(1, vec![op(Instruction::Copy)])]
         );
     }
 
@@ -2161,19 +2246,11 @@ pub(crate) mod tests {
             n: 2,
             m: 1,
         };
-        assert_eq!(
-            r.lhs(),
-            vec![
-                op(Instruction::Pick(1)),
-                op(Instruction::Pick(1)),
-                op(Instruction::Equal),
-                dip(1, vec![op(Instruction::Equal)]),
-            ]
-        );
-        assert_eq!(
-            r.rhs(),
-            vec![op(Instruction::Equal), op(Instruction::Pick(0))]
-        );
+        let mut want = copy_block(2);
+        want.push(op(Instruction::Equal));
+        want.push(dip(1, vec![op(Instruction::Equal)]));
+        assert_eq!(r.lhs(), want);
+        assert_eq!(r.rhs(), vec![op(Instruction::Equal), op(Instruction::Copy)]);
     }
 
     #[test]
@@ -2278,7 +2355,7 @@ pub(crate) mod tests {
         assert_eq!(
             r(Arm::Then).lhs(),
             vec![
-                op(Instruction::Pick(0)),
+                op(Instruction::Copy),
                 branch(
                     held(vec![inner(), op(Instruction::Add)]),
                     vec![op(Instruction::Drop)]
@@ -2288,7 +2365,7 @@ pub(crate) mod tests {
         assert_eq!(
             r(Arm::Then).rhs(),
             vec![
-                op(Instruction::Pick(0)),
+                op(Instruction::Copy),
                 branch(
                     held(vec![
                         op(Instruction::Drop),
@@ -2305,7 +2382,7 @@ pub(crate) mod tests {
         assert_eq!(
             r(Arm::Else).rhs(),
             vec![
-                op(Instruction::Pick(0)),
+                op(Instruction::Copy),
                 branch(
                     vec![op(Instruction::Drop)],
                     held(vec![
@@ -2339,14 +2416,11 @@ pub(crate) mod tests {
         // One law each way round, and the set had only one of them.
         assert_eq!(
             Rule::Counit { d: 0 }.lhs(),
-            vec![op(Instruction::Pick(0)), op(Instruction::Drop)]
+            vec![op(Instruction::Copy), op(Instruction::Drop)]
         );
         assert_eq!(
             Rule::CounitUnder.lhs(),
-            vec![
-                op(Instruction::Pick(0)),
-                dip(1, vec![op(Instruction::Drop)])
-            ]
+            vec![op(Instruction::Copy), dip(1, vec![op(Instruction::Drop)])]
         );
         assert_eq!(Rule::CounitUnder.rhs(), Vec::new());
     }
@@ -2421,7 +2495,7 @@ pub(crate) mod tests {
             Rule::SplitBool,
             Rule::Counit { d: 3 },
             Rule::CopyConst { c: Value::Int(7) },
-            Rule::CopyAssoc { d: 2 },
+            Rule::CopyAssoc,
             Rule::CopyNat {
                 x: vec![op(Instruction::Equal)],
                 n: 2,
@@ -2440,17 +2514,16 @@ pub(crate) mod tests {
                 else_origin: "else".to_string(),
             },
             Rule::CancelTuple { n: 3 },
-            Rule::RollCycle { d: 3 },
+            Rule::SwapCycle,
             Rule::Unframe {
                 framed: Node::Dip {
-                    depth: 2,
+                    depth: 1,
                     origins: Vec::new(),
                     body: vec![op(Instruction::Equal)],
                 },
                 n: 2,
                 m: 1,
             },
-            Rule::PickRoll { d: 3 },
         ]
     }
 
@@ -2501,25 +2574,33 @@ pub(crate) mod tests {
         // number honest is the point: an equation is an axiom, and the set is
         // meant to grow only when something genuinely cannot be derived.
         //
-        // Twenty-two variants, twenty-one axioms: `copy_const` is the constant
-        // case of `copy_nat` and is kept only because it is one step where the
+        // Twenty-one variants, twenty axioms: `copy_const` is the constant case
+        // of `copy_nat` and is kept only because it is one step where the
         // derivation is three, and `values` and `cleanup` fire it constantly.
         // `applier::tests::copy_const_is_derivable_from_copy_nat` is what says
         // so out loud.
         //
-        // The last three are the roll laws, and they were added together for
-        // one reason: every equation about *what a value is* is stated about
-        // the top of the stack, because `branch` observes the top and nothing
-        // else does, so a value under a frame is out of all of their reach.
-        // Restating each of them at depth — `split_bool(d)`, then
-        // `bool_result(d)` to discharge its guard, then `copy_const(d)` to read
-        // what it left — is the same fact three times and composes with
-        // nothing. These move the value instead, and `copy_const` at depth then
-        // falls out as a lemma rather than a fourth axiom, which
-        // `applier::tests::copy_const_at_depth_is_derivable_from_the_roll_laws`
-        // runs in both directions. `vm::roll_law_tests` measures all three
-        // against the machine.
-        assert_eq!(before, 22);
+        // It was twenty-two, and five of those said things about `pick d` and
+        // `roll d` that `copy`, `swap` and a one-deep `dip` say in a single
+        // equation each. Deleting the depths from the instruction set deleted
+        // the families with them: `pick_roll` became the compiler's own
+        // expansion, `roll_cycle` became `swap_cycle`, and `counit`,
+        // `copy_assoc` and `unframe` each stopped being an axiom per depth and
+        // became one axiom.
+        //
+        // The last two are the movement laws, and they are here for one reason:
+        // every equation about *what a value is* is stated about the top of the
+        // stack, because `branch` observes the top and nothing else does, so a
+        // value under a frame is out of all of their reach. Restating each of
+        // them at depth — `split_bool(d)`, then `bool_result(d)` to discharge
+        // its guard, then `copy_const(d)` to read what it left — is the same
+        // fact three times and composes with nothing. These move the value
+        // instead, and `copy_const` at depth then falls out as a lemma rather
+        // than a third axiom, which
+        // `applier::tests::copy_const_at_depth_is_derivable_from_the_movement_laws`
+        // runs in both directions. `vm::movement_tests` measures them against
+        // the machine, along with the expansions they now stand behind.
+        assert_eq!(before, 21);
     }
 
     // -----------------------------------------------------------------------

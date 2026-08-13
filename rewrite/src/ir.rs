@@ -64,7 +64,14 @@ pub(crate) fn build(library: &Library, s_idx: SentenceIndex) -> Vec<Node> {
     library.sentences[s_idx]
         .iter()
         .map(|inst| match inst {
-            Instruction::Dip(depth, target) => build_dip(library, *depth, *target),
+            // The ISA has no width to read: a call hides nothing or one value,
+            // and a deeper region is that many of them nested. The tree keeps a
+            // width because [`Rule::Collapse`] can merge a nest into one, which
+            // is what every equation that reaches under a frame reads — so the
+            // number here is one a rewrite arrived at rather than one the
+            // bytecode stated.
+            Instruction::Jump(target) => build_dip(library, 0, *target),
+            Instruction::Dip(target) => build_dip(library, 1, *target),
             Instruction::Branch(then_t, else_t) => Node::Branch {
                 then_origin: label(library, *then_t),
                 then_body: build(library, *then_t),

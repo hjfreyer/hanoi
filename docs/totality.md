@@ -385,7 +385,7 @@ have to become one.
    `X = untuple 3 ; dip 3 { is_symbol } ; dip 2 { is_symbol }` that one
    `share { X }` would eliminate against the emit side.
 4. The two booleans then have to be case-split where they sit, which is under
-   two and three values respectively. That is what the roll laws are for — see
+   two and three values respectively. That is what the movement laws are for — see
    "reaching a value below the top" in `docs/tactics.md`. They are equations
    here without matchers, so today this step is a script rather than a tactic.
 

@@ -1272,7 +1272,7 @@ impl Matcher for Annihilate {
 ///
 /// The two-output case, which exists because a fallible instruction leaves its
 /// flag alongside its value: `add` is `(2 -> 2)`, so what cancels it is two
-/// drops rather than one. `pick 0` is `(1 -> 2)` and belongs here too, copying
+/// drops rather than one. `copy` is `(1 -> 2)` and belongs here too, copying
 /// a value only for both copies to go.
 ///
 /// Measure: non-drop node count.
@@ -1386,11 +1386,11 @@ fn is_drop(node: &Node) -> bool {
 /// the tactic expression:
 ///
 /// ```text
-/// then(once(introduce { pick 0 }))
+/// then(once(introduce { copy }))
 /// ```
 ///
 /// It is what makes factoring reachable when only one arm has the code you want
-/// to hoist. Give the other arm a `pick 0` it immediately discards, and the two
+/// to hoist. Give the other arm a `copy` it immediately discards, and the two
 /// arms now share a prefix that `factor` can lift out — the copy having been
 /// paid for in a place where it provably costs nothing.
 ///
@@ -1745,13 +1745,19 @@ impl Matcher for Speculate {
         let mut steps = Vec::new();
         // The vacuous identity, derived rather than assumed: `n` cancelling
         // pairs, then the computation in front of the drops they left.
+        //
+        // Each pair is `pick (n-1) ; drop`, and a `pick` is as many nodes as
+        // its depth costs to write — one for a `copy`, two for anything under
+        // frames. So the `i`th pair goes in past the `i` picks already there,
+        // and the drops they left start where the last one ends.
+        let wide = crate::rule::pick(self.n.saturating_sub(1)).len();
         for i in 0..self.n {
             steps.push(PlannedStep {
                 kind: StepKind::Rule(Rule::Counit { d: self.n - 1 }),
                 dir: Direction::Reverse,
                 rel: Location {
                     descent: vec![(0, opposite)],
-                    at: i,
+                    at: i * wide,
                 },
             });
         }
@@ -1766,7 +1772,7 @@ impl Matcher for Speculate {
             dir: Direction::Reverse,
             rel: Location {
                 descent: vec![(0, opposite)],
-                at: self.n,
+                at: self.n * wide,
             },
         });
 
@@ -1795,17 +1801,31 @@ impl Matcher for Speculate {
     }
 }
 
-/// A node an arm is allowed to keep: `drop`, `pick`, and a `branch`.
+/// A node an arm is allowed to keep: movement, and a `branch`.
 ///
-/// The three that say *which* values a branch is choosing between rather than
+/// The ones that say *which* values a branch is choosing between rather than
 /// computing anything with them. Everything else is what [`Lift`] is trying to
 /// get out, and the distinction is what stops it from lifting the drops it
 /// just put in.
+///
+/// A frame counts when what it holds is movement and nothing else, which is
+/// what keeps a `pick` or a `roll` trivial now that either is frames around a
+/// `copy` or a `swap`. A frame around anything else is work, and a `branch` is
+/// trivial only where it stands rather than wherever it is buried.
 fn is_trivial(node: &Node) -> bool {
-    matches!(
-        node,
-        Node::Op(Instruction::Drop) | Node::Op(Instruction::Pick(_)) | Node::Branch { .. }
-    )
+    matches!(node, Node::Branch { .. }) || is_movement(node)
+}
+
+/// A node that only moves values about: `drop`, `copy`, `swap`, and the frames
+/// that a reach at depth is written as.
+fn is_movement(node: &Node) -> bool {
+    match node {
+        Node::Op(Instruction::Drop) | Node::Op(Instruction::Copy) | Node::Op(Instruction::Swap) => {
+            true
+        }
+        Node::Dip { body, .. } => body.iter().all(is_movement),
+        _ => false,
+    }
 }
 
 /// Hoists the computation an arm opens with out of the branch — [`Speculate`]
@@ -2038,10 +2058,10 @@ impl Matcher for Lift {
 
             // The speculating route: no drops to stand in front of, but the
             // arm computes on copies, so the copies can be conjured instead.
-            let copies = leading_copy_block(matched);
-            if copies > 0
-                && let Some(found) = Lift::candidate(prog, matched, copies, &|n| n == copies)
-                && let Ok(speculate) = Speculate::new(Some(prog), found.prefix[copies..].to_vec())
+            let (copied, block) = leading_copy_block(matched);
+            if copied > 0
+                && let Some(found) = Lift::candidate(prog, matched, block, &|n| n == copied)
+                && let Ok(speculate) = Speculate::new(Some(prog), found.prefix[block..].to_vec())
                 && let Some(steps) = speculate.plan(prog, window)
             {
                 return Some(steps);
@@ -2051,21 +2071,27 @@ impl Matcher for Lift {
     }
 }
 
-/// The `pick (n-1)^n` a computation on copies opens with, or nought.
+/// The block duplicating the top `n` values that a computation on copies opens
+/// with: how many values it copies, and how many nodes that took.
 ///
-/// `n` is read off the depth rather than guessed at: a block that copies `n`
-/// values is `n` picks at depth `n-1`, so the first pick says how many there
-/// should be and the rest have to agree.
-fn leading_copy_block(arm: &[Node]) -> usize {
-    let Some(Node::Op(Instruction::Pick(d))) = arm.first() else {
-        return 0;
-    };
-    let n = d + 1;
-    if arm.len() >= n && arm[..n].iter().all(|node| same_effect(node, &arm[0])) {
-        n
-    } else {
-        0
-    }
+/// The two are not the same number any more, which is the whole reason this
+/// answers both. `pick (n-1)^n` was `n` nodes; written out it is `n` copies
+/// under `n-1` frames apiece, and a caller indexing into the arm needs the node
+/// count while one reckoning what the other arm must pay needs the value count.
+///
+/// At most one width can match, so this can afford to try them: `copy_block(n)`
+/// opens with a nest of frames `n-1` deep, and two different widths never share
+/// a prefix. Reading the width off a `pick`'s depth is what this used to do,
+/// and there is no depth to read — a copy from below the top is a `copy` under
+/// frames, and how many frames is the width.
+fn leading_copy_block(arm: &[Node]) -> (usize, usize) {
+    (1..=arm.len())
+        .find_map(|n| {
+            let block = crate::rule::copy_block(n);
+            (block.len() <= arm.len() && same_effect_seq(&block, &arm[..block.len()]))
+                .then_some((n, block.len()))
+        })
+        .unwrap_or((0, 0))
 }
 
 /// The arity of a term written in a tactic expression.
@@ -2148,18 +2174,18 @@ impl Matcher for BoolResult {
     }
 }
 
-/// `op ; pick 0 ; is_bool` becomes `op ; push true`.
+/// `op ; copy ; is_bool` becomes `op ; push true`.
 ///
 /// The same fact as [`BoolResult`], read through a **copy** — and it is a
 /// second matcher for the reason [`Annihilate`] has three: a matcher's width is
-/// fixed before it looks, and the `pick 0` in the middle makes this window
+/// fixed before it looks, and the `copy` in the middle makes this window
 /// three nodes where that one reads two.
 ///
 /// **What wants it is [`SplitBool`].** The case split is the only law that can
 /// put a `branch` on an unknown condition into a term, and it pays for being
-/// unconditional by asking `is_bool` in the term — behind a `pick 0`, because
+/// unconditional by asking `is_bool` in the term — behind a `copy`, because
 /// the value has to survive for the branch that follows. So the guard it leaves
-/// is `pick 0 ; is_bool`, which `bool_result` cannot read, and a split placed on
+/// is `copy ; is_bool`, which `bool_result` cannot read, and a split placed on
 /// the result of an operator stalls holding a question the equation set can
 /// already answer. The two laws that were built to compose could not meet, and
 /// this is the window where they do.
@@ -2168,7 +2194,7 @@ impl Matcher for BoolResult {
 /// has, and `tests::the_guard_a_split_leaves_is_derivable` runs them:
 ///
 /// ```text
-/// op ; pick 0 ; is_bool
+/// op ; copy ; is_bool
 ///   = pick (n-1)^n ; op ; dip 1 { op } ; is_bool     copy_nat backwards
 ///   = pick (n-1)^n ; op ; is_bool ; dip 1 { op }     interchange
 ///   = pick (n-1)^n ; op ; drop ; push true ; …       bool_result
@@ -2209,7 +2235,7 @@ impl Matcher for BoolResultCopied {
     fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
         let [
             Node::Op(op),
-            Node::Op(Instruction::Pick(0)),
+            Node::Op(Instruction::Copy),
             Node::Op(Instruction::IsBool),
         ] = window
         else {
@@ -2272,18 +2298,22 @@ impl Matcher for BoolResultCopied {
             rule.check(prog).ok()?;
         }
 
+        // The block of copies is as many nodes as writing its picks costs, so
+        // everything after it is addressed past that rather than past `n`.
+        let wide = crate::rule::pick(n.saturating_sub(1)).len();
+        let copies = n * wide;
         let mut steps = vec![
-            // `op ; pick 0` is one run of `op` and a copy; un-share it into two
+            // `op ; copy` is one run of `op` and a copy; un-share it into two
             // runs, which is what puts an `op` in front of the `is_bool`.
             at(unshare, Direction::Reverse, 0),
-            at(float, Direction::Reverse, n + 1),
-            at(fold, Direction::Forward, n),
-            at(discard, Direction::Forward, n),
+            at(float, Direction::Reverse, copies + 1),
+            at(fold, Direction::Forward, copies),
+            at(discard, Direction::Forward, copies),
         ];
         // The copies were made only to be discarded, and the drops the
         // annihilation left are what they cancel against — innermost first.
         for i in (0..n).rev() {
-            steps.push(at(Rule::Counit { d: n - 1 }, Direction::Forward, i));
+            steps.push(at(Rule::Counit { d: n - 1 }, Direction::Forward, i * wide));
         }
         steps.push(at(put_back, Direction::Forward, 0));
         steps.push(at(unwrap, Direction::Forward, 0));
@@ -2333,19 +2363,43 @@ impl Matcher for InvBoolResult {
 
 /// `pick d ; drop` becomes nothing.
 ///
-/// Copying a value and discarding the copy: neither happened. The counit law of
-/// the comonoid whose comultiplication is `pick`.
+/// Copying a value and discarding the copy: neither happened. At `d = 0` it is
+/// the counit law of the comonoid whose comultiplication is `copy`; deeper it
+/// is that law under frames, which is where the copy came from.
+///
+/// The window is three nodes because that is what `pick d ; drop` is once the
+/// depth has been written out: a frame, an exchange, and the drop. At `d = 0`
+/// there is no frame, so the first two of the three are the whole `copy ; drop`
+/// and the third is not looked at.
 ///
 /// Measure: node count.
 #[derive(Debug)]
 pub(crate) struct Counit;
+
+/// The `pick d ; drop` a window opens with, if that is what it opens with.
+///
+/// Reads the depth back off the frames, which is what an equation stated about
+/// `pick d` needs in a term that never mentions one. The answer is the number
+/// of nodes matched as well as the depth, since a `copy` is one node and every
+/// deeper reach is two.
+fn counit_window(window: &[Node]) -> Option<(usize, usize)> {
+    for width in [1usize, 2] {
+        if window.len() > width
+            && let Some(d) = crate::rule::pick_depth(&window[..width])
+            && is_drop(&window[width])
+        {
+            return Some((d, width + 1));
+        }
+    }
+    None
+}
 
 impl Matcher for Counit {
     fn name(&self) -> &'static str {
         "counit"
     }
     fn width(&self) -> usize {
-        2
+        3
     }
     fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
         Err(
@@ -2356,13 +2410,8 @@ impl Matcher for Counit {
         )
     }
     fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
-        let [Node::Op(Instruction::Pick(d)), drop] = window else {
-            return None;
-        };
-        if !is_drop(drop) {
-            return None;
-        }
-        at_window(prog, Rule::Counit { d: *d }, Direction::Forward)
+        let (d, _) = counit_window(window)?;
+        at_window(prog, Rule::Counit { d }, Direction::Forward)
     }
 }
 
@@ -2379,19 +2428,17 @@ impl Matcher for CounitAt {
         "counit"
     }
     fn width(&self) -> usize {
-        2
+        3
     }
     fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
         Ok(Box::new(InvCounit(self.0)))
     }
     fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
-        let [Node::Op(Instruction::Pick(d)), drop] = window else {
-            return None;
-        };
-        if *d != self.0 || !is_drop(drop) {
+        let (d, _) = counit_window(window)?;
+        if d != self.0 {
             return None;
         }
-        at_window(prog, Rule::Counit { d: *d }, Direction::Forward)
+        at_window(prog, Rule::Counit { d }, Direction::Forward)
     }
 }
 
@@ -2408,14 +2455,18 @@ impl Matcher for CounitAt {
 /// That also means it cannot insert past the last node of a sequence — there is
 /// nothing there to stand in front of.
 ///
-/// The copy is the point. A cancelling pair put beside a value is how a copy of
-/// that value gets somewhere it is wanted; the `drop` then either travels off
-/// with [`Float`] or becomes a computation with [`Introduce`], which together
-/// spell out the vacuous law:
+/// The copy is the point, and the depth with it. A cancelling pair put beside a
+/// value is how a copy of that value gets somewhere it is wanted; the `drop`
+/// then either travels off with [`Float`] or becomes a computation with
+/// [`Introduce`], which together spell out the vacuous law:
 ///
 /// ```text
 /// pick (n-1)^n ; X ; drop^m  =  nothing            for X : n -> m
 /// ```
+///
+/// This is the one place a depth is still written down, and it is why
+/// [`Rule::Counit`] kept one when the instruction it named did not: `n` of
+/// these nested is a block copy, and nothing else in the set builds one.
 ///
 /// Measure: none, and it grows the term — its own output is a node it would
 /// happily insert in front of again. Aim it.
@@ -2438,8 +2489,8 @@ impl Matcher for InvCounit {
     }
 }
 
-/// `pick 0 ; branch { branch { A } { B } ; R } { Q }` becomes
-/// `pick 0 ; branch { drop ; A ; R } { Q }`, and the mirror of it.
+/// `copy ; branch { branch { A } { B } ; R } { Q }` becomes
+/// `copy ; branch { drop ; A ; R } { Q }`, and the mirror of it.
 ///
 /// [`Rule::Retest`] forward: the same value tested twice answers the same, so
 /// the arm the outer branch took already decides the inner one and the other
@@ -2449,7 +2500,7 @@ impl Matcher for InvCounit {
 /// the window it just rewrote, so a branch with a branch in each arm is
 /// collapsed by two firings rather than needing a third shape.
 ///
-/// Measure: arms that begin with a branch under a `pick 0`, which it strictly
+/// Measure: arms that begin with a branch under a `copy`, which it strictly
 /// reduces — what it leaves in one begins with a `drop`.
 #[derive(Debug)]
 pub(crate) struct Retest;
@@ -2471,7 +2522,7 @@ impl Matcher for Retest {
     }
     fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
         let [
-            Node::Op(Instruction::Pick(0)),
+            Node::Op(Instruction::Copy),
             Node::Branch {
                 then_origin,
                 then_body,
@@ -2539,10 +2590,10 @@ pub(crate) struct SpecializeEqual;
 /// The literal, and the two arms with their origins.
 type SpecializeWindow<'a> = (&'a Value, &'a String, &'a [Node], &'a String, &'a [Node]);
 
-/// The window both readings share: `pick 0 ; push c ; equal ; branch`.
+/// The window both readings share: `copy ; push c ; equal ; branch`.
 fn specialize_window(window: &[Node]) -> Option<SpecializeWindow<'_>> {
     let [
-        Node::Op(Instruction::Pick(0)),
+        Node::Op(Instruction::Copy),
         Node::Op(Instruction::Push(c)),
         Node::Op(Instruction::Equal),
         Node::Branch {
@@ -2635,7 +2686,7 @@ impl Matcher for InvSpecializeEqual {
     }
 }
 
-/// `pick 0 ; dip 1 { drop }` becomes nothing.
+/// `copy ; dip 1 { drop }` becomes nothing.
 ///
 /// [`Rule::CounitUnder`] forward: copy a value and discard the original. The
 /// other counit law of the comonoid `pick` comultiplies, where [`Counit`] is
@@ -2657,7 +2708,7 @@ impl Matcher for CounitUnder {
     }
     fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
         let [
-            Node::Op(Instruction::Pick(0)),
+            Node::Op(Instruction::Copy),
             Node::Dip { depth: 1, body, .. },
         ] = window
         else {
@@ -2670,7 +2721,7 @@ impl Matcher for CounitUnder {
     }
 }
 
-/// Puts `pick 0 ; dip 1 { drop }` where there was nothing at all.
+/// Puts `copy ; dip 1 { drop }` where there was nothing at all.
 ///
 /// [`Rule::CounitUnder`] backwards. Unlike [`InvCounit`] it needs no argument —
 /// the law is only stated at depth 0 — so `inv(counit_under)` is written bare.
@@ -2700,9 +2751,9 @@ impl Matcher for InvCounitUnder {
     }
 }
 
-/// `roll 1 ; op` becomes `op`, for a commutative `op`.
+/// `swap ; op` becomes `op`, for a commutative `op`.
 ///
-/// `roll 1` swaps the top two values, and an operator that answers the same
+/// `swap` exchanges the top two values, and an operator that answers the same
 /// either way round cannot tell. The commutative set — `add`, `multiply`,
 /// `and`, `or`, `equal` — is a property of the instruction rather than of this
 /// matcher, and `vm` measures it against the interpreter rather than trusting
@@ -2723,14 +2774,14 @@ impl Matcher for Comm {
         Ok(Box::new(Swap))
     }
     fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
-        let [Node::Op(Instruction::Roll(1)), Node::Op(op)] = window else {
+        let [Node::Op(Instruction::Swap), Node::Op(op)] = window else {
             return None;
         };
         at_window(prog, Rule::Commute { op: op.clone() }, Direction::Forward)
     }
 }
 
-/// `op` becomes `roll 1 ; op`, for a commutative `op`.
+/// `op` becomes `swap ; op`, for a commutative `op`.
 ///
 /// The same law read backwards: it swaps the operands of a commutative
 /// operator, which is how what sits *underneath* them gets rearranged to line
@@ -2738,7 +2789,7 @@ impl Matcher for Comm {
 /// done its work, or `interchange` carries it off.
 ///
 /// Measure: none, and it grows the term — its own output contains the operator
-/// it just matched, so `each` would put a second `roll 1` in front of it and
+/// it just matched, so `each` would put a second `swap` in front of it and
 /// keep going. Aim it with `once`, `at` or a descent, as with `introduce`.
 #[derive(Debug)]
 pub(crate) struct Swap;
@@ -2763,7 +2814,7 @@ impl Matcher for Swap {
 
 /// Splits an opaque value into the two cases where it is a boolean.
 ///
-/// Puts `pick 0 ; is_bool ; branch { branch { push true } { push false } } { }`
+/// Puts `copy ; is_bool ; branch { branch { push true } { push false } } { }`
 /// in front of the node it is aimed at. The whole block is the identity, so the
 /// term still means what it meant — but inside the inner arms the value has
 /// been replaced by a **literal**, which every law that folds constants can act
@@ -2815,15 +2866,15 @@ impl Matcher for SplitBool {
 /// insertion that tells the continuation nothing. This is the law that moves
 /// the value instead of the reasoning.
 ///
-/// **The rolls have to be put in first.** The equation has rolls on *both*
-/// sides, and a term that holds none matches neither. [`Rule::RollCycle`]
-/// backwards is the only way to introduce one — a full cycle of `d+m` copies —
-/// and the unframing then eats `m` of them, so `d` are left over:
+/// **The exchange has to be put in first.** The equation has a `sink` on *both*
+/// sides, and a term that holds neither matches neither. [`Rule::SwapCycle`]
+/// backwards is the only way to introduce one — a cancelling pair — and the
+/// unframing then eats one of the two:
 ///
 /// ```text
 /// dip 1 { push t2 ; equal }
-///   = dip 1 { push t2 ; equal } ; roll 1 ; roll 1      inv(roll_cycle)
-///   = roll 1 ; push t2 ; equal ; roll 1                unframe
+///   = dip 1 { push t2 ; equal } ; swap ; swap      inv(swap_cycle)
+///   = swap ; push t2 ; equal ; swap                unframe
 /// ```
 ///
 /// Two steps there, and `equal` now sits at the top level with its result on
@@ -2831,18 +2882,19 @@ impl Matcher for SplitBool {
 ///
 /// **Why the width is one.** `docs/tactics.md` gave the obstacle as "`unframe`
 /// can only fix one of `n` and `m` before it looks", which is true of a matcher
-/// reading the *rolls*: how many there are is `m`, and a matcher's width is
-/// fixed before it looks. Reading the **frame** instead, `d` is on the node and
-/// `n` and `m` are its body's arity, so all three are known and the window is
-/// one node. The obstacle was in which side to search from.
+/// reading the *movement*: how much of it there is depends on `m`, and a
+/// matcher's width is fixed before it looks. Reading the **frame** instead, `n`
+/// and `m` are its body's arity, so both are known and the window is one node.
+/// The obstacle was in which side to search from.
 ///
-/// It declines `dip 0 { X }`, which is [`Flatten`]'s and needs no rolls at all.
+/// It declines `dip 0 { X }`, which is [`Flatten`]'s and needs no exchange at
+/// all, and a nest, which is more than the one frame the law is about.
 ///
 /// Measure: frame nodes, which it strictly reduces — the body's own frames
-/// come up a level but are neither created nor destroyed. But it **pays `d+1`
-/// rolls per firing**, and nothing deletes a roll except `roll_cycle`
-/// completing a cycle, so a term driven to a fixpoint on this grows with the
-/// depth of what it unwraps. It is in no default pass; aim it.
+/// come up a level but are neither created nor destroyed. But it **pays an
+/// exchange per firing**, and nothing deletes one except `swap_cycle` finding
+/// its pair, so a term driven to a fixpoint on this grows. It is in no default
+/// pass; aim it.
 #[derive(Debug)]
 pub(crate) struct Unframe;
 
@@ -2858,23 +2910,32 @@ impl Matcher for Unframe {
             "`unframe` is a firing of two different equations, so there is no \
              single one to read backwards. Putting a computation back under a \
              frame is `inv(unframe)` on the equation itself, which no window \
-             says where to start: the roll depth gives `d` away but nothing \
-             marks where the body begins"
+             says where to start: nothing marks where the body begins"
                 .to_string(),
         )
     }
     fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
         let framed = &window[0];
         let (depth, body) = crate::rule::framed_body(framed)?;
-        // `dip 0 { X }` is `flatten`'s: there is no depth to reach past, and
-        // the law would conjure a cycle of rolls to say nothing.
-        if depth == 0 {
+        // `dip 0 { X }` is `flatten`'s: there is no hidden value to reach past.
+        // Anything deeper is a nest, and the law is about one frame — open it
+        // with `inv(collapse)` and this reads the innermost.
+        if depth != 1 {
             return None;
         }
         let (n, m) = full_arity(prog, &body)?;
         let (Ok(n), Ok(m)) = (usize::try_from(n), usize::try_from(m)) else {
             return None;
         };
+        // What has to be conjured is `sink m` against its inverse, and only at
+        // `m <= 1` is that pair a single equation: `sink 1` is `swap`, whose
+        // inverse is the other `swap` of [`Rule::SwapCycle`]. Wider, the pair
+        // is a derivation rather than a step, and this declines rather than
+        // pretending to be one firing. The law itself still holds at every `m`
+        // and a derivation file may name it.
+        if m > 1 {
+            return None;
+        }
 
         let unframe = Rule::Unframe {
             framed: framed.clone(),
@@ -2884,11 +2945,11 @@ impl Matcher for Unframe {
         unframe.check(prog).ok()?;
 
         let mut steps = Vec::new();
-        // A computation that leaves nothing needs no rolls on the left, so
+        // A computation that leaves nothing needs no exchange on the left, so
         // there is nothing to conjure and the firing is one step.
         if m > 0 {
             steps.push(PlannedStep {
-                kind: StepKind::Rule(Rule::RollCycle { d: depth + m - 1 }),
+                kind: StepKind::Rule(Rule::SwapCycle),
                 dir: Direction::Reverse,
                 rel: Location::root(1),
             });
@@ -2931,13 +2992,13 @@ impl Matcher for UnsplitBool {
     }
 }
 
-/// `push c ; pick 0` becomes `push c ; push c`.
+/// `push c ; copy` becomes `push c ; push c`.
 ///
 /// Copying a constant is pushing it again. It is what makes a refinement pay:
 /// downstream code reads a slot with `pick`, and a `pick` is opaque to every
 /// law that folds literals.
 ///
-/// Measure: the number of `push c; pick 0` adjacencies, which this strictly
+/// Measure: the number of `push c; copy` adjacencies, which this strictly
 /// decreases — its own output contains none.
 #[derive(Debug)]
 pub(crate) struct CopyConst;
@@ -2953,18 +3014,14 @@ impl Matcher for CopyConst {
         Ok(Box::new(InvCopyConst))
     }
     fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
-        let [
-            Node::Op(Instruction::Push(c)),
-            Node::Op(Instruction::Pick(0)),
-        ] = window
-        else {
+        let [Node::Op(Instruction::Push(c)), Node::Op(Instruction::Copy)] = window else {
             return None;
         };
         at_window(prog, Rule::CopyConst { c: c.clone() }, Direction::Forward)
     }
 }
 
-/// `push c ; push c` becomes `push c ; pick 0`.
+/// `push c ; push c` becomes `push c ; copy`.
 ///
 /// [`Rule::CopyConst`] read backwards. Pushing a literal twice is pushing it
 /// and copying it, and the copy is what a law about *slots* can act on where a
@@ -3003,13 +3060,13 @@ impl Matcher for InvCopyConst {
     }
 }
 
-/// `pick d ; pick 0` becomes `pick d ; dip 1 { pick d }`.
+/// `copy ; copy` becomes `copy ; dip { copy }`.
 ///
 /// Duplication is coassociative. Neither side is smaller, and that is not the
 /// point: the right-hand side puts one copy **in a frame**, and a framed
-/// computation is one [`Float`] can carry. A bare `pick` cannot travel at all.
+/// computation is one [`Float`] can carry. A bare `copy` cannot travel at all.
 ///
-/// Measure: the number of `pick d; pick 0` adjacencies, which this strictly
+/// Measure: the number of `copy ; copy` adjacencies, which this strictly
 /// decreases — its own output contains none.
 #[derive(Debug)]
 pub(crate) struct CopyAssoc;
@@ -3025,26 +3082,22 @@ impl Matcher for CopyAssoc {
         Ok(Box::new(InvCopyAssoc))
     }
     fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
-        let [
-            Node::Op(Instruction::Pick(d)),
-            Node::Op(Instruction::Pick(0)),
-        ] = window
-        else {
+        let [Node::Op(Instruction::Copy), Node::Op(Instruction::Copy)] = window else {
             return None;
         };
-        at_window(prog, Rule::CopyAssoc { d: *d }, Direction::Forward)
+        at_window(prog, Rule::CopyAssoc, Direction::Forward)
     }
 }
 
-/// `pick d ; dip 1 { pick d }` becomes `pick d ; pick 0`.
+/// `copy ; dip { copy }` becomes `copy ; copy`.
 ///
 /// [`Rule::CopyAssoc`] read backwards, taking the second copy back out of its
 /// frame once it has been carried to where it was wanted.
 ///
 /// No name of its own: it is `inv(copy_assoc)`.
 ///
-/// Measure: its output contains no `pick d ; dip 1 { pick d }`, so it settles
-/// on its own — but not beside [`CopyAssoc`], which puts the frame back.
+/// Measure: its output contains no `copy ; dip { copy }`, so it settles on its
+/// own — but not beside [`CopyAssoc`], which puts the frame back.
 #[derive(Debug)]
 pub(crate) struct InvCopyAssoc;
 
@@ -3060,19 +3113,16 @@ impl Matcher for InvCopyAssoc {
     }
     fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
         let [
-            Node::Op(Instruction::Pick(d)),
+            Node::Op(Instruction::Copy),
             Node::Dip { depth: 1, body, .. },
         ] = window
         else {
             return None;
         };
-        let [Node::Op(Instruction::Pick(inner))] = &body[..] else {
+        let [Node::Op(Instruction::Copy)] = &body[..] else {
             return None;
         };
-        if d != inner {
-            return None;
-        }
-        at_window(prog, Rule::CopyAssoc { d: *d }, Direction::Reverse)
+        at_window(prog, Rule::CopyAssoc, Direction::Reverse)
     }
 }
 
@@ -3248,15 +3298,9 @@ mod tests {
         );
         round_trip(
             &CopyConst,
-            &[
-                op(Instruction::Push(Value::Int(7))),
-                op(Instruction::Pick(0)),
-            ],
+            &[op(Instruction::Push(Value::Int(7))), op(Instruction::Copy)],
         );
-        round_trip(
-            &CopyAssoc,
-            &[op(Instruction::Pick(3)), op(Instruction::Pick(0))],
-        );
+        round_trip(&CopyAssoc, &[op(Instruction::Copy), op(Instruction::Copy)]);
     }
 
     #[test]
@@ -3347,7 +3391,7 @@ mod tests {
                 op(Instruction::Drop),
             ],
             vec![
-                op(Instruction::Pick(0)),
+                op(Instruction::Copy),
                 op(Instruction::Not),
                 op(Instruction::Drop),
             ],
@@ -3355,7 +3399,7 @@ mod tests {
         assert_eq!(
             fire(&InvDistribute, &prog(), &w),
             Some(vec![
-                branch(vec![op(Instruction::Add)], vec![op(Instruction::Pick(0))]),
+                branch(vec![op(Instruction::Add)], vec![op(Instruction::Copy)]),
                 op(Instruction::Not),
                 op(Instruction::Drop),
             ])
@@ -3376,10 +3420,7 @@ mod tests {
     #[test]
     fn retest_collapses_one_arm_at_a_time() {
         let inner = || branch(vec![op(Instruction::Not)], vec![op(Instruction::IsBool)]);
-        let w = [
-            op(Instruction::Pick(0)),
-            branch(vec![inner()], vec![inner()]),
-        ];
+        let w = [op(Instruction::Copy), branch(vec![inner()], vec![inner()])];
 
         // Then arm first, and what it leaves there no longer begins with a
         // branch — which is what lets the rescan take the else arm next.
@@ -3387,7 +3428,7 @@ mod tests {
         assert_eq!(
             once,
             vec![
-                op(Instruction::Pick(0)),
+                op(Instruction::Copy),
                 branch(
                     vec![op(Instruction::Drop), op(Instruction::Not)],
                     vec![inner()]
@@ -3397,7 +3438,7 @@ mod tests {
         assert_eq!(
             fire(&Retest, &prog(), &once),
             Some(vec![
-                op(Instruction::Pick(0)),
+                op(Instruction::Copy),
                 branch(
                     vec![op(Instruction::Drop), op(Instruction::Not)],
                     vec![op(Instruction::Drop), op(Instruction::IsBool)],
@@ -3408,13 +3449,13 @@ mod tests {
 
         // Whatever follows the inner branch in that arm rides along.
         let w = [
-            op(Instruction::Pick(0)),
+            op(Instruction::Copy),
             branch(vec![inner(), op(Instruction::Add)], Vec::new()),
         ];
         assert_eq!(
             fire(&Retest, &prog(), &w),
             Some(vec![
-                op(Instruction::Pick(0)),
+                op(Instruction::Copy),
                 branch(
                     vec![
                         op(Instruction::Drop),
@@ -3430,7 +3471,7 @@ mod tests {
     #[test]
     fn retest_needs_the_condition_to_be_a_copy() {
         let inner = || branch(Vec::new(), Vec::new());
-        // No `pick 0`, so the two branches read different values.
+        // No `copy`, so the two branches read different values.
         assert!(
             Retest
                 .plan(
@@ -3445,7 +3486,7 @@ mod tests {
                 .plan(
                     &prog(),
                     &[
-                        op(Instruction::Pick(0)),
+                        op(Instruction::Copy),
                         branch(vec![op(Instruction::Not)], vec![op(Instruction::Add)]),
                     ]
                 )
@@ -3462,7 +3503,7 @@ mod tests {
         let c = Value::Int(7);
         let w = |then_body: Vec<Node>| {
             [
-                op(Instruction::Pick(0)),
+                op(Instruction::Copy),
                 op(Instruction::Push(c.clone())),
                 op(Instruction::Equal),
                 branch(then_body, vec![op(Instruction::IsBool)]),
@@ -3513,7 +3554,7 @@ mod tests {
         // it can compare is one the literal may be written in place of.
         let w = |c: Value| {
             [
-                op(Instruction::Pick(0)),
+                op(Instruction::Copy),
                 op(Instruction::Push(c)),
                 op(Instruction::Equal),
                 branch(vec![op(Instruction::Not)], Vec::new()),
@@ -3532,7 +3573,7 @@ mod tests {
     #[test]
     fn specialize_equal_needs_the_condition_to_be_a_copy() {
         let c = Value::Int(9);
-        // No `pick 0`, so the value the arm holds is not the one tested.
+        // No `copy`, so the value the arm holds is not the one tested.
         assert!(
             SpecializeEqual
                 .plan(
@@ -3552,7 +3593,7 @@ mod tests {
                 .plan(
                     &prog(),
                     &[
-                        op(Instruction::Pick(0)),
+                        op(Instruction::Copy),
                         op(Instruction::Push(c)),
                         op(Instruction::Greater),
                         branch(Vec::new(), Vec::new()),
@@ -3566,30 +3607,28 @@ mod tests {
     fn the_two_counits_discard_opposite_copies() {
         // `counit` drops the copy; `counit_under` drops the original from
         // under it. Two laws, and the set had only one.
-        let w = [
-            op(Instruction::Pick(0)),
-            dip(1, vec![op(Instruction::Drop)]),
-        ];
+        let w = [op(Instruction::Copy), dip(1, vec![op(Instruction::Drop)])];
         assert_eq!(fire(&CounitUnder, &prog(), &w), Some(Vec::new()));
         assert!(
             CounitUnder
                 .plan(
                     &prog(),
                     &[
-                        op(Instruction::Pick(1)),
+                        dip(1, vec![op(Instruction::Copy)]),
                         dip(1, vec![op(Instruction::Drop)])
                     ]
                 )
                 .is_none(),
-            "only at depth 0 — deeper it is a `roll`, not the identity"
+            "only a copy of the top — a copy made under a frame and the \
+             original discarded is a `roll`, not the identity"
         );
 
-        // Backwards it needs no argument, unlike `inv(counit(d))`, because the
-        // law is stated at one depth.
+        // Backwards it needs nothing to be told, which every matcher whose
+        // law is stated at the top of the stack now shares.
         assert_eq!(
             fire(&InvCounitUnder, &prog(), &[op(Instruction::Add)]),
             Some(vec![
-                op(Instruction::Pick(0)),
+                op(Instruction::Copy),
                 dip(1, vec![op(Instruction::Drop)]),
                 op(Instruction::Add),
             ])
@@ -3659,35 +3698,39 @@ mod tests {
         assert_eq!(
             fire(&m, &prog(), &[op(Instruction::Add)]),
             Some(vec![
-                op(Instruction::Pick(0)),
+                op(Instruction::Copy),
                 op(Instruction::Drop),
                 op(Instruction::Add),
             ]),
             "it inserts before the window rather than rewriting it"
         );
 
-        // Any depth, and `counit` takes it straight back out.
-        let there = fire(&InvCounit(3), &prog(), &[op(Instruction::Add)]).unwrap();
-        assert_eq!(there[0], op(Instruction::Pick(3)));
-        assert_eq!(fire(&Counit, &prog(), &there[..2]), Some(Vec::new()));
-    }
+        // And `counit` takes it straight back out.
+        let there = fire(&InvCounit(0), &prog(), &[op(Instruction::Add)]).unwrap();
+        assert_eq!(
+            fire(&Counit, &prog(), &there),
+            Some(vec![op(Instruction::Add)])
+        );
 
-    #[test]
-    fn a_counit_narrowed_to_one_depth_reads_only_that_one() {
-        let w = [op(Instruction::Pick(2)), op(Instruction::Drop)];
-        assert_eq!(fire(&CounitAt(2), &prog(), &w), Some(Vec::new()));
-        assert!(CounitAt(0).plan(&prog(), &w).is_none());
-        // And it is the reading `inv` flips, in both directions.
-        assert_eq!(CounitAt(2).inverse().unwrap().name(), "inv(counit)");
-        assert_eq!(InvCounit(2).inverse().unwrap().name(), "counit");
-    }
+        // At depth it puts in what phase 4 writes for a `pick`, which is what
+        // makes a block copy introducible: `dip { copy } ; swap ; drop`.
+        let deep = fire(&InvCounit(1), &prog(), &[op(Instruction::Add)]).unwrap();
+        assert_eq!(
+            &deep[..3],
+            &[
+                dip(1, vec![op(Instruction::Copy)]),
+                op(Instruction::Swap),
+                op(Instruction::Drop),
+            ]
+        );
+        assert_eq!(
+            fire(&Counit, &prog(), &deep),
+            Some(vec![op(Instruction::Add)])
+        );
 
-    #[test]
-    fn a_bare_counit_says_which_number_it_is_missing() {
-        // The message has to be actionable: the reading exists, it just needs
-        // to be told `d`.
-        let why = Counit.inverse().unwrap_err();
-        assert!(why.contains("inv(counit(0))"), "{}", why);
+        // The two readings flip into each other, and the number goes across.
+        assert_eq!(CounitAt(1).inverse().unwrap().name(), "inv(counit)");
+        assert_eq!(InvCounit(1).inverse().unwrap().name(), "counit");
     }
 
     #[test]
@@ -3771,11 +3814,9 @@ mod tests {
         // the losing arm pays one drop.
         let m = Speculate::new(None, vec![op(Instruction::Equal)]).unwrap();
         let prefix = || {
-            vec![
-                op(Instruction::Pick(1)),
-                op(Instruction::Pick(1)),
-                op(Instruction::Equal),
-            ]
+            let mut p = crate::rule::copy_block(2);
+            p.push(op(Instruction::Equal));
+            p
         };
         let mut then_arm = prefix();
         then_arm.push(op(Instruction::And));
@@ -3803,11 +3844,11 @@ mod tests {
         // sequence that has none.
         let m = Speculate::new(None, vec![op(Instruction::Equal)]).unwrap();
         let w = [branch(
-            vec![
-                op(Instruction::Pick(1)),
-                op(Instruction::Pick(1)),
-                op(Instruction::Equal),
-            ],
+            {
+                let mut p = crate::rule::copy_block(2);
+                p.push(op(Instruction::Equal));
+                p
+            },
             Vec::new(),
         )];
         let got = fire(&m, &prog(), &w).unwrap();
@@ -3875,11 +3916,9 @@ mod tests {
         // the copies are conjured instead, which is `speculate` with the
         // prefix found rather than named.
         let prefix = || {
-            vec![
-                op(Instruction::Pick(1)),
-                op(Instruction::Pick(1)),
-                op(Instruction::Equal),
-            ]
+            let mut p = crate::rule::copy_block(2);
+            p.push(op(Instruction::Equal));
+            p
         };
         let mut then_arm = prefix();
         then_arm.push(op(Instruction::And));
@@ -3907,7 +3946,7 @@ mod tests {
             Lift.plan(
                 &prog(),
                 &[branch(
-                    vec![op(Instruction::Pick(0)), op(Instruction::Drop)],
+                    vec![op(Instruction::Copy), op(Instruction::Drop)],
                     vec![op(Instruction::Drop), op(Instruction::Drop)]
                 )]
             )
@@ -3972,7 +4011,7 @@ mod tests {
     fn bool_result_reads_through_the_copy_a_split_leaves() {
         let w = [
             op(Instruction::Equal),
-            op(Instruction::Pick(0)),
+            op(Instruction::Copy),
             op(Instruction::IsBool),
         ];
         assert_eq!(
@@ -3999,7 +4038,7 @@ mod tests {
                     &prog(),
                     &[
                         op(Instruction::Push(Value::Bool(true))),
-                        op(Instruction::Pick(0)),
+                        op(Instruction::Copy),
                         op(Instruction::IsBool)
                     ]
                 )
@@ -4015,7 +4054,7 @@ mod tests {
                     &prog(),
                     &[
                         op(Instruction::Add),
-                        op(Instruction::Pick(0)),
+                        op(Instruction::Copy),
                         op(Instruction::IsBool)
                     ]
                 )
@@ -4029,7 +4068,7 @@ mod tests {
                     &prog(),
                     &[
                         op(Instruction::Equal),
-                        op(Instruction::Pick(1)),
+                        dip(1, vec![op(Instruction::Copy)]),
                         op(Instruction::IsBool)
                     ]
                 )
@@ -4118,31 +4157,28 @@ mod tests {
         assert_eq!(
             fire(&Unframe, &prog(), &w),
             Some(vec![
-                op(Instruction::Roll(1)),
+                op(Instruction::Swap),
                 op(Instruction::Not),
-                op(Instruction::Roll(1)),
+                op(Instruction::Swap),
             ])
         );
-        // `inv(roll_cycle)` to put a cycle in, then the law.
+        // `inv(swap_cycle)` to put the pair in, then the law.
         assert_eq!(Unframe.plan(&prog(), &w).unwrap().len(), 2);
 
-        // Deeper, and the leftover run is `d` long: a cycle of `d+m` rolls
-        // goes in and the unframing eats `m`.
-        let got = fire(&Unframe, &prog(), &[dip(3, vec![op(Instruction::Not)])]).unwrap();
-        assert_eq!(
-            got.iter()
-                .filter(|n| matches!(n, Node::Op(Instruction::Roll(3))))
-                .count(),
-            4,
-            "one rolled up, three carrying the answer back: {:?}",
-            got
+        // A nest is not a frame. The law is about the one value a `dip` hides,
+        // so a collapsed one has to be opened before this can read it — where
+        // the old law took the width as an argument and did arithmetic on it.
+        assert!(
+            Unframe
+                .plan(&prog(), &[dip(3, vec![op(Instruction::Not)])])
+                .is_none()
         );
     }
 
     #[test]
     fn unframe_declines_a_frame_that_hides_nothing() {
-        // `dip 0 { X }` is `flatten`'s — there is no depth to reach past, and
-        // this would conjure a cycle of rolls to say nothing.
+        // `dip 0 { X }` is `flatten`'s — there is no hidden value to reach
+        // past, and this would conjure a pair of exchanges to say nothing.
         assert!(
             Unframe
                 .plan(&prog(), &[dip(0, vec![op(Instruction::Not)])])
@@ -4158,11 +4194,9 @@ mod tests {
     fn speculate_declines_what_factor_already_does() {
         let m = Speculate::new(None, vec![op(Instruction::Equal)]).unwrap();
         let prefix = || {
-            vec![
-                op(Instruction::Pick(1)),
-                op(Instruction::Pick(1)),
-                op(Instruction::Equal),
-            ]
+            let mut p = crate::rule::copy_block(2);
+            p.push(op(Instruction::Equal));
+            p
         };
         // Both arms open with it, so factoring needs no drops and no copies.
         assert!(
@@ -4194,23 +4228,21 @@ mod tests {
         // `equal` is (2 -> 1), so two picks in front and one after.
         let m = Share::new(None, vec![op(Instruction::Equal)]).unwrap();
         assert_eq!(m.width(), 4);
-        let w = [
-            op(Instruction::Pick(1)),
-            op(Instruction::Pick(1)),
-            op(Instruction::Equal),
-            dip(1, vec![op(Instruction::Equal)]),
-        ];
+        let mut w = crate::rule::copy_block(2);
+        w.push(op(Instruction::Equal));
+        w.push(dip(1, vec![op(Instruction::Equal)]));
+        let w = &w[..];
         assert_eq!(
-            fire(&m, &prog(), &w),
-            Some(vec![op(Instruction::Equal), op(Instruction::Pick(0))])
+            fire(&m, &prog(), w),
+            Some(vec![op(Instruction::Equal), op(Instruction::Copy)])
         );
-        round_trip(&m, &w);
+        round_trip(&m, w);
 
-        // The copies have to be the ones the law names: `pick 0` twice copies
+        // The copies have to be the ones the law names: `copy` twice copies
         // the top value twice over, which is a different program.
         let wrong = [
-            op(Instruction::Pick(0)),
-            op(Instruction::Pick(0)),
+            op(Instruction::Copy),
+            op(Instruction::Copy),
             op(Instruction::Equal),
             dip(1, vec![op(Instruction::Equal)]),
         ];
@@ -4234,10 +4266,10 @@ mod tests {
 
         // And a term of more than one node, where nothing in the window could
         // have said where the computation began.
-        let term = vec![op(Instruction::Pick(0)), op(Instruction::IsBool)];
+        let term = vec![op(Instruction::Copy), op(Instruction::IsBool)];
         let m = Share::new(None, term.clone()).unwrap();
         assert_eq!(m.width(), 1 + 2 + 1, "one pick, the term, the frame");
-        let mut w = vec![op(Instruction::Pick(0))];
+        let mut w = vec![op(Instruction::Copy)];
         w.extend(term.clone());
         w.push(dip(2, term));
         round_trip(&m, &w);
@@ -4251,14 +4283,14 @@ mod tests {
 
     #[test]
     fn inv_introduce_reads_the_whole_term_where_annihilate_reads_one_node() {
-        // `pick 0` is (1 -> 2), so the introduction stands in front of one drop
+        // `copy` is (1 -> 2), so the introduction stands in front of one drop
         // and leaves two; reading it back takes all three nodes.
-        let m = Introduce::new(None, vec![op(Instruction::Pick(0))]).unwrap();
+        let m = Introduce::new(None, vec![op(Instruction::Copy)]).unwrap();
         round_trip(&m, &[op(Instruction::Drop)]);
 
         // A term of more than one node, which `annihilate` cannot match: it
         // reads `X ; drop` for a single node `X`.
-        let term = vec![op(Instruction::Pick(0)), op(Instruction::IsBool)];
+        let term = vec![op(Instruction::Copy), op(Instruction::IsBool)];
         let m = Introduce::new(None, term.clone()).unwrap();
         round_trip(&m, &[op(Instruction::Drop)]);
         let back = m.inverse().unwrap();
@@ -4397,8 +4429,8 @@ mod tests {
             (op(Instruction::Add), 2usize),
             (op(Instruction::Push(Value::Int(1))), 1),
             (op(Instruction::Drop), 0),
-            (op(Instruction::Pick(2)), 4),
-            (op(Instruction::Roll(1)), 2),
+            (op(Instruction::Copy), 2),
+            (op(Instruction::Swap), 2),
         ] {
             let w = [x.clone(), dip(depth, vec![op(Instruction::Not)])];
             let Some(sunk) = fire(&Sink, &prog(), &w) else {
@@ -4443,13 +4475,13 @@ mod tests {
         let mut then_arm = shared.clone();
         then_arm.push(op(Instruction::Drop));
         let mut else_arm = shared.clone();
-        else_arm.push(op(Instruction::Pick(0)));
+        else_arm.push(op(Instruction::Copy));
         let w = [branch(then_arm, else_arm)];
         assert_eq!(
             fire(&Factor, &prog(), &w),
             Some(vec![
                 dip(1, shared),
-                branch(vec![op(Instruction::Drop)], vec![op(Instruction::Pick(0))]),
+                branch(vec![op(Instruction::Drop)], vec![op(Instruction::Copy)]),
             ])
         );
     }
@@ -4560,7 +4592,7 @@ mod tests {
 
     #[test]
     fn fold_branch_declines_a_computed_condition() {
-        let w = [op(Instruction::Pick(0)), branch(vec![], vec![])];
+        let w = [op(Instruction::Copy), branch(vec![], vec![])];
         assert!(FoldBranch.plan(&prog(), &w).is_none());
     }
 
@@ -4663,9 +4695,9 @@ mod tests {
 
     #[test]
     fn annihilate_flagged_takes_a_pick_whose_copies_both_go() {
-        // `pick 0` is (1 -> 2).
+        // `copy` is (1 -> 2).
         let w = [
-            op(Instruction::Pick(0)),
+            op(Instruction::Copy),
             op(Instruction::Drop),
             op(Instruction::Drop),
         ];
@@ -4695,10 +4727,10 @@ mod tests {
     }
 
     #[test]
-    fn annihilate_leaves_a_pick_to_the_counit_law() {
-        // `pick d` is (d+1 -> d+2), so it is not of annihilate's shape at all
-        // and neither matcher has to know about the other.
-        let w = [op(Instruction::Pick(2)), op(Instruction::Drop)];
+    fn annihilate_leaves_a_copy_to_the_counit_law() {
+        // `copy` is (1 -> 2), so it is not of annihilate's shape at all and
+        // neither matcher has to know about the other.
+        let w = [op(Instruction::Copy), op(Instruction::Drop)];
         assert!(Annihilate.plan(&prog(), &w).is_none());
         assert_eq!(fire(&Counit, &prog(), &w), Some(Vec::new()));
     }
@@ -4712,7 +4744,7 @@ mod tests {
             Instruction::Or,
             Instruction::Equal,
         ] {
-            let w = [op(Instruction::Roll(1)), op(inst.clone())];
+            let w = [op(Instruction::Swap), op(inst.clone())];
             assert_eq!(
                 fire(&Comm, &prog(), &w),
                 Some(vec![op(inst.clone())]),
@@ -4729,12 +4761,17 @@ mod tests {
             Instruction::Less,
             Instruction::Tuple(2),
         ] {
-            let w = [op(Instruction::Roll(1)), op(inst.clone())];
+            let w = [op(Instruction::Swap), op(inst.clone())];
             assert!(Comm.plan(&prog(), &w).is_none(), "{:?}", inst);
         }
-        // And a deeper roll is not a swap of the top two.
-        let w = [op(Instruction::Roll(2)), op(Instruction::Add)];
-        assert!(Comm.plan(&prog(), &w).is_none());
+        // And a deeper roll is not an exchange of the top two: it is frames
+        // around one, and the frame is what the window sees first.
+        let w = [
+            dip(1, vec![op(Instruction::Swap)]),
+            op(Instruction::Swap),
+            op(Instruction::Add),
+        ];
+        assert!(Comm.plan(&prog(), &w[..2]).is_none());
     }
 
     #[test]
@@ -4742,7 +4779,7 @@ mod tests {
         let w = [op(Instruction::Add)];
         assert_eq!(
             fire(&Swap, &prog(), &w),
-            Some(vec![op(Instruction::Roll(1)), op(Instruction::Add)])
+            Some(vec![op(Instruction::Swap), op(Instruction::Add)])
         );
         // And straight back out again: two readings of one law.
         let there = fire(&Swap, &prog(), &w).unwrap();
@@ -4761,7 +4798,7 @@ mod tests {
         let w = [op(Instruction::Not)];
         let got = fire(&SplitBool, &prog(), &w).unwrap();
         assert_eq!(got.len(), 4, "{:?}", got);
-        assert_eq!(got[0], op(Instruction::Pick(0)));
+        assert_eq!(got[0], op(Instruction::Copy));
         assert_eq!(got[1], op(Instruction::IsBool));
         assert_eq!(got[3], op(Instruction::Not), "it did not insert in front");
     }
@@ -4783,14 +4820,14 @@ mod tests {
     fn unsplit_bool_declines_a_block_that_is_not_the_split() {
         // A guard over different arms is a different program.
         let wrong = [
-            op(Instruction::Pick(0)),
+            op(Instruction::Copy),
             op(Instruction::IsBool),
             branch(vec![op(Instruction::Drop)], Vec::new()),
         ];
         assert!(UnsplitBool.plan(&prog(), &wrong).is_none());
         // And so is the same shape guarded on something else.
         let wrong = [
-            op(Instruction::Pick(0)),
+            op(Instruction::Copy),
             op(Instruction::IsInt),
             Rule::SplitBool.lhs()[2].clone(),
         ];
@@ -4799,10 +4836,7 @@ mod tests {
 
     #[test]
     fn copy_const_turns_a_copy_back_into_a_push() {
-        let w = [
-            op(Instruction::Push(Value::Int(7))),
-            op(Instruction::Pick(0)),
-        ];
+        let w = [op(Instruction::Push(Value::Int(7))), op(Instruction::Copy)];
         assert_eq!(
             fire(&CopyConst, &prog(), &w),
             Some(vec![
@@ -4814,12 +4848,12 @@ mod tests {
 
     #[test]
     fn copy_assoc_puts_the_second_copy_in_a_frame() {
-        let w = [op(Instruction::Pick(2)), op(Instruction::Pick(0))];
+        let w = [op(Instruction::Copy), op(Instruction::Copy)];
         assert_eq!(
             fire(&CopyAssoc, &prog(), &w),
             Some(vec![
-                op(Instruction::Pick(2)),
-                dip(1, vec![op(Instruction::Pick(2))]),
+                op(Instruction::Copy),
+                dip(1, vec![op(Instruction::Copy)]),
             ])
         );
     }
@@ -4868,14 +4902,14 @@ mod tests {
 
     #[test]
     fn introduce_puts_the_named_code_in_front_of_the_drops_it_pays_for() {
-        // `pick 0` is (1 -> 2), so it stands in front of one drop and brings
+        // `copy` is (1 -> 2), so it stands in front of one drop and brings
         // two of its own. Both sides discard exactly one value.
-        let m = introduce(vec![op(Instruction::Pick(0))]);
+        let m = introduce(vec![op(Instruction::Copy)]);
         assert_eq!(m.width(), 1);
         assert_eq!(
             fire(&m, &prog(), &[op(Instruction::Drop)]),
             Some(vec![
-                op(Instruction::Pick(0)),
+                op(Instruction::Copy),
                 op(Instruction::Drop),
                 op(Instruction::Drop),
             ])
@@ -4919,8 +4953,8 @@ mod tests {
 
     #[test]
     fn introduce_takes_a_whole_sequence() {
-        let m = introduce(vec![op(Instruction::Pick(0)), op(Instruction::IsBool)]);
-        // pick 0 is (1 -> 2), is_bool is (1 -> 1): together (1 -> 2).
+        let m = introduce(vec![op(Instruction::Copy), op(Instruction::IsBool)]);
+        // copy is (1 -> 2), is_bool is (1 -> 1): together (1 -> 2).
         assert_eq!(m.width(), 1);
         let got = fire(&m, &prog(), &[op(Instruction::Drop)]).unwrap();
         assert_eq!(got.len(), 4, "{:?}", got);
@@ -4935,9 +4969,9 @@ mod tests {
     fn the_introduced_code_is_undone_by_annihilate() {
         // Forward and backward readings of one law, so what `introduce` puts in
         // `annihilate` takes straight back out.
-        let m = introduce(vec![op(Instruction::Pick(0))]);
+        let m = introduce(vec![op(Instruction::Copy)]);
         let with = fire(&m, &prog(), &[op(Instruction::Drop)]).unwrap();
-        // `pick 0 ; drop` is the counit; the remaining `drop` is the original.
+        // `copy ; drop` is the counit; the remaining `drop` is the original.
         assert_eq!(
             fire(&Counit, &prog(), &with[..2]),
             Some(Vec::new()),
@@ -4948,7 +4982,7 @@ mod tests {
 
     #[test]
     fn term_arity_reckons_frames_without_a_library() {
-        assert_eq!(term_arity(&[op(Instruction::Pick(0))]), Some((1, 2)));
+        assert_eq!(term_arity(&[op(Instruction::Copy)]), Some((1, 2)));
         assert_eq!(
             term_arity(&[dip(2, vec![op(Instruction::Drop)])]),
             Some((3, 2))
@@ -4981,7 +5015,7 @@ mod tests {
                 "`{}` needs a term and must not construct without one",
                 name
             );
-            let built = matcher_with_term(name, vec![op(Instruction::Pick(0))], None)
+            let built = matcher_with_term(name, vec![op(Instruction::Copy)], None)
                 .unwrap_or_else(|| panic!("`{}` is listed but takes no term", name))
                 .unwrap_or_else(|e| panic!("`{}` rejected a plain term: {}", name, e));
             assert_eq!(built.name(), name);
@@ -5000,9 +5034,8 @@ mod tests {
             op(Instruction::Drop),
             op(Instruction::Not),
             op(Instruction::Equal),
-            op(Instruction::Pick(0)),
-            op(Instruction::Pick(2)),
-            op(Instruction::Roll(1)),
+            op(Instruction::Copy),
+            op(Instruction::Swap),
             op(Instruction::Push(Value::Int(1))),
             op(Instruction::Push(Value::Bool(true))),
             op(Instruction::Tuple(2)),
@@ -5020,14 +5053,14 @@ mod tests {
             .filter_map(matcher_by_name)
             .collect();
         all.push(
-            matcher_with_term("introduce", vec![op(Instruction::Pick(0))], None)
+            matcher_with_term("introduce", vec![op(Instruction::Copy)], None)
                 .unwrap()
                 .unwrap(),
         );
         for m in &all {
             let width = m.width();
             // Every window of this width over the corpus, in both orders, so
-            // that pairs like `push ; pick 0` and `pick 0 ; push` both occur.
+            // that pairs like `push ; copy` and `copy ; push` both occur.
             for i in 0..corpus.len() {
                 for j in 0..corpus.len() {
                     let mut window: Vec<Node> = Vec::new();
