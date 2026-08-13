@@ -726,13 +726,25 @@ fn parse_annotations(stream: &mut TokenStream) -> Result<Vec<SourceAnnotation>, 
             "postcondition" => {
                 Annotation::Postcondition(parse_annotation_path(stream, "postcondition")?)
             }
-            "recursive" => Annotation::Recursive,
             "total" => Annotation::Total,
+            // `recursive` was the annotation that let a sentence reach itself.
+            // Recursion is forbidden now, so the word is not an annotation
+            // whose spelling went wrong — it is a thing the language stopped
+            // having, and saying so beats listing what else it could have been.
+            "recursive" => {
+                return Err(Error::at(
+                    "`#[recursive]` is not an annotation: recursion is forbidden".to_string(),
+                    name_span,
+                )
+                .with_help(
+                    "a sentence may not reach itself, so a loop is written out as the \
+                     steps it takes",
+                ));
+            }
             other => {
                 return Err(
-                    Error::at(format!("unsupported annotation `{}`", other), name_span).with_help(
-                        "known annotations: arity, precondition, postcondition, recursive, total",
-                    ),
+                    Error::at(format!("unsupported annotation `{}`", other), name_span)
+                        .with_help("known annotations: arity, precondition, postcondition, total"),
                 );
             }
         };
@@ -741,7 +753,7 @@ fn parse_annotations(stream: &mut TokenStream) -> Result<Vec<SourceAnnotation>, 
         // A declaration carries at most one of each contract. Verification reads
         // a single precondition and a single postcondition, so a second would be
         // silently ignored rather than conjoined. `arity` is exempt because every
-        // one of those is checked, and `recursive`/`total` are idempotent flags.
+        // one of those is checked, and `total` is an idempotent flag.
         let has = |f: fn(&SourceAnnotation) -> bool| annotations.iter().any(f);
         let duplicate = match &ann {
             Annotation::Precondition(_) if has(|a| matches!(a, Annotation::Precondition(_))) => {
@@ -984,11 +996,6 @@ fn check_identity_annotations(annotations: &[SourceAnnotation], span: Span) -> R
     for ann in annotations {
         let (name, why) = match ann {
             Annotation::Arity(..) | Annotation::Total => continue,
-            Annotation::Recursive => (
-                "recursive",
-                "the rewriter expands calls, so it cannot prove anything about a \
-                 program with no finite expansion",
-            ),
             Annotation::Precondition(_) => (
                 "precondition",
                 "a contract constrains what a caller may pass; an identity has no caller",
@@ -1293,7 +1300,6 @@ struct Compiler<'a> {
     sentences: Vec<Vec<Instruction>>,
     names: Vec<String>,
     annotations: Vec<Vec<SentenceAnnotation>>,
-    current_parent_idx: Option<SentenceIndex>,
 }
 
 impl<'a> Compiler<'a> {
@@ -1315,7 +1321,6 @@ impl<'a> Compiler<'a> {
                         self.resolve_contract_fn("postcondition", scope, path)?,
                     ),
                     Annotation::Arity(n, m) => Annotation::Arity(*n, *m),
-                    Annotation::Recursive => Annotation::Recursive,
                     Annotation::Total => Annotation::Total,
                 })
             })
@@ -1476,26 +1481,13 @@ impl<'a> Compiler<'a> {
                 self.sentences.push(Vec::new());
                 self.names.push("<inline>".to_string());
 
-                // A branch arm or dip body is part of the sentence that wrote
-                // it, so the annotations that change how its instructions
-                // compile have to follow it in.
-                let mut inline_anns = Vec::new();
-                if let Some(parent_idx) = self.current_parent_idx {
-                    let parent_idx_usize: usize = parent_idx.into();
-                    if parent_idx_usize < self.annotations.len()
-                        && self.annotations[parent_idx_usize].contains(&Annotation::Recursive)
-                    {
-                        inline_anns.push(Annotation::Recursive);
-                    }
-                }
-                self.annotations.push(inline_anns);
+                // A branch arm or dip body carries no annotations of its own:
+                // it is part of the sentence that wrote it, and every
+                // annotation left is a claim about a sentence being called.
+                self.annotations.push(Vec::new());
 
-                let prev_parent = self.current_parent_idx;
-                self.current_parent_idx = Some(new_idx);
-                let compiled_body = self.compile_sentence_body(scope, parsed_sentence.instructions);
-                self.current_parent_idx = prev_parent;
-
-                let compiled_body = compiled_body?;
+                let compiled_body =
+                    self.compile_sentence_body(scope, parsed_sentence.instructions)?;
                 let idx_usize: usize = new_idx.into();
                 self.sentences[idx_usize] = compiled_body;
                 Ok(new_idx)
@@ -1555,7 +1547,6 @@ pub fn assemble_source(
         sentences: Vec::new(),
         names: Vec::new(),
         annotations: Vec::new(),
-        current_parent_idx: None,
     };
 
     // Pre-allocate space for all named sentences
@@ -1568,7 +1559,6 @@ pub fn assemble_source(
         compiler.annotations[idx] = compiler
             .resolve_annotations(scope, &sentence.annotations)
             .map_err(|e| format!("In '{}': {}", tree.fq_name(scope, &sentence.name), e))?;
-        compiler.current_parent_idx = Some(SentenceIndex::from(idx));
         let compiled_instructions =
             compiler.compile_sentence_body(scope, sentence.body.instructions)?;
         compiler.sentences[idx] = compiled_instructions;
@@ -1841,8 +1831,8 @@ mod tests {
     #[test]
     fn an_identity_refuses_an_annotation_nothing_would_read() {
         for (ann, word) in [
-            ("#[recursive]", "recursive"),
             ("#[precondition(p)]", "precondition"),
+            ("#[postcondition(p)]", "postcondition"),
         ] {
             let rendered = error_for(&format!("{} identity x {{ }} = {{ }};", ann));
             assert!(

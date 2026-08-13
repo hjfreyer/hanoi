@@ -1,7 +1,5 @@
 //! The tree the tool rewrites and prints.
 
-use std::collections::HashSet;
-
 use bytecode::{Instruction, Library, SentenceIndex};
 
 use crate::program::Program;
@@ -13,9 +11,9 @@ pub(crate) enum Node {
     /// A call that has not been expanded. `depth == 0` is a plain jump.
     ///
     /// This is what `Cut` used to be, generalized: a cut edge was always a call
-    /// somebody declined to expand. Making it the same node means a recursive
-    /// call has a real arity — from its target's `#[arity]` — where a `Cut` had
-    /// none and poisoned the reckoning of everything after it.
+    /// somebody declined to expand. Making it the same node means an unexpanded
+    /// call has a real arity — its target's — where a `Cut` had none and
+    /// poisoned the reckoning of everything after it.
     Call {
         depth: usize,
         target: SentenceIndex,
@@ -57,61 +55,36 @@ fn is_inline_block(library: &Library, target: SentenceIndex) -> bool {
 ///
 /// A `dip N` or a `jump` naming a real sentence stays a [`Node::Call`]: there the
 /// callee exists independently, `inline` is a real choice, and the label is worth
-/// keeping. An inline block that would recurse also stays a `Call`, which is what
-/// it becomes at run time anyway.
-pub(crate) fn build(
-    library: &Library,
-    s_idx: SentenceIndex,
-    in_progress: &mut HashSet<SentenceIndex>,
-) -> Vec<Node> {
-    in_progress.insert(s_idx);
-
-    let out = library.sentences[s_idx]
+/// keeping.
+///
+/// The walk terminates because recursion is forbidden: `check_arities` refuses a
+/// sentence that reaches itself, so a library that compiled has an acyclic call
+/// graph and there is no cycle for this to guard against.
+pub(crate) fn build(library: &Library, s_idx: SentenceIndex) -> Vec<Node> {
+    library.sentences[s_idx]
         .iter()
         .map(|inst| match inst {
-            Instruction::Dip(depth, target) => build_dip(library, *depth, *target, in_progress),
+            Instruction::Dip(depth, target) => build_dip(library, *depth, *target),
             Instruction::Branch(then_t, else_t) => Node::Branch {
                 then_origin: label(library, *then_t),
-                then_body: build_arm(library, *then_t, in_progress),
+                then_body: build(library, *then_t),
                 else_origin: label(library, *else_t),
-                else_body: build_arm(library, *else_t, in_progress),
+                else_body: build(library, *else_t),
             },
             other => Node::Op(other.clone()),
         })
-        .collect();
-
-    in_progress.remove(&s_idx);
-    out
+        .collect()
 }
 
-fn build_dip(
-    library: &Library,
-    depth: usize,
-    target: SentenceIndex,
-    in_progress: &mut HashSet<SentenceIndex>,
-) -> Node {
-    if is_inline_block(library, target) && !in_progress.contains(&target) {
+fn build_dip(library: &Library, depth: usize, target: SentenceIndex) -> Node {
+    if is_inline_block(library, target) {
         Node::Dip {
             depth,
             origins: vec![label(library, target)],
-            body: build(library, target, in_progress),
+            body: build(library, target),
         }
     } else {
         Node::Call { depth, target }
-    }
-}
-
-fn build_arm(
-    library: &Library,
-    target: SentenceIndex,
-    in_progress: &mut HashSet<SentenceIndex>,
-) -> Vec<Node> {
-    if in_progress.contains(&target) {
-        // A branch arm is entered with the condition already popped, which is
-        // what `Dip(0, arm)` means.
-        vec![Node::Call { depth: 0, target }]
-    } else {
-        build(library, target, in_progress)
     }
 }
 
@@ -205,7 +178,7 @@ pub(crate) enum Selector {
 /// into the caller's sequence. Anything deeper keeps its frame, since there the
 /// frame is what the instruction means.
 pub(crate) fn expand_call(prog: &Program, depth: usize, target: SentenceIndex) -> Vec<Node> {
-    let body = build(prog.library(), target, &mut HashSet::new());
+    let body = build(prog.library(), target);
     if depth == 0 {
         body
     } else {

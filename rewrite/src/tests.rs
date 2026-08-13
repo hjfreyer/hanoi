@@ -7,8 +7,6 @@
 //! prelude tactics over real `.hana` code, and the sweeps over the corpus that
 //! keep the claims in `docs/tactics.md` honest.
 
-use std::collections::HashSet;
-
 use bytecode::arity::failure_reachability;
 use bytecode::{Instruction, Library, SentenceIndex, Value, assemble};
 use std::fs;
@@ -93,7 +91,7 @@ fn program_of(code: &str) -> &'static Program<'static> {
 /// still be a `Call` node.
 fn tree_of(code: &str, src: &str) -> (&'static Program<'static>, Vec<Node>) {
     let prog = program_of(code);
-    let body = build(prog.library(), SentenceIndex::from(0), &mut HashSet::new());
+    let body = build(prog.library(), SentenceIndex::from(0));
     let body = run(prog, body, &format!("unfold_all; {}", src));
     (prog, body)
 }
@@ -137,7 +135,7 @@ fn shape(nodes: &[Node]) -> Vec<String> {
 #[test]
 fn depth_counts_inputs_once() {
     let prog = program_of("sentence probe { add drop 0 drop 0 }");
-    let body = build(prog.library(), SentenceIndex::from(0), &mut HashSet::new());
+    let body = build(prog.library(), SentenceIndex::from(0));
     // Two operands in, the sum and its flag out, then both dropped.
     assert_eq!(
         depths(prog, &body),
@@ -150,7 +148,7 @@ fn depth_counts_inputs_once() {
 #[test]
 fn depth_stops_being_known_after_a_panic() {
     let prog = program_of("sentence probe { push 1 panic push 2 }");
-    let body = build(prog.library(), SentenceIndex::from(0), &mut HashSet::new());
+    let body = build(prog.library(), SentenceIndex::from(0));
     let d = depths(prog, &body);
     assert_eq!(d[0], Some(0));
     assert_eq!(d[1], Some(1));
@@ -168,7 +166,7 @@ fn a_branch_takes_what_the_hungrier_arm_takes() {
     // `{ }` is (0 -> 0) and `{ drop 0  push true }` is (1 -> 1): same net,
     // different demands. The branch needs the condition and the value.
     let prog = program_of("sentence probe { pick 0 branch { } { drop 0 push true } }");
-    let body = build(prog.library(), SentenceIndex::from(0), &mut HashSet::new());
+    let body = build(prog.library(), SentenceIndex::from(0));
     let [_, inner] = &body[..] else {
         panic!("expected a pick and a branch, got {:?}", shape(&body))
     };
@@ -177,7 +175,7 @@ fn a_branch_takes_what_the_hungrier_arm_takes() {
     // An arm that never returns answers for neither, and the other stands
     // alone — the one case where a single arm decides.
     let prog = program_of("sentence probe { pick 0 branch { panic } { drop 0 } }");
-    let body = build(prog.library(), SentenceIndex::from(0), &mut HashSet::new());
+    let body = build(prog.library(), SentenceIndex::from(0));
     let [_, inner] = &body[..] else {
         panic!("expected a branch")
     };
@@ -222,12 +220,6 @@ fn a_function_that_is_not_the_identity_is_not_rewritten_into_one() {
             tac
         );
     }
-}
-
-#[test]
-fn a_cycle_has_no_static_arity() {
-    let prog = program_of("#[recursive] sentence loops { jump loops }");
-    assert_eq!(prog.arity(SentenceIndex::from(0)), None);
 }
 
 // ---------------------------------------------------------------------------
@@ -306,7 +298,7 @@ fn fusing_records_every_origin() {
         .find(|(_, n)| *n == "probe")
         .map(|(i, _)| i)
         .unwrap();
-    let body = build(prog.library(), probe, &mut HashSet::new());
+    let body = build(prog.library(), probe);
     let got = run(prog, body, DIPS);
     let [Node::Dip { origins, .. }] = &got[..] else {
         panic!("expected one fused frame, got {:?}", shape(&got))
@@ -369,7 +361,7 @@ fn factoring_looks_past_provenance() {
         .find(|(_, n)| *n == "probe")
         .map(|(i, _)| i)
         .unwrap();
-    let body = build(prog.library(), probe, &mut HashSet::new());
+    let body = build(prog.library(), probe);
     let got = run(prog, body, FACTOR);
     assert_eq!(got.len(), 3, "nothing was factored: {:?}", shape(&got));
 }
@@ -468,7 +460,7 @@ fn raw(code: &str, name: &str) -> (&'static Program<'static>, Vec<Node>) {
         .find(|(_, n)| *n == name)
         .map(|(i, _)| i)
         .unwrap_or_else(|| panic!("no sentence '{}'", name));
-    let body = build(prog.library(), idx, &mut HashSet::new());
+    let body = build(prog.library(), idx);
     (prog, body)
 }
 
@@ -511,14 +503,6 @@ fn unfolding_puts_the_callee_in_reach_of_the_callers_laws() {
     let (prog, body) = raw(code, "probe");
     let got = run(prog, body, "unfold_all; cleanup");
     assert_eq!(shape(&got), vec!["push 1"]);
-}
-
-#[test]
-fn the_recursive_annotation_is_all_it_takes_to_spot_recursion() {
-    let (prog, body) = raw("#[recursive] sentence loops { jump loops }", "loops");
-    let before = shape(&body);
-    let got = run(prog, body, "unfold_all");
-    assert_eq!(shape(&got), before, "a recursive call was opened");
 }
 
 // ---------------------------------------------------------------------------
@@ -826,7 +810,7 @@ fn lifting_empties_the_arms_of_the_barista_probe() {
         return;
     };
 
-    let plain = run(prog, build(library, idx, &mut HashSet::new()), "unfold_all");
+    let plain = run(prog, build(library, idx), "unfold_all");
     let before = work_in_arms(&plain);
     let lifted = run(prog, plain, "lifting");
     let after = work_in_arms(&lifted);
@@ -1078,7 +1062,7 @@ fn pushed(prog: &'static Program<'static>, name: &str) -> Result<bytecode::Symbo
         .compile_with(&src, Some(prog))
         .map_err(|e| format!("{}{}", e.message, e.help.unwrap_or_default()))?;
 
-    let body = build(prog.library(), SentenceIndex::from(0), &mut HashSet::new());
+    let body = build(prog.library(), SentenceIndex::from(0));
     let env = Env::new(prog, 1000, true);
     let (got, _) = run_tactic(&env, &tactic, body).unwrap_or_else(|e| panic!("{}", e));
     match &got[0] {
@@ -1140,7 +1124,7 @@ fn a_term_can_push_a_const_string_written_out() {
     let tactic = defs
         .compile_with(r#"once(introduce { push "hi" equal })"#, Some(prog))
         .unwrap();
-    let body = build(prog.library(), SentenceIndex::from(0), &mut HashSet::new());
+    let body = build(prog.library(), SentenceIndex::from(0));
     let env = Env::new(prog, 1000, true);
     let (got, _) = run_tactic(&env, &tactic, body).unwrap_or_else(|e| panic!("{}", e));
     assert_eq!(
@@ -1230,16 +1214,16 @@ fn corpus() -> Option<(&'static Library, &'static Program<'static>)> {
 
 /// Every sentence the tool would agree to work on.
 ///
-/// The two refusals `main` makes, applied to the sweep: the equations are
-/// stated for code that is neither recursive nor able to fail, so a sweep that
-/// ignored the precondition would be testing something the tool does not do.
-fn admissible(library: &Library, prog: &Program) -> Vec<SentenceIndex> {
+/// The refusal `main` makes, applied to the sweep: the equations are stated for
+/// code that cannot fail, so a sweep that ignored the precondition would be
+/// testing something the tool does not do.
+fn admissible(library: &Library, _prog: &Program) -> Vec<SentenceIndex> {
     let can_fail = failure_reachability(library);
     library
         .names
         .iter_enumerated()
         .map(|(idx, _)| idx)
-        .filter(|idx| !prog.is_recursive(*idx) && !can_fail[usize::from(*idx)])
+        .filter(|idx| !can_fail[usize::from(*idx)])
         .collect()
 }
 
@@ -1274,11 +1258,7 @@ fn rewrites_preserve_arity_across_the_corpus() {
 
     let mut checked = 0;
     for s_idx in admissible(library, prog) {
-        let plain = run(
-            prog,
-            build(library, s_idx, &mut HashSet::new()),
-            "unfold_all",
-        );
+        let plain = run(prog, build(library, s_idx), "unfold_all");
         let name = || format!("#{} {}", usize::from(s_idx), library.names[s_idx]);
 
         for tac in [DIPS, FACTOR] {
@@ -1344,11 +1324,7 @@ fn corpus_derivations_replay() {
     let mut steps = 0usize;
     let mut worked = 0usize;
     for s_idx in admissible(library, prog) {
-        let plain = run(
-            prog,
-            build(library, s_idx, &mut HashSet::new()),
-            "unfold_all",
-        );
+        let plain = run(prog, build(library, s_idx), "unfold_all");
         // `with_script` replays and asserts; the counting is so that a sweep
         // over a corpus that stopped matching would not pass silently.
         let (_, script) = with_script(prog, plain, ALL);
@@ -1385,11 +1361,7 @@ fn corpus_derivations_survive_being_written_down() {
 
     let mut steps = 0usize;
     for s_idx in admissible(library, prog) {
-        let plain = run(
-            prog,
-            build(library, s_idx, &mut HashSet::new()),
-            "unfold_all",
-        );
+        let plain = run(prog, build(library, s_idx), "unfold_all");
         let (after, script) = with_script(prog, plain.clone(), ALL);
         if script.is_empty() {
             continue;
@@ -1445,11 +1417,7 @@ fn inverting_a_corpus_derivation_returns_it_to_where_it_started() {
     let mut undone = 0usize;
     let mut steps = 0usize;
     for s_idx in admissible(library, prog) {
-        let before = run(
-            prog,
-            build(library, s_idx, &mut HashSet::new()),
-            "unfold_all",
-        );
+        let before = run(prog, build(library, s_idx), "unfold_all");
         let env = Env::new(prog, 1_000_000, true);
         let (after, script) =
             run_tactic(&env, &compile(ALL), before.clone()).unwrap_or_else(|e| panic!("{}", e));
@@ -1497,11 +1465,7 @@ fn the_annihilation_with_no_outputs_is_a_third_of_them() {
 
     let (mut total, mut void) = (0usize, 0usize);
     for s_idx in admissible(library, prog) {
-        let plain = run(
-            prog,
-            build(library, s_idx, &mut HashSet::new()),
-            "unfold_all",
-        );
+        let plain = run(prog, build(library, s_idx), "unfold_all");
         let (_, script) = with_script(prog, plain, "factoring; all");
         for step in &script {
             let StepKind::Rule(Rule::Annihilate { m, .. }) = &step.kind else {
@@ -1534,11 +1498,7 @@ fn a_branch_arity_is_one_both_arms_can_meet() {
     let mut checked = 0usize;
     let mut asymmetric = 0usize;
     for s_idx in admissible(library, prog) {
-        let tree = run(
-            prog,
-            build(library, s_idx, &mut HashSet::new()),
-            "unfold_all",
-        );
+        let tree = run(prog, build(library, s_idx), "unfold_all");
         walk_branches(prog, &tree, &mut |then_body, else_body, reported| {
             let (Some((tn, tm)), Some((en, em))) =
                 (seq_full(prog, then_body), seq_full(prog, else_body))
@@ -1623,7 +1583,7 @@ fn most_of_the_corpus_is_admissible() {
     let ok = admissible(library, prog).len();
     assert!(
         ok * 2 > total,
-        "only {} of {} sentences are non-recursive and total",
+        "only {} of {} sentences are total",
         ok,
         total
     );
@@ -1643,11 +1603,7 @@ fn the_admissible_corpus_exercises_the_movement_laws() {
 
     let mut fired = 0;
     for s_idx in admissible(library, prog) {
-        let plain = run(
-            prog,
-            build(library, s_idx, &mut HashSet::new()),
-            "unfold_all",
-        );
+        let plain = run(prog, build(library, s_idx), "unfold_all");
         let (_, script) = with_script(prog, plain, ALL);
         fired += script
             .iter()
@@ -1687,13 +1643,12 @@ fn the_precondition_is_measured_rather_than_assumed() {
         return;
     };
 
-    let nodes_in = |idx| run(prog, build(library, idx, &mut HashSet::new()), "unfold_all").len();
+    let nodes_in = |idx| run(prog, build(library, idx), "unfold_all").len();
     let admissible_nodes: usize = admissible(library, prog).into_iter().map(nodes_in).sum();
     let open_nodes: usize = library
         .names
         .iter_enumerated()
         .map(|(idx, _)| idx)
-        .filter(|idx| !prog.is_recursive(*idx))
         .map(nodes_in)
         .sum();
 
@@ -1717,7 +1672,7 @@ fn the_precondition_is_measured_rather_than_assumed() {
 
 fn stack_of(code: &str, src: &str) -> Vec<String> {
     let prog = program_of(code);
-    let body = build(prog.library(), SentenceIndex::from(0), &mut HashSet::new());
+    let body = build(prog.library(), SentenceIndex::from(0));
     let body = run(prog, body, src);
     crate::print::render_body(prog, SentenceIndex::from(0), &body, src, true, false)
 }
@@ -1756,7 +1711,7 @@ fn positions(lines: &[String]) -> Vec<(String, String)> {
 #[test]
 fn the_listing_numbers_each_sequence_from_zero() {
     let prog = program_of("sentence probe { push 1 pick 0 branch { not } { is_bool } }");
-    let body = build(prog.library(), SentenceIndex::from(0), &mut HashSet::new());
+    let body = build(prog.library(), SentenceIndex::from(0));
     let lines = crate::print::render_body(prog, SentenceIndex::from(0), &body, "id", false, true);
     let rows = positions(&lines);
 
@@ -1781,7 +1736,7 @@ fn the_number_the_listing_prints_is_the_number_a_tactic_takes() {
     // The property that makes the column worth printing: read a position off
     // the listing, hand it to `at`, and the step lands there.
     let prog = program_of("sentence probe { push 1 push 2 dip 1 { dip 1 { drop 0 } } }");
-    let body = build(prog.library(), SentenceIndex::from(0), &mut HashSet::new());
+    let body = build(prog.library(), SentenceIndex::from(0));
     let lines = crate::print::render_body(prog, SentenceIndex::from(0), &body, "id", false, true);
 
     let rows = positions(&lines);

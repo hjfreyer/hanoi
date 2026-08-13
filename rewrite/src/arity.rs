@@ -2,7 +2,7 @@
 //!
 //! Mostly structural, but a [`Node::Call`] names a sentence rather than holding
 //! its body, so these take a [`Program`] to look the target up. That is the
-//! price of making inlining a rule; the gain is that a recursive call now has
+//! price of making inlining a rule; the gain is that an unexpanded call now has
 //! an arity where the old `Cut` had none.
 
 use bytecode::arity::op_arity;
@@ -55,8 +55,8 @@ pub(crate) fn node_arity(prog: &Program, node: &Node) -> Option<(i64, i64)> {
 /// neither, and the other arm stands alone: an arm that does not return
 /// constrains nothing about what the branch leaves. That is the only case in
 /// which one arm decides, and it is unreachable under the tool's precondition,
-/// where nothing can panic and nothing recurses. It is kept because the depth
-/// gutter is printed for sentences the rewriter would refuse.
+/// where nothing can panic. It is kept because the depth gutter is printed for
+/// sentences the rewriter would refuse.
 ///
 /// `None` when neither arm answers, or when the two disagree on net change.
 /// Neither is reachable from code the arity checker accepted — but an arity

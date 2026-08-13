@@ -239,23 +239,22 @@ pub(crate) fn derivation_lines(prog: &Program, title: &str, script: &[Step]) -> 
 
 /// What disqualifies a program from being rewritten at all.
 ///
-/// Both properties are closed over reachability, so refusing a root refuses
-/// every node any tree built from it can come to hold — which is what lets an
+/// The property is closed over reachability, so refusing a root refuses every
+/// node any tree built from it can come to hold — which is what lets an
 /// annihilation ask only for an arity, and what makes running a computation on
 /// copies and discarding the results the identity.
+///
+/// There used to be a second one, that the sentence had a finite expansion.
+/// Recursion is forbidden now and `check_arities` refuses it, so every sentence
+/// in a library that compiled has one, and there is nothing left to ask.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Precondition {
-    /// `#[recursive]`, so there is no finite expansion.
-    Recursive,
     /// Reaches a `panic`, an `assert` or an `assert_eq`.
     CanFail,
 }
 
 /// Whether this sentence may be rewritten. Both tools ask, and both refuse.
 pub(crate) fn check_preconditions(prog: &Program, root: SentenceIndex) -> Result<(), Precondition> {
-    if prog.is_recursive(root) {
-        return Err(Precondition::Recursive);
-    }
     if prog.can_fail(root) {
         return Err(Precondition::CanFail);
     }
@@ -265,14 +264,6 @@ pub(crate) fn check_preconditions(prog: &Program, root: SentenceIndex) -> Result
 /// Why a refusal was right, as lines. One text, so both tools say it the same.
 pub(crate) fn precondition_explanation(p: Precondition, name: &str) -> Vec<String> {
     match p {
-        Precondition::Recursive => vec![
-            format!("'{}' is #[recursive]", name),
-            String::new(),
-            "  This tool expands calls, and a recursive sentence has no finite".to_string(),
-            "  expansion. hanoi requires the annotation on every caller of a".to_string(),
-            "  recursive sentence, so its absence is what proves expanding a".to_string(),
-            "  sentence terminates — and its presence is where that proof stops.".to_string(),
-        ],
         Precondition::CanFail => vec![
             format!("'{}' can fail", name),
             String::new(),

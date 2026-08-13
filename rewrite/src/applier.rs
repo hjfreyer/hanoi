@@ -134,18 +134,13 @@ fn sides(prog: &Program, step: &Step) -> Result<(Vec<Node>, Vec<Node>), SideCond
             rule.check(prog)?;
             (rule.lhs(), rule.rhs())
         }
-        StepKind::Unfold { depth, target } => {
-            if prog.is_recursive(*target) {
-                return Err(SideCondition::RecursiveTarget { target: *target });
-            }
-            (
-                vec![Node::Call {
-                    depth: *depth,
-                    target: *target,
-                }],
-                expand_call(prog, *depth, *target),
-            )
-        }
+        StepKind::Unfold { depth, target } => (
+            vec![Node::Call {
+                depth: *depth,
+                target: *target,
+            }],
+            expand_call(prog, *depth, *target),
+        ),
     };
     Ok(match step.dir {
         Direction::Forward => (lhs, rhs),
@@ -223,7 +218,7 @@ pub(crate) fn apply_step(
         //
         // Learning an arity that was previously unknown stays permissible.
         // Under the global precondition it should not arise — every node has
-        // an arity once recursion and panics are excluded — but tolerating it
+        // an arity once panics are excluded — but tolerating it
         // costs nothing and keeps the applier usable on synthetic trees.
         let (before, after) = (net(prog, &src), net(prog, &dst));
         let broke = match (before, after) {
@@ -912,7 +907,6 @@ mod tests {
                 r#"
                 sentence pushy { push 7 }
                 sentence pair { push 1 push 2 }
-                #[recursive] sentence loops { jump loops }
                 "#,
             )
             .unwrap(),
@@ -1038,31 +1032,6 @@ mod tests {
         };
         assert_eq!(*depth, 2);
         assert_eq!(body, &vec![op(Instruction::Push(Value::Int(7)))]);
-    }
-
-    #[test]
-    fn unfold_refuses_a_recursive_target() {
-        let library = library();
-        let prog = Program::new(library);
-        let loops = named(library, "loops");
-        let mut tree = vec![Node::Call {
-            depth: 0,
-            target: loops,
-        }];
-        let s = Step {
-            kind: StepKind::Unfold {
-                depth: 0,
-                target: loops,
-            },
-            dir: Direction::Forward,
-            loc: Location::root(0),
-        };
-        assert!(matches!(
-            apply_step(&prog, &mut tree, &s, 0, false)
-                .unwrap_err()
-                .cause,
-            Cause::SideCondition(SideCondition::RecursiveTarget { .. })
-        ));
     }
 
     #[test]

@@ -268,8 +268,8 @@ vocabularies correspond one to one.
 - **`jump S` becomes `Dip(0, idx)`.** A plain call is a dip whose hidden region
   is empty. The point is not the saved variant, it is that a traversal of the
   ISA can no longer handle one call instruction and silently miss the other —
-  and the traversal that would have missed it, `has_cycle`, is the one gating
-  `#[recursive]`.
+  and one of the traversals that would have missed it is arity inference, which
+  is what refuses recursion.
 - **`drop d` for `d > 0` becomes `Dip(d, idx)` around a plain `Drop`.** Dropping
   at a depth was the only instruction that removed a value from the *middle* of
   the stack. With it gone, `Pick` and `Roll` are the only instructions that

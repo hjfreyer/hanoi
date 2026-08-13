@@ -168,8 +168,7 @@ would break the precondition the whole calculus rests on.
 
 Everything `prove` checks of its own derivation, in the same code:
 
-- both sides of the identity may be rewritten at all — neither is
-  `#[recursive]` nor able to fail;
+- both sides of the identity may be rewritten at all — neither can fail;
 - **every step applies**: the descent reaches a real node of a kind that has the
   part named, the window is in range and matches what the equation regenerates
   (compared by effect), the equation's side conditions hold against *this*

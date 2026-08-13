@@ -329,13 +329,10 @@ impl Matcher for Unfold {
                 .to_string(),
         )
     }
-    fn plan(&self, prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
+    fn plan(&self, _prog: &Program, window: &[Node]) -> Option<Vec<PlannedStep>> {
         let Node::Call { depth, target } = &window[0] else {
             return None;
         };
-        if prog.is_recursive(*target) {
-            return None;
-        }
         Some(vec![PlannedStep {
             kind: StepKind::Unfold {
                 depth: *depth,
@@ -4852,40 +4849,25 @@ mod tests {
     // -- unfold -------------------------------------------------------------
 
     #[test]
-    fn unfold_opens_a_call_and_refuses_a_recursive_one() {
-        let library: &'static Library = Box::leak(Box::new(
-            assemble(
-                r#"
-                sentence pushy { push 7 }
-                #[recursive] sentence loops { jump loops }
-                "#,
-            )
-            .unwrap(),
-        ));
+    fn unfold_opens_a_call() {
+        let library: &'static Library =
+            Box::leak(Box::new(assemble(r#"sentence pushy { push 7 }"#).unwrap()));
         let prog = Program::new(library);
-        let idx = |name: &str| {
-            library
-                .names
-                .iter_enumerated()
-                .find(|(_, n)| *n == name)
-                .map(|(i, _)| i)
-                .unwrap()
-        };
+        let idx = library
+            .names
+            .iter_enumerated()
+            .find(|(_, n)| *n == "pushy")
+            .map(|(i, _)| i)
+            .unwrap();
 
         let w = [Node::Call {
             depth: 0,
-            target: idx("pushy"),
+            target: idx,
         }];
         assert_eq!(
             fire(&Unfold, &prog, &w),
             Some(vec![op(Instruction::Push(Value::Int(7)))])
         );
-
-        let w = [Node::Call {
-            depth: 0,
-            target: idx("loops"),
-        }];
-        assert!(Unfold.plan(&prog, &w).is_none());
     }
 
     // -- introduce ----------------------------------------------------------

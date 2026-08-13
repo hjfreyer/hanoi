@@ -16,8 +16,8 @@
 //! What is checked is exactly what `prove` checks of its own script, in the
 //! same code:
 //!
-//! - both sides may be rewritten at all — neither is `#[recursive]` nor able to
-//!   fail, which is the precondition every equation is stated under;
+//! - both sides may be rewritten at all — neither can fail, which is the
+//!   precondition every equation is stated under;
 //! - every step applies: the descent reaches a real node, the window is what
 //!   the equation regenerates, the side conditions hold against *this* library,
 //!   and the replacement leaves the stack as the window did;
@@ -262,7 +262,7 @@ fn check(
 }
 
 fn build_tree(prog: &Program, root: SentenceIndex) -> Vec<Node> {
-    build(prog.library(), root, &mut HashSet::new())
+    build(prog.library(), root)
 }
 
 impl Failure {

@@ -926,7 +926,6 @@ mod tests {
     use crate::location::Location;
     use crate::matcher::{self, matcher_by_name};
     use bytecode::{Instruction, Library, Value, assemble};
-    use std::collections::HashSet;
 
     fn m(name: &str) -> Box<dyn Matcher> {
         matcher_by_name(name).unwrap_or_else(|| panic!("no matcher '{}'", name))
@@ -1673,10 +1672,7 @@ mod tests {
 
         let mut checked = 0;
         for (idx, _) in library.sentences.iter_enumerated() {
-            if prog.is_recursive(idx) {
-                continue;
-            }
-            let tree = build(library, idx, &mut HashSet::new());
+            let tree = build(library, idx);
             if tree.is_empty() {
                 continue;
             }
@@ -1749,7 +1745,7 @@ mod tests {
             .map(|(i, _)| i)
             .unwrap();
 
-        let tree = build(library, outer, &mut HashSet::new());
+        let tree = build(library, outer);
         let tactic = Tactic::Repeat(Box::new(Tactic::Td(Box::new(each_of(&[
             "unfold",
             "flatten",

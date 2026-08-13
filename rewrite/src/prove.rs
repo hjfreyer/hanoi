@@ -546,9 +546,9 @@ fn check(
 ) -> Result<Proven, Failure> {
     // Both sides, not only the one that gets rewritten: the right-hand side is
     // the term the claim is measured against, so it has to be one the equations
-    // can speak about too. It is also what makes the inlining below terminate,
-    // since `#[recursive]` is refused and that property is closed over
-    // reachability.
+    // can speak about too. (The inlining below terminates for a reason that is
+    // not this one: recursion is forbidden, so every call has a finite
+    // expansion.)
     for (side, which) in [(identity.lhs, "left-hand"), (identity.rhs, "right-hand")] {
         if let Err(p) = check_preconditions(prog, side) {
             return Err(Failure::Side(p, which, prog.library().names[side].clone()));
@@ -606,7 +606,7 @@ fn compile(prog: &Program, file: &ProvenFile, proof: usize) -> Result<Strategy, 
 }
 
 fn tree(prog: &Program, root: SentenceIndex) -> Vec<Node> {
-    build(prog.library(), root, &mut HashSet::new())
+    build(prog.library(), root)
 }
 
 impl Failure {

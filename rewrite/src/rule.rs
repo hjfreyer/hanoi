@@ -27,10 +27,10 @@
 //!
 //! ## The global precondition
 //!
-//! The tool works only on sentences that are neither `#[recursive]` nor able to
-//! fail, and refuses others up front (see `main`). Both properties are closed
-//! over reachability, so every node any tree here can hold is total and
-//! non-recursive. Several conditions the old rules needed therefore collapse:
+//! The tool works only on sentences that cannot fail, and refuses others up
+//! front (see `main`). The property is closed over reachability, so every node
+//! any tree here can hold is total. Several conditions the old rules needed
+//! therefore collapse:
 //! [`Rule::Annihilate`] asks only for an arity where `speculable` used to
 //! require a syntactic whitelist, because there is no `assert` left to run on a
 //! path that would not have run it. Each such place says so, since lifting the
@@ -83,8 +83,6 @@ impl Direction {
 /// step got something wrong.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum SideCondition {
-    /// `unfold` was asked to open a sentence with no finite expansion.
-    RecursiveTarget { target: SentenceIndex },
     /// The node an equation wanted to move past has no frame to speak of — a
     /// plain instruction, or the `jump` that a `Call { depth: 0 }` is.
     NotFramed { found: String },
@@ -117,11 +115,6 @@ pub(crate) enum SideCondition {
 impl std::fmt::Display for SideCondition {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SideCondition::RecursiveTarget { target } => write!(
-                f,
-                "#{} is #[recursive] and has no finite expansion",
-                usize::from(*target)
-            ),
             SideCondition::NotFramed { found } => {
                 write!(f, "`{}` has no frame to move a window through", found)
             }

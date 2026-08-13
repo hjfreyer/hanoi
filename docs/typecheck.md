@@ -1,7 +1,9 @@
 # Typecheck: Static Safety Verification Tool for Hanoi
 
 > [!NOTE]
-> The `typecheck` tool and its Z3 dependency have been removed from the codebase for now (it was restricting other development). The `#[precondition]`, `#[postcondition]`, `#[total]`, and `#[recursive]` annotations described below are still parsed and preserved in the `Library`, but nothing currently verifies them. This document is kept as a design reference for a future reimplementation.
+> The `typecheck` tool and its Z3 dependency have been removed from the codebase for now (it was restricting other development). The `#[precondition]` and `#[postcondition]` annotations described below are still parsed and preserved in the `Library`, but nothing currently verifies them. This document is kept as a design reference for a future reimplementation.
+>
+> **The recursion model below is stale too.** `#[recursive]` no longer exists and recursion is forbidden outright (see [hana.md](hana.md#recursion-is-forbidden)), so a reimplementation has no cycles to annotate, validate, or encode as Z3 recursive definitions: every sentence unfolds finitely.
 >
 > **The panic model below is stale.** It was written against a VM in which any operator could reject an operand — division by zero, `untuple` on a non-tuple, `and` on two ints. Every data operation is now total (see [docs/totality.md](totality.md)), so `Panic` is reachable only through `panic`, `assert` and `assert_eq`, and the interesting judgment has changed from "does this program panic" to "does this program compute on junk". A reimplementation should be generated from the junk table in `totality.md` rather than from the encoding described here.
 
@@ -29,10 +31,9 @@ function foo {
 ```
 
 When Typecheck runs:
-1. It validates that all recursive cycles in the compiled library are correctly annotated with the `#[recursive]` attribute.
-2. It compiles all non-recursive sentences in the library into programmatic Z3 recursive function definitions.
-3. It asserts that the safety precondition function (`safe_for_foo`) evaluates to `true`.
-4. It checks whether the target function (`foo`) can evaluate to `Panic` under that precondition.
+1. It compiles the sentences in the library into programmatic Z3 function definitions.
+2. It asserts that the safety precondition function (`safe_for_foo`) evaluates to `true`.
+3. It checks whether the target function (`foo`) can evaluate to `Panic` under that precondition.
 
 ### Postconditions
 You can also annotate a function with `#[postcondition(Q)]`. A postcondition asserts that the function's output value satisfies the check function `Q`, assuming the function's input satisfies its precondition (if any).

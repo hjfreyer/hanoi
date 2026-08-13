@@ -25,7 +25,6 @@
 //! to step *n* quadratic in *n*. Now the derivation is a value; the search runs
 //! once.
 
-use std::collections::HashSet;
 use std::io::{self, BufRead, Write};
 
 use bytecode::SentenceIndex;
@@ -331,7 +330,7 @@ fn histogram(steps: &[Step]) -> Vec<(&'static str, usize)> {
 }
 
 fn tree(prog: &Program, root: SentenceIndex) -> Vec<Node> {
-    build(prog.library(), root, &mut HashSet::new())
+    build(prog.library(), root)
 }
 
 /// One step: which law, which way, where, and what it does to its window.
