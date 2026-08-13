@@ -1344,8 +1344,6 @@ can fail, and `interchange` needs it because reordering is only unobservable
 when the failure order cannot be seen. The other eleven are sound on fallible
 code as written. Lifting the restriction therefore means giving those two their
 own side conditions rather than taking one for the whole run.
-`tests::the_precondition_is_measured_rather_than_assumed` records the
-measurement and fails if it goes stale.
 
 ## The governing invariant, in three parts
 
