@@ -1047,4 +1047,107 @@ mod tests {
         let res = assemble(code).unwrap();
         assert_eq!(res.sentences.len(), 5);
     }
+
+    /// Everything after the assertion becomes the arm taken when the two values
+    /// agree, so the branch is the last thing the sentence does and a failed
+    /// comparison has no way back into the code it was guarding.
+    #[test]
+    fn a_test_assertion_swallows_the_rest_of_the_sentence() {
+        let code = r#"
+            mod prelude { symbol fail }
+            sentence check {
+                push 1
+                push 1
+                test_assert_eq
+                push 9
+            }
+        "#;
+        let library = assemble(code).unwrap();
+        let body = library.sentences[sentence_named(&library, "check")].as_slice();
+
+        let (then_t, else_t) = match body {
+            [
+                Instruction::Push(Value::Int(1)),
+                Instruction::Push(Value::Int(1)),
+                Instruction::Equal,
+                Instruction::Branch(then_t, else_t),
+            ] => (*then_t, *else_t),
+            other => panic!("unexpected expansion: {:?}", other),
+        };
+
+        assert_eq!(
+            library.sentences[then_t],
+            vec![Instruction::Push(Value::Int(9))]
+        );
+        // Nothing was left on the stack for the rest to read, so the failing
+        // arm has nothing to clear before answering.
+        assert!(matches!(
+            library.sentences[else_t].as_slice(),
+            [Instruction::Push(Value::Symbol(_))]
+        ));
+    }
+
+    /// The failing arm has to leave the stack the way the other one does, and
+    /// what the rest of the sentence reads is exactly what it has to drop.
+    #[test]
+    fn a_failing_assertion_clears_what_the_rest_would_have_read() {
+        let code = r#"
+            mod prelude { symbol fail }
+            sentence check {
+                push 7
+                push 1
+                push 1
+                test_assert_eq
+                drop 0
+                push 9
+            }
+        "#;
+        let library = assemble(code).unwrap();
+        let else_t = match library.sentences[sentence_named(&library, "check")].as_slice() {
+            [.., Instruction::Branch(_, else_t)] => *else_t,
+            other => panic!("unexpected expansion: {:?}", other),
+        };
+        assert!(matches!(
+            library.sentences[else_t].as_slice(),
+            [Instruction::Drop, Instruction::Push(Value::Symbol(_))]
+        ));
+    }
+
+    /// The verdict is one value, so the rest of the sentence must leave one
+    /// value — otherwise the two arms disagree and no number of drops fixes it.
+    #[test]
+    fn a_test_assertion_needs_the_rest_to_end_in_a_verdict() {
+        let code = r#"
+            mod prelude { symbol fail }
+            sentence check {
+                push 1
+                push 1
+                test_assert_eq
+            }
+        "#;
+        let err = assemble(code).unwrap_err();
+        assert!(
+            err.contains("must leave one value too, but it leaves 0"),
+            "unexpected error: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn a_test_assertion_says_where_it_reports_to() {
+        let code = r#"
+            sentence check {
+                push 1
+                push 1
+                test_assert_eq
+                push 9
+            }
+        "#;
+        let err = assemble(code).unwrap_err();
+        assert!(
+            err.contains("`test_assert_eq` reports with `crate::prelude::fail`"),
+            "unexpected error: {}",
+            err
+        );
+    }
 }

@@ -5,7 +5,7 @@ use crate::ast::{
     SentenceDecl, SourceAnnotation, SymbolDecl, Target, TypeSpec,
 };
 use crate::library::{
-    Annotation, Identity, IdentityIndex, Library, SentenceAnnotation, SentenceIndex,
+    Annotation, Arity, Identity, IdentityIndex, Library, SentenceAnnotation, SentenceIndex,
 };
 use crate::opcode::Instruction;
 use crate::resolve::{ModuleId, ModuleItem, ModuleTree, ResolvedItem};
@@ -602,6 +602,7 @@ fn parse_instruction(stream: &mut TokenStream) -> Result<ParsedInstruction, Erro
         "panic" => Ok(ParsedInstruction::Panic),
         "assert" => Ok(ParsedInstruction::Assert),
         "assert_equal" | "assert_eq" => Ok(ParsedInstruction::AssertEqual),
+        "test_assert_equal" | "test_assert_eq" => Ok(ParsedInstruction::TestAssertEqual),
         "tuple" => {
             let size = parse_usize(stream)?;
             Ok(ParsedInstruction::Tuple(size))
@@ -1294,6 +1295,73 @@ struct Compiler<'a> {
     names: Vec<String>,
     annotations: Vec<Vec<SentenceAnnotation>>,
     current_parent_idx: Option<SentenceIndex>,
+    /// One entry per `test_assert_eq`, to be settled once arities can be
+    /// inferred. See [`settle_verdict_arms`].
+    verdict_arms: Vec<VerdictArm>,
+}
+
+/// Where `test_assert_eq` reports to. Crate-rooted, so one path serves every
+/// module, and the same symbol the test runner and the machine composers
+/// already answer with.
+fn fail_path() -> Path {
+    Path {
+        segments: vec![
+            PathSegment::Crate,
+            PathSegment::Identifier("prelude".to_string()),
+            PathSegment::Identifier("fail".to_string()),
+        ],
+    }
+}
+
+/// Between emitting and checking: writes the real body of every
+/// `test_assert_eq` failure arm.
+///
+/// The arm has to leave the stack the way the rest of the sentence does, and
+/// all it produces on its own is the verdict — so it drops exactly what the
+/// rest would have read, and the rest must leave exactly the one value the
+/// verdict replaces.
+///
+/// Order does not matter. A `test_assert_eq` inside another's continuation is
+/// still a `panic` placeholder when the outer one's arity is inferred, and a
+/// halting arm contributes nothing to a branch's arity — so an inner arm reads
+/// the same whether it has been settled yet or not.
+fn settle_verdict_arms(library: &mut Library, arms: &[VerdictArm]) -> Result<(), String> {
+    for arm in arms {
+        let arity = crate::arity::infer_arity(library, arm.rest).map_err(|e| {
+            format!(
+                "`test_assert_eq` cannot tell what the rest of the sentence does: {}",
+                e
+            )
+        })?;
+        let reads = match arity {
+            Arity::Normal { outputs, .. } if outputs != 1 => {
+                return Err(format!(
+                    "`test_assert_eq` answers with one value, the verdict, so the rest of \
+                     the sentence must leave one value too, but it leaves {}",
+                    outputs
+                ));
+            }
+            Arity::Normal { inputs, .. } | Arity::Panic { inputs } => inputs,
+        };
+
+        library.sentences[arm.failure] = std::iter::repeat_n(Instruction::Drop, reads as usize)
+            .chain(std::iter::once(Instruction::Push(arm.verdict.clone())))
+            .collect();
+    }
+    Ok(())
+}
+
+/// The failing half of a `test_assert_eq`, before it knows how much stack to
+/// clear.
+struct VerdictArm {
+    /// The arm taken when the two values differ. Holds a placeholder until
+    /// [`settle_verdict_arms`] writes its real body.
+    failure: SentenceIndex,
+    /// The rest of the sentence — the arm taken when they agree. What it reads
+    /// off the stack is what the failing arm has to drop.
+    rest: SentenceIndex,
+    /// `crate::prelude::fail`, resolved at the use site.
+    verdict: Value,
 }
 
 impl<'a> Compiler<'a> {
@@ -1365,13 +1433,60 @@ impl<'a> Compiler<'a> {
         }
     }
 
+    /// Expands `test_assert_eq` into the branch that ends the sentence.
+    ///
+    /// The agreeing arm is the rest of the sentence, so nothing follows the
+    /// branch and there is no path from a failed comparison back into the code
+    /// the assertion was guarding.
+    ///
+    /// The failing arm answers `crate::prelude::fail`, and to be a legal branch
+    /// arm it must leave the stack the way the other one does — which means
+    /// dropping whatever the rest of the sentence would have read. How much
+    /// that is is an arity question, and arities are inferred a phase later, so
+    /// the arm is compiled as a `panic` placeholder here. `panic` is what makes
+    /// the deferral work: an arm that halts imposes nothing on the other, so
+    /// the rest can be inferred while the placeholder is still standing.
+    fn expand_test_assert_eq(
+        &mut self,
+        scope: ModuleId,
+        rest_of_sentence: ParsedSentence,
+    ) -> Result<(SentenceIndex, SentenceIndex), String> {
+        let verdict = self
+            .compile_value(scope, ParsedValue::Ref(fail_path()))
+            .map_err(|e| {
+                format!(
+                    "`test_assert_eq` reports with `crate::prelude::fail`: {}",
+                    e
+                )
+            })?;
+
+        let rest = self.resolve_target(scope, Target::Inline(rest_of_sentence))?;
+        let failure = self.resolve_target(
+            scope,
+            Target::Inline(ParsedSentence {
+                instructions: Vec::new(),
+            }),
+        )?;
+        self.names[usize::from(failure)] = "<test_assert_eq failure>".to_string();
+        self.sentences[usize::from(failure)] =
+            vec![Instruction::Push(verdict.clone()), Instruction::Panic];
+
+        self.verdict_arms.push(VerdictArm {
+            failure,
+            rest,
+            verdict,
+        });
+        Ok((rest, failure))
+    }
+
     fn compile_sentence_body(
         &mut self,
         scope: ModuleId,
         instructions: Vec<ParsedInstruction>,
     ) -> Result<Vec<Instruction>, String> {
         let mut compiled = Vec::new();
-        for inst in instructions {
+        let mut instructions = instructions.into_iter();
+        while let Some(inst) = instructions.next() {
             let c_inst = match inst {
                 ParsedInstruction::Push(v) => {
                     let compiled_val = self.compile_value(scope, v)?;
@@ -1401,6 +1516,16 @@ impl<'a> Compiler<'a> {
                 ParsedInstruction::Panic => Instruction::Panic,
                 ParsedInstruction::Assert => Instruction::Assert,
                 ParsedInstruction::AssertEqual => Instruction::AssertEqual,
+                // The one instruction that reads what comes after it: the rest
+                // of the body is swallowed here, which is what ends the loop.
+                ParsedInstruction::TestAssertEqual => {
+                    let rest_of_sentence = ParsedSentence {
+                        instructions: instructions.by_ref().collect(),
+                    };
+                    let (rest, failure) = self.expand_test_assert_eq(scope, rest_of_sentence)?;
+                    compiled.push(Instruction::Equal);
+                    Instruction::Branch(rest, failure)
+                }
                 ParsedInstruction::Tuple(n) => Instruction::Tuple(n),
                 ParsedInstruction::Untuple(n) => Instruction::Untuple(n),
                 ParsedInstruction::And => Instruction::And,
@@ -1556,6 +1681,7 @@ pub fn assemble_source(
         names: Vec::new(),
         annotations: Vec::new(),
         current_parent_idx: None,
+        verdict_arms: Vec::new(),
     };
 
     // Pre-allocate space for all named sentences
@@ -1574,6 +1700,8 @@ pub fn assemble_source(
         compiler.sentences[idx] = compiled_instructions;
         compiler.names[idx] = tree.fq_name(scope, &sentence.name);
     }
+
+    let verdict_arms = std::mem::take(&mut compiler.verdict_arms);
 
     let mut library = Library::new();
     for s in compiler.sentences {
@@ -1598,6 +1726,8 @@ pub fn assemble_source(
 
     library.symbols = tree.symbol_map();
     library.identities = identities.into();
+
+    settle_verdict_arms(&mut library, &verdict_arms)?;
 
     crate::arity::check_arities(&mut library)?;
     crate::arity::check_totality(&library)?;

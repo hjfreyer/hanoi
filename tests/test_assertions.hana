@@ -1,0 +1,44 @@
+// Tests for `test_assert_eq`, the assertion that reports instead of halting.
+//
+// It takes everything after it as the branch to run when the two values agree,
+// and answers `prelude::fail` when they do not — so a broken expectation ends
+// the test with a verdict the runner can name, rather than stopping the VM.
+
+test sentence a_matching_pair_runs_on {
+    push 10
+    push 20
+    add
+    assert
+    push 30
+    test_assert_eq
+    push crate::prelude::pass
+}
+
+// Each assertion swallows the ones after it, so this nests four deep.
+test sentence assertions_chain {
+    push 3 push 4 equal
+    push false test_assert_eq
+    push 5 push 5 equal
+    push true test_assert_eq
+    push crate::prelude::pass
+}
+
+// The arm taken on disagreement has to leave the stack the way the rest of the
+// sentence does, so it drops whatever the rest would have read — here, the 7
+// still waiting underneath.
+test sentence an_assertion_with_more_on_the_stack {
+    push 7 push 8
+    push 8 test_assert_eq
+    push 7 test_assert_eq
+    push crate::prelude::pass
+}
+
+// Nothing the expansion produces can fail, which is the point of it: this test
+// claims `#[total]`, where the same test spelled with `assert_eq` could not.
+#[total]
+test sentence a_reporting_test_is_total {
+    push (2, 1)
+    push (2, 1)
+    test_assert_eq
+    push crate::prelude::pass
+}

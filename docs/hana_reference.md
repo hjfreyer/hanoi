@@ -89,9 +89,44 @@ These instructions control execution flow, jumps, and validation assertions.
 | `jump` | `jump <target>` | `[...] -> [...]` | Pushes the return address onto the call stack and transfers execution to the subroutine `<target>`. |
 | `dip` | `dip <count>? <target>` | `[..., v_{k-1}, ..., v_0] -> [..., v_{k-1}, ..., v_0]` | Hides the top `<count>` values (default 1), runs `<target>` on what remains, then restores the hidden values on top of its results. `dip 0 <target>` is exactly `jump <target>`. |
 | `branch` | `branch { then } { else }` | `[..., cond] -> [...]` | Pops $cond$. Executes the `then` block if $cond$ is exactly `true`, and the `else` block on **every** other value. |
-| `panic` | `panic` | `[...] -> [halt]` | Halts VM execution immediately with a failure status. This and the two below are the only instructions that can, and a sentence reaching any of them cannot claim `#[total]`. |
+| `panic` | `panic` | `[...] -> [halt]` | Halts VM execution immediately with a failure status. This, `assert` and `assert_equal` are the only instructions that can, and a sentence reaching any of them cannot claim `#[total]`. |
 | `assert` | `assert` | `[..., cond] -> [...]` | Pops $cond$. Halts and panics only if $cond$ is exactly `false`; anything else is truthy and passes. See `docs/totality.md`. |
 | `assert_equal` | `assert_eq` | `[..., a, b] -> [...]` | Pops $a$ and $b$. Halts and panics if $a \neq b$. |
+| `test_assert_equal` | `test_assert_eq` | `[..., a, b] -> [..., verdict]` | Pops $a$ and $b$. If they are equal, runs the rest of the sentence; if not, clears what the rest would have read and leaves `crate::prelude::fail`. Syntax rather than an instruction — see below. |
+
+### `test_assert_eq`
+
+`assert_eq` for a test that should *report* a mismatch rather than halt the VM.
+Nothing about it can fail, so a sentence using it can still claim `#[total]`.
+
+It is the one piece of syntax that reads what comes after it. Writing
+
+```
+push 30
+test_assert_eq
+push crate::prelude::pass
+```
+
+is writing
+
+```
+push 30
+equal
+branch { push crate::prelude::pass } { push crate::prelude::fail }
+```
+
+so a mismatch has no path back into the code the assertion was guarding. The
+failing arm must leave the stack the way the other one does, which it does by
+dropping whatever the rest of the sentence would have read — the compiler works
+that count out from the rest's inferred arity. Two things follow:
+
+- The rest of the sentence must leave **exactly one** value, since that is what
+  the failing arm answers with. In a `test sentence` that value is
+  `crate::prelude::pass`, and the test runner reads the verdict off the stack.
+- The crate must declare `prelude::fail`.
+
+"The rest of the sentence" means the rest of the block it is written in: inside
+a `branch` arm it ends the arm, and control still returns to whatever called it.
 
 ---
 

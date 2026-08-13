@@ -340,6 +340,16 @@ pub fn sentence_arity(library: &Library, s_idx: SentenceIndex) -> Option<Arity> 
     if is_recursive(s_idx, library) {
         return declared_arity(library, s_idx);
     }
+    infer_arity(library, s_idx).ok()
+}
+
+/// One sentence's inferred arity, with the reason when there is none.
+///
+/// [`sentence_arity`] is this with the reason dropped and `#[recursive]`
+/// answered from the annotation. Public for the `test_assert_eq` expansion,
+/// which sizes a generated branch arm from what the other arm reads and has to
+/// say why if that cannot be worked out.
+pub fn infer_arity(library: &Library, s_idx: SentenceIndex) -> Result<Arity, String> {
     let mut memo = HashMap::new();
     let mut in_progress = HashSet::new();
     let mut instruction_arities = HashMap::new();
@@ -350,7 +360,6 @@ pub fn sentence_arity(library: &Library, s_idx: SentenceIndex) -> Option<Arity> 
         &mut in_progress,
         &mut instruction_arities,
     )
-    .ok()
 }
 
 fn declared_arity(library: &Library, s_idx: SentenceIndex) -> Option<Arity> {

@@ -284,6 +284,35 @@ calls, and each expansion still bottoms out in a frame-crossing `roll 1`, so
 the hard case is multiplied rather than removed. A minimal primitive set makes
 the metatheory smaller and the analysis larger; here the analysis is the point.
 
+## Where `test_assert_eq` fits
+
+`test_assert_eq` is **sugar**, and phase 4 expands it: `a b test_assert_eq REST`
+becomes `a b equal branch { REST } { …drops… push crate::prelude::fail }`. It is
+the only instruction whose expansion reads what *follows* it, which is why the
+compiler takes the rest of the body when it meets one and why nothing can come
+after the branch it emits.
+
+Two things put it in phase 4 rather than phase 2. The rest of the sentence
+becomes a branch arm, and inline blocks are not flattened into sentences until
+phase 4; and the failing arm has to leave the stack the way the other one does,
+which means dropping whatever the rest reads — a count that only arity inference
+knows. That is the same bind as `dip`'s, one phase later: *a lowering that needs
+information its phase cannot have is not a lowering.*
+
+The drops are therefore written **after** phase 4 and before phase 5, by
+`settle_verdict_arms`, which infers the arity of each rest-arm and rewrites its
+partner. Until then the failing arm is a `panic` placeholder, and that choice is
+what makes the pass order-independent: a halting arm imposes nothing on the arm
+opposite it, so a `test_assert_eq` nested inside another's continuation reads the
+same whether it has been settled yet or not. Every placeholder is replaced before
+`check_totality` runs, so no `panic` ever survives into the library — which is
+the point of the construct. It cannot fail, so a test written with it can claim
+`#[total]`.
+
+What phase 5 does check is that the rest of the sentence leaves exactly one
+value. The failing arm answers with exactly one — the verdict — and no number of
+drops reconciles arms that differ in what they *leave*.
+
 ## Where `identity` fits
 
 `identity A = B` is **core**, and it is the second construct where the

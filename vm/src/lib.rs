@@ -1784,6 +1784,45 @@ mod totality_tests {
         assert!(run(vec![Instruction::Panic]).is_err());
     }
 
+    /// `test_assert_eq` is the fourth spelling of an assertion, and the only
+    /// one that is not a way to fail: it answers `prelude::fail` and stops,
+    /// where `assert_eq` halts the VM.
+    #[test]
+    fn a_test_assertion_reports_instead_of_halting() {
+        let code = r#"
+            mod prelude { symbol fail symbol pass }
+            export sentence disagrees {
+                push 7
+                push 1
+                push 2
+                test_assert_eq
+                drop 0
+                push crate::prelude::pass
+            }
+            export sentence agrees {
+                push 7
+                push 1
+                push 1
+                test_assert_eq
+                drop 0
+                push crate::prelude::pass
+            }
+        "#;
+        let library = bytecode::assemble(code).unwrap();
+        let fail = library.symbols.get("prelude::fail").unwrap().clone();
+        let pass = library.symbols.get("prelude::pass").unwrap().clone();
+
+        for (name, expected) in [("disagrees", fail), ("agrees", pass)] {
+            let idx = *library.exports.get(name).unwrap();
+            let mut vm = VM::new(library.clone());
+            vm.execute(idx)
+                .unwrap_or_else(|e| panic!("{} should not halt: {}", name, e));
+            // Exactly the verdict: the arm not taken dropped the 7 that the
+            // rest of the sentence would have read.
+            assert_eq!(vm.stack(), [expected], "{} left the wrong stack", name);
+        }
+    }
+
     #[test]
     fn underflow_is_still_an_error_because_it_is_structural() {
         // Ruled out by arity checking rather than by a flag: a sentence that

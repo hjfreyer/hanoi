@@ -27,6 +27,7 @@ mod runtime_stdout;
 mod advent;
 mod machine_tests;
 mod arity_tests;
+mod test_assertions;
 mod typecheck_test;
 mod type_tests;
 mod types_test;

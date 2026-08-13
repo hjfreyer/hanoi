@@ -71,6 +71,14 @@ pub enum ParsedInstruction {
     Panic,
     Assert,
     AssertEqual,
+    /// `assert_eq` for a test that reports rather than halts: everything after
+    /// it becomes the branch taken when the two values agree, and the branch
+    /// taken when they do not answers `crate::prelude::fail`.
+    ///
+    /// Sugar, and the only instruction whose expansion reads what follows it.
+    /// It never reaches the [`crate::Library`] — `compile_sentence_body` turns
+    /// it into an `equal` and a `branch`.
+    TestAssertEqual,
     Tuple(usize),
     Untuple(usize),
     And,

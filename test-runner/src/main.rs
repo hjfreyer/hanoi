@@ -190,18 +190,18 @@ async fn main() {
                             println!("ok ({} steps)", vm.steps_executed());
                         }
                     } else {
-                        if trace {
-                            println!(
-                                "result: FAILED (stack was not exactly [prelude::pass]: {:?}) ({} steps)",
-                                vm.stack(),
-                                vm.steps_executed()
-                            );
+                        // `test_assert_eq` reports rather than panics, so a
+                        // bare `fail` is a verdict the test reached on purpose
+                        // and there is nothing about the stack worth printing.
+                        let why = if vm.stack() == std::slice::from_ref(&fail_val) {
+                            "the test answered prelude::fail".to_string()
                         } else {
-                            println!(
-                                "FAILED (stack was not exactly [prelude::pass]: {:?}) ({} steps)",
-                                vm.stack(),
-                                vm.steps_executed()
-                            );
+                            format!("stack was not exactly [prelude::pass]: {:?}", vm.stack())
+                        };
+                        if trace {
+                            println!("result: FAILED ({}) ({} steps)", why, vm.steps_executed());
+                        } else {
+                            println!("FAILED ({}) ({} steps)", why, vm.steps_executed());
                         }
                         failed += 1;
                     }
