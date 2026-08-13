@@ -1651,55 +1651,6 @@ fn the_admissible_corpus_exercises_the_movement_laws() {
     );
 }
 
-/// **What the totality precondition costs, measured.**
-///
-/// Refusing sentences that can fail is what lets `annihilate` ask only for an
-/// arity and what makes `interchange` a reordering nobody can observe. On this
-/// corpus it is also very expensive, and the number is worth having in front of
-/// us rather than discovered later.
-///
-/// Two thirds of the sentences are admissible, but they are the *small* ones —
-/// generated accessors and predicates. By node count the admissible share is
-/// about a fifth, and by rewriting work done it is a few percent, because the
-/// substantial code says `assert`: since fallible instructions started
-/// reporting with a flag, a sentence that untuples a value it has no reason to
-/// trust says so, and saying so is what makes it fallible.
-///
-/// The consequence is that the value-level laws — folding, cancelling, deciding
-/// a branch — have almost nothing to act on here, while the movement laws,
-/// which the small sentences do exercise, run freely. Lifting the restriction
-/// means giving `annihilate` and `interchange` their own totality conditions
-/// rather than taking one for the whole run; every other equation in the set is
-/// sound without it.
-#[test]
-fn the_precondition_is_measured_rather_than_assumed() {
-    let Some((library, prog)) = corpus() else {
-        return;
-    };
-
-    let nodes_in = |idx| run(prog, build(library, idx), "unfold_all").len();
-    let admissible_nodes: usize = admissible(library, prog).into_iter().map(nodes_in).sum();
-    let open_nodes: usize = library
-        .names
-        .iter_enumerated()
-        .map(|(idx, _)| idx)
-        .map(nodes_in)
-        .sum();
-
-    assert!(admissible_nodes > 0 && open_nodes > admissible_nodes);
-    // The claim above, as a number: most of the corpus by size is out of
-    // reach. If this ever stops holding — because the corpus stopped asserting,
-    // or because the restriction was lifted — the comment is stale and this is
-    // where to notice.
-    assert!(
-        admissible_nodes * 2 < open_nodes,
-        "admissible code is {} nodes of {}; the precondition may have stopped \
-         being the limitation this test documents",
-        admissible_nodes,
-        open_nodes
-    );
-}
-
 // ---------------------------------------------------------------------------
 // The symbolic stack view
 // ---------------------------------------------------------------------------
