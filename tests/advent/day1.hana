@@ -17,10 +17,17 @@ sentence sync_char_iterator_in {
         push false
     } {
         untuple 2
-        assert
-        drop 1
-        push crate::string::char_iterator::in
-        equal
+        branch {
+            drop 1
+            push crate::string::char_iterator::in
+            equal
+        } {
+            // Not an (args, tag) pair, so it is not one of the events this
+            // syncs on: the value untuple handed back, and its padding.
+            drop 0
+            drop 0
+            push false
+        }
     }
 }
 
@@ -41,10 +48,17 @@ sentence sync_parseint_in {
         push false
     } {
         untuple 2
-        assert
-        drop 1
-        push crate::string::parseint::in
-        equal
+        branch {
+            drop 1
+            push crate::string::parseint::in
+            equal
+        } {
+            // Not an (args, tag) pair, so it is not one of the events this
+            // syncs on: the value untuple handed back, and its padding.
+            drop 0
+            drop 0
+            push false
+        }
     }
 }
 
@@ -98,10 +112,17 @@ sentence sync_set {
         push false
     } {
         untuple 2
-        assert
-        drop 1
-        push crate::string::parseint::out
-        equal
+        branch {
+            drop 1
+            push crate::string::parseint::out
+            equal
+        } {
+            // Not an (args, tag) pair, so it is not one of the events this
+            // syncs on: the value untuple handed back, and its padding.
+            drop 0
+            drop 0
+            push false
+        }
     }
 }
 
@@ -118,8 +139,21 @@ sentence tau_step {
     jump test0::tau_reduce
     // Stack: [(next_state, did_change)]
     untuple 2
-    assert // the untuple
-    assert // ... and did_change, leaving [next_state]
+    branch {
+        // Stack: [next_state, did_change]
+        branch {
+            push crate::prelude::ok
+            tuple 2
+        } {
+            push crate::prelude::err
+            tuple 2
+        }
+    } {
+        // Not a (next_state, did_change) pair at all.
+        drop 0
+        push crate::prelude::err
+        tuple 2
+    }
 }
 
 test sentence verify_day1_manually {
@@ -134,25 +168,45 @@ test sentence verify_day1_manually {
     
     // Run the twenty tau reductions the system takes to reach its answer
     jump tau_step
+    ?
     jump tau_step
+    ?
     jump tau_step
+    ?
     jump tau_step
+    ?
     jump tau_step
+    ?
     jump tau_step
+    ?
     jump tau_step
+    ?
     jump tau_step
+    ?
     jump tau_step
+    ?
     jump tau_step
+    ?
     jump tau_step
+    ?
     jump tau_step
+    ?
     jump tau_step
+    ?
     jump tau_step
+    ?
     jump tau_step
+    ?
     jump tau_step
+    ?
     jump tau_step
+    ?
     jump tau_step
+    ?
     jump tau_step
+    ?
     jump tau_step
+    ?
     
     // Assert that it emitted the pass event
     pick 0

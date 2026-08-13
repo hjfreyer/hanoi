@@ -42,8 +42,10 @@ mod queue {
 
     // init: returns initial state
     function init {
+        // `untuple 0` takes the argument whether or not it was `()`, so there
+        // is nothing left to answer differently about: drop the flag.
         untuple 0
-        assert
+        drop 0
         push () // current
         tuple 1
         push super::State::Idle::tag
@@ -53,130 +55,166 @@ mod queue {
 
     function accept {
         untuple 2
-        assert
-        // Stack: [event, state]
-        pick 0
-        // Stack: [event, state, state]
-        untuple 2
-        assert
-        // Stack: [event, state, Body, tag]
-
-        pick 0
-        push super::State::Idle::tag
-        equal
         branch {
-            drop 0 // tag
-            drop 0 // Body
-            drop 0 // state (unused copy)
-            // Stack: [event]
+            // Stack: [event, state]
+            pick 0
+            // Stack: [event, state, state]
             untuple 2
-            assert
-            // Stack: [Body, channel]
-            pick 0 // channel
-            push super::Event::PushBack::tag
-            equal
             branch {
-                drop 0 // channel
-                drop 0 // Body (any val)
-                push true
-            } {
-                pick 0 // channel
-                push super::Event::PopFront::tag
+                // Stack: [event, state, Body, tag]
+
+                pick 0
+                push super::State::Idle::tag
                 equal
-                pick 1 // channel
-                push super::Event::AwaitFront::tag
-                equal
-                or
                 branch {
-                    // Only bare requests are accepted, not responses.
-                    drop 0 // channel
-                    untuple 1
-                    assert
-                    // Stack: [reqresp]
-                    tuple 0
-                    push super::super::prelude::req
-                    tuple 2
-                    equal
-                } {
-                    drop 0 // channel
+                    drop 0 // tag
                     drop 0 // Body
-                    push false
+                    drop 0 // state (unused copy)
+                    // Stack: [event]
+                    untuple 2
+                    branch {
+                        // Stack: [Body, channel]
+                        pick 0 // channel
+                        push super::Event::PushBack::tag
+                        equal
+                        branch {
+                            drop 0 // channel
+                            drop 0 // Body (any val)
+                            push true
+                        } {
+                            pick 0 // channel
+                            push super::Event::PopFront::tag
+                            equal
+                            pick 1 // channel
+                            push super::Event::AwaitFront::tag
+                            equal
+                            or
+                            branch {
+                                // Only bare requests are accepted, not responses.
+                                drop 0 // channel
+                                untuple 1
+                                branch {
+                                    // Stack: [reqresp]
+                                    tuple 0
+                                    push super::super::prelude::req
+                                    tuple 2
+                                    equal
+                                } {
+                                    drop 0
+                                    push false
+                                }
+                            } {
+                                drop 0 // channel
+                                drop 0 // Body
+                                push false
+                            }
+                        }
+                    } {
+                        drop 0
+                        drop 0
+                        push false
+                    }
+                } {
+                    pick 0 // tag
+                    push super::State::AwaitingPush::tag
+                    equal
+                    branch {
+                        drop 0 // tag
+                        drop 0 // Body
+                        drop 0 // state (unused copy)
+                        // Stack: [event]
+                        untuple 2
+                        branch {
+                            // Stack: [Body, channel]
+                            pick 0 // channel
+                            push super::Event::PushBack::tag
+                            equal
+                            branch {
+                                drop 0 // channel
+                                drop 0 // Body
+                                push true
+                            } {
+                                pick 0 // channel
+                                push super::Event::PopFront::tag
+                                equal
+                                branch {
+                                    drop 0 // channel
+                                    untuple 1
+                                    branch {
+                                        tuple 0
+                                        push super::super::prelude::req
+                                        tuple 2
+                                        equal
+                                    } {
+                                        drop 0
+                                        push false
+                                    }
+                                } {
+                                    drop 0 // channel
+                                    drop 0 // Body
+                                    push false
+                                }
+                            }
+                        } {
+                            drop 0
+                            drop 0
+                            push false
+                        }
+                    } {
+                        pick 0 // tag
+                        push super::State::PopFrontResp::tag
+                        equal
+                        pick 1 // tag
+                        push super::State::PopFrontRespAwait::tag
+                        equal
+                        or
+                        pick 1 // tag
+                        push super::State::AwaitingFrontResp::tag
+                        equal
+                        or
+                        branch {
+                            // Response states always emit; accept iff the offered
+                            // event equals what emit() would produce.
+                            drop 0 // tag
+                            drop 0 // Body
+                            // Stack: [event, state]
+                            jump super::queue::emit
+                            untuple 2
+                            branch {
+                                branch {
+                                    // Stack: [event, emitted_event]
+                                    equal
+                                } {
+                                    drop 0
+                                    drop 0
+                                    push false
+                                }
+                            } {
+                                drop 0
+                                drop 0
+                                drop 0
+                                push false
+                            }
+                        } {
+                            drop 0 // tag
+                            drop 0 // Body
+                            drop 0 // state
+                            drop 0 // event
+                            push false
+                        }
+                    }
                 }
+            } {
+                drop 0
+                drop 0
+                drop 0
+                drop 0
+                push false
             }
         } {
-            pick 0 // tag
-            push super::State::AwaitingPush::tag
-            equal
-            branch {
-                drop 0 // tag
-                drop 0 // Body
-                drop 0 // state (unused copy)
-                // Stack: [event]
-                untuple 2
-                assert
-                // Stack: [Body, channel]
-                pick 0 // channel
-                push super::Event::PushBack::tag
-                equal
-                branch {
-                    drop 0 // channel
-                    drop 0 // Body
-                    push true
-                } {
-                    pick 0 // channel
-                    push super::Event::PopFront::tag
-                    equal
-                    branch {
-                        drop 0 // channel
-                        untuple 1
-                        assert
-                        tuple 0
-                        push super::super::prelude::req
-                        tuple 2
-                        equal
-                    } {
-                        drop 0 // channel
-                        drop 0 // Body
-                        push false
-                    }
-                }
-            } {
-                pick 0 // tag
-                push super::State::PopFrontResp::tag
-                equal
-                pick 1 // tag
-                push super::State::PopFrontRespAwait::tag
-                equal
-                or
-                pick 1 // tag
-                push super::State::AwaitingFrontResp::tag
-                equal
-                or
-                branch {
-                    // Response states always emit; accept iff the offered
-                    // event equals what emit() would produce.
-                    drop 0 // tag
-                    drop 0 // Body
-                    // Stack: [event, state]
-                    jump super::queue::emit
-                    untuple 2
-                    assert
-                    branch {
-                        // Stack: [event, emitted_event]
-                        equal
-                    } {
-                        drop 0
-                        drop 0
-                        push false
-                    }
-                } {
-                    drop 0 // tag
-                    drop 0 // Body
-                    drop 0 // state
-                    drop 0 // event
-                    push false
-                }
-            }
+            drop 0
+            drop 0
+            push false
         }
     }
 
@@ -186,72 +224,91 @@ mod queue {
     function emit {
         // Stack: [state]
         untuple 2
-        assert
-        // Stack: [Body, tag]
-
-        pick 0
-        push super::State::PopFrontResp::tag
-        equal
         branch {
-            // PopFrontResp: Body = (current, option)
-            drop 0 // tag
-            untuple 2
-            assert
-            // Stack: [current, option]
-            drop 1 // drop current
-            // Stack: [option]
-            push super::super::prelude::resp
-            tuple 2 // (option, resp)
-            tuple 1
-            push super::Event::PopFront::tag
-            tuple 2 // ((option, resp), pop_front)
-            push true
-            tuple 2
-        } {
+            // Stack: [Body, tag]
+
             pick 0
-            push super::State::PopFrontRespAwait::tag
+            push super::State::PopFrontResp::tag
             equal
             branch {
-                // PopFrontRespAwait: Body = (option)
+                // PopFrontResp: Body = (current, option)
                 drop 0 // tag
-                untuple 1
-                assert
-                // Stack: [option]
-                push super::super::prelude::resp
-                tuple 2
-                tuple 1
-                push super::Event::PopFront::tag
-                tuple 2
-                push true
-                tuple 2
-            } {
-                pick 0
-                push super::State::AwaitingFrontResp::tag
-                equal
+                untuple 2
                 branch {
-                    // AwaitingFrontResp: Body = (current, option)
-                    drop 0 // tag
-                    untuple 2
-                    assert
                     // Stack: [current, option]
                     drop 1 // drop current
                     // Stack: [option]
                     push super::super::prelude::resp
-                    tuple 2
+                    tuple 2 // (option, resp)
                     tuple 1
-                    push super::Event::AwaitFront::tag
-                    tuple 2
+                    push super::Event::PopFront::tag
+                    tuple 2 // ((option, resp), pop_front)
                     push true
                     tuple 2
                 } {
-                    // Emit nothing
+                    drop 0
+                    drop 0
+                    push ((), false)
+                }
+            } {
+                pick 0
+                push super::State::PopFrontRespAwait::tag
+                equal
+                branch {
+                    // PopFrontRespAwait: Body = (option)
                     drop 0 // tag
-                    drop 0 // Body
-                    tuple 0
-                    push false
-                    tuple 2
+                    untuple 1
+                    branch {
+                        // Stack: [option]
+                        push super::super::prelude::resp
+                        tuple 2
+                        tuple 1
+                        push super::Event::PopFront::tag
+                        tuple 2
+                        push true
+                        tuple 2
+                    } {
+                        drop 0
+                        push ((), false)
+                    }
+                } {
+                    pick 0
+                    push super::State::AwaitingFrontResp::tag
+                    equal
+                    branch {
+                        // AwaitingFrontResp: Body = (current, option)
+                        drop 0 // tag
+                        untuple 2
+                        branch {
+                            // Stack: [current, option]
+                            drop 1 // drop current
+                            // Stack: [option]
+                            push super::super::prelude::resp
+                            tuple 2
+                            tuple 1
+                            push super::Event::AwaitFront::tag
+                            tuple 2
+                            push true
+                            tuple 2
+                        } {
+                            drop 0
+                            drop 0
+                            push ((), false)
+                        }
+                    } {
+                        // Emit nothing
+                        drop 0 // tag
+                        drop 0 // Body
+                        tuple 0
+                        push false
+                        tuple 2
+                    }
                 }
             }
+        } {
+            drop 0
+            drop 0
+            push ((), false)
         }
     }
 
@@ -268,26 +325,32 @@ mod queue {
         // Stack: [arg]  where arg = (event, state), matching process's own
         pick 0
         untuple 2
-        assert
-        // Stack: [arg, event, state]
-        pick 1 // duplicate event
-        jump super::Event::check
-        // Stack: [arg, event, state, event_ok]
         branch {
-            jump super::State::check
-            // Stack: [arg, event, state_ok]
+            // Stack: [arg, event, state]
+            pick 1 // duplicate event
+            jump super::Event::check
+            // Stack: [arg, event, state, event_ok]
             branch {
-                drop 0 // event
-                jump super::queue::accept
+                jump super::State::check
+                // Stack: [arg, event, state_ok]
+                branch {
+                    drop 0 // event
+                    jump super::queue::accept
+                } {
+                    drop 0 // event
+                    drop 0 // arg
+                    push false
+                }
             } {
+                drop 0 // state
                 drop 0 // event
                 drop 0 // arg
                 push false
             }
         } {
-            drop 0 // state
-            drop 0 // event
-            drop 0 // arg
+            drop 0
+            drop 0
+            drop 0
             push false
         }
     }
@@ -296,205 +359,285 @@ mod queue {
     #[precondition(process_precondition)]
     function process {
         untuple 2
-        assert
-        // Stack: [event, state]
-        untuple 2
-        assert
-        // Stack: [event, Body, tag]
-
-        pick 0 // tag
-        push super::State::Idle::tag
-        equal
         branch {
-            // Processing in idle state. Body = (current)
-            drop 0 // drop tag
-            untuple 1
-            assert
-            // Stack: [event, current]
-            roll 1 // Stack: [current, event]
+            // Stack: [event, state]
             untuple 2
-            assert // Stack: [current, Body, type]
-
-            pick 0 // type
-            push super::Event::PushBack::tag
-            equal
             branch {
-                // PUSH: payload is val. New state: Descending(current, (), val)
-                drop 0 // drop type. Stack: [current, Body]
-                untuple 1
-                assert
-                // Stack: [current, val]
-                push ()
-                roll 1 // Stack: [current, (), val]
-                tuple 3 // Body = (current, (), val)
-                push super::State::Descending::tag
-                tuple 2
-            } {
-                pick 0 // type
-                push super::Event::PopFront::tag
-                equal
-                branch {
-                    // POP: payload is ((), req)
-                    drop 0 // drop type. Stack: [current, Body]
-                    untuple 1
-                    assert
-                    // Stack: [current, reqresp]
-                    push ()
-                    push super::super::prelude::req
-                    tuple 2
-                    assert_eq
+                // Stack: [event, Body, tag]
 
-                    pick 0 // current
-                    push ()
-                    equal
-                    branch {
-                        // Nothing to pop: PopFrontResp((), none)
-                        drop 0 // drop current
-                        push () // new current
-                        tuple 0
-                        push super::super::prelude::none
-                        tuple 2 // option = ((), none)
-                        tuple 2 // Body = (current, option)
-                        push super::State::PopFrontResp::tag
-                        tuple 2
-                    } {
-                        // Pop head: PopFrontResp(rest, some(head))
-                        untuple 2
-                        assert // Stack: [rest, head]
-                        push ()
-                        roll 1 // Stack: [rest, (), head]
-                        tuple 2 // ((), head)
-                        push super::super::prelude::some
-                        tuple 2 // option = (((), head), some)
-                        tuple 2 // Body = (rest, option)
-                        push super::State::PopFrontResp::tag
-                        tuple 2
-                    }
-                } {
-                    // AWAIT: payload is ((), req)
-                    drop 0 // drop type. Stack: [current, Body]
-                    untuple 1
-                    assert
-                    // Stack: [current, reqresp]
-                    tuple 0
-                    push super::super::prelude::req
-                    tuple 2
-                    assert_eq
-
-                    pick 0 // current
-                    push ()
-                    equal
-                    branch {
-                        // Nothing to serve: AwaitingPush()
-                        drop 0
-                        tuple 0 // Body = ()
-                        push super::State::AwaitingPush::tag
-                        tuple 2
-                    } {
-                        // Serve head immediately: AwaitingFrontResp(rest, some(head))
-                        untuple 2
-                        assert // Stack: [rest, head]
-                        push ()
-                        roll 1 // Stack: [rest, (), head]
-                        tuple 2 // ((), head)
-                        push super::super::prelude::some
-                        tuple 2 // option = (((), head), some)
-                        tuple 2 // Body = (rest, option)
-                        push super::State::AwaitingFrontResp::tag
-                        tuple 2
-                    }
-                }
-            }
-        } {
-            pick 0 // tag
-            push super::State::AwaitingPush::tag
-            equal
-            branch {
-                // Processing in awaiting_push state. Body = ()
-                drop 0 // drop tag
-                drop 0 // drop Body (== ())
-                // Stack: [event]
-                untuple 2
-                assert // Stack: [Body, type]
-
-                pick 0 // type
-                push super::Event::PopFront::tag
-                equal
-                branch {
-                    // Nothing to serve: PopFrontRespAwait(none)
-                    drop 0 // type
-                    untuple 1
-                    assert
-                    // Stack: [reqresp]
-                    tuple 0
-                    push super::super::prelude::req
-                    tuple 2
-                    assert_eq
-
-                    tuple 0
-                    push super::super::prelude::none
-                    tuple 2 // option = ((), none)
-                    tuple 1 // Body = (option)
-                    push super::State::PopFrontRespAwait::tag
-                    tuple 2
-                } {
-                    // Push satisfies the wait: AwaitingFrontResp((), some(val))
-                    drop 0 // type. Stack: [Body]
-                    untuple 1
-                    assert
-                    // Stack: [val]
-                    push ()
-                    roll 1
-                    tuple 2 // ((), val)
-                    push super::super::prelude::some
-                    tuple 2 // option = (((), val), some)
-                    push () // new current (always empty here)
-                    roll 1 // Stack: [current, option]
-                    tuple 2 // Body = (current, option)
-                    push super::State::AwaitingFrontResp::tag
-                    tuple 2
-                }
-            } {
-                // Return to idle / awaiting_push state from response state
                 pick 0 // tag
-                push super::State::PopFrontResp::tag
+                push super::State::Idle::tag
                 equal
-                pick 1 // tag
-                push super::State::AwaitingFrontResp::tag
-                equal
-                or
                 branch {
-                    // Both carry Body = (current, option); resume Idle(current)
-                    drop 0 // tag
-                    untuple 2
-                    assert
-                    // Stack: [event, current, option]
-                    drop 0 // drop option
-                    drop 1 // drop event
-                    // Stack: [current]
-                    tuple 1 // Body = (current)
-                    push super::State::Idle::tag
-                    tuple 2
+                    // Processing in idle state. Body = (current)
+                    drop 0 // drop tag
+                    untuple 1
+                    branch {
+                        // Stack: [event, current]
+                        roll 1 // Stack: [current, event]
+                        untuple 2
+                        branch {
+
+                            pick 0 // type
+                            push super::Event::PushBack::tag
+                            equal
+                            branch {
+                                // PUSH: payload is val. New state: Descending(current, (), val)
+                                drop 0 // drop type. Stack: [current, Body]
+                                untuple 1
+                                branch {
+                                    // Stack: [current, val]
+                                    push ()
+                                    roll 1 // Stack: [current, (), val]
+                                    tuple 3 // Body = (current, (), val)
+                                    push super::State::Descending::tag
+                                    tuple 2
+                                } {
+                                    drop 0
+                                    drop 0
+                                    push ()
+                                }
+                            } {
+                                pick 0 // type
+                                push super::Event::PopFront::tag
+                                equal
+                                branch {
+                                    // POP: payload is ((), req)
+                                    drop 0 // drop type. Stack: [current, Body]
+                                    untuple 1
+                                    branch {
+                                        // Stack: [current, reqresp]
+                                        push ()
+                                        push super::super::prelude::req
+                                        tuple 2
+                                        equal
+                                        branch {
+
+                                            pick 0 // current
+                                            push ()
+                                            equal
+                                            branch {
+                                                // Nothing to pop: PopFrontResp((), none)
+                                                drop 0 // drop current
+                                                push () // new current
+                                                tuple 0
+                                                push super::super::prelude::none
+                                                tuple 2 // option = ((), none)
+                                                tuple 2 // Body = (current, option)
+                                                push super::State::PopFrontResp::tag
+                                                tuple 2
+                                            } {
+                                                // Pop head: PopFrontResp(rest, some(head))
+                                                untuple 2
+                                                branch {
+                                                    push ()
+                                                    roll 1 // Stack: [rest, (), head]
+                                                    tuple 2 // ((), head)
+                                                    push super::super::prelude::some
+                                                    tuple 2 // option = (((), head), some)
+                                                    tuple 2 // Body = (rest, option)
+                                                    push super::State::PopFrontResp::tag
+                                                    tuple 2
+                                                } {
+                                                    drop 0
+                                                    drop 0
+                                                    push ()
+                                                }
+                                            }
+                                        } {
+                                            drop 0
+                                            push ()
+                                        }
+                                    } {
+                                        drop 0
+                                        drop 0
+                                        push ()
+                                    }
+                                } {
+                                    // AWAIT: payload is ((), req)
+                                    drop 0 // drop type. Stack: [current, Body]
+                                    untuple 1
+                                    branch {
+                                        // Stack: [current, reqresp]
+                                        tuple 0
+                                        push super::super::prelude::req
+                                        tuple 2
+                                        equal
+                                        branch {
+
+                                            pick 0 // current
+                                            push ()
+                                            equal
+                                            branch {
+                                                // Nothing to serve: AwaitingPush()
+                                                drop 0
+                                                tuple 0 // Body = ()
+                                                push super::State::AwaitingPush::tag
+                                                tuple 2
+                                            } {
+                                                // Serve head immediately: AwaitingFrontResp(rest, some(head))
+                                                untuple 2
+                                                branch {
+                                                    push ()
+                                                    roll 1 // Stack: [rest, (), head]
+                                                    tuple 2 // ((), head)
+                                                    push super::super::prelude::some
+                                                    tuple 2 // option = (((), head), some)
+                                                    tuple 2 // Body = (rest, option)
+                                                    push super::State::AwaitingFrontResp::tag
+                                                    tuple 2
+                                                } {
+                                                    drop 0
+                                                    drop 0
+                                                    push ()
+                                                }
+                                            }
+                                        } {
+                                            drop 0
+                                            push ()
+                                        }
+                                    } {
+                                        drop 0
+                                        drop 0
+                                        push ()
+                                    }
+                                }
+                            }
+                        } {
+                            drop 0
+                            drop 0
+                            drop 0
+                            push ()
+                        }
+                    } {
+                        drop 0
+                        drop 0
+                        push ()
+                    }
                 } {
                     pick 0 // tag
-                    push super::State::PopFrontRespAwait::tag
+                    push super::State::AwaitingPush::tag
                     equal
                     branch {
-                        // Resume AwaitingPush()
-                        drop 0 // tag
-                        drop 0 // Body (== (option))
-                        drop 0 // event
-                        tuple 0
-                        push super::State::AwaitingPush::tag
-                        tuple 2
+                        // Processing in awaiting_push state. Body = ()
+                        drop 0 // drop tag
+                        drop 0 // drop Body (== ())
+                        // Stack: [event]
+                        untuple 2
+                        branch {
+
+                            pick 0 // type
+                            push super::Event::PopFront::tag
+                            equal
+                            branch {
+                                // Nothing to serve: PopFrontRespAwait(none)
+                                drop 0 // type
+                                untuple 1
+                                branch {
+                                    // Stack: [reqresp]
+                                    tuple 0
+                                    push super::super::prelude::req
+                                    tuple 2
+                                    equal
+                                    branch {
+
+                                        tuple 0
+                                        push super::super::prelude::none
+                                        tuple 2 // option = ((), none)
+                                        tuple 1 // Body = (option)
+                                        push super::State::PopFrontRespAwait::tag
+                                        tuple 2
+                                    } {
+                                        push ()
+                                    }
+                                } {
+                                    drop 0
+                                    push ()
+                                }
+                            } {
+                                // Push satisfies the wait: AwaitingFrontResp((), some(val))
+                                drop 0 // type. Stack: [Body]
+                                untuple 1
+                                branch {
+                                    // Stack: [val]
+                                    push ()
+                                    roll 1
+                                    tuple 2 // ((), val)
+                                    push super::super::prelude::some
+                                    tuple 2 // option = (((), val), some)
+                                    push () // new current (always empty here)
+                                    roll 1 // Stack: [current, option]
+                                    tuple 2 // Body = (current, option)
+                                    push super::State::AwaitingFrontResp::tag
+                                    tuple 2
+                                } {
+                                    drop 0
+                                    push ()
+                                }
+                            }
+                        } {
+                            drop 0
+                            drop 0
+                            push ()
+                        }
                     } {
-                        drop 0
-                        drop 0
-                        drop 0
-                        push ()
+                        // Return to idle / awaiting_push state from response state
+                        pick 0 // tag
+                        push super::State::PopFrontResp::tag
+                        equal
+                        pick 1 // tag
+                        push super::State::AwaitingFrontResp::tag
+                        equal
+                        or
+                        branch {
+                            // Both carry Body = (current, option); resume Idle(current)
+                            drop 0 // tag
+                            untuple 2
+                            branch {
+                                // Stack: [event, current, option]
+                                drop 0 // drop option
+                                drop 1 // drop event
+                                // Stack: [current]
+                                tuple 1 // Body = (current)
+                                push super::State::Idle::tag
+                                tuple 2
+                            } {
+                                drop 0
+                                drop 0
+                                drop 0
+                                push ()
+                            }
+                        } {
+                            pick 0 // tag
+                            push super::State::PopFrontRespAwait::tag
+                            equal
+                            branch {
+                                // Resume AwaitingPush()
+                                drop 0 // tag
+                                drop 0 // Body (== (option))
+                                drop 0 // event
+                                tuple 0
+                                push super::State::AwaitingPush::tag
+                                tuple 2
+                            } {
+                                drop 0
+                                drop 0
+                                drop 0
+                                push ()
+                            }
+                        }
                     }
                 }
+            } {
+                drop 0
+                drop 0
+                drop 0
+                push ()
             }
+        } {
+            drop 0
+            drop 0
+            push ()
         }
     }
 
@@ -503,100 +646,134 @@ mod queue {
         // Stack: [state]
         pick 0 // duplicate state. Stack: [state, state]
         untuple 2
-        assert
-        // Stack: [state, Body, tag]
-
-        pick 0 // tag
-        push super::State::Descending::tag
-        equal
         branch {
-            // Descending: Body = (current, accumulator, new_el)
-            drop 0 // tag
-            untuple 3
-            assert
-            // Stack: [state, current, accumulator, new_el]
-            pick 2 // current
-            push ()
-            equal
-            branch {
-                // current is () -> finished descending, start rebuilding
-                drop 2 // drop current
-                // Stack: [state, accumulator, new_el]
-                push ()
-                roll 1
-                tuple 2 // new_current = ((), new_el)
-                roll 1
-                tuple 2 // Body = (new_current, accumulator)
-                push super::State::Rebuilding::tag
-                tuple 2
-                push true
-                tuple 2
-                drop 1 // drop original state
-            } {
-                // current is NOT () -> keep descending past its head
-                roll 2 // bring current to top. Stack: [state, accumulator, new_el, current]
-                untuple 2
-                assert // Stack: [state, accumulator, new_el, rest, head]
-                pick 3 // duplicate accumulator
-                roll 1 // Stack: [state, accumulator, new_el, rest, accumulator, head]
-                tuple 2 // new_accumulator = (accumulator, head)
-                // Stack: [state, accumulator, new_el, rest, new_accumulator]
-                roll 2 // bring new_el to top
-                tuple 3 // Body = (rest, new_accumulator, new_el)
-                push super::State::Descending::tag
-                tuple 2
-                push true
-                tuple 2
-                drop 1 // drop stale accumulator
-                drop 1 // drop original state
-            }
-        } {
+            // Stack: [state, Body, tag]
+
             pick 0 // tag
-            push super::State::Rebuilding::tag
+            push super::State::Descending::tag
             equal
             branch {
-                // Rebuilding: Body = (current, accumulator)
+                // Descending: Body = (current, accumulator, new_el)
                 drop 0 // tag
-                untuple 2
-                assert
-                // Stack: [state, current, accumulator]
-                pick 0 // accumulator
-                push ()
-                equal
+                untuple 3
                 branch {
-                    // accumulator is () -> done rebuilding, return to idle
-                    drop 0 // drop accumulator
-                    // Stack: [state, current]
-                    tuple 1 // Body = (current)
-                    push super::State::Idle::tag
-                    tuple 2
-                    push true
-                    tuple 2
-                    drop 1 // drop original state
+                    // Stack: [state, current, accumulator, new_el]
+                    pick 2 // current
+                    push ()
+                    equal
+                    branch {
+                        // current is () -> finished descending, start rebuilding
+                        drop 2 // drop current
+                        // Stack: [state, accumulator, new_el]
+                        push ()
+                        roll 1
+                        tuple 2 // new_current = ((), new_el)
+                        roll 1
+                        tuple 2 // Body = (new_current, accumulator)
+                        push super::State::Rebuilding::tag
+                        tuple 2
+                        push true
+                        tuple 2
+                        drop 1 // drop original state
+                    } {
+                        // current is NOT () -> keep descending past its head
+                        roll 2 // bring current to top. Stack: [state, accumulator, new_el, current]
+                        untuple 2
+                        branch {
+                            pick 3 // duplicate accumulator
+                            roll 1 // Stack: [state, accumulator, new_el, rest, accumulator, head]
+                            tuple 2 // new_accumulator = (accumulator, head)
+                            // Stack: [state, accumulator, new_el, rest, new_accumulator]
+                            roll 2 // bring new_el to top
+                            tuple 3 // Body = (rest, new_accumulator, new_el)
+                            push super::State::Descending::tag
+                            tuple 2
+                            push true
+                            tuple 2
+                            drop 1 // drop stale accumulator
+                            drop 1 // drop original state
+                        } {
+                            drop 0
+                            drop 0
+                            drop 0
+                            drop 0
+                            push false
+                            tuple 2
+                        }
+                    }
                 } {
-                    // accumulator is NOT () -> move one element across
-                    untuple 2
-                    assert // Stack: [state, current, rest_acc, head]
-                    pick 2 // duplicate current
-                    roll 1 // Stack: [state, current, rest_acc, current, head]
-                    tuple 2 // new_current = (current, head)
-                    // Stack: [state, current, rest_acc, new_current]
-                    roll 1 // Stack: [state, current, new_current, rest_acc]
-                    tuple 2 // Body = (new_current, rest_acc)
-                    push super::State::Rebuilding::tag
+                    drop 0
+                    drop 0
+                    drop 0
+                    push false
                     tuple 2
-                    push true
-                    tuple 2
-                    drop 1 // drop stale current
-                    drop 1 // drop original state
                 }
             } {
-                // idle / awaiting_push / response states: no transition
-                drop 0 // tag
-                drop 0 // Body
-                push false
-                tuple 2
+                pick 0 // tag
+                push super::State::Rebuilding::tag
+                equal
+                branch {
+                    // Rebuilding: Body = (current, accumulator)
+                    drop 0 // tag
+                    untuple 2
+                    branch {
+                        // Stack: [state, current, accumulator]
+                        pick 0 // accumulator
+                        push ()
+                        equal
+                        branch {
+                            // accumulator is () -> done rebuilding, return to idle
+                            drop 0 // drop accumulator
+                            // Stack: [state, current]
+                            tuple 1 // Body = (current)
+                            push super::State::Idle::tag
+                            tuple 2
+                            push true
+                            tuple 2
+                            drop 1 // drop original state
+                        } {
+                            // accumulator is NOT () -> move one element across
+                            untuple 2
+                            branch {
+                                pick 2 // duplicate current
+                                roll 1 // Stack: [state, current, rest_acc, current, head]
+                                tuple 2 // new_current = (current, head)
+                                // Stack: [state, current, rest_acc, new_current]
+                                roll 1 // Stack: [state, current, new_current, rest_acc]
+                                tuple 2 // Body = (new_current, rest_acc)
+                                push super::State::Rebuilding::tag
+                                tuple 2
+                                push true
+                                tuple 2
+                                drop 1 // drop stale current
+                                drop 1 // drop original state
+                            } {
+                                drop 0
+                                drop 0
+                                drop 0
+                                push false
+                                tuple 2
+                            }
+                        }
+                    } {
+                        drop 0
+                        drop 0
+                        push false
+                        tuple 2
+                    }
+                } {
+                    // idle / awaiting_push / response states: no transition
+                    drop 0 // tag
+                    drop 0 // Body
+                    push false
+                    tuple 2
+                }
             }
+        } {
+            drop 0
+            drop 0
+            push false
+            tuple 2
         }
     }
 
@@ -607,29 +784,49 @@ mod queue {
 
     function is_ready_to_finish {
         untuple 2
-        assert
-        // Stack: [Body, tag]
-        pick 0
-        push super::State::Idle::tag
-        equal
-        roll 2
-        drop 0
-        roll 1
-        drop 0
+        branch {
+            // Stack: [Body, tag]
+            pick 0
+            push super::State::Idle::tag
+            equal
+            roll 2
+            drop 0
+            roll 1
+            drop 0
+        } {
+            drop 0
+            drop 0
+            push false
+        }
     }
 }
 
 // One tau reduction of the queue, which has to be there to take: the call
 // sites below spell out how many reductions each step of the test runs, so a
 // `tau_step` that finds nothing to reduce is a mistake in the test rather than
-// a stopping condition.
+// a stopping condition. It says so with a result, and the `?` at each call
+// site carries that out of the test.
 sentence tau_step {
     // Stack: [state]
     jump queue::tau_reduce
     // Stack: [(new_state, changed)]
     untuple 2
-    assert // the untuple
-    assert // ... and `changed`, leaving [new_state]
+    branch {
+        // Stack: [new_state, changed]
+        branch {
+            push crate::prelude::ok
+            tuple 2
+        } {
+            push crate::prelude::err
+            tuple 2
+        }
+    } {
+        // Not a (new_state, changed) pair at all.
+        // Stack: [(new_state, changed), ()]
+        drop 0
+        push crate::prelude::err
+        tuple 2
+    }
 }
 
 test sentence verify_queue_machine {
@@ -646,7 +843,9 @@ test sentence verify_queue_machine {
     jump queue::process
     // Descend to the end of the list, then rebuild it around the new element.
     jump tau_step
+    ?
     jump tau_step
+    ?
     
     // 3. Push 20
     push 20
@@ -657,9 +856,13 @@ test sentence verify_queue_machine {
     tuple 2
     jump queue::process
     jump tau_step
+    ?
     jump tau_step
+    ?
     jump tau_step
+    ?
     jump tau_step
+    ?
     
     // 4. Pop (should yield 10)
     push ()

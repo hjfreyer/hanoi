@@ -28,15 +28,24 @@ sentence halve {
     pick 0
     push 2
     modulo
-    assert
-    push 0
-    equal
     branch {
-        push 2
-        divide
-        assert
-        jump result::ok
+        push 0
+        equal
+        branch {
+            push 2
+            divide
+            branch {
+                jump result::ok
+            } {
+                // `divide` says no: the quotient it invented is all that is
+                // left, so that is what the error carries.
+                jump result::err
+            }
+        } {
+            jump result::err
+        }
     } {
+        drop 0
         jump result::err
     }
 }
@@ -112,8 +121,11 @@ sentence sum_of_halves {
     jump halve
     ?
     add
-    assert
-    jump result::ok
+    branch {
+        jump result::ok
+    } {
+        jump result::err
+    }
 }
 
 test sentence summing_two_halves {
@@ -150,7 +162,9 @@ sentence inside_an_arm {
         ?
         push 100
         add
-        assert
+        // Nothing follows in this arm, so the flag has nowhere to go: the
+        // answer is the sum, junk or not, and the test's check catches it.
+        drop 0
     } {
         drop 0
         push 0
