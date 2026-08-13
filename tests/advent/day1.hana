@@ -158,10 +158,16 @@ test sentence verify_day1_manually {
     pick 0
     jump test0::emit
     untuple 2
-    assert
-    assert // assert has_event is true
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true // ... and that there is an event
+    ?
+    drop 0
     push crate::prelude::pass
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
     
     // Process the emitted event to transition to final state
     push crate::prelude::pass
@@ -172,7 +178,10 @@ test sentence verify_day1_manually {
     // Check is_done
     pick 0
     jump test0::is_done
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
     
     drop 0
+    push ((), crate::prelude::ok)
 }

@@ -4,65 +4,79 @@ test sentence add_numbers {
     push 10
     push 20
     add
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
     push 30
-    assert_eq
+    jump crate::prelude::check_equals
 }
 
 test sentence subtract_numbers {
     push 50
     push 20
     sub
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
     push 30
-    assert_eq
+    jump crate::prelude::check_equals
 }
 
 test sentence multiply_numbers {
     push 5
     push 6
     mul
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
     push 30
-    assert_eq
+    jump crate::prelude::check_equals
 }
 
 test sentence divide_numbers {
     push 90
     push 3
     div
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
     push 30
-    assert_eq
+    jump crate::prelude::check_equals
 }
 
 test sentence modulo_numbers {
     push 35
     push 10
     mod
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
     push 5
-    assert_eq
+    jump crate::prelude::check_equals
 }
 
 test sentence negate_number {
     push 42
     neg
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
     push -42
-    assert_eq
+    jump crate::prelude::check_equals
 }
 
 test sentence logical_not {
     push true
     not
     push false
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
     
     push false
     not
     push true
-    assert_eq
+    jump crate::prelude::check_equals
 }
 
 test sentence boolean_operations {
@@ -70,29 +84,37 @@ test sentence boolean_operations {
     push true
     and
     push true
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
 
     push true
     push false
     and
     push false
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
 
     push false
     push false
     and
     push false
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
 
     push true
     push false
     or
     push true
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
 
     push false
     push false
     or
     push false
-    assert_eq
+    jump crate::prelude::check_equals
 }

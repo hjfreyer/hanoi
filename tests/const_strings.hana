@@ -11,40 +11,54 @@ test sentence a_const_string_is_its_text {
     push greeting
     push same_greeting
     equal
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     // And a literal is that same value, with nothing to declare.
     push greeting
     push "hello"
     equal
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     push greeting
     push "goodbye"
     equal
     not
-    assert
+    jump crate::prelude::check_true
 }
 
 test sentence const_string_len_counts_characters {
     push greeting
     const_string_len
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
     push 5
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
 
     push empty
     const_string_len
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
     push 0
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
 
     // Characters, not bytes: `café` is five bytes and four characters.
     push unicode
     const_string_len
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
     push 4
-    assert_eq
+    jump crate::prelude::check_equals
 }
 
 test sentence const_string_len_fails_off_the_strings {
@@ -52,32 +66,44 @@ test sentence const_string_len_fails_off_the_strings {
     push 3
     const_string_len
     not
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
     push 3
-    assert_eq
+    jump crate::prelude::check_equals
 }
 
 test sentence const_string_char_at_reads_a_code_point {
     push greeting
     push 0
     const_string_char_at
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
     push 104 // 'h'
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
 
     push greeting
     push 4
     const_string_char_at
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
     push 111 // 'o'
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
 
     push unicode
     push 3
     const_string_char_at
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
     push 233 // 'é'
-    assert_eq
+    jump crate::prelude::check_equals
 }
 
 test sentence const_string_char_at_fails_out_of_range {
@@ -87,46 +113,62 @@ test sentence const_string_char_at_fails_out_of_range {
     push 5
     const_string_char_at
     not
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
     push 0
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
 
     push empty
     push 0
     const_string_char_at
     not
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
     push 0
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
 
     // A wrong operand type fails the same way.
     push 7
     push 0
     const_string_char_at
     not
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
     push 0
-    assert_eq
+    jump crate::prelude::check_equals
 }
 
 test sentence is_const_string_answers_on_every_shape {
     push greeting
     is_const_string
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     push ""
     is_const_string
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     push 42
     is_const_string
     not
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     push (1, greeting)
     is_const_string
     not
-    assert
+    jump crate::prelude::check_true
 }
 
 // A const string is a value like any other, so it works as a type spec too.
@@ -136,19 +178,25 @@ type Hello "hello";
 test sentence const_string_type_checks {
     push greeting
     jump Greeting::check
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     push 42
     jump Greeting::check
     not
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     push "hello"
     jump Hello::check
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     push "goodbye"
     jump Hello::check
     not
-    assert
+    jump crate::prelude::check_true
 }

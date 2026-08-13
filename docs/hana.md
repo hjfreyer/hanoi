@@ -108,6 +108,54 @@ function double_value {
 > [!IMPORTANT]
 > The parser automatically attaches an arity annotation of `#[arity(1, 1)]` to any block declared with the `function` keyword. If a function's instructions result in a different stack size transition, it will fail the arity check at compile time.
 
+### Tests
+Declared with `test` in front of `sentence`. `bin/test-runner` runs each one in
+a fresh VM and reads what it left behind.
+
+**A test answers with a result.** `((), ok)` says every check it made held;
+`(payload, err)` says one did not, and the payload says what it saw. Nothing
+about a failing test halts the machine — the runner prints the payload:
+
+```
+test arithmetic::add_numbers ... FAILED (err (5, 6)) (14 steps)
+```
+
+The checks come from `crate::prelude`, which is also where the tags come from:
+
+- `check_equals` compares the top two values, and answers `((), ok)` or
+  `((a, b), err)` with the pair that did not match.
+- `check_true` is `check_equals` against `true`, which is what an `assert` was.
+
+Each check is followed by [`?`](#the--operator), which carries the first failure
+out of the test and leaves the `()` an ok carries for the `drop 0` after it. The
+last check needs neither: it *is* the answer.
+
+```hana
+test sentence add_numbers {
+    push 2
+    push 3
+    add
+    jump crate::prelude::check_true   // the flag `add` left
+    ?
+    drop 0
+    push 5
+    jump crate::prelude::check_equals // the answer this test hands back
+}
+```
+
+A test that ends on something else — cleaning up a machine state, say — says so
+itself with `push ((), crate::prelude::ok)`.
+
+This is why `assert_eq` has all but disappeared from `tests/`: what is left of
+it is inside a `dip` body or a branch arm, where `?` cannot reach out to the
+test (see [the `?` operator](#the--operator)), and in the machine
+implementations, whose internal checks are library code rather than a claim the
+test is making.
+
+A **test machine** — `test mod` — is a different thing with a different
+protocol, driven by `prelude::start`, `prelude::pass` and `prelude::fail`. See
+[docs/machines.md](machines.md).
+
 ### Identities
 Declared using the `identity` keyword, and not a program at all: it *claims*
 that two programs are interchangeable.

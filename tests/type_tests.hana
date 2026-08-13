@@ -24,206 +24,280 @@ test sentence test_primitive_checks {
     // Test int
     push 42
     jump TestInt::check
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     push true
     jump TestInt::check
     not
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     // Test bool
     push true
     jump TestBool::check
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     push 42
     jump TestBool::check
     not
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     // Test const string
     push "hi"
     jump TestConstString::check
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     push 42
     jump TestConstString::check
     not
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     // Test symbol
     push test_sym
     jump TestSymbol::check
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     push other_sym
     jump TestSymbol::check
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     push 42
     jump TestSymbol::check
     not
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     // Test tuple
     push (2, 1)
     jump TestTuple::check
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     push 42
     jump TestTuple::check
     not
-    assert
+    jump crate::prelude::check_true
 }
 
 test sentence test_union_checks {
     push 42
     jump IntOrBool::check
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     push false
     jump IntOrBool::check
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     push "hi"
     jump IntOrBool::check
     not
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     push test_sym
     jump SymOr42::check
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     push 42
     jump SymOr42::check
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     push other_sym
     jump SymOr42::check
     not
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     push 43
     jump SymOr42::check
     not
-    assert
+    jump crate::prelude::check_true
 }
 
 test sentence test_tuple_checks {
     // SimpleTuple = (bool, int)
     push (true, 42)
     jump SimpleTuple::check
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     // Wrong types
     push (43, 42)
     jump SimpleTuple::check
     not
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     // Wrong length
     push (44, true, 42)
     jump SimpleTuple::check
     not
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     // Not a tuple
     push 42
     jump SimpleTuple::check
     not
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     // NestedTuple = (int | test_sym, SimpleTuple)
     push (3, (false, 10))
     jump NestedTuple::check
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     push (test_sym, (false, 10))
     jump NestedTuple::check
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     push (other_sym, (false, 10))
     jump NestedTuple::check
     not
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     // EmptyTuple = ()
     push ()
     jump EmptyTuple::check
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     push (1)
     jump EmptyTuple::check
     not
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     push 42
     jump EmptyTuple::check
     not
-    assert
+    jump crate::prelude::check_true
 }
 
 test sentence test_enum_checks {
     // Test MyEnum::Case1
     push ((true, 42), MyEnum::Case1::tag)
     jump MyEnum::check
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     push ((true, 42), MyEnum::Case1::tag)
     jump MyEnum::Case1::check
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     push (true, 42)
     jump MyEnum::Case1::Body::check
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     // Test MyEnum::Case2
     push ((test_sym), MyEnum::Case2::tag)
     jump MyEnum::check
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     push ((test_sym), MyEnum::Case2::tag)
     jump MyEnum::Case2::check
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     push (test_sym)
     jump MyEnum::Case2::Body::check
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     // Test MyEnum::Case3
     push ((), MyEnum::Case3::tag)
     jump MyEnum::check
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     push ((), MyEnum::Case3::tag)
     jump MyEnum::Case3::check
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     push ()
     jump MyEnum::Case3::Body::check
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     // Test invalid variant
     push ((), MyEnum::Case1::tag)
     jump MyEnum::Case1::check
     not
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     push ((42), MyEnum::Case2::tag)
     jump MyEnum::Case2::check
     not
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     push ((1), MyEnum::Case3::tag)
     jump MyEnum::Case3::check
     not
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     // Test invalid tags
     push ((true, 42), test_sym)
     jump MyEnum::check
     not
-    assert
+    jump crate::prelude::check_true
 }
 
 // A variant payload naming a sibling by a *relative* path. The check for this
@@ -247,42 +321,58 @@ mod nested {
 test sentence test_enum_relative_payload_paths {
     push ((42), RelEnum::Wraps::tag)
     jump RelEnum::check
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     push ((true), RelEnum::Wraps::tag)
     jump RelEnum::check
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     // A const string is not `Small`, so the payload check must reject it.
     push (("no"), RelEnum::Wraps::tag)
     jump RelEnum::check
     not
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     push ((other_sym, 42), RelEnum::Pair::tag)
     jump RelEnum::check
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     push ((test_sym, 42), RelEnum::Pair::tag)
     jump RelEnum::check
     not
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     push (42)
     jump RelEnum::Wraps::Body::check
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     push ("no")
     jump RelEnum::Wraps::Body::check
     not
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     push ((true), nested::Outer::Holds::tag)
     jump nested::Outer::check
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     push (("no"), nested::Outer::Holds::tag)
     jump nested::Outer::check
     not
-    assert
+    jump crate::prelude::check_true
 }

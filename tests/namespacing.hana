@@ -5,7 +5,7 @@ mod foo {
 
     sentence target_sentence {
         push 42
-        assert_eq
+        jump crate::prelude::check_equals
     }
 
     mod bar {
@@ -16,19 +16,25 @@ mod foo {
             push deepest_sym
             push deepest_sym
             equal
-            assert
+            jump crate::prelude::check_true
+            ?
+            drop 0
             
             // Reference parent's symbol using super::
             push super::inner_sym
             push super::inner_sym
             equal
-            assert
+            jump crate::prelude::check_true
+            ?
+            drop 0
             
             // Reference root symbol using crate::
             push crate::namespacing::root_sym
             push crate::namespacing::root_sym
             equal
-            assert
+            jump crate::prelude::check_true
+            ?
+            drop 0
 
             // Jump to parent's sentence using super::target_sentence
             push 42
@@ -40,7 +46,7 @@ mod foo {
         push inner_sym
         push inner_sym
         equal
-        assert
+        jump crate::prelude::check_true
     }
 }
 
@@ -51,12 +57,16 @@ test sentence check_root {
     push foo::inner_sym
     push foo::inner_sym
     equal
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
 
     push foo::bar::deepest_sym
     push foo::bar::deepest_sym
     equal
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
     
     // Jump to nested sentence using path
     push 42

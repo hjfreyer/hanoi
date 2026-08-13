@@ -678,8 +678,12 @@ test sentence verify_queue_machine {
     pick 0
     jump queue::emit
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     
     push ((), 10)
     push super::prelude::some
@@ -689,7 +693,9 @@ test sentence verify_queue_machine {
     tuple 1
     push Event::PopFront::tag
     tuple 2 // (((((), 10), some), resp), pop_front)
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
     
     // Process emitted event to return to idle
     push ((), 10)
@@ -718,8 +724,12 @@ test sentence verify_queue_machine {
     pick 0
     jump queue::emit
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     push ((), 20)
     push super::prelude::some
     tuple 2
@@ -728,7 +738,9 @@ test sentence verify_queue_machine {
     tuple 1
     push Event::PopFront::tag
     tuple 2
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
     
     push ((), 20)
     push super::prelude::some
@@ -756,8 +768,12 @@ test sentence verify_queue_machine {
     pick 0
     jump queue::emit
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     tuple 0
     push super::prelude::none
     tuple 2
@@ -766,7 +782,9 @@ test sentence verify_queue_machine {
     tuple 1
     push Event::PopFront::tag
     tuple 2
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
     
     tuple 0
     push super::prelude::none
@@ -802,7 +820,9 @@ test sentence verify_queue_machine {
     pick 1
     tuple 2
     jump queue::accept
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
     
     // Process pop_front.req on awaiting queue (transitions to pop_front_resp_await)
     push ()
@@ -819,8 +839,12 @@ test sentence verify_queue_machine {
     pick 0
     jump queue::emit
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     tuple 0
     push super::prelude::none
     tuple 2
@@ -829,7 +853,9 @@ test sentence verify_queue_machine {
     tuple 1
     push Event::PopFront::tag
     tuple 2
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
     
     // Process emitted event to return to awaiting_push state
     tuple 0
@@ -857,8 +883,12 @@ test sentence verify_queue_machine {
     pick 0
     jump queue::emit
     untuple 2
-    assert
-    assert
+    jump crate::prelude::check_true
+    ?
+    drop 0
+    jump crate::prelude::check_true
+    ?
+    drop 0
     push ((), 100)
     push super::prelude::some
     tuple 2
@@ -867,7 +897,9 @@ test sentence verify_queue_machine {
     tuple 1
     push Event::AwaitFront::tag
     tuple 2
-    assert_eq
+    jump crate::prelude::check_equals
+    ?
+    drop 0
     
     // Process await_front.resp to return to idle
     push ((), 100)
@@ -883,4 +915,5 @@ test sentence verify_queue_machine {
     jump queue::process
     
     drop 0 // clean up state
+    push ((), crate::prelude::ok)
 }
