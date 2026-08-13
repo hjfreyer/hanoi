@@ -1216,7 +1216,8 @@ fn corpus() -> Option<(&'static Library, &'static Program<'static>)> {
 ///
 /// The refusal `main` makes, applied to the sweep: the equations are stated for
 /// code that cannot fail, so a sweep that ignored the precondition would be
-/// testing something the tool does not do.
+/// testing something the tool does not do. Nothing in the corpus asserts any
+/// more, so this is now every sentence there is.
 fn admissible(library: &Library, _prog: &Program) -> Vec<SentenceIndex> {
     let can_fail = failure_reachability(library);
     library
@@ -1225,6 +1226,46 @@ fn admissible(library: &Library, _prog: &Program) -> Vec<SentenceIndex> {
         .map(|(idx, _)| idx)
         .filter(|idx| !can_fail[usize::from(*idx)])
         .collect()
+}
+
+/// How far a sweep will unfold one sentence before leaving it alone.
+const SWEEP_BUDGET: u64 = 60;
+
+/// What a sweep takes, and the tree it takes it as.
+///
+/// Two cuts, and both are about cost rather than about what the tool can do.
+///
+/// **Named sentences only.** An `<inline>` block is already part of the tree of
+/// whatever wrote it, so sweeping it separately sweeps the same nodes twice,
+/// and there are six of them for every sentence a user wrote.
+///
+/// **A budget on the unfolding.** Every sentence became admissible when the
+/// corpus stopped asserting, and `unfold_all` on a composed machine inlines the
+/// whole system it was composed from: `barista::verify_hidden_system` alone
+/// comes to two hundred thousand nodes, and the rule set run over all of it
+/// takes hours. What the sweeps had before that change was fourteen thousand
+/// nodes in total, and this keeps them near it.
+///
+/// The count of what was left out is returned, because a sweep that quietly
+/// covered a tenth of what it named would read as covering all of it.
+fn sweep(
+    library: &'static Library,
+    prog: &'static Program,
+) -> (Vec<(SentenceIndex, Vec<Node>)>, usize) {
+    let mut taken = Vec::new();
+    let mut left = 0usize;
+    for idx in admissible(library, prog) {
+        if library.names[idx] == "<inline>" {
+            continue;
+        }
+        let env = Env::new(prog, SWEEP_BUDGET, true);
+        match run_tactic(&env, &compile("unfold_all"), build(library, idx)) {
+            Ok((tree, _)) if !tree.is_empty() => taken.push((idx, tree)),
+            Ok(_) => {}
+            Err(_) => left += 1,
+        }
+    }
+    (taken, left)
 }
 
 fn unary_only(nodes: &[Node]) -> bool {
@@ -1257,8 +1298,7 @@ fn rewrites_preserve_arity_across_the_corpus() {
     };
 
     let mut checked = 0;
-    for s_idx in admissible(library, prog) {
-        let plain = run(prog, build(library, s_idx), "unfold_all");
+    for (s_idx, plain) in sweep(library, prog).0 {
         let name = || format!("#{} {}", usize::from(s_idx), library.names[s_idx]);
 
         for tac in [DIPS, FACTOR] {
@@ -1323,8 +1363,7 @@ fn corpus_derivations_replay() {
 
     let mut steps = 0usize;
     let mut worked = 0usize;
-    for s_idx in admissible(library, prog) {
-        let plain = run(prog, build(library, s_idx), "unfold_all");
+    for (_, plain) in sweep(library, prog).0 {
         // `with_script` replays and asserts; the counting is so that a sweep
         // over a corpus that stopped matching would not pass silently.
         let (_, script) = with_script(prog, plain, ALL);
@@ -1360,8 +1399,7 @@ fn corpus_derivations_survive_being_written_down() {
     };
 
     let mut steps = 0usize;
-    for s_idx in admissible(library, prog) {
-        let plain = run(prog, build(library, s_idx), "unfold_all");
+    for (s_idx, plain) in sweep(library, prog).0 {
         let (after, script) = with_script(prog, plain.clone(), ALL);
         if script.is_empty() {
             continue;
@@ -1449,8 +1487,7 @@ fn inverting_a_corpus_derivation_returns_it_to_where_it_started() {
 
     let mut undone = 0usize;
     let mut steps = 0usize;
-    for s_idx in admissible(library, prog) {
-        let before = run(prog, build(library, s_idx), "unfold_all");
+    for (s_idx, before) in sweep(library, prog).0 {
         let env = Env::new(prog, 1_000_000, true);
         let (after, script) =
             run_tactic(&env, &compile(ALL), before.clone()).unwrap_or_else(|e| panic!("{}", e));
@@ -1498,8 +1535,7 @@ fn the_annihilation_with_no_outputs_is_a_third_of_them() {
     };
 
     let (mut total, mut void) = (0usize, 0usize);
-    for s_idx in admissible(library, prog) {
-        let plain = run(prog, build(library, s_idx), "unfold_all");
+    for (_, plain) in sweep(library, prog).0 {
         let (_, script) = with_script(prog, plain, "factoring; all");
         for step in &script {
             let StepKind::Rule(Rule::Annihilate { m, .. }) = &step.kind else {
@@ -1531,8 +1567,7 @@ fn a_branch_arity_is_one_both_arms_can_meet() {
 
     let mut checked = 0usize;
     let mut asymmetric = 0usize;
-    for s_idx in admissible(library, prog) {
-        let tree = run(prog, build(library, s_idx), "unfold_all");
+    for (_, tree) in sweep(library, prog).0 {
         walk_branches(prog, &tree, &mut |then_body, else_body, reported| {
             let (Some((tn, tm)), Some((en, em))) =
                 (seq_full(prog, then_body), seq_full(prog, else_body))
@@ -1608,18 +1643,30 @@ fn walk_branches(
 /// Making the tool refuse fallible sentences is only reasonable while most of
 /// the corpus is still admissible. If this ever fails, the restriction has
 /// stopped being a simplification and started being a limitation.
+/// The precondition has to leave something to work on, and it now leaves
+/// everything: no sentence in the corpus can fail. What the sweeps below reach
+/// is a smaller number, and this is where to read both.
 #[test]
-fn most_of_the_corpus_is_admissible() {
+fn the_whole_corpus_is_admissible() {
     let Some((library, prog)) = corpus() else {
         return;
     };
     let total = library.sentences.len();
     let ok = admissible(library, prog).len();
-    assert!(
-        ok * 2 > total,
-        "only {} of {} sentences are total",
+    assert_eq!(
         ok,
+        total,
+        "{} of {} sentences can still fail",
+        total - ok,
         total
+    );
+
+    let (taken, left) = sweep(library, prog);
+    assert!(
+        taken.len() > 500 && left * 4 < taken.len(),
+        "the sweeps reach {} sentences and leave {} for the budget",
+        taken.len(),
+        left
     );
 }
 
@@ -1636,8 +1683,7 @@ fn the_admissible_corpus_exercises_the_movement_laws() {
     };
 
     let mut fired = 0;
-    for s_idx in admissible(library, prog) {
-        let plain = run(prog, build(library, s_idx), "unfold_all");
+    for (_, plain) in sweep(library, prog).0 {
         let (_, script) = with_script(prog, plain, ALL);
         fired += script
             .iter()
