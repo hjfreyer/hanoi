@@ -77,6 +77,81 @@ pub fn check_arities(library: &mut Library) -> Result<(), String> {
     Ok(())
 }
 
+/// The two arms a `?` left behind: the rest of the block, and the early return.
+///
+/// Recorded by the compiler, which builds both but cannot finish the second —
+/// see [`balance_early_returns`].
+#[derive(Debug, Clone)]
+pub(crate) struct EarlyReturn {
+    /// The arm holding everything written after the `?`.
+    pub(crate) rest: SentenceIndex,
+    /// The arm that rebuilds the error and leaves, still short its drops.
+    pub(crate) fail: SentenceIndex,
+    /// The sentence the `?` was written in. Both arms are `<inline>` blocks,
+    /// which is no help to a reader looking for the `?` that went wrong.
+    pub(crate) in_sentence: String,
+}
+
+/// Makes an early return leave the stack the way finishing the block would.
+///
+/// A branch's two arms must agree on their net stack change, and `?`'s do not
+/// on their own. The rest arm consumes whatever the block was holding — the
+/// values below the one that was unwrapped — and the failure arm consumes only
+/// the unwrapped value itself. So the failure arm drops the difference: with
+/// the rest arm `(inputs -> outputs)`, it drops `inputs - outputs` values from
+/// under the error it is carrying out.
+///
+/// That is *only* the count the arities demand, which is the honest amount. A
+/// rest arm that passes a value through rather than consuming it asks for no
+/// drop, and the early return passes the same value through.
+///
+/// This runs before [`check_arities`] and after every sentence has been
+/// emitted, because the rest arm's arity is not knowable any earlier: it can
+/// call sentences that had not been compiled when the `?` was met. Sites come
+/// in an order that puts a nested `?` before the one enclosing it, so each rest
+/// arm is already balanced by the time it is measured.
+pub(crate) fn balance_early_returns(
+    library: &mut Library,
+    sites: &[EarlyReturn],
+) -> Result<(), String> {
+    // One `drop`, shared by every early return that needs one: the arm reaches
+    // under its own result with `dip 1`, and what it runs there is the same
+    // instruction every time.
+    let mut deep_drop: Option<SentenceIndex> = None;
+
+    for site in sites {
+        let Some(arity) = sentence_arity(library, site.rest) else {
+            // The rest arm does not reckon, and saying why is `check_arities`'
+            // job a moment from now. Anything added here would only bury it.
+            continue;
+        };
+        let drops = match arity {
+            // An arm that always fails leaves nothing to agree with, so the
+            // early return stands alone and there is nothing to balance.
+            Arity::Panic { .. } => 0,
+            Arity::Normal { inputs, outputs } => inputs - outputs,
+        };
+        if drops < 0 {
+            return Err(format!(
+                "the code after a `?` in '{}' leaves {} more values than it takes, \
+                 so an early return there cannot match it: it would have to invent them",
+                site.in_sentence, -drops
+            ));
+        }
+        if drops > 0 && deep_drop.is_none() {
+            let idx = SentenceIndex::from(library.sentences.len());
+            library.sentences.push(vec![Instruction::Drop]);
+            library.names.push("<inline>".to_string());
+            library.annotations.push(Vec::new());
+            deep_drop = Some(idx);
+        }
+        for _ in 0..drops {
+            library.sentences[site.fail].push(Instruction::Dip(1, deep_drop.unwrap()));
+        }
+    }
+    Ok(())
+}
+
 fn is_total(s_idx: SentenceIndex, library: &Library) -> bool {
     library.annotations[s_idx]
         .iter()

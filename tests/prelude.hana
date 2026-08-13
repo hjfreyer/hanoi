@@ -3,6 +3,11 @@ symbol some
 symbol req
 symbol resp
 
+// The two tags a result carries, and the ones `?` reads. A result is the
+// 2-tuple `(value, ok)` or `(value, err)`.
+symbol ok
+symbol err
+
 symbol start
 symbol pass
 symbol fail

@@ -92,6 +92,7 @@ These instructions control execution flow, jumps, and validation assertions.
 | `panic` | `panic` | `[...] -> [halt]` | Halts VM execution immediately with a failure status. This and the two below are the only instructions that can, and a sentence reaching any of them cannot claim `#[total]`. |
 | `assert` | `assert` | `[..., cond] -> [...]` | Pops $cond$. Halts and panics only if $cond$ is exactly `false`; anything else is truthy and passes. See `docs/totality.md`. |
 | `assert_equal` | `assert_eq` | `[..., a, b] -> [...]` | Pops $a$ and $b$. Halts and panics if $a \neq b$. |
+| `try` | `?` | `[..., (v, ok)] -> [..., v]`, or the block ends with `[..., (v, err)]` | Unwraps a result, or leaves the block early carrying the error. Sugar: it compiles to two branches, with everything written after it inside an arm. Total — a value that is not a 2-tuple is treated as an error carrying that value. See [docs/hana.md](hana.md#the--operator). |
 
 ---
 

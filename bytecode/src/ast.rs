@@ -85,6 +85,14 @@ pub enum ParsedInstruction {
     TupleLength,
     /// Check the top of stack against the predicate or symbol `Path` names.
     TypeCheckPath(Path),
+    /// `?`: unwrap a result, or leave the block early carrying the error.
+    ///
+    /// Written as punctuation and erased at emit time, like [`Self::Drop`] with
+    /// a depth. It is the one instruction whose expansion is not local — it
+    /// puts everything after it inside a branch arm — so what it becomes
+    /// depends on the arity of the instructions that follow it. See
+    /// `docs/hana.md` and [`crate::arity::balance_early_returns`].
+    Try,
 }
 
 /// A symbol declaration. Shared between sugar and core.

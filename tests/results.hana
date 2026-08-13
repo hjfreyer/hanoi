@@ -1,0 +1,171 @@
+// The `?` operator: unwrap a result, or leave the sentence carrying the error.
+//
+// A result is the 2-tuple `(value, tag)` with `tag` being `crate::prelude::ok`
+// or `crate::prelude::err`. `?` takes one apart: on `ok` the block carries on
+// with the value it was holding, and on `err` the block ends there and hands
+// the error back as its own answer.
+
+mod result {
+    #[total]
+    #[arity(1, 1)]
+    sentence ok {
+        push crate::prelude::ok
+        tuple 2
+    }
+
+    #[total]
+    #[arity(1, 1)]
+    sentence err {
+        push crate::prelude::err
+        tuple 2
+    }
+}
+
+// Halves an even number, and calls an odd one an error carrying the number it
+// could not halve.
+#[arity(1, 1)]
+sentence halve {
+    pick 0
+    push 2
+    modulo
+    assert
+    push 0
+    equal
+    branch {
+        push 2
+        divide
+        assert
+        jump result::ok
+    } {
+        jump result::err
+    }
+}
+
+// Nothing but the unwrap: `?` adds no way to fail, so a sentence made of one
+// can claim totality.
+#[total]
+#[arity(1, 1)]
+sentence unwrap {
+    ?
+}
+
+test sentence unwrapping_an_ok_leaves_the_value {
+    push (7, crate::prelude::ok)
+    jump unwrap
+    push 7
+    assert_eq
+}
+
+test sentence unwrapping_an_err_hands_it_back {
+    push (7, crate::prelude::err)
+    jump unwrap
+    push (7, crate::prelude::err)
+    assert_eq
+}
+
+// A value that is not a 2-tuple is not a result, and `?` calls it an error
+// carrying that value rather than failing on it.
+test sentence unwrapping_a_non_result_makes_it_an_error {
+    push 7
+    jump unwrap
+    push (7, crate::prelude::err)
+    assert_eq
+}
+
+// Two halvings, the second reached only if the first succeeded.
+#[arity(1, 1)]
+sentence quarter {
+    jump halve
+    ?
+    jump halve
+}
+
+test sentence a_quarter_of_twelve {
+    push 12
+    jump quarter
+    push (3, crate::prelude::ok)
+    assert_eq
+}
+
+test sentence the_first_error_ends_it {
+    push 5
+    jump quarter
+    push (5, crate::prelude::err)
+    assert_eq
+}
+
+test sentence the_second_error_ends_it_too {
+    push 6
+    jump quarter
+    push (3, crate::prelude::err)
+    assert_eq
+}
+
+// Both `?`s here have work sitting under them — the other number, and then the
+// half already computed — so both early returns drop what they are leaving
+// behind.
+#[arity(2, 1)]
+sentence sum_of_halves {
+    jump halve
+    ?
+    roll 1
+    jump halve
+    ?
+    add
+    assert
+    jump result::ok
+}
+
+test sentence summing_two_halves {
+    push 10
+    push 4
+    jump sum_of_halves
+    push (7, crate::prelude::ok)
+    assert_eq
+}
+
+test sentence the_second_half_fails_and_the_first_is_dropped {
+    push 3
+    push 4
+    jump sum_of_halves
+    push (3, crate::prelude::err)
+    assert_eq
+}
+
+test sentence the_first_half_fails_and_the_second_is_never_taken {
+    push 10
+    push 5
+    jump sum_of_halves
+    push (5, crate::prelude::err)
+    assert_eq
+}
+
+// `?` leaves the block it is written in, and a branch arm is a block: the error
+// lands in the code after the branch rather than at the end of the sentence.
+#[arity(1, 1)]
+sentence inside_an_arm {
+    push true
+    branch {
+        jump halve
+        ?
+        push 100
+        add
+        assert
+    } {
+        drop 0
+        push 0
+    }
+    jump result::ok
+}
+
+test sentence an_arm_is_the_block_that_is_left {
+    push 8
+    jump inside_an_arm
+    push (104, crate::prelude::ok)
+    assert_eq
+
+    push 5
+    jump inside_an_arm
+    push ((5, crate::prelude::err), crate::prelude::ok)
+    assert_eq
+}

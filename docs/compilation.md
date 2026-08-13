@@ -28,6 +28,7 @@ write a `SentenceIndex`, so bytecode is not core.
 | type checks | `TypeCheckPath(Path)` | `Dip(0, idx)`, or `Push(v); Equal` |
 | calls | `Jump`, `Dip` | `Dip` only — `jump` is `Dip(0, idx)` |
 | deep drops | `Drop(d)` | `Dip(d, idx)` around a plain `Drop` |
+| `?` | `Try` | `Untuple(2)` and two `Branch`es, the rest of the block in an arm |
 | declarations | `symbol`, `const_string`, `mod` | erased |
 | annotations | attached to the sentence | side table keyed by `SentenceIndex` |
 
@@ -229,8 +230,8 @@ sentence is declared in* — no special case for type checks.
 Resolution is `ModuleTree::resolve(scope, path)` — one entry point, one set of
 rules, for every path in the language.
 
-Phase 5 then runs `check_arities` over the resulting `Library`, followed by
-`check_totality` and `check_identities`. A Z3-backed
+Phase 5 then runs `balance_early_returns` — the one thing phase 4 leaves unfinished,
+see below — followed by `check_arities`, `check_totality` and `check_identities`. A Z3-backed
 precondition/postcondition/total checker previously ran separately via
 `bin/typecheck`; it has been removed from the codebase for now (see
 [docs/typecheck.md](typecheck.md) for the design).
@@ -270,6 +271,10 @@ vocabularies correspond one to one.
   ISA can no longer handle one call instruction and silently miss the other —
   and one of the traversals that would have missed it is arity inference, which
   is what refuses recursion.
+- **`?` becomes `Untuple(2)` and two branches.** The rest of the block moves
+  into the arm that runs when the tag was `crate::prelude::ok`, and the other
+  arm rebuilds the error and ends there. See [docs/hana.md](hana.md#the--operator)
+  for the shape and why it cannot fail.
 - **`drop d` for `d > 0` becomes `Dip(d, idx)` around a plain `Drop`.** Dropping
   at a depth was the only instruction that removed a value from the *middle* of
   the stack. With it gone, `Pick` and `Roll` are the only instructions that
@@ -283,6 +288,45 @@ that trade.** It replaces one instruction with `O(d)` instructions and `O(d)`
 calls, and each expansion still bottoms out in a frame-crossing `roll 1`, so
 the hard case is multiplied rather than removed. A minimal primitive set makes
 the metatheory smaller and the analysis larger; here the analysis is the point.
+
+## Where `?` fits
+
+`?` is **core**, for the same reason `dip` is, and it is the sharpest case of it.
+
+A user can write the longhand — `untuple 2`, ask which tag it carries, put the
+rest of the block in an arm — so the "could a user have written this by hand?"
+test says sugar. But the arm that leaves early has to drop whatever the rest of
+the block would have consumed, and *how many that is* is the arity of the rest
+of the block. Phase 2 has no arities and no scope; it cannot even see that the
+rest of the block calls something. A lowering that needs information phase 2
+cannot have is not a lowering.
+
+So phase 4 emits the whole shape, and leaves the failure arm one step short of
+finished:
+
+```
+Untuple(2)
+Branch(is_ok, not_a_result)          //  push ok equal   |   drop 0 push false
+Branch(rest, fail)                   //  the rest of it  |   push err tuple 2
+```
+
+`balance_early_returns` then reads the arity of `rest` — a real sentence by now,
+so `sentence_arity` answers — and appends `inputs - outputs` deep drops to
+`fail`. It runs before `check_arities` because what it is doing is making the
+two arms agree; run it after and the check it exists to satisfy has already
+failed.
+
+Two ordering facts hold it together:
+
+- **Every sentence has been emitted**, so the arity of a `rest` arm that calls
+  something is knowable. This is what phase 4 could not say.
+- **Sites arrive innermost first.** A `?` nested inside another's `rest` arm is
+  balanced before that arm is measured; until it is, its own two arms disagree
+  and the arm has no arity to read.
+
+A rest arm that *leaves* more than it takes is refused: an early return would
+have to invent the difference. So is a program that uses `?` without declaring
+the tags it reads.
 
 ## Where `identity` fits
 

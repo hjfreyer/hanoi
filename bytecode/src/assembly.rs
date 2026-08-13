@@ -1,3 +1,4 @@
+use crate::arity::EarlyReturn;
 use crate::ast::core;
 use crate::ast::sugar::{self, Composer, ModuleExpr};
 use crate::ast::{
@@ -43,6 +44,7 @@ enum Token {
     Comma,
     Colon,
     Pipe,
+    Question,
     Int(i64),
     Bool(bool),
 }
@@ -75,6 +77,7 @@ fn describe(token: &Token) -> String {
         Token::Comma => ",",
         Token::Colon => ":",
         Token::Pipe => "|",
+        Token::Question => "?",
         Token::Identifier(name) => return format!("`{}`", name),
         Token::StringLiteral(s) => return format!("string literal \"{}\"", s),
         Token::Int(i) => return format!("`{}`", i),
@@ -187,6 +190,10 @@ fn tokenize(input: &str, file: FileId) -> Result<Vec<SpannedToken>, Error> {
             '|' => {
                 chars.next();
                 push!(tokens, start, chars, Token::Pipe);
+            }
+            '?' => {
+                chars.next();
+                push!(tokens, start, chars, Token::Question);
             }
             '"' => {
                 chars.next(); // consume '"'
@@ -543,6 +550,12 @@ fn parse_usize(stream: &mut TokenStream) -> Result<usize, Error> {
 }
 
 fn parse_instruction(stream: &mut TokenStream) -> Result<ParsedInstruction, Error> {
+    // The one instruction that is punctuation rather than a word, because it
+    // reads as a suffix on the call that produced the result.
+    if stream.peek() == Some(&Token::Question) {
+        stream.next();
+        return Ok(ParsedInstruction::Try);
+    }
     let span = stream.span();
     let err = stream.expected("an instruction");
     let name = match stream.next() {
@@ -1300,6 +1313,11 @@ struct Compiler<'a> {
     sentences: Vec<Vec<Instruction>>,
     names: Vec<String>,
     annotations: Vec<Vec<SentenceAnnotation>>,
+    /// Every `?` met so far, in the order their expansions were completed,
+    /// which puts a nested one before the one that encloses it.
+    early_returns: Vec<EarlyReturn>,
+    /// The sentence being compiled, for errors about the blocks inside it.
+    current_sentence: String,
 }
 
 impl<'a> Compiler<'a> {
@@ -1376,7 +1394,8 @@ impl<'a> Compiler<'a> {
         instructions: Vec<ParsedInstruction>,
     ) -> Result<Vec<Instruction>, String> {
         let mut compiled = Vec::new();
-        for inst in instructions {
+        let mut rest = instructions.into_iter();
+        while let Some(inst) = rest.next() {
             let c_inst = match inst {
                 ParsedInstruction::Push(v) => {
                     let compiled_val = self.compile_value(scope, v)?;
@@ -1432,6 +1451,13 @@ impl<'a> Compiler<'a> {
                     let idx2 = self.resolve_target(scope, t2)?;
                     Instruction::Branch(idx1, idx2)
                 }
+                // `?` takes the rest of the block with it, so it is the end
+                // of this body rather than one more instruction in it.
+                ParsedInstruction::Try => {
+                    let tail: Vec<ParsedInstruction> = rest.by_ref().collect();
+                    compiled.extend(self.compile_try(scope, tail)?);
+                    return Ok(compiled);
+                }
                 ParsedInstruction::TypeCheckPath(path) => {
                     let resolved = match self.tree.resolve(scope, &path) {
                         Ok(res) => res,
@@ -1459,6 +1485,104 @@ impl<'a> Compiler<'a> {
             compiled.push(c_inst);
         }
         Ok(compiled)
+    }
+
+    /// `?`, as the branches a user could have written in its place.
+    ///
+    /// A result is `(value, tag)` with `tag` being `crate::prelude::ok` or
+    /// `crate::prelude::err`, so the expansion takes the pair apart, asks which
+    /// tag it carries, and puts the rest of the block in the arm that runs when
+    /// the answer is `ok`:
+    ///
+    /// ```text
+    /// untuple 2
+    /// branch { push ok equal } { drop 0 push false }
+    /// branch { ...the rest of the block... } { push err tuple 2 }
+    /// ```
+    ///
+    /// The first branch reads the flag `untuple` leaves: a value that is not a
+    /// 2-tuple is not a result, and rather than failing on it, `?` calls it an
+    /// error carrying that value — which is what `untuple` handed back. That is
+    /// what keeps `?` total (see `docs/totality.md`).
+    ///
+    /// The failure arm is left one step short: it rebuilds the error but does
+    /// not yet drop whatever the block was holding underneath it, because how
+    /// much that is depends on the arity of the rest of the block, which is not
+    /// known until every sentence has been emitted.
+    /// [`crate::arity::balance_early_returns`] finishes it.
+    fn compile_try(
+        &mut self,
+        scope: ModuleId,
+        tail: Vec<ParsedInstruction>,
+    ) -> Result<Vec<Instruction>, String> {
+        let ok = self.prelude_symbol(scope, "ok")?;
+        let err = self.prelude_symbol(scope, "err")?;
+
+        // The rest of the block first, so that a `?` nested inside it records
+        // itself before this one does: balancing reads the arity of a rest arm,
+        // and an arm with an unbalanced `?` in it does not have one yet.
+        let rest = self.compile_sentence_body(scope, tail)?;
+        let rest = self.push_block(rest);
+
+        let is_ok = self.push_block(vec![Instruction::Push(ok), Instruction::Equal]);
+        let not_a_result = self.push_block(vec![
+            Instruction::Drop,
+            Instruction::Push(Value::Bool(false)),
+        ]);
+        let fail = self.push_block(vec![Instruction::Push(err), Instruction::Tuple(2)]);
+
+        self.early_returns.push(EarlyReturn {
+            rest,
+            fail,
+            in_sentence: self.current_sentence.clone(),
+        });
+        Ok(vec![
+            Instruction::Untuple(2),
+            Instruction::Branch(is_ok, not_a_result),
+            Instruction::Branch(rest, fail),
+        ])
+    }
+
+    /// The tag symbols `?` compares against.
+    ///
+    /// Absolute, not resolved against the sentence's own module: which symbol
+    /// marks an error is a property of the program rather than of the place the
+    /// `?` was written. Nothing declares them for you — a program that uses `?`
+    /// says what its tags are.
+    fn prelude_symbol(&self, scope: ModuleId, name: &str) -> Result<Value, String> {
+        let path = Path {
+            segments: vec![
+                PathSegment::Crate,
+                PathSegment::Identifier("prelude".to_string()),
+                PathSegment::Identifier(name.to_string()),
+            ],
+        };
+        let missing = || {
+            format!(
+                "`?` reads the tag `crate::prelude::{}`, which this program does not \
+                 declare; a program that uses `?` needs `mod prelude {{ symbol ok symbol err }}`",
+                name
+            )
+        };
+        match self.tree.resolve(scope, &path).map_err(|_| missing())? {
+            ResolvedItem::Const(val) => Ok(val),
+            ResolvedItem::Sentence(_) => Err(format!(
+                "`crate::prelude::{}` names a sentence, but `?` compares against it as a value",
+                name
+            )),
+        }
+    }
+
+    /// Files a compiled body as a block: a sentence nothing can name.
+    ///
+    /// The same thing `resolve_target` does for a `{ ... }` written in source,
+    /// for bodies this compiler builds itself.
+    fn push_block(&mut self, body: Vec<Instruction>) -> SentenceIndex {
+        let idx = SentenceIndex::from(self.sentences.len());
+        self.sentences.push(body);
+        self.names.push("<inline>".to_string());
+        self.annotations.push(Vec::new());
+        idx
     }
 
     fn resolve_target(&mut self, scope: ModuleId, target: Target) -> Result<SentenceIndex, String> {
@@ -1547,6 +1671,8 @@ pub fn assemble_source(
         sentences: Vec::new(),
         names: Vec::new(),
         annotations: Vec::new(),
+        early_returns: Vec::new(),
+        current_sentence: String::new(),
     };
 
     // Pre-allocate space for all named sentences
@@ -1556,14 +1682,18 @@ pub fn assemble_source(
 
     // Compile instructions recursively
     for (idx, (scope, sentence)) in flat_sentences.into_iter().enumerate() {
+        let name = tree.fq_name(scope, &sentence.name);
+        compiler.current_sentence = name.clone();
         compiler.annotations[idx] = compiler
             .resolve_annotations(scope, &sentence.annotations)
-            .map_err(|e| format!("In '{}': {}", tree.fq_name(scope, &sentence.name), e))?;
+            .map_err(|e| format!("In '{}': {}", name, e))?;
         let compiled_instructions =
             compiler.compile_sentence_body(scope, sentence.body.instructions)?;
         compiler.sentences[idx] = compiled_instructions;
-        compiler.names[idx] = tree.fq_name(scope, &sentence.name);
+        compiler.names[idx] = name;
     }
+
+    let early_returns = compiler.early_returns;
 
     let mut library = Library::new();
     for s in compiler.sentences {
@@ -1589,6 +1719,7 @@ pub fn assemble_source(
     library.symbols = tree.symbol_map();
     library.identities = identities.into();
 
+    crate::arity::balance_early_returns(&mut library, &early_returns)?;
     crate::arity::check_arities(&mut library)?;
     crate::arity::check_totality(&library)?;
     crate::arity::check_identities(&library)?;
