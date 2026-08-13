@@ -831,7 +831,7 @@ impl<'a> Parser<'a> {
         Ok((Step { kind, dir, loc }, (name_span.0, end.1)))
     }
 
-    /// `[1.then, 2.body] @2`, read outermost-first — the same text a listing
+    /// `[1.then, 2.left] @2`, read outermost-first — the same text a listing
     /// prints, so a location can be copied from one to the other.
     fn location(&mut self) -> Result<Location, ScriptError> {
         let mut descent = Vec::new();

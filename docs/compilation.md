@@ -327,7 +327,9 @@ chains rather than one per site.
 
 What the argument got right is that the expansion **creates frames**, and a
 frame is what the rewriter sees through worst — it is the reason `unframe` had
-to be assumed. A `pick 2` that was one visible node is now a `swap` behind two
+to be assumed. (The rewriter spells a frame `par { X } { id k }` now: a
+computation beside an identity that passes `k` values through. Same shape, said
+in the algebra it belongs to — see `docs/tactics.md`.) A `pick 2` that was one visible node is now a `swap` behind two
 frames, and reaching it means opening them first. Two places in the corpus paid
 for that directly: an aimed `annihilate` in `discarded_work_on_copies`, because
 an unaimed one now reads a wider window than it used to, and the positions in

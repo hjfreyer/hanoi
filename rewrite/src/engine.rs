@@ -390,7 +390,7 @@ pub(crate) enum Tactic {
     ///
     /// `once` finds the first place a rule fits; this one is told. Together
     /// with [`Tactic::IntoNth`] it can name any window a script can, which is
-    /// what a listing's `[1.then, 2.body] @2` reads as.
+    /// what a listing's `[1.then, 2.left] @2` reads as.
     At(usize, Vec<Box<dyn Matcher>>),
     Seq(Vec<Tactic>),
     Choice(Vec<Tactic>),

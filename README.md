@@ -136,7 +136,7 @@ The Hanoi codebase is structured as a cargo workspace with several key packages:
 - **[bytecode](bytecode)**: The compiler frontend and validation pipeline.
   - [bytecode/src/assembly.rs](bytecode/src/assembly.rs): Parser and assembler that turns `.hana` source code into VM bytecode.
   - [bytecode/src/arity.rs](bytecode/src/arity.rs): Static arity checker for validating stack depths.
-- **[rewrite](rewrite)**: The equational rewriter, and the two tools built on it.
+- **[rewrite](rewrite)**: The equational rewriter, and the tools built on it. It works over a term algebra rather than over instruction lists: `A ; B` for composition and `par { A } { B }` for two computations side by side on one stack, with `id n` the identity that is the unit of both. A `dip N { ... }` is `par { ... } { id N }`, so the frames the ISA is written in are the case of `par` where one side is an identity.
   - `bin/rewrite`: a debugging aid — takes one sentence and shows what a tactic does to it.
   - `bin/prove`: a gate — takes a corpus and checks that every stated identity has a proof.
   - `bin/replay`: the same gate with the search taken away — takes derivations in the portable format and checks that they discharge what they name.

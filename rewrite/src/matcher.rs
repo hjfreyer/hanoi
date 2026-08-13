@@ -2742,7 +2742,7 @@ impl Matcher for SplitBool {
 /// [`BoolResult`], [`CopyConst`], `eval` — is stated about the top of the
 /// stack, because `branch` observes the top and nothing else does. A value
 /// under a frame is out of all of their reach, and descending into the body
-/// with `body(t)` does not help: a `branch` inside a frame cannot show its two
+/// with `left(t)` does not help: a `branch` inside a `par` cannot show its two
 /// cases to the code outside it, so a case split at depth is an identity
 /// insertion that tells the continuation nothing. This is the law that moves
 /// the value instead of the reasoning.

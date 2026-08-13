@@ -21,7 +21,16 @@ pub(crate) fn term_arity(prog: &Program, term: &Term) -> Option<(i64, i64)> {
         Term::Id(k) => Some((*k as i64, *k as i64)),
         Term::Op(inst) => op_arity(inst),
         Term::Call(target) => prog.arity(*target),
-        Term::Compose(a, b) => Some(compose(term_arity(prog, a)?, term_arity(prog, b)?)),
+        // Over the spine rather than through the nesting: a sentence composes
+        // as many factors as it has instructions, and one stack frame apiece
+        // is a cost this has no reason to pay.
+        Term::Compose(..) => {
+            let mut acc = (0, 0);
+            for factor in term.spine() {
+                acc = compose(acc, term_arity(prog, factor)?);
+            }
+            Some(acc)
+        }
         // Side by side on disjoint parts of one stack: the right runs on the
         // top, the left on what is under it, and neither can see the other's
         // values. So the two demands add, and so do the two results.

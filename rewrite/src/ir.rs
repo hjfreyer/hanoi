@@ -212,14 +212,23 @@ impl Term {
         out
     }
 
+    /// Iterative down the right, which is the way a canonical composite nests:
+    /// a sentence's spine is as long as the sentence, and recursing once per
+    /// factor would put the whole of it on the stack.
     fn walk_spine<'t>(&'t self, out: &mut Vec<&'t Term>) {
-        match self {
-            Term::Compose(a, b) => {
-                a.walk_spine(out);
-                b.walk_spine(out);
+        let mut cur = self;
+        loop {
+            match cur {
+                Term::Compose(a, b) => {
+                    a.walk_spine(out);
+                    cur = b;
+                }
+                Term::Id(0) => return,
+                other => {
+                    out.push(other);
+                    return;
+                }
             }
-            Term::Id(0) => {}
-            other => out.push(other),
         }
     }
 
@@ -231,22 +240,35 @@ impl Term {
     }
 
     fn take_spine(self, out: &mut Vec<Term>) {
-        match self {
-            Term::Compose(a, b) => {
-                a.take_spine(out);
-                b.take_spine(out);
+        let mut cur = self;
+        loop {
+            match cur {
+                Term::Compose(a, b) => {
+                    a.take_spine(out);
+                    cur = *b;
+                }
+                Term::Id(0) => return,
+                other => {
+                    out.push(other);
+                    return;
+                }
             }
-            Term::Id(0) => {}
-            other => out.push(other),
         }
     }
 
     /// How many factors the spine holds.
     pub(crate) fn width(&self) -> usize {
-        match self {
-            Term::Compose(a, b) => a.width() + b.width(),
-            Term::Id(0) => 0,
-            _ => 1,
+        let mut cur = self;
+        let mut out = 0;
+        loop {
+            match cur {
+                Term::Compose(a, b) => {
+                    out += a.width();
+                    cur = b;
+                }
+                Term::Id(0) => return out,
+                _ => return out + 1,
+            }
         }
     }
 }
@@ -457,6 +479,16 @@ fn sketch_inner(term: &Term, depth: usize) -> String {
     sketch_seq(&spine, depth)
 }
 
+/// One side of a `par`. An identity is written as itself rather than as the
+/// spine it does not have: `par { drop } { id 0 }` says which law is about to
+/// fire where `par { drop } { (nothing) }` reads as a hole.
+fn sketch_side(term: &Term, depth: usize) -> String {
+    match term {
+        Term::Id(k) => id_word(*k),
+        other => sketch_inner(other, depth),
+    }
+}
+
 fn sketch_node(node: &Term, depth: usize) -> String {
     match node {
         Term::Op(inst) => format!("{}", inst),
@@ -467,8 +499,8 @@ fn sketch_node(node: &Term, depth: usize) -> String {
             0 => "par { … } { … }".to_string(),
             _ => format!(
                 "par {{ {} }} {{ {} }}",
-                sketch_inner(left, depth - 1),
-                sketch_inner(right, depth - 1)
+                sketch_side(left, depth - 1),
+                sketch_side(right, depth - 1)
             ),
         },
         Term::Branch {
