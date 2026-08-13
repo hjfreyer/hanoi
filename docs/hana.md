@@ -238,6 +238,68 @@ That is a real restriction, and it is bought rather than free. What it buys:
 What it costs is unbounded iteration, which has to be expressed some other way —
 today, by writing the steps out.
 
+### The `?` operator
+
+A **result** is the 2-tuple `(value, tag)`, where `tag` is `crate::prelude::ok`
+or `crate::prelude::err`. `?` takes one apart: on `ok` the block carries on with
+the value that was inside, and on `err` the block **ends there**, handing the
+error back as its own answer.
+
+```hana
+mod prelude {
+    symbol ok
+    symbol err
+}
+
+// Halves an even number; an odd one is an error carrying the number.
+#[arity(1, 1)]
+sentence halve { /* ... leaves (n/2, ok) or (n, err) ... */ }
+
+// Two halvings, the second reached only if the first succeeded.
+#[arity(1, 1)]
+sentence quarter {
+    jump halve
+    ?
+    jump halve
+}
+```
+
+`12` gives `(3, ok)`; `5` gives `(5, err)` without the second `halve` running at
+all. Nothing declares `ok` and `err` for you — a program that uses `?` says what
+its tags are, the way it says what its `main` is.
+
+**It is sugar, and this is what it expands to.** Everything written after the
+`?` moves into a branch arm:
+
+```hana
+untuple 2
+branch { push crate::prelude::ok equal } { drop 0 push false }
+branch { ...the rest of the block... } { push crate::prelude::err tuple 2 }
+```
+
+Three things follow from that shape:
+
+- **`?` cannot fail.** The first branch reads the flag `untuple` leaves rather
+  than asserting on it: a value that is not a 2-tuple is not a result, so `?`
+  calls it an error carrying that value — which is exactly what `untuple` hands
+  back (see [docs/totality.md](totality.md)). A sentence whose only novelty is a
+  `?` can still claim `#[total]`.
+- **The early return drops what the rest of the block would have consumed.** The
+  two arms of a branch must agree on their net stack effect, and the arm that
+  leaves early has not run the code that would have eaten the values underneath.
+  So it drops them — exactly as many as the arity demands, no more. A value the
+  rest of the block would have passed through is passed through by the early
+  return too.
+- **`?` leaves the *block* it is written in, not the sentence.** A branch arm and
+  a `dip` body are blocks, so a `?` inside one ends that arm and the error lands
+  in the code after the branch. Returning further than that is not something the
+  language can express yet.
+
+The drop count is measured, not declared, which is why `?` is the one piece of
+sugar that is not expanded in phase 2: what the rest of the block consumes can
+depend on a sentence that has not been compiled yet. See
+[docs/compilation.md](compilation.md).
+
 ### Why `dip` and not `roll`
 
 `pick` and `roll` take depths measured from the top of the stack, so what they

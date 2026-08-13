@@ -83,6 +83,170 @@ mod tests {
         );
     }
 
+    // -----------------------------------------------------------------------
+    // `?`
+    // -----------------------------------------------------------------------
+
+    /// The declarations `?` reads, in front of whatever the test is about.
+    fn with_prelude(code: &str) -> String {
+        format!("mod prelude {{ symbol ok symbol err }}\n{}", code)
+    }
+
+    fn blocks(library: &Library) -> Vec<&Sentence> {
+        library
+            .names
+            .iter_enumerated()
+            .filter(|(_, n)| *n == "<inline>")
+            .map(|(i, _)| &library.sentences[i])
+            .collect()
+    }
+
+    #[test]
+    fn a_question_mark_becomes_two_branches_and_takes_the_rest_with_it() {
+        let res = assemble(&with_prelude(
+            "#[arity(1, 1)] sentence s { ? push 1 add assert }",
+        ))
+        .unwrap();
+
+        // The sentence itself is only the test: everything written after the
+        // `?` moved into an arm.
+        let [
+            Instruction::Untuple(2),
+            Instruction::Branch(is_ok, junk),
+            Instruction::Branch(rest, fail),
+        ] = res.sentences[SentenceIndex::from(0)][..]
+        else {
+            panic!(
+                "expected the `?` expansion, got {:?}",
+                res.sentences[SentenceIndex::from(0)]
+            );
+        };
+
+        let ok = res.symbols["prelude::ok"].clone();
+        let err = res.symbols["prelude::err"].clone();
+        assert_eq!(
+            res.sentences[is_ok],
+            vec![Instruction::Push(ok), Instruction::Equal]
+        );
+        // A value that is not a 2-tuple answers `false` to "is this an ok?",
+        // which is what makes `?` total on one.
+        assert_eq!(
+            res.sentences[junk],
+            vec![Instruction::Drop, Instruction::Push(Value::Bool(false))]
+        );
+        assert_eq!(
+            res.sentences[rest],
+            vec![
+                Instruction::Push(Value::Int(1)),
+                Instruction::Add,
+                Instruction::Assert
+            ]
+        );
+        assert_eq!(
+            res.sentences[fail],
+            vec![Instruction::Push(err), Instruction::Tuple(2)]
+        );
+    }
+
+    #[test]
+    fn an_early_return_drops_what_the_rest_of_the_block_would_have_consumed() {
+        // The rest arm is (2 -> 1): it eats the value the `?` unwrapped *and*
+        // the one underneath. The early return eats only its own, so it drops
+        // the difference from under the error it is carrying out.
+        let res = assemble(&with_prelude("#[arity(2, 1)] sentence s { ? add assert }")).unwrap();
+        let [.., Instruction::Branch(_, fail)] = res.sentences[SentenceIndex::from(0)][..] else {
+            panic!("expected the `?` expansion");
+        };
+        let err = res.symbols["prelude::err"].clone();
+        let [
+            Instruction::Push(ref e),
+            Instruction::Tuple(2),
+            Instruction::Dip(1, deep),
+        ] = res.sentences[fail][..]
+        else {
+            panic!("expected one drop, got {:?}", res.sentences[fail]);
+        };
+        assert_eq!(*e, err);
+        assert_eq!(res.sentences[deep], vec![Instruction::Drop]);
+    }
+
+    #[test]
+    fn a_block_that_consumes_nothing_extra_needs_no_drops() {
+        let res = assemble(&with_prelude("#[arity(1, 1)] sentence s { ? }")).unwrap();
+        let [.., Instruction::Branch(rest, fail)] = res.sentences[SentenceIndex::from(0)][..]
+        else {
+            panic!("expected the `?` expansion");
+        };
+        assert!(
+            res.sentences[rest].is_empty(),
+            "nothing was written after it"
+        );
+        assert_eq!(
+            res.sentences[fail].len(),
+            2,
+            "no drops: {:?}",
+            res.sentences[fail]
+        );
+    }
+
+    /// The count is measured, not guessed, so it follows a call whose arity is
+    /// only known once every sentence has been emitted.
+    #[test]
+    fn the_drops_count_what_a_call_after_the_question_mark_consumes() {
+        let res = assemble(&with_prelude(
+            r#"
+            #[arity(3, 1)] sentence s { ? jump eats }
+            #[arity(3, 1)] sentence eats { add assert add assert }
+        "#,
+        ))
+        .unwrap();
+        let [.., Instruction::Branch(_, fail)] = res.sentences[SentenceIndex::from(0)][..] else {
+            panic!("expected the `?` expansion");
+        };
+        assert_eq!(
+            res.sentences[fail].len(),
+            4,
+            "two drops for the two extra values `eats` takes: {:?}",
+            res.sentences[fail]
+        );
+    }
+
+    #[test]
+    fn a_nested_question_mark_is_balanced_before_the_one_around_it() {
+        // Each `?` here has one value under it, so each early return drops one.
+        // The outer one can only be measured once the inner one balances.
+        let res = assemble(&with_prelude(
+            r#"
+            #[arity(3, 1)] sentence s { ? add assert jump maybe ? add assert }
+            #[arity(1, 1)] sentence maybe { push crate::prelude::ok tuple 2 }
+        "#,
+        ))
+        .unwrap();
+        let with_drops = blocks(&res)
+            .iter()
+            .filter(|b| b.iter().any(|i| matches!(i, Instruction::Dip(1, _))))
+            .count();
+        assert_eq!(with_drops, 2, "both early returns drop");
+    }
+
+    #[test]
+    fn a_question_mark_needs_the_tags_it_reads() {
+        let err = assemble("sentence s { ? }").unwrap_err();
+        assert!(err.contains("crate::prelude::ok"), "{}", err);
+        assert!(
+            err.contains("symbol ok"),
+            "should say how to fix it: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn an_early_return_cannot_invent_what_the_rest_of_the_block_would_push() {
+        let err = assemble(&with_prelude("sentence s { ? push 1 push 2 }")).unwrap_err();
+        assert!(err.contains("leaves 2 more values"), "{}", err);
+        assert!(err.contains("'s'"), "should name the sentence: {}", err);
+    }
+
     #[test]
     fn test_drop_zero_does_not_expand() {
         let code = r#"
