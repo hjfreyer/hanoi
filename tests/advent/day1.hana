@@ -109,25 +109,19 @@ mod sut_and_harness compose_concurrent(sut, harness, sync_set);
 
 mod test0 compose_hidden(sut_and_harness, sync_set);
 
-#[recursive]
-sentence run_tau_reductions {
+// One tau reduction of the system under test together with its harness, which
+// has to be there to take: the test spells out how many reductions the run
+// takes, so a `tau_step` that finds nothing to reduce is a mistake in the test
+// rather than a stopping condition.
+sentence tau_step {
     // Stack: [state]
-    pick 0
     jump test0::tau_reduce
+    // Stack: [(next_state, did_change)]
     untuple 2
-    assert // Stack: [state, next_state, did_change]
-    branch {
-        // did_change is true: drop the old state and loop with next_state
-        roll 1
-        drop 0
-        jump run_tau_reductions
-    } {
-        // did_change is false: drop the next_state, keep old state and return
-        drop 0
-    }
+    assert // the untuple
+    assert // ... and did_change, leaving [next_state]
 }
 
-#[recursive]
 test sentence verify_day1_manually {
     tuple 0
     jump test0::init
@@ -138,8 +132,27 @@ test sentence verify_day1_manually {
     tuple 2
     jump test0::process
     
-    // Run all tau reductions recursively
-    jump run_tau_reductions
+    // Run the twenty tau reductions the system takes to reach its answer
+    jump tau_step
+    jump tau_step
+    jump tau_step
+    jump tau_step
+    jump tau_step
+    jump tau_step
+    jump tau_step
+    jump tau_step
+    jump tau_step
+    jump tau_step
+    jump tau_step
+    jump tau_step
+    jump tau_step
+    jump tau_step
+    jump tau_step
+    jump tau_step
+    jump tau_step
+    jump tau_step
+    jump tau_step
+    jump tau_step
     
     // Assert that it emitted the pass event
     pick 0
