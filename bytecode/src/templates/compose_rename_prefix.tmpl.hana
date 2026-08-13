@@ -8,55 +8,69 @@ function init {
 function accept {
     // Stack: [(event, state)]
     untuple 2
-    assert
-    // Stack: [event, state]
-    pick 1
-    push crate::prelude::start
-    equal
-    pick 2
-    push crate::prelude::pass
-    equal
-    or
-    pick 2
-    push crate::prelude::fail
-    equal
-    or
     branch {
+        // Stack: [event, state]
+        pick 1
+        push crate::prelude::start
+        equal
+        pick 2
+        push crate::prelude::pass
+        equal
+        or
+        pick 2
+        push crate::prelude::fail
+        equal
+        or
+        branch {
+            drop 0
+            drop 0
+            push false
+        } {
+            // Stack: [event, state]
+            pick 1 // duplicate event
+            untuple 2
+            branch {
+                // Stack: [event, state, payload, prefix]
+                push {{to_symbol}}
+                equal
+                // Stack: [event, state, payload, prefix == {{to_symbol}}]
+                branch {
+                    // Stack: [event, state, payload]
+                    push {{from_symbol}}
+                    // Stack: [event, state, payload, {{from_symbol}}]
+                    tuple 2
+                    // Stack: [event, state, (payload, {{from_symbol}})]
+                    drop 2 // drops event
+                    // Stack: [state, (payload, {{from_symbol}})]
+                    roll 1 // swap them
+                    // Stack: [(payload, {{from_symbol}}), state]
+                    tuple 2
+                    // Stack: [((payload, {{from_symbol}}), state)]
+                    jump {{target}}::accept
+                    // Stack: [Bool]
+                } {
+                    // Stack: [event, state, payload]
+                    drop 0 // drop payload
+                    // Stack: [event, state]
+                    tuple 2
+                    // Stack: [(event, state)]
+                    jump {{target}}::accept
+                    // Stack: [Bool]
+                }
+            } {
+                // Not the shape this accepts.
+                drop 0
+                drop 0
+                drop 0
+                drop 0
+                push false
+            }
+        }
+    } {
+        // Not the shape this accepts.
         drop 0
         drop 0
         push false
-    } {
-        // Stack: [event, state]
-        pick 1 // duplicate event
-        untuple 2
-        assert
-        // Stack: [event, state, payload, prefix]
-        push {{to_symbol}}
-        equal
-        // Stack: [event, state, payload, prefix == {{to_symbol}}]
-        branch {
-            // Stack: [event, state, payload]
-            push {{from_symbol}}
-            // Stack: [event, state, payload, {{from_symbol}}]
-            tuple 2
-            // Stack: [event, state, (payload, {{from_symbol}})]
-            drop 2 // drops event
-            // Stack: [state, (payload, {{from_symbol}})]
-            roll 1 // swap them
-            // Stack: [(payload, {{from_symbol}}), state]
-            tuple 2
-            // Stack: [((payload, {{from_symbol}}), state)]
-            jump {{target}}::accept
-            // Stack: [Bool]
-        } {
-            // Stack: [event, state, payload]
-            drop 0 // drop payload
-            // Stack: [event, state]
-            tuple 2
-            // Stack: [(event, state)]
-            jump {{target}}::accept
-            // Stack: [Bool]
-        }
     }
 }
 
@@ -65,93 +79,118 @@ function emit {
     jump {{target}}::emit
     // Stack: [(event, has_event)]
     untuple 2
-    assert
-    // Stack: [event, has_event]
     branch {
-        // Stack: [event]
-        untuple 2
-        assert
-        // Stack: [payload, prefix]
-        pick 0
-        // Stack: [payload, prefix, prefix]
-        push {{from_symbol}}
-        // Stack: [payload, prefix, prefix, {{from_symbol}}]
-        equal
-        // Stack: [payload, prefix, is_from_symbol]
+        // Stack: [event, has_event]
         branch {
-            // Stack: [payload, prefix]
-            drop 0
-            // Stack: [payload]
-            push {{to_symbol}}
-            // Stack: [payload, {{to_symbol}}]
-            tuple 2
-            // Stack: [(payload, {{to_symbol}})]
-            push true
-            // Stack: [(payload, {{to_symbol}}), true]
-            tuple 2
-            // Stack: [((payload, {{to_symbol}}), true)]
+            // Stack: [event]
+            untuple 2
+            branch {
+                // Stack: [payload, prefix]
+                pick 0
+                // Stack: [payload, prefix, prefix]
+                push {{from_symbol}}
+                // Stack: [payload, prefix, prefix, {{from_symbol}}]
+                equal
+                // Stack: [payload, prefix, is_from_symbol]
+                branch {
+                    // Stack: [payload, prefix]
+                    drop 0
+                    // Stack: [payload]
+                    push {{to_symbol}}
+                    // Stack: [payload, {{to_symbol}}]
+                    tuple 2
+                    // Stack: [(payload, {{to_symbol}})]
+                    push true
+                    // Stack: [(payload, {{to_symbol}}), true]
+                    tuple 2
+                    // Stack: [((payload, {{to_symbol}}), true)]
+                } {
+                    // Stack: [payload, prefix]
+                    tuple 2
+                    // Stack: [(payload, prefix)]
+                    push true
+                    // Stack: [(payload, prefix), true]
+                    tuple 2
+                    // Stack: [((payload, prefix), true)]
+                }
+            } {
+                // Nothing to say about a state this cannot read.
+                drop 0
+                drop 0
+                push ((), false)
+            }
         } {
-            // Stack: [payload, prefix]
+            // Stack: [event]
+            drop 0
+            // Stack: []
+            tuple 0
+            // Stack: [()]
+            push false
+            // Stack: [(), false]
             tuple 2
-            // Stack: [(payload, prefix)]
-            push true
-            // Stack: [(payload, prefix), true]
-            tuple 2
-            // Stack: [((payload, prefix), true)]
+            // Stack: [((), false)]
         }
     } {
-        // Stack: [event]
+        // Nothing to say about a state this cannot read.
         drop 0
-        // Stack: []
-        tuple 0
-        // Stack: [()]
-        push false
-        // Stack: [(), false]
-        tuple 2
-        // Stack: [((), false)]
+        drop 0
+        push ((), false)
     }
 }
 
 function process {
     // Stack: [(event, state)]
     untuple 2
-    assert
-    // Stack: [event, state]
-    roll 1
-    // Stack: [state, event]
-    untuple 2
-    assert
-    // Stack: [state, payload, prefix]
-    pick 0
-    // Stack: [state, payload, prefix, prefix]
-    push {{to_symbol}}
-    // Stack: [state, payload, prefix, prefix, {{to_symbol}}]
-    equal
-    // Stack: [state, payload, prefix, is_to_symbol]
     branch {
-        // Stack: [state, payload, prefix]
-        drop 0
-        // Stack: [state, payload]
-        push {{from_symbol}}
-        // Stack: [state, payload, {{from_symbol}}]
-        tuple 2
-        // Stack: [state, (payload, {{from_symbol}})]
+        // Stack: [event, state]
         roll 1
-        // Stack: [(payload, {{from_symbol}}), state]
-        tuple 2
-        // Stack: [((payload, {{from_symbol}}), state)]
-        jump {{target}}::process
-        // Stack: [next_state]
+        // Stack: [state, event]
+        untuple 2
+        branch {
+            // Stack: [state, payload, prefix]
+            pick 0
+            // Stack: [state, payload, prefix, prefix]
+            push {{to_symbol}}
+            // Stack: [state, payload, prefix, prefix, {{to_symbol}}]
+            equal
+            // Stack: [state, payload, prefix, is_to_symbol]
+            branch {
+                // Stack: [state, payload, prefix]
+                drop 0
+                // Stack: [state, payload]
+                push {{from_symbol}}
+                // Stack: [state, payload, {{from_symbol}}]
+                tuple 2
+                // Stack: [state, (payload, {{from_symbol}})]
+                roll 1
+                // Stack: [(payload, {{from_symbol}}), state]
+                tuple 2
+                // Stack: [((payload, {{from_symbol}}), state)]
+                jump {{target}}::process
+                // Stack: [next_state]
+            } {
+                // Stack: [state, payload, prefix]
+                tuple 2
+                // Stack: [state, (payload, prefix)]
+                roll 1
+                // Stack: [(payload, prefix), state]
+                tuple 2
+                // Stack: [((payload, prefix), state)]
+                jump {{target}}::process
+                // Stack: [next_state]
+            }
+        } {
+            // Nothing to make of this, so the state it answers with is one nothing recognises.
+            drop 0
+            drop 0
+            drop 0
+            push ()
+        }
     } {
-        // Stack: [state, payload, prefix]
-        tuple 2
-        // Stack: [state, (payload, prefix)]
-        roll 1
-        // Stack: [(payload, prefix), state]
-        tuple 2
-        // Stack: [((payload, prefix), state)]
-        jump {{target}}::process
-        // Stack: [next_state]
+        // Nothing to make of this, so the state it answers with is one nothing recognises.
+        drop 0
+        drop 0
+        push ()
     }
 }
 

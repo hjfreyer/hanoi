@@ -1,7 +1,9 @@
 function init {
     // Stack: [()]
     untuple 0
-    assert
+    // `untuple 0` takes the argument either way, so the flag is
+    // the whole answer: there is nothing to answer differently about.
+    drop 0
     // Stack: []
     push 0
     // Stack: [0]
@@ -11,14 +13,20 @@ function init {
 function accept {
     // Stack: [(event, state)]
     untuple 2
-    assert
-    // Stack: [event, state]
-    drop 0
-    // Stack: [event]
-    drop 0
-    // Stack: []
-    push false
-    // Stack: [false]
+    branch {
+        // Stack: [event, state]
+        drop 0
+        // Stack: [event]
+        drop 0
+        // Stack: []
+        push false
+        // Stack: [false]
+    } {
+        // Not the shape this accepts.
+        drop 0
+        drop 0
+        push false
+    }
 }
 
 function emit {
@@ -36,10 +44,16 @@ function emit {
 function process {
     // Stack: [(event, state)]
     untuple 2
-    assert
-    // Stack: [event, state]
-    drop 1
-    // Stack: [state]
+    branch {
+        // Stack: [event, state]
+        drop 1
+        // Stack: [state]
+    } {
+        // Nothing to make of this, so the state it answers with is one nothing recognises.
+        drop 0
+        drop 0
+        push ()
+    }
 }
 
 function tau_reduce {

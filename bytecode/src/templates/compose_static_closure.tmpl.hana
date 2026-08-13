@@ -1,7 +1,9 @@
 function init {
     // Stack: [()]
     untuple 0
-    assert
+    // `untuple 0` takes the argument either way, so the flag is
+    // the whole answer: there is nothing to answer differently about.
+    drop 0
     // Stack: []
     push {{val}}
     // Stack: [{{val}}]
