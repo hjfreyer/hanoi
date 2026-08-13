@@ -8,11 +8,11 @@ test sentence simple_tuple {
     untuple 3
     assert
     push 3
-    assert_eq
+    test_assert_eq
     push 2
-    assert_eq
+    test_assert_eq
     push 1
-    assert_eq
+    test_assert_eq
     push crate::prelude::pass
 }
 
@@ -30,10 +30,10 @@ test sentence nested_tuples {
     assert
     
     push 20
-    assert_eq
+    test_assert_eq
     push 30
-    assert_eq
+    test_assert_eq
     push 10
-    assert_eq
+    test_assert_eq
     push crate::prelude::pass
 }

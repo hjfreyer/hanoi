@@ -1133,6 +1133,30 @@ mod tests {
         );
     }
 
+    /// The rest-arm inherits `#[recursive]` from the sentence it was cut out
+    /// of, and a recursive sentence has no inferred arity — so there is no
+    /// count for the failing arm to drop by.
+    #[test]
+    fn a_test_assertion_cannot_live_in_a_recursive_sentence() {
+        let code = r#"
+            mod prelude { symbol fail }
+            #[recursive]
+            sentence check {
+                push 1
+                push 1
+                test_assert_eq
+                jump check
+                push 9
+            }
+        "#;
+        let err = assemble(code).unwrap_err();
+        assert!(
+            err.contains("`#[recursive]` sentence has none inferred"),
+            "unexpected error: {}",
+            err
+        );
+    }
+
     #[test]
     fn a_test_assertion_says_where_it_reports_to() {
         let code = r#"

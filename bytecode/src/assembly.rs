@@ -1327,6 +1327,18 @@ fn fail_path() -> Path {
 /// the same whether it has been settled yet or not.
 fn settle_verdict_arms(library: &mut Library, arms: &[VerdictArm]) -> Result<(), String> {
     for arm in arms {
+        // Inherited from the enclosing sentence, and it means inference will
+        // not answer for the rest — so there is no count to drop by. Said here
+        // rather than left to the inference error, which reports it as one
+        // generated block calling another.
+        if library.annotations[arm.rest].contains(&Annotation::Recursive) {
+            return Err(
+                "`test_assert_eq` needs the arity of the rest of the sentence to \
+                 size the arm it generates, and a `#[recursive]` sentence has none inferred"
+                    .to_string(),
+            );
+        }
+
         let arity = crate::arity::infer_arity(library, arm.rest).map_err(|e| {
             format!(
                 "`test_assert_eq` cannot tell what the rest of the sentence does: {}",

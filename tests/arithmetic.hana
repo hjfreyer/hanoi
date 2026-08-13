@@ -6,7 +6,7 @@ test sentence add_numbers {
     add
     assert
     push 30
-    assert_eq
+    test_assert_eq
     push crate::prelude::pass
 }
 
@@ -16,7 +16,7 @@ test sentence subtract_numbers {
     sub
     assert
     push 30
-    assert_eq
+    test_assert_eq
     push crate::prelude::pass
 }
 
@@ -26,7 +26,7 @@ test sentence multiply_numbers {
     mul
     assert
     push 30
-    assert_eq
+    test_assert_eq
     push crate::prelude::pass
 }
 
@@ -36,7 +36,7 @@ test sentence divide_numbers {
     div
     assert
     push 30
-    assert_eq
+    test_assert_eq
     push crate::prelude::pass
 }
 
@@ -46,7 +46,7 @@ test sentence modulo_numbers {
     mod
     assert
     push 5
-    assert_eq
+    test_assert_eq
     push crate::prelude::pass
 }
 
@@ -55,7 +55,7 @@ test sentence negate_number {
     neg
     assert
     push -42
-    assert_eq
+    test_assert_eq
     push crate::prelude::pass
 }
 
@@ -63,12 +63,12 @@ test sentence logical_not {
     push true
     not
     push false
-    assert_eq
+    test_assert_eq
     
     push false
     not
     push true
-    assert_eq
+    test_assert_eq
     push crate::prelude::pass
 }
 
@@ -77,30 +77,30 @@ test sentence boolean_operations {
     push true
     and
     push true
-    assert_eq
+    test_assert_eq
 
     push true
     push false
     and
     push false
-    assert_eq
+    test_assert_eq
 
     push false
     push false
     and
     push false
-    assert_eq
+    test_assert_eq
 
     push true
     push false
     or
     push true
-    assert_eq
+    test_assert_eq
 
     push false
     push false
     or
     push false
-    assert_eq
+    test_assert_eq
     push crate::prelude::pass
 }

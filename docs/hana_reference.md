@@ -124,6 +124,8 @@ that count out from the rest's inferred arity. Two things follow:
   the failing arm answers with. In a `test sentence` that value is
   `crate::prelude::pass`, and the test runner reads the verdict off the stack.
 - The crate must declare `prelude::fail`.
+- It cannot appear in a `#[recursive]` sentence, which has no inferred arity for
+  the drops to be read off. Those keep `assert_eq`.
 
 "The rest of the sentence" means the rest of the block it is written in: inside
 a `branch` arm it ends the arm, and control still returns to whatever called it.

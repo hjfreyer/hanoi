@@ -1528,7 +1528,7 @@ test sentence iterate_string_ascii {
     tuple 2
     push char_iterator::out
     tuple 2
-    assert_eq
+    test_assert_eq
     
     // Process iterator event
     push 97
@@ -1560,7 +1560,7 @@ test sentence iterate_string_ascii {
     tuple 2
     push char_iterator::out
     tuple 2
-    assert_eq
+    test_assert_eq
     
     push 98
     push next
@@ -1591,7 +1591,7 @@ test sentence iterate_string_ascii {
     tuple 2
     push char_iterator::out
     tuple 2
-    assert_eq
+    test_assert_eq
     
     push 99
     push next
@@ -1622,7 +1622,7 @@ test sentence iterate_string_ascii {
     tuple 2
     push char_iterator::out
     tuple 2
-    assert_eq
+    test_assert_eq
     
     tuple 0
     push done
@@ -1768,7 +1768,7 @@ test sentence parseint_valid_number {
     tuple 2
     push parseint::out
     tuple 2
-    assert_eq
+    test_assert_eq
     
     // Process emission event -> transitions back to idle
     push 123
@@ -1869,7 +1869,7 @@ test sentence parseint_invalid_char {
     tuple 2
     push parseint::out
     tuple 2
-    assert_eq
+    test_assert_eq
     
     tuple 0
     push err
@@ -1936,7 +1936,7 @@ test sentence parseint_empty_string {
     tuple 2
     push parseint::out
     tuple 2
-    assert_eq
+    test_assert_eq
     
     tuple 0
     push err
@@ -2002,7 +2002,7 @@ test sentence verify_string_ref {
     assert
     assert
     push (3, string_ref::length_resp)
-    assert_eq
+    test_assert_eq
     
     // Process emission event -> transitions back to idle
     push (3, string_ref::length_resp)
@@ -2023,7 +2023,7 @@ test sentence verify_string_ref {
     assert
     assert
     push ((121, string_ref::some), string_ref::charat_resp)
-    assert_eq
+    test_assert_eq
     
     // Process emission event
     push ((121, string_ref::some), string_ref::charat_resp)
@@ -2044,7 +2044,7 @@ test sentence verify_string_ref {
     assert
     assert
     push (((), string_ref::none), string_ref::charat_resp)
-    assert_eq
+    test_assert_eq
     
     // Process emission event
     push (((), string_ref::none), string_ref::charat_resp)
@@ -2056,9 +2056,9 @@ test sentence verify_string_ref {
     untuple 2
     assert
     push string_ref::idle
-    assert_eq
+    test_assert_eq
     push xyz_str
-    assert_eq
+    test_assert_eq
     push crate::prelude::pass
 }
 
@@ -2095,7 +2095,7 @@ test sentence verify_prefixed_string_ref {
     assert
     assert
     push (((121, string_ref::some), string_ref::charat_resp), char_iterator::in)
-    assert_eq
+    test_assert_eq
     
     // Process emission back to idle
     push (((121, string_ref::some), string_ref::charat_resp), char_iterator::in)
@@ -2107,9 +2107,9 @@ test sentence verify_prefixed_string_ref {
     untuple 2
     assert
     push string_ref::idle
-    assert_eq
+    test_assert_eq
     push xyz_str
-    assert_eq
+    test_assert_eq
     push crate::prelude::pass
 }
 
@@ -2147,7 +2147,7 @@ test sentence iterate_empty {
     tuple 2
     push char_iterator::out
     tuple 2
-    assert_eq
+    test_assert_eq
     
     tuple 0
     push done
@@ -2195,7 +2195,7 @@ test sentence iterate_unicode {
     tuple 2
     push char_iterator::out
     tuple 2
-    assert_eq
+    test_assert_eq
     push 99
     push next
     tuple 2
@@ -2225,7 +2225,7 @@ test sentence iterate_unicode {
     tuple 2
     push char_iterator::out
     tuple 2
-    assert_eq
+    test_assert_eq
     push 97
     push next
     tuple 2
@@ -2255,7 +2255,7 @@ test sentence iterate_unicode {
     tuple 2
     push char_iterator::out
     tuple 2
-    assert_eq
+    test_assert_eq
     push 102
     push next
     tuple 2
@@ -2285,7 +2285,7 @@ test sentence iterate_unicode {
     tuple 2
     push char_iterator::out
     tuple 2
-    assert_eq
+    test_assert_eq
     push 233
     push next
     tuple 2
@@ -2315,7 +2315,7 @@ test sentence iterate_unicode {
     tuple 2
     push char_iterator::out
     tuple 2
-    assert_eq
+    test_assert_eq
     tuple 0
     push done
     tuple 2
@@ -2413,7 +2413,7 @@ test sentence split_string {
     tuple 2
     push split::out
     tuple 2
-    assert_eq
+    test_assert_eq
     
     // Process start event
     tuple 0
@@ -2438,7 +2438,7 @@ test sentence split_string {
     tuple 2
     push split::out
     tuple 2
-    assert_eq
+    test_assert_eq
     
     // Process item event
     push 97
@@ -2477,7 +2477,7 @@ test sentence split_string {
     tuple 2
     push split::out
     tuple 2
-    assert_eq
+    test_assert_eq
     
     // Process end event
     tuple 0
@@ -2525,7 +2525,7 @@ test sentence split_string {
     tuple 2
     push split::out
     tuple 2
-    assert_eq
+    test_assert_eq
     
     tuple 0
     push split::start
@@ -2549,7 +2549,7 @@ test sentence split_string {
     tuple 2
     push split::out
     tuple 2
-    assert_eq
+    test_assert_eq
     
     push 98
     push next
@@ -2587,7 +2587,7 @@ test sentence split_string {
     tuple 2
     push split::out
     tuple 2
-    assert_eq
+    test_assert_eq
     
     tuple 0
     push split::end
@@ -2620,7 +2620,7 @@ test sentence split_string {
     tuple 2
     push split::out
     tuple 2
-    assert_eq
+    test_assert_eq
     
     tuple 0
     push split::done

@@ -7,13 +7,13 @@ test sentence verify_is_done_basic_machines {
     tuple 2 // state
     jump super::string::string_ref::is_done
     push false
-    assert_eq
+    test_assert_eq
 
     // 2. queue: state ((), (), (), idle) -> is_done = false
     push ((()), super::queue::State::Idle::tag) // state
     jump super::queue::queue::is_done
     push false
-    assert_eq
+    test_assert_eq
 
     // 3. char_iterator: state (0, fetch) -> is_done = false
     push 0
@@ -21,7 +21,7 @@ test sentence verify_is_done_basic_machines {
     tuple 2 // state
     jump super::string::char_iterator::is_done
     push false
-    assert_eq
+    test_assert_eq
 
     // 4. char_iterator: state (5, done_state) -> is_done = true
     push 5
@@ -29,7 +29,7 @@ test sentence verify_is_done_basic_machines {
     tuple 2 // state
     jump super::string::char_iterator::is_done
     push true
-    assert_eq
+    test_assert_eq
 
     // 5. split: state (delim, state_done) -> is_done = true
     push ()
@@ -37,7 +37,7 @@ test sentence verify_is_done_basic_machines {
     tuple 2 // state
     jump super::string::split::is_done
     push true
-    assert_eq
+    test_assert_eq
     push crate::prelude::pass
 }
 
@@ -48,13 +48,13 @@ test sentence verify_is_ready_to_finish_basic_machines {
     tuple 2 // state
     jump super::string::string_ref::is_ready_to_finish
     push true
-    assert_eq
+    test_assert_eq
 
     // 2. queue: state ((), (), (), idle) -> is_ready_to_finish = true
     push ((()), super::queue::State::Idle::tag) // state
     jump super::queue::queue::is_ready_to_finish
     push true
-    assert_eq
+    test_assert_eq
 
     // 3. char_iterator: state (0, fetch) -> is_ready_to_finish = false
     push 0
@@ -62,7 +62,7 @@ test sentence verify_is_ready_to_finish_basic_machines {
     tuple 2 // state
     jump super::string::char_iterator::is_ready_to_finish
     push false
-    assert_eq
+    test_assert_eq
 
     // 4. char_iterator: state (5, done_state) -> is_ready_to_finish = true
     push 5
@@ -70,7 +70,7 @@ test sentence verify_is_ready_to_finish_basic_machines {
     tuple 2 // state
     jump super::string::char_iterator::is_ready_to_finish
     push true
-    assert_eq
+    test_assert_eq
 
     // 5. split: state (delim, state_done) -> is_ready_to_finish = true
     push ()
@@ -78,7 +78,7 @@ test sentence verify_is_ready_to_finish_basic_machines {
     tuple 2 // state
     jump super::string::split::is_ready_to_finish
     push true
-    assert_eq
+    test_assert_eq
     push crate::prelude::pass
 }
 
@@ -88,21 +88,21 @@ test sentence verify_is_done_compositions {
     jump super::barista::customer1::init
     jump super::barista::customer1::is_done
     push false
-    assert_eq
+    test_assert_eq
 
     // 2. compose_concurrent (using customers)
     tuple 0
     jump super::barista::customers::init
     jump super::barista::customers::is_done
     push false
-    assert_eq
+    test_assert_eq
 
     // 3. compose_hidden (using hidden)
     tuple 0
     jump super::barista::hidden::init
     jump super::barista::hidden::is_done
     push false
-    assert_eq
+    test_assert_eq
     push crate::prelude::pass
 }
 
@@ -112,13 +112,13 @@ test sentence verify_is_ready_to_finish_compositions {
     jump super::barista::customer1::init
     jump super::barista::customer1::is_ready_to_finish
     push true
-    assert_eq
+    test_assert_eq
 
     // 2. compose_concurrent (using customers)
     tuple 0
     jump super::barista::customers::init
     jump super::barista::customers::is_ready_to_finish
     push true
-    assert_eq
+    test_assert_eq
     push crate::prelude::pass
 }

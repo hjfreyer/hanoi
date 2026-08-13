@@ -32,20 +32,20 @@ test sentence const_string_len_counts_characters {
     const_string_len
     assert
     push 5
-    assert_eq
+    test_assert_eq
 
     push empty
     const_string_len
     assert
     push 0
-    assert_eq
+    test_assert_eq
 
     // Characters, not bytes: `café` is five bytes and four characters.
     push unicode
     const_string_len
     assert
     push 4
-    assert_eq
+    test_assert_eq
     push crate::prelude::pass
 }
 
@@ -56,7 +56,7 @@ test sentence const_string_len_fails_off_the_strings {
     not
     assert
     push 3
-    assert_eq
+    test_assert_eq
     push crate::prelude::pass
 }
 
@@ -66,21 +66,21 @@ test sentence const_string_char_at_reads_a_code_point {
     const_string_char_at
     assert
     push 104 // 'h'
-    assert_eq
+    test_assert_eq
 
     push greeting
     push 4
     const_string_char_at
     assert
     push 111 // 'o'
-    assert_eq
+    test_assert_eq
 
     push unicode
     push 3
     const_string_char_at
     assert
     push 233 // 'é'
-    assert_eq
+    test_assert_eq
     push crate::prelude::pass
 }
 
@@ -93,7 +93,7 @@ test sentence const_string_char_at_fails_out_of_range {
     not
     assert
     push 0
-    assert_eq
+    test_assert_eq
 
     push empty
     push 0
@@ -101,7 +101,7 @@ test sentence const_string_char_at_fails_out_of_range {
     not
     assert
     push 0
-    assert_eq
+    test_assert_eq
 
     // A wrong operand type fails the same way.
     push 7
@@ -110,7 +110,7 @@ test sentence const_string_char_at_fails_out_of_range {
     not
     assert
     push 0
-    assert_eq
+    test_assert_eq
     push crate::prelude::pass
 }
 

@@ -20,7 +20,7 @@ test sentence conditional_branch {
         panic
     }
     push 10
-    assert_eq
+    test_assert_eq
     push crate::prelude::pass
 }
 

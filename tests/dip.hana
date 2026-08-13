@@ -8,9 +8,9 @@ test sentence dip_hides_one_value {
     dip { add assert }
     // Stack: [3, 99]
     push 99
-    assert_eq
+    test_assert_eq
     push 3
-    assert_eq
+    test_assert_eq
     push crate::prelude::pass
 }
 
@@ -21,9 +21,9 @@ test sentence dip_explicit_count_of_one {
     push 99
     dip 1 { add assert }
     push 99
-    assert_eq
+    test_assert_eq
     push 3
-    assert_eq
+    test_assert_eq
     push crate::prelude::pass
 }
 
@@ -35,11 +35,11 @@ test sentence dip_hides_several_values {
     dip 2 { add assert }
     // Stack: [3, 8, 9]
     push 9
-    assert_eq
+    test_assert_eq
     push 8
-    assert_eq
+    test_assert_eq
     push 3
-    assert_eq
+    test_assert_eq
     push crate::prelude::pass
 }
 
@@ -49,7 +49,7 @@ test sentence dip_zero_is_jump {
     push 22
     dip 0 { add assert }
     push 42
-    assert_eq
+    test_assert_eq
     push crate::prelude::pass
 }
 
@@ -58,7 +58,7 @@ test sentence dip_of_nothing {
     push 42
     dip { }
     push 42
-    assert_eq
+    test_assert_eq
     push crate::prelude::pass
 }
 
@@ -75,9 +75,9 @@ test sentence dip_to_label {
     push 99
     dip add_two
     push 99
-    assert_eq
+    test_assert_eq
     push 3
-    assert_eq
+    test_assert_eq
     push crate::prelude::pass
 }
 
@@ -89,11 +89,11 @@ test sentence dip_nests {
     push 9
     dip { dip { add assert } }
     push 9
-    assert_eq
+    test_assert_eq
     push 8
-    assert_eq
+    test_assert_eq
     push 3
-    assert_eq
+    test_assert_eq
     push crate::prelude::pass
 }
 
@@ -106,11 +106,11 @@ test sentence dip_block_indexes_below_the_hidden_region {
     dip { pick 0 }
     // Stack: [7, 7, 99]
     push 99
-    assert_eq
+    test_assert_eq
     push 7
-    assert_eq
+    test_assert_eq
     push 7
-    assert_eq
+    test_assert_eq
     push crate::prelude::pass
 }
 
@@ -123,9 +123,9 @@ test sentence dip_over_branch {
         branch { push 10 } { push 20 }
     }
     push 99
-    assert_eq
+    test_assert_eq
     push 10
-    assert_eq
+    test_assert_eq
     push crate::prelude::pass
 }
 
@@ -143,8 +143,8 @@ test sentence dip_preserves_hidden_across_rewrite {
         push 42
     }
     push 77
-    assert_eq
+    test_assert_eq
     push 42
-    assert_eq
+    test_assert_eq
     push crate::prelude::pass
 }
