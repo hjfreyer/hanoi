@@ -1248,7 +1248,7 @@ impl TreeBuilder {
                     // Into the single per-module namespace, so `identity foo`
                     // and `sentence foo` in one module collide. That is what
                     // makes a fully qualified identity name denote one thing —
-                    // which is what a proof, and later a rewrite step, names.
+                    // which is what anything citing the claim names.
                     let fq_name = self.tree.fq_name(scope, &decl.name);
                     self.tree
                         .declare(scope, decl.name.clone(), ModuleItem::Identity(id))?;
@@ -1261,10 +1261,9 @@ impl TreeBuilder {
 
                     // Named `<identity>::lhs` and `::rhs`, which phase 4 turns
                     // into fully qualified names for free. Nothing resolves to
-                    // them — they are not in the module tree — but
-                    // `resolve_sentence` reads `Library::names`, so
-                    // `rewrite tests 'foo::lhs' -t ...` addresses one. That is
-                    // the loop a proof is found in.
+                    // them — they are not in the module tree — but they are in
+                    // `Library::names`, so a tool that works on one side of a
+                    // claim can address it by name.
                     for (suffix, body) in [("lhs", decl.lhs), ("rhs", decl.rhs)] {
                         self.flat_sentences.push((
                             scope,
@@ -2003,9 +2002,9 @@ mod tests {
         assert_eq!(lib.sentences[id.rhs].len(), 2);
     }
 
-    /// The whole development loop rests on this: `rewrite <dir> 'foo::lhs'`
-    /// finds a side by the name phase 4 gave it, so a proof can be iterated on
-    /// with the exploration tool before it is written down.
+    /// Each side of a claim is reachable by the name phase 4 gave it, so a tool
+    /// outside the compiler can address one without knowing how the identity
+    /// was declared.
     #[test]
     fn an_identity_names_both_of_its_sides() {
         let lib = assemble("mod m { identity foo { drop 0 } = { drop 0 }; }").expect("assembles");
@@ -2103,7 +2102,7 @@ mod tests {
     }
 
     /// The one thing the span is carried for: an identity has to know which
-    /// file stated it, because that is the file whose `.hant` must prove it.
+    /// file stated it, so a tool outside the compiler can address it per file.
     #[test]
     fn an_identity_records_the_file_it_was_stated_in() {
         let dir = std::env::temp_dir().join("hanoi_identity_file_test");

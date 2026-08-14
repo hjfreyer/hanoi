@@ -23,10 +23,11 @@ use crate::value::Value;
 /// The surface language still spells all three, and `docs/hana.md` documents
 /// them; what is gone is the *indexed instruction*. A depth in an instruction
 /// is a pointer into the stack, and every law about one is an infinite family
-/// indexed by that pointer, with arithmetic in its side conditions — five of
-/// the rewriter's axioms existed only to say things about `pick d` and `roll d`
-/// that `copy`, `swap` and one-deep `dip` say in a single equation each. A
-/// frame's width was the same kind of index, and nesting is what replaces it.
+/// indexed by that pointer, with arithmetic in its side conditions — an
+/// equational account of the ISA needed five separate axioms only to say
+/// things about `pick d` and `roll d` that `copy`, `swap` and one-deep `dip`
+/// say in a single equation each. A frame's width was the same kind of index,
+/// and nesting is what replaces it.
 ///
 /// See `docs/compilation.md` for what phase 4 emits, and `docs/movement.md` for
 /// why the trade is worth taking.
@@ -154,10 +155,10 @@ impl Instruction {
     /// Whether this takes two operands and answers the same either way round.
     ///
     /// `swap` exchanges the top two values, so for these — and only these —
-    /// `swap ; op` is `op`. That is what `bin/rewrite`'s `comm` law rests on,
-    /// and it lives here rather than in the rewriter because it is a fact about
-    /// the instruction set, the same way [`crate::arity::op_arity`] is; a second
-    /// copy of the list would be a silent hazard rather than a duplication.
+    /// `swap ; op` is `op`. It lives here rather than in whatever wants to use
+    /// it, because it is a fact about the instruction set, the same way
+    /// [`crate::arity::op_arity`] is; a second copy of the list would be a
+    /// silent hazard rather than a duplication.
     ///
     /// The flag a fallible one leaves is symmetric too: `add` on a symbol and an
     /// int fails whichever order they arrive in, answering `0, false` both ways.
@@ -175,10 +176,10 @@ impl Instruction {
 
     /// Whether what this leaves on top of the stack is always a `Bool`.
     ///
-    /// `bin/rewrite` folds `op ; is_bool` to `op ; drop ; push true` on the
-    /// strength of this, so a wrong entry is a soundness bug rather than an
-    /// inaccurate comment — and `vm` measures it, running every candidate on
-    /// every shape of operand and holding the list to what it finds.
+    /// Folding `op ; is_bool` to `op ; drop ; push true` rests on this, so a
+    /// wrong entry is a soundness bug rather than an inaccurate comment — and
+    /// `vm` measures it, running every candidate on every shape of operand and
+    /// holding the list to what it finds.
     ///
     /// It is a wide list because a **flag** is a boolean: every fallible
     /// operation reports with one, and reports it on top. `add` leaves a sum
@@ -191,15 +192,15 @@ impl Instruction {
     /// - `drop`, `copy` and `swap` leave a value that came off the stack rather
     ///   than one they computed, so nothing about the instruction decides it.
     /// - `push` leaves exactly its literal, so the answer is known *better*
-    ///   than this: `eval` folds `push c ; is_bool` to the literal it really
-    ///   is, where this would only say that it is one.
+    ///   than this: evaluation folds `push c ; is_bool` to the literal it
+    ///   really is, where this would only say that it is one.
     ///
-    /// A **codomain is not something a rewrite can discover.** `split_bool`
-    /// splits a value into the cases where it is a boolean, but the case where
-    /// it is not leaves the value opaque, and every equation the tool has is
-    /// true of an `is_bool` that answered `42` for `true` — truthiness is all a
-    /// branch can observe, and `false` is the only falsy value. So this fact
-    /// has to be stated about the instruction and measured against the machine.
+    /// A **codomain is not something a rewrite can discover.** Case-splitting
+    /// a value on whether it is a boolean leaves the value opaque in the case
+    /// where it is not, and every equation over the instruction set is true of
+    /// an `is_bool` that answered `42` for `true` — truthiness is all a branch
+    /// can observe, and `false` is the only falsy value. So this fact has to be
+    /// stated about the instruction and measured against the machine.
     pub fn yields_bool(&self) -> bool {
         matches!(
             self,

@@ -168,10 +168,10 @@ checks that the two sides leave the stack the same — the net change, not the
 arity, since `pick 1 ; drop` = nothing is `(2 -> 2)` against `(0 -> 0)`.
 
 Nothing calls an identity and nothing runs it, so it takes no `export` or `test`
-marker, and only `#[arity]` means anything on one. The tactic that
-*proves* it lives out of line, in the `.hant` beside the `.hana`, and
-`bin/prove` checks that every stated identity has one. See
-[docs/identities.md](identities.md).
+marker, and only `#[arity]` means anything on one. Its two sides are compiled
+and named `<identity>::lhs` and `<identity>::rhs`, so something can address
+them, but nothing checks the claim itself today: the equational rewriter that
+discharged one has been removed pending a reboot.
 
 ---
 
@@ -277,13 +277,12 @@ That is a real restriction, and it is bought rather than free. What it buys:
 - **Every sentence has an arity**, inferred rather than declared, so `#[arity]`
   is only ever a check on what the body does — never the last word on a body
   inference could not read.
-- **Every sentence has a finite expansion.** `bin/rewrite` and `bin/prove` work
-  by expanding calls, and termination is a property of the language rather than
-  something a precondition has to ask about. See
-  [docs/identities.md](identities.md).
+- **Every sentence has a finite expansion.** Anything that reasons about a
+  program by expanding its calls terminates because the language says so,
+  rather than because a precondition asked.
 - **Every analysis over the call graph terminates on its own.** Arity inference
-  and the rewriter's tree-building walk it with no cycle case to carry, and
-  failure reachability settles in one pass over each edge.
+  walks it with no cycle case to carry, and failure reachability settles in one
+  pass over each edge.
 - **A program's step count is bounded by its text**, which is what makes the
   totality claim in [docs/totality.md](totality.md) about failure alone rather
   than about failure and divergence.

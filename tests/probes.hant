@@ -1,8 +1,0 @@
-// A reflexive claim needs no derivation: the two sides are the same term, so
-// `id` closes it in nought steps. That these are provable at all is the price
-// of stating them — a corpus proves everything it states — and it is a price
-// worth paying to keep `rewrite` addressing one kind of thing.
-proof pair_check = id;
-proof state_check = id;
-proof emit_pre_and_post = id;
-proof number_pre_and_post = id;

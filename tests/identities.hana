@@ -1,9 +1,10 @@
-// The laws `bin/rewrite` rewrites by, checked against the interpreter.
+// The laws an equational account of the ISA rewrites by, checked against the
+// interpreter.
 //
-// Each equation there claims two programs behave identically. The rewriter
-// takes that on faith — it is an axiom — so the claims are worth stating
-// somewhere that runs them. A law that turned out to be false would show up
-// here rather than as a silently wrong derivation.
+// Each equation claims two programs behave identically. Anything rewriting by
+// one takes that on faith — it is an axiom — so the claims are worth stating
+// somewhere that runs them. A law that turned out to be false shows up here
+// rather than as a silently wrong proof.
 
 symbol some_sym
 
@@ -35,7 +36,7 @@ test sentence split_bool_is_the_identity {
 // `roll 1 ; op` = `op`, for the commutative operators.
 //
 // `vm` measures the commutative set exhaustively over every pair of value
-// shapes; this checks the shape of the law the rewriter actually applies.
+// shapes; this checks the shape the law is actually applied in.
 test sentence commuting_operands_changes_nothing {
     push 3 push 4 roll 1 add jump crate::prelude::check_true ? drop 0
     push 7 jump crate::prelude::check_equals ? drop 0
@@ -134,7 +135,7 @@ test sentence copying_and_discarding_the_original_is_nothing {
 //
 // The one fact here that no rewriting can reach: a codomain is not something a
 // case split discovers. `vm` measures which instructions qualify; this checks
-// the shape of the law the rewriter applies, on a predicate and on a flag.
+// the shape the law is applied in, on a predicate and on a flag.
 test sentence a_test_on_something_already_boolean_is_decided {
     push true     is_bool is_bool  push true jump crate::prelude::check_equals ? drop 0
     push false    is_bool is_bool  push true jump crate::prelude::check_equals ? drop 0
@@ -356,31 +357,34 @@ test sentence copying_inputs_is_copying_outputs {
 }
 
 // ---------------------------------------------------------------------------
-// The same laws again, stated for the rewriter rather than the interpreter.
+// The same laws again, stated as claims rather than run against the
+// interpreter.
 //
 // Everything above runs both sides and asserts they agree, which is a check on
-// finitely many inputs. An `identity` is the claim itself, and `bin/prove`
-// discharges it by deriving one side from the other — so the two readings of
-// this file answer different questions: does the law hold on these values, and
-// does the rewriter's own equation set reach it.
+// finitely many inputs. An `identity` is the claim itself, over every input,
+// and the two readings of this file answer different questions: does the law
+// hold on these values, and does it hold at all.
+//
+// Nothing discharges the claims today — the equational rewriter that did has
+// been removed pending a reboot. They are kept because the claims are what a
+// replacement has to be measured against, and because the compiler still holds
+// each one to having two sides that leave the stack the same way.
 // ---------------------------------------------------------------------------
 
 // `op ; is_bool` = `op ; drop ; push true`, then the annihilation takes the
 // operator away. Two steps, and neither is `is_bool`-specific.
 identity testing_a_test { is_bool is_bool } = { drop 0 push true };
 
-// The four-arm collapse. `retest` fires once per arm, `factor` lifts the two
-// `drop`s out, and `counit_under` deletes the copy whose original went.
+// The four-arm collapse: each arm's inner test is decided by the outer one, the
+// two `drop`s lift out, and the copy whose original went is deleted.
 identity a_value_tested_twice
     { pick 0 branch { branch { push 1 } { push 2 } } { branch { push 3 } { push 4 } } }
   = { branch { push 1 } { push 4 } };
 
-// `push c ; pick 0` = `push c ; push c` — the constant case of `copy_nat`,
-// which is why `copy_const` is a lemma and not an axiom.
-//
-// The proof is what makes the point: it never uses the `copy_const` matcher.
-// `inv(share { push 9 })` reads the naturality law backwards to put the second
-// `push` inside a frame, and the movement laws take the frame away again.
+// `push c ; pick 0` = `push c ; push c` — the constant case of copy naturality,
+// which is why copying a constant is a lemma and not an axiom: reading
+// naturality backwards puts the second `push` inside a frame, and the movement
+// laws take the frame away again.
 identity copying_a_constant { push 9 pick 0 } = { push 9 push 9 };
 
 // `pick (n-1)^n ; X ; drop^m` = nothing, for `X : n -> m`.
@@ -391,19 +395,17 @@ identity copying_a_constant { push 9 pick 0 } = { push 9 push 9 };
 // a lemma a generator emits as one firing, not an axiom.
 //
 // Note the two sides need different amounts of stack and leave the same:
-// `(2 -> 2)` against `(0 -> 0)`. That asymmetry is `counit`'s, and it is why an
-// identity is held to its net change rather than to its arity.
+// `(2 -> 2)` against `(0 -> 0)`. That asymmetry is the counit's, and it is why
+// an identity is held to its net change rather than to its arity.
 identity discarded_work_on_copies { pick 1 pick 1 equal drop 0 } = { };
 
 // The same law as `testing_a_test`, with the right-hand side written as the
 // call it is rather than pasted out in full.
 //
-// `cleanup` leaves `drop 0 push true` on the left and nothing folds it back up,
+// Reducing the left leaves `drop 0 push true` and nothing folds it back up,
 // because nothing can read a window and say which sentence to fold into. So the
-// two sides are compared *up to inlining*: both are unfolded, and the proof is
-// what the left reached meeting what the right unfolds to. That is one
-// derivation still — the fold-back is the right-hand side's own unfold script,
-// read backwards.
+// two sides have to be compared *up to inlining*: unfold both, and the claim is
+// what the left reaches meeting what the right unfolds to.
 function drop_and_true { drop 0 push true }
 
 identity testing_a_test_by_name { is_bool is_bool } = { jump drop_and_true };
@@ -415,26 +417,17 @@ identity testing_a_test_by_name { is_bool is_bool } = { jump drop_and_true };
 // `drop 0 push true`; neither reduces to the other. A one-sided proof cannot
 // close this at all — rewriting the left gets to the normal form and the right
 // is still sitting where it was written, and unfolding reconciles nothing
-// because there is nothing here to unfold.
-//
-// So the proof drives *both* sides and meets in the middle. The derivation is
-// the left's script followed by the right's read backwards, which is why the
-// listing shows `bool_result` firing forwards at the top and backwards at the
-// bottom.
+// because there is nothing here to unfold. Closing it means driving *both*
+// sides and meeting in the middle.
 identity two_spellings_of_one_test { is_bool is_bool } = { is_int is_bool };
 
 // The same claim, one level down, and proved by congruence rather than by
 // reaching in with a traversal.
 //
-// `descend` cuts the goal into one sub-goal per child: the `then` arms become a
-// goal of their own, discharged by the proof above, and the `else` arms are
-// claimed to need no proof — a claim that is checked and not assumed. What each
-// sub-proof produces is lifted back through the context, which is why every
-// step in the listing is addressed `[0.then]`.
-//
-// `normalize` alone would also close this, since it would drive the whole term
-// rather than the arm. Written this way it says where the difference is, and
-// the derivation says it too.
+// The claim cuts into one sub-claim per child: the `then` arms are the claim
+// above, and the `else` arms are identical and need nothing. What each
+// sub-proof produces lifts back through the context. Driving the whole term
+// would close it too; stated this way it says where the difference is.
 identity a_test_inside_an_arm
     { branch { is_bool is_bool } { not } }
   = { branch { is_int is_bool } { not } };
@@ -442,12 +435,9 @@ identity a_test_inside_an_arm
 // The same claim again, with something in front of it — so the goal has to be
 // narrowed before it can be decomposed.
 //
-// `peel` strips what the two sides already share at either end and leaves a
-// smaller goal, which is what makes it a *move* rather than something taking the
-// rest of the proof: `peel ; descend(...)` reads left to right, and every step
-// the descent finds comes back addressed past the peeled prefix. The listing
-// says `[1.then]` where the last one said `[0.then]`, and that one index is the
-// whole of what narrowing costs.
+// Stripping what the two sides already share at either end leaves the smaller
+// claim above, and every step found inside it comes back addressed past the
+// stripped prefix. That one index is the whole of what narrowing costs.
 identity a_test_inside_an_arm_with_a_prefix
     { drop 0 branch { is_bool is_bool } { not } }
   = { drop 0 branch { is_int is_bool } { not } };
@@ -455,52 +445,51 @@ identity a_test_inside_an_arm_with_a_prefix
 // `op ; pick 0 ; is_bool` = `op ; push true` — the guard a case split leaves.
 //
 // `split_bool` asks `is_bool` behind a `pick 0`, because the value it is about
-// to branch on has to survive the question. `bool_result` reads `op ; is_bool`
-// and a matcher's width is fixed before it looks, so the copy in the middle put
-// the answer out of reach and a split placed on an operator's result stalled
-// holding a question the equation set could already discharge.
+// to branch on has to survive the question. The `op ; is_bool` law reads a
+// window of fixed width, so the copy in the middle puts the answer out of
+// reach: a split placed on an operator's result stalls holding a question the
+// equation set can already discharge.
 //
-// Eight steps, no new law: `inv(share { equal })` turns the copy into a second
-// run of `equal`, which is what puts an `equal` in front of the `is_bool`;
-// `bool_result` folds that; and the run left over is exactly what the
-// annihilation and two counits the copies paid for take away again.
+// No new law is needed. Reading copy naturality backwards turns the copy into a
+// second run of `equal`, which is what puts an `equal` in front of the
+// `is_bool`; folding that leaves a run the annihilation and two counits the
+// copies paid for take away again.
 identity the_guard_a_split_leaves { equal pick 0 is_bool } = { equal push true };
 
 // `dip d { X }` = `(roll (d+n-1))^n ; X ; (roll (d+m-1))^d` — a frame taken off.
 //
-// The equation has rolls on both sides and the term holds none, so the firing
-// puts them in first: `roll_cycle` backwards is the only way to introduce a
-// roll at all, and it introduces a whole cycle, of which the unframing eats
-// `m` and leaves `d`.
+// The equation has rolls on both sides and the term holds none, so applying it
+// has to put them in first: `(roll d)^(d+1)` = nothing, read backwards, is the
+// only way to introduce a roll at all, and it introduces a whole cycle, of
+// which the unframing eats `m` and leaves `d`.
 //
-// Two steps, and what they buy is the operand at the **top of the stack**,
-// where `split_bool` and the folding laws are stated. `docs/tactics.md` gave
-// the reason there was no matcher as "`unframe` can only fix one of `n` and `m`
-// before it looks" — true of one reading the rolls, whose count is `m`. Reading
-// the frame, `d` is on the node and `n` and `m` are its body's arity, so the
-// window is one node and all three are known.
+// What that buys is the operand at the **top of the stack**, where
+// `split_bool` and the folding laws are stated. Matching it is a question of
+// which side you read: reading the rolls, only their count `m` is visible
+// before the match; reading the frame, `d` is on the node and `n` and `m` are
+// its body's arity, so the window is one node and all three are known.
 identity taking_a_frame_off { dip 1 { not } } = { roll 1 not roll 1 };
 
-// `push a ; push b ; tuple 2 ; … ; equal` decided, which needs `eval` to know
-// how to build a tuple and how to take one apart.
+// `push a ; push b ; tuple 2 ; … ; equal` decided, which needs constant folding
+// to know how to build a tuple and how to take one apart.
 //
-// It did not. Every value law is stated about literals, and a constructed tuple
-// was not one — so a postcondition comparing what a function just built against
-// what it should have built stalled with both operands right there. Widening
-// `eval_op` is not a new law: `Rule::Eval` already says "the pushes of what the
-// operator answers", and `tuple` is an operator that answers.
+// The obstacle is that value laws are stated about literals, and a constructed
+// tuple is not one — so a postcondition comparing what a function just built
+// against what it should have built stalls with both operands right there.
+// Widening folding to cover it is not a new law: "the pushes of what the
+// operator answers" already covers `tuple`, which is an operator that answers.
 identity comparing_two_built_tuples
     { push some_sym push 1 tuple 2 push some_sym push 1 tuple 2 equal }
   = { push true };
 
 // The value an arm tested equal to, written into the arm.
 //
-// One step, and what it buys is the second line: once the literal is there,
-// `eval` reads a window it could not read before, and the arm folds to the
-// constant the whole proof was after. That is the entire content of the law —
-// it is the first fact here about what an instruction *computes* rather than
-// about shape, and nothing in the set reaches it, since `split_bool` splits the
-// boolean and leaves the value opaque in both arms.
+// What it buys is the second line: once the literal is there, folding reads a
+// window it could not read before, and the arm collapses to the constant. That
+// is the entire content of the law — it is the first fact here about what an
+// instruction *computes* rather than about shape, and nothing else reaches it,
+// since `split_bool` splits the boolean and leaves the value opaque in both
+// arms.
 identity specializing_a_tested_value
     { pick 0 push 7 equal branch { push 7 equal } { drop 0 push false } }
   = { pick 0 push 7 equal branch { drop 0 push true } { drop 0 push false } };
