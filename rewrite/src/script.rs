@@ -38,7 +38,7 @@ use std::collections::{HashMap, HashSet};
 use bytecode::{Instruction, Value};
 
 use crate::engine::Tactic;
-use crate::ir::{Node, Selector};
+use crate::ir::{Selector, Term};
 use crate::matcher::{
     Matcher, count_matcher_names, matcher_by_name, matcher_names, matcher_with_count,
     matcher_with_term, term_matcher_names,
@@ -65,11 +65,11 @@ tactic unfold_all = repeat(bu(each(unfold)));
 // and you unfold the ones you care about.
 tactic default = id;
 
-// Move framed blocks left, fuse the ones that meet, and keep nested frames
-// collapsed so the interchange law sees a frame's true hidden depth.
-tactic dips = repeat(bu(each(collapse); each(sink); each(fuse)));
+// Move framed blocks left, fuse the ones that meet, and keep nested `par`s
+// collapsed so the interchange law sees a window's true width.
+tactic frames = repeat(bu(each(collapse); each(sink); each(fuse)));
 
-// Split every frame into a nest of unary ones. Presentation only, and the
+// Split every window into a nest of one-value ones. Presentation only, and the
 // opposite reading of the same law as `collapse` — never put both in one
 // `repeat`.
 tactic unary = repeat(bu(each(expand)));
@@ -114,8 +114,8 @@ tactic cleanup = repeat(bu(each(annihilate, annihilate_flagged, annihilate_void,
 // laws that fold values can reach it and where two arms testing the same thing
 // come to be testing the *same* node.
 //
-// Alternated with `dips` rather than run to a fixpoint first: every firing
-// leaves a `dip 1 { X }` behind, and collapsing and sinking those is what
+// Alternated with `frames` rather than run to a fixpoint first: every firing
+// leaves a `par { X } { id }` behind, and collapsing and sinking those is what
 // lets the next one see a prefix rather than a pile of frames.
 tactic lifting = repeat(bu(each(factor); each(lift);
                            each(collapse); each(sink); each(fuse)));
@@ -139,8 +139,8 @@ tactic all = repeat(bu(each(annihilate, annihilate_flagged, annihilate_void,
                        each(factor);
                        each(collapse); each(sink); each(fuse)));
 
-// Frames left-most and written in unary.
-tactic dip_normalize = dips; unary;
+// Windows left-most and written in unary.
+tactic frame_normalize = frames; unary;
 "#;
 
 pub(crate) type Span = (usize, usize);
@@ -378,7 +378,7 @@ enum Expr {
     /// function of the window. An introduction has nothing to read — the code
     /// it puts into the term has to be written down somewhere, and this is
     /// where.
-    Term(String, Span, Vec<Node>),
+    Term(String, Span, Term),
     Seq(Vec<Expr>),
     Choice(Vec<Expr>),
 }
@@ -561,20 +561,20 @@ impl<'a> Parser<'a> {
     /// rather than compiled from a sentence, so there is nothing to name — and
     /// no branches, since a branch needs two blocks and a condition and would
     /// be a program rather than a term.
-    fn term(&mut self) -> Result<Vec<Node>, ScriptError> {
+    fn term(&mut self) -> Result<Term, ScriptError> {
         let mut out = Vec::new();
         while !matches!(self.peek(), Some(&Tok::RBrace) | None) {
-            out.extend(self.instruction()?);
+            out.push(self.factor()?);
         }
-        Ok(out)
+        Ok(Term::seq(out))
     }
 
-    /// One written instruction, as the nodes it stands for.
+    /// One written factor, as the term it stands for.
     ///
-    /// A `Vec` rather than a node because `pick d` and `roll d` are spellings
-    /// rather than instructions: what they stand for is frames around a `copy`
-    /// or a `swap`, and a term may say either. Everything else is one node.
-    fn instruction(&mut self) -> Result<Vec<Node>, ScriptError> {
+    /// It may be a whole composite, because `pick d` and `roll d` are spellings
+    /// rather than instructions: what they stand for is `par`s around a `copy`
+    /// or a `swap`, and a term may say either. Everything else is one factor.
+    fn factor(&mut self) -> Result<Term, ScriptError> {
         let span = self.span();
         let Some(Spanned {
             tok: Tok::Ident(word),
@@ -587,11 +587,11 @@ impl<'a> Parser<'a> {
         let word = word.clone();
 
         // The two nested forms. A branch reads as a program rather than a
-        // value, which is why a term used to decline one — but a `Node::Branch`
-        // carries no condition, only the two arms, and the condition it pops is
-        // whatever the stack already holds. So it is a node like any other, and
-        // excluding it left `annihilate` with no way to be read backwards at
-        // `m = 0`: nothing could write the `branch { } { }` to introduce.
+        // value, which is why a term used to decline one — but a branch carries
+        // no condition, only the two arms, and the condition it pops is
+        // whatever the stack already holds. So it is a factor like any other,
+        // and excluding it left `annihilate` with no way to be read backwards
+        // at `m = 0`: nothing could write the `branch { } { }` to introduce.
 
         // The two spellings that stand for frames around a movement. Written
         // the way the assembler takes them, and expanded the way phase 4
@@ -606,27 +606,28 @@ impl<'a> Parser<'a> {
         if word == "branch" {
             let then_body = self.block()?;
             let else_body = self.block()?;
-            return Ok(vec![Node::Branch {
-                then_origin: TERM_ORIGIN.to_string(),
-                then_body,
-                else_origin: TERM_ORIGIN.to_string(),
-                else_body,
-            }]);
+            return Ok(Term::branch(TERM_ORIGIN, then_body, TERM_ORIGIN, else_body));
         }
 
-        // `dip k { ... }` is the one nested form, and the only way to write a
-        // term that hides part of the stack from itself.
-        if word == "dip" {
-            let depth = self.count(&word, span)?;
-            return Ok(vec![Node::Dip {
-                depth,
-                origins: Vec::new(),
-                body: self.block()?,
-            }]);
+        // The identity, and the second binary operator. `par { X } { id }` is
+        // what hides the top of the stack from `X`, and is the only way to
+        // write a term that keeps part of the stack out of its own reach.
+        if word == "id" {
+            let k = match self.peek() {
+                Some(Tok::Int(_)) => self.count(&word, span)?,
+                _ => 1,
+            };
+            return Ok(Term::Id(k));
+        }
+
+        if word == "par" {
+            let left = self.block()?;
+            let right = self.block()?;
+            return Ok(Term::par(left, right));
         }
 
         if word == "push" {
-            return Ok(vec![Node::Op(Instruction::Push(self.literal(span)?))]);
+            return Ok(Term::Op(Instruction::Push(self.literal(span)?)));
         }
 
         // The one thing in a term that reaches outside it. A term used to hold
@@ -634,10 +635,7 @@ impl<'a> Parser<'a> {
         // written here rather than compiled from a sentence — but `share` is
         // about running *a function* twice, and the function has a name.
         if word == "jump" {
-            return Ok(vec![Node::Call {
-                depth: 0,
-                target: self.sentence(span)?,
-            }]);
+            return Ok(Term::Call(self.sentence(span)?));
         }
 
         let inst = match word.as_str() {
@@ -654,7 +652,7 @@ impl<'a> Parser<'a> {
                 }
             },
         };
-        Ok(vec![Node::Op(inst)])
+        Ok(Term::Op(inst))
     }
 
     /// The sentence a term names, resolved the way the command line resolves
@@ -690,8 +688,8 @@ impl<'a> Parser<'a> {
         resolve_sentence(prog.library(), &ident).map_err(|why| ScriptError::new(why, ident_span))
     }
 
-    /// A braced run of instructions: a dip body, or one arm of a branch.
-    fn block(&mut self) -> Result<Vec<Node>, ScriptError> {
+    /// A braced run of instructions: a side of a `par`, or one arm of a branch.
+    fn block(&mut self) -> Result<Term, ScriptError> {
         self.expect(Tok::LBrace, "'{'")?;
         let body = self.term()?;
         self.expect(Tok::RBrace, "'}'")?;
@@ -882,7 +880,8 @@ const INSTRUCTION_WORDS: &[&str] = &[
     "tuple n",
     "untuple n",
     "push <int|true|false|\"const string\"|symbol>",
-    "dip { .. }",
+    "par { .. } { .. }",
+    "id n",
     "drop",
     "equal",
     "greater",
@@ -1288,7 +1287,7 @@ impl Definitions {
 
             // `;` between moves, where each rewrites one side of the goal and
             // hands the rest of the sequence what it left. This is the reading
-            // that makes `cleanup ; rhs(dips)` mean what it looks like.
+            // that makes `cleanup ; rhs(frames)` mean what it looks like.
             //
             // A strategy that *forks* — `descend`, or a choice — discharges the
             // goal rather than narrowing it, so it can only come last, and there
@@ -1466,7 +1465,7 @@ impl Definitions {
         }
     }
 
-    /// `descend(body: s)`, or `descend(then: s, else: s)`.
+    /// `descend(left: s, right: s)`, or `descend(then: s, else: s)`.
     ///
     /// Named parts rather than an order, because a branch has two children and
     /// both have to be discharged — and because which arm a strategy was meant
@@ -1479,26 +1478,27 @@ impl Definitions {
         visiting: &mut HashSet<String>,
         tactics: &mut HashSet<String>,
     ) -> Result<Strategy, ScriptError> {
-        let (mut body, mut then, mut els) = (None, None, None);
+        let (mut left, mut right, mut then, mut els) = (None, None, None, None);
         for arg in args {
             let Arg::Named(part, part_span, inner) = arg else {
                 return Err(
                     ScriptError::new("`descend` takes named parts", span).with_help(
-                        "`descend(body: t)` reaches into a frame, and \
+                        "`descend(left: t)` reaches into a `par`, and \
                          `descend(then: t, else: t)` into the arms of a branch",
                     ),
                 );
             };
             let slot = match part.as_str() {
-                "body" => &mut body,
+                "left" => &mut left,
+                "right" => &mut right,
                 "then" => &mut then,
                 "else" => &mut els,
                 other => {
                     return Err(ScriptError::new(
-                        format!("'{}' is not a part a node has", other),
+                        format!("'{}' is not a part a term has", other),
                         *part_span,
                     )
-                    .with_help("the parts are `body`, `then` and `else`"));
+                    .with_help("the parts are `left`, `right`, `then` and `else`"));
                 }
             };
             if slot.is_some() {
@@ -1512,19 +1512,22 @@ impl Definitions {
             ));
         }
 
-        match (body, then, els) {
-            (None, None, None) => Err(ScriptError::new(
-                "`descend` needs a part to descend into",
+        let sides = left.is_some() || right.is_some();
+        let arms = then.is_some() || els.is_some();
+        match (sides, arms) {
+            (false, false) => Err(
+                ScriptError::new("`descend` needs a part to descend into", span).with_help(
+                    "`descend(left: t, right: t)` for a `par`, \
+                 `descend(then: t, else: t)` for a branch",
+                ),
+            ),
+            (true, true) => Err(ScriptError::new(
+                "`descend` mixes the sides of a `par` with the arms of a branch",
                 span,
             )
-            .with_help("`descend(body: t)` for a frame, `descend(then: t, else: t)` for a branch")),
-            (Some(body), None, None) => Ok(Strategy::Descend(Descent::Body(body))),
-            (Some(_), _, _) => Err(ScriptError::new(
-                "`descend` mixes a body with branch arms",
-                span,
-            )
-            .with_help("a frame has a body and a branch has two arms; no node has both")),
-            (None, then, els) => Ok(Strategy::Descend(Descent::Arms { then, els })),
+            .with_help("a `par` has a left and a right; a branch has two arms")),
+            (true, false) => Ok(Strategy::Descend(Descent::Sides { left, right })),
+            (false, true) => Ok(Strategy::Descend(Descent::Arms { then, els })),
         }
     }
 
@@ -1736,7 +1739,8 @@ impl Definitions {
                 let sel = match name {
                     "then" => Selector::Then,
                     "else" => Selector::Else,
-                    _ => Selector::Body,
+                    "left" => Selector::Left,
+                    _ => Selector::Right,
                 };
                 let inner = Box::new(self.resolve(inner, prog, visiting)?);
                 Ok(match index {
@@ -1980,7 +1984,8 @@ const COMBINATORS: &[(&str, Shape)] = &[
     // `children` narrowed to one kind of child, and optionally to one node.
     ("then", Shape::Descend),
     ("else", Shape::Descend),
-    ("body", Shape::Descend),
+    ("left", Shape::Descend),
+    ("right", Shape::Descend),
     ("bu", Shape::One),
     ("td", Shape::One),
     ("repeat_n", Shape::CountAndOne),
@@ -2060,8 +2065,8 @@ mod tests {
     fn a_tactic_is_not_accepted_where_a_rule_belongs() {
         // `each` takes rule names, so this is caught at compile time rather
         // than by inspecting the argument at run time.
-        let msg = err("each(dips)");
-        assert!(msg.contains("unknown rule 'dips'"), "{}", msg);
+        let msg = err("each(frames)");
+        assert!(msg.contains("unknown rule 'frames'"), "{}", msg);
     }
 
     #[test]
@@ -2105,7 +2110,7 @@ mod tests {
     #[test]
     fn user_definitions_can_build_on_the_prelude() {
         let mut d = defs();
-        d.load("tactic mine = dips; factoring;").unwrap();
+        d.load("tactic mine = frames; factoring;").unwrap();
         assert!(d.compile("mine").is_ok());
     }
 
@@ -2157,7 +2162,7 @@ mod tests {
     fn a_term_names_the_code_to_introduce() {
         assert!(compiles("each(introduce { copy })"));
         assert!(compiles("once(introduce { copy is_bool })"));
-        assert!(compiles("once(introduce { dip 1 { copy } })"));
+        assert!(compiles("once(introduce { par { copy } { id } })"));
         // A `push` has to be paired with something that consumes, or the term
         // takes no inputs and there is no drop for it to stand in front of.
         assert!(compiles("once(introduce { push 7 equal })"));
@@ -2173,7 +2178,9 @@ mod tests {
         // and the condition it pops is whatever the stack already holds.
         assert!(compiles("once(introduce { branch { } { } })"));
         assert!(compiles("once(introduce { branch { not } { is_bool } })"));
-        assert!(compiles("once(introduce { dip 1 { branch { } { } } })"));
+        assert!(compiles(
+            "once(introduce { par { branch { } { } } { id } })"
+        ));
         assert!(compiles(
             "once(introduce { branch { branch { } { } } { drop } })"
         ));
@@ -2190,7 +2197,7 @@ mod tests {
         assert!(e.contains("-1 against 0"), "{}", e);
 
         // Including one nested inside another block.
-        let e = err("once(introduce { dip 1 { branch { drop } { } } })");
+        let e = err("once(introduce { par { branch { drop } { } } { id } })");
         assert!(e.contains("leave different amounts"), "{}", e);
     }
 
@@ -2359,9 +2366,10 @@ mod tests {
         assert!(compiles("then(each(sink))"));
         assert!(compiles("then(2, each(sink))"));
         assert!(compiles("else(0, at(1, fuse))"));
-        assert!(compiles("body(7, id)"));
+        assert!(compiles("left(7, id)"));
+        assert!(compiles("right(0, id)"));
         // Nested, which is how a whole path gets written.
-        assert!(compiles("then(1, body(2, at(0, sink)))"));
+        assert!(compiles("then(1, left(2, at(0, sink)))"));
     }
 
     #[test]
@@ -2517,7 +2525,7 @@ mod tests {
             // `;` and `|` and the combinators all keep their tactic reading,
             // which is what makes this change invisible to every `.hant` that
             // came before it.
-            "proof foo = dips; cleanup;",
+            "proof foo = frames; cleanup;",
             "proof foo = try(at(9, sink)) | id;",
             "proof foo = then(cleanup);",
         ] {
@@ -2550,9 +2558,9 @@ mod tests {
     fn moves_sequence_with_a_semicolon() {
         let lib = corpus("identity foo { drop 0 } = { drop 0 };");
         for source in [
-            "proof foo = cleanup; rhs(dips);",
+            "proof foo = cleanup; rhs(frames);",
             "proof foo = exact(cleanup); rhs(unfold_all);",
-            "proof foo = rhs(dips); rhs(cleanup); normalize(all);",
+            "proof foo = rhs(frames); rhs(cleanup); normalize(all);",
         ] {
             let prog = Program::new(&lib);
             let file = hant(&lib, source).expect("parses");
@@ -2570,27 +2578,28 @@ mod tests {
         assert!(rendered.contains("takes named parts"), "{}", rendered);
 
         let rendered = proof_err(&lib, "proof foo = descend(arm: cleanup);");
-        assert!(rendered.contains("not a part a node has"), "{}", rendered);
+        assert!(rendered.contains("not a part a term has"), "{}", rendered);
 
         let rendered = proof_err(&lib, "proof foo = descend(then: id, then: id);");
         assert!(rendered.contains("given twice"), "{}", rendered);
 
-        let rendered = proof_err(&lib, "proof foo = descend(body: id, then: id);");
+        let rendered = proof_err(&lib, "proof foo = descend(left: id, then: id);");
         assert!(
-            rendered.contains("mixes a body with branch arms"),
+            rendered.contains("mixes the sides of a `par`"),
             "{}",
             rendered
         );
     }
 
-    /// A frame has a body and a branch has two arms, and no node has both — so
+    /// A `par` has two sides and a branch two arms, and no term has both — so
     /// the two shapes are the two forms, and each resolves.
     #[test]
     fn both_shapes_of_descend_resolve() {
         let lib = corpus("identity foo { drop 0 } = { drop 0 };");
         for source in [
-            "proof foo = descend(body: cleanup);",
-            "proof foo = descend(then: cleanup, else: dips);",
+            "proof foo = descend(left: cleanup);",
+            "proof foo = descend(left: cleanup, right: id);",
+            "proof foo = descend(then: cleanup, else: frames);",
             // One arm named is the claim that the other needs no proof.
             "proof foo = descend(then: cleanup);",
             "proof foo = peel ; descend(then: normalize(all));",

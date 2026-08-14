@@ -81,7 +81,7 @@ as it likes.
 ### A step
 
 ```
-annihilate(x = { equal }, n = 2, m = 1) -> [1.then, 2.body] @2;
+annihilate(x = { equal }, n = 2, m = 1) -> [1.then, 2.left] @2;
 ```
 
 - **the equation**, by the name `--list-rules` and `docs/tactics.md` use;
@@ -91,10 +91,10 @@ annihilate(x = { equal }, n = 2, m = 1) -> [1.then, 2.body] @2;
 - **the direction**: `->` finds the left-hand side and leaves the right, `<-`
   the other way. Every equation is true both ways and a step says which reading
   it wants;
-- **the location**: `[1.then, 2.body]` is "the then arm of the node at index 1,
-  then the body of the node at index 2 within it", read outermost-first, and
-  `@2` is where the window starts in the sequence that walk arrives at. A bare
-  `@0` is a window in the root sequence.
+- **the location**: `[1.then, 2.left]` is "the then arm of the factor at index
+  1, then the left-hand side of the `par` at index 2 within it", read
+  outermost-first, and `@2` is where the window starts in the spine that walk
+  arrives at. A bare `@0` is a window in the root spine.
 
 The direction and the location are spelled exactly as `--show-script` spells
 them, so a step read off a listing and a step read out of a file are the same
@@ -105,9 +105,9 @@ text.
 | equation | arguments |
 |---|---|
 | `collapse` | `k`, `j`, `a` |
-| `elim_dip0` | `a` |
-| `interchange` | `x`, `framed`, `n`, `m` |
-| `fuse` | `k`, `a`, `b` |
+| `elim_par0` | `a` |
+| `slide` | `x`, `framed`, `n`, `m` |
+| `interchange` | `a`, `b`, `c`, `d` |
 | `hoist` | `k`, `x`, `then`, `else` |
 | `distribute` | `then`, `else`, `suffix` |
 | `fold_branch` | `c`, `then`, `else` |
@@ -125,14 +125,15 @@ text.
 | `cancel_tuple` | `n` |
 | `swap_cycle` | — |
 | `unframe` | `framed`, `n`, `m` |
-| `unfold` | `depth`, `target` |
+| `unfold` | `target` |
 
 Each equation's law is stated in `docs/tactics.md`, and its arguments are the
 letters that law is written with. An argument is one of:
 
 - **a count or a number** — `k = 2`, `n = -1`;
 - **a term**, in braces — `x = { push 9 copy }`. Where an equation takes a
-  single node the term holds exactly one: `framed = { dip 1 { drop } }`;
+  single factor the term holds exactly one:
+  `framed = { par { drop } { id } }`;
 - **a literal** — `c = 9`, `c = true`, `c = "text"`, `c = 1.5`, `c = (1, 2)`,
   or a symbol by its declared path, `c = barista::state::thirsty`;
 - **a list of literals**, in brackets — `inputs = [1, 2]`;
@@ -140,28 +141,31 @@ letters that law is written with. An argument is one of:
 - **an arm** — `arm = then` or `arm = else`.
 
 `unfold` is the one step that is not an equation of the calculus: that
-`Call { k, S }` may be replaced by `S`'s body is the axiom the *library*
-contributes by defining `S`. So it names a sentence and never quotes it —
-`unfold(depth = 0, target = identities::drop_and_true)` is three words whether
-the body is one instruction or ten thousand.
+`jump S` may be replaced by `S`'s body is the axiom the *library* contributes by
+defining `S`. So it names a sentence and never quotes it —
+`unfold(target = identities::drop_and_true)` is three words whether the body is
+one instruction or ten thousand. It carries no width: a call that hides values
+is `par { jump S } { id k }`, so the window this reads is the bare call inside
+the `par`, reached by a `left` leg of the location.
 
 ### Terms
 
 A term is the same small language a tactic writes a term in — see
-`docs/tactics.md` — with two additions a derivation needs and a hand-written
-tactic did not:
+`docs/tactics.md` — with one addition a derivation needs and a hand-written
+tactic did not, tuples:
 
 ```
 { copy is_bool branch { push true } { push false } }
-{ dip 2 { push 9 add } }        a block, written out
-{ dip 2 queue::accept }         a call that hides two values
-{ jump queue::accept }          the same at depth 0
-{ push (1, 2) }                 tuples
-{ pick 2 }                      the frames a reach at depth stands for
+{ par { push 9 add } { id 2 } }   a hidden window two values wide
+{ par { jump queue::accept } { id 2 } }   a call under one
+{ jump queue::accept }            the same call with nothing beside it
+{ id }  { id 3 }                  the identity, on one value or three
+{ push (1, 2) }                   tuples
+{ pick 2 }                        the `par`s a reach at depth stands for
 ```
 
 `pick d` and `roll d` are spellings, not instructions: reading one gives the
-frames around `copy` or `swap` that the compiler would have emitted, so a term
+`par`s around `copy` or `swap` that the compiler would have emitted, so a term
 written either way is the same term. Nothing *writes* them — the tool has no
 depth left to write — but a producer in another language may, and the two term
 languages are meant to be one.
@@ -182,7 +186,7 @@ Everything `prove` checks of its own derivation, in the same code:
 - what the last step leaves is the right-hand side, compared by effect.
 
 **Nothing about being written down makes a step trusted.** Facts that originate
-in the library ride in the arguments — the claimed arity of `X` in `interchange`
+in the library ride in the arguments — the claimed arity of `X` in `slide`
 and `annihilate` — and are re-derived against the real program on every
 application. A file claiming `add` is `(1 -> 1)` is refused however it came to
 be written:

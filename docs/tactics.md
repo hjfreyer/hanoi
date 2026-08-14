@@ -5,13 +5,44 @@ an `identity` states: two terms, and the claim that they are equal. A **tactic**
 says how to rewrite a term, and is most of this document.
 
 ```bash
-cargo run --bin rewrite -- tests state_check -t 'exact(unfold_all; dips)'
+cargo run --bin rewrite -- tests state_check -t 'exact(unfold_all; frames)'
 ```
 
 No *call* is opened unless you ask. A listing shows one sentence, naming every
 call it makes on a single line; `unfold` is how you open one up. Blocks written
 inline — branch arms and `dip N { ... }` bodies — are always spelled out,
 because they are not calls.
+
+## What a term is
+
+A term is an algebra rather than a list, and every law below is stated in it:
+
+```text
+A, B  ::=  id n  |  op  |  jump S           the atoms
+        |  A ; B                            composition
+        |  par { A } { B }                  parallel composition
+        |  branch { A } { B }
+```
+
+`A ; B` runs `A` and then `B`. `par { A } { B }` runs both, on disjoint parts of
+one stack: the arities carve it, with `B` taking the values on top and `A` the
+ones underneath. `id n` is the identity on `n` values, and `id 0` — the program
+that does nothing — is the unit of both operators.
+
+**A `dip` is `par { X } { id }`.** The instruction runs a block with the top
+value hidden from it, which is a computation beside an identity that passes that
+value through untouched; a window `k` values wide is `par { X } { id k }`, and a
+call at depth is `par { jump S } { id k }`. So the frames the ISA is written in
+are the case of `par` where one side is an identity, and the laws that reason
+about a hidden window say so by asking for that shape.
+
+**Composition is associative, and nothing here may distinguish `(A ; B) ; C`
+from `A ; (B ; C)`.** Terms are built canonically — nested to the right, with
+the unit dropped — and a window is a run of adjacent factors of one **spine**:
+the factors of a composite, in order, with the bracketing forgotten. That is
+what lets an equation whose left-hand side is `swap ; swap` fire wherever those
+two sit next to each other, and it is why a position in a script is an index
+into a spine.
 
 **There is no way to name a bare sentence**, because everything this tool does
 is about a goal. A term worth looking at is therefore a term worth stating an
@@ -44,7 +75,7 @@ The tool is split in half, and the split is the thing worth understanding
 first.
 
 **The lower layer is mechanical.** A small set of **equations** — each a pair of
-program sequences asserted to behave identically — plus a **script** saying
+terms asserted to behave identically — plus a **script** saying
 which equation to use, with which arguments, at exactly which place, in which
 direction. An **applier** consumes a script and a tree and performs the
 rewrites, refusing anything that does not line up precisely. It searches for
@@ -74,8 +105,8 @@ closed — 6 steps
         copy ; branch { drop ; push 1 } { branch { push 3 } { push 4 } }
      ⇒  copy ; branch { drop ; push 1 } { drop ; push 4 }
      4  hoist <- @1
-        branch { jump { drop } ; push 1 } { jump { drop } ; push 4 }
-     ⇒  dip 1 { drop } ; branch { push 1 } { push 4 }
+        branch { par { drop } { id 0 } ; push 1 } { par { drop } { id 0 } ; push 4 }
+     ⇒  par { drop } { id } ; branch { push 1 } { push 4 }
 ```
 
 Applying that script to a fresh build reproduces the run exactly. That is
@@ -100,30 +131,30 @@ three.
 
 | equation | law | notes |
 |---|---|---|
-| `collapse` | `dip k { dip j { A } }` = `dip (k+j) { A }` | forward is the old `collapse`; backward at the split `(1, k-1)` is the old `expand` |
-| `elim_dip0` | `dip 0 { A }` = `A` | forward splices a frame that hides nothing; backward *introduces* a frame around a run |
-| `interchange` | `X ; D_k` = `D_(k-m+n) ; X`, for `X : n -> m`, `k >= m` | forward is `sink`, backward is `float`. `D` is a dip at any depth, or a call that hides something |
-| `fuse` | `dip k { A } ; dip k { B }` = `dip k { A B }` | backward splits one frame at a point the arguments name |
-| `hoist` | `dip (k+1) { X } ; branch { A } { B }` = `branch { dip k { X } ; A } { dip k { X } ; B }` | forward is `unfactor`; backward is the last step of `factor` |
-| `distribute` | `branch { A } { B } ; C` = `branch { A C } { B C }` | `C` is a whole sequence. Backward factors a shared *suffix*, which the old set could not do at all |
+| `collapse` | `par { par { A } { id j } } { id k }` = `par { A } { id (j+k) }` | **`par` is associative**, and two identities side by side are one. Forward is `collapse`; backward at the split `(1, k-1)` is `expand` |
+| `elim_par0` | `par { A } { id 0 }` = `A` | **`id 0` is the unit of `par`.** Forward splices a window that passes nothing through; backward *introduces* one around a run |
+| `slide` | `X ; D_k` = `D_(k-m+n) ; X`, for `X : n -> m`, `k >= m` | a framed computation walks past one whose results its window clears, with `D_k` = `par { A } { id k }`. Forward is `sink`, backward is `float`. `A` may be an unexpanded call: the condition is about the window |
+| `interchange` | `par { a } { c } ; par { b } { d }` = `par { a ; b } { c ; d }`, for `out(c) = in(d)` | **the interchange law.** Two `par`s become one whenever the *upper* seam meets; the lower one is free, because a lower region has the whole stack beneath it. The frame case — `c` and `d` both `id k` — is what `fuse` places, and backward it splits one `par` at a cut the arguments name |
+| `hoist` | `par { X } { id (k+1) } ; branch { A } { B }` = `branch { par { X } { id k } ; A } { par { X } { id k } ; B }` | forward is `unfactor`; backward is the last step of `factor` |
+| `distribute` | `branch { A } { B } ; C` = `branch { A ; C } { B ; C }` | `C` is a whole term. Backward factors a shared *suffix*, which the old set could not do at all |
 | `fold_branch` | `push c ; branch { A } { B }` = the arm `c` selects | selected by `truthy`, and `false` is the only falsy value, so `push 1; branch` takes the **then** arm |
 | `eval` | `push v1 … push vn ; op` = the pushes of what `op` answers | subsumes the old `fold_const` and `fold_const_unary`. `tuple` and `untuple` are operators that answer, so they fold too |
-| `annihilate` | `X ; drop^m` = `drop^n`, for `X : n -> m` | `X` is a whole sequence. Forward subsumes `annihilate_drop` (m=1), `annihilate_flagged` (m=2) and the case with no drops at all (m=0, where `branch { } { }` = `drop`); backward is `introduce`, below |
+| `annihilate` | `X ; drop^m` = `drop^n`, for `X : n -> m` | `X` is a whole term. Forward subsumes `annihilate_drop` (m=1), `annihilate_flagged` (m=2) and the case with no drops at all (m=0, where `branch { } { }` = `drop`); backward is `introduce`, below |
 | `commute` | `swap ; op` = `op`, for a commutative `op` | `swap` exchanges the top two, and `add`, `multiply`, `and`, `or`, `equal` cannot tell. Forward is `comm`, backward is `swap` |
 | `split_bool` | `copy ; is_bool ; branch { branch { push true } { push false } } { }` = nothing | a boolean is either `true` or `false`. Backward it is a case split; forward is `unsplit_bool` |
 | `counit` | `pick d ; drop` = nothing | copy, discard the **copy**. *Not* an annihilation: `copy` is `(1 -> 2)`. `d` indexes a spelling rather than an instruction — the term holds the frames `pick d` expands to — and at `d = 0` it is `copy ; drop` |
-| `counit_under` | `copy ; dip { drop }` = nothing | copy, discard the **original**. The other counit law; only at the top, since deeper it is a `roll` |
+| `counit_under` | `copy ; par { drop } { id }` = `id 0` | copy, discard the **original**. The other counit law; only at the top, since deeper it is a `roll` |
 | `retest` | `copy ; branch { branch { A } { B } ; R } { Q }` = `copy ; branch { drop ; A ; R } { Q }`, and the mirror | the same value tested twice answers the same, so the other inner arm is dead. One equation read at either arm |
 | `specialize_equal` | `copy ; push c ; equal ; branch { A } { B }` = `… branch { drop ; push c ; A } { B }` | a value that tested equal to a literal **is** that literal. No side condition: `equal` is structural identity on every value the machine has |
 | `copy_const` | `push c ; copy` = `push c ; push c` | |
-| `copy_assoc` | `copy ; copy` = `copy ; dip { copy }` | neither side is smaller; the point is that one copy ends up **in a frame**, and a framed computation is one `float` can carry |
-| `copy_nat` | `pick (n-1)^n ; X ; dip m { X }` = `X ; pick (m-1)^m`, for `X : n -> m` | copying is natural. Forward is common-subexpression elimination; the only law that needs `X` to be **deterministic** |
+| `copy_assoc` | `copy ; copy` = `copy ; par { copy } { id }` | neither side is smaller; the point is that one copy ends up **beside an identity**, and a framed computation is one `float` can carry |
+| `copy_nat` | `pick (n-1)^n ; X ; par { X } { id m }` = `X ; pick (m-1)^m`, for `X : n -> m` | copying is natural. Forward is common-subexpression elimination; the only law that needs `X` to be **deterministic** |
 | `bool_result` | `op ; is_bool` = `op ; drop ; push true`, for an `op` that always leaves a boolean | the only fact here about an instruction's **codomain**, and the only one no rewriting could reach. `Instruction::yields_bool`, measured by `vm` |
 | `cancel_tuple` | `tuple n ; untuple n` = `push true` | the flag is the whole residue. The converse order is not a no-op and has no equation |
-| `swap_cycle` | `swap ; swap` = nothing | an exchange is its own inverse. Backward it is the only way to put a `swap` into a term that holds none |
-| `unframe` | `dip { X } ; sink m` = `sink n ; X`, for `X : n -> m` | a framed computation is a sunk one. Forward brings the operands to the top; backward puts the answer back under a frame. `sink k` puts the top value under the `k` beneath it |
+| `swap_cycle` | `swap ; swap` = `id 0` | an exchange is its own inverse. Backward it is the only way to put a `swap` into a term that holds none |
+| `unframe` | `par { X } { id } ; sink m` = `sink n ; X`, for `X : n -> m` | a framed computation is a sunk one. Forward brings the operands to the top; backward puts the answer back beside an identity. `sink k` puts the top value under the `k` beneath it |
 
-**`unfold` is not one of these.** That `Call { k, S }` may be replaced by `S`'s
+**`unfold` is not one of these.** That `jump S` may be replaced by `S`'s
 body is not a law of the calculus — it is the axiom the *library* contributes by
 defining `S`, and it says nothing about any other sentence. So it is a separate
 kind of step, and the applier reads the body from the library itself: a script
@@ -151,20 +182,20 @@ the derivation both ways rather than asserting the claim.
 ### The one that was worth adding: `copy_nat`
 
 ```text
-pick (n-1)^n ; X ; dip m { X }  =  X ; pick (m-1)^m       for X : n -> m
+pick (n-1)^n ; X ; par { X } { id m }  =  X ; pick (m-1)^m     for X : n -> m
 ```
 
 Copy the inputs and run `X` on both the copy and the original, or run it once
 and copy the outputs. `pick (n-1)` done `n` times duplicates the top `n` values
 as a block — `a b` becomes `a b a b` — and the second application runs under
-the first one's results, which is what the frame is for. Forward it is common
+the first one's results, which is what the `par` is for. Forward it is common
 subexpression elimination; backward it delivers a second copy of a computation
 to a place that needs its own.
 
 **It is genuinely independent, and there is an argument rather than a failed
 search.** Read an opaque `X` as a random oracle — every application answers
 freshly — and every other equation in the set still holds. `annihilate` throws
-the answers away, `interchange` reorders computations that cannot see each
+the answers away, `slide` reorders computations that cannot see each
 other, and the rest never mention an opaque `X`. This one fails: the left side
 runs `X` twice and gets two different answers where the right runs it once and
 copies, and an `equal` afterwards can tell. No derivation from the others can
@@ -172,15 +203,15 @@ exist.
 
 That argument is also the statement of what it assumes. **It is the only law
 here that needs `X` to be deterministic**, the way `annihilate` and
-`interchange` are the only two that need it to be total. It costs nothing
+`slide` are the only two that need it to be total. It costs nothing
 today, because the instruction set is pure and a sentence of arity `(n -> m)`
 can see only the `n` values it is given — but an effectful instruction would
 take this law with it and nothing else, so it is written down rather than
 assumed.
 
 Adding it demoted one: `copy_const` is the case `X = push c`. The `n = 0`
-instance reads `push c ; dip 1 { push c }` = `push c ; copy`, and one
-`interchange` and one `elim_dip0` turn the left side into `push c ; push c`.
+instance reads `push c ; par { push c } { id }` = `push c ; copy`, and one
+`slide` and one `elim_par0` turn the left side into `push c ; push c`.
 See `applier::tests::copy_const_is_derivable_from_copy_nat`, which runs that
 derivation both ways. It keeps its one-step matcher because `values` and
 `cleanup` fire it constantly and three steps is three times the fuel, but the
@@ -191,12 +222,12 @@ set now rests on fifteen axioms rather than sixteen.
 A step is a rule, a direction, and a place:
 
 ```
-interchange -> [1.then, 2.body, 1.then] @2
+slide -> [1.then, 2.left, 1.then] @2
 ```
 
-The location reads outermost-first. `[1.then, 2.body]` means "the then arm of
-the node at index 1, then the body of the node at index 2 within it", and `@2`
-is where the window starts in the sequence that walk arrives at.
+The location reads outermost-first. `[1.then, 2.left]` means "the then arm of
+the factor at index 1, then the left-hand side of the `par` at index 2 within
+it", and `@2` is where the window starts in the spine that walk arrives at.
 
 **A location addresses the tree as the preceding steps left it.** Locations are
 not stable across a script — step 5 may name an index that did not exist when
@@ -209,7 +240,7 @@ A script also has a **file format**, which is that line with the arguments
 written out:
 
 ```
-annihilate(x = { equal }, n = 2, m = 1) -> [1.then, 2.body] @2;
+annihilate(x = { equal }, n = 2, m = 1) -> [1.then, 2.left] @2;
 ```
 
 `prove --emit` writes them and `bin/replay` checks them, with none of this page
@@ -221,7 +252,7 @@ one. See [docs/derivations.md](derivations.md).
 
 Every application, live run and replay alike:
 
-- the descent reaches a real node, of a kind that has the part named;
+- the descent reaches a real factor, of a kind that has the part named;
 - the window is in range;
 - the window matches the side the equation generates, compared **by effect** —
   provenance is not part of a term's identity, since two identical blocks
@@ -230,7 +261,7 @@ Every application, live run and replay alike:
 - with `--check`, the replacement leaves the stack as the window did.
 
 **Nothing in a script is trusted.** Facts that originate in the library ride in
-the arguments — the claimed arity of `X` in `interchange` and `annihilate` — and
+the arguments — the claimed arity of `X` in `slide` and `annihilate` — and
 are re-derived against the real program on every application. A step claiming
 `add` is `(1 -> 1)` is refused however it came to be written, and the tree is
 left untouched. The script communicates a construction; the applier checks it.
@@ -241,9 +272,9 @@ left untouched. The script communicates a construction; the applier checks it.
 that knew a whole procedure. It is now three steps, each an instance of a law:
 
 ```
-elim_dip0 <- [0.then] @0     wrap the shared prefix in a frame, in the then arm
-elim_dip0 <- [0.else] @0     and in the else arm
-hoist     <- @0              lift the two frames into one, in front of the branch
+elim_par0 <- [0.then] @0     wrap the shared prefix in a window, in the then arm
+elim_par0 <- [0.else] @0     and in the else arm
+hoist     <- @0              lift the two windows into one, in front of the branch
 ```
 
 That is what the split buys. The old rule *asserted* that splicing a shared
@@ -258,10 +289,10 @@ different thing to look for even though the arithmetic is the same:
 | matcher | width | places |
 |---|---|---|
 | `unfold` | 1 | opens a call |
-| `collapse` / `expand` | 1 | the frame-nesting law, either way |
-| `flatten` | 1 | `elim_dip0` forward |
-| `fuse` | 2 | |
-| `sink` / `float` | 2 | interchange, either way |
+| `collapse` / `expand` | 1 | associativity of `par`, either way |
+| `flatten` | 1 | `elim_par0` forward |
+| `fuse` | 2 | interchange, forwards |
+| `sink` / `float` | 2 | slide, either way |
 | `factor` / `unfactor` | 1 / 2 | hoist, either way (factor is three steps) |
 | `distribute` | 2 | |
 | `fold_branch` | 2 | |
@@ -275,7 +306,7 @@ different thing to look for even though the arithmetic is the same:
 | `lift` | 1 | the same move with the prefix **found** rather than named — see below. 4 steps, or `speculate`'s |
 | `bool_result` | 2 | `op ; is_bool` forward; backward is `inv(bool_result)` |
 | `bool_result_copied` | 3 | the same fact through a copy — `op ; copy ; is_bool`, which is the guard `split_bool` leaves. 8 steps, no new law |
-| `unframe` | 1 | takes a frame off, bringing the operands to the top — see below. 2 steps, no new law |
+| `unframe` | 1 | takes a window off, bringing the operands to the top — see below. 2 steps, no new law |
 | `retest` | 2 | one arm per firing, then arm first; no backward reading |
 | `specialize_equal` | 4 | writes the literal into the arm that tested equal to it; backward is `inv(specialize_equal)` |
 | `counit_under` / `inv(counit_under)` | 2 / 1 | the other counit, found or *put in* |
@@ -301,11 +332,11 @@ Every law about *what a value is* — `split_bool`, `bool_result`, `copy_const`,
 and nothing else does. So a value held under a frame is out of all of their
 reach, and the obvious fix is the wrong one twice over.
 
-`body(t)` is not it. A rule does apply inside a frame, and sees the top of the
-*inner* stack — but a `branch` inside a frame cannot show its two cases to the
-code outside it, and there is no top-level branch equal to one. A case split at
-depth is therefore an identity insertion that tells the continuation nothing:
-sound, and useless.
+`left(t)` is not it. A rule does apply inside a `par`, and sees the top of the
+*inner* stack — but a `branch` inside one cannot show its two cases to the code
+outside it, and there is no top-level branch equal to one. A case split at depth
+is therefore an identity insertion that tells the continuation nothing: sound,
+and useless.
 
 Parameterizing the laws by depth is not it either. `split_bool(d)` would want
 `bool_result(d)` to discharge its guard, which would want `copy_const(d)` to
@@ -313,23 +344,24 @@ read what it left, and each is the same fact restated in a new shape. The
 namespace grows and nothing composes.
 
 **The movement laws move the value instead of the reasoning.** `swap_cycle` is
-what lets an exchange be written down at all, and `unframe` is what a frame
-turns into. Applied to `dip 3 { is_symbol }` — three frames nested, since the
-ISA has no other kind — they bring the value up to the top level, where the case
+what lets an exchange be written down at all, and `unframe` is what a window
+turns into. Applied to `par { is_symbol } { id 3 }` — three one-value windows
+nested, since the ISA has no other kind — they bring the value up to the top
+level, where the case
 analysis can happen on a `branch` that `distribute` can push a continuation
 into, and put it back down afterwards. That is the whole point: the fork has to
 happen where `branch` can express it.
 
 There is no third law about `pick`. There used to be: `pick d` was an
 instruction, every folding law was blind to it, and `pick_roll` said it was a
-framed copy rolled up so that `copy_const` could fire *inside* the frame. The
+framed copy rolled up so that `copy_const` could fire *inside* the window. The
 compiler performs that equation now — a `pick d` in a term already **is**
-`dip { pick (d-1) } ; swap` — so what was an axiom is an expansion, and
+`par { pick (d-1) } { id } ; swap` — so what was an axiom is an expansion, and
 `applier::tests::copy_const_at_depth_is_derivable_from_the_movement_laws` runs
 the derivation that is left, four steps in both directions.
 
 No inverse instruction was needed for either. A `swap` inverts itself, and a
-deeper rotation is frames around one, so `roll 0 = ε` is not a law of its own
+deeper rotation is `par`s around one, so `roll 0 = id 0` is not a law of its own
 but what the recursion says at the bottom.
 
 ### Placing one: `unframe`
@@ -337,13 +369,13 @@ but what the recursion says at the bottom.
 `unframe` has a matcher now, and what unblocked it was reading the other side.
 
 ```text
-dip { X } ; sink m  =  sink n ; X                              for X : n -> m
+par { X } { id } ; sink m  =  sink n ; X                       for X : n -> m
 ```
 
 The obstacle recorded here was that a matcher "can only fix one of `n` and `m`
 before it looks" — true of one reading the **movement**, since how much of it
-there is depends on `m` and a width is fixed before looking. Reading the
-**frame** instead, `n` and `m` are its body's arity, so the window is one node
+there is depends on `m` and a width is fixed before looking. Reading the **`par`**
+instead, `n` and `m` are its left-hand side's arity, so the window is one factor
 and both are known. The obstacle was in which side to search from.
 
 The equation has movement on both sides and a term usually holds none, so the
@@ -352,22 +384,22 @@ exchange at all, and it introduces a cancelling pair, of which the unframing
 eats one:
 
 ```
-$ rewrite mini unframing -t 'exact(must(once(unframe)))' --show-script
+$ rewrite tests taking_a_frame_off -t 'exact(must(once(unframe)))' --show-script
 closed — 2 steps
      0  swap_cycle <- @1   (nothing)                     ⇒  swap ; swap
-     1  unframe    -> @0   dip 1 { push t2 ; equal } ; swap
-                                                         ⇒  swap ; push t2 ; equal
+     1  unframe    -> @0   par { X } { id } ; swap       ⇒  swap ; X
 ```
 
 What that buys is the middle: `equal` is now at the top level with its result on
 **top of the stack**, which is the window `split_bool` needs and could not reach
-while the value sat under a frame. `identities::taking_a_frame_off` states the
+while the value sat under a window. `identities::taking_a_frame_off` states the
 claim and `vm::movement_tests::a_framed_computation_is_a_rolled_one` runs both
 sides at every depth.
 
-It declines two shapes. `dip 0 { X }` is `flatten`'s and needs no exchange; and
-a **nest** is more than the one frame the law is about, so a collapsed frame has
-to be opened with `inv(collapse)` before this reads the innermost one. That is
+It declines two shapes. `par { X } { id 0 }` is `flatten`'s and needs no
+exchange; and a **nest** is more than the one window the law is about, so a
+collapsed one has to be opened with `inv(collapse)` before this reads the
+innermost. That is
 the shape of the whole change: a width used to be a number the law did
 arithmetic on, and it is now a nesting the law reaches into one level at a time.
 
@@ -403,11 +435,11 @@ were the same *all the way down*. So `factoring; all` now takes the husk with
 them:
 
 ```
-$ rewrite demo probe -t factoring      # copy ; dip 1 { drop } ; branch { } { }
+$ rewrite demo probe -t factoring   # copy ; par { drop } { id } ; branch { } { }
 $ rewrite demo probe -t 'factoring; all'                                 # drop
 ```
 
-It reaches more than branches: any `(n -> 0)` node, including a call. A `drop`
+It reaches more than branches: any `(n -> 0)` term, including a call. A `drop`
 is itself `(1 -> 0)` and is declined, or it would rewrite every one into itself
 and report a change forever.
 
@@ -441,18 +473,18 @@ have:
 
 | | |
 |---|---|
-| `inv(flatten)` | `A` = `dip 0 { A }` — put a frame round a bare node so the movement laws can carry it. `factor`'s first two steps |
-| `inv(fuse)` | split one node off the front of a frame's body, the way `expand` takes the canonical split of `collapse` |
-| `inv(unfactor)` | lift a frame **both arms open with** out in front of the branch. `factor`'s third step, at any depth rather than only `0` |
+| `inv(flatten)` | `A` = `par { A } { id 0 }` — put a window round a bare factor so the movement laws can carry it. `factor`'s first two steps |
+| `inv(fuse)` | split one factor off the front of each of a `par`'s two regions, the way `expand` takes the canonical split of `collapse`. An identity region is cut by repeating it, since `id k ; id k` is `id k` |
+| `inv(unfactor)` | lift a window **both arms open with** out in front of the branch. `factor`'s third step, at any width rather than only `0` |
 | `inv(distribute)` | factor the longest shared **suffix** out of both arms — the end of a branch `factor` cannot reach, since it only ever worked on prefixes |
 | `inv(copy_const)` | `push c ; push c` = `push c ; copy` |
-| `inv(copy_assoc)` | take the second copy back out of its frame |
-| `inv(introduce { X })` | `X ; drop^m` = `drop^n` — `annihilate`'s law reading a whole *term*, where `annihilate` reads a single node |
+| `inv(copy_assoc)` | take the second copy back out of its `par` |
+| `inv(introduce { X })` | `X ; drop^m` = `drop^n` — `annihilate`'s law reading a whole *term*, where `annihilate` reads a single factor |
 
 ### Putting work where there is nothing to match
 
 Every introduction so far has stood on something. `introduce { X }` needs the
-drops already there; `inv(flatten)` needs a node to wrap; `share`'s backward
+drops already there; `inv(flatten)` needs a factor to wrap; `share`'s backward
 reading needs the computation it un-shares. None of them can put code at a
 position that holds nothing to match.
 
@@ -474,18 +506,18 @@ in the equation set.
 
 It survived the ISA losing its own depths, and the reason is exactly this
 paragraph. `d` no longer indexes an instruction: `pick 2 ; drop` in a term is
-frames around a `copy`, and the number says which spelling. But **a block copy
+`par`s around a `copy`, and the number says which spelling. But **a block copy
 is `n` of these nested**, and nothing else in the set builds one — `speculate`,
 `share` and the vacuous law all stand on it. Forward the law is a consequence
 of the `d = 0` case; backward it is the only thing that puts a copy of a value
-*at depth* where there was nothing at all, and a frame cannot be conjured to
+*at depth* where there was nothing at all, and a window cannot be conjured to
 derive it inside.
 
-**It inserts *before* the window** and reads one node purely to have somewhere
+**It inserts *before* the window** and reads one factor purely to have somewhere
 to stand — the same arrangement `split_bool` uses, and for the same reason: an
 equation whose other side is empty has no window to recognize. The same
-limitation follows for both, that neither can insert past the last node of a
-sequence.
+limitation follows for both, that neither can insert past the last factor of a
+spine.
 
 The copy is the point. A cancelling pair beside a value is how a copy of that
 value gets somewhere it is wanted, and `introduce` then turns the `drop` into a
@@ -495,7 +527,7 @@ where it belongs, since it is a lemma rather than an axiom:
 ```
 $ rewrite demo probe -t 'at(1, inv(counit(0))); at(2, introduce { copy })'
    1 │ copy        ⎫
-   2 │ copy        ⎬  pick (n-1)^n ; X ; drop^m  =  nothing
+   2 │ copy        ⎬  pick (n-1)^n ; X ; drop^m  =  id 0
    3 │ drop          ⎪
    4 │ drop          ⎭
 ```
@@ -579,11 +611,11 @@ $ rewrite probe test_always_true -t 'else(once(introduce { copy })); factoring' 
      0  annihilate <- [2.else] @0
         drop
      ⇒  copy ; drop ; drop
-     1  elim_dip0 <- [2.then] @0
-     2  elim_dip0 <- [2.else] @0
+     1  elim_par0 <- [2.then] @0
+     2  elim_par0 <- [2.else] @0
      3  hoist <- @2
-        branch { jump { copy } ; … } { jump { copy } ; … }
-     ⇒  dip 1 { copy } ; branch { … } { … }
+        branch { par { copy } { id 0 } ; … } { par { copy } { id 0 } ; … }
+     ⇒  par { copy } { id } ; branch { … } { … }
 ```
 
 The copy has been hoisted out of both arms, which is the move the old rule set
@@ -593,7 +625,7 @@ could not reach at all.
 
 `share { X }` is the other rule that takes a term, and it takes one for a
 sharper reason. `introduce`'s window says nothing about what to conjure;
-`share`'s window cannot say what `X` **is**. For a run of nodes there is
+`share`'s window cannot say what `X` **is**. For a run of factors there is
 nothing to mark where the computation begins, and the number of `pick`s in
 front of it is `X`'s own input arity — which the matcher has to know before it
 can even ask for a window, since a matcher's width is fixed before it looks.
@@ -605,7 +637,7 @@ $ rewrite demo twice -t 'must(once(share { jump classify }))' --show-script
 
   derivation — 1 step(s)
      0  copy_nat -> @0
-        copy ; jump → #0 ; dip 1 { jump → #0 }
+        copy ; jump → #0 ; par { jump → #0 } { id }
      ⇒  jump → #0 ; copy
 ```
 
@@ -621,7 +653,7 @@ when only one does, in a single firing:
 
 ```text
 branch { pick (n-1)^n ; X ; B } { C }
-  =  dip 1 { pick (n-1)^n ; X } ; branch { B } { drop^m ; C }
+  =  par { pick (n-1)^n ; X } { id } ; branch { B } { drop^m ; C }
 ```
 
 ```
@@ -629,10 +661,10 @@ $ rewrite demo spec -t 'must(once(speculate { equal }))' --show-script
    0  counit     <- [1.else] @0    (nothing)   ⇒  pick 1 ; drop
    1  counit     <- [1.else] @1    (nothing)   ⇒  pick 1 ; drop
    2  annihilate <- [1.else] @2    drop ; drop ⇒  equal ; drop
-   3  elim_dip0  <- [1.then] @0    ⎫
-   4  elim_dip0  <- [1.else] @0    ⎬ factor, with the prefix named
+   3  elim_par0  <- [1.then] @0    ⎫
+   4  elim_par0  <- [1.else] @0    ⎬ factor, with the prefix named
    5  hoist      <- @1             ⎭
-   ⇒  dip 1 { pick 1 ; pick 1 ; equal } ; branch { and } { drop ; not }
+   ⇒  par { pick 1 ; pick 1 ; equal } { id } ; branch { and } { drop ; not }
 ```
 
 **It is shorthand, not a law.** Every step is an equation the set already had:
@@ -652,13 +684,13 @@ nothing is asked of it beyond the totality the precondition already gives.
 Two things it does that the hand-written version cannot. It **names the
 prefix**, where `factoring` takes the longest shared run and will happily
 swallow more than you meant once the conjured drops line up with what follows.
-And it reaches an arm that is **empty**: `inv(counit(d))` needs a node to stand
-in front of, where a planned step can name position 0 of a sequence with
+And it reaches an arm that is **empty**: `inv(counit(d))` needs a factor to
+stand in front of, where a planned step can name position 0 of a spine with
 nothing in it.
 
 It declines when *both* arms open with the prefix — that is `factor`'s, and
 factoring needs no copies and no drops. It has no measure and grows the term by
-the frame and the `m` drops, so it is in no default pass; but it cannot fire on
+the window and the `m` drops, so it is in no default pass; but it cannot fire on
 its own output, since the arm it rewrote no longer opens with the prefix and
 the other now opens with drops.
 
@@ -674,8 +706,10 @@ It reads an arm's longest **branch-free** prefix `X : n -> m` and takes the
 first of two routes to the same shape:
 
 ```text
-branch { X ; B } { drop^n ; C }        =  dip 1 { X } ; branch { B } { drop^m ; C }
-branch { pick (n-1)^n ; X ; B } { C }  =  dip 1 { pick (n-1)^n ; X } ; branch { B } { drop^m ; C }
+branch { X ; B } { drop^n ; C }
+  =  par { X } { id } ; branch { B } { drop^m ; C }
+branch { pick (n-1)^n ; X ; B } { C }
+  =  par { pick (n-1)^n ; X } { id } ; branch { B } { drop^m ; C }
 ```
 
 The first is the cheaper one and is tried first. The other arm was going to
@@ -685,7 +719,7 @@ front of the drops it already has, and the two arms now share a prefix that
 behind. The second is `speculate`, for an arm that computes on copies where the
 other has no drops to stand in.
 
-**Why the prefix has to be branch-free.** A branch is the one node whose arms
+**Why the prefix has to be branch-free.** A branch is the one factor whose arms
 cannot see out of it, so lifting one would mean lifting both of its arms with
 it. Stopping in front of it is also what makes the pass terminate: the arm that
 was rewritten now opens with that branch, so `lift` cannot fire on it again.
@@ -695,16 +729,16 @@ choosing between rather than computing anything with them — and `drop^m` is
 exactly what the last firing put into the other arm, so a rule that read those
 back out would take turns with itself forever.
 
-The measure is real, and it is the number of non-trivial nodes inside branch
-arms weighted by how many arms deep each one sits. A frame is not a level: `X`
-moving from inside an arm into a `dip 1 { X }` in front of the branch is `X`
+The measure is real, and it is the number of non-trivial factors inside branch
+arms weighted by how many arms deep each one sits. A `par` is not a level: `X`
+moving from inside an arm into a `par { X } { id }` in front of the branch is `X`
 leaving that arm, which is the whole point. `tests::\
 lifting_empties_the_arms_of_the_barista_probe` measures it over the corpus
 rather than asserting the shape.
 
-`lifting` is the pass, and it alternates with the frame laws — every firing
-leaves a `dip 1 { X }` behind, and collapsing and sinking those is what lets the
-next one see a prefix rather than a pile of frames:
+`lifting` is the pass, and it alternates with the window laws — every firing
+leaves a `par { X } { id }` behind, and collapsing and sinking those is what lets
+the next one see a prefix rather than a pile of them:
 
 ```
 $ rewrite tests emit_pre_and_post -t 'exact(unfold_all; lifting)' --trace
@@ -725,16 +759,16 @@ nothing but branches, drops and the literal each one selects:
 
 ```
    0 │      1 │ copy
-   1 │      2 │ dip 1 {
+   1 │      2 │ par {
    0 │      2 │   untuple 3
-   1 │      5 │   dip 1 { copy ; push state::thirsty ; equal }
-     │        │ }
+   1 │      5 │   par { copy ; push state::thirsty ; equal } { id }
+     │        │ } { id }
    2 │      6 │ untuple 3
-   3 │      9 │ dip 1 {
+   3 │      9 │ par {
      │        │   …the four comparisons, nested one per else arm…
    4 │     12 │   push state::idle
    5 │     13 │   equal
-     │        │ }
+     │        │ } { id }
    4 │     12 │ branch then {
    0 │     11 │   branch then {
    0 │     10 │     drop
@@ -745,8 +779,9 @@ nothing but branches, drops and the literal each one selects:
 
 **What it cannot reach.** A prefix that *consumes* values the other arm still
 needs can only be lifted onto copies, and the copies have to be paid for:
-`pick (n-1)^n ; X ; dip m { drop^n }` = `X` is what would license it, which is
-one `interchange` and then `pick (n-1)^n ; dip n { drop^n }` = nothing — which
+`pick (n-1)^n ; X ; par { drop^n } { id m }` = `X` is what would license it,
+which is one `slide` and then
+`pick (n-1)^n ; par { drop^n } { id n }` = `id 0` — which
 is `counit_under` at `n = 1` and a **roll** for anything above it. That is
 `pick_drop_to_roll`, on the list under "what is not here yet", so an arm that
 builds a value out of operands the other arm goes on to use keeps its work. In
@@ -754,11 +789,13 @@ the term above that is `emit`'s answer and nothing else.
 
 ### Terms
 
-A term is a run of instructions in braces. `pick n`, `roll n`, `tuple n`,
-`untuple n`, `push <int|true|false|"const string"|symbol>`, `dip n { ... }`,
-`branch { .. } { .. }`, `jump <sentence>`, and the argument-free operators
-(`drop`, `not`, `and`, `equal`, `is_bool`, `add`, …). `--list-rules` prints the
-list.
+A term is a run of factors in braces. `pick n`, `roll n`, `tuple n`,
+`untuple n`, `push <int|true|false|"const string"|symbol>`, `id n`,
+`par { .. } { .. }`, `branch { .. } { .. }`, `jump <sentence>`, and the
+argument-free operators (`drop`, `not`, `and`, `equal`, `is_bool`, `add`, …).
+`--list-rules` prints the list. A hidden window is written the way the algebra
+has it — `par { X } { id }`, and `par { X } { id 3 }` for one three values
+wide.
 
 Every instruction is spellable, which was not always so: `panic`, `assert` and
 `assert_eq` were left out on purpose, being the three that could fail. They are
@@ -883,9 +920,9 @@ $ rewrite demo four_arms -t all --show-script
    0  retest -> @0    copy ; branch { branch { push 1 } { push 2 } } { branch { push 3 } { push 4 } }
                    ⇒  copy ; branch { drop ; push 1 } { branch { push 3 } { push 4 } }
    1  retest -> @0 ⇒  copy ; branch { drop ; push 1 } { drop ; push 4 }
-   2  elim_dip0 <- [1.then] @0            ⎫
-   3  elim_dip0 <- [1.else] @0            ⎬  factor
-   4  hoist     <- @1                     ⎭  ⇒ dip 1 { drop } ; branch { … } { … }
+   2  elim_par0 <- [1.then] @0            ⎫
+   3  elim_par0 <- [1.else] @0            ⎬  factor
+   4  hoist     <- @1                     ⎭  ⇒ par { drop } { id } ; branch { … } { … }
    5  counit_under -> @0                     ⇒ branch { push 1 } { push 4 }
 ```
 
@@ -966,13 +1003,13 @@ the guard `each` would write the literal in forever.
 counit laws — discard the copy, or discard the original:
 
 ```text
-counit        pick d ; drop            = nothing
-counit_under  copy ; dip 1 { drop }  = nothing
+counit        pick d ; drop              = id 0
+counit_under  copy ; par { drop } { id }  = id 0
 ```
 
 Only the first was here. The second is what `factor` leaves behind after
 `retest` has fired on both arms, and it is an axiom for the same reason its
-partner is. It holds **only at depth 0**: `pick d ; dip (d+1) { drop }` copies
+partner is. It holds **only at depth 0**: `pick d ; par { drop } { id (d+1) }` copies
 to the top and deletes the original, which for `d > 0` *moves* the value — that
 is a `roll d`, a different law, and not written.
 
@@ -1104,15 +1141,18 @@ what puts an `op` next to the `is_bool`, and the run left over is exactly what
 the annihilation and counits the copies paid for take away again.
 
 ```
-$ rewrite mini guard -t 'exact(must(once(bool_result_copied)))' --show-script
-     0  copy_nat    <- @0   equal ; copy        ⇒ pick 1 ; pick 1 ; equal ; …
-     1  interchange <- @3   dip 1 { equal } ; is_bool ⇒ is_bool ; dip 1 { equal }
-     2  bool_result -> @2   equal ; is_bool       ⇒ equal ; drop ; push true
-     3  annihilate  -> @2   equal ; drop          ⇒ drop ; drop
-     4  counit      -> @1                         ⇒ (nothing)
-     5  counit      -> @0                         ⇒ (nothing)
-     6  interchange -> @0   push true ; dip 1 { equal } ⇒ dip 0 { equal } ; push true
-     7  elim_dip0   -> @0                         ⇒ equal
+$ rewrite tests the_guard_a_split_leaves \
+      -t 'exact(must(once(bool_result_copied)))' --show-script
+     0  copy_nat    <- @0   equal ; copy      ⇒ pick 1 ; pick 1 ; equal ; …
+     1  slide       <- @5   par { equal } { id } ; is_bool
+                                              ⇒ is_bool ; par { equal } { id }
+     2  bool_result -> @4   equal ; is_bool     ⇒ equal ; drop ; push true
+     3  annihilate  -> @4   equal ; drop        ⇒ drop ; drop
+     4  counit      -> @2                       ⇒ (nothing)
+     5  counit      -> @0                       ⇒ (nothing)
+     6  slide       -> @0   push true ; par { equal } { id }
+                                              ⇒ par { equal } { id 0 } ; push true
+     7  elim_par0   -> @0                       ⇒ equal
 ```
 
 `tests::the_guard_a_split_leaves_is_derivable` runs both routes and holds them
@@ -1137,7 +1177,7 @@ Control and traversal, unchanged from before the split:
 
 | | |
 |---|---|
-| `each(r, ...)` | every position in one sequence, left to right, to exhaustion |
+| `each(r, ...)` | every position in one spine, left to right, to exhaustion |
 | `once(r, ...)` | the first matcher that matches, at the first position it does |
 | `at(n, r, ...)` | the first matcher that matches, at *exactly* position n |
 | `a; b` | in sequence |
@@ -1146,9 +1186,9 @@ Control and traversal, unchanged from before the split:
 | `must(t)` | fails unless `t` changed something, rolling the term back |
 | `repeat(t)` | until nothing changes |
 | `repeat_n(k, t)` | at most k times, stopping early |
-| `children(t)` | every child sequence, one level down |
-| `then(t)`, `else(t)`, `body(t)` | one *kind* of child, everywhere |
-| `then(k, t)`, `else(k, t)`, `body(k, t)` | that child of the node at `k` |
+| `children(t)` | every sub-term, one level down |
+| `then(t)`, `else(t)`, `left(t)`, `right(t)` | one *kind* of child, everywhere |
+| `then(k, t)`, `else(k, t)`, `left(k, t)`, `right(k, t)` | that child of the factor at `k` |
 | `bu(t)`, `td(t)` | children first / here first, recursively |
 | `id`, `fail` | |
 
@@ -1157,7 +1197,7 @@ not fail. Every total tactic reports "unchanged" when it had no work, and
 treating that as a win would make `a | b` unusable with any of them.
 
 A matcher that matches nowhere reports **unchanged, not failed**. Scanning a
-sequence and finding no work is a successful no-op; treating it as an error made
+spine and finding no work is a successful no-op; treating it as an error made
 `a; b` throw away everything `a` did whenever `b` had nothing to do. `Failed`
 comes only from an explicit `fail`.
 
@@ -1173,8 +1213,8 @@ could not be addressed. Two forms close that, and composed they name any window
 a script prints:
 
 ```
-$ rewrite tests pair_check -t 'normalize(unfold_all; then(1, body(2, then(1, at(2, sink)))))' --show-script
-     3  interchange -> [1.then, 2.body, 1.then] @2
+$ rewrite tests pair_check -t 'normalize(unfold_all; then(1, left(2, then(1, at(2, sink)))))' --show-script
+     3  slide -> [1.then, 2.body, 1.then] @2
 ```
 
 The tactic and the location read the same, in the same order. `at(n, ...)` is
@@ -1184,7 +1224,7 @@ The tactic and the location read the same, in the same order. `at(n, ...)` is
 ### The listing says which number to write
 
 Every number in that tactic is in the `pos` column, which is a node's index in
-the sequence it belongs to. It restarts at every nesting level, which is what
+the spine it belongs to. It restarts at every nesting level, which is what
 the indentation shows, and a closing brace belongs to no node and is blank:
 
 ```
@@ -1194,24 +1234,24 @@ closed — 3 steps + 3 up to inlining
  pos │  depth │ instruction
 ─────┼────────┼────────────
    0 │      1 │ untuple 2
-   1 │      3 │ branch then → #3499 <inline> {
+   1 │      3 │ branch then → #5888 <inline> {
    0 │      2 │   push type_tests::RelEnum::Pair::tag
    1 │      3 │   equal
-   2 │      2 │   dip 1 → #3500 <inline> {
+   2 │      2 │   par → #5889 <inline> {
    0 │      2 │     untuple 2
-   1 │      4 │     branch then → #3496 <inline> {
+   1 │      4 │     branch then → #5885 <inline> {
    0 │      3 │       copy
    1 │      4 │       is_int
-   2 │      4 │       branch then → #3489 <inline> {
+   2 │      4 │       par → #5886 <inline> {
 ```
 
 Read down the column at each nesting level and the path writes itself:
-`then(1, body(2, then(1, at(2, …))))`, which is the `[1.then, 2.body, 1.then]
+`then(1, left(2, then(1, at(2, …))))`, which is the `[1.then, 2.left, 1.then]
 @2` above. One number per level, and the last one is the window.
 
 The stepper's diff leaves the column out, and `list` puts it back. A splice
-renumbers every sibling after it, so a step that removed one node would report
-the whole rest of the sequence as changed — where a depth is stable across a
+renumbers every sibling after it, so a step that removed one factor would report
+the whole rest of the spine as changed — where a depth is stable across a
 firing, since every equation preserves the net stack effect of what it rewrote.
 
 ### An index is a claim; a scan is a question
@@ -1226,7 +1266,7 @@ exactly like a rule with nothing to do. So the two are separated:
 
 | | |
 |---|---|
-| a **claim** | `at(n, r)`, `then(k, t)`, `else(k, t)`, `body(k, t)` |
+| a **claim** | `at(n, r)`, `then(k, t)`, `else(k, t)`, `left(k, t)`, `right(k, t)` |
 | a **question** | `each`, `once`, `then(t)`, `children`, `bu`, `td`, `repeat`, `repeat_n` |
 
 A claim that does not hold is a **miss**: reported at the end of the run, with
@@ -1238,7 +1278,7 @@ $ rewrite tests pair_check -t 'unfold_all; at(9, sink)'
 
 error: 1 aimed step(s) matched nothing:
 
-  at(9, sink) at the root — that sequence holds 2 nodes, 0 to 1
+  at(9, sink) at the root — that term holds 2 factors, 0 to 1
 ```
 
 **A miss is a diagnostic, not a failure.** Nothing rolls back, and the listing
@@ -1247,9 +1287,9 @@ and a rollback would take away the thing you need to fix it. It also means a
 miss composes: `a; b` still keeps what `a` did.
 
 The reason is worth having, because four different mistakes used to look
-identical: the sequence is too short, the window runs off the end of it (`fuse`
-reads two nodes and one is left), the node is the wrong shape, or a rule looked
-and declined.
+identical: the spine is too short, the window runs off the end of it (`fuse`
+reads two factors and one is left), the factor is the wrong shape, or a rule
+looked and declined.
 
 Two things do **not** record a miss:
 
@@ -1278,9 +1318,9 @@ one place and nowhere else.
 
 ## Named tactics
 
-`--list-tactics` prints them. `unfold_all`, `dips`, `unary`, `factoring`,
+`--list-tactics` prints them. `unfold_all`, `frames`, `unary`, `factoring`,
 `annihilation`, `values`, `commuting`, `cleanup`, `lifting`, `distribution`,
-`flattening`, `all`, `dip_normalize`.
+`flattening`, `all`, `frame_normalize`.
 
 A tactic may not take a matcher's name, so where a pass and the matcher at its
 heart would collide the pass gives way: `annihilation` drives `annihilate`,
@@ -1337,12 +1377,12 @@ either way — a route that does not work out still cost what it cost.
 
 Worth knowing either way: only **two** of the thirteen equations actually need
 totality. `annihilate` needs it because dropping `X`'s results still has to run
-`X` if `X` can fail, and `interchange` needs it because reordering is only
+`X` if `X` can fail, and `slide` needs it because reordering is only
 unobservable when the failure order cannot be seen. The other eleven were sound
 on fallible code as written.
 ## The governing invariant, in three parts
 
-The old rule was: *a tactic's result depends only on the sequence it is given,
+The old rule was: *a tactic's result depends only on the spine it is given,
 never on where in the tree it is being applied.* With a script in the picture
 that splits:
 
@@ -1366,16 +1406,16 @@ context-aware ones would each need their own notion of it.
 
 ### Local application, absolute record
 
-A traversal owns each sub-sequence as it visits it, so during a run the root is
+A traversal owns each sub-term as it visits it, so during a run the root is
 not reachable from where the work happens. A firing is therefore applied to the
-sequence in hand with a *relative* location, while the step written into the
+spine in hand with a *relative* location, while the step written into the
 script carries the full path. The two agree by construction, and the replay test
 is what holds them to it — deliberately recording the relative location instead
 fails six tests.
 
 Ancestor indices cannot go stale in between, because while the engine is inside
-a child body every enclosing frame is suspended mid-iteration and nothing can
-splice an ancestor sequence until the traversal returns to it.
+a sub-term every enclosing frame is suspended mid-iteration and nothing can
+splice an ancestor spine until the traversal returns to it.
 
 ## A block is not a call
 
@@ -1386,9 +1426,9 @@ the un-expanded listing to usefully name on one line. Both are spelled out by
 `build`, before any tactic runs.
 
 ```
-   3 │      4 │ dip 1 → #676 <inline> {
+   3 │      4 │ par → #676 <inline> {
    0 │      4 │   is_symbol
-     │        │ }
+     │        │ } { id }
 ```
 
 A `dip N` or `jump` naming a real sentence is a different thing and stays a
@@ -1402,9 +1442,9 @@ $ rewrite tests state_check -t unfold_all                         # 635, one fla
 ```
 
 Because splicing rescans where it landed, `each(unfold)` already opens a whole
-sequence transitively; `bu` is what additionally reaches into branch arms. To
+spine transitively; `bu` is what additionally reaches into branch arms. To
 open *less*, use `once`, which takes a single call — and note that it works on
-one sequence, so `repeat_n(k, once(unfold))` counts calls at the level you are
+one spine, so `repeat_n(k, once(unfold))` counts calls at the level you are
 looking at rather than descending into arms.
 
 ## Don't expand more than you are about to cancel
@@ -1420,24 +1460,25 @@ Note that `repeat(bu(each(unfold); ...))` does not buy this, and neither does
 which is the situation the interleaving was meant to avoid. Staging needs a
 tactic that opens a bounded number of calls, which means `once` or `repeat_n`.
 
-## Reaching one arm: `then`, `else`, `body`
+## Reaching one part: `then`, `else`, `left`, `right`
 
-`children` visits every child of every node. That is what a normalizing pass
-wants and the opposite of what a targeted one wants, so it comes in narrower
-flavours: `then` and `else` take a branch's arms one at a time, and `body` takes
-dip bodies.
+`children` visits every sub-term of every factor. That is what a normalizing
+pass wants and the opposite of what a targeted one wants, so it comes in
+narrower flavours: `then` and `else` take a branch's arms one at a time, and
+`left` and `right` take the two sides of a `par` — `left` being the one a frame
+holds its computation in.
 
 Staged unfolding is what makes the difference concrete. `once` works on one
-sequence, so the moment the only remaining calls are inside branch arms it has
+spine, so the moment the only remaining calls are inside branch arms it has
 nothing left to find, and no amount of `repeat_n` gets further.
 `then(once(unfold))` is how you say which arm to open next, and it is the whole
 difference between a plateau and a derivation.
 
-These three partition `children` rather than overlapping it: `body` declines a
-branch arm and `then`/`else` decline a dip, so `children(t)` is exactly
-`then(t); else(t); body(t)`. A selector that finds nothing to descend into
-reports "unchanged" — `then(t)` on a sequence with no branch is a no-op, not an
-error.
+These four partition `children` rather than overlapping it: `left`/`right`
+decline a branch arm and `then`/`else` decline a `par`, so `children(t)` is
+exactly `then(t); else(t); left(t); right(t)`. A selector that finds nothing to
+descend into reports "unchanged" — `then(t)` on a spine with no branch is a
+no-op, not an error.
 
 ## Folding is evaluation
 
@@ -1488,9 +1529,9 @@ width is fixed before it looks, and `tuple 0` reads no operands at all.
    call graph.
 3. **Expecting a matcher to see context.** It sees its window and nothing else.
    Remove the frame with `flatten`, or bring the neighbour in with `distribute`.
-4. **Reading `@n` as a global position.** It is an offset in the sequence the
+4. **Reading `@n` as a global position.** It is an offset in the spine the
    descent arrives at. Two steps reporting `@0` may be in different arms.
-5. **Hiding an aim inside a search.** `at(9, sink)` on a five-node sequence
+5. **Hiding an aim inside a search.** `at(9, sink)` on a five-factor spine
    reports itself, but `bu(at(9, sink))` does not — an aim inside a sweep is
    along for the ride, and there is no telling a level it skipped from a level
    it was never meant to hit. Read the position off the `pos` column rather
@@ -1529,10 +1570,10 @@ Each step puts the tree as it stood **before** the last step beside the tree
 sketches the window the next one is about to match:
 
 ```
-    step 0                                    ┃   step 1  ·  unfold -> [1.then, 2.body] @0
+    step 0                                    ┃   step 1  ·  unfold -> [1.then, 2.left] @0
   ────────────────────────────────────────────╂────────────────────────────────────────────
     ⋮ 8 unchanged lines                       ┃
-    2 │   dip 1 → #3400 <inline> {            ┃   2 │   dip 1 → #3400 <inline> {
+    2 │   par → #3400 <inline> {              ┃   2 │   par → #3400 <inline> {
   - 2 │     jump → #645 …::Body::check        ┃ + 2 │     untuple 2
                                               ┃ + 4 │     branch then → #3396 <inline> {
 ```
@@ -1545,10 +1586,10 @@ closing `q`.
 `trace` shows the derivation around the cursor with counts so far:
 
 ```
-       1  unfold -> [1.then, 2.body] @0
-       2  unfold -> [1.then, 2.body, 1.then] @0
-       3  interchange -> [1.then, 2.body, 1.then] @2
-  ▸    7  interchange -> [1.then] @0
+       1  unfold -> [1.then, 2.left] @0
+       2  unfold -> [1.then, 2.left, 1.then] @0
+       3  slide -> [1.then, 2.left, 1.then] @2
+  ▸    7  slide -> [1.then] @0
 ```
 
 ### It steps by applying a prefix
@@ -1577,22 +1618,23 @@ consulting an analysis.
 
 ## What is not here yet
 
-- **Tranche two.** `dup_natural`, `rebuild_copy`, and `dip k { } = ε`. All are
+- **Tranche two.** `dup_natural`, `rebuild_copy`, and `par { id 0 } { id k }`
+  = `id k`. All are
   expressible as equations in this framework; none is written yet.
   `specialize_equal` was on this list and is now in the set — see "the value an
   arm tested equal to".
 
   Two that used to be on this list are now in the set, as equations without
-  matchers. `roll 0 = ε` is `roll_cycle` at `d = 0`, and the rolls arrived with
-  company: `unframe` and `pick_roll` are what make a roll worth writing, since
-  alone it only moves a value and nothing could say what that bought.
-  `pick_drop_to_roll` — `pick d ; dip (d+1) { drop }` = `roll d`, which is
+  matchers. `roll 0 = id 0` is `roll_cycle` at `d = 0`, and the rolls arrived
+  with company: `unframe` and `pick_roll` are what make a roll worth writing,
+  since alone it only moves a value and nothing could say what that bought.
+  `pick_drop_to_roll` — `pick d ; par { drop } { id (d+1) }` = `roll d`, which is
   `counit_under` at depth and would demote it — is still not written, but
   something wants it now: it is what would let `lift` reach a prefix that
   consumes more than one value the other arm still needs.
 
 - **Matchers for the other five roll readings.** `unframe` forward has one now
-  — see "placing one" above, where the answer was to read the frame rather than
+  — see "placing one" above, where the answer was to read the `par` rather than
   the rolls. The rest still have real questions behind them: the width of
   `roll_cycle` is its own argument, and its backward reading needs somewhere to
   stand.

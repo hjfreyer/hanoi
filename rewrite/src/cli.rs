@@ -217,7 +217,7 @@ fn usage() {
     eprintln!("  peel                 narrow to what the two sides do not share");
     eprintln!("  inline               unfold every call on both sides");
     eprintln!("and these fork the goal, so they come last:");
-    eprintln!("  descend(body: s), descend(then: s, else: s), s | s");
+    eprintln!("  descend(left: s), descend(then: s, else: s), s | s");
     eprintln!("An arm left out of `descend` is a claim that it already matches,");
     eprintln!("which is checked: `descend(else: cleanup)` proves the else arm and");
     eprintln!("holds the then arms to being equal already.");
@@ -227,5 +227,5 @@ fn usage() {
     eprintln!("  rewrite tests two_spellings_of_one_test -t 'normalize(cleanup)'");
     eprintln!("  rewrite tests testing_a_test_by_name -t 'cleanup; rhs(unfold_all)'");
     eprintln!("  rewrite tests a_test_inside_an_arm -t 'peel; descend(then: cleanup)'");
-    eprintln!("  rewrite tests copying_a_constant -t 'dips; factoring' --step");
+    eprintln!("  rewrite tests copying_a_constant -t 'frames; factoring' --step");
 }

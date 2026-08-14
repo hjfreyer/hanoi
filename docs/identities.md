@@ -38,7 +38,8 @@ Two inline bodies, and **only** two inline bodies. Naming two sentences that
 already exist is `{ jump a } = { jump b }`, so one form covers both cases; a
 second spelling would buy nothing and cost the consistency between them. A body
 is whatever a sentence body is, so `branch { } { }` and `dip 1 { ... }` work
-inside one for free.
+inside one for free — the rewriter reads that `dip` as `par { … } { id }`, which
+is what it always meant.
 
 `#[arity(n, m)]` is the annotation an identity may carry, a claim both sides
 answer for independently. The rest name properties of a sentence *being
@@ -189,8 +190,8 @@ identity identities::testing_a_test_by_name ... ok (2 steps + 1 up to inlining)
 A proof that lands exactly still takes the short route: one derivation, no
 inlining segment. The machinery only runs when it is needed.
 
-**What inlining does not reconcile is a *frame*-shape mismatch.** A proof that
-says `dips` leaves frames collapsed and sunk, and a naturally-written right-hand
+**What inlining does not reconcile is a *window*-shape mismatch.** A proof that
+says `frames` leaves them collapsed and sunk, and a naturally-written right-hand
 side will not match that however much either side is unfolded. Nor does it help
 when neither side is the normal form: rewriting the left reaches it and the
 right is still sitting where it was written. That is what strategies are for.
@@ -239,7 +240,8 @@ what discharges each arm goes *inside* it. A choice reads the same way.
 | strategy | what it does |
 |---|---|
 | `<tactic>` alone | run it on the left and compare, exactly or after unfolding both sides |
-| `descend(body: s)` | congruence into a frame |
+| `descend(left: s, right: s)` | congruence into the two sides of a `par` |
+| `descend(left: s)` | into the left-hand side, claiming the right-hand sides already match — which for a frame is two identities |
 | `descend(then: s, else: s)` | congruence into both arms of a branch |
 | `descend(then: s)` | into the `then` arm, claiming the `else` arms already match |
 | `descend(else: s)` | into the `else` arm, claiming the `then` arms already match |
@@ -462,7 +464,7 @@ originals were never touched. It is the law that looked essential and turned out
 to be derivable: one annihilation and two counits. It is also the identity whose
 two sides need different amounts of stack, which is why an identity is held to
 its net change. Its annihilation is *aimed*, which is a cost of writing the
-depths out: a `pick 1` is `dip { copy } ; swap` now, and an unaimed
+depths out: a `pick 1` is `par { copy } { id } ; swap` now, and an unaimed
 `annihilate` reads the longest window it can — taking the `swap` along with the
 computation, which is a true equation that leaves the copies nothing to cancel
 against.
@@ -485,7 +487,7 @@ themselves are now in the language.
   can reach for a library of statements rather than for the axioms every time.
   The shape is a `StepKind::Identity { id }` beside `Unfold`, whose `sides()`
   regenerates both from the library; a matcher `identity(<path>)` whose width is
-  the left-hand side's node count; and — unlike `unfold`, whose backward reading
+  the left-hand side's factor count; and — unlike `unfold`, whose backward reading
   is the known gap because a window does not say which sentence to fold into —
   a free `inverse()`, since an identity's other side is written down.
 - **Acyclicity.** With that in place a proof of A could cite B whose proof cites
@@ -496,13 +498,13 @@ themselves are now in the language.
   Soundness comes from `prove`'s whole-corpus pass, not from the applier —
   which is an accepted asymmetry, `rewrite` being a debugging aid whose output
   does not even parse.
-- **Node-level alignment.** `peel` strips what the two sides share at their
-  ends, and stops there. When what is left is two multi-node sequences with no
+- **Factor-level alignment.** `peel` strips what the two sides share at their
+  ends, and stops there. When what is left is two multi-factor spines with no
   common ends, nothing pairs up the interior — a branch at position 3 of one and
-  position 4 of the other are not the same node, and guessing is a search
+  position 4 of the other are not the same factor, and guessing is a search
   `peel` deliberately does not do. `diff::align` is not reusable, since it
-  aligns rendered lines rather than nodes; a Myers-style diff over `same_effect`
-  to find interior anchors is the obvious next strategy, and should wait until
+  aligns rendered lines rather than factors; a Myers-style diff over
+  `same_effect` to find interior anchors is the obvious next strategy, and should wait until
   the corpus asks for one.
 
 - **Combinators that consult the goal, and matchers that read a second window.**

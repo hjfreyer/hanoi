@@ -27,10 +27,10 @@
 //! - **A `Symbol` compares by `id`**, which is minted during assembly. It is
 //!   written as its declared path and looked up on the way back in, exactly as
 //!   a term in a tactic does it.
-//! - **Provenance is not part of a term's identity.** `Dip::origins` and a
+//! - **Provenance is not part of a term's identity.** `Par::origins` and a
 //!   branch's arm labels say where code came from, which is for a listing;
 //!   [`crate::ir::same_effect`] ignores them and so does everything that reads
-//!   a replayed tree. They are dropped, and what a parsed step rebuilds carries
+//!   a replayed term. They are dropped, and what a parsed step rebuilds carries
 //!   [`TERM_ORIGIN`] — the label a block written by hand already gets.
 //!
 //! What is *not* dealt with, on purpose, is program content. A step names a
@@ -49,7 +49,7 @@
 //! arrow   := "->" | "<-"
 //! location:= descent? "@" INT
 //! descent := "[" INT "." kind ("," INT "." kind)* "]"
-//! kind    := "then" | "else" | "body"
+//! kind    := "then" | "else" | "left" | "right"
 //! value   := INT | STRING | ident INT? | term | list | tuple
 //! term    := "{" instruction* "}"
 //! list    := "[" (value ("," value)*)? "]"
@@ -63,16 +63,14 @@
 //! needs `n` instead of counting.
 //!
 //! An instruction inside a term is spelled as a tactic's term spells it — see
-//! [`crate::script`], whose vocabulary this shares rather than restates. Two
-//! things are written here that a tactic cannot write, because a derivation may
-//! hold them and a hand-written term never needed to: a call at depth, as `dip
-//! k <sentence>` beside the `jump <sentence>` that is one at depth 0, and the
-//! one literal shape a corpus can hold but a tactic had no syntax for —
-//! tuples.
+//! [`crate::script`], whose vocabulary this shares rather than restates. One
+//! thing is written here that a tactic cannot write, because a derivation may
+//! hold it and a hand-written term never needed to: the one literal shape a
+//! corpus can hold but a tactic had no syntax for, tuples.
 
 use bytecode::{Instruction, SentenceIndex, Value};
 
-use crate::ir::{Node, Selector};
+use crate::ir::{Selector, Term, id_word};
 use crate::location::Location;
 use crate::program::{Program, resolve_sentence, resolve_symbol};
 use crate::rule::{Arm, Direction, Rule, Step, StepKind};
@@ -147,10 +145,7 @@ pub(crate) fn write_step(prog: &Program, step: &Step) -> Result<String, String> 
 
 fn write_kind(prog: &Program, kind: &StepKind) -> Result<String, String> {
     let args = match kind {
-        StepKind::Unfold { depth, target } => vec![
-            ("depth", depth.to_string()),
-            ("target", write_sentence(prog, *target)?),
-        ],
+        StepKind::Unfold { target } => vec![("target", write_sentence(prog, *target)?)],
         StepKind::Rule(rule) => write_rule(prog, rule)?,
     };
     if args.is_empty() {
@@ -179,17 +174,18 @@ fn write_rule(prog: &Program, rule: &Rule) -> Result<Vec<(&'static str, String)>
             ("j", j.to_string()),
             ("a", write_term(prog, a)?),
         ],
-        Rule::ElimDip0 { a, .. } => vec![("a", write_term(prog, a)?)],
-        Rule::Interchange { x, framed, n, m } => vec![
-            ("x", write_term(prog, std::slice::from_ref(x))?),
-            ("framed", write_term(prog, std::slice::from_ref(framed))?),
+        Rule::ElimPar0 { a, .. } => vec![("a", write_term(prog, a)?)],
+        Rule::Slide { x, framed, n, m } => vec![
+            ("x", write_term(prog, x)?),
+            ("framed", write_term(prog, framed)?),
             ("n", n.to_string()),
             ("m", m.to_string()),
         ],
-        Rule::Fuse { k, a, b, .. } => vec![
-            ("k", k.to_string()),
+        Rule::Interchange { a, b, c, d, .. } => vec![
             ("a", write_term(prog, a)?),
             ("b", write_term(prog, b)?),
+            ("c", write_term(prog, c)?),
+            ("d", write_term(prog, d)?),
         ],
         Rule::Hoist {
             k,
@@ -248,7 +244,7 @@ fn write_rule(prog: &Program, rule: &Rule) -> Result<Vec<(&'static str, String)>
             ..
         } => vec![
             ("arm", arm.name().to_string()),
-            ("inner", write_term(prog, std::slice::from_ref(inner))?),
+            ("inner", write_term(prog, inner)?),
             ("rest", write_term(prog, rest)?),
             ("other", write_term(prog, other)?),
         ],
@@ -273,7 +269,7 @@ fn write_rule(prog: &Program, rule: &Rule) -> Result<Vec<(&'static str, String)>
         Rule::CancelTuple { n } => vec![("n", n.to_string())],
         Rule::SwapCycle => Vec::new(),
         Rule::Unframe { framed, n, m } => vec![
-            ("framed", write_term(prog, std::slice::from_ref(framed))?),
+            ("framed", write_term(prog, framed)?),
             ("n", n.to_string()),
             ("m", m.to_string()),
         ],
@@ -283,10 +279,10 @@ fn write_rule(prog: &Program, rule: &Rule) -> Result<Vec<(&'static str, String)>
 /// A braced run of instructions. `{ }` is a term that holds nothing, which
 /// several equations legitimately have — `annihilate` at `m = 0` reads a
 /// `branch { } { }`.
-fn write_term(prog: &Program, nodes: &[Node]) -> Result<String, String> {
+fn write_term(prog: &Program, term: &Term) -> Result<String, String> {
     let mut parts = Vec::new();
-    for node in nodes {
-        parts.push(write_node(prog, node)?);
+    for node in term.spine() {
+        parts.push(write_factor(prog, node)?);
     }
     if parts.is_empty() {
         return Ok("{ }".to_string());
@@ -294,18 +290,19 @@ fn write_term(prog: &Program, nodes: &[Node]) -> Result<String, String> {
     Ok(format!("{{ {} }}", parts.join(" ")))
 }
 
-fn write_node(prog: &Program, node: &Node) -> Result<String, String> {
+/// One factor of a spine. A composite never reaches here — that is what
+/// [`Term::spine`] took apart — so the two binary operators leave only `par`.
+fn write_factor(prog: &Program, node: &Term) -> Result<String, String> {
     Ok(match node {
-        Node::Op(inst) => write_op(prog, inst)?,
-        // A plain jump and a call that hides something are one instruction in
-        // the ISA and are spelled as two words here, the way the surface
-        // language spells them.
-        Node::Call { depth: 0, target } => format!("jump {}", write_sentence(prog, *target)?),
-        Node::Call { depth, target } => {
-            format!("dip {} {}", depth, write_sentence(prog, *target)?)
-        }
-        Node::Dip { depth, body, .. } => format!("dip {} {}", depth, write_term(prog, body)?),
-        Node::Branch {
+        Term::Op(inst) => write_op(prog, inst)?,
+        Term::Id(k) => id_word(*k),
+        Term::Call(target) => format!("jump {}", write_sentence(prog, *target)?),
+        Term::Par { left, right, .. } => format!(
+            "par {} {}",
+            write_term(prog, left)?,
+            write_term(prog, right)?
+        ),
+        Term::Branch {
             then_body,
             else_body,
             ..
@@ -314,6 +311,7 @@ fn write_node(prog: &Program, node: &Node) -> Result<String, String> {
             write_term(prog, then_body)?,
             write_term(prog, else_body)?
         ),
+        Term::Compose(..) => unreachable!("a factor of a spine is never a composite"),
     })
 }
 
@@ -612,7 +610,7 @@ enum Val {
     Word(String, Option<i64>, Span),
     Int(i64, Span),
     Str(String, Span),
-    Term(Vec<Node>, Span),
+    Term(Term, Span),
     List(Vec<Val>, Span),
     Tuple(Vec<Val>, Span),
 }
@@ -834,7 +832,7 @@ impl<'a> Parser<'a> {
         Ok((Step { kind, dir, loc }, (name_span.0, end.1)))
     }
 
-    /// `[1.then, 2.body] @2`, read outermost-first — the same text a listing
+    /// `[1.then, 2.left] @2`, read outermost-first — the same text a listing
     /// prints, so a location can be copied from one to the other.
     fn location(&mut self) -> Result<Location, ScriptError> {
         let mut descent = Vec::new();
@@ -847,19 +845,20 @@ impl<'a> Parser<'a> {
                         ScriptError::new("an index may not be negative", self.span())
                     })?;
                     self.expect(Tok::Dot, "'.'")?;
-                    let (kind, kind_span) = self.ident("`then`, `else` or `body`")?;
+                    let (kind, kind_span) = self.ident("`then`, `else`, `left` or `right`")?;
                     let sel = match kind.as_str() {
                         "then" => Selector::Then,
                         "else" => Selector::Else,
-                        "body" => Selector::Body,
+                        "left" => Selector::Left,
+                        "right" => Selector::Right,
                         other => {
                             return Err(ScriptError::new(
-                                format!("'{}' is not a part of a node", other),
+                                format!("'{}' is not a part of a term", other),
                                 kind_span,
                             )
                             .with_help(
                                 "a descent turns into the `then` or `else` arm of a \
-                                 branch, or the `body` of a dip",
+                                 branch, or the `left` or `right` of a `par`",
                             ));
                         }
                     };
@@ -965,23 +964,23 @@ impl<'a> Parser<'a> {
         Ok((items, end))
     }
 
-    /// A run of instructions, up to but not including the closing brace.
-    fn term(&mut self) -> Result<Vec<Node>, ScriptError> {
+    /// A run of factors, up to but not including the closing brace.
+    fn term(&mut self) -> Result<Term, ScriptError> {
         let mut out = Vec::new();
         while !matches!(self.peek(), Some(&Tok::RBrace) | None) {
-            out.extend(self.instruction()?);
+            out.push(self.factor()?);
         }
-        Ok(out)
+        Ok(Term::seq(out))
     }
 
-    /// One written instruction, as the nodes it stands for.
+    /// One written factor, as the term it stands for.
     ///
-    /// A `Vec` because `pick d` and `roll d` are spellings rather than
-    /// instructions: what they stand for is frames around a `copy` or a `swap`.
-    /// Nothing *writes* them — [`write_op`] has no depth to write — but the two
-    /// term languages are meant to be one, and a derivation may be written by
-    /// something other than this tool.
-    fn instruction(&mut self) -> Result<Vec<Node>, ScriptError> {
+    /// It may be a whole composite: `pick d` and `roll d` are spellings rather
+    /// than instructions, and what they stand for is `par`s around a `copy` or a
+    /// `swap`. Nothing *writes* them — [`write_op`] has no depth to write — but
+    /// the two term languages are meant to be one, and a derivation may be
+    /// written by something other than this tool.
+    fn factor(&mut self) -> Result<Term, ScriptError> {
         let (word, span) = self.ident("an instruction")?;
 
         if word == "pick" {
@@ -991,48 +990,38 @@ impl<'a> Parser<'a> {
             return Ok(crate::rule::roll(self.usize_count(&word, span)?));
         }
 
+        // The identity, which is the right-hand side of every `par` a program
+        // compiles to. Bare it is the one-value identity; `id k` passes `k`
+        // through, and `id 0` is nothing at all.
+        if word == "id" {
+            let k = match self.peek() {
+                Some(Tok::Int(_)) => self.usize_count(&word, span)?,
+                _ => 1,
+            };
+            return Ok(Term::Id(k));
+        }
+
         if word == "branch" {
             let then_body = self.block()?;
             let else_body = self.block()?;
-            return Ok(vec![Node::Branch {
-                then_origin: TERM_ORIGIN.to_string(),
-                then_body,
-                else_origin: TERM_ORIGIN.to_string(),
-                else_body,
-            }]);
+            return Ok(Term::branch(TERM_ORIGIN, then_body, TERM_ORIGIN, else_body));
         }
 
-        // `dip k { ... }` is a block written out; `dip k <sentence>` is a call
-        // that hides `k` values. The ISA has one instruction for both — a body
-        // it can see and a body it cannot — and the two spellings are that
-        // difference.
-        if word == "dip" {
-            let depth = self.usize_count(&word, span)?;
-            if self.peek() == Some(&Tok::LBrace) {
-                return Ok(vec![Node::Dip {
-                    depth,
-                    origins: Vec::new(),
-                    body: self.block()?,
-                }]);
-            }
-            return Ok(vec![Node::Call {
-                depth,
-                target: self.sentence(span)?,
-            }]);
+        // The second binary operator: two blocks, the right one running on the
+        // top of the stack and the left on what is under it.
+        if word == "par" {
+            let left = self.block()?;
+            let right = self.block()?;
+            return Ok(Term::par(left, right));
         }
 
         if word == "jump" {
-            return Ok(vec![Node::Call {
-                depth: 0,
-                target: self.sentence(span)?,
-            }]);
+            return Ok(Term::Call(self.sentence(span)?));
         }
 
         if word == "push" {
             let value = self.value()?;
-            return Ok(vec![Node::Op(Instruction::Push(literal(
-                &value, self.prog,
-            )?))]);
+            return Ok(Term::Op(Instruction::Push(literal(&value, self.prog)?)));
         }
 
         let inst = match word.as_str() {
@@ -1052,10 +1041,10 @@ impl<'a> Parser<'a> {
                 }
             },
         };
-        Ok(vec![Node::Op(inst)])
+        Ok(Term::Op(inst))
     }
 
-    fn block(&mut self) -> Result<Vec<Node>, ScriptError> {
+    fn block(&mut self) -> Result<Term, ScriptError> {
         self.expect(Tok::LBrace, "'{'")?;
         let body = self.term()?;
         self.expect(Tok::RBrace, "'}'")?;
@@ -1110,20 +1099,21 @@ impl<'a> Parser<'a> {
                 outer: Vec::new(),
                 inner: Vec::new(),
             }),
-            "elim_dip0" => StepKind::Rule(Rule::ElimDip0 {
+            "elim_par0" => StepKind::Rule(Rule::ElimPar0 {
                 a: f.term("a")?,
                 origins: Vec::new(),
             }),
-            "interchange" => StepKind::Rule(Rule::Interchange {
-                x: f.node("x")?,
-                framed: f.node("framed")?,
+            "slide" => StepKind::Rule(Rule::Slide {
+                x: f.term("x")?,
+                framed: f.term("framed")?,
                 n: f.int("n")?,
                 m: f.int("m")?,
             }),
-            "fuse" => StepKind::Rule(Rule::Fuse {
-                k: f.count("k")?,
+            "interchange" => StepKind::Rule(Rule::Interchange {
                 a: f.term("a")?,
                 b: f.term("b")?,
+                c: f.term("c")?,
+                d: f.term("d")?,
                 a_origins: Vec::new(),
                 b_origins: Vec::new(),
             }),
@@ -1196,7 +1186,6 @@ impl<'a> Parser<'a> {
                 m: f.count("m")?,
             }),
             "unfold" => StepKind::Unfold {
-                depth: f.count("depth")?,
                 target: f.sentence("target", prog)?,
             },
             other => {
@@ -1269,32 +1258,31 @@ impl Fields {
         }
     }
 
-    fn term(&mut self, name: &str) -> Result<Vec<Node>, ScriptError> {
+    fn term(&mut self, name: &str) -> Result<Term, ScriptError> {
         let val = self.take(name)?;
         match val {
-            Val::Term(nodes, _) => Ok(nodes),
+            Val::Term(term, _) => Ok(term),
             other => Err(wanted(name, "a term, in braces", &other)),
         }
     }
 
-    /// A term holding exactly one node. Several equations take a single node —
-    /// the thing that moves in `interchange`, the branch `retest` collapses —
-    /// and writing it as a term of one keeps the format to one spelling for
-    /// program text.
-    fn node(&mut self, name: &str) -> Result<Node, ScriptError> {
+    /// A term holding exactly one factor. Two equations take a single one —
+    /// the frame `unframe` opens, the branch `retest` collapses — and writing it
+    /// as a term of one keeps the format to one spelling for program text.
+    fn node(&mut self, name: &str) -> Result<Term, ScriptError> {
         let val = self.take(name)?;
         let span = val.span();
         match val {
-            Val::Term(mut nodes, _) if nodes.len() == 1 => Ok(nodes.remove(0)),
-            Val::Term(nodes, _) => Err(ScriptError::new(
+            Val::Term(term, _) if term.width() == 1 => Ok(term),
+            Val::Term(term, _) => Err(ScriptError::new(
                 format!(
-                    "`{}` is one node, and this term holds {}",
+                    "`{}` is one factor, and this term holds {}",
                     name,
-                    nodes.len()
+                    term.width()
                 ),
                 span,
             )),
-            other => Err(wanted(name, "a term holding one node", &other)),
+            other => Err(wanted(name, "a term holding one factor", &other)),
         }
     }
 
@@ -1440,9 +1428,9 @@ fn describe(tok: &Tok) -> String {
 pub(crate) fn arg_names(rule: &str) -> Option<&'static [&'static str]> {
     Some(match rule {
         "collapse" => &["k", "j", "a"],
-        "elim_dip0" => &["a"],
-        "interchange" => &["x", "framed", "n", "m"],
-        "fuse" => &["k", "a", "b"],
+        "elim_par0" => &["a"],
+        "slide" => &["x", "framed", "n", "m"],
+        "interchange" => &["a", "b", "c", "d"],
         "hoist" => &["k", "x", "then", "else"],
         "distribute" => &["then", "else", "suffix"],
         "fold_branch" => &["c", "then", "else"],
@@ -1460,7 +1448,7 @@ pub(crate) fn arg_names(rule: &str) -> Option<&'static [&'static str]> {
         "cancel_tuple" => &["n"],
         "swap_cycle" => &[],
         "unframe" => &["framed", "n", "m"],
-        "unfold" => &["depth", "target"],
+        "unfold" => &["target"],
         _ => return None,
     })
 }
@@ -1470,9 +1458,9 @@ pub(crate) fn arg_names(rule: &str) -> Option<&'static [&'static str]> {
 pub(crate) fn equation_names() -> Vec<&'static str> {
     vec![
         "collapse",
-        "elim_dip0",
+        "elim_par0",
+        "slide",
         "interchange",
-        "fuse",
         "hoist",
         "distribute",
         "fold_branch",
@@ -1519,8 +1507,8 @@ mod tests {
         parsed[0].steps.clone()
     }
 
-    fn op(i: Instruction) -> Node {
-        Node::Op(i)
+    fn op(i: Instruction) -> Term {
+        Term::Op(i)
     }
 
     fn step(kind: StepKind, dir: Direction, loc: Location) -> Step {
@@ -1531,7 +1519,7 @@ mod tests {
     fn a_step_survives_being_written_and_read() {
         let steps = vec![step(
             StepKind::Rule(Rule::Annihilate {
-                x: vec![op(Instruction::Add)],
+                x: Term::seq([op(Instruction::Add)]),
                 n: 2,
                 m: 2,
             }),
@@ -1549,7 +1537,7 @@ mod tests {
             Location {
                 descent: vec![
                     (3, Selector::Then),
-                    (0, Selector::Body),
+                    (0, Selector::Left),
                     (1, Selector::Else),
                 ],
                 at: 2,
@@ -1562,61 +1550,53 @@ mod tests {
     /// rather than a file that cannot be written.
     #[test]
     fn every_equation_survives_the_round_trip() {
-        let branch = Node::Branch {
-            then_origin: TERM_ORIGIN.to_string(),
-            then_body: vec![op(Instruction::Add)],
-            else_origin: TERM_ORIGIN.to_string(),
-            else_body: Vec::new(),
-        };
+        let branch = Term::branch(TERM_ORIGIN, op(Instruction::Add), TERM_ORIGIN, Term::nil());
         let rules = vec![
             Rule::Collapse {
                 k: 2,
                 j: 3,
-                a: vec![op(Instruction::Add)],
+                a: Term::seq([op(Instruction::Add)]),
                 outer: Vec::new(),
                 inner: Vec::new(),
             },
-            Rule::ElimDip0 {
-                a: vec![op(Instruction::Drop)],
+            Rule::ElimPar0 {
+                a: op(Instruction::Drop),
                 origins: Vec::new(),
             },
-            Rule::Interchange {
+            Rule::Slide {
                 x: op(Instruction::Add),
-                framed: Node::Dip {
-                    depth: 2,
-                    origins: Vec::new(),
-                    body: vec![op(Instruction::Drop)],
-                },
+                framed: Term::frame(Vec::new(), 2, op(Instruction::Drop)),
                 n: 2,
                 m: 2,
             },
-            Rule::Fuse {
-                k: 1,
-                a: vec![op(Instruction::Add)],
-                b: vec![op(Instruction::Drop)],
+            Rule::Interchange {
+                a: Term::seq([op(Instruction::Add)]),
+                b: Term::seq([op(Instruction::Drop)]),
+                c: Term::Id(1),
+                d: Term::Id(1),
                 a_origins: Vec::new(),
                 b_origins: Vec::new(),
             },
             Rule::Hoist {
                 k: 1,
-                x: vec![op(Instruction::Drop)],
+                x: Term::seq([op(Instruction::Drop)]),
                 origins: Vec::new(),
-                then_arm: vec![op(Instruction::Add)],
-                else_arm: Vec::new(),
+                then_arm: Term::seq([op(Instruction::Add)]),
+                else_arm: Term::nil(),
                 then_origin: TERM_ORIGIN.to_string(),
                 else_origin: TERM_ORIGIN.to_string(),
             },
             Rule::Distribute {
-                then_arm: vec![op(Instruction::Add)],
-                else_arm: Vec::new(),
-                suffix: vec![op(Instruction::Drop)],
+                then_arm: Term::seq([op(Instruction::Add)]),
+                else_arm: Term::nil(),
+                suffix: Term::seq([op(Instruction::Drop)]),
                 then_origin: TERM_ORIGIN.to_string(),
                 else_origin: TERM_ORIGIN.to_string(),
             },
             Rule::FoldBranch {
                 c: Value::Bool(true),
-                then_arm: vec![op(Instruction::Add)],
-                else_arm: Vec::new(),
+                then_arm: Term::seq([op(Instruction::Add)]),
+                else_arm: Term::nil(),
                 then_origin: TERM_ORIGIN.to_string(),
                 else_origin: TERM_ORIGIN.to_string(),
             },
@@ -1625,7 +1605,7 @@ mod tests {
                 inputs: vec![Value::Int(1), Value::Int(2)],
             },
             Rule::Annihilate {
-                x: vec![op(Instruction::Add)],
+                x: Term::seq([op(Instruction::Add)]),
                 n: 2,
                 m: 2,
             },
@@ -1638,15 +1618,15 @@ mod tests {
             Rule::Retest {
                 arm: Arm::Else,
                 inner: branch.clone(),
-                rest: vec![op(Instruction::Drop)],
-                other: Vec::new(),
+                rest: Term::seq([op(Instruction::Drop)]),
+                other: Term::nil(),
                 then_origin: TERM_ORIGIN.to_string(),
                 else_origin: TERM_ORIGIN.to_string(),
             },
             Rule::CopyConst { c: Value::Int(9) },
             Rule::CopyAssoc,
             Rule::CopyNat {
-                x: vec![op(Instruction::Add)],
+                x: Term::seq([op(Instruction::Add)]),
                 n: 2,
                 m: 2,
             },
@@ -1656,25 +1636,21 @@ mod tests {
             Rule::CancelTuple { n: 3 },
             Rule::SwapCycle,
             Rule::Unframe {
-                framed: Node::Dip {
-                    depth: 1,
-                    origins: Vec::new(),
-                    body: vec![op(Instruction::Add)],
-                },
+                framed: Term::frame(Vec::new(), 1, op(Instruction::Add)),
                 n: 2,
                 m: 2,
             },
             Rule::SpecializeEqual {
                 c: Value::Int(9),
-                then_arm: vec![op(Instruction::Not)],
-                else_arm: vec![op(Instruction::IsBool)],
+                then_arm: Term::seq([op(Instruction::Not)]),
+                else_arm: Term::seq([op(Instruction::IsBool)]),
                 then_origin: TERM_ORIGIN.to_string(),
                 else_origin: TERM_ORIGIN.to_string(),
             },
         ];
         // Every name in the table is covered, so a new equation shows up here
         // as a missing case rather than as a file nobody can write.
-        let mut named: Vec<&str> = rules.iter().map(|r| r.name()).collect();
+        let mut named: Vec<&str> = rules.iter().map(Rule::name).collect();
         named.push("unfold");
         let mut all = equation_names();
         named.sort();
@@ -1696,14 +1672,14 @@ mod tests {
         let target = resolve_sentence(prog.library(), "f").unwrap();
         let steps = vec![
             step(
-                StepKind::Unfold { depth: 0, target },
+                StepKind::Unfold { target },
                 Direction::Forward,
                 Location::root(0),
             ),
             step(
-                StepKind::Rule(Rule::Interchange {
+                StepKind::Rule(Rule::Slide {
                     x: op(Instruction::Add),
-                    framed: Node::Call { depth: 2, target },
+                    framed: Term::frame(Vec::new(), 2, Term::Call(target)),
                     n: 2,
                     m: 2,
                 }),
@@ -1713,7 +1689,7 @@ mod tests {
         ];
         let text = write(prog, &[("x", &steps)]).unwrap();
         assert!(text.contains("target = f"), "{}", text);
-        assert!(text.contains("dip 2 f"), "{}", text);
+        assert!(text.contains("par { jump f } { id 2 }"), "{}", text);
         assert_eq!(round_trip(prog, &steps), steps);
     }
 
@@ -1792,7 +1768,7 @@ mod tests {
 
     #[test]
     fn a_word_that_is_not_an_instruction_says_so() {
-        let msg = err("derivation 1; proof x { elim_dip0(a = { assert }) -> @0; }");
+        let msg = err("derivation 1; proof x { elim_par0(a = { assert }) -> @0; }");
         assert!(msg.contains("'assert' is not an instruction"), "{}", msg);
         assert!(msg.contains("every instruction has a spelling"), "{}", msg);
     }
@@ -1802,7 +1778,7 @@ mod tests {
         let msg = err(
             "derivation 1; proof x { retest(arm = then, inner = { add drop }, rest = { }, other = { }) -> @0; }",
         );
-        assert!(msg.contains("`inner` is one node"), "{}", msg);
+        assert!(msg.contains("`inner` is one factor"), "{}", msg);
     }
 
     #[test]

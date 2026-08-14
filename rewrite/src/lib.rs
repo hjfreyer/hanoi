@@ -1,7 +1,12 @@
-//! Turns one sentence's compiled bytecode into a tree, rewrites it by a tactic,
+//! Turns one sentence's compiled bytecode into a term, rewrites it by a tactic,
 //! and prints it — with every call inlined that you ask to be, both `dip`
 //! targets (which includes plain jumps, since `jump` is `Dip(0, s)`) and both
 //! arms of every `branch`.
+//!
+//! The term is an algebra rather than a list: two binary operators, `;` for
+//! composition and `par { A } { B }` for two computations side by side, with
+//! `id n` the identity that is the unit of both. A `dip` is `par { X } { id }`.
+//! See [`ir`].
 //!
 //! Tactics are built from a set of equations and a handful of combinators for
 //! control and traversal, so which rewrites run, in what order, where in the
@@ -15,7 +20,7 @@
 //!
 //! **Nothing here is public but the two entry points.** The binaries are
 //! `fn main() { exit(rewrite::cli::run()) }` and its `prove` twin, so the
-//! calculus — `Rule`, `StepKind`, `Node`, `Matcher`, `Location` — never crosses
+//! calculus — `Rule`, `StepKind`, `Term`, `Matcher`, `Location` — never crosses
 //! a crate boundary and never becomes an API. That is not tidiness: a `Tactic`
 //! holds `Box<dyn Matcher>`, a `Matcher` plans a `Step`, and a `Step` names a
 //! `Rule`, so publishing the outermost of those publishes every equation as
@@ -167,10 +172,11 @@ pub(crate) fn rule_listing() -> Vec<String> {
         ));
     }
     out.push(String::new());
-    out.push("a term is instructions in braces — `pick n`, `push <lit>`,".to_string());
-    out.push("`dip n { ... }`, `jump <sentence>`, and the argument-free".to_string());
-    out.push("operators. Naming a sentence needs a program loaded, since its".to_string());
-    out.push("arity is what says how wide a window the rule reads.".to_string());
+    out.push("a term is instructions in braces — `pick n`, `push <lit>`, `id n`,".to_string());
+    out.push("`par { ... } { ... }`, `branch { ... } { ... }`, `jump <sentence>`,".to_string());
+    out.push("and the argument-free operators. A hidden window is `par { X } { id }`,".to_string());
+    out.push("which is what a `dip` compiles to. Naming a sentence needs a program".to_string());
+    out.push("loaded, since its arity is what says how wide a window the rule reads.".to_string());
     out.push(String::new());
     out.push("`inv(r)` is r's equation read the other way. Where that reading is".to_string());
     out.push("worth a name it has one — `inv(sink)` is `float` — and where it is".to_string());
@@ -188,14 +194,14 @@ pub(crate) fn tactic_listing(defs: &Definitions) -> Vec<String> {
     }
     out.push(String::new());
     out.push("combinators: each, once, at, try, must, repeat, repeat_n, id, fail".to_string());
-    out.push("traversals:  children, then, else, body, bu, td".to_string());
+    out.push("traversals:  children, then, else, left, right, bu, td".to_string());
     out.push("operators:   `a; b` in sequence, `a | b` first that applies".to_string());
     out.push(String::new());
     out.push("aiming:      `at(n, r)` applies r at exactly position n, and".to_string());
     out.push("             `then(k, t)` reaches the then arm of the node at k".to_string());
     out.push("             (bare `then(t)` reaches every one). Composed, they".to_string());
     out.push("             name any window --show-script prints:".to_string());
-    out.push("             `then(1, body(2, at(0, sink)))` is `[1.then, 2.body] @0`.".to_string());
+    out.push("             `then(1, left(2, at(0, sink)))` is `[1.then, 2.left] @0`.".to_string());
     out.push("             An index is a claim: an aimed step that misses is".to_string());
     out.push("             reported and exits non-zero, saying what was there".to_string());
     out.push("             instead. A scan is a question, so `each` and the like".to_string());

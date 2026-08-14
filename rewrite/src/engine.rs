@@ -1,6 +1,6 @@
 //! The search: what drives the matchers, and what it leaves behind.
 //!
-//! A tactic is a partial function on a node sequence. It either matches and
+//! A tactic is a partial function on a spine — a run of composed factors. It either matches and
 //! changes something, matches and changes nothing, or fails — and a tactic that
 //! fails hands the sequence back exactly as it received it, which is what makes
 //! rollback a matter of ownership rather than of copying.
@@ -43,7 +43,7 @@ use std::collections::{HashMap, VecDeque};
 use std::fmt;
 
 use crate::applier::{ApplyError, apply_step};
-use crate::ir::{Node, Selector, child_seq, child_seqs, sketch_head};
+use crate::ir::{Selector, Term, child_seq, child_seqs, sketch_head};
 use crate::location::selector_name;
 use crate::matcher::Matcher;
 use crate::program::Program;
@@ -72,13 +72,13 @@ const MISSES_SHOWN: usize = 10;
 /// know about it.
 #[derive(Debug)]
 pub(crate) enum Outcome {
-    Changed(Vec<Node>),
-    Unchanged(Vec<Node>),
-    Failed(Vec<Node>),
+    Changed(Vec<Term>),
+    Unchanged(Vec<Term>),
+    Failed(Vec<Term>),
 }
 
 impl Outcome {
-    pub(crate) fn into_nodes(self) -> Vec<Node> {
+    pub(crate) fn into_terms(self) -> Vec<Term> {
         match self {
             Outcome::Changed(n) | Outcome::Unchanged(n) | Outcome::Failed(n) => n,
         }
@@ -390,7 +390,7 @@ pub(crate) enum Tactic {
     ///
     /// `once` finds the first place a rule fits; this one is told. Together
     /// with [`Tactic::IntoNth`] it can name any window a script can, which is
-    /// what a listing's `[1.then, 2.body] @2` reads as.
+    /// what a listing's `[1.then, 2.left] @2` reads as.
     At(usize, Vec<Box<dyn Matcher>>),
     Seq(Vec<Tactic>),
     Choice(Vec<Tactic>),
@@ -457,7 +457,7 @@ fn can_fail(t: &Tactic) -> bool {
     }
 }
 
-pub(crate) fn apply(t: &Tactic, env: &Env, nodes: Vec<Node>) -> Result<Outcome, TacticError> {
+pub(crate) fn apply(t: &Tactic, env: &Env, nodes: Vec<Term>) -> Result<Outcome, TacticError> {
     match t {
         Tactic::Id => Ok(Outcome::Unchanged(nodes)),
         Tactic::Fail => Ok(Outcome::Failed(nodes)),
@@ -480,7 +480,7 @@ pub(crate) fn apply(t: &Tactic, env: &Env, nodes: Vec<Node>) -> Result<Outcome, 
                 changed @ Outcome::Changed(_) => changed,
                 other => {
                     env.truncate_script(mark);
-                    Outcome::Failed(other.into_nodes())
+                    Outcome::Failed(other.into_terms())
                 }
             })
         }
@@ -543,7 +543,7 @@ pub(crate) fn apply(t: &Tactic, env: &Env, nodes: Vec<Node>) -> Result<Outcome, 
                     }
                     other => {
                         let failed = matches!(other, Outcome::Failed(_));
-                        cur = other.into_nodes();
+                        cur = other.into_terms();
                         last = Some(failed);
                     }
                 }
@@ -563,7 +563,7 @@ pub(crate) fn apply(t: &Tactic, env: &Env, nodes: Vec<Node>) -> Result<Outcome, 
             loop {
                 let outcome = apply(inner, env, cur)?;
                 let progressed = outcome.changed();
-                cur = outcome.into_nodes();
+                cur = outcome.into_terms();
                 if !progressed {
                     break;
                 }
@@ -642,12 +642,12 @@ pub(crate) fn apply(t: &Tactic, env: &Env, nodes: Vec<Node>) -> Result<Outcome, 
 /// The `try` is load-bearing. Without it `bu` would fail whenever `t` misses at
 /// the root — which is nearly always — and `repeat(bu(X))` would stop after one
 /// pass even though a child had changed.
-fn bottom_up(t: &Tactic, env: &Env, nodes: Vec<Node>) -> Result<Outcome, TacticError> {
+fn bottom_up(t: &Tactic, env: &Env, nodes: Vec<Term>) -> Result<Outcome, TacticError> {
     let (nodes, children_changed) =
         map_children(nodes, env, None, &mut |n, env| bottom_up(t, env, n))?;
     let outcome = apply(t, env, nodes)?;
     let here_changed = outcome.changed();
-    let nodes = outcome.into_nodes();
+    let nodes = outcome.into_terms();
     Ok(if children_changed || here_changed {
         Outcome::Changed(nodes)
     } else {
@@ -660,10 +660,10 @@ fn bottom_up(t: &Tactic, env: &Env, nodes: Vec<Node>) -> Result<Outcome, TacticE
 /// Total for the same reason `bu` is, and the mirror of it. Note what that
 /// means for a matcher that *creates* children: `td` descends into the body it
 /// just produced, so one pass runs all the way down.
-fn top_down(t: &Tactic, env: &Env, nodes: Vec<Node>) -> Result<Outcome, TacticError> {
+fn top_down(t: &Tactic, env: &Env, nodes: Vec<Term>) -> Result<Outcome, TacticError> {
     let outcome = apply(t, env, nodes)?;
     let here_changed = outcome.changed();
-    let nodes = outcome.into_nodes();
+    let nodes = outcome.into_terms();
     let (nodes, children_changed) =
         map_children(nodes, env, None, &mut |n, env| top_down(t, env, n))?;
     Ok(if here_changed || children_changed {
@@ -674,7 +674,7 @@ fn top_down(t: &Tactic, env: &Env, nodes: Vec<Node>) -> Result<Outcome, TacticEr
 }
 
 /// What a traversal does to each child sequence it reaches.
-type Descend<'f> = &'f mut dyn FnMut(Vec<Node>, &Env) -> Result<Outcome, TacticError>;
+type Descend<'f> = &'f mut dyn FnMut(Vec<Term>, &Env) -> Result<Outcome, TacticError>;
 
 /// Runs `f` over child sequences, in order, tracking where it went.
 ///
@@ -686,11 +686,11 @@ type Descend<'f> = &'f mut dyn FnMut(Vec<Node>, &Env) -> Result<Outcome, TacticE
 /// descent*, which is what makes the recorded locations right: this level
 /// cannot be spliced while the traversal is below it.
 fn map_children(
-    mut nodes: Vec<Node>,
+    mut nodes: Vec<Term>,
     env: &Env,
     sel: Option<Selector>,
     f: Descend,
-) -> Result<(Vec<Node>, bool), TacticError> {
+) -> Result<(Vec<Term>, bool), TacticError> {
     let mut changed = false;
 
     for (index, node) in nodes.iter_mut().enumerate() {
@@ -699,11 +699,11 @@ fn map_children(
                 continue;
             }
             env.descend(index, kind);
-            let outcome = f(std::mem::take(body), env);
+            let outcome = f(std::mem::replace(body, Term::nil()).into_spine(), env);
             env.ascend();
             let outcome = outcome?;
             changed |= outcome.changed();
-            *body = outcome.into_nodes();
+            *body = Term::seq(outcome.into_terms());
         }
     }
 
@@ -720,7 +720,7 @@ fn map_children(
 fn each(
     matchers: &[Box<dyn Matcher>],
     env: &Env,
-    mut nodes: Vec<Node>,
+    mut nodes: Vec<Term>,
 ) -> Result<Outcome, TacticError> {
     let mut fired = false;
     let mut w = 0usize;
@@ -755,7 +755,7 @@ fn at(
     n: usize,
     matchers: &[Box<dyn Matcher>],
     env: &Env,
-    mut nodes: Vec<Node>,
+    mut nodes: Vec<Term>,
 ) -> Result<Outcome, TacticError> {
     if n < nodes.len() && step(matchers, env, &mut nodes, n)?.is_some() {
         return Ok(Outcome::Changed(nodes));
@@ -774,31 +774,31 @@ fn at(
 /// short, the window runs off the end of it, the node is the wrong shape, or a
 /// rule looked and declined — and a report that said only "matched nothing"
 /// would leave the reader to work out which.
-fn why_nothing_fits(matchers: &[Box<dyn Matcher>], nodes: &[Node], n: usize) -> String {
+fn why_nothing_fits(matchers: &[Box<dyn Matcher>], nodes: &[Term], n: usize) -> String {
     if n >= nodes.len() {
         return match nodes.len() {
-            0 => "that sequence is empty".to_string(),
-            1 => "that sequence holds one node, at 0".to_string(),
-            len => format!("that sequence holds {} nodes, 0 to {}", len, len - 1),
+            0 => "that term is empty".to_string(),
+            1 => "that term holds one factor, at 0".to_string(),
+            len => format!("that term holds {} factors, 0 to {}", len, len - 1),
         };
     }
     let left = nodes.len() - n;
     let narrowest = matchers.iter().map(|m| m.width()).min().unwrap_or(1);
     if narrowest > left {
         return format!(
-            "the window runs off the end: {} node(s) left there, and the \
+            "the window runs off the end: {} factor(s) left there, and the \
              narrowest of those rules reads {}",
             left, narrowest
         );
     }
-    format!("the node there is `{}`", sketch_head(&nodes[n]))
+    format!("the factor there is `{}`", sketch_head(&nodes[n]))
 }
 
 /// Applies the first matcher that matches, at the first position it matches.
 fn once(
     matchers: &[Box<dyn Matcher>],
     env: &Env,
-    mut nodes: Vec<Node>,
+    mut nodes: Vec<Term>,
 ) -> Result<Outcome, TacticError> {
     for w in 0..nodes.len() {
         if step(matchers, env, &mut nodes, w)?.is_some() {
@@ -813,7 +813,7 @@ fn once(
 fn step(
     matchers: &[Box<dyn Matcher>],
     env: &Env,
-    nodes: &mut Vec<Node>,
+    nodes: &mut Vec<Term>,
     w: usize,
 ) -> Result<Option<usize>, TacticError> {
     for matcher in matchers {
@@ -871,12 +871,12 @@ fn step(
 /// A node that is not there, or has no child of that kind, is left alone and
 /// recorded as a [`Miss`]: an index is a claim, the same way `at`'s is.
 fn map_one_child(
-    mut nodes: Vec<Node>,
+    mut nodes: Vec<Term>,
     env: &Env,
     index: usize,
     sel: Selector,
     f: Descend,
-) -> Result<(Vec<Node>, bool), TacticError> {
+) -> Result<(Vec<Term>, bool), TacticError> {
     let kind = selector_name(sel);
     let aim = || format!("{}({}, …)", kind, index);
     if index >= nodes.len() {
@@ -887,17 +887,17 @@ fn map_one_child(
         let what = sketch_head(&nodes[index]);
         env.note_miss(
             aim(),
-            format!("the node there is `{}`, which has no {} part", what, kind),
+            format!("the factor there is `{}`, which has no {} part", what, kind),
         );
         return Ok((nodes, false));
     }
     let body = child_seq(&mut nodes[index], sel).expect("just looked");
     env.descend(index, sel);
-    let outcome = f(std::mem::take(body), env);
+    let outcome = f(std::mem::replace(body, Term::nil()).into_spine(), env);
     env.ascend();
     let outcome = outcome?;
     let changed = outcome.changed();
-    *body = outcome.into_nodes();
+    *body = Term::seq(outcome.into_terms());
     Ok((nodes, changed))
 }
 
@@ -910,18 +910,18 @@ fn map_one_child(
 pub(crate) fn run(
     env: &Env,
     tactic: &Tactic,
-    tree: Vec<Node>,
-) -> Result<(Vec<Node>, Script), TacticError> {
+    tree: Vec<Term>,
+) -> Result<(Vec<Term>, Script), TacticError> {
     match apply(tactic, env, tree)? {
         Outcome::Failed(_) => Err(TacticError::Failed),
-        other => Ok((other.into_nodes(), env.script())),
+        other => Ok((other.into_terms(), env.script())),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::applier::apply_script;
+    use crate::applier::apply_script_seq;
     use crate::ir::build;
     use crate::location::Location;
     use crate::matcher::{self, matcher_by_name};
@@ -943,24 +943,21 @@ mod tests {
         Program::new(Box::leak(Box::new(Library::new())))
     }
 
-    fn op(i: Instruction) -> Node {
-        Node::Op(i)
+    fn op(i: Instruction) -> Term {
+        Term::Op(i)
     }
 
-    fn dip(depth: usize, body: Vec<Node>) -> Node {
-        Node::Dip {
-            depth,
-            origins: Vec::new(),
-            body,
-        }
+    /// `par { body } { id k }`, which is what a `dip k` is.
+    fn frame(k: usize, body: Vec<Term>) -> Term {
+        Term::frame(Vec::new(), k, Term::seq(body))
     }
 
-    fn branch(then_body: Vec<Node>, else_body: Vec<Node>) -> Node {
-        Node::Branch {
+    fn branch(then_body: Vec<Term>, else_body: Vec<Term>) -> Term {
+        Term::Branch {
             then_origin: "then".to_string(),
-            then_body,
+            then_body: Box::new(Term::seq(then_body)),
             else_origin: "else".to_string(),
-            else_body,
+            else_body: Box::new(Term::seq(else_body)),
         }
     }
 
@@ -968,13 +965,13 @@ mod tests {
     ///
     /// Every test goes through this, so the replay invariant is not one test
     /// but a precondition of every assertion in the module.
-    fn run_checked(prog: &Program, tactic: &Tactic, tree: Vec<Node>) -> (Vec<Node>, Script) {
+    fn run_checked(prog: &Program, tactic: &Tactic, tree: Vec<Term>) -> (Vec<Term>, Script) {
         let env = Env::new(prog, 100_000, true);
         let before = tree.clone();
         let (after, script) = run(&env, tactic, tree).expect("tactic failed");
 
         let mut replayed = before;
-        apply_script(prog, &mut replayed, &script, true)
+        apply_script_seq(prog, &mut replayed, &script, true)
             .unwrap_or_else(|e| panic!("the script did not replay: {}", e));
         assert_eq!(
             replayed, after,
@@ -987,21 +984,21 @@ mod tests {
 
     #[test]
     fn a_run_is_reproduced_by_its_own_script() {
-        // Deep, mixed work: rewrites at the root, inside a dip body, and inside
+        // Deep, mixed work: rewrites at the root, inside a `par`, and inside
         // both branch arms, so the recorded paths have to be right in every
         // direction.
         let prog = empty_prog();
         let tree = vec![
-            dip(1, vec![dip(2, vec![op(Instruction::Add)])]),
+            frame(1, vec![frame(2, vec![op(Instruction::Add)])]),
             branch(
-                vec![dip(1, vec![dip(1, vec![op(Instruction::Not)])])],
+                vec![frame(1, vec![frame(1, vec![op(Instruction::Not)])])],
                 vec![
                     op(Instruction::Push(Value::Int(1))),
                     op(Instruction::Push(Value::Int(1))),
                     op(Instruction::Equal),
                 ],
             ),
-            dip(0, vec![op(Instruction::Drop)]),
+            frame(0, vec![op(Instruction::Drop)]),
         ];
         let tactic = Tactic::Repeat(Box::new(Tactic::Bu(Box::new(each_of(&[
             "collapse", "flatten", "eval2",
@@ -1010,7 +1007,7 @@ mod tests {
 
         // And it really did work in all three places.
         assert!(script.len() >= 3, "script was {:?}", script);
-        assert_eq!(after[0], dip(3, vec![op(Instruction::Add)]));
+        assert_eq!(after[0], frame(3, vec![op(Instruction::Add)]));
     }
 
     #[test]
@@ -1018,7 +1015,7 @@ mod tests {
         let prog = empty_prog();
         let tree = vec![branch(
             vec![op(Instruction::Add)],
-            vec![dip(1, vec![dip(1, vec![])])],
+            vec![frame(1, vec![frame(1, vec![])])],
         )];
         let (_, script) = run_checked(&prog, &tree_collapse(), tree);
         assert_eq!(script.len(), 1);
@@ -1049,7 +1046,10 @@ mod tests {
             branch(
                 vec![
                     op(Instruction::Not),
-                    dip(1, vec![op(Instruction::Drop), dip(1, vec![dip(1, vec![])])]),
+                    frame(
+                        1,
+                        vec![op(Instruction::Drop), frame(1, vec![frame(1, vec![])])],
+                    ),
                 ],
                 Vec::new(),
             ),
@@ -1059,13 +1059,13 @@ mod tests {
             Selector::Then,
             Box::new(Tactic::IntoNth(
                 1,
-                Selector::Body,
+                Selector::Left,
                 Box::new(Tactic::At(1, vec![m("collapse")])),
             )),
         );
         let (_, script) = run_checked(&prog, &tactic, tree);
         assert_eq!(script.len(), 1);
-        assert_eq!(script[0].loc.to_string(), "[1.then, 1.body] @1");
+        assert_eq!(script[0].loc.to_string(), "[1.then, 1.left] @1");
     }
 
     #[test]
@@ -1073,16 +1073,16 @@ mod tests {
         let prog = empty_prog();
         let tree = || {
             vec![
-                dip(1, vec![dip(1, Vec::new())]),
-                dip(1, vec![dip(1, Vec::new())]),
+                frame(1, vec![frame(1, Vec::new())]),
+                frame(1, vec![frame(1, Vec::new())]),
             ]
         };
         // Position 1, not position 0, even though both would match.
         let (after, script) = run_checked(&prog, &Tactic::At(1, vec![m("collapse")]), tree());
         assert_eq!(script.len(), 1);
         assert_eq!(script[0].loc, Location::root(1));
-        assert_eq!(after[0], dip(1, vec![dip(1, Vec::new())]));
-        assert_eq!(after[1], dip(2, Vec::new()));
+        assert_eq!(after[0], frame(1, vec![frame(1, Vec::new())]));
+        assert_eq!(after[1], frame(2, Vec::new()));
 
         // Where `once` would have taken the first.
         let (_, script) = run_checked(&prog, &Tactic::Once(vec![m("collapse")]), tree());
@@ -1094,7 +1094,7 @@ mod tests {
         // Three nested frames: `at` collapses the pair it was pointed at and
         // stops, where `each` would cascade.
         let prog = empty_prog();
-        let tree = vec![dip(1, vec![dip(1, vec![dip(1, Vec::new())])])];
+        let tree = vec![frame(1, vec![frame(1, vec![frame(1, Vec::new())])])];
         let (_, script) = run_checked(&prog, &Tactic::At(0, vec![m("collapse")]), tree);
         assert_eq!(script.len(), 1);
     }
@@ -1104,7 +1104,7 @@ mod tests {
         // Aiming badly is something the listing tells you, not something that
         // aborts a sequence.
         let prog = empty_prog();
-        let tree = vec![dip(1, vec![dip(1, Vec::new())])];
+        let tree = vec![frame(1, vec![frame(1, Vec::new())])];
         let env = Env::new(&prog, 1000, true);
         let outcome = apply(&Tactic::At(7, vec![m("collapse")]), &env, tree.clone()).unwrap();
         assert!(matches!(outcome, Outcome::Unchanged(_)));
@@ -1114,7 +1114,7 @@ mod tests {
     #[test]
     fn an_indexed_descent_leaves_its_siblings_alone() {
         let prog = empty_prog();
-        let inner = || dip(1, vec![dip(1, Vec::new())]);
+        let inner = || frame(1, vec![frame(1, Vec::new())]);
         let tree = vec![
             branch(vec![inner()], vec![inner()]),
             branch(vec![inner()], vec![inner()]),
@@ -1129,8 +1129,8 @@ mod tests {
         assert_eq!(script[0].loc.to_string(), "[1.then] @0");
         // The first branch, and the second's else arm, are untouched.
         let [
-            Node::Branch { then_body: a, .. },
-            Node::Branch {
+            Term::Branch { then_body: a, .. },
+            Term::Branch {
                 then_body: b,
                 else_body: c,
                 ..
@@ -1139,16 +1139,16 @@ mod tests {
         else {
             panic!("expected two branches")
         };
-        assert_eq!(a, &vec![inner()]);
-        assert_eq!(b, &vec![dip(2, Vec::new())]);
-        assert_eq!(c, &vec![inner()]);
+        assert_eq!(**a, inner());
+        assert_eq!(**b, frame(2, Vec::new()));
+        assert_eq!(**c, inner());
     }
 
     #[test]
     fn an_indexed_descent_into_the_wrong_kind_of_node_is_a_no_op() {
         let prog = empty_prog();
-        // Node 0 is a dip: it has a body, not a then arm.
-        let tree = vec![dip(1, vec![dip(1, Vec::new())])];
+        // Factor 0 is a `par`: it has a left and a right, not a then arm.
+        let tree = vec![frame(1, vec![frame(1, Vec::new())])];
         let env = Env::new(&prog, 1000, true);
         let tactic = Tactic::IntoNth(
             0,
@@ -1162,21 +1162,21 @@ mod tests {
         let env = Env::new(&prog, 1000, true);
         let tactic = Tactic::IntoNth(
             9,
-            Selector::Body,
+            Selector::Left,
             Box::new(Tactic::Each(vec![m("collapse")])),
         );
-        let outcome = apply(&tactic, &env, vec![dip(1, vec![dip(1, Vec::new())])]).unwrap();
+        let outcome = apply(&tactic, &env, vec![frame(1, vec![frame(1, Vec::new())])]).unwrap();
         assert!(matches!(outcome, Outcome::Unchanged(_)));
     }
 
     #[test]
     fn must_fails_when_the_aim_misses_and_passes_when_it_lands() {
         let prog = empty_prog();
-        let tree = vec![dip(1, vec![dip(1, Vec::new())])];
+        let tree = vec![frame(1, vec![frame(1, Vec::new())])];
 
         let hit = Tactic::Must(Box::new(Tactic::At(0, vec![m("collapse")])));
         let (after, script) = run_checked(&prog, &hit, tree.clone());
-        assert_eq!(after, vec![dip(2, Vec::new())]);
+        assert_eq!(after, vec![frame(2, Vec::new())]);
         assert_eq!(script.len(), 1);
 
         // Same rule, wrong position: silent on its own, an error under `must`.
@@ -1202,7 +1202,7 @@ mod tests {
         let prog = empty_prog();
         let env = Env::new(&prog, 1000, true);
         let tactic = Tactic::Must(Box::new(Tactic::At(5, vec![m("collapse")])));
-        let err = run(&env, &tactic, vec![dip(1, vec![dip(1, Vec::new())])]).unwrap_err();
+        let err = run(&env, &tactic, vec![frame(1, vec![frame(1, Vec::new())])]).unwrap_err();
         assert!(matches!(err, TacticError::Failed));
         assert!(err.to_string().contains("must"), "{}", err);
     }
@@ -1213,7 +1213,7 @@ mod tests {
         // keep anything the failed branch did.
         let prog = empty_prog();
         let env = Env::new(&prog, 1000, true);
-        let tree = vec![dip(1, vec![dip(1, Vec::new())]), op(Instruction::Add)];
+        let tree = vec![frame(1, vec![frame(1, Vec::new())]), op(Instruction::Add)];
         // The collapse lands, but the sequence then demands something absent.
         let tactic = Tactic::Must(Box::new(Tactic::Seq(vec![
             Tactic::At(0, vec![m("collapse")]),
@@ -1222,7 +1222,7 @@ mod tests {
         ])));
         let outcome = apply(&tactic, &env, tree.clone()).unwrap();
         assert!(matches!(outcome, Outcome::Failed(_)));
-        assert_eq!(outcome.into_nodes(), tree);
+        assert_eq!(outcome.into_terms(), tree);
         assert!(env.script().is_empty(), "script kept {:?}", env.script());
     }
 
@@ -1230,7 +1230,7 @@ mod tests {
     fn must_is_exactly_choice_with_fail() {
         // It is sugar, and saying so keeps the two from drifting.
         let prog = empty_prog();
-        let tree = || vec![dip(1, vec![dip(1, Vec::new())])];
+        let tree = || vec![frame(1, vec![frame(1, Vec::new())])];
         for at in [0usize, 5] {
             let sugar = Tactic::Must(Box::new(Tactic::At(at, vec![m("collapse")])));
             let spelled = Tactic::Choice(vec![Tactic::At(at, vec![m("collapse")]), Tactic::Fail]);
@@ -1244,7 +1244,7 @@ mod tests {
                 "at {} they disagreed",
                 at
             );
-            assert_eq!(ra.into_nodes(), rb.into_nodes());
+            assert_eq!(ra.into_terms(), rb.into_terms());
             assert_eq!(a.script().len(), b.script().len());
         }
     }
@@ -1252,7 +1252,7 @@ mod tests {
     // -- misses: an index is a claim ----------------------------------------
 
     /// The misses a tactic leaves behind, as the strings they print as.
-    fn misses_of(prog: &Program, tactic: &Tactic, tree: Vec<Node>) -> Vec<String> {
+    fn misses_of(prog: &Program, tactic: &Tactic, tree: Vec<Term>) -> Vec<String> {
         let env = Env::new(prog, 1000, true);
         apply(tactic, &env, tree).expect("the tactic errored");
         env.misses().iter().map(|m| m.to_string()).collect()
@@ -1261,7 +1261,7 @@ mod tests {
     #[test]
     fn an_aimed_step_that_misses_says_what_was_there() {
         let prog = empty_prog();
-        let tree = || vec![dip(1, vec![dip(1, Vec::new())]), op(Instruction::Add)];
+        let tree = || vec![frame(1, vec![frame(1, Vec::new())]), op(Instruction::Add)];
 
         // Past the end: the sequence's size is the answer.
         let got = misses_of(&prog, &Tactic::At(9, vec![m("collapse")]), tree());
@@ -1271,12 +1271,12 @@ mod tests {
             "{}",
             got[0]
         );
-        assert!(got[0].contains("holds 2 nodes, 0 to 1"), "{}", got[0]);
+        assert!(got[0].contains("holds 2 factors, 0 to 1"), "{}", got[0]);
 
         // In range, wrong shape: what is there is the answer.
         let got = misses_of(&prog, &Tactic::At(1, vec![m("collapse")]), tree());
         assert_eq!(got.len(), 1, "{:?}", got);
-        assert!(got[0].contains("the node there is `add`"), "{}", got[0]);
+        assert!(got[0].contains("the factor there is `add`"), "{}", got[0]);
 
         // In range, but the window runs off the end. `fuse` reads two nodes and
         // there is one left, which is a different mistake from either above.
@@ -1290,18 +1290,18 @@ mod tests {
         let prog = empty_prog();
         let inner = || Box::new(Tactic::Each(vec![m("collapse")]));
 
-        // A dip has a body, not a then arm.
-        let tree = vec![dip(1, vec![dip(1, Vec::new())])];
+        // A `par` has a left and a right, not a then arm.
+        let tree = vec![frame(1, vec![frame(1, Vec::new())])];
         let got = misses_of(&prog, &Tactic::IntoNth(0, Selector::Then, inner()), tree);
         assert_eq!(got.len(), 1, "{:?}", got);
         assert!(got[0].starts_with("then(0, …)"), "{}", got[0]);
         assert!(got[0].contains("no then part"), "{}", got[0]);
 
         // And an index past the end of the sequence.
-        let tree = vec![dip(1, vec![dip(1, Vec::new())])];
-        let got = misses_of(&prog, &Tactic::IntoNth(9, Selector::Body, inner()), tree);
+        let tree = vec![frame(1, vec![frame(1, Vec::new())])];
+        let got = misses_of(&prog, &Tactic::IntoNth(9, Selector::Left, inner()), tree);
         assert_eq!(got.len(), 1, "{:?}", got);
-        assert!(got[0].contains("holds one node, at 0"), "{}", got[0]);
+        assert!(got[0].contains("holds one factor, at 0"), "{}", got[0]);
     }
 
     #[test]
@@ -1309,19 +1309,22 @@ mod tests {
         // The path is the other half of the address, so a miss two levels down
         // has to say which two levels.
         let prog = empty_prog();
-        let tree = vec![branch(vec![dip(1, vec![op(Instruction::Add)])], Vec::new())];
+        let tree = vec![branch(
+            vec![frame(1, vec![op(Instruction::Add)])],
+            Vec::new(),
+        )];
         let tactic = Tactic::IntoNth(
             0,
             Selector::Then,
             Box::new(Tactic::IntoNth(
                 0,
-                Selector::Body,
+                Selector::Left,
                 Box::new(Tactic::At(4, vec![m("collapse")])),
             )),
         );
         let got = misses_of(&prog, &tactic, tree);
         assert_eq!(got.len(), 1, "{:?}", got);
-        assert!(got[0].contains("in [0.then, 0.body]"), "{}", got[0]);
+        assert!(got[0].contains("in [0.then, 0.left]"), "{}", got[0]);
     }
 
     #[test]
@@ -1332,7 +1335,7 @@ mod tests {
         let prog = empty_prog();
         let tree = || {
             vec![
-                dip(1, vec![dip(1, vec![op(Instruction::Add)])]),
+                frame(1, vec![frame(1, vec![op(Instruction::Add)])]),
                 op(Instruction::Not),
             ]
         };
@@ -1341,7 +1344,7 @@ mod tests {
             Tactic::Bu(Box::new(aimed())),
             Tactic::Td(Box::new(aimed())),
             Tactic::Children(Box::new(aimed())),
-            Tactic::Into(Selector::Body, Box::new(aimed())),
+            Tactic::Into(Selector::Left, Box::new(aimed())),
             Tactic::Try(Box::new(Tactic::At(9, vec![m("collapse")]))),
             Tactic::Repeat(Box::new(aimed())),
             Tactic::RepeatN(3, Box::new(aimed())),
@@ -1361,7 +1364,7 @@ mod tests {
     #[test]
     fn an_alternative_taking_over_means_the_earlier_aim_was_a_candidate() {
         let prog = empty_prog();
-        let tree = || vec![op(Instruction::Add), dip(1, vec![dip(1, Vec::new())])];
+        let tree = || vec![op(Instruction::Add), frame(1, vec![frame(1, Vec::new())])];
 
         // The second branch does something, so the first was offered rather
         // than claimed.
@@ -1387,7 +1390,7 @@ mod tests {
         let prog = empty_prog();
         let env = Env::new(&prog, 1000, true);
         let tactic = Tactic::Must(Box::new(Tactic::At(5, vec![m("collapse")])));
-        let outcome = apply(&tactic, &env, vec![dip(1, vec![dip(1, Vec::new())])]).unwrap();
+        let outcome = apply(&tactic, &env, vec![frame(1, vec![frame(1, Vec::new())])]).unwrap();
         assert!(matches!(outcome, Outcome::Failed(_)));
         let misses = env.misses();
         assert_eq!(misses.len(), 1, "{:?}", misses);
@@ -1401,14 +1404,14 @@ mod tests {
         // in order to fix the number.
         let prog = empty_prog();
         let env = Env::new(&prog, 1000, true);
-        let tree = vec![dip(1, vec![dip(1, Vec::new())])];
+        let tree = vec![frame(1, vec![frame(1, Vec::new())])];
         let tactic = Tactic::Seq(vec![
             Tactic::At(0, vec![m("collapse")]),
             Tactic::At(9, vec![m("collapse")]),
         ]);
         let outcome = apply(&tactic, &env, tree).unwrap();
         assert!(matches!(outcome, Outcome::Changed(_)));
-        assert_eq!(outcome.into_nodes(), vec![dip(2, Vec::new())]);
+        assert_eq!(outcome.into_terms(), vec![frame(2, Vec::new())]);
         assert_eq!(env.script().len(), 1);
         assert_eq!(env.misses().len(), 1);
     }
@@ -1443,7 +1446,7 @@ mod tests {
             vec![m("collapse")],
         )))));
         assert!(matches!(
-            apply(&tactic, &env, vec![dip(1, Vec::new())]).unwrap(),
+            apply(&tactic, &env, vec![frame(1, Vec::new())]).unwrap(),
             Outcome::Unchanged(_)
         ));
     }
@@ -1452,16 +1455,16 @@ mod tests {
 
     #[test]
     fn a_cascade_reconsiders_what_a_firing_moved() {
-        // Three nested dips collapse to one, which needs the scan to come back
+        // Three nested `par`s collapse to one, which needs the scan to come back
         // to a position it already passed.
         let prog = empty_prog();
-        let tree = vec![dip(
+        let tree = vec![frame(
             1,
-            vec![dip(1, vec![dip(1, vec![op(Instruction::Add)])])],
+            vec![frame(1, vec![frame(1, vec![op(Instruction::Add)])])],
         )];
         let tactic = Tactic::Repeat(Box::new(Tactic::Bu(Box::new(each_of(&["collapse"])))));
         let (after, _) = run_checked(&prog, &tactic, tree);
-        assert_eq!(after, vec![dip(3, vec![op(Instruction::Add)])]);
+        assert_eq!(after, vec![frame(3, vec![op(Instruction::Add)])]);
     }
 
     #[test]
@@ -1485,20 +1488,20 @@ mod tests {
         // `a; b` must not throw away what `a` did merely because `b` had
         // nothing to do.
         let prog = empty_prog();
-        let tree = vec![dip(1, vec![dip(1, vec![])])];
+        let tree = vec![frame(1, vec![frame(1, vec![])])];
         let tactic = Tactic::Seq(vec![each_of(&["collapse"]), each_of(&["cancel_tuple"])]);
         let (after, script) = run_checked(&prog, &tactic, tree);
-        assert_eq!(after, vec![dip(2, vec![])]);
+        assert_eq!(after, vec![frame(2, vec![])]);
         assert_eq!(script.len(), 1);
     }
 
     #[test]
     fn choice_falls_through_a_branch_that_changed_nothing() {
         let prog = empty_prog();
-        let tree = vec![dip(1, vec![dip(1, vec![])])];
+        let tree = vec![frame(1, vec![frame(1, vec![])])];
         let tactic = Tactic::Choice(vec![each_of(&["cancel_tuple"]), each_of(&["collapse"])]);
         let (after, script) = run_checked(&prog, &tactic, tree);
-        assert_eq!(after, vec![dip(2, vec![])]);
+        assert_eq!(after, vec![frame(2, vec![])]);
         assert_eq!(script.len(), 1);
     }
 
@@ -1527,22 +1530,22 @@ mod tests {
     #[test]
     fn repeat_n_stops_early_when_there_is_nothing_left() {
         let prog = empty_prog();
-        let tree = vec![dip(1, vec![dip(1, vec![])])];
+        let tree = vec![frame(1, vec![frame(1, vec![])])];
         let tactic = Tactic::RepeatN(50, Box::new(Tactic::Bu(Box::new(each_of(&["collapse"])))));
         let (_, script) = run_checked(&prog, &tactic, tree);
         assert_eq!(script.len(), 1, "it kept going after the work ran out");
     }
 
     #[test]
-    fn the_three_selectors_partition_children() {
+    fn the_selectors_partition_children() {
         let prog = empty_prog();
         let tree = || {
             vec![
                 branch(
-                    vec![dip(1, vec![dip(1, vec![])])],
-                    vec![dip(1, vec![dip(1, vec![])])],
+                    vec![frame(1, vec![frame(1, vec![])])],
+                    vec![frame(1, vec![frame(1, vec![])])],
                 ),
-                dip(1, vec![dip(1, vec![dip(1, vec![])])]),
+                frame(1, vec![frame(1, vec![frame(1, vec![])])]),
             ]
         };
         let inner = || each_of(&["collapse"]);
@@ -1550,7 +1553,8 @@ mod tests {
         let split = Tactic::Seq(vec![
             Tactic::Into(Selector::Then, Box::new(inner())),
             Tactic::Into(Selector::Else, Box::new(inner())),
-            Tactic::Into(Selector::Body, Box::new(inner())),
+            Tactic::Into(Selector::Left, Box::new(inner())),
+            Tactic::Into(Selector::Right, Box::new(inner())),
         ]);
         let (a, _) = run_checked(&prog, &all, tree());
         let (b, _) = run_checked(&prog, &split, tree());
@@ -1561,14 +1565,14 @@ mod tests {
     fn then_and_else_each_reach_one_arm_and_leave_the_other() {
         let prog = empty_prog();
         let tree = vec![branch(
-            vec![dip(1, vec![dip(1, vec![])])],
-            vec![dip(1, vec![dip(1, vec![])])],
+            vec![frame(1, vec![frame(1, vec![])])],
+            vec![frame(1, vec![frame(1, vec![])])],
         )];
         let tactic = Tactic::Into(Selector::Then, Box::new(each_of(&["collapse"])));
         let (after, script) = run_checked(&prog, &tactic, tree);
         assert_eq!(script.len(), 1);
         let [
-            Node::Branch {
+            Term::Branch {
                 then_body,
                 else_body,
                 ..
@@ -1577,8 +1581,8 @@ mod tests {
         else {
             panic!("expected a branch")
         };
-        assert_eq!(then_body, &vec![dip(2, vec![])]);
-        assert_eq!(else_body, &vec![dip(1, vec![dip(1, vec![])])]);
+        assert_eq!(**then_body, frame(2, vec![]));
+        assert_eq!(**else_body, frame(1, vec![frame(1, vec![])]));
     }
 
     // -- rollback -----------------------------------------------------------
@@ -1588,7 +1592,7 @@ mod tests {
         // This is the one place the two could diverge: if the tree goes back
         // but the script does not, the script describes work that was undone.
         let prog = empty_prog();
-        let tree = vec![dip(1, vec![dip(1, vec![])])];
+        let tree = vec![frame(1, vec![frame(1, vec![])])];
         let tactic = Tactic::Try(Box::new(Tactic::Seq(vec![
             each_of(&["collapse"]),
             Tactic::Fail,
@@ -1601,7 +1605,10 @@ mod tests {
     #[test]
     fn rollback_keeps_the_work_that_came_before_it() {
         let prog = empty_prog();
-        let tree = vec![dip(1, vec![dip(1, vec![])]), dip(1, vec![dip(1, vec![])])];
+        let tree = vec![
+            frame(1, vec![frame(1, vec![])]),
+            frame(1, vec![frame(1, vec![])]),
+        ];
         // One collapse survives; the failing sequence after it does not.
         let tactic = Tactic::Seq(vec![
             once_of(&["collapse"]),
@@ -1624,7 +1631,7 @@ mod tests {
             each_of(&["collapse"]),
             Tactic::Fail,
         ])));
-        apply(&tactic, &env, vec![dip(1, vec![dip(1, vec![])])]).unwrap();
+        apply(&tactic, &env, vec![frame(1, vec![frame(1, vec![])])]).unwrap();
         assert_eq!(env.steps_taken(), 1);
         assert!(env.script().is_empty());
     }
@@ -1655,7 +1662,7 @@ mod tests {
         let tactic = Tactic::Repeat(Box::new(Tactic::Bu(Box::new(each_of(&[
             "collapse", "expand",
         ])))));
-        let err = apply(&tactic, &env, vec![dip(3, vec![op(Instruction::Add)])]).unwrap_err();
+        let err = apply(&tactic, &env, vec![frame(3, vec![op(Instruction::Add)])]).unwrap_err();
         let TacticError::OutOfFuel { recent, .. } = &err else {
             panic!("expected the budget to run out, got {:?}", err)
         };
@@ -1672,7 +1679,7 @@ mod tests {
 
         let mut checked = 0;
         for (idx, _) in library.sentences.iter_enumerated() {
-            let tree = build(library, idx);
+            let tree = build(library, idx).into_spine();
             if tree.is_empty() {
                 continue;
             }
@@ -1700,7 +1707,7 @@ mod tests {
                 continue;
             }
             let mut replayed = before;
-            apply_script(&prog, &mut replayed, &script, true)
+            apply_script_seq(&prog, &mut replayed, &script, true)
                 .unwrap_or_else(|e| panic!("#{} did not replay: {}", usize::from(idx), e));
             assert_eq!(
                 replayed,
@@ -1745,7 +1752,7 @@ mod tests {
             .map(|(i, _)| i)
             .unwrap();
 
-        let tree = build(library, outer);
+        let tree = build(library, outer).into_spine();
         let tactic = Tactic::Repeat(Box::new(Tactic::Td(Box::new(each_of(&[
             "unfold",
             "flatten",

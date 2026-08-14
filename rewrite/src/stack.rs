@@ -21,13 +21,14 @@ use std::rc::Rc;
 
 use bytecode::{Instruction, Value};
 
-use crate::arity::node_arity;
-use crate::ir::Node;
+use crate::arity::term_arity;
+use crate::ir::Term;
 use crate::program::Program;
 
-/// What a stack slot holds.
+/// What a stack slot holds: a *value* term, which has nothing to do with the
+/// program terms of [`crate::ir`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) enum Term {
+pub(crate) enum Sym {
     /// A literal.
     Const(ConstKey),
     /// One of the sentence's own inputs, counted from the top of the stack.
@@ -36,12 +37,12 @@ pub(crate) enum Term {
     /// branch arms disagreed.
     Opaque(usize),
     /// Element `i` of a tuple that was never built here.
-    Proj(usize, Rc<Term>),
+    Proj(usize, Rc<Sym>),
     /// A tuple built here. Index 0 first, which is the element that sat
     /// deepest on the stack.
-    Tup(Vec<Rc<Term>>),
+    Tup(Vec<Rc<Sym>>),
     /// The result of an operator, by name.
-    App(&'static str, Vec<Rc<Term>>),
+    App(&'static str, Vec<Rc<Sym>>),
 }
 
 /// `Value` is not `Hash`, so terms key on its rendering instead. Two constants
@@ -83,7 +84,7 @@ fn short_symbol(path: &str) -> String {
 }
 
 /// The stack, or `None` where it stopped being knowable.
-pub(crate) type Stack = Option<Vec<Rc<Term>>>;
+pub(crate) type Stack = Option<Vec<Rc<Sym>>>;
 
 /// Hands out `Opaque` identities for values this interpretation cannot see.
 pub(crate) struct Fresh(usize);
@@ -92,9 +93,9 @@ impl Fresh {
     pub(crate) fn new() -> Self {
         Fresh(0)
     }
-    fn next(&mut self) -> Rc<Term> {
+    fn next(&mut self) -> Rc<Sym> {
         self.0 += 1;
-        Rc::new(Term::Opaque(self.0))
+        Rc::new(Sym::Opaque(self.0))
     }
 }
 
@@ -103,38 +104,51 @@ impl Fresh {
 /// Numbered from the top, so `in0` is the argument of a `1 -> 1` function.
 pub(crate) fn entry(inputs: i64, _fresh: &mut Fresh) -> Stack {
     let n = usize::try_from(inputs).ok()?;
-    Some((0..n).rev().map(|i| Rc::new(Term::In(i))).collect())
+    Some((0..n).rev().map(|i| Rc::new(Sym::In(i))).collect())
 }
 
-fn constant(v: &Value) -> Rc<Term> {
-    Rc::new(Term::Const(ConstKey::new(v)))
+fn constant(v: &Value) -> Rc<Sym> {
+    Rc::new(Sym::Const(ConstKey::new(v)))
 }
 
-fn as_const(t: &Term) -> Option<&ConstKey> {
+fn as_const(t: &Sym) -> Option<&ConstKey> {
     match t {
-        Term::Const(k) => Some(k),
+        Sym::Const(k) => Some(k),
         _ => None,
     }
 }
 
-/// Runs one node, returning the stack after it.
-pub(crate) fn step(prog: &Program, stack: Stack, node: &Node, fresh: &mut Fresh) -> Stack {
+/// Runs one factor of a spine, returning the stack after it.
+pub(crate) fn step(prog: &Program, stack: Stack, node: &Term, fresh: &mut Fresh) -> Stack {
     let mut s = stack?;
     match node {
-        Node::Op(inst) => op(inst, &mut s, fresh).then_some(s),
-        Node::Dip { depth, body, .. } => {
-            if *depth > s.len() {
+        Term::Op(inst) => op(inst, &mut s, fresh).then_some(s),
+        // The identity passes its values through, which is the whole of what
+        // makes a `par` a window: the right-hand side hands back what it was
+        // given and the left runs on the rest.
+        Term::Id(_) => Some(s),
+        Term::Compose(a, b) => {
+            let lower = step(prog, Some(s), a, fresh)?;
+            step(prog, Some(lower), b, fresh)
+        }
+        Term::Par { left, right, .. } => {
+            // The right runs on the top of the stack and the left on what is
+            // under it, so the carve is by the right's own input arity.
+            let (hidden, _) = term_arity(prog, right)?;
+            let hidden = usize::try_from(hidden).ok()?;
+            if hidden > s.len() {
                 return None;
             }
-            let hidden = s.split_off(s.len() - depth);
-            let mut lower = run(prog, Some(s), body, fresh)?;
-            lower.extend(hidden);
+            let upper = s.split_off(s.len() - hidden);
+            let mut lower = step(prog, Some(s), left, fresh)?;
+            let upper = step(prog, Some(upper), right, fresh)?;
+            lower.extend(upper);
             Some(lower)
         }
         // Where the arms disagree, the depth still follows from the arity but
         // the identities do not, so the slots become fresh rather than wrong.
-        Node::Branch { .. } | Node::Call { .. } => {
-            let (n, m) = node_arity(prog, node)?;
+        Term::Branch { .. } | Term::Call(_) => {
+            let (n, m) = term_arity(prog, node)?;
             let n = usize::try_from(n).ok()?;
             let m = usize::try_from(m).ok()?;
             if n > s.len() {
@@ -147,18 +161,8 @@ pub(crate) fn step(prog: &Program, stack: Stack, node: &Node, fresh: &mut Fresh)
     }
 }
 
-/// Runs a whole sequence.
-pub(crate) fn run(prog: &Program, stack: Stack, nodes: &[Node], fresh: &mut Fresh) -> Stack {
-    let mut s = stack;
-    for node in nodes {
-        s = step(prog, s, node, fresh);
-        s.as_ref()?;
-    }
-    s
-}
-
 /// Applies one instruction. Returns false where the effect is not knowable.
-fn op(inst: &Instruction, s: &mut Vec<Rc<Term>>, fresh: &mut Fresh) -> bool {
+fn op(inst: &Instruction, s: &mut Vec<Rc<Sym>>, fresh: &mut Fresh) -> bool {
     macro_rules! pop {
         () => {
             match s.pop() {
@@ -190,23 +194,23 @@ fn op(inst: &Instruction, s: &mut Vec<Rc<Term>>, fresh: &mut Fresh) -> bool {
             }
             // `tuple n` keeps stack order: the deepest element is index 0.
             let es: Vec<_> = s.split_off(s.len() - n);
-            s.push(Rc::new(Term::Tup(es)));
+            s.push(Rc::new(Sym::Tup(es)));
         }
         Instruction::Untuple(n) => {
             let t = pop!();
             match &*t {
-                Term::Tup(es) if es.len() == *n => {
+                Sym::Tup(es) if es.len() == *n => {
                     // Index 0 goes back to the deepest slot, so push in order.
                     for e in es {
                         s.push(e.clone());
                     }
                     // A tuple this wide always comes apart, and the view knows
                     // it, so the flag is a literal rather than an opaque slot.
-                    s.push(Rc::new(Term::Const(ConstKey::new(&Value::Bool(true)))));
+                    s.push(Rc::new(Sym::Const(ConstKey::new(&Value::Bool(true)))));
                 }
                 _ => {
                     for i in 0..*n {
-                        s.push(Rc::new(Term::Proj(i, t.clone())));
+                        s.push(Rc::new(Sym::Proj(i, t.clone())));
                     }
                     s.push(fresh.next());
                 }
@@ -234,7 +238,7 @@ fn op(inst: &Instruction, s: &mut Vec<Rc<Term>>, fresh: &mut Fresh) -> bool {
         Instruction::And | Instruction::Or => {
             let b = pop!();
             let a = pop!();
-            s.push(Rc::new(Term::App(op_name(inst), vec![a, b])));
+            s.push(Rc::new(Sym::App(op_name(inst), vec![a, b])));
         }
         Instruction::Greater
         | Instruction::Less
@@ -246,7 +250,7 @@ fn op(inst: &Instruction, s: &mut Vec<Rc<Term>>, fresh: &mut Fresh) -> bool {
         | Instruction::ConstStringCharAt => {
             let b = pop!();
             let a = pop!();
-            s.push(Rc::new(Term::App(op_name(inst), vec![a, b])));
+            s.push(Rc::new(Sym::App(op_name(inst), vec![a, b])));
             // Whether it succeeded is not something the view tracks, so the
             // flag is a fresh opaque slot rather than a claim.
             s.push(fresh.next());
@@ -262,8 +266,8 @@ fn op(inst: &Instruction, s: &mut Vec<Rc<Term>>, fresh: &mut Fresh) -> bool {
 
 /// `equal` is where the whole point of this view lives: two slots holding the
 /// same term hold the same value, so the comparison is already decided.
-fn equality(a: &Rc<Term>, b: &Rc<Term>) -> Rc<Term> {
-    let decided = |v: bool| Rc::new(Term::Const(ConstKey::new(&Value::Bool(v))));
+fn equality(a: &Rc<Sym>, b: &Rc<Sym>) -> Rc<Sym> {
+    let decided = |v: bool| Rc::new(Sym::Const(ConstKey::new(&Value::Bool(v))));
     if let (Some(x), Some(y)) = (as_const(a), as_const(b)) {
         return decided(x == y);
     }
@@ -272,33 +276,33 @@ fn equality(a: &Rc<Term>, b: &Rc<Term>) -> Rc<Term> {
     if a == b {
         return decided(true);
     }
-    Rc::new(Term::App("==", vec![a.clone(), b.clone()]))
+    Rc::new(Sym::App("==", vec![a.clone(), b.clone()]))
 }
 
-fn unary(inst: &Instruction, a: &Rc<Term>) -> Rc<Term> {
+fn unary(inst: &Instruction, a: &Rc<Sym>) -> Rc<Sym> {
     let name = op_name(inst);
     if let Some(k) = as_const(a)
         && let Some(v) = fold_unary(inst, k)
     {
-        return Rc::new(Term::Const(ConstKey::new(&v)));
+        return Rc::new(Sym::Const(ConstKey::new(&v)));
     }
     // A tuple built here answers `is_tuple` and `tuple_length` on sight.
-    if let Term::Tup(es) = &**a {
+    if let Sym::Tup(es) = &**a {
         match inst {
-            Instruction::IsTuple => return Rc::new(Term::Const(ConstKey::new(&Value::Bool(true)))),
+            Instruction::IsTuple => return Rc::new(Sym::Const(ConstKey::new(&Value::Bool(true)))),
             Instruction::TupleLength => {
-                return Rc::new(Term::Const(ConstKey::new(&Value::Int(es.len() as i64))));
+                return Rc::new(Sym::Const(ConstKey::new(&Value::Int(es.len() as i64))));
             }
             Instruction::IsInt
             | Instruction::IsBool
             | Instruction::IsConstString
             | Instruction::IsSymbol => {
-                return Rc::new(Term::Const(ConstKey::new(&Value::Bool(false))));
+                return Rc::new(Sym::Const(ConstKey::new(&Value::Bool(false))));
             }
             _ => {}
         }
     }
-    Rc::new(Term::App(name, vec![a.clone()]))
+    Rc::new(Sym::App(name, vec![a.clone()]))
 }
 
 fn fold_unary(inst: &Instruction, k: &ConstKey) -> Option<Value> {
@@ -357,7 +361,7 @@ fn op_name(inst: &Instruction) -> &'static str {
 /// letter from one line to the next is a slot that kept its value, and that is
 /// exactly what a reader is trying to follow.
 pub(crate) struct Names {
-    labels: HashMap<Rc<Term>, String>,
+    labels: HashMap<Rc<Sym>, String>,
     next: usize,
     /// Label, then what it stands for, in the order the labels were handed out.
     legend: Vec<(String, String)>,
@@ -373,8 +377,8 @@ impl Names {
     }
 
     /// A literal shows itself; anything else gets a letter.
-    pub(crate) fn label(&mut self, t: &Rc<Term>) -> String {
-        if let Term::Const(k) = &**t {
+    pub(crate) fn label(&mut self, t: &Rc<Sym>) -> String {
+        if let Sym::Const(k) = &**t {
             return k.0.clone();
         }
         if let Some(l) = self.labels.get(t) {
@@ -390,17 +394,17 @@ impl Names {
 
     /// One level deep, in terms of the labels of the parts. Deeper than that
     /// and the legend stops being readable — the parts have their own entries.
-    fn describe(&mut self, t: &Rc<Term>) -> String {
+    fn describe(&mut self, t: &Rc<Sym>) -> String {
         match &**t {
-            Term::In(i) => format!("input {}", i),
-            Term::Opaque(_) => "?".to_string(),
-            Term::Const(k) => k.0.clone(),
-            Term::Proj(i, inner) => format!("{}.{}", self.label(inner), i),
-            Term::Tup(es) => {
+            Sym::In(i) => format!("input {}", i),
+            Sym::Opaque(_) => "?".to_string(),
+            Sym::Const(k) => k.0.clone(),
+            Sym::Proj(i, inner) => format!("{}.{}", self.label(inner), i),
+            Sym::Tup(es) => {
                 let parts: Vec<_> = es.iter().map(|e| self.label(e)).collect();
                 format!("({})", parts.join(", "))
             }
-            Term::App(name, args) => {
+            Sym::App(name, args) => {
                 let parts: Vec<_> = args.iter().map(|a| self.label(a)).collect();
                 if args.len() == 2 && !name.chars().next().is_some_and(char::is_alphabetic) {
                     format!("{} {} {}", parts[0], name, parts[1])

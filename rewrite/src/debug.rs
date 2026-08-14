@@ -30,9 +30,9 @@ use std::io::{self, BufRead, Write};
 use bytecode::SentenceIndex;
 
 use crate::Options;
-use crate::applier::{apply_script, preview};
+use crate::applier::{apply_script_seq, preview};
 use crate::diff::side_by_side;
-use crate::ir::{Node, build};
+use crate::ir::{Term, build};
 use crate::print::render_body;
 use crate::program::Program;
 use crate::rule::{Script, Step};
@@ -268,10 +268,10 @@ impl Session<'_> {
     /// steps" has ever meant. A step that will not apply is reported rather
     /// than panicked on: the session is worth keeping even when the script it
     /// is walking has stopped fitting.
-    fn tree_at(&self, n: u64) -> Vec<Node> {
+    fn tree_at(&self, n: u64) -> Vec<Term> {
         let mut body = tree(self.prog, self.root);
         let prefix = &self.script[..(n as usize).min(self.script.len())];
-        if let Err(err) = apply_script(self.prog, &mut body, prefix, self.opts.check) {
+        if let Err(err) = apply_script_seq(self.prog, &mut body, prefix, self.opts.check) {
             println!("  the derivation stopped fitting: {}", err);
         }
         body
@@ -329,8 +329,8 @@ fn histogram(steps: &[Step]) -> Vec<(&'static str, usize)> {
     counts
 }
 
-fn tree(prog: &Program, root: SentenceIndex) -> Vec<Node> {
-    build(prog.library(), root)
+fn tree(prog: &Program, root: SentenceIndex) -> Vec<Term> {
+    build(prog.library(), root).into_spine()
 }
 
 /// One step: which law, which way, where, and what it does to its window.
@@ -487,16 +487,17 @@ mod tests {
             step(Rule::Collapse {
                 k: 1,
                 j: 1,
-                a: Vec::new(),
+                a: Term::nil(),
                 outer: Vec::new(),
                 inner: Vec::new(),
             })
         };
         let fuse = || {
-            step(Rule::Fuse {
-                k: 1,
-                a: Vec::new(),
-                b: Vec::new(),
+            step(Rule::Interchange {
+                a: Term::nil(),
+                b: Term::nil(),
+                c: Term::Id(1),
+                d: Term::Id(1),
                 a_origins: Vec::new(),
                 b_origins: Vec::new(),
             })
@@ -506,7 +507,7 @@ mod tests {
         let log = vec![cancel(), fuse(), cancel(), collapse()];
         assert_eq!(
             histogram(&log),
-            vec![("cancel_tuple", 2), ("collapse", 1), ("fuse", 1)]
+            vec![("cancel_tuple", 2), ("collapse", 1), ("interchange", 1)]
         );
         assert_eq!(histogram(&log[..1]), vec![("cancel_tuple", 1)]);
     }

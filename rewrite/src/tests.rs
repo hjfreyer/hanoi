@@ -11,21 +11,21 @@ use bytecode::{Instruction, Library, SentenceIndex, Value, assemble};
 use std::fs;
 use std::path::Path;
 
-use crate::applier::apply_script;
-use crate::arity::{node_arity, seq_arity};
+use crate::applier::apply_script_seq;
+use crate::arity::{seq_arity, term_arity};
 use crate::engine::{Env, Tactic, run as run_tactic};
-use crate::ir::{Node, build};
+use crate::ir::{Term, build, id_word};
 use crate::program::Program;
 use crate::rule::Script;
 use crate::script::{Definitions, PRELUDE};
 
 /// The prelude tactics, by the name a test refers to them by.
-const DIPS: &str = "dips";
+const DIPS: &str = "frames";
 const FACTOR: &str = "factoring";
 const ANNIHILATE: &str = "annihilation";
 
 /// Net stack change, which every equation must preserve exactly.
-fn net(prog: &Program, nodes: &[Node]) -> Option<i64> {
+fn net(prog: &Program, nodes: &[Term]) -> Option<i64> {
     let (inputs, outputs) = seq_arity(prog, nodes);
     outputs.map(|o| o - inputs)
 }
@@ -52,18 +52,18 @@ fn compile_for(prog: &Program, src: &str) -> Tactic {
 /// Every test in this file therefore also asserts that each step preserved the
 /// net stack effect of the window it rewrote, and that the derivation the run
 /// recorded reproduces the run.
-fn run(prog: &Program, nodes: Vec<Node>, src: &str) -> Vec<Node> {
+fn run(prog: &Program, nodes: Vec<Term>, src: &str) -> Vec<Term> {
     with_script(prog, nodes, src).0
 }
 
-fn with_script(prog: &Program, nodes: Vec<Node>, src: &str) -> (Vec<Node>, Script) {
+fn with_script(prog: &Program, nodes: Vec<Term>, src: &str) -> (Vec<Term>, Script) {
     let env = Env::new(prog, 1_000_000, true);
     let before = nodes.clone();
     let (after, script) =
         run_tactic(&env, &compile(src), nodes).unwrap_or_else(|e| panic!("{}", e));
 
     let mut replayed = before;
-    apply_script(prog, &mut replayed, &script, true)
+    apply_script_seq(prog, &mut replayed, &script, true)
         .unwrap_or_else(|e| panic!("`{}` produced a script that does not replay: {}", src, e));
     assert_eq!(
         replayed, after,
@@ -87,24 +87,24 @@ fn program_of(code: &str) -> &'static Program<'static> {
 /// Unfolding first because these tests are about rewriting rather than about
 /// expansion — `build` itself expands nothing, so without this every call would
 /// still be a `Call` node.
-fn tree_of(code: &str, src: &str) -> (&'static Program<'static>, Vec<Node>) {
+fn tree_of(code: &str, src: &str) -> (&'static Program<'static>, Vec<Term>) {
     let prog = program_of(code);
-    let body = build(prog.library(), SentenceIndex::from(0));
+    let body = build(prog.library(), SentenceIndex::from(0)).into_spine();
     let body = run(prog, body, &format!("unfold_all; {}", src));
     (prog, body)
 }
 
-fn tree(code: &str, src: &str) -> Vec<Node> {
+fn tree(code: &str, src: &str) -> Vec<Term> {
     tree_of(code, src).1
 }
 
 /// The depth before each instruction of a sequence, entered at its inputs.
-fn depths(prog: &Program, nodes: &[Node]) -> Vec<Option<i64>> {
+fn depths(prog: &Program, nodes: &[Term]) -> Vec<Option<i64>> {
     let mut depth = Some(seq_arity(prog, nodes).0);
     let mut out = Vec::new();
     for node in nodes {
         out.push(depth);
-        depth = match (depth, node_arity(prog, node)) {
+        depth = match (depth, term_arity(prog, node)) {
             (Some(d), Some((n, m))) => Some(d - n + m),
             _ => None,
         };
@@ -112,18 +112,28 @@ fn depths(prog: &Program, nodes: &[Node]) -> Vec<Option<i64>> {
     out
 }
 
-fn shape(nodes: &[Node]) -> Vec<String> {
-    nodes
-        .iter()
-        .map(|node| match node {
-            Node::Op(inst) => format!("{}", inst),
-            Node::Dip { depth, body, .. } => {
-                format!("dip {} {{ {} }}", depth, shape(body).join(" "))
-            }
-            Node::Branch { .. } => "branch".to_string(),
-            Node::Call { depth, target } => format!("call {} #{}", depth, usize::from(*target)),
-        })
-        .collect()
+fn shape(nodes: &[Term]) -> Vec<String> {
+    nodes.iter().map(shape_of).collect()
+}
+
+/// The same, for a sub-term: its spine, factor by factor.
+fn shape_in(term: &Term) -> Vec<String> {
+    term.spine().into_iter().map(shape_of).collect()
+}
+
+/// One factor, as the term language spells it.
+fn shape_of(node: &Term) -> String {
+    let inner = |t: &Term| shape(&t.spine().into_iter().cloned().collect::<Vec<_>>()).join(" ");
+    match node {
+        Term::Op(inst) => format!("{}", inst),
+        Term::Id(k) => id_word(*k),
+        Term::Call(target) => format!("jump #{}", usize::from(*target)),
+        Term::Compose(..) => inner(node),
+        Term::Par { left, right, .. } => {
+            format!("par {{ {} }} {{ {} }}", inner(left), inner(right))
+        }
+        Term::Branch { .. } => "branch".to_string(),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -133,7 +143,7 @@ fn shape(nodes: &[Node]) -> Vec<String> {
 #[test]
 fn depth_counts_inputs_once() {
     let prog = program_of("sentence probe { add drop 0 drop 0 }");
-    let body = build(prog.library(), SentenceIndex::from(0));
+    let body = build(prog.library(), SentenceIndex::from(0)).into_spine();
     // Two operands in, the sum and its flag out, then both dropped.
     assert_eq!(
         depths(prog, &body),
@@ -154,11 +164,11 @@ fn a_branch_takes_what_the_hungrier_arm_takes() {
     // `{ }` is (0 -> 0) and `{ drop 0  push true }` is (1 -> 1): same net,
     // different demands. The branch needs the condition and the value.
     let prog = program_of("sentence probe { copy branch { } { drop 0 push true } }");
-    let body = build(prog.library(), SentenceIndex::from(0));
+    let body = build(prog.library(), SentenceIndex::from(0)).into_spine();
     let [_, inner] = &body[..] else {
         panic!("expected a pick and a branch, got {:?}", shape(&body))
     };
-    assert_eq!(node_arity(prog, inner), Some((2, 1)));
+    assert_eq!(term_arity(prog, inner), Some((2, 1)));
 }
 
 /// The rewrite that understating a branch's arity used to license.
@@ -205,36 +215,39 @@ fn a_function_that_is_not_the_identity_is_not_rewritten_into_one() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn dips_sink_past_pushes_and_arithmetic() {
+fn frames_sink_past_pushes_and_arithmetic() {
     // The dip's window clears what each node leaves behind, so it walks left
     // and the depth follows the arithmetic.
     let got = tree("sentence probe { push 1 dip 2 { drop 0 } }", DIPS);
     assert_eq!(
         shape(&got),
-        vec!["dip 1 { drop }", "push 1"],
+        vec!["par { drop } { id }", "push 1"],
         "{:?}",
         shape(&got)
     );
 }
 
 #[test]
-fn dips_fuse_when_they_meet_at_the_same_depth() {
+fn frames_fuse_when_they_meet_at_the_same_width() {
     let got = tree("sentence probe { dip 1 { push 1 } dip 1 { push 2 } }", DIPS);
-    assert_eq!(shape(&got), vec!["dip 1 { push 1 push 2 }"]);
+    assert_eq!(shape(&got), vec!["par { push 1 push 2 } { id }"]);
 }
 
 #[test]
-fn nested_dips_collapse_and_then_keep_sinking() {
+fn nested_frames_collapse_and_then_keep_sinking() {
     // Collapsing first is what lets the interchange law see the frame's true
     // hidden depth; without it the outer frame reports 1 and stops early.
     let got = tree("sentence probe { push 1 dip 1 { dip 1 { drop 0 } } }", DIPS);
-    assert_eq!(shape(&got), vec!["dip 1 { drop }", "push 1"]);
+    assert_eq!(shape(&got), vec!["par { drop } { id }", "push 1"]);
 }
 
 #[test]
-fn a_deep_dip_becomes_a_nest_of_unary_dips() {
+fn a_wide_window_becomes_a_nest_of_one_value_ones() {
     let got = tree("sentence probe { dip 3 { drop 0 } }", "unary");
-    assert_eq!(shape(&got), vec!["dip 1 { dip 1 { dip 1 { drop } } }"]);
+    assert_eq!(
+        shape(&got),
+        vec!["par { par { par { drop } { id } } { id } } { id }"]
+    );
 }
 
 #[test]
@@ -252,14 +265,18 @@ fn a_dip_stops_at_a_pick_that_reaches_into_it() {
     let got = tree("sentence probe { pick 2 dip 3 { drop 0 } }", DIPS);
     assert_eq!(
         shape(&got),
-        vec!["dip 1 { dip 1 { copy } swap }", "dip 3 { drop }", "swap"]
+        vec![
+            "par { par { copy } { id } swap } { id }",
+            "par { drop } { id 3 }",
+            "swap"
+        ]
     );
 }
 
 #[test]
 fn a_dip_sinks_past_a_pick_it_clears() {
     let got = tree("sentence probe { copy dip 2 { drop 0 } }", DIPS);
-    assert_eq!(shape(&got), vec!["dip 1 { drop }", "copy"]);
+    assert_eq!(shape(&got), vec!["par { drop } { id }", "copy"]);
 }
 
 #[test]
@@ -280,9 +297,9 @@ fn fusing_records_every_origin() {
         .find(|(_, n)| *n == "probe")
         .map(|(i, _)| i)
         .unwrap();
-    let body = build(prog.library(), probe);
+    let body = build(prog.library(), probe).into_spine();
     let got = run(prog, body, DIPS);
-    let [Node::Dip { origins, .. }] = &got[..] else {
+    let Some((_, origins, _)) = got[0].as_frame() else {
         panic!("expected one fused frame, got {:?}", shape(&got))
     };
     assert_eq!(origins.len(), 2, "origins were {:?}", origins);
@@ -304,7 +321,7 @@ fn a_shared_branch_prefix_is_hoisted_under_a_dip() {
     let got = tree(&arms("drop 0 push 1", "drop 0 push 2"), FACTOR);
     assert_eq!(
         shape(&got),
-        vec!["copy", "dip 1 { drop }", "branch"],
+        vec!["copy", "par { drop } { id }", "branch"],
         "{:?}",
         shape(&got)
     );
@@ -313,7 +330,10 @@ fn a_shared_branch_prefix_is_hoisted_under_a_dip() {
 #[test]
 fn factoring_takes_the_whole_shared_run() {
     let got = tree(&arms("drop 0 not push 1", "drop 0 not push 2"), FACTOR);
-    assert_eq!(shape(&got), vec!["copy", "dip 1 { drop not }", "branch"]);
+    assert_eq!(
+        shape(&got),
+        vec!["copy", "par { drop not } { id }", "branch"]
+    );
 }
 
 #[test]
@@ -321,7 +341,7 @@ fn factoring_stops_where_the_arms_diverge() {
     let got = tree(&arms("drop 0 push 1 not", "drop 0 push 2 not"), FACTOR);
     // The shared prefix comes out; the shared *suffix* is `distribute`'s
     // business read backwards and is not part of factoring.
-    assert_eq!(shape(&got), vec!["copy", "dip 1 { drop }", "branch"]);
+    assert_eq!(shape(&got), vec!["copy", "par { drop } { id }", "branch"]);
 }
 
 #[test]
@@ -343,7 +363,7 @@ fn factoring_looks_past_provenance() {
         .find(|(_, n)| *n == "probe")
         .map(|(i, _)| i)
         .unwrap();
-    let body = build(prog.library(), probe);
+    let body = build(prog.library(), probe).into_spine();
     let got = run(prog, body, FACTOR);
     assert_eq!(got.len(), 3, "nothing was factored: {:?}", shape(&got));
 }
@@ -433,7 +453,7 @@ fn building_a_tuple_and_taking_it_apart_leaves_the_flag() {
 // Unfolding
 // ---------------------------------------------------------------------------
 
-fn raw(code: &str, name: &str) -> (&'static Program<'static>, Vec<Node>) {
+fn raw(code: &str, name: &str) -> (&'static Program<'static>, Vec<Term>) {
     let prog = program_of(code);
     let idx = prog
         .library()
@@ -442,7 +462,7 @@ fn raw(code: &str, name: &str) -> (&'static Program<'static>, Vec<Node>) {
         .find(|(_, n)| *n == name)
         .map(|(i, _)| i)
         .unwrap_or_else(|| panic!("no sentence '{}'", name));
-    let body = build(prog.library(), idx);
+    let body = build(prog.library(), idx).into_spine();
     (prog, body)
 }
 
@@ -455,14 +475,14 @@ const CHAIN: &str = r#"
 #[test]
 fn build_expands_nothing_on_its_own() {
     let (_, body) = raw(CHAIN, "first");
-    assert_eq!(shape(&body), vec!["call 0 #1"], "{:?}", shape(&body));
+    assert_eq!(shape(&body), vec!["jump #1"], "{:?}", shape(&body));
 }
 
 #[test]
 fn unfolding_is_bounded_one_call_at_a_time() {
     let (prog, body) = raw(CHAIN, "first");
     let once = run(prog, body.clone(), "once(unfold)");
-    assert_eq!(shape(&once), vec!["call 0 #0"], "{:?}", shape(&once));
+    assert_eq!(shape(&once), vec!["jump #0"], "{:?}", shape(&once));
     let twice = run(prog, once, "once(unfold)");
     assert_eq!(shape(&twice), vec!["push 3"]);
 }
@@ -493,7 +513,7 @@ fn unfolding_puts_the_callee_in_reach_of_the_callers_laws() {
 
 #[test]
 fn passes_compose() {
-    // Factoring exposes a frame, the dip passes move it, and cleanup cancels
+    // Factoring exposes a frame, the frame passes move it, and cleanup cancels
     // what that brings together. Each alone leaves work the others finish.
     let code = "sentence probe { copy branch { drop 0 push 1 drop 0 } { drop 0 push 2 drop 0 } }";
     let (prog, plain) = tree_of(code, "id");
@@ -502,7 +522,7 @@ fn passes_compose() {
         let b = run(prog, a, DIPS);
         run(prog, b, "cleanup")
     };
-    let together = run(prog, plain, "factoring; dips; cleanup");
+    let together = run(prog, plain, "factoring; frames; cleanup");
     assert_eq!(shape(&separately), shape(&together));
 }
 
@@ -547,7 +567,7 @@ fn introducing_a_copy_lets_factoring_reach_an_arm_that_lacked_it() {
     let (got, script) = with_script(prog, plain, "else(once(introduce { copy })); factoring");
     assert_eq!(
         shape(&got)[2],
-        "dip 1 { copy }",
+        "par { copy } { id }",
         "the copy was not hoisted: {:?}",
         shape(&got)
     );
@@ -594,22 +614,22 @@ fn splitting_a_bool_lets_the_folding_laws_reach_an_opaque_value() {
 
     // Split the value first and each boolean case folds to a literal.
     let got = run(prog, plain, "at(0, split_bool); distribution; values");
-    let [_, _, Node::Branch { then_body, .. }] = &got[..] else {
+    let [_, _, Term::Branch { then_body, .. }] = &got[..] else {
         panic!("expected a guard branch, got {:?}", shape(&got))
     };
     let [
-        Node::Branch {
+        Term::Branch {
             then_body: yes,
             else_body: no,
             ..
         },
-    ] = &then_body[..]
+    ] = then_body.spine()[..]
     else {
         panic!("expected an inner branch")
     };
     // not true = false, not false = true.
-    assert_eq!(shape(yes), vec!["push false"]);
-    assert_eq!(shape(no), vec!["push true"]);
+    assert_eq!(shape_in(yes), vec!["push false"]);
+    assert_eq!(shape_in(no), vec!["push true"]);
 }
 
 // ---------------------------------------------------------------------------
@@ -653,7 +673,7 @@ fn a_branch_whose_arms_were_the_same_disappears_along_with_them() {
     let factored = run(prog, plain.clone(), FACTOR);
     assert_eq!(
         shape(&factored),
-        vec!["copy", "dip 1 { drop }", "branch"],
+        vec!["copy", "par { drop } { id }", "branch"],
         "{:?}",
         shape(&factored)
     );
@@ -694,7 +714,7 @@ fn speculating_is_what_the_three_rules_do_written_out() {
         shape(&shorthand),
         vec![
             "copy",
-            "dip 1 { dip 1 { copy } swap dip 1 { copy } swap equal }",
+            "par { par { copy } { id } swap par { copy } { id } swap equal } { id }",
             "branch"
         ],
         "{:?}",
@@ -709,8 +729,8 @@ fn speculating_is_what_the_three_rules_do_written_out() {
             "counit",
             "counit",
             "annihilate",
-            "elim_dip0",
-            "elim_dip0",
+            "elim_par0",
+            "elim_par0",
             "hoist"
         ]
     );
@@ -728,7 +748,7 @@ fn the_arm_that_did_not_want_it_drops_the_results() {
     let [
         _,
         _,
-        Node::Branch {
+        Term::Branch {
             then_body,
             else_body,
             ..
@@ -737,9 +757,9 @@ fn the_arm_that_did_not_want_it_drops_the_results() {
     else {
         panic!("expected a frame and a branch, got {:?}", shape(&got))
     };
-    assert_eq!(shape(then_body), vec!["and"]);
+    assert_eq!(shape_in(then_body), vec!["and"]);
     // `equal` is (2 -> 1), so exactly one result to discard.
-    assert_eq!(shape(else_body), vec!["drop", "not"]);
+    assert_eq!(shape_in(else_body), vec!["drop", "not"]);
 }
 
 // ---------------------------------------------------------------------------
@@ -750,30 +770,39 @@ fn the_arm_that_did_not_want_it_drops_the_results() {
 /// `pick`, weighted by how many branch arms deep it sits.
 ///
 /// A frame does not count as a level, since `lift` is what puts one there —
-/// `dip 1 { X }` in front of a branch is `X` out of that branch's arms, and a
+/// `par { X } { id }` in front of a branch is `X` out of that branch's arms,
+/// and a
 /// measure that read it otherwise would say the pass had gone backwards. What
 /// it is held to is a number rather than a listing, because the claim is about
 /// a shape and a listing would churn on every unrelated change to the corpus.
-fn work_in_arms(nodes: &[Node]) -> usize {
-    fn walk(nodes: &[Node], depth: usize, found: &mut usize) {
-        for node in nodes {
-            match node {
-                Node::Branch {
-                    then_body,
-                    else_body,
-                    ..
-                } => {
-                    walk(then_body, depth + 1, found);
-                    walk(else_body, depth + 1, found);
-                }
-                Node::Op(Instruction::Drop | Instruction::Copy | Instruction::Swap) => {}
-                Node::Dip { body, .. } => walk(body, depth, found),
-                _ => *found += depth,
+fn work_in_arms(nodes: &[Term]) -> usize {
+    fn walk(node: &Term, depth: usize, found: &mut usize) {
+        match node {
+            Term::Compose(a, b) => {
+                walk(a, depth, found);
+                walk(b, depth, found);
             }
+            Term::Branch {
+                then_body,
+                else_body,
+                ..
+            } => {
+                walk(then_body, depth + 1, found);
+                walk(else_body, depth + 1, found);
+            }
+            Term::Op(Instruction::Drop | Instruction::Copy | Instruction::Swap) => {}
+            Term::Id(_) => {}
+            Term::Par { left, right, .. } => {
+                walk(left, depth, found);
+                walk(right, depth, found);
+            }
+            _ => *found += depth,
         }
     }
     let mut found = 0;
-    walk(nodes, 0, &mut found);
+    for node in nodes {
+        walk(node, 0, &mut found);
+    }
     found
 }
 
@@ -795,7 +824,7 @@ fn lifting_empties_the_arms_of_the_barista_probe() {
         return;
     };
 
-    let plain = run(prog, build(library, idx), "unfold_all");
+    let plain = run(prog, build(library, idx).into_spine(), "unfold_all");
     let before = work_in_arms(&plain);
     let lifted = run(prog, plain, "lifting");
     let after = work_in_arms(&lifted);
@@ -813,7 +842,8 @@ fn lifting_empties_the_arms_of_the_barista_probe() {
 /// A prefix that *consumes* the values the other arm still needs can only be
 /// lifted onto copies of them, and the copies have to be paid for: `n`
 /// backward `counit`s put `pick (n-1)^n ; drop^n` in, and turning those drops
-/// back into the originals wants `pick (n-1)^n ; dip n { drop^n }` = nothing.
+/// back into the originals wants `pick (n-1)^n ; par { drop^n } { id n }`
+/// = nothing.
 /// That is `counit_under` at `n = 1` and a `roll` for anything above it —
 /// `pick_drop_to_roll`, which is on the list in `docs/tactics.md` and not
 /// written. So the arms that build `emit`'s answer keep their work.
@@ -872,13 +902,13 @@ fn the_guard_a_split_leaves_is_derivable() {
         laws,
         vec![
             "copy_nat",
-            "interchange",
+            "slide",
             "bool_result",
             "annihilate",
             "counit",
             "counit",
-            "interchange",
-            "elim_dip0",
+            "slide",
+            "elim_par0",
         ]
     );
 }
@@ -902,7 +932,7 @@ fn a_split_on_an_operator_result_folds_to_the_two_cases() {
     );
     let [
         _,
-        Node::Branch {
+        Term::Branch {
             then_body,
             else_body,
             ..
@@ -912,8 +942,8 @@ fn a_split_on_an_operator_result_folds_to_the_two_cases() {
     else {
         panic!("expected a branch, got {:?}", shape(&got))
     };
-    assert_eq!(shape(then_body), vec!["push true"]);
-    assert_eq!(shape(else_body), vec!["push false"]);
+    assert_eq!(shape_in(then_body), vec!["push true"]);
+    assert_eq!(shape_in(else_body), vec!["push false"]);
 }
 
 // ---------------------------------------------------------------------------
@@ -960,7 +990,7 @@ fn four_different_arms_collapse_to_the_diagonal() {
     let (prog, plain) = tree_of(code, "id");
     let (got, script) = with_script(prog, plain, "all");
     let [
-        Node::Branch {
+        Term::Branch {
             then_body,
             else_body,
             ..
@@ -971,8 +1001,8 @@ fn four_different_arms_collapse_to_the_diagonal() {
     };
     // `A` from the then arm's then arm, `D` from the else arm's else arm: the
     // two arms the same condition can actually reach.
-    assert_eq!(shape(then_body), vec!["push 1"]);
-    assert_eq!(shape(else_body), vec!["push 4"]);
+    assert_eq!(shape_in(then_body), vec!["push 1"]);
+    assert_eq!(shape_in(else_body), vec!["push 4"]);
 
     // Two firings of `retest`, one per arm, then `factor` and the other counit.
     let fired: Vec<&str> = script.iter().map(|s| s.kind.name()).collect();
@@ -1003,14 +1033,14 @@ fn sharing_a_call_runs_it_once_and_copies_what_it_left() {
     let env = Env::new(prog, 1_000_000, true);
     let (got, script) =
         run_tactic(&env, &tactic, plain.clone()).unwrap_or_else(|e| panic!("{}", e));
-    assert_eq!(shape(&got), vec!["call 0 #0", "copy"], "{:?}", shape(&got));
+    assert_eq!(shape(&got), vec!["jump #0", "copy"], "{:?}", shape(&got));
     assert_eq!(script.len(), 1, "one law, one step");
     assert_eq!(script[0].kind.name(), "copy_nat");
 
     // And the derivation replays, which is what makes the step a construction
     // rather than a claim.
     let mut replayed = plain.clone();
-    apply_script(prog, &mut replayed, &script, true).unwrap();
+    apply_script_seq(prog, &mut replayed, &script, true).unwrap();
     assert_eq!(replayed, got);
 
     // Backwards, it runs the call a second time instead of copying.
@@ -1039,11 +1069,11 @@ fn pushed(prog: &'static Program<'static>, name: &str) -> Result<bytecode::Symbo
         .compile_with(&src, Some(prog))
         .map_err(|e| format!("{}{}", e.message, e.help.unwrap_or_default()))?;
 
-    let body = build(prog.library(), SentenceIndex::from(0));
+    let body = build(prog.library(), SentenceIndex::from(0)).into_spine();
     let env = Env::new(prog, 1000, true);
     let (got, _) = run_tactic(&env, &tactic, body).unwrap_or_else(|e| panic!("{}", e));
     match &got[0] {
-        Node::Op(Instruction::Push(Value::Symbol(s))) => Ok(s.clone()),
+        Term::Op(Instruction::Push(Value::Symbol(s))) => Ok(s.clone()),
         other => panic!("expected a pushed symbol, got {:?}", other),
     }
 }
@@ -1101,12 +1131,12 @@ fn a_term_can_push_a_const_string_written_out() {
     let tactic = defs
         .compile_with(r#"once(introduce { push "hi" equal })"#, Some(prog))
         .unwrap();
-    let body = build(prog.library(), SentenceIndex::from(0));
+    let body = build(prog.library(), SentenceIndex::from(0)).into_spine();
     let env = Env::new(prog, 1000, true);
     let (got, _) = run_tactic(&env, &tactic, body).unwrap_or_else(|e| panic!("{}", e));
     assert_eq!(
         got[0],
-        Node::Op(Instruction::Push(Value::ConstString("hi".to_string()))),
+        Term::Op(Instruction::Push(Value::ConstString("hi".to_string()))),
         "{:?}",
         got[0]
     );
@@ -1198,7 +1228,7 @@ fn corpus() -> Option<(&'static Library, &'static Program<'static>)> {
 
 fn stack_of(code: &str, src: &str) -> Vec<String> {
     let prog = program_of(code);
-    let body = build(prog.library(), SentenceIndex::from(0));
+    let body = build(prog.library(), SentenceIndex::from(0)).into_spine();
     let body = run(prog, body, src);
     crate::print::render_body(prog, SentenceIndex::from(0), &body, src, true, false)
 }
@@ -1237,7 +1267,7 @@ fn positions(lines: &[String]) -> Vec<(String, String)> {
 #[test]
 fn the_listing_numbers_each_sequence_from_zero() {
     let prog = program_of("sentence probe { push 1 copy branch { not } { is_bool } }");
-    let body = build(prog.library(), SentenceIndex::from(0));
+    let body = build(prog.library(), SentenceIndex::from(0)).into_spine();
     let lines = crate::print::render_body(prog, SentenceIndex::from(0), &body, "id", false, true);
     let rows = positions(&lines);
 
@@ -1262,13 +1292,13 @@ fn the_number_the_listing_prints_is_the_number_a_tactic_takes() {
     // The property that makes the column worth printing: read a position off
     // the listing, hand it to `at`, and the step lands there.
     let prog = program_of("sentence probe { push 1 push 2 dip 1 { dip 1 { drop 0 } } }");
-    let body = build(prog.library(), SentenceIndex::from(0));
+    let body = build(prog.library(), SentenceIndex::from(0)).into_spine();
     let lines = crate::print::render_body(prog, SentenceIndex::from(0), &body, "id", false, true);
 
     let rows = positions(&lines);
     let (cell, _) = rows
         .iter()
-        .find(|(_, text)| text.starts_with("dip 1"))
+        .find(|(_, text)| text.starts_with("par"))
         .unwrap_or_else(|| panic!("no frame in {:?}", rows));
     let n: usize = cell.parse().unwrap();
     assert_eq!(n, 2, "the frame is the third node");
