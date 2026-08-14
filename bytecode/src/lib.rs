@@ -83,6 +83,41 @@ mod tests {
         );
     }
 
+    /// The three coercions parse to themselves, and `as_tuple` takes its width.
+    ///
+    /// Each is one instruction with no expansion behind it, so the whole
+    /// mnemonic table for them is what this pins down.
+    #[test]
+    fn the_coercions_assemble_to_one_instruction_each() {
+        let res = assemble("sentence probe { as_bool as_int as_tuple 3 }").unwrap();
+        assert_eq!(
+            res.sentences[SentenceIndex::from(0)],
+            vec![
+                Instruction::AsBool,
+                Instruction::AsInt,
+                Instruction::AsTuple(3),
+            ]
+        );
+        // One value in and one out, three times over, so the sentence reads
+        // exactly the one value the first coercion needs.
+        assert_eq!(
+            arity::sentence_arity(&res, SentenceIndex::from(0)),
+            Some(Arity {
+                inputs: 1,
+                outputs: 1
+            })
+        );
+    }
+
+    /// `as_tuple` without a width is refused rather than defaulted.
+    ///
+    /// A width is part of the type being coerced to — `dip`'s count defaults
+    /// because one is the classic combinator, but there is no obvious tuple.
+    #[test]
+    fn as_tuple_needs_its_width() {
+        assert!(assemble("sentence probe { as_tuple }").is_err());
+    }
+
     // -----------------------------------------------------------------------
     // `?`
     // -----------------------------------------------------------------------

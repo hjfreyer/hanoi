@@ -633,6 +633,15 @@ fn parse_instruction(stream: &mut TokenStream) -> Result<ParsedInstruction, Erro
         "is_symbol" => Ok(ParsedInstruction::IsSymbol),
         "is_tuple" => Ok(ParsedInstruction::IsTuple),
         "tuple_length" => Ok(ParsedInstruction::TupleLength),
+        "as_bool" => Ok(ParsedInstruction::AsBool),
+        "as_int" => Ok(ParsedInstruction::AsInt),
+        // The width is part of the type, so it is required rather than
+        // defaulted: `as_tuple` alone would have to mean "a tuple of some
+        // length", which is a different coercion and not one this has.
+        "as_tuple" => {
+            let size = parse_usize(stream)?;
+            Ok(ParsedInstruction::AsTuple(size))
+        }
         other => Err(Error::at(format!("unknown instruction `{}`", other), span)),
     }
 }
@@ -1473,6 +1482,9 @@ impl<'a> Compiler<'a> {
                 ParsedInstruction::IsSymbol => Instruction::IsSymbol,
                 ParsedInstruction::IsTuple => Instruction::IsTuple,
                 ParsedInstruction::TupleLength => Instruction::TupleLength,
+                ParsedInstruction::AsBool => Instruction::AsBool,
+                ParsedInstruction::AsInt => Instruction::AsInt,
+                ParsedInstruction::AsTuple(n) => Instruction::AsTuple(n),
                 ParsedInstruction::Jump(target) => {
                     let target_idx = self.resolve_target(scope, target)?;
                     Instruction::Jump(target_idx)

@@ -80,6 +80,9 @@ pub enum ParsedInstruction {
     IsSymbol,
     IsTuple,
     TupleLength,
+    AsBool,
+    AsInt,
+    AsTuple(usize),
     /// Check the top of stack against the predicate or symbol `Path` names.
     TypeCheckPath(Path),
     /// `?`: unwrap a result, or leave the block early carrying the error.

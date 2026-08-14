@@ -377,6 +377,34 @@ impl VM {
                         other => self.failed(other),
                     }
                 }
+                // The three coercions. Each leaves one value of the type it
+                // names, whatever it was handed, and none of them leaves a
+                // flag: there is no domain they are off, so there is nothing to
+                // report. See `docs/totality.md`.
+                Instruction::AsBool => {
+                    // The identity on a `Bool`, since `truthy(Bool(p)) = p`,
+                    // and the same coercion `branch`, `not`, `and` and `or`
+                    // apply to their operands anyway.
+                    let val = self.pop()?;
+                    self.stack.push(Value::Bool(val.truthy()));
+                }
+                Instruction::AsInt => {
+                    let val = self.pop()?;
+                    self.stack.push(match val {
+                        int @ Value::Int(_) => int,
+                        _ => Value::Int(0),
+                    });
+                }
+                Instruction::AsTuple(n) => {
+                    // A tuple of the wrong width is a mismatch like any other:
+                    // it is exactly what `untuple n` could not take apart, so
+                    // the junk is a tuple that it can.
+                    let val = self.pop()?;
+                    self.stack.push(match val {
+                        Value::Tuple(elements) if elements.len() == n => Value::Tuple(elements),
+                        _ => Value::Tuple(vec![Value::unit(); n]),
+                    });
+                }
                 Instruction::ConstStringLen => {
                     let val = self.pop()?;
                     match val {
@@ -1292,6 +1320,11 @@ mod totality_tests {
             Instruction::TupleLength,
             Instruction::Untuple(2),
             Instruction::Tuple(2),
+            // `as_tuple 2` is here at the width `every_shape` supplies a
+            // matching tuple for, so the sweep sees both of its cases.
+            Instruction::AsBool,
+            Instruction::AsInt,
+            Instruction::AsTuple(2),
         ]
     }
 
@@ -1510,6 +1543,166 @@ mod totality_tests {
                 // Anything else left the value in the deepest slot untouched.
                 assert_eq!(parts[0], x, "untuple 3 lost {:?}", x);
             }
+        }
+    }
+
+    // -- The coercions ------------------------------------------------------
+
+    /// The three coercions, each with the width the sweep has a value for.
+    fn every_coercion() -> Vec<Instruction> {
+        vec![
+            Instruction::AsBool,
+            Instruction::AsInt,
+            Instruction::AsTuple(2),
+        ]
+    }
+
+    /// Whether the value is one a coercion would leave alone.
+    fn already(inst: &Instruction, v: &Value) -> bool {
+        match (inst, v) {
+            (Instruction::AsBool, Value::Bool(_)) => true,
+            (Instruction::AsInt, Value::Int(_)) => true,
+            (Instruction::AsTuple(n), Value::Tuple(elements)) => elements.len() == *n,
+            _ => false,
+        }
+    }
+
+    #[test]
+    fn a_coercion_leaves_a_value_of_its_own_type_alone() {
+        for inst in every_coercion() {
+            for v in every_shape() {
+                if already(&inst, &v) {
+                    assert_eq!(
+                        apply(std::slice::from_ref(&v), inst.clone()),
+                        vec![v.clone()],
+                        "{:?} should be the identity on {:?}",
+                        inst,
+                        v
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_coercion_off_its_type_hands_back_the_default() {
+        assert_eq!(apply(&[sym(7)], Instruction::AsInt), vec![Value::Int(0)]);
+        assert_eq!(apply(&[cs("hi")], Instruction::AsInt), vec![Value::Int(0)]);
+        assert_eq!(
+            apply(&[Value::Int(3)], Instruction::AsTuple(2)),
+            vec![Value::Tuple(vec![unit(), unit()])]
+        );
+        // A tuple of the wrong width is a mismatch like any other: it is
+        // exactly what `untuple 2` could not have taken apart.
+        assert_eq!(
+            apply(
+                &[Value::Tuple(vec![Value::Int(1)])],
+                Instruction::AsTuple(2)
+            ),
+            vec![Value::Tuple(vec![unit(), unit()])]
+        );
+        // At width zero the only tuple that matches is the empty one, and the
+        // default is that same empty tuple.
+        assert_eq!(apply(&[sym(7)], Instruction::AsTuple(0)), vec![unit()]);
+    }
+
+    #[test]
+    fn as_bool_is_the_truthiness_every_other_boolean_operation_applies() {
+        for v in every_shape() {
+            assert_eq!(
+                apply(std::slice::from_ref(&v), Instruction::AsBool),
+                vec![Value::Bool(v.truthy())],
+                "as_bool {:?}",
+                v
+            );
+            // Which is to say it is `not ; not`, the coercion spelled the long
+            // way round.
+            assert_eq!(
+                run(vec![Instruction::Push(v.clone()), Instruction::AsBool]).unwrap(),
+                run(vec![
+                    Instruction::Push(v.clone()),
+                    Instruction::Not,
+                    Instruction::Not
+                ])
+                .unwrap(),
+                "as_bool {:?} should be not ; not",
+                v
+            );
+        }
+    }
+
+    /// The property the coercions exist for: what comes out is of the type
+    /// named, whatever went in.
+    ///
+    /// A codomain is not something a rewrite can discover — case-splitting a
+    /// value on `is_int` leaves it opaque in the arm where it is not one — so
+    /// it has to be measured against the machine, exactly as `yields_bool` is.
+    #[test]
+    fn a_coercion_lands_in_the_type_it_names() {
+        for v in every_shape() {
+            let one = std::slice::from_ref(&v);
+            assert!(matches!(
+                apply(one, Instruction::AsBool)[..],
+                [Value::Bool(_)]
+            ));
+            assert!(matches!(
+                apply(one, Instruction::AsInt)[..],
+                [Value::Int(_)]
+            ));
+            for n in 0..3 {
+                match &apply(one, Instruction::AsTuple(n))[..] {
+                    [Value::Tuple(elements)] => assert_eq!(elements.len(), n),
+                    other => panic!("as_tuple {} left {:?} on {:?}", n, other, v),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_coercion_is_idempotent() {
+        for inst in every_coercion() {
+            for v in every_shape() {
+                let once = run(vec![Instruction::Push(v.clone()), inst.clone()]).unwrap();
+                let twice = run(vec![
+                    Instruction::Push(v.clone()),
+                    inst.clone(),
+                    inst.clone(),
+                ])
+                .unwrap();
+                assert_eq!(once, twice, "{:?} twice on {:?}", inst, v);
+            }
+        }
+    }
+
+    /// Two consequences of the codomain, which are what makes a coercion worth
+    /// writing rather than a check worth reading.
+    #[test]
+    fn a_coercion_settles_the_question_that_follows_it() {
+        for v in every_shape() {
+            // `as_int ; is_int` is `drop ; push true`.
+            assert_eq!(
+                run(vec![
+                    Instruction::Push(v.clone()),
+                    Instruction::AsInt,
+                    Instruction::IsInt
+                ])
+                .unwrap(),
+                vec![Value::Bool(true)],
+                "as_int ; is_int on {:?}",
+                v
+            );
+            // `as_tuple n ; untuple n` never reports failure.
+            let (_, ok) = {
+                let mut out = run(vec![
+                    Instruction::Push(v.clone()),
+                    Instruction::AsTuple(2),
+                    Instruction::Untuple(2),
+                ])
+                .unwrap();
+                let flag = out.pop().unwrap();
+                (out, flag == Value::Bool(true))
+            };
+            assert!(ok, "as_tuple 2 ; untuple 2 should not fail on {:?}", v);
         }
     }
 

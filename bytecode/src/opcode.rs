@@ -32,10 +32,36 @@ use crate::value::Value;
 /// See `docs/compilation.md` for what phase 4 emits, and `docs/movement.md` for
 /// why the trade is worth taking.
 ///
+/// # Coercions
+///
+/// [`AsBool`], [`AsInt`] and [`AsTuple`] force a value to a type: each is the
+/// identity where the value is already of that type, and hands back a default
+/// where it is not. None of them is fallible, and the difference is not a
+/// loosening.
+///
+/// A fallible instruction reports whether its answer was computed or invented
+/// because it was reaching for something it might not find — `add` on two
+/// symbols has no sum to give. A coercion reaches for nothing. `as_int v` is
+/// *defined* as the int if there is one and zero otherwise: a total function of
+/// the value, with no domain it is off, so there is no flag to leave and
+/// nothing for a caller to check. Code that wants the question asked rather
+/// than the answer forced still has `is_int`, and can `copy` first.
+///
+/// What they buy is a **codomain**, which is exactly the thing an equational
+/// account cannot otherwise discover — see [`yields_bool`] for the same
+/// argument made about booleans. Case-splitting a value on whether it is an Int
+/// leaves it opaque in the arm where it is not, so no rewrite can conclude that
+/// what came out is an Int; after `as_int`, it is one by construction. Hence
+/// `as_int ; as_int` = `as_int`, and `as_int ; is_int` = `drop ; push true`.
+///
 /// [`Drop`]: Instruction::Drop
 /// [`Copy`]: Instruction::Copy
 /// [`Swap`]: Instruction::Swap
 /// [`Dip`]: Instruction::Dip
+/// [`AsBool`]: Instruction::AsBool
+/// [`AsInt`]: Instruction::AsInt
+/// [`AsTuple`]: Instruction::AsTuple
+/// [`yields_bool`]: Instruction::yields_bool
 #[derive(Debug, Clone, PartialEq)]
 pub enum Instruction {
     /// Push a constant value onto the stack.
@@ -122,6 +148,29 @@ pub enum Instruction {
     IsTuple,
     /// Pop the top value (must be a Tuple) and push its length as an Int.
     TupleLength,
+
+    /// Pop the top value and push its truthiness as a Bool. See the type's
+    /// docs for why the coercions carry no flag.
+    ///
+    /// This is [`Value::truthy`][crate::value::Value::truthy] made into an
+    /// instruction, so it is the identity on a `Bool` for the same reason
+    /// `truthy(Bool(p)) = p`. Every boolean-shaped operation already applies
+    /// that coercion per operand, which makes this the one coercion that
+    /// discards nothing a later instruction would have read: `as_bool ; branch`
+    /// is `branch`, `as_bool ; not` is `not`, and the same for `and` and `or`
+    /// on either operand.
+    AsBool,
+    /// Pop the top value and push it back if it is an Int, or `Int(0)` if it is
+    /// not.
+    AsInt,
+    /// Pop the top value and push it back if it is a Tuple of exactly `n`
+    /// elements, or a tuple of `n` empty tuples if it is not.
+    ///
+    /// The width is part of the type coerced to, as it is in
+    /// [`Untuple`][Instruction::Untuple]: a tuple of the wrong length is as
+    /// much a mismatch as a symbol, since it is exactly the values `untuple n`
+    /// could not take apart. So `as_tuple n ; untuple n` never reports failure.
+    AsTuple(usize),
 }
 
 impl Instruction {
@@ -225,6 +274,10 @@ impl Instruction {
                 | Instruction::IsTuple
                 | Instruction::TupleLength
                 | Instruction::Untuple(_)
+                // A coercion's whole point is its codomain, and this one's is
+                // `Bool`. The other two leave an Int and a Tuple, which is the
+                // same fact about a different type and has nowhere to be said.
+                | Instruction::AsBool
         )
     }
 }
@@ -262,6 +315,9 @@ impl std::fmt::Display for Instruction {
             Instruction::IsSymbol => write!(f, "is_symbol"),
             Instruction::IsTuple => write!(f, "is_tuple"),
             Instruction::TupleLength => write!(f, "tuple_length"),
+            Instruction::AsBool => write!(f, "as_bool"),
+            Instruction::AsInt => write!(f, "as_int"),
+            Instruction::AsTuple(n) => write!(f, "as_tuple {}", n),
         }
     }
 }
