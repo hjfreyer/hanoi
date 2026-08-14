@@ -270,7 +270,13 @@ pub fn op_arity(inst: &Instruction) -> Option<(i64, i64)> {
         | Instruction::IsBool
         | Instruction::IsConstString
         | Instruction::IsSymbol
-        | Instruction::IsTuple => (1, 1),
+        | Instruction::IsTuple
+        // The coercions replace a value with one of the type they name, and
+        // there is no flag: they are total in the sense of having no domain to
+        // be off, so nothing about the outcome needs reporting.
+        | Instruction::AsBool
+        | Instruction::AsInt
+        | Instruction::AsTuple(_) => (1, 1),
         // The fallible instructions, each one output wider than the value it
         // computes because the extra slot holds the success flag. See
         // [`is_fallible`].

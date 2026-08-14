@@ -130,3 +130,15 @@ These instructions test the runtime type of the top stack value, pushing a Bool.
 | `is_const_string` | `is_const_string` | `[..., v] -> [..., is_const_string]` | Pops a value and pushes `true` if it is a ConstString, else `false`. |
 | `is_symbol` | `is_symbol` | `[..., v] -> [..., is_symbol]` | Pops a value and pushes `true` if it is a Symbol, else `false`. |
 | `is_tuple` | `is_tuple` | `[..., v] -> [..., is_tuple]` | Pops a value and pushes `true` if it is a Tuple, else `false`. |
+
+## 7. Coercions
+
+These force the top value to a type instead of asking about it: each is the identity where the value already has that type, and leaves a default where it does not. None carries a success flag — a coercion is defined on every value, so there is no outcome to report. See [docs/totality.md](totality.md#the-coercions).
+
+| Mnemonic | Syntax | Stack Transition | Description |
+| :--- | :--- | :--- | :--- |
+| `as_bool` | `as_bool` | `[..., v] -> [..., bool]` | Pops a value and pushes its truthiness. The identity on a Bool, and the same coercion `not`, `and`, `or` and `branch` apply to their operands. |
+| `as_int` | `as_int` | `[..., v] -> [..., int]` | Pops a value and pushes it back if it is an Int, or `0` if it is not. |
+| `as_tuple` | `as_tuple N` | `[..., v] -> [..., tuple]` | Pops a value and pushes it back if it is a Tuple of exactly `N` elements, or a tuple of `N` empty tuples if it is not. The width is required: it is part of the type being coerced to, as it is for `untuple`. |
+
+What each buys is a guarantee about what comes *out*, which a check cannot give: after `as_int`, the value is an Int by construction, so `as_int is_int` is always `true` and `as_tuple N untuple N` never reports failure. Coercing twice is the same as coercing once.

@@ -114,6 +114,10 @@ pub enum Prim {
     IsSymbol,
     IsTuple,
     TupleLength,
+
+    AsBool,
+    AsInt,
+    AsTuple(usize),
 }
 
 impl Prim {
@@ -149,6 +153,9 @@ impl Prim {
             Instruction::IsSymbol => Prim::IsSymbol,
             Instruction::IsTuple => Prim::IsTuple,
             Instruction::TupleLength => Prim::TupleLength,
+            Instruction::AsBool => Prim::AsBool,
+            Instruction::AsInt => Prim::AsInt,
+            Instruction::AsTuple(n) => Prim::AsTuple(*n),
 
             // The five with a structural spelling. See the type's docs.
             Instruction::Drop
@@ -186,6 +193,9 @@ impl Prim {
             Prim::IsSymbol => Instruction::IsSymbol,
             Prim::IsTuple => Instruction::IsTuple,
             Prim::TupleLength => Instruction::TupleLength,
+            Prim::AsBool => Instruction::AsBool,
+            Prim::AsInt => Instruction::AsInt,
+            Prim::AsTuple(n) => Instruction::AsTuple(*n),
         }
     }
 
@@ -207,7 +217,11 @@ impl Prim {
             | Prim::IsBool
             | Prim::IsConstString
             | Prim::IsSymbol
-            | Prim::IsTuple => Arity::new(1, 1),
+            | Prim::IsTuple
+            // The coercions, which report nothing and so stay one wide.
+            | Prim::AsBool
+            | Prim::AsInt
+            | Prim::AsTuple(_) => Arity::new(1, 1),
 
             // The fallible ones, each a slot wider than the value it computes
             // because the extra slot carries the success flag.
@@ -257,6 +271,9 @@ impl Prim {
             Prim::IsSymbol,
             Prim::IsTuple,
             Prim::TupleLength,
+            Prim::AsBool,
+            Prim::AsInt,
+            Prim::AsTuple(5),
         ]
     }
 }

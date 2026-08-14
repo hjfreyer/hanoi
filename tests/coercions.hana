@@ -1,0 +1,211 @@
+// Tests for `as_bool`, `as_int` and `as_tuple N`, which force a value to a
+// type: each is the identity where the value is already of that type, and
+// hands back a default where it is not.
+//
+// None of them carries a success flag, and that is the difference from a
+// fallible instruction rather than an oversight. `add` reports because it was
+// reaching for a sum that two symbols do not have; a coercion reaches for
+// nothing, being defined on every value it can be handed. Code that wants the
+// question asked rather than the answer forced writes `is_int` — and can
+// `copy` first, to keep the value as well as the answer.
+
+symbol a_symbol
+
+// -- The identity where the type already matches ------------------------------
+
+test sentence as_bool_leaves_a_bool_alone {
+    push true
+    as_bool
+    push true
+    jump crate::prelude::check_equals
+    ?
+    drop 0
+
+    push false
+    as_bool
+    push false
+    jump crate::prelude::check_equals
+}
+
+test sentence as_int_leaves_an_int_alone {
+    push 42
+    as_int
+    push 42
+    jump crate::prelude::check_equals
+    ?
+    drop 0
+
+    // Including the value that is also the default, which would pass either
+    // way — it is here so the interesting cases below are not the only ones.
+    push 0
+    as_int
+    push 0
+    jump crate::prelude::check_equals
+}
+
+test sentence as_tuple_leaves_a_tuple_of_that_width_alone {
+    push (1, 2)
+    as_tuple 2
+    push (1, 2)
+    jump crate::prelude::check_equals
+    ?
+    drop 0
+
+    push ()
+    as_tuple 0
+    push ()
+    jump crate::prelude::check_equals
+}
+
+// -- The default everywhere else ----------------------------------------------
+
+test sentence as_bool_is_truthiness {
+    // `false` is the unique falsy value, so everything else coerces to `true`.
+    push 42
+    as_bool
+    jump crate::prelude::check_true
+    ?
+    drop 0
+
+    push a_symbol
+    as_bool
+    jump crate::prelude::check_true
+    ?
+    drop 0
+
+    push ()
+    as_bool
+    jump crate::prelude::check_true
+    ?
+    drop 0
+
+    push ""
+    as_bool
+    jump crate::prelude::check_true
+}
+
+test sentence as_int_off_the_ints_is_zero {
+    push a_symbol
+    as_int
+    push 0
+    jump crate::prelude::check_equals
+    ?
+    drop 0
+
+    push true
+    as_int
+    push 0
+    jump crate::prelude::check_equals
+    ?
+    drop 0
+
+    push (1, 2)
+    as_int
+    push 0
+    jump crate::prelude::check_equals
+}
+
+test sentence as_tuple_off_the_tuples_is_that_many_units {
+    push 42
+    as_tuple 2
+    push ((), ())
+    jump crate::prelude::check_equals
+    ?
+    drop 0
+
+    // A tuple of the wrong width is a mismatch like any other: it is exactly
+    // what `untuple 2` could not have taken apart.
+    push (1,)
+    as_tuple 2
+    push ((), ())
+    jump crate::prelude::check_equals
+}
+
+// -- What the coercions are for -----------------------------------------------
+
+// A codomain is not something a check can discover: case-splitting a value on
+// `is_int` leaves it opaque in the arm where it is not one. After `as_int` it
+// is an int by construction, which is the whole reason to write one.
+test sentence a_coercion_settles_the_question_that_follows_it {
+    push a_symbol
+    as_int
+    is_int
+    jump crate::prelude::check_true
+    ?
+    drop 0
+
+    push ""
+    as_bool
+    is_bool
+    jump crate::prelude::check_true
+    ?
+    drop 0
+
+    // And so `as_tuple n ; untuple n` never reports failure, whatever it was
+    // handed. The flag is checked here rather than dropped, since it is the
+    // claim being made; the two elements underneath it go instead.
+    push a_symbol
+    as_tuple 2
+    untuple 2
+    drop 1
+    drop 1
+    jump crate::prelude::check_true
+}
+
+// Forcing a value that is already of the type changes nothing, so a second
+// coercion has nothing left to do.
+test sentence a_coercion_is_idempotent {
+    push a_symbol
+    as_int
+    as_int
+    push 0
+    jump crate::prelude::check_equals
+    ?
+    drop 0
+
+    push 42
+    as_bool
+    as_bool
+    push true
+    jump crate::prelude::check_equals
+    ?
+    drop 0
+
+    push 42
+    as_tuple 1
+    as_tuple 1
+    push ((),)
+    jump crate::prelude::check_equals
+}
+
+// `as_bool` is the coercion every boolean-shaped instruction already applies to
+// its operands, so putting one in front of them changes nothing.
+test sentence as_bool_is_what_the_boolean_instructions_already_do {
+    push 42
+    as_bool
+    not
+    push false
+    jump crate::prelude::check_equals
+    ?
+    drop 0
+
+    push 42
+    not
+    push false
+    jump crate::prelude::check_equals
+    ?
+    drop 0
+
+    push a_symbol
+    as_bool
+    branch { push 1 } { push 2 }
+    push 1
+    jump crate::prelude::check_equals
+    ?
+    drop 0
+
+    push a_symbol
+    branch { push 1 } { push 2 }
+    push 1
+    jump crate::prelude::check_equals
+}

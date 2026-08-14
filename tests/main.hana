@@ -20,6 +20,7 @@ mod namespacing;
 mod symbols;
 mod const_strings;
 mod tuples;
+mod coercions;
 mod string;
 mod queue;
 mod is_done_test;

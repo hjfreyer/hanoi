@@ -148,6 +148,7 @@ its answer was computed or invented, by leaving a `bool` on top of its result.
 | `push c`, `pick d`, `roll d`, `drop` | unchanged | — | cannot fail |
 | `equal`, `is_int`, `is_bool`, `is_const_string`, `is_symbol`, `is_tuple` | unchanged | — | cannot fail |
 | `not`, `and`, `or`, `tuple n` | unchanged | — | cannot fail |
+| `as_bool`, `as_int`, `as_tuple n` | `1 -> 1` | — | cannot fail; see below |
 | `add`, `subtract`, `multiply` | `2 -> 2` | sum, `true` | `Int 0`, `false` |
 | `divide`, `modulo` | `2 -> 2` | quotient, `true` | `Int 0`, `false` |
 | `greater`, `less` | `2 -> 2` | the answer, `true` | `false`, `false` |
@@ -193,6 +194,51 @@ no answer to report and no need to invent one.
 It is not a second control-flow outcome. A fallible instruction always
 completes and always leaves the same number of values; the flag is data, and a
 program is free to ignore it.
+
+## The coercions
+
+`as_bool`, `as_int` and `as_tuple n` force a value to a type. Each is the
+identity where the value is already of that type, and hands back a default
+where it is not:
+
+| instruction | on its own type | everywhere else |
+|---|---|---|
+| `as_bool` | `Bool p` unchanged | `Bool(truthy(v))` |
+| `as_int` | `Int x` unchanged | `Int 0` |
+| `as_tuple n` | `Tuple` of exactly `n` unchanged | `Tuple` of `n` `()`s |
+
+`as_bool` is exactly `truthy`, so its second column subsumes the first:
+`truthy(Bool p) = p` is what makes it the identity on a bool, and nothing else
+is needed to say what it does. For `as_tuple n` the width is part of the type,
+as it is for `untuple n` — a tuple of the wrong length is as much a mismatch as
+a symbol, being precisely the values `untuple n` could not take apart.
+
+**None of them is fallible, and that is not a loosening.** A fallible
+instruction reports whether its answer was computed or invented because it was
+reaching for something it might not find: `add` on two symbols has no sum to
+give, and the flag is how it says so. A coercion reaches for nothing. `as_int
+v` is *defined* as the int if there is one and zero otherwise — a total
+function of the value with no domain it is off — so there is no outcome to
+report. The question is still available to any program that wants it: `is_int`
+asks it, and `copy` first keeps the value as well as the answer.
+
+What a coercion buys instead is a **codomain**, which is the one thing this
+document's totality does not otherwise give you. Case-splitting a value on
+`is_int` leaves it opaque in the arm where it is not one, so no amount of
+rewriting concludes that what came out is an `Int`; after `as_int` it is one by
+construction. Three consequences follow directly, and `vm::totality_tests`
+holds the machine to all of them:
+
+```
+as_int ; as_int      =  as_int              and likewise for the other two
+as_int ; is_int      =  drop ; push true
+as_tuple n ; untuple n                      never reports failure
+```
+
+The first is why a coercion is idempotent; the second and third are why writing
+one is worth more than reading a check. `as_bool` has a fourth: it is the
+coercion `not`, `and`, `or` and `branch` already apply to their operands, so it
+is absorbed by any of them — `as_bool ; branch` is `branch`.
 
 ## Reading the flags
 
