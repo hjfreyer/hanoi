@@ -7,7 +7,7 @@
 //!
 //! This is the upper layer at its simplest: one matcher per *search direction*
 //! over the equations. `sink` and `float` are two matchers over one
-//! [`Rule::Interchange`]; `collapse` and `expand` two over one
+//! [`Rule::Slide`]; `collapse` and `expand` two over one
 //! [`Rule::Collapse`]. What used to be a doubled rule is now a doubled way of
 //! looking, which is the part that genuinely differs — the arithmetic is
 //! written once.
@@ -484,7 +484,7 @@ impl Matcher for Flatten {
 ///
 /// [`Rule::ElimPar0`] read backwards, wrapping one factor in a window that
 /// passes nothing through. That looks like a pointless thing to do until you want to move the
-/// node, because [`Rule::Interchange`] and [`Rule::Hoist`] both carry *frames*
+/// node, because [`Rule::Slide`] and [`Rule::Hoist`] both carry *frames*
 /// — so putting one round a bare instruction is how it becomes something the
 /// movement laws can pick up. `factor` uses exactly this step, twice.
 ///
@@ -517,7 +517,12 @@ impl Matcher for InvFlatten {
     }
 }
 
-/// `par { A } { id k } ; par { B } { id k }` becomes `par { A ; B } { id k }`.
+/// `par { a } { c } ; par { b } { d }` becomes `par { a ; b } { c ; d }`.
+///
+/// [`Rule::Interchange`] read forwards. Two adjacent `par`s become one whenever
+/// the upper seam lines up — which for the frames a compiled term is made of
+/// means two windows of the same width, the old `fuse`. The name is that case;
+/// the matcher is the law.
 ///
 /// Measure: factor count.
 #[derive(Debug)]
@@ -534,18 +539,23 @@ impl Matcher for Fuse {
         Ok(Box::new(InvFuse))
     }
     fn plan(&self, prog: &Program, window: &[Term]) -> Option<Vec<PlannedStep>> {
-        let [a, b] = window else { return None };
-        let (ka, oa, ba) = a.as_frame()?;
-        let (kb, ob, bb) = b.as_frame()?;
-        if ka != kb {
+        let [first, second] = window else {
+            return None;
+        };
+        let (oa, a, c) = as_par(first)?;
+        let (ob, b, d) = as_par(second)?;
+        // The equation checks the seam itself; declining here keeps a misaligned
+        // pair out of the report as a miss rather than as a refusal.
+        if term_arity(prog, c)?.1 != term_arity(prog, d)?.0 {
             return None;
         }
         at_window(
             prog,
-            Rule::Fuse {
-                k: ka,
-                a: ba.clone(),
-                b: bb.clone(),
+            Rule::Interchange {
+                a: a.clone(),
+                b: b.clone(),
+                c: c.clone(),
+                d: d.clone(),
                 a_origins: oa.to_vec(),
                 b_origins: ob.to_vec(),
             },
@@ -554,14 +564,27 @@ impl Matcher for Fuse {
     }
 }
 
-/// `par { A ; B } { id k }` becomes `par { A } { id k } ; par { B } { id k }`,
-/// splitting off one factor.
+/// The three parts of a `par`, whatever its right-hand side is.
+fn as_par(term: &Term) -> Option<(&[String], &Term, &Term)> {
+    match term {
+        Term::Par {
+            origins,
+            left,
+            right,
+        } => Some((origins, left, right)),
+        _ => None,
+    }
+}
+
+/// `par { a ; b } { c ; d }` becomes `par { a } { c } ; par { b } { d }`,
+/// splitting off one factor from each region.
 ///
-/// [`Rule::Fuse`] read backwards. The equation lets the body be cut anywhere,
-/// and this takes the canonical cut: one node off the front, the way [`Expand`]
-/// takes the canonical split of [`Rule::Collapse`]. Driven by `each` it would
-/// peel the whole body apart, one frame per node — which is also why it must
-/// not share a fixpoint with [`Fuse`].
+/// [`Rule::Interchange`] read backwards. The equation lets each region be cut
+/// anywhere the seam lines up, and this takes the canonical cut: one factor off
+/// the front, the way [`Expand`] takes the canonical split of
+/// [`Rule::Collapse`]. Driven by `each` it would peel the whole body apart, one
+/// `par` per factor — which is also why it must not share a fixpoint with
+/// [`Fuse`].
 ///
 /// No name of its own: it is `inv(fuse)`.
 ///
@@ -580,25 +603,49 @@ impl Matcher for InvFuse {
         Ok(Box::new(Fuse))
     }
     fn plan(&self, prog: &Program, window: &[Term]) -> Option<Vec<PlannedStep>> {
-        let (k, origins, body) = window[0].as_frame()?;
-        let factors = body.spine();
-        // One factor either side, or the split says nothing: an empty frame
-        // beside the original is a change the listing shows and nothing can use.
-        if factors.len() < 2 {
+        let (origins, left, right) = as_par(&window[0])?;
+        let (a, b) = cut(left);
+        let (c, d) = match right {
+            // An identity is its own composite — `id k ; id k` = `id k` — so
+            // the upper region is cut by *repeating* it rather than by dividing
+            // it. That is the whole of what made the old `fuse` a law about
+            // frames: a window either side of a seam that stays put.
+            Term::Id(_) => (right.clone(), right.clone()),
+            _ => cut(right),
+        };
+        // One factor below and a window above is the term itself beside an
+        // empty one: a change the listing shows and nothing can use.
+        if b.is_nil() && matches!(right, Term::Id(_)) {
+            return None;
+        }
+        // A cut the upper region's own composition does not pass through would
+        // be refused by the equation; declining reports it as a miss.
+        if term_arity(prog, &c)?.1 != term_arity(prog, &d)?.0 {
             return None;
         }
         at_window(
             prog,
-            Rule::Fuse {
-                k,
-                a: Term::seq(cloned(&factors[..1])),
-                b: Term::seq(cloned(&factors[1..])),
+            Rule::Interchange {
+                a,
+                b,
+                c,
+                d,
                 a_origins: origins.to_vec(),
                 b_origins: Vec::new(),
             },
             Direction::Reverse,
         )
     }
+}
+
+/// A term's spine, cut after the first factor.
+fn cut(term: &Term) -> (Term, Term) {
+    let factors = term.spine();
+    let at = 1.min(factors.len());
+    (
+        Term::seq(cloned(&factors[..at])),
+        Term::seq(cloned(&factors[at..])),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -632,7 +679,7 @@ impl Matcher for Sink {
         let (n, m) = term_arity(prog, x)?;
         at_window(
             prog,
-            Rule::Interchange {
+            Rule::Slide {
                 x: x.clone(),
                 framed: framed.clone(),
                 n,
@@ -681,7 +728,7 @@ impl Matcher for Float {
         let k = usize::try_from(j - n + m).ok()?;
         at_window(
             prog,
-            Rule::Interchange {
+            Rule::Slide {
                 x: x.clone(),
                 framed: with_frame_depth(framed, k)?,
                 n,
@@ -2164,7 +2211,7 @@ impl Matcher for BoolResultCopied {
             n,
             m: 1,
         };
-        let float = Rule::Interchange {
+        let float = Rule::Slide {
             x: Term::Op(Instruction::IsBool),
             framed,
             n: 1,
@@ -2176,7 +2223,7 @@ impl Matcher for BoolResultCopied {
             n,
             m: 1,
         };
-        let put_back = Rule::Interchange {
+        let put_back = Rule::Slide {
             x: Term::Op(Instruction::Push(Value::Bool(true))),
             framed: Term::frame(Vec::new(), 1, node()),
             n: 0,
@@ -4254,6 +4301,37 @@ mod tests {
     #[test]
     fn fuse_declines_different_depths() {
         let w = [frame(1, vec![]), frame(2, vec![])];
+        assert!(Fuse.plan(&prog(), &w).is_none());
+    }
+
+    /// Both regions computing, which is what the law says and the frame case
+    /// hides. Nothing compiles to this today; a script that writes a `par` by
+    /// hand can, and the matcher reads it because it asks about the seam rather
+    /// than about frames.
+    #[test]
+    fn fuse_joins_two_pars_that_compute_on_both_sides() {
+        let w = [
+            Term::par(op(Instruction::Not), op(Instruction::Add)),
+            Term::par(op(Instruction::Drop), op(Instruction::Swap)),
+        ];
+        assert_eq!(
+            fire(&Fuse, &prog(), &w),
+            Some(vec![Term::par(
+                Term::seq([op(Instruction::Not), op(Instruction::Drop)]),
+                Term::seq([op(Instruction::Add), op(Instruction::Swap)]),
+            )])
+        );
+    }
+
+    /// The seam again, from the search side: `add` leaves two where `copy`
+    /// reads one, so the upper regions do not meet and there is nothing here to
+    /// find.
+    #[test]
+    fn fuse_declines_a_seam_that_does_not_meet() {
+        let w = [
+            Term::par(op(Instruction::Not), op(Instruction::Add)),
+            Term::par(op(Instruction::Drop), op(Instruction::Copy)),
+        ];
         assert!(Fuse.plan(&prog(), &w).is_none());
     }
 

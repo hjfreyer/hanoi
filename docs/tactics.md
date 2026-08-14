@@ -133,8 +133,8 @@ three.
 |---|---|---|
 | `collapse` | `par { par { A } { id j } } { id k }` = `par { A } { id (j+k) }` | **`par` is associative**, and two identities side by side are one. Forward is `collapse`; backward at the split `(1, k-1)` is `expand` |
 | `elim_par0` | `par { A } { id 0 }` = `A` | **`id 0` is the unit of `par`.** Forward splices a window that passes nothing through; backward *introduces* one around a run |
-| `interchange` | `X ; D_k` = `D_(k-m+n) ; X`, for `X : n -> m`, `k >= m` | **the interchange law**, with `D_k` = `par { A } { id k }`. Forward is `sink`, backward is `float`. `A` may be an unexpanded call: the condition is about the window |
-| `fuse` | `par { A } { id k } ; par { B } { id k }` = `par { A ; B } { id k }` | backward splits one window at a point the arguments name |
+| `slide` | `X ; D_k` = `D_(k-m+n) ; X`, for `X : n -> m`, `k >= m` | a framed computation walks past one whose results its window clears, with `D_k` = `par { A } { id k }`. Forward is `sink`, backward is `float`. `A` may be an unexpanded call: the condition is about the window |
+| `interchange` | `par { a } { c } ; par { b } { d }` = `par { a ; b } { c ; d }`, for `out(c) = in(d)` | **the interchange law.** Two `par`s become one whenever the *upper* seam meets; the lower one is free, because a lower region has the whole stack beneath it. The frame case — `c` and `d` both `id k` — is what `fuse` places, and backward it splits one `par` at a cut the arguments name |
 | `hoist` | `par { X } { id (k+1) } ; branch { A } { B }` = `branch { par { X } { id k } ; A } { par { X } { id k } ; B }` | forward is `unfactor`; backward is the last step of `factor` |
 | `distribute` | `branch { A } { B } ; C` = `branch { A ; C } { B ; C }` | `C` is a whole term. Backward factors a shared *suffix*, which the old set could not do at all |
 | `fold_branch` | `push c ; branch { A } { B }` = the arm `c` selects | selected by `truthy`, and `false` is the only falsy value, so `push 1; branch` takes the **then** arm |
@@ -195,7 +195,7 @@ to a place that needs its own.
 **It is genuinely independent, and there is an argument rather than a failed
 search.** Read an opaque `X` as a random oracle — every application answers
 freshly — and every other equation in the set still holds. `annihilate` throws
-the answers away, `interchange` reorders computations that cannot see each
+the answers away, `slide` reorders computations that cannot see each
 other, and the rest never mention an opaque `X`. This one fails: the left side
 runs `X` twice and gets two different answers where the right runs it once and
 copies, and an `equal` afterwards can tell. No derivation from the others can
@@ -203,7 +203,7 @@ exist.
 
 That argument is also the statement of what it assumes. **It is the only law
 here that needs `X` to be deterministic**, the way `annihilate` and
-`interchange` are the only two that need it to be total. It costs nothing
+`slide` are the only two that need it to be total. It costs nothing
 today, because the instruction set is pure and a sentence of arity `(n -> m)`
 can see only the `n` values it is given — but an effectful instruction would
 take this law with it and nothing else, so it is written down rather than
@@ -211,7 +211,7 @@ assumed.
 
 Adding it demoted one: `copy_const` is the case `X = push c`. The `n = 0`
 instance reads `push c ; par { push c } { id }` = `push c ; copy`, and one
-`interchange` and one `elim_par0` turn the left side into `push c ; push c`.
+`slide` and one `elim_par0` turn the left side into `push c ; push c`.
 See `applier::tests::copy_const_is_derivable_from_copy_nat`, which runs that
 derivation both ways. It keeps its one-step matcher because `values` and
 `cleanup` fire it constantly and three steps is three times the fuel, but the
@@ -222,7 +222,7 @@ set now rests on fifteen axioms rather than sixteen.
 A step is a rule, a direction, and a place:
 
 ```
-interchange -> [1.then, 2.left, 1.then] @2
+slide -> [1.then, 2.left, 1.then] @2
 ```
 
 The location reads outermost-first. `[1.then, 2.left]` means "the then arm of
@@ -261,7 +261,7 @@ Every application, live run and replay alike:
 - with `--check`, the replacement leaves the stack as the window did.
 
 **Nothing in a script is trusted.** Facts that originate in the library ride in
-the arguments — the claimed arity of `X` in `interchange` and `annihilate` — and
+the arguments — the claimed arity of `X` in `slide` and `annihilate` — and
 are re-derived against the real program on every application. A step claiming
 `add` is `(1 -> 1)` is refused however it came to be written, and the tree is
 left untouched. The script communicates a construction; the applier checks it.
@@ -291,8 +291,8 @@ different thing to look for even though the arithmetic is the same:
 | `unfold` | 1 | opens a call |
 | `collapse` / `expand` | 1 | associativity of `par`, either way |
 | `flatten` | 1 | `elim_par0` forward |
-| `fuse` | 2 | |
-| `sink` / `float` | 2 | interchange, either way |
+| `fuse` | 2 | interchange, forwards |
+| `sink` / `float` | 2 | slide, either way |
 | `factor` / `unfactor` | 1 / 2 | hoist, either way (factor is three steps) |
 | `distribute` | 2 | |
 | `fold_branch` | 2 | |
@@ -474,7 +474,7 @@ have:
 | | |
 |---|---|
 | `inv(flatten)` | `A` = `par { A } { id 0 }` — put a window round a bare factor so the movement laws can carry it. `factor`'s first two steps |
-| `inv(fuse)` | split one factor off the front of a `par`'s left-hand side, the way `expand` takes the canonical split of `collapse` |
+| `inv(fuse)` | split one factor off the front of each of a `par`'s two regions, the way `expand` takes the canonical split of `collapse`. An identity region is cut by repeating it, since `id k ; id k` is `id k` |
 | `inv(unfactor)` | lift a window **both arms open with** out in front of the branch. `factor`'s third step, at any width rather than only `0` |
 | `inv(distribute)` | factor the longest shared **suffix** out of both arms — the end of a branch `factor` cannot reach, since it only ever worked on prefixes |
 | `inv(copy_const)` | `push c ; push c` = `push c ; copy` |
@@ -780,7 +780,7 @@ nothing but branches, drops and the literal each one selects:
 **What it cannot reach.** A prefix that *consumes* values the other arm still
 needs can only be lifted onto copies, and the copies have to be paid for:
 `pick (n-1)^n ; X ; par { drop^n } { id m }` = `X` is what would license it,
-which is one `interchange` and then
+which is one `slide` and then
 `pick (n-1)^n ; par { drop^n } { id n }` = `id 0` — which
 is `counit_under` at `n = 1` and a **roll** for anything above it. That is
 `pick_drop_to_roll`, on the list under "what is not here yet", so an arm that
@@ -1144,13 +1144,13 @@ the annihilation and counits the copies paid for take away again.
 $ rewrite tests the_guard_a_split_leaves \
       -t 'exact(must(once(bool_result_copied)))' --show-script
      0  copy_nat    <- @0   equal ; copy      ⇒ pick 1 ; pick 1 ; equal ; …
-     1  interchange <- @5   par { equal } { id } ; is_bool
+     1  slide       <- @5   par { equal } { id } ; is_bool
                                               ⇒ is_bool ; par { equal } { id }
      2  bool_result -> @4   equal ; is_bool     ⇒ equal ; drop ; push true
      3  annihilate  -> @4   equal ; drop        ⇒ drop ; drop
      4  counit      -> @2                       ⇒ (nothing)
      5  counit      -> @0                       ⇒ (nothing)
-     6  interchange -> @0   push true ; par { equal } { id }
+     6  slide       -> @0   push true ; par { equal } { id }
                                               ⇒ par { equal } { id 0 } ; push true
      7  elim_par0   -> @0                       ⇒ equal
 ```
@@ -1214,7 +1214,7 @@ a script prints:
 
 ```
 $ rewrite tests pair_check -t 'normalize(unfold_all; then(1, left(2, then(1, at(2, sink)))))' --show-script
-     3  interchange -> [1.then, 2.body, 1.then] @2
+     3  slide -> [1.then, 2.body, 1.then] @2
 ```
 
 The tactic and the location read the same, in the same order. `at(n, ...)` is
@@ -1377,7 +1377,7 @@ either way — a route that does not work out still cost what it cost.
 
 Worth knowing either way: only **two** of the thirteen equations actually need
 totality. `annihilate` needs it because dropping `X`'s results still has to run
-`X` if `X` can fail, and `interchange` needs it because reordering is only
+`X` if `X` can fail, and `slide` needs it because reordering is only
 unobservable when the failure order cannot be seen. The other eleven were sound
 on fallible code as written.
 ## The governing invariant, in three parts
@@ -1588,8 +1588,8 @@ closing `q`.
 ```
        1  unfold -> [1.then, 2.left] @0
        2  unfold -> [1.then, 2.left, 1.then] @0
-       3  interchange -> [1.then, 2.left, 1.then] @2
-  ▸    7  interchange -> [1.then] @0
+       3  slide -> [1.then, 2.left, 1.then] @2
+  ▸    7  slide -> [1.then] @0
 ```
 
 ### It steps by applying a prefix

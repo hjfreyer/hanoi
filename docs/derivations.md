@@ -106,8 +106,8 @@ text.
 |---|---|
 | `collapse` | `k`, `j`, `a` |
 | `elim_par0` | `a` |
-| `interchange` | `x`, `framed`, `n`, `m` |
-| `fuse` | `k`, `a`, `b` |
+| `slide` | `x`, `framed`, `n`, `m` |
+| `interchange` | `a`, `b`, `c`, `d` |
 | `hoist` | `k`, `x`, `then`, `else` |
 | `distribute` | `then`, `else`, `suffix` |
 | `fold_branch` | `c`, `then`, `else` |
@@ -186,7 +186,7 @@ Everything `prove` checks of its own derivation, in the same code:
 - what the last step leaves is the right-hand side, compared by effect.
 
 **Nothing about being written down makes a step trusted.** Facts that originate
-in the library ride in the arguments — the claimed arity of `X` in `interchange`
+in the library ride in the arguments — the claimed arity of `X` in `slide`
 and `annihilate` — and are re-derived against the real program on every
 application. A file claiming `add` is `(1 -> 1)` is refused however it came to
 be written:

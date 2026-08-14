@@ -894,12 +894,12 @@ fn the_guard_a_split_leaves_is_derivable() {
         laws,
         vec![
             "copy_nat",
-            "interchange",
+            "slide",
             "bool_result",
             "annihilate",
             "counit",
             "counit",
-            "interchange",
+            "slide",
             "elim_par0",
         ]
     );

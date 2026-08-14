@@ -32,7 +32,10 @@
 //! A `par` whose right-hand side is *not* an identity is a term nothing
 //! compiles to today. The operator is binary because that is what it means for
 //! two computations to run side by side; the frames are the special case that
-//! the instruction set happens to be written in.
+//! the instruction set happens to be written in. The laws are stated about the
+//! general shape all the same — [`Rule::Interchange`][crate::rule::Rule::Interchange]
+//! joins any two `par`s whose upper regions meet — so a term that holds one is
+//! a term the rules can read, whether a rewrite or a script put it there.
 //!
 //! ## Composition is associative, and the code reads it that way
 //!
@@ -97,7 +100,8 @@ impl Term {
         matches!(self, Term::Id(0))
     }
 
-    /// `self ; other`, right-nested and with the unit dropped.
+    /// `self ; other`, right-nested, with the unit dropped and adjacent
+    /// identities merged.
     pub(crate) fn then(self, other: Term) -> Term {
         if self.is_nil() {
             return other;
@@ -107,6 +111,23 @@ impl Term {
         }
         match self {
             Term::Compose(a, b) => Term::Compose(a, Box::new(b.then(other))),
+            // `id j ; id k` = `id max(j, k)`. Neither does anything, and what a
+            // composite requires is the deepest thing either half reached for —
+            // so two identities in a row are one. Without this the interchange
+            // law's frame case would answer with `par { A ; B } { id k ; id k }`,
+            // which is the same program written so that nothing recognizes the
+            // frame in it.
+            Term::Id(j) => match other {
+                Term::Id(k) => Term::Id(j.max(k)),
+                Term::Compose(head, tail) => match *head {
+                    Term::Id(k) => Term::Id(j.max(k)).then(*tail),
+                    head => Term::Compose(
+                        Box::new(Term::Id(j)),
+                        Box::new(Term::Compose(Box::new(head), tail)),
+                    ),
+                },
+                other => Term::Compose(Box::new(Term::Id(j)), Box::new(other)),
+            },
             head => Term::Compose(Box::new(head), Box::new(other)),
         }
     }
@@ -127,7 +148,7 @@ impl Term {
             return Term::nil();
         };
         while let Some(t) = factors.pop() {
-            out = Term::Compose(Box::new(t), Box::new(out));
+            out = t.then(out);
         }
         out
     }

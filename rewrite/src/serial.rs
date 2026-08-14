@@ -175,16 +175,17 @@ fn write_rule(prog: &Program, rule: &Rule) -> Result<Vec<(&'static str, String)>
             ("a", write_term(prog, a)?),
         ],
         Rule::ElimPar0 { a, .. } => vec![("a", write_term(prog, a)?)],
-        Rule::Interchange { x, framed, n, m } => vec![
+        Rule::Slide { x, framed, n, m } => vec![
             ("x", write_term(prog, x)?),
             ("framed", write_term(prog, framed)?),
             ("n", n.to_string()),
             ("m", m.to_string()),
         ],
-        Rule::Fuse { k, a, b, .. } => vec![
-            ("k", k.to_string()),
+        Rule::Interchange { a, b, c, d, .. } => vec![
             ("a", write_term(prog, a)?),
             ("b", write_term(prog, b)?),
+            ("c", write_term(prog, c)?),
+            ("d", write_term(prog, d)?),
         ],
         Rule::Hoist {
             k,
@@ -1103,16 +1104,17 @@ impl<'a> Parser<'a> {
                 a: f.term("a")?,
                 origins: Vec::new(),
             }),
-            "interchange" => StepKind::Rule(Rule::Interchange {
+            "slide" => StepKind::Rule(Rule::Slide {
                 x: f.term("x")?,
                 framed: f.term("framed")?,
                 n: f.int("n")?,
                 m: f.int("m")?,
             }),
-            "fuse" => StepKind::Rule(Rule::Fuse {
-                k: f.count("k")?,
+            "interchange" => StepKind::Rule(Rule::Interchange {
                 a: f.term("a")?,
                 b: f.term("b")?,
+                c: f.term("c")?,
+                d: f.term("d")?,
                 a_origins: Vec::new(),
                 b_origins: Vec::new(),
             }),
@@ -1428,8 +1430,8 @@ pub(crate) fn arg_names(rule: &str) -> Option<&'static [&'static str]> {
     Some(match rule {
         "collapse" => &["k", "j", "a"],
         "elim_par0" => &["a"],
-        "interchange" => &["x", "framed", "n", "m"],
-        "fuse" => &["k", "a", "b"],
+        "slide" => &["x", "framed", "n", "m"],
+        "interchange" => &["a", "b", "c", "d"],
         "hoist" => &["k", "x", "then", "else"],
         "distribute" => &["then", "else", "suffix"],
         "fold_branch" => &["c", "then", "else"],
@@ -1458,8 +1460,8 @@ pub(crate) fn equation_names() -> Vec<&'static str> {
     vec![
         "collapse",
         "elim_par0",
+        "slide",
         "interchange",
-        "fuse",
         "hoist",
         "distribute",
         "fold_branch",
@@ -1567,16 +1569,17 @@ mod tests {
                 a: op(Instruction::Drop),
                 origins: Vec::new(),
             },
-            Rule::Interchange {
+            Rule::Slide {
                 x: op(Instruction::Add),
                 framed: Term::frame(Vec::new(), 2, op(Instruction::Drop)),
                 n: 2,
                 m: 2,
             },
-            Rule::Fuse {
-                k: 1,
+            Rule::Interchange {
                 a: Term::seq([op(Instruction::Add)]),
                 b: Term::seq([op(Instruction::Drop)]),
+                c: Term::Id(1),
+                d: Term::Id(1),
                 a_origins: Vec::new(),
                 b_origins: Vec::new(),
             },
@@ -1653,7 +1656,7 @@ mod tests {
         ];
         // Every name in the table is covered, so a new equation shows up here
         // as a missing case rather than as a file nobody can write.
-        let mut named: Vec<&str> = rules.iter().map(|r| r.name()).collect();
+        let mut named: Vec<&str> = rules.iter().map(Rule::name).collect();
         named.push("unfold");
         let mut all = equation_names();
         named.sort();
@@ -1680,7 +1683,7 @@ mod tests {
                 Location::root(0),
             ),
             step(
-                StepKind::Rule(Rule::Interchange {
+                StepKind::Rule(Rule::Slide {
                     x: op(Instruction::Add),
                     framed: Term::frame(Vec::new(), 2, Term::Call(target)),
                     n: 2,

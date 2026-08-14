@@ -547,16 +547,17 @@ mod tests {
                 a: op(Instruction::Add),
                 origins: vec!["o".to_string()],
             },
-            Rule::Interchange {
+            Rule::Slide {
                 x: op(Instruction::Add),
                 framed: frame(2, vec![op(Instruction::Drop)]),
                 n: 2,
                 m: 2,
             },
-            Rule::Fuse {
-                k: 1,
+            Rule::Interchange {
                 a: op(Instruction::Add),
                 b: op(Instruction::Drop),
+                c: Term::Id(1),
+                d: Term::Id(1),
                 a_origins: vec!["a".to_string()],
                 b_origins: vec!["b".to_string()],
             },
@@ -683,7 +684,7 @@ mod tests {
         let before = vec![op(Instruction::Add), frame(1, Vec::new())];
         let mut tree = before.clone();
         let s = step(
-            Rule::Interchange {
+            Rule::Slide {
                 x: op(Instruction::Add),
                 framed: frame(1, Vec::new()),
                 n: 1,
@@ -864,7 +865,7 @@ mod tests {
                 Location::root(0),
             ),
             step(
-                Rule::Interchange {
+                Rule::Slide {
                     x: push_c(),
                     framed: frame(1, vec![push_c()]),
                     n: 0,
@@ -925,10 +926,11 @@ mod tests {
 
         let script = vec![
             step(
-                Rule::Fuse {
-                    k: 1,
+                Rule::Interchange {
                     a: push_c(),
                     b: op(Instruction::Copy),
+                    c: Term::Id(1),
+                    d: Term::Id(1),
                     a_origins: Vec::new(),
                     b_origins: Vec::new(),
                 },
@@ -944,10 +946,11 @@ mod tests {
                 },
             ),
             step(
-                Rule::Fuse {
-                    k: 1,
+                Rule::Interchange {
                     a: push_c(),
                     b: push_c(),
+                    c: Term::Id(1),
+                    d: Term::Id(1),
                     a_origins: Vec::new(),
                     b_origins: Vec::new(),
                 },

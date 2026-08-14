@@ -27,7 +27,7 @@
 //! ## What an argument may be
 //!
 //! Everything the two sides are built from, including facts that originate in
-//! the library. The claimed arity of `X` in [`Rule::Interchange`] is an
+//! the library. The claimed arity of `X` in [`Rule::Slide`] is an
 //! argument, not a lookup, so `lhs` and `rhs` are pure functions of the
 //! arguments. What keeps that honest is [`Rule::check`], which the applier is
 //! required to run first and which verifies every claim against the real
@@ -48,6 +48,7 @@
 use bytecode::value::numeric_cmp;
 use bytecode::{Instruction, SentenceIndex, Value};
 
+use crate::arity::term_arity;
 use crate::ir::{Term, frame_depth, sketch_term, with_frame_depth};
 use crate::location::Location;
 use crate::program::Program;
@@ -104,9 +105,13 @@ pub(crate) enum SideCondition {
         claimed: (i64, i64),
         actual: (i64, i64),
     },
-    /// Interchange: the hidden window does not clear what the moved term leaves
+    /// `slide`: the hidden window does not clear what the moved term leaves
     /// behind, so the two genuinely interfere.
     FrameTooShallow { depth: usize, outputs: i64 },
+    /// Interchange: the two `par`s carve the stack between them at different
+    /// points on the **upper** side, so `c ; d` is not a computation the upper
+    /// region can hold on its own.
+    SeamMisaligned { leaves: i64, wants: i64 },
     /// A frame width came out negative or too large to represent.
     DepthOverflow { shifted: i64 },
     /// `unframe` was handed a nest rather than a single frame. The law is about
@@ -148,6 +153,12 @@ impl std::fmt::Display for SideCondition {
                 f,
                 "a window {} wide does not clear the {} value(s) left behind",
                 depth, outputs
+            ),
+            SideCondition::SeamMisaligned { leaves, wants } => write!(
+                f,
+                "the upper region leaves {} value(s) where the next `par` reads \
+                 {}, so the seam is not in one place",
+                leaves, wants
             ),
             SideCondition::DepthOverflow { shifted } => {
                 write!(f, "the shifted window width {} is not representable", shifted)
@@ -268,7 +279,7 @@ pub(crate) enum Rule {
     /// unexpanded call as readily as a spelled-out block: the condition is about
     /// the window, and the callee's body has no say in it. A bare `jump` is not
     /// a `par` at all and is rejected.
-    Interchange {
+    Slide {
         x: Term,
         /// The framed term as it stands on the left-hand side.
         framed: Term,
@@ -277,15 +288,44 @@ pub(crate) enum Rule {
         m: i64,
     },
 
-    /// `par { A } { id k } ; par { B } { id k }` = `par { A ; B } { id k }`.
+    /// `par { a } { c } ; par { b } { d }` = `par { a ; b } { c ; d }`,
+    /// when `out(c) = in(d)`.
     ///
-    /// The second window passes through exactly what the first restored, so the
-    /// region can just stay hidden across both. Read backward it splits one
-    /// frame into two at a point the arguments name.
-    Fuse {
-        k: usize,
+    /// **The interchange law**: two computations side by side, run one after the
+    /// other, are the two composites side by side. It is what makes `par` a
+    /// functor rather than just a way of writing a pair, and it is the reason
+    /// "these two do not interact" is a thing this calculus can say at all.
+    ///
+    /// The frame case — `c` and `d` both `id k` — is the old `fuse`: a window
+    /// that passes `k` values through, twice in a row, is one window across
+    /// both. That is still what the [`Fuse`][crate::matcher::Fuse] matcher
+    /// places, and the law says it without knowing what a frame is.
+    ///
+    /// ## Why only the upper seam has to line up
+    ///
+    /// The condition is on `c` and `d` alone. `a` may leave fewer values than
+    /// `b` reads, and the law still holds, because a `par`'s **lower** region
+    /// has the whole term's stack beneath it: `b` reaching past what `a` left
+    /// reaches the same values on either side of the equation.
+    ///
+    /// The upper region does not have that. What is beneath it is the lower
+    /// region, and the two sides disagree about what is there. Take
+    /// `a = push 9`, `c = push 1`, `b = id 0`, `d = add`: on the left `add`
+    /// takes `1` and the `9` that `push 9` just left, and on the right it takes
+    /// `1` and whatever was under the region to begin with. So `out(c)` must be
+    /// exactly `in(d)`, and it is checked rather than assumed —
+    /// `interchange_needs_the_upper_seam_to_line_up` is the counterexample run
+    /// as a test.
+    ///
+    /// Read backward this splits one `par` into two, at a cut the arguments
+    /// name: the equation permits any cut, and choosing one is the matcher's
+    /// business.
+    Interchange {
         a: Term,
         b: Term,
+        c: Term,
+        d: Term,
+        /// Provenance of the lower region, which is what a `par` records.
         a_origins: Vec<String>,
         b_origins: Vec<String>,
     },
@@ -464,7 +504,7 @@ pub(crate) enum Rule {
     /// `speculate`, `share` and the vacuous law all stand on. Deriving each
     /// instance instead would mean conjuring the frame the derivation runs
     /// inside, and a frame cannot be conjured: [`Rule::ElimPar0`] backwards
-    /// makes one that passes nothing through, and only [`Rule::Interchange`]
+    /// makes one that passes nothing through, and only [`Rule::Slide`]
     /// past a `drop` widens it. So the schema earns its place by what it
     /// introduces, where the axiom earns its by what it deletes.
     ///
@@ -608,7 +648,7 @@ pub(crate) enum Rule {
     ///
     /// Neither side is smaller, which is the point: the right-hand side puts a
     /// copy *beside an identity*, and a framed computation is one
-    /// [`Rule::Interchange`] can carry. A bare `copy` cannot travel, so the copy
+    /// [`Rule::Slide`] can carry. A bare `copy` cannot travel, so the copy
     /// a later step needs would otherwise be stranded where it was made.
     ///
     /// Stated at the top of the stack and nowhere else, where it used to be
@@ -635,7 +675,7 @@ pub(crate) enum Rule {
     /// every `X` is a homomorphism for it. [`Rule::CopyConst`] is the case
     /// `X = push c`, and is now a lemma rather than an axiom — the `n = 0`
     /// instance reads `push c ; par { push c } { id }` = `push c ; copy`, and
-    /// one [`Rule::Interchange`] and one [`Rule::ElimPar0`] turn the left side
+    /// one [`Rule::Slide`] and one [`Rule::ElimPar0`] turn the left side
     /// into `push c ; push c`. See
     /// `applier::tests::copy_const_is_derivable_from_copy_nat`, which runs the
     /// derivation rather than asserting the claim.
@@ -781,8 +821,8 @@ impl Rule {
         match self {
             Rule::Collapse { .. } => "collapse",
             Rule::ElimPar0 { .. } => "elim_par0",
+            Rule::Slide { .. } => "slide",
             Rule::Interchange { .. } => "interchange",
-            Rule::Fuse { .. } => "fuse",
             Rule::Hoist { .. } => "hoist",
             Rule::Distribute { .. } => "distribute",
             Rule::FoldBranch { .. } => "fold_branch",
@@ -811,7 +851,7 @@ impl Rule {
     /// invent a shape if it has not.
     pub(crate) fn check(&self, prog: &Program) -> Result<(), SideCondition> {
         match self {
-            Rule::Interchange { x, framed, n, m } => {
+            Rule::Slide { x, framed, n, m } => {
                 let depth = frame_depth(framed).ok_or_else(|| SideCondition::NotFramed {
                     found: sketch_term(framed),
                 })?;
@@ -823,6 +863,26 @@ impl Rule {
                     });
                 }
                 shifted_depth(depth, actual).map(|_| ())
+            }
+            // The upper seam, and nothing else — see the variant's doc for why
+            // the lower one is free. Both readings check the same thing: the
+            // cut a backward step names has to be a place the upper region's
+            // own composition already passes through.
+            Rule::Interchange { c, d, .. } => {
+                let leaves = term_arity(prog, c)
+                    .ok_or_else(|| SideCondition::ArityUnknown {
+                        found: sketch_term(c),
+                    })?
+                    .1;
+                let wants = term_arity(prog, d)
+                    .ok_or_else(|| SideCondition::ArityUnknown {
+                        found: sketch_term(d),
+                    })?
+                    .0;
+                if leaves != wants {
+                    return Err(SideCondition::SeamMisaligned { leaves, wants });
+                }
+                Ok(())
             }
             // One thing only: that the arity the step claims for `x` is the one
             // the library gives. Under the global precondition that is the
@@ -892,7 +952,6 @@ impl Rule {
             Rule::SwapCycle
             | Rule::Collapse { .. }
             | Rule::ElimPar0 { .. }
-            | Rule::Fuse { .. }
             | Rule::Hoist { .. }
             | Rule::Distribute { .. }
             | Rule::FoldBranch { .. }
@@ -923,16 +982,17 @@ impl Rule {
 
             Rule::ElimPar0 { a, origins } => Term::frame(origins.clone(), 0, a.clone()),
 
-            Rule::Interchange { x, framed, .. } => x.clone().then(framed.clone()),
+            Rule::Slide { x, framed, .. } => x.clone().then(framed.clone()),
 
-            Rule::Fuse {
-                k,
+            Rule::Interchange {
                 a,
                 b,
+                c,
+                d,
                 a_origins,
                 b_origins,
-            } => Term::frame(a_origins.clone(), *k, a.clone())
-                .then(Term::frame(b_origins.clone(), *k, b.clone())),
+            } => Term::par_from(a_origins.clone(), a.clone(), c.clone())
+                .then(Term::par_from(b_origins.clone(), b.clone(), d.clone())),
 
             Rule::Hoist {
                 k,
@@ -1075,7 +1135,7 @@ impl Rule {
 
             Rule::ElimPar0 { a, .. } => a.clone(),
 
-            Rule::Interchange { x, framed, n, m } => {
+            Rule::Slide { x, framed, n, m } => {
                 let depth = frame_depth(framed).expect("check() accepted an unframed term");
                 let shifted =
                     shifted_depth(depth, (*n, *m)).expect("check() accepted an unusable width");
@@ -1084,16 +1144,17 @@ impl Rule {
                     .then(x.clone())
             }
 
-            Rule::Fuse {
-                k,
+            Rule::Interchange {
                 a,
                 b,
+                c,
+                d,
                 a_origins,
                 b_origins,
             } => {
                 let mut origins = a_origins.clone();
                 origins.extend(b_origins.iter().cloned());
-                Term::frame(origins, *k, a.clone().then(b.clone()))
+                Term::par_from(origins, a.clone().then(b.clone()), c.clone().then(d.clone()))
             }
 
             Rule::Hoist {
@@ -1671,12 +1732,91 @@ pub(crate) mod tests {
         assert_eq!(r.rhs(), a);
     }
 
+    /// The law with all four parts alive, which is the whole of what
+    /// generalizing it bought: neither region is an identity, so no reading of
+    /// the old frame-shaped `fuse` could even state this.
+    #[test]
+    fn interchange_merges_two_pars_that_are_not_frames() {
+        let r = Rule::Interchange {
+            a: op(Instruction::Not),
+            b: op(Instruction::Drop),
+            c: op(Instruction::Add),
+            d: op(Instruction::Swap),
+            a_origins: Vec::new(),
+            b_origins: Vec::new(),
+        };
+        // `add` leaves two — its answer and its success flag — and `swap` reads
+        // two, so the seam is in one place.
+        assert_eq!(r.check(&prog()), Ok(()));
+        assert_eq!(
+            r.lhs(),
+            Term::par(op(Instruction::Not), op(Instruction::Add))
+                .then(Term::par(op(Instruction::Drop), op(Instruction::Swap)))
+        );
+        assert_eq!(
+            r.rhs(),
+            Term::par(
+                Term::seq([op(Instruction::Not), op(Instruction::Drop)]),
+                Term::seq([op(Instruction::Add), op(Instruction::Swap)]),
+            )
+        );
+    }
+
+    /// The side condition, as the counterexample that forced it.
+    ///
+    /// `a = push 9`, `c = push 1`, `b = id 0`, `d = add`. On the left the two
+    /// `par`s run in turn: `push 1` leaves a 1 in the upper region, `push 9`
+    /// leaves a 9 in the lower, and then `add` — reading two — takes the 1 and
+    /// the 9 that `push 9` just left, answering 10 on top of the original value.
+    /// On the right the upper region is fixed at entry, so `add` takes the 1 and
+    /// whatever was under it *before* the `par` began. `[v]` goes to `[v, 10]`
+    /// one way and `[9, v+1]` the other.
+    #[test]
+    fn interchange_needs_the_upper_seam_to_line_up() {
+        let r = Rule::Interchange {
+            a: op(Instruction::Push(Value::Int(9))),
+            b: Term::nil(),
+            c: op(Instruction::Push(Value::Int(1))),
+            d: op(Instruction::Add),
+            a_origins: Vec::new(),
+            b_origins: Vec::new(),
+        };
+        assert_eq!(
+            r.check(&prog()),
+            Err(SideCondition::SeamMisaligned {
+                leaves: 1,
+                wants: 2
+            })
+        );
+    }
+
+    /// And the other seam is genuinely free, which is why the condition is
+    /// one-sided rather than a pair.
+    ///
+    /// `a` leaves nothing where `b` reads two. That is fine: what `b` reaches
+    /// past `a` is the stack under the whole term, and that is the same stack on
+    /// either side of the equation — a lower region has no ceiling to disagree
+    /// about.
+    #[test]
+    fn interchange_does_not_care_about_the_lower_seam() {
+        let r = Rule::Interchange {
+            a: Term::nil(),
+            b: op(Instruction::Add),
+            c: op(Instruction::Push(Value::Int(1))),
+            d: op(Instruction::Drop),
+            a_origins: Vec::new(),
+            b_origins: Vec::new(),
+        };
+        assert_eq!(r.check(&prog()), Ok(()));
+    }
+
     #[test]
     fn fuse_concatenates_two_bodies_at_the_same_width() {
-        let r = Rule::Fuse {
-            k: 2,
+        let r = Rule::Interchange {
             a: op(Instruction::Add),
             b: op(Instruction::Drop),
+            c: Term::Id(2),
+            d: Term::Id(2),
             a_origins: vec!["a".to_string()],
             b_origins: vec!["b".to_string()],
         };
@@ -1697,7 +1837,7 @@ pub(crate) mod tests {
     fn interchange_widens_a_window_past_an_operator_that_consumes_two() {
         // `add` is (2 -> 2), the second output being its success flag: 2 >= 2
         // clears the window, and the same window is 2 - 2 + 2 = 2 wide beyond.
-        let r = Rule::Interchange {
+        let r = Rule::Slide {
             x: op(Instruction::Add),
             framed: frame(2, Vec::new()),
             n: 2,
@@ -1717,7 +1857,7 @@ pub(crate) mod tests {
     #[test]
     fn interchange_narrows_a_window_past_a_push() {
         // `push` is (0 -> 1): a window 1 wide clears it and is 0 wide beyond.
-        let r = Rule::Interchange {
+        let r = Rule::Slide {
             x: push(Value::Int(1)),
             framed: frame(1, Vec::new()),
             n: 0,
@@ -1732,7 +1872,7 @@ pub(crate) mod tests {
 
     #[test]
     fn interchange_refuses_a_window_that_would_reach_what_x_produced() {
-        let r = Rule::Interchange {
+        let r = Rule::Slide {
             x: op(Instruction::Add),
             framed: frame(1, Vec::new()),
             n: 2,
@@ -1752,7 +1892,7 @@ pub(crate) mod tests {
         // A bare `jump` is not a `par` and has no window at all; a frame at
         // width 0 does have one, which passes nothing through.
         let jump = Term::Call(SentenceIndex::from(0));
-        let r = Rule::Interchange {
+        let r = Rule::Slide {
             x: push(Value::Int(1)),
             framed: jump,
             n: 0,
@@ -1764,7 +1904,7 @@ pub(crate) mod tests {
         ));
 
         let called = Term::frame(Vec::new(), 2, Term::Call(SentenceIndex::from(0)));
-        let r = Rule::Interchange {
+        let r = Rule::Slide {
             x: push(Value::Int(1)),
             framed: called,
             n: 0,
@@ -1784,7 +1924,7 @@ pub(crate) mod tests {
     fn a_fabricated_arity_is_caught_against_the_library() {
         // Claiming `add` is (1 -> 1) would let the window move where it must
         // not. The library is the authority, and it disagrees.
-        let r = Rule::Interchange {
+        let r = Rule::Slide {
             x: op(Instruction::Add),
             framed: frame(1, Vec::new()),
             n: 1,
@@ -2343,16 +2483,17 @@ pub(crate) mod tests {
                 a: op(Instruction::Add),
                 origins: vec!["o".to_string()],
             },
-            Rule::Interchange {
+            Rule::Slide {
                 x: op(Instruction::Add),
                 framed: frame(2, vec![op(Instruction::Drop)]),
                 n: 2,
                 m: 2,
             },
-            Rule::Fuse {
-                k: 1,
+            Rule::Interchange {
                 a: op(Instruction::Add),
                 b: op(Instruction::Drop),
+                c: Term::Id(1),
+                d: Term::Id(1),
                 a_origins: vec!["a".to_string()],
                 b_origins: vec!["b".to_string()],
             },

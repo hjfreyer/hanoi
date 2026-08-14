@@ -493,10 +493,11 @@ mod tests {
             })
         };
         let fuse = || {
-            step(Rule::Fuse {
-                k: 1,
+            step(Rule::Interchange {
                 a: Term::nil(),
                 b: Term::nil(),
+                c: Term::Id(1),
+                d: Term::Id(1),
                 a_origins: Vec::new(),
                 b_origins: Vec::new(),
             })
@@ -506,7 +507,7 @@ mod tests {
         let log = vec![cancel(), fuse(), cancel(), collapse()];
         assert_eq!(
             histogram(&log),
-            vec![("cancel_tuple", 2), ("collapse", 1), ("fuse", 1)]
+            vec![("cancel_tuple", 2), ("collapse", 1), ("interchange", 1)]
         );
         assert_eq!(histogram(&log[..1]), vec![("cancel_tuple", 1)]);
     }
