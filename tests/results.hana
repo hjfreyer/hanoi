@@ -19,38 +19,37 @@ mod result {
     }
 }
 
-// Halves an even number, and calls an odd one an error carrying the number it
-// could not halve.
+// Halves an even number, and calls an odd one — or a value that is not a
+// number at all — an error carrying what it could not halve.
 #[arity(1, 1)]
 sentence halve {
+    // `modulo` answers `0` on operands it has no remainder for, which is the
+    // same answer an even number gets, so the question is asked here rather
+    // than read off the arithmetic afterwards. Once it is an int, `modulo` and
+    // `divide` are both computing something.
     pick 0
-    push 2
-    modulo
+    is_int
     branch {
+        pick 0
+        push 2
+        modulo
         push 0
         equal
         branch {
             push 2
             divide
-            branch {
-                jump result::ok
-            } {
-                // `divide` says no: the quotient it invented is all that is
-                // left, so that is what the error carries.
-                jump result::err
-            }
+            jump result::ok
         } {
             jump result::err
         }
     } {
-        drop 0
         jump result::err
     }
 }
 
-// Nothing but the unwrap: `?` reads the flag `untuple` leaves rather than
-// relying on the shape, so a value that is not a result comes back as an error
-// carrying that value.
+// Nothing but the unwrap: `?` asks whether there is a result to take apart
+// before it takes one apart, so a value that is not a result comes back as an
+// error carrying that value.
 #[arity(1, 1)]
 sentence unwrap {
     ?
@@ -118,12 +117,10 @@ sentence sum_of_halves {
     roll 1
     jump halve
     ?
+    // Both halves are ints — `halve` says `ok` of nothing else — so the sum is
+    // one too, and there is nothing left for this to ask.
     add
-    branch {
-        jump result::ok
-    } {
-        jump result::err
-    }
+    jump result::ok
 }
 
 test sentence summing_two_halves {
@@ -160,9 +157,6 @@ sentence inside_an_arm {
         ?
         push 100
         add
-        // Nothing follows in this arm, so the flag has nowhere to go: the
-        // answer is the sum, junk or not, and the test's check catches it.
-        drop 0
     } {
         drop 0
         push 0

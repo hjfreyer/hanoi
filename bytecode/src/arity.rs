@@ -264,69 +264,42 @@ pub fn op_arity(inst: &Instruction) -> Option<(i64, i64)> {
         Instruction::Drop => (1, 0),
         Instruction::Copy => (1, 2),
         Instruction::Swap => (2, 2),
-        Instruction::Equal | Instruction::And | Instruction::Or => (2, 1),
-        Instruction::Not
-        | Instruction::IsInt
-        | Instruction::IsBool
-        | Instruction::IsConstString
-        | Instruction::IsSymbol
-        | Instruction::IsTuple
-        // The coercions replace a value with one of the type they name, and
-        // there is no flag: they are total in the sense of having no domain to
-        // be off, so nothing about the outcome needs reporting.
-        | Instruction::AsBool
-        | Instruction::AsInt
-        | Instruction::AsTuple(_) => (1, 1),
-        // The fallible instructions, each one output wider than the value it
-        // computes because the extra slot holds the success flag. See
-        // [`is_fallible`].
-        Instruction::Greater
+        // Every instruction that reads two values and answers with one. The
+        // arithmetic and the comparisons are here rather than a slot wider
+        // because an answer they had to invent is still one value: an
+        // operation says what it computed, and a caller that needs to know
+        // whether it was reaching for something asks before it hands the
+        // operands over. See `docs/totality.md`.
+        Instruction::Equal
+        | Instruction::And
+        | Instruction::Or
+        | Instruction::Greater
         | Instruction::Less
         | Instruction::Add
         | Instruction::Subtract
         | Instruction::Multiply
         | Instruction::Divide
         | Instruction::Modulo
-        | Instruction::ConstStringCharAt => (2, 2),
-        Instruction::Negate | Instruction::ConstStringLen | Instruction::TupleLength => (1, 2),
-        Instruction::Untuple(n) => (1, *n as i64 + 1),
+        | Instruction::ConstStringCharAt => (2, 1),
+        Instruction::Not
+        | Instruction::Negate
+        | Instruction::ConstStringLen
+        | Instruction::TupleLength
+        | Instruction::IsInt
+        | Instruction::IsBool
+        | Instruction::IsConstString
+        | Instruction::IsSymbol
+        | Instruction::IsTuple
+        // The coercions replace a value with one of the type they name.
+        | Instruction::AsBool
+        | Instruction::AsInt
+        | Instruction::AsTuple(_) => (1, 1),
+        // `untuple n` fills exactly the slots `tuple n` emptied, which is what
+        // makes the pair a shape rather than a pair of numbers to keep in step.
+        Instruction::Untuple(n) => (1, *n as i64),
         Instruction::Tuple(n) => (*n as i64, 1),
         Instruction::Jump(..) | Instruction::Dip(..) | Instruction::Branch(..) => return None,
     })
-}
-
-/// Whether this instruction reports success with a flag on top of its result.
-///
-/// A fallible instruction is still **total** — it answers on every input (see
-/// `docs/totality.md`). What the flag adds is that the answer says whether it
-/// was computed or invented: `add` on two symbols leaves `0` and `false`, and
-/// on two numbers leaves the sum and `true`.
-///
-/// The arity is fixed either way, which is the point. A caller's stack does not
-/// depend on data, so the arity checker still works on shape alone and every
-/// rule that moves code past an instruction reads one pair of numbers rather
-/// than reasoning about which branch it took.
-///
-/// Kept beside [`op_arity`] because the two must agree: a fallible instruction
-/// is exactly one whose output count includes a slot the value does not need.
-/// The VM produces the flag and `assemble` decides whether to drop it — two
-/// readers, one table.
-pub fn is_fallible(inst: &Instruction) -> bool {
-    matches!(
-        inst,
-        Instruction::Greater
-            | Instruction::Less
-            | Instruction::Add
-            | Instruction::Subtract
-            | Instruction::Multiply
-            | Instruction::Divide
-            | Instruction::Modulo
-            | Instruction::Negate
-            | Instruction::Untuple(_)
-            | Instruction::TupleLength
-            | Instruction::ConstStringLen
-            | Instruction::ConstStringCharAt
-    )
 }
 
 fn infer_arity_of_instructions(
@@ -462,13 +435,13 @@ mod tests {
 
     #[test]
     fn an_ordinary_sentence_is_inferred() {
-        // Two operands in, the sum and its success flag out.
+        // Two operands in, the sum out.
         let got = arity_of("sentence probe { add }", "probe");
         assert_eq!(
             got,
             Some(Arity {
                 inputs: 2,
-                outputs: 2
+                outputs: 1
             })
         );
     }
@@ -480,7 +453,7 @@ mod tests {
         // what `check_arities` itself uses when it meets a Dip.
         let got = arity_of(
             r#"
-            #[arity(5, 5)]
+            #[arity(5, 4)]
             sentence probe { add }
         "#,
             "probe",
@@ -489,7 +462,7 @@ mod tests {
             got,
             Some(Arity {
                 inputs: 2,
-                outputs: 2
+                outputs: 1
             })
         );
     }

@@ -16,355 +16,182 @@ function init {
 function accept {
     // Stack: [(event, state)]
     untuple 2
+    // Stack: [event, state]
+    untuple 2
+    // Stack: [event, s1, s2]
+    pick 2
+    // Stack: [event, s1, s2, event]
+    jump {{sync_fn}}
+    // Stack: [event, s1, s2, is_sync]
     branch {
-        // Stack: [event, state]
-        untuple 2
+        // Stack: [event, s1, s2]
+        pick 2
+        // Stack: [event, s1, s2, event]
+        pick 2
+        // Stack: [event, s1, s2, event, s1]
+        tuple 2
+        // Stack: [event, s1, s2, (event, s1)]
+        jump {{p1}}::accept
+        // Stack: [event, s1, s2, accepts_p1]
         branch {
             // Stack: [event, s1, s2]
             pick 2
             // Stack: [event, s1, s2, event]
-            jump {{sync_fn}}
-            // Stack: [event, s1, s2, is_sync]
-            branch {
-                // Stack: [event, s1, s2]
-                pick 2
-                // Stack: [event, s1, s2, event]
-                pick 2
-                // Stack: [event, s1, s2, event, s1]
-                tuple 2
-                // Stack: [event, s1, s2, (event, s1)]
-                jump {{p1}}::accept
-                // Stack: [event, s1, s2, accepts_p1]
-                branch {
-                    // Stack: [event, s1, s2]
-                    pick 2
-                    // Stack: [event, s1, s2, event]
-                    pick 1
-                    // Stack: [event, s1, s2, event, s2]
-                    tuple 2
-                    // Stack: [event, s1, s2, (event, s2)]
-                    jump {{p2}}::accept
-                    // Stack: [event, s1, s2, accepts_p2]
-                    roll 1
-                    // Stack: [event, s1, accepts_p2, s2]
-                    drop 0
-                    // Stack: [event, s1, accepts_p2]
-                    roll 1
-                    // Stack: [event, accepts_p2, s1]
-                    drop 0
-                    // Stack: [event, accepts_p2]
-                    roll 1
-                    // Stack: [accepts_p2, event]
-                    drop 0
-                    // Stack: [accepts_p2]
-                } {
-                    // Stack: [event, s1, s2]
-                    drop 0
-                    // Stack: [event, s1]
-                    drop 0
-                    // Stack: [event]
-                    drop 0
-                    // Stack: []
-                    push false
-                    // Stack: [false]
-                }
-            } {
-                // Stack: [event, s1, s2]
-                pick 2
-                // Stack: [event, s1, s2, event]
-                pick 2
-                // Stack: [event, s1, s2, event, s1]
-                tuple 2
-                // Stack: [event, s1, s2, (event, s1)]
-                jump {{p1}}::accept
-                // Stack: [event, s1, s2, accepts_p1]
-                branch {
-                    // Stack: [event, s1, s2]
-                    drop 0
-                    // Stack: [event, s1]
-                    drop 0
-                    // Stack: [event]
-                    drop 0
-                    // Stack: []
-                    push true
-                    // Stack: [true]
-                } {
-                    // Stack: [event, s1, s2]
-                    pick 2
-                    // Stack: [event, s1, s2, event]
-                    pick 1
-                    // Stack: [event, s1, s2, event, s2]
-                    tuple 2
-                    // Stack: [event, s1, s2, (event, s2)]
-                    jump {{p2}}::accept
-                    // Stack: [event, s1, s2, accepts_p2]
-                    roll 1
-                    // Stack: [event, s1, accepts_p2, s2]
-                    drop 0
-                    // Stack: [event, s1, accepts_p2]
-                    roll 1
-                    // Stack: [event, accepts_p2, s1]
-                    drop 0
-                    // Stack: [event, accepts_p2]
-                    roll 1
-                    // Stack: [accepts_p2, event]
-                    drop 0
-                    // Stack: [accepts_p2]
-                }
-            }
+            pick 1
+            // Stack: [event, s1, s2, event, s2]
+            tuple 2
+            // Stack: [event, s1, s2, (event, s2)]
+            jump {{p2}}::accept
+            // Stack: [event, s1, s2, accepts_p2]
+            roll 1
+            // Stack: [event, s1, accepts_p2, s2]
+            drop 0
+            // Stack: [event, s1, accepts_p2]
+            roll 1
+            // Stack: [event, accepts_p2, s1]
+            drop 0
+            // Stack: [event, accepts_p2]
+            roll 1
+            // Stack: [accepts_p2, event]
+            drop 0
+            // Stack: [accepts_p2]
         } {
-            // Not the shape this accepts.
+            // Stack: [event, s1, s2]
             drop 0
+            // Stack: [event, s1]
             drop 0
+            // Stack: [event]
             drop 0
+            // Stack: []
             push false
+            // Stack: [false]
         }
     } {
-        // Not the shape this accepts.
-        drop 0
-        drop 0
-        push false
+        // Stack: [event, s1, s2]
+        pick 2
+        // Stack: [event, s1, s2, event]
+        pick 2
+        // Stack: [event, s1, s2, event, s1]
+        tuple 2
+        // Stack: [event, s1, s2, (event, s1)]
+        jump {{p1}}::accept
+        // Stack: [event, s1, s2, accepts_p1]
+        branch {
+            // Stack: [event, s1, s2]
+            drop 0
+            // Stack: [event, s1]
+            drop 0
+            // Stack: [event]
+            drop 0
+            // Stack: []
+            push true
+            // Stack: [true]
+        } {
+            // Stack: [event, s1, s2]
+            pick 2
+            // Stack: [event, s1, s2, event]
+            pick 1
+            // Stack: [event, s1, s2, event, s2]
+            tuple 2
+            // Stack: [event, s1, s2, (event, s2)]
+            jump {{p2}}::accept
+            // Stack: [event, s1, s2, accepts_p2]
+            roll 1
+            // Stack: [event, s1, accepts_p2, s2]
+            drop 0
+            // Stack: [event, s1, accepts_p2]
+            roll 1
+            // Stack: [event, accepts_p2, s1]
+            drop 0
+            // Stack: [event, accepts_p2]
+            roll 1
+            // Stack: [accepts_p2, event]
+            drop 0
+            // Stack: [accepts_p2]
+        }
     }
 }
 
 function emit {
     // Stack: [state]
     untuple 2
-    branch {
-        // Stack: [s1, s2]
-        roll 1
-        // Stack: [s2, s1]
-        pick 0
-        // Stack: [s2, s1, s1]
-        roll 1
-        // Stack: [s2, s1, s1]
-        jump {{p1}}::emit
-        // Stack: [s2, s1, (e1, has_e1)]
-        untuple 2
-        branch {
-            // Stack: [s2, s1, e1, has_e1]
-            roll 3
-            // Stack: [s1, e1, has_e1, s2]
-            pick 0
-            // Stack: [s1, e1, has_e1, s2, s2]
-            roll 1
-            // Stack: [s1, e1, has_e1, s2, s2]
-            jump {{p2}}::emit
-            // Stack: [s1, e1, has_e1, s2, (e2, has_e2)]
-            untuple 2
-            branch {
-                // Stack: [s1, e1, has_e1, s2, e2, has_e2]
+    // Stack: [s1, s2]
+    roll 1
+    // Stack: [s2, s1]
+    pick 0
+    // Stack: [s2, s1, s1]
+    roll 1
+    // Stack: [s2, s1, s1]
+    jump {{p1}}::emit
+    // Stack: [s2, s1, (e1, has_e1)]
+    untuple 2
+    // Stack: [s2, s1, e1, has_e1]
+    roll 3
+    // Stack: [s1, e1, has_e1, s2]
+    pick 0
+    // Stack: [s1, e1, has_e1, s2, s2]
+    roll 1
+    // Stack: [s1, e1, has_e1, s2, s2]
+    jump {{p2}}::emit
+    // Stack: [s1, e1, has_e1, s2, (e2, has_e2)]
+    untuple 2
+    // Stack: [s1, e1, has_e1, s2, e2, has_e2]
     
-                // check_e1
-                pick 3
-                // Stack: [s1, e1, has_e1, s2, e2, has_e2, has_e1]
+    // check_e1
+    pick 3
+    // Stack: [s1, e1, has_e1, s2, e2, has_e2, has_e1]
+    branch {
+        // Stack: [s1, e1, has_e1, s2, e2, has_e2]
+        pick 4
+        // Stack: [s1, e1, has_e1, s2, e2, has_e2, e1]
+        jump {{sync_fn}}
+        // Stack: [s1, e1, has_e1, s2, e2, has_e2, is_sync_e1]
+        branch {
+            // Stack: [s1, e1, has_e1, s2, e2, has_e2]
+            pick 2
+            // Stack: [s1, e1, has_e1, s2, e2, has_e2, s2]
+            pick 5
+            // Stack: [s1, e1, has_e1, s2, e2, has_e2, s2, e1]
+            roll 1
+            // Stack: [s1, e1, has_e1, s2, e2, has_e2, e1, s2]
+            tuple 2
+            // Stack: [s1, e1, has_e1, s2, e2, has_e2, (e1, s2)]
+            jump {{p2}}::accept
+            // Stack: [s1, e1, has_e1, s2, e2, has_e2, accepts_p2_e1]
+            branch {
+                // return_e1
+                // Stack: [s1, e1, has_e1, s2, e2, has_e2]
+                pick 4
+                // Stack: [s1, e1, has_e1, s2, e2, has_e2, e1]
+                push true
+                // Stack: [s1, e1, has_e1, s2, e2, has_e2, e1, true]
+                tuple 2
+                // Stack: [s1, e1, has_e1, s2, e2, has_e2, (e1, true)]
+                drop 1
+                // Stack: [s1, e1, has_e1, s2, e2, (e1, true)]
+                drop 1
+                // Stack: [s1, e1, has_e1, s2, (e1, true)]
+                drop 1
+                // Stack: [s1, e1, has_e1, (e1, true)]
+                drop 1
+                // Stack: [s1, e1, (e1, true)]
+                drop 1
+                // Stack: [s1, (e1, true)]
+                drop 1
+                // Stack: [(e1, true)]
+            } {
+                // Stack: [s1, e1, has_e1, s2, e2, has_e2]
+                pick 0
+                // Stack: [s1, e1, has_e1, s2, e2, has_e2, has_e2]
                 branch {
                     // Stack: [s1, e1, has_e1, s2, e2, has_e2]
-                    pick 4
-                    // Stack: [s1, e1, has_e1, s2, e2, has_e2, e1]
-                    jump {{sync_fn}}
-                    // Stack: [s1, e1, has_e1, s2, e2, has_e2, is_sync_e1]
+                    pick 1
+                    // Stack: [s1, e1, has_e1, s2, e2, has_e2, e2]
+                    pick 5
+                    // Stack: [s1, e1, has_e1, s2, e2, has_e2, e2, e1]
+                    equal
+                    // Stack: [s1, e1, has_e1, s2, e2, has_e2, e1 == e2]
                     branch {
-                        // Stack: [s1, e1, has_e1, s2, e2, has_e2]
-                        pick 2
-                        // Stack: [s1, e1, has_e1, s2, e2, has_e2, s2]
-                        pick 5
-                        // Stack: [s1, e1, has_e1, s2, e2, has_e2, s2, e1]
-                        roll 1
-                        // Stack: [s1, e1, has_e1, s2, e2, has_e2, e1, s2]
-                        tuple 2
-                        // Stack: [s1, e1, has_e1, s2, e2, has_e2, (e1, s2)]
-                        jump {{p2}}::accept
-                        // Stack: [s1, e1, has_e1, s2, e2, has_e2, accepts_p2_e1]
-                        branch {
-                            // return_e1
-                            // Stack: [s1, e1, has_e1, s2, e2, has_e2]
-                            pick 4
-                            // Stack: [s1, e1, has_e1, s2, e2, has_e2, e1]
-                            push true
-                            // Stack: [s1, e1, has_e1, s2, e2, has_e2, e1, true]
-                            tuple 2
-                            // Stack: [s1, e1, has_e1, s2, e2, has_e2, (e1, true)]
-                            drop 1
-                            // Stack: [s1, e1, has_e1, s2, e2, (e1, true)]
-                            drop 1
-                            // Stack: [s1, e1, has_e1, s2, (e1, true)]
-                            drop 1
-                            // Stack: [s1, e1, has_e1, (e1, true)]
-                            drop 1
-                            // Stack: [s1, e1, (e1, true)]
-                            drop 1
-                            // Stack: [s1, (e1, true)]
-                            drop 1
-                            // Stack: [(e1, true)]
-                        } {
-                            // Stack: [s1, e1, has_e1, s2, e2, has_e2]
-                            pick 0
-                            // Stack: [s1, e1, has_e1, s2, e2, has_e2, has_e2]
-                            branch {
-                                // Stack: [s1, e1, has_e1, s2, e2, has_e2]
-                                pick 1
-                                // Stack: [s1, e1, has_e1, s2, e2, has_e2, e2]
-                                pick 5
-                                // Stack: [s1, e1, has_e1, s2, e2, has_e2, e2, e1]
-                                equal
-                                // Stack: [s1, e1, has_e1, s2, e2, has_e2, e1 == e2]
-                                branch {
-                                    // return_e1
-                                    // Stack: [s1, e1, has_e1, s2, e2, has_e2]
-                                    pick 4
-                                    // Stack: [s1, e1, has_e1, s2, e2, has_e2, e1]
-                                    push true
-                                    // Stack: [s1, e1, has_e1, s2, e2, has_e2, e1, true]
-                                    tuple 2
-                                    // Stack: [s1, e1, has_e1, s2, e2, has_e2, (e1, true)]
-                                    drop 1
-                                    // Stack: [s1, e1, has_e1, s2, e2, (e1, true)]
-                                    drop 1
-                                    // Stack: [s1, e1, has_e1, s2, (e1, true)]
-                                    drop 1
-                                    // Stack: [s1, e1, has_e1, (e1, true)]
-                                    drop 1
-                                    // Stack: [s1, e1, (e1, true)]
-                                    drop 1
-                                    // Stack: [s1, (e1, true)]
-                                    drop 1
-                                    // Stack: [(e1, true)]
-                                } {
-                                    // check_e2 (nested)
-                                    // Stack: [s1, e1, has_e1, s2, e2, has_e2]
-                                    pick 0
-                                    // Stack: [s1, e1, has_e1, s2, e2, has_e2, has_e2]
-                                    branch {
-                                        // Stack: [s1, e1, has_e1, s2, e2, has_e2]
-                                        pick 1
-                                        // Stack: [s1, e1, has_e1, s2, e2, has_e2, e2]
-                                        jump {{sync_fn}}
-                                        // Stack: [s1, e1, has_e1, s2, e2, has_e2, is_sync_e2]
-                                        branch {
-                                            // Stack: [s1, e1, has_e1, s2, e2, has_e2]
-                                            pick 5
-                                            // Stack: [s1, e1, has_e1, s2, e2, has_e2, s1]
-                                            pick 2
-                                            // Stack: [s1, e1, has_e1, s2, e2, has_e2, s1, e2]
-                                            roll 1
-                                            // Stack: [s1, e1, has_e1, s2, e2, has_e2, e2, s1]
-                                            tuple 2
-                                            // Stack: [s1, e1, has_e1, s2, e2, has_e2, (e2, s1)]
-                                            jump {{p1}}::accept
-                                            // Stack: [s1, e1, has_e1, s2, e2, has_e2, accepts_p1_e2]
-                                            branch {
-                                                // return_e2
-                                                // Stack: [s1, e1, has_e1, s2, e2, has_e2]
-                                                pick 1
-                                                // Stack: [s1, e1, has_e1, s2, e2, has_e2, e2]
-                                                push true
-                                                // Stack: [s1, e1, has_e1, s2, e2, has_e2, e2, true]
-                                                tuple 2
-                                                // Stack: [s1, e1, has_e1, s2, e2, has_e2, (e2, true)]
-                                                drop 1
-                                                // Stack: [s1, e1, has_e1, s2, e2, (e2, true)]
-                                                drop 1
-                                                // Stack: [s1, e1, has_e1, s2, (e2, true)]
-                                                drop 1
-                                                // Stack: [s1, e1, has_e1, (e2, true)]
-                                                drop 1
-                                                // Stack: [s1, e1, (e2, true)]
-                                                drop 1
-                                                // Stack: [s1, (e2, true)]
-                                                drop 1
-                                                // Stack: [(e2, true)]
-                                            } {
-                                                // return_none
-                                                // Stack: [s1, e1, has_e1, s2, e2, has_e2]
-                                                tuple 0
-                                                // Stack: [s1, e1, has_e1, s2, e2, has_e2, ()]
-                                                push false
-                                                // Stack: [s1, e1, has_e1, s2, e2, has_e2, (), false]
-                                                tuple 2
-                                                // Stack: [s1, e1, has_e1, s2, e2, has_e2, ((), false)]
-                                                drop 1
-                                                // Stack: [s1, e1, has_e1, s2, e2, ((), false)]
-                                                drop 1
-                                                // Stack: [s1, e1, has_e1, s2, ((), false)]
-                                                drop 1
-                                                // Stack: [s1, e1, has_e1, ((), false)]
-                                                drop 1
-                                                // Stack: [s1, e1, ((), false)]
-                                                drop 1
-                                                // Stack: [s1, ((), false)]
-                                                drop 1
-                                                // Stack: [((), false)]
-                                            }
-                                        } {
-                                            // return_e2
-                                            // Stack: [s1, e1, has_e1, s2, e2, has_e2]
-                                            pick 1
-                                            // Stack: [s1, e1, has_e1, s2, e2, has_e2, e2]
-                                            push true
-                                            // Stack: [s1, e1, has_e1, s2, e2, has_e2, e2, true]
-                                            tuple 2
-                                            // Stack: [s1, e1, has_e1, s2, e2, has_e2, (e2, true)]
-                                            drop 1
-                                            // Stack: [s1, e1, has_e1, s2, e2, (e2, true)]
-                                            drop 1
-                                            // Stack: [s1, e1, has_e1, s2, (e2, true)]
-                                            drop 1
-                                            // Stack: [s1, e1, has_e1, (e2, true)]
-                                            drop 1
-                                            // Stack: [s1, e1, (e2, true)]
-                                            drop 1
-                                            // Stack: [s1, (e2, true)]
-                                            drop 1
-                                            // Stack: [(e2, true)]
-                                        }
-                                    } {
-                                        // return_none
-                                        // Stack: [s1, e1, has_e1, s2, e2, has_e2]
-                                        tuple 0
-                                        // Stack: [s1, e1, has_e1, s2, e2, has_e2, ()]
-                                        push false
-                                        // Stack: [s1, e1, has_e1, s2, e2, has_e2, (), false]
-                                        tuple 2
-                                        // Stack: [s1, e1, has_e1, s2, e2, has_e2, ((), false)]
-                                        drop 1
-                                        // Stack: [s1, e1, has_e1, s2, e2, ((), false)]
-                                        drop 1
-                                        // Stack: [s1, e1, has_e1, s2, ((), false)]
-                                        drop 1
-                                        // Stack: [s1, e1, has_e1, ((), false)]
-                                        drop 1
-                                        // Stack: [s1, e1, ((), false)]
-                                        drop 1
-                                        // Stack: [s1, ((), false)]
-                                        drop 1
-                                        // Stack: [((), false)]
-                                    }
-                                }
-                            } {
-                                // return_none
-                                // Stack: [s1, e1, has_e1, s2, e2, has_e2]
-                                tuple 0
-                                // Stack: [s1, e1, has_e1, s2, e2, has_e2, ()]
-                                push false
-                                // Stack: [s1, e1, has_e1, s2, e2, has_e2, (), false]
-                                tuple 2
-                                // Stack: [s1, e1, has_e1, s2, e2, has_e2, ((), false)]
-                                drop 1
-                                // Stack: [s1, e1, has_e1, s2, e2, ((), false)]
-                                drop 1
-                                // Stack: [s1, e1, has_e1, s2, ((), false)]
-                                drop 1
-                                // Stack: [s1, e1, has_e1, ((), false)]
-                                drop 1
-                                // Stack: [s1, e1, ((), false)]
-                                drop 1
-                                // Stack: [s1, ((), false)]
-                                drop 1
-                                // Stack: [((), false)]
-                            }
-                        }
-                    } {
                         // return_e1
                         // Stack: [s1, e1, has_e1, s2, e2, has_e2]
                         pick 4
@@ -385,31 +212,73 @@ function emit {
                         // Stack: [s1, (e1, true)]
                         drop 1
                         // Stack: [(e1, true)]
-                    }
-                } {
-                    // check_e2 (direct)
-                    // Stack: [s1, e1, has_e1, s2, e2, has_e2]
-                    pick 0
-                    // Stack: [s1, e1, has_e1, s2, e2, has_e2, has_e2]
-                    branch {
+                    } {
+                        // check_e2 (nested)
                         // Stack: [s1, e1, has_e1, s2, e2, has_e2]
-                        pick 1
-                        // Stack: [s1, e1, has_e1, s2, e2, has_e2, e2]
-                        jump {{sync_fn}}
-                        // Stack: [s1, e1, has_e1, s2, e2, has_e2, is_sync_e2]
+                        pick 0
+                        // Stack: [s1, e1, has_e1, s2, e2, has_e2, has_e2]
                         branch {
                             // Stack: [s1, e1, has_e1, s2, e2, has_e2]
-                            pick 5
-                            // Stack: [s1, e1, has_e1, s2, e2, has_e2, s1]
-                            pick 2
-                            // Stack: [s1, e1, has_e1, s2, e2, has_e2, s1, e2]
-                            roll 1
-                            // Stack: [s1, e1, has_e1, s2, e2, has_e2, e2, s1]
-                            tuple 2
-                            // Stack: [s1, e1, has_e1, s2, e2, has_e2, (e2, s1)]
-                            jump {{p1}}::accept
-                            // Stack: [s1, e1, has_e1, s2, e2, has_e2, accepts_p1_e2]
+                            pick 1
+                            // Stack: [s1, e1, has_e1, s2, e2, has_e2, e2]
+                            jump {{sync_fn}}
+                            // Stack: [s1, e1, has_e1, s2, e2, has_e2, is_sync_e2]
                             branch {
+                                // Stack: [s1, e1, has_e1, s2, e2, has_e2]
+                                pick 5
+                                // Stack: [s1, e1, has_e1, s2, e2, has_e2, s1]
+                                pick 2
+                                // Stack: [s1, e1, has_e1, s2, e2, has_e2, s1, e2]
+                                roll 1
+                                // Stack: [s1, e1, has_e1, s2, e2, has_e2, e2, s1]
+                                tuple 2
+                                // Stack: [s1, e1, has_e1, s2, e2, has_e2, (e2, s1)]
+                                jump {{p1}}::accept
+                                // Stack: [s1, e1, has_e1, s2, e2, has_e2, accepts_p1_e2]
+                                branch {
+                                    // return_e2
+                                    // Stack: [s1, e1, has_e1, s2, e2, has_e2]
+                                    pick 1
+                                    // Stack: [s1, e1, has_e1, s2, e2, has_e2, e2]
+                                    push true
+                                    // Stack: [s1, e1, has_e1, s2, e2, has_e2, e2, true]
+                                    tuple 2
+                                    // Stack: [s1, e1, has_e1, s2, e2, has_e2, (e2, true)]
+                                    drop 1
+                                    // Stack: [s1, e1, has_e1, s2, e2, (e2, true)]
+                                    drop 1
+                                    // Stack: [s1, e1, has_e1, s2, (e2, true)]
+                                    drop 1
+                                    // Stack: [s1, e1, has_e1, (e2, true)]
+                                    drop 1
+                                    // Stack: [s1, e1, (e2, true)]
+                                    drop 1
+                                    // Stack: [s1, (e2, true)]
+                                    drop 1
+                                    // Stack: [(e2, true)]
+                                } {
+                                    // return_none
+                                    // Stack: [s1, e1, has_e1, s2, e2, has_e2]
+                                    tuple 0
+                                    // Stack: [s1, e1, has_e1, s2, e2, has_e2, ()]
+                                    push false
+                                    // Stack: [s1, e1, has_e1, s2, e2, has_e2, (), false]
+                                    tuple 2
+                                    // Stack: [s1, e1, has_e1, s2, e2, has_e2, ((), false)]
+                                    drop 1
+                                    // Stack: [s1, e1, has_e1, s2, e2, ((), false)]
+                                    drop 1
+                                    // Stack: [s1, e1, has_e1, s2, ((), false)]
+                                    drop 1
+                                    // Stack: [s1, e1, has_e1, ((), false)]
+                                    drop 1
+                                    // Stack: [s1, e1, ((), false)]
+                                    drop 1
+                                    // Stack: [s1, ((), false)]
+                                    drop 1
+                                    // Stack: [((), false)]
+                                }
+                            } {
                                 // return_e2
                                 // Stack: [s1, e1, has_e1, s2, e2, has_e2]
                                 pick 1
@@ -430,475 +299,488 @@ function emit {
                                 // Stack: [s1, (e2, true)]
                                 drop 1
                                 // Stack: [(e2, true)]
-                            } {
-                                // return_none
-                                // Stack: [s1, e1, has_e1, s2, e2, has_e2]
-                                tuple 0
-                                // Stack: [s1, e1, has_e1, s2, e2, has_e2, ()]
-                                push false
-                                // Stack: [s1, e1, has_e1, s2, e2, has_e2, (), false]
-                                tuple 2
-                                // Stack: [s1, e1, has_e1, s2, e2, has_e2, ((), false)]
-                                drop 1
-                                // Stack: [s1, e1, has_e1, s2, e2, ((), false)]
-                                drop 1
-                                // Stack: [s1, e1, has_e1, s2, ((), false)]
-                                drop 1
-                                // Stack: [s1, e1, has_e1, ((), false)]
-                                drop 1
-                                // Stack: [s1, e1, ((), false)]
-                                drop 1
-                                // Stack: [s1, ((), false)]
-                                drop 1
-                                // Stack: [((), false)]
                             }
                         } {
-                            // return_e2
+                            // return_none
                             // Stack: [s1, e1, has_e1, s2, e2, has_e2]
-                            pick 1
-                            // Stack: [s1, e1, has_e1, s2, e2, has_e2, e2]
-                            push true
-                            // Stack: [s1, e1, has_e1, s2, e2, has_e2, e2, true]
+                            tuple 0
+                            // Stack: [s1, e1, has_e1, s2, e2, has_e2, ()]
+                            push false
+                            // Stack: [s1, e1, has_e1, s2, e2, has_e2, (), false]
                             tuple 2
-                            // Stack: [s1, e1, has_e1, s2, e2, has_e2, (e2, true)]
+                            // Stack: [s1, e1, has_e1, s2, e2, has_e2, ((), false)]
                             drop 1
-                            // Stack: [s1, e1, has_e1, s2, e2, (e2, true)]
+                            // Stack: [s1, e1, has_e1, s2, e2, ((), false)]
                             drop 1
-                            // Stack: [s1, e1, has_e1, s2, (e2, true)]
+                            // Stack: [s1, e1, has_e1, s2, ((), false)]
                             drop 1
-                            // Stack: [s1, e1, has_e1, (e2, true)]
+                            // Stack: [s1, e1, has_e1, ((), false)]
                             drop 1
-                            // Stack: [s1, e1, (e2, true)]
+                            // Stack: [s1, e1, ((), false)]
                             drop 1
-                            // Stack: [s1, (e2, true)]
+                            // Stack: [s1, ((), false)]
                             drop 1
-                            // Stack: [(e2, true)]
+                            // Stack: [((), false)]
                         }
-                    } {
-                        // return_none
-                        // Stack: [s1, e1, has_e1, s2, e2, has_e2]
-                        tuple 0
-                        // Stack: [s1, e1, has_e1, s2, e2, has_e2, ()]
-                        push false
-                        // Stack: [s1, e1, has_e1, s2, e2, has_e2, (), false]
-                        tuple 2
-                        // Stack: [s1, e1, has_e1, s2, e2, has_e2, ((), false)]
-                        drop 1
-                        // Stack: [s1, e1, has_e1, s2, e2, ((), false)]
-                        drop 1
-                        // Stack: [s1, e1, has_e1, s2, ((), false)]
-                        drop 1
-                        // Stack: [s1, e1, has_e1, ((), false)]
-                        drop 1
-                        // Stack: [s1, e1, ((), false)]
-                        drop 1
-                        // Stack: [s1, ((), false)]
-                        drop 1
-                        // Stack: [((), false)]
                     }
+                } {
+                    // return_none
+                    // Stack: [s1, e1, has_e1, s2, e2, has_e2]
+                    tuple 0
+                    // Stack: [s1, e1, has_e1, s2, e2, has_e2, ()]
+                    push false
+                    // Stack: [s1, e1, has_e1, s2, e2, has_e2, (), false]
+                    tuple 2
+                    // Stack: [s1, e1, has_e1, s2, e2, has_e2, ((), false)]
+                    drop 1
+                    // Stack: [s1, e1, has_e1, s2, e2, ((), false)]
+                    drop 1
+                    // Stack: [s1, e1, has_e1, s2, ((), false)]
+                    drop 1
+                    // Stack: [s1, e1, has_e1, ((), false)]
+                    drop 1
+                    // Stack: [s1, e1, ((), false)]
+                    drop 1
+                    // Stack: [s1, ((), false)]
+                    drop 1
+                    // Stack: [((), false)]
                 }
-            } {
-                // Nothing to say about a state this cannot read.
-                drop 0
-                drop 0
-                drop 0
-                drop 0
-                drop 0
-                drop 0
-                push ((), false)
             }
         } {
-            // Nothing to say about a state this cannot read.
-            drop 0
-            drop 0
-            drop 0
-            drop 0
-            push ((), false)
+            // return_e1
+            // Stack: [s1, e1, has_e1, s2, e2, has_e2]
+            pick 4
+            // Stack: [s1, e1, has_e1, s2, e2, has_e2, e1]
+            push true
+            // Stack: [s1, e1, has_e1, s2, e2, has_e2, e1, true]
+            tuple 2
+            // Stack: [s1, e1, has_e1, s2, e2, has_e2, (e1, true)]
+            drop 1
+            // Stack: [s1, e1, has_e1, s2, e2, (e1, true)]
+            drop 1
+            // Stack: [s1, e1, has_e1, s2, (e1, true)]
+            drop 1
+            // Stack: [s1, e1, has_e1, (e1, true)]
+            drop 1
+            // Stack: [s1, e1, (e1, true)]
+            drop 1
+            // Stack: [s1, (e1, true)]
+            drop 1
+            // Stack: [(e1, true)]
         }
     } {
-        // Nothing to say about a state this cannot read.
-        drop 0
-        drop 0
-        push ((), false)
+        // check_e2 (direct)
+        // Stack: [s1, e1, has_e1, s2, e2, has_e2]
+        pick 0
+        // Stack: [s1, e1, has_e1, s2, e2, has_e2, has_e2]
+        branch {
+            // Stack: [s1, e1, has_e1, s2, e2, has_e2]
+            pick 1
+            // Stack: [s1, e1, has_e1, s2, e2, has_e2, e2]
+            jump {{sync_fn}}
+            // Stack: [s1, e1, has_e1, s2, e2, has_e2, is_sync_e2]
+            branch {
+                // Stack: [s1, e1, has_e1, s2, e2, has_e2]
+                pick 5
+                // Stack: [s1, e1, has_e1, s2, e2, has_e2, s1]
+                pick 2
+                // Stack: [s1, e1, has_e1, s2, e2, has_e2, s1, e2]
+                roll 1
+                // Stack: [s1, e1, has_e1, s2, e2, has_e2, e2, s1]
+                tuple 2
+                // Stack: [s1, e1, has_e1, s2, e2, has_e2, (e2, s1)]
+                jump {{p1}}::accept
+                // Stack: [s1, e1, has_e1, s2, e2, has_e2, accepts_p1_e2]
+                branch {
+                    // return_e2
+                    // Stack: [s1, e1, has_e1, s2, e2, has_e2]
+                    pick 1
+                    // Stack: [s1, e1, has_e1, s2, e2, has_e2, e2]
+                    push true
+                    // Stack: [s1, e1, has_e1, s2, e2, has_e2, e2, true]
+                    tuple 2
+                    // Stack: [s1, e1, has_e1, s2, e2, has_e2, (e2, true)]
+                    drop 1
+                    // Stack: [s1, e1, has_e1, s2, e2, (e2, true)]
+                    drop 1
+                    // Stack: [s1, e1, has_e1, s2, (e2, true)]
+                    drop 1
+                    // Stack: [s1, e1, has_e1, (e2, true)]
+                    drop 1
+                    // Stack: [s1, e1, (e2, true)]
+                    drop 1
+                    // Stack: [s1, (e2, true)]
+                    drop 1
+                    // Stack: [(e2, true)]
+                } {
+                    // return_none
+                    // Stack: [s1, e1, has_e1, s2, e2, has_e2]
+                    tuple 0
+                    // Stack: [s1, e1, has_e1, s2, e2, has_e2, ()]
+                    push false
+                    // Stack: [s1, e1, has_e1, s2, e2, has_e2, (), false]
+                    tuple 2
+                    // Stack: [s1, e1, has_e1, s2, e2, has_e2, ((), false)]
+                    drop 1
+                    // Stack: [s1, e1, has_e1, s2, e2, ((), false)]
+                    drop 1
+                    // Stack: [s1, e1, has_e1, s2, ((), false)]
+                    drop 1
+                    // Stack: [s1, e1, has_e1, ((), false)]
+                    drop 1
+                    // Stack: [s1, e1, ((), false)]
+                    drop 1
+                    // Stack: [s1, ((), false)]
+                    drop 1
+                    // Stack: [((), false)]
+                }
+            } {
+                // return_e2
+                // Stack: [s1, e1, has_e1, s2, e2, has_e2]
+                pick 1
+                // Stack: [s1, e1, has_e1, s2, e2, has_e2, e2]
+                push true
+                // Stack: [s1, e1, has_e1, s2, e2, has_e2, e2, true]
+                tuple 2
+                // Stack: [s1, e1, has_e1, s2, e2, has_e2, (e2, true)]
+                drop 1
+                // Stack: [s1, e1, has_e1, s2, e2, (e2, true)]
+                drop 1
+                // Stack: [s1, e1, has_e1, s2, (e2, true)]
+                drop 1
+                // Stack: [s1, e1, has_e1, (e2, true)]
+                drop 1
+                // Stack: [s1, e1, (e2, true)]
+                drop 1
+                // Stack: [s1, (e2, true)]
+                drop 1
+                // Stack: [(e2, true)]
+            }
+        } {
+            // return_none
+            // Stack: [s1, e1, has_e1, s2, e2, has_e2]
+            tuple 0
+            // Stack: [s1, e1, has_e1, s2, e2, has_e2, ()]
+            push false
+            // Stack: [s1, e1, has_e1, s2, e2, has_e2, (), false]
+            tuple 2
+            // Stack: [s1, e1, has_e1, s2, e2, has_e2, ((), false)]
+            drop 1
+            // Stack: [s1, e1, has_e1, s2, e2, ((), false)]
+            drop 1
+            // Stack: [s1, e1, has_e1, s2, ((), false)]
+            drop 1
+            // Stack: [s1, e1, has_e1, ((), false)]
+            drop 1
+            // Stack: [s1, e1, ((), false)]
+            drop 1
+            // Stack: [s1, ((), false)]
+            drop 1
+            // Stack: [((), false)]
+        }
     }
 }
 
 function process {
     // Stack: [(event, state)]
     untuple 2
+    // Stack: [event, state]
+    roll 1
+    // Stack: [state, event]
+    pick 0
+    // Stack: [state, event, event]
+    jump {{sync_fn}}
+    // Stack: [state, event, is_sync]
     branch {
-        // Stack: [event, state]
-        roll 1
         // Stack: [state, event]
-        pick 0
-        // Stack: [state, event, event]
-        jump {{sync_fn}}
-        // Stack: [state, event, is_sync]
+        roll 1
+        // Stack: [event, state]
+        untuple 2
+        // Stack: [event, s1, s2]
+        pick 2
+        // Stack: [event, s1, s2, event]
+        roll 2
+        // Stack: [event, s2, event, s1]
+        tuple 2
+        // Stack: [event, s2, (event, s1)]
+        jump {{p1}}::process
+        // Stack: [event, s2, next_s1]
+        roll 1
+        // Stack: [event, next_s1, s2]
+        roll 2
+        // Stack: [next_s1, s2, event]
+        roll 1
+        // Stack: [next_s1, event, s2]
+        tuple 2
+        // Stack: [next_s1, (event, s2)]
+        jump {{p2}}::process
+        // Stack: [next_s1, next_s2]
+        tuple 2
+        // Stack: [(next_s1, next_s2)]
+    } {
+        // Stack: [state, event]
+        roll 1
+        // Stack: [event, state]
+        untuple 2
+        // Stack: [event, s1, s2]
+    
+        // Check P1 participation
+        pick 1
+        // Stack: [event, s1, s2, s1]
+        pick 3
+        // Stack: [event, s1, s2, s1, event]
+        roll 1
+        // Stack: [event, s1, s2, event, s1]
+        tuple 2
+        // Stack: [event, s1, s2, (event, s1)]
+        jump {{p1}}::accept
+        // Stack: [event, s1, s2, p1_accepts]
         branch {
-            // Stack: [state, event]
-            roll 1
-            // Stack: [event, state]
+            // Stack: [event, s1, s2]
+            push true
+            // Stack: [event, s1, s2, true]
+        } {
+            // Stack: [event, s1, s2]
+            pick 1
+            // Stack: [event, s1, s2, s1]
+            jump {{p1}}::emit
+            // Stack: [event, s1, s2, (e1, has_e1)]
             untuple 2
+            // Stack: [event, s1, s2, e1, has_e1]
+            branch {
+                // Stack: [event, s1, s2, e1]
+                pick 3
+                // Stack: [event, s1, s2, e1, event]
+                equal
+                // Stack: [event, s1, s2, event == e1]
+            } {
+                // Stack: [event, s1, s2, e1]
+                drop 0
+                // Stack: [event, s1, s2]
+                push false
+                // Stack: [event, s1, s2, false]
+            }
+        }
+    
+        // Check P2 participation
+        pick 1
+        // Stack: [event, s1, s2, p1_participates, s2]
+        pick 4
+        // Stack: [event, s1, s2, p1_participates, s2, event]
+        roll 1
+        // Stack: [event, s1, s2, p1_participates, event, s2]
+        tuple 2
+        // Stack: [event, s1, s2, p1_participates, (event, s2)]
+        jump {{p2}}::accept
+        // Stack: [event, s1, s2, p1_participates, p2_accepts]
+        branch {
+            // Stack: [event, s1, s2, p1_participates]
+            push true
+            // Stack: [event, s1, s2, p1_participates, true]
+        } {
+            // Stack: [event, s1, s2, p1_participates]
+            pick 1
+            // Stack: [event, s1, s2, p1_participates, s2]
+            jump {{p2}}::emit
+            // Stack: [event, s1, s2, p1_participates, (e2, has_e2)]
+            untuple 2
+            // Stack: [event, s1, s2, p1_participates, e2, has_e2]
+            branch {
+                // Stack: [event, s1, s2, p1_participates, e2]
+                pick 4
+                // Stack: [event, s1, s2, p1_participates, e2, event]
+                equal
+                // Stack: [event, s1, s2, p1_participates, event == e2]
+            } {
+                // Stack: [event, s1, s2, p1_participates, e2]
+                drop 0
+                // Stack: [event, s1, s2, p1_participates]
+                push false
+                // Stack: [event, s1, s2, p1_participates, false]
+            }
+        }
+    
+        // Stack: [event, s1, s2, p1_participates, p2_participates]
+        roll 1
+        // Stack: [event, s1, s2, p2_participates, p1_participates]
+        branch {
+            // Stack: [event, s1, s2, p2_participates]
+            drop 0
+            // Stack: [event, s1, s2]
+            pick 2
+            // Stack: [event, s1, s2, event]
+            roll 2
+            // Stack: [event, s2, event, s1]
+            tuple 2
+            // Stack: [event, s2, (event, s1)]
+            jump {{p1}}::process
+            // Stack: [event, s2, next_s1]
+            roll 2
+            // Stack: [s2, next_s1, event]
+            drop 0
+            // Stack: [s2, next_s1]
+            roll 1
+            // Stack: [next_s1, s2]
+            tuple 2
+            // Stack: [(next_s1, s2)]
+        } {
+            // Stack: [event, s1, s2, p2_participates]
             branch {
                 // Stack: [event, s1, s2]
                 pick 2
                 // Stack: [event, s1, s2, event]
-                roll 2
-                // Stack: [event, s2, event, s1]
-                tuple 2
-                // Stack: [event, s2, (event, s1)]
-                jump {{p1}}::process
-                // Stack: [event, s2, next_s1]
                 roll 1
-                // Stack: [event, next_s1, s2]
-                roll 2
-                // Stack: [next_s1, s2, event]
-                roll 1
-                // Stack: [next_s1, event, s2]
+                // Stack: [event, s1, event, s2]
                 tuple 2
-                // Stack: [next_s1, (event, s2)]
+                // Stack: [event, s1, (event, s2)]
                 jump {{p2}}::process
-                // Stack: [next_s1, next_s2]
+                // Stack: [event, s1, next_s2]
+                roll 2
+                // Stack: [s1, next_s2, event]
+                drop 0
+                // Stack: [s1, next_s2]
                 tuple 2
-                // Stack: [(next_s1, next_s2)]
+                // Stack: [(s1, next_s2)]
             } {
-                // Nothing to make of this, so the state it answers with is one nothing recognises.
-                drop 0
-                drop 0
-                drop 0
-                push ()
-            }
-        } {
-            // Stack: [state, event]
-            roll 1
-            // Stack: [event, state]
-            untuple 2
-            branch {
                 // Stack: [event, s1, s2]
-        
-                // Check P1 participation
-                pick 1
-                // Stack: [event, s1, s2, s1]
-                pick 3
-                // Stack: [event, s1, s2, s1, event]
-                roll 1
-                // Stack: [event, s1, s2, event, s1]
-                tuple 2
-                // Stack: [event, s1, s2, (event, s1)]
-                jump {{p1}}::accept
-                // Stack: [event, s1, s2, p1_accepts]
-                branch {
-                    // Stack: [event, s1, s2]
-                    push true
-                    // Stack: [event, s1, s2, true]
-                } {
-                    // Stack: [event, s1, s2]
-                    pick 1
-                    // Stack: [event, s1, s2, s1]
-                    jump {{p1}}::emit
-                    // Stack: [event, s1, s2, (e1, has_e1)]
-                    untuple 2
-                    branch {
-                        // Stack: [event, s1, s2, e1, has_e1]
-                        branch {
-                            // Stack: [event, s1, s2, e1]
-                            pick 3
-                            // Stack: [event, s1, s2, e1, event]
-                            equal
-                            // Stack: [event, s1, s2, event == e1]
-                        } {
-                            // Stack: [event, s1, s2, e1]
-                            drop 0
-                            // Stack: [event, s1, s2]
-                            push false
-                            // Stack: [event, s1, s2, false]
-                        }
-                    } {
-                        // Nothing to make of this, so the state it answers with is one nothing recognises.
-                        drop 0
-                        drop 0
-                        push ()
-                    }
-                }
-        
-                // Check P2 participation
-                pick 1
-                // Stack: [event, s1, s2, p1_participates, s2]
-                pick 4
-                // Stack: [event, s1, s2, p1_participates, s2, event]
-                roll 1
-                // Stack: [event, s1, s2, p1_participates, event, s2]
-                tuple 2
-                // Stack: [event, s1, s2, p1_participates, (event, s2)]
-                jump {{p2}}::accept
-                // Stack: [event, s1, s2, p1_participates, p2_accepts]
-                branch {
-                    // Stack: [event, s1, s2, p1_participates]
-                    push true
-                    // Stack: [event, s1, s2, p1_participates, true]
-                } {
-                    // Stack: [event, s1, s2, p1_participates]
-                    pick 1
-                    // Stack: [event, s1, s2, p1_participates, s2]
-                    jump {{p2}}::emit
-                    // Stack: [event, s1, s2, p1_participates, (e2, has_e2)]
-                    untuple 2
-                    branch {
-                        // Stack: [event, s1, s2, p1_participates, e2, has_e2]
-                        branch {
-                            // Stack: [event, s1, s2, p1_participates, e2]
-                            pick 4
-                            // Stack: [event, s1, s2, p1_participates, e2, event]
-                            equal
-                            // Stack: [event, s1, s2, p1_participates, event == e2]
-                        } {
-                            // Stack: [event, s1, s2, p1_participates, e2]
-                            drop 0
-                            // Stack: [event, s1, s2, p1_participates]
-                            push false
-                            // Stack: [event, s1, s2, p1_participates, false]
-                        }
-                    } {
-                        // Nothing to make of this, so the state it answers with is one nothing recognises.
-                        drop 0
-                        drop 0
-                        push ()
-                    }
-                }
-        
-                // Stack: [event, s1, s2, p1_participates, p2_participates]
-                roll 1
-                // Stack: [event, s1, s2, p2_participates, p1_participates]
-                branch {
-                    // Stack: [event, s1, s2, p2_participates]
-                    drop 0
-                    // Stack: [event, s1, s2]
-                    pick 2
-                    // Stack: [event, s1, s2, event]
-                    roll 2
-                    // Stack: [event, s2, event, s1]
-                    tuple 2
-                    // Stack: [event, s2, (event, s1)]
-                    jump {{p1}}::process
-                    // Stack: [event, s2, next_s1]
-                    roll 2
-                    // Stack: [s2, next_s1, event]
-                    drop 0
-                    // Stack: [s2, next_s1]
-                    roll 1
-                    // Stack: [next_s1, s2]
-                    tuple 2
-                    // Stack: [(next_s1, s2)]
-                } {
-                    // Stack: [event, s1, s2, p2_participates]
-                    branch {
-                        // Stack: [event, s1, s2]
-                        pick 2
-                        // Stack: [event, s1, s2, event]
-                        roll 1
-                        // Stack: [event, s1, event, s2]
-                        tuple 2
-                        // Stack: [event, s1, (event, s2)]
-                        jump {{p2}}::process
-                        // Stack: [event, s1, next_s2]
-                        roll 2
-                        // Stack: [s1, next_s2, event]
-                        drop 0
-                        // Stack: [s1, next_s2]
-                        tuple 2
-                        // Stack: [(s1, next_s2)]
-                    } {
-                        // Stack: [event, s1, s2]
-                        // Neither machine will take this, so the state it answers with
-                        // is one nothing recognises.
-                        drop 0
-                        drop 0
-                        drop 0
-                        push ()
-                    }
-                }
-            } {
-                // Nothing to make of this, so the state it answers with is one nothing recognises.
+                // Neither machine will take this, so the state it answers with
+                // is one nothing recognises.
                 drop 0
                 drop 0
                 drop 0
                 push ()
             }
         }
-    } {
-        // Nothing to make of this, so the state it answers with is one nothing recognises.
-        drop 0
-        drop 0
-        push ()
     }
 }
 
 function tau_reduce {
     // Stack: [state]
     untuple 2
+    // Stack: [s1, s2]
+    pick 1
+    // Stack: [s1, s2, s1]
+    jump {{p1}}::tau_reduce
+    // Stack: [s1, s2, (next_s1, did_reduce_p1)]
+    untuple 2
+    // Stack: [s1, s2, next_s1, did_reduce_p1]
     branch {
-        // Stack: [s1, s2]
-        pick 1
-        // Stack: [s1, s2, s1]
-        jump {{p1}}::tau_reduce
-        // Stack: [s1, s2, (next_s1, did_reduce_p1)]
-        untuple 2
-        branch {
-            // Stack: [s1, s2, next_s1, did_reduce_p1]
-            branch {
-                // Stack: [s1, s2, next_s1]
-                roll 2
-                // Stack: [s2, next_s1, s1]
-                drop 0
-                // Stack: [s2, next_s1]
-                roll 1
-                // Stack: [next_s1, s2]
-                tuple 2
-                // Stack: [(next_s1, s2)]
-                push true
-                // Stack: [(next_s1, s2), true]
-                tuple 2
-                // Stack: [((next_s1, s2), true)]
-            } {
-                // Stack: [s1, s2, next_s1]
-                roll 1
-                // Stack: [s1, next_s1, s2]
-                roll 2
-                // Stack: [next_s1, s2, s1]
-                drop 0
-                // Stack: [next_s1, s2]
-        
-                pick 0
-                // Stack: [next_s1, s2, s2]
-                jump {{p2}}::tau_reduce
-                // Stack: [next_s1, s2, (next_s2, did_reduce_p2)]
-                untuple 2
-                branch {
-                    // Stack: [next_s1, s2, next_s2, did_reduce_p2]
-        
-                    roll 2
-                    // Stack: [next_s1, next_s2, did_reduce_p2, s2]
-                    drop 0
-                    // Stack: [next_s1, next_s2, did_reduce_p2]
-                    roll 2
-                    // Stack: [next_s2, did_reduce_p2, next_s1]
-                    roll 2
-                    // Stack: [did_reduce_p2, next_s1, next_s2]
-                    tuple 2
-                    // Stack: [did_reduce_p2, (next_s1, next_s2)]
-                    roll 1
-                    // Stack: [(next_s1, next_s2), did_reduce_p2]
-                    tuple 2
-                    // Stack: [((next_s1, next_s2), did_reduce_p2)]
-                } {
-                    // Not a state this can take apart, so there is nothing to reduce.
-                    drop 0
-                    drop 0
-                    drop 0
-                    push false
-                    tuple 2
-                }
-            }
-        } {
-            // Not a state this can take apart, so there is nothing to reduce.
-            drop 0
-            drop 0
-            drop 0
-            push false
-            tuple 2
-        }
-    } {
-        // Not a state this can take apart, so there is nothing to reduce.
+        // Stack: [s1, s2, next_s1]
+        roll 2
+        // Stack: [s2, next_s1, s1]
         drop 0
-        push false
+        // Stack: [s2, next_s1]
+        roll 1
+        // Stack: [next_s1, s2]
         tuple 2
+        // Stack: [(next_s1, s2)]
+        push true
+        // Stack: [(next_s1, s2), true]
+        tuple 2
+        // Stack: [((next_s1, s2), true)]
+    } {
+        // Stack: [s1, s2, next_s1]
+        roll 1
+        // Stack: [s1, next_s1, s2]
+        roll 2
+        // Stack: [next_s1, s2, s1]
+        drop 0
+        // Stack: [next_s1, s2]
+    
+        pick 0
+        // Stack: [next_s1, s2, s2]
+        jump {{p2}}::tau_reduce
+        // Stack: [next_s1, s2, (next_s2, did_reduce_p2)]
+        untuple 2
+        // Stack: [next_s1, s2, next_s2, did_reduce_p2]
+    
+        roll 2
+        // Stack: [next_s1, next_s2, did_reduce_p2, s2]
+        drop 0
+        // Stack: [next_s1, next_s2, did_reduce_p2]
+        roll 2
+        // Stack: [next_s2, did_reduce_p2, next_s1]
+        roll 2
+        // Stack: [did_reduce_p2, next_s1, next_s2]
+        tuple 2
+        // Stack: [did_reduce_p2, (next_s1, next_s2)]
+        roll 1
+        // Stack: [(next_s1, next_s2), did_reduce_p2]
+        tuple 2
+        // Stack: [((next_s1, next_s2), did_reduce_p2)]
     }
 }
 
 function is_done {
     // Stack: [state]
     untuple 2
-    branch {
-        // Stack: [s1, s2]
-        pick 1
-        // Stack: [s1, s2, s1]
-        jump {{p1}}::is_ready_to_finish
-        // Stack: [s1, s2, rtf_p1]
-        roll 2
-        // Stack: [s2, rtf_p1, s1]
-        jump {{p1}}::is_done
-        // Stack: [s2, rtf_p1, done_p1]
-        roll 2
-        // Stack: [rtf_p1, done_p1, s2]
-        pick 0
-        // Stack: [rtf_p1, done_p1, s2, s2]
-        jump {{p2}}::is_ready_to_finish
-        // Stack: [rtf_p1, done_p1, s2, rtf_p2]
-        roll 1
-        // Stack: [rtf_p1, done_p1, rtf_p2, s2]
-        jump {{p2}}::is_done
-        // Stack: [rtf_p1, done_p1, rtf_p2, done_p2]
+    // Stack: [s1, s2]
+    pick 1
+    // Stack: [s1, s2, s1]
+    jump {{p1}}::is_ready_to_finish
+    // Stack: [s1, s2, rtf_p1]
+    roll 2
+    // Stack: [s2, rtf_p1, s1]
+    jump {{p1}}::is_done
+    // Stack: [s2, rtf_p1, done_p1]
+    roll 2
+    // Stack: [rtf_p1, done_p1, s2]
+    pick 0
+    // Stack: [rtf_p1, done_p1, s2, s2]
+    jump {{p2}}::is_ready_to_finish
+    // Stack: [rtf_p1, done_p1, s2, rtf_p2]
+    roll 1
+    // Stack: [rtf_p1, done_p1, rtf_p2, s2]
+    jump {{p2}}::is_done
+    // Stack: [rtf_p1, done_p1, rtf_p2, done_p2]
     
-        pick 3
-        // Stack: [rtf_p1, done_p1, rtf_p2, done_p2, rtf_p1]
-        pick 1
-        // Stack: [rtf_p1, done_p1, rtf_p2, done_p2, rtf_p1, done_p2]
-        and
-        // Stack: [rtf_p1, done_p1, rtf_p2, done_p2, rtf_p1_and_done_p2]
+    pick 3
+    // Stack: [rtf_p1, done_p1, rtf_p2, done_p2, rtf_p1]
+    pick 1
+    // Stack: [rtf_p1, done_p1, rtf_p2, done_p2, rtf_p1, done_p2]
+    and
+    // Stack: [rtf_p1, done_p1, rtf_p2, done_p2, rtf_p1_and_done_p2]
     
-        pick 2
-        // Stack: [rtf_p1, done_p1, rtf_p2, done_p2, rtf_p1_and_done_p2, rtf_p2]
-        pick 4
-        // Stack: [rtf_p1, done_p1, rtf_p2, done_p2, rtf_p1_and_done_p2, rtf_p2, done_p1]
-        and
-        // Stack: [rtf_p1, done_p1, rtf_p2, done_p2, rtf_p1_and_done_p2, rtf_p2_and_done_p1]
+    pick 2
+    // Stack: [rtf_p1, done_p1, rtf_p2, done_p2, rtf_p1_and_done_p2, rtf_p2]
+    pick 4
+    // Stack: [rtf_p1, done_p1, rtf_p2, done_p2, rtf_p1_and_done_p2, rtf_p2, done_p1]
+    and
+    // Stack: [rtf_p1, done_p1, rtf_p2, done_p2, rtf_p1_and_done_p2, rtf_p2_and_done_p1]
     
-        or
-        // Stack: [rtf_p1, done_p1, rtf_p2, done_p2, result]
+    or
+    // Stack: [rtf_p1, done_p1, rtf_p2, done_p2, result]
     
-        roll 4
-        // Stack: [done_p1, rtf_p2, done_p2, result, rtf_p1]
-        drop 0
-        // Stack: [done_p1, rtf_p2, done_p2, result]
-        roll 3
-        // Stack: [rtf_p2, done_p2, result, done_p1]
-        drop 0
-        // Stack: [rtf_p2, done_p2, result]
-        roll 2
-        // Stack: [done_p2, result, rtf_p2]
-        drop 0
-        // Stack: [done_p2, result]
-        roll 1
-        // Stack: [result, done_p2]
-        drop 0
-        // Stack: [result]
-    } {
-        // Not a state this knows, so not done.
-        drop 0
-        drop 0
-        push false
-    }
+    roll 4
+    // Stack: [done_p1, rtf_p2, done_p2, result, rtf_p1]
+    drop 0
+    // Stack: [done_p1, rtf_p2, done_p2, result]
+    roll 3
+    // Stack: [rtf_p2, done_p2, result, done_p1]
+    drop 0
+    // Stack: [rtf_p2, done_p2, result]
+    roll 2
+    // Stack: [done_p2, result, rtf_p2]
+    drop 0
+    // Stack: [done_p2, result]
+    roll 1
+    // Stack: [result, done_p2]
+    drop 0
+    // Stack: [result]
 }
 
 function is_ready_to_finish {
     // Stack: [state]
     untuple 2
-    branch {
-        // Stack: [s1, s2]
-        roll 1
-        // Stack: [s2, s1]
-        jump {{p1}}::is_ready_to_finish
-        // Stack: [s2, rtf_p1]
-        roll 1
-        // Stack: [rtf_p1, s2]
-        jump {{p2}}::is_ready_to_finish
-        // Stack: [rtf_p1, rtf_p2]
-        or
-        // Stack: [rtf_p1_or_rtf_p2]
-    } {
-        // Not a state this knows.
-        drop 0
-        drop 0
-        push false
-    }
+    // Stack: [s1, s2]
+    roll 1
+    // Stack: [s2, s1]
+    jump {{p1}}::is_ready_to_finish
+    // Stack: [s2, rtf_p1]
+    roll 1
+    // Stack: [rtf_p1, s2]
+    jump {{p2}}::is_ready_to_finish
+    // Stack: [rtf_p1, rtf_p2]
+    or
+    // Stack: [rtf_p1_or_rtf_p2]
 }

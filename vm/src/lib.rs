@@ -65,29 +65,6 @@ impl VM {
             .ok_or_else(|| "Stack underflow".to_string())
     }
 
-    /// A fallible instruction that computed its answer: the value, then `true`.
-    fn ok(&mut self, value: Value) {
-        self.stack.push(value);
-        self.stack.push(Value::Bool(true));
-    }
-
-    /// A fallible instruction that did not: junk, then `false`.
-    ///
-    /// The caller passes whatever fills the result slots, which is where the
-    /// "preserve the inputs" rule of `docs/totality.md` is applied — an
-    /// instruction whose output arity has room hands its own input back, and
-    /// one whose does not fills with a default.
-    fn failed(&mut self, value: Value) {
-        self.stack.push(value);
-        self.stack.push(Value::Bool(false));
-    }
-
-    /// [`failed`](Self::failed) with several result slots to fill.
-    fn failed_with(&mut self, values: impl IntoIterator<Item = Value>) {
-        self.stack.extend(values);
-        self.stack.push(Value::Bool(false));
-    }
-
     /// Executes sentences in the library starting with the given `start_sentence`.
     /// Reaching the end of a sentence pops the call stack to return to the caller.
     /// Execution terminates when the call stack is empty and the current sentence ends.
@@ -179,7 +156,10 @@ impl VM {
                 Instruction::Greater | Instruction::Less => {
                     // A NaN is unordered rather than non-numeric, but neither
                     // pair yields an ordering and neither is a comparison this
-                    // instruction can claim to have made.
+                    // instruction can claim to have made. `false` is what it
+                    // answers where there is no ordering to report, which is
+                    // the same answer it gives for an ordering that does not
+                    // hold — see `docs/totality.md`.
                     let b = self.pop()?;
                     let a = self.pop()?;
                     let want = if matches!(instruction, Instruction::Greater) {
@@ -187,58 +167,54 @@ impl VM {
                     } else {
                         std::cmp::Ordering::Less
                     };
-                    match numeric_cmp(&a, &b) {
-                        Some(ord) => self.ok(Value::Bool(ord == want)),
-                        // Two slots and two inputs, so there is no room to keep
-                        // them; the result slot takes the junk answer.
-                        None => self.failed(Value::Bool(false)),
-                    }
+                    let answer = numeric_cmp(&a, &b).is_some_and(|ord| ord == want);
+                    self.stack.push(Value::Bool(answer));
                 }
                 Instruction::Add => {
                     let b = self.pop()?;
                     let a = self.pop()?;
-                    match (a, b) {
-                        (Value::Int(x), Value::Int(y)) => self.ok(Value::Int(x.wrapping_add(y))),
-                        _ => self.failed(Value::Int(0)),
-                    }
+                    self.stack.push(match (a, b) {
+                        (Value::Int(x), Value::Int(y)) => Value::Int(x.wrapping_add(y)),
+                        _ => Value::Int(0),
+                    });
                 }
                 Instruction::Subtract => {
                     let b = self.pop()?;
                     let a = self.pop()?;
-                    match (a, b) {
-                        (Value::Int(x), Value::Int(y)) => self.ok(Value::Int(x.wrapping_sub(y))),
-                        _ => self.failed(Value::Int(0)),
-                    }
+                    self.stack.push(match (a, b) {
+                        (Value::Int(x), Value::Int(y)) => Value::Int(x.wrapping_sub(y)),
+                        _ => Value::Int(0),
+                    });
                 }
                 Instruction::Multiply => {
                     let b = self.pop()?;
                     let a = self.pop()?;
-                    match (a, b) {
-                        (Value::Int(x), Value::Int(y)) => self.ok(Value::Int(x.wrapping_mul(y))),
-                        _ => self.failed(Value::Int(0)),
-                    }
+                    self.stack.push(match (a, b) {
+                        (Value::Int(x), Value::Int(y)) => Value::Int(x.wrapping_mul(y)),
+                        _ => Value::Int(0),
+                    });
                 }
                 Instruction::Divide => {
                     let b = self.pop()?;
                     let a = self.pop()?;
-                    match (a, b) {
-                        // Division by zero has no answer to report, and it
-                        // says so rather than inventing one.
-                        (Value::Int(_), Value::Int(0)) => self.failed(Value::Int(0)),
+                    self.stack.push(match (a, b) {
+                        // Division by zero has no answer to give, so it takes
+                        // the same `0` every other off-domain pair does.
+                        (Value::Int(_), Value::Int(0)) => Value::Int(0),
                         // `wrapping_div` keeps `i64::MIN / -1` from being a
                         // host-level overflow.
-                        (Value::Int(x), Value::Int(y)) => self.ok(Value::Int(x.wrapping_div(y))),
-                        _ => self.failed(Value::Int(0)),
-                    }
+                        (Value::Int(x), Value::Int(y)) => Value::Int(x.wrapping_div(y)),
+                        _ => Value::Int(0),
+                    });
                 }
                 Instruction::Modulo => {
                     let b = self.pop()?;
                     let a = self.pop()?;
-                    match (a, b) {
-                        (Value::Int(_), Value::Int(0)) => self.failed(Value::Int(0)),
-                        (Value::Int(x), Value::Int(y)) => self.ok(Value::Int(x.wrapping_rem(y))),
-                        _ => self.failed(Value::Int(0)),
-                    }
+                    self.stack.push(match (a, b) {
+                        (Value::Int(_), Value::Int(0)) => Value::Int(0),
+                        (Value::Int(x), Value::Int(y)) => Value::Int(x.wrapping_rem(y)),
+                        _ => Value::Int(0),
+                    });
                 }
                 Instruction::Not => {
                     let val = self.pop()?;
@@ -255,12 +231,11 @@ impl VM {
                     self.stack.push(Value::Bool(a.truthy() || b.truthy()));
                 }
                 Instruction::Negate => {
-                    // One input and two slots, so failure hands the value back.
                     let val = self.pop()?;
-                    match val {
-                        Value::Int(x) => self.ok(Value::Int(x.wrapping_neg())),
-                        other => self.failed(other),
-                    }
+                    self.stack.push(match val {
+                        Value::Int(x) => Value::Int(x.wrapping_neg()),
+                        _ => Value::Int(0),
+                    });
                 }
                 Instruction::Jump(target) => {
                     self.call_stack.push(Frame {
@@ -321,29 +296,20 @@ impl VM {
                     self.stack.push(Value::Tuple(elements));
                 }
                 Instruction::Untuple(n) => {
-                    // The instruction the "preserve the inputs" rule is really
-                    // for. On failure the value stays in the slot it occupied
-                    // and the n-1 slots above it take `()`, so a caller that
-                    // reads the flag can drop the padding and still have its
-                    // value — which is what makes the flag a tag on the *stack*
-                    // rather than inside `Value`. See `docs/totality.md`.
+                    // `as_tuple n ; untuple n`, which is the whole definition:
+                    // a value that is not a tuple of exactly `n` is coerced to
+                    // the one that is — `n` copies of `()` — and then taken
+                    // apart like any other. A caller that needs to know which
+                    // of the two happened asks before it unpacks, with `pick 0
+                    // ; as_tuple n ; equal`. See `docs/totality.md`.
                     let val = self.pop()?;
                     match val {
+                        // Element 0 goes back to the deepest slot, which is
+                        // where `tuple n` found it.
                         Value::Tuple(elements) if elements.len() == n => {
-                            // Element 0 goes back to the deepest slot, which is
-                            // where `tuple n` found it.
-                            for elem in elements {
-                                self.stack.push(elem);
-                            }
-                            self.stack.push(Value::Bool(true));
+                            self.stack.extend(elements)
                         }
-                        // At n = 0 there is no room for the value, and nothing
-                        // to hold it for: the flag is the whole answer.
-                        _ if n == 0 => self.failed_with(std::iter::empty()),
-                        other => {
-                            let padding = std::iter::repeat_n(Value::unit(), n - 1);
-                            self.failed_with(std::iter::once(other).chain(padding))
-                        }
+                        _ => self.stack.extend(std::iter::repeat_n(Value::unit(), n)),
                     }
                 }
                 Instruction::IsInt => {
@@ -369,18 +335,17 @@ impl VM {
                     self.stack.push(Value::Bool(matches!(val, Value::Tuple(_))));
                 }
                 Instruction::TupleLength => {
-                    // One input and two slots, so a non-tuple comes back out
-                    // rather than being replaced by a length it does not have.
+                    // A length is an `Int` whatever it was asked about, so a
+                    // non-tuple takes the same `0` the arithmetic does rather
+                    // than coming back out where a count belongs.
                     let val = self.pop()?;
-                    match val {
-                        Value::Tuple(elements) => self.ok(Value::Int(elements.len() as i64)),
-                        other => self.failed(other),
-                    }
+                    self.stack.push(match val {
+                        Value::Tuple(elements) => Value::Int(elements.len() as i64),
+                        _ => Value::Int(0),
+                    });
                 }
                 // The three coercions. Each leaves one value of the type it
-                // names, whatever it was handed, and none of them leaves a
-                // flag: there is no domain they are off, so there is nothing to
-                // report. See `docs/totality.md`.
+                // names, whatever it was handed. See `docs/totality.md`.
                 Instruction::AsBool => {
                     // The identity on a `Bool`, since `truthy(Bool(p)) = p`,
                     // and the same coercion `branch`, `not`, `and` and `or`
@@ -407,21 +372,19 @@ impl VM {
                 }
                 Instruction::ConstStringLen => {
                     let val = self.pop()?;
-                    match val {
-                        Value::ConstString(ref s) => {
-                            let len = s.chars().count() as i64;
-                            self.ok(Value::Int(len))
-                        }
-                        other => self.failed(other),
-                    }
+                    self.stack.push(match val {
+                        Value::ConstString(ref s) => Value::Int(s.chars().count() as i64),
+                        _ => Value::Int(0),
+                    });
                 }
                 Instruction::ConstStringCharAt => {
                     let idx_val = self.pop()?;
                     let str_val = self.pop()?;
-                    // Wrong types and an out-of-range index fail alike: an index
-                    // is in range or it is not, and there is nothing for a
-                    // caller to learn from telling the two apart. Two inputs and
-                    // two slots leave no room to hand either back.
+                    // Wrong types and an out-of-range index answer alike: an
+                    // index is in range or it is not, and there is nothing for
+                    // a caller to learn from telling the two apart. A caller
+                    // that wants the question asked has `const_string_len` and
+                    // `less` to ask it with.
                     let ch = match (str_val, idx_val) {
                         (Value::ConstString(s), Value::Int(idx)) => usize::try_from(idx)
                             .ok()
@@ -429,10 +392,7 @@ impl VM {
                             .map(|ch| ch as i64),
                         _ => None,
                     };
-                    match ch {
-                        Some(ch) => self.ok(Value::Int(ch)),
-                        None => self.failed(Value::Int(0)),
-                    }
+                    self.stack.push(Value::Int(ch.unwrap_or(0)));
                 }
             }
         }
@@ -453,8 +413,6 @@ mod tests {
             Instruction::Push(Value::Int(10)),
             Instruction::Push(Value::Int(20)),
             Instruction::Add,
-            // `add` is fallible, so this drops the flag it leaves.
-            Instruction::Drop,
         ];
         library.sentences.push(sentence);
         let idx = SentenceIndex::from(0);
@@ -537,7 +495,7 @@ mod tests {
             Instruction::Push(Value::Int(99)),
             Instruction::Dip(SentenceIndex::from(1)),
         ];
-        let s1 = vec![Instruction::Add, Instruction::Drop];
+        let s1 = vec![Instruction::Add];
 
         library.sentences.push(s0);
         library.sentences.push(s1);
@@ -556,7 +514,7 @@ mod tests {
             Instruction::Push(Value::Int(2)),
             Instruction::Jump(SentenceIndex::from(1)),
         ];
-        let s1 = vec![Instruction::Add, Instruction::Drop];
+        let s1 = vec![Instruction::Add];
 
         library.sentences.push(s0);
         library.sentences.push(s1);
@@ -580,7 +538,7 @@ mod tests {
             Instruction::Dip(SentenceIndex::from(1)),
         ];
         let s1 = vec![Instruction::Dip(SentenceIndex::from(2))];
-        let s2 = vec![Instruction::Add, Instruction::Drop];
+        let s2 = vec![Instruction::Add];
 
         library.sentences.push(s0);
         library.sentences.push(s1);
@@ -619,7 +577,6 @@ mod tests {
             Instruction::Push(Value::Int(3)),
             Instruction::Tuple(3),
             Instruction::Untuple(3),
-            Instruction::Drop, // the untuple's success flag
         ];
         library.sentences.push(sentence);
         let idx = SentenceIndex::from(0);
@@ -648,7 +605,6 @@ mod tests {
             Instruction::Push(Value::Int(2)),
             Instruction::Tuple(2),
             Instruction::TupleLength,
-            Instruction::Drop, // the tuple_length's success flag
         ];
         library.sentences.push(sentence);
         let idx = SentenceIndex::from(0);
@@ -674,7 +630,7 @@ mod tests {
                 push 10
                 push 20
                 add
-                // Stack: [30, true]
+                // Stack: [30]
 
                 // Test branching with inline targets
                 push true
@@ -683,7 +639,7 @@ mod tests {
                 } {
                     push 200
                 }
-                // Stack: [30, true, 100]
+                // Stack: [30, 100]
             }
         "#;
         let res = bytecode::assemble(code).unwrap();
@@ -691,10 +647,7 @@ mod tests {
 
         let mut vm = VM::new(res);
         assert!(vm.execute(start_idx).is_ok());
-        assert_eq!(
-            vm.stack(),
-            &[Value::Int(30), Value::Bool(true), Value::Int(100)]
-        );
+        assert_eq!(vm.stack(), &[Value::Int(30), Value::Int(100)]);
     }
 
     #[test]
@@ -754,46 +707,32 @@ mod tests {
                 push unicode_str
                 push 4
                 const_string_char_at
-                // Out of range, so the flag is the one place this differs from
-                // the two above: it says the 0 underneath was invented.
+                // Out of range, and the 0 it answers with is the same 0 a
+                // string of zeros would have given: nothing here tells the two
+                // apart, and a caller that must have `const_string_len` and
+                // `less` to ask with.
             }
         "#;
         let res = bytecode::assemble(code).unwrap();
 
-        // Run test_len: each length, and the flag saying it was read.
+        // Run test_len: each length, and nothing else.
         let test_len_idx = *res.exports.get("test_len").unwrap();
         let mut vm = VM::new(res.clone());
         assert!(vm.execute(test_len_idx).is_ok());
-        assert_eq!(
-            vm.stack(),
-            &[
-                Value::Int(5),
-                Value::Bool(true),
-                Value::Int(4),
-                Value::Bool(true)
-            ]
-        );
+        assert_eq!(vm.stack(), &[Value::Int(5), Value::Int(4)]);
 
         // Run test_char_at
         let test_char_idx = *res.exports.get("test_char_at").unwrap();
         let mut vm = VM::new(res.clone());
         assert!(vm.execute(test_char_idx).is_ok());
-        assert_eq!(
-            vm.stack(),
-            &[
-                Value::Int(101),
-                Value::Bool(true),
-                Value::Int(233),
-                Value::Bool(true)
-            ]
-        );
+        assert_eq!(vm.stack(), &[Value::Int(101), Value::Int(233)]);
 
         // Run test_out_of_bounds: an index past the end answers 0 rather than
-        // failing, and reports that it did.
+        // failing.
         let oob_idx = *res.exports.get("test_out_of_bounds").unwrap();
         let mut vm = VM::new(res);
         assert!(vm.execute(oob_idx).is_ok());
-        assert_eq!(vm.stack(), &[Value::Int(0), Value::Bool(false)]);
+        assert_eq!(vm.stack(), &[Value::Int(0)]);
     }
 
     #[test]
@@ -810,7 +749,7 @@ mod tests {
         let mut vm = VM::new(res);
         vm.set_tracing(true);
         assert!(vm.execute(entry_idx).is_ok());
-        assert_eq!(vm.stack(), &[Value::Int(142), Value::Bool(true)]);
+        assert_eq!(vm.stack(), &[Value::Int(142)]);
     }
 
     #[test]
@@ -831,17 +770,15 @@ mod tests {
             mod base {
                 export function init {
                     // `untuple 0` takes the argument whether or not it was
-                    // `()`, so the flag has nothing left to say.
+                    // `()`, which is the whole of what it does.
                     untuple 0
-                    drop 0
                     push 0
                 }
                 export function accept {
                     // `untuple 2` leaves two values either way, so this reads
                     // the same on a malformed event: it just answers about the
-                    // padding.
+                    // `()`s that stood in for the parts.
                     untuple 2
-                    drop 0
                     drop 0
                     push crate::payload
                     equal
@@ -854,7 +791,6 @@ mod tests {
                 }
                 export function process {
                     untuple 2
-                    drop 0
                     drop 0
                     drop 0
                     push 1
@@ -944,8 +880,8 @@ mod tests {
             symbol a
             symbol b
             mod m {
-                export function init { untuple 0 drop 0 push 0 }
-                export sentence accept { untuple 2 drop 0 drop 0 drop 0 push false }
+                export function init { untuple 0 push 0 }
+                export sentence accept { untuple 2 drop 0 drop 0 push false }
                 export function emit { drop 0 tuple 0 push false tuple 2 }
                 export sentence process { }
             }
@@ -962,11 +898,9 @@ mod tests {
                     // Stack has the value pushed by the composer
                     push 10
                     add
-                    drop 0
                 }
                 export function accept {
                     untuple 2
-                    drop 0
                     drop 0
                     drop 0
                     push false
@@ -979,11 +913,9 @@ mod tests {
                 }
                 export function process {
                     untuple 2
-                    drop 0
                     drop 1
                     push 100
                     add
-                    drop 0
                 }
                 export function tau_reduce {
                     push false
@@ -1036,12 +968,10 @@ mod tests {
             mod m_no_tau {
                 export function init {
                     untuple 0
-                    drop 0
                     push 0
                 }
                 export sentence accept {
                     untuple 2
-                    drop 0
                     drop 0
                     drop 0
                     push false
@@ -1058,7 +988,6 @@ mod tests {
                 }
                 export function process {
                     untuple 2
-                    drop 0
                     drop 1
                 }
                 export function is_done {
@@ -1074,12 +1003,10 @@ mod tests {
             mod m_with_tau {
                 export function init {
                     untuple 0
-                    drop 0
                     push 0
                 }
                 export sentence accept {
                     untuple 2
-                    drop 0
                     drop 0
                     drop 0
                     push false
@@ -1098,7 +1025,6 @@ mod tests {
                 }
                 export function process {
                     untuple 2
-                    drop 0
                     drop 1
                 }
                 export function is_done {
@@ -1145,17 +1071,17 @@ mod tests {
     }
 }
 
-/// The executable mirror of the fallible table in `docs/totality.md`.
+/// The executable mirror of the junk table in `docs/totality.md`.
 ///
-/// Every data instruction is total — it answers on every input — and a
-/// **fallible** one additionally says whether the answer was computed or
-/// invented, by leaving a flag on top. These tests hold the VM to the table
-/// row by row, so a row changed in one place and not the other is a failure
-/// rather than a silent divergence.
+/// Every data instruction is total — it answers on every input — and answers
+/// with one value of the type it computes, saying nothing about whether the
+/// answer was computed or invented. These tests hold the VM to the table row by
+/// row, so a row changed in one place and not the other is a failure rather
+/// than a silent divergence.
 #[cfg(test)]
 mod totality_tests {
     use super::*;
-    use bytecode::arity::{is_fallible, op_arity};
+    use bytecode::arity::op_arity;
     use bytecode::value::Symbol;
 
     /// Runs `body` on an empty stack and hands back what it left.
@@ -1175,18 +1101,6 @@ mod totality_tests {
         let mut body: Vec<Instruction> = operands.iter().cloned().map(Instruction::Push).collect();
         body.push(inst.clone());
         run(body).unwrap_or_else(|e| panic!("{:?} on {:?} failed: {}", inst, operands, e))
-    }
-
-    /// [`apply`], then split the success flag off the top.
-    fn flagged(operands: &[Value], inst: Instruction) -> (Vec<Value>, bool) {
-        let mut out = apply(operands, inst.clone());
-        let flag = out
-            .pop()
-            .unwrap_or_else(|| panic!("{:?} left nothing", inst));
-        match flag {
-            Value::Bool(b) => (out, b),
-            other => panic!("{:?} left {:?} where its flag belongs", inst, other),
-        }
     }
 
     /// A symbol, identified by its id — two are the same value exactly when
@@ -1213,6 +1127,11 @@ mod totality_tests {
             Value::Bool(false),
             Value::Int(0),
             Value::Int(-3),
+            // A second non-zero int, which is what it takes to tell an
+            // operation that reads its operands in order from one that does
+            // not: junk is the same `0` whichever way round the pair arrives,
+            // so `6` against `-3` is the witness `0` against `-3` could not be.
+            Value::Int(6),
             cs("hi"),
             cs(""),
             sym(7),
@@ -1385,26 +1304,67 @@ mod totality_tests {
         }
     }
 
-    /// Every instruction that carries a flag, with operands that make it fail.
-    fn failing_cases() -> Vec<(Instruction, Vec<Value>)> {
+    /// Every instruction with an off-domain case, with operands that reach it
+    /// and the junk it answers with.
+    ///
+    /// The junk is always the **default of the type the instruction computes**,
+    /// which is what is left of the old table now that nothing reports: `Int 0`
+    /// for a number, `false` for a comparison, `()` for each slot `untuple`
+    /// fills. Nothing hands an operand back, because there is no longer a slot
+    /// whose meaning would say whether it had.
+    fn off_domain_cases() -> Vec<(Instruction, Vec<Value>, Vec<Value>)> {
+        let zero = vec![Value::Int(0)];
         vec![
-            (Instruction::Add, vec![sym(7), Value::Int(1)]),
-            (Instruction::Subtract, vec![Value::Int(1), sym(7)]),
+            (Instruction::Add, vec![sym(7), Value::Int(1)], zero.clone()),
+            (
+                Instruction::Subtract,
+                vec![Value::Int(1), sym(7)],
+                zero.clone(),
+            ),
             (
                 Instruction::Multiply,
                 vec![Value::Bool(true), Value::Bool(false)],
+                zero.clone(),
             ),
-            (Instruction::Divide, vec![Value::Int(7), Value::Int(0)]),
-            (Instruction::Modulo, vec![Value::Int(7), Value::Int(0)]),
-            (Instruction::Negate, vec![sym(7)]),
-            (Instruction::Greater, vec![sym(1), sym(2)]),
-            (Instruction::Less, vec![unit(), unit()]),
-            (Instruction::Untuple(3), vec![Value::Int(5)]),
-            (Instruction::TupleLength, vec![sym(7)]),
-            (Instruction::ConstStringLen, vec![Value::Int(3)]),
+            (
+                Instruction::Divide,
+                vec![Value::Int(7), Value::Int(0)],
+                zero.clone(),
+            ),
+            (
+                Instruction::Modulo,
+                vec![Value::Int(7), Value::Int(0)],
+                zero.clone(),
+            ),
+            (Instruction::Negate, vec![sym(7)], zero.clone()),
+            (
+                Instruction::Greater,
+                vec![sym(1), sym(2)],
+                vec![Value::Bool(false)],
+            ),
+            (
+                Instruction::Less,
+                vec![unit(), unit()],
+                vec![Value::Bool(false)],
+            ),
+            (
+                Instruction::Untuple(3),
+                vec![Value::Int(5)],
+                vec![unit(), unit(), unit()],
+            ),
+            // At width zero there is nothing to fill, and `untuple 0` takes its
+            // argument whether or not the argument was `()`.
+            (Instruction::Untuple(0), vec![Value::Int(5)], vec![]),
+            (Instruction::TupleLength, vec![sym(7)], zero.clone()),
+            (
+                Instruction::ConstStringLen,
+                vec![Value::Int(3)],
+                zero.clone(),
+            ),
             (
                 Instruction::ConstStringCharAt,
                 vec![cs("hi"), Value::Int(9)],
+                zero,
             ),
         ]
     }
@@ -1412,136 +1372,144 @@ mod totality_tests {
     // -- The shape of the contract ------------------------------------------
 
     #[test]
-    fn a_fallible_instruction_keeps_its_arity_whichever_way_it_goes() {
-        // The reason the flag is a stack slot rather than a second outcome: a
-        // caller's stack does not depend on the data, so the arity checker
-        // still works on shape alone.
-        for (inst, bad) in failing_cases() {
-            let (_, n_out) = op_arity(&inst).expect("a fallible instruction has a local arity");
-            let failed = apply(&bad, inst.clone());
+    fn an_instruction_keeps_its_arity_wherever_its_operands_land() {
+        // A caller's stack does not depend on the data, which is why junk is
+        // padding rather than an outcome: the arity checker works on shape
+        // alone, and every rule that moves code past an instruction reads one
+        // pair of numbers rather than reasoning about which case it hit.
+        for (inst, bad, _) in off_domain_cases() {
+            let (_, n_out) = op_arity(&inst).expect("a data instruction has a local arity");
+            let out = apply(&bad, inst.clone());
             assert_eq!(
-                failed.len() as i64,
+                out.len() as i64,
                 n_out,
                 "{:?} on {:?} left {} values, not {}",
                 inst,
                 bad,
-                failed.len(),
+                out.len(),
                 n_out
             );
-            assert!(
-                is_fallible(&inst),
-                "{:?} should be listed as fallible",
-                inst
-            );
         }
     }
 
     #[test]
-    fn failure_is_reported_rather_than_raised() {
-        for (inst, bad) in failing_cases() {
-            let (_, ok) = flagged(&bad, inst.clone());
-            assert!(!ok, "{:?} on {:?} should report failure", inst, bad);
+    fn off_its_domain_an_instruction_answers_with_the_default_of_its_type() {
+        for (inst, bad, want) in off_domain_cases() {
+            assert_eq!(apply(&bad, inst.clone()), want, "{:?} on {:?}", inst, bad);
         }
     }
 
     #[test]
-    fn success_is_reported_too() {
-        let cases: Vec<(Instruction, Vec<Value>)> = vec![
-            (Instruction::Add, vec![Value::Int(1), Value::Int(2)]),
-            (Instruction::Divide, vec![Value::Int(7), Value::Int(2)]),
-            (Instruction::Negate, vec![Value::Int(3)]),
-            (Instruction::Greater, vec![Value::Int(3), Value::Int(1)]),
+    fn on_its_domain_it_answers_with_what_it_computed_and_nothing_else() {
+        let cases: Vec<(Instruction, Vec<Value>, Vec<Value>)> = vec![
+            (
+                Instruction::Add,
+                vec![Value::Int(1), Value::Int(2)],
+                vec![Value::Int(3)],
+            ),
+            (
+                Instruction::Divide,
+                vec![Value::Int(7), Value::Int(2)],
+                vec![Value::Int(3)],
+            ),
+            (
+                Instruction::Negate,
+                vec![Value::Int(3)],
+                vec![Value::Int(-3)],
+            ),
+            (
+                Instruction::Greater,
+                vec![Value::Int(3), Value::Int(1)],
+                vec![Value::Bool(true)],
+            ),
             (
                 Instruction::Untuple(2),
                 vec![Value::Tuple(vec![sym(1), sym(2)])],
+                vec![sym(1), sym(2)],
             ),
             (
                 Instruction::TupleLength,
                 vec![Value::Tuple(vec![Value::Int(1)])],
+                vec![Value::Int(1)],
             ),
-            (Instruction::ConstStringLen, vec![cs("hi")]),
+            (
+                Instruction::ConstStringLen,
+                vec![cs("hi")],
+                vec![Value::Int(2)],
+            ),
             (
                 Instruction::ConstStringCharAt,
                 vec![cs("hi"), Value::Int(0)],
+                vec![Value::Int('h' as i64)],
             ),
         ];
-        for (inst, good) in cases {
-            let (out, ok) = flagged(&good, inst.clone());
-            assert!(ok, "{:?} on {:?} should report success", inst, good);
-            assert!(!out.is_empty(), "{:?} should leave a result too", inst);
+        for (inst, good, want) in cases {
+            assert_eq!(apply(&good, inst.clone()), want, "{:?} on {:?}", inst, good);
         }
     }
 
     #[test]
-    fn a_failure_hands_its_input_back_where_there_is_room_for_it() {
-        // The rule that makes the flag a tag on the *stack*: an instruction
-        // whose output arity has room preserves the slot its input occupied,
-        // so a caller that reads the flag has not lost anything.
-        assert_eq!(
-            flagged(&[sym(7)], Instruction::TupleLength),
-            (vec![sym(7)], false)
-        );
-        assert_eq!(
-            flagged(&[Value::Int(3)], Instruction::ConstStringLen),
-            (vec![Value::Int(3)], false)
-        );
-        assert_eq!(
-            flagged(&[unit()], Instruction::Negate),
-            (vec![unit()], false)
-        );
-        // `untuple n` is the one this rule is really for: the value stays in
-        // the deepest of the n slots and `()` pads the rest.
-        assert_eq!(
-            flagged(&[sym(7)], Instruction::Untuple(3)),
-            (vec![sym(7), unit(), unit()], false)
-        );
-        assert_eq!(
-            flagged(&[sym(7)], Instruction::Untuple(1)),
-            (vec![sym(7)], false)
-        );
-    }
-
-    #[test]
-    fn a_failure_with_no_room_fills_with_a_default() {
-        // Two operands and two slots leave nowhere to keep them, which is why
-        // `add` does not bother.
-        assert_eq!(
-            flagged(&[sym(7), Value::Int(1)], Instruction::Add),
-            (vec![Value::Int(0)], false)
-        );
-        assert_eq!(
-            flagged(&[sym(1), sym(2)], Instruction::Greater),
-            (vec![Value::Bool(false)], false)
-        );
-        assert_eq!(
-            flagged(&[cs("hi"), Value::Int(9)], Instruction::ConstStringCharAt),
-            (vec![Value::Int(0)], false)
-        );
-        // At n = 0 there is no room either, and nothing to hold: the flag is
-        // the whole answer.
-        assert_eq!(
-            flagged(&[Value::Int(5)], Instruction::Untuple(0)),
-            (vec![], false)
-        );
-        assert_eq!(flagged(&[unit()], Instruction::Untuple(0)), (vec![], true));
-    }
-
-    #[test]
-    fn untupling_and_retupling_recovers_the_value_it_came_from() {
-        // What the preserved input buys, and the thing the previous untagged
-        // junk could not do: on the failing path the value is still there, so
-        // a caller that reads the flag can put the stack back exactly.
+    fn untupling_is_coercing_and_then_taking_apart() {
+        // The whole definition of the junk case, and the reason there is
+        // nothing left to report: `untuple n` is `as_tuple n ; untuple n`, so
+        // a caller that wants to know which case it is in asks `as_tuple` the
+        // same question, on a copy, before handing the value over.
         for x in every_shape() {
-            let (parts, ok) = flagged(std::slice::from_ref(&x), Instruction::Untuple(3));
-            if ok {
-                // A real 3-tuple rebuilds by `tuple 3`.
-                let mut body: Vec<Instruction> =
-                    parts.iter().cloned().map(Instruction::Push).collect();
-                body.push(Instruction::Tuple(3));
-                assert_eq!(run(body).unwrap(), vec![x.clone()], "rebuild of {:?}", x);
-            } else {
-                // Anything else left the value in the deepest slot untouched.
-                assert_eq!(parts[0], x, "untuple 3 lost {:?}", x);
+            for n in 0..4 {
+                let one = std::slice::from_ref(&x);
+                assert_eq!(
+                    apply(one, Instruction::Untuple(n)),
+                    run(vec![
+                        Instruction::Push(x.clone()),
+                        Instruction::AsTuple(n),
+                        Instruction::Untuple(n),
+                    ])
+                    .unwrap(),
+                    "untuple {} of {:?}",
+                    n,
+                    x
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_caller_that_wants_the_question_asked_can_ask_it() {
+        // `pick 0 ; pick 0 ; as_tuple n ; equal` is the check it used to
+        // make for everyone: true exactly where `untuple n` takes the value
+        // apart rather than replacing it, and it leaves the value untouched
+        // for the arm that answers `false`.
+        for x in every_shape() {
+            let asked = run(vec![
+                Instruction::Push(x.clone()),
+                Instruction::Copy,
+                Instruction::Copy,
+                Instruction::AsTuple(3),
+                Instruction::Equal,
+            ])
+            .unwrap();
+            let is_triple = matches!(&x, Value::Tuple(elements) if elements.len() == 3);
+            assert_eq!(
+                asked,
+                vec![x.clone(), Value::Bool(is_triple)],
+                "the check on {:?}",
+                x
+            );
+
+            // And where it says yes, `tuple 3` puts back exactly what came
+            // apart, which is the whole of what asking first is worth.
+            if is_triple {
+                assert_eq!(
+                    run(vec![
+                        Instruction::Push(x.clone()),
+                        Instruction::Untuple(3),
+                        Instruction::Tuple(3),
+                    ])
+                    .unwrap(),
+                    vec![x.clone()],
+                    "rebuild of {:?}",
+                    x
+                );
             }
         }
     }
@@ -1691,22 +1659,24 @@ mod totality_tests {
                 "as_int ; is_int on {:?}",
                 v
             );
-            // `as_tuple n ; untuple n` never reports failure.
-            let (_, ok) = {
-                let mut out = run(vec![
+            // `as_tuple n ; untuple n ; tuple n` is `as_tuple n`: after the
+            // coercion the taking apart is exact, junk or not.
+            assert_eq!(
+                run(vec![
                     Instruction::Push(v.clone()),
                     Instruction::AsTuple(2),
                     Instruction::Untuple(2),
+                    Instruction::Tuple(2),
                 ])
-                .unwrap();
-                let flag = out.pop().unwrap();
-                (out, flag == Value::Bool(true))
-            };
-            assert!(ok, "as_tuple 2 ; untuple 2 should not fail on {:?}", v);
+                .unwrap(),
+                run(vec![Instruction::Push(v.clone()), Instruction::AsTuple(2)]).unwrap(),
+                "as_tuple 2 ; untuple 2 should come apart exactly, on {:?}",
+                v
+            );
         }
     }
 
-    // -- The instructions that carry no flag --------------------------------
+    // -- The instructions with no domain to be off --------------------------
 
     #[test]
     fn only_bool_false_is_false() {
@@ -1755,8 +1725,8 @@ mod totality_tests {
 
     #[test]
     fn de_morgan_holds_on_every_value() {
-        // What per-operand coercion is for. `and`, `or` and `not` carry no
-        // flag precisely because there is no input they cannot answer on.
+        // What per-operand coercion is for: there is no input `and`, `or` or
+        // `not` cannot answer on, so none of them has junk to answer with.
         for a in every_shape() {
             for b in every_shape() {
                 let lhs = run(vec![
@@ -1838,41 +1808,50 @@ mod totality_tests {
     // -- Numbers ------------------------------------------------------------
 
     #[test]
-    fn division_by_zero_reports_rather_than_answering() {
-        // `int` is the whole of arithmetic, so a zero divisor has no answer to
-        // report and says so on the flag rather than inventing one.
+    fn division_by_zero_answers_zero_like_anything_else_off_the_domain() {
+        // `int` is the whole of arithmetic, so a zero divisor has no quotient
+        // to give and takes the default an `Int` slot takes everywhere. A
+        // caller that means to tell the two apart tests the divisor.
         assert_eq!(
-            flagged(&[Value::Int(1), Value::Int(0)], Instruction::Divide),
-            (vec![Value::Int(0)], false)
+            apply(&[Value::Int(1), Value::Int(0)], Instruction::Divide),
+            vec![Value::Int(0)]
         );
         assert_eq!(
-            flagged(&[Value::Int(1), Value::Int(0)], Instruction::Modulo),
-            (vec![Value::Int(0)], false)
+            apply(&[Value::Int(1), Value::Int(0)], Instruction::Modulo),
+            vec![Value::Int(0)]
         );
     }
 
     #[test]
     fn integer_arithmetic_wraps_rather_than_overflowing_the_host() {
         assert_eq!(
-            flagged(&[Value::Int(i64::MIN), Value::Int(-1)], Instruction::Divide),
-            (vec![Value::Int(i64::MIN)], true)
+            apply(&[Value::Int(i64::MIN), Value::Int(-1)], Instruction::Divide),
+            vec![Value::Int(i64::MIN)]
         );
         assert_eq!(
-            flagged(&[Value::Int(i64::MIN), Value::Int(-1)], Instruction::Modulo),
-            (vec![Value::Int(0)], true)
+            apply(&[Value::Int(i64::MIN), Value::Int(-1)], Instruction::Modulo),
+            vec![Value::Int(0)]
         );
     }
 
     #[test]
-    fn comparisons_answer_on_two_ints_and_fail_off_the_numbers() {
+    fn comparisons_answer_on_two_ints_and_answer_false_off_the_numbers() {
         assert_eq!(
-            flagged(&[Value::Int(1), Value::Int(2)], Instruction::Less),
-            (vec![Value::Bool(true)], true)
+            apply(&[Value::Int(1), Value::Int(2)], Instruction::Less),
+            vec![Value::Bool(true)]
         );
-        // Anything that is not a pair of ints is not a comparison, and the
-        // instruction reports that rather than ordering it somehow.
-        let (_, ok) = flagged(&[cs("a"), Value::Int(1)], Instruction::Less);
-        assert!(!ok, "a non-numeric operand is not a comparison");
+        // Anything that is not a pair of ints is not a comparison, and `false`
+        // is what it says about an ordering that does not hold either. The two
+        // are the same answer on purpose: a caller that needs them apart asks
+        // `is_int` before it compares.
+        assert_eq!(
+            apply(&[cs("a"), Value::Int(1)], Instruction::Less),
+            vec![Value::Bool(false)]
+        );
+        assert_eq!(
+            apply(&[Value::Int(2), Value::Int(1)], Instruction::Less),
+            vec![Value::Bool(false)]
+        );
     }
 
     // -- What is still an error ---------------------------------------------
@@ -1947,18 +1926,16 @@ mod runtime_tests {
                 }
 
                 export function init {
-                    // `untuple 0` takes the argument either way, so the flag
-                    // has nothing left to say.
+                    // `untuple 0` takes the argument either way, which is the
+                    // whole of what it does.
                     untuple 0
-                    drop 0
                     push state::init
                 }
 
                 export sentence accept {
-                    // A malformed event untuples to itself and a `()`, which
+                    // A malformed event untuples to a pair of `()`s, which
                     // matches no state and so is declined below.
                     untuple 2
-                    drop 0
                     // Stack: [event, state]
                     push state::waiting
                     equal
@@ -1992,7 +1969,6 @@ mod runtime_tests {
 
                 export function process {
                     untuple 2
-                    drop 0
                     // Stack: [event, state]
                     pick 0
                     push state::init
@@ -2075,10 +2051,9 @@ mod runtime_tests {
                 const_string hello "Hello, World!"
 
                 export function init {
-                    // `untuple 0` takes the argument either way, so the flag
-                    // has nothing left to say.
+                    // `untuple 0` takes the argument either way, which is the
+                    // whole of what it does.
                     untuple 0
-                    drop 0
                     push 0
                 }
 
@@ -2086,7 +2061,6 @@ mod runtime_tests {
                     // This machine only writes, so nothing is accepted and
                     // the shape of the event never comes up.
                     untuple 2
-                    drop 0
                     drop 0
                     drop 0
                     push false
@@ -2101,11 +2075,7 @@ mod runtime_tests {
                     pick 0
                     push hello
                     const_string_len
-                    // A literal always has a length, and the index is always
-                    // an int, so both flags are foregone conclusions here.
-                    drop 0
                     less
-                    drop 0
                     branch {
                         push ()
 
@@ -2113,7 +2083,6 @@ mod runtime_tests {
                         pick 2 // index
                         const_string_char_at
                         // In range, since `less` is what got us into this arm.
-                        drop 0
 
                         tuple 2 // ((), char)
                         
@@ -2142,19 +2111,15 @@ mod runtime_tests {
 
                 export function process {
                     untuple 2
-                    drop 0
                     drop 1 // drop event
                     push 1
                     add
-                    drop 0
                 }
 
                 export function is_done {
                     push hello
                     const_string_len
-                    drop 0
                     less
-                    drop 0
                     not
                 }
 
@@ -2296,7 +2261,7 @@ mod movement_tests {
             // one, which is the arity that makes the restore observable.
             want.splice(size - n - 2..size - n, [99]);
             assert_eq!(
-                run(size, &format!("dip {} {{ add drop 0 push 99 drop 1 }}", n)),
+                run(size, &format!("dip {} {{ add drop 0 push 99 }}", n)),
                 ints(&want),
                 "dip {} left the hidden values wrong",
                 n
@@ -2361,7 +2326,7 @@ mod movement_tests {
             ("is_symbol", 1, 1),
             ("not", 1, 1),
             ("push true", 0, 1),
-            ("add", 2, 2),
+            ("add", 2, 1),
             ("and", 2, 1),
             ("drop 0", 1, 0),
         ];

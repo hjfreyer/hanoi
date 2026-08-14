@@ -33,9 +33,6 @@ test sentence a_const_string_is_its_text {
 test sentence const_string_len_counts_characters {
     push greeting
     const_string_len
-    jump crate::prelude::check_true
-    ?
-    drop 0
     push 5
     jump crate::prelude::check_equals
     ?
@@ -43,9 +40,6 @@ test sentence const_string_len_counts_characters {
 
     push empty
     const_string_len
-    jump crate::prelude::check_true
-    ?
-    drop 0
     push 0
     jump crate::prelude::check_equals
     ?
@@ -54,22 +48,17 @@ test sentence const_string_len_counts_characters {
     // Characters, not bytes: `café` is five bytes and four characters.
     push unicode
     const_string_len
-    jump crate::prelude::check_true
-    ?
-    drop 0
     push 4
     jump crate::prelude::check_equals
 }
 
-test sentence const_string_len_fails_off_the_strings {
-    // One input and two slots, so the value it could not measure comes back.
+test sentence const_string_len_answers_zero_off_the_strings {
+    // A length is an `Int` whatever it was asked about, so a value with no
+    // characters to count measures `0`. Nothing here says the count was
+    // invented rather than read; `is_const_string` is what asks that.
     push 3
     const_string_len
-    not
-    jump crate::prelude::check_true
-    ?
-    drop 0
-    push 3
+    push 0
     jump crate::prelude::check_equals
 }
 
@@ -77,9 +66,6 @@ test sentence const_string_char_at_reads_a_code_point {
     push greeting
     push 0
     const_string_char_at
-    jump crate::prelude::check_true
-    ?
-    drop 0
     push 104 // 'h'
     jump crate::prelude::check_equals
     ?
@@ -88,9 +74,6 @@ test sentence const_string_char_at_reads_a_code_point {
     push greeting
     push 4
     const_string_char_at
-    jump crate::prelude::check_true
-    ?
-    drop 0
     push 111 // 'o'
     jump crate::prelude::check_equals
     ?
@@ -99,23 +82,17 @@ test sentence const_string_char_at_reads_a_code_point {
     push unicode
     push 3
     const_string_char_at
-    jump crate::prelude::check_true
-    ?
-    drop 0
     push 233 // 'é'
     jump crate::prelude::check_equals
 }
 
-test sentence const_string_char_at_fails_out_of_range {
-    // Two inputs and two slots leave no room to hand either back, so the
-    // answer is `0` and the flag is what says it was invented.
+test sentence const_string_char_at_answers_zero_out_of_range {
+    // An index past the end reads no code point, so the answer is `0` — the
+    // same `0` a string holding a NUL would have given. A caller that means to
+    // tell the two apart asks `const_string_len` first.
     push greeting
     push 5
     const_string_char_at
-    not
-    jump crate::prelude::check_true
-    ?
-    drop 0
     push 0
     jump crate::prelude::check_equals
     ?
@@ -124,23 +101,15 @@ test sentence const_string_char_at_fails_out_of_range {
     push empty
     push 0
     const_string_char_at
-    not
-    jump crate::prelude::check_true
-    ?
-    drop 0
     push 0
     jump crate::prelude::check_equals
     ?
     drop 0
 
-    // A wrong operand type fails the same way.
+    // A wrong operand type answers the same way.
     push 7
     push 0
     const_string_char_at
-    not
-    jump crate::prelude::check_true
-    ?
-    drop 0
     push 0
     jump crate::prelude::check_equals
 }

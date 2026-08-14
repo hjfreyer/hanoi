@@ -138,15 +138,15 @@ mod tests {
 
     #[test]
     fn a_question_mark_becomes_two_branches_and_takes_the_rest_with_it() {
-        let res = assemble(&with_prelude(
-            "#[arity(1, 1)] sentence s { ? push 1 add drop 0 }",
-        ))
-        .unwrap();
+        let res = assemble(&with_prelude("#[arity(1, 1)] sentence s { ? push 1 add }")).unwrap();
 
         // The sentence itself is only the test: everything written after the
         // `?` moved into an arm.
         let [
-            Instruction::Untuple(2),
+            Instruction::Copy,
+            Instruction::Copy,
+            Instruction::AsTuple(2),
+            Instruction::Equal,
             Instruction::Branch(is_ok, junk),
             Instruction::Branch(rest, fail),
         ] = res.sentences[SentenceIndex::from(0)][..]
@@ -159,23 +159,24 @@ mod tests {
 
         let ok = res.symbols["prelude::ok"].clone();
         let err = res.symbols["prelude::err"].clone();
+        // The value is a 2-tuple, so there is a tag to read.
         assert_eq!(
             res.sentences[is_ok],
-            vec![Instruction::Push(ok), Instruction::Equal]
+            vec![
+                Instruction::Untuple(2),
+                Instruction::Push(ok),
+                Instruction::Equal
+            ]
         );
-        // A value that is not a 2-tuple answers `false` to "is this an ok?",
-        // which is what makes `?` total on one.
+        // And where it is not, it answers `false` to "is this an ok?" without
+        // taking anything apart — which is what makes `?` total on one.
         assert_eq!(
             res.sentences[junk],
-            vec![Instruction::Drop, Instruction::Push(Value::Bool(false))]
+            vec![Instruction::Push(Value::Bool(false))]
         );
         assert_eq!(
             res.sentences[rest],
-            vec![
-                Instruction::Push(Value::Int(1)),
-                Instruction::Add,
-                Instruction::Drop
-            ]
+            vec![Instruction::Push(Value::Int(1)), Instruction::Add]
         );
         assert_eq!(
             res.sentences[fail],
@@ -188,7 +189,7 @@ mod tests {
         // The rest arm is (2 -> 1): it eats the value the `?` unwrapped *and*
         // the one underneath. The early return eats only its own, so it drops
         // the difference from under the error it is carrying out.
-        let res = assemble(&with_prelude("#[arity(2, 1)] sentence s { ? add drop 0 }")).unwrap();
+        let res = assemble(&with_prelude("#[arity(2, 1)] sentence s { ? add }")).unwrap();
         let [.., Instruction::Branch(_, fail)] = res.sentences[SentenceIndex::from(0)][..] else {
             panic!("expected the `?` expansion");
         };
@@ -231,7 +232,7 @@ mod tests {
         let res = assemble(&with_prelude(
             r#"
             #[arity(3, 1)] sentence s { ? jump eats }
-            #[arity(3, 1)] sentence eats { add drop 0 add drop 0 }
+            #[arity(3, 1)] sentence eats { add add }
         "#,
         ))
         .unwrap();
@@ -252,7 +253,7 @@ mod tests {
         // The outer one can only be measured once the inner one balances.
         let res = assemble(&with_prelude(
             r#"
-            #[arity(3, 1)] sentence s { ? add drop 0 jump maybe ? add drop 0 }
+            #[arity(3, 1)] sentence s { ? add jump maybe ? add }
             #[arity(1, 1)] sentence maybe { push crate::prelude::ok tuple 2 }
         "#,
         ))
@@ -345,7 +346,7 @@ mod tests {
     #[test]
     fn test_assemble_dip() {
         let code = r#"
-            #[arity(3, 3)]
+            #[arity(3, 2)]
             sentence entry {
                 dip 1 {
                     add
@@ -359,8 +360,8 @@ mod tests {
             res.sentences[SentenceIndex::from(0)],
             vec![Instruction::Dip(SentenceIndex::from(1))]
         );
-        // `add` stands alone: the flag it leaves is the block's third output,
-        // not something the assembler splices a drop in to remove.
+        // `add` stands alone: what it computes is the block's whole output,
+        // and the assembler splices nothing in after it.
         assert_eq!(
             res.sentences[SentenceIndex::from(1)],
             vec![Instruction::Add]
@@ -370,7 +371,7 @@ mod tests {
     #[test]
     fn test_assemble_dip_count_defaults_to_one() {
         let code = r#"
-            #[arity(3, 3)]
+            #[arity(3, 2)]
             sentence entry {
                 dip { add }
             }
@@ -385,11 +386,11 @@ mod tests {
     #[test]
     fn test_assemble_dip_to_label() {
         let code = r#"
-            #[arity(2, 2)]
+            #[arity(2, 1)]
             sentence add_two {
                 add
             }
-            #[arity(4, 4)]
+            #[arity(4, 3)]
             sentence entry {
                 dip 2 add_two
             }
@@ -411,7 +412,7 @@ mod tests {
     #[test]
     fn test_dip_arity_counts_the_hidden_region() {
         // `dip 1 { add }` needs two values for the add plus one to hide, and
-        // leaves the hidden value on top of the sum and its flag.
+        // leaves the hidden value on top of the sum.
         let code = r#"
             #[arity(1, 1)]
             sentence bad_dip {
@@ -427,7 +428,7 @@ mod tests {
 
         // The same body checks out against the arity it actually has.
         let code = r#"
-            #[arity(3, 3)]
+            #[arity(3, 2)]
             sentence good_dip {
                 dip { add }
             }
@@ -600,7 +601,7 @@ mod tests {
                 export function accept { drop 0 push false }
                 export function tau_reduce { push false tuple 2 }
                 export function emit { drop 0 tuple 0 push false tuple 2 }
-                export function process { untuple 2 drop 0 drop 0 }
+                export function process { untuple 2 drop 0 }
                 export function is_done { drop 0 push false }
                 export function is_ready_to_finish { drop 0 push false }
             }
@@ -688,7 +689,7 @@ mod tests {
 
         // 2. Net stack change is wrong
         let code = r#"
-            #[arity(2, 1)]
+            #[arity(2, 2)]
             sentence bad_net_change {
                 add
             }
@@ -696,7 +697,7 @@ mod tests {
         let res = assemble(code);
         assert!(res.is_err());
         assert!(res.unwrap_err().contains(
-            "net stack change of 0, but annotated arity 2 -> 1 expects net change of -1"
+            "net stack change of -1, but annotated arity 2 -> 2 expects net change of 0"
         ));
 
         // 3. Mismatched branch arities
@@ -778,8 +779,8 @@ mod tests {
         "#;
         let res3 = assemble(code3).unwrap();
         // One entry per written instruction, each the arity of the prefix
-        // before it. `add` is fallible and the sentence keeps its flag, so the
-        // depth stays at 2 across it and the `drop 0` takes it back to 1.
+        // before it: the two pushes take the depth to 2, `add` reads both and
+        // leaves one, and the `drop 0` takes it to nothing.
         assert_eq!(
             res3.instruction_arities[SentenceIndex::from(0)],
             vec![
@@ -797,7 +798,7 @@ mod tests {
                 },
                 Arity {
                     inputs: 0,
-                    outputs: 2
+                    outputs: 1
                 },
             ]
         );

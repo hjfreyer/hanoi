@@ -4,9 +4,6 @@ test sentence add_numbers {
     push 10
     push 20
     add
-    jump crate::prelude::check_true
-    ?
-    drop 0
     push 30
     jump crate::prelude::check_equals
 }
@@ -15,9 +12,6 @@ test sentence subtract_numbers {
     push 50
     push 20
     sub
-    jump crate::prelude::check_true
-    ?
-    drop 0
     push 30
     jump crate::prelude::check_equals
 }
@@ -26,9 +20,6 @@ test sentence multiply_numbers {
     push 5
     push 6
     mul
-    jump crate::prelude::check_true
-    ?
-    drop 0
     push 30
     jump crate::prelude::check_equals
 }
@@ -37,9 +28,6 @@ test sentence divide_numbers {
     push 90
     push 3
     div
-    jump crate::prelude::check_true
-    ?
-    drop 0
     push 30
     jump crate::prelude::check_equals
 }
@@ -48,9 +36,6 @@ test sentence modulo_numbers {
     push 35
     push 10
     mod
-    jump crate::prelude::check_true
-    ?
-    drop 0
     push 5
     jump crate::prelude::check_equals
 }
@@ -58,9 +43,6 @@ test sentence modulo_numbers {
 test sentence negate_number {
     push 42
     neg
-    jump crate::prelude::check_true
-    ?
-    drop 0
     push -42
     jump crate::prelude::check_equals
 }

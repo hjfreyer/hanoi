@@ -2,12 +2,12 @@
 // type: each is the identity where the value is already of that type, and
 // hands back a default where it is not.
 //
-// None of them carries a success flag, and that is the difference from a
-// fallible instruction rather than an oversight. `add` reports because it was
-// reaching for a sum that two symbols do not have; a coercion reaches for
-// nothing, being defined on every value it can be handed. Code that wants the
-// question asked rather than the answer forced writes `is_int` — and can
-// `copy` first, to keep the value as well as the answer.
+// No instruction says whether its answer was computed or invented: `add` on
+// two symbols answers `0`, and a coercion is what that junk is defined
+// through. What a coercion adds is that it names the type on its own, for a
+// value nothing is being computed from. Code that wants the question asked
+// rather than the answer forced writes `is_int` — and can `copy` first, to
+// keep the value as well as the answer.
 
 symbol a_symbol
 
@@ -141,15 +141,15 @@ test sentence a_coercion_settles_the_question_that_follows_it {
     ?
     drop 0
 
-    // And so `as_tuple n ; untuple n` never reports failure, whatever it was
-    // handed. The flag is checked here rather than dropped, since it is the
-    // claim being made; the two elements underneath it go instead.
+    // And so `as_tuple n ; untuple n` comes apart exactly, whatever it was
+    // handed: what `untuple` fills the slots with is what the coercion put
+    // there, so `tuple n` puts it back.
     push a_symbol
     as_tuple 2
     untuple 2
-    drop 1
-    drop 1
-    jump crate::prelude::check_true
+    tuple 2
+    push ((), ())
+    jump crate::prelude::check_equals
 }
 
 // Forcing a value that is already of the type changes nothing, so a second

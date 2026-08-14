@@ -2,11 +2,11 @@
 
 Every operation in the hanoi bytecode is a total function. An operation applied
 to operands it was not written for does not fail; it returns a **deterministic
-default**, called *junk* below, and — if it is one of the twelve **fallible**
-instructions — a `bool` saying so. No instruction can end a run for a reason
-about values: there is nothing left to fail.
+default**, called *junk* below, and says nothing about having done so. No
+instruction can end a run for a reason about values: there is nothing left to
+fail.
 
-This document is the normative specification of that. The fallible table is the
+This document is the normative specification of that. The junk table is the
 spec; `vm::totality_tests` is its executable mirror.
 
 ## Why total
@@ -123,62 +123,63 @@ the arguments are not overwhelming in either direction.
 
 What it buys is that the *positive* answer is the cheap one. A predicate that
 computes a real boolean is unaffected — `equal`, the `is_*` tests and the
-fallible instructions' flags all produce genuine `Bool`s, so they read the same
-under either rule. What differs is only what happens to a value that was never
-a boolean at all, and there "carry on" is the less surprising reading than
-"take the failure path".
+comparisons all produce genuine `Bool`s, so they read the same under either
+rule. What differs is only what happens to a value that was never a boolean at
+all, and there "carry on" is the less surprising reading than "take the failure
+path".
 
 What it costs is that a check written as "is this not false" **passes on junk**.
-A test that wants the stronger reading has to say `push true equal` — or,
-better, read a flag from the instruction that reported it, which is what the
-flags are for.
+A test that wants the stronger reading has to say `push true equal`.
 
 The change was made deliberately and is invisible to the corpus: every one of
 the 64 `.hana` integration tests runs the identical number of VM steps under
 either rule, because nothing in real code lets a non-boolean reach a branch.
 
-## The fallible table
+## The junk table
 
-Every data operation is total. A **fallible** one additionally reports whether
-its answer was computed or invented, by leaving a `bool` on top of its result.
-`()` below is the empty tuple, `Value::unit()`.
+Every data operation is total, and every one of them answers with exactly what
+it computes. `()` below is the empty tuple, `Value::unit()`.
 
-| instruction | arity | on success | off its domain |
+| instruction | arity | on its domain | off it |
 |---|---|---|---|
-| `push c`, `pick d`, `roll d`, `drop` | unchanged | — | cannot fail |
-| `equal`, `is_int`, `is_bool`, `is_const_string`, `is_symbol`, `is_tuple` | unchanged | — | cannot fail |
-| `not`, `and`, `or`, `tuple n` | unchanged | — | cannot fail |
-| `as_bool`, `as_int`, `as_tuple n` | `1 -> 1` | — | cannot fail; see below |
-| `add`, `subtract`, `multiply` | `2 -> 2` | sum, `true` | `Int 0`, `false` |
-| `divide`, `modulo` | `2 -> 2` | quotient, `true` | `Int 0`, `false` |
-| `greater`, `less` | `2 -> 2` | the answer, `true` | `false`, `false` |
-| `negate` | `1 -> 2` | `-x`, `true` | **`x`**, `false` |
-| `tuple_length` | `1 -> 2` | the count, `true` | **`x`**, `false` |
-| `const_string_len` | `1 -> 2` | the count, `true` | **`x`**, `false` |
-| `const_string_char_at` | `2 -> 2` | the code point, `true` | `Int 0`, `false` |
-| `untuple n` | `1 -> n+1` | the `n` elements, `true` | **`x`**, `()` × (n-1), `false` |
-| `branch` | unchanged | then arm unless `Bool(false)` | cannot fail |
+| `push c`, `pick d`, `roll d`, `drop` | unchanged | — | no domain to be off |
+| `equal`, `is_int`, `is_bool`, `is_const_string`, `is_symbol`, `is_tuple` | unchanged | — | no domain to be off |
+| `not`, `and`, `or`, `tuple n` | unchanged | — | no domain to be off |
+| `as_bool`, `as_int`, `as_tuple n` | `1 -> 1` | — | the default of the type; see below |
+| `add`, `subtract`, `multiply` | `2 -> 1` | the sum | `Int 0` |
+| `divide`, `modulo` | `2 -> 1` | the quotient | `Int 0` |
+| `greater`, `less` | `2 -> 1` | the answer | `false` |
+| `negate` | `1 -> 1` | `-x` | `Int 0` |
+| `tuple_length` | `1 -> 1` | the count | `Int 0` |
+| `const_string_len` | `1 -> 1` | the count | `Int 0` |
+| `const_string_char_at` | `2 -> 1` | the code point | `Int 0` |
+| `untuple n` | `1 -> n` | the `n` elements | `()` × n |
+| `branch` | unchanged | then arm unless `Bool(false)` | no domain to be off |
 
 Two rules govern the rest of the table.
 
-**The arity is fixed whichever way it goes.** A caller's stack does not depend
-on the data, so the arity checker still works on shape alone, and every rule
-that moves code past an instruction reads one pair of numbers rather than
-reasoning about which branch it took. That is why failure pads with junk rather
-than leaving fewer values.
+**Junk is the default of the type the instruction computes.** `add` leaves an
+`Int` on every pair of values, `less` a `Bool`, `untuple n` exactly `n` values.
+Which is to say every instruction has a **codomain**, and it is the same
+codomain on junk as anywhere else: the junk column is the coercions of the
+section below, applied to the type the instruction was going to answer in.
+`untuple n` *is* `as_tuple n` followed by taking a tuple of the right width
+apart, and that is the whole definition rather than a coincidence.
 
-**Failure preserves its inputs where the output arity has room.** The bolded
-cells above are the instructions with one input and two slots: they hand the
-value straight back, and `untuple n` keeps it in the deepest of the `n` slots it
-filled with `()` padding above. Where there is no room — two operands and two
-slots, as in `add` — the result slot takes a default instead, which is why
-`add` does not bother.
+**No instruction reports on itself.** There is no `bool` on top saying whether
+the answer was computed or invented, because the question belongs to the caller
+and the caller can ask it — `is_int` before the arithmetic, `pick 0 ; pick 0 ;
+as_tuple n ; equal` before the unpacking. Asking it there is strictly better
+than reading it afterwards: the check is made where the operands still are, so
+the arm that says no still has them, and the code that does not care pays
+nothing. A flag asked the question for every caller whether or not any of them
+wanted it, and every site that did not want it paid a `drop` to say so.
 
-That second rule is what makes the flag a tag on the **stack** rather than
-inside `Value`. Untupling is now recoverable: read the flag, and either the
-parts rebuild the value or the value is still sitting there. `Tuple` stays a
-free constructor and no hana program can write a junk value, because there is
-no junk value to write.
+The arity is fixed whichever way the data goes, which is what makes junk
+*padding* rather than an outcome. A caller's stack does not depend on the data,
+so the arity checker works on shape alone, and every rule that moves code past
+an instruction reads one pair of numbers rather than reasoning about which case
+it hit.
 
 `Int` is the whole of arithmetic: an instruction that takes two numbers is
 in-domain on two `Int`s and out of it on anything else. Integer arithmetic
@@ -186,14 +187,17 @@ wraps, so `i64::MIN` is not a special case anywhere, including `i64::MIN / -1`.
 
 ### Division by zero
 
-`Int x / Int 0` and `Int x % Int 0` **fail**, leaving `0` and `false`. There is
-no answer to report and no need to invent one.
+`Int x / Int 0` and `Int x % Int 0` answer `0`, like any other pair with no
+quotient to give. There is no answer to report and no need to invent a
+different one for this case than for the rest.
 
-### What the flag is not
+### What junk is not
 
-It is not a second control-flow outcome. A fallible instruction always
-completes and always leaves the same number of values; the flag is data, and a
-program is free to ignore it.
+It is not a second control-flow outcome, and it is not a value a program can
+tell apart by looking. `add` answering `0` on two symbols is the same `0` it
+answers on `push 0 push 0 add`; the difference is in what was asked, not in what
+came back. Whether a program ever *computes on junk* is the static question this
+document makes askable and does not answer.
 
 ## The coercions
 
@@ -211,28 +215,26 @@ where it is not:
 `truthy(Bool p) = p` is what makes it the identity on a bool, and nothing else
 is needed to say what it does. For `as_tuple n` the width is part of the type,
 as it is for `untuple n` — a tuple of the wrong length is as much a mismatch as
-a symbol, being precisely the values `untuple n` could not take apart.
+a symbol, being precisely the values `untuple n` has no `n` parts to give.
 
-**None of them is fallible, and that is not a loosening.** A fallible
-instruction reports whether its answer was computed or invented because it was
-reaching for something it might not find: `add` on two symbols has no sum to
-give, and the flag is how it says so. A coercion reaches for nothing. `as_int
-v` is *defined* as the int if there is one and zero otherwise — a total
-function of the value with no domain it is off — so there is no outcome to
-report. The question is still available to any program that wants it: `is_int`
-asks it, and `copy` first keeps the value as well as the answer.
+**A coercion is the junk of the table above, named on its own.** `as_int v` is
+*defined* as the int if there is one and zero otherwise, which is exactly what
+`add` answers with when it has no sum to give; the difference is only that a
+coercion is handed a value rather than computing one. So the two halves of the
+document are one rule: every instruction lands in a type, and where it has
+nothing to land with it lands on that type's default.
 
-What a coercion buys instead is a **codomain**, which is the one thing this
-document's totality does not otherwise give you. Case-splitting a value on
-`is_int` leaves it opaque in the arm where it is not one, so no amount of
-rewriting concludes that what came out is an `Int`; after `as_int` it is one by
-construction. Three consequences follow directly, and `vm::totality_tests`
-holds the machine to all of them:
+What a coercion buys is a **codomain** stated where a program can use it, which
+is the one thing this document's totality does not otherwise give you.
+Case-splitting a value on `is_int` leaves it opaque in the arm where it is not
+one, so no amount of rewriting concludes that what came out is an `Int`; after
+`as_int` it is one by construction. Three consequences follow directly, and
+`vm::totality_tests` holds the machine to all of them:
 
 ```
-as_int ; as_int      =  as_int              and likewise for the other two
-as_int ; is_int      =  drop ; push true
-as_tuple n ; untuple n                      never reports failure
+as_int ; as_int             =  as_int       and likewise for the other two
+as_int ; is_int             =  drop ; push true
+as_tuple n ; untuple n      =  untuple n
 ```
 
 The first is why a coercion is idempotent; the second and third are why writing
@@ -240,61 +242,56 @@ one is worth more than reading a check. `as_bool` has a fourth: it is the
 coercion `not`, `and`, `or` and `branch` already apply to their operands, so it
 is absorbed by any of them — `as_bool ; branch` is `branch`.
 
-## Reading the flags
+## Asking the question
 
 The arities in the table above are the ones `assemble` emits. `untuple 3`
-leaves four values, `add` leaves two, and a sentence that writes one is
-expected to say what happens when it is false:
+leaves three values and `add` leaves one, and a sentence that needs to know
+whether the instruction was reaching for something asks **before** it hands the
+operands over:
 
 ```
-#[arity(1, 8)]
+#[arity(1, 6)]
 sentence shares {
     pick 0
-    untuple 3        // leaves 4: three parts and a flag
-    dip 4 { untuple 3 }
+    untuple 3        // leaves 3: the parts, or three ()s
+    dip 3 { untuple 3 }
 }
 ```
 
-There is no annotation for this and no way to turn it off. For one change there
-was: `assemble` used to splice a `drop` in after every fallible instruction
-unless a sentence said `#[flags]`, so that source written against the old
-arities kept working while the corpus was converted. That scaffolding is gone
-now that every sentence has been converted, which is what keeps a branch arm
-from having a different instruction set than the sentence that wrote it.
+There is no annotation for this and no way to turn it off. The two questions
+worth asking are `is_int`, for anything arithmetic, and
 
-A flag admits two honest answers, and which one a site wants is not a matter of
-taste:
+```
+pick 0 ; pick 0 ; as_tuple n ; equal
+```
 
-* **Read it.** Branch on the flag and say what the false side does. Where the
-  code was already computing the answer the flag carries, the guard goes and the
-  branch reads the flag instead — see the sugar below.
-* **Drop it**, where the flag genuinely has nothing left to say. `untuple 0`
-  takes its argument whether or not the argument was `()`, so its flag is a
-  question already answered; a `const_string_len` on a literal is another. Each
-  such site is worth a comment saying which.
+for anything about shape: a value is an `n`-tuple exactly when coercing it to
+one changes nothing, and the two copies are what leave the value itself
+underneath the answer. Both are cheap, both are total, and both are written at
+the site that cares rather than at every site that does not.
 
-Dropping a flag that *was* carrying information is a program deciding to compute
-on junk. There is no longer an instruction that turns that decision into a
-halt — asserting the flag is what a sentence used to do — so a site that relies
-on its input's shape now has to say what it does when the shape is wrong. The
-[`?` operator](hana.md) is the short way to say "hand the problem back to my
-caller".
+A site that does not ask is a program deciding to compute on junk. There is no
+instruction that turns that decision into a halt — that is what `assert` used to
+be — so a site relying on its input's shape has to say what it does when the
+shape is wrong. The [`?` operator](hana.md) is the short way to say "hand the
+problem back to my caller", and it is written in exactly this shape: ask
+`as_tuple 2`, take the result apart in the arm where there is one, and call the
+value an error carrying itself in the arm where there is not.
 
 ### What the sugar does with it
 
 `type` and `enum` checks used to ask `is_tuple`, then `tuple_length; push n;
-equal`, and only then untuple — three instructions to recompute what `untuple`
-reports for free. They now ask once:
+equal`, and only then untuple. They ask once:
 
 ```
-untuple n
-branch { ...element checks... }
-       { drop^n; push false }
+pick 0 ; pick 0 ; as_tuple n ; equal
+branch { untuple n; ...element checks... }
+       { drop; push false }
 ```
 
-The else arm clears the slots `untuple` filled — the value itself in the
-deepest, `()` padding above it — and answers `false`. At `n = 0` the flag *is*
-the predicate and the body is a bare `untuple 0`.
+The value survives into both arms, so the else arm has something to discard
+rather than padding to clear. At `n = 0` the coercion is the constant `()` and
+the whole check is `push () ; equal`.
 
 ## What the laws buy, and what they cost
 
@@ -307,12 +304,12 @@ The point of all this is which local rewrites become sound. The wins:
 - **A branch on any literal folds**, since the direction on junk is defined.
 - **`tuple n; untuple n` is still one-way.** It is the identity; `untuple n;
   tuple n` is not — it *junk-normalizes*, mapping every non-`n`-tuple to
-  `((), …, ())` rather than panicking. A different function, so still not
-  removable.
+  `((), …, ())`. That normalization has a name now: `untuple n; tuple n` is
+  `as_tuple n`, which is a law rather than a warning.
 
 And two things that did **not** become free.
 
-### Copying before untupling, and what the flag paid for
+### Copying before untupling, and what the guard costs
 
 The rule one wants is
 
@@ -323,27 +320,25 @@ pick 0; untuple n   ==   untuple n; (pick (n-1))^n; dip n { tuple n }
 justified under the old semantics by "both sides panic on exactly the inputs
 where `x` is not an `n`-tuple". With no panic left to agree about, the two sides
 visibly differ: the left keeps `x`, and the right hands back `untuple n;
-tuple n` of `x`. Sound before, unsound after — the rule was *relying* on
-partiality to hide a normalization.
+tuple n` of `x` — which is to say `as_tuple n` of `x`. Sound before, unsound
+after; the rule was *relying* on partiality to hide a normalization.
 
-While untupling junk was untagged, nothing recovered `x` from the parts, and the
-rule had to buy the condition back with a `tuple_length; push n; equal` guard.
-It does not any more:
+So it has to buy the condition back, and the guard it buys it with is the one
+the whole language now uses:
 
 ```
 pick 0; untuple n
   ==
-untuple n;
-branch { (pick (n-1))^n; dip n { tuple n }; push true }
-       { dip (n-1) { pick 0 }; push false }
+pick 0; pick 0; as_tuple n; equal;
+branch { untuple n; (pick (n-1))^n; dip n { tuple n } }
+       { (tuple 0)^n }
 ```
 
-**The guard the rewrite needs is the one the instruction already computed.** No
-recomputation, no `is_tuple`, and an else arm with something to say rather than
-junk to invent — the value `untuple n` could not take apart is still sitting in
-the deepest of the slots it filled. Both arms are exact.
-
-That is the clearest single argument for putting the flag on the stack.
+Both arms are exact: on the then side the parts rebuild `x` because `x` was an
+`n`-tuple, and on the else side the left's own answer is `x` under `n` `()`s,
+which is what the arm pushes. The guard is four instructions and states the
+domain exactly, where the old `is_tuple; tuple_length; push n; equal` prologue
+was five and stated it in pieces.
 
 ### The single-arm hoist, which totality *did* buy
 
@@ -358,11 +353,10 @@ does **not** work as written. It used to invent a panic on the path that took
 the other arm; then it *junk-normalized* a value that `B` goes on to use, with
 `tuple 3` unable to put it back.
 
-The flag changes what is *possible* here — `untuple n` preserves its input on
-failure, so the else arm could read the flag and recover `x` — but it does not
-make the rewrite above correct, because that rewrite reads no flag. Recovering
-would mean branching on it inside the arm, which is more machinery than the
-alternative needs.
+Recovering `x` in the else arm is not available either: what `untuple n` left
+there is `()`s, and no instruction after the fact says what they stood for.
+Recovering would mean asking `as_tuple n` before the branch and threading the
+answer into the arm, which is more machinery than the alternative needs.
 
 **The hoist does not need an inverse. It needs a copy**:
 

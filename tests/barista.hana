@@ -48,11 +48,34 @@ mod customer_impl {
     #[precondition(accept_type::check)]
     function accept {
         untuple 2
+        untuple 3
+        pick 0
+        push state::idle
+        equal
         branch {
-            untuple 3
+            drop 0 // drop internal_state
+            drop 0 // drop preferred_drink
+            // Stack: [event, id]
+            tuple 0
+            roll 1 // Stack: [event, (), id]
+            tuple 2 // Stack: [event, ((), id)]
+            push super::event::want_coffee
+            tuple 2 // Stack: [event, (((), id), want_coffee)]
+            equal
+        } {
+            pick 0
+            push state::ordered
+            equal
             branch {
+                drop 0 // drop internal_state
+                // Stack: [event, id, preferred_drink]
+                tuple 2 // Stack: [event, (id, preferred_drink)]
+                push super::event::coffee
+                tuple 2 // Stack: [event, ((id, preferred_drink), coffee)]
+                equal
+            } {
                 pick 0
-                push state::idle
+                push state::has_coffee
                 equal
                 branch {
                     drop 0 // drop internal_state
@@ -61,65 +84,28 @@ mod customer_impl {
                     tuple 0
                     roll 1 // Stack: [event, (), id]
                     tuple 2 // Stack: [event, ((), id)]
-                    push super::event::want_coffee
-                    tuple 2 // Stack: [event, (((), id), want_coffee)]
+                    push super::event::enjoy
+                    tuple 2 // Stack: [event, (((), id), enjoy)]
                     equal
                 } {
                     pick 0
-                    push state::ordered
+                    push state::thirsty
                     equal
                     branch {
-                        drop 0 // drop internal_state
-                        // Stack: [event, id, preferred_drink]
-                        tuple 2 // Stack: [event, (id, preferred_drink)]
-                        push super::event::coffee
-                        tuple 2 // Stack: [event, ((id, preferred_drink), coffee)]
-                        equal
+                        drop 0
+                        drop 0
+                        drop 0
+                        drop 0 // drop event
+                        push false
                     } {
-                        pick 0
-                        push state::has_coffee
-                        equal
-                        branch {
-                            drop 0 // drop internal_state
-                            drop 0 // drop preferred_drink
-                            // Stack: [event, id]
-                            tuple 0
-                            roll 1 // Stack: [event, (), id]
-                            tuple 2 // Stack: [event, ((), id)]
-                            push super::event::enjoy
-                            tuple 2 // Stack: [event, (((), id), enjoy)]
-                            equal
-                        } {
-                            pick 0
-                            push state::thirsty
-                            equal
-                            branch {
-                                drop 0
-                                drop 0
-                                drop 0
-                                drop 0 // drop event
-                                push false
-                            } {
-                                drop 0
-                                drop 0
-                                drop 0
-                                drop 0
-                                push false
-                            }
-                        }
+                        drop 0
+                        drop 0
+                        drop 0
+                        drop 0
+                        push false
                     }
                 }
-            } {
-                drop 0
-                drop 0
-                drop 0
-                drop 0
-                push false
             }
-        } {
-            drop 0
-            drop 0
-            push false
         }
     }
 
@@ -130,24 +116,16 @@ mod customer_impl {
 
     function emit_postcondition {
         untuple 2
+        pick 0
+        is_bool
         branch {
-            pick 0
-            is_bool
             branch {
-                branch {
-                    jump is_event::check
-                } {
-                    drop 0
-                    push true
-                }
+                jump is_event::check
             } {
                 drop 0
-                drop 0
-                push false
+                push true
             }
         } {
-            // Not a pair: the value itself sits in the deepest slot untuple
-            // filled, with () padding above it. Clear both and reject.
             drop 0
             drop 0
             push false
@@ -173,23 +151,33 @@ mod customer_impl {
     #[postcondition(emit_postcondition)]
     function emit {
         untuple 3
+        // Stack: [id, preferred_drink, internal_state]
+        pick 0
+        push state::thirsty
+        equal
         branch {
-            // Stack: [id, preferred_drink, internal_state]
+            // Customer emits order request to queue (push_back event)
+            drop 0 // drop internal_state. Stack: [id, preferred_drink]
+            tuple 2 // (id, preferred_drink)
+            tuple 1
+            push super::super::queue::Event::PushBack::tag
+            tuple 2
+            push true
+            tuple 2
+        } {
             pick 0
-            push state::thirsty
+            push state::idle
             equal
             branch {
-                // Customer emits order request to queue (push_back event)
-                drop 0 // drop internal_state. Stack: [id, preferred_drink]
-                tuple 2 // (id, preferred_drink)
-                tuple 1
-                push super::super::queue::Event::PushBack::tag
-                tuple 2
-                push true
+                drop 0
+                drop 0
+                drop 0
+                tuple 0
+                push false
                 tuple 2
             } {
                 pick 0
-                push state::idle
+                push state::ordered
                 equal
                 branch {
                     drop 0
@@ -200,7 +188,7 @@ mod customer_impl {
                     tuple 2
                 } {
                     pick 0
-                    push state::ordered
+                    push state::has_coffee
                     equal
                     branch {
                         drop 0
@@ -210,73 +198,105 @@ mod customer_impl {
                         push false
                         tuple 2
                     } {
-                        pick 0
-                        push state::has_coffee
-                        equal
-                        branch {
-                            drop 0
-                            drop 0
-                            drop 0
-                            tuple 0
-                            push false
-                            tuple 2
-                        } {
-                            // Unrecognized internal state: emit nothing.
-                            drop 0
-                            drop 0
-                            drop 0
-                            tuple 0
-                            push false
-                            tuple 2
-                        }
+                        // Unrecognized internal state: emit nothing.
+                        drop 0
+                        drop 0
+                        drop 0
+                        tuple 0
+                        push false
+                        tuple 2
                     }
                 }
             }
-        } {
-            // Not a triple: the value itself sits in the deepest slot untuple
-            // filled, with () padding above it. Clear all three and emit nothing.
-            drop 0
-            drop 0
-            drop 0
-            tuple 0
-            push false
-            tuple 2
         }
     }
 
     // process takes [state, event] and returns next_state.
     function process {
         untuple 2
-        branch {
-            // Stack: [event, state]
-            untuple 3
-            branch {
+        // Stack: [event, state]
+        untuple 3
         
-                // Check internal_state
+        // Check internal_state
+        pick 0
+        push state::idle
+        equal
+        branch {
+            drop 0 // the tag the branch above already read
+            roll 2
+            untuple 2
+            push super::event::want_coffee
+            equal
+            branch {
+                untuple 2
+                drop 0
+                drop 0
+                push state::thirsty
+                tuple 3
+            } {
+                drop 0
+                drop 0
+                drop 0
+                push ()
+            }
+        } {
+            pick 0
+            push state::thirsty
+            equal
+            branch {
+                drop 0 // the tag the branch above already read
+                roll 2
+                untuple 2
+                push super::super::queue::Event::PushBack::tag
+                equal
+                branch {
+                    drop 0
+                    push state::ordered
+                    tuple 3
+                } {
+                    drop 0
+                    drop 0
+                    drop 0
+                    push ()
+                }
+            } {
                 pick 0
-                push state::idle
+                push state::ordered
                 equal
                 branch {
                     drop 0 // the tag the branch above already read
                     roll 2
                     untuple 2
+                    push super::event::coffee
+                    equal
                     branch {
-                        push super::event::want_coffee
+                        untuple 2
+                        drop 0
+                        drop 0
+                        push state::has_coffee
+                        tuple 3
+                    } {
+                        drop 0
+                        drop 0
+                        drop 0
+                        push ()
+                    }
+                } {
+                    pick 0
+                    push state::has_coffee
+                    equal
+                    branch {
+                        drop 0 // the tag the branch above already read
+                        roll 2
+                        untuple 2
+                        push super::event::enjoy
                         equal
                         branch {
                             untuple 2
-                            branch {
-                                drop 0
-                                drop 0
-                                push state::thirsty
-                                tuple 3
-                            } {
-                                drop 0
-                                drop 0
-                                drop 0
-                                drop 0
-                                push ()
-                            }
+                            drop 0
+                            drop 0
+                            push state::idle
+                            tuple 3
                         } {
                             drop 0
                             drop 0
@@ -290,131 +310,8 @@ mod customer_impl {
                         drop 0
                         push ()
                     }
-                } {
-                    pick 0
-                    push state::thirsty
-                    equal
-                    branch {
-                        drop 0 // the tag the branch above already read
-                        roll 2
-                        untuple 2
-                        branch {
-                            push super::super::queue::Event::PushBack::tag
-                            equal
-                            branch {
-                                drop 0
-                                push state::ordered
-                                tuple 3
-                            } {
-                                drop 0
-                                drop 0
-                                drop 0
-                                push ()
-                            }
-                        } {
-                            drop 0
-                            drop 0
-                            drop 0
-                            drop 0
-                            push ()
-                        }
-                    } {
-                        pick 0
-                        push state::ordered
-                        equal
-                        branch {
-                            drop 0 // the tag the branch above already read
-                            roll 2
-                            untuple 2
-                            branch {
-                                push super::event::coffee
-                                equal
-                                branch {
-                                    untuple 2
-                                    branch {
-                                        drop 0
-                                        drop 0
-                                        push state::has_coffee
-                                        tuple 3
-                                    } {
-                                        drop 0
-                                        drop 0
-                                        drop 0
-                                        drop 0
-                                        push ()
-                                    }
-                                } {
-                                    drop 0
-                                    drop 0
-                                    drop 0
-                                    push ()
-                                }
-                            } {
-                                drop 0
-                                drop 0
-                                drop 0
-                                drop 0
-                                push ()
-                            }
-                        } {
-                            pick 0
-                            push state::has_coffee
-                            equal
-                            branch {
-                                drop 0 // the tag the branch above already read
-                                roll 2
-                                untuple 2
-                                branch {
-                                    push super::event::enjoy
-                                    equal
-                                    branch {
-                                        untuple 2
-                                        branch {
-                                            drop 0
-                                            drop 0
-                                            push state::idle
-                                            tuple 3
-                                        } {
-                                            drop 0
-                                            drop 0
-                                            drop 0
-                                            drop 0
-                                            push ()
-                                        }
-                                    } {
-                                        drop 0
-                                        drop 0
-                                        drop 0
-                                        push ()
-                                    }
-                                } {
-                                    drop 0
-                                    drop 0
-                                    drop 0
-                                    drop 0
-                                    push ()
-                                }
-                            } {
-                                drop 0
-                                drop 0
-                                drop 0
-                                drop 0
-                                push ()
-                            }
-                        }
-                    }
                 }
-            } {
-                drop 0
-                drop 0
-                drop 0
-                drop 0
-                push ()
             }
-        } {
-            drop 0
-            drop 0
-            push ()
         }
     }
 
@@ -425,22 +322,15 @@ mod customer_impl {
 
     function is_ready_to_finish {
         untuple 3
-        branch {
-            pick 0
-            push state::idle
-            equal
-            roll 3
-            drop 0
-            roll 2
-            drop 0
-            roll 1
-            drop 0
-        } {
-            drop 0
-            drop 0
-            drop 0
-            push false
-        }
+        pick 0
+        push state::idle
+        equal
+        roll 3
+        drop 0
+        roll 2
+        drop 0
+        roll 1
+        drop 0
     }
 }
 test sentence verify_customer_is_event {
@@ -512,9 +402,6 @@ test sentence verify_customer_logic {
     pick 0
     jump customer_impl::emit
     untuple 2
-    jump crate::prelude::check_true
-    ?
-    drop 0
     jump crate::prelude::check_true
     ?
     drop 0
@@ -622,114 +509,78 @@ mod barista {
 
     // Initializes barista state
     function init {
-        // `untuple 0` takes the argument either way, so the flag is the whole
-        // answer and there is nothing to answer differently about.
+        // `untuple 0` takes the argument either way, which is the whole of
+        // what it does.
         untuple 0
-        drop 0
         push state::idle
     }
 
 
     function accept {
         untuple 2
+        pick 0
+        push state::idle
+        equal
         branch {
+            drop 0 // drop state
+            drop 0 // drop event
+            push false
+        } {
             pick 0
-            push state::idle
+            push state::awaiting_order
             equal
             branch {
                 drop 0 // drop state
-                drop 0 // drop event
-                push false
-            } {
-                pick 0
-                push state::awaiting_order
+                // Stack: [event]
+                untuple 2
+                // Stack: [channel, inner]
+                push super::super::queue::Event::AwaitFront::tag
                 equal
                 branch {
-                    drop 0 // drop state
-                    // Stack: [event]
+                    // channel == await_front
+                    // Stack: [Body]
+                    untuple 1
+                    // Stack: [reqresp]
                     untuple 2
+                    // Stack: [resp_tag, option]
+                    push super::super::prelude::resp
+                    equal
                     branch {
-                        // Stack: [channel, inner]
-                        push super::super::queue::Event::AwaitFront::tag
+                        // resp_tag == resp
+                        // Stack: [option]
+                        untuple 2
+                        // Stack: [some_tag, val_tuple]
+                        push super::super::prelude::some
                         equal
                         branch {
-                            // channel == await_front
-                            // Stack: [Body]
-                            untuple 1
-                            branch {
-                                // Stack: [reqresp]
-                                untuple 2
-                                branch {
-                                    // Stack: [resp_tag, option]
-                                    push super::super::prelude::resp
-                                    equal
-                                    branch {
-                                        // resp_tag == resp
-                                        // Stack: [option]
-                                        untuple 2
-                                        branch {
-                                            // Stack: [some_tag, val_tuple]
-                                            push super::super::prelude::some
-                                            equal
-                                            branch {
-                                                // some_tag == some
-                                                // Stack: [val_tuple]
-                                                untuple 2
-                                                branch {
-                                                    // Stack: [empty_tuple, val]
-                                                    drop 0 // drop val (can be anything)
-                                                    // Stack: [empty_tuple]
-                                                    tuple 0 // push ()
-                                                    equal
-                                                } {
-                                                    drop 0
-                                                    drop 0
-                                                    push false
-                                                }
-                                            } {
-                                                // some_tag != some
-                                                drop 0
-                                                push false
-                                            }
-                                        } {
-                                            drop 0
-                                            drop 0
-                                            push false
-                                        }
-                                    } {
-                                        // resp_tag != resp
-                                        drop 0
-                                        push false
-                                    }
-                                } {
-                                    drop 0
-                                    drop 0
-                                    push false
-                                }
-                            } {
-                                drop 0
-                                push false
-                            }
+                            // some_tag == some
+                            // Stack: [val_tuple]
+                            untuple 2
+                            // Stack: [empty_tuple, val]
+                            drop 0 // drop val (can be anything)
+                            // Stack: [empty_tuple]
+                            tuple 0 // push ()
+                            equal
                         } {
-                            // channel != await_front
+                            // some_tag != some
                             drop 0
                             push false
                         }
                     } {
-                        drop 0
+                        // resp_tag != resp
                         drop 0
                         push false
                     }
                 } {
-                    drop 0 // drop state
-                    drop 0 // drop event
+                    // channel != await_front
+                    drop 0
                     push false
                 }
+            } {
+                drop 0 // drop state
+                drop 0 // drop event
+                push false
             }
-        } {
-            drop 0
-            drop 0
-            push false
         }
     }
 
@@ -766,29 +617,17 @@ mod barista {
             } {
                 // Must be brewing
                 untuple 2
+                push state::brewing
+                equal
                 branch {
-                    push state::brewing
-                    equal
-                    branch {
-                        // Stack: [(id, drink)]
-                        untuple 2
-                        branch {
-                            tuple 2
-                            push super::event::coffee
-                            tuple 2
-                            push true
-                            tuple 2
-                        } {
-                            drop 0
-                            drop 0
-                            push ((), false)
-                        }
-                    } {
-                        drop 0
-                        push ((), false)
-                    }
+                    // Stack: [(id, drink)]
+                    untuple 2
+                    tuple 2
+                    push super::event::coffee
+                    tuple 2
+                    push true
+                    tuple 2
                 } {
-                    drop 0
                     drop 0
                     push ((), false)
                 }
@@ -799,92 +638,59 @@ mod barista {
     // process takes [state, event] and returns next_state.
     function process {
         untuple 2
+        // Inputs: [event, state]
+        pick 0 // state
+        push state::idle
+        equal
         branch {
-            // Inputs: [event, state]
-            pick 0 // state
-            push state::idle
+            // Transition from idle to awaiting_order
+            drop 0 // the tag the branch above already read
+        
+            push ()
+            push super::super::prelude::req
+            tuple 2
+            tuple 1
+            push super::super::queue::Event::AwaitFront::tag
+            tuple 2
             equal
             branch {
-                // Transition from idle to awaiting_order
+                push state::awaiting_order
+            } {
+                push state::idle
+            }
+        } {
+            pick 0 // state
+            push state::awaiting_order
+            equal
+            branch {
+                // Transition from awaiting_order to brewing.
                 drop 0 // the tag the branch above already read
             
-                push ()
-                push super::super::prelude::req
-                tuple 2
-                tuple 1
+                // Destructure event: (((((), val), some), resp), await_front)
+                untuple 2
                 push super::super::queue::Event::AwaitFront::tag
-                tuple 2
                 equal
                 branch {
-                    push state::awaiting_order
-                } {
-                    push state::idle
-                }
-            } {
-                pick 0 // state
-                push state::awaiting_order
-                equal
-                branch {
-                    // Transition from awaiting_order to brewing.
-                    drop 0 // the tag the branch above already read
-                
-                    // Destructure event: (((((), val), some), resp), await_front)
+                    untuple 1
+
                     untuple 2
+                    push super::super::prelude::resp
+                    equal
                     branch {
-                        push super::super::queue::Event::AwaitFront::tag
+            
+                        untuple 2
+                        push super::super::prelude::some
                         equal
                         branch {
-                            untuple 1
+            
+                            untuple 2
+                            roll 1
+                            push ()
+                            equal
                             branch {
-
-                                untuple 2
-                                branch {
-                                    push super::super::prelude::resp
-                                    equal
-                                    branch {
-                
-                                        untuple 2
-                                        branch {
-                                            push super::super::prelude::some
-                                            equal
-                                            branch {
-                
-                                                untuple 2
-                                                branch {
-                                                    roll 1
-                                                    push ()
-                                                    equal
-                                                    branch {
-                
-                                                        push state::brewing
-                                                        tuple 2 // (val, state::brewing)
-                                                    } {
-                                                        drop 0
-                                                        push state::awaiting_order
-                                                    }
-                                                } {
-                                                    drop 0
-                                                    drop 0
-                                                    push state::awaiting_order
-                                                }
-                                            } {
-                                                drop 0
-                                                push state::awaiting_order
-                                            }
-                                        } {
-                                            drop 0
-                                            drop 0
-                                            push state::awaiting_order
-                                        }
-                                    } {
-                                        drop 0
-                                        push state::awaiting_order
-                                    }
-                                } {
-                                    drop 0
-                                    drop 0
-                                    push state::awaiting_order
-                                }
+            
+                                push state::brewing
+                                tuple 2 // (val, state::brewing)
                             } {
                                 drop 0
                                 push state::awaiting_order
@@ -895,57 +701,37 @@ mod barista {
                         }
                     } {
                         drop 0
-                        drop 0
                         push state::awaiting_order
                     }
                 } {
-                    // Must be brewing. Transition to idle.
+                    drop 0
+                    push state::awaiting_order
+                }
+            } {
+                // Must be brewing. Transition to idle.
+                untuple 2
+                push state::brewing
+                equal
+                branch {
+                    drop 0
                     untuple 2
+                    push super::event::coffee
+                    equal
                     branch {
-                        push state::brewing
-                        equal
-                        branch {
-                            drop 0
-                            untuple 2
-                            branch {
-                                push super::event::coffee
-                                equal
-                                branch {
-                                    untuple 2
-                                    branch {
-                                        drop 0
-                                        drop 0
-                                        push state::idle
-                                    } {
-                                        drop 0
-                                        drop 0
-                                        push ()
-                                    }
-                                } {
-                                    drop 0
-                                    push ()
-                                }
-                            } {
-                                drop 0
-                                drop 0
-                                push ()
-                            }
-                        } {
-                            drop 0
-                            drop 0
-                            push ()
-                        }
+                        untuple 2
+                        drop 0
+                        drop 0
+                        push state::idle
                     } {
                         drop 0
-                        roll 1
-                        drop 0
+                        push ()
                     }
+                } {
+                    drop 0
+                    drop 0
+                    push ()
                 }
             }
-        } {
-            drop 0
-            drop 0
-            push ()
         }
     }
 
@@ -984,15 +770,9 @@ sentence customers_queue_sync {
         push false
     } {
         untuple 2
-        branch {
-            drop 1
-            push super::queue::Event::PushBack::tag
-            equal
-        } {
-            drop 0
-            drop 0
-            push false
-        }
+        drop 1
+        push super::queue::Event::PushBack::tag
+        equal
     }
 }
 
@@ -1015,22 +795,16 @@ sentence joint_sync {
         push false
     } {
         untuple 2
+        drop 1 // drop payload
+        pick 0
+        push super::queue::Event::AwaitFront::tag
+        equal
         branch {
-            drop 1 // drop payload
-            pick 0
-            push super::queue::Event::AwaitFront::tag
-            equal
-            branch {
-                drop 0
-                push true
-            } {
-                push event::coffee
-                equal
-            }
+            drop 0
+            push true
         } {
-            drop 0
-            drop 0
-            push false
+            push event::coffee
+            equal
         }
     }
 }
@@ -1054,30 +828,24 @@ sentence hidden_events {
         push false
     } {
         untuple 2
+        drop 1 // drop payload
+        pick 0
+        push super::queue::Event::PushBack::tag
+        equal
         branch {
-            drop 1 // drop payload
+            drop 0
+            push true
+        } {
             pick 0
-            push super::queue::Event::PushBack::tag
+            push event::coffee
             equal
             branch {
                 drop 0
                 push true
             } {
-                pick 0
-                push event::coffee
+                push super::queue::Event::AwaitFront::tag
                 equal
-                branch {
-                    drop 0
-                    push true
-                } {
-                    push super::queue::Event::AwaitFront::tag
-                    equal
-                }
             }
-        } {
-            drop 0
-            drop 0
-            push false
         }
     }
 }
@@ -1093,18 +861,11 @@ sentence hidden_tau_step {
     jump hidden::tau_reduce
     // Stack: [(next_state, did_reduce)]
     untuple 2
+    // Stack: [next_state, did_reduce]
     branch {
-        // Stack: [next_state, did_reduce]
-        branch {
-            push crate::prelude::ok
-            tuple 2
-        } {
-            push crate::prelude::err
-            tuple 2
-        }
+        push crate::prelude::ok
+        tuple 2
     } {
-        // Not a (next_state, did_reduce) pair at all.
-        drop 0
         push crate::prelude::err
         tuple 2
     }
@@ -1113,18 +874,11 @@ sentence hidden_tau_step {
 sentence concurrent_tau_step {
     jump concurrent::tau_reduce
     untuple 2
+    // Stack: [next_state, did_reduce]
     branch {
-        // Stack: [next_state, did_reduce]
-        branch {
-            push crate::prelude::ok
-            tuple 2
-        } {
-            push crate::prelude::err
-            tuple 2
-        }
+        push crate::prelude::ok
+        tuple 2
     } {
-        // Not a (next_state, did_reduce) pair at all.
-        drop 0
         push crate::prelude::err
         tuple 2
     }
@@ -1342,9 +1096,6 @@ test sentence verify_concurrent_system {
     jump crate::prelude::check_true
     ?
     drop 0
-    jump crate::prelude::check_true
-    ?
-    drop 0
     
     push ()
     push super::prelude::req
@@ -1401,9 +1152,6 @@ test sentence verify_concurrent_system {
     jump crate::prelude::check_true
     ?
     drop 0
-    jump crate::prelude::check_true
-    ?
-    drop 0
     push (customer_id::c1, event::latte)
     tuple 1
     push super::queue::Event::PushBack::tag
@@ -1426,9 +1174,6 @@ test sentence verify_concurrent_system {
     pick 0
     jump concurrent::emit
     untuple 2
-    jump crate::prelude::check_true
-    ?
-    drop 0
     jump crate::prelude::check_true
     ?
     drop 0
@@ -1468,9 +1213,6 @@ test sentence verify_concurrent_system {
     jump crate::prelude::check_true
     ?
     drop 0
-    jump crate::prelude::check_true
-    ?
-    drop 0
     push (customer_id::c2, event::espresso)
     tuple 1
     push super::queue::Event::PushBack::tag
@@ -1495,9 +1237,6 @@ test sentence verify_concurrent_system {
     pick 0
     jump concurrent::emit
     untuple 2
-    jump crate::prelude::check_true
-    ?
-    drop 0
     jump crate::prelude::check_true
     ?
     drop 0
@@ -1532,9 +1271,6 @@ test sentence verify_concurrent_system {
     jump crate::prelude::check_true
     ?
     drop 0
-    jump crate::prelude::check_true
-    ?
-    drop 0
     
     push ()
     push super::prelude::req
@@ -1560,9 +1296,6 @@ test sentence verify_concurrent_system {
     pick 0
     jump concurrent::emit
     untuple 2
-    jump crate::prelude::check_true
-    ?
-    drop 0
     jump crate::prelude::check_true
     ?
     drop 0
@@ -1599,9 +1332,6 @@ test sentence verify_concurrent_system {
     pick 0
     jump concurrent::emit
     untuple 2
-    jump crate::prelude::check_true
-    ?
-    drop 0
     jump crate::prelude::check_true
     ?
     drop 0
@@ -1694,9 +1424,6 @@ test sentence verify_barista_rejection {
     jump crate::prelude::check_true
     ?
     drop 0
-    jump crate::prelude::check_true
-    ?
-    drop 0
     
     tuple 0
     push super::prelude::req
@@ -1754,9 +1481,6 @@ test sentence verify_barista_rejection {
     
     jump barista::emit
     untuple 2
-    jump crate::prelude::check_true
-    ?
-    drop 0
     not
     jump crate::prelude::check_true
     ?

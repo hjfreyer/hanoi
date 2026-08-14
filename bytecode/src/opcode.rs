@@ -32,27 +32,37 @@ use crate::value::Value;
 /// See `docs/compilation.md` for what phase 4 emits, and `docs/movement.md` for
 /// why the trade is worth taking.
 ///
+/// # Every instruction answers, and none of them reports
+///
+/// A data instruction leaves exactly what it computed and nothing about how it
+/// got there. `add` on two symbols has no sum to give, so it gives `Int 0`;
+/// `untuple 3` of a symbol has no three parts to give, so it gives three `()`s.
+/// Neither leaves a `bool` saying which happened, because **the question is the
+/// caller's and the caller can ask it**: `is_int` and `pick 0 ; pick 0 ;
+/// as_tuple n ; equal` are the two shapes of it, and each leaves the value
+/// itself underneath the answer. A flag on top of the answer asked the question
+/// for every caller whether or not any of them wanted it, and cost every site
+/// that did not a `drop` to say so.
+///
+/// What is left is that each instruction has a **codomain**: `add` leaves an
+/// `Int` on every pair of values, `less` a `Bool`, `untuple n` exactly `n`
+/// values. See [`yields_bool`] for why that is the one fact an equational
+/// account cannot discover for itself, and `docs/totality.md` for the table.
+///
 /// # Coercions
 ///
 /// [`AsBool`], [`AsInt`] and [`AsTuple`] force a value to a type: each is the
 /// identity where the value is already of that type, and hands back a default
-/// where it is not. None of them is fallible, and the difference is not a
-/// loosening.
+/// where it is not. They are the codomain named on its own, for a value nothing
+/// is being computed from — and they are what the junk answers above are
+/// defined through, `untuple n` being `as_tuple n` followed by taking a tuple
+/// of the right width apart. Code that wants the question asked rather than the
+/// answer forced has `is_int`, and can `copy` first.
 ///
-/// A fallible instruction reports whether its answer was computed or invented
-/// because it was reaching for something it might not find — `add` on two
-/// symbols has no sum to give. A coercion reaches for nothing. `as_int v` is
-/// *defined* as the int if there is one and zero otherwise: a total function of
-/// the value, with no domain it is off, so there is no flag to leave and
-/// nothing for a caller to check. Code that wants the question asked rather
-/// than the answer forced still has `is_int`, and can `copy` first.
-///
-/// What they buy is a **codomain**, which is exactly the thing an equational
-/// account cannot otherwise discover — see [`yields_bool`] for the same
-/// argument made about booleans. Case-splitting a value on whether it is an Int
-/// leaves it opaque in the arm where it is not, so no rewrite can conclude that
-/// what came out is an Int; after `as_int`, it is one by construction. Hence
-/// `as_int ; as_int` = `as_int`, and `as_int ; is_int` = `drop ; push true`.
+/// Case-splitting a value on whether it is an Int leaves it opaque in the arm
+/// where it is not, so no rewrite can conclude that what came out is an Int;
+/// after `as_int`, it is one by construction. Hence `as_int ; as_int` =
+/// `as_int`, and `as_int ; is_int` = `drop ; push true`.
 ///
 /// [`Drop`]: Instruction::Drop
 /// [`Copy`]: Instruction::Copy
@@ -121,9 +131,15 @@ pub enum Instruction {
     /// is element 0 and the topmost is the last, so `push 1 ; push 2 ; tuple 2`
     /// is `(1, 2)`.
     Tuple(usize),
-    /// Pops a Tuple off the stack, checks that it contains exactly N elements,
-    /// and pushes each of those elements back onto the stack, element 0 first —
+    /// Pops a value off the stack and pushes `N` values back, element 0 first —
     /// undoing [`Instruction::Tuple`] slot for slot.
+    ///
+    /// This is [`AsTuple(n)`][Instruction::AsTuple] and then the taking apart:
+    /// a value that is not a tuple of exactly `N` elements has no `N` parts to
+    /// give, so what comes back is `N` `()`s. Nothing says which of the two
+    /// happened, and a caller that needs to know asks first — `pick 0 ; pick 0
+    /// ; as_tuple n ; equal` is the question, and it is the one the `type` sugar
+    /// and `?` both write.
     Untuple(usize),
 
     /// Pop the top two values on the stack, evaluate logical AND on their truthiness, and push the result.
@@ -131,9 +147,13 @@ pub enum Instruction {
     /// Pop the top two values on the stack, evaluate logical OR on their truthiness, and push the result.
     Or,
 
-    /// Pop a ConstString off the stack, and push its character length as an Int.
+    /// Pop a value off the stack and push its character length as an Int: the
+    /// count of a ConstString, and `0` for anything with no characters to count.
     ConstStringLen,
-    /// Pop an index (Int) and a ConstString off the stack, and push the Unicode code point of the character at that index as an Int.
+    /// Pop an index (Int) and a ConstString off the stack, and push the Unicode
+    /// code point of the character at that index as an Int. An index out of
+    /// range reads no code point, and answers `0` — as does an operand of the
+    /// wrong type.
     ConstStringCharAt,
 
     /// Pop the top value and push true if it is an Int, else false.
@@ -146,11 +166,11 @@ pub enum Instruction {
     IsSymbol,
     /// Pop the top value and push true if it is a Tuple, else false.
     IsTuple,
-    /// Pop the top value (must be a Tuple) and push its length as an Int.
+    /// Pop the top value and push its length as an Int: the element count of a
+    /// Tuple, and `0` for anything else, which has no length to count.
     TupleLength,
 
-    /// Pop the top value and push its truthiness as a Bool. See the type's
-    /// docs for why the coercions carry no flag.
+    /// Pop the top value and push its truthiness as a Bool.
     ///
     /// This is [`Value::truthy`][crate::value::Value::truthy] made into an
     /// instruction, so it is the identity on a `Bool` for the same reason
@@ -209,8 +229,8 @@ impl Instruction {
     /// [`crate::arity::op_arity`] is; a second copy of the list would be a
     /// silent hazard rather than a duplication.
     ///
-    /// The flag a fallible one leaves is symmetric too: `add` on a symbol and an
-    /// int fails whichever order they arrive in, answering `0, false` both ways.
+    /// The junk answer is symmetric too: `add` on a symbol and an int has no
+    /// sum to give whichever order they arrive in, and answers `0` both ways.
     ///
     pub fn commutative(&self) -> bool {
         matches!(
@@ -230,11 +250,13 @@ impl Instruction {
     /// `vm` measures it, running every candidate on every shape of operand and
     /// holding the list to what it finds.
     ///
-    /// It is a wide list because a **flag** is a boolean: every fallible
-    /// operation reports with one, and reports it on top. `add` leaves a sum
-    /// and a flag, and it is the flag `is_bool` would be asking about.
+    /// The list is the predicates and the boolean connectives, which is what is
+    /// left once no instruction reports on itself: an operation that answers
+    /// with a `bool` is one that was *asked* something. `add` leaves an `Int`
+    /// on every pair of values, junk included, so it is not here — the codomain
+    /// it does have is a fact of the same kind with nowhere to be said.
     ///
-    /// The three exclusions are all deliberate:
+    /// The exclusions worth naming:
     ///
     /// - `tuple n` builds a tuple, and is the negative case the sweep needs to
     ///   stay honest about being a measurement.
@@ -256,24 +278,14 @@ impl Instruction {
             Instruction::Equal
                 | Instruction::Greater
                 | Instruction::Less
-                | Instruction::Add
-                | Instruction::Subtract
-                | Instruction::Multiply
-                | Instruction::Divide
-                | Instruction::Modulo
                 | Instruction::Not
-                | Instruction::Negate
                 | Instruction::And
                 | Instruction::Or
-                | Instruction::ConstStringLen
-                | Instruction::ConstStringCharAt
                 | Instruction::IsInt
                 | Instruction::IsBool
                 | Instruction::IsConstString
                 | Instruction::IsSymbol
                 | Instruction::IsTuple
-                | Instruction::TupleLength
-                | Instruction::Untuple(_)
                 // A coercion's whole point is its codomain, and this one's is
                 // `Bool`. The other two leave an Int and a Tuple, which is the
                 // same fact about a different type and has nowhere to be said.
