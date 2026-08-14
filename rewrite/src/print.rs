@@ -310,9 +310,9 @@ fn render_seq(
                     )),
                     other => {
                         out.push(format!("{}{} │ {}}} {{", close(&view), blank, pad));
-                        let upper = stack
-                            .as_ref()
-                            .and_then(|s| (hidden <= s.len()).then(|| s[s.len() - hidden..].to_vec()));
+                        let upper = stack.as_ref().and_then(|s| {
+                            (hidden <= s.len()).then(|| s[s.len() - hidden..].to_vec())
+                        });
                         render_seq(
                             prog,
                             &other.spine().into_iter().cloned().collect::<Vec<_>>(),

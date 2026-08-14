@@ -161,7 +161,11 @@ impl std::fmt::Display for SideCondition {
                 leaves, wants
             ),
             SideCondition::DepthOverflow { shifted } => {
-                write!(f, "the shifted window width {} is not representable", shifted)
+                write!(
+                    f,
+                    "the shifted window width {} is not representable",
+                    shifted
+                )
             }
             SideCondition::FrameNotOneDeep { depth } => write!(
                 f,
@@ -974,11 +978,7 @@ impl Rule {
                 a,
                 outer,
                 inner,
-            } => Term::frame(
-                outer.clone(),
-                *k,
-                Term::frame(inner.clone(), *j, a.clone()),
-            ),
+            } => Term::frame(outer.clone(), *k, Term::frame(inner.clone(), *j, a.clone())),
 
             Rule::ElimPar0 { a, origins } => Term::frame(origins.clone(), 0, a.clone()),
 
@@ -991,8 +991,11 @@ impl Rule {
                 d,
                 a_origins,
                 b_origins,
-            } => Term::par_from(a_origins.clone(), a.clone(), c.clone())
-                .then(Term::par_from(b_origins.clone(), b.clone(), d.clone())),
+            } => Term::par_from(a_origins.clone(), a.clone(), c.clone()).then(Term::par_from(
+                b_origins.clone(),
+                b.clone(),
+                d.clone(),
+            )),
 
             Rule::Hoist {
                 k,
@@ -1015,13 +1018,8 @@ impl Rule {
                 suffix,
                 then_origin,
                 else_origin,
-            } => Term::branch(
-                then_origin,
-                then_arm.clone(),
-                else_origin,
-                else_arm.clone(),
-            )
-            .then(suffix.clone()),
+            } => Term::branch(then_origin, then_arm.clone(), else_origin, else_arm.clone())
+                .then(suffix.clone()),
 
             Rule::FoldBranch {
                 c,
@@ -1050,8 +1048,9 @@ impl Rule {
                 else_origin,
             ),
 
-            Rule::Eval { op, inputs } => Term::seq(inputs.iter().cloned().map(push))
-                .then(Term::Op(op.clone())),
+            Rule::Eval { op, inputs } => {
+                Term::seq(inputs.iter().cloned().map(push)).then(Term::Op(op.clone()))
+            }
 
             Rule::Annihilate { x, m, .. } => x.clone().then(drops(*m)),
 
@@ -1154,7 +1153,11 @@ impl Rule {
             } => {
                 let mut origins = a_origins.clone();
                 origins.extend(b_origins.iter().cloned());
-                Term::par_from(origins, a.clone().then(b.clone()), c.clone().then(d.clone()))
+                Term::par_from(
+                    origins,
+                    a.clone().then(b.clone()),
+                    c.clone().then(d.clone()),
+                )
             }
 
             Rule::Hoist {
@@ -1166,9 +1169,8 @@ impl Rule {
                 then_origin,
                 else_origin,
             } => {
-                let prefixed = |arm: &Term| {
-                    Term::frame(origins.clone(), *k, x.clone()).then(arm.clone())
-                };
+                let prefixed =
+                    |arm: &Term| Term::frame(origins.clone(), *k, x.clone()).then(arm.clone());
                 Term::branch(
                     then_origin,
                     prefixed(then_arm),
@@ -1258,11 +1260,7 @@ impl Rule {
                 };
                 retest_shape(
                     *arm,
-                    Term::seq([
-                        Term::Op(Instruction::Drop),
-                        (**live).clone(),
-                        rest.clone(),
-                    ]),
+                    Term::seq([Term::Op(Instruction::Drop), (**live).clone(), rest.clone()]),
                     other,
                     then_origin,
                     else_origin,
@@ -1347,8 +1345,7 @@ pub(crate) fn sink(k: usize) -> Term {
     match k {
         0 => Term::nil(),
         1 => Term::Op(Instruction::Swap),
-        _ => Term::Op(Instruction::Swap)
-            .then(Term::frame(Vec::new(), 1, sink(k - 1))),
+        _ => Term::Op(Instruction::Swap).then(Term::frame(Vec::new(), 1, sink(k - 1))),
     }
 }
 
@@ -1362,13 +1359,7 @@ pub(crate) fn framed_body(node: &Term) -> Option<(usize, Term)> {
 /// Both sides of [`Rule::Retest`] are this shape and differ only in what the
 /// arm holds, which is what makes the equation one law read at two arms rather
 /// than two laws that happen to look alike.
-fn retest_shape(
-    arm: Arm,
-    held: Term,
-    other: &Term,
-    then_origin: &str,
-    else_origin: &str,
-) -> Term {
+fn retest_shape(arm: Arm, held: Term, other: &Term, then_origin: &str, else_origin: &str) -> Term {
     let (then_body, else_body) = match arm {
         Arm::Then => (held, other.clone()),
         Arm::Else => (other.clone(), held),
@@ -1559,6 +1550,12 @@ pub(crate) fn eval_op(inst: &Instruction, inputs: &[Value]) -> Option<Vec<Value>
 /// Keeping them apart is what stops library content from riding inside a
 /// script. The applier reads the body from the library itself, so a step names
 /// a sentence and never quotes it.
+// The two variants differ in size by the whole of a `Rule`, which holds the
+// terms an equation is instantiated at. Boxing to even them out would put an
+// allocation and an indirection under every step for a saving nothing spends: a
+// script is hundreds of steps, not millions, and a `StepKind` is moved by value
+// rather than held in a long homogeneous array.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum StepKind {
     Rule(Rule),
@@ -1574,7 +1571,9 @@ pub(crate) enum StepKind {
     ///
     /// The cost of unfolding is provenance — a spliced body no longer says
     /// which sentence it came from — which is why nothing unfolds by default.
-    Unfold { target: SentenceIndex },
+    Unfold {
+        target: SentenceIndex,
+    },
 }
 
 impl StepKind {
@@ -1690,7 +1689,10 @@ pub(crate) mod tests {
             outer: Vec::new(),
             inner: Vec::new(),
         };
-        assert_eq!(r.lhs(), frame(2, vec![frame(3, vec![op(Instruction::Add)])]));
+        assert_eq!(
+            r.lhs(),
+            frame(2, vec![frame(3, vec![op(Instruction::Add)])])
+        );
         assert_eq!(r.rhs(), frame(5, vec![op(Instruction::Add)]));
     }
 
@@ -1728,7 +1730,10 @@ pub(crate) mod tests {
             a: a.clone(),
             origins: Vec::new(),
         };
-        assert_eq!(r.lhs(), frame(0, vec![op(Instruction::Add), op(Instruction::Drop)]));
+        assert_eq!(
+            r.lhs(),
+            frame(0, vec![op(Instruction::Add), op(Instruction::Drop)])
+        );
         assert_eq!(r.rhs(), a);
     }
 
@@ -2112,10 +2117,7 @@ pub(crate) mod tests {
             m: 2,
         };
         assert_eq!(r.check(&prog()), Ok(()));
-        assert_eq!(
-            r.lhs(),
-            Term::seq([op(Instruction::Add), drops(2)])
-        );
+        assert_eq!(r.lhs(), Term::seq([op(Instruction::Add), drops(2)]));
         assert_eq!(r.rhs(), drops(2));
     }
 
@@ -2139,12 +2141,7 @@ pub(crate) mod tests {
         assert_eq!(copies(0), Term::nil());
         assert_eq!(copies(1), op(Instruction::Copy));
         // `pick 1` twice, written the way phase 4 writes one.
-        let pick_one = || {
-            Term::seq([
-                frame(1, vec![op(Instruction::Copy)]),
-                op(Instruction::Swap),
-            ])
-        };
+        let pick_one = || Term::seq([frame(1, vec![op(Instruction::Copy)]), op(Instruction::Swap)]);
         assert_eq!(copies(2), Term::seq([pick_one(), pick_one()]));
     }
 
@@ -2257,10 +2254,7 @@ pub(crate) mod tests {
         );
         assert_eq!(
             spine(r.rhs()),
-            vec![
-                op(Instruction::Copy),
-                frame(1, vec![op(Instruction::Copy)])
-            ]
+            vec![op(Instruction::Copy), frame(1, vec![op(Instruction::Copy)])]
         );
     }
 
@@ -2453,10 +2447,7 @@ pub(crate) mod tests {
         );
         assert_eq!(
             spine(Rule::CounitUnder.lhs()),
-            vec![
-                op(Instruction::Copy),
-                frame(1, vec![op(Instruction::Drop)])
-            ]
+            vec![op(Instruction::Copy), frame(1, vec![op(Instruction::Drop)])]
         );
         assert_eq!(Rule::CounitUnder.rhs(), Term::nil());
     }

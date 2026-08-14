@@ -2009,8 +2009,10 @@ impl Matcher for Lift {
             let (copied, block) = leading_copy_block(matched);
             if copied > 0
                 && let Some(found) = Lift::candidate(prog, matched, block, &|n| n == copied)
-                && let Ok(speculate) =
-                    Speculate::new(Some(prog), Term::seq(cloned(&found.prefix.spine()[block..])))
+                && let Ok(speculate) = Speculate::new(
+                    Some(prog),
+                    Term::seq(cloned(&found.prefix.spine()[block..])),
+                )
                 && let Some(steps) = speculate.plan(prog, window)
             {
                 return Some(steps);
@@ -2206,11 +2208,7 @@ impl Matcher for BoolResultCopied {
             dir,
             rel: Location::root(at),
         };
-        let unshare = Rule::CopyNat {
-            x: node(),
-            n,
-            m: 1,
-        };
+        let unshare = Rule::CopyNat { x: node(), n, m: 1 };
         let float = Rule::Slide {
             x: Term::Op(Instruction::IsBool),
             framed,
@@ -2218,11 +2216,7 @@ impl Matcher for BoolResultCopied {
             m: 1,
         };
         let fold = Rule::BoolResult { op: op.clone() };
-        let discard = Rule::Annihilate {
-            x: node(),
-            n,
-            m: 1,
-        };
+        let discard = Rule::Annihilate { x: node(), n, m: 1 };
         let put_back = Rule::Slide {
             x: Term::Op(Instruction::Push(Value::Bool(true))),
             framed: Term::frame(Vec::new(), 1, node()),
@@ -4275,7 +4269,10 @@ mod tests {
 
     #[test]
     fn flatten_removes_an_empty_frame_outright() {
-        assert_eq!(fire(&Flatten, &prog(), &[frame(0, vec![])]), Some(Vec::new()));
+        assert_eq!(
+            fire(&Flatten, &prog(), &[frame(0, vec![])]),
+            Some(Vec::new())
+        );
     }
 
     #[test]
@@ -4466,8 +4463,7 @@ mod tests {
         // Two identical blocks compiled to different sentences never share a
         // label, and used to make factoring miss every shared prefix that
         // contained one.
-        let block =
-            |origin: &str| Term::frame(vec![origin.to_string()], 1, op(Instruction::Add));
+        let block = |origin: &str| Term::frame(vec![origin.to_string()], 1, op(Instruction::Add));
         let w = [branch(
             vec![block("#3 a"), op(Instruction::Drop)],
             vec![block("#9 b"), op(Instruction::Not)],

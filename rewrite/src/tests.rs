@@ -123,9 +123,7 @@ fn shape_in(term: &Term) -> Vec<String> {
 
 /// One factor, as the term language spells it.
 fn shape_of(node: &Term) -> String {
-    let inner = |t: &Term| {
-        shape(&t.spine().into_iter().cloned().collect::<Vec<_>>()).join(" ")
-    };
+    let inner = |t: &Term| shape(&t.spine().into_iter().cloned().collect::<Vec<_>>()).join(" ");
     match node {
         Term::Op(inst) => format!("{}", inst),
         Term::Id(k) => id_word(*k),
@@ -246,7 +244,10 @@ fn nested_frames_collapse_and_then_keep_sinking() {
 #[test]
 fn a_wide_window_becomes_a_nest_of_one_value_ones() {
     let got = tree("sentence probe { dip 3 { drop 0 } }", "unary");
-    assert_eq!(shape(&got), vec!["par { par { par { drop } { id } } { id } } { id }"]);
+    assert_eq!(
+        shape(&got),
+        vec!["par { par { par { drop } { id } } { id } } { id }"]
+    );
 }
 
 #[test]
@@ -264,7 +265,11 @@ fn a_dip_stops_at_a_pick_that_reaches_into_it() {
     let got = tree("sentence probe { pick 2 dip 3 { drop 0 } }", DIPS);
     assert_eq!(
         shape(&got),
-        vec!["par { par { copy } { id } swap } { id }", "par { drop } { id 3 }", "swap"]
+        vec![
+            "par { par { copy } { id } swap } { id }",
+            "par { drop } { id 3 }",
+            "swap"
+        ]
     );
 }
 
@@ -325,7 +330,10 @@ fn a_shared_branch_prefix_is_hoisted_under_a_dip() {
 #[test]
 fn factoring_takes_the_whole_shared_run() {
     let got = tree(&arms("drop 0 not push 1", "drop 0 not push 2"), FACTOR);
-    assert_eq!(shape(&got), vec!["copy", "par { drop not } { id }", "branch"]);
+    assert_eq!(
+        shape(&got),
+        vec!["copy", "par { drop not } { id }", "branch"]
+    );
 }
 
 #[test]

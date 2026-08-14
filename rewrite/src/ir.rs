@@ -368,7 +368,10 @@ pub(crate) fn label(library: &Library, target: SentenceIndex) -> String {
 pub(crate) fn child_seqs(node: &mut Term) -> Vec<(Selector, &mut Term)> {
     match node {
         Term::Par { left, right, .. } => {
-            vec![(Selector::Left, &mut **left), (Selector::Right, &mut **right)]
+            vec![
+                (Selector::Left, &mut **left),
+                (Selector::Right, &mut **right),
+            ]
         }
         Term::Branch {
             then_body,

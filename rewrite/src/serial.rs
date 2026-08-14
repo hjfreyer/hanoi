@@ -845,8 +845,7 @@ impl<'a> Parser<'a> {
                         ScriptError::new("an index may not be negative", self.span())
                     })?;
                     self.expect(Tok::Dot, "'.'")?;
-                    let (kind, kind_span) =
-                        self.ident("`then`, `else`, `left` or `right`")?;
+                    let (kind, kind_span) = self.ident("`then`, `else`, `left` or `right`")?;
                     let sel = match kind.as_str() {
                         "then" => Selector::Then,
                         "else" => Selector::Else,
@@ -1551,12 +1550,7 @@ mod tests {
     /// rather than a file that cannot be written.
     #[test]
     fn every_equation_survives_the_round_trip() {
-        let branch = Term::branch(
-            TERM_ORIGIN,
-            op(Instruction::Add),
-            TERM_ORIGIN,
-            Term::nil(),
-        );
+        let branch = Term::branch(TERM_ORIGIN, op(Instruction::Add), TERM_ORIGIN, Term::nil());
         let rules = vec![
             Rule::Collapse {
                 k: 2,

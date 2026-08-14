@@ -1515,14 +1515,12 @@ impl Definitions {
         let sides = left.is_some() || right.is_some();
         let arms = then.is_some() || els.is_some();
         match (sides, arms) {
-            (false, false) => Err(ScriptError::new(
-                "`descend` needs a part to descend into",
-                span,
-            )
-            .with_help(
-                "`descend(left: t, right: t)` for a `par`, \
+            (false, false) => Err(
+                ScriptError::new("`descend` needs a part to descend into", span).with_help(
+                    "`descend(left: t, right: t)` for a `par`, \
                  `descend(then: t, else: t)` for a branch",
-            )),
+                ),
+            ),
             (true, true) => Err(ScriptError::new(
                 "`descend` mixes the sides of a `par` with the arms of a branch",
                 span,
@@ -2180,7 +2178,9 @@ mod tests {
         // and the condition it pops is whatever the stack already holds.
         assert!(compiles("once(introduce { branch { } { } })"));
         assert!(compiles("once(introduce { branch { not } { is_bool } })"));
-        assert!(compiles("once(introduce { par { branch { } { } } { id } })"));
+        assert!(compiles(
+            "once(introduce { par { branch { } { } } { id } })"
+        ));
         assert!(compiles(
             "once(introduce { branch { branch { } { } } { drop } })"
         ));

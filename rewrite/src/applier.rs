@@ -202,10 +202,7 @@ impl Target<'_> {
 }
 
 /// Walks a descent to the spine it names.
-fn locate<'t>(
-    root: &'t mut Vec<Term>,
-    descent: &[(usize, Selector)],
-) -> Result<Target<'t>, Cause> {
+fn locate<'t>(root: &'t mut Vec<Term>, descent: &[(usize, Selector)]) -> Result<Target<'t>, Cause> {
     let Some(((index, sel), rest)) = descent.split_first() else {
         return Ok(Target::Root(root));
     };
@@ -516,7 +513,10 @@ mod tests {
             Location::root(0),
         );
         apply_step(&prog(), &mut tree, &s, 0, true).unwrap();
-        assert_eq!(tree, vec![frame(2, vec![frame(3, vec![op(Instruction::Drop)])])]);
+        assert_eq!(
+            tree,
+            vec![frame(2, vec![frame(3, vec![op(Instruction::Drop)])])]
+        );
     }
 
     #[test]
@@ -795,11 +795,7 @@ mod tests {
                 })
                 .collect();
             script.push(step(
-                Rule::Annihilate {
-                    x: x.clone(),
-                    n,
-                    m,
-                },
+                Rule::Annihilate { x: x.clone(), n, m },
                 Direction::Reverse,
                 Location::root(n * wide),
             ));

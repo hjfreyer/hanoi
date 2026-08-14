@@ -1046,7 +1046,10 @@ mod tests {
             branch(
                 vec![
                     op(Instruction::Not),
-                    frame(1, vec![op(Instruction::Drop), frame(1, vec![frame(1, vec![])])]),
+                    frame(
+                        1,
+                        vec![op(Instruction::Drop), frame(1, vec![frame(1, vec![])])],
+                    ),
                 ],
                 Vec::new(),
             ),
@@ -1306,7 +1309,10 @@ mod tests {
         // The path is the other half of the address, so a miss two levels down
         // has to say which two levels.
         let prog = empty_prog();
-        let tree = vec![branch(vec![frame(1, vec![op(Instruction::Add)])], Vec::new())];
+        let tree = vec![branch(
+            vec![frame(1, vec![op(Instruction::Add)])],
+            Vec::new(),
+        )];
         let tactic = Tactic::IntoNth(
             0,
             Selector::Then,
@@ -1599,7 +1605,10 @@ mod tests {
     #[test]
     fn rollback_keeps_the_work_that_came_before_it() {
         let prog = empty_prog();
-        let tree = vec![frame(1, vec![frame(1, vec![])]), frame(1, vec![frame(1, vec![])])];
+        let tree = vec![
+            frame(1, vec![frame(1, vec![])]),
+            frame(1, vec![frame(1, vec![])]),
+        ];
         // One collapse survives; the failing sequence after it does not.
         let tactic = Tactic::Seq(vec![
             once_of(&["collapse"]),

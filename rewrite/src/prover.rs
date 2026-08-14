@@ -732,7 +732,12 @@ impl Prover<'_> {
         let mut misses = Vec::new();
         let mut closed = 0usize;
         for (sel, strategy, l, r) in parts {
-            let sub = goal.under(0, *sel, (*l).clone().into_spine(), (*r).clone().into_spine());
+            let sub = goal.under(
+                0,
+                *sel,
+                (*l).clone().into_spine(),
+                (*r).clone().into_spine(),
+            );
             match strategy {
                 Some(strategy) => {
                     let solved = self.solve(&sub, strategy)?;
@@ -1160,7 +1165,11 @@ mod tests {
         .err()
         .expect("different widths");
         let why = why(err);
-        assert!(why.contains("`right` sides are not already equal"), "{}", why);
+        assert!(
+            why.contains("`right` sides are not already equal"),
+            "{}",
+            why
+        );
     }
 
     #[test]
