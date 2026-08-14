@@ -74,9 +74,9 @@ impl Value {
     /// `push true equal`, or reads a flag from the instruction that reported
     /// it.
     ///
-    /// It lives here rather than in the VM because `bin/rewrite` folds the
-    /// same operators and has to agree with the interpreter exactly; a second
-    /// copy of the definition would be a silent hazard rather than a
+    /// It lives here rather than in the VM because anything that folds these
+    /// operators statically has to agree with the interpreter exactly; a
+    /// second copy of the definition would be a silent hazard rather than a
     /// duplication, in the same way [`crate::arity::op_arity`] is shared.
     pub fn truthy(&self) -> bool {
         *self != Value::Bool(false)

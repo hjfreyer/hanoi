@@ -1230,10 +1230,10 @@ mod totality_tests {
 
     /// `Instruction::commutative` is measured, not asserted.
     ///
-    /// `bin/rewrite` rewrites `roll 1 ; op` to `op` on the strength of that
-    /// list, so a wrong entry would be a soundness bug in the rewriter rather
-    /// than an inaccuracy in a comment. This runs every candidate on every pair
-    /// of shapes both ways round and holds the list to what it finds.
+    /// Rewriting `roll 1 ; op` to `op` rests on that list, so a wrong entry
+    /// would be a soundness bug in whatever reads it rather than an inaccuracy
+    /// in a comment. This runs every candidate on every pair of shapes both
+    /// ways round and holds the list to what it finds.
     #[test]
     fn the_commutative_instructions_are_exactly_the_ones_the_list_names() {
         for inst in every_binary() {
@@ -1308,10 +1308,10 @@ mod totality_tests {
 
     /// `Instruction::yields_bool` is measured, not asserted.
     ///
-    /// `bin/rewrite` folds `op ; is_bool` to `op ; drop ; push true` on the
-    /// strength of that list. The fact cannot be derived by rewriting — a
-    /// codomain is not something a case split can reach — so this is the only
-    /// thing holding it to the machine.
+    /// Folding `op ; is_bool` to `op ; drop ; push true` rests on that list.
+    /// The fact cannot be derived by rewriting — a codomain is not something a
+    /// case split can reach — so this is the only thing holding it to the
+    /// machine.
     #[test]
     fn the_instructions_that_leave_a_bool_are_exactly_the_ones_the_list_names() {
         for inst in every_computation() {
@@ -2114,7 +2114,7 @@ mod movement_tests {
     /// The two spellings of a copy at depth agree: `pick d` is a copy made
     /// under the frame and rolled up.
     ///
-    /// This was `Rule::PickRoll`, an axiom of the rewriter. It is now the
+    /// This used to be an axiom stated about the instruction set. It is now the
     /// compiler's own definition read at one remove, and the sweep keeps the
     /// two spellings honest about being one thing.
     #[test]
@@ -2135,10 +2135,10 @@ mod movement_tests {
 
     /// `(roll d)^(d+1)` = nothing: a rotation of `d+1` things has order `d+1`.
     ///
-    /// The law that used to be `Rule::RollCycle`, an axiom for every `d`. What
-    /// the rewriter now assumes is the `d = 1` case, `swap ; swap` = nothing,
-    /// and every other depth is a consequence of the expansion — so the sweep
-    /// is what says the consequence really follows.
+    /// This used to be an axiom stated for every `d`. All that needs assuming
+    /// now is the `d = 1` case, `swap ; swap` = nothing, and every other depth
+    /// is a consequence of the expansion — so the sweep is what says the
+    /// consequence really follows.
     #[test]
     fn rolling_the_whole_way_round_is_the_identity() {
         for d in 0..DEEPEST {

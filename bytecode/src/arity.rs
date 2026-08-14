@@ -139,7 +139,7 @@ pub(crate) fn balance_early_returns(
 /// Phase 5, after `check_arities` has settled every inference and verified
 /// every `#[arity]`. This is the one property of an identity that is a fact
 /// about the *statement* rather than about its proof: two programs that leave
-/// the stack differently are not two spellings of one thing, whatever a tactic
+/// the stack differently are not two spellings of one thing, whatever a proof
 /// does to them.
 ///
 /// **Net change, not full arity**, and the distinction is not a loosening for
@@ -148,9 +148,10 @@ pub(crate) fn balance_early_returns(
 /// it, but the left needs a value to look at where the right does not. Every
 /// counit reads this way, and so does every annihilation, which lowers the
 /// input requirement on purpose — dropping `pick 2 ; drop` drops the demand for
-/// three values that only the `pick` made. `--check` in the rewriter allows the
-/// same asymmetry for the same reason (`applier::net`), and refusing it here
-/// would refuse exactly the equations the rewriter is built out of.
+/// three values that only the `pick` made. Anything that checks an equation
+/// step by step has to allow the same asymmetry for the same reason, and
+/// refusing it here would refuse exactly the equations such a thing is built
+/// out of.
 ///
 /// What it does still catch is a claim that leaves a different amount behind,
 /// which no proof could ever discharge.
@@ -230,8 +231,8 @@ fn get_or_infer_arity(
 /// `Dip` — a sentence's declared `#[arity]` may ask for more inputs than it
 /// touches, and a caller cares about what is actually consumed.
 ///
-/// Public for `bin/rewrite`, whose `Call` nodes need their target's arity to
-/// decide whether a dip may move past them.
+/// Public because a caller outside this crate needs a call's arity to decide
+/// whether a dip may move past it.
 pub fn sentence_arity(library: &Library, s_idx: SentenceIndex) -> Option<Arity> {
     let mut memo = HashMap::new();
     let mut in_progress = HashSet::new();
@@ -252,9 +253,9 @@ pub fn sentence_arity(library: &Library, s_idx: SentenceIndex) -> Option<Arity> 
 /// depend on the sentences they call.
 ///
 /// This is the single source of truth for per-instruction stack effects, and it
-/// is deliberately public: `bin/rewrite` needs the same numbers to decide
-/// whether a dip may move past an instruction. A second copy over there is a
-/// silent hazard rather than a duplication — the interchange rule's side
+/// is deliberately public: anything reasoning about whether code may move past
+/// an instruction needs the same numbers. A second copy elsewhere would be a
+/// silent hazard rather than a duplication — an interchange law's side
 /// condition is computed from `m`, so one wrong entry permits an unsound
 /// rewrite with nothing to catch it.
 pub fn op_arity(inst: &Instruction) -> Option<(i64, i64)> {
@@ -302,8 +303,8 @@ pub fn op_arity(inst: &Instruction) -> Option<(i64, i64)> {
 ///
 /// Kept beside [`op_arity`] because the two must agree: a fallible instruction
 /// is exactly one whose output count includes a slot the value does not need.
-/// The VM produces the flag, `assemble` decides whether to drop it, and
-/// `bin/rewrite` folds it — three readers, one table.
+/// The VM produces the flag and `assemble` decides whether to drop it — two
+/// readers, one table.
 pub fn is_fallible(inst: &Instruction) -> bool {
     matches!(
         inst,

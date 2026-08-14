@@ -11,21 +11,24 @@ spec; `vm::totality_tests` is its executable mirror.
 
 ## Why total
 
-The rewriter in `bin/rewrite` proves programs equal by splicing local windows.
-Two programs that compute the same values are still not interchangeable if one
-of them *rejects* an input the other accepts, so as long as ordinary operators
-could fail, every rule had to carry a panic-preservation side condition, and
-those conditions are not window-local. The damage was visible everywhere:
+Reasoning about two programs being interchangeable means reasoning about local
+windows: replace a stretch of one program with an equal stretch, and the whole
+stays equal. Two programs that compute the same values are still not
+interchangeable if one of them *rejects* an input the other accepts, so as long
+as ordinary operators could fail, every such law had to carry a
+panic-preservation side condition — and those conditions are not window-local.
+The damage was visible everywhere:
 
-- `annihilate_drop` fired only on a hand-maintained whitelist of instructions
-  that "cannot panic", so `add; drop` was not `drop; drop`.
-- `fold_const` declined `push 1; push 2; and`, because `push false` is not a
-  panic and the original was.
-- `fold_branch` needed a literal `Bool`, because `push 1; branch` was a panic.
-  It now folds any literal, `push 1; branch` taking the then arm.
-- `rebuild_copy` existed at all in order to launder an opaque value into a
-  syntactically total shape, and even then the *reverse* — hoisting a partial
-  computation out of a single branch arm — stayed out of reach.
+- Cancelling an operator against a following `drop` needed a hand-maintained
+  whitelist of instructions that "cannot panic", so `add; drop` was not
+  `drop; drop`.
+- Constant folding had to decline `push 1; push 2; and`, because `push false`
+  is not a panic and the original was.
+- Folding a branch needed a literal `Bool`, because `push 1; branch` was a
+  panic. Any literal folds now, `push 1; branch` taking the then arm.
+- Hoisting a partial computation out of a single branch arm stayed out of reach
+  entirely, and the workarounds for it existed only to launder an opaque value
+  into a syntactically total shape.
 
 Making the data operations total moves the question. Equivalence is now over
 total functions, which a local window can decide. Whether a program is
@@ -249,34 +252,33 @@ the predicate and the body is a bare `untuple 0`.
 
 ## What the laws buy, and what they cost
 
-The point of all this is which rewrites become sound. The wins:
+The point of all this is which local rewrites become sound. The wins:
 
-- `annihilate_drop` needs no whitelist. Any single-output operator cancels
-  against a following `drop`, becoming drops of its inputs.
-- `fold_const` and `fold_const_unary` are *evaluation*. Folding a literal
-  window is running it, so anything the VM computes they may compute.
-- `fold_branch` folds **any** literal condition, since the direction on junk is
-  defined.
-- `cancel_tuple` is unchanged, and still one-way. `tuple n; untuple n` is the
-  identity; `untuple n; tuple n` is not — it *junk-normalizes*, mapping every
-  non-`n`-tuple to `((), …, ())` rather than panicking. A different function, so
-  still not removable.
+- **Cancelling against a `drop` needs no whitelist.** Any single-output
+  operator cancels against a following `drop`, becoming drops of its inputs.
+- **Constant folding is *evaluation*.** Folding a literal window is running it,
+  so anything the VM computes may be folded.
+- **A branch on any literal folds**, since the direction on junk is defined.
+- **`tuple n; untuple n` is still one-way.** It is the identity; `untuple n;
+  tuple n` is not — it *junk-normalizes*, mapping every non-`n`-tuple to
+  `((), …, ())` rather than panicking. A different function, so still not
+  removable.
 
 And two things that did **not** become free.
 
-### `rebuild_copy`, and what the flag paid for
+### Copying before untupling, and what the flag paid for
 
-The old rule was
+The rule one wants is
 
 ```
 pick 0; untuple n   ==   untuple n; (pick (n-1))^n; dip n { tuple n }
 ```
 
-justified by "both sides panic on exactly the inputs where `x` is not an
-`n`-tuple". With no panic left to agree about, the two sides visibly differ: the
-left keeps `x`, and the right hands back `untuple n; tuple n` of `x`. Sound
-before, unsound after — the rule was *relying* on partiality to hide a
-normalization.
+justified under the old semantics by "both sides panic on exactly the inputs
+where `x` is not an `n`-tuple". With no panic left to agree about, the two sides
+visibly differ: the left keeps `x`, and the right hands back `untuple n;
+tuple n` of `x`. Sound before, unsound after — the rule was *relying* on
+partiality to hide a normalization.
 
 While untupling junk was untagged, nothing recovered `x` from the parts, and the
 rule had to buy the condition back with a `tuple_length; push n; equal` guard.
@@ -339,62 +341,9 @@ What this needs is exactly what this document establishes:
 - `X`'s arity must be **known locally**, which excludes calls — a call's arity
   lives in the library rather than the window.
 
-That is `speculate_branch` in `bin/rewrite`, and
-`the_direct_route_closes_by_speculating` runs the whole derivation the sharing
-problem was stuck on: hoist the arm's `untuple`, `sink` it back onto the check's,
-`dup_natural` merges the two. No reconstruction, no guard, no imaginary values.
-
-## A worked obligation: `emit_does_pre_and_post`
-
-`tests/barista.hana` carries the smallest interesting instance of the judgment
-this document says is missing — *does this program ever compute on junk?* —
-written as a program rather than a claim:
-
-```
-function emit_does_pre_and_post {
-    pick 0
-    jump is_state::check
-    branch { jump emit ; jump emit_postcondition } { drop ; push true }
-}
-```
-
-It should answer `true` on **every** input, and `bin/rewrite` should be able to
-say so by reducing it to `drop ; push true`. It is worth writing down how far
-that gets, because the answer is a measurement of the rewriter rather than of
-the program.
-
-**What the theorem needs.** Not much of the check, and all of the hard part of
-it. Four of `emit`'s five arms answer `((), false)`, which the postcondition
-passes on its own, so they fold by evaluation alone. The *thirsty* arm builds a
-`push_back` event, and `is_event` asks that its payload be a pair of symbols —
-which is exactly what the precondition established two branches earlier and
-nothing in the arm can see. So the proof turns on **sharing**: the two
-`is_symbol` computations, one in the check and one inside the postcondition,
-have to become one.
-
-**The derivation, as far as it is written.** Each step is an existing rule and
-`--check` accepts every one:
-
-1. `speculate { jump emit jump emit_postcondition }` hoists the whole then arm
-   out of the branch, which is sound precisely because both are total.
-   What is left is `check ; dip 1 { … } ; branch { dip 1 { drop } } { … }`.
-2. `share { untuple 3 }` merges the check's destructuring with `emit`'s, so
-   both read one set of parts.
-3. `introduce { dip 2 { is_symbol } }` in the else arm, then `inv(unfactor)`,
-   lifts both `is_symbol`s out of the check's branch — giving the shared prefix
-   `X = untuple 3 ; dip 3 { is_symbol } ; dip 2 { is_symbol }` that one
-   `share { X }` would eliminate against the emit side.
-4. The two booleans then have to be case-split where they sit, which is under
-   two and three values respectively. That is what the movement laws are for — see
-   "reaching a value below the top" in `docs/tactics.md`. They are equations
-   here without matchers, so today this step is a script rather than a tactic.
-
-**What is left.** The emit side has to be normalized to open with the same `X`,
-which means reducing `is_event`'s union check on a constructed event — the
-`tuple n ; pick 0 ; untuple n` shape yields to
-`inv(share { push … tuple 2 })`, `float` and `cancel_tuple` — and then lifting
-its `is_symbol`s out through the branch levels the way step 3 does. That is
-mechanical and long, and nothing in it is known to be blocked.
+Under the old semantics this rule was unsound for precisely the `untuple` case
+that makes it worth having. Totality is what makes it statable at all: no
+reconstruction, no guard, no imaginary values.
 
 ## What is not covered
 
@@ -402,3 +351,14 @@ mechanical and long, and nothing in it is known to be blocked.
   the question this document makes askable, and nothing here answers it. The
   previous Z3 typechecker modelled the old partial semantics and has been
   removed; anything that replaces it should be generated from the table above.
+
+  `emit_does_pre_and_post` in `tests/barista.hana` is the smallest interesting
+  instance: a program that should answer `true` on every input, where seeing
+  why requires noticing that the precondition two branches earlier already
+  established what the postcondition goes on to ask. Nothing in the workspace
+  can say so today.
+
+- **A way to discharge an `identity`.** The claim is stated and its two sides
+  are compiled, but the equational rewriter that proved one has been removed
+  pending a reboot. Whatever replaces it inherits the laws this document makes
+  sound.

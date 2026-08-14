@@ -299,13 +299,14 @@ was never a rule that the two vocabularies correspond one to one.
 
 A depth on an instruction is a **pointer into the stack**. A frame's width was
 one too. Every law about either is an infinite family indexed by that pointer,
-with arithmetic in its side conditions, and five of the rewriter's axioms
-existed only to say things about `pick d` and `roll d` that `copy`, `swap` and
-a one-deep `dip` say in a single equation each. `pick_roll` was the definition
-the compiler now performs; `roll_cycle` became `swap ; swap` = nothing;
-`collapse` stopped being how a term arrives and became a rewrite that a proof
-asks for. A frame's width is now a *shape* — how many frames — which no
-analysis can get wrong and no equation does arithmetic on.
+with arithmetic in its side conditions, and an equational account of the ISA
+needed five separate axioms just to say things about `pick d` and `roll d` that
+`copy`, `swap` and a one-deep `dip` say in a single equation each — the
+definition of `pick d` in terms of `roll` is now something the compiler
+performs rather than something a law has to state, and `roll 1 ; roll 1` =
+nothing is just `swap ; swap` = nothing. A frame's width is now a *shape* — how
+many frames — which no analysis can get wrong and no equation does arithmetic
+on.
 
 **This document used to argue the other way**, and the argument is worth
 recording because half of it was right:
@@ -326,13 +327,11 @@ is `pick 5`, and the shared blocks mean the whole program pays for about five
 chains rather than one per site.
 
 What the argument got right is that the expansion **creates frames**, and a
-frame is what the rewriter sees through worst — it is the reason `unframe` had
-to be assumed. A `pick 2` that was one visible node is now a `swap` behind two
-frames, and reaching it means opening them first. Two places in the corpus paid
-for that directly: an aimed `annihilate` in `discarded_work_on_copies`, because
-an unaimed one now reads a wider window than it used to, and the positions in
-the hand-written derivations that `speculate` and `bool_result_copied` stand
-for, which count nodes and so count the expansion.
+frame is what any analysis reading a local window sees through worst. A
+`pick 2` that was one visible node is now a `swap` behind two frames, and
+reaching it means opening them first. That cost is paid by whatever wants to
+look inside — it does not go away, it moves from the instruction set into the
+tree.
 
 ## Where `?` fits
 
@@ -393,10 +392,10 @@ Phase 4 needs no special case at all, which is the interesting fact: the two
 sides compile exactly as any named sentence does, inline blocks and all.
 
 `IdentityDecl` is the one AST node that carries a `Span`, and it carries it as
-*data*: an identity is proved in the file beside the one that stated it, so
-which file that was has to survive into the `Library`. `SourceMap::path` is the
-other half. Everything after parsing still reports errors against the module
-tree.
+*data*: which file stated an identity has to survive into the `Library`, since
+a tool that works on identities addresses them per file rather than per module.
+`SourceMap::path` is the other half. Everything after parsing still reports
+errors against the module tree.
 
 ## Where `use` fits
 

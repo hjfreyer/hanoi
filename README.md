@@ -21,8 +21,7 @@ Hanoi is a stack-oriented, VM-executed language designed to explore static analy
 - **Static Arity Verification**: An arity checker runs before execution to ensure that stack push/pop operations match function signatures, avoiding runtime stack underflows.
 - **No Recursion**: A sentence may not reach itself, by any route, and the compiler refuses one that does. Arity inference is what enforces it — a cycle is where inference cannot terminate — so every sentence has an inferred arity and a finite expansion, and a loop is written as the steps it takes. See [the reference](docs/hana.md#recursion-is-forbidden).
 - **Namespacing & Modularity**: Hierarchical module declarations (`mod name { ... }` or `mod name;`) with file-import support, relative/absolute path routing, and name visibility exports.
-- **Stated Identities & Out-of-Line Proofs**: `identity A = B;` states that two programs are interchangeable; the tactic that proves it lives in the `.hant` beside the `.hana`, and `bin/prove` checks that every stated identity has a proof that discharges it. See [docs/identities.md](docs/identities.md).
-- **Portable Derivations**: A proof's derivation — which equation, which arguments, which direction, which place, step by step — has a text format, and `bin/replay` checks a file of them against the corpus with no search involved. Finding a derivation and checking one are different jobs, so anything that can write the format can be checked by one small tool, whatever language it is written in. See [docs/derivations.md](docs/derivations.md).
+- **Stated Identities** *(claims only — prover temporarily removed)*: `identity A = B;` states that two programs are interchangeable. The claim is parsed, namespaced, and held to the one property that is a fact about the *statement* — both sides must leave the stack the same way — but the equational rewriter that discharged it has been removed pending a reboot.
 
 ---
 
@@ -90,28 +89,21 @@ sentence test_type_and_enum {
 Each `type`/`enum` declaration expands into a module with a `check` sentence (`Name::check`) that consumes a value and pushes a `Bool`, so it can be used directly as a `#[precondition(...)]` or `#[postcondition(...)]`. See [docs/typecheck.md](docs/typecheck.md) for the verification model design (currently unimplemented) and [docs/hana.md](docs/hana.md) for the complete `type`/`enum` grammar.
 
 ### Identities
-A claim that two programs are interchangeable, stated in the source and proved
-out of line:
+A claim that two programs are interchangeable, stated in the source:
 
 ```hana
 // identities.hana
 identity testing_a_test { is_bool is_bool } = { drop 0 push true };
 ```
 
-```
-// identities.hant
-proof testing_a_test = cleanup;
-```
+An identity is a claim rather than a program: it takes no `export` or `test`
+marker and no contract annotation, and its two sides are compiled and named
+`testing_a_test::lhs` and `::rhs` so that something can address them. The
+compiler checks that the two sides leave the stack the same way, which is the
+one property of the claim that holds however it might be proved.
 
-`./run_proofs.sh` checks every one. The proof is a tactic rather than part of
-the program, because it depends on the rewriter's rule set and changes when that
-does, while the claim it establishes does not. See
-[docs/identities.md](docs/identities.md).
-
-What the proof leaves behind is a derivation — one equation per step, each with
-its arguments and the place it applies — and that has a file format of its own,
-so a proof can be found by something other than a tactic and still be checked by
-one tool. See [docs/derivations.md](docs/derivations.md).
+Discharging the claim is out of scope for now — the equational rewriter that
+did it has been removed, and a stated identity is currently unproved.
 
 ---
 
@@ -136,10 +128,6 @@ The Hanoi codebase is structured as a cargo workspace with several key packages:
 - **[bytecode](bytecode)**: The compiler frontend and validation pipeline.
   - [bytecode/src/assembly.rs](bytecode/src/assembly.rs): Parser and assembler that turns `.hana` source code into VM bytecode.
   - [bytecode/src/arity.rs](bytecode/src/arity.rs): Static arity checker for validating stack depths.
-- **[rewrite](rewrite)**: The equational rewriter, and the two tools built on it.
-  - `bin/rewrite`: a debugging aid — takes one sentence and shows what a tactic does to it.
-  - `bin/prove`: a gate — takes a corpus and checks that every stated identity has a proof.
-  - `bin/replay`: the same gate with the search taken away — takes derivations in the portable format and checks that they discharge what they name.
 - **[vm](vm)**: The virtual machine execution engine.
   - [vm/src/lib.rs](vm/src/lib.rs): Core interpreter, instruction dispatch loop, and stack representation.
   - [vm/src/runtime.rs](vm/src/runtime.rs): Asynchronous CSP coordinator that drives state machine step cycles.
@@ -173,11 +161,6 @@ Use the helper shell scripts at the project root to execute test suites:
   ```bash
   ./run_tests.sh
   ```
-- **Check every stated identity against its proof**, and then replay each
-  derivation through the portable format with the search taken away:
-  ```bash
-  ./run_proofs.sh
-  ```
 
 ---
 
@@ -188,6 +171,4 @@ Use the helper shell scripts at the project root to execute test suites:
 - [docs/typecheck.md](docs/typecheck.md): Detailed SMT verification and symbolic execution design for the `typecheck` tool (currently removed from the codebase; kept as a design reference).
 - [docs/machines.md](docs/machines.md): Specification of Hanoi's Communicating Sequential Processes (CSP) state machine semantics.
 - [docs/compilation.md](docs/compilation.md): The compilation pipeline — the sugar and core ASTs, and what each phase from tokens to bytecode may assume.
-- [docs/tactics.md](docs/tactics.md): The tactic language the `rewrite` crate uses to inline and rewrite compiled bytecode — the rule set, the combinators, and the laws they obey.
-- [docs/identities.md](docs/identities.md): Stating an identity in a `.hana`, proving it in the `.hant` beside it, and what `bin/prove` checks.
-- [docs/derivations.md](docs/derivations.md): The text format a rewrite script is written in, and what `bin/replay` checks — the interface a proof producer in any language writes to.
+- [docs/totality.md](docs/totality.md): Why every instruction answers on every input, and what that buys.

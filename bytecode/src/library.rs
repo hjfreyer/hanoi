@@ -20,25 +20,23 @@ pub struct IdentityIndex(usize);
 /// states it.
 ///
 /// The two sides are ordinary sentences in the library rather than trees in a
-/// side table, and that is the load-bearing choice here. When an identity
-/// becomes something a derivation may cite, the applier will regenerate both
-/// sides from the library on every application — exactly as it already
-/// regenerates an unfolded body — so no copy of a program ever travels inside a
-/// script, and a script written against a library that has since changed fails
-/// at the step that stopped fitting rather than rewriting by a stale claim.
+/// side table, and that is the load-bearing choice here: a tool that cites an
+/// identity regenerates both sides from the library rather than carrying a copy
+/// of the programs around, so nothing it wrote down can go stale silently
+/// against a library that has since changed.
 ///
-/// Nothing here says whether the claim is *true*. That is
-/// [`bin/prove`](../../rewrite)'s job, and it deliberately lives outside the
-/// compiler: a proof depends on the rewriter's rule set, which is not part of
-/// the language.
+/// Nothing here says whether the claim is *true*, and nothing in the workspace
+/// does today — the equational rewriter that discharged one has been removed
+/// pending a reboot. Deciding it belongs outside the compiler in any case: a
+/// proof depends on a rule set, which is not part of the language.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Identity {
     /// Fully qualified, e.g. `identities::a_value_tested_twice`.
     pub name: String,
     pub lhs: SentenceIndex,
     pub rhs: SentenceIndex,
-    /// Where the name was written. `span.file` is what pairs the identity with
-    /// the `.hant` that must prove it.
+    /// Where the name was written, which is what lets a tool address an
+    /// identity per file rather than per module.
     pub span: Span,
 }
 
