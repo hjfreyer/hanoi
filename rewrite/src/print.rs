@@ -232,10 +232,7 @@ fn render_seq(
         let gutter = format!("{}{}", pos_cell(show_pos, Some(index)), gutter);
         let pad = "  ".repeat(indent);
 
-        // **Padding is elided.** What `par { id k } { X }` says is the depth
-        // the stack is at, and that is the column on the left — printing it as
-        // structure would nest every second line for no reading.
-        match node.atom() {
+        match node {
             Term::Op(inst) => out.push(format!("{} │ {}{}", gutter, pad, inst)),
             Term::Id(k) => out.push(format!("{} │ {}{}", gutter, pad, id_word(*k))),
             Term::Call(target) => out.push(format!(
@@ -262,6 +259,49 @@ fn render_seq(
                     show_origins,
                     out,
                 );
+            }
+            // Padding — `par { id k } { X }` — is the mirror of a frame: an
+            // identity *underneath* rather than on top, widening a factor to
+            // the stack it stands on. It is part of the term the rules match
+            // against, so it is written rather than elided; but it is written
+            // the way a frame is, with the identity on the brace line instead
+            // of opened up, and a factor that is one line stays one line.
+            Term::Par { .. } if node.as_padding().is_some() => {
+                let (k, inner) = node.as_padding().expect("guarded above");
+                match leaf_word(prog, inner) {
+                    Some(word) => out.push(format!(
+                        "{} │ {}par {{ {} }} {{ {} }}",
+                        gutter,
+                        pad,
+                        id_word(k),
+                        word
+                    )),
+                    None => {
+                        out.push(format!("{} │ {}par {{ {} }} {{", gutter, pad, id_word(k)));
+                        // The padded factor runs on the top of the stack, above
+                        // the `k` values the identity carries past it — so it is
+                        // shown at its own entry depth, as any `par`'s right-hand
+                        // side is.
+                        let held = term_arity(prog, inner).map(|(n, _)| n).unwrap_or(0);
+                        let upper = stack.as_ref().and_then(|s| {
+                            let held = usize::try_from(held).ok()?;
+                            (held <= s.len()).then(|| s[s.len() - held..].to_vec())
+                        });
+                        render_seq(
+                            prog,
+                            std::slice::from_ref(inner),
+                            indent + 1,
+                            Some(held),
+                            relative,
+                            upper,
+                            view.as_deref_mut(),
+                            show_pos,
+                            show_origins,
+                            out,
+                        );
+                        out.push(format!("{}{} │ {}}}", close(&view), blank, pad));
+                    }
+                }
             }
             Term::Par {
                 origins,
@@ -394,6 +434,18 @@ fn render_seq(
         if let Some(v) = view.as_deref_mut() {
             stack = stack::step(prog, stack, node, v.fresh);
         }
+    }
+}
+
+/// A factor that fits on one line, as it is written there. `None` for the ones
+/// that open a brace, which have to be rendered into the listing rather than
+/// into a string.
+fn leaf_word(prog: &Program, node: &Term) -> Option<String> {
+    match node {
+        Term::Op(inst) => Some(format!("{}", inst)),
+        Term::Id(k) => Some(id_word(*k)),
+        Term::Call(target) => Some(format!("jump → {}", prog.label(*target))),
+        _ => None,
     }
 }
 

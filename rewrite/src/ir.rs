@@ -576,9 +576,14 @@ fn sketch_side(term: &Term, depth: usize) -> String {
 }
 
 fn sketch_node(node: &Term, depth: usize) -> String {
-    // Padding is elided: what it says is the stack depth, which every listing
-    // that shows a sketch shows in its own column.
-    match node.atom() {
+    // Padding is shown — a rule matched the term including it, and a sketch is
+    // how a rewrite is recognized — but as a wrapper rather than as a level.
+    // Spending the depth budget on an identity would turn every atom into
+    // `par { … } { … }`, which names nothing.
+    if let Some((k, inner)) = node.as_padding() {
+        return format!("par {{ {} }} {{ {} }}", id_word(k), sketch_node(inner, depth));
+    }
+    match node {
         Term::Op(inst) => format!("{}", inst),
         Term::Id(k) => id_word(*k),
         Term::Call(target) => format!("jump → #{}", usize::from(*target)),
