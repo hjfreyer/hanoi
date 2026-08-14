@@ -43,7 +43,8 @@ use bytecode::{Instruction, Value};
 
 use crate::arity::{full_arity, term_arity};
 use crate::ir::{
-    Selector, Term, cloned, frame_depth, same_effect, same_effect_seq, with_frame_depth,
+    Selector, Term, cloned, frame_depth, same_effect, same_effect_refs, same_effect_seq,
+    with_frame_depth,
 };
 use crate::location::Location;
 use crate::program::Program;
@@ -72,7 +73,7 @@ pub(crate) trait Matcher: Sync + std::fmt::Debug {
     /// Every step returned must be one the applier will accept: a matcher
     /// checks its own side conditions rather than proposing something that
     /// fails. An empty vector is not a match — return `None`.
-    fn plan(&self, prog: &Program, window: &[Term]) -> Option<Vec<PlannedStep>>;
+    fn plan(&self, prog: &Program, window: &[&Term]) -> Option<Vec<PlannedStep>>;
 
     /// The same equation, read the other way: what `inv(...)` resolves to.
     ///
@@ -336,7 +337,7 @@ impl Matcher for Unfold {
                 .to_string(),
         )
     }
-    fn plan(&self, _prog: &Program, window: &[Term]) -> Option<Vec<PlannedStep>> {
+    fn plan(&self, _prog: &Program, window: &[&Term]) -> Option<Vec<PlannedStep>> {
         // A plain jump is the call itself; a call that hides values is
         // `par { jump S } { id k }`, and the step reaches it through the left.
         let (target, rel) = match &window[0] {
@@ -379,7 +380,7 @@ impl Matcher for Collapse {
     fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
         Ok(Box::new(Expand))
     }
-    fn plan(&self, prog: &Program, window: &[Term]) -> Option<Vec<PlannedStep>> {
+    fn plan(&self, prog: &Program, window: &[&Term]) -> Option<Vec<PlannedStep>> {
         let (k, outer, body) = window[0].as_frame()?;
         let [inner_frame] = body.spine()[..] else {
             return None;
@@ -422,7 +423,7 @@ impl Matcher for Expand {
     fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
         Ok(Box::new(Collapse))
     }
-    fn plan(&self, prog: &Program, window: &[Term]) -> Option<Vec<PlannedStep>> {
+    fn plan(&self, prog: &Program, window: &[&Term]) -> Option<Vec<PlannedStep>> {
         let (k, origins, body) = window[0].as_frame()?;
         // `id 0` passes nothing through and `id` is already unary.
         if k < 2 {
@@ -465,7 +466,7 @@ impl Matcher for Flatten {
     fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
         Ok(Box::new(InvFlatten))
     }
-    fn plan(&self, prog: &Program, window: &[Term]) -> Option<Vec<PlannedStep>> {
+    fn plan(&self, prog: &Program, window: &[&Term]) -> Option<Vec<PlannedStep>> {
         let (0, origins, body) = window[0].as_frame()? else {
             return None;
         };
@@ -505,11 +506,11 @@ impl Matcher for InvFlatten {
     fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
         Ok(Box::new(Flatten))
     }
-    fn plan(&self, prog: &Program, window: &[Term]) -> Option<Vec<PlannedStep>> {
+    fn plan(&self, prog: &Program, window: &[&Term]) -> Option<Vec<PlannedStep>> {
         at_window(
             prog,
             Rule::ElimPar0 {
-                a: Term::seq(window.to_vec()),
+                a: Term::seq(cloned(window)),
                 origins: Vec::new(),
             },
             Direction::Reverse,
@@ -533,7 +534,7 @@ impl Matcher for Fuse {
     fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
         Ok(Box::new(InvFuse))
     }
-    fn plan(&self, prog: &Program, window: &[Term]) -> Option<Vec<PlannedStep>> {
+    fn plan(&self, prog: &Program, window: &[&Term]) -> Option<Vec<PlannedStep>> {
         let [a, b] = window else { return None };
         let (ka, oa, ba) = a.as_frame()?;
         let (kb, ob, bb) = b.as_frame()?;
@@ -579,7 +580,7 @@ impl Matcher for InvFuse {
     fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
         Ok(Box::new(Fuse))
     }
-    fn plan(&self, prog: &Program, window: &[Term]) -> Option<Vec<PlannedStep>> {
+    fn plan(&self, prog: &Program, window: &[&Term]) -> Option<Vec<PlannedStep>> {
         let (k, origins, body) = window[0].as_frame()?;
         let factors = body.spine();
         // One factor either side, or the split says nothing: an empty frame
@@ -625,7 +626,7 @@ impl Matcher for Sink {
     fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
         Ok(Box::new(Float))
     }
-    fn plan(&self, prog: &Program, window: &[Term]) -> Option<Vec<PlannedStep>> {
+    fn plan(&self, prog: &Program, window: &[&Term]) -> Option<Vec<PlannedStep>> {
         let [x, framed] = window else { return None };
         // The equation's own arithmetic checks `k >= m`; all this has to do is
         // supply the arity it claims.
@@ -633,8 +634,8 @@ impl Matcher for Sink {
         at_window(
             prog,
             Rule::Interchange {
-                x: x.clone(),
-                framed: framed.clone(),
+                x: (*x).clone(),
+                framed: (*framed).clone(),
                 n,
                 m,
             },
@@ -669,7 +670,7 @@ impl Matcher for Float {
     fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
         Ok(Box::new(Sink))
     }
-    fn plan(&self, prog: &Program, window: &[Term]) -> Option<Vec<PlannedStep>> {
+    fn plan(&self, prog: &Program, window: &[&Term]) -> Option<Vec<PlannedStep>> {
         let [framed, x] = window else { return None };
         let j = frame_depth(framed)? as i64;
         let (n, m) = term_arity(prog, x)?;
@@ -682,7 +683,7 @@ impl Matcher for Float {
         at_window(
             prog,
             Rule::Interchange {
-                x: x.clone(),
+                x: (*x).clone(),
                 framed: with_frame_depth(framed, k)?,
                 n,
                 m,
@@ -732,7 +733,7 @@ impl Matcher for Factor {
                 .to_string(),
         )
     }
-    fn plan(&self, prog: &Program, window: &[Term]) -> Option<Vec<PlannedStep>> {
+    fn plan(&self, prog: &Program, window: &[&Term]) -> Option<Vec<PlannedStep>> {
         let (then_origin, then_body, else_origin, else_body) = window[0].as_branch()?;
         let (then_arm, else_arm) = (then_body.spine(), else_body.spine());
 
@@ -814,7 +815,7 @@ impl Matcher for Unfactor {
     fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
         Ok(Box::new(InvHoist))
     }
-    fn plan(&self, prog: &Program, window: &[Term]) -> Option<Vec<PlannedStep>> {
+    fn plan(&self, prog: &Program, window: &[&Term]) -> Option<Vec<PlannedStep>> {
         let [framed, branch] = window else {
             return None;
         };
@@ -875,7 +876,7 @@ impl Matcher for InvHoist {
     fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
         Ok(Box::new(Unfactor))
     }
-    fn plan(&self, prog: &Program, window: &[Term]) -> Option<Vec<PlannedStep>> {
+    fn plan(&self, prog: &Program, window: &[&Term]) -> Option<Vec<PlannedStep>> {
         let (then_origin, then_body, else_origin, else_body) = window[0].as_branch()?;
         let (then_arm, else_arm) = (then_body.spine(), else_body.spine());
         let (Some(head), Some(other)) = (then_arm.first(), else_arm.first()) else {
@@ -922,7 +923,7 @@ impl Matcher for Distribute {
     fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
         Ok(Box::new(InvDistribute))
     }
-    fn plan(&self, prog: &Program, window: &[Term]) -> Option<Vec<PlannedStep>> {
+    fn plan(&self, prog: &Program, window: &[&Term]) -> Option<Vec<PlannedStep>> {
         let [branch, next] = window else { return None };
         let (then_origin, then_body, else_origin, else_body) = branch.as_branch()?;
         at_window(
@@ -930,7 +931,7 @@ impl Matcher for Distribute {
             Rule::Distribute {
                 then_arm: then_body.clone(),
                 else_arm: else_body.clone(),
-                suffix: next.clone(),
+                suffix: (*next).clone(),
                 then_origin: then_origin.to_string(),
                 else_origin: else_origin.to_string(),
             },
@@ -963,7 +964,7 @@ impl Matcher for InvDistribute {
     fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
         Ok(Box::new(Distribute))
     }
-    fn plan(&self, prog: &Program, window: &[Term]) -> Option<Vec<PlannedStep>> {
+    fn plan(&self, prog: &Program, window: &[&Term]) -> Option<Vec<PlannedStep>> {
         let (then_origin, then_body, else_origin, else_body) = window[0].as_branch()?;
         let (then_arm, else_arm) = (then_body.spine(), else_body.spine());
         let shared = then_arm
@@ -1015,7 +1016,7 @@ impl Matcher for FoldBranch {
                 .to_string(),
         )
     }
-    fn plan(&self, prog: &Program, window: &[Term]) -> Option<Vec<PlannedStep>> {
+    fn plan(&self, prog: &Program, window: &[&Term]) -> Option<Vec<PlannedStep>> {
         let [Term::Op(Instruction::Push(c)), branch] = window else {
             return None;
         };
@@ -1062,7 +1063,7 @@ impl Matcher for EvalBinary {
                 .to_string(),
         )
     }
-    fn plan(&self, prog: &Program, window: &[Term]) -> Option<Vec<PlannedStep>> {
+    fn plan(&self, prog: &Program, window: &[&Term]) -> Option<Vec<PlannedStep>> {
         let [
             Term::Op(Instruction::Push(a)),
             Term::Op(Instruction::Push(b)),
@@ -1109,7 +1110,7 @@ impl Matcher for EvalNullary {
                 .to_string(),
         )
     }
-    fn plan(&self, prog: &Program, window: &[Term]) -> Option<Vec<PlannedStep>> {
+    fn plan(&self, prog: &Program, window: &[&Term]) -> Option<Vec<PlannedStep>> {
         let [Term::Op(inst)] = window else {
             return None;
         };
@@ -1144,7 +1145,7 @@ impl Matcher for EvalUnary {
                 .to_string(),
         )
     }
-    fn plan(&self, prog: &Program, window: &[Term]) -> Option<Vec<PlannedStep>> {
+    fn plan(&self, prog: &Program, window: &[&Term]) -> Option<Vec<PlannedStep>> {
         let [Term::Op(Instruction::Push(a)), Term::Op(inst)] = window else {
             return None;
         };
@@ -1184,7 +1185,7 @@ impl Matcher for Annihilate {
                 .to_string(),
         )
     }
-    fn plan(&self, prog: &Program, window: &[Term]) -> Option<Vec<PlannedStep>> {
+    fn plan(&self, prog: &Program, window: &[&Term]) -> Option<Vec<PlannedStep>> {
         annihilate_with(prog, window, 1)
     }
 }
@@ -1215,7 +1216,7 @@ impl Matcher for AnnihilateFlagged {
                 .to_string(),
         )
     }
-    fn plan(&self, prog: &Program, window: &[Term]) -> Option<Vec<PlannedStep>> {
+    fn plan(&self, prog: &Program, window: &[&Term]) -> Option<Vec<PlannedStep>> {
         annihilate_with(prog, window, 2)
     }
 }
@@ -1257,16 +1258,16 @@ impl Matcher for AnnihilateVoid {
                 .to_string(),
         )
     }
-    fn plan(&self, prog: &Program, window: &[Term]) -> Option<Vec<PlannedStep>> {
+    fn plan(&self, prog: &Program, window: &[&Term]) -> Option<Vec<PlannedStep>> {
         annihilate_with(prog, window, 0)
     }
 }
 
 /// The shared body of the annihilation matchers, which differ only in how many
 /// outputs they read.
-fn annihilate_with(prog: &Program, window: &[Term], m: usize) -> Option<Vec<PlannedStep>> {
+fn annihilate_with(prog: &Program, window: &[&Term], m: usize) -> Option<Vec<PlannedStep>> {
     let (x, drops) = window.split_first()?;
-    if drops.len() != m || !drops.iter().all(is_drop) {
+    if drops.len() != m || !drops.iter().all(|d| is_drop(d)) {
         return None;
     }
     let (n, actual) = term_arity(prog, x)?;
@@ -1281,7 +1282,7 @@ fn annihilate_with(prog: &Program, window: &[Term], m: usize) -> Option<Vec<Plan
     at_window(
         prog,
         Rule::Annihilate {
-            x: x.clone(),
+            x: (**x).clone(),
             n: usize::try_from(n).ok()?,
             m,
         },
@@ -1364,8 +1365,8 @@ impl Matcher for Introduce {
             m: self.m,
         }))
     }
-    fn plan(&self, prog: &Program, window: &[Term]) -> Option<Vec<PlannedStep>> {
-        if !window.iter().all(is_drop) {
+    fn plan(&self, prog: &Program, window: &[&Term]) -> Option<Vec<PlannedStep>> {
+        if !window.iter().all(|d| is_drop(d)) {
             return None;
         }
         at_window(
@@ -1413,9 +1414,11 @@ impl Matcher for InvIntroduce {
             m: self.m,
         }))
     }
-    fn plan(&self, prog: &Program, window: &[Term]) -> Option<Vec<PlannedStep>> {
+    fn plan(&self, prog: &Program, window: &[&Term]) -> Option<Vec<PlannedStep>> {
         let (term, drops) = window.split_at(self.x.width());
-        if !same_effect_seq(term, &self.x.clone().into_spine()) || !drops.iter().all(is_drop) {
+        if !same_effect_refs(term, &self.x.clone().into_spine())
+            || !drops.iter().all(|d| is_drop(d))
+        {
             return None;
         }
         at_window(
@@ -1486,12 +1489,12 @@ impl Matcher for Share {
             m: self.m,
         }))
     }
-    fn plan(&self, prog: &Program, window: &[Term]) -> Option<Vec<PlannedStep>> {
+    fn plan(&self, prog: &Program, window: &[&Term]) -> Option<Vec<PlannedStep>> {
         // The equation is closed over the term, so there is one shape to look
         // for and the applier will compare against it anyway. All this decides
         // is whether to propose.
         let rule = self.rule();
-        if !same_effect_seq(window, &rule.lhs().into_spine()) {
+        if !same_effect_refs(window, &rule.lhs().into_spine()) {
             return None;
         }
         at_window(prog, rule, Direction::Forward)
@@ -1531,13 +1534,13 @@ impl Matcher for InvShare {
             m: self.m,
         }))
     }
-    fn plan(&self, prog: &Program, window: &[Term]) -> Option<Vec<PlannedStep>> {
+    fn plan(&self, prog: &Program, window: &[&Term]) -> Option<Vec<PlannedStep>> {
         let rule = Rule::CopyNat {
             x: self.x.clone(),
             n: self.n,
             m: self.m,
         };
-        if !same_effect_seq(window, &rule.rhs().into_spine()) {
+        if !same_effect_refs(window, &rule.rhs().into_spine()) {
             return None;
         }
         at_window(prog, rule, Direction::Reverse)
@@ -1612,7 +1615,7 @@ impl Matcher for Speculate {
                 .to_string(),
         )
     }
-    fn plan(&self, prog: &Program, window: &[Term]) -> Option<Vec<PlannedStep>> {
+    fn plan(&self, prog: &Program, window: &[&Term]) -> Option<Vec<PlannedStep>> {
         let (then_origin, then_arm, else_origin, else_arm) = window[0].as_branch()?;
         let (then_body, else_body) = (then_arm.spine(), else_arm.spine());
 
@@ -1725,13 +1728,13 @@ impl Matcher for Speculate {
 /// `copy` or a `swap`. A `par` around anything else is work, and a `branch` is
 /// trivial only where it stands rather than wherever it is buried.
 fn is_trivial(node: &Term) -> bool {
-    matches!(node, Term::Branch { .. }) || is_movement(node)
+    matches!(node.atom(), Term::Branch { .. }) || is_movement(node)
 }
 
 /// A factor that only moves values about: `drop`, `copy`, `swap`, the identity,
 /// and the `par`s that a reach at depth is written as.
 fn is_movement(node: &Term) -> bool {
-    match node {
+    match node.atom() {
         Term::Op(Instruction::Drop) | Term::Op(Instruction::Copy) | Term::Op(Instruction::Swap) => {
             true
         }
@@ -1815,7 +1818,7 @@ impl Lift {
     ) -> Option<Candidate> {
         let limit = arm
             .iter()
-            .position(|node| matches!(node, Term::Branch { .. }))
+            .position(|node| matches!(node.atom(), Term::Branch { .. }))
             .unwrap_or(arm.len());
         for len in (copies + 1..=limit).rev() {
             let prefix = &arm[..len];
@@ -1932,7 +1935,7 @@ impl Matcher for Lift {
              forwards takes the conjured copy of the computation out again"
             .to_string())
     }
-    fn plan(&self, prog: &Program, window: &[Term]) -> Option<Vec<PlannedStep>> {
+    fn plan(&self, prog: &Program, window: &[&Term]) -> Option<Vec<PlannedStep>> {
         let branch = &window[0];
         let (_, then_body, _, else_body) = branch.as_branch()?;
         let (then_arm, else_arm) = (then_body.spine(), else_body.spine());
@@ -2062,7 +2065,7 @@ impl Matcher for BoolResult {
     fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
         Ok(Box::new(InvBoolResult))
     }
-    fn plan(&self, prog: &Program, window: &[Term]) -> Option<Vec<PlannedStep>> {
+    fn plan(&self, prog: &Program, window: &[&Term]) -> Option<Vec<PlannedStep>> {
         let [Term::Op(op), Term::Op(Instruction::IsBool)] = window else {
             return None;
         };
@@ -2132,7 +2135,7 @@ impl Matcher for BoolResultCopied {
                 .to_string(),
         )
     }
-    fn plan(&self, prog: &Program, window: &[Term]) -> Option<Vec<PlannedStep>> {
+    fn plan(&self, prog: &Program, window: &[&Term]) -> Option<Vec<PlannedStep>> {
         let [
             Term::Op(op),
             Term::Op(Instruction::Copy),
@@ -2236,7 +2239,7 @@ impl Matcher for InvBoolResult {
     fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
         Ok(Box::new(BoolResult))
     }
-    fn plan(&self, prog: &Program, window: &[Term]) -> Option<Vec<PlannedStep>> {
+    fn plan(&self, prog: &Program, window: &[&Term]) -> Option<Vec<PlannedStep>> {
         let [
             Term::Op(op),
             Term::Op(Instruction::Drop),
@@ -2274,7 +2277,7 @@ pub(crate) struct Counit;
 /// `pick d` needs in a term that never mentions one. The answer is the number
 /// of nodes matched as well as the depth, since a `copy` is one node and every
 /// deeper reach is two.
-fn counit_window(window: &[Term]) -> Option<(usize, usize)> {
+fn counit_window(window: &[&Term]) -> Option<(usize, usize)> {
     for width in [1usize, 2] {
         if window.len() > width
             && let Some(d) = crate::rule::pick_depth(&window[..width])
@@ -2301,7 +2304,7 @@ impl Matcher for Counit {
                 .to_string(),
         )
     }
-    fn plan(&self, prog: &Program, window: &[Term]) -> Option<Vec<PlannedStep>> {
+    fn plan(&self, prog: &Program, window: &[&Term]) -> Option<Vec<PlannedStep>> {
         let (d, _) = counit_window(window)?;
         at_window(prog, Rule::Counit { d }, Direction::Forward)
     }
@@ -2325,7 +2328,7 @@ impl Matcher for CounitAt {
     fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
         Ok(Box::new(InvCounit(self.0)))
     }
-    fn plan(&self, prog: &Program, window: &[Term]) -> Option<Vec<PlannedStep>> {
+    fn plan(&self, prog: &Program, window: &[&Term]) -> Option<Vec<PlannedStep>> {
         let (d, _) = counit_window(window)?;
         if d != self.0 {
             return None;
@@ -2376,7 +2379,7 @@ impl Matcher for InvCounit {
     fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
         Ok(Box::new(CounitAt(self.0)))
     }
-    fn plan(&self, prog: &Program, _window: &[Term]) -> Option<Vec<PlannedStep>> {
+    fn plan(&self, prog: &Program, _window: &[&Term]) -> Option<Vec<PlannedStep>> {
         at_window(prog, Rule::Counit { d: self.0 }, Direction::Reverse)
     }
 }
@@ -2412,7 +2415,7 @@ impl Matcher for Retest {
                 .to_string(),
         )
     }
-    fn plan(&self, prog: &Program, window: &[Term]) -> Option<Vec<PlannedStep>> {
+    fn plan(&self, prog: &Program, window: &[&Term]) -> Option<Vec<PlannedStep>> {
         let [Term::Op(Instruction::Copy), branch] = window else {
             return None;
         };
@@ -2476,7 +2479,7 @@ pub(crate) struct SpecializeEqual;
 type SpecializeWindow<'a> = (&'a Value, &'a str, &'a Term, &'a str, &'a Term);
 
 /// The window both readings share: `copy ; push c ; equal ; branch`.
-fn specialize_window(window: &[Term]) -> Option<SpecializeWindow<'_>> {
+fn specialize_window<'a>(window: &'a [&'a Term]) -> Option<SpecializeWindow<'a>> {
     let [
         Term::Op(Instruction::Copy),
         Term::Op(Instruction::Push(c)),
@@ -2506,7 +2509,7 @@ impl Matcher for SpecializeEqual {
     fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
         Ok(Box::new(InvSpecializeEqual))
     }
-    fn plan(&self, prog: &Program, window: &[Term]) -> Option<Vec<PlannedStep>> {
+    fn plan(&self, prog: &Program, window: &[&Term]) -> Option<Vec<PlannedStep>> {
         let (c, then_origin, then_body, else_origin, else_body) = specialize_window(window)?;
         if opens_specialized(c, then_body) {
             return None;
@@ -2549,7 +2552,7 @@ impl Matcher for InvSpecializeEqual {
     fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
         Ok(Box::new(SpecializeEqual))
     }
-    fn plan(&self, prog: &Program, window: &[Term]) -> Option<Vec<PlannedStep>> {
+    fn plan(&self, prog: &Program, window: &[&Term]) -> Option<Vec<PlannedStep>> {
         let (c, then_origin, then_body, else_origin, else_body) = specialize_window(window)?;
         if !opens_specialized(c, then_body) {
             return None;
@@ -2588,7 +2591,7 @@ impl Matcher for CounitUnder {
     fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
         Ok(Box::new(InvCounitUnder))
     }
-    fn plan(&self, prog: &Program, window: &[Term]) -> Option<Vec<PlannedStep>> {
+    fn plan(&self, prog: &Program, window: &[&Term]) -> Option<Vec<PlannedStep>> {
         let [Term::Op(Instruction::Copy), framed] = window else {
             return None;
         };
@@ -2627,7 +2630,7 @@ impl Matcher for InvCounitUnder {
     fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
         Ok(Box::new(CounitUnder))
     }
-    fn plan(&self, prog: &Program, _window: &[Term]) -> Option<Vec<PlannedStep>> {
+    fn plan(&self, prog: &Program, _window: &[&Term]) -> Option<Vec<PlannedStep>> {
         at_window(prog, Rule::CounitUnder, Direction::Reverse)
     }
 }
@@ -2654,7 +2657,7 @@ impl Matcher for Comm {
     fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
         Ok(Box::new(Swap))
     }
-    fn plan(&self, prog: &Program, window: &[Term]) -> Option<Vec<PlannedStep>> {
+    fn plan(&self, prog: &Program, window: &[&Term]) -> Option<Vec<PlannedStep>> {
         let [Term::Op(Instruction::Swap), Term::Op(op)] = window else {
             return None;
         };
@@ -2685,7 +2688,7 @@ impl Matcher for Swap {
     fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
         Ok(Box::new(Comm))
     }
-    fn plan(&self, prog: &Program, window: &[Term]) -> Option<Vec<PlannedStep>> {
+    fn plan(&self, prog: &Program, window: &[&Term]) -> Option<Vec<PlannedStep>> {
         let Term::Op(op) = &window[0] else {
             return None;
         };
@@ -2725,7 +2728,7 @@ impl Matcher for SplitBool {
     fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
         Ok(Box::new(UnsplitBool))
     }
-    fn plan(&self, prog: &Program, _window: &[Term]) -> Option<Vec<PlannedStep>> {
+    fn plan(&self, prog: &Program, _window: &[&Term]) -> Option<Vec<PlannedStep>> {
         at_window(prog, Rule::SplitBool, Direction::Reverse)
     }
 }
@@ -2796,7 +2799,7 @@ impl Matcher for Unframe {
                 .to_string(),
         )
     }
-    fn plan(&self, prog: &Program, window: &[Term]) -> Option<Vec<PlannedStep>> {
+    fn plan(&self, prog: &Program, window: &[&Term]) -> Option<Vec<PlannedStep>> {
         let framed = &window[0];
         let (depth, body) = crate::rule::framed_body(framed)?;
         // `par { X } { id 0 }` is `flatten`'s: no value to reach past.
@@ -2820,7 +2823,7 @@ impl Matcher for Unframe {
         }
 
         let unframe = Rule::Unframe {
-            framed: framed.clone(),
+            framed: (*framed).clone(),
             n,
             m,
         };
@@ -2864,10 +2867,10 @@ impl Matcher for UnsplitBool {
     fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
         Ok(Box::new(SplitBool))
     }
-    fn plan(&self, prog: &Program, window: &[Term]) -> Option<Vec<PlannedStep>> {
+    fn plan(&self, prog: &Program, window: &[&Term]) -> Option<Vec<PlannedStep>> {
         // The equation is closed, so the applier compares the window against
         // the one shape it has. All this decides is whether to bother.
-        if !same_effect_seq(window, &Rule::SplitBool.lhs().into_spine()) {
+        if !same_effect_refs(window, &Rule::SplitBool.lhs().into_spine()) {
             return None;
         }
         at_window(prog, Rule::SplitBool, Direction::Forward)
@@ -2895,7 +2898,7 @@ impl Matcher for CopyConst {
     fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
         Ok(Box::new(InvCopyConst))
     }
-    fn plan(&self, prog: &Program, window: &[Term]) -> Option<Vec<PlannedStep>> {
+    fn plan(&self, prog: &Program, window: &[&Term]) -> Option<Vec<PlannedStep>> {
         let [Term::Op(Instruction::Push(c)), Term::Op(Instruction::Copy)] = window else {
             return None;
         };
@@ -2927,7 +2930,7 @@ impl Matcher for InvCopyConst {
     fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
         Ok(Box::new(CopyConst))
     }
-    fn plan(&self, prog: &Program, window: &[Term]) -> Option<Vec<PlannedStep>> {
+    fn plan(&self, prog: &Program, window: &[&Term]) -> Option<Vec<PlannedStep>> {
         let [
             Term::Op(Instruction::Push(a)),
             Term::Op(Instruction::Push(b)),
@@ -2963,7 +2966,7 @@ impl Matcher for CopyAssoc {
     fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
         Ok(Box::new(InvCopyAssoc))
     }
-    fn plan(&self, prog: &Program, window: &[Term]) -> Option<Vec<PlannedStep>> {
+    fn plan(&self, prog: &Program, window: &[&Term]) -> Option<Vec<PlannedStep>> {
         let [Term::Op(Instruction::Copy), Term::Op(Instruction::Copy)] = window else {
             return None;
         };
@@ -2994,7 +2997,7 @@ impl Matcher for InvCopyAssoc {
     fn inverse(&self) -> Result<Box<dyn Matcher>, String> {
         Ok(Box::new(CopyAssoc))
     }
-    fn plan(&self, prog: &Program, window: &[Term]) -> Option<Vec<PlannedStep>> {
+    fn plan(&self, prog: &Program, window: &[&Term]) -> Option<Vec<PlannedStep>> {
         let [Term::Op(Instruction::Copy), framed] = window else {
             return None;
         };
@@ -3032,7 +3035,7 @@ impl Matcher for CancelTuple {
                 .to_string(),
         )
     }
-    fn plan(&self, prog: &Program, window: &[Term]) -> Option<Vec<PlannedStep>> {
+    fn plan(&self, prog: &Program, window: &[&Term]) -> Option<Vec<PlannedStep>> {
         let [
             Term::Op(Instruction::Tuple(n)),
             Term::Op(Instruction::Untuple(m)),
@@ -3076,8 +3079,13 @@ mod tests {
     /// This is the whole contract in one function: a matcher proposes, the
     /// applier disposes, and what comes back is what the old rule's `rewrite`
     /// would have returned directly.
+    /// A window as a matcher sees it: padding stripped, by reference.
+    fn refs(w: &[Term]) -> Vec<&Term> {
+        w.iter().map(Term::atom).collect()
+    }
+
     fn fire(m: &dyn Matcher, prog: &Program, window: &[Term]) -> Option<Vec<Term>> {
-        let planned = m.plan(prog, window)?;
+        let planned = m.plan(prog, &refs(window))?;
         assert!(!planned.is_empty(), "{} planned nothing", m.name());
         let script: Vec<Step> = planned
             .into_iter()
@@ -3208,7 +3216,7 @@ mod tests {
         // which is a change nothing can use.
         assert!(
             InvFuse
-                .plan(&prog(), &[frame(1, vec![op(Instruction::Add)])])
+                .plan(&prog(), &refs(&[frame(1, vec![op(Instruction::Add)])]))
                 .is_none()
         );
     }
@@ -3232,24 +3240,18 @@ mod tests {
         // `factor`'s business, since it has to wrap it first.
         assert!(
             InvHoist
-                .plan(
-                    &prog(),
-                    &[branch(
+                .plan(&prog(), &refs(&[branch(
                         vec![frame(1, vec![op(Instruction::Add)])],
                         vec![frame(2, vec![op(Instruction::Add)])],
-                    )]
-                )
+                    )]))
                 .is_none()
         );
         assert!(
             InvHoist
-                .plan(
-                    &prog(),
-                    &[branch(
+                .plan(&prog(), &refs(&[branch(
                         vec![op(Instruction::Add)],
                         vec![op(Instruction::Add)]
-                    )]
-                )
+                    )]))
                 .is_none()
         );
     }
@@ -3280,13 +3282,10 @@ mod tests {
         );
         assert!(
             InvDistribute
-                .plan(
-                    &prog(),
-                    &[branch(
+                .plan(&prog(), &refs(&[branch(
                         vec![op(Instruction::Add)],
                         vec![op(Instruction::Not)]
-                    )]
-                )
+                    )]))
                 .is_none()
         );
     }
@@ -3348,22 +3347,16 @@ mod tests {
         // No `copy`, so the two branches read different values.
         assert!(
             Retest
-                .plan(
-                    &prog(),
-                    &[op(Instruction::Not), branch(vec![inner()], Vec::new())]
-                )
+                .plan(&prog(), &refs(&[op(Instruction::Not), branch(vec![inner()], Vec::new())]))
                 .is_none()
         );
         // And an arm that does not open with a branch says nothing.
         assert!(
             Retest
-                .plan(
-                    &prog(),
-                    &[
+                .plan(&prog(), &refs(&[
                         op(Instruction::Copy),
                         branch(vec![op(Instruction::Not)], vec![op(Instruction::Add)]),
-                    ]
-                )
+                    ]))
                 .is_none()
         );
         // Reading it backwards would have to invent the arm that cannot run.
@@ -3413,7 +3406,7 @@ mod tests {
         // window still matches, so without this `each` would write the literal
         // in forever.
         assert!(
-            SpecializeEqual.plan(&prog(), &got).is_none(),
+            SpecializeEqual.plan(&prog(), &refs(&got)).is_none(),
             "it fired on its own output: {:?}",
             got
         );
@@ -3438,7 +3431,7 @@ mod tests {
             SpecializeEqual
                 .plan(
                     &prog(),
-                    &w(Value::Tuple(vec![Value::Int(1), Value::Int(2)]))
+                    &refs(&w(Value::Tuple(vec![Value::Int(1), Value::Int(2)])))
                 )
                 .is_some()
         );
@@ -3450,29 +3443,23 @@ mod tests {
         // No `copy`, so the value the arm holds is not the one tested.
         assert!(
             SpecializeEqual
-                .plan(
-                    &prog(),
-                    &[
+                .plan(&prog(), &refs(&[
                         op(Instruction::Not),
                         op(Instruction::Push(c.clone())),
                         op(Instruction::Equal),
                         branch(Vec::new(), Vec::new()),
-                    ]
-                )
+                    ]))
                 .is_none()
         );
         // And the test has to be `equal`: nothing else observes the value.
         assert!(
             SpecializeEqual
-                .plan(
-                    &prog(),
-                    &[
+                .plan(&prog(), &refs(&[
                         op(Instruction::Copy),
                         op(Instruction::Push(c)),
                         op(Instruction::Greater),
                         branch(Vec::new(), Vec::new()),
-                    ]
-                )
+                    ]))
                 .is_none()
         );
     }
@@ -3485,13 +3472,10 @@ mod tests {
         assert_eq!(fire(&CounitUnder, &prog(), &w), Some(Vec::new()));
         assert!(
             CounitUnder
-                .plan(
-                    &prog(),
-                    &[
+                .plan(&prog(), &refs(&[
                         frame(1, vec![op(Instruction::Copy)]),
                         frame(1, vec![op(Instruction::Drop)])
-                    ]
-                )
+                    ]))
                 .is_none(),
             "only a copy of the top — a copy made under a frame and the \
              original discarded is a `roll`, not the identity"
@@ -3542,22 +3526,16 @@ mod tests {
         // And an operator that leaves something else is declined.
         assert!(
             BoolResult
-                .plan(
-                    &prog(),
-                    &[op(Instruction::Tuple(2)), op(Instruction::IsBool)]
-                )
+                .plan(&prog(), &refs(&[op(Instruction::Tuple(2)), op(Instruction::IsBool)]))
                 .is_none()
         );
         // As is a literal: `eval` answers that one exactly.
         assert!(
             BoolResult
-                .plan(
-                    &prog(),
-                    &[
+                .plan(&prog(), &refs(&[
                         op(Instruction::Push(Value::Bool(true))),
                         op(Instruction::IsBool)
-                    ]
-                )
+                    ]))
                 .is_none()
         );
     }
@@ -3649,7 +3627,7 @@ mod tests {
             fire(&AnnihilateVoid, &prog(), &w),
             Some(vec![op(Instruction::Drop)])
         );
-        let planned = AnnihilateVoid.plan(&prog(), &w).unwrap();
+        let planned = AnnihilateVoid.plan(&prog(), &refs(&w)).unwrap();
         assert_eq!(planned.len(), 1);
         assert_eq!(planned[0].kind.name(), "annihilate");
     }
@@ -3671,13 +3649,13 @@ mod tests {
         // report a change forever.
         assert!(
             AnnihilateVoid
-                .plan(&prog(), &[op(Instruction::Drop)])
+                .plan(&prog(), &refs(&[op(Instruction::Drop)]))
                 .is_none()
         );
         // And a node that leaves something is the other two matchers' business.
         assert!(
             AnnihilateVoid
-                .plan(&prog(), &[op(Instruction::Add)])
+                .plan(&prog(), &refs(&[op(Instruction::Add)]))
                 .is_none()
         );
     }
@@ -3708,7 +3686,7 @@ mod tests {
         );
 
         // `n` cancelling pairs, one conjuring, and factor's three.
-        assert_eq!(m.plan(&prog(), &w).unwrap().len(), 2 + 1 + 3);
+        assert_eq!(m.plan(&prog(), &refs(&w)).unwrap().len(), 2 + 1 + 3);
     }
 
     #[test]
@@ -3755,7 +3733,7 @@ mod tests {
             "two drops in, one out: the arm discards `equal`'s result instead"
         );
         // One conjuring and factor's three. Nothing is copied.
-        assert_eq!(Lift.plan(&prog(), &w).unwrap().len(), 1 + 3);
+        assert_eq!(Lift.plan(&prog(), &refs(&w)).unwrap().len(), 1 + 3);
     }
 
     #[test]
@@ -3815,38 +3793,29 @@ mod tests {
         // Nothing but `drop`s and `pick`s is not a computation, and lifting
         // one would take straight back out the drops the last firing put in.
         assert!(
-            Lift.plan(
-                &prog(),
-                &[branch(
+            Lift.plan(&prog(), &refs(&[branch(
                     vec![op(Instruction::Copy), op(Instruction::Drop)],
                     vec![op(Instruction::Drop), op(Instruction::Drop)]
-                )]
-            )
+                )]))
             .is_none()
         );
         // A shared opening node is `factor`'s, which pays for neither drops
         // nor copies.
         assert!(
-            Lift.plan(
-                &prog(),
-                &[branch(
+            Lift.plan(&prog(), &refs(&[branch(
                     vec![op(Instruction::Equal)],
                     vec![op(Instruction::Equal)]
-                )]
-            )
+                )]))
             .is_none()
         );
         // A branch is the node whose arms cannot see out of it, so the run
         // stops in front of one — and an arm that opens with one offers
         // nothing.
         assert!(
-            Lift.plan(
-                &prog(),
-                &[branch(
+            Lift.plan(&prog(), &refs(&[branch(
                     vec![branch(Vec::new(), Vec::new()), op(Instruction::Not)],
                     vec![op(Instruction::Drop), op(Instruction::Drop)]
-                )]
-            )
+                )]))
             .is_none()
         );
         // Reading it backwards is three equations, not one.
@@ -3871,7 +3840,7 @@ mod tests {
         )
         .expect("declined");
         assert!(
-            Lift.plan(&prog(), &got[1..]).is_none(),
+            Lift.plan(&prog(), &refs(&got[1..])).is_none(),
             "the arm it emptied offers nothing and the drops it left are not a \
              computation, so a `repeat` settles here: {:?}",
             got
@@ -3897,7 +3866,7 @@ mod tests {
         // `equal` is (2 -> 1), so two copies are made and two counits take
         // them back: copy_nat, interchange, bool_result, annihilate, two
         // counits, interchange, elim_par0.
-        assert_eq!(BoolResultCopied.plan(&prog(), &w).unwrap().len(), 8);
+        assert_eq!(BoolResultCopied.plan(&prog(), &refs(&w)).unwrap().len(), 8);
     }
 
     #[test]
@@ -3906,14 +3875,11 @@ mod tests {
         // refusal `bool_result` makes, through the copy.
         assert!(
             BoolResultCopied
-                .plan(
-                    &prog(),
-                    &[
+                .plan(&prog(), &refs(&[
                         op(Instruction::Push(Value::Bool(true))),
                         op(Instruction::Copy),
                         op(Instruction::IsBool)
-                    ]
-                )
+                    ]))
                 .is_none(),
             "a literal's type is known better than this law says"
         );
@@ -3922,28 +3888,22 @@ mod tests {
         // `bool_result` covers a flag happily, since it deletes nothing.
         assert!(
             BoolResultCopied
-                .plan(
-                    &prog(),
-                    &[
+                .plan(&prog(), &refs(&[
                         op(Instruction::Add),
                         op(Instruction::Copy),
                         op(Instruction::IsBool)
-                    ]
-                )
+                    ]))
                 .is_none()
         );
         // And the copy has to be the one the split makes: at depth, it is a
         // different value being asked about.
         assert!(
             BoolResultCopied
-                .plan(
-                    &prog(),
-                    &[
+                .plan(&prog(), &refs(&[
                         op(Instruction::Equal),
                         frame(1, vec![op(Instruction::Copy)]),
                         op(Instruction::IsBool)
-                    ]
-                )
+                    ]))
                 .is_none()
         );
         assert!(BoolResultCopied.inverse().is_err());
@@ -4011,13 +3971,13 @@ mod tests {
         // A literal is already folded, so it cannot fire on its own output.
         assert!(
             EvalNullary
-                .plan(&prog(), &[op(Instruction::Push(Value::Int(1)))])
+                .plan(&prog(), &refs(&[op(Instruction::Push(Value::Int(1)))]))
                 .is_none()
         );
         // And an operator that wants operands is the other two matchers'.
         assert!(
             EvalNullary
-                .plan(&prog(), &[op(Instruction::Equal)])
+                .plan(&prog(), &refs(&[op(Instruction::Equal)]))
                 .is_none()
         );
     }
@@ -4035,7 +3995,7 @@ mod tests {
             ])
         );
         // `inv(swap_cycle)` to put the pair in, then the law.
-        assert_eq!(Unframe.plan(&prog(), &w).unwrap().len(), 2);
+        assert_eq!(Unframe.plan(&prog(), &refs(&w)).unwrap().len(), 2);
 
         // A nest is not one window. The law is about the one value an `id`
         // passes through,
@@ -4043,7 +4003,7 @@ mod tests {
         // the old law took the width as an argument and did arithmetic on it.
         assert!(
             Unframe
-                .plan(&prog(), &[frame(3, vec![op(Instruction::Not)])])
+                .plan(&prog(), &refs(&[frame(3, vec![op(Instruction::Not)])]))
                 .is_none()
         );
     }
@@ -4054,11 +4014,11 @@ mod tests {
         // past, and this would conjure a pair of exchanges to say nothing.
         assert!(
             Unframe
-                .plan(&prog(), &[frame(0, vec![op(Instruction::Not)])])
+                .plan(&prog(), &refs(&[frame(0, vec![op(Instruction::Not)])]))
                 .is_none()
         );
         // It reads a frame, and a bare node is not one.
-        assert!(Unframe.plan(&prog(), &[op(Instruction::Not)]).is_none());
+        assert!(Unframe.plan(&prog(), &refs(&[op(Instruction::Not)])).is_none());
         // Two equations, so there is no single one to read backwards.
         assert!(Unframe.inverse().is_err());
     }
@@ -4073,23 +4033,20 @@ mod tests {
         };
         // Both arms open with it, so factoring needs no drops and no copies.
         assert!(
-            m.plan(&prog(), &[branch(prefix(), prefix())]).is_none(),
+            m.plan(&prog(), &refs(&[branch(prefix(), prefix())])).is_none(),
             "that is `factor`'s, and it is cheaper"
         );
         // Neither arm opens with it.
         assert!(
-            m.plan(
-                &prog(),
-                &[branch(
+            m.plan(&prog(), &refs(&[branch(
                     vec![op(Instruction::Not)],
                     vec![op(Instruction::And)]
-                )]
-            )
+                )]))
             .is_none()
         );
         // The copies have to be there: `equal` alone is not the prefix.
         assert!(
-            m.plan(&prog(), &[branch(vec![op(Instruction::Equal)], Vec::new())])
+            m.plan(&prog(), &refs(&[branch(vec![op(Instruction::Equal)], Vec::new())]))
                 .is_none()
         );
         // And it is a firing of several steps, so nothing reads it backwards.
@@ -4122,7 +4079,7 @@ mod tests {
             op(Instruction::Equal),
             frame(1, vec![op(Instruction::Equal)]),
         ];
-        assert!(m.plan(&prog(), &wrong).is_none());
+        assert!(m.plan(&prog(), &refs(&wrong)).is_none());
     }
 
     #[test]
@@ -4173,7 +4130,7 @@ mod tests {
         let back = m.inverse().unwrap();
         assert_eq!(back.width(), 4, "the term, then the drops it leaves");
         assert!(
-            Annihilate.plan(&prog(), &term.into_spine()).is_none(),
+            Annihilate.plan(&prog(), &refs(&term.into_spine())).is_none(),
             "annihilate should not reach a two-factor term"
         );
     }
@@ -4192,7 +4149,7 @@ mod tests {
     #[test]
     fn collapse_declines_a_left_that_is_more_than_one_par() {
         let w = [frame(2, vec![frame(1, vec![]), op(Instruction::Add)])];
-        assert!(Collapse.plan(&prog(), &w).is_none());
+        assert!(Collapse.plan(&prog(), &refs(&w)).is_none());
     }
 
     #[test]
@@ -4206,8 +4163,8 @@ mod tests {
 
     #[test]
     fn expand_leaves_a_plain_call_and_a_one_value_window_alone() {
-        assert!(Expand.plan(&prog(), &[frame(0, vec![])]).is_none());
-        assert!(Expand.plan(&prog(), &[frame(1, vec![])]).is_none());
+        assert!(Expand.plan(&prog(), &refs(&[frame(0, vec![])])).is_none());
+        assert!(Expand.plan(&prog(), &refs(&[frame(1, vec![])])).is_none());
     }
 
     #[test]
@@ -4233,7 +4190,7 @@ mod tests {
 
     #[test]
     fn flatten_declines_a_frame_that_hides_something() {
-        assert!(Flatten.plan(&prog(), &[frame(1, vec![])]).is_none());
+        assert!(Flatten.plan(&prog(), &refs(&[frame(1, vec![])])).is_none());
     }
 
     #[test]
@@ -4254,7 +4211,7 @@ mod tests {
     #[test]
     fn fuse_declines_different_depths() {
         let w = [frame(1, vec![]), frame(2, vec![])];
-        assert!(Fuse.plan(&prog(), &w).is_none());
+        assert!(Fuse.plan(&prog(), &refs(&w)).is_none());
     }
 
     // -- interchange --------------------------------------------------------
@@ -4270,7 +4227,7 @@ mod tests {
         );
         // One narrower and the window would be rewriting the flag.
         assert!(
-            Sink.plan(&prog(), &[op(Instruction::Add), frame(1, vec![])])
+            Sink.plan(&prog(), &refs(&[op(Instruction::Add), frame(1, vec![])]))
                 .is_none()
         );
     }
@@ -4321,7 +4278,7 @@ mod tests {
     fn float_declines_a_window_that_holds_what_x_consumes() {
         // `add` consumes two; a window one deep does not contain both.
         let w = [frame(1, vec![]), op(Instruction::Add)];
-        assert!(Float.plan(&prog(), &w).is_none());
+        assert!(Float.plan(&prog(), &refs(&w)).is_none());
     }
 
     // -- branches -----------------------------------------------------------
@@ -4366,7 +4323,7 @@ mod tests {
             vec![op(Instruction::Add)],
             vec![op(Instruction::Add)],
         )];
-        let planned = Factor.plan(&prog(), &w).unwrap();
+        let planned = Factor.plan(&prog(), &refs(&w)).unwrap();
         assert_eq!(planned.len(), 3);
         assert_eq!(planned[0].kind.name(), "elim_par0");
         assert_eq!(planned[1].kind.name(), "elim_par0");
@@ -4380,7 +4337,7 @@ mod tests {
             vec![op(Instruction::Add)],
             vec![op(Instruction::Not)],
         )];
-        assert!(Factor.plan(&prog(), &w).is_none());
+        assert!(Factor.plan(&prog(), &refs(&w)).is_none());
     }
 
     #[test]
@@ -4417,7 +4374,7 @@ mod tests {
     #[test]
     fn unfactor_declines_a_window_that_does_not_hold_the_condition() {
         let w = [frame(0, vec![op(Instruction::Add)]), branch(vec![], vec![])];
-        assert!(Unfactor.plan(&prog(), &w).is_none());
+        assert!(Unfactor.plan(&prog(), &refs(&w)).is_none());
     }
 
     #[test]
@@ -4462,7 +4419,7 @@ mod tests {
     #[test]
     fn fold_branch_declines_a_computed_condition() {
         let w = [op(Instruction::Copy), branch(vec![], vec![])];
-        assert!(FoldBranch.plan(&prog(), &w).is_none());
+        assert!(FoldBranch.plan(&prog(), &refs(&w)).is_none());
     }
 
     // -- values -------------------------------------------------------------
@@ -4503,14 +4460,14 @@ mod tests {
             op(Instruction::Push(Value::Int(2))),
             op(Instruction::Add),
         ];
-        assert!(EvalBinary.plan(&prog(), &w).is_none());
+        assert!(EvalBinary.plan(&prog(), &refs(&w)).is_none());
         // And a third push is not an operator.
         let w = [
             op(Instruction::Push(Value::Int(1))),
             op(Instruction::Push(Value::Int(2))),
             op(Instruction::Push(Value::Int(3))),
         ];
-        assert!(EvalBinary.plan(&prog(), &w).is_none());
+        assert!(EvalBinary.plan(&prog(), &refs(&w)).is_none());
     }
 
     #[test]
@@ -4600,7 +4557,7 @@ mod tests {
         // `copy` is (1 -> 2), so it is not of annihilate's shape at all and
         // neither matcher has to know about the other.
         let w = [op(Instruction::Copy), op(Instruction::Drop)];
-        assert!(Annihilate.plan(&prog(), &w).is_none());
+        assert!(Annihilate.plan(&prog(), &refs(&w)).is_none());
         assert_eq!(fire(&Counit, &prog(), &w), Some(Vec::new()));
     }
 
@@ -4631,7 +4588,7 @@ mod tests {
             Instruction::Tuple(2),
         ] {
             let w = [op(Instruction::Swap), op(inst.clone())];
-            assert!(Comm.plan(&prog(), &w).is_none(), "{:?}", inst);
+            assert!(Comm.plan(&prog(), &refs(&w)).is_none(), "{:?}", inst);
         }
         // And a deeper roll is not an exchange of the top two: it is frames
         // around one, and the frame is what the window sees first.
@@ -4640,7 +4597,7 @@ mod tests {
             op(Instruction::Swap),
             op(Instruction::Add),
         ];
-        assert!(Comm.plan(&prog(), &w[..2]).is_none());
+        assert!(Comm.plan(&prog(), &refs(&w[..2])).is_none());
     }
 
     #[test]
@@ -4657,9 +4614,9 @@ mod tests {
 
     #[test]
     fn swap_declines_what_comm_declines() {
-        assert!(Swap.plan(&prog(), &[op(Instruction::Subtract)]).is_none());
-        assert!(Swap.plan(&prog(), &[op(Instruction::Not)]).is_none());
-        assert!(Swap.plan(&prog(), &[frame(1, Vec::new())]).is_none());
+        assert!(Swap.plan(&prog(), &refs(&[op(Instruction::Subtract)])).is_none());
+        assert!(Swap.plan(&prog(), &refs(&[op(Instruction::Not)])).is_none());
+        assert!(Swap.plan(&prog(), &refs(&[frame(1, Vec::new())])).is_none());
     }
 
     #[test]
@@ -4693,14 +4650,14 @@ mod tests {
             op(Instruction::IsBool),
             branch(vec![op(Instruction::Drop)], Vec::new()),
         ];
-        assert!(UnsplitBool.plan(&prog(), &wrong).is_none());
+        assert!(UnsplitBool.plan(&prog(), &refs(&wrong)).is_none());
         // And so is the same shape guarded on something else.
         let wrong = [
             op(Instruction::Copy),
             op(Instruction::IsInt),
             Rule::SplitBool.lhs().into_spine()[2].clone(),
         ];
-        assert!(UnsplitBool.plan(&prog(), &wrong).is_none());
+        assert!(UnsplitBool.plan(&prog(), &refs(&wrong)).is_none());
     }
 
     #[test]
@@ -4736,7 +4693,7 @@ mod tests {
         );
         // Different widths are not a cancelling pair.
         let w = [op(Instruction::Tuple(3)), op(Instruction::Untuple(2))];
-        assert!(CancelTuple.plan(&prog(), &w).is_none());
+        assert!(CancelTuple.plan(&prog(), &refs(&w)).is_none());
     }
 
     // -- unfold -------------------------------------------------------------
@@ -4803,7 +4760,7 @@ mod tests {
     fn introduce_declines_a_window_that_is_not_all_drops() {
         let m = introduce(vec![op(Instruction::Add)]);
         assert!(
-            m.plan(&prog(), &[op(Instruction::Drop), op(Instruction::Not)])
+            m.plan(&prog(), &refs(&[op(Instruction::Drop), op(Instruction::Not)]))
                 .is_none()
         );
     }

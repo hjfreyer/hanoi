@@ -24,9 +24,10 @@
 //! arguments claim an arity the library does not give is refused no matter how
 //! it came to be written.
 
-use crate::arity::seq_arity;
+use crate::arity::{seq_arity, term_arity};
 use crate::ir::{
-    Selector, Term, child_seq, cloned, expand_call, same_effect_refs, sketch, sketch_head,
+    Selector, Term, aligned, child_seq, cloned, expand_call, pad, same_effect_refs, sketch,
+    sketch_head, unpad,
 };
 use crate::location::{Location, selector_name};
 use crate::program::Program;
@@ -77,11 +78,14 @@ pub(crate) enum Cause {
     WindowMismatch { expected: String, found: String },
     /// The arguments do not satisfy the equation.
     SideCondition(SideCondition),
-    /// `--check`: the replacement does not leave the stack as the window did.
-    NetChanged {
-        before: Option<i64>,
-        after: Option<i64>,
+    /// `--check`: the two sides of the equation are stated at different types.
+    ArityChanged {
+        before: Option<(i64, i64)>,
+        after: Option<(i64, i64)>,
     },
+    /// The replacement demands a deeper stack than the term it lands in has, so
+    /// there is no padding that would make it fit.
+    TooShallow { entry: i64, needs: i64 },
 }
 
 impl std::fmt::Display for ApplyError {
@@ -123,10 +127,16 @@ impl std::fmt::Display for ApplyError {
                 expected, found
             ),
             Cause::SideCondition(sc) => write!(f, "{}", sc),
-            Cause::NetChanged { before, after } => write!(
+            Cause::ArityChanged { before, after } => write!(
                 f,
-                "the replacement changes the net stack effect ({:?} -> {:?})",
+                "the two sides are stated at different types ({:?} -> {:?})",
                 before, after
+            ),
+            Cause::TooShallow { entry, needs } => write!(
+                f,
+                "the replacement needs {} value(s) and the term it lands in is \
+                 stated at {}",
+                needs, entry
             ),
         }
     }
@@ -138,7 +148,7 @@ impl std::fmt::Display for ApplyError {
 /// which way round that puts the equation is exactly what [`Direction`] says.
 /// An [`StepKind::Unfold`] builds its sides from the library here, so no copy
 /// of a sentence's body ever has to travel inside a script.
-fn sides(prog: &Program, step: &Step) -> Result<(Vec<Term>, Vec<Term>), SideCondition> {
+fn sides(prog: &Program, step: &Step) -> Result<(Term, Term), SideCondition> {
     let (lhs, rhs) = match &step.kind {
         StepKind::Rule(rule) => {
             rule.check(prog)?;
@@ -146,11 +156,21 @@ fn sides(prog: &Program, step: &Step) -> Result<(Vec<Term>, Vec<Term>), SideCond
         }
         StepKind::Unfold { target } => (Term::Call(*target), expand_call(prog, *target)),
     };
-    let (src, dst) = match step.dir {
+    Ok(match step.dir {
         Direction::Forward => (lhs, rhs),
         Direction::Reverse => (rhs, lhs),
-    };
-    Ok((src.into_spine(), dst.into_spine()))
+    })
+}
+
+/// The same, as the spines a window is matched and spliced against.
+///
+/// **Bare**, where the sides themselves are typed. An equation is stated at one
+/// arity — `counit` is `pick d ; drop = id (d+1)`, not `= id 0` — and that is
+/// what `--check` compares; but the term it lands in is padded to *its* type, so
+/// what gets spliced is the equation with its own padding taken back off.
+fn bare_sides(prog: &Program, step: &Step) -> Result<(Vec<Term>, Vec<Term>), SideCondition> {
+    let (src, dst) = sides(prog, step)?;
+    Ok((unpad(&src).into_spine(), unpad(&dst).into_spine()))
 }
 
 /// The `i`th factor of a term's spine.
@@ -187,16 +207,11 @@ impl Target<'_> {
         }
     }
 
-    fn splice(&mut self, range: std::ops::Range<usize>, dst: Vec<Term>) {
+    /// Puts a whole rebuilt spine back.
+    fn replace(&mut self, factors: Vec<Term>) {
         match self {
-            Target::Root(v) => {
-                v.splice(range, dst);
-            }
-            Target::Sub(t) => {
-                let mut factors = std::mem::replace(&mut **t, Term::nil()).into_spine();
-                factors.splice(range, dst);
-                **t = Term::seq(factors);
-            }
+            Target::Root(v) => **v = factors,
+            Target::Sub(t) => **t = Term::seq(factors),
         }
     }
 }
@@ -250,14 +265,45 @@ fn locate<'t>(
     Ok(Target::Sub(cur))
 }
 
-/// Net stack effect, which every equation must preserve.
+/// The spine a splice leaves behind, and how many factors it inserted.
 ///
-/// Deliberately not full arity: annihilating `pick 2; drop` legitimately drops
-/// the demand for values that only the pick made, so what a term *requires*
-/// may fall. What it leaves may not move.
-fn net(prog: &Program, nodes: &[Term]) -> Option<i64> {
-    let (inputs, outputs) = seq_arity(prog, nodes);
-    outputs.map(|o| o - inputs)
+/// **This is where the padding invariant is maintained.** A window is replaced
+/// at the *bare* type both sides of the equation are stated at, and the whole
+/// spine is then re-stated at the type it had — so a rewrite cannot quietly
+/// widen or narrow the term it sits in, and every composition still lines up
+/// afterwards. `None` when the replacement demands a deeper stack than the
+/// spine is stated at, which is the one thing padding cannot fix.
+fn respliced(
+    prog: &Program,
+    factors: &[&Term],
+    range: std::ops::Range<usize>,
+    dst: Vec<Term>,
+) -> Option<(Vec<Term>, usize)> {
+    // What the spine is stated at: what its first factor takes. A spine that is
+    // nothing but an identity is the empty program at that type, and unpadding
+    // it leaves no factors — which is why the window into one can only ever be
+    // the empty one, at 0.
+    let entry = match factors.first() {
+        Some(first) => term_arity(prog, first)?.0,
+        None => 0,
+    };
+    // A term the tool built is padded; one a test wrote by hand may not be.
+    // The invariant is *maintained* rather than imposed: a spine that did not
+    // line up going in does not line up coming out, and nothing here quietly
+    // restates a caller's term at a type it did not choose.
+    let was_aligned = aligned(prog, &Term::seq(cloned(factors)));
+    let mut bare = Term::seq(factors.iter().map(|f| unpad(f))).into_spine();
+    let inserted: Vec<Term> = Term::seq(dst).into_spine();
+    let count = inserted.len();
+    if range.end > bare.len() {
+        return None;
+    }
+    bare.splice(range, inserted);
+    let whole = Term::seq(bare);
+    if !was_aligned {
+        return Some((whole.into_spine(), count));
+    }
+    Some((pad(prog, &whole, entry)?.into_spine(), count))
 }
 
 /// Applies one step to a spine, or explains why it does not fit.
@@ -279,27 +325,33 @@ pub(crate) fn apply_step(
         cause,
     };
 
-    let (src, dst) = sides(prog, step).map_err(|sc| fail(Cause::SideCondition(sc)))?;
+    let (src, dst) = bare_sides(prog, step).map_err(|sc| fail(Cause::SideCondition(sc)))?;
 
     if check {
-        // What this cannot catch: a rewrite licensed by a *wrong* arity. Net
-        // change is preserved by a misreported one as readily as by a correct
-        // one — a branch that claimed `(1 -> 0)` when it was `(2 -> 1)` has the
-        // same net either way — so the guard here is downstream of the arity
-        // being right. See `arity::branch_arity`.
+        // **The two sides must be stated at the same type.** That is stricter
+        // than the net-change comparison it replaces: net is preserved by a
+        // misreported arity as readily as by a correct one, and it said nothing
+        // about a rewrite that quietly demanded a deeper stack. Since every
+        // equation is padded to a common arity, equality here is exactly the
+        // claim that the two sides are the same morphism.
         //
         // Learning an arity that was previously unknown stays permissible.
         // Under the global precondition it should not arise — every term has an
         // arity once panics are excluded — but tolerating it costs nothing and
         // keeps the applier usable on synthetic terms.
-        let (before, after) = (net(prog, &src), net(prog, &dst));
+        let (typed_src, typed_dst) =
+            sides(prog, step).map_err(|sc| fail(Cause::SideCondition(sc)))?;
+        let (before, after) = (
+            term_arity(prog, &typed_src),
+            term_arity(prog, &typed_dst),
+        );
         let broke = match (before, after) {
             (Some(a), Some(b)) => a != b,
             (Some(_), None) => true,
             (None, _) => false,
         };
         if broke {
-            return Err(fail(Cause::NetChanged { before, after }));
+            return Err(fail(Cause::ArityChanged { before, after }));
         }
     }
 
@@ -307,33 +359,42 @@ pub(crate) fn apply_step(
 
     let at = step.loc.at;
     let end = at + src.len();
-    {
-        let factors = target.factors();
-        if end > factors.len() {
-            return Err(fail(Cause::WindowRange {
-                at,
-                need: src.len(),
-                len: factors.len(),
-            }));
-        }
-        let window = &factors[at..end];
-        if !same_effect_refs(window, &src) {
-            let found = sketch(&cloned(window));
-            return Err(fail(Cause::WindowMismatch {
-                expected: sketch(&src),
-                found,
-            }));
-        }
+    let factors = target.factors();
+    if end > factors.len() {
+        let len = factors.len();
+        return Err(fail(Cause::WindowRange {
+            at,
+            need: src.len(),
+            len,
+        }));
+    }
+    let window = &factors[at..end];
+    if !same_effect_refs(window, &src) {
+        let found = sketch(&cloned(window));
+        return Err(fail(Cause::WindowMismatch {
+            expected: sketch(&src),
+            found,
+        }));
     }
 
-    let info = SpliceInfo {
-        removed: src.len(),
-        inserted: dst.len(),
-    };
     // The splice is on the spine, and the term is rebuilt from it: a rewrite
     // does not have to respect the nesting it found, because the nesting was
     // never part of what the term means.
-    target.splice(at..end, dst);
+    let entry = factors
+        .first()
+        .and_then(|f| term_arity(prog, f))
+        .map(|(n, _)| n)
+        .unwrap_or(0);
+    let Some((rebuilt, inserted)) = respliced(prog, &factors, at..end, dst) else {
+        let needs = seq_arity(prog, &cloned(&factors)).0;
+        return Err(fail(Cause::TooShallow { entry, needs }));
+    };
+    drop(factors);
+    let info = SpliceInfo {
+        removed: src.len(),
+        inserted,
+    };
+    target.replace(rebuilt);
     Ok(info)
 }
 
@@ -344,7 +405,7 @@ pub(crate) fn apply_step(
 /// arguments do not satisfy the equation, which for a recorded step means
 /// something has changed underneath it.
 pub(crate) fn preview(prog: &Program, step: &Step) -> Option<(String, String)> {
-    let (src, dst) = sides(prog, step).ok()?;
+    let (src, dst) = bare_sides(prog, step).ok()?;
     Some((sketch(&src), sketch(&dst)))
 }
 

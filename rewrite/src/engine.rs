@@ -826,7 +826,13 @@ fn step(
         if w + width > nodes.len() {
             continue;
         }
-        let Some(planned) = matcher.plan(env.prog, &nodes[w..w + width]) else {
+        // **Padding is stripped before a matcher sees it.** A factor in the
+        // term is `par { id k } { op }` wherever the stack is taller than the
+        // op reads, and every matcher would otherwise have to say so in its own
+        // pattern. The stripping is by reference and one level deep, which is
+        // all `pad` ever adds to a factor.
+        let window: Vec<&Term> = nodes[w..w + width].iter().map(Term::atom).collect();
+        let Some(planned) = matcher.plan(env.prog, &window) else {
             continue;
         };
         if planned.is_empty() {

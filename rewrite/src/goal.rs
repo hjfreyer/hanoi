@@ -32,7 +32,7 @@ use bytecode::{Identity, SentenceIndex};
 
 use crate::debug;
 use crate::engine::{Tactic, miss_report};
-use crate::ir::{Term, build};
+use crate::ir::{Term, build_padded};
 use crate::print::render_nodes;
 use crate::program::Program;
 use crate::prover::{self, Goal, Solved, Unproved};
@@ -57,7 +57,8 @@ pub(crate) fn run(
     opts: &Options,
     out: &mut dyn std::io::Write,
 ) -> std::io::Result<i32> {
-    let goal = Goal::root(tree(prog, identity.lhs), tree(prog, identity.rhs));
+    let (lhs, rhs) = crate::ir::goal_terms(prog, identity.lhs, identity.rhs);
+    let goal = Goal::root(lhs.into_spine(), rhs.into_spine());
     let (found, firings) = prover::work(prog, inline, &goal, strategy, opts.fuel, opts.check);
     let solved = match found {
         Ok(solved) => solved,
@@ -202,7 +203,7 @@ fn broken(err: &Unproved) -> Vec<String> {
 }
 
 fn tree(prog: &Program, root: SentenceIndex) -> Vec<Term> {
-    build(prog.library(), root).into_spine()
+    build_padded(prog, root).into_spine()
 }
 
 /// Two spaces in front of a line, except an empty one — which would otherwise

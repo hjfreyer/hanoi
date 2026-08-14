@@ -32,7 +32,7 @@ use bytecode::SentenceIndex;
 use crate::Options;
 use crate::applier::{apply_script_seq, preview};
 use crate::diff::side_by_side;
-use crate::ir::{Term, build};
+use crate::ir::{Term, build_padded};
 use crate::print::render_body;
 use crate::program::Program;
 use crate::rule::{Script, Step};
@@ -330,7 +330,7 @@ fn histogram(steps: &[Step]) -> Vec<(&'static str, usize)> {
 }
 
 fn tree(prog: &Program, root: SentenceIndex) -> Vec<Term> {
-    build(prog.library(), root).into_spine()
+    build_padded(prog, root).into_spine()
 }
 
 /// One step: which law, which way, where, and what it does to its window.

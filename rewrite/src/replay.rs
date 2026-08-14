@@ -34,7 +34,7 @@ use bytecode::{Identity, Library, SentenceIndex};
 
 use crate::applier::apply_script_seq;
 use crate::diff::side_by_side;
-use crate::ir::{Term, build, same_effect_seq};
+use crate::ir::{Term, build_padded, same_effect_seq};
 use crate::print::render_nodes;
 use crate::program::Program;
 use crate::prove::{BROKEN, FAILED, OK};
@@ -235,14 +235,17 @@ fn check(
         .map_err(Failure::NoSuchIdentity)?;
     let identity: &Identity = &library.identities[index];
 
-    let mut tree = build_tree(prog, identity.lhs);
+    // Both sides at one type, as `prove` states them: an identity is a claim
+    // about two morphisms, and the derivation runs between them.
+    let (lhs, rhs) = crate::ir::goal_terms(prog, identity.lhs, identity.rhs);
+    let mut tree = lhs.into_spine();
     apply_script_seq(prog, &mut tree, &derivation.steps, opts.check)
         .map_err(|e| Failure::Step(Box::new(e)))?;
 
     // By effect, not by `==`. The two sides were compiled from two sentences,
     // so phase 4 gave every inline block in them a different label, and
     // provenance is not part of a term's identity.
-    if same_effect_seq(&tree, &build_tree(prog, identity.rhs)) {
+    if same_effect_seq(&tree, &rhs.into_spine()) {
         Ok(identity.name.clone())
     } else {
         Err(Failure::NotReached(tree, identity.rhs))
@@ -250,7 +253,7 @@ fn check(
 }
 
 fn build_tree(prog: &Program, root: SentenceIndex) -> Vec<Term> {
-    build(prog.library(), root).into_spine()
+    build_padded(prog, root).into_spine()
 }
 
 impl Failure {

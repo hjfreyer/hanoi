@@ -1170,7 +1170,16 @@ impl Rule {
 
             Rule::Commute { op } => Term::Op(op.clone()),
 
-            Rule::SplitBool | Rule::Counit { .. } | Rule::CounitUnder => Term::nil(),
+            // **Padded to the type the left-hand side is stated at.** An
+            // equation is a claim about two morphisms, so its two sides have to
+            // be the same one: `pick d ; drop` reads `d+1` values and leaves
+            // them, and the program that does nothing to `d+1` values is
+            // `id (d+1)` rather than `id 0`. Writing `id 0` here would be the
+            // claim that the two sides have different sources, which is not a
+            // claim anybody wanted to make.
+            Rule::SplitBool => Term::Id(1),
+            Rule::Counit { d } => Term::Id(d + 1),
+            Rule::CounitUnder => Term::Id(1),
 
             Rule::Retest {
                 arm,
@@ -1224,9 +1233,11 @@ impl Rule {
                 push(Value::Bool(true)),
             ]),
 
-            Rule::CancelTuple { .. } => push(Value::Bool(true)),
+            // The `n` values `tuple n` read come back, which the padding is
+            // what says: `= push true` alone left the reader to know it.
+            Rule::CancelTuple { n } => Term::par(Term::Id(*n), push(Value::Bool(true))),
 
-            Rule::SwapCycle => Term::nil(),
+            Rule::SwapCycle => Term::Id(2),
 
             Rule::Unframe { framed, n, .. } => {
                 let (_, body) = framed_body(framed).expect("check() accepted an unframed term");
@@ -1284,7 +1295,11 @@ fn drops(n: usize) -> Term {
 /// ```
 pub(crate) fn sink(k: usize) -> Term {
     match k {
-        0 => Term::nil(),
+        // **`id 1`, not `id 0`.** Putting the top value under nothing is the
+        // program that does nothing *to one value* — and the difference is what
+        // makes `unframe` at `m = 0` state its two sides at the same type. The
+        // net-change check could not see it; the arity check could.
+        0 => Term::Id(1),
         1 => Term::Op(Instruction::Swap),
         _ => Term::Op(Instruction::Swap)
             .then(Term::frame(Vec::new(), 1, sink(k - 1))),
@@ -1343,14 +1358,14 @@ pub(crate) fn copy_block(k: usize) -> Term {
 /// [`pick`] read backwards. A matcher window holds factors rather than a depth,
 /// so recovering `d` is how an equation stated about `pick d` finds itself in a
 /// term that never mentions one.
-pub(crate) fn pick_depth(nodes: &[Term]) -> Option<usize> {
-    match nodes {
+pub(crate) fn pick_depth(nodes: &[&Term]) -> Option<usize> {
+    // Padding is stripped at every step: a `pick` written out sits at whatever
+    // depth the stack happens to be, and the shape is the same either way.
+    let atoms: Vec<&Term> = nodes.iter().map(|t| t.atom()).collect();
+    match atoms[..] {
         [Term::Op(Instruction::Copy)] => Some(0),
         [head, Term::Op(Instruction::Swap)] => match head.as_frame() {
-            Some((1, _, body)) => {
-                let inner: Vec<Term> = body.spine().into_iter().cloned().collect();
-                pick_depth(&inner).map(|d| d + 1)
-            }
+            Some((1, _, body)) => pick_depth(&body.spine()).map(|d| d + 1),
             _ => None,
         },
         _ => None,
@@ -1367,7 +1382,8 @@ pub(crate) fn pick_depth(nodes: &[Term]) -> Option<usize> {
 /// whole of the difference between moving a value up and copying it up.
 pub(crate) fn roll(d: usize) -> Term {
     match d {
-        0 => Term::nil(),
+        // The identity on the one value it would have rotated. See [`sink`].
+        0 => Term::Id(1),
         1 => Term::Op(Instruction::Swap),
         _ => Term::frame(Vec::new(), 1, roll(d - 1)).then(Term::Op(Instruction::Swap)),
     }
@@ -2417,6 +2433,18 @@ pub(crate) mod tests {
                 m: 1,
             },
         ]
+    }
+
+
+    #[test]
+    fn probe_arity_alignment() {
+        let prog = prog();
+        for r in every_equation() {
+            let l = crate::arity::term_arity(&prog, &r.lhs());
+            let rr = crate::arity::term_arity(&prog, &r.rhs());
+            println!("{:<18} {:?} vs {:?}  {}", r.name(), l, rr,
+                     if l == rr { "aligned" } else { "MISALIGNED" });
+        }
     }
 
     #[test]

@@ -48,7 +48,7 @@ use bytecode::{Identity, IdentityIndex, Library, SentenceIndex, SourceMap};
 use crate::DEFAULT_FUEL;
 use crate::applier::apply_script_seq;
 use crate::engine::{Tactic, TacticError, miss_report};
-use crate::ir::{Term, build, same_effect_seq};
+use crate::ir::{Term, build_padded, same_effect_seq};
 use crate::program::Program;
 use crate::prover::{self, Closed, Goal, Residual, Strategy, Unproved};
 use crate::rule::{Script, Step};
@@ -543,8 +543,10 @@ fn check(
     opts: &Options,
 ) -> Result<Proven, Failure> {
     let strategy = compile(prog, file, proof)?;
-    let lhs = tree(prog, identity.lhs);
-    let rhs = tree(prog, identity.rhs);
+    // Both sides at one type: an identity is a claim about two morphisms, and
+    // two morphisms are only comparable at a common source and target.
+    let (lhs, rhs) = crate::ir::goal_terms(prog, identity.lhs, identity.rhs);
+    let (lhs, rhs) = (lhs.into_spine(), rhs.into_spine());
 
     let goal = Goal::root(lhs.clone(), rhs.clone());
     let solved = prover::solve(prog, inline, &goal, &strategy, opts.fuel, opts.check)?;
@@ -593,7 +595,7 @@ fn compile(prog: &Program, file: &ProvenFile, proof: usize) -> Result<Strategy, 
 }
 
 fn tree(prog: &Program, root: SentenceIndex) -> Vec<Term> {
-    build(prog.library(), root).into_spine()
+    build_padded(prog, root).into_spine()
 }
 
 impl Failure {

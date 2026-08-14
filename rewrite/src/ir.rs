@@ -190,6 +190,53 @@ impl Term {
         }
     }
 
+    /// `par { id k } { X }`: `X` widened to run on a taller stack.
+    ///
+    /// The mirror of a frame, and the other thing an identity beside a
+    /// computation can mean. A frame puts the identity on **top** — those values
+    /// are hidden from the body. Padding puts it **underneath** — those values
+    /// are below everything the computation reads, so it does not care that they
+    /// are there. That is what makes padding recoverable rather than meaningful:
+    /// `par { id k } { X }` and `X` run identically, and differ only in the type
+    /// they are stated at.
+    ///
+    /// A `par` whose right-hand side is an identity is read as a frame instead,
+    /// so the two never both answer.
+    pub(crate) fn as_padding(&self) -> Option<(usize, &Term)> {
+        match self {
+            Term::Par { left, right, .. } if !matches!(**right, Term::Id(_)) => match **left {
+                Term::Id(k) if k > 0 => Some((k, right)),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// The factor under whatever padding it carries.
+    pub(crate) fn atom(&self) -> &Term {
+        match self.as_padding() {
+            Some((_, x)) => x,
+            None => self,
+        }
+    }
+
+    /// The same, to write through.
+    ///
+    /// **Padding is transparent to every traversal.** It is stored as a `par`
+    /// because that is what it is, which means nothing that walks the term can
+    /// tell it from one somebody meant — and a traversal that descended into it
+    /// would rewrite inside the padding and leave a composite where the spine
+    /// expects a factor. So the walk goes straight through.
+    pub(crate) fn atom_mut(&mut self) -> &mut Term {
+        if self.as_padding().is_none() {
+            return self;
+        }
+        match self {
+            Term::Par { right, .. } => right,
+            _ => unreachable!("as_padding answered for something that is not a par"),
+        }
+    }
+
     /// The two arms and their provenance, if this is a branch.
     pub(crate) fn as_branch(&self) -> Option<(&str, &Term, &str, &Term)> {
         match self {
@@ -331,6 +378,45 @@ fn build_call(library: &Library, k: usize, target: SentenceIndex) -> Term {
     }
 }
 
+/// The same, with the padding that makes every composition line up.
+///
+/// This is what a tool actually works on: [`build`] says what the sentence is,
+/// and this states it at the type the sentence declares. The entry is the
+/// sentence's own arity where inference gave one, since that — rather than what
+/// the body happens to demand — is what the caller promises.
+pub(crate) fn build_padded(prog: &Program, s_idx: SentenceIndex) -> Term {
+    let bare = build(prog.library(), s_idx);
+    let declared = prog.arity(s_idx).map(|(n, _)| n).unwrap_or(0);
+    let demanded = crate::arity::term_arity(prog, &bare)
+        .map(|(n, _)| n)
+        .unwrap_or(0);
+    let entry = declared.max(demanded);
+    pad(prog, &bare, entry).unwrap_or(bare)
+}
+
+/// The two sides of an identity, stated at **one** type.
+///
+/// A claim that two programs are interchangeable is a claim about two
+/// morphisms, and two morphisms are only comparable at a common source and
+/// target. `{ pick 1 pick 1 equal drop 0 } = { }` is true and its two sides
+/// demand two values and none — so the claim is stated by padding the thinner
+/// side up to the other, which is what "what a term requires may fall" used to
+/// say by allowing the comparison to ignore it.
+pub(crate) fn goal_terms(prog: &Program, lhs: SentenceIndex, rhs: SentenceIndex) -> (Term, Term) {
+    let (l, r) = (build(prog.library(), lhs), build(prog.library(), rhs));
+    let demand = |t: &Term, s| {
+        crate::arity::term_arity(prog, t)
+            .map(|(n, _)| n)
+            .unwrap_or(0)
+            .max(prog.arity(s).map(|(n, _)| n).unwrap_or(0))
+    };
+    let entry = demand(&l, lhs).max(demand(&r, rhs));
+    (
+        pad(prog, &l, entry).unwrap_or(l),
+        pad(prog, &r, entry).unwrap_or(r),
+    )
+}
+
 pub(crate) fn label(library: &Library, target: SentenceIndex) -> String {
     format!("#{} {}", usize::from(target), library.names[target])
 }
@@ -345,7 +431,7 @@ pub(crate) fn label(library: &Library, target: SentenceIndex) -> String {
 /// the fact is impossible, so every traversal carries it whether or not it
 /// looks.
 pub(crate) fn child_seqs(node: &mut Term) -> Vec<(Selector, &mut Term)> {
-    match node {
+    match node.atom_mut() {
         Term::Par { left, right, .. } => {
             vec![(Selector::Left, &mut **left), (Selector::Right, &mut **right)]
         }
@@ -490,7 +576,9 @@ fn sketch_side(term: &Term, depth: usize) -> String {
 }
 
 fn sketch_node(node: &Term, depth: usize) -> String {
-    match node {
+    // Padding is elided: what it says is the stack depth, which every listing
+    // that shows a sketch shows in its own column.
+    match node.atom() {
         Term::Op(inst) => format!("{}", inst),
         Term::Id(k) => id_word(*k),
         Term::Call(target) => format!("jump → #{}", usize::from(*target)),
@@ -527,6 +615,162 @@ pub(crate) fn id_word(k: usize) -> String {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Padding
+// ---------------------------------------------------------------------------
+
+/// Strips every padding wrapper, leaving each part at its own minimal type.
+///
+/// The inverse of [`pad`] up to the entry: `unpad(pad(t, e)) == t` for every `t`
+/// a rule or a parser builds. What it does **not** strip is a frame's identity —
+/// `par { A } { id k }` says which values the window hides, and that is content.
+pub(crate) fn unpad(term: &Term) -> Term {
+    if let Some((_, inner)) = term.as_padding() {
+        return unpad(inner);
+    }
+    match term {
+        // An identity is padding of the empty program wherever it stands on its
+        // own; only a `par`'s right-hand side reads it as a width, and that case
+        // is handled below without recursing.
+        Term::Id(_) => Term::nil(),
+        Term::Compose(..) => Term::seq(term.spine().into_iter().map(unpad)),
+        Term::Par {
+            origins,
+            left,
+            right,
+        } => match &**right {
+            Term::Id(_) => Term::par_from(origins.clone(), unpad(left), (**right).clone()),
+            _ => Term::par_from(origins.clone(), unpad(left), unpad(right)),
+        },
+        Term::Branch {
+            then_origin,
+            then_body,
+            else_origin,
+            else_body,
+        } => Term::branch(
+            then_origin.clone(),
+            unpad(then_body),
+            else_origin.clone(),
+            unpad(else_body),
+        ),
+        other => other.clone(),
+    }
+}
+
+/// Inserts the padding that makes every composition in `term` line up, reading
+/// it at a stack `entry` values deep.
+///
+/// Expects a **bare** term — [`unpad`] first if it may already carry padding, or
+/// the widths compound. `None` when `entry` is not enough for what the term
+/// demands, which is the one thing padding cannot fix: a computation cannot be
+/// made to run on a stack that does not hold its operands.
+pub(crate) fn pad(prog: &Program, term: &Term, entry: i64) -> Option<Term> {
+    match term {
+        // The empty program at this type. That is what an identity *is*, and it
+        // is why a padded term is never empty: `id 0` at entry 3 is `id 3`.
+        Term::Id(_) => Some(Term::Id(usize::try_from(entry).ok()?)),
+        Term::Compose(..) => {
+            let mut size = entry;
+            let mut out = Vec::new();
+            for factor in term.spine() {
+                let padded = pad(prog, factor, size)?;
+                size = crate::arity::term_arity(prog, &padded)?.1;
+                out.push(padded);
+            }
+            Some(Term::seq(out))
+        }
+        // A `par`'s sides are carved by their own arities, so neither takes any
+        // of the ambient padding — it wraps the pair.
+        Term::Par {
+            origins,
+            left,
+            right,
+        } => {
+            let a = crate::arity::term_arity(prog, left)?.0;
+            let c = crate::arity::term_arity(prog, right)?.0;
+            let inner = Term::par_from(
+                origins.clone(),
+                pad(prog, left, a)?,
+                pad(prog, right, c)?,
+            );
+            widen(prog, inner, entry)
+        }
+        // **Both arms at one type**, which is what makes a branch's own arity
+        // exact rather than a reading off whichever arm is hungrier.
+        Term::Branch {
+            then_origin,
+            then_body,
+            else_origin,
+            else_body,
+        } => {
+            let need = crate::arity::term_arity(prog, then_body)?
+                .0
+                .max(crate::arity::term_arity(prog, else_body)?.0);
+            let arms = Term::branch(
+                then_origin.clone(),
+                pad(prog, then_body, need)?,
+                else_origin.clone(),
+                pad(prog, else_body, need)?,
+            );
+            widen(prog, arms, entry)
+        }
+        atom => widen(prog, atom.clone(), entry),
+    }
+}
+
+/// `par { id k } { atom }` for whatever `k` brings it up to `entry`.
+fn widen(prog: &Program, atom: Term, entry: i64) -> Option<Term> {
+    let n = crate::arity::term_arity(prog, &atom)?.0;
+    match usize::try_from(entry - n).ok()? {
+        0 => Some(atom),
+        k => Some(Term::par(Term::Id(k), atom)),
+    }
+}
+
+/// Whether every composition in the term lines up, and both arms of every
+/// branch are stated at one type.
+///
+/// The invariant [`pad`] establishes and the applier maintains. It is checked
+/// rather than assumed: a rewrite that put a term back together wrongly would
+/// otherwise be a silently wider program.
+pub(crate) fn aligned(prog: &Program, term: &Term) -> bool {
+    match term {
+        Term::Compose(..) => {
+            let factors = term.spine();
+            let mut size = match crate::arity::term_arity(prog, factors[0]) {
+                Some((_, m)) => m,
+                None => return true,
+            };
+            for factor in &factors[1..] {
+                let Some((n, m)) = crate::arity::term_arity(prog, factor) else {
+                    return true;
+                };
+                if n != size {
+                    return false;
+                }
+                size = m;
+            }
+            factors.iter().all(|f| aligned(prog, f))
+        }
+        Term::Par { left, right, .. } => aligned(prog, left) && aligned(prog, right),
+        Term::Branch {
+            then_body,
+            else_body,
+            ..
+        } => {
+            let (a, b) = (
+                crate::arity::term_arity(prog, then_body),
+                crate::arity::term_arity(prog, else_body),
+            );
+            match (a, b) {
+                (Some(x), Some(y)) if x != y => false,
+                _ => aligned(prog, then_body) && aligned(prog, else_body),
+            }
+        }
+        _ => true,
+    }
+}
+
 /// Whether two terms do the same thing.
 ///
 /// Deliberately *not* the derived `PartialEq`. `Par::origins` and a branch's arm
@@ -541,6 +785,11 @@ pub(crate) fn id_word(k: usize) -> String {
 /// thing, and two calls to different sentences might, but nothing here can tell
 /// without expanding them.
 pub(crate) fn same_effect(a: &Term, b: &Term) -> bool {
+    // Padding is a type, not a program: `par { id 3 } { X }` and `X` do the same
+    // thing to the values `X` reads. A frame's identity is *not* stripped — that
+    // one says which values are hidden, and `collapse` would misfire if two
+    // widths compared equal.
+    let (a, b) = (a.atom(), b.atom());
     match (a, b) {
         (Term::Op(x), Term::Op(y)) => x == y,
         (Term::Id(x), Term::Id(y)) => x == y,

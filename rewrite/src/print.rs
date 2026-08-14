@@ -232,7 +232,10 @@ fn render_seq(
         let gutter = format!("{}{}", pos_cell(show_pos, Some(index)), gutter);
         let pad = "  ".repeat(indent);
 
-        match node {
+        // **Padding is elided.** What `par { id k } { X }` says is the depth
+        // the stack is at, and that is the column on the left — printing it as
+        // structure would nest every second line for no reading.
+        match node.atom() {
             Term::Op(inst) => out.push(format!("{} │ {}{}", gutter, pad, inst)),
             Term::Id(k) => out.push(format!("{} │ {}{}", gutter, pad, id_word(*k))),
             Term::Call(target) => out.push(format!(
