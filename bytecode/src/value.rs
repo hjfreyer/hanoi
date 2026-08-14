@@ -71,8 +71,7 @@ impl Value {
     ///
     /// The consequence worth knowing is that a check written as "is this not
     /// false" passes on junk. A check that wants the stronger reading says
-    /// `push true equal`, or reads a flag from the instruction that reported
-    /// it.
+    /// `push true equal`.
     ///
     /// It lives here rather than in the VM because anything that folds these
     /// operators statically has to agree with the interpreter exactly; a
@@ -93,7 +92,8 @@ impl Value {
 ///
 /// `None` says there is no ordering, which since `Int` is the only number is
 /// exactly the case where an operand is not a number at all: `greater` and
-/// `less` answer `false` and fail there.
+/// `less` answer `false` there, the same `false` they answer with when the
+/// ordering they were asked about does not hold.
 pub fn numeric_cmp(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
     match (a, b) {
         (Value::Int(x), Value::Int(y)) => Some(x.cmp(y)),

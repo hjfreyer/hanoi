@@ -20,38 +20,25 @@ function init {
 function accept {
     // Stack: [(event, state)]
     untuple 2
-    // Stack: [event, state, ok] or [(event, state), (), false]
+    // Stack: [event, state]
+    pick 1
+    // Stack: [event, state, event]
+    jump {{hidden_fn}}
+    // Stack: [event, state, is_hidden]
     branch {
         // Stack: [event, state]
-        pick 1
-        // Stack: [event, state, event]
-        jump {{hidden_fn}}
-        // Stack: [event, state, is_hidden]
-        branch {
-            // Stack: [event, state]
-            drop 0
-            // Stack: [event]
-            drop 0
-            // Stack: []
-            push false
-            // Stack: [false]
-        } {
-            // Stack: [event, state]
-            tuple 2
-            // Stack: [(event, state)]
-            jump {{concurrent}}::accept
-            // Stack: [Bool]
-        }
-    } {
-        // Not an (event, state) pair, so there is no event to weigh and no
-        // state to weigh it against: accept nothing.
-        // Stack: [(event, state), ()]
         drop 0
-        // Stack: [(event, state)]
+        // Stack: [event]
         drop 0
         // Stack: []
         push false
         // Stack: [false]
+    } {
+        // Stack: [event, state]
+        tuple 2
+        // Stack: [(event, state)]
+        jump {{concurrent}}::accept
+        // Stack: [Bool]
     }
 }
 
@@ -62,39 +49,14 @@ function emit {
     jump {{concurrent}}::emit
     // Stack: [state, (event, has_event)]
     untuple 2
-    // Stack: [state, event, has_event, ok] or [state, (event, has_event), (), false]
+    // Stack: [state, event, has_event]
     branch {
-        // Stack: [state, event, has_event]
+        // Stack: [state, event]
+        pick 0
+        // Stack: [state, event, event]
+        jump {{hidden_fn}}
+        // Stack: [state, event, is_hidden]
         branch {
-            // Stack: [state, event]
-            pick 0
-            // Stack: [state, event, event]
-            jump {{hidden_fn}}
-            // Stack: [state, event, is_hidden]
-            branch {
-                // Stack: [state, event]
-                drop 0
-                // Stack: [state]
-                drop 0
-                // Stack: []
-                tuple 0
-                // Stack: [()]
-                push false
-                // Stack: [(), false]
-                tuple 2
-                // Stack: [((), false)]
-            } {
-                // Stack: [state, event]
-                roll 1
-                // Stack: [event, state]
-                drop 0
-                // Stack: [event]
-                push true
-                // Stack: [event, true]
-                tuple 2
-                // Stack: [(event, true)]
-            }
-        } {
             // Stack: [state, event]
             drop 0
             // Stack: [state]
@@ -106,13 +68,19 @@ function emit {
             // Stack: [(), false]
             tuple 2
             // Stack: [((), false)]
+        } {
+            // Stack: [state, event]
+            roll 1
+            // Stack: [event, state]
+            drop 0
+            // Stack: [event]
+            push true
+            // Stack: [event, true]
+            tuple 2
+            // Stack: [(event, true)]
         }
     } {
-        // The machine did not answer with an (event, has_event) pair, which is
-        // the same as having nothing to say.
-        // Stack: [state, (event, has_event), ()]
-        drop 0
-        // Stack: [state, (event, has_event)]
+        // Stack: [state, event]
         drop 0
         // Stack: [state]
         drop 0
@@ -139,72 +107,47 @@ function tau_reduce {
     jump {{concurrent}}::tau_reduce
     // Stack: [state, (next_state, did_reduce)]
     untuple 2
-    // Stack: [state, next_state, did_reduce, ok] or [state, (next_state, did_reduce), (), false]
+    // Stack: [state, next_state, did_reduce]
     branch {
-        // Stack: [state, next_state, did_reduce]
+        // Stack: [state, next_state]
+        roll 1
+        // Stack: [next_state, state]
+        drop 0
+        // Stack: [next_state]
+        push true
+        // Stack: [next_state, true]
+        tuple 2
+        // Stack: [(next_state, true)]
+    } {
+        // Stack: [state, next_state]
+        drop 0
+        // Stack: [state]
+        pick 0
+        // Stack: [state, state]
+        jump {{concurrent}}::emit
+        // Stack: [state, (event, has_event)]
+        untuple 2
+        // Stack: [state, event, has_event]
         branch {
-            // Stack: [state, next_state]
-            roll 1
-            // Stack: [next_state, state]
-            drop 0
-            // Stack: [next_state]
-            push true
-            // Stack: [next_state, true]
-            tuple 2
-            // Stack: [(next_state, true)]
-        } {
-            // Stack: [state, next_state]
-            drop 0
-            // Stack: [state]
+            // Stack: [state, event]
             pick 0
-            // Stack: [state, state]
-            jump {{concurrent}}::emit
-            // Stack: [state, (event, has_event)]
-            untuple 2
-            // Stack: [state, event, has_event, ok] or [state, (event, has_event), (), false]
+            // Stack: [state, event, event]
+            jump {{hidden_fn}}
+            // Stack: [state, event, is_hidden]
             branch {
-                // Stack: [state, event, has_event]
-                branch {
-                    // Stack: [state, event]
-                    pick 0
-                    // Stack: [state, event, event]
-                    jump {{hidden_fn}}
-                    // Stack: [state, event, is_hidden]
-                    branch {
-                        // Stack: [state, event]
-                        roll 1
-                        // Stack: [event, state]
-                        tuple 2
-                        // Stack: [(event, state)]
-                        jump {{concurrent}}::process
-                        // Stack: [next_state]
-                        push true
-                        // Stack: [next_state, true]
-                        tuple 2
-                        // Stack: [(next_state, true)]
-                    } {
-                        // Stack: [state, event]
-                        drop 0
-                        // Stack: [state]
-                        push false
-                        // Stack: [state, false]
-                        tuple 2
-                        // Stack: [(state, false)]
-                    }
-                } {
-                    // Stack: [state, event]
-                    drop 0
-                    // Stack: [state]
-                    push false
-                    // Stack: [state, false]
-                    tuple 2
-                    // Stack: [(state, false)]
-                }
+                // Stack: [state, event]
+                roll 1
+                // Stack: [event, state]
+                tuple 2
+                // Stack: [(event, state)]
+                jump {{concurrent}}::process
+                // Stack: [next_state]
+                push true
+                // Stack: [next_state, true]
+                tuple 2
+                // Stack: [(next_state, true)]
             } {
-                // Nothing emitted that this could hide, so nothing reduced.
-                // Stack: [state, (event, has_event), ()]
-                drop 0
-                // Stack: [state, (event, has_event)]
+                // Stack: [state, event]
                 drop 0
                 // Stack: [state]
                 push false
@@ -212,19 +155,15 @@ function tau_reduce {
                 tuple 2
                 // Stack: [(state, false)]
             }
+        } {
+            // Stack: [state, event]
+            drop 0
+            // Stack: [state]
+            push false
+            // Stack: [state, false]
+            tuple 2
+            // Stack: [(state, false)]
         }
-    } {
-        // The machine did not answer with a (next_state, did_reduce) pair, so
-        // it has not reduced, and the state it was given is the one that stands.
-        // Stack: [state, (next_state, did_reduce), ()]
-        drop 0
-        // Stack: [state, (next_state, did_reduce)]
-        drop 0
-        // Stack: [state]
-        push false
-        // Stack: [state, false]
-        tuple 2
-        // Stack: [(state, false)]
     }
 }
 

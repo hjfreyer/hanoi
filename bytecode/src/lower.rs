@@ -416,9 +416,9 @@ fn lower_enum(decl: sugar::EnumDecl) -> Result<core::Item, String> {
 
 /// Builds the exported `check` predicate for a spec.
 ///
-/// A tuple spec asks `untuple` the shape question directly rather than guarding
-/// it, so the success flag *is* the test: the answer on the failing side is a
-/// `branch` arm rather than something that stops.
+/// A tuple spec asks the shape question with `as_tuple`, which is the coercion
+/// `untuple` would apply anyway: the answer on the failing side is a `branch`
+/// arm rather than something that stops.
 fn check_sentence(
     spec: &TypeSpec,
     annotations: Vec<SourceAnnotation>,
@@ -450,23 +450,28 @@ fn compile_type_spec(spec: &TypeSpec) -> Result<Vec<ParsedInstruction>, String> 
         TypeSpec::Path(path) => Ok(vec![ParsedInstruction::TypeCheckPath(path.clone())]),
         TypeSpec::Union(variants) => compile_union(variants),
         TypeSpec::Tuple(elements) => {
-            // `untuple n` succeeds on exactly the values this spec accepts the
-            // shape of, so the guard the old `is_tuple; tuple_length; equal`
-            // prologue recomputed is the flag the instruction already left.
-            // Ask the question once and branch on the answer.
+            // A value is of this shape exactly when coercing it to the shape
+            // changes nothing, so `pick 0 ; pick 0 ; as_tuple n ; equal` is the
+            // whole test — one question rather than the `is_tuple ;
+            // tuple_length ; equal` prologue it replaced, and the same one
+            // `untuple n` used to answer for itself.
             let n = elements.len();
             if n == 0 {
-                // At n = 0 the flag is the whole answer: `untuple 0` leaves
-                // `true` for `()` and `false` for everything else, which is
-                // precisely the predicate.
-                return Ok(vec![ParsedInstruction::Untuple(0)]);
+                // At width zero the coercion is the constant `()`, so the test
+                // is `equal` against that literal and there is nothing left to
+                // take apart.
+                return Ok(vec![
+                    ParsedInstruction::Push(ParsedValue::Tuple(Vec::new())),
+                    ParsedInstruction::Equal,
+                ]);
             }
 
             // `untuple n` leaves the last element on top and element 0 in the
             // deepest slot, so the elements are checked back to front: the one
             // this spec names last is the one already under the nose.
             let then_untupled = {
-                let mut insts = compile_type_spec(&elements[n - 1])?;
+                let mut insts = vec![ParsedInstruction::Untuple(n)];
+                insts.extend(compile_type_spec(&elements[n - 1])?);
                 for elem in elements.iter().rev().skip(1) {
                     // The result accumulated so far sits on top of the elements
                     // still to check. Hide it rather than rolling it out of the
@@ -485,19 +490,22 @@ fn compile_type_spec(spec: &TypeSpec) -> Result<Vec<ParsedInstruction>, String> 
                 }
             };
 
-            // Failure filled the same `n` slots — the value itself in the
-            // deepest, `()` padding above it — so the arm clears exactly what
-            // the other one consumes and answers `false`.
+            // The value is still whole in this arm, since the test was made on
+            // a copy: discard it and answer `false`.
             let else_wrong_shape = ParsedSentence {
-                instructions: std::iter::repeat_n(ParsedInstruction::Drop(0), n)
-                    .chain(std::iter::once(ParsedInstruction::Push(ParsedValue::Bool(
-                        false,
-                    ))))
-                    .collect(),
+                instructions: vec![
+                    ParsedInstruction::Drop(0),
+                    ParsedInstruction::Push(ParsedValue::Bool(false)),
+                ],
             };
 
             Ok(vec![
-                ParsedInstruction::Untuple(n),
+                // Two copies: `as_tuple` coerces one and `equal` compares it
+                // against the other, so the value survives into both arms.
+                ParsedInstruction::Pick(0),
+                ParsedInstruction::Pick(0),
+                ParsedInstruction::AsTuple(n),
+                ParsedInstruction::Equal,
                 ParsedInstruction::Branch(
                     Target::Inline(then_untupled),
                     Target::Inline(else_wrong_shape),

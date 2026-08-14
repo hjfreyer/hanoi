@@ -42,14 +42,10 @@ sentence check_symbol {
 
 test sentence a_symbol_carries_no_text {
     // A symbol is opaque: the string instructions have nothing to read in one,
-    // so they report failure and hand it back.
+    // so each answers with the default of the type it computes.
     push sym_a
     const_string_len
-    not
-    jump crate::prelude::check_true
-    ?
-    drop 0
-    push sym_a
+    push 0
     jump crate::prelude::check_equals
     ?
     drop 0
@@ -57,10 +53,6 @@ test sentence a_symbol_carries_no_text {
     push sym_a
     push 0
     const_string_char_at
-    not
-    jump crate::prelude::check_true
-    ?
-    drop 0
     push 0
     jump crate::prelude::check_equals
 }

@@ -1,9 +1,8 @@
 function init {
     // Stack: [()]
+    // `untuple 0` takes the argument either way, which is the whole of what
+    // it does.
     untuple 0
-    // `untuple 0` takes the argument either way, so the flag is
-    // the whole answer: there is nothing to answer differently about.
-    drop 0
     // Stack: []
     push {{val}}
     // Stack: [{{val}}]

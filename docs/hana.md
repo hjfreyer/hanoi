@@ -24,12 +24,11 @@ const_string greeting "hello"     // five characters
 
 sentence example {
     push idle
-    const_string_len   // fails: a symbol has no text — the flag says so
-    drop 0
+    const_string_len   // 0: a symbol has no text, and no length either
     drop 0
 
     push greeting
-    const_string_len   // 5, true
+    const_string_len   // 5
     drop 0
 }
 ```
@@ -135,9 +134,6 @@ test sentence add_numbers {
     push 2
     push 3
     add
-    jump crate::prelude::check_true   // the flag `add` left
-    ?
-    drop 0
     push 5
     jump crate::prelude::check_equals // the answer this test hands back
 }
@@ -251,16 +247,9 @@ so when one was not there to make:
 sentence tau_step {
     jump machine::tau_reduce
     untuple 2
-    branch {
-        // Stack: [new_state, did_reduce]
-        branch { push crate::prelude::ok } { push crate::prelude::err }
-        tuple 2
-    } {
-        // Not a (new_state, did_reduce) pair at all.
-        drop 0
-        push crate::prelude::err
-        tuple 2
-    }
+    // Stack: [new_state, did_reduce]
+    branch { push crate::prelude::ok } { push crate::prelude::err }
+    tuple 2
 }
 
 test sentence drives_two_steps {
@@ -324,16 +313,17 @@ its tags are, the way it says what its `main` is.
 `?` moves into a branch arm:
 
 ```hana
-untuple 2
-branch { push crate::prelude::ok equal } { drop 0 push false }
+pick 0 pick 0 as_tuple 2 equal
+branch { untuple 2 push crate::prelude::ok equal } { push false }
 branch { ...the rest of the block... } { push crate::prelude::err tuple 2 }
 ```
 
 Three things follow from that shape:
 
-- **`?` answers on every input.** The first branch reads the flag `untuple`
-  leaves: a value that is not a 2-tuple is not a result, so `?` calls it an
-  error carrying that value — which is exactly what `untuple` hands back (see
+- **`?` answers on every input.** The first branch asks whether there is a
+  result to take apart at all: a value that is not a 2-tuple is not one, so `?`
+  calls it an error carrying that value — which is why the arm that says no
+  leaves the value alone and only answers `false` (see
   [docs/totality.md](totality.md)).
 - **The early return drops what the rest of the block would have consumed.** The
   two arms of a branch must agree on their net stack effect, and the arm that
@@ -366,11 +356,12 @@ and the Z3 encoding threads them through as the same terms rather than
 rebuilding them.
 
 The alternative — `tuple N`, shuffle, `untuple N` — is worse than it looks.
-`untuple` does not halt on a value that is not a tuple of exactly that size,
-but it does *fail*: it reports `false` and hands the value back (see
+`untuple` does not halt on a value that is not a tuple of exactly that size; it
+coerces, and what comes back is `N` `()`s (see
 [docs/totality.md](totality.md)). Saving and restoring `N` values that way adds
-`N` failure flags to reason about, purely as an artifact of the encoding. `dip`
-makes them impossible to write.
+`N` shape questions to ask, purely as an artifact of the encoding — and a
+program that skips them is computing on junk. `dip` makes them impossible to
+write.
 
 ```hana
 // Reach past a value you want to keep:

@@ -33,7 +33,7 @@ sentence check_equals {
 }
 
 // `((), ok)` when the top value is `true`, and `((v, true), err)` when it is
-// anything else — `check_equals` against `true`, which is what most flags want.
+// anything else — `check_equals` against `true`, which is what a predicate wants.
 #[arity(1, 1)]
 sentence check_true {
     push true

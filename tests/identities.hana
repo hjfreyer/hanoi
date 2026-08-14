@@ -38,13 +38,10 @@ test sentence split_bool_is_the_identity {
 // `vm` measures the commutative set exhaustively over every pair of value
 // shapes; this checks the shape the law is actually applied in.
 test sentence commuting_operands_changes_nothing {
-    push 3 push 4 roll 1 add jump crate::prelude::check_true ? drop 0
-    push 7 jump crate::prelude::check_equals ? drop 0
-    push 3 push 4 add jump crate::prelude::check_true ? drop 0
-    push 7 jump crate::prelude::check_equals ? drop 0
+    push 3 push 4 roll 1 add            push 7  jump crate::prelude::check_equals ? drop 0
+    push 3 push 4 add                   push 7  jump crate::prelude::check_equals ? drop 0
 
-    push 3 push 4 roll 1 mul jump crate::prelude::check_true ? drop 0
-    push 12 jump crate::prelude::check_equals ? drop 0
+    push 3 push 4 roll 1 mul            push 12 jump crate::prelude::check_equals ? drop 0
     push true push false roll 1 and     push false jump crate::prelude::check_equals ? drop 0
     push true push false roll 1 or      push true  jump crate::prelude::check_equals ? drop 0
     push 3 push some_sym roll 1 equal   push false jump crate::prelude::check_equals
@@ -135,7 +132,7 @@ test sentence copying_and_discarding_the_original_is_nothing {
 //
 // The one fact here that no rewriting can reach: a codomain is not something a
 // case split discovers. `vm` measures which instructions qualify; this checks
-// the shape the law is applied in, on a predicate and on a flag.
+// the shape the law is applied in, on a predicate and on a comparison.
 test sentence a_test_on_something_already_boolean_is_decided {
     push true     is_bool is_bool  push true jump crate::prelude::check_equals ? drop 0
     push false    is_bool is_bool  push true jump crate::prelude::check_equals ? drop 0
@@ -147,17 +144,15 @@ test sentence a_test_on_something_already_boolean_is_decided {
     // The right-hand side, once `annihilate` has taken the operator away.
     push 42       drop 0 push true  push true jump crate::prelude::check_equals ? drop 0
 
-    // A flag is a boolean, so it folds where the operator cannot be deleted.
-    push 3 push 4 add is_bool push true jump crate::prelude::check_equals ? drop 0
-    push 7 jump crate::prelude::check_equals ? drop 0
-    push 3 push 4 add drop 0 push true
+    // A comparison is a boolean, so it folds where the operator cannot be
+    // deleted: `less` answers about its operands rather than leaving them.
+    push 3 push 4 less is_bool      push true jump crate::prelude::check_equals ? drop 0
+    push 3 push 4 less drop 0 push true
                                     push true jump crate::prelude::check_equals ? drop 0
-                                    push 7 jump crate::prelude::check_equals ? drop 0
 
-    // And one that fails, where the flag says so and is still a boolean.
-    push some_sym push 4 add is_bool
+    // And one with no ordering to report, whose `false` is a boolean too.
+    push some_sym push 4 less is_bool
                                     push true jump crate::prelude::check_equals ? drop 0
-                                    drop 0
     push ((), crate::prelude::ok)
 }
 
@@ -211,16 +206,14 @@ test sentence a_framed_computation_is_a_rolled_one {
     push true jump crate::prelude::check_equals ? drop 0
     push false jump crate::prelude::check_equals ? drop 0
 
-    // d = 2, X = add : 2 -> 2 — the rolls are all at one depth because a
-    // rotation does not change how many values there are.
-    push 1 push 2 push 8 push 9  dip 2 { add } roll 3 roll 3
-    jump crate::prelude::check_true ? drop 0
+    // d = 2, X = add : 2 -> 1 — one roll on the left for the single result,
+    // two on the right for the two operands it reads.
+    push 1 push 2 push 8 push 9  dip 2 { add } roll 2
     push 3 jump crate::prelude::check_equals ? drop 0
     push 9 jump crate::prelude::check_equals ? drop 0
     push 8 jump crate::prelude::check_equals ? drop 0
 
     push 1 push 2 push 8 push 9  roll 3 roll 3 add
-    jump crate::prelude::check_true ? drop 0
     push 3 jump crate::prelude::check_equals ? drop 0
     push 9 jump crate::prelude::check_equals ? drop 0
     push 8 jump crate::prelude::check_equals
@@ -233,26 +226,26 @@ test sentence a_framed_computation_is_a_rolled_one {
 // interpreter exactly, on junk as much as on anything else. So the element
 // order is measured here rather than reasoned about — `tuple n` takes the top
 // `n` in the order they sit on the stack, so the *topmost* becomes the last
-// element — and so is what `untuple`
-// hands back when the width does not match: the value in the deepest slot it
-// filled, `()` in the rest, and `false` on top.
+// element — and so is what `untuple` hands back when the width does not match:
+// `()` in every slot it filled.
 test sentence building_and_taking_apart_literals {
     push 1 push 2 tuple 2       push (1, 2) jump crate::prelude::check_equals ? drop 0
     push some_sym push 1 tuple 2
                                 push (some_sym, 1) jump crate::prelude::check_equals ? drop 0
 
-    push (1, 2) untuple 2 jump crate::prelude::check_true ? drop 0
-    push 2 jump crate::prelude::check_equals ? drop 0
-    push 1 jump crate::prelude::check_equals ? drop 0
-    push 2 untuple 2 not jump crate::prelude::check_true ? drop 0
-    push () jump crate::prelude::check_equals ? drop 0
-    push 2 jump crate::prelude::check_equals ? drop 0
+    push (1, 2) untuple 2       push 2 jump crate::prelude::check_equals ? drop 0
+                                push 1 jump crate::prelude::check_equals ? drop 0
+
+    // A value that is not a pair has no two parts to give.
+    push 2 untuple 2            push () jump crate::prelude::check_equals ? drop 0
+                                push () jump crate::prelude::check_equals ? drop 0
 
     // `tuple 0` is the one an operator with no operands at all answers.
     tuple 0                     push () jump crate::prelude::check_equals ? drop 0
 
-    // At `n = 0` there is no room for the value: the flag is the whole answer.
-    push 7 untuple 0            not jump crate::prelude::check_true
+    // At `n = 0` there are no slots to fill, so `untuple 0` is a drop.
+    push 7 untuple 0
+    push ((), crate::prelude::ok)
 }
 
 // `pick 0 ; push c ; equal ; branch { A } { B }`
@@ -286,7 +279,7 @@ test sentence a_value_equal_to_a_literal_is_that_literal {
 // `X ; drop^m` = `drop^n`, and `pick d ; drop` = nothing.
 test sentence discarded_work_is_no_work {
     push 9
-    push 3 push 4 add drop 0 drop 0
+    push 3 push 4 add drop 0
     push 9 jump crate::prelude::check_equals ? drop 0
 
     push 9
@@ -294,13 +287,24 @@ test sentence discarded_work_is_no_work {
     push 9 jump crate::prelude::check_equals
 }
 
-// `tuple n ; untuple n` = `push true`.
-test sentence building_and_taking_apart_leaves_the_flag {
+// `tuple n ; untuple n` = nothing.
+//
+// The one direction that holds: `untuple n ; tuple n` is not the identity, it
+// junk-normalizes, mapping every value that is not an `n`-tuple to `((), …)`.
+test sentence building_and_taking_apart_is_the_identity {
     push 1 push 2
     tuple 2 untuple 2
-    jump crate::prelude::check_true ? drop 0
     push 2 jump crate::prelude::check_equals ? drop 0
     push 1 jump crate::prelude::check_equals
+}
+
+// `untuple n ; tuple n` = `as_tuple n`, run rather than claimed.
+test sentence taking_apart_and_rebuilding_is_the_coercion {
+    push (1, 2)   untuple 2 tuple 2   push (1, 2)   jump crate::prelude::check_equals ? drop 0
+    push (1, 2)   as_tuple 2          push (1, 2)   jump crate::prelude::check_equals ? drop 0
+
+    push some_sym untuple 2 tuple 2   push ((), ()) jump crate::prelude::check_equals ? drop 0
+    push some_sym as_tuple 2          push ((), ()) jump crate::prelude::check_equals
 }
 
 // `pick (n-1)^n ; X ; dip m { X }` = `X ; pick (m-1)^m`, for `X : n -> m`.
@@ -327,16 +331,12 @@ test sentence copying_inputs_is_copying_outputs {
     push true jump crate::prelude::check_equals ? drop 0
     push true jump crate::prelude::check_equals ? drop 0
 
-    // X = add : 2 -> 2, where the flag is copied too
-    push 3 push 4  pick 1 pick 1 add dip 2 { add }
-    push true jump crate::prelude::check_equals ? drop 0
+    // X = add : 2 -> 1
+    push 3 push 4  pick 1 pick 1 add dip 1 { add }
     push 7 jump crate::prelude::check_equals ? drop 0
-    push true jump crate::prelude::check_equals ? drop 0
     push 7 jump crate::prelude::check_equals ? drop 0
-    push 3 push 4  add pick 1 pick 1
-    push true jump crate::prelude::check_equals ? drop 0
+    push 3 push 4  add pick 0
     push 7 jump crate::prelude::check_equals ? drop 0
-    push true jump crate::prelude::check_equals ? drop 0
     push 7 jump crate::prelude::check_equals ? drop 0
 
     // X = a call, which is the case `share { jump ... }` is for
@@ -481,6 +481,15 @@ identity taking_a_frame_off { dip 1 { not } } = { roll 1 not roll 1 };
 identity comparing_two_built_tuples
     { push some_sym push 1 tuple 2 push some_sym push 1 tuple 2 equal }
   = { push true };
+
+// `untuple n ; tuple n` = `as_tuple n` — the one direction that is not the
+// identity, and what it is instead.
+//
+// Taking a value apart and putting it back is the identity only where there was
+// something to take apart. Everywhere else `untuple n` fills its slots with
+// `()`s, so what comes back is `((), …)`: the coercion, which is where those
+// `()`s came from. It is the law that says junk-normalizing has a name.
+identity untupling_and_retupling_is_the_coercion { untuple 2 tuple 2 } = { as_tuple 2 };
 
 // The value an arm tested equal to, written into the arm.
 //

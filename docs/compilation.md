@@ -252,10 +252,10 @@ lowering. A lowering that needs information phase 2 cannot have is not a
 lowering.
 
 The semantics are not expressible either. The longhand routes the hidden
-values through an ADT constructor and a *fallible* accessor, so it introduces a
-flag per hidden value and a junk answer to discharge; `dip` cannot. What a user can
-write by hand is something with the same stack transition, not the same
-construct.
+values through an ADT constructor and an accessor that coerces, so it
+introduces a shape question per hidden value and a junk answer to discharge;
+`dip` cannot. What a user can write by hand is something with the same stack
+transition, not the same construct.
 
 Being core, `dip` needs nothing from phase 2 — sentence bodies pass through
 lowering untouched — and phase 4 resolves its target exactly as it resolves

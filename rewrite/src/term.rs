@@ -210,33 +210,37 @@ impl Prim {
             Prim::Push(_) => Arity::new(0, 1),
             Prim::Swap => Arity::new(2, 2),
 
-            Prim::Equal | Prim::And | Prim::Or => Arity::new(2, 1),
-
-            Prim::Not
-            | Prim::IsInt
-            | Prim::IsBool
-            | Prim::IsConstString
-            | Prim::IsSymbol
-            | Prim::IsTuple
-            // The coercions, which report nothing and so stay one wide.
-            | Prim::AsBool
-            | Prim::AsInt
-            | Prim::AsTuple(_) => Arity::new(1, 1),
-
-            // The fallible ones, each a slot wider than the value it computes
-            // because the extra slot carries the success flag.
-            Prim::Greater
+            // Everything that reads two values and answers with one. No
+            // instruction reports on itself, so an operation off its domain is
+            // a slot narrower than it used to be: the junk answer fills the one
+            // slot there is.
+            Prim::Equal
+            | Prim::And
+            | Prim::Or
+            | Prim::Greater
             | Prim::Less
             | Prim::Add
             | Prim::Subtract
             | Prim::Multiply
             | Prim::Divide
             | Prim::Modulo
-            | Prim::ConstStringCharAt => Arity::new(2, 2),
-            Prim::Negate | Prim::ConstStringLen | Prim::TupleLength => Arity::new(1, 2),
+            | Prim::ConstStringCharAt => Arity::new(2, 1),
+
+            Prim::Not
+            | Prim::Negate
+            | Prim::ConstStringLen
+            | Prim::TupleLength
+            | Prim::IsInt
+            | Prim::IsBool
+            | Prim::IsConstString
+            | Prim::IsSymbol
+            | Prim::IsTuple
+            | Prim::AsBool
+            | Prim::AsInt
+            | Prim::AsTuple(_) => Arity::new(1, 1),
 
             Prim::Tuple(n) => Arity::new(*n, 1),
-            Prim::Untuple(n) => Arity::new(1, *n + 1),
+            Prim::Untuple(n) => Arity::new(1, *n),
         }
     }
 
@@ -851,7 +855,7 @@ mod tests {
             err,
             Error::Mismatch {
                 left: Arity::new(1, 1),
-                right: Arity::new(2, 2),
+                right: Arity::new(2, 1),
             }
         );
     }
@@ -868,13 +872,13 @@ mod tests {
         let short_left =
             Term::pad_compose(Term::op(Prim::Push(Value::Int(1))), Term::op(Prim::Add));
         assert_eq!(format!("{}", short_left), "id(1) * push 1 ; add");
-        assert_eq!(short_left.arity(), Arity::new(1, 2));
+        assert_eq!(short_left.arity(), Arity::new(1, 1));
 
         // The prefix leaves two values where the next term wants one, so the
         // spare value passes under the next term instead.
-        let short_right = Term::pad_compose(Term::op(Prim::Add), Term::op(Prim::Not));
-        assert_eq!(format!("{}", short_right), "add ; id(1) * not");
-        assert_eq!(short_right.arity(), Arity::new(2, 2));
+        let short_right = Term::pad_compose(Term::copy(1), Term::op(Prim::Not));
+        assert_eq!(format!("{}", short_right), "copy(1) ; id(1) * not");
+        assert_eq!(short_right.arity(), Arity::new(1, 2));
     }
 
     #[test]
@@ -991,13 +995,12 @@ mod tests {
         let probe = sentence_named(&library, "probe");
         let term = lower(&library, probe).unwrap();
         term.check().unwrap();
-        // The dip needs three values where the jump before it left two, so the
-        // prefix is widened; the dip after it leaves one fewer than the prefix
-        // has, so the spare value passes underneath instead.
+        // The dip needs three values where the jump before it left one, so the
+        // prefix is widened by two; the frames after it meet what is there.
         assert_eq!(
             format!("{}", term),
             format!(
-                "id(1) * call #{h} ; call #{h} * id(1) ; id(1) * (drop(1) * id(1))",
+                "id(2) * call #{h} ; call #{h} * id(1) ; drop(1) * id(1)",
                 h = usize::from(helper)
             )
         );

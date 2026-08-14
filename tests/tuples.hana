@@ -6,9 +6,6 @@ test sentence simple_tuple {
     push 3
     tuple 3
     untuple 3
-    jump crate::prelude::check_true
-    ?
-    drop 0
     push 3
     jump crate::prelude::check_equals
     ?
@@ -28,15 +25,9 @@ test sentence nested_tuples {
     
     // Destructure outer tuple
     untuple 2
-    jump crate::prelude::check_true
-    ?
-    drop 0
     
     // Destructure inner tuple
     untuple 2
-    jump crate::prelude::check_true
-    ?
-    drop 0
     
     push 20
     jump crate::prelude::check_equals

@@ -1537,20 +1537,24 @@ impl<'a> Compiler<'a> {
     /// `?`, as the branches a user could have written in its place.
     ///
     /// A result is `(value, tag)` with `tag` being `crate::prelude::ok` or
-    /// `crate::prelude::err`, so the expansion takes the pair apart, asks which
-    /// tag it carries, and puts the rest of the block in the arm that runs when
-    /// the answer is `ok`:
+    /// `crate::prelude::err`, so the expansion asks whether it was handed a
+    /// pair at all, takes that pair apart, asks which tag it carries, and puts
+    /// the rest of the block in the arm that runs when the answer is `ok`:
     ///
     /// ```text
-    /// untuple 2
-    /// branch { push ok equal } { drop 0 push false }
+    /// pick 0 pick 0 as_tuple 2 equal
+    /// branch { untuple 2 push ok equal } { push false }
     /// branch { ...the rest of the block... } { push err tuple 2 }
     /// ```
     ///
-    /// The first branch reads the flag `untuple` leaves: a value that is not a
-    /// 2-tuple is not a result, and rather than failing on it, `?` calls it an
-    /// error carrying that value — which is what `untuple` handed back. That is
-    /// what keeps `?` total (see `docs/totality.md`).
+    /// The first branch asks whether there is a result to take apart at all: a
+    /// value that is not a 2-tuple is not one, and rather than failing on it,
+    /// `?` calls it an error carrying that value — which is why the else arm
+    /// leaves the value alone and only answers `false`. That is what keeps `?`
+    /// total (see `docs/totality.md`).
+    ///
+    /// Asking before unpacking is what `untuple` used to answer for itself. It
+    /// is the same question, written where the one caller that wants it is.
     ///
     /// The failure arm is left one step short: it rebuilds the error but does
     /// not yet drop whatever the block was holding underneath it, because how
@@ -1571,11 +1575,12 @@ impl<'a> Compiler<'a> {
         let rest = self.compile_sentence_body(scope, tail)?;
         let rest = self.push_block(rest);
 
-        let is_ok = self.push_block(vec![Instruction::Push(ok), Instruction::Equal]);
-        let not_a_result = self.push_block(vec![
-            Instruction::Drop,
-            Instruction::Push(Value::Bool(false)),
+        let is_ok = self.push_block(vec![
+            Instruction::Untuple(2),
+            Instruction::Push(ok),
+            Instruction::Equal,
         ]);
+        let not_a_result = self.push_block(vec![Instruction::Push(Value::Bool(false))]);
         let fail = self.push_block(vec![Instruction::Push(err), Instruction::Tuple(2)]);
 
         self.early_returns.push(EarlyReturn {
@@ -1584,7 +1589,13 @@ impl<'a> Compiler<'a> {
             in_sentence: self.current_sentence.clone(),
         });
         Ok(vec![
-            Instruction::Untuple(2),
+            // Two copies: one for `as_tuple` to coerce and one for `equal` to
+            // compare it against, so the value itself is still there whichever
+            // arm the answer picks.
+            Instruction::Copy,
+            Instruction::Copy,
+            Instruction::AsTuple(2),
+            Instruction::Equal,
             Instruction::Branch(is_ok, not_a_result),
             Instruction::Branch(rest, fail),
         ])

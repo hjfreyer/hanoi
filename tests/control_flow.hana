@@ -155,7 +155,4 @@ sentence level_0 {
 sentence decrement {
     push 1
     sub
-    jump crate::prelude::check_true
-    ?
-    drop 0
 }
