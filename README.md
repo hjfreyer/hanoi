@@ -21,7 +21,7 @@ Hanoi is a stack-oriented, VM-executed language designed to explore static analy
 - **Static Arity Verification**: An arity checker runs before execution to ensure that stack push/pop operations match function signatures, avoiding runtime stack underflows.
 - **No Recursion**: A sentence may not reach itself, by any route, and the compiler refuses one that does. Arity inference is what enforces it — a cycle is where inference cannot terminate — so every sentence has an inferred arity and a finite expansion, and a loop is written as the steps it takes. See [the reference](docs/hana.md#recursion-is-forbidden).
 - **Namespacing & Modularity**: Hierarchical module declarations (`mod name { ... }` or `mod name;`) with file-import support, relative/absolute path routing, and name visibility exports.
-- **Stated Identities** *(claims only — prover temporarily removed)*: `identity A = B;` states that two programs are interchangeable. The claim is parsed, namespaced, and held to the one property that is a fact about the *statement* — both sides must leave the stack the same way — but the equational rewriter that discharged it has been removed pending a reboot.
+- **Stated & Proved Identities**: `identity A = B;` states that two programs are interchangeable, and `bin/prove` discharges the claim by equality saturation over an algebraic term model — both sides of a goal go into one e-graph and the equations fire until they meet. A goal that sticks prints a **residual**: the smallest spelling each side reached, which is what says what to try next. See [docs/proving.md](docs/proving.md) and [docs/algebra.md](docs/algebra.md).
 
 ---
 
@@ -102,8 +102,15 @@ marker and no contract annotation, and its two sides are compiled and named
 compiler checks that the two sides leave the stack the same way, which is the
 one property of the claim that holds however it might be proved.
 
-Discharging the claim is out of scope for now — the equational rewriter that
-did it has been removed, and a stated identity is currently unproved.
+`bin/prove` discharges the claims:
+
+```bash
+cargo run --bin prove -- tests
+```
+
+Every identity in `tests/identities.hana` closes on the rule set alone; the
+pipeline, the equations, and the `.hant` stepping-stone file for goals that
+need a bridge are described in [docs/proving.md](docs/proving.md).
 
 ---
 
@@ -131,6 +138,10 @@ The Hanoi codebase is structured as a cargo workspace with several key packages:
 - **[vm](vm)**: The virtual machine execution engine.
   - [vm/src/lib.rs](vm/src/lib.rs): Core interpreter, instruction dispatch loop, and stack representation.
   - [vm/src/runtime.rs](vm/src/runtime.rs): Asynchronous CSP coordinator that drives state machine step cycles.
+- **[rewrite](rewrite)**: The prover.
+  - [rewrite/src/term.rs](rewrite/src/term.rs): The algebraic term model — programs as two arity-exact operators (`;` and `*`) over a handful of leaves.
+  - [rewrite/src/rules.rs](rewrite/src/rules.rs): The equations, as e-graph rewrites.
+  - [rewrite/src/strategy.rs](rewrite/src/strategy.rs): The goal pipeline (peel, descend, saturate, inline) behind `bin/prove`.
 - **[test-runner](test-runner)**: CLI harness that compiles and runs integration test suites.
 - **[tests](tests)**: A collection of test cases covering all VM features, string/data parsers, queues, and multi-agent CSP networks.
 
@@ -172,3 +183,5 @@ Use the helper shell scripts at the project root to execute test suites:
 - [docs/machines.md](docs/machines.md): Specification of Hanoi's Communicating Sequential Processes (CSP) state machine semantics.
 - [docs/compilation.md](docs/compilation.md): The compilation pipeline — the sugar and core ASTs, and what each phase from tokens to bytecode may assume.
 - [docs/totality.md](docs/totality.md): Why every instruction answers on every input, and what that buys.
+- [docs/proving.md](docs/proving.md): How `bin/prove` discharges identities — the goal pipeline, the e-graph, and the `.hant` stepping-stone files.
+- [docs/algebra.md](docs/algebra.md): The equational theory itself — every structural law with its side conditions, and the map to the category-theory literature it comes from.

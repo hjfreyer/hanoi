@@ -398,7 +398,9 @@ reconstruction, no guard, no imaginary values.
   established what the postcondition goes on to ask. Nothing in the workspace
   can say so today.
 
-- **A way to discharge an `identity`.** The claim is stated and its two sides
-  are compiled, but the equational rewriter that proved one has been removed
-  pending a reboot. Whatever replaces it inherits the laws this document makes
-  sound.
+- ~~A way to discharge an `identity`.~~ `bin/prove` does, by equality
+  saturation over the term model — see [docs/proving.md](proving.md). It
+  inherits the laws this document makes sound, and two of them precisely:
+  totality is what licenses discarding work (`drop-nat`) and reordering
+  disjoint computations, and determinism is what licenses sharing them
+  (`copy-nat`).
