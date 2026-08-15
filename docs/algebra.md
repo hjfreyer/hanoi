@@ -1,242 +1,207 @@
 # The algebra of programs
 
-A reference sheet for the rewriter's equation set: every structural law stated
-symbolically and as a Hanoi window, with its side conditions, its status in the
-current set, and what is known about completeness. Written against the set of
-22 in [docs/tactics.md](tactics.md); intended as the sheet to check a rebooted
-rule set against, so gaps and candidates are listed beside what exists.
+A reference sheet for the equational theory the rewriter works in: every
+structural law stated symbolically and in the term model's spelling, with its
+side conditions, where it lives in `rewrite/src/rules.rs`, and what is known
+about completeness. [docs/proving.md](proving.md) describes the machinery
+that applies these laws; this page is the laws themselves, and the map to the
+literature they come from.
 
 The organizing fact: the copy/drop/swap/frame fragment of this language is the
 standard finite presentation of the **free cartesian PROP** — the categorical
 structure singled out by Fox's theorem — and the branch fragment is the
 equational theory of **sum types**. The first has a complete, known axiom set
 and a decision procedure; the second is decidable but genuinely hard, and that
-split is exactly where the proof effort in this corpus goes.
+split is exactly where the proof effort goes: the one identity in the corpus
+that does not close is a sum-type path-condition claim.
 
 ## Conventions
 
-- `;` is composition in program order — the left factor runs first — matching
-  both diagrammatic order and Hanoi concatenation. It is written only where a
-  law needs the seam pointed at; adjacency means the same thing.
-- Objects are stack widths, so on objects `⊗` is `+`. In `W ⊗ X` the **deeper**
-  region is on the left and the top of the stack on the right, so
-  `dip k { A }` is `A ⊗ id_k`.
-- Generators: `δ = copy : 1 → 2` (the fresh copy lands on top — the right
-  factor), `ε = drop : 1 → 0`, `σ = swap : 2 → 2`.
-- Derived: `Δₙ : n → 2n` is the block diagonal, `pick (n-1)` written `n` times;
-  `!ₙ = εⁿ : n → 0` is `n` drops; `sink k` puts the top value under the `k`
-  beneath it.
-- Every law is stated in its minimal window. Congruence — `A = B ⟹ C[A] = C[B]`,
-  which is what a `Location` is — embeds it in any context, so no ambient
-  identity wires appear.
-- **Status** column: *in set* (one of the 22), *missing* (needed for
-  completeness, not currently stated), *candidate* (true and useful, priority a
-  judgment call), *lemma* (derivable — keep as a matcher or tactic, never as an
-  axiom).
+- `;` is composition in program order — the left factor runs first. `*` is
+  the tensor, and in `W * X` the **deeper** stack region is on the left, so
+  `dip { A }` is `A * id(1)`. Both are the term model's own operators
+  (`rewrite/src/term.rs`); objects are stack widths, so on objects `*` is
+  `+`.
+- Generators: `copy(1) : 1 → 2` (δ, the fresh copy lands on top), `drop(1) :
+  1 → 0` (ε), `swap : 2 → 2` (σ). The block forms `copy(n)`, `drop(n)`,
+  `id(n)` are their own leaves.
+- Every law is stated in its minimal window. Congruence embeds it in any
+  context — in the e-graph that is just the fact that rewriting is closed
+  under node formation.
+- **Where** column: the rule's name in `rules.rs`, *emergent* when the law
+  needs no rule of its own (it falls out of others plus the e-graph's
+  bidirectionality), *candidate* when it is true and useful but not yet
+  written.
 
 ## Layer 1: the cartesian core
 
 The structural laws — everything about copying, discarding and rearranging,
 with the signature's instructions opaque. This layer has a known complete
 presentation: symmetric monoidal structure, a cocommutative comonoid on the
-generating object, and naturality of `δ` and `ε` (Fox 1976; Lafont 2003 is the
+generating object, and naturality of δ and ε (Fox 1976; Lafont 2003 is the
 copy-paste-friendly catalogue).
 
-| law | symbolic | Hanoi | constraints | status |
-|---|---|---|---|---|
-| coassociativity | `δ ; (id ⊗ δ) = δ ; (δ ⊗ id)` | `copy ; copy = copy ; dip 1 { copy }` | — | in set (`copy_assoc`) |
-| counit, drop the copy | `δ ; (id ⊗ ε) = id` | `copy ; drop = ε` | net-change asymmetry (note 2) | in set (`counit`) |
-| counit, drop the original | `δ ; (ε ⊗ id) = id` | `copy ; dip 1 { drop } = ε` | top of stack only; at depth it is a `roll` | in set (`counit_under`) |
-| **cocommutativity** | `δ ; σ = δ` | `copy ; swap = copy` | — | **missing** (note 5) |
-| symmetry involutive | `σ ; σ = id₂` | `swap ; swap = ε` | — | in set (`swap_cycle`) |
-| naturality of σ | `(X ⊗ Y) ; σ = σ ; (Y ⊗ X)` | `dip 1 { X } ; sink m = sink n ; X` is the `Y = id₁` instance | `X : n → m`; matcher places `m = 1`, single frame — the law is general | in set (`unframe`) |
-| naturality of δ | `Δₙ ; (X ⊗ X) = X ; Δₘ` | `pick (n-1)^n ; X ; dip m { X } = X ; pick (m-1)^m` | `X : n → m` **deterministic** — the only law that needs it | in set (`copy_nat`) |
-| naturality of ε | `X ; !ₘ = !ₙ` | `X ; drop^m = drop^n` | `X : n → m` **total**; lowers the input requirement | in set (`annihilate`) |
-| `id_k ⊗ (−)` preserves composition | `(id_k ⊗ A) ; (id_k ⊗ B) = id_k ⊗ (A ; B)` | `dip k { A } ; dip k { B } = dip k { A B }` | same `k` both frames | in set (`fuse`) |
-| **`id_k ⊗ (−)` preserves identities** | `id_k ⊗ id₀ = id_k` | `dip k { } = ε` | — | **missing** — the other half of functoriality; `fuse` alone cannot delete an empty frame |
-| tensor unit | `id₀ ⊗ A = A` | `dip 0 { A } = A` | — | in set (`elim_dip0`) |
-| strict associativity of ⊗ | `id_k ⊗ (id_j ⊗ A) = id_{k+j} ⊗ A` | `dip k { dip j { A } } = dip (k+j) { A }` | — | in set (`collapse`) |
-| interchange | `(id ⊗ X) ; (Y ⊗ id) = (Y ⊗ id) ; (id ⊗ X)` | `X ; D_k = D_(k−m+n) ; X` | `X : n → m`, `k ≥ m`; totality of the reordered computations | in set (`interchange`) |
+| law | symbolic | in terms | where |
+|---|---|---|---|
+| associativity of `;` | `(a;b);c = a;(b;c)` | as written | `assoc-compose` ⇄ |
+| associativity of `*` | `(a*b)*c = a*(b*c)` | as written | `assoc-par` ⇄ |
+| units of `;` | `id ; a = a = a ; id` | `id(n)` of the right width | `unit-compose-left/right` (elim only) |
+| unit of `*` | `id₀ * a = a = a * id₀` | width-0 leaf | `par-unit-deep/top` |
+| id blocks fuse | `id(n) * id(m) = id(n+m)` | | `par-id-fuse` |
+| degenerate blocks | `copy(0) = drop(0) = id(0)` | | `copy-nothing`, `drop-nothing` |
+| interchange, staircase form | `a * b = (a * id) ; (id * b) = (id * b) ; (a * id)` | | `stair-deep-first`, `stair-top-first`, and the two `stair-read-*` recognizers |
+| interchange, middle-four | `(a;c) * (b;d) = (a*b) ; (c*d)` when the split aligns | | `par-fuse` (fusing direction; splitting is the staircases) |
+| producer beside a computation | `a ; (id(a.out) * b) = a * b` for `b : 0 → m` | | `compose-to-par` |
+| symmetry involutive | `σ ; σ = id₂` | `swap ; swap = id(2)` | `swap-cycle` |
+| naturality of σ | `(a*b) ; σ = σ ; (b*a)` | legs `1 → 1` | `swap-nat` ⇄ |
+| σ past a dropping leg | `swap ; (id(1)*drop(1)) = drop(1)*id(1)`, and mirror | the `1 → 0` leg naturality cannot say | `swap-drop-top/deep` ⇄ |
+| coassociativity | `δ;(id⊗δ) = δ;(δ⊗id)` | `copy(1) ; id(1)*copy(1) = copy(1) ; copy(1)*id(1)` | `coassociative` ⇄ |
+| **cocommutativity** | `δ ; σ = δ` | `copy(1) ; swap = copy(1)` | `cocommutative` |
+| counit, drop the copy | `δ ; (id ⊗ ε) = id` | `copy(n) ; id(n)*drop(n) = id(n)` | `counit-copy` |
+| counit, drop the original | `δ ; (ε ⊗ id) = id` | `copy(n) ; drop(n)*id(n) = id(n)` | `counit-original` |
+| naturality of δ | `X ; copy(m) = copy(n) ; (X * X)` for `X : n → m` | copying outputs is running twice on copied inputs | `copy-nat` ⇄ (`copy-nat-rev` reads the shared shape back) |
+| naturality of ε | `X ; drop(m) = drop(n)` for `X : n → m` | discarded work is no work | `drop-nat` (forward only — the reverse conjures an `X`; a stepping stone is how that direction is reached) |
+| drop blocks | `drop(n) * drop(m) = drop(n+m)` | | `drop-par-fuse`; `drop-split-two` ⇄ for the width the corpus uses |
+| copy blocks | `copy(2)` = the `pick 1 ; pick 1` frame spelling | | `copy-block-two` ⇄ |
 
 Notes:
 
-1. **Two kinds of constraint.** Semantic side conditions (determinism,
-   totality, `k ≥ m`, depth-0-only) are part of the law — violate them and the
-   equation is false. Matcher restrictions (`unframe` placing only `m = 1`) are
-   part of the search; a derivation file may cite the general law.
-2. **Net change, not full arity.** The counits and `annihilate` have sides with
-   different input *requirements* — `copy ; drop` is `(1 → 1)` against `ε` at
-   `(0 → 0)`. The compiler and `--check` compare net stack effect for exactly
-   this reason.
-3. **Arities are re-derived.** Every `n`, `m` above rides in a script as an
-   argument and is recomputed by the applier against the real program. The
-   arity constraints cost nothing to state.
-4. **Totality and determinism are free today.** No `panic`, no effects — so the
-   starred conditions are discharged by construction. They are recorded because
-   they are the load-bearing walls: an effectful instruction takes `copy_nat`
-   down (the diagonal stops being natural), a partial one takes `annihilate`
-   and `interchange` (the counit stops being natural and the tensor is merely
+1. **Side conditions became facts.** A width cannot appear in an e-graph
+   pattern, so every law indexed by one reads it off the class analysis
+   (arity, `is_id`, `is_drop`, `is_copy`). The conditions marked on the old
+   axiom sheet — determinism for `copy-nat`, totality for `drop-nat` and
+   interchange — are discharged globally: the language has no effects, no
+   nondeterminism, and nothing that fails.
+2. **The net-change asymmetry lives at the goal.** In the term model, padding
+   is explicit, so every rule instance above is arity-preserving as written —
+   the counit is `copy(1) ; id(1)*drop(1) = id(1)`, `1 → 1` on both sides.
+   Only an *identity's statement* needs the old net-change allowance, and
+   `Goal::aligned` pays it once, by padding the narrower side.
+3. **Elimination-only units are not a gap.** Unit *introduction* is unbounded
+   and is never needed: the staircase rules re-pad shapes boundedly, which is
+   what introduction was ever for.
+4. **Yang–Baxter is an instance.** The braid relation
+   `swap ; id(1)*swap ; swap = id(1)*swap ; swap ; id(1)*swap` — needed for
+   the permutation fragment to be complete — is naturality of σ at
+   `X = swap`, reachable from `swap-nat` plus the staircases; the
+   `a_framed_computation_is_a_rolled_one` corpus test runs its shape.
+5. **Totality and determinism are free today, and are the load-bearing
+   walls.** An effectful instruction would take `copy-nat` down (the diagonal
+   stops being natural), a partial one would take `drop-nat` and the
+   interchange (the counit stops being natural and the tensor is merely
    premonoidal). See "if effects arrive", below.
-5. **Cocommutativity appears underivable from the 22.** For a *boolean* value
-   it falls to `split_bool` + `eval` (each arm holds a literal, and `eval`
-   folds `push c ; push c ; swap`). For an opaque value nothing applies: no law
-   in the set exchanges the two outputs of a `copy`. Worth a `rewrite` session
-   to confirm before adding — and if it is underivable, some identity will
-   eventually stall on it.
-
-### Permutations: Yang–Baxter is already an instance
-
-A complete presentation of the symmetric groups by adjacent transpositions
-needs three families: `sᵢ² = 1`, `sᵢsⱼ = sⱼsᵢ` for `|i−j| ≥ 2`, and the braid
-relation `sᵢsᵢ₊₁sᵢ = sᵢ₊₁sᵢsᵢ₊₁`. In this language those are, respectively,
-`swap_cycle` (under frames), `interchange` (disjoint windows), and:
-
-```text
-swap ; dip 1 { swap } ; swap  =  dip 1 { swap } ; swap ; dip 1 { swap }
-```
-
-The third is **not** covered by `interchange` — the windows overlap — but it
-needs no new axiom: it is `unframe` at `X = swap` (`n = m = 2`), once `sink 2`
-is spelled as `swap ; dip 1 { swap }`. No matcher places `unframe` at `m = 2`,
-so today this is reachable by a derivation file and not by a search. A rebooted
-set should either keep the general `unframe` and make sure the braid instance
-is provable, or state the braid relation directly; without one of the two, the
-permutation fragment is incomplete.
 
 ### What completeness means for this layer
 
 In the free cartesian category on a signature, a morphism `n → m` **is** an
-m-tuple of first-order terms over n variables. Consequences worth building on:
+m-tuple of first-order terms over n variables. Consequences worth building
+on:
 
-- **Normal form.** Every branch-free program is equal to: a copy/discard/permute
-  layer, then the operations, with each output a term. Two branch-free programs
-  are equal under this layer's axioms **iff** symbolic evaluation yields the
-  same tuple of terms (dropped inputs and discarded work vanish — that is
-  `annihilate` — and shared work may be copied — that is `copy_nat`).
-- **A cheap oracle.** Symbolic evaluation decides the branch-free fragment
-  outright. It produces no derivation, so it cannot replace `prove` — but it
-  can answer "is this identity even true?" before a tactic is written, and it
-  is the right completeness test for the axiom set: sweep pairs of random
-  branch-free terms, compare the oracle's verdict against the rewriter's reach.
-- `--stack`'s abstract interpretation is this oracle in embryo.
+- **Normal form.** Every branch-free program is equal to: a
+  copy/discard/permute layer, then the operations, with each output a term.
+  Two branch-free programs are equal under this layer's laws **iff**
+  symbolic evaluation yields the same tuple of terms — dropped inputs and
+  discarded work vanish (`drop-nat`), shared work may be copied
+  (`copy-nat`).
+- **A cheap oracle.** Symbolic evaluation therefore decides the branch-free
+  fragment outright. It produces no derivation, so it cannot replace the
+  prover — but it can answer "is this identity even true?" before anything
+  searches, and it is the right completeness sweep for the rule set: random
+  branch-free pairs, oracle verdict against e-graph reach.
 
 ## Layer 2: branching — the sum-type fragment
 
-`branch` makes the category bicartesian (products *and* a boolean coproduct),
-and this is the fragment with no easy complete rewrite system. The known-good
-reference points from the λ-calculus literature: β for case, η for booleans,
-and the commuting conversions. Deciding equality here needed normalization by
-evaluation with case trees (Altenkirch–Dybjer–Hofmann–Scott); expect this
-layer to stay the hard one, and measure any reboot against these named laws.
+`branch` makes the category bicartesian, and this is the fragment with no
+easy complete rewrite system. The reference points from the λ-calculus
+literature: β for case, η for booleans, and the commuting conversions.
+Deciding equality here needed normalization by evaluation with case trees
+(Altenkirch–Dybjer–Hofmann–Scott); expect this layer to stay the hard one.
 
-| law | symbolic reading | Hanoi | status |
-|---|---|---|---|
-| β | `case(inl) = first arm` | `push c ; branch { A } { B }` = the arm `truthy(c)` selects | in set (`fold_branch`) |
-| η (booleans) | `case(x, true, false) = x` | `copy ; is_bool ; branch { branch { push true } { push false } } { }` = `ε` | in set (`split_bool`) |
-| commuting conversion, suffix | `case(x, f, g) ; h = case(x, f;h, g;h)` | `branch { A } { B } ; C = branch { A C } { B C }` | in set (`distribute`) |
-| commuting conversion, frame | `(id ⊗ case) = case of (id ⊗ −)` | `dip (k+1) { X } ; branch { A } { B } = branch { dip k { X } ; A } { dip k { X } ; B }` | in set (`hoist`) |
-| path condition, truthiness | an arm knows which way its own condition branches | `retest` (see tactics.md) | in set |
-| path condition, value | an arm that tested `equal` to a literal holds that literal | `specialize_equal` | in set |
-| codomain fact | `op` factors through `Bool ↪ Value` | `op ; is_bool = op ; drop ; push true` for `yields_bool` ops | in set (`bool_result`) |
+| law | reading | where |
+|---|---|---|
+| β | `push c ; branch { A } { B }` = the arm `truthy(c)` selects | `fold-branch` |
+| η (booleans) | ask `is_bool`, branch, push back what branching told you = ε | stated as `identities::split_bool` in the corpus and *run*; as a rewrite it inserts branches, so it stays a goal-level move for the case-split strategy to spend |
+| commuting conversion, suffix | `branch { A } { B } ; C = branch { A;C } { B;C }` | `branch-distribute` ⇄ (backward is suffix-factoring) |
+| commuting conversion, frame | `(x * id(1)) ; branch { A } { B } = branch { x;A } { x;B }` | `branch-hoist` ⇄ — no arithmetic: the frame hid exactly the condition |
+| copy absorbed by its branch | `copy(1) ; branch { drop(1);A } { drop(1);B } = branch { A } { B }` | `branch-absorbs-copy` |
+| path condition, truthiness | the arm an outer branch took decides an inner branch on a copy of its condition | `retest-then/-else` (+ `-bare` forms) |
+| path condition, value | a value that tested `equal` to a literal *is* that literal, in the then arm | `specialize-equal` |
+| codomain fact | `op ; is_bool = op ; drop-top ; push true` for `yields_bool` ops | `bool-result`; the `yields_bool` fact is measured by `vm` and lifted through composition by the analysis |
 
-The coproduct laws are sound with the shared program **duplicated textually**
-— `C` appears in both arms of `distribute` — because a branch's arms are
-alternatives: any run takes one, so nothing runs twice. Contrast the tensor,
-where `(a;b) ⊗ c ≠ (a⊗c);(b⊗c)` unless `c` is idempotent: ⊗ means *both
-happen*. That asymmetry is the whole difference between this layer and layer 1.
+Candidates, verified against the junk semantics of
+[docs/totality.md](totality.md) but not yet written — none is needed by the
+current corpus:
 
-### Candidates for this layer
-
-Each verified against the junk semantics of [docs/totality.md](totality.md) —
-`truthy(v) = (v ≠ false)`, per-operand coercion, `equal` is structural
-identity. None is in the current set.
-
-| law | Hanoi | why it is true | why it is useful |
-|---|---|---|---|
-| `not_branch` | `not ; branch { A } { B } = branch { B } { A }` | `not v` is truthy iff `v = false`, the unique falsy value | deletes every `not` that feeds a branch; pairs with `split_bool`, which otherwise leaves the `not` to fold arm by arm |
-| `and_branch` | `and ; branch { A } { B } = branch { branch { A } { B } } { drop ; B }` | `and` pops the top operand first; if it is falsy the else arm runs regardless of the other | turns boolean structure into control structure, where `retest` and the path-condition laws can reach it — short-circuiting as an equation |
-| `or_branch` | `or ; branch { A } { B } = branch { drop ; A } { branch { A } { B } }` | dual of `and_branch` | same |
-| `equal_refl` | `copy ; equal = drop ; push true` | `equal` is structural identity, so `v == v` for every value the machine has | a postcondition comparing a value to itself is otherwise unprovable on opaque values — `specialize_equal` needs a literal |
-| `branch_same_arms` | `branch { A } { A } = drop ; A` | either arm is `A` | **lemma, not axiom**: `inv(distribute)` factors `A` as a shared suffix, `annihilate` at `m = 0` and `counit` finish — the `same_arms` derivation in tactics.md |
-| type-test family | `op ; is_int = op ; drop ; push false` for a `yields_bool` op, and the analogous line per (op-codomain, test) pair | same fact as `bool_result`, read at the other five tests | tactics.md already names this gap; keep it table-driven off `Instruction::yields_*` and measured by `vm`, never restated |
-| `assoc` for `and`/`or` | `dip 1 { and } ; and = and ; and` | per-operand `truthy` and `truthy(Bool(p)) = p` | low priority — only bites on opaque values, where `split_bool` cannot reach; note `add` does **not** get this shape, its flag changes the arity |
-| De Morgan | `and ; not = not ; dip 1 { not } ; or` | the argument in totality.md § Truthiness | low priority; mostly subsumed by `not_branch` once conditions feed branches |
-
-`retest` and `specialize_equal` are this language's spelling of what the sum
-literature calls path conditions, and they are the right shape: a branch
-observes truthiness and nothing else, so *which facts an arm may learn* is
-exactly (a) which way a second test of the same value goes, and (b) the whole
-value when the test was `equal` against a literal. A reboot should keep both
-and expect no completeness theorem to cover them — this is the fragment where
-the corpus, not a theorem, says what is missing.
+| law | in terms | why it is true |
+|---|---|---|
+| `not_branch` | `not ; branch { A } { B } = branch { B } { A }` | `not v` is truthy iff `v = false`, the unique falsy value |
+| `and_branch` | `and ; branch { A } { B } = branch { branch { A } { B } } { drop-top ; B }` | short-circuiting as an equation; dual form for `or` |
+| `equal_refl` | `copy(1) ; equal = drop... = push true` over the value | `equal` is structural identity; unprovable on opaque values today |
+| type-test family | `op ; is_int = op ; drop-top ; push false` for a `yields_bool` op, per (codomain, test) pair | the other five tests of the same codomain fact, table-driven off `Instruction::yields_*` |
 
 ## Layer 3: the signature — evaluation
 
 Laws about what specific instructions compute. The discipline that matters
-more than any individual law: **facts live on the instruction and are measured
-by `vm`, never restated in the rewriter** — `truthy`, `op_arity`,
-`commutative`, `yields_bool` are the existing precedents. A second copy of any
-of these lists is a silent hazard.
+more than any individual law: **facts live on the instruction and are
+measured by `vm`, never restated** — `truthy`, `op_arity`, `commutative`,
+`yields_bool` are the precedents, and the prover's `eval` rule goes one
+further: it executes the literal window on a scratch VM, so there is no
+second implementation of the semantics at all.
 
-| law | Hanoi | status |
-|---|---|---|
-| evaluation | `push v₁ … push vₙ ; op` = the pushes of what `op` answers — junk included, flags included, `tuple`/`untuple` included | in set (`eval`) |
-| tuple cancellation | `tuple n ; untuple n = push true` | in set (`cancel_tuple`); no backward reading — `push true` does not determine `n` |
-| commutativity | `swap ; op = op` for `add`, `multiply`, `and`, `or`, `equal` | in set (`commute`) |
-| structural `equal` over tuples | `tuple n ; dip 1 { tuple n } ; equal` = the pairwise `equal`s conjoined | candidate — what a postcondition comparing a *built* value against a spec wants; today `eval` covers only the all-literal case |
+| law | where |
+|---|---|
+| evaluation — `push v̄ ; op` = the pushes of what the machine answers, junk included | `eval`, `eval-padded`, `eval-nothing` |
+| commutativity — `swap ; op = op` for `Instruction::commutative` | `commute` |
+| tuple cancellation — `tuple n ; untuple n = id(n)` | `tuple-cancel` |
+| the coercion — `untuple n ; tuple n = as_tuple n` | `untuple-retuple` |
+| coercion idempotence — `as_X ; as_X = as_X` | `as-bool-idem`, `as-int-idem`, `as-tuple-idem` |
 
 ## Lemmas, never axioms
 
-Derivable — each has a derivation checked in the tests, and keeping them
-demoted is what keeps the axiom count honest. A reboot inherits the same
-worked examples:
+Laws that looked essential and are reachable from the set above — each held
+by a test rather than stated as a rule:
 
-| lemma | derived from | where checked |
+| lemma | reached by | held by |
 |---|---|---|
-| `copy_const` — `push c ; copy = push c ; push c` | `copy_nat` at `X = push c`, `interchange`, `elim_dip0` | `applier::tests::copy_const_is_derivable_from_copy_nat` |
-| vacuous — `Δₙ ; X ; !ₘ = ε` | n× `counit` backward, one `annihilate` backward | `applier::tests::vacuous_is_derivable_from_annihilate_and_counit` |
-| `bool_result_copied` — `op ; copy ; is_bool = op ; push true` | `copy_nat` backward, `interchange`, `bool_result`, annihilation, counits | `tests::the_guard_a_split_leaves_is_derivable` |
-| `factor` — hoist a shared prefix | 2× `elim_dip0` backward, `hoist` backward | the three-step firing in tactics.md |
-| `speculate` / `lift` | counits backward, `introduce`, `factor` | `tests::speculating_is_what_the_three_rules_do_written_out` |
-| `branch_same_arms` | `inv(distribute)`, `annihilate`, `counit` | the `same_arms` run in tactics.md |
-| Yang–Baxter | `unframe` at `X = swap` | not yet stated as an identity — worth adding to the corpus |
+| `copy_const` — `push c ; copy(1) = push c ; push c` | `copy-nat` at `X = push c`, staircases, units | `rules::tests::copying_a_constant_is_pushing_it_twice`, and the corpus identity |
+| vacuous — copy a block, compute, drop the results = ε | counits + `drop-nat` + the block bridges | corpus identity `discarded_work_on_copies` |
+| the guard a split leaves — `op ; copy(1) ; is_bool = op ; push true` | `copy-nat` read backward by the e-graph, `bool-result`, counits | corpus identity `the_guard_a_split_leaves` |
+| a frame off — `X * id(1) = swap ; id(1)*X ; swap` | `swap-nat` + `swap-cycle` | corpus identity `taking_a_frame_off` |
+| branch of equal arms — `branch { A } { A } = drop-top ; A` | `branch-distribute` backward + `drop-nat` + counit | candidate sweep, when wanted |
 
-The demotion test, from tactics.md: read the opaque `X` as a random oracle
-(kills `copy_nat`) or as fallible (kills `annihilate`, `interchange`) and see
-what else falls. A law that survives every such reading of the others but
-fails on its own is independent; anything else is a lemma.
+The demotion test is unchanged from the old sheet: read the opaque `X` as a
+random oracle (kills `copy-nat`) or as fallible (kills `drop-nat` and the
+interchange) and see what else falls. A law that survives every such reading
+of the others but fails on its own is independent; anything else is a lemma.
 
 ## If effects or partiality ever arrive
 
 The literature already says which rows fall, and it matches the constraints
 column exactly:
 
-- **Partiality** (a `panic` returns): `annihilate` and `interchange` go — the
+- **Partiality** (a `panic` returns): `drop-nat` and the interchange go — the
   counit stops being natural and the tensor is merely *premonoidal*
   (Power–Robinson). Every other layer-1 law survives.
-- **Nondeterminism or effects**: `copy_nat` goes — the diagonal stops being
-  natural. The recovery notion is Führmann's *thunkability* / centrality: the
-  laws return for the sub-category of pure computations, which is how an
-  effectful Hanoi would keep this document — as the theory of its pure
-  fragment, with an effect row annotation deciding membership.
+- **Nondeterminism or effects**: `copy-nat` goes — the diagonal stops being
+  natural. The recovery notion is Führmann's *thunkability*: the laws return
+  for the pure sub-language, which is how an effectful Hanoi would keep this
+  page — as the theory of its pure fragment.
 
 ## References
 
 - Fox, *Coalgebras and cartesian categories* (1976) — cartesian = symmetric
   monoidal + natural cocommutative comonoids; the spine of layer 1.
-- Lafont, *Towards an algebraic theory of Boolean circuits* (2003) — explicit
-  finite presentations of these PROPs; the copy-paste catalogue.
+- Lafont, *Towards an algebraic theory of Boolean circuits* (2003) —
+  explicit finite presentations of these PROPs.
 - Bonchi–Sobociński–Zanasi, *Interacting Hopf algebras*; the *String Diagram
   Rewrite Theory* series I–III — rewriting these presentations as hypergraph
-  rewriting, which dissolves the frame bureaucracy layer 1 pays for explicitly;
-  Kissinger's Chyp is the working tool.
+  rewriting, which dissolves the padding bureaucracy layer 1 pays for in
+  staircase rules; Kissinger's Chyp is the working tool.
 - Altenkirch–Dybjer–Hofmann–Scott, *Normalization by evaluation for typed
   lambda calculus with coproducts* (2001) — why layer 2 is the hard one, and
   the shape of its decision procedure.
-- Power–Robinson, *Premonoidal categories and notions of computation* (1997);
-  Führmann, *Direct models of the computational lambda calculus* (1999) — the
-  effects roadmap.
-- egg (Willsey et al., POPL 2021) — equality saturation with proof production;
-  the natural candidate for a "smarter upper layer" whose explanations compile
-  to `.hand` derivations, which tactics.md § "what is not here yet" already
-  reserves space for.
+- Power–Robinson, *Premonoidal categories and notions of computation*
+  (1997); Führmann, *Direct models of the computational lambda calculus*
+  (1999) — the effects roadmap.
+- Willsey et al., *egg: Fast and extensible equality saturation* (POPL 2021)
+  — the engine `bin/prove` is built on.

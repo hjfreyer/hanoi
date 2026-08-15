@@ -8,6 +8,11 @@
 //! matching and the search come next, and are meant to be stated over a model
 //! that settled first.
 
+pub mod goal;
+pub mod hint;
+pub mod lang;
+pub mod rules;
+pub mod strategy;
 pub mod term;
 
 pub use term::{Arity, Error, Prim, Term, lower, lower_all};
