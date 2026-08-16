@@ -217,7 +217,7 @@ impl<'l> Prover<'l> {
                 }
             }
         }
-        firings.sort_by(|a, b| b.1.cmp(&a.1));
+        firings.sort_by_key(|&(_, count)| std::cmp::Reverse(count));
         Outcome::Stuck(Residual {
             lhs: expr_to_term(&best_l, &runner.egraph.analysis.session),
             rhs: expr_to_term(&best_r, &runner.egraph.analysis.session),

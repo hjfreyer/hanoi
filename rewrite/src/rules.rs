@@ -614,8 +614,7 @@ fn top_drop(eg: &mut ProofGraph, under: usize) -> Id {
 /// shape whose class the literal fact recognizes.
 fn literal_chain(eg: &mut ProofGraph, inputs: usize, vs: &[PushW]) -> Id {
     let mut acc = eg.add(HanaLang::Idn(IdW(inputs)));
-    let mut depth = inputs;
-    for v in vs {
+    for (depth, v) in (inputs..).zip(vs) {
         let push = eg.add(HanaLang::Push(*v));
         let step = if depth == 0 {
             push
@@ -624,7 +623,6 @@ fn literal_chain(eg: &mut ProofGraph, inputs: usize, vs: &[PushW]) -> Id {
             eg.add(HanaLang::Par([id, push]))
         };
         acc = eg.add(HanaLang::Compose([acc, step]));
-        depth += 1;
     }
     acc
 }
