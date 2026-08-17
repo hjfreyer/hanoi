@@ -51,23 +51,16 @@ impl Goal {
 
 /// How a goal was discharged. Printed with `--explain`; the leaves carry what
 /// the e-graph found.
+///
+/// Deliberately short: decomposition steps that once appeared here — peeling
+/// a shared affix, descending into arms — are congruences, which the e-graph
+/// performs on its own, so no proof ever needs to record one. Inlining is
+/// the exception that stays: it spends the library's defining equations,
+/// which saturation is deliberately not allowed to do by itself.
 #[derive(Debug)]
 pub enum Proof {
     /// The two sides are one term as written.
     Trivial,
-    /// A shared prefix and suffix were stripped; the sub-proof answers for
-    /// what was left.
-    Peel {
-        prefix: usize,
-        suffix: usize,
-        sub: Box<Proof>,
-    },
-    /// Both sides were branches; each pair of arms is its own claim. `None`
-    /// means the arms were equal as written.
-    Descend {
-        then_sub: Option<Box<Proof>>,
-        else_sub: Option<Box<Proof>>,
-    },
     /// Every call was unfolded, and the opened goal closed.
     Inlined(Box<Proof>),
     /// Saturation united the two sides.
@@ -83,20 +76,6 @@ impl Proof {
     pub fn summary(&self) -> String {
         match self {
             Proof::Trivial => "the two sides are one term".to_string(),
-            Proof::Peel {
-                prefix,
-                suffix,
-                sub,
-            } => {
-                format!("peel {}+{}; {}", prefix, suffix, sub.summary())
-            }
-            Proof::Descend { then_sub, else_sub } => {
-                let arm = |sub: &Option<Box<Proof>>| match sub {
-                    None => "as written".to_string(),
-                    Some(p) => p.summary(),
-                };
-                format!("descend (then: {}; else: {})", arm(then_sub), arm(else_sub))
-            }
             Proof::Inlined(sub) => format!("inline; {}", sub.summary()),
             Proof::Saturated {
                 iterations,
@@ -110,19 +89,15 @@ impl Proof {
     pub fn explanations(&self) -> Vec<&str> {
         match self {
             Proof::Trivial => vec![],
-            Proof::Peel { sub, .. } | Proof::Inlined(sub) => sub.explanations(),
-            Proof::Descend { then_sub, else_sub } => then_sub
-                .iter()
-                .chain(else_sub.iter())
-                .flat_map(|p| p.explanations())
-                .collect(),
+            Proof::Inlined(sub) => sub.explanations(),
             Proof::Saturated { explanation, .. } => explanation.as_deref().into_iter().collect(),
         }
     }
 }
 
 /// What is left when a goal did not close: the smallest spelling saturation
-/// found for each side, and what the search did on the way.
+/// found for each side, narrowed to where the two differ, and what the
+/// search did on the way.
 ///
 /// This output is the deliverable of a failed run — it is what says what to
 /// try next, so it is kept as data rather than printed on the spot.
@@ -130,6 +105,9 @@ impl Proof {
 pub struct Residual {
     pub lhs: Term,
     pub rhs: Term,
+    /// How the report walked from the goal to the difference: each step of
+    /// stripping shared context or entering the one arm that differs.
+    pub path: Vec<String>,
     /// Rule firings, most active first.
     pub firings: Vec<(String, usize)>,
     /// Why saturation stopped.

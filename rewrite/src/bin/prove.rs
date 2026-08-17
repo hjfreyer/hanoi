@@ -161,6 +161,9 @@ fn run(args: &Args) -> Result<bool, String> {
                 failed += 1;
                 println!("identity {} ... FAILED", identity.name);
                 println!();
+                if !residual.path.is_empty() {
+                    println!("  the difference is       │ {}", residual.path.join(", "));
+                }
                 println!("  what the left came to   │ {}", residual.lhs);
                 println!("  what the right came to  │ {}", residual.rhs);
                 println!("  the search stopped      │ {}", residual.stopped);
