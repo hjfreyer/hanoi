@@ -1,15 +1,14 @@
 //! Machinery for proving Hanoi programs equivalent.
 //!
-//! The first thing such a proof needs is something to state itself over, and a
-//! list of instructions is not it: composition is implicit, untyped, and joined
-//! by `dip` as a second way of combining programs that no law about the first
-//! one reaches. [`term`] is the model that replaces all three with two
-//! arity-exact operators, and it is all that lives here so far — the rules, the
-//! matching and the search come next, and are meant to be stated over a model
-//! that settled first.
+//! [`term`] is the model claims are stated over; [`lang`] is that model as an
+//! e-graph language and [`rules`] the equations over it; [`goal`] is a claim
+//! and what became of it; [`hant`] is the strategy language a human directs a
+//! proof with; [`strategy`] interprets one; [`corpus`] loads a source tree's
+//! identities and proofs together. `bin/prove` drives the lot.
 
+pub mod corpus;
 pub mod goal;
-pub mod hint;
+pub mod hant;
 pub mod lang;
 pub mod rules;
 pub mod strategy;

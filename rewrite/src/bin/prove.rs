@@ -5,23 +5,21 @@
 //! cargo run --bin prove -- tests --filter two_spellings --explain
 //! ```
 //!
-//! Per identity, the goal pipeline runs (see `rewrite::strategy`) and one
-//! line reports the outcome; a goal that sticks prints its **residual** — the
-//! smallest spelling saturation found for each side, which is what says what
-//! to try next. Exit codes: `0` every identity proved, `1` a claim is
-//! unproved or a hint is orphaned, `2` the corpus would not build or the
-//! arguments were wrong.
+//! Per identity, its written strategy runs — the `.hant` beside the `.hana`,
+//! see `rewrite::hant` — or the default `egraph` when it has none, and one
+//! line reports the outcome. A goal that sticks prints its **residual**: the
+//! smallest spelling saturation found for each side, narrowed to where the
+//! two differ, which is what says what to try next. Exit codes: `0` every
+//! identity proved, `1` a claim is unproved or a proof entry could not
+//! attach, `2` the corpus would not build or the arguments were wrong.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
 
-use bytecode::{IdentityIndex, SourceMap, assemble_source};
+use rewrite::corpus;
 use rewrite::goal::{Goal, Outcome};
-use rewrite::hint::{collect_hints, scratch_name, scratch_sentences};
 use rewrite::strategy::{Config, Prover};
-use rewrite::term::{Term, lower};
 
 struct Args {
     root: PathBuf,
@@ -97,54 +95,25 @@ fn parse_args() -> Result<Args, String> {
 }
 
 fn run(args: &Args) -> Result<bool, String> {
-    // The corpus, with every hint's stepping stone appended as a scratch
-    // sentence so the real parser and resolver compile it.
-    let main_path = args.root.join("main.hana");
-    let mut text = std::fs::read_to_string(&main_path)
-        .map_err(|e| format!("cannot read {}: {}", main_path.display(), e))?;
-    let hints = collect_hints(&args.root)?;
-    text.push_str(&scratch_sentences(&hints));
-
-    let mut map = SourceMap::new();
-    let file = map.add("main.hana", text);
-    let library = assemble_source(&mut map, file, Some(&args.root)).map_err(|e| map.render(&e))?;
-
-    // Resolve every hint to the identity it names; an orphan is an error, not
-    // a shrug — a renamed identity must not silently shed its stones.
-    let mut orphaned = 0usize;
-    let mut stones: HashMap<IdentityIndex, Vec<Term>> = HashMap::new();
-    for (i, hint) in hints.iter().enumerate() {
-        let scratch = library
-            .names
-            .iter_enumerated()
-            .find(|(_, n)| **n == scratch_name(i))
-            .map(|(idx, _)| idx)
-            .expect("every hint compiled into a scratch sentence");
-        let stone = lower(&library, scratch).map_err(|e| e.to_string())?;
-        match library.identity_by_name(&hint.identity) {
-            Ok(idx) => stones.entry(idx).or_default().push(stone),
-            Err(e) => {
-                orphaned += 1;
-                eprintln!("orphaned hint {:?}: {}", hint.identity, e);
-            }
-        }
+    let corpus = corpus::load(&args.root)?;
+    for problem in &corpus.problems {
+        eprintln!("{}", problem);
     }
 
-    let total = library.identities.len();
+    let total = corpus.library.identities.len();
     println!("Proving {} identities...", total);
-    let prover = Prover::new(&library, args.config.clone());
+    let prover = Prover::new(&corpus.library, args.config.clone());
     let (mut passed, mut failed, mut filtered) = (0usize, 0usize, 0usize);
-    for (idx, identity) in library.identities.iter_enumerated() {
+    for (idx, identity) in corpus.library.identities.iter_enumerated() {
         if let Some(f) = &args.filter
             && !identity.name.contains(f.as_str())
         {
             filtered += 1;
             continue;
         }
-        let goal = Goal::of_identity(&library, idx).map_err(|e| e.to_string())?;
-        let empty = Vec::new();
-        let hints_for = stones.get(&idx).unwrap_or(&empty);
-        match prover.prove(&goal, hints_for).map_err(|e| e.to_string())? {
+        let goal = Goal::of_identity(&corpus.library, idx).map_err(|e| e.to_string())?;
+        let strategy = corpus.proofs.get(&idx);
+        match prover.prove(&goal, strategy).map_err(|e| e.to_string())? {
             Outcome::Closed(proof) => {
                 passed += 1;
                 println!("identity {} ... ok ({})", identity.name, proof.summary());
@@ -178,14 +147,14 @@ fn run(args: &Args) -> Result<bool, String> {
         }
     }
 
-    let ok = failed == 0 && orphaned == 0;
+    let ok = failed == 0 && corpus.problems.is_empty();
     println!();
     println!(
-        "identity result: {}. {} passed; {} failed; {} orphaned hints; {} filtered out",
+        "identity result: {}. {} passed; {} failed; {} problem(s); {} filtered out",
         if ok { "ok" } else { "FAILED" },
         passed,
         failed,
-        orphaned,
+        corpus.problems.len(),
         filtered
     );
     Ok(ok)
