@@ -77,6 +77,14 @@ pub enum Proof {
         left_sub: Box<Proof>,
         right_sub: Box<Proof>,
     },
+    /// A `solve` matched its template against the left side — which is the
+    /// proof of the left half — and the filled-in waypoint's right half
+    /// closed. The fills are recorded so a different match after a rule-set
+    /// change is visible rather than mysterious.
+    Solved {
+        fills: Vec<(String, Term)>,
+        right_sub: Box<Proof>,
+    },
     /// An `egraph` united the two sides.
     Saturated {
         iterations: usize,
@@ -111,6 +119,15 @@ impl Proof {
                 left_sub.summary(),
                 right_sub.summary()
             ),
+            Proof::Solved { fills, right_sub } => format!(
+                "solve ({}; right: {})",
+                fills
+                    .iter()
+                    .map(|(name, term)| format!("?{} = {}", name, term))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                right_sub.summary()
+            ),
             Proof::Saturated {
                 iterations,
                 classes,
@@ -137,6 +154,7 @@ impl Proof {
                 .into_iter()
                 .chain(right_sub.explanations())
                 .collect(),
+            Proof::Solved { right_sub, .. } => right_sub.explanations(),
             Proof::Saturated { explanation, .. } => explanation.as_deref().into_iter().collect(),
         }
     }

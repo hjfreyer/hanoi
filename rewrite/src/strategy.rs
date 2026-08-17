@@ -33,11 +33,13 @@ use std::time::Duration;
 use bytecode::Library;
 use egg::{AstSize, BackoffScheduler, EGraph, Extractor, Runner};
 
+use std::collections::HashMap;
+
 use crate::goal::{Goal, Outcome, Proof, Residual};
-use crate::hant::{Step, Strategy, default_strategy};
-use crate::lang::{Proving, expr_of, expr_to_term};
+use crate::hant::{Body, Step, Strategy, default_strategy};
+use crate::lang::{Proving, expr_of, expr_to_term, pattern_of};
 use crate::rules::rules;
-use crate::term::{Error, Term, lower};
+use crate::term::{Arity, Error, Term, lower};
 
 /// The saturation budget, and whether to pay for explanations.
 #[derive(Debug, Clone)]
@@ -82,7 +84,7 @@ impl<'l> Prover<'l> {
 
     /// Runs a strategy on a goal — the written one, or the default `egraph`
     /// when the identity carries no proof.
-    pub fn prove(&self, goal: &Goal, strategy: Option<&Strategy<Term>>) -> Result<Outcome, Error> {
+    pub fn prove(&self, goal: &Goal, strategy: Option<&Strategy<Body>>) -> Result<Outcome, Error> {
         let default = default_strategy();
         let strategy = strategy.unwrap_or(&default);
         self.run(strategy, goal.clone())
@@ -91,7 +93,7 @@ impl<'l> Prover<'l> {
     /// One strategy on one goal. A goal whose sides are one term as written
     /// is closed before any step runs — at every level, so a `descend` arm
     /// or a cut's side that became trivial needs no steps of its own.
-    fn run(&self, strategy: &[Step<Term>], goal: Goal) -> Result<Outcome, Error> {
+    fn run(&self, strategy: &[Step<Body>], goal: Goal) -> Result<Outcome, Error> {
         if goal.lhs == goal.rhs {
             return Ok(Outcome::Closed(Proof::Trivial));
         }
@@ -109,6 +111,9 @@ impl<'l> Prover<'l> {
                 left,
                 right,
             } => {
+                let Body::Stone(waypoint) = waypoint else {
+                    unreachable!("the loader compiles a via body to a stone");
+                };
                 // The cut is a claim, so a waypoint whose stack effect cannot
                 // sit between the sides is refused here, loudly, rather than
                 // producing goals no rule could ever close.
@@ -124,7 +129,7 @@ impl<'l> Prover<'l> {
                 // own road, and proving both proves the whole by transitivity.
                 let default = default_strategy();
                 let side = |name: &str,
-                            strategy: &Option<Strategy<Term>>,
+                            strategy: &Option<Strategy<Body>>,
                             sub: Goal|
                  -> Result<Result<Box<Proof>, Residual>, Error> {
                     let strategy = strategy.as_ref().unwrap_or(&default);
@@ -158,6 +163,116 @@ impl<'l> Prover<'l> {
                     left_sub,
                     right_sub,
                 }))
+            }
+
+            Step::Solve {
+                vars,
+                template,
+                right,
+            } => {
+                let Body::Template { term, holes } = template else {
+                    unreachable!("the loader compiles a solve body to a template");
+                };
+                // The template stands where a waypoint would, so it owes the
+                // same net stack change — checked with the holes at their
+                // declared arities, before any search runs.
+                if term.arity().net() != goal.lhs.arity().net() {
+                    let why = format!(
+                        "the `solve` template's net stack change ({}) is not the goal's ({})",
+                        term.arity().net(),
+                        goal.lhs.arity().net()
+                    );
+                    return Ok(Outcome::Stuck(gave_up(goal, &why)));
+                }
+
+                // One saturation: the goal's two sides, and a pattern built
+                // in the same session so its leaves name the same values.
+                let mut analysis = Proving::default();
+                let lhs = expr_of(&goal.lhs, &mut analysis.session);
+                let rhs = expr_of(&goal.rhs, &mut analysis.session);
+                let hole_vars: HashMap<bytecode::SentenceIndex, egg::Var> = holes
+                    .iter()
+                    .map(|(name, idx)| {
+                        (
+                            *idx,
+                            format!("?{}", name).parse().expect("a var spelled ?x"),
+                        )
+                    })
+                    .collect();
+                let pattern = pattern_of(term, &hole_vars, &mut analysis.session);
+                let runner = self.run_engine(analysis, &lhs, &rhs);
+
+                // The goal may simply have closed while we were solving.
+                let (l, r) = (runner.roots[0], runner.roots[1]);
+                if runner.egraph.find(l) == runner.egraph.find(r) {
+                    return Ok(self.judge(runner, &lhs, &rhs));
+                }
+
+                // Match the template against the left side's class. The match
+                // both finds the fills and *is* the proof of the left half:
+                // the instantiated template's nodes live in that class. First
+                // match at the declared arities wins — recorded in the proof,
+                // so a different match after a rule-set change is visible.
+                use egg::Searcher;
+                let matches = pattern.search_eclass(&runner.egraph, runner.egraph.find(l));
+                let extractor = Extractor::new(&runner.egraph, AstSize);
+                let mut fills: Option<Vec<(String, Term)>> = None;
+                'subst: for subst in matches.iter().flat_map(|m| m.substs.iter()) {
+                    let mut candidate = Vec::new();
+                    for ((name, (inputs, outputs)), (_, idx)) in vars.iter().zip(holes) {
+                        let var = hole_vars[idx];
+                        let Some(&class) = subst.get(var) else {
+                            continue 'subst;
+                        };
+                        if runner.egraph[class].data.arity != Arity::new(*inputs, *outputs) {
+                            continue 'subst;
+                        }
+                        let (_, best) = extractor.find_best(class);
+                        candidate.push((
+                            name.clone(),
+                            expr_to_term(&best, &runner.egraph.analysis.session),
+                        ));
+                    }
+                    fills = Some(candidate);
+                    break;
+                }
+                drop(extractor);
+                let Some(fills) = fills else {
+                    return Ok(Outcome::Stuck(gave_up(
+                        goal,
+                        "the template matched nothing in the left side's class at the declared arities",
+                    )));
+                };
+
+                // The filled-in waypoint, and the one goal left: its right half.
+                let by_hole: HashMap<bytecode::SentenceIndex, &Term> = holes
+                    .iter()
+                    .zip(&fills)
+                    .map(|((_, idx), (_, fill))| (*idx, fill))
+                    .collect();
+                let filled = substitute_holes(term, &by_hole);
+                let fills_shown = fills
+                    .iter()
+                    .map(|(name, term)| format!("?{} = {}", name, term))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let default = default_strategy();
+                let right = right.as_ref().unwrap_or(&default);
+                Ok(
+                    match self.run(right, Goal::aligned(filled, goal.rhs.clone()))? {
+                        Outcome::Closed(p) => Outcome::Closed(Proof::Solved {
+                            fills,
+                            right_sub: Box::new(p),
+                        }),
+                        Outcome::Stuck(mut residual) => {
+                            residual.path.insert(
+                                0,
+                                format!("in the right half of the solve, with {}", fills_shown),
+                            );
+                            Outcome::Stuck(residual)
+                        }
+                    },
+                )
             }
 
             Step::Peel => {
@@ -217,7 +332,7 @@ impl<'l> Prover<'l> {
                     )));
                 };
                 let arm = |name: &str,
-                           strategy: &Option<Strategy<Term>>,
+                           strategy: &Option<Strategy<Body>>,
                            a: &Term,
                            b: &Term|
                  -> Result<Result<Option<Box<Proof>>, Residual>, Error> {
@@ -262,7 +377,17 @@ impl<'l> Prover<'l> {
         let mut analysis = Proving::default();
         let lhs = expr_of(&goal.lhs, &mut analysis.session);
         let rhs = expr_of(&goal.rhs, &mut analysis.session);
+        let runner = self.run_engine(analysis, &lhs, &rhs);
+        self.judge(runner, &lhs, &rhs)
+    }
 
+    /// Builds and runs the engine on a goal's two expressions.
+    fn run_engine(
+        &self,
+        analysis: Proving,
+        lhs: &egg::RecExpr<crate::lang::HanaLang>,
+        rhs: &egg::RecExpr<crate::lang::HanaLang>,
+    ) -> Runner<crate::lang::HanaLang, Proving> {
         // The backoff scheduler exists to slow growth, and the growth here
         // comes from the handful of rules that fire on shape alone. The fact
         // rules match everywhere and *decline* nearly everywhere — banning
@@ -294,14 +419,14 @@ impl<'l> Prover<'l> {
             egraph
         };
 
-        let mut runner = Runner::default()
+        Runner::default()
             .with_scheduler(scheduler)
             .with_iter_limit(self.config.iter_limit)
             .with_node_limit(self.config.node_limit)
             .with_time_limit(self.config.time_limit)
             .with_egraph(egraph)
-            .with_expr(&lhs)
-            .with_expr(&rhs)
+            .with_expr(lhs)
+            .with_expr(rhs)
             // Stop the moment the two sides meet: saturation would happily
             // keep exploring an already-closed goal to the end of the budget.
             .with_hook(|runner| {
@@ -312,14 +437,22 @@ impl<'l> Prover<'l> {
                     Ok(())
                 }
             })
-            .run(&self.rules);
+            .run(&self.rules)
+    }
 
+    /// Reads the verdict off a finished run: the sides met, or the residual.
+    fn judge(
+        &self,
+        mut runner: Runner<crate::lang::HanaLang, Proving>,
+        lhs: &egg::RecExpr<crate::lang::HanaLang>,
+        rhs: &egg::RecExpr<crate::lang::HanaLang>,
+    ) -> Outcome {
         let (l, r) = (runner.roots[0], runner.roots[1]);
         if runner.egraph.find(l) == runner.egraph.find(r) {
             let explanation = self
                 .config
                 .explain
-                .then(|| runner.explain_equivalence(&lhs, &rhs).get_flat_string());
+                .then(|| runner.explain_equivalence(lhs, rhs).get_flat_string());
             return Outcome::Closed(Proof::Saturated {
                 iterations: runner.iterations.len(),
                 classes: runner.egraph.number_of_classes(),
@@ -357,6 +490,26 @@ impl<'l> Prover<'l> {
                 None => "unknown".to_string(),
             },
         })
+    }
+}
+
+/// The template with every hole replaced by the term the match bound it to.
+fn substitute_holes(term: &Term, fills: &HashMap<bytecode::SentenceIndex, &Term>) -> Term {
+    match term {
+        Term::Call { target, .. } if fills.contains_key(target) => fills[target].clone(),
+        Term::Compose(a, b) => Term::Compose(
+            Box::new(substitute_holes(a, fills)),
+            Box::new(substitute_holes(b, fills)),
+        ),
+        Term::Par(a, b) => Term::Par(
+            Box::new(substitute_holes(a, fills)),
+            Box::new(substitute_holes(b, fills)),
+        ),
+        Term::Branch { if_true, if_false } => Term::Branch {
+            if_true: Box::new(substitute_holes(if_true, fills)),
+            if_false: Box::new(substitute_holes(if_false, fills)),
+        },
+        leaf => leaf.clone(),
     }
 }
 
@@ -536,23 +689,21 @@ mod tests {
     use bytecode::assemble;
 
     /// Proves the identity named `name`, with the strategy written as a
-    /// `.hant` entry body, or the default when `strategy` is `None`.
+    /// `.hant` entry body, or the default when `strategy` is `None` —
+    /// compiling `via` and `solve` bodies exactly as `corpus::load` does.
     fn prove_with(code: &str, name: &str, strategy: Option<&str>) -> Outcome {
-        let library = assemble(code).unwrap();
+        let entries = strategy
+            .map(|s| parse_hant(&format!("proof {} = {};", name, s)).unwrap())
+            .unwrap_or_default();
+        let (scratch, mut plan) = crate::corpus::plan_scratches(&entries).unwrap();
+        let library = assemble(&format!("{}{}", code, scratch)).unwrap();
+        let strategy = entries
+            .first()
+            .map(|e| crate::corpus::attach(&e.strategy, &mut plan, &library).unwrap());
         let idx = library.identity_by_name(name).unwrap();
         let goal = Goal::of_identity(&library, idx).unwrap();
-        let parsed = strategy.map(|s| {
-            let entries = parse_hant(&format!("proof {} = {};", name, s)).unwrap();
-            crate::hant::map_via(entries.into_iter().next().unwrap().strategy, &mut |body| {
-                Err::<Term, String>(format!(
-                    "this test writes no via bodies, got {{ {} }}",
-                    body
-                ))
-            })
-            .unwrap()
-        });
         Prover::new(&library, Config::default())
-            .prove(&goal, parsed.as_ref())
+            .prove(&goal, strategy.as_ref())
             .unwrap()
     }
 
@@ -560,34 +711,8 @@ mod tests {
         prove_with(code, name, None)
     }
 
-    /// The same, for strategies whose `via` bodies must compile — a small
-    /// version of what `corpus::load` does with scratch sentences.
     fn prove_with_vias(code: &str, name: &str, strategy: &str) -> Outcome {
-        let entries = parse_hant(&format!("proof {} = {};", name, strategy)).unwrap();
-        let entry = entries.into_iter().next().unwrap();
-        let mut source = code.to_string();
-        for (i, body) in crate::hant::via_bodies(&entry.strategy).iter().enumerate() {
-            source.push_str(&format!("\nsentence __via_{} {{ {} }}\n", i, body));
-        }
-        let library = assemble(&source).unwrap();
-        let mut next = 0usize;
-        let strategy = crate::hant::map_via(entry.strategy, &mut |_body: String| {
-            let scratch = format!("__via_{}", next);
-            next += 1;
-            let idx = library
-                .names
-                .iter_enumerated()
-                .find(|(_, n)| **n == scratch)
-                .map(|(idx, _)| idx)
-                .expect("the scratch sentence compiled");
-            lower(&library, idx).map_err(|e| e.to_string())
-        })
-        .unwrap();
-        let idx = library.identity_by_name(name).unwrap();
-        let goal = Goal::of_identity(&library, idx).unwrap();
-        Prover::new(&library, Config::default())
-            .prove(&goal, Some(&strategy))
-            .unwrap()
+        prove_with(code, name, Some(strategy))
     }
 
     #[test]
@@ -722,6 +847,66 @@ mod tests {
         assert_eq!(
             proof.summary(),
             "cut (left: saturated (4 iters, 6 classes); right: inline; the two sides are one term)"
+        );
+    }
+
+    #[test]
+    fn a_solve_fills_its_template_from_the_left_side() {
+        // The left side reaches `drop ; push true`; the template asks for
+        // "something, then `push true`" and the match fills ?f with the
+        // smallest spelling of that something. The right half then compares
+        // the filled waypoint against a call, so it inlines.
+        let outcome = prove_with_vias(
+            r#"
+            sentence drop_and_true { drop 0 push true }
+            identity probe { is_bool is_bool } = { jump crate::drop_and_true };
+            "#,
+            "probe",
+            "solve (f: 1 -> 0) { ?f push true } (right: inline)",
+        );
+        let Outcome::Closed(proof) = outcome else {
+            panic!("the template matches and the right half closes");
+        };
+        assert_eq!(
+            proof.summary(),
+            "solve (?f = drop(1); right: inline; the two sides are one term)"
+        );
+    }
+
+    #[test]
+    fn a_template_that_matches_nothing_fails_loudly() {
+        let outcome = prove_with_vias(
+            r#"
+            sentence three { push 3 }
+            identity probe { push 1 push 2 add } = { jump crate::three };
+            "#,
+            "probe",
+            "solve (f: 0 -> 1) { ?f not }",
+        );
+        let Outcome::Stuck(residual) = outcome else {
+            panic!("nothing in the left class ends in `not`");
+        };
+        assert!(
+            residual.stopped.contains("matched nothing"),
+            "{}",
+            residual.stopped
+        );
+    }
+
+    #[test]
+    fn a_template_off_the_goal_net_is_refused_loudly() {
+        let outcome = prove_with_vias(
+            "identity probe { push 1 } = { push 2 };",
+            "probe",
+            "solve (f: 1 -> 1) { ?f }",
+        );
+        let Outcome::Stuck(residual) = outcome else {
+            panic!("the template's net does not fit");
+        };
+        assert!(
+            residual.stopped.contains("net stack change"),
+            "{}",
+            residual.stopped
         );
     }
 

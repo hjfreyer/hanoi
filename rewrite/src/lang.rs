@@ -18,7 +18,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use bytecode::{Instruction, SentenceIndex, Value};
-use egg::{Analysis, DidMerge, EGraph, Id, RecExpr, define_language};
+use egg::{Analysis, DidMerge, EGraph, ENodeOrVar, Id, PatternAst, RecExpr, define_language};
 
 use crate::term::{Arity, Prim, Term};
 
@@ -435,6 +435,63 @@ pub fn expr_of(term: &Term, session: &mut Session) -> RecExpr<HanaLang> {
     let mut expr = RecExpr::default();
     term_to_expr(term, session, &mut expr);
     expr
+}
+
+/// The pattern a template denotes: the term's expression with each hole —
+/// a call to one of the listed scratch sentences — replaced by the pattern
+/// variable its name spells. What `solve` hands to the e-matcher.
+pub fn pattern_of(
+    term: &Term,
+    holes: &HashMap<SentenceIndex, egg::Var>,
+    session: &mut Session,
+) -> egg::Pattern<HanaLang> {
+    fn walk(
+        term: &Term,
+        holes: &HashMap<SentenceIndex, egg::Var>,
+        session: &mut Session,
+        ast: &mut PatternAst<HanaLang>,
+    ) -> Id {
+        if let Term::Call { target, .. } = term
+            && let Some(var) = holes.get(target)
+        {
+            return ast.add(ENodeOrVar::Var(*var));
+        }
+        let node = match term {
+            Term::Id(n) => HanaLang::Idn(IdW(*n)),
+            Term::Drop(n) => HanaLang::Dropn(DropW(*n)),
+            Term::Copy(n) => HanaLang::Copyn(CopyW(*n)),
+            Term::Call { target, arity } => HanaLang::Call(session.call(*target, *arity)),
+            Term::Op(prim) => match prim {
+                Prim::Push(v) => HanaLang::Push(session.value(v)),
+                Prim::Tuple(n) => HanaLang::Tuplen(TupleW(*n)),
+                Prim::Untuple(n) => HanaLang::Untuplen(UntupleW(*n)),
+                Prim::AsTuple(n) => HanaLang::AsTuplen(AsTupleW(*n)),
+                other => other
+                    .to_instruction()
+                    .pipe_into_node()
+                    .expect("every dataless prim has a lang node"),
+            },
+            Term::Compose(a, b) => {
+                let a = walk(a, holes, session, ast);
+                let b = walk(b, holes, session, ast);
+                HanaLang::Compose([a, b])
+            }
+            Term::Par(a, b) => {
+                let a = walk(a, holes, session, ast);
+                let b = walk(b, holes, session, ast);
+                HanaLang::Par([a, b])
+            }
+            Term::Branch { if_true, if_false } => {
+                let t = walk(if_true, holes, session, ast);
+                let e = walk(if_false, holes, session, ast);
+                HanaLang::Branch([t, e])
+            }
+        };
+        ast.add(ENodeOrVar::ENode(node))
+    }
+    let mut ast = PatternAst::default();
+    walk(term, holes, session, &mut ast);
+    egg::Pattern::from(ast)
 }
 
 /// Reads an expression back into a [`Term`], for printing what an e-class

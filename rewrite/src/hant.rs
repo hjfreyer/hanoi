@@ -22,6 +22,7 @@
 //! | `peel` | strips what the two compose spines share at either end | nothing is shared |
 //! | `inline` | unfolds every call, all the way down | there are no calls |
 //! | `via { body } (left: s, right: s)` | **cuts**: `A = B` splits into the goals `A = C` and `C = B` | the waypoint's net stack change is not the goal's, or a side fails |
+//! | `solve (f: 1 -> 1) { … ?f … } (right: s)` | **cuts at a waypoint the engine fills in**: match the template against the left side, continue with `C[fills] = B` | the template's net is not the goal's, no match binds the variables at their declared arities, or the right half fails |
 //! | `egraph` | saturates; the sides meet or the gas runs out | it runs out of gas |
 //! | `descend(then: s, else: s)` | forks a branch-vs-branch goal into its arms | the sides are not branches, or an omitted arm is not already equal |
 //!
@@ -32,6 +33,15 @@
 //! link may take a different road. A strategy that ends on a manipulation
 //! is allowed: it closes only if the goal has become trivially equal, and
 //! says so otherwise.
+//!
+//! `solve` is `via` with the waypoint under-specified: `?vars` stand for
+//! unknown subprograms at declared arities, and *solving* means saturating
+//! the goal and matching the template against the left side's class — which
+//! finds the fills and proves `A = C[fills]` in one motion, since a match
+//! is an instantiation living in that very class. The first match at the
+//! declared arities wins, and the fills are recorded in the proof so a
+//! different match after a rule-set change is visible rather than
+//! mysterious. Only the right half remains as a goal.
 //!
 //! The two splitters treat an omitted side differently, on purpose. An
 //! omitted `descend` arm is a *checked claim* that those arms are already
@@ -49,6 +59,10 @@
 //! caveat that paths in a body resolve from the crate root.
 
 use std::fmt;
+
+use bytecode::SentenceIndex;
+
+use crate::term::Term;
 
 /// One step of a strategy. `V` is what a `via` carries: the body's source
 /// text as parsed, a lowered [`Term`](crate::term::Term) once the corpus it
@@ -71,6 +85,16 @@ pub enum Step<V> {
         left: Option<Strategy<V>>,
         right: Option<Strategy<V>>,
     },
+    /// Cut the goal at a waypoint the engine fills in. The template's
+    /// `?vars` stand for unknown subprograms at declared arities; solving
+    /// means matching the template against the left side's saturated class,
+    /// which both finds the fills and proves `A = C[fills]` in one motion.
+    /// The goal continues as `C[fills] = B` under `right`.
+    Solve {
+        vars: SolveVars,
+        template: V,
+        right: Option<Strategy<V>>,
+    },
     /// Fork a branch-vs-branch goal into its arms. An omitted arm claims
     /// those arms are already equal, and the claim is checked.
     Descend {
@@ -79,8 +103,25 @@ pub enum Step<V> {
     },
 }
 
+/// A `via` or `solve` payload once compiled against a library.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Body {
+    /// A `via` waypoint: the lowered term itself.
+    Stone(Term),
+    /// A `solve` template: the lowered term, with each declared variable
+    /// standing as a call to a scratch hole sentence of the declared arity.
+    Template {
+        term: Term,
+        /// Parallel to the step's `vars`: which sentence each `?var` calls.
+        holes: Vec<(String, SentenceIndex)>,
+    },
+}
+
 /// A strategy: steps in order, manipulations first, at most one closer last.
 pub type Strategy<V> = Vec<Step<V>>;
+
+/// The variables a `solve` declares: name and arity, `(inputs, outputs)`.
+pub type SolveVars = Vec<(String, (usize, usize))>;
 
 /// A parsed `.hant` entry: which identity, and how to prove it.
 #[derive(Debug, Clone, PartialEq)]
@@ -94,64 +135,6 @@ pub fn default_strategy<V>() -> Strategy<V> {
     vec![Step::Egraph]
 }
 
-/// Maps every `via` body through `f` — how a parsed strategy becomes a
-/// runnable one once the corpus its bodies compile against exists.
-pub fn map_via<V, W, E>(
-    strategy: Strategy<V>,
-    f: &mut impl FnMut(V) -> Result<W, E>,
-) -> Result<Strategy<W>, E> {
-    strategy
-        .into_iter()
-        .map(|step| {
-            Ok(match step {
-                Step::Egraph => Step::Egraph,
-                Step::Peel => Step::Peel,
-                Step::Inline => Step::Inline,
-                Step::Via {
-                    waypoint,
-                    left,
-                    right,
-                } => Step::Via {
-                    waypoint: f(waypoint)?,
-                    left: left.map(|s| map_via(s, f)).transpose()?,
-                    right: right.map(|s| map_via(s, f)).transpose()?,
-                },
-                Step::Descend { then_arm, else_arm } => Step::Descend {
-                    then_arm: then_arm.map(|s| map_via(s, f)).transpose()?,
-                    else_arm: else_arm.map(|s| map_via(s, f)).transpose()?,
-                },
-            })
-        })
-        .collect()
-}
-
-/// Every `via` body in a strategy, in reading order — the collection pass
-/// that decides what scratch sentences the corpus needs.
-pub fn via_bodies<V: Clone>(strategy: &Strategy<V>) -> Vec<V> {
-    let mut out = Vec::new();
-    for step in strategy {
-        match step {
-            Step::Via {
-                waypoint,
-                left,
-                right,
-            } => {
-                out.push(waypoint.clone());
-                for side in [left, right].into_iter().flatten() {
-                    out.extend(via_bodies(side));
-                }
-            }
-            Step::Descend { then_arm, else_arm } => {
-                for arm in [then_arm, else_arm].into_iter().flatten() {
-                    out.extend(via_bodies(arm));
-                }
-            }
-            _ => {}
-        }
-    }
-    out
-}
-
 impl<V> fmt::Display for Step<V> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -159,6 +142,7 @@ impl<V> fmt::Display for Step<V> {
             Step::Peel => write!(f, "peel"),
             Step::Inline => write!(f, "inline"),
             Step::Via { .. } => write!(f, "via {{ … }}"),
+            Step::Solve { .. } => write!(f, "solve(…)"),
             Step::Descend { .. } => write!(f, "descend(…)"),
         }
     }
@@ -243,6 +227,37 @@ fn parse_step(input: &str) -> Result<(Step<String>, &str), String> {
                 after,
             ))
         }
+        "solve" => {
+            let rest = rest.trim_start();
+            if !rest.starts_with('(') {
+                return Err(
+                    "`solve` expects its variables first: `solve (f: 1 -> 1) { … ?f … }`"
+                        .to_string(),
+                );
+            }
+            let (vars, after) = parse_solve_vars(rest)?;
+            if vars.is_empty() {
+                return Err("`solve` with no variables is `via`".to_string());
+            }
+            let (body, after) =
+                brace_block(after.trim_start()).ok_or("`solve` expects a braced template")?;
+            let (right, after) = if after.trim_start().starts_with('(') {
+                let ((right, none), rest) =
+                    parse_arms("solve", "right", "right", after.trim_start())?;
+                debug_assert!(none.is_none());
+                (right, rest)
+            } else {
+                (None, after)
+            };
+            Ok((
+                Step::Solve {
+                    vars,
+                    template: body.trim().to_string(),
+                    right,
+                },
+                after,
+            ))
+        }
         "descend" => {
             let rest = rest.trim_start();
             if !rest.starts_with('(') {
@@ -254,6 +269,55 @@ fn parse_step(input: &str) -> Result<(Step<String>, &str), String> {
         "" => Err(format!("expected a step, found: {}", head_of(input))),
         other => Err(format!("no step is called `{}`", other)),
     }
+}
+
+/// `(f: 1 -> 1, g: 2 -> 1)` — the variables a `solve` template binds.
+fn parse_solve_vars(input: &str) -> Result<(SolveVars, &str), String> {
+    let mut rest = input
+        .strip_prefix('(')
+        .expect("the caller saw the open paren");
+    let mut vars = Vec::new();
+    loop {
+        rest = rest.trim_start();
+        if let Some(after) = rest.strip_prefix(')') {
+            return Ok((vars, after));
+        }
+        let name_len = rest
+            .find(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .unwrap_or(rest.len());
+        let (name, after_name) = rest.split_at(name_len);
+        if name.is_empty() {
+            return Err(format!(
+                "`solve` expects `name: inputs -> outputs`, found: {}",
+                head_of(rest)
+            ));
+        }
+        let after_colon = after_name
+            .trim_start()
+            .strip_prefix(':')
+            .ok_or_else(|| format!("variable {}: expected `:` and an arity", name))?;
+        let (inputs, after_inputs) = parse_number(after_colon.trim_start())
+            .ok_or_else(|| format!("variable {}: expected an input count", name))?;
+        let after_arrow = after_inputs
+            .trim_start()
+            .strip_prefix("->")
+            .ok_or_else(|| format!("variable {}: expected `->`", name))?;
+        let (outputs, after_outputs) = parse_number(after_arrow.trim_start())
+            .ok_or_else(|| format!("variable {}: expected an output count", name))?;
+        if vars.iter().any(|(n, _)| n == name) {
+            return Err(format!("`solve` declares {} twice", name));
+        }
+        vars.push((name.to_string(), (inputs, outputs)));
+        rest = after_outputs.trim_start();
+        rest = rest.strip_prefix(',').unwrap_or(rest);
+    }
+}
+
+fn parse_number(input: &str) -> Option<(usize, &str)> {
+    let len = input
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(input.len());
+    (len > 0).then(|| (input[..len].parse().expect("digits parse"), &input[len..]))
 }
 
 /// Two arms in parentheses, either labelled and either omissible:
@@ -310,7 +374,9 @@ fn validate<V>(strategy: &Strategy<V>) -> Result<(), String> {
     for (i, step) in strategy.iter().enumerate() {
         let last = i + 1 == strategy.len();
         match step {
-            Step::Egraph | Step::Descend { .. } | Step::Via { .. } if !last => {
+            Step::Egraph | Step::Descend { .. } | Step::Via { .. } | Step::Solve { .. }
+                if !last =>
+            {
                 return Err(format!("`{}` closes the goal; nothing can follow it", step));
             }
             Step::Descend { then_arm, else_arm } => {
@@ -320,6 +386,11 @@ fn validate<V>(strategy: &Strategy<V>) -> Result<(), String> {
             }
             Step::Via { left, right, .. } => {
                 for side in [left, right].into_iter().flatten() {
+                    validate(side)?;
+                }
+            }
+            Step::Solve { right, .. } => {
+                for side in right.iter() {
                     validate(side)?;
                 }
             }
@@ -428,22 +499,6 @@ mod tests {
     }
 
     #[test]
-    fn via_bodies_are_collected_in_reading_order() {
-        let entries = parse_hant(
-            "proof p = descend(then: via { push 1 } (left: via { push 2 }), else: via { push 3 });",
-        )
-        .unwrap();
-        assert_eq!(
-            via_bodies(&entries[0].strategy),
-            vec![
-                "push 1".to_string(),
-                "push 2".to_string(),
-                "push 3".to_string()
-            ]
-        );
-    }
-
-    #[test]
     fn a_cut_closes_its_goal() {
         // Nothing follows a split: the subgoals' work is written inside it.
         let err = parse_hant("proof p = via { push 1 } egraph;").unwrap_err();
@@ -457,5 +512,38 @@ mod tests {
         };
         assert_eq!(left.as_deref(), Some([Step::Peel, Step::Egraph].as_slice()));
         assert!(matches!(right.as_deref(), Some([Step::Via { .. }])));
+    }
+
+    #[test]
+    fn solve_parses_vars_template_and_right() {
+        let entries =
+            parse_hant("proof p = solve (f: 1 -> 0, g: 2 -> 1) { ?f ?g } (right: egraph);")
+                .unwrap();
+        let [
+            Step::Solve {
+                vars,
+                template,
+                right,
+            },
+        ] = &entries[0].strategy[..]
+        else {
+            panic!("{:?}", entries[0].strategy);
+        };
+        assert_eq!(
+            vars,
+            &[("f".to_string(), (1, 0)), ("g".to_string(), (2, 1))]
+        );
+        assert_eq!(template, "?f ?g");
+        assert_eq!(right.as_deref(), Some([Step::Egraph].as_slice()));
+    }
+
+    #[test]
+    fn solve_is_a_closer_with_checked_variables() {
+        let err = parse_hant("proof p = solve (f: 1 -> 1) { ?f } egraph;").unwrap_err();
+        assert!(err.contains("nothing can follow"), "{}", err);
+        let err = parse_hant("proof p = solve () { x };").unwrap_err();
+        assert!(err.contains("no variables"), "{}", err);
+        let err = parse_hant("proof p = solve (f: 1 -> 1, f: 2 -> 2) { ?f };").unwrap_err();
+        assert!(err.contains("twice"), "{}", err);
     }
 }
