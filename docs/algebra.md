@@ -12,8 +12,9 @@ standard finite presentation of the **free cartesian PROP** — the categorical
 structure singled out by Fox's theorem — and the branch fragment is the
 equational theory of **sum types**. The first has a complete, known axiom set
 and a decision procedure; the second is decidable but genuinely hard, and that
-split is exactly where the proof effort goes: the one identity in the corpus
-that does not close is a sum-type path-condition claim.
+split is exactly where the proof effort goes: every identity in the corpus
+closes on the rules alone except the sum-type path-condition claim, and that
+one needs its case split written out as a chain of cuts.
 
 ## Conventions
 

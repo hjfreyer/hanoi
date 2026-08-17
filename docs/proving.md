@@ -14,11 +14,12 @@ cargo run --bin prove -- tests --filter two_spellings --explain
 
 ```
 Proving 14 identities...
-identity identities::testing_a_test ... ok (saturated (8 iters, 5 classes))
-identity identities::a_test_inside_an_arm ... ok (descend (then: saturated (13 iters, 56 classes); else: as written))
-identity identities::testing_a_test_by_name ... ok (inline; saturated (8 iters, 5 classes))
+identity identities::testing_a_test ... ok (saturated (4 iters, 6 classes))
+identity identities::testing_a_test_by_name ... ok (inline; saturated (4 iters, 6 classes))
+identity identities::specializing_a_tested_value ... ok (saturated (7 iters, 87 classes))
+identity types_test::number_does_pre_and_post_is_constant ... ok (cut (left: inline; ...
 ...
-identity result: ok. 13 passed; 0 failed; 0 orphaned hints; 0 filtered out
+identity result: ok. 14 passed; 0 failed; 0 problem(s); 0 filtered out
 ```
 
 Exit codes keep the old contract: `0` every identity proved, `1` a claim
@@ -100,6 +101,16 @@ stone is silently ignored instead of failing the proof, and a stuck run
 cannot say which half of the journey failed. The forgiving behavior is a
 coherent different step — see `egraph-hint` under "what is not here
 yet".)
+
+**A case split is a chain of cuts.** That is what discharges the corpus's
+one path-condition claim, `types_test::number_does_pre_and_post_is_constant`
+— see `tests/types_test.hant`. Its then arm is reached only when `is_tag`
+held, and *that* fact is a disjunction (`v = t1` or `v = t2`) no rule window
+can spend. So the proof writes the analysis out: one waypoint is the case
+tree the test is, the next has the tested literal written into each arm —
+which is what `specialize-equal` says and what the engine checks — and the
+leaves are then a constant each, which folding reaches. Nothing conjures the
+cases; the author names them and every hop is a checked claim.
 
 `solve` is `via` with the waypoint under-specified — the cut with
 metavariables. Its `?vars` stand for unknown subprograms at declared
@@ -202,12 +213,16 @@ too often. `via` bodies are programs, compiled by appending scratch
 sentences to the corpus source so the whole parser and resolver are reused,
 with one caveat: paths in a body resolve from the crate root.
 
-The current corpus needs exactly one entry —
-`proof identities::testing_a_test_by_name = inline egraph;` — and no cuts:
-everything else closes on the rules alone. The `via` mechanism exists for
-the day a goal does not.
+The current corpus needs two entries. `identities.hant` holds one line —
+`proof identities::testing_a_test_by_name = inline egraph;` — and
+`types_test.hant` holds the corpus's one real proof: the case split of
+`number_does_pre_and_post_is_constant`, written as a chain of cuts. Every
+other identity closes on the rules alone.
 
 ## The failure output is the point
+
+This is what that identity printed before its proof was written, and the two
+lines it starts from are why the proof looks the way it does:
 
 ```
 identity types_test::number_does_pre_and_post_is_constant ... FAILED
@@ -229,15 +244,15 @@ gap found so far was diagnosed.
 
 ## What is not here yet
 
-- **A case split on a value.** The one stuck identity,
-  `types_test::number_does_pre_and_post_is_constant`, is a path-condition
-  claim: its then arm is reached only when `is_tag` held, and *that* fact is
-  a disjunction (`v = t1` or `v = t2`) no single rule window can use. The
-  move it needs is a case-analysis step in the strategy language — split
-  the goal per case, specialize, prove each — and unlike peel and descend it
-  is not a congruence, so it will earn its keyword.
-  `rewrite/tests/corpus.rs` names the identity as the expected straggler, so
-  the day it closes is the day a test says so.
+- **A case split as a *step*.** The corpus's path-condition claim closes
+  today, but by hand: `tests/types_test.hant` writes each state of the
+  analysis out as a waypoint, and the cases come from the author rather than
+  from the goal. A `cases` step would read the tree off the test itself —
+  enter each arm, carry its condition, specialize, prove the leaves — and
+  the four waypoints that proof spells out would be four it derived. Unlike
+  peel and descend it is not a congruence, so it will earn its keyword. What
+  it needs first is a way to *state* the condition an arm carries, which is
+  the same machinery `solve`'s templates began.
 - **A replayable derivation.** A close currently answers with egg's
   explanation (`--explain`); nothing independent re-checks it yet. The next
   milestone translates explanations into the flat derivation format a small

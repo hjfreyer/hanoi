@@ -1,11 +1,11 @@
 //! The corpus's identities, proved.
 //!
-//! This is the regression net for the whole pipeline: every identity
-//! `tests/identities.hana` states must close — by its written proof in
-//! `tests/identities.hant` where it has one, by the default `egraph` where
-//! it does not — and the one known straggler is named exactly. A rule change
-//! that breaks a proof fails here, and so does the happy surprise of the
-//! straggler starting to close, which is the cue to shorten the list.
+//! This is the regression net for the whole pipeline: every identity the
+//! corpus states must close — by its written proof in the `.hant` beside it
+//! where it has one, by the default `egraph` where it does not — and any
+//! straggler is named exactly. A rule change that breaks a proof fails here,
+//! and so does the happy surprise of a straggler starting to close, which is
+//! the cue to shorten the list. The list is empty today.
 
 use rewrite::corpus;
 use rewrite::goal::{Goal, Outcome};
@@ -20,10 +20,10 @@ fn the_corpus_identities_close() {
     let corpus = corpus::load(&tests).unwrap();
     assert_eq!(corpus.problems, Vec::<String>::new());
 
-    // The path-condition claim in types_test needs a case split on the tested
-    // value — a strategy step the language does not have yet. Its residual is
-    // stable and its deadline is the case-split step, not a rule.
-    let expected_stragglers = ["types_test::number_does_pre_and_post_is_constant"];
+    // Nothing is expected to stick. The path-condition claim in `types_test`
+    // was the last one, and `tests/types_test.hant` discharges it: a case
+    // split is a chain of cuts, one waypoint per case the analysis reaches.
+    let expected_stragglers: [&str; 0] = [];
 
     let prover = Prover::new(&corpus.library, Config::default());
     let mut stragglers = Vec::new();
