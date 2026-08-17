@@ -1,24 +1,31 @@
 //! The goal pipeline: what happens to a claim before and after the e-graph.
 //!
-//! Saturation is the engine, but it is the *last* thing that happens to a
-//! goal, not the only thing. The moves in front of it are the ones that keep
-//! e-graphs small and failures readable:
+//! It is short, and the reason it is short is worth stating. Decomposition
+//! moves that looked necessary — strip a shared prefix, descend into branch
+//! arms — are **congruences**, and an e-graph performs congruences
+//! intrinsically: the moment saturation unites `A` with `B`, the parents
+//! `P ; A` and `P ; B` are one e-node and merge for free, and a branch
+//! merges the moment its arms do. Running those moves *before* saturation
+//! bought nothing and cost real money — a peeled subgoal can be false
+//! (`push 1 ; drop` = `push 2 ; drop`, minus the shared `drop`), and a
+//! false goal saturates to the end of its budget. So the prover does:
 //!
 //! 1. **Trivial** — the two sides are one term as written.
-//! 2. **Peel** — strip what the two compose spines share at either end and
-//!    prove what is left. Peeling is *incomplete* — `push 1 ; drop` equals
-//!    `push 2 ; drop` and stripping the shared `drop` leaves a false claim —
-//!    so a peeled goal that sticks falls back to the whole one.
-//! 3. **Descend** — two branches are equal exactly when their arms are equal
-//!    pairwise (the stack under the condition is arbitrary, so there is no
-//!    context to lose): one subgoal per differing arm, and the decomposition
-//!    is complete, unlike peeling.
-//! 4. **Saturate** — both sides and any stepping stones go into one e-graph,
-//!    every rule fires until the sides meet or the budget runs out.
-//! 5. **Inline** — a stuck goal that still holds calls is reopened with every
-//!    call unfolded and tried once more. Unfolding is a goal-level decision,
-//!    deliberately not a rule: opened calls multiply the term, and the goal
-//!    is the only level that knows the cheap route failed.
+//! 2. **Saturate** — both sides and any stepping stones into one e-graph,
+//!    every rule fires, and a hook closes the run the moment the two roots
+//!    meet — saturation has no goal of its own and would happily keep
+//!    exploring a closed one.
+//! 3. **Inline** — a stuck goal that still holds calls is reopened with
+//!    every call unfolded and tried once more. This one is *not* a
+//!    congruence — it spends the library's defining equations, and opened
+//!    calls multiply the term — so it stays a goal-level decision.
+//!
+//! Peeling and descending still exist, after the search rather than before
+//! it: a stuck goal's residual is **narrowed** — shared affixes stripped,
+//! branch pairs with matching other arms descended into — so the report
+//! points at where the difference lives instead of printing two whole
+//! terms. The same moves are the natural vocabulary for a human or agent
+//! directing a proof by hand, which is where they came from.
 
 use std::time::Duration;
 
@@ -36,8 +43,9 @@ pub struct Config {
     pub iter_limit: usize,
     pub node_limit: usize,
     pub time_limit: Duration,
-    /// Extract a step-by-step explanation for every close. Costs time on
-    /// large proofs, so the report asks for it explicitly.
+    /// Extract a step-by-step explanation for every close. Explanation
+    /// tracking taxes every union, so the e-graph only carries it when
+    /// someone asked to read one.
     pub explain: bool,
 }
 
@@ -61,20 +69,6 @@ pub struct Prover<'l> {
     rules: Vec<crate::rules::ProofRewrite>,
 }
 
-/// How hard a saturation may try.
-///
-/// A peeled subgoal gets a **probe**: peeling is incomplete, so the narrowed
-/// claim may simply be false, and a false goal saturates until the budget
-/// runs out — the full budget, spent proving nothing, before the fallback
-/// even starts. A probe is the fraction of the budget a wrong turn is
-/// allowed to cost. Everything else — the goal as stated, a descend arm, the
-/// inlined retry — runs **full**.
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum Effort {
-    Probe,
-    Full,
-}
-
 impl<'l> Prover<'l> {
     pub fn new(library: &'l Library, config: Config) -> Self {
         Prover {
@@ -88,64 +82,15 @@ impl<'l> Prover<'l> {
     /// into the e-graph beside the two sides, for bridging what the rules do
     /// not find on their own.
     pub fn prove(&self, goal: &Goal, hints: &[Term]) -> Result<Outcome, Error> {
-        self.prove_from(goal, hints, true, Effort::Full)
+        self.prove_from(goal, hints, true)
     }
 
-    fn prove_from(
-        &self,
-        goal: &Goal,
-        hints: &[Term],
-        may_inline: bool,
-        effort: Effort,
-    ) -> Result<Outcome, Error> {
+    fn prove_from(&self, goal: &Goal, hints: &[Term], may_inline: bool) -> Result<Outcome, Error> {
         if goal.lhs == goal.rhs {
             return Ok(Outcome::Closed(Proof::Trivial));
         }
 
-        // Peel, and fall back: what the peeled goal cannot say, the whole one
-        // still can. The peeled attempt runs as a probe — see [`Effort`] —
-        // and everything under it stays one.
-        if let Some((peeled, prefix, suffix)) = peel(goal)
-            && let Outcome::Closed(sub) =
-                self.prove_from(&peeled, hints, may_inline, Effort::Probe)?
-        {
-            return Ok(Outcome::Closed(Proof::Peel {
-                prefix,
-                suffix,
-                sub: Box::new(sub),
-            }));
-        }
-
-        // Two branches: one subgoal per differing arm, complete.
-        if let (
-            Term::Branch {
-                if_true: t1,
-                if_false: e1,
-            },
-            Term::Branch {
-                if_true: t2,
-                if_false: e2,
-            },
-        ) = (&goal.lhs, &goal.rhs)
-        {
-            let arm = |a: &Term, b: &Term| -> Result<Option<Option<Box<Proof>>>, Error> {
-                if a == b {
-                    return Ok(Some(None));
-                }
-                let sub = Goal::aligned(a.clone(), b.clone());
-                Ok(match self.prove_from(&sub, hints, may_inline, effort)? {
-                    Outcome::Closed(p) => Some(Some(Box::new(p))),
-                    Outcome::Stuck(_) => None,
-                })
-            };
-            if let (Some(then_sub), Some(else_sub)) = (arm(t1, t2)?, arm(e1, e2)?) {
-                return Ok(Outcome::Closed(Proof::Descend { then_sub, else_sub }));
-            }
-            // An arm that stuck is not the end: the whole branch goal goes to
-            // saturation below, where the arms can help each other.
-        }
-
-        match self.saturate(goal, hints, effort) {
+        match self.saturate(goal, hints) {
             Outcome::Closed(proof) => Ok(Outcome::Closed(proof)),
             Outcome::Stuck(residual) => {
                 if may_inline && (has_calls(&goal.lhs) || has_calls(&goal.rhs)) {
@@ -153,7 +98,7 @@ impl<'l> Prover<'l> {
                         inline_calls(self.library, &goal.lhs)?,
                         inline_calls(self.library, &goal.rhs)?,
                     );
-                    return Ok(match self.prove_from(&opened, hints, false, effort)? {
+                    return Ok(match self.prove_from(&opened, hints, false)? {
                         Outcome::Closed(sub) => Outcome::Closed(Proof::Inlined(Box::new(sub))),
                         // The residual of the opened goal is the one worth
                         // reading: it is where the search actually died.
@@ -167,7 +112,7 @@ impl<'l> Prover<'l> {
 
     /// One e-graph, both sides, every rule, until they meet or the budget is
     /// spent.
-    fn saturate(&self, goal: &Goal, hints: &[Term], effort: Effort) -> Outcome {
+    fn saturate(&self, goal: &Goal, hints: &[Term]) -> Outcome {
         let mut analysis = Proving::default();
         let lhs = expr_of(&goal.lhs, &mut analysis.session);
         let rhs = expr_of(&goal.rhs, &mut analysis.session);
@@ -205,21 +150,6 @@ impl<'l> Prover<'l> {
             }
         }
 
-        // A probe gets a fraction of the budget: it is the price a wrong
-        // peel is allowed to cost before the whole goal gets its turn.
-        let (iter_limit, node_limit, time_limit) = match effort {
-            Effort::Full => (
-                self.config.iter_limit,
-                self.config.node_limit,
-                self.config.time_limit,
-            ),
-            Effort::Probe => (
-                self.config.iter_limit / 3 + 1,
-                self.config.node_limit / 5 + 1,
-                self.config.time_limit / 8,
-            ),
-        };
-
         // Explanation tracking taxes every union, so the e-graph only carries
         // it when someone asked to read one.
         let egraph = EGraph::new(analysis);
@@ -231,9 +161,9 @@ impl<'l> Prover<'l> {
 
         let mut runner = Runner::default()
             .with_scheduler(scheduler)
-            .with_iter_limit(iter_limit)
-            .with_node_limit(node_limit)
-            .with_time_limit(time_limit)
+            .with_iter_limit(self.config.iter_limit)
+            .with_node_limit(self.config.node_limit)
+            .with_time_limit(self.config.time_limit)
             .with_egraph(egraph)
             .with_expr(&lhs)
             .with_expr(&rhs)
@@ -279,9 +209,16 @@ impl<'l> Prover<'l> {
             }
         }
         firings.sort_by_key(|&(_, count)| std::cmp::Reverse(count));
+
+        // The best spelling of each side, narrowed to where they differ: the
+        // congruence moves, run backwards over the wreckage for the report.
+        let full_l = expr_to_term(&best_l, &runner.egraph.analysis.session);
+        let full_r = expr_to_term(&best_r, &runner.egraph.analysis.session);
+        let (path, lhs, rhs) = narrow(full_l, full_r);
         Outcome::Stuck(Residual {
-            lhs: expr_to_term(&best_l, &runner.egraph.analysis.session),
-            rhs: expr_to_term(&best_r, &runner.egraph.analysis.session),
+            lhs,
+            rhs,
+            path,
             firings,
             stopped: match &runner.stop_reason {
                 Some(reason) => format!("{:?}", reason),
@@ -291,7 +228,64 @@ impl<'l> Prover<'l> {
     }
 }
 
-// ---- peeling ----------------------------------------------------------------
+// ---- narrowing a residual ---------------------------------------------------
+
+/// Localizes a stuck goal's difference: strips what the two compose spines
+/// share at either end, and descends into a branch pair whose *other* arm
+/// already matches, until neither move applies. The path records each step,
+/// so the report can say "the difference is inside the then arm" instead of
+/// printing two whole terms.
+///
+/// These are the congruence moves the search itself never needs — an e-graph
+/// merges parents the moment children meet — read backwards over a failure.
+/// Sound for pointing (any remaining difference must live inside what is
+/// kept), and only for pointing: the narrowed pair may be equal for reasons
+/// the stripped context supplied, which is exactly why peeling was removed
+/// from the search path.
+fn narrow(lhs: Term, rhs: Term) -> (Vec<String>, Term, Term) {
+    let mut path = Vec::new();
+    let (mut lhs, mut rhs) = (lhs, rhs);
+    loop {
+        if let Some((narrowed, prefix, suffix)) = peel(&Goal {
+            lhs: lhs.clone(),
+            rhs: rhs.clone(),
+        }) {
+            path.push(match (prefix, suffix) {
+                (p, 0) => format!("past {} shared leading part(s)", p),
+                (0, s) => format!("before {} shared trailing part(s)", s),
+                (p, s) => format!("between {} shared leading and {} trailing part(s)", p, s),
+            });
+            lhs = narrowed.lhs;
+            rhs = narrowed.rhs;
+            continue;
+        }
+        if let (
+            Term::Branch {
+                if_true: t1,
+                if_false: e1,
+            },
+            Term::Branch {
+                if_true: t2,
+                if_false: e2,
+            },
+        ) = (&lhs, &rhs)
+        {
+            if t1 == t2 && e1 != e2 {
+                path.push("in the else arm".to_string());
+                let (l, r) = (e1.as_ref().clone(), e2.as_ref().clone());
+                (lhs, rhs) = (l, r);
+                continue;
+            }
+            if e1 == e2 && t1 != t2 {
+                path.push("in the then arm".to_string());
+                let (l, r) = (t1.as_ref().clone(), t2.as_ref().clone());
+                (lhs, rhs) = (l, r);
+                continue;
+            }
+        }
+        return (path, lhs, rhs);
+    }
+}
 
 /// Strips what the two compose spines share at either end. Answers the
 /// narrowed goal and how much went, or `None` when nothing does.
@@ -406,35 +400,23 @@ mod tests {
     }
 
     #[test]
-    fn a_shared_prefix_is_peeled_and_the_rest_proved() {
+    fn a_shared_prefix_is_no_obstacle() {
+        // The prefix is a congruence: the e-graph closes the whole goal the
+        // moment the differing tails meet, with no peeling step.
         let outcome = prove_identity(
             "identity probe { drop 0 is_bool is_bool } = { drop 0 drop 0 push true };",
             "probe",
         );
-        let Outcome::Closed(proof) = outcome else {
-            panic!("expected the goal to close");
-        };
-        assert!(
-            proof.summary().starts_with("peel 1+0"),
-            "{}",
-            proof.summary()
-        );
+        assert!(matches!(outcome, Outcome::Closed(_)));
     }
 
     #[test]
-    fn arms_are_their_own_claims() {
+    fn differing_arms_close_by_congruence() {
         let outcome = prove_identity(
             "identity probe { branch { is_bool is_bool } { not } } = { branch { is_int is_bool } { not } };",
             "probe",
         );
-        let Outcome::Closed(proof) = outcome else {
-            panic!("expected the goal to close");
-        };
-        assert!(
-            proof.summary().contains("else: as written"),
-            "{}",
-            proof.summary()
-        );
+        assert!(matches!(outcome, Outcome::Closed(_)));
     }
 
     #[test]
@@ -460,19 +442,37 @@ mod tests {
         };
         assert_eq!(format!("{}", residual.lhs), "push 1");
         assert_eq!(format!("{}", residual.rhs), "push 2");
+        assert!(residual.path.is_empty());
     }
 
     #[test]
-    fn peeling_a_false_remainder_falls_back_to_the_whole_goal() {
-        // `push 1 ; drop` = `push 2 ; drop`: stripping the shared `drop`
-        // leaves a false claim, and the whole goal still closes.
+    fn a_shared_suffix_of_unequal_work_still_closes() {
+        // `push 1 ; drop` = `push 2 ; drop`: the claim that made automatic
+        // peeling dangerous. Whole-goal saturation closes it directly.
         let outcome = prove_identity(
             "identity probe { push 1 drop 0 } = { push 2 drop 0 };",
             "probe",
         );
+        assert!(matches!(outcome, Outcome::Closed(_)));
+    }
+
+    #[test]
+    fn a_stuck_goal_names_where_the_difference_lives() {
+        // A false claim buried in one branch arm behind a shared prefix: the
+        // residual walks to it rather than printing the whole terms.
+        let outcome = prove_identity(
+            "identity probe { drop 0 branch { drop 0 push 1 } { not } } = { drop 0 branch { drop 0 push 2 } { not } };",
+            "probe",
+        );
+        let Outcome::Stuck(residual) = outcome else {
+            panic!("the arms differ");
+        };
+        assert_eq!(format!("{}", residual.lhs), "push 1");
+        assert_eq!(format!("{}", residual.rhs), "push 2");
         assert!(
-            matches!(outcome, Outcome::Closed(_)),
-            "the fallback saturation closes what peeling cannot"
+            residual.path.iter().any(|step| step.contains("then arm")),
+            "{:?}",
+            residual.path
         );
     }
 }

@@ -48,24 +48,10 @@ spot rather than prove something false.
 
 ### The pipeline
 
-A goal runs through five moves, each of which exists to keep the e-graph
-small and the failure readable:
+Three moves, and the shortness is a finding, not an economy:
 
 1. **Trivial** — the sides are one term as written.
-2. **Peel** — strip what the two compose spines share at either end, prove
-   what is left. Peeling is *incomplete* (`push 1 ; drop` = `push 2 ; drop`,
-   and stripping the `drop` leaves a false claim), so a peeled goal that
-   sticks falls back to the whole one — and because a false subgoal
-   saturates to the end of whatever budget it is given, the peeled attempt
-   runs as a **probe**, on a fraction of the budget. The probe is the price
-   a wrong peel is allowed to cost; before it existed,
-   `two_spellings_of_one_test` spent fourteen seconds failing to prove
-   `is_bool = is_int` and then closed the real goal in milliseconds.
-3. **Descend** — two branches are equal exactly when their arms are equal
-   pairwise, so each differing arm becomes its own goal. Unlike peeling this
-   is complete: the stack under a condition is arbitrary, so there is no
-   context an arm could have used.
-4. **Saturate** — both sides into one e-graph, every rule fires. Closing
+2. **Saturate** — both sides into one e-graph, every rule fires. Closing
    means the two roots unify, and a hook checks for that **every iteration**
    — saturation would otherwise happily keep exploring an already-closed
    goal to the end of the budget, and did: `discarded_work_on_copies` grew
@@ -73,11 +59,36 @@ small and the failure readable:
    iterations and class count, and `--explain` prints egg's step-by-step
    account of the meeting. Explanation tracking taxes every union, so the
    e-graph only carries it when `--explain` asks.
-5. **Inline** — a stuck goal that still holds calls is reopened with every
-   call unfolded and tried once more. Unfolding is a goal-level decision, not
-   a rule: opened calls multiply the term, and only the goal level knows the
-   cheap route already failed. This is "comparison up to inlining" reborn —
-   `testing_a_test_by_name` is the identity that exercises it.
+3. **Inline** — a stuck goal that still holds calls is reopened with every
+   call unfolded and tried once more. This is "comparison up to inlining"
+   reborn — `testing_a_test_by_name` is the identity that exercises it.
+
+#### Why peeling and descending are not search moves
+
+Two decompositions that looked essential — strip the prefix and suffix the
+two sides share, descend into the arms of a branch pair — are
+**congruences**, and performing congruences is precisely what an e-graph
+does on its own: the moment saturation unites `A` with `B`, the parents
+`P ; A` and `P ; B` are one e-node and merge for free, and two branches
+merge the moment their arms do. Running the moves *before* saturation could
+only ever save graph size, and in practice it cost instead: a peeled
+subgoal can be **false** (`push 1 ; drop` = `push 2 ; drop`, minus the
+shared `drop`), and a false goal saturates to the end of its budget —
+`two_spellings_of_one_test` once spent fourteen seconds failing to prove
+`is_bool = is_int`, a claim its own peel had manufactured, before closing
+the real goal in milliseconds. Removing both moves changed no verdict on
+the corpus and simplified the prover to the three moves above.
+
+The one goal-level move that survives is the one that is *not* a
+congruence: inlining spends the library's defining equations, which
+saturation is deliberately not allowed to do by itself.
+
+Peel and descend still exist — after the search rather than before it.
+A stuck goal's residual is **narrowed**: shared affixes stripped, branch
+pairs with matching other arms entered, each step recorded, so the report
+points at where the difference lives. The same moves are the natural
+vocabulary for a human or agent directing a proof by hand, which is where
+they belong.
 
 The old system's hardest cases are the e-graph's easiest. `two_spellings_of_
 one_test` needed "driving both sides and meeting in the middle" — a whole
@@ -150,9 +161,11 @@ identity types_test::number_does_pre_and_post_is_constant ... FAILED
 ```
 
 A stuck goal prints the smallest spelling saturation found for each side —
-the **residual**, which is what says what to try next — plus why the search
-stopped and which rules did the work. That output is the deliverable of a
-failed run, and it is how every rule gap found so far was diagnosed.
+the **residual**, which is what says what to try next — narrowed to where
+the two differ (a `the difference is │ in the then arm` line walks past
+shared context), plus why the search stopped and which rules did the work.
+That output is the deliverable of a failed run, and it is how every rule
+gap found so far was diagnosed.
 
 ## What is not here yet
 
