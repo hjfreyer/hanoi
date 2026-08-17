@@ -546,7 +546,32 @@ impl fmt::Display for Term {
     }
 }
 
+/// A term laid out over as many lines as it needs: a composition one factor
+/// per line, a branch's arms indented inside their braces, and anything that
+/// still fits in the width left exactly as [`Display`] writes it.
+///
+/// Same spelling, different line breaks — the parentheses are the ones
+/// `Display` puts in, so the printed form still says which tree it came from.
+/// A residual is the deliverable of a failed run and is read by a human;
+/// everything that goes on one line of a report (a proof summary, a `solve`'s
+/// fills) keeps using `Display`.
+pub struct Pretty<'t> {
+    term: &'t Term,
+    width: usize,
+}
+
+impl fmt::Display for Pretty<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.term.lay(f, 0, 0, self.width)
+    }
+}
+
 impl Term {
+    /// This term laid out to read in `width` columns. See [`Pretty`].
+    pub fn pretty(&self, width: usize) -> Pretty<'_> {
+        Pretty { term: self, width }
+    }
+
     fn precedence(&self) -> u8 {
         match self {
             Term::Compose(_, _) => PREC_COMPOSE,
@@ -591,6 +616,69 @@ impl Term {
                 if_false.write(f, 0)?;
                 write!(f, " }}")
             }
+        }
+    }
+
+    /// The one-line spelling, when it is short enough to keep.
+    fn flat_within(&self, context: u8, budget: usize) -> Option<String> {
+        struct Flat<'t>(&'t Term, u8);
+        impl fmt::Display for Flat<'_> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                self.0.write(f, self.1)
+            }
+        }
+        let flat = Flat(self, context).to_string();
+        (flat.chars().count() <= budget).then_some(flat)
+    }
+
+    /// Writes the term broken over lines, with continuation lines starting at
+    /// column `indent` — which the caller has already left the cursor at.
+    fn lay(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        indent: usize,
+        context: u8,
+        width: usize,
+    ) -> fmt::Result {
+        // What fits stays put: breaking a short factor helps nobody.
+        if let Some(flat) = self.flat_within(context, width.saturating_sub(indent)) {
+            return f.write_str(&flat);
+        }
+        // A group that has to break is a group whose parentheses are worth
+        // seeing, and they are where its extra column of indent comes from:
+        // the lines inside line up under the paren.
+        if self.precedence() < context {
+            f.write_str("(")?;
+            self.lay(f, indent + 1, 0, width)?;
+            return f.write_str(")");
+        }
+        let newline = |f: &mut fmt::Formatter<'_>, indent: usize| write!(f, "\n{:1$}", "", indent);
+        match self {
+            Term::Compose(left, right) => {
+                left.lay(f, indent, PREC_COMPOSE, width)?;
+                f.write_str(" ;")?;
+                newline(f, indent)?;
+                right.lay(f, indent, PREC_COMPOSE + 1, width)
+            }
+            Term::Par(left, right) => {
+                left.lay(f, indent, PREC_PAR, width)?;
+                f.write_str(" *")?;
+                newline(f, indent)?;
+                right.lay(f, indent, PREC_PAR + 1, width)
+            }
+            Term::Branch { if_true, if_false } => {
+                f.write_str("branch ")?;
+                for (arm, close) in [(if_true, "} "), (if_false, "}")] {
+                    f.write_str("{")?;
+                    newline(f, indent + 2)?;
+                    arm.lay(f, indent + 2, 0, width)?;
+                    newline(f, indent)?;
+                    f.write_str(close)?;
+                }
+                Ok(())
+            }
+            // A leaf has no break to make, however long it is.
+            leaf => leaf.write(f, context),
         }
     }
 }
@@ -946,6 +1034,49 @@ mod tests {
         assert_eq!(format!("{}", left), "id(1) * id(1) * id(1)");
         let right = Term::par(a(), Term::par(a(), a()));
         assert_eq!(format!("{}", right), "id(1) * (id(1) * id(1))");
+    }
+
+    #[test]
+    fn what_fits_the_width_is_left_on_one_line() {
+        let spine = Term::pad_compose(
+            Term::pad_compose(Term::copy(1), Term::op(Prim::Equal)),
+            Term::drop(1),
+        );
+        assert_eq!(format!("{}", spine.pretty(40)), "copy(1) ; equal ; drop(1)");
+        // The same term with nowhere to put it breaks at every `;` of its
+        // spine, and at no other place.
+        assert_eq!(
+            format!("{}", spine.pretty(10)),
+            "copy(1) ;\nequal ;\ndrop(1)"
+        );
+    }
+
+    #[test]
+    fn a_broken_branch_indents_its_arms() {
+        let arm = |v| Term::pad_compose(Term::drop(1), Term::op(Prim::Push(Value::Int(v))));
+        let branch = Term::pad_compose(Term::copy(1), Term::branch(arm(1), arm(2)).unwrap());
+        assert_eq!(
+            format!("{}", branch.pretty(20)),
+            "copy(1) ;\nbranch {\n  drop(1) ; push 1\n} {\n  drop(1) ; push 2\n}"
+        );
+    }
+
+    #[test]
+    fn a_group_that_breaks_lines_up_inside_its_parenthesis() {
+        // The parentheses are `Display`'s, so the broken form still says the
+        // compose leans right; the lines inside sit under the open paren.
+        let not = || Term::op(Prim::Not);
+        let group = Term::compose(
+            Term::pad_compose(Term::copy(1), Term::op(Prim::Equal)),
+            not(),
+        )
+        .unwrap();
+        let right = Term::compose(not(), group).unwrap();
+        assert_eq!(format!("{}", right), "not ; (copy(1) ; equal ; not)");
+        assert_eq!(
+            format!("{}", right.pretty(20)),
+            "not ;\n(copy(1) ; equal ;\n not)"
+        );
     }
 
     // ---- lowering ----

@@ -21,6 +21,7 @@
 //! |---|---|---|
 //! | `peel` | strips what the two compose spines share at either end | nothing is shared |
 //! | `inline` | unfolds every call, all the way down | there are no calls |
+//! | `symm` | swaps the two sides | never — but two in a row are refused |
 //! | `via { body } (left: s, right: s)` | **cuts**: `A = B` splits into the goals `A = C` and `C = B` | the waypoint's net stack change is not the goal's, or a side fails |
 //! | `solve (f: 1 -> 1) { … ?f … } (right: s)` | **cuts at a waypoint the engine fills in**: match the template against the left side, continue with `C[fills] = B` | the template's net is not the goal's, no match binds the variables at their declared arities, or the right half fails |
 //! | `egraph` | saturates; the sides meet or the gas runs out | it runs out of gas |
@@ -33,6 +34,13 @@
 //! link may take a different road. A strategy that ends on a manipulation
 //! is allowed: it closes only if the goal has become trivially equal, and
 //! says so otherwise.
+//!
+//! `symm` is the one step that changes nothing about the claim: equality is
+//! symmetric, so `A = B` and `B = A` are the same goal. What it changes is
+//! which side the *asymmetric* steps read — `solve` matches its template
+//! against the left side, and a `via`'s halves are named for their sides —
+//! so it is how a proof says "the interesting side is the other one" without
+//! restating the identity backwards.
 //!
 //! `solve` is `via` with the waypoint under-specified: `?vars` stand for
 //! unknown subprograms at declared arities, and *solving* means saturating
@@ -75,6 +83,9 @@ pub enum Step<V> {
     Peel,
     /// Unfold every call on both sides.
     Inline,
+    /// Swap the two sides. Equality is symmetric, so the claim is untouched;
+    /// what moves is which side the asymmetric steps read.
+    Symm,
     /// Cut the goal at a waypoint: `A = B` splits into the two independent
     /// goals `A = C` (left) and `C = B` (right), each discharged by its own
     /// strategy. An omitted side gets the default, `egraph` — a cut exists
@@ -141,6 +152,7 @@ impl<V> fmt::Display for Step<V> {
             Step::Egraph => write!(f, "egraph"),
             Step::Peel => write!(f, "peel"),
             Step::Inline => write!(f, "inline"),
+            Step::Symm => write!(f, "symm"),
             Step::Via { .. } => write!(f, "via {{ … }}"),
             Step::Solve { .. } => write!(f, "solve(…)"),
             Step::Descend { .. } => write!(f, "descend(…)"),
@@ -209,6 +221,7 @@ fn parse_step(input: &str) -> Result<(Step<String>, &str), String> {
         "egraph" => Ok((Step::Egraph, rest)),
         "peel" => Ok((Step::Peel, rest)),
         "inline" => Ok((Step::Inline, rest)),
+        "symm" => Ok((Step::Symm, rest)),
         "via" => {
             let (body, after) =
                 brace_block(rest.trim_start()).ok_or("`via` expects a braced body")?;
@@ -394,6 +407,11 @@ fn validate<V>(strategy: &Strategy<V>) -> Result<(), String> {
                     validate(side)?;
                 }
             }
+            // Swapping twice is the goal it started with, and a step that
+            // says nothing is a step whose author lost the thread.
+            Step::Symm if matches!(strategy.get(i + 1), Some(Step::Symm)) => {
+                return Err("`symm symm` is the goal unchanged".to_string());
+            }
             _ => {}
         }
     }
@@ -535,6 +553,17 @@ mod tests {
         );
         assert_eq!(template, "?f ?g");
         assert_eq!(right.as_deref(), Some([Step::Egraph].as_slice()));
+    }
+
+    #[test]
+    fn symm_parses_and_says_nothing_twice() {
+        let entries = parse_hant("proof p = symm peel egraph;").unwrap();
+        assert_eq!(
+            entries[0].strategy,
+            vec![Step::Symm, Step::Peel, Step::Egraph]
+        );
+        let err = parse_hant("proof p = symm symm egraph;").unwrap_err();
+        assert!(err.contains("`symm symm`"), "{}", err);
     }
 
     #[test]

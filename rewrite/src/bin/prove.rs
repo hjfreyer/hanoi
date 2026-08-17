@@ -94,6 +94,20 @@ fn parse_args() -> Result<Args, String> {
     })
 }
 
+/// How many columns a residual's terms get, past the gutter [`field`] writes.
+const TERM_WIDTH: usize = 70;
+
+/// One row of the residual report: a label, a gutter, and a value that may
+/// need more than one line — every line of it written inside the same gutter,
+/// so a term broken over ten lines still reads as one field.
+fn field(label: &str, value: &impl std::fmt::Display) {
+    let value = value.to_string();
+    for (i, line) in value.lines().enumerate() {
+        let label = if i == 0 { label } else { "" };
+        println!("  {:<24}│ {}", label, line);
+    }
+}
+
 fn run(args: &Args) -> Result<bool, String> {
     let corpus = corpus::load(&args.root)?;
     for problem in &corpus.problems {
@@ -131,11 +145,11 @@ fn run(args: &Args) -> Result<bool, String> {
                 println!("identity {} ... FAILED", identity.name);
                 println!();
                 if !residual.path.is_empty() {
-                    println!("  the difference is       │ {}", residual.path.join(", "));
+                    field("the difference is", &residual.path.join(", "));
                 }
-                println!("  what the left came to   │ {}", residual.lhs);
-                println!("  what the right came to  │ {}", residual.rhs);
-                println!("  the search stopped      │ {}", residual.stopped);
+                field("what the left came to", &residual.lhs.pretty(TERM_WIDTH));
+                field("what the right came to", &residual.rhs.pretty(TERM_WIDTH));
+                field("the search stopped", &residual.stopped);
                 if !residual.firings.is_empty() {
                     println!("  rule firings");
                     for (rule, count) in residual.firings.iter().take(8) {
