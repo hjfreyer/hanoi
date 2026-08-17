@@ -1,0 +1,117 @@
+// The proof of `number_does_pre_and_post_is_constant` — the contract claim:
+// either the precondition fails, or the answer satisfies the postcondition.
+//
+// It is the corpus's one path-condition claim, and what kept it open is that
+// its then arm is reached only when `is_tag` held — a fact that is a
+// *disjunction* (`v = t1` or `v = t2`), and no rule window can spend one.
+// What spends it is a case split, and a case split is a chain of cuts: each
+// waypoint below is one state of the analysis written out as a program, and
+// the engine closes the step between two of them.
+//
+//   the body            `pick 0 ; is_tag ; branch { number ; is_numbered } { … }`
+//   the test opened     the outer branch, and the copy it fed on, moved into
+//                       `is_tag`'s own arms — the case tree
+//   the value written   each arm holding the literal it tested equal to
+//   the answers         each leaf run on that literal: `push true`, three times
+//   the claim           `drop 0 push true`
+//
+// Only the first three cuts spend anything; everything after is the engine
+// folding what a literal reaches, cut where a fold needs more than one hop.
+
+proof types_test::number_does_pre_and_post_is_constant =
+    // The body itself, with `is_tag` spelled out: `inline` opens every call on
+    // both sides, so this is the hop that has to name the whole shape.
+    via {
+        pick 0
+        pick 0 push crate::types_test::t1 equal
+        branch { drop 0 push true } { push crate::types_test::t2 equal }
+        branch {
+            jump crate::types_test::number
+            jump crate::types_test::is_numbered
+        } {
+            drop 0 push true
+        }
+    } (left: inline egraph, right:
+
+    // The case tree. The outer branch distributes into the arms of the test:
+    // the arm that answered `true` decides it, and the arm that did not
+    // carries the second test with it. The copy made up front is the copy
+    // each arm makes for itself, so every branch here reads a value one deep
+    // — which is the shape every law about a tested value is stated in.
+    via {
+        pick 0 push crate::types_test::t1 equal
+        branch {
+            jump crate::types_test::number
+            jump crate::types_test::is_numbered
+        } {
+            pick 0 push crate::types_test::t2 equal
+            branch {
+                jump crate::types_test::number
+                jump crate::types_test::is_numbered
+            } {
+                drop 0 push true
+            }
+        }
+    } (right:
+
+    // The path condition, spent: a value that tested equal to a literal *is*
+    // that literal, inside the arm that saw `true`. Each arm now runs the
+    // contract on a constant, which is what the disjunction was hiding.
+    via {
+        pick 0 push crate::types_test::t1 equal
+        branch {
+            drop 0 push crate::types_test::t1
+            jump crate::types_test::number
+            jump crate::types_test::is_numbered
+        } {
+            pick 0 push crate::types_test::t2 equal
+            branch {
+                drop 0 push crate::types_test::t2
+                jump crate::types_test::number
+                jump crate::types_test::is_numbered
+            } {
+                drop 0 push true
+            }
+        }
+    } (right:
+
+    // Every leaf answers `true`, and a tree of three `true`s is the claim.
+    via {
+        pick 0 push crate::types_test::t1 equal
+        branch { drop 0 push true } {
+            pick 0 push crate::types_test::t2 equal
+            branch { drop 0 push true } { drop 0 push true }
+        }
+    } (
+        // Per leaf: past the shared test, into the arm, past the shared drop,
+        // and run the contract on the literal the arm holds. The last arm is
+        // `drop 0 push true` on both sides already, so `descend` is given
+        // nothing for it and checks that claim rather than assuming it.
+        left: peel descend(
+            // `t1` is `number`'s first case: one saturation reaches it.
+            then: peel inline egraph,
+            else: peel descend(
+                // `t2` is not, and neither is it `is_numbered`'s first case,
+                // so the two answers the leaf passes through are named: what
+                // `number` does with a `t2`, and what `is_numbered` does with
+                // the pair it built.
+                then: peel
+                    via {
+                        push crate::types_test::t2
+                        pick 0 push crate::types_test::t2 equal
+                        branch {
+                            drop 0 push crate::types_test::t2 push 2 tuple 2
+                        } {
+                            drop 0 tuple 0
+                        }
+                        jump crate::types_test::is_numbered
+                    } (left: inline egraph, right:
+                    via {
+                        push (crate::types_test::t2, 2)
+                        jump crate::types_test::is_numbered
+                    } (left: inline egraph, right:
+                    via {
+                        push (crate::types_test::t2, 2)
+                        push crate::types_test::t2 push 2 tuple 2 equal
+                    } (left: inline egraph))))),
+        right: egraph))));
