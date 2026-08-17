@@ -67,6 +67,7 @@ proof identities::something_harder =
 |---|---|---|
 | `peel` | strips what the two compose spines share at either end | nothing is shared |
 | `inline` | unfolds every call, all the way down | there are no calls |
+| `inline(name)` | unfolds the calls to that one sentence | it is not called here |
 | `symm` | swaps the two sides | never — but two in a row are refused |
 | `via { body } (left: s, right: s)` | **cuts**: `A = B` splits into the goals `A = C` and `C = B` | the waypoint’s net stack change is not the goal’s, or a side fails |
 | `solve (f: 1 -> 1) { … ?f … } (right: s)` | **cuts at a waypoint the engine fills in** | the template’s net is not the goal’s, nothing matches at the declared arities, or the right half fails |
@@ -81,8 +82,9 @@ strategy, and what follows a split is written *inside* it. An omitted
 `descend` arm is a *checked* claim that those arms already match, not a
 shrug. A goal that becomes syntactically equal at any point closes on the
 spot. And a step that finds nothing to do — `peel` with nothing shared,
-`inline` with no calls — fails loudly rather than becoming a no-op, so a
-proof that no longer matches its identity says so.
+`inline` with no calls, `inline(name)` where nothing calls it — fails loudly
+rather than becoming a no-op, so a proof that no longer matches its identity
+says so.
 
 `via` is the transitivity cut. The author claims the waypoint sits between
 the sides, and the goal splits into `A = C` and `C = B` — **fully
@@ -102,6 +104,19 @@ stone is silently ignored instead of failing the proof, and a stuck run
 cannot say which half of the journey failed. The forgiving behavior is a
 coherent different step — see `egraph-hint` under "what is not here
 yet".)
+
+`inline` takes an optional label, and the label is usually what you want.
+Unlabelled it opens every call on both sides, all the way down — which means
+the *other* side of the next cut has to spell out everything that came open,
+and the engine pays for all of it. `inline(is_tag)` opens the calls to that
+one sentence and leaves the rest shut, so a waypoint can go on naming them:
+the corpus's contract proof opens the function under test and its
+precondition, keeps `number` and `is_numbered` as calls through four cuts,
+and its first hop went from 336 e-classes to 79 when it stopped opening them.
+Recursion is forbidden, so one pass opens every instance of the label; a
+label naming a sentence the library does not have is a load error, and one
+that is simply not called here fails the step, loudly, like any other step
+that found nothing to do.
 
 `symm` is the one step that claims nothing: equality is symmetric, so `A =
 B` and `B = A` are the same goal. What it moves is which side the

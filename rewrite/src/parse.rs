@@ -293,8 +293,9 @@ fn width_carrying(mnemonic: &str) -> Option<fn(usize) -> Prim> {
 }
 
 /// A sentence by the name the library keys it under, or by an unambiguous
-/// trailing part of one.
-fn sentence_named(library: &Library, path: &str) -> Result<SentenceIndex, String> {
+/// trailing part of one. Shared with the loader, which resolves an
+/// `inline(name)` label the same way a `call name` resolves.
+pub fn sentence_named(library: &Library, path: &str) -> Result<SentenceIndex, String> {
     if path.is_empty() {
         return Err("`call` wants the name of a sentence".to_string());
     }

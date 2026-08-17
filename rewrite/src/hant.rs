@@ -21,6 +21,7 @@
 //! |---|---|---|
 //! | `peel` | strips what the two compose spines share at either end | nothing is shared |
 //! | `inline` | unfolds every call, all the way down | there are no calls |
+//! | `inline(name)` | unfolds the calls to that one sentence | it is not called here |
 //! | `symm` | swaps the two sides | never — but two in a row are refused |
 //! | `via { body } (left: s, right: s)` | **cuts**: `A = B` splits into the goals `A = C` and `C = B` | the waypoint's net stack change is not the goal's, or a side fails |
 //! | `solve (f: 1 -> 1) { … ?f … } (right: s)` | **cuts at a waypoint the engine fills in**: match the template against the left side, continue with `C[fills] = B` | the template's net is not the goal's, no match binds the variables at their declared arities, or the right half fails |
@@ -84,8 +85,10 @@ pub enum Step<V> {
     Egraph,
     /// Strip the shared affixes of the two compose spines.
     Peel,
-    /// Unfold every call on both sides.
-    Inline,
+    /// Unfold calls on both sides: every one, all the way down, or — with a
+    /// label — only the calls to the sentence it names, whose own calls stay
+    /// closed. Recursion is forbidden, so one pass opens every instance.
+    Inline(Option<V>),
     /// Swap the two sides. Equality is symmetric, so the claim is untouched;
     /// what moves is which side the asymmetric steps read.
     Symm,
@@ -117,7 +120,8 @@ pub enum Step<V> {
     },
 }
 
-/// A `via` or `solve` payload once compiled against a library.
+/// What a step's payload reads as, once the library it names things against
+/// exists: a term, a term with holes, or a sentence.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Body {
     /// A `via` waypoint: the lowered term itself.
@@ -129,6 +133,8 @@ pub enum Body {
         /// Parallel to the step's `vars`: which leaf each `?var` is.
         holes: Vec<(String, SentenceIndex)>,
     },
+    /// An `inline` label: the one sentence it opens.
+    Target(SentenceIndex),
 }
 
 /// A strategy: steps in order, manipulations first, at most one closer last.
@@ -154,7 +160,8 @@ impl<V> fmt::Display for Step<V> {
         match self {
             Step::Egraph => write!(f, "egraph"),
             Step::Peel => write!(f, "peel"),
-            Step::Inline => write!(f, "inline"),
+            Step::Inline(None) => write!(f, "inline"),
+            Step::Inline(Some(_)) => write!(f, "inline(…)"),
             Step::Symm => write!(f, "symm"),
             Step::Via { .. } => write!(f, "via {{ … }}"),
             Step::Solve { .. } => write!(f, "solve(…)"),
@@ -223,7 +230,19 @@ fn parse_step(input: &str) -> Result<(Step<String>, &str), String> {
     match word {
         "egraph" => Ok((Step::Egraph, rest)),
         "peel" => Ok((Step::Peel, rest)),
-        "inline" => Ok((Step::Inline, rest)),
+        "inline" => {
+            // A label goes in parentheses, so `inline egraph` stays two steps
+            // rather than an inline of a sentence called `egraph`.
+            let Some(after) = rest.trim_start().strip_prefix('(') else {
+                return Ok((Step::Inline(None), rest));
+            };
+            let (label, after) = after.split_once(')').ok_or("`inline(` never closes")?;
+            let label = label.trim();
+            if label.is_empty() {
+                return Err("`inline()` names no sentence".to_string());
+            }
+            Ok((Step::Inline(Some(label.to_string())), after))
+        }
         "symm" => Ok((Step::Symm, rest)),
         "via" => {
             let (body, after) =
@@ -470,7 +489,7 @@ mod tests {
         .unwrap();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].identity, "identities::by_name");
-        assert_eq!(entries[0].strategy, vec![Step::Inline, Step::Egraph]);
+        assert_eq!(entries[0].strategy, vec![Step::Inline(None), Step::Egraph]);
         let [Step::Descend { then_arm, else_arm }] = &entries[1].strategy[..] else {
             panic!("{:?}", entries[1].strategy);
         };
@@ -556,6 +575,23 @@ mod tests {
         );
         assert_eq!(template, "?f ; ?g");
         assert_eq!(right.as_deref(), Some([Step::Egraph].as_slice()));
+    }
+
+    #[test]
+    fn an_inline_label_is_parenthesized() {
+        // Parenthesized so that `inline egraph` stays two steps.
+        let entries = parse_hant("proof p = inline egraph;").unwrap();
+        assert_eq!(entries[0].strategy, vec![Step::Inline(None), Step::Egraph]);
+        let entries = parse_hant("proof p = inline(types_test::is_tag) egraph;").unwrap();
+        assert_eq!(
+            entries[0].strategy,
+            vec![
+                Step::Inline(Some("types_test::is_tag".to_string())),
+                Step::Egraph
+            ]
+        );
+        let err = parse_hant("proof p = inline() egraph;").unwrap_err();
+        assert!(err.contains("names no sentence"), "{}", err);
     }
 
     #[test]

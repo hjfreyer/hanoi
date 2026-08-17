@@ -30,7 +30,7 @@
 
 use std::time::Duration;
 
-use bytecode::Library;
+use bytecode::{Library, SentenceIndex};
 use egg::{AstSize, BackoffScheduler, EGraph, Extractor, Runner};
 
 use std::collections::HashMap;
@@ -317,19 +317,36 @@ impl<'l> Prover<'l> {
                 })
             }
 
-            Step::Inline => {
-                if !has_calls(&goal.lhs) && !has_calls(&goal.rhs) {
-                    return Ok(Outcome::Stuck(gave_up(
-                        goal,
-                        "`inline` found no calls to open",
-                    )));
+            Step::Inline(label) => {
+                // A label opens one sentence's calls and leaves the rest shut,
+                // which is what lets a waypoint keep naming the calls it does
+                // not care about: unfolding everything means spelling
+                // everything out on the other side of the cut.
+                let only = match label {
+                    None => None,
+                    Some(Body::Target(idx)) => Some(*idx),
+                    Some(_) => unreachable!("the loader reads an inline label as a target"),
+                };
+                if !has_calls(&goal.lhs, only) && !has_calls(&goal.rhs, only) {
+                    let why = match only {
+                        None => "`inline` found no calls to open".to_string(),
+                        Some(idx) => format!(
+                            "`inline({})` found no call to it here",
+                            self.library.names[idx]
+                        ),
+                    };
+                    return Ok(Outcome::Stuck(gave_up(goal, &why)));
                 }
                 let opened = Goal::aligned(
-                    inline_calls(self.library, &goal.lhs)?,
-                    inline_calls(self.library, &goal.rhs)?,
+                    inline_calls(self.library, &goal.lhs, only)?,
+                    inline_calls(self.library, &goal.rhs, only)?,
                 );
+                let target = only.map(|idx| self.library.names[idx].clone());
                 Ok(match self.run(rest, opened)? {
-                    Outcome::Closed(sub) => Outcome::Closed(Proof::Inlined(Box::new(sub))),
+                    Outcome::Closed(sub) => Outcome::Closed(Proof::Inlined {
+                        target,
+                        sub: Box::new(sub),
+                    }),
                     stuck => stuck,
                 })
             }
@@ -668,35 +685,41 @@ fn rebuild(parts: &[&Term], width_if_empty: usize) -> Term {
 
 // ---- inlining ---------------------------------------------------------------
 
-fn has_calls(term: &Term) -> bool {
+/// Whether there is anything for an `inline` to open: any call at all, or a
+/// call to the one sentence a label named.
+fn has_calls(term: &Term, only: Option<SentenceIndex>) -> bool {
     match term {
-        Term::Call { .. } => true,
-        Term::Compose(a, b) | Term::Par(a, b) => has_calls(a) || has_calls(b),
-        Term::Branch { if_true, if_false } => has_calls(if_true) || has_calls(if_false),
+        Term::Call { target, .. } => only.is_none_or(|idx| *target == idx),
+        Term::Compose(a, b) | Term::Par(a, b) => has_calls(a, only) || has_calls(b, only),
+        Term::Branch { if_true, if_false } => has_calls(if_true, only) || has_calls(if_false, only),
         _ => false,
     }
 }
 
-/// The term with every call replaced by its body, all the way down.
-/// Terminates because recursion is forbidden: the call graph of a library
-/// that compiled is acyclic.
-fn inline_calls(library: &Library, term: &Term) -> Result<Term, Error> {
+/// The term with calls replaced by their bodies: every call, all the way down,
+/// or every call to `only` and no others.
+///
+/// The unlabelled walk terminates because recursion is forbidden — the call
+/// graph of a library that compiled is acyclic — and for the same reason the
+/// labelled one needs no recursion into the body it just opened: nothing a
+/// sentence calls can reach that sentence again.
+fn inline_calls(
+    library: &Library,
+    term: &Term,
+    only: Option<SentenceIndex>,
+) -> Result<Term, Error> {
+    let recur = |t: &Term| inline_calls(library, t, only);
     Ok(match term {
-        Term::Call { target, .. } => {
-            let body = lower(library, *target)?;
-            inline_calls(library, &body)?
-        }
-        Term::Compose(a, b) => Term::Compose(
-            Box::new(inline_calls(library, a)?),
-            Box::new(inline_calls(library, b)?),
-        ),
-        Term::Par(a, b) => Term::Par(
-            Box::new(inline_calls(library, a)?),
-            Box::new(inline_calls(library, b)?),
-        ),
+        Term::Call { target, .. } => match only {
+            None => recur(&lower(library, *target)?)?,
+            Some(idx) if *target == idx => lower(library, *target)?,
+            Some(_) => term.clone(),
+        },
+        Term::Compose(a, b) => Term::Compose(Box::new(recur(a)?), Box::new(recur(b)?)),
+        Term::Par(a, b) => Term::Par(Box::new(recur(a)?), Box::new(recur(b)?)),
         Term::Branch { if_true, if_false } => Term::Branch {
-            if_true: Box::new(inline_calls(library, if_true)?),
-            if_false: Box::new(inline_calls(library, if_false)?),
+            if_true: Box::new(recur(if_true)?),
+            if_false: Box::new(recur(if_false)?),
         },
         leaf => leaf.clone(),
     })
@@ -769,6 +792,58 @@ mod tests {
             panic!("expected the opened goal to close");
         };
         assert_eq!(proof.summary(), "inline; saturated (4 iters, 6 classes)");
+    }
+
+    #[test]
+    fn a_labelled_inline_opens_one_sentence_and_leaves_the_rest_shut() {
+        // `outer` calls `inner`. Opening `outer` alone leaves the call to
+        // `inner` standing, so the waypoint can name it rather than spell it,
+        // and the summary says which sentence was spent.
+        let code = r#"
+            #[arity(1,1)] sentence inner { drop 0 push true }
+            #[arity(1,1)] sentence outer { jump crate::inner }
+            identity probe { jump crate::outer } = { drop 0 push true };
+        "#;
+        let outcome = prove_with(
+            code,
+            "probe",
+            Some("inline(outer) via { call inner } (right: inline)"),
+        );
+        let Outcome::Closed(proof) = outcome else {
+            panic!("the opened goal is `call inner` against the claim");
+        };
+        assert_eq!(
+            proof.summary(),
+            "inline outer; cut (left: the two sides are one term; \
+             right: inline; the two sides are one term)"
+        );
+    }
+
+    #[test]
+    fn a_label_naming_an_uncalled_sentence_fails_loudly() {
+        let code = r#"
+            #[arity(1,1)] sentence elsewhere { drop 0 push false }
+            identity probe { is_bool is_bool } = { drop 0 push true };
+        "#;
+        let Outcome::Stuck(residual) = prove_with(code, "probe", Some("inline(elsewhere) egraph"))
+        else {
+            panic!("nothing here calls it");
+        };
+        assert!(
+            residual.stopped.contains("found no call to it"),
+            "{}",
+            residual.stopped
+        );
+    }
+
+    #[test]
+    fn a_label_naming_nothing_at_all_is_a_load_error() {
+        // A sentence that is not there is a mistake in the proof, not a proof
+        // that failed, so it is caught when the entry is attached.
+        let library = assemble("identity probe { is_bool } = { is_bool };").unwrap();
+        let entries = parse_hant("proof probe = inline(nowhere) egraph;").unwrap();
+        let err = crate::corpus::attach(&entries[0].strategy, &library).unwrap_err();
+        assert!(err.contains("no sentence is called"), "{}", err);
     }
 
     #[test]

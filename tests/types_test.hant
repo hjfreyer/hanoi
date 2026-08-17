@@ -8,14 +8,18 @@
 // waypoint below is one state of the analysis written out as a term, and the
 // engine closes the step between two of them.
 //
-//   the body            `copy(1) ; is_tag ; branch { number ; is_numbered } { … }`
-//   the test opened     the outer branch, and the copy it fed on, moved into
-//                       `is_tag`'s own arms — the case tree
+//   the body            `copy(1) ; is_tag ; branch { number ; is_numbered } { … }`,
+//                       opened by label so the contract's two halves stay
+//                       calls — a waypoint can name them instead of spelling
+//                       them out, and every goal below is that much smaller
+//   the frame off       the precondition's body, unframed
+//   the case tree       the outer branch, and the copy it fed on, moved into
+//                       `is_tag`'s own arms
 //   the value written   each arm holding the literal it tested equal to
 //   the answers         each leaf run on that literal: `push true`, three times
 //   the claim           `drop(1) ; push true`
 //
-// Only the first three cuts spend anything; everything after is the engine
+// The middle cuts are the ones that spend something; the rest is the engine
 // folding what a literal reaches, cut where a fold needs more than one hop.
 //
 // The waypoints are terms, in the language a residual prints in — so what the
@@ -24,8 +28,16 @@
 // on the page where the engine can be argued with about it.
 
 proof types_test::number_does_pre_and_post_is_constant =
-    // The body itself, with `is_tag` opened out: `inline` opens every call on
-    // both sides, so this is the hop that has to name the whole shape.
+    // Open the function under test, and the precondition it asks — and
+    // nothing else. `number` and `is_numbered` stay calls, so every waypoint
+    // below names them instead of spelling them out.
+    inline(types_test::number_does_pre_and_post)
+    inline(types_test::is_tag)
+
+    // The precondition, unframed. Opening a call puts its whole body inside
+    // the frame the call sat in — `id(1) * (copy(1) ; …)` — and every law
+    // about a branch is stated about one that is not framed, so the first cut
+    // is the same body with the padding spread across its factors.
     via {
         copy(1) ; id(1) * copy(1) ; id(3) * push types_test::t1 ;
         id(2) * equal ;
@@ -40,7 +52,7 @@ proof types_test::number_does_pre_and_post_is_constant =
         } {
             drop(1) ; push true
         }
-    } (left: inline egraph, right:
+    } (right:
 
     // The case tree. The outer branch distributes into the arms of the test:
     // the arm that answered `true` decides it, and the arm that did not
@@ -99,10 +111,13 @@ proof types_test::number_does_pre_and_post_is_constant =
             then: peel inline egraph,
             else: peel descend(
                 // `t2` is not, and neither is it `is_numbered`'s first case,
-                // so the two answers the leaf passes through are named: what
-                // `number` does with a `t2`, and what `is_numbered` does with
-                // the pair it built.
+                // so the answers the leaf passes through are named one at a
+                // time — and each cut opens only the half of the contract that
+                // has to fold, which is what the labels are for.
                 then: peel
+                    // What `number` does with a `t2`: its first test is false,
+                    // so the else arm. Only `number` opens — the postcondition
+                    // is the same call on both sides of this cut.
                     via {
                         push types_test::t2 ; copy(1) ;
                         id(2) * push types_test::t2 ; id(1) * equal ;
@@ -112,12 +127,16 @@ proof types_test::number_does_pre_and_post_is_constant =
                             drop(1) ; tuple 0
                         } ;
                         call types_test::is_numbered
-                    } (left: inline egraph, right:
+                    } (left: inline(types_test::number) egraph, right:
+                    // …and the pair that arm builds. Nothing opens here: it is
+                    // the engine folding a literal.
                     via {
                         push (types_test::t2, 2) ; call types_test::is_numbered
-                    } (left: inline egraph, right:
+                    } (right:
+                    // Then the same again for the postcondition: `(t2, 2)` is
+                    // not the pair it tests for first either.
                     via {
                         push (types_test::t2, 2) ; id(1) * push types_test::t2 ;
                         id(2) * push 2 ; id(1) * tuple 2 ; equal
-                    } (left: inline egraph))))),
+                    } (left: inline(types_test::is_numbered) egraph))))),
         right: egraph))));
