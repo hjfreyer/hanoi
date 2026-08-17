@@ -393,6 +393,13 @@ pub fn rules() -> Vec<ProofRewrite> {
     // the frame hid exactly the condition.
     out.extend(rewrite!("branch-hoist";
         "(; (* ?x id@1) (branch ?t ?f))" <=> "(branch (; ?x ?t) (; ?x ?f))"));
+    // And what runs *beside* a branch runs inside whichever arm it takes: the
+    // deeper region the branch never looks at does not care which one that
+    // was. The conversion `branch-hoist` cannot say, and the one lowering
+    // makes constantly — a branch whose arms are narrower than the stack is
+    // emitted framed, and every law about branches is stated unframed.
+    out.extend(rewrite!("branch-beside";
+        "(* ?x (branch ?t ?f))" <=> "(branch (* ?x ?t) (* ?x ?f))"));
     // The condition was a copy, and both arms open by dropping it: nothing is
     // left of the copy at all.
     out.push(dyn_rule(
@@ -843,6 +850,21 @@ mod tests {
             op(Prim::Swap),
         );
         assert!(provable(&lhs, &rhs));
+    }
+
+    #[test]
+    fn a_frame_beside_a_branch_opens_into_the_arms() {
+        // `id(1) * branch { A } { B }` = `branch { id(1)*A } { id(1)*B }`.
+        // Lowering emits the left whenever a branch's arms are narrower than
+        // the stack, and every other branch law is stated about the right.
+        let arm = |v| Term::pad_compose(Term::drop(1), op(Prim::Push(Value::Int(v))));
+        let framed = Term::par(Term::id(1), Term::branch(arm(1), arm(2)).unwrap());
+        let opened = Term::branch(
+            Term::par(Term::id(1), arm(1)),
+            Term::par(Term::id(1), arm(2)),
+        )
+        .unwrap();
+        assert!(provable(&framed, &opened));
     }
 
     #[test]
