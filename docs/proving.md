@@ -67,6 +67,7 @@ proof identities::something_harder =
 | `peel` | strips what the two compose spines share at either end | nothing is shared |
 | `inline` | unfolds every call, all the way down | there are no calls |
 | `via { body } (left: s, right: s)` | **cuts**: `A = B` splits into the goals `A = C` and `C = B` | the waypoint’s net stack change is not the goal’s, or a side fails |
+| `solve (f: 1 -> 1) { … ?f … } (right: s)` | **cuts at a waypoint the engine fills in** | the template’s net is not the goal’s, nothing matches at the declared arities, or the right half fails |
 | `egraph` | saturates; the sides meet or the gas runs out | it runs out of gas |
 | `descend(then: s, else: s)` | forks a branch-vs-branch goal into its arms | the sides are not branches, or an omitted arm is not already equal |
 
@@ -99,6 +100,21 @@ stone is silently ignored instead of failing the proof, and a stuck run
 cannot say which half of the journey failed. The forgiving behavior is a
 coherent different step — see `egraph-hint` under "what is not here
 yet".)
+
+`solve` is `via` with the waypoint under-specified — the cut with
+metavariables. Its `?vars` stand for unknown subprograms at declared
+arities; the engine saturates the goal and **e-matches** the template
+against the left side's class. A match both finds the fills and *is* the
+proof of the left half: the instantiated template's nodes live in that
+class, put there by rule applications. The first match at the declared
+arities wins, the fills are recorded in the proof (`solve (?f = drop(1);
+…)`) so a different match after a rule-set change is visible rather than
+mysterious, and only the right half — `C[fills] = B` — remains as a goal.
+Declared-but-unmentioned and mentioned-but-undeclared variables are load
+errors; a template that does not mean what it says must not quietly search
+for something else. This is also the seed of lemma application: a template
+with variables is the left-hand side of a lemma, and the matching machinery
+built here is what citing a proven identity inside another proof will use.
 
 Inside `egraph`: both sides go into one e-graph and
 every rule fires, with a hook that stops the run the moment the two roots
