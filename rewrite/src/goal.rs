@@ -70,8 +70,12 @@ pub enum Proof {
         then_sub: Option<Box<Proof>>,
         else_sub: Option<Box<Proof>>,
     },
-    /// An `inline` unfolded every call, and the opened goal closed.
-    Inlined(Box<Proof>),
+    /// An `inline` unfolded calls — every one, or the labelled sentence's,
+    /// which the summary names — and the opened goal closed.
+    Inlined {
+        target: Option<String>,
+        sub: Box<Proof>,
+    },
     /// A `symm` swapped the sides, and the swapped goal closed. It records
     /// nothing but itself: the claim either way is the same one.
     Swapped(Box<Proof>),
@@ -113,7 +117,10 @@ impl Proof {
                 };
                 format!("descend (then: {}; else: {})", arm(then_sub), arm(else_sub))
             }
-            Proof::Inlined(sub) => format!("inline; {}", sub.summary()),
+            Proof::Inlined { target, sub } => match target {
+                None => format!("inline; {}", sub.summary()),
+                Some(name) => format!("inline {}; {}", name, sub.summary()),
+            },
             Proof::Swapped(sub) => format!("symm; {}", sub.summary()),
             Proof::Cut {
                 left_sub,
@@ -144,7 +151,7 @@ impl Proof {
     pub fn explanations(&self) -> Vec<&str> {
         match self {
             Proof::Trivial => vec![],
-            Proof::Peel { sub, .. } | Proof::Inlined(sub) | Proof::Swapped(sub) => {
+            Proof::Peel { sub, .. } | Proof::Inlined { sub, .. } | Proof::Swapped(sub) => {
                 sub.explanations()
             }
             Proof::Descend { then_sub, else_sub } => then_sub

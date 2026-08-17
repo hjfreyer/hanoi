@@ -27,7 +27,7 @@ use std::path::Path;
 use bytecode::{IdentityIndex, Library, SourceMap, assemble_source};
 
 use crate::hant::{Body, ProofEntry, Step, Strategy, parse_hant};
-use crate::parse::{Scope, parse_term};
+use crate::parse::{Scope, parse_term, sentence_named};
 
 /// A loaded corpus: the compiled library, the proofs that attached, and the
 /// entries that could not attach.
@@ -49,7 +49,20 @@ pub(crate) fn attach(
             Ok(match step {
                 Step::Egraph => Step::Egraph,
                 Step::Peel => Step::Peel,
-                Step::Inline => Step::Inline,
+                // A label is resolved here, so a proof naming a sentence that
+                // is not there is a load-time problem rather than a failed
+                // proof: the two mean different things to whoever reads the
+                // report.
+                Step::Inline(label) => Step::Inline(
+                    label
+                        .as_ref()
+                        .map(|name| {
+                            sentence_named(library, name)
+                                .map(Body::Target)
+                                .map_err(|e| format!("`inline`: {}", e))
+                        })
+                        .transpose()?,
+                ),
                 Step::Symm => Step::Symm,
                 Step::Via {
                     waypoint,
