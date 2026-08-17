@@ -542,7 +542,7 @@ const PREC_ATOM: u8 = 3;
 
 impl fmt::Display for Term {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.write(f, 0)
+        self.write(f, 0, Names::default())
     }
 }
 
@@ -558,18 +558,49 @@ impl fmt::Display for Term {
 pub struct Pretty<'t> {
     term: &'t Term,
     width: usize,
+    names: Names<'t>,
 }
 
 impl fmt::Display for Pretty<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.term.lay(f, 0, 0, self.width)
+        self.term.lay(f, 0, 0, self.width, self.names)
+    }
+}
+
+/// Where a printed call gets its name, when it has one to get.
+///
+/// A [`Term`] carries an index rather than a name, so `Display` can only write
+/// `call #3`. Anything printed for a human to *answer* — a residual, whose
+/// answer is a `via` waypoint naming the same sentence — is printed with the
+/// library at hand instead, and says `call types_test::number`.
+#[derive(Copy, Clone, Default)]
+struct Names<'l>(Option<&'l TiVec<SentenceIndex, String>>);
+
+impl Names<'_> {
+    fn of(&self, idx: SentenceIndex) -> Option<&str> {
+        self.0?.get(idx).map(String::as_str)
+    }
+}
+
+impl<'t> Pretty<'t> {
+    /// The same layout, with calls printed by the name the library keys them
+    /// under rather than by index.
+    pub fn named(self, library: &'t Library) -> Self {
+        Pretty {
+            names: Names(Some(&library.names)),
+            ..self
+        }
     }
 }
 
 impl Term {
     /// This term laid out to read in `width` columns. See [`Pretty`].
     pub fn pretty(&self, width: usize) -> Pretty<'_> {
-        Pretty { term: self, width }
+        Pretty {
+            term: self,
+            width,
+            names: Names::default(),
+        }
     }
 
     fn precedence(&self) -> u8 {
@@ -587,10 +618,10 @@ impl Term {
     /// at its parent's own precedence, and one on the right a step above it. So
     /// `(a ; b) ; c` prints flat and `a ; (b ; c)` keeps its parentheses, which
     /// is what makes the printed form say which tree it came from.
-    fn write(&self, f: &mut fmt::Formatter<'_>, context: u8) -> fmt::Result {
+    fn write(&self, f: &mut fmt::Formatter<'_>, context: u8, names: Names<'_>) -> fmt::Result {
         if self.precedence() < context {
             write!(f, "(")?;
-            self.write(f, 0)?;
+            self.write(f, 0, names)?;
             return write!(f, ")");
         }
         match self {
@@ -598,36 +629,39 @@ impl Term {
             Term::Drop(n) => write!(f, "drop({})", n),
             Term::Copy(n) => write!(f, "copy({})", n),
             Term::Op(prim) => write!(f, "{}", prim),
-            Term::Call { target, .. } => write!(f, "call #{}", usize::from(*target)),
+            Term::Call { target, .. } => match names.of(*target) {
+                Some(name) => write!(f, "call {}", name),
+                None => write!(f, "call #{}", usize::from(*target)),
+            },
             Term::Compose(left, right) => {
-                left.write(f, PREC_COMPOSE)?;
+                left.write(f, PREC_COMPOSE, names)?;
                 write!(f, " ; ")?;
-                right.write(f, PREC_COMPOSE + 1)
+                right.write(f, PREC_COMPOSE + 1, names)
             }
             Term::Par(left, right) => {
-                left.write(f, PREC_PAR)?;
+                left.write(f, PREC_PAR, names)?;
                 write!(f, " * ")?;
-                right.write(f, PREC_PAR + 1)
+                right.write(f, PREC_PAR + 1, names)
             }
             Term::Branch { if_true, if_false } => {
                 write!(f, "branch {{ ")?;
-                if_true.write(f, 0)?;
+                if_true.write(f, 0, names)?;
                 write!(f, " }} {{ ")?;
-                if_false.write(f, 0)?;
+                if_false.write(f, 0, names)?;
                 write!(f, " }}")
             }
         }
     }
 
     /// The one-line spelling, when it is short enough to keep.
-    fn flat_within(&self, context: u8, budget: usize) -> Option<String> {
-        struct Flat<'t>(&'t Term, u8);
+    fn flat_within(&self, context: u8, budget: usize, names: Names<'_>) -> Option<String> {
+        struct Flat<'t>(&'t Term, u8, Names<'t>);
         impl fmt::Display for Flat<'_> {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                self.0.write(f, self.1)
+                self.0.write(f, self.1, self.2)
             }
         }
-        let flat = Flat(self, context).to_string();
+        let flat = Flat(self, context, names).to_string();
         (flat.chars().count() <= budget).then_some(flat)
     }
 
@@ -639,9 +673,10 @@ impl Term {
         indent: usize,
         context: u8,
         width: usize,
+        names: Names<'_>,
     ) -> fmt::Result {
         // What fits stays put: breaking a short factor helps nobody.
-        if let Some(flat) = self.flat_within(context, width.saturating_sub(indent)) {
+        if let Some(flat) = self.flat_within(context, width.saturating_sub(indent), names) {
             return f.write_str(&flat);
         }
         // A group that has to break is a group whose parentheses are worth
@@ -649,36 +684,36 @@ impl Term {
         // the lines inside line up under the paren.
         if self.precedence() < context {
             f.write_str("(")?;
-            self.lay(f, indent + 1, 0, width)?;
+            self.lay(f, indent + 1, 0, width, names)?;
             return f.write_str(")");
         }
         let newline = |f: &mut fmt::Formatter<'_>, indent: usize| write!(f, "\n{:1$}", "", indent);
         match self {
             Term::Compose(left, right) => {
-                left.lay(f, indent, PREC_COMPOSE, width)?;
+                left.lay(f, indent, PREC_COMPOSE, width, names)?;
                 f.write_str(" ;")?;
                 newline(f, indent)?;
-                right.lay(f, indent, PREC_COMPOSE + 1, width)
+                right.lay(f, indent, PREC_COMPOSE + 1, width, names)
             }
             Term::Par(left, right) => {
-                left.lay(f, indent, PREC_PAR, width)?;
+                left.lay(f, indent, PREC_PAR, width, names)?;
                 f.write_str(" *")?;
                 newline(f, indent)?;
-                right.lay(f, indent, PREC_PAR + 1, width)
+                right.lay(f, indent, PREC_PAR + 1, width, names)
             }
             Term::Branch { if_true, if_false } => {
                 f.write_str("branch ")?;
                 for (arm, close) in [(if_true, "} "), (if_false, "}")] {
                     f.write_str("{")?;
                     newline(f, indent + 2)?;
-                    arm.lay(f, indent + 2, 0, width)?;
+                    arm.lay(f, indent + 2, 0, width, names)?;
                     newline(f, indent)?;
                     f.write_str(close)?;
                 }
                 Ok(())
             }
             // A leaf has no break to make, however long it is.
-            leaf => leaf.write(f, context),
+            leaf => leaf.write(f, context, names),
         }
     }
 }
@@ -833,14 +868,20 @@ impl<'a> Lowering<'a> {
         if let Some(arity) = self.arities.get(&idx) {
             return Ok(*arity);
         }
-        let inferred = sentence_arity(self.library, idx).ok_or(Error::NoArity(idx))?;
-        let arity = Arity::new(
-            usize::try_from(inferred.inputs).expect("an inferred arity counts up from zero"),
-            usize::try_from(inferred.outputs).expect("an inferred arity counts up from zero"),
-        );
+        let arity = call_arity(self.library, idx)?;
         self.arities.insert(idx, arity);
         Ok(arity)
     }
+}
+
+/// What a call to this sentence does to the stack: its *inferred* arity, which
+/// is what the machine consumes and what a [`Term::Call`] carries.
+pub fn call_arity(library: &Library, idx: SentenceIndex) -> Result<Arity, Error> {
+    let inferred = sentence_arity(library, idx).ok_or(Error::NoArity(idx))?;
+    Ok(Arity::new(
+        usize::try_from(inferred.inputs).expect("an inferred arity counts up from zero"),
+        usize::try_from(inferred.outputs).expect("an inferred arity counts up from zero"),
+    ))
 }
 
 #[cfg(test)]

@@ -32,7 +32,7 @@ Four layers, in `rewrite/src/`:
 
 | layer | module | what it does |
 |---|---|---|
-| proofs | `hant.rs`, `corpus.rs` | the strategy language a proof is written in, and the loader that attaches each `.hant` entry to the identity it names |
+| proofs | `hant.rs`, `corpus.rs`, `parse.rs` | the strategy language a proof is written in, the loader that attaches each `.hant` entry to the identity it names, and the reader that turns a waypoint's text into a term |
 | goals | `goal.rs`, `strategy.rs` | a goal is two [terms](../rewrite/src/term.rs) padded to one arity; the interpreter runs a strategy over one |
 | engine | `lang.rs` | the term model as an egg language, with a per-class analysis carrying the facts rules condition on |
 | equations | `rules.rs` | every law, as a rewrite the e-graph applies in both directions where both are bounded |
@@ -60,7 +60,7 @@ holds exactly the claims that need a human's direction:
 proof identities::testing_a_test_by_name = inline egraph;
 proof identities::something_harder =
     peel
-    via { drop 0 push true } (left: inline egraph);
+    via { drop(1) ; push true } (left: inline egraph);
 ```
 
 | step | does | fails when |
@@ -217,9 +217,23 @@ One file beside each `.hana` that states identities, holding `proof` entries
 in the strategy language above. Attachment is checked both ways: an entry
 naming no stated identity is an error — a renamed identity must not
 silently shed its proof — and a claim discharged twice was discharged once
-too often. `via` bodies are programs, compiled by appending scratch
-sentences to the corpus source so the whole parser and resolver are reused,
-with one caveat: paths in a body resolve from the crate root.
+too often. A body — a `via` waypoint or a `solve` template — is a **term**, read by
+`rewrite/src/parse.rs`, which is the inverse of the printing residuals use.
+That is the point: a residual says `copy(1) ; id(1) * push t1 ; equal`, the
+waypoint answering it is written the same way, and nothing is translated by
+hand. Two consequences worth knowing. Nothing pads — the term language says
+what it means, so a body whose halves do not meet is `cannot compose 1 -> 2
+with 1 -> 1` where it is written, rather than something quietly widened. And
+a call is named (`call types_test::number`, or any unambiguous tail of that),
+which is also how a residual prints one when the report has the library to
+hand; `Display` alone can only say `call #3`.
+
+Bodies used to be Hana sentences, appended to the corpus source so the real
+parser and resolver did the work. It cost the author a translation of every
+waypoint out of the language the report had just printed, and it cost `solve`
+a scratch **hole sentence** per variable, written to have the declared arity
+so the lowering's padding arithmetic had something to chew on. Now the arity
+is on the variable and `?f` is a leaf of the term.
 
 The current corpus needs two entries. `identities.hant` holds one line —
 `proof identities::testing_a_test_by_name = inline egraph;` — and

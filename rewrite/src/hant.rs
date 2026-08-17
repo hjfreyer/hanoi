@@ -10,7 +10,7 @@
 //! proof identities::testing_a_test_by_name = inline egraph;
 //! proof identities::something_harder =
 //!     peel
-//!     via { drop 0 push true } (left: inline egraph);
+//!     via { drop(1) ; push true } (left: inline egraph);
 //! ```
 //!
 //! A strategy is a run of steps, juxtaposed, acting on **one goal**. The
@@ -62,9 +62,12 @@
 //! error (a renamed identity must not silently shed its proof), and a claim
 //! discharged twice was discharged once too often.
 //!
-//! `via` bodies are programs, compiled by appending scratch sentences to the
-//! corpus source so the real parser and resolver do the work — with the one
-//! caveat that paths in a body resolve from the crate root.
+//! A body — a `via` waypoint or a `solve` template — is a **term**, in the
+//! language [`crate::term`] prints and [`crate::parse`] reads: the same
+//! language a residual is reported in, so answering a stuck goal is copying
+//! and editing rather than translating. `call name` names a sentence, `?f` a
+//! declared variable, and nothing pads — `id(k) * A` is written where a Hana
+//! sentence would have inferred it.
 
 use std::fmt;
 
@@ -72,9 +75,9 @@ use bytecode::SentenceIndex;
 
 use crate::term::Term;
 
-/// One step of a strategy. `V` is what a `via` carries: the body's source
-/// text as parsed, a lowered [`Term`](crate::term::Term) once the corpus it
-/// compiles against exists.
+/// One step of a strategy. `V` is what a `via` carries: the body's text as
+/// parsed, a [`Body`] — the term it reads as — once the library it is written
+/// against exists.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Step<V> {
     /// Saturate. Closes the goal or fails with a residual.
@@ -119,11 +122,11 @@ pub enum Step<V> {
 pub enum Body {
     /// A `via` waypoint: the lowered term itself.
     Stone(Term),
-    /// A `solve` template: the lowered term, with each declared variable
-    /// standing as a call to a scratch hole sentence of the declared arity.
+    /// A `solve` template: the term, with each declared variable standing as
+    /// a leaf of the declared arity — a call to an index no sentence has.
     Template {
         term: Term,
-        /// Parallel to the step's `vars`: which sentence each `?var` calls.
+        /// Parallel to the step's `vars`: which leaf each `?var` is.
         holes: Vec<(String, SentenceIndex)>,
     },
 }
@@ -461,7 +464,7 @@ mod tests {
             // how the hard ones close
             proof identities::by_name = inline egraph;
             proof identities::wrapped =
-                descend(then: peel via { drop 0 push true }, else: egraph);
+                descend(then: peel via { drop(1) ; push true }, else: egraph);
             "#,
         )
         .unwrap();
@@ -477,7 +480,7 @@ mod tests {
                 [
                     Step::Peel,
                     Step::Via {
-                        waypoint: "drop 0 push true".to_string(),
+                        waypoint: "drop(1) ; push true".to_string(),
                         left: None,
                         right: None,
                     },
@@ -535,7 +538,7 @@ mod tests {
     #[test]
     fn solve_parses_vars_template_and_right() {
         let entries =
-            parse_hant("proof p = solve (f: 1 -> 0, g: 2 -> 1) { ?f ?g } (right: egraph);")
+            parse_hant("proof p = solve (f: 1 -> 0, g: 2 -> 1) { ?f ; ?g } (right: egraph);")
                 .unwrap();
         let [
             Step::Solve {
@@ -551,7 +554,7 @@ mod tests {
             vars,
             &[("f".to_string(), (1, 0)), ("g".to_string(), (2, 1))]
         );
-        assert_eq!(template, "?f ?g");
+        assert_eq!(template, "?f ; ?g");
         assert_eq!(right.as_deref(), Some([Step::Egraph].as_slice()));
     }
 
