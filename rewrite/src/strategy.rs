@@ -1,31 +1,32 @@
-//! The goal pipeline: what happens to a claim before and after the e-graph.
+//! The interpreter for the strategy language of [`crate::hant`].
 //!
-//! It is short, and the reason it is short is worth stating. Decomposition
-//! moves that looked necessary — strip a shared prefix, descend into branch
-//! arms — are **congruences**, and an e-graph performs congruences
-//! intrinsically: the moment saturation unites `A` with `B`, the parents
-//! `P ; A` and `P ; B` are one e-node and merge for free, and a branch
-//! merges the moment its arms do. Running those moves *before* saturation
-//! bought nothing and cost real money — a peeled subgoal can be false
-//! (`push 1 ; drop` = `push 2 ; drop`, minus the shared `drop`), and a
-//! false goal saturates to the end of its budget. So the prover does:
+//! A proof mirrors a tree of goals. A strategy acts on one goal:
+//! manipulations transform it, a splitter (`via`, `descend`) replaces it
+//! with independent subgoals each carrying its own strategy, and `egraph`
+//! closes it. The default — what an identity with no written proof gets —
+//! is `egraph` alone, and nothing else runs unbidden. That division is
+//! deliberate, twice over:
 //!
-//! 1. **Trivial** — the two sides are one term as written.
-//! 2. **Saturate** — both sides and any stepping stones into one e-graph,
-//!    every rule fires, and a hook closes the run the moment the two roots
-//!    meet — saturation has no goal of its own and would happily keep
-//!    exploring a closed one.
-//! 3. **Inline** — a stuck goal that still holds calls is reopened with
-//!    every call unfolded and tried once more. This one is *not* a
-//!    congruence — it spends the library's defining equations, and opened
-//!    calls multiply the term — so it stays a goal-level decision.
+//! - **The manipulations the engine performs itself are not offered as
+//!   automatic steps.** Peeling an affix and descending into arms are
+//!   congruences, and an e-graph performs congruences intrinsically: unite
+//!   `A` with `B` and the parents `P ; A` and `P ; B` merge for free. When
+//!   this crate ran them automatically they bought nothing and cost real
+//!   money — a peeled subgoal can be false, and a false goal saturates to
+//!   the end of its budget. As *directed* moves they are a different thing:
+//!   the author who writes `peel` is asserting the narrowed claim is the
+//!   true one, and an assertion that is wrong fails loudly in a small goal.
+//! - **Every written step is a checked claim.** `inline` spends the
+//!   library's defining equations; `via` is the transitivity cut — `A = B`
+//!   splits into the independent goals `A = C` and `C = B`, each free to
+//!   take a different road — so a wrong waypoint fails its half, named,
+//!   instead of being quietly ignored. Saturation is allowed neither on
+//!   its own.
 //!
-//! Peeling and descending still exist, after the search rather than before
-//! it: a stuck goal's residual is **narrowed** — shared affixes stripped,
-//! branch pairs with matching other arms descended into — so the report
-//! points at where the difference lives instead of printing two whole
-//! terms. The same moves are the natural vocabulary for a human or agent
-//! directing a proof by hand, which is where they came from.
+//! `egraph` runs the engine and fails if the gas runs out. A stuck goal's
+//! residual is still **narrowed** for the report — shared affixes stripped,
+//! the differing arm entered — because when the engine gives up, where the
+//! difference lives is the thing worth printing.
 
 use std::time::Duration;
 
@@ -33,6 +34,7 @@ use bytecode::Library;
 use egg::{AstSize, BackoffScheduler, EGraph, Extractor, Runner};
 
 use crate::goal::{Goal, Outcome, Proof, Residual};
+use crate::hant::{Step, Strategy, default_strategy};
 use crate::lang::{Proving, expr_of, expr_to_term};
 use crate::rules::rules;
 use crate::term::{Error, Term, lower};
@@ -78,55 +80,188 @@ impl<'l> Prover<'l> {
         }
     }
 
-    /// Runs the pipeline on a goal. `hints` are stepping stones: terms seeded
-    /// into the e-graph beside the two sides, for bridging what the rules do
-    /// not find on their own.
-    pub fn prove(&self, goal: &Goal, hints: &[Term]) -> Result<Outcome, Error> {
-        self.prove_from(goal, hints, true)
+    /// Runs a strategy on a goal — the written one, or the default `egraph`
+    /// when the identity carries no proof.
+    pub fn prove(&self, goal: &Goal, strategy: Option<&Strategy<Term>>) -> Result<Outcome, Error> {
+        let default = default_strategy();
+        let strategy = strategy.unwrap_or(&default);
+        self.run(strategy, goal.clone())
     }
 
-    fn prove_from(&self, goal: &Goal, hints: &[Term], may_inline: bool) -> Result<Outcome, Error> {
+    /// One strategy on one goal. A goal whose sides are one term as written
+    /// is closed before any step runs — at every level, so a `descend` arm
+    /// or a cut's side that became trivial needs no steps of its own.
+    fn run(&self, strategy: &[Step<Term>], goal: Goal) -> Result<Outcome, Error> {
         if goal.lhs == goal.rhs {
             return Ok(Outcome::Closed(Proof::Trivial));
         }
+        let Some((head, rest)) = strategy.split_first() else {
+            return Ok(Outcome::Stuck(gave_up(
+                goal,
+                "the strategy ended with the goal still open",
+            )));
+        };
+        match head {
+            Step::Egraph => Ok(self.saturate(&goal)),
 
-        match self.saturate(goal, hints) {
-            Outcome::Closed(proof) => Ok(Outcome::Closed(proof)),
-            Outcome::Stuck(residual) => {
-                if may_inline && (has_calls(&goal.lhs) || has_calls(&goal.rhs)) {
-                    let opened = Goal::aligned(
-                        inline_calls(self.library, &goal.lhs)?,
-                        inline_calls(self.library, &goal.rhs)?,
+            Step::Via {
+                waypoint,
+                left,
+                right,
+            } => {
+                // The cut is a claim, so a waypoint whose stack effect cannot
+                // sit between the sides is refused here, loudly, rather than
+                // producing goals no rule could ever close.
+                if waypoint.arity().net() != goal.lhs.arity().net() {
+                    let why = format!(
+                        "the `via` waypoint's net stack change ({}) is not the goal's ({})",
+                        waypoint.arity().net(),
+                        goal.lhs.arity().net()
                     );
-                    return Ok(match self.prove_from(&opened, hints, false)? {
-                        Outcome::Closed(sub) => Outcome::Closed(Proof::Inlined(Box::new(sub))),
-                        // The residual of the opened goal is the one worth
-                        // reading: it is where the search actually died.
-                        stuck => stuck,
-                    });
+                    return Ok(Outcome::Stuck(gave_up(goal, &why)));
                 }
-                Ok(Outcome::Stuck(residual))
+                // Two goals, fully independent from here: each side takes its
+                // own road, and proving both proves the whole by transitivity.
+                let default = default_strategy();
+                let side = |name: &str,
+                            strategy: &Option<Strategy<Term>>,
+                            sub: Goal|
+                 -> Result<Result<Box<Proof>, Residual>, Error> {
+                    let strategy = strategy.as_ref().unwrap_or(&default);
+                    Ok(match self.run(strategy, sub)? {
+                        Outcome::Closed(p) => Ok(Box::new(p)),
+                        Outcome::Stuck(mut residual) => {
+                            residual
+                                .path
+                                .insert(0, format!("in the {} half of the cut", name));
+                            Err(residual)
+                        }
+                    })
+                };
+                let left_sub = match side(
+                    "left",
+                    left,
+                    Goal::aligned(goal.lhs.clone(), waypoint.clone()),
+                )? {
+                    Ok(p) => p,
+                    Err(residual) => return Ok(Outcome::Stuck(residual)),
+                };
+                let right_sub = match side(
+                    "right",
+                    right,
+                    Goal::aligned(waypoint.clone(), goal.rhs.clone()),
+                )? {
+                    Ok(p) => p,
+                    Err(residual) => return Ok(Outcome::Stuck(residual)),
+                };
+                Ok(Outcome::Closed(Proof::Cut {
+                    left_sub,
+                    right_sub,
+                }))
+            }
+
+            Step::Peel => {
+                let Some((narrowed, prefix, suffix)) = peel(&goal) else {
+                    return Ok(Outcome::Stuck(gave_up(
+                        goal,
+                        "`peel` found nothing shared to strip",
+                    )));
+                };
+                Ok(match self.run(rest, narrowed)? {
+                    Outcome::Closed(sub) => Outcome::Closed(Proof::Peel {
+                        prefix,
+                        suffix,
+                        sub: Box::new(sub),
+                    }),
+                    Outcome::Stuck(mut residual) => {
+                        residual
+                            .path
+                            .insert(0, "past the peeled affixes".to_string());
+                        Outcome::Stuck(residual)
+                    }
+                })
+            }
+
+            Step::Inline => {
+                if !has_calls(&goal.lhs) && !has_calls(&goal.rhs) {
+                    return Ok(Outcome::Stuck(gave_up(
+                        goal,
+                        "`inline` found no calls to open",
+                    )));
+                }
+                let opened = Goal::aligned(
+                    inline_calls(self.library, &goal.lhs)?,
+                    inline_calls(self.library, &goal.rhs)?,
+                );
+                Ok(match self.run(rest, opened)? {
+                    Outcome::Closed(sub) => Outcome::Closed(Proof::Inlined(Box::new(sub))),
+                    stuck => stuck,
+                })
+            }
+
+            Step::Descend { then_arm, else_arm } => {
+                let (
+                    Term::Branch {
+                        if_true: t1,
+                        if_false: e1,
+                    },
+                    Term::Branch {
+                        if_true: t2,
+                        if_false: e2,
+                    },
+                ) = (&goal.lhs, &goal.rhs)
+                else {
+                    return Ok(Outcome::Stuck(gave_up(
+                        goal,
+                        "`descend` needs a branch on both sides",
+                    )));
+                };
+                let arm = |name: &str,
+                           strategy: &Option<Strategy<Term>>,
+                           a: &Term,
+                           b: &Term|
+                 -> Result<Result<Option<Box<Proof>>, Residual>, Error> {
+                    let sub = Goal::aligned(a.clone(), b.clone());
+                    match strategy {
+                        Some(s) => Ok(match self.run(s, sub)? {
+                            Outcome::Closed(p) => Ok(Some(Box::new(p))),
+                            Outcome::Stuck(mut residual) => {
+                                residual.path.insert(0, format!("in the {} arm", name));
+                                Err(residual)
+                            }
+                        }),
+                        // An arm left out is a claim that it already matches,
+                        // and the claim is checked rather than assumed.
+                        None if a == b => Ok(Ok(None)),
+                        None => Ok(Err(Residual {
+                            path: vec![format!("in the {} arm", name)],
+                            stopped: format!(
+                                "the {} arms are not already equal, and `descend` was given no strategy for them",
+                                name
+                            ),
+                            ..gave_up(sub, "")
+                        })),
+                    }
+                };
+                let then_sub = match arm("then", then_arm, t1, t2)? {
+                    Ok(p) => p,
+                    Err(residual) => return Ok(Outcome::Stuck(residual)),
+                };
+                let else_sub = match arm("else", else_arm, e1, e2)? {
+                    Ok(p) => p,
+                    Err(residual) => return Ok(Outcome::Stuck(residual)),
+                };
+                Ok(Outcome::Closed(Proof::Descend { then_sub, else_sub }))
             }
         }
     }
 
     /// One e-graph, both sides, every rule, until they meet or the budget is
     /// spent.
-    fn saturate(&self, goal: &Goal, hints: &[Term]) -> Outcome {
+    fn saturate(&self, goal: &Goal) -> Outcome {
         let mut analysis = Proving::default();
         let lhs = expr_of(&goal.lhs, &mut analysis.session);
         let rhs = expr_of(&goal.rhs, &mut analysis.session);
-        let goal_arity = goal.lhs.arity();
-        let hint_exprs: Vec<_> = hints
-            .iter()
-            .filter(|h| h.arity().net() == goal_arity.net())
-            .map(|h| {
-                let padded = h
-                    .clone()
-                    .under(goal_arity.inputs.saturating_sub(h.arity().inputs));
-                expr_of(&padded, &mut analysis.session)
-            })
-            .collect();
 
         // The backoff scheduler exists to slow growth, and the growth here
         // comes from the handful of rules that fire on shape alone. The fact
@@ -176,11 +311,8 @@ impl<'l> Prover<'l> {
                 } else {
                     Ok(())
                 }
-            });
-        for hint in &hint_exprs {
-            runner = runner.with_expr(hint);
-        }
-        let mut runner = runner.run(&self.rules);
+            })
+            .run(&self.rules);
 
         let (l, r) = (runner.roots[0], runner.roots[1]);
         if runner.egraph.find(l) == runner.egraph.find(r) {
@@ -225,6 +357,18 @@ impl<'l> Prover<'l> {
                 None => "unknown".to_string(),
             },
         })
+    }
+}
+
+/// A residual for a strategy that failed before any search ran: the goal as
+/// it stood, and why the step gave up.
+fn gave_up(goal: Goal, why: &str) -> Residual {
+    Residual {
+        lhs: goal.lhs,
+        rhs: goal.rhs,
+        path: Vec::new(),
+        firings: Vec::new(),
+        stopped: why.to_string(),
     }
 }
 
@@ -388,26 +532,73 @@ fn inline_calls(library: &Library, term: &Term) -> Result<Term, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hant::parse_hant;
     use bytecode::assemble;
 
-    fn prove_identity(code: &str, name: &str) -> Outcome {
+    /// Proves the identity named `name`, with the strategy written as a
+    /// `.hant` entry body, or the default when `strategy` is `None`.
+    fn prove_with(code: &str, name: &str, strategy: Option<&str>) -> Outcome {
         let library = assemble(code).unwrap();
         let idx = library.identity_by_name(name).unwrap();
         let goal = Goal::of_identity(&library, idx).unwrap();
+        let parsed = strategy.map(|s| {
+            let entries = parse_hant(&format!("proof {} = {};", name, s)).unwrap();
+            crate::hant::map_via(entries.into_iter().next().unwrap().strategy, &mut |body| {
+                Err::<Term, String>(format!(
+                    "this test writes no via bodies, got {{ {} }}",
+                    body
+                ))
+            })
+            .unwrap()
+        });
         Prover::new(&library, Config::default())
-            .prove(&goal, &[])
+            .prove(&goal, parsed.as_ref())
+            .unwrap()
+    }
+
+    fn prove_identity(code: &str, name: &str) -> Outcome {
+        prove_with(code, name, None)
+    }
+
+    /// The same, for strategies whose `via` bodies must compile — a small
+    /// version of what `corpus::load` does with scratch sentences.
+    fn prove_with_vias(code: &str, name: &str, strategy: &str) -> Outcome {
+        let entries = parse_hant(&format!("proof {} = {};", name, strategy)).unwrap();
+        let entry = entries.into_iter().next().unwrap();
+        let mut source = code.to_string();
+        for (i, body) in crate::hant::via_bodies(&entry.strategy).iter().enumerate() {
+            source.push_str(&format!("\nsentence __via_{} {{ {} }}\n", i, body));
+        }
+        let library = assemble(&source).unwrap();
+        let mut next = 0usize;
+        let strategy = crate::hant::map_via(entry.strategy, &mut |_body: String| {
+            let scratch = format!("__via_{}", next);
+            next += 1;
+            let idx = library
+                .names
+                .iter_enumerated()
+                .find(|(_, n)| **n == scratch)
+                .map(|(idx, _)| idx)
+                .expect("the scratch sentence compiled");
+            lower(&library, idx).map_err(|e| e.to_string())
+        })
+        .unwrap();
+        let idx = library.identity_by_name(name).unwrap();
+        let goal = Goal::of_identity(&library, idx).unwrap();
+        Prover::new(&library, Config::default())
+            .prove(&goal, Some(&strategy))
             .unwrap()
     }
 
     #[test]
-    fn a_shared_prefix_is_no_obstacle() {
+    fn the_default_is_the_engine_alone() {
         // The prefix is a congruence: the e-graph closes the whole goal the
-        // moment the differing tails meet, with no peeling step.
+        // moment the differing tails meet, with no peeling step written.
         let outcome = prove_identity(
             "identity probe { drop 0 is_bool is_bool } = { drop 0 drop 0 push true };",
             "probe",
         );
-        assert!(matches!(outcome, Outcome::Closed(_)));
+        assert!(matches!(outcome, Outcome::Closed(Proof::Saturated { .. })));
     }
 
     #[test]
@@ -420,18 +611,154 @@ mod tests {
     }
 
     #[test]
-    fn a_call_on_the_right_is_opened_when_the_closed_goal_sticks() {
-        let outcome = prove_identity(
+    fn a_call_stays_closed_until_a_proof_says_inline() {
+        let code = r#"
+            sentence drop_and_true { drop 0 push true }
+            identity probe { is_bool is_bool } = { jump crate::drop_and_true };
+        "#;
+        // The default does not spend the library's definitions…
+        let outcome = prove_identity(code, "probe");
+        assert!(matches!(outcome, Outcome::Stuck(_)));
+        // …a written proof does.
+        let outcome = prove_with(code, "probe", Some("inline egraph"));
+        let Outcome::Closed(proof) = outcome else {
+            panic!("expected the opened goal to close");
+        };
+        assert_eq!(proof.summary(), "inline; saturated (4 iters, 6 classes)");
+    }
+
+    #[test]
+    fn a_directed_peel_and_descend_close_and_say_so() {
+        let outcome = prove_with(
+            "identity probe { drop 0 branch { is_bool is_bool } { not } } = { drop 0 branch { is_int is_bool } { not } };",
+            "probe",
+            Some("peel descend(then: egraph)"),
+        );
+        let Outcome::Closed(proof) = outcome else {
+            panic!("expected the goal to close");
+        };
+        assert!(
+            proof
+                .summary()
+                .starts_with("peel 1+0; descend (then: saturated"),
+            "{}",
+            proof.summary()
+        );
+        assert!(
+            proof.summary().contains("else: as written"),
+            "{}",
+            proof.summary()
+        );
+    }
+
+    #[test]
+    fn an_omitted_descend_arm_is_checked_not_assumed() {
+        let outcome = prove_with(
+            "identity probe { branch { is_bool is_bool } { not } } = { branch { is_int is_bool } { not } };",
+            "probe",
+            Some("descend(else: egraph)"),
+        );
+        let Outcome::Stuck(residual) = outcome else {
+            panic!("the then arms are not already equal");
+        };
+        assert!(
+            residual.stopped.contains("then arms"),
+            "{}",
+            residual.stopped
+        );
+    }
+
+    #[test]
+    fn a_step_that_does_nothing_fails_loudly() {
+        let code = "identity probe { is_bool is_bool } = { drop 0 push true };";
+        let Outcome::Stuck(residual) = prove_with(code, "probe", Some("peel egraph")) else {
+            panic!("nothing is shared to peel");
+        };
+        assert!(residual.stopped.contains("`peel`"), "{}", residual.stopped);
+        let Outcome::Stuck(residual) = prove_with(code, "probe", Some("inline egraph")) else {
+            panic!("there are no calls to open");
+        };
+        assert!(
+            residual.stopped.contains("`inline`"),
+            "{}",
+            residual.stopped
+        );
+    }
+
+    #[test]
+    fn a_cut_splits_the_goal_and_closes_each_half() {
+        // `is_bool ; is_bool` = `is_int ; is_bool`, cut at the normal form
+        // both sides reach: two independent goals, each a small saturation.
+        let outcome = prove_with_vias(
+            "identity probe { is_bool is_bool } = { is_int is_bool };",
+            "probe",
+            "via { drop 0 push true }",
+        );
+        let Outcome::Closed(proof) = outcome else {
+            panic!("both halves close");
+        };
+        assert!(
+            proof.summary().starts_with("cut (left: saturated"),
+            "{}",
+            proof.summary()
+        );
+    }
+
+    #[test]
+    fn a_cut_lets_each_half_take_its_own_road() {
+        // The right half compares the waypoint against a call, so it inlines;
+        // the left half needs no such thing. Fully independent strategies.
+        let outcome = prove_with_vias(
             r#"
             sentence drop_and_true { drop 0 push true }
             identity probe { is_bool is_bool } = { jump crate::drop_and_true };
             "#,
             "probe",
+            "via { drop 0 push true } (right: inline egraph)",
         );
         let Outcome::Closed(proof) = outcome else {
-            panic!("expected the goal to close");
+            panic!("both halves close");
         };
-        assert!(proof.summary().starts_with("inline"), "{}", proof.summary());
+        assert_eq!(
+            proof.summary(),
+            "cut (left: saturated (4 iters, 6 classes); right: inline; the two sides are one term)"
+        );
+    }
+
+    #[test]
+    fn a_wrong_waypoint_fails_its_half_by_name() {
+        // `not` has the right arity but is no midpoint: the left goal,
+        // `is_bool ; is_bool` = `not`, is false and says so.
+        let outcome = prove_with_vias(
+            "identity probe { is_bool is_bool } = { is_int is_bool };",
+            "probe",
+            "via { not }",
+        );
+        let Outcome::Stuck(residual) = outcome else {
+            panic!("the left half is false");
+        };
+        assert!(
+            residual.path.iter().any(|p| p.contains("left half")),
+            "{:?}",
+            residual.path
+        );
+    }
+
+    #[test]
+    fn a_waypoint_off_the_goal_net_is_refused_loudly() {
+        let outcome = prove_with_vias(
+            "identity probe { is_bool is_bool } = { is_int is_bool };",
+            "probe",
+            "via { push 1 }",
+        );
+        let Outcome::Stuck(residual) = outcome else {
+            panic!("the waypoint's net does not fit");
+        };
+        assert!(
+            residual.stopped.contains("net stack change"),
+            "{}",
+            residual.stopped
+        );
     }
 
     #[test]
@@ -443,17 +770,6 @@ mod tests {
         assert_eq!(format!("{}", residual.lhs), "push 1");
         assert_eq!(format!("{}", residual.rhs), "push 2");
         assert!(residual.path.is_empty());
-    }
-
-    #[test]
-    fn a_shared_suffix_of_unequal_work_still_closes() {
-        // `push 1 ; drop` = `push 2 ; drop`: the claim that made automatic
-        // peeling dangerous. Whole-goal saturation closes it directly.
-        let outcome = prove_identity(
-            "identity probe { push 1 drop 0 } = { push 2 drop 0 };",
-            "probe",
-        );
-        assert!(matches!(outcome, Outcome::Closed(_)));
     }
 
     #[test]

@@ -49,21 +49,35 @@ impl Goal {
     }
 }
 
-/// How a goal was discharged. Printed with `--explain`; the leaves carry what
-/// the e-graph found.
-///
-/// Deliberately short: decomposition steps that once appeared here — peeling
-/// a shared affix, descending into arms — are congruences, which the e-graph
-/// performs on its own, so no proof ever needs to record one. Inlining is
-/// the exception that stays: it spends the library's defining equations,
-/// which saturation is deliberately not allowed to do by itself.
+/// How a goal was discharged: the shape of the strategy that closed it, with
+/// what the e-graph found at the leaves. Printed one-line by
+/// [`summary`][Proof::summary]; `--explain` adds the leaves' step-by-step
+/// accounts.
 #[derive(Debug)]
 pub enum Proof {
     /// The two sides are one term as written.
     Trivial,
-    /// Every call was unfolded, and the opened goal closed.
+    /// A `peel` stripped a shared prefix and suffix; the sub-proof answers
+    /// for what was left.
+    Peel {
+        prefix: usize,
+        suffix: usize,
+        sub: Box<Proof>,
+    },
+    /// A `descend` forked the arms; `None` is an omitted arm whose sides
+    /// were checked equal as written.
+    Descend {
+        then_sub: Option<Box<Proof>>,
+        else_sub: Option<Box<Proof>>,
+    },
+    /// An `inline` unfolded every call, and the opened goal closed.
     Inlined(Box<Proof>),
-    /// Saturation united the two sides.
+    /// A `via` cut the goal at a waypoint; each half closed independently.
+    Cut {
+        left_sub: Box<Proof>,
+        right_sub: Box<Proof>,
+    },
+    /// An `egraph` united the two sides.
     Saturated {
         iterations: usize,
         classes: usize,
@@ -76,7 +90,27 @@ impl Proof {
     pub fn summary(&self) -> String {
         match self {
             Proof::Trivial => "the two sides are one term".to_string(),
+            Proof::Peel {
+                prefix,
+                suffix,
+                sub,
+            } => format!("peel {}+{}; {}", prefix, suffix, sub.summary()),
+            Proof::Descend { then_sub, else_sub } => {
+                let arm = |sub: &Option<Box<Proof>>| match sub {
+                    None => "as written".to_string(),
+                    Some(p) => p.summary(),
+                };
+                format!("descend (then: {}; else: {})", arm(then_sub), arm(else_sub))
+            }
             Proof::Inlined(sub) => format!("inline; {}", sub.summary()),
+            Proof::Cut {
+                left_sub,
+                right_sub,
+            } => format!(
+                "cut (left: {}; right: {})",
+                left_sub.summary(),
+                right_sub.summary()
+            ),
             Proof::Saturated {
                 iterations,
                 classes,
@@ -89,7 +123,20 @@ impl Proof {
     pub fn explanations(&self) -> Vec<&str> {
         match self {
             Proof::Trivial => vec![],
-            Proof::Inlined(sub) => sub.explanations(),
+            Proof::Peel { sub, .. } | Proof::Inlined(sub) => sub.explanations(),
+            Proof::Descend { then_sub, else_sub } => then_sub
+                .iter()
+                .chain(else_sub.iter())
+                .flat_map(|p| p.explanations())
+                .collect(),
+            Proof::Cut {
+                left_sub,
+                right_sub,
+            } => left_sub
+                .explanations()
+                .into_iter()
+                .chain(right_sub.explanations())
+                .collect(),
             Proof::Saturated { explanation, .. } => explanation.as_deref().into_iter().collect(),
         }
     }

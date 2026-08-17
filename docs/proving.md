@@ -27,11 +27,12 @@ were wrong.
 
 ## The shape of the thing
 
-Three layers, in `rewrite/src/`:
+Four layers, in `rewrite/src/`:
 
 | layer | module | what it does |
 |---|---|---|
-| goals | `goal.rs`, `strategy.rs` | a goal is two [terms](../rewrite/src/term.rs) padded to one arity; a small pipeline of moves narrows it before and after the engine runs |
+| proofs | `hant.rs`, `corpus.rs` | the strategy language a proof is written in, and the loader that attaches each `.hant` entry to the identity it names |
+| goals | `goal.rs`, `strategy.rs` | a goal is two [terms](../rewrite/src/term.rs) padded to one arity; the interpreter runs a strategy over one |
 | engine | `lang.rs` | the term model as an egg language, with a per-class analysis carrying the facts rules condition on |
 | equations | `rules.rs` | every law, as a rewrite the e-graph applies in both directions where both are bounded |
 
@@ -46,49 +47,97 @@ is invariant across an e-class**, and the analysis asserts it on every merge.
 A rule that united two classes with different stack effects would panic on the
 spot rather than prove something false.
 
-### The pipeline
+### The strategy language
 
-Three moves, and the shortness is a finding, not an economy:
+A proof is a strategy: steps juxtaposed, manipulations first, a closer
+last, written in the `.hant` beside the `.hana` that states the identity.
+An identity with no entry gets the default — `egraph` alone — so the file
+holds exactly the claims that need a human's direction:
 
-1. **Trivial** — the sides are one term as written.
-2. **Saturate** — both sides into one e-graph, every rule fires. Closing
-   means the two roots unify, and a hook checks for that **every iteration**
-   — saturation would otherwise happily keep exploring an already-closed
-   goal to the end of the budget, and did: `discarded_work_on_copies` grew
-   to 23,000 classes finding a proof it had at 51. The proof records
-   iterations and class count, and `--explain` prints egg's step-by-step
-   account of the meeting. Explanation tracking taxes every union, so the
-   e-graph only carries it when `--explain` asks.
-3. **Inline** — a stuck goal that still holds calls is reopened with every
-   call unfolded and tried once more. This is "comparison up to inlining"
-   reborn — `testing_a_test_by_name` is the identity that exercises it.
+```text
+// identities.hant
+proof identities::testing_a_test_by_name = inline egraph;
+proof identities::something_harder =
+    peel
+    via { drop 0 push true } (left: inline egraph);
+```
 
-#### Why peeling and descending are not search moves
+| step | does | fails when |
+|---|---|---|
+| `peel` | strips what the two compose spines share at either end | nothing is shared |
+| `inline` | unfolds every call, all the way down | there are no calls |
+| `via { body } (left: s, right: s)` | **cuts**: `A = B` splits into the goals `A = C` and `C = B` | the waypoint’s net stack change is not the goal’s, or a side fails |
+| `egraph` | saturates; the sides meet or the gas runs out | it runs out of gas |
+| `descend(then: s, else: s)` | forks a branch-vs-branch goal into its arms | the sides are not branches, or an omitted arm is not already equal |
 
-Two decompositions that looked essential — strip the prefix and suffix the
-two sides share, descend into the arms of a branch pair — are
-**congruences**, and performing congruences is precisely what an e-graph
-does on its own: the moment saturation unites `A` with `B`, the parents
-`P ; A` and `P ; B` are one e-node and merge for free, and two branches
-merge the moment their arms do. Running the moves *before* saturation could
-only ever save graph size, and in practice it cost instead: a peeled
-subgoal can be **false** (`push 1 ; drop` = `push 2 ; drop`, minus the
-shared `drop`), and a false goal saturates to the end of its budget —
-`two_spellings_of_one_test` once spent fourteen seconds failing to prove
-`is_bool = is_int`, a claim its own peel had manufactured, before closing
-the real goal in milliseconds. Removing both moves changed no verdict on
-the corpus and simplified the prover to the three moves above.
+A strategy acts on **one goal**, and the proof mirrors a tree of goals.
+The manipulations transform the current goal; a splitter — `via` or
+`descend` — replaces it with independent subgoals, each carrying its own
+strategy inside the splitter; `egraph` closes it. So the closers end a
+strategy, and what follows a split is written *inside* it. An omitted
+`descend` arm is a *checked* claim that those arms already match, not a
+shrug. A goal that becomes syntactically equal at any point closes on the
+spot. And a step that finds nothing to do — `peel` with nothing shared,
+`inline` with no calls — fails loudly rather than becoming a no-op, so a
+proof that no longer matches its identity says so.
 
-The one goal-level move that survives is the one that is *not* a
-congruence: inlining spends the library's defining equations, which
-saturation is deliberately not allowed to do by itself.
+`via` is the transitivity cut. The author claims the waypoint sits between
+the sides, and the goal splits into `A = C` and `C = B` — **fully
+independent from that moment**: peel one, inline the other, cut one again;
+proving both proves the whole. A wrong waypoint fails its half, *named*,
+rather than being quietly ignored; a chain is nested cuts,
+`via { c1 } (right: via { c2 })`, each link free to take a different road.
+The two splitters default an omitted side differently, on purpose: a
+`descend` arm was supplied by the goal, and equal arms are common, so
+omission is a checked equality claim; a cut's sides are the author's own
+construction and a trivially-equal side is a degenerate cut, so an omitted
+`via` side gets `egraph` — handing the engine easier halves is what a cut
+is *for*. (The alternative `via` design — seeding the waypoint into one
+shared e-graph as a third root — was tried first and is strictly more
+forgiving, which is exactly what is wrong with it *as `via`*: a wrong
+stone is silently ignored instead of failing the proof, and a stuck run
+cannot say which half of the journey failed. The forgiving behavior is a
+coherent different step — see `egraph-hint` under "what is not here
+yet".)
 
-Peel and descend still exist — after the search rather than before it.
-A stuck goal's residual is **narrowed**: shared affixes stripped, branch
-pairs with matching other arms entered, each step recorded, so the report
-points at where the difference lives. The same moves are the natural
-vocabulary for a human or agent directing a proof by hand, which is where
-they belong.
+Inside `egraph`: both sides go into one e-graph and
+every rule fires, with a hook that stops the run the moment the two roots
+unify — saturation has no goal of its own and would otherwise explore a
+closed goal to the end of the budget (`discarded_work_on_copies` once grew
+to 23,000 classes finding a proof it had at 51). `--explain` prints egg's
+step-by-step account of the meeting; explanation tracking taxes every
+union, so the e-graph only carries it when asked.
+
+#### Why the default is the engine alone
+
+The manipulations the language offers are not run automatically, and the
+reason splits in two:
+
+- **Peel and descend are congruences**, and an e-graph performs congruences
+  intrinsically: unite `A` with `B` and the parents `P ; A` and `P ; B` are
+  one e-node, merging for free; two branches merge the moment their arms
+  do. When this crate ran these moves automatically they bought nothing and
+  cost real money — a peeled subgoal can be **false** (`push 1 ; drop` =
+  `push 2 ; drop`, minus the shared `drop`), and a false goal saturates to
+  the end of its budget: `two_spellings_of_one_test` once spent fourteen
+  seconds failing to prove `is_bool = is_int`, a claim its own peel had
+  manufactured. As *directed* moves they are a different thing — the author
+  who writes `peel` asserts the narrowed claim is the true one, and a wrong
+  assertion fails loudly in a small goal.
+- **Inline and via spend something.** `inline` spends the library's
+  defining equations and multiplies the term; `via` spends an author's
+  claim about the middle. Saturation is deliberately allowed neither on its
+  own, which is why `testing_a_test_by_name` carries the corpus's first
+  written proof.
+
+So the working assumption is the one the tool is built around: the engine
+closes what the equations reach, and for anything non-trivial a human
+manipulates the goal a little and lets the engine close what is left.
+
+When the engine gives up, the same decomposition moves run *backwards over
+the wreckage*: the residual is narrowed — shared affixes stripped, the one
+differing arm entered, each step recorded — so the report points at where
+the difference lives instead of printing two whole terms.
 
 The old system's hardest cases are the e-graph's easiest. `two_spellings_of_
 one_test` needed "driving both sides and meeting in the middle" — a whole
@@ -117,7 +166,8 @@ and the map between the two is written there. Three kinds of rule:
 Two readings are deliberately absent. **Unfolding** is the pipeline's move,
 per above. And nothing **conjures work** — `drop(n) = X ; drop(m)` read
 backwards would have to invent `X`. When a proof needs that direction, the
-term it needs is written down as a stepping stone instead.
+term containing the work is written down as a `via` waypoint instead, and
+the forward rules connect it to both sides of its links.
 
 One scheduling fact worth knowing, learned the expensive way: egg's backoff
 scheduler bans rules by *match* count, and a fact rule matches everywhere
@@ -126,26 +176,20 @@ one and you silence exactly the rare application it exists for. So only the
 shape rules that actually grow the graph (associativity, the staircases, the
 block expansions) are left bannable; every fact rule is exempted.
 
-## Stepping stones: the `.hant` file
+## The `.hant` file
 
-A goal the rules cannot bridge is helped by seeding the e-graph with an
-intermediate term both sides can reach. The stone is a program, so it is
-written as one, in a `.hant` beside the `.hana`:
+One file beside each `.hana` that states identities, holding `proof` entries
+in the strategy language above. Attachment is checked both ways: an entry
+naming no stated identity is an error — a renamed identity must not
+silently shed its proof — and a claim discharged twice was discharged once
+too often. `via` bodies are programs, compiled by appending scratch
+sentences to the corpus source so the whole parser and resolver are reused,
+with one caveat: paths in a body resolve from the crate root.
 
-```text
-// identities.hant
-hint identities::some_claim via { drop 0 push true };
-```
-
-An identity may have several stones; one with none runs the default pipeline;
-an entry naming no stated identity is an error, since a renamed identity
-would otherwise shed its hints silently. Bodies are compiled by appending
-scratch sentences to the corpus source — the whole parser and resolver are
-reused — with one caveat: paths in a body resolve from the crate root.
-
-The current corpus needs no stones: all thirteen identities in
-`tests/identities.hana` close on the rules alone. The mechanism exists for
-the day one does not.
+The current corpus needs exactly one entry —
+`proof identities::testing_a_test_by_name = inline egraph;` — and no cuts:
+everything else closes on the rules alone. The `via` mechanism exists for
+the day a goal does not.
 
 ## The failure output is the point
 
@@ -173,15 +217,25 @@ gap found so far was diagnosed.
   `types_test::number_does_pre_and_post_is_constant`, is a path-condition
   claim: its then arm is reached only when `is_tag` held, and *that* fact is
   a disjunction (`v = t1` or `v = t2`) no single rule window can use. The
-  move it needs is goal-level case analysis on the tested value — split the
-  goal per case, specialize, prove each — which is the next strategy to
-  build. `rewrite/tests/corpus.rs` names it as the expected straggler, so
+  move it needs is a case-analysis step in the strategy language — split
+  the goal per case, specialize, prove each — and unlike peel and descend it
+  is not a congruence, so it will earn its keyword.
+  `rewrite/tests/corpus.rs` names the identity as the expected straggler, so
   the day it closes is the day a test says so.
 - **A replayable derivation.** A close currently answers with egg's
   explanation (`--explain`); nothing independent re-checks it yet. The next
   milestone translates explanations into the flat derivation format a small
   applier can replay, restoring the old system's "finding and checking are
   different jobs" property.
+- **`egraph-hint { body }`.** The seeding semantics `via` deliberately does
+  not have, as its own step: drop a term into the closing `egraph`'s graph
+  as a third root, claiming nothing. A hint can help *catalytically* — its
+  subterms hash-cons into classes the sides share, and rewrites discovered
+  on its material carry over — without ever being equal to either side,
+  which a cut cannot express. The cost is exactly the forgiveness: a
+  useless hint is silently ignored. Worth adding the day a goal wants a
+  nudge rather than a milestone; the plumbing (`via`'s body compilation)
+  is already the hard part and is built.
 - **Block operators at width n.** `copy(2)` is bridged to the frame spelling
   `pick 1 ; pick 1` lowers to by a recognizer — one direction, frames to
   block, since two `copy@2` leaves are one e-node and the classes meet
