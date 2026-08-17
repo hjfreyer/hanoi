@@ -67,6 +67,7 @@ proof identities::something_harder =
 |---|---|---|
 | `peel` | strips what the two compose spines share at either end | nothing is shared |
 | `inline` | unfolds every call, all the way down | there are no calls |
+| `symm` | swaps the two sides | never — but two in a row are refused |
 | `via { body } (left: s, right: s)` | **cuts**: `A = B` splits into the goals `A = C` and `C = B` | the waypoint’s net stack change is not the goal’s, or a side fails |
 | `solve (f: 1 -> 1) { … ?f … } (right: s)` | **cuts at a waypoint the engine fills in** | the template’s net is not the goal’s, nothing matches at the declared arities, or the right half fails |
 | `egraph` | saturates; the sides meet or the gas runs out | it runs out of gas |
@@ -101,6 +102,13 @@ stone is silently ignored instead of failing the proof, and a stuck run
 cannot say which half of the journey failed. The forgiving behavior is a
 coherent different step — see `egraph-hint` under "what is not here
 yet".)
+
+`symm` is the one step that claims nothing: equality is symmetric, so `A =
+B` and `B = A` are the same goal. What it moves is which side the
+*asymmetric* steps read — `solve` matches its template against the left
+side, and a cut's halves are named for their sides — so it is how a proof
+says "the interesting side is the other one" instead of restating the
+identity backwards. Two in a row are the goal unchanged, and refused.
 
 **A case split is a chain of cuts.** That is what discharges the corpus's
 one path-condition claim, `types_test::number_does_pre_and_post_is_constant`
@@ -227,12 +235,23 @@ lines it starts from are why the proof looks the way it does:
 ```
 identity types_test::number_does_pre_and_post_is_constant ... FAILED
 
-  what the left came to   │ copy(1) ; (id(1) * (...) ; branch { ... } { drop(1) ; push true })
+  what the left came to   │ copy(1) ;
+                          │ (id(1) *
+                          │  (copy(1) * push t1 ;
+                          │   (id(1) * equal ;
+                          │    branch { drop(1) ; push true } { id(1) * push t2 ; equal })) ;
+                          │  branch {
+                          │    copy(1) * push t1 ; id(1) * equal ;
+                          │    (branch { … } { … } ;
+                          │     (copy(1) * push (t1, 1) ; …))
+                          │  } {
+                          │    drop(1) ; push true
+                          │  })
   what the right came to  │ drop(1) ; push true
-  the search stopped      │ TimeLimit(10.0)
+  the search stopped      │ IterationLimit(40)
   rule firings
-      1436  par-fuse
-      1155  stair-deep-first
+      1341  par-fuse
+      1169  stair-deep-first
 ```
 
 A stuck goal prints the smallest spelling saturation found for each side —
@@ -241,6 +260,12 @@ the two differ (a `the difference is │ in the then arm` line walks past
 shared context), plus why the search stopped and which rules did the work.
 That output is the deliverable of a failed run, and it is how every rule
 gap found so far was diagnosed.
+
+A term that does not fit the width breaks at every `;` of its spine, indents
+a branch's arms inside their braces, and lines a parenthesized group up under
+its paren; anything that still fits stays on one line. The parentheses are
+the same ones the one-line spelling uses, so a broken term still says which
+tree it came from — the layout only chooses where the newlines go.
 
 ## What is not here yet
 

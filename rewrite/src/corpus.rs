@@ -115,7 +115,7 @@ fn plan_strategy(
                     plan_strategy(arm, source, plan, counter)?;
                 }
             }
-            Step::Egraph | Step::Peel | Step::Inline => {}
+            Step::Egraph | Step::Peel | Step::Inline | Step::Symm => {}
         }
     }
     Ok(())
@@ -169,6 +169,7 @@ pub(crate) fn attach(
                 Step::Egraph => Step::Egraph,
                 Step::Peel => Step::Peel,
                 Step::Inline => Step::Inline,
+                Step::Symm => Step::Symm,
                 Step::Via { left, right, .. } => {
                     let Some(Planned::Stone { name }) = plan.pop_front() else {
                         unreachable!("the plan walks the same strategies in the same order");

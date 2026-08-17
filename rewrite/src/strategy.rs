@@ -297,6 +297,26 @@ impl<'l> Prover<'l> {
                 })
             }
 
+            Step::Symm => {
+                // Equality is symmetric, so this claims nothing; it moves
+                // which side the asymmetric steps read. A residual carries
+                // the swap in its path, because "the left came to" means the
+                // left of the goal that failed, not the left of the identity.
+                let swapped = Goal {
+                    lhs: goal.rhs,
+                    rhs: goal.lhs,
+                };
+                Ok(match self.run(rest, swapped)? {
+                    Outcome::Closed(sub) => Outcome::Closed(Proof::Swapped(Box::new(sub))),
+                    Outcome::Stuck(mut residual) => {
+                        residual
+                            .path
+                            .insert(0, "with the sides swapped".to_string());
+                        Outcome::Stuck(residual)
+                    }
+                })
+            }
+
             Step::Inline => {
                 if !has_calls(&goal.lhs) && !has_calls(&goal.rhs) {
                     return Ok(Outcome::Stuck(gave_up(
@@ -871,6 +891,41 @@ mod tests {
             proof.summary(),
             "solve (?f = drop(1); right: inline; the two sides are one term)"
         );
+    }
+
+    #[test]
+    fn symm_hands_the_asymmetric_steps_the_other_side() {
+        // `solve` matches its template against the *left* side's class, and
+        // here the side worth matching is the right one. Swap, then solve.
+        let outcome = prove_with_vias(
+            r#"
+            sentence drop_and_true { drop 0 push true }
+            identity probe { jump crate::drop_and_true } = { is_bool is_bool };
+            "#,
+            "probe",
+            "symm solve (f: 1 -> 0) { ?f push true } (right: inline)",
+        );
+        let Outcome::Closed(proof) = outcome else {
+            panic!("the swapped goal is the one solve can match");
+        };
+        assert_eq!(
+            proof.summary(),
+            "symm; solve (?f = drop(1); right: inline; the two sides are one term)"
+        );
+    }
+
+    #[test]
+    fn a_swapped_goal_that_sticks_says_which_way_round_it_is() {
+        let outcome = prove_with_vias("identity probe { push 1 } = { push 2 };", "probe", "symm");
+        let Outcome::Stuck(residual) = outcome else {
+            panic!("push 2 is not push 1 either way round");
+        };
+        assert!(
+            residual.path.iter().any(|step| step.contains("swapped")),
+            "{:?}",
+            residual.path
+        );
+        assert_eq!(format!("{}", residual.lhs), "push 2");
     }
 
     #[test]
