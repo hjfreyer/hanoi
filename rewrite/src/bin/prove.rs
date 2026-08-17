@@ -147,8 +147,13 @@ fn run(args: &Args) -> Result<bool, String> {
                 if !residual.path.is_empty() {
                     field("the difference is", &residual.path.join(", "));
                 }
-                field("what the left came to", &residual.lhs.pretty(TERM_WIDTH));
-                field("what the right came to", &residual.rhs.pretty(TERM_WIDTH));
+                // With the library at hand a call prints as the name a
+                // waypoint would have to write, not as an index.
+                let shown = |term: &rewrite::Term| {
+                    term.pretty(TERM_WIDTH).named(&corpus.library).to_string()
+                };
+                field("what the left came to", &shown(&residual.lhs));
+                field("what the right came to", &shown(&residual.rhs));
                 field("the search stopped", &residual.stopped);
                 if !residual.firings.is_empty() {
                     println!("  rule firings");

@@ -437,9 +437,9 @@ pub fn expr_of(term: &Term, session: &mut Session) -> RecExpr<HanaLang> {
     expr
 }
 
-/// The pattern a template denotes: the term's expression with each hole —
-/// a call to one of the listed scratch sentences — replaced by the pattern
-/// variable its name spells. What `solve` hands to the e-matcher.
+/// The pattern a template denotes: the term's expression with each hole — a
+/// call to one of the listed indices, which no sentence has — replaced by the
+/// pattern variable its name spells. What `solve` hands to the e-matcher.
 pub fn pattern_of(
     term: &Term,
     holes: &HashMap<SentenceIndex, egg::Var>,

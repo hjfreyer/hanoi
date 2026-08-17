@@ -112,7 +112,7 @@ impl<'l> Prover<'l> {
                 right,
             } => {
                 let Body::Stone(waypoint) = waypoint else {
-                    unreachable!("the loader compiles a via body to a stone");
+                    unreachable!("the loader reads a via body as a stone");
                 };
                 // The cut is a claim, so a waypoint whose stack effect cannot
                 // sit between the sides is refused here, loudly, rather than
@@ -171,7 +171,7 @@ impl<'l> Prover<'l> {
                 right,
             } => {
                 let Body::Template { term, holes } = template else {
-                    unreachable!("the loader compiles a solve body to a template");
+                    unreachable!("the loader reads a solve body as a template");
                 };
                 // The template stands where a waypoint would, so it owes the
                 // same net stack change — checked with the holes at their
@@ -709,17 +709,16 @@ mod tests {
     use bytecode::assemble;
 
     /// Proves the identity named `name`, with the strategy written as a
-    /// `.hant` entry body, or the default when `strategy` is `None` —
-    /// compiling `via` and `solve` bodies exactly as `corpus::load` does.
+    /// `.hant` entry body, or the default when `strategy` is `None` — reading
+    /// `via` and `solve` bodies exactly as `corpus::load` does.
     fn prove_with(code: &str, name: &str, strategy: Option<&str>) -> Outcome {
         let entries = strategy
             .map(|s| parse_hant(&format!("proof {} = {};", name, s)).unwrap())
             .unwrap_or_default();
-        let (scratch, mut plan) = crate::corpus::plan_scratches(&entries).unwrap();
-        let library = assemble(&format!("{}{}", code, scratch)).unwrap();
+        let library = assemble(code).unwrap();
         let strategy = entries
             .first()
-            .map(|e| crate::corpus::attach(&e.strategy, &mut plan, &library).unwrap());
+            .map(|e| crate::corpus::attach(&e.strategy, &library).unwrap());
         let idx = library.identity_by_name(name).unwrap();
         let goal = Goal::of_identity(&library, idx).unwrap();
         Prover::new(&library, Config::default())
@@ -837,7 +836,7 @@ mod tests {
         let outcome = prove_with_vias(
             "identity probe { is_bool is_bool } = { is_int is_bool };",
             "probe",
-            "via { drop 0 push true }",
+            "via { drop(1) ; push true }",
         );
         let Outcome::Closed(proof) = outcome else {
             panic!("both halves close");
@@ -859,7 +858,7 @@ mod tests {
             identity probe { is_bool is_bool } = { jump crate::drop_and_true };
             "#,
             "probe",
-            "via { drop 0 push true } (right: inline egraph)",
+            "via { drop(1) ; push true } (right: inline egraph)",
         );
         let Outcome::Closed(proof) = outcome else {
             panic!("both halves close");
@@ -882,7 +881,7 @@ mod tests {
             identity probe { is_bool is_bool } = { jump crate::drop_and_true };
             "#,
             "probe",
-            "solve (f: 1 -> 0) { ?f push true } (right: inline)",
+            "solve (f: 1 -> 0) { ?f ; push true } (right: inline)",
         );
         let Outcome::Closed(proof) = outcome else {
             panic!("the template matches and the right half closes");
@@ -903,7 +902,7 @@ mod tests {
             identity probe { jump crate::drop_and_true } = { is_bool is_bool };
             "#,
             "probe",
-            "symm solve (f: 1 -> 0) { ?f push true } (right: inline)",
+            "symm solve (f: 1 -> 0) { ?f ; push true } (right: inline)",
         );
         let Outcome::Closed(proof) = outcome else {
             panic!("the swapped goal is the one solve can match");
@@ -936,7 +935,7 @@ mod tests {
             identity probe { push 1 push 2 add } = { jump crate::three };
             "#,
             "probe",
-            "solve (f: 0 -> 1) { ?f not }",
+            "solve (f: 0 -> 1) { ?f ; not }",
         );
         let Outcome::Stuck(residual) = outcome else {
             panic!("nothing in the left class ends in `not`");
