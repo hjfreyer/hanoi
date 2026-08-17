@@ -56,29 +56,58 @@ impl Default for Config {
 pub struct Prover<'l> {
     pub library: &'l Library,
     pub config: Config,
+    /// Built once: a rule is a pattern compiled and a closure boxed, and
+    /// every saturation in a run uses the same set.
+    rules: Vec<crate::rules::ProofRewrite>,
+}
+
+/// How hard a saturation may try.
+///
+/// A peeled subgoal gets a **probe**: peeling is incomplete, so the narrowed
+/// claim may simply be false, and a false goal saturates until the budget
+/// runs out — the full budget, spent proving nothing, before the fallback
+/// even starts. A probe is the fraction of the budget a wrong turn is
+/// allowed to cost. Everything else — the goal as stated, a descend arm, the
+/// inlined retry — runs **full**.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Effort {
+    Probe,
+    Full,
 }
 
 impl<'l> Prover<'l> {
     pub fn new(library: &'l Library, config: Config) -> Self {
-        Prover { library, config }
+        Prover {
+            library,
+            config,
+            rules: rules(),
+        }
     }
 
     /// Runs the pipeline on a goal. `hints` are stepping stones: terms seeded
     /// into the e-graph beside the two sides, for bridging what the rules do
     /// not find on their own.
     pub fn prove(&self, goal: &Goal, hints: &[Term]) -> Result<Outcome, Error> {
-        self.prove_from(goal, hints, true)
+        self.prove_from(goal, hints, true, Effort::Full)
     }
 
-    fn prove_from(&self, goal: &Goal, hints: &[Term], may_inline: bool) -> Result<Outcome, Error> {
+    fn prove_from(
+        &self,
+        goal: &Goal,
+        hints: &[Term],
+        may_inline: bool,
+        effort: Effort,
+    ) -> Result<Outcome, Error> {
         if goal.lhs == goal.rhs {
             return Ok(Outcome::Closed(Proof::Trivial));
         }
 
         // Peel, and fall back: what the peeled goal cannot say, the whole one
-        // still can.
+        // still can. The peeled attempt runs as a probe — see [`Effort`] —
+        // and everything under it stays one.
         if let Some((peeled, prefix, suffix)) = peel(goal)
-            && let Outcome::Closed(sub) = self.prove_from(&peeled, hints, may_inline)?
+            && let Outcome::Closed(sub) =
+                self.prove_from(&peeled, hints, may_inline, Effort::Probe)?
         {
             return Ok(Outcome::Closed(Proof::Peel {
                 prefix,
@@ -104,7 +133,7 @@ impl<'l> Prover<'l> {
                     return Ok(Some(None));
                 }
                 let sub = Goal::aligned(a.clone(), b.clone());
-                Ok(match self.prove_from(&sub, hints, may_inline)? {
+                Ok(match self.prove_from(&sub, hints, may_inline, effort)? {
                     Outcome::Closed(p) => Some(Some(Box::new(p))),
                     Outcome::Stuck(_) => None,
                 })
@@ -116,7 +145,7 @@ impl<'l> Prover<'l> {
             // saturation below, where the arms can help each other.
         }
 
-        match self.saturate(goal, hints) {
+        match self.saturate(goal, hints, effort) {
             Outcome::Closed(proof) => Ok(Outcome::Closed(proof)),
             Outcome::Stuck(residual) => {
                 if may_inline && (has_calls(&goal.lhs) || has_calls(&goal.rhs)) {
@@ -124,7 +153,7 @@ impl<'l> Prover<'l> {
                         inline_calls(self.library, &goal.lhs)?,
                         inline_calls(self.library, &goal.rhs)?,
                     );
-                    return Ok(match self.prove_from(&opened, hints, false)? {
+                    return Ok(match self.prove_from(&opened, hints, false, effort)? {
                         Outcome::Closed(sub) => Outcome::Closed(Proof::Inlined(Box::new(sub))),
                         // The residual of the opened goal is the one worth
                         // reading: it is where the search actually died.
@@ -138,7 +167,7 @@ impl<'l> Prover<'l> {
 
     /// One e-graph, both sides, every rule, until they meet or the budget is
     /// spent.
-    fn saturate(&self, goal: &Goal, hints: &[Term]) -> Outcome {
+    fn saturate(&self, goal: &Goal, hints: &[Term], effort: Effort) -> Outcome {
         let mut analysis = Proving::default();
         let lhs = expr_of(&goal.lhs, &mut analysis.session);
         let rhs = expr_of(&goal.rhs, &mut analysis.session);
@@ -159,7 +188,6 @@ impl<'l> Prover<'l> {
         // rules match everywhere and *decline* nearly everywhere — banning
         // one on its match count would silence exactly the rare application
         // it exists for — so only the shape rules stay bannable.
-        let all_rules = rules();
         let growth = [
             "assoc-compose",
             "assoc-compose-rev",
@@ -167,29 +195,62 @@ impl<'l> Prover<'l> {
             "assoc-par-rev",
             "stair-deep-first",
             "stair-top-first",
-            "copy-block-two",
             "drop-split-two",
             "drop-split-two-rev",
         ];
         let mut scheduler = BackoffScheduler::default();
-        for rule in &all_rules {
+        for rule in &self.rules {
             if !growth.contains(&rule.name.as_str()) {
                 scheduler = scheduler.do_not_ban(rule.name.as_str());
             }
         }
 
+        // A probe gets a fraction of the budget: it is the price a wrong
+        // peel is allowed to cost before the whole goal gets its turn.
+        let (iter_limit, node_limit, time_limit) = match effort {
+            Effort::Full => (
+                self.config.iter_limit,
+                self.config.node_limit,
+                self.config.time_limit,
+            ),
+            Effort::Probe => (
+                self.config.iter_limit / 3 + 1,
+                self.config.node_limit / 5 + 1,
+                self.config.time_limit / 8,
+            ),
+        };
+
+        // Explanation tracking taxes every union, so the e-graph only carries
+        // it when someone asked to read one.
+        let egraph = EGraph::new(analysis);
+        let egraph = if self.config.explain {
+            egraph.with_explanations_enabled()
+        } else {
+            egraph
+        };
+
         let mut runner = Runner::default()
             .with_scheduler(scheduler)
-            .with_iter_limit(self.config.iter_limit)
-            .with_node_limit(self.config.node_limit)
-            .with_time_limit(self.config.time_limit)
-            .with_egraph(EGraph::new(analysis).with_explanations_enabled())
+            .with_iter_limit(iter_limit)
+            .with_node_limit(node_limit)
+            .with_time_limit(time_limit)
+            .with_egraph(egraph)
             .with_expr(&lhs)
-            .with_expr(&rhs);
+            .with_expr(&rhs)
+            // Stop the moment the two sides meet: saturation would happily
+            // keep exploring an already-closed goal to the end of the budget.
+            .with_hook(|runner| {
+                let (l, r) = (runner.roots[0], runner.roots[1]);
+                if runner.egraph.find(l) == runner.egraph.find(r) {
+                    Err("the sides met".to_string())
+                } else {
+                    Ok(())
+                }
+            });
         for hint in &hint_exprs {
             runner = runner.with_expr(hint);
         }
-        let mut runner = runner.run(&all_rules);
+        let mut runner = runner.run(&self.rules);
 
         let (l, r) = (runner.roots[0], runner.roots[1]);
         if runner.egraph.find(l) == runner.egraph.find(r) {

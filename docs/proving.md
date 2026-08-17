@@ -55,14 +55,24 @@ small and the failure readable:
 2. **Peel** — strip what the two compose spines share at either end, prove
    what is left. Peeling is *incomplete* (`push 1 ; drop` = `push 2 ; drop`,
    and stripping the `drop` leaves a false claim), so a peeled goal that
-   sticks falls back to the whole one.
+   sticks falls back to the whole one — and because a false subgoal
+   saturates to the end of whatever budget it is given, the peeled attempt
+   runs as a **probe**, on a fraction of the budget. The probe is the price
+   a wrong peel is allowed to cost; before it existed,
+   `two_spellings_of_one_test` spent fourteen seconds failing to prove
+   `is_bool = is_int` and then closed the real goal in milliseconds.
 3. **Descend** — two branches are equal exactly when their arms are equal
    pairwise, so each differing arm becomes its own goal. Unlike peeling this
    is complete: the stack under a condition is arbitrary, so there is no
    context an arm could have used.
 4. **Saturate** — both sides into one e-graph, every rule fires. Closing
-   means the two roots unify; the proof records iterations and class count,
-   and `--explain` prints egg's step-by-step account of the meeting.
+   means the two roots unify, and a hook checks for that **every iteration**
+   — saturation would otherwise happily keep exploring an already-closed
+   goal to the end of the budget, and did: `discarded_work_on_copies` grew
+   to 23,000 classes finding a proof it had at 51. The proof records
+   iterations and class count, and `--explain` prints egg's step-by-step
+   account of the meeting. Explanation tracking taxes every union, so the
+   e-graph only carries it when `--explain` asks.
 5. **Inline** — a stuck goal that still holds calls is reopened with every
    call unfolded and tried once more. Unfolding is a goal-level decision, not
    a rule: opened calls multiply the term, and only the goal level knows the
@@ -160,5 +170,7 @@ failed run, and it is how every rule gap found so far was diagnosed.
   applier can replay, restoring the old system's "finding and checking are
   different jobs" property.
 - **Block operators at width n.** `copy(2)` is bridged to the frame spelling
-  `pick 1 ; pick 1` lowers to by an explicit rule; the general `copy(n)`
-  bridge should be derived, not enumerated, when a corpus term wants one.
+  `pick 1 ; pick 1` lowers to by a recognizer — one direction, frames to
+  block, since two `copy@2` leaves are one e-node and the classes meet
+  without ever expanding a block into frames. The general `copy(n)` bridge
+  should be derived, not enumerated, when a corpus term wants one.
