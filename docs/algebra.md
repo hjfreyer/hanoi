@@ -123,6 +123,7 @@ Deciding equality here needed normalization by evaluation with case trees
 | η (booleans) | ask `is_bool`, branch, push back what branching told you = ε | stated as `identities::split_bool` in the corpus and *run*; as a rewrite it inserts branches, so it stays a goal-level move for the case-split strategy to spend |
 | commuting conversion, suffix | `branch { A } { B } ; C = branch { A;C } { B;C }` | `branch-distribute` ⇄ (backward is suffix-factoring) |
 | commuting conversion, frame | `(x * id(1)) ; branch { A } { B } = branch { x;A } { x;B }` | `branch-hoist` ⇄ — no arithmetic: the frame hid exactly the condition |
+| commuting conversion, beside | `x * branch { A } { B } = branch { x*A } { x*B }` | `branch-beside` ⇄ — the tensor distributing over the case, and independent of the other two. The one lowering asks for constantly: a branch whose arms are narrower than the stack is emitted framed, and every law about branches is stated unframed |
 | copy absorbed by its branch | `copy(1) ; branch { drop(1);A } { drop(1);B } = branch { A } { B }` | `branch-absorbs-copy` |
 | path condition, truthiness | the arm an outer branch took decides an inner branch on a copy of its condition | `retest-then/-else` (+ `-bare` forms) |
 | path condition, value | a value that tested `equal` to a literal *is* that literal, in the then arm | `specialize-equal` |
