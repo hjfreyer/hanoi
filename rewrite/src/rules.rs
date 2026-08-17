@@ -239,28 +239,15 @@ pub fn rules() -> Vec<ProofRewrite> {
             (fc.is_copy && fc.arity.inputs == 1).then_some(vars[0])
         },
     ));
-    // A block copy of two is the two `pick 1`s it lowers from — the frame
-    // spelling the corpus writes and the block spelling the comonoid laws
-    // read, held together. (`copy@2` ⇄ `copy@1 * id@1 ; id@1 * swap ;
-    // id@1 * (copy@1 * id@1) ; id@2 * swap`, which is `pick 1 ; pick 1`.)
-    out.push(dyn_rule("copy-block-two", "copy@2", [], |eg, _, _| {
-        let c1 = eg.add(HanaLang::Copyn(CopyW(1)));
-        let i1 = eg.add(HanaLang::Idn(IdW(1)));
-        let i2 = eg.add(HanaLang::Idn(IdW(2)));
-        let swap = eg.add(HanaLang::Swap);
-        let pick_shallow = {
-            let copy_deep = eg.add(HanaLang::Par([c1, i1]));
-            let swap_top = eg.add(HanaLang::Par([i1, swap]));
-            eg.add(HanaLang::Compose([copy_deep, swap_top]))
-        };
-        let pick_again = {
-            let inner = eg.add(HanaLang::Par([c1, i1]));
-            let padded = eg.add(HanaLang::Par([i1, inner]));
-            let swap_top = eg.add(HanaLang::Par([i2, swap]));
-            eg.add(HanaLang::Compose([padded, swap_top]))
-        };
-        Some(eg.add(HanaLang::Compose([pick_shallow, pick_again])))
-    }));
+    // A block copy of two is the two `pick 1`s it lowers from. One direction
+    // only — recognize the frame spelling and give its class the `copy@2`
+    // leaf. That is enough for both ways of meeting: two `copy@2` leaves are
+    // one e-node, so a block the naturality rules built and a block the
+    // compiler spelled as frames land in one class without ever *expanding*
+    // a `copy@2` into frames, which was a growth engine.
+    out.push(rewrite!("copy-block-two";
+        "(; (* copy@1 id@1) (; (* id@1 swap) (; (* id@1 (* copy@1 id@1)) (* id@2 swap))))"
+        => "copy@2"));
     out.extend(rewrite!("coassociative";
         "(; copy@1 (* id@1 copy@1))" <=> "(; copy@1 (* copy@1 id@1))"));
 
