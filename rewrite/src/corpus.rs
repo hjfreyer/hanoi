@@ -64,6 +64,7 @@ pub(crate) fn attach(
                         .transpose()?,
                 ),
                 Step::Symm => Step::Symm,
+                Step::Exact => Step::Exact,
                 Step::Via {
                     waypoint,
                     left,

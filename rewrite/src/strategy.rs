@@ -106,6 +106,19 @@ impl<'l> Prover<'l> {
         match head {
             Step::Egraph => Ok(self.saturate(&goal)),
 
+            // A goal whose sides are one term closed above, before any step
+            // ran — so an `exact` that is reached is an `exact` whose claim
+            // is false, and its whole job is the report: the goal untouched,
+            // no saturation to shrink it and no narrowing to walk into it.
+            // That unaltered residual is what the step is usually written
+            // for — `exact` alone shows the identity as lowered and aligned,
+            // and after a manipulation it shows what the manipulation left,
+            // in the language a waypoint is written in.
+            Step::Exact => Ok(Outcome::Stuck(gave_up(
+                goal,
+                "`exact` claims the sides are one term as written, and they are not",
+            ))),
+
             Step::Via {
                 waypoint,
                 left,
@@ -792,6 +805,45 @@ mod tests {
             panic!("expected the opened goal to close");
         };
         assert_eq!(proof.summary(), "inline; saturated (4 iters, 6 classes)");
+    }
+
+    #[test]
+    fn exact_closes_what_a_manipulation_made_identical() {
+        // Inlining the call leaves the two sides one term, so the claim holds
+        // and no saturation ever runs.
+        let outcome = prove_with(
+            r#"
+            sentence drop_and_true { drop 0 push true }
+            identity probe { jump crate::drop_and_true } = { drop 0 push true };
+            "#,
+            "probe",
+            Some("inline exact"),
+        );
+        let Outcome::Closed(proof) = outcome else {
+            panic!("the opened goal is one term");
+        };
+        assert_eq!(proof.summary(), "inline; the two sides are one term");
+    }
+
+    #[test]
+    fn a_failed_exact_reports_the_goal_untouched() {
+        // `is_bool ; is_bool` = `drop 0 ; push true` is provable — egraph
+        // closes it — but `exact` claims more, fails, and shows the goal
+        // exactly as it stands: no smallest-spelling extraction, no
+        // narrowing. That unaltered residual is what the step is for.
+        let outcome = prove_with(
+            "identity probe { is_bool is_bool } = { drop 0 push true };",
+            "probe",
+            Some("exact"),
+        );
+        let Outcome::Stuck(residual) = outcome else {
+            panic!("the sides are not one term as written");
+        };
+        assert!(residual.stopped.contains("`exact`"), "{}", residual.stopped);
+        assert_eq!(format!("{}", residual.lhs), "is_bool ; is_bool");
+        assert_eq!(format!("{}", residual.rhs), "drop(1) ; push true");
+        assert!(residual.path.is_empty());
+        assert!(residual.firings.is_empty(), "no search ran");
     }
 
     #[test]
