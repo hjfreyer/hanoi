@@ -23,6 +23,7 @@
 //! | `inline` | unfolds every call, all the way down | there are no calls |
 //! | `inline(name)` | unfolds the calls to that one sentence | it is not called here |
 //! | `symm` | swaps the two sides | never — but two in a row are refused |
+//! | `exact` | closes the goal if the sides are one term as written | they differ — and the residual is the goal untouched, which is what the step is usually for |
 //! | `via { body } (left: s, right: s)` | **cuts**: `A = B` splits into the goals `A = C` and `C = B` | the waypoint's net stack change is not the goal's, or a side fails |
 //! | `solve (f: 1 -> 1) { … ?f … } (right: s)` | **cuts at a waypoint the engine fills in**: match the template against the left side, continue with `C[fills] = B` | the template's net is not the goal's, no match binds the variables at their declared arities, or the right half fails |
 //! | `egraph` | saturates; the sides meet or the gas runs out | it runs out of gas |
@@ -92,6 +93,12 @@ pub enum Step<V> {
     /// Swap the two sides. Equality is symmetric, so the claim is untouched;
     /// what moves is which side the asymmetric steps read.
     Symm,
+    /// Close the goal only if the two sides are one term as written. No
+    /// search runs, so a failed `exact` reports the goal exactly as it
+    /// stands — un-saturated, un-narrowed — which is the way to *see* a
+    /// goal: `exact` alone shows the identity as lowered and aligned, and
+    /// after a manipulation it shows what the manipulation left.
+    Exact,
     /// Cut the goal at a waypoint: `A = B` splits into the two independent
     /// goals `A = C` (left) and `C = B` (right), each discharged by its own
     /// strategy. An omitted side gets the default, `egraph` — a cut exists
@@ -163,6 +170,7 @@ impl<V> fmt::Display for Step<V> {
             Step::Inline(None) => write!(f, "inline"),
             Step::Inline(Some(_)) => write!(f, "inline(…)"),
             Step::Symm => write!(f, "symm"),
+            Step::Exact => write!(f, "exact"),
             Step::Via { .. } => write!(f, "via {{ … }}"),
             Step::Solve { .. } => write!(f, "solve(…)"),
             Step::Descend { .. } => write!(f, "descend(…)"),
@@ -244,6 +252,7 @@ fn parse_step(input: &str) -> Result<(Step<String>, &str), String> {
             Ok((Step::Inline(Some(label.to_string())), after))
         }
         "symm" => Ok((Step::Symm, rest)),
+        "exact" => Ok((Step::Exact, rest)),
         "via" => {
             let (body, after) =
                 brace_block(rest.trim_start()).ok_or("`via` expects a braced body")?;
@@ -409,7 +418,11 @@ fn validate<V>(strategy: &Strategy<V>) -> Result<(), String> {
     for (i, step) in strategy.iter().enumerate() {
         let last = i + 1 == strategy.len();
         match step {
-            Step::Egraph | Step::Descend { .. } | Step::Via { .. } | Step::Solve { .. }
+            Step::Egraph
+            | Step::Exact
+            | Step::Descend { .. }
+            | Step::Via { .. }
+            | Step::Solve { .. }
                 if !last =>
             {
                 return Err(format!("`{}` closes the goal; nothing can follow it", step));
@@ -592,6 +605,14 @@ mod tests {
         );
         let err = parse_hant("proof p = inline() egraph;").unwrap_err();
         assert!(err.contains("names no sentence"), "{}", err);
+    }
+
+    #[test]
+    fn exact_is_a_closer() {
+        let entries = parse_hant("proof p = inline exact;").unwrap();
+        assert_eq!(entries[0].strategy, vec![Step::Inline(None), Step::Exact]);
+        let err = parse_hant("proof p = exact egraph;").unwrap_err();
+        assert!(err.contains("nothing can follow"), "{}", err);
     }
 
     #[test]

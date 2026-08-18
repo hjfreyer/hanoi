@@ -69,6 +69,7 @@ proof identities::something_harder =
 | `inline` | unfolds every call, all the way down | there are no calls |
 | `inline(name)` | unfolds the calls to that one sentence | it is not called here |
 | `symm` | swaps the two sides | never — but two in a row are refused |
+| `exact` | closes the goal if the sides are one term as written | they differ — and the residual is the goal untouched, which is what the step is usually for |
 | `via { body } (left: s, right: s)` | **cuts**: `A = B` splits into the goals `A = C` and `C = B` | the waypoint’s net stack change is not the goal’s, or a side fails |
 | `solve (f: 1 -> 1) { … ?f … } (right: s)` | **cuts at a waypoint the engine fills in** | the template’s net is not the goal’s, nothing matches at the declared arities, or the right half fails |
 | `egraph` | saturates; the sides meet or the gas runs out | it runs out of gas |
@@ -117,6 +118,16 @@ Recursion is forbidden, so one pass opens every instance of the label; a
 label naming a sentence the library does not have is a load error, and one
 that is simply not called here fails the step, loudly, like any other step
 that found nothing to do.
+
+`exact` is the closer that searches nothing: it claims the two sides are
+already one term, syntactically. As a proof step it is the strongest and
+cheapest claim there is, but its everyday use is the *failure*: every other
+report is post-mortem material — `egraph`'s residual is the smallest spelling
+saturation found, narrowed to the difference — while a failed `exact` prints
+the goal exactly as it stands. `proof x = exact;` shows an identity as
+lowered and aligned, and `inline(f) exact` shows what the inline left, in the
+language a waypoint is written in — which makes it the way to *start* a
+proof: write `exact`, read the goal, replace `exact` with the real strategy.
 
 `symm` is the one step that claims nothing: equality is symmetric, so `A =
 B` and `B = A` are the same goal. What it moves is which side the
