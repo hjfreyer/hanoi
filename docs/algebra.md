@@ -51,7 +51,7 @@ copy-paste-friendly catalogue).
 | id blocks fuse | `id(n) * id(m) = id(n+m)` | | `par-id-fuse` |
 | degenerate blocks | `copy(0) = drop(0) = id(0)` | | `copy-nothing`, `drop-nothing` |
 | interchange, staircase form | `a * b = (a * id) ; (id * b) = (id * b) ; (a * id)` | | `stair-deep-first`, `stair-top-first`, and the two `stair-read-*` recognizers |
-| interchange, middle-four | `(a;c) * (b;d) = (a*b) ; (c*d)` when the split aligns | | `par-fuse` (fusing direction; splitting is the staircases) |
+| interchange, middle-four | `(a;c) * (b;d) = (a*b) ; (c*d)` when the split aligns | | `par-fuse` (fusing direction; splitting is the staircases, plus `frame-split-deep/top` for the id-legged case `id * (f;g) = (id*f) ; (id*g)`, which is what lets a branch buried in a framed body surface toward the commuting conversions) |
 | producer beside a computation | `a ; (id(a.out) * b) = a * b` for `b : 0 → m` | | `compose-to-par` |
 | symmetry involutive | `σ ; σ = id₂` | `swap ; swap = id(2)` | `swap-cycle` |
 | naturality of σ | `(a*b) ; σ = σ ; (b*a)` | legs `1 → 1` | `swap-nat` ⇄ |
