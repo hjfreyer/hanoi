@@ -364,6 +364,71 @@ impl<'l> Prover<'l> {
                 })
             }
 
+            Step::Norm {
+                trusted,
+                left,
+                right,
+            } => {
+                let inputs = goal.lhs.arity().inputs;
+                let lnf = crate::nf::normalize(&goal.lhs);
+                let rnf = crate::nf::normalize(&goal.rhs);
+                if lnf != rnf {
+                    // Reified, the two trees are terms in the language every
+                    // other report speaks — and narrowing walks to where
+                    // they disagree, same as a saturation residual.
+                    let (mut path, lhs, rhs) = narrow(
+                        crate::nf::reify(&lnf, inputs),
+                        crate::nf::reify(&rnf, inputs),
+                    );
+                    path.insert(0, "after normalization".to_string());
+                    return Ok(Outcome::Stuck(Residual {
+                        lhs,
+                        rhs,
+                        path,
+                        firings: Vec::new(),
+                        stopped: "the case-tree normal forms differ: the identity is false, \
+                                  or true only for reasons the normalizer cannot see"
+                            .to_string(),
+                    }));
+                }
+                if *trusted {
+                    return Ok(Outcome::Closed(Proof::Normalized { subs: None }));
+                }
+                // The agreed tree, reified, is a waypoint; the rest is a cut.
+                let waypoint = crate::nf::reify(&lnf, inputs);
+                let default = default_strategy();
+                let side = |name: &str,
+                            strategy: &Option<Strategy<Body>>,
+                            sub: Goal|
+                 -> Result<Result<Box<Proof>, Residual>, Error> {
+                    let strategy = strategy.as_ref().unwrap_or(&default);
+                    Ok(match self.run(strategy, sub)? {
+                        Outcome::Closed(p) => Ok(Box::new(p)),
+                        Outcome::Stuck(mut residual) => {
+                            residual
+                                .path
+                                .insert(0, format!("in the {} half of the norm cut", name));
+                            Err(residual)
+                        }
+                    })
+                };
+                let left_sub = match side(
+                    "left",
+                    left,
+                    Goal::aligned(goal.lhs.clone(), waypoint.clone()),
+                )? {
+                    Ok(p) => p,
+                    Err(residual) => return Ok(Outcome::Stuck(residual)),
+                };
+                let right_sub = match side("right", right, Goal::aligned(waypoint, goal.rhs))? {
+                    Ok(p) => p,
+                    Err(residual) => return Ok(Outcome::Stuck(residual)),
+                };
+                Ok(Outcome::Closed(Proof::Normalized {
+                    subs: Some((left_sub, right_sub)),
+                }))
+            }
+
             Step::Descend { then_arm, else_arm } => {
                 let (
                     Term::Branch {
@@ -1128,6 +1193,116 @@ mod tests {
     }
 
     #[test]
+    fn norm_trusted_closes_on_the_normalizer_word() {
+        let outcome = prove_with(
+            "identity probe { is_bool is_bool } = { drop 0 push true };",
+            "probe",
+            Some("norm_trusted"),
+        );
+        let Outcome::Closed(proof) = outcome else {
+            panic!("the normal forms agree");
+        };
+        assert_eq!(proof.summary(), "norm, trusted");
+    }
+
+    #[test]
+    fn norm_cuts_through_the_reified_normal_form() {
+        // Same claim, no trust: the tree both sides reach becomes a
+        // waypoint, and the engine closes each half.
+        let outcome = prove_with(
+            "identity probe { is_bool is_bool } = { drop 0 push true };",
+            "probe",
+            Some("norm"),
+        );
+        let Outcome::Closed(proof) = outcome else {
+            panic!("both halves close by saturation");
+        };
+        assert!(
+            proof.summary().starts_with("norm cut (left: saturated"),
+            "{}",
+            proof.summary()
+        );
+    }
+
+    #[test]
+    fn norm_sees_through_matching_branches() {
+        // What needed `descend` (or congruence): a branch-vs-branch goal
+        // whose arms agree valuewise closes in one step, because both sides
+        // grow one case tree.
+        let outcome = prove_with(
+            "identity probe { branch { is_bool is_bool } { not } } = { branch { is_int is_bool } { not } };",
+            "probe",
+            Some("norm_trusted"),
+        );
+        assert!(matches!(outcome, Outcome::Closed(_)));
+    }
+
+    #[test]
+    fn norm_on_a_false_goal_reports_both_reified_forms() {
+        let outcome = prove_with(
+            "identity probe { push 1 } = { push 2 };",
+            "probe",
+            Some("norm"),
+        );
+        let Outcome::Stuck(residual) = outcome else {
+            panic!("the normal forms differ");
+        };
+        assert!(
+            residual.stopped.contains("normal forms differ"),
+            "{}",
+            residual.stopped
+        );
+        assert!(
+            residual.path.iter().any(|p| p.contains("normalization")),
+            "{:?}",
+            residual.path
+        );
+        assert_eq!(format!("{}", residual.lhs), "push 1");
+        assert_eq!(format!("{}", residual.rhs), "push 2");
+    }
+
+    #[test]
+    fn norm_keeps_calls_closed_until_a_proof_says_inline() {
+        // The same discipline as the engine's: a definition is spent by
+        // `inline`, never by the normalizer on its own.
+        let code = r#"
+            sentence drop_and_true { drop 0 push true }
+            identity probe { is_bool is_bool } = { jump crate::drop_and_true };
+        "#;
+        let outcome = prove_with(code, "probe", Some("norm_trusted"));
+        assert!(matches!(outcome, Outcome::Stuck(_)));
+        let outcome = prove_with(code, "probe", Some("inline norm_trusted"));
+        let Outcome::Closed(proof) = outcome else {
+            panic!("opened, the sides normalize alike");
+        };
+        assert_eq!(proof.summary(), "inline; norm, trusted");
+    }
+
+    #[test]
+    fn a_norm_cut_half_that_sticks_says_which() {
+        // The reified normal form of a call-bearing side spells the call in
+        // frames the engine can reach, so the halves close — but a half
+        // given a strategy that fails must name itself. `exact` on the left
+        // half fails: the goal side and the reified tree differ as terms.
+        let outcome = prove_with(
+            "identity probe { push 1 push 2 add } = { push 3 };",
+            "probe",
+            Some("norm (left: exact)"),
+        );
+        let Outcome::Stuck(residual) = outcome else {
+            panic!("`exact` claims too much for the left half");
+        };
+        assert!(
+            residual
+                .path
+                .iter()
+                .any(|p| p.contains("left half of the norm cut")),
+            "{:?}",
+            residual.path
+        );
+    }
+
+    #[test]
     fn a_false_goal_reports_a_residual() {
         let outcome = prove_identity("identity probe { push 1 } = { push 2 };", "probe");
         let Outcome::Stuck(residual) = outcome else {
@@ -1136,6 +1311,66 @@ mod tests {
         assert_eq!(format!("{}", residual.lhs), "push 1");
         assert_eq!(format!("{}", residual.rhs), "push 2");
         assert!(residual.path.is_empty());
+    }
+
+    /// Which of the corpus's identities the normalizer decides, pinned.
+    ///
+    /// Printed rather than silently counted so a rule-set or normalizer
+    /// change shows exactly which claims moved. Two sweeps: the goal as
+    /// stated (calls opaque, the `norm` stance), and with every call opened
+    /// first (the `inline norm` stance).
+    #[test]
+    fn the_corpus_identities_the_normalizer_decides() {
+        let tests = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("the crate sits in the workspace")
+            .join("tests");
+        let corpus = crate::corpus::load(&tests).unwrap();
+        let library = &corpus.library;
+
+        let mut plain = Vec::new();
+        let mut opened = Vec::new();
+        for (idx, identity) in library.identities.iter_enumerated() {
+            let goal = Goal::of_identity(library, idx).unwrap();
+            if crate::nf::normalize(&goal.lhs) == crate::nf::normalize(&goal.rhs) {
+                plain.push(identity.name.as_str());
+            }
+            let unfolded = Goal::aligned(
+                inline_calls(library, &goal.lhs, None).unwrap(),
+                inline_calls(library, &goal.rhs, None).unwrap(),
+            );
+            if crate::nf::normalize(&unfolded.lhs) == crate::nf::normalize(&unfolded.rhs) {
+                opened.push(identity.name.as_str());
+            }
+        }
+
+        assert_eq!(
+            plain,
+            [
+                "identities::testing_a_test",
+                "identities::a_value_tested_twice",
+                "identities::copying_a_constant",
+                "identities::discarded_work_on_copies",
+                "identities::two_spellings_of_one_test",
+                "identities::a_test_inside_an_arm",
+                "identities::a_test_inside_an_arm_with_a_prefix",
+                "identities::the_guard_a_split_leaves",
+                "identities::taking_a_frame_off",
+                "identities::comparing_two_built_tuples",
+                "identities::untupling_and_retupling_is_the_coercion",
+                "identities::specializing_a_tested_value",
+            ],
+            "calls-opaque: the normalizer's reach changed"
+        );
+        assert_eq!(
+            opened,
+            library
+                .identities
+                .iter()
+                .map(|i| i.name.as_str())
+                .collect::<Vec<_>>(),
+            "calls-opened: the normalizer's reach changed"
+        );
     }
 
     #[test]

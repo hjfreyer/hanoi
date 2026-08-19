@@ -28,7 +28,7 @@ were wrong.
 
 ## The shape of the thing
 
-Four layers, in `rewrite/src/`:
+Five layers, in `rewrite/src/`:
 
 | layer | module | what it does |
 |---|---|---|
@@ -36,6 +36,7 @@ Four layers, in `rewrite/src/`:
 | goals | `goal.rs`, `strategy.rs` | a goal is two [terms](../rewrite/src/term.rs) padded to one arity; the interpreter runs a strategy over one |
 | engine | `lang.rs` | the term model as an egg language, with a per-class analysis carrying the facts rules condition on |
 | equations | `rules.rs` | every law, as a rewrite the e-graph applies in both directions where both are bounded |
+| normal forms | `nf.rs` | symbolic evaluation into case trees — the decision procedure the cartesian layer's completeness theorem promises, spent by the `norm` steps |
 
 ### Goals, and where the net-change asymmetry lives
 
@@ -74,6 +75,8 @@ proof identities::something_harder =
 | `solve (f: 1 -> 1) { … ?f … } (right: s)` | **cuts at a waypoint the engine fills in** | the template’s net is not the goal’s, nothing matches at the declared arities, or the right half fails |
 | `egraph` | saturates; the sides meet or the gas runs out | it runs out of gas |
 | `descend(then: s, else: s)` | forks a branch-vs-branch goal into its arms | the sides are not branches, or an omitted arm is not already equal |
+| `norm (left: s, right: s)` | **cuts at the normal form**: both sides must normalize to one case tree, and the tree reified back into a term is the waypoint | the normal forms differ — and the residual is both of them, reified |
+| `norm_trusted` | closes when the two normal forms agree, on the normalizer's word alone | the same |
 
 A strategy acts on **one goal**, and the proof mirrors a tree of goals.
 The manipulations transform the current goal; a splitter — `via` or
@@ -160,6 +163,40 @@ errors; a template that does not mean what it says must not quietly search
 for something else. This is also the seed of lemma application: a template
 with variables is the left-hand side of a lemma, and the matching machinery
 built here is what citing a proven identity inside another proof will use.
+
+`norm` and `norm_trusted` spend the decision procedure the algebra sheet
+promises ([docs/algebra.md](algebra.md), "a cheap oracle"): `nf.rs` runs a
+term on a stack of variables and keeps what lands — a **case tree** whose
+leaves are tuples of symbolic values. For branch-free terms that tuple is
+the free cartesian category's own normal form, so agreement there is
+complete for layer 1; branches fork the tree on a symbolically evaluated
+condition, which is sound but knowingly incomplete (independent branches
+commute and the tree does not see it — the pinned
+`branches_on_independent_conditions_stay_apart` test is the boundary
+marker). Along the way the evaluator picks up, for free, much of what the
+rules state one window at a time: literal windows run on the machine itself
+(the same `run_window` the `eval` rule uses), a literal condition takes its
+arm, a retested condition is decided, a value that tested `equal` to a
+literal *is* that literal in the then arm, commutative operands sort, and
+equal arms never branch. Calls stay opaque — `inline` remains the step that
+spends a definition.
+
+The two spellings differ in exactly one thing: **who is trusted**. `norm`
+uses the normalizer only to *find* a waypoint — the agreed tree, reified
+back into a canonical term — and makes the engine prove both halves of the
+cut, so nothing new is trusted and the step can still fail on a true claim
+when the rules cannot reach the reified spelling. `norm_trusted` closes on
+the normalizer's word, recorded as such in the proof (`norm, trusted`), so
+a report can always say which claims lean on it. The trade is real and
+measured: `inline norm_trusted` closes the corpus's contract claim —
+`types_test::number_does_pre_and_post_is_constant`, whose written proof is
+a page of hand-derived cuts — in milliseconds, while checked `inline norm`
+times out on the same goal, because the reified case tree is as hard a
+waypoint as the original claim. The intended trajectory is that of a
+proof-producing normalizer: today's `norm_trusted` is scaffolding for
+finding workable strategies, and every use of it is a claim the checked
+machinery should eventually reach — via `norm`'s cut, a `cases` step, or a
+replayable trace out of the evaluator itself.
 
 Inside `egraph`: both sides go into one e-graph and
 every rule fires, with a hook that stops the run the moment the two roots

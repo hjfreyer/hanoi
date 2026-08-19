@@ -100,6 +100,15 @@ pub(crate) fn attach(
                     then_arm: side(then_arm, library)?,
                     else_arm: side(else_arm, library)?,
                 },
+                Step::Norm {
+                    trusted,
+                    left,
+                    right,
+                } => Step::Norm {
+                    trusted: *trusted,
+                    left: side(left, library)?,
+                    right: side(right, library)?,
+                },
             })
         })
         .collect()

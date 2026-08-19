@@ -28,6 +28,8 @@
 //! | `solve (f: 1 -> 1) { … ?f … } (right: s)` | **cuts at a waypoint the engine fills in**: match the template against the left side, continue with `C[fills] = B` | the template's net is not the goal's, no match binds the variables at their declared arities, or the right half fails |
 //! | `egraph` | saturates; the sides meet or the gas runs out | it runs out of gas |
 //! | `descend(then: s, else: s)` | forks a branch-vs-branch goal into its arms | the sides are not branches, or an omitted arm is not already equal |
+//! | `norm (left: s, right: s)` | **cuts at the normal form**: both sides' case trees must agree; the tree reified is the waypoint | the normal forms differ — and the residual is both of them, reified |
+//! | `norm_trusted` | closes when the two normal forms agree, on the normalizer's word alone | the normal forms differ, reported the same way |
 //!
 //! `egraph`, `via` and `descend` end a strategy — the goal is closed or
 //! split, and what follows a split is written *inside* it, since the
@@ -125,6 +127,19 @@ pub enum Step<V> {
         then_arm: Option<Strategy<V>>,
         else_arm: Option<Strategy<V>>,
     },
+    /// Cut the goal at a waypoint the normalizer computes: both sides'
+    /// case-tree normal forms ([`crate::nf`]) must agree, and the shared
+    /// tree, reified back into a term, becomes the waypoint of an ordinary
+    /// cut — each half closed by its own strategy, `egraph` by default. With
+    /// `trusted`, no cut happens: the goal closes on the normalizer's word
+    /// alone, which trades trusted surface for not depending on the rule
+    /// set reaching the reified spelling. Differing normal forms fail the
+    /// step either way, with both reified forms as the residual.
+    Norm {
+        trusted: bool,
+        left: Option<Strategy<V>>,
+        right: Option<Strategy<V>>,
+    },
 }
 
 /// What a step's payload reads as, once the library it names things against
@@ -174,6 +189,8 @@ impl<V> fmt::Display for Step<V> {
             Step::Via { .. } => write!(f, "via {{ … }}"),
             Step::Solve { .. } => write!(f, "solve(…)"),
             Step::Descend { .. } => write!(f, "descend(…)"),
+            Step::Norm { trusted: false, .. } => write!(f, "norm"),
+            Step::Norm { trusted: true, .. } => write!(f, "norm_trusted"),
         }
     }
 }
@@ -310,6 +327,32 @@ fn parse_step(input: &str) -> Result<(Step<String>, &str), String> {
             let ((then_arm, else_arm), after) = parse_arms("descend", "then", "else", rest)?;
             Ok((Step::Descend { then_arm, else_arm }, after))
         }
+        "norm" => {
+            // The halves take strategies like a `via`'s, and for the same
+            // reason: the normal form is a waypoint, just a computed one.
+            let (sides, after) = if rest.trim_start().starts_with('(') {
+                parse_arms("norm", "left", "right", rest.trim_start())?
+            } else {
+                ((None, None), rest)
+            };
+            Ok((
+                Step::Norm {
+                    trusted: false,
+                    left: sides.0,
+                    right: sides.1,
+                },
+                after,
+            ))
+        }
+        // No arms: there are no halves, because there is no cut to have them.
+        "norm_trusted" => Ok((
+            Step::Norm {
+                trusted: true,
+                left: None,
+                right: None,
+            },
+            rest,
+        )),
         "" => Err(format!("expected a step, found: {}", head_of(input))),
         other => Err(format!("no step is called `{}`", other)),
     }
@@ -423,6 +466,7 @@ fn validate<V>(strategy: &Strategy<V>) -> Result<(), String> {
             | Step::Descend { .. }
             | Step::Via { .. }
             | Step::Solve { .. }
+            | Step::Norm { .. }
                 if !last =>
             {
                 return Err(format!("`{}` closes the goal; nothing can follow it", step));
@@ -432,7 +476,7 @@ fn validate<V>(strategy: &Strategy<V>) -> Result<(), String> {
                     validate(arm)?;
                 }
             }
-            Step::Via { left, right, .. } => {
+            Step::Via { left, right, .. } | Step::Norm { left, right, .. } => {
                 for side in [left, right].into_iter().flatten() {
                     validate(side)?;
                 }
@@ -624,6 +668,52 @@ mod tests {
         );
         let err = parse_hant("proof p = symm symm egraph;").unwrap_err();
         assert!(err.contains("`symm symm`"), "{}", err);
+    }
+
+    #[test]
+    fn norm_parses_bare_with_sides_and_trusted() {
+        let entries = parse_hant("proof p = norm;").unwrap();
+        assert_eq!(
+            entries[0].strategy,
+            vec![Step::Norm {
+                trusted: false,
+                left: None,
+                right: None,
+            }]
+        );
+        let entries = parse_hant("proof p = norm (left: peel egraph, right: inline);").unwrap();
+        let [
+            Step::Norm {
+                trusted: false,
+                left,
+                right,
+            },
+        ] = &entries[0].strategy[..]
+        else {
+            panic!("{:?}", entries[0].strategy);
+        };
+        assert_eq!(left.as_deref(), Some([Step::Peel, Step::Egraph].as_slice()));
+        assert_eq!(right.as_deref(), Some([Step::Inline(None)].as_slice()));
+        let entries = parse_hant("proof p = inline norm_trusted;").unwrap();
+        assert_eq!(
+            entries[0].strategy,
+            vec![
+                Step::Inline(None),
+                Step::Norm {
+                    trusted: true,
+                    left: None,
+                    right: None,
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn norm_is_a_closer() {
+        let err = parse_hant("proof p = norm egraph;").unwrap_err();
+        assert!(err.contains("nothing can follow"), "{}", err);
+        let err = parse_hant("proof p = norm_trusted egraph;").unwrap_err();
+        assert!(err.contains("nothing can follow"), "{}", err);
     }
 
     #[test]

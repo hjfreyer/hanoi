@@ -98,6 +98,13 @@ pub enum Proof {
         classes: usize,
         explanation: Option<String>,
     },
+    /// A `norm` found both sides' case-tree normal forms to be one tree.
+    /// `subs` holds the halves of the cut through the reified tree; `None`
+    /// is the trusted close, where the normalizer's word was the whole
+    /// proof — recorded as such, so a report says which claims lean on it.
+    Normalized {
+        subs: Option<(Box<Proof>, Box<Proof>)>,
+    },
 }
 
 impl Proof {
@@ -144,6 +151,10 @@ impl Proof {
                 classes,
                 ..
             } => format!("saturated ({} iters, {} classes)", iterations, classes),
+            Proof::Normalized { subs: None } => "norm, trusted".to_string(),
+            Proof::Normalized { subs: Some((l, r)) } => {
+                format!("norm cut (left: {}; right: {})", l.summary(), r.summary())
+            }
         }
     }
 
@@ -169,6 +180,12 @@ impl Proof {
                 .collect(),
             Proof::Solved { right_sub, .. } => right_sub.explanations(),
             Proof::Saturated { explanation, .. } => explanation.as_deref().into_iter().collect(),
+            Proof::Normalized { subs: None } => vec![],
+            Proof::Normalized { subs: Some((l, r)) } => l
+                .explanations()
+                .into_iter()
+                .chain(r.explanations())
+                .collect(),
         }
     }
 }
