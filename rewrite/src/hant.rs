@@ -28,8 +28,8 @@
 //! | `solve (f: 1 -> 1) { … ?f … } (right: s)` | **cuts at a waypoint the engine fills in**: match the template against the left side, continue with `C[fills] = B` | the template's net is not the goal's, no match binds the variables at their declared arities, or the right half fails |
 //! | `egraph` | saturates; the sides meet or the gas runs out | it runs out of gas |
 //! | `descend(then: s, else: s)` | forks a branch-vs-branch goal into its arms | the sides are not branches, or an omitted arm is not already equal |
-//! | `norm (left: s, right: s)` | **cuts at the normal form**: both sides' case trees must agree; the tree reified is the waypoint | the normal forms differ — and the residual is both of them, reified |
-//! | `norm_trusted` | closes when the two normal forms agree, on the normalizer's word alone | the normal forms differ, reported the same way |
+//! | `norm (left: s, right: s)` | **cuts at the left side's normal form**: `A = B` splits into `A = NF(A)` and `NF(A) = B`, with the case tree reified as the waypoint | a half fails |
+//! | `norm_trusted (right: s)` | the same cut with `A = NF(A)` closed on the normalizer's word | the right half fails |
 //!
 //! `egraph`, `via` and `descend` end a strategy — the goal is closed or
 //! split, and what follows a split is written *inside* it, since the
@@ -127,14 +127,16 @@ pub enum Step<V> {
         then_arm: Option<Strategy<V>>,
         else_arm: Option<Strategy<V>>,
     },
-    /// Cut the goal at a waypoint the normalizer computes: both sides'
-    /// case-tree normal forms ([`crate::nf`]) must agree, and the shared
-    /// tree, reified back into a term, becomes the waypoint of an ordinary
-    /// cut — each half closed by its own strategy, `egraph` by default. With
-    /// `trusted`, no cut happens: the goal closes on the normalizer's word
-    /// alone, which trades trusted surface for not depending on the rule
-    /// set reaching the reified spelling. Differing normal forms fail the
-    /// step either way, with both reified forms as the residual.
+    /// Cut the goal at a waypoint the normalizer computes: the **left**
+    /// side's case-tree normal form ([`crate::nf`]), reified back into a
+    /// term. `A = B` splits into `A = NF(A)` and `NF(A) = B`, each half
+    /// closed by its own strategy, `egraph` by default. One side only, so
+    /// the step composes: a right half that needs normalizing too writes
+    /// `symm norm…` inside itself, and when both sides normalize to one
+    /// tree the chain's last goal is one term as written. With `trusted`
+    /// the left half closes on the normalizer's word instead of carrying a
+    /// strategy — the trade of trusted surface for not depending on the
+    /// rule set reaching the reified spelling.
     Norm {
         trusted: bool,
         left: Option<Strategy<V>>,
@@ -344,15 +346,26 @@ fn parse_step(input: &str) -> Result<(Step<String>, &str), String> {
                 after,
             ))
         }
-        // No arms: there are no halves, because there is no cut to have them.
-        "norm_trusted" => Ok((
-            Step::Norm {
-                trusted: true,
-                left: None,
-                right: None,
-            },
-            rest,
-        )),
+        "norm_trusted" => {
+            // Only a right side: the left half is the one the trust closes,
+            // so a strategy for it would direct nothing.
+            let (right, after) = if rest.trim_start().starts_with('(') {
+                let ((right, none), rest) =
+                    parse_arms("norm_trusted", "right", "right", rest.trim_start())?;
+                debug_assert!(none.is_none());
+                (right, rest)
+            } else {
+                (None, rest)
+            };
+            Ok((
+                Step::Norm {
+                    trusted: true,
+                    left: None,
+                    right,
+                },
+                after,
+            ))
+        }
         "" => Err(format!("expected a step, found: {}", head_of(input))),
         other => Err(format!("no step is called `{}`", other)),
     }
@@ -706,6 +719,25 @@ mod tests {
                 }
             ]
         );
+        // The trusted spelling takes a right side — and only a right side,
+        // since the left half is the one the trust closes.
+        let entries = parse_hant("proof p = norm_trusted (right: symm norm_trusted);").unwrap();
+        let [
+            Step::Norm {
+                trusted: true,
+                left: None,
+                right: Some(right),
+            },
+        ] = &entries[0].strategy[..]
+        else {
+            panic!("{:?}", entries[0].strategy);
+        };
+        assert!(matches!(
+            right[..],
+            [Step::Symm, Step::Norm { trusted: true, .. }]
+        ));
+        let err = parse_hant("proof p = norm_trusted (left: egraph);").unwrap_err();
+        assert!(err.contains("`right:`"), "{}", err);
     }
 
     #[test]

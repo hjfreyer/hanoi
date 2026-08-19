@@ -98,12 +98,14 @@ pub enum Proof {
         classes: usize,
         explanation: Option<String>,
     },
-    /// A `norm` found both sides' case-tree normal forms to be one tree.
-    /// `subs` holds the halves of the cut through the reified tree; `None`
-    /// is the trusted close, where the normalizer's word was the whole
-    /// proof — recorded as such, so a report says which claims lean on it.
+    /// A `norm` cut the goal at the left side's normal form, reified. The
+    /// left half is `A = NF(A)`; `None` there is `norm_trusted`, where that
+    /// half closed on the normalizer's word — recorded as such, so a report
+    /// says which claims lean on it. The right half, `NF(A) = B`, always
+    /// answers for itself.
     Normalized {
-        subs: Option<(Box<Proof>, Box<Proof>)>,
+        left_sub: Option<Box<Proof>>,
+        right_sub: Box<Proof>,
     },
 }
 
@@ -151,10 +153,17 @@ impl Proof {
                 classes,
                 ..
             } => format!("saturated ({} iters, {} classes)", iterations, classes),
-            Proof::Normalized { subs: None } => "norm, trusted".to_string(),
-            Proof::Normalized { subs: Some((l, r)) } => {
-                format!("norm cut (left: {}; right: {})", l.summary(), r.summary())
-            }
+            Proof::Normalized {
+                left_sub,
+                right_sub,
+            } => format!(
+                "norm (left: {}; right: {})",
+                match left_sub {
+                    None => "trusted".to_string(),
+                    Some(l) => l.summary(),
+                },
+                right_sub.summary()
+            ),
         }
     }
 
@@ -180,11 +189,13 @@ impl Proof {
                 .collect(),
             Proof::Solved { right_sub, .. } => right_sub.explanations(),
             Proof::Saturated { explanation, .. } => explanation.as_deref().into_iter().collect(),
-            Proof::Normalized { subs: None } => vec![],
-            Proof::Normalized { subs: Some((l, r)) } => l
-                .explanations()
-                .into_iter()
-                .chain(r.explanations())
+            Proof::Normalized {
+                left_sub,
+                right_sub,
+            } => left_sub
+                .iter()
+                .flat_map(|l| l.explanations())
+                .chain(right_sub.explanations())
                 .collect(),
         }
     }
