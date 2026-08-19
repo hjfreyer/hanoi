@@ -75,8 +75,8 @@ proof identities::something_harder =
 | `solve (f: 1 -> 1) { … ?f … } (right: s)` | **cuts at a waypoint the engine fills in** | the template’s net is not the goal’s, nothing matches at the declared arities, or the right half fails |
 | `egraph` | saturates; the sides meet or the gas runs out | it runs out of gas |
 | `descend(then: s, else: s)` | forks a branch-vs-branch goal into its arms | the sides are not branches, or an omitted arm is not already equal |
-| `norm (left: s, right: s)` | **cuts at the normal form**: both sides must normalize to one case tree, and the tree reified back into a term is the waypoint | the normal forms differ — and the residual is both of them, reified |
-| `norm_trusted` | closes when the two normal forms agree, on the normalizer's word alone | the same |
+| `norm (left: s, right: s)` | **cuts at the left side's normal form**: `A = B` splits into `A = NF(A)` and `NF(A) = B`, with the case tree reified back into a term as the waypoint | a half fails |
+| `norm_trusted (right: s)` | the same cut with `A = NF(A)` closed on the normalizer's word | the right half fails |
 
 A strategy acts on **one goal**, and the proof mirrors a tree of goals.
 The manipulations transform the current goal; a splitter — `via` or
@@ -181,22 +181,30 @@ literal *is* that literal in the then arm, commutative operands sort, and
 equal arms never branch. Calls stay opaque — `inline` remains the step that
 spends a definition.
 
-The two spellings differ in exactly one thing: **who is trusted**. `norm`
-uses the normalizer only to *find* a waypoint — the agreed tree, reified
-back into a canonical term — and makes the engine prove both halves of the
-cut, so nothing new is trusted and the step can still fail on a true claim
-when the rules cannot reach the reified spelling. `norm_trusted` closes on
-the normalizer's word, recorded as such in the proof (`norm, trusted`), so
-a report can always say which claims lean on it. The trade is real and
-measured: `inline norm_trusted` closes the corpus's contract claim —
-`types_test::number_does_pre_and_post_is_constant`, whose written proof is
-a page of hand-derived cuts — in milliseconds, while checked `inline norm`
-times out on the same goal, because the reified case tree is as hard a
-waypoint as the original claim. The intended trajectory is that of a
-proof-producing normalizer: today's `norm_trusted` is scaffolding for
-finding workable strategies, and every use of it is a claim the checked
-machinery should eventually reach — via `norm`'s cut, a `cases` step, or a
-replayable trace out of the evaluator itself.
+Both spellings are the **same cut**: `A = B` splits at the left side's
+normal form, reified back into a canonical term, into `A = NF(A)` and
+`NF(A) = B`. One side only, on purpose — that is what makes the step
+compose. A right side that needs normalizing too writes `symm norm…`
+inside itself, and when both sides normalize to one tree the chain's last
+goal is one term as written and closes on the spot:
+`norm_trusted (right: symm norm_trusted)` is "normalize both sides and
+meet in the middle", with no saturation anywhere. Where the two spellings
+differ is **who answers for the left half**. `norm` hands `A = NF(A)` to a
+strategy (`egraph` by default), so nothing new is trusted — and the half
+can still fail on a true claim when the rules cannot reach the reified
+spelling. `norm_trusted` closes that half on the normalizer's word,
+recorded as such in the proof (`norm (left: trusted; …)`), so a report can
+always say which claims lean on it. The trade is real and measured, on the
+corpus's contract claim `types_test::number_does_pre_and_post_is_constant`,
+whose written proof is a page of hand-derived cuts: the trusted chain
+closes it in milliseconds, plain `inline norm_trusted` a few more (its
+right half, `NF(A)` against the small stated answer, is an easy
+saturation), and checked `inline norm` times out — `A = NF(A)` across a
+whole inlined case analysis is as hard as the original claim. The intended
+trajectory is that of a proof-producing normalizer: today's `norm_trusted`
+is scaffolding for finding workable strategies, and every use of it is a
+claim the checked machinery should eventually reach — via `norm`'s cut, a
+`cases` step, or a replayable trace out of the evaluator itself.
 
 Inside `egraph`: both sides go into one e-graph and
 every rule fires, with a hook that stops the run the moment the two roots

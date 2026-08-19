@@ -111,9 +111,11 @@ on:
   it answers "is this identity even true?" before anything searches, it is
   the right completeness sweep for the rule set (random branch-free pairs,
   oracle verdict against e-graph reach), and the `norm` proof steps spend
-  it: as a waypoint generator the e-graph must answer for, or — spelled
-  `norm_trusted`, and so marked in the proof — as a judge.
-  [docs/proving.md](proving.md) has the trust discussion.
+  it: `A = B` cut at the left side's normal form into `A = NF(A)` and
+  `NF(A) = B`, with the e-graph answering for both halves — or, spelled
+  `norm_trusted` and so marked in the proof, with the `A = NF(A)` half
+  closed on the oracle's word. [docs/proving.md](proving.md) has the trust
+  discussion.
 
 ## Layer 2: branching — the sum-type fragment
 

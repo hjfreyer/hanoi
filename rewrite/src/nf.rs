@@ -37,10 +37,13 @@
 //!
 //! **Trust.** Nothing here produces a derivation. [`normalize`] is a second
 //! judge of equality, held to the machine by [`run_window`] and to the rule
-//! set by tests, and how much to lean on it is a per-proof choice: the
-//! `norm` step uses it only to *find* a waypoint (the reified normal form,
-//! [`reify`]) and makes the e-graph check both halves, while `norm_trusted`
-//! closes on this module's word alone. See `docs/proving.md`.
+//! set by tests, and how much to lean on it is a per-proof choice. Both
+//! `norm` steps cut a goal `A = B` at the left side's normal form, reified
+//! ([`reify`]), into `A = NF(A)` and `NF(A) = B`: `norm` makes the e-graph
+//! answer for both halves, while `norm_trusted` closes the `A = NF(A)`
+//! half on this module's word. Left side only, so the steps compose —
+//! `norm_trusted (right: symm norm_trusted)` normalizes both sides and
+//! meets in the middle. See `docs/proving.md`.
 
 use std::cmp::Ordering;
 use std::fmt;

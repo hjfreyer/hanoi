@@ -369,33 +369,13 @@ impl<'l> Prover<'l> {
                 left,
                 right,
             } => {
+                // The left side's normal form, reified, is the waypoint of
+                // an ordinary cut: `A = B` splits into `A = NF(A)` and
+                // `NF(A) = B`. One side only, so the step composes — the
+                // other side gets its own `symm norm…` inside the right
+                // half when it too needs normalizing.
                 let inputs = goal.lhs.arity().inputs;
-                let lnf = crate::nf::normalize(&goal.lhs);
-                let rnf = crate::nf::normalize(&goal.rhs);
-                if lnf != rnf {
-                    // Reified, the two trees are terms in the language every
-                    // other report speaks — and narrowing walks to where
-                    // they disagree, same as a saturation residual.
-                    let (mut path, lhs, rhs) = narrow(
-                        crate::nf::reify(&lnf, inputs),
-                        crate::nf::reify(&rnf, inputs),
-                    );
-                    path.insert(0, "after normalization".to_string());
-                    return Ok(Outcome::Stuck(Residual {
-                        lhs,
-                        rhs,
-                        path,
-                        firings: Vec::new(),
-                        stopped: "the case-tree normal forms differ: the identity is false, \
-                                  or true only for reasons the normalizer cannot see"
-                            .to_string(),
-                    }));
-                }
-                if *trusted {
-                    return Ok(Outcome::Closed(Proof::Normalized { subs: None }));
-                }
-                // The agreed tree, reified, is a waypoint; the rest is a cut.
-                let waypoint = crate::nf::reify(&lnf, inputs);
+                let waypoint = crate::nf::reify(&crate::nf::normalize(&goal.lhs), inputs);
                 let default = default_strategy();
                 let side = |name: &str,
                             strategy: &Option<Strategy<Body>>,
@@ -412,20 +392,29 @@ impl<'l> Prover<'l> {
                         }
                     })
                 };
-                let left_sub = match side(
-                    "left",
-                    left,
-                    Goal::aligned(goal.lhs.clone(), waypoint.clone()),
-                )? {
-                    Ok(p) => p,
-                    Err(residual) => return Ok(Outcome::Stuck(residual)),
+                // `norm_trusted` is the same cut with `A = NF(A)` closed on
+                // the normalizer's word; the parser guarantees it carries no
+                // left strategy.
+                let left_sub = if *trusted {
+                    debug_assert!(left.is_none(), "the parser refuses a trusted left");
+                    None
+                } else {
+                    match side(
+                        "left",
+                        left,
+                        Goal::aligned(goal.lhs.clone(), waypoint.clone()),
+                    )? {
+                        Ok(p) => Some(p),
+                        Err(residual) => return Ok(Outcome::Stuck(residual)),
+                    }
                 };
                 let right_sub = match side("right", right, Goal::aligned(waypoint, goal.rhs))? {
                     Ok(p) => p,
                     Err(residual) => return Ok(Outcome::Stuck(residual)),
                 };
                 Ok(Outcome::Closed(Proof::Normalized {
-                    subs: Some((left_sub, right_sub)),
+                    left_sub,
+                    right_sub,
                 }))
             }
 
@@ -1193,22 +1182,28 @@ mod tests {
     }
 
     #[test]
-    fn norm_trusted_closes_on_the_normalizer_word() {
+    fn norm_trusted_closes_the_left_half_on_the_normalizer_word() {
+        // The cut is `A = NF(A)` (trusted) and `NF(A) = B` (the engine's).
         let outcome = prove_with(
             "identity probe { is_bool is_bool } = { drop 0 push true };",
             "probe",
             Some("norm_trusted"),
         );
         let Outcome::Closed(proof) = outcome else {
-            panic!("the normal forms agree");
+            panic!("the right half is a small saturation");
         };
-        assert_eq!(proof.summary(), "norm, trusted");
+        assert!(
+            proof
+                .summary()
+                .starts_with("norm (left: trusted; right: saturated"),
+            "{}",
+            proof.summary()
+        );
     }
 
     #[test]
-    fn norm_cuts_through_the_reified_normal_form() {
-        // Same claim, no trust: the tree both sides reach becomes a
-        // waypoint, and the engine closes each half.
+    fn norm_cuts_at_the_left_normal_form_trusting_nothing() {
+        // Same claim, no trust: the engine answers for both halves.
         let outcome = prove_with(
             "identity probe { is_bool is_bool } = { drop 0 push true };",
             "probe",
@@ -1218,42 +1213,49 @@ mod tests {
             panic!("both halves close by saturation");
         };
         assert!(
-            proof.summary().starts_with("norm cut (left: saturated"),
+            proof.summary().starts_with("norm (left: saturated"),
             "{}",
             proof.summary()
         );
     }
 
     #[test]
-    fn norm_sees_through_matching_branches() {
-        // What needed `descend` (or congruence): a branch-vs-branch goal
-        // whose arms agree valuewise closes in one step, because both sides
-        // grow one case tree.
+    fn norm_chains_through_symm_to_meet_in_the_middle() {
+        // Both sides need normalizing, so the right half normalizes its own
+        // right side: after `symm`, its `NF(B) = NF(A)` goal is one term as
+        // written — no saturation anywhere.
         let outcome = prove_with(
             "identity probe { branch { is_bool is_bool } { not } } = { branch { is_int is_bool } { not } };",
             "probe",
-            Some("norm_trusted"),
+            Some("norm_trusted (right: symm norm_trusted)"),
         );
-        assert!(matches!(outcome, Outcome::Closed(_)));
+        let Outcome::Closed(proof) = outcome else {
+            panic!("the normal forms are one tree");
+        };
+        assert_eq!(
+            proof.summary(),
+            "norm (left: trusted; right: symm; norm (left: trusted; \
+             right: the two sides are one term))"
+        );
     }
 
     #[test]
-    fn norm_on_a_false_goal_reports_both_reified_forms() {
+    fn norm_on_a_false_goal_fails_its_right_half() {
+        // `NF(push 1)` reifies back to `push 1` itself, so the left half is
+        // trivial and the falsehood lands where it lives: the right half.
         let outcome = prove_with(
             "identity probe { push 1 } = { push 2 };",
             "probe",
             Some("norm"),
         );
         let Outcome::Stuck(residual) = outcome else {
-            panic!("the normal forms differ");
+            panic!("push 1 is not push 2 through any waypoint");
         };
         assert!(
-            residual.stopped.contains("normal forms differ"),
-            "{}",
-            residual.stopped
-        );
-        assert!(
-            residual.path.iter().any(|p| p.contains("normalization")),
+            residual
+                .path
+                .iter()
+                .any(|p| p.contains("right half of the norm cut")),
             "{:?}",
             residual.path
         );
@@ -1264,18 +1266,35 @@ mod tests {
     #[test]
     fn norm_keeps_calls_closed_until_a_proof_says_inline() {
         // The same discipline as the engine's: a definition is spent by
-        // `inline`, never by the normalizer on its own.
+        // `inline`, never by the normalizer on its own — so the right half,
+        // `NF(A)` against the call, sticks until the call is opened.
         let code = r#"
             sentence drop_and_true { drop 0 push true }
             identity probe { is_bool is_bool } = { jump crate::drop_and_true };
         "#;
         let outcome = prove_with(code, "probe", Some("norm_trusted"));
-        assert!(matches!(outcome, Outcome::Stuck(_)));
+        let Outcome::Stuck(residual) = outcome else {
+            panic!("nothing opens the call");
+        };
+        assert!(
+            residual
+                .path
+                .iter()
+                .any(|p| p.contains("right half of the norm cut")),
+            "{:?}",
+            residual.path
+        );
         let outcome = prove_with(code, "probe", Some("inline norm_trusted"));
         let Outcome::Closed(proof) = outcome else {
-            panic!("opened, the sides normalize alike");
+            panic!("opened, the right half saturates");
         };
-        assert_eq!(proof.summary(), "inline; norm, trusted");
+        assert!(
+            proof
+                .summary()
+                .starts_with("inline; norm (left: trusted; right: saturated"),
+            "{}",
+            proof.summary()
+        );
     }
 
     #[test]
