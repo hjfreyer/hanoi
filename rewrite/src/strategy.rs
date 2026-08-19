@@ -506,6 +506,8 @@ impl<'l> Prover<'l> {
             "stair-top-first",
             "drop-split-two",
             "drop-split-two-rev",
+            "frame-split-deep",
+            "frame-split-top",
         ];
         let mut scheduler = BackoffScheduler::default();
         for rule in &self.rules {

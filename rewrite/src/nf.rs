@@ -160,12 +160,21 @@ fn eval(term: &Term, mut stack: Vec<Rc<Val>>, path: &mut Path) -> Nf {
             // The second argument gets the top; branches inside the deep
             // side fork first, which is the one ordering decision this
             // normal form makes for terms that run side by side.
+            //
+            // A par is the one place values *join a path late*: the top
+            // slice runs under whatever the deep side branched on, and the
+            // deep side's answers land under whatever the top branched on.
+            // `branch_on` specialized only the stack present at its own
+            // fork, so both joins re-apply the path's substitutions here —
+            // without this, `id(1) * is_tag` keeps an original the arm has
+            // proved equal to a literal, and two terms equal in the theory
+            // normalize apart.
             let top = stack.split_off(stack.len() - b.arity().inputs);
             let deep = eval(a, stack, path);
             graft(deep, path, &mut |left, path| {
-                let above = eval(b, top.clone(), path);
-                graft(above, path, &mut |right, _| {
-                    let mut whole = left.clone();
+                let above = eval(b, specialize_by_path(&top, path), path);
+                graft(above, path, &mut |right, path| {
+                    let mut whole = specialize_by_path(&left, path);
                     whole.extend(right);
                     Nf::Leaf(whole)
                 })
@@ -244,25 +253,51 @@ fn mk_branch(cond: Rc<Val>, if_true: Nf, if_false: Nf) -> Nf {
     }
 }
 
-/// The then-arm's stack when the condition is `v = literal`: every
-/// occurrence of `v` replaced by the literal it just proved to be.
-fn specialize(cond: &Rc<Val>, stack: &[Rc<Val>]) -> Vec<Rc<Val>> {
+/// The value–literal pair a condition proves equal when it holds: `equal`
+/// is structural identity, so the arm that saw `true` may write the literal
+/// wherever the value stood.
+fn equal_to_literal(cond: &Val) -> Option<(&Rc<Val>, &Rc<Val>)> {
     let Val::App {
         op: Op::Prim(Prim::Equal),
         args,
-    } = &**cond
+    } = cond
     else {
-        return stack.to_vec();
+        return None;
     };
     let [a, b] = &args[..] else {
+        return None;
+    };
+    match (&**a, &**b) {
+        (_, Val::Lit(_)) => Some((a, b)),
+        (Val::Lit(_), _) => Some((b, a)),
+        _ => None,
+    }
+}
+
+/// The then-arm's stack when the condition is `v = literal`: every
+/// occurrence of `v` replaced by the literal it just proved to be.
+fn specialize(cond: &Rc<Val>, stack: &[Rc<Val>]) -> Vec<Rc<Val>> {
+    let Some((from, to)) = equal_to_literal(cond) else {
         return stack.to_vec();
     };
-    let (from, to) = match (&**a, &**b) {
-        (_, Val::Lit(_)) => (a, b),
-        (Val::Lit(_), _) => (b, a),
-        _ => return stack.to_vec(),
-    };
     stack.iter().map(|v| subst(v, from, to)).collect()
+}
+
+/// Values re-specialized against every equality the path has already
+/// proved. Idempotent over what `specialize` did at the forks; what it is
+/// for is the values a fork never saw — see the `Par` arm of [`eval`].
+fn specialize_by_path(vals: &[Rc<Val>], path: &Path) -> Vec<Rc<Val>> {
+    let mut out = vals.to_vec();
+    for (cond, taken) in path {
+        if !taken {
+            continue;
+        }
+        let Some((from, to)) = equal_to_literal(cond) else {
+            continue;
+        };
+        out = out.iter().map(|v| subst(v, from, to)).collect();
+    }
+    out
 }
 
 /// `v` with every occurrence of `from` replaced by `to`, re-canonicalized on
@@ -859,6 +894,40 @@ mod tests {
             "pick 0 push 7 equal branch { push 7 equal } { drop 0 push false }",
             "pick 0 push 7 equal branch { drop 0 push true } { drop 0 push false }",
         );
+    }
+
+    #[test]
+    fn specialization_reaches_values_that_join_the_path_late() {
+        // The tested original passes *under* the frame that computes the
+        // condition — the shape an inlined precondition takes, `copy(1) ;
+        // id(1) * body ; branch` — so it is not on the stack when the fork
+        // happens inside the par's top, and joins the path only at the
+        // graft. The substitution has to reach it there: the then arm
+        // re-tests the original, which folds to `true` only as the literal.
+        let body = Term::pad_compose(
+            Term::pad_compose(Term::op(Prim::Push(Value::Int(7))), Term::op(Prim::Equal)),
+            Term::branch(
+                Term::op(Prim::Push(Value::Bool(true))),
+                Term::op(Prim::Push(Value::Bool(false))),
+            )
+            .unwrap(),
+        );
+        let retest = Term::pad_compose(Term::op(Prim::Push(Value::Int(7))), Term::op(Prim::Equal));
+        let term = Term::compose(
+            Term::copy(1),
+            Term::compose(
+                Term::par(Term::id(1), body),
+                Term::branch(
+                    retest,
+                    Term::pad_compose(Term::drop(1), Term::op(Prim::Push(Value::Bool(true)))),
+                )
+                .unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let claim = Term::pad_compose(Term::drop(1), Term::op(Prim::Push(Value::Bool(true))));
+        assert_eq!(normalize(&term), normalize(&claim));
     }
 
     #[test]

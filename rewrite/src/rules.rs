@@ -170,6 +170,38 @@ pub fn rules() -> Vec<ProofRewrite> {
             )
         },
     ));
+    // A frame off a composition: `id * (f ; g)` runs its framed factors one
+    // at a time. This is the *splitting* reading of the interchange that
+    // `par-fuse` fuses — bounded here because one leg is an identity and
+    // the other is literally a composition node, so nothing has to guess a
+    // split. It is what lets a branch buried in a framed body surface:
+    // `id(1) * (P ; branch { … })` has no other road to `branch-beside`'s
+    // window, which is why the contract proof's first cut used to spread
+    // the padding by hand.
+    out.push(dyn_rule(
+        "frame-split-deep",
+        "(* ?i (; ?f ?g))",
+        ["?i", "?f", "?g"],
+        |eg, vars, _| {
+            facts(eg, vars[0]).is_id.then(|| {
+                let first = eg.add(HanaLang::Par([vars[0], vars[1]]));
+                let second = eg.add(HanaLang::Par([vars[0], vars[2]]));
+                eg.add(HanaLang::Compose([first, second]))
+            })
+        },
+    ));
+    out.push(dyn_rule(
+        "frame-split-top",
+        "(* (; ?f ?g) ?i)",
+        ["?f", "?g", "?i"],
+        |eg, vars, _| {
+            facts(eg, vars[2]).is_id.then(|| {
+                let first = eg.add(HanaLang::Par([vars[0], vars[2]]));
+                let second = eg.add(HanaLang::Par([vars[1], vars[2]]));
+                eg.add(HanaLang::Compose([first, second]))
+            })
+        },
+    ));
     // A producer beside a computation: `a ; (id(a.out) * b)` is `a * b` when
     // `b` reads nothing — `b`'s pushes land on top of `a`'s untouched answer.
     out.push(dyn_rule(
@@ -847,6 +879,27 @@ mod tests {
         )
         .unwrap();
         assert!(provable(&framed, &opened));
+    }
+
+    #[test]
+    fn a_branch_surfaces_through_a_frame() {
+        // `id(1) * (P ; branch { … })` — the shape an inlined call takes —
+        // meets its spread spelling, where the branch stands alone and the
+        // commuting conversions can reach it. `frame-split-deep` is the only
+        // road: nothing else opens a composition inside a framed leg.
+        let tst = |v| op(Prim::Push(Value::Bool(v)));
+        let body = Term::compose(
+            Term::op(Prim::IsBool),
+            Term::branch(tst(true), tst(false)).unwrap(),
+        )
+        .unwrap();
+        let framed = Term::par(Term::id(1), body);
+        let spread = Term::compose(
+            Term::par(Term::id(1), op(Prim::IsBool)),
+            Term::par(Term::id(1), Term::branch(tst(true), tst(false)).unwrap()),
+        )
+        .unwrap();
+        assert!(provable(&framed, &spread));
     }
 
     #[test]
