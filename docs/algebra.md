@@ -105,9 +105,13 @@ on:
   discarded work vanish (`drop-nat`), shared work may be copied
   (`copy-nat`).
 - **A cheap oracle.** Symbolic evaluation therefore decides the branch-free
-  fragment outright, and `rewrite/src/nf.rs` implements it — extended to
-  **case trees** over the branch fragment (sound there, complete only
-  here). It produces no derivation, so it cannot replace the prover — but
+  fragment outright, and `rewrite/src/diagram.rs` implements it as a
+  string-diagram engine: programs as wiring in an interned arena, so this
+  whole layer is representation rather than rules — extended over the
+  branch fragment to **ordered, shared case trees** (the decision-diagram
+  discipline: independent branches reorder to one spelling; sound there,
+  complete only here). It produces no derivation, so it cannot replace the
+  prover — but
   it answers "is this identity even true?" before anything searches, it is
   the right completeness sweep for the rule set (random branch-free pairs,
   oracle verdict against e-graph reach), and the `norm` proof steps spend

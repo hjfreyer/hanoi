@@ -36,7 +36,7 @@ Five layers, in `rewrite/src/`:
 | goals | `goal.rs`, `strategy.rs` | a goal is two [terms](../rewrite/src/term.rs) padded to one arity; the interpreter runs a strategy over one |
 | engine | `lang.rs` | the term model as an egg language, with a per-class analysis carrying the facts rules condition on |
 | equations | `rules.rs` | every law, as a rewrite the e-graph applies in both directions where both are bounded |
-| normal forms | `nf.rs` | symbolic evaluation into case trees — the decision procedure the cartesian layer's completeness theorem promises, spent by the `norm` steps |
+| diagrams | `diagram.rs` | the string-diagram engine: programs as wiring in an interned arena, canonicalized into ordered, shared case trees — the decision procedure the cartesian layer's completeness theorem promises, spent by the `norm` steps |
 
 ### Goals, and where the net-change asymmetry lives
 
@@ -165,21 +165,28 @@ with variables is the left-hand side of a lemma, and the matching machinery
 built here is what citing a proven identity inside another proof will use.
 
 `norm` and `norm_trusted` spend the decision procedure the algebra sheet
-promises ([docs/algebra.md](algebra.md), "a cheap oracle"): `nf.rs` runs a
-term on a stack of variables and keeps what lands — a **case tree** whose
-leaves are tuples of symbolic values. For branch-free terms that tuple is
-the free cartesian category's own normal form, so agreement there is
-complete for layer 1; branches fork the tree on a symbolically evaluated
-condition, which is sound but knowingly incomplete (independent branches
-commute and the tree does not see it — the pinned
-`branches_on_independent_conditions_stay_apart` test is the boundary
-marker). Along the way the evaluator picks up, for free, much of what the
-rules state one window at a time: literal windows run on the machine itself
-(the same `run_window` the `eval` rule uses), a literal condition takes its
-arm, a retested condition is decided, a value that tested `equal` to a
-literal *is* that literal in the then arm, commutative operands sort, and
-equal arms never branch. Calls stay opaque — `inline` remains the step that
-spends a definition.
+promises ([docs/algebra.md](algebra.md), "a cheap oracle"), and its home is
+`diagram.rs` — the **string-diagram engine**. A program there is wiring,
+not a term: operations are boxes with ordered ports, values are wires in an
+interned arena, and the whole structural layer is representation rather
+than rules — `id` is a wire, `;` and `*` are not stored, `swap` is a
+crossing the data structure does not remember, `copy` is a wire read
+twice, `drop` a wire nobody reads. Interning makes `copy-nat` automatic
+and reachability makes `drop-nat` automatic, so for branch-free programs
+the wiring *is* the free cartesian category's normal form, and agreement
+is complete for layer 1. Branches take the decision-diagram discipline:
+the canonical form is an **ordered, shared case tree** — conditions in one
+global order along every path, so programs that test independent
+conditions in different orders reach one spelling; equal subtrees are one
+node, so reconverging check chains stay small. What remains outside is
+genuinely semantic: η — inventing a case split on an opaque value — is the
+pinned boundary (`eta_stays_beyond_the_diagram`). Along the way the
+evaluator picks up, for free, much of what the rules state one window at a
+time: literal windows run on the machine itself (the same `run_window` the
+`eval` rule uses), a literal condition takes its arm, a retested condition
+is decided, a value that tested `equal` to a literal *is* that literal in
+the then arm, commutative operands sort, and equal arms never branch.
+Calls stay opaque — `inline` remains the step that spends a definition.
 
 Both spellings are the **same cut**: `A = B` splits at the left side's
 normal form, reified back into a canonical term, into `A = NF(A)` and
