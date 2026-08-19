@@ -105,10 +105,15 @@ on:
   discarded work vanish (`drop-nat`), shared work may be copied
   (`copy-nat`).
 - **A cheap oracle.** Symbolic evaluation therefore decides the branch-free
-  fragment outright. It produces no derivation, so it cannot replace the
-  prover — but it can answer "is this identity even true?" before anything
-  searches, and it is the right completeness sweep for the rule set: random
-  branch-free pairs, oracle verdict against e-graph reach.
+  fragment outright, and `rewrite/src/nf.rs` implements it — extended to
+  **case trees** over the branch fragment (sound there, complete only
+  here). It produces no derivation, so it cannot replace the prover — but
+  it answers "is this identity even true?" before anything searches, it is
+  the right completeness sweep for the rule set (random branch-free pairs,
+  oracle verdict against e-graph reach), and the `norm` proof steps spend
+  it: as a waypoint generator the e-graph must answer for, or — spelled
+  `norm_trusted`, and so marked in the proof — as a judge.
+  [docs/proving.md](proving.md) has the trust discussion.
 
 ## Layer 2: branching — the sum-type fragment
 

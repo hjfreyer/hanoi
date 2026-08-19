@@ -20,12 +20,13 @@
 //! conjures code from nothing (`drop(n) = X ; drop(m)` backwards); a stepping
 //! stone seeded into the e-graph is how that direction is reached.
 
-use bytecode::{Instruction, Library, Value};
+use bytecode::{Instruction, Value};
 use egg::{Applier, Id, Pattern, PatternAst, Rewrite, Subst, Symbol, Var, rewrite};
 
 use crate::lang::{
     AsTupleW, CopyW, DropW, Facts, HanaLang, IdW, ProofGraph, Proving, PushW, TupleW, UntupleW,
 };
+use crate::nf::run_window;
 
 /// A rewrite over the proving e-graph.
 pub type ProofRewrite = Rewrite<HanaLang, Proving>;
@@ -619,25 +620,6 @@ fn literal_chain(eg: &mut ProofGraph, inputs: usize, vs: &[PushW]) -> Id {
         acc = eg.add(HanaLang::Compose([acc, step]));
     }
     acc
-}
-
-/// Runs one instruction on the operands it wants, on the machine itself.
-///
-/// The fold owes the interpreter exact agreement, junk included, so there is
-/// no second implementation to drift: a scratch library holding
-/// `push v̄ ; inst` is executed and the stack it leaves is the answer.
-fn run_window(operands: &[Value], inst: &Instruction) -> Option<Vec<Value>> {
-    let mut library = Library::new();
-    let mut sentence: Vec<Instruction> = operands
-        .iter()
-        .map(|v| Instruction::Push(v.clone()))
-        .collect();
-    sentence.push(inst.clone());
-    library.sentences.push(sentence);
-    let start = library.sentences.first_key().expect("one sentence");
-    let mut vm = vm::VM::new(library);
-    vm.execute(start).ok()?;
-    Some(vm.stack().to_vec())
 }
 
 /// The retest rules, then side: the outer condition was truthy, so an inner
