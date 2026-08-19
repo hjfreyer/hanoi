@@ -2,7 +2,7 @@
 //!
 //! ```bash
 //! cargo run --bin prove -- tests
-//! cargo run --bin prove -- tests --filter two_spellings --explain
+//! cargo run --bin prove -- tests --filter two_spellings --firings
 //! ```
 //!
 //! Per identity, its written strategy runs — the `.hant` beside the `.hana`,
@@ -24,7 +24,7 @@ use rewrite::strategy::{Config, Prover};
 struct Args {
     root: PathBuf,
     filter: Option<String>,
-    explain: bool,
+    firings: bool,
     config: Config,
 }
 
@@ -34,7 +34,7 @@ fn main() -> ExitCode {
         Err(message) => {
             eprintln!("error: {}", message);
             eprintln!(
-                "usage: prove <root> [--filter <substr>] [--explain] [--fuel <nodes>] [--iters <n>]"
+                "usage: prove <root> [--filter <substr>] [--firings] [--fuel <nodes>] [--iters <n>]"
             );
             return ExitCode::from(2);
         }
@@ -53,12 +53,12 @@ fn parse_args() -> Result<Args, String> {
     let mut root = None;
     let mut filter = None;
     let mut config = Config::default();
-    let mut explain = false;
+    let mut firings = false;
     let mut argv = std::env::args().skip(1);
     while let Some(arg) = argv.next() {
         match arg.as_str() {
             "--filter" => filter = Some(argv.next().ok_or("--filter needs a value")?),
-            "--explain" => explain = true,
+            "--firings" => firings = true,
             "--fuel" => {
                 config.node_limit = argv
                     .next()
@@ -85,11 +85,10 @@ fn parse_args() -> Result<Args, String> {
             other => return Err(format!("unrecognized argument: {}", other)),
         }
     }
-    config.explain = explain;
     Ok(Args {
         root: root.ok_or("no corpus root given")?,
         filter,
-        explain,
+        firings,
         config,
     })
 }
@@ -131,10 +130,10 @@ fn run(args: &Args) -> Result<bool, String> {
             Outcome::Closed(proof) => {
                 passed += 1;
                 println!("identity {} ... ok ({})", identity.name, proof.summary());
-                if args.explain {
-                    for explanation in proof.explanations() {
-                        for line in explanation.lines() {
-                            println!("    {}", line);
+                if args.firings {
+                    for leaf in proof.firings() {
+                        for (rule, count) in leaf.iter().take(8) {
+                            println!("    {:>6}  {}", count, rule);
                         }
                         println!();
                     }

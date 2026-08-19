@@ -51,8 +51,8 @@ impl Goal {
 
 /// How a goal was discharged: the shape of the strategy that closed it, with
 /// what the e-graph found at the leaves. Printed one-line by
-/// [`summary`][Proof::summary]; `--explain` adds the leaves' step-by-step
-/// accounts.
+/// [`summary`][Proof::summary]; `--firings` adds which rules did the work at
+/// each leaf.
 #[derive(Debug)]
 pub enum Proof {
     /// The two sides are one term as written.
@@ -95,8 +95,11 @@ pub enum Proof {
     /// An `egraph` united the two sides.
     Saturated {
         iterations: usize,
-        classes: usize,
-        explanation: Option<String>,
+        /// Rows across every table the engine held when the sides met — the
+        /// program nodes plus the facts about them.
+        nodes: usize,
+        /// Rule firings, most active first.
+        firings: Vec<(String, usize)>,
     },
 }
 
@@ -140,35 +143,40 @@ impl Proof {
                 right_sub.summary()
             ),
             Proof::Saturated {
-                iterations,
-                classes,
-                ..
-            } => format!("saturated ({} iters, {} classes)", iterations, classes),
+                iterations, nodes, ..
+            } => format!("saturated ({} iters, {} nodes)", iterations, nodes),
         }
     }
 
-    /// Every explanation the proof's leaves carry, outermost first.
-    pub fn explanations(&self) -> Vec<&str> {
+    /// The rule firings of every saturation the proof's leaves ran,
+    /// outermost first.
+    ///
+    /// This is what a close has to say about *how* it closed. egglog does not
+    /// yet hand back a step-by-step derivation — the 2.0 backend lays the
+    /// groundwork for proofs but exposes no way to read one — so what the
+    /// engine can report is which laws did the work and how often, which is
+    /// the same material a stuck goal's residual prints.
+    pub fn firings(&self) -> Vec<&[(String, usize)]> {
         match self {
             Proof::Trivial => vec![],
             Proof::Peel { sub, .. } | Proof::Inlined { sub, .. } | Proof::Swapped(sub) => {
-                sub.explanations()
+                sub.firings()
             }
             Proof::Descend { then_sub, else_sub } => then_sub
                 .iter()
                 .chain(else_sub.iter())
-                .flat_map(|p| p.explanations())
+                .flat_map(|p| p.firings())
                 .collect(),
             Proof::Cut {
                 left_sub,
                 right_sub,
             } => left_sub
-                .explanations()
+                .firings()
                 .into_iter()
-                .chain(right_sub.explanations())
+                .chain(right_sub.firings())
                 .collect(),
-            Proof::Solved { right_sub, .. } => right_sub.explanations(),
-            Proof::Saturated { explanation, .. } => explanation.as_deref().into_iter().collect(),
+            Proof::Solved { right_sub, .. } => right_sub.firings(),
+            Proof::Saturated { firings, .. } => vec![firings.as_slice()],
         }
     }
 }

@@ -2,7 +2,7 @@
 
 A reference sheet for the equational theory the rewriter works in: every
 structural law stated symbolically and in the term model's spelling, with its
-side conditions, where it lives in `rewrite/src/rules.rs`, and what is known
+side conditions, where it lives in `rewrite/src/rules.egg`, and what is known
 about completeness. [docs/proving.md](proving.md) describes the machinery
 that applies these laws; this page is the laws themselves, and the map to the
 literature they come from.
@@ -29,7 +29,8 @@ one needs its case split written out as a chain of cuts.
 - Every law is stated in its minimal window. Congruence embeds it in any
   context — in the e-graph that is just the fact that rewriting is closed
   under node formation.
-- **Where** column: the rule's name in `rules.rs`, *emergent* when the law
+- **Where** column: the rule's name in `rules.egg` — the label written in the
+  comment above it — *emergent* when the law
   needs no rule of its own (it falls out of others plus the e-graph's
   bidirectionality), *candidate* when it is true and useful but not yet
   written.
@@ -120,7 +121,7 @@ Deciding equality here needed normalization by evaluation with case trees
 
 | law | reading | where |
 |---|---|---|
-| β | `push c ; branch { A } { B }` = the arm `truthy(c)` selects | `fold-branch` |
+| β | `push c ; branch { A } { B }` = the arm `truthy(c)` selects | `fold-branch-then`, `fold-branch-else` |
 | η (booleans) | ask `is_bool`, branch, push back what branching told you = ε | stated as `identities::split_bool` in the corpus and *run*; as a rewrite it inserts branches, so it stays a goal-level move for the case-split strategy to spend |
 | commuting conversion, suffix | `branch { A } { B } ; C = branch { A;C } { B;C }` | `branch-distribute` ⇄ (backward is suffix-factoring) |
 | commuting conversion, frame | `(x * id(1)) ; branch { A } { B } = branch { x;A } { x;B }` | `branch-hoist` ⇄ — no arithmetic: the frame hid exactly the condition |
@@ -206,4 +207,6 @@ column exactly:
   (1997); Führmann, *Direct models of the computational lambda calculus*
   (1999) — the effects roadmap.
 - Willsey et al., *egg: Fast and extensible equality saturation* (POPL 2021)
+  — and Zhang et al., *Better together: Unifying datalog and equality
+  saturation* (PLDI 2023), the egglog the prover runs on
   — the engine `bin/prove` is built on.

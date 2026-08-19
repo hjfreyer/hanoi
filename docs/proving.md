@@ -9,14 +9,14 @@ thing each side reached is printed instead.
 
 ```bash
 cargo run --bin prove -- tests
-cargo run --bin prove -- tests --filter two_spellings --explain
+cargo run --bin prove -- tests --filter two_spellings --firings
 ```
 
 ```
 Proving 14 identities...
-identity identities::testing_a_test ... ok (saturated (4 iters, 6 classes))
-identity identities::testing_a_test_by_name ... ok (inline; saturated (4 iters, 6 classes))
-identity identities::specializing_a_tested_value ... ok (saturated (7 iters, 87 classes))
+identity identities::testing_a_test ... ok (saturated (6 iters, 54 nodes))
+identity identities::testing_a_test_by_name ... ok (inline; saturated (6 iters, 54 nodes))
+identity identities::specializing_a_tested_value ... ok (saturated (8 iters, 2452 nodes))
 identity types_test::number_does_pre_and_post_is_constant ... ok (cut (left: inline; ...
 ...
 identity result: ok. 14 passed; 0 failed; 0 problem(s); 0 filtered out
@@ -34,8 +34,35 @@ Four layers, in `rewrite/src/`:
 |---|---|---|
 | proofs | `hant.rs`, `corpus.rs`, `parse.rs` | the strategy language a proof is written in, the loader that attaches each `.hant` entry to the identity it names, and the reader that turns a waypoint's text into a term |
 | goals | `goal.rs`, `strategy.rs` | a goal is two [terms](../rewrite/src/term.rs) padded to one arity; the interpreter runs a strategy over one |
-| engine | `lang.rs` | the term model as an egg language, with a per-class analysis carrying the facts rules condition on |
-| equations | `rules.rs` | every law, as a rewrite the e-graph applies in both directions where both are bounded |
+| engine | `lang.rs` | the term model as an egglog datatype, with the rules that compute the facts the equations condition on, and the primitives they reach Rust through |
+| equations | `rules.egg` | every law, as a rewrite the e-graph applies in both directions where both are bounded — a text file, not Rust; `rules.rs` only hands it to the engine |
+
+### The engine
+
+The e-graph is [**egglog**](https://github.com/egraphs-good/egglog) 2.0.
+Three things follow from that, and they are why the crate looks the way it
+does:
+
+- **The rules are a file.** egglog takes a program, so the equations live in
+  `rules.egg` in the rewrite syntax egg made familiar — see "the equations"
+  below. So does the analysis: `lang.rs` emits the datatype and the rules that
+  compute every fact, rather than implementing an `Analysis` trait.
+- **The analysis is a set of tables.** `arity-in`, `arity-out`, `is-id`,
+  `is-drop`, `is-copy`, `yields-bool`, `literal` are ordinary egglog
+  functions and relations over the program sort, computed by rules and read by
+  a rule's `:when`. The arities are declared `:no-merge`, which *is* the
+  soundness net: uniting two classes with different stack effects is an
+  illegal merge and the engine refuses it.
+- **Nodes are spelled a little differently.** egglog reads `;` as a comment
+  and owns `*`, so compose and par are `Seq` and `Par`; instruction leaves are
+  their mnemonic in CamelCase; and a width rides *inside* its node, `(Id 3)`
+  rather than egg's `id@3`. Nothing else about the model moved — `term.rs` and
+  every printed residual still say `;`, `*` and `id(3)`.
+
+The trade is speed on small graphs: egglog's per-rule, per-iteration cost is
+built for e-graphs far larger than a goal here, and the corpus takes a few
+seconds where egg took a fraction of one. What it buys is the rule file, and
+with it the width-indexed laws that egg could only express as Rust.
 
 ### Goals, and where the net-change asymmetry lives
 
@@ -44,9 +71,10 @@ The compiler holds an identity to equal **net** change, not equal arity —
 asymmetry is resolved in exactly one place: `Goal::aligned` pads the narrower
 side with `id(k) *` until the arities agree. Every rule instance after that is
 arity-preserving as a term, which buys the engine its soundness net: **arity
-is invariant across an e-class**, and the analysis asserts it on every merge.
-A rule that united two classes with different stack effects would panic on the
-spot rather than prove something false.
+is invariant across an e-class**, and `:no-merge` on `arity-in` and
+`arity-out` asserts it on every merge. A rule that united two classes with
+different stack effects would fail on the spot rather than prove something
+false.
 
 ### The strategy language
 
@@ -165,9 +193,10 @@ Inside `egraph`: both sides go into one e-graph and
 every rule fires, with a hook that stops the run the moment the two roots
 unify — saturation has no goal of its own and would otherwise explore a
 closed goal to the end of the budget (`discarded_work_on_copies` once grew
-to 23,000 classes finding a proof it had at 51). `--explain` prints egg's
-step-by-step account of the meeting; explanation tracking taxes every
-union, so the e-graph only carries it when asked.
+to 23,000 classes finding a proof it had at 51). `--firings` prints which
+laws did the work at each closed leaf — the same material a stuck goal's
+residual prints, and for now the whole of what a close can say about
+*how* it closed: see "what is not here yet".
 
 #### Why the default is the engine alone
 
@@ -209,20 +238,38 @@ backwards.
 ### The equations
 
 The rule set is the algebra of [docs/algebra.md](algebra.md) made executable,
-and the map between the two is written there. Three kinds of rule:
+and the map between the two is written there. It is a **file**,
+`rewrite/src/rules.egg`, in the rewrite syntax egg made familiar and egglog
+speaks natively — an s-expression pattern with `?vars`, `rewrite` one way and
+`birewrite` both, side conditions in a `:when`:
+
+```lisp
+;; par-id-fuse
+(rewrite (Par ?a ?b) (Id (+ ?n ?m))
+  :when ((is-id ?a) (is-id ?b) (= ?n (arity-in ?a)) (= ?m (arity-in ?b))))
+```
+
+The comment above each rule is its name — what the firings report prints and
+what `docs/algebra.md`'s "where" column cites. Three kinds of rule:
 
 - **Pattern rules** state both sides syntactically — associativity, the
-  branch laws, `swap` sliding past a drop.
-- **Fact rules** match a small window and read the analysis of what they
-  bound. The facts are: the class's arity; `is_id` / `is_drop` / `is_copy`
-  (it contains that structural leaf); `yields_bool` (its top output is a
-  `Bool` — `Instruction::yields_bool`, lifted through composition); and
-  `literal` (it behaves as `id(n) *` a run of pushes). A width cannot appear
-  in a pattern, so anything the algebra indexes by width reads it off a fact.
-- **The evaluation rule** builds a scratch one-sentence library — the pushed
-  operands and the instruction — and runs the real `vm` on it. Folding owes
-  the interpreter exact agreement, junk included, and this way there is no
-  second implementation to drift.
+  branch laws, `swap` sliding past a drop. **A width is an ordinary pattern
+  variable**, which is why the file can exist: under egg a width could not
+  appear in a pattern at all, so every law the algebra indexes by width had
+  to be a Rust closure that matched a small window and rebuilt the answer by
+  hand. `par-id-fuse` above was thirteen lines of Rust.
+- **Fact rules** add a `:when` reading the tables `lang.rs` declares and
+  computes. The facts are: the class's arity (`arity-in`, `arity-out`);
+  `is-id` / `is-drop` / `is-copy` (it contains that structural leaf);
+  `yields-bool` (its top output is a `Bool` — `Instruction::yields_bool`,
+  lifted through composition); and `literal` (it behaves as `id(n) *` a run
+  of pushes). All but the arities are one-way — absent means "not known to
+  hold", never "known not to" — because egglog has no negation, so no rule
+  may ask whether a fact is *missing*.
+- **The evaluation rule** calls a primitive that builds a scratch
+  one-sentence library — the pushed operands and the instruction — and runs
+  the real `vm` on it. Folding owes the interpreter exact agreement, junk
+  included, and this way there is no second implementation to drift.
 
 Two readings are deliberately absent. **Unfolding** is the pipeline's move,
 per above. And nothing **conjures work** — `drop(n) = X ; drop(m)` read
@@ -230,12 +277,15 @@ backwards would have to invent `X`. When a proof needs that direction, the
 term containing the work is written down as a `via` waypoint instead, and
 the forward rules connect it to both sides of its links.
 
-One scheduling fact worth knowing, learned the expensive way: egg's backoff
+One scheduling fact worth knowing, learned the expensive way: the backoff
 scheduler bans rules by *match* count, and a fact rule matches everywhere
 precisely because its pattern is small — it declines almost every match. Ban
 one and you silence exactly the rare application it exists for. So only the
 shape rules that actually grow the graph (associativity, the staircases, the
-block expansions) are left bannable; every fact rule is exempted.
+block expansions) are bannable, and which ones those are is written in the
+rule file: `:ruleset growth` on a rule puts it under `Backoff`
+(`strategy.rs`), and everything else runs unpoliced. Without it the corpus's
+one hard proof reaches 1.1 million rows where it now reaches six thousand.
 
 ## The `.hant` file
 
@@ -288,7 +338,7 @@ identity types_test::number_does_pre_and_post_is_constant ... FAILED
                           │    drop(1) ; push true
                           │  })
   what the right came to  │ drop(1) ; push true
-  the search stopped      │ IterationLimit(40)
+  the search stopped      │ IterationLimit(60)
   rule firings
       1341  par-fuse
       1169  stair-deep-first
@@ -318,9 +368,12 @@ tree it came from — the layout only chooses where the newlines go.
   peel and descend it is not a congruence, so it will earn its keyword. What
   it needs first is a way to *state* the condition an arm carries, which is
   the same machinery `solve`'s templates began.
-- **A replayable derivation.** A close currently answers with egg's
-  explanation (`--explain`); nothing independent re-checks it yet. The next
-  milestone translates explanations into the flat derivation format a small
+- **A replayable derivation.** A close currently answers with the laws that
+  fired (`--firings`) and nothing more: egglog 2.0 lays the groundwork for
+  proofs — the term encoding makes equality justifications first-class data —
+  but exposes no API to read one back, so there is no step-by-step account to
+  print and nothing independent re-checks a close. When that API lands, the
+  milestone is translating a proof into the flat derivation format a small
   applier can replay, restoring the old system's "finding and checking are
   different jobs" property.
 - **`egraph-hint { body }`.** The seeding semantics `via` deliberately does

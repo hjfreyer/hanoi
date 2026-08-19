@@ -1,11 +1,12 @@
 //! Machinery for proving Hanoi programs equivalent.
 //!
 //! [`term`] is the model claims are stated over and [`parse`] reads one back
-//! out of the language it prints in; [`lang`] is that model as an e-graph
-//! language and [`rules`] the equations over it; [`goal`] is a claim and what
-//! became of it; [`hant`] is the strategy language a human directs a proof
-//! with; [`strategy`] interprets one; [`corpus`] loads a source tree's
-//! identities and proofs together. `bin/prove` drives the lot.
+//! out of the language it prints in; [`lang`] is that model as an egglog
+//! datatype with the analysis over it and [`rules`] the equations, written in
+//! `rules.egg`; [`goal`] is a claim and what became of it; [`hant`] is the
+//! strategy language a human directs a proof with; [`strategy`] interprets one
+//! and drives the engine; [`corpus`] loads a source tree's identities and
+//! proofs together. `bin/prove` drives the lot.
 
 pub mod corpus;
 pub mod goal;

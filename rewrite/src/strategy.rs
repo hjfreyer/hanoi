@@ -28,38 +28,41 @@
 //! the differing arm entered — because when the engine gives up, where the
 //! difference lives is the thing worth printing.
 
-use std::time::Duration;
+use std::collections::HashMap;
+use std::fmt::Write as _;
+use std::time::{Duration, Instant};
+
+use std::sync::{Arc, Mutex, OnceLock};
 
 use bytecode::{Library, SentenceIndex};
-use egg::{AstSize, BackoffScheduler, EGraph, Extractor, Runner};
-
-use std::collections::HashMap;
+use egglog::prelude::*;
+use egglog::scheduler::{Matches, Scheduler};
+use egglog::{ArcSort, EGraph, Value};
 
 use crate::goal::{Goal, Outcome, Proof, Residual};
-use crate::hant::{Body, Step, Strategy, default_strategy};
-use crate::lang::{Proving, expr_of, expr_to_term, pattern_of};
+use crate::hant::{Body, SolveVars, Step, Strategy, default_strategy};
+use crate::lang::{self, Session};
 use crate::rules::rules;
 use crate::term::{Arity, Error, Term, lower};
 
-/// The saturation budget, and whether to pay for explanations.
+/// The saturation budget.
+///
+/// `node_limit` counts rows across every table the engine holds, which is the
+/// nearest thing egglog has to egg's e-node count: the program nodes plus the
+/// facts about them.
 #[derive(Debug, Clone)]
 pub struct Config {
     pub iter_limit: usize,
     pub node_limit: usize,
     pub time_limit: Duration,
-    /// Extract a step-by-step explanation for every close. Explanation
-    /// tracking taxes every union, so the e-graph only carries it when
-    /// someone asked to read one.
-    pub explain: bool,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Config {
-            iter_limit: 40,
-            node_limit: 100_000,
+            iter_limit: 60,
+            node_limit: 400_000,
             time_limit: Duration::from_secs(10),
-            explain: false,
         }
     }
 }
@@ -68,17 +71,31 @@ impl Default for Config {
 pub struct Prover<'l> {
     pub library: &'l Library,
     pub config: Config,
-    /// Built once: a rule is a pattern compiled and a closure boxed, and
-    /// every saturation in a run uses the same set.
-    rules: Vec<crate::rules::ProofRewrite>,
+    /// The engine with the model and the equations loaded and nothing else in
+    /// it. Reading the program costs more than most goals do, so it is read
+    /// once and each saturation starts from a clone.
+    template: EGraph,
+    /// One interning table for the whole run, shared with the primitives the
+    /// template's rules call. Indices are global, so a goal reaching for a
+    /// value another goal already named gets the same leaf.
+    session: Session,
 }
 
 impl<'l> Prover<'l> {
     pub fn new(library: &'l Library, config: Config) -> Self {
+        let session = Session::default();
+        let mut template = EGraph::default();
+        load(&mut template, &lang::declarations());
+        lang::primitives(&mut template, &session);
+        let mut program = lang::analysis();
+        program.push_str(&lang::constants(&session));
+        program.push_str(rules());
+        load(&mut template, &program);
         Prover {
             library,
             config,
-            rules: rules(),
+            template,
+            session,
         }
     }
 
@@ -200,25 +217,18 @@ impl<'l> Prover<'l> {
 
                 // One saturation: the goal's two sides, and a pattern built
                 // in the same session so its leaves name the same values.
-                let mut analysis = Proving::default();
-                let lhs = expr_of(&goal.lhs, &mut analysis.session);
-                let rhs = expr_of(&goal.rhs, &mut analysis.session);
-                let hole_vars: HashMap<bytecode::SentenceIndex, egg::Var> = holes
+                let lhs = lang::sexp_of(&goal.lhs, &self.session);
+                let rhs = lang::sexp_of(&goal.rhs, &self.session);
+                let hole_vars: HashMap<bytecode::SentenceIndex, String> = holes
                     .iter()
-                    .map(|(name, idx)| {
-                        (
-                            *idx,
-                            format!("?{}", name).parse().expect("a var spelled ?x"),
-                        )
-                    })
+                    .map(|(name, idx)| (*idx, format!("?{}", name)))
                     .collect();
-                let pattern = pattern_of(term, &hole_vars, &mut analysis.session);
-                let runner = self.run_engine(analysis, &lhs, &rhs);
+                let pattern = lang::pattern_of(term, &hole_vars, &self.session);
+                let mut run = self.run_engine(&lhs, &rhs);
 
                 // The goal may simply have closed while we were solving.
-                let (l, r) = (runner.roots[0], runner.roots[1]);
-                if runner.egraph.find(l) == runner.egraph.find(r) {
-                    return Ok(self.judge(runner, &lhs, &rhs));
+                if run.met {
+                    return Ok(self.judge(run));
                 }
 
                 // Match the template against the left side's class. The match
@@ -226,31 +236,7 @@ impl<'l> Prover<'l> {
                 // the instantiated template's nodes live in that class. First
                 // match at the declared arities wins — recorded in the proof,
                 // so a different match after a rule-set change is visible.
-                use egg::Searcher;
-                let matches = pattern.search_eclass(&runner.egraph, runner.egraph.find(l));
-                let extractor = Extractor::new(&runner.egraph, AstSize);
-                let mut fills: Option<Vec<(String, Term)>> = None;
-                'subst: for subst in matches.iter().flat_map(|m| m.substs.iter()) {
-                    let mut candidate = Vec::new();
-                    for ((name, (inputs, outputs)), (_, idx)) in vars.iter().zip(holes) {
-                        let var = hole_vars[idx];
-                        let Some(&class) = subst.get(var) else {
-                            continue 'subst;
-                        };
-                        if runner.egraph[class].data.arity != Arity::new(*inputs, *outputs) {
-                            continue 'subst;
-                        }
-                        let (_, best) = extractor.find_best(class);
-                        candidate.push((
-                            name.clone(),
-                            expr_to_term(&best, &runner.egraph.analysis.session),
-                        ));
-                    }
-                    fills = Some(candidate);
-                    break;
-                }
-                drop(extractor);
-                let Some(fills) = fills else {
+                let Some(fills) = run.fills(&pattern, vars, holes, &hole_vars) else {
                     return Ok(Outcome::Stuck(gave_up(
                         goal,
                         "the template matched nothing in the left side's class at the declared arities",
@@ -423,124 +409,396 @@ impl<'l> Prover<'l> {
 
     /// One e-graph, both sides, every rule, until they meet or the budget is
     /// spent.
-    fn saturate(&self, goal: &Goal) -> Outcome {
-        let mut analysis = Proving::default();
-        let lhs = expr_of(&goal.lhs, &mut analysis.session);
-        let rhs = expr_of(&goal.rhs, &mut analysis.session);
-        let runner = self.run_engine(analysis, &lhs, &rhs);
-        self.judge(runner, &lhs, &rhs)
+    pub fn saturate(&self, goal: &Goal) -> Outcome {
+        let lhs = lang::sexp_of(&goal.lhs, &self.session);
+        let rhs = lang::sexp_of(&goal.rhs, &self.session);
+        let run = self.run_engine(&lhs, &rhs);
+        self.judge(run)
     }
 
-    /// Builds and runs the engine on a goal's two expressions.
-    fn run_engine(
-        &self,
-        analysis: Proving,
-        lhs: &egg::RecExpr<crate::lang::HanaLang>,
-        rhs: &egg::RecExpr<crate::lang::HanaLang>,
-    ) -> Runner<crate::lang::HanaLang, Proving> {
-        // The backoff scheduler exists to slow growth, and the growth here
-        // comes from the handful of rules that fire on shape alone. The fact
-        // rules match everywhere and *decline* nearly everywhere — banning
-        // one on its match count would silence exactly the rare application
-        // it exists for — so only the shape rules stay bannable.
-        let growth = [
-            "assoc-compose",
-            "assoc-compose-rev",
-            "assoc-par",
-            "assoc-par-rev",
-            "stair-deep-first",
-            "stair-top-first",
-            "drop-split-two",
-            "drop-split-two-rev",
-        ];
-        let mut scheduler = BackoffScheduler::default();
-        for rule in &self.rules {
-            if !growth.contains(&rule.name.as_str()) {
-                scheduler = scheduler.do_not_ban(rule.name.as_str());
+    /// Runs the engine on a goal's two expressions.
+    ///
+    /// The sides go into a fresh clone of the template as the globals the
+    /// meeting test, the residual and `solve`'s query all name.
+    fn run_engine(&self, lhs: &str, rhs: &str) -> Run {
+        let mut egraph = self.template.clone();
+        let mut program = String::new();
+        let _ = write!(program, "(let $lhs {})\n(let $rhs {})\n", lhs, rhs);
+        load(&mut egraph, &program);
+
+        let (sort, l) = egraph
+            .eval_expr(&exprs::var("$lhs"))
+            .expect("the left side was just added");
+        let (_, r) = egraph
+            .eval_expr(&exprs::var("$rhs"))
+            .expect("the right side was just added");
+
+        let backoff = Backoff::default();
+        let clock = backoff.clock();
+        let scheduler = egraph.add_scheduler(Box::new(backoff));
+
+        // Saturation has no goal of its own and would happily explore an
+        // already-closed goal to the end of the budget, so the meeting is
+        // checked before every step rather than only at the end.
+        let started = Instant::now();
+        let mut iterations = 0usize;
+        let mut counts: HashMap<String, usize> = HashMap::new();
+        let stopped = loop {
+            if met(&egraph, &sort, l, r) {
+                break "the sides met".to_string();
             }
-        }
-
-        // Explanation tracking taxes every union, so the e-graph only carries
-        // it when someone asked to read one.
-        let egraph = EGraph::new(analysis);
-        let egraph = if self.config.explain {
-            egraph.with_explanations_enabled()
-        } else {
-            egraph
-        };
-
-        Runner::default()
-            .with_scheduler(scheduler)
-            .with_iter_limit(self.config.iter_limit)
-            .with_node_limit(self.config.node_limit)
-            .with_time_limit(self.config.time_limit)
-            .with_egraph(egraph)
-            .with_expr(lhs)
-            .with_expr(rhs)
-            // Stop the moment the two sides meet: saturation would happily
-            // keep exploring an already-closed goal to the end of the budget.
-            .with_hook(|runner| {
-                let (l, r) = (runner.roots[0], runner.roots[1]);
-                if runner.egraph.find(l) == runner.egraph.find(r) {
-                    Err("the sides met".to_string())
-                } else {
-                    Ok(())
+            if iterations >= self.config.iter_limit {
+                break format!("IterationLimit({})", self.config.iter_limit);
+            }
+            if egraph.num_tuples() >= self.config.node_limit {
+                break format!("NodeLimit({})", self.config.node_limit);
+            }
+            if started.elapsed() >= self.config.time_limit {
+                break format!("TimeLimit({:?})", self.config.time_limit);
+            }
+            // A rule that unites two classes with different stack effects is
+            // an illegal merge of `arity-in`, which egglog refuses — the
+            // soundness net the schema hangs, and a broken rule rather than
+            // anything a corpus can cause.
+            let steady = egraph
+                .step_rules(DEFAULT_RULESET)
+                .unwrap_or_else(|e| panic!("the engine refused a rule application: {}", e));
+            let growth = egraph
+                .step_rules_with_scheduler(scheduler, GROWTH_RULESET)
+                .unwrap_or_else(|e| panic!("the engine refused a rule application: {}", e));
+            iterations += 1;
+            clock.lock().expect("the clock is never poisoned").iteration = iterations;
+            for report in [&steady, &growth] {
+                for (rule, count) in &report.num_matches_per_rule {
+                    *counts.entry(short(rule)).or_default() += count;
                 }
-            })
-            .run(&self.rules)
+            }
+            if !steady.updated && !growth.updated {
+                break "Saturated".to_string();
+            }
+        };
+        let met = met(&egraph, &sort, l, r);
+
+        let mut firings: Vec<(String, usize)> =
+            counts.into_iter().filter(|(_, count)| *count > 0).collect();
+        firings.sort_by_key(|(rule, count)| (std::cmp::Reverse(*count), rule.clone()));
+
+        Run {
+            session: self.session.clone(),
+            egraph,
+            sort,
+            lhs: l,
+            rhs: r,
+            met,
+            iterations,
+            firings,
+            stopped,
+        }
     }
 
     /// Reads the verdict off a finished run: the sides met, or the residual.
-    fn judge(
-        &self,
-        mut runner: Runner<crate::lang::HanaLang, Proving>,
-        lhs: &egg::RecExpr<crate::lang::HanaLang>,
-        rhs: &egg::RecExpr<crate::lang::HanaLang>,
-    ) -> Outcome {
-        let (l, r) = (runner.roots[0], runner.roots[1]);
-        if runner.egraph.find(l) == runner.egraph.find(r) {
-            let explanation = self
-                .config
-                .explain
-                .then(|| runner.explain_equivalence(lhs, rhs).get_flat_string());
+    fn judge(&self, run: Run) -> Outcome {
+        if run.met {
             return Outcome::Closed(Proof::Saturated {
-                iterations: runner.iterations.len(),
-                classes: runner.egraph.number_of_classes(),
-                explanation,
+                iterations: run.iterations,
+                nodes: run.egraph.num_tuples(),
+                firings: run.firings,
             });
         }
 
-        let extractor = Extractor::new(&runner.egraph, AstSize);
-        let (_, best_l) = extractor.find_best(l);
-        let (_, best_r) = extractor.find_best(r);
-        drop(extractor);
-        let mut firings: Vec<(String, usize)> = Default::default();
-        for iteration in &runner.iterations {
-            for (rule, count) in &iteration.applied {
-                match firings.iter_mut().find(|(name, _)| name == rule.as_str()) {
-                    Some((_, total)) => *total += count,
-                    None => firings.push((rule.to_string(), *count)),
-                }
-            }
-        }
-        firings.sort_by_key(|&(_, count)| std::cmp::Reverse(count));
-
         // The best spelling of each side, narrowed to where they differ: the
         // congruence moves, run backwards over the wreckage for the report.
-        let full_l = expr_to_term(&best_l, &runner.egraph.analysis.session);
-        let full_r = expr_to_term(&best_r, &runner.egraph.analysis.session);
+        let full_l = run.best(run.lhs);
+        let full_r = run.best(run.rhs);
         let (path, lhs, rhs) = narrow(full_l, full_r);
         Outcome::Stuck(Residual {
             lhs,
             rhs,
             path,
-            firings,
-            stopped: match &runner.stop_reason {
-                Some(reason) => format!("{:?}", reason),
-                None => "unknown".to_string(),
-            },
+            firings: run.firings,
+            stopped: run.stopped,
         })
     }
+}
+
+/// A finished saturation, and what can still be asked of it.
+struct Run {
+    egraph: EGraph,
+    session: Session,
+    sort: ArcSort,
+    lhs: Value,
+    rhs: Value,
+    met: bool,
+    iterations: usize,
+    firings: Vec<(String, usize)>,
+    stopped: String,
+}
+
+impl Run {
+    /// The smallest term a class holds.
+    fn best(&self, class: Value) -> Term {
+        let (dag, id, _) = self
+            .egraph
+            .extract_value(&self.sort, class)
+            .expect("every class the goal reaches holds a term");
+        lang::term_of(&dag, id, &self.session)
+    }
+
+    /// The fills a template's first match at the declared arities gives, if
+    /// the left side's class holds one.
+    ///
+    /// The query is the template with `(= $lhs …)` in front of it, so it can
+    /// only match inside that class — the match is the proof of the left half
+    /// of the cut, and a match anywhere else would prove nothing.
+    fn fills(
+        &mut self,
+        pattern: &str,
+        vars: &SolveVars,
+        holes: &[(String, SentenceIndex)],
+        hole_vars: &HashMap<SentenceIndex, String>,
+    ) -> Option<Vec<(String, Term)>> {
+        let fact = self
+            .egraph
+            .parser
+            .get_fact_from_string(None, &format!("(= $lhs {})", pattern))
+            .expect("the template is a well-formed pattern");
+        let names: Vec<String> = holes
+            .iter()
+            .map(|(_, idx)| hole_vars[idx].clone())
+            .collect();
+        let bound: Vec<(&str, ArcSort)> = names
+            .iter()
+            .map(|name| (name.as_str(), self.sort.clone()))
+            .collect();
+        let matches = query(&mut self.egraph, &bound, Facts(vec![fact]))
+            .expect("the template's query is well-typed");
+
+        'row: for row in matches.iter() {
+            let mut candidate = Vec::new();
+            for ((name, (inputs, outputs)), class) in vars.iter().zip(row) {
+                if self.arity_of(*class) != Some(Arity::new(*inputs, *outputs)) {
+                    continue 'row;
+                }
+                candidate.push((name.clone(), self.best(*class)));
+            }
+            return Some(candidate);
+        }
+        None
+    }
+
+    /// The stack effect the analysis gave a class.
+    fn arity_of(&self, class: Value) -> Option<Arity> {
+        let read = |table: &str| -> Option<usize> {
+            let v = self.egraph.lookup_function(table, &[class])?;
+            Some(self.egraph.value_to_base::<i64>(v) as usize)
+        };
+        Some(Arity::new(read("arity-in")?, read("arity-out")?))
+    }
+}
+
+/// Whether the two sides have landed in one class.
+fn met(egraph: &EGraph, sort: &ArcSort, lhs: Value, rhs: Value) -> bool {
+    egraph.get_canonical_value(lhs, sort) == egraph.get_canonical_value(rhs, sort)
+}
+
+/// Runs a chunk of egglog, refusing to continue if it does not load.
+///
+/// Everything handed to this is either generated from the term model or the
+/// checked-in rule file, so a failure is a bug in this crate rather than
+/// anything a corpus can provoke.
+fn load(egraph: &mut EGraph, program: &str) {
+    if let Err(e) = egraph.parse_and_run_program(None, program) {
+        panic!("the engine would not load its own program: {}", e);
+    }
+}
+
+/// The ruleset the equations that do not grow the graph live in — egglog's
+/// default, which is also where [`crate::lang::analysis`] puts the fact rules.
+const DEFAULT_RULESET: &str = "";
+
+/// The ruleset `rules.egg` puts the shape rules in, and the one [`Backoff`]
+/// polices.
+const GROWTH_RULESET: &str = "growth";
+
+/// egg's backoff scheduler, over egglog's scheduler interface.
+///
+/// The growth here comes from the handful of rules that fire on shape alone —
+/// associativity above all, which on this model is most of the search. A rule
+/// that produces more than its allowance of matches in one iteration is
+/// **banned** for a while, and both its allowance and the ban double each
+/// time, so a rule that keeps running away is squeezed harder while a rule
+/// that has one busy iteration is not.
+///
+/// Which rules are policed is written in `rules.egg`, as a `:ruleset growth`
+/// on each: only the rules that actually grow the graph are bannable. A fact
+/// rule matches everywhere precisely because its pattern is small — it
+/// declines almost every match — so banning one on its match count would
+/// silence exactly the rare application it exists for. That was learned the
+/// expensive way under egg and is why the two rulesets are separate.
+#[derive(Clone, Default)]
+struct Backoff {
+    clock: Arc<Mutex<Clock>>,
+    rules: HashMap<String, Ban>,
+}
+
+/// The iteration count, shared with the driver that advances it.
+#[derive(Default)]
+struct Clock {
+    iteration: usize,
+}
+
+#[derive(Clone)]
+struct Ban {
+    /// How many matches this rule may produce in one iteration before it is
+    /// banned. Doubles with every ban.
+    allowance: usize,
+    /// How many iterations the next ban lasts. Doubles with every ban.
+    length: usize,
+    /// The first iteration this rule may fire again.
+    until: usize,
+}
+
+impl Default for Ban {
+    fn default() -> Self {
+        Ban {
+            allowance: 1_000,
+            length: 5,
+            until: 0,
+        }
+    }
+}
+
+impl Backoff {
+    fn clock(&self) -> Arc<Mutex<Clock>> {
+        self.clock.clone()
+    }
+
+    fn now(&self) -> usize {
+        self.clock
+            .lock()
+            .expect("the clock is never poisoned")
+            .iteration
+    }
+}
+
+impl Scheduler for Backoff {
+    fn filter_matches(&mut self, rule: &str, ruleset: &str, matches: &mut Matches) -> bool {
+        if ruleset != GROWTH_RULESET {
+            matches.choose_all();
+            return true;
+        }
+        let now = self.now();
+        let ban = self.rules.entry(rule.to_owned()).or_default();
+        if now < ban.until {
+            // Banned: the matches already found stay pending — answering
+            // `false` is what tells the engine not to search again for them —
+            // and they fire in the iteration the ban lifts.
+            return false;
+        }
+        if matches.match_size() > ban.allowance {
+            ban.allowance *= 2;
+            ban.length *= 2;
+            ban.until = now + ban.length;
+            return false;
+        }
+        matches.choose_all();
+        true
+    }
+
+    fn can_stop(&mut self, _rules: &[&str], _ruleset: &str) -> bool {
+        let now = self.now();
+        !self.rules.values().any(|ban| now < ban.until)
+    }
+}
+
+/// A rule's name, for the firings report.
+///
+/// egglog names a rule after the text that states it — informative, but a
+/// whole rule of it, and a `birewrite` becomes two names differing in a
+/// trailing `=>` or `<=`. `rules.egg` writes a label above every rule, which
+/// is the name `docs/algebra.md` cites, so the text is matched back to its
+/// label and the report says `par-fuse` rather than the pattern. A rule with
+/// no label — the fact rules `lang.rs` generates — keeps its text, cut to fit
+/// the column.
+fn short(rule: &str) -> String {
+    let (text, direction) = match rule.strip_suffix("=>") {
+        Some(text) => (text, " →"),
+        None => match rule.strip_suffix("<=") {
+            Some(text) => (text, " ←"),
+            None => (rule, ""),
+        },
+    };
+    let flat = flatten(text);
+    if let Some(label) = rule_labels().get(&flat) {
+        return format!("{}{}", label, direction);
+    }
+    if flat.chars().count() <= 60 {
+        flat
+    } else {
+        format!("{}…", flat.chars().take(59).collect::<String>())
+    }
+}
+
+/// A rule's text in the one spelling both sides can be compared in: no
+/// whitespace except between atoms, so the file's layout and egglog's
+/// printing of the same rule come out identical.
+fn flatten(text: &str) -> String {
+    let mut out = String::new();
+    let mut spaced = false;
+    for c in text.chars() {
+        if c.is_whitespace() {
+            spaced = true;
+            continue;
+        }
+        if spaced && !out.is_empty() && c != ')' && !out.ends_with('(') {
+            out.push(' ');
+        }
+        spaced = false;
+        out.push(c);
+    }
+    out
+}
+
+/// Every rule the engine loads, keyed by its text and answering with the
+/// label written above it.
+///
+/// Both rule files use the same convention — a comment line holding one word
+/// immediately above the rule it names — so the analysis rules `lang.rs`
+/// generates are labelled too, and the report reads the same for both.
+fn rule_labels() -> &'static HashMap<String, String> {
+    static LABELS: OnceLock<HashMap<String, String>> = OnceLock::new();
+    LABELS.get_or_init(|| {
+        let mut labels = HashMap::new();
+        for source in [lang::analysis(), rules().to_string()] {
+            let mut pending: Option<String> = None;
+            let mut form = String::new();
+            let mut depth = 0isize;
+            for line in source.lines() {
+                let code = line.split(';').next().unwrap_or("");
+                if depth == 0 && code.trim().is_empty() {
+                    let comment = line.trim().trim_start_matches(';').trim();
+                    // A label is one word. Prose and the
+                    // `---- section ----` headings are not.
+                    if comment.split_whitespace().count() == 1 {
+                        pending = Some(comment.to_string());
+                    }
+                    continue;
+                }
+                form.push_str(code);
+                form.push(' ');
+                depth += code.matches('(').count() as isize;
+                depth -= code.matches(')').count() as isize;
+                if depth <= 0 {
+                    if let Some(label) = pending.take() {
+                        labels.insert(flatten(&form), label);
+                    }
+                    form.clear();
+                    depth = 0;
+                }
+            }
+        }
+        labels
+    })
 }
 
 /// The template with every hole replaced by the term the match bound it to.
@@ -744,6 +1002,59 @@ mod tests {
     use crate::hant::parse_hant;
     use bytecode::assemble;
 
+    /// Two programs with different stack effects must never land in one
+    /// class. `arity-in` is declared `:no-merge` so that uniting them is an
+    /// illegal merge the engine refuses — this is the net under every rule,
+    /// so it is worth a test that it is still hung.
+    #[test]
+    #[should_panic(expected = "the engine refused a rule application")]
+    fn uniting_two_stack_effects_is_refused() {
+        let library = Library::new();
+        let prover = Prover::new(&library, Config::default());
+        let mut egraph = prover.template.clone();
+        load(
+            &mut egraph,
+            "(let $a (Id 1))\n(let $b (Id 2))\n(union $a $b)\n",
+        );
+        egraph
+            .step_rules(DEFAULT_RULESET)
+            .unwrap_or_else(|e| panic!("the engine refused a rule application: {}", e));
+    }
+
+    #[test]
+    fn every_rule_the_engine_loads_carries_a_label() {
+        // The label is what the firings report prints and what
+        // `docs/algebra.md` cites, so a rule added without one goes back to
+        // showing its whole pattern in a 60-column field.
+        let mut unlabelled = Vec::new();
+        for source in [lang::analysis(), rules().to_string()] {
+            let mut form = String::new();
+            let mut depth = 0isize;
+            for line in source.lines() {
+                let code = line.split(';').next().unwrap_or("");
+                if depth == 0 && code.trim().is_empty() {
+                    continue;
+                }
+                form.push_str(code);
+                form.push(' ');
+                depth += code.matches('(').count() as isize;
+                depth -= code.matches(')').count() as isize;
+                if depth <= 0 {
+                    let flat = flatten(&form);
+                    let is_rule = ["(rule ", "(rewrite ", "(birewrite "]
+                        .iter()
+                        .any(|head| flat.starts_with(head));
+                    if is_rule && !rule_labels().contains_key(&flat) {
+                        unlabelled.push(flat);
+                    }
+                    form.clear();
+                    depth = 0;
+                }
+            }
+        }
+        assert_eq!(unlabelled, Vec::<String>::new());
+    }
+
     /// Proves the identity named `name`, with the strategy written as a
     /// `.hant` entry body, or the default when `strategy` is `None` — reading
     /// `via` and `solve` bodies exactly as `corpus::load` does.
@@ -804,7 +1115,13 @@ mod tests {
         let Outcome::Closed(proof) = outcome else {
             panic!("expected the opened goal to close");
         };
-        assert_eq!(proof.summary(), "inline; saturated (4 iters, 6 classes)");
+        // The cost a summary quotes is the engine's, not the proof's, so the
+        // shape is what is held here and the numbers are left to move.
+        assert!(
+            proof.summary().starts_with("inline; saturated ("),
+            "{}",
+            proof.summary()
+        );
     }
 
     #[test]
@@ -990,9 +1307,12 @@ mod tests {
         let Outcome::Closed(proof) = outcome else {
             panic!("both halves close");
         };
-        assert_eq!(
-            proof.summary(),
-            "cut (left: saturated (4 iters, 6 classes); right: inline; the two sides are one term)"
+        let summary = proof.summary();
+        assert!(summary.starts_with("cut (left: saturated ("), "{}", summary);
+        assert!(
+            summary.ends_with("right: inline; the two sides are one term)"),
+            "{}",
+            summary
         );
     }
 

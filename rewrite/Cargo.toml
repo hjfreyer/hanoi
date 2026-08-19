@@ -2,9 +2,17 @@
 name = "rewrite"
 version = "0.1.0"
 edition = "2024"
+build = "build.rs"
 
 [dependencies]
 bytecode = { version = "0.1.0", path = "../bytecode" }
-egg = "0.11.0"
+egglog = { version = "2.0.0", default-features = false }
 typed-index-collections = "3.5.0"
 vm = { version = "0.1.0", path = "../vm" }
+
+# Nothing here is used at build time. `egglog-add-primitive` 2.0 declares
+# `syn = "2.0"` without the `full` feature but writes macro bodies that need
+# it, so it only compiles when something else in the host dependency graph
+# turns the feature on. A build dependency is that something else.
+[build-dependencies]
+syn = { version = "2.0", features = ["full"] }
