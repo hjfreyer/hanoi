@@ -68,11 +68,12 @@ copy-paste-friendly catalogue).
 
 Notes:
 
-1. **Side conditions became facts.** A width cannot appear in an e-graph
-   pattern, so every law indexed by one reads it off the class analysis
-   (arity, `is_id`, `is_drop`, `is_copy`). The conditions marked on the old
-   axiom sheet — determinism for `copy-nat`, totality for `drop-nat` and
-   interchange — are discharged globally: the language has no effects, no
+1. **Side conditions are patterns and arities.** A width is an ordinary
+   pattern variable in `rules.egg`, so a law indexed by one says it in the
+   pattern — `(Par (Id ?n) (Id ?m))` — and anything about a class rather than
+   a node reads the `arity-in` / `arity-out` tables. The conditions marked on
+   the old axiom sheet — determinism for `copy-nat`, totality for `drop-nat`
+   and interchange — are discharged globally: the language has no effects, no
    nondeterminism, and nothing that fails.
 2. **The net-change asymmetry lives at the goal.** In the term model, padding
    is explicit, so every rule instance above is arity-preserving as written —

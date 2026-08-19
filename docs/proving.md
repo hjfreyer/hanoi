@@ -51,12 +51,11 @@ does:
   that hold the file to `term.rs` and to the instruction set: a leaf's arity,
   its `yields_bool` entry, its commutativity and the name a fold runs it under
   are all checked against `Prim` and `Instruction`.
-- **The analysis is a set of tables.** `arity-in`, `arity-out`, `is-id`,
-  `is-drop`, `is-copy`, `yields-bool`, `literal` are ordinary egglog
-  functions and relations over the program sort, computed by rules and read by
-  a rule's `:when`. The arities are declared `:no-merge`, which *is* the
-  soundness net: uniting two classes with different stack effects is an
-  illegal merge and the engine refuses it.
+- **The analysis is a set of tables.** `arity-in`, `arity-out`, `yields-bool`,
+  `literal`, `opcode` are ordinary egglog functions and relations over the
+  program sort, computed by rules and read by a rule's `:when`. The arities
+  are declared `:no-merge`, which *is* the soundness net: uniting two classes
+  with different stack effects is an illegal merge and the engine refuses it.
 - **Nodes are spelled a little differently.** egglog reads `;` as a comment
   and owns `*`, so compose and par are `Seq` and `Par`; instruction leaves are
   their mnemonic in CamelCase; and a width rides *inside* its node, `(Id 3)`
@@ -249,8 +248,7 @@ speaks natively — an s-expression pattern with `?vars`, `rewrite` one way and
 
 ```lisp
 ;; par-id-fuse
-(rewrite (Par ?a ?b) (Id (+ ?n ?m))
-  :when ((is-id ?a) (is-id ?b) (= ?n (arity-in ?a)) (= ?m (arity-in ?b))))
+(rewrite (Par (Id ?n) (Id ?m)) (Id (+ ?n ?m)))
 ```
 
 The comment above each rule is its name — what the firings report prints and
@@ -263,13 +261,19 @@ what `docs/algebra.md`'s "where" column cites. Three kinds of rule:
   to be a Rust closure that matched a small window and rebuilt the answer by
   hand. `par-id-fuse` above was thirteen lines of Rust.
 - **Fact rules** add a `:when` reading the tables the first half of the file
-  declares and fills. The facts are: the class's arity (`arity-in`, `arity-out`);
-  `is-id` / `is-drop` / `is-copy` (it contains that structural leaf);
-  `yields-bool` (its top output is a `Bool` — `Instruction::yields_bool`,
-  lifted through composition); and `literal` (it behaves as `id(n) *` a run
-  of pushes). All but the arities are one-way — absent means "not known to
-  hold", never "known not to" — because egglog has no negation, so no rule
-  may ask whether a fact is *missing*.
+  declares and fills. The facts are: the class's arity (`arity-in`,
+  `arity-out`); `yields-bool` (its top output is a `Bool` —
+  `Instruction::yields_bool`, lifted through composition); and `literal` (it
+  behaves as `id(n) *` a run of pushes). All but the arities are one-way —
+  absent means "not known to hold", never "known not to" — because egglog has
+  no negation, so no rule may ask whether a fact is *missing*.
+
+  There is deliberately no `is-id` / `is-drop` / `is-copy` fact. A class is an
+  identity exactly when it holds an `(Id n)` node — every law that concludes
+  identity-ness emits one, and the unit and fusing rules put one in the class
+  of any composite that is one — so the pattern says it directly, and says the
+  width at the same time. The counit was six side conditions and is now
+  `(rewrite (Seq (Copy ?n) (Par (Id ?n) (Drop ?n))) (Id ?n))`.
 - **The evaluation rule** calls a primitive that builds a scratch
   one-sentence library — the pushed operands and the instruction — and runs
   the real `vm` on it. Folding owes the interpreter exact agreement, junk

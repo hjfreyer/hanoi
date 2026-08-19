@@ -92,8 +92,6 @@
 ;;   across a class, and `:no-merge` is what enforces it: uniting two classes
 ;;   with different stack effects is an illegal merge and the engine refuses
 ;;   it. That is the net under every law in this file.
-;; - `is-id` / `is-drop` / `is-copy` say the class contains that structural
-;;   leaf, or something the facts compose to one. The width is the arity's.
 ;; - `yields-bool` says whatever this computes leaves a `Bool` on top. The
 ;;   `Instruction::yields_bool` list, lifted through composition. It is
 ;;   measured by `vm`, so a wrong entry below is a soundness bug rather than
@@ -107,15 +105,19 @@
 ;; - `commutative` is `Instruction::commutative`, for the one rule that spends
 ;;   it.
 ;;
+;; There is deliberately no `is-id` / `is-drop` / `is-copy`. A class is an
+;; identity exactly when it holds an `(Id n)` node — every law that concludes
+;; identity-ness emits one, and the unit and fusing rules put one in the class
+;; of any composite that is one — so `(Id ?n)` in a pattern says it, and says
+;; the width at the same time, where a fact would need a second join against
+;; `arity-in` to get it. The same goes for `(Drop n)` and `(Copy n)`.
+;;
 ;; All of them but the arities are one-way: absent means "not known to hold",
 ;; never "known not to". egglog has no negation, so no rule may ask whether a
 ;; fact is *missing*, and none below needs to.
 
 (function arity-in  (Hana) i64 :no-merge)
 (function arity-out (Hana) i64 :no-merge)
-(relation is-id (Hana))
-(relation is-drop (Hana))
-(relation is-copy (Hana))
 (relation yields-bool (Hana))
 (function literal (Hana) Lits :merge old)
 (function opcode  (Hana) String :no-merge)
@@ -160,14 +162,14 @@
 (rule ((= t (Id ?n)))
       ;; `id(0)` pushes nothing over an untouched stack, which is what lets a
       ;; literal prefix compose past it — hence the empty run.
-      ((set (arity-in t) ?n) (set (arity-out t) ?n) (is-id t)
+      ((set (arity-in t) ?n) (set (arity-out t) ?n)
        (set (literal t) (vec-of))))
 ;; leaf-drop
 (rule ((= t (Drop ?n)))
-      ((set (arity-in t) ?n) (set (arity-out t) 0) (is-drop t)))
+      ((set (arity-in t) ?n) (set (arity-out t) 0)))
 ;; leaf-copy
 (rule ((= t (Copy ?n)))
-      ((set (arity-in t) ?n) (set (arity-out t) (+ ?n ?n)) (is-copy t)))
+      ((set (arity-in t) ?n) (set (arity-out t) (+ ?n ?n))))
 ;; leaf-push
 (rule ((= t (Push ?v)))
       ((set (arity-in t) 0) (set (arity-out t) 1) (set (literal t) (vec-of ?v))))
@@ -185,24 +187,13 @@
 ;; compose-meets
 (rule ((= t (Seq ?a ?b)) (= ?o (arity-out ?a)) (= ?i (arity-in ?b)) (!= ?o ?i))
       ((panic "a compose node whose halves do not meet")))
-;; compose-is-id
-(rule ((= t (Seq ?a ?b)) (is-id ?a) (is-id ?b))     ((is-id t)))
-;; compose-is-drop-after-id
-(rule ((= t (Seq ?a ?b)) (is-id ?a) (is-drop ?b))   ((is-drop t)))
-;; compose-is-drop
-(rule ((= t (Seq ?a ?b)) (is-drop ?a) (is-drop ?b)) ((is-drop t)))
-;; compose-is-drop-then-nothing
-(rule ((= t (Seq ?a ?b)) (is-drop ?a) (is-id ?b) (= 0 (arity-in ?b)))
-      ((is-drop t)))
-;; compose-is-copy
-(rule ((= t (Seq ?a ?b)) (is-copy ?a) (is-id ?b))   ((is-copy t)))
 ;; The suffix answers for the top of the stack; an identity suffix leaves the
 ;; prefix's answer standing. The second rule is the other side of that `if`:
 ;; egglog cannot ask whether the suffix is *not* an identity, and it need not —
 ;; an identity class that also yielded a bool would be claiming its own input is
 ;; always a `Bool`, which no sound union can put there.
 ;; compose-bool-through-id
-(rule ((= t (Seq ?a ?b)) (is-id ?b) (> (arity-in ?b) 0) (yields-bool ?a))
+(rule ((= t (Seq ?a (Id ?n))) (> ?n 0) (yields-bool ?a))
       ((yields-bool t)))
 ;; compose-bool
 (rule ((= t (Seq ?a ?b)) (yields-bool ?b))
@@ -219,10 +210,6 @@
        (= ?ai (arity-in ?a)) (= ?bi (arity-in ?b))
        (= ?ao (arity-out ?a)) (= ?bo (arity-out ?b)))
       ((set (arity-in t) (+ ?ai ?bi)) (set (arity-out t) (+ ?ao ?bo))))
-;; par-is-id
-(rule ((= t (Par ?a ?b)) (is-id ?a) (is-id ?b))     ((is-id t)))
-;; par-is-drop
-(rule ((= t (Par ?a ?b)) (is-drop ?a) (is-drop ?b)) ((is-drop t)))
 ;; par-bool-top
 (rule ((= t (Par ?a ?b)) (> (arity-out ?b) 0) (yields-bool ?b)) ((yields-bool t)))
 ;; par-bool-deep
@@ -234,7 +221,7 @@
 (rule ((= t (Par ?a ?b)) (= ?xs (literal ?a)) (= ?ys (literal ?b)) (= 0 (arity-in ?b)))
       ((set (literal t) (vec-append ?xs ?ys))))
 ;; par-literal-over-id
-(rule ((= t (Par ?a ?b)) (is-id ?a) (= ?ys (literal ?b)))
+(rule ((= t (Par (Id ?n) ?b)) (= ?ys (literal ?b)))
       ((set (literal t) ?ys)))
 
 ;; ---- branch -----------------------------------------------------------------
@@ -406,16 +393,15 @@
 ;; `*`. Elimination only: introduction is unbounded, and the staircase rules
 ;; below are the bounded way shapes get re-padded.
 ;; unit-compose-left
-(rewrite (Seq ?a ?b) ?b :when ((is-id ?a)))
+(rewrite (Seq (Id ?n) ?b) ?b)
 ;; unit-compose-right
-(rewrite (Seq ?a ?b) ?a :when ((is-id ?b)))
+(rewrite (Seq ?a (Id ?n)) ?a)
 ;; par-unit-deep
-(rewrite (Par ?a ?b) ?b :when ((is-id ?a) (= 0 (arity-in ?a))))
+(rewrite (Par (Id 0) ?b) ?b)
 ;; par-unit-top
-(rewrite (Par ?a ?b) ?a :when ((is-id ?b) (= 0 (arity-in ?b))))
+(rewrite (Par ?a (Id 0)) ?a)
 ;; par-id-fuse
-(rewrite (Par ?a ?b) (Id (+ ?n ?m))
-  :when ((is-id ?a) (is-id ?b) (= ?n (arity-in ?a)) (= ?m (arity-in ?b))))
+(rewrite (Par (Id ?n) (Id ?m)) (Id (+ ?n ?m)))
 ;; copy-nothing
 (rewrite (Copy 0) (Id 0))
 ;; drop-nothing
@@ -434,15 +420,11 @@
 (rewrite (Par ?a ?b) (Seq (Par (Id ?ai) ?b) (Par ?a (Id ?bo)))
   :when ((= ?ai (arity-in ?a)) (= ?bo (arity-out ?b))) :ruleset growth)
 ;; stair-read-deep-first
-(rewrite (Seq (Par ?a ?i) (Par ?j ?b)) (Par ?a ?b)
-  :when ((is-id ?i) (is-id ?j)
-         (= (arity-in ?i) (arity-in ?b))
-         (= (arity-in ?j) (arity-out ?a))))
+(rewrite (Seq (Par ?a (Id ?i)) (Par (Id ?j) ?b)) (Par ?a ?b)
+  :when ((= ?i (arity-in ?b)) (= ?j (arity-out ?a))))
 ;; stair-read-top-first
-(rewrite (Seq (Par ?i ?b) (Par ?a ?j)) (Par ?a ?b)
-  :when ((is-id ?i) (is-id ?j)
-         (= (arity-in ?i) (arity-in ?a))
-         (= (arity-in ?j) (arity-out ?b))))
+(rewrite (Seq (Par (Id ?i) ?b) (Par ?a (Id ?j))) (Par ?a ?b)
+  :when ((= ?i (arity-in ?a)) (= ?j (arity-out ?b))))
 ;; The full middle-four interchange, forward: two pars in sequence whose split
 ;; lines up fuse into one par of composes. The staircases above are its
 ;; identity cases; this is the general one, and it is what lets a computation
@@ -453,8 +435,8 @@
 ;; A producer beside a computation: `a ; (id(a.out) * b)` is `a * b` when `b`
 ;; reads nothing — `b`'s pushes land on top of `a`'s untouched answer.
 ;; compose-to-par
-(rewrite (Seq ?a (Par ?i ?b)) (Par ?a ?b)
-  :when ((is-id ?i) (= (arity-in ?i) (arity-out ?a)) (= 0 (arity-in ?b))))
+(rewrite (Seq ?a (Par (Id ?i) ?b)) (Par ?a ?b)
+  :when ((= ?i (arity-out ?a)) (= 0 (arity-in ?b))))
 
 ;; ---- the symmetry -----------------------------------------------------------
 ;; swap-cycle
@@ -469,17 +451,11 @@
 ;; The first takes the copy (on top), the second takes the original out from
 ;; underneath it.
 ;; counit-copy
-(rewrite (Seq ?c (Par ?i ?d)) (Id ?n)
-  :when ((is-copy ?c) (= ?n (arity-in ?c))
-         (is-id ?i) (= ?n (arity-in ?i))
-         (is-drop ?d) (= ?n (arity-in ?d))))
+(rewrite (Seq (Copy ?n) (Par (Id ?n) (Drop ?n))) (Id ?n))
 ;; counit-original
-(rewrite (Seq ?c (Par ?d ?i)) (Id ?n)
-  :when ((is-copy ?c) (= ?n (arity-in ?c))
-         (is-id ?i) (= ?n (arity-in ?i))
-         (is-drop ?d) (= ?n (arity-in ?d))))
+(rewrite (Seq (Copy ?n) (Par (Drop ?n) (Id ?n))) (Id ?n))
 ;; cocommutative
-(rewrite (Seq ?c (Swap)) ?c :when ((is-copy ?c) (= 1 (arity-in ?c))))
+(rewrite (Seq (Copy 1) (Swap)) (Copy 1))
 ;; A block copy of two is the two `pick 1`s it lowers from. One direction only
 ;; — recognize the frame spelling and give its class the `(Copy 2)` leaf. That
 ;; is enough for both ways of meeting: two `(Copy 2)` leaves are one e-node, so
@@ -509,21 +485,20 @@
 ;; itself a copy, so the rule does not chase its own output. Same for the
 ;; identity instance, which the unit rules collapse straight back.
 ;; copy-nat
-(rewrite (Seq ?x ?c) (Seq (Copy ?n) (Par ?x ?x))
-  :when ((is-copy ?c) (= (arity-in ?c) (arity-out ?x)) (= ?n (arity-in ?x))))
+(rewrite (Seq ?x (Copy ?m)) (Seq (Copy ?n) (Par ?x ?x))
+  :when ((= ?m (arity-out ?x)) (= ?n (arity-in ?x))))
 ;; copy-nat-rev
-(rewrite (Seq ?c (Par ?x ?x)) (Seq ?x (Copy ?o))
-  :when ((is-copy ?c) (= (arity-in ?c) (arity-in ?x)) (= ?o (arity-out ?x))))
+(rewrite (Seq (Copy ?n) (Par ?x ?x)) (Seq ?x (Copy ?o))
+  :when ((= ?n (arity-in ?x)) (= ?o (arity-out ?x))))
 ;; Discarding is natural: a computation whose results are all dropped is the
 ;; dropping of its inputs. One direction — the other conjures work. Its egg
 ;; guard is gone for the same reason as copy naturality's, and here the
 ;; instances it excluded are outright already-derivable: `id(n) ; drop(n)` and
 ;; `drop(n) ; drop(0)` are both `drop(n)` by the unit rules.
 ;; drop-nat
-(rewrite (Seq ?x ?d) (Drop ?n) :when ((is-drop ?d) (= ?n (arity-in ?x))))
+(rewrite (Seq ?x (Drop ?m)) (Drop ?n) :when ((= ?n (arity-in ?x))))
 ;; drop-par-fuse
-(rewrite (Par ?a ?b) (Drop (+ ?n ?m))
-  :when ((is-drop ?a) (is-drop ?b) (= ?n (arity-in ?a)) (= ?m (arity-in ?b))))
+(rewrite (Par (Drop ?n) (Drop ?m)) (Drop (+ ?n ?m)))
 ;; drop-split-two
 (birewrite (Drop 2) (Par (Drop 1) (Drop 1)) :ruleset growth)
 ;; The symmetry slides past a dropping leg: exchange two values and drop one,
@@ -545,8 +520,8 @@
 ;; literals (or anything else) through untouched, and the operation still reads
 ;; the top of the pushed run.
 ;; eval-padded
-(rewrite (Seq ?l (Par ?i ?op)) (lit-chain ?n ?out)
-  :when ((is-id ?i) (= ?vs (literal ?l)) (= ?n (arity-in ?l))
+(rewrite (Seq ?l (Par (Id ?i) ?op)) (lit-chain ?n ?out)
+  :when ((= ?vs (literal ?l)) (= ?n (arity-in ?l))
          (= ?out (vm-eval ?vs (opcode ?op) (opwidth ?op) (arity-in ?op)))))
 ;; eval-nothing
 (rewrite (Tuple 0) (Push $unit-value))
@@ -594,43 +569,38 @@
 ;; The condition was a copy, and both arms open by dropping it: nothing is left
 ;; of the copy at all.
 ;; branch-absorbs-copy
-(rewrite (Seq ?c (Branch (Seq ?d ?a) (Seq ?e ?b))) (Branch ?a ?b)
-  :when ((is-copy ?c) (= 1 (arity-in ?c))
-         (is-drop ?d) (= 1 (arity-in ?d))
-         (is-drop ?e) (= 1 (arity-in ?e))))
+(rewrite (Seq (Copy 1) (Branch (Seq (Drop 1) ?a) (Seq (Drop 1) ?b))) (Branch ?a ?b))
 
 ;; The same value tested twice answers the same: the arm an outer branch took
 ;; already decides an inner branch on a copy of its condition, so the other
 ;; inner arm is dead. Four rules: either arm, with or without a continuation
 ;; after the inner branch.
 ;; retest-then
-(rewrite (Seq ?c (Branch (Seq (Branch ?p ?q) ?r) ?e))
-         (Seq ?c (Branch (Seq (Seq (top-drop ?n) ?p) ?r) ?e))
-  :when ((is-copy ?c) (= 1 (arity-in ?c)) (= ?n (arity-in ?p))))
+(rewrite (Seq (Copy 1) (Branch (Seq (Branch ?p ?q) ?r) ?e))
+         (Seq (Copy 1) (Branch (Seq (Seq (top-drop ?n) ?p) ?r) ?e))
+  :when ((= ?n (arity-in ?p))))
 ;; retest-then-bare
-(rewrite (Seq ?c (Branch (Branch ?p ?q) ?e))
-         (Seq ?c (Branch (Seq (top-drop ?n) ?p) ?e))
-  :when ((is-copy ?c) (= 1 (arity-in ?c)) (= ?n (arity-in ?p))))
+(rewrite (Seq (Copy 1) (Branch (Branch ?p ?q) ?e))
+         (Seq (Copy 1) (Branch (Seq (top-drop ?n) ?p) ?e))
+  :when ((= ?n (arity-in ?p))))
 ;; retest-else
-(rewrite (Seq ?c (Branch ?t (Seq (Branch ?p ?q) ?r)))
-         (Seq ?c (Branch ?t (Seq (Seq (top-drop ?n) ?q) ?r)))
-  :when ((is-copy ?c) (= 1 (arity-in ?c)) (= ?n (arity-in ?q))))
+(rewrite (Seq (Copy 1) (Branch ?t (Seq (Branch ?p ?q) ?r)))
+         (Seq (Copy 1) (Branch ?t (Seq (Seq (top-drop ?n) ?q) ?r)))
+  :when ((= ?n (arity-in ?q))))
 ;; retest-else-bare
-(rewrite (Seq ?c (Branch ?t (Branch ?p ?q)))
-         (Seq ?c (Branch ?t (Seq (top-drop ?n) ?q)))
-  :when ((is-copy ?c) (= 1 (arity-in ?c)) (= ?n (arity-in ?q))))
+(rewrite (Seq (Copy 1) (Branch ?t (Branch ?p ?q)))
+         (Seq (Copy 1) (Branch ?t (Seq (top-drop ?n) ?q)))
+  :when ((= ?n (arity-in ?q))))
 
 ;; A value that tested `equal` to a literal *is* that literal, inside the arm
 ;; that saw `true`. The copy keeps the original one deep, so the `equal`
 ;; reading the copy against the literal is always framed over it; the then arm
 ;; holds the original on top, so drop it and write the literal in its place.
 ;; specialize-equal
-(rewrite (Seq ?c (Seq ?p (Seq (Par ?i (Equal)) (Branch ?t ?f))))
-         (Seq ?c (Seq ?p (Seq (Par (Id 1) (Equal))
-                              (Branch (Seq (Seq (Drop 1) (Push ?v)) ?t) ?f))))
-  :when ((is-copy ?c) (= 1 (arity-in ?c))
-         (is-id ?i) (= 1 (arity-in ?i))
-         (= ?lit (literal ?p)) (= 1 (vec-length ?lit)) (= ?v (vec-get ?lit 0))))
+(rewrite (Seq (Copy 1) (Seq ?p (Seq (Par (Id 1) (Equal)) (Branch ?t ?f))))
+         (Seq (Copy 1) (Seq ?p (Seq (Par (Id 1) (Equal))
+                                    (Branch (Seq (Seq (Drop 1) (Push ?v)) ?t) ?f))))
+  :when ((= ?lit (literal ?p)) (= 1 (vec-length ?lit)) (= ?v (vec-get ?lit 0))))
 
 ;; ---- coercions and tuples ---------------------------------------------------
 ;; as-bool-idem
