@@ -1,52 +1,52 @@
-//! [`Term`] as an egglog datatype, plus the per-class facts saturation reads.
+//! The Rust the engine's program calls into, and the terms that go in and out.
 //!
-//! The e-graph is where a goal's two sides go to meet, so this module is the
-//! seam between the term model and the search. Four things live here:
+//! [`rules.egg`](../rules.egg) is the engine: the datatype, the facts, and
+//! every law, written out. This module is everything that cannot be said
+//! there, and nothing else — no schema is generated here, so the two are read
+//! side by side rather than one reconstructed from the other.
 //!
-//! - [`Session`] interns the two kinds of leaf data an e-node cannot carry
-//!   directly — pushed [`Value`]s and called sentences — so every node is a
-//!   constructor over `i64`.
-//! - [`schema`] is the egglog program that declares the datatype, the tables
-//!   the facts live in, and the rules that compute them. The per-instruction
-//!   part of it is *generated* from [`Prim`], so the node set, the arities,
-//!   the `yields_bool` list and the opcode table cannot drift from the term
-//!   model they mirror.
-//! - [`primitives`] registers the handful of egglog primitives the rules use
-//!   to reach back into Rust: the session's leaf data, and the interpreter
-//!   itself for `vm-eval`.
-//! - The conversions: a [`Term`] into the s-expression egglog reads, a
-//!   template into the query `solve` matches, and an extracted term back into
-//!   a [`Term`].
+//! Three things:
 //!
-//! The load-bearing fact is the **arity**. Every rule instance over this model
-//! is arity-preserving — padding made that so — which means arity is invariant
-//! across an e-class. `arity-in` and `arity-out` are therefore declared
-//! `:no-merge`: uniting two classes with different stack effects is an illegal
-//! merge, and egglog refuses it on the spot rather than producing a wrong
-//! proof.
-//!
-//! # The node spellings
-//!
-//! egglog's parser takes `;` for a comment and already owns `*`, so compose
-//! and par are spelled `Seq` and `Par` rather than the `;` and `*` the algebra
-//! and the residual printer use. Everything else is the mnemonic in
-//! CamelCase. Widths ride *inside* the node — `(Id 3)`, not egg's `id@3` —
-//! which is the whole reason the rules can be written down: a width is an
-//! ordinary pattern variable, so `(rewrite (Par (Id ?n) (Id ?m)) (Id (+ ?n
-//! ?m)))` is a rule rather than a Rust closure.
+//! - [`Session`] interns the two kinds of leaf data an e-node cannot carry —
+//!   pushed [`Value`]s and called sentences — so every node is a constructor
+//!   over `i64`.
+//! - [`vocabulary`] gives the engine the `Lits` sort and the handful of
+//!   primitives the rules call: the session's leaf data, and the interpreter
+//!   itself for `vm-eval`. It runs before the program is read, because a rule
+//!   cannot mention what does not exist yet.
+//! - The conversions: a [`Term`] into the s-expression the engine reads, a
+//!   template into the pattern `solve` matches, and an extracted term back
+//!   into a [`Term`]. [`node_name`] and [`prim_of`] are the two halves of the
+//!   one table those need, and the tests below hold that table — and the
+//!   arities, codomains and opcodes `rules.egg` states — to the instruction
+//!   set they mirror.
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};
 
 use bytecode::{Instruction, Library, SentenceIndex, Value};
-use egglog::sort::VecContainer;
+use egglog::ast::Expr;
+use egglog::prelude::{RustSpan, Span, span};
+use egglog::sort::{Presort, S, VecContainer, VecSort};
 use egglog::{EGraph, TermDag, TermId, add_primitive};
 
 use crate::term::{Arity, Prim, Term};
 
 /// The sort every program node has.
 pub const SORT: &str = "Hana";
+
+/// The sort of a run of interned values — `rules.egg` uses it but does not
+/// declare it, because [`vm-eval`](vocabulary) has to name it before the
+/// program is read.
+const LITS: &str = "Lits";
+
+/// The program the engine runs.
+pub fn program() -> &'static str {
+    include_str!("rules.egg")
+}
+
+// ---- the session ------------------------------------------------------------
 
 /// The leaf data an e-node cannot carry: pushed values and called sentences.
 ///
@@ -56,7 +56,7 @@ pub const SORT: &str = "Hana";
 /// primitives the rules call — `vm-eval` interns the values a fold answers
 /// with, so the table grows during saturation and every reader must see the
 /// same one.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Session(Arc<Mutex<Interned>>);
 
 #[derive(Debug, Default)]
@@ -67,6 +67,25 @@ struct Interned {
     value_keys: HashMap<String, usize>,
     calls: Vec<(SentenceIndex, Arity)>,
     call_keys: HashMap<SentenceIndex, usize>,
+}
+
+/// The index of `()`, which `eval-nothing` pushes.
+pub const UNIT_VALUE: usize = 0;
+/// The index of `true`, which `bool-result` pushes.
+pub const TRUE_VALUE: usize = 1;
+
+impl Default for Session {
+    /// A session with the two constants `rules.egg` names already interned.
+    ///
+    /// The rule file writes them as `(let $unit-value 0)` and `(let
+    /// $true-value 1)` — a static file cannot ask what a table will answer —
+    /// so interning them first is what makes those indices right.
+    fn default() -> Self {
+        let session = Session(Arc::new(Mutex::new(Interned::default())));
+        session.value(&Value::unit());
+        session.value(&Value::Bool(true));
+        session
+    }
 }
 
 impl Session {
@@ -106,326 +125,104 @@ impl Session {
     }
 }
 
-// ---- the node set -----------------------------------------------------------
+// ---- the node table ---------------------------------------------------------
 
-/// The name a prim's node is spelled with, and the tag `opcode` gives it.
+/// The node a prim is spelled with in `rules.egg`.
 ///
-/// Both come from [`Prim::all`], so a prim added to the term model shows up
-/// here without anything else being edited — and `every_prim_has_a_node`
-/// holds the two to each other.
-fn prim_nodes() -> Vec<(Prim, String)> {
-    Prim::all()
-        .into_iter()
-        .filter(|p| !matches!(p, Prim::Push(_)))
-        .map(|p| {
-            let name = node_name(&p);
-            (p, name)
-        })
-        .collect()
-}
-
-/// `const_string_char_at` as `ConstStringCharAt`.
-fn camel(mnemonic: &str) -> String {
-    mnemonic
-        .split('_')
-        .map(|word| {
-            let mut chars = word.chars();
-            match chars.next() {
-                Some(c) => c.to_uppercase().chain(chars).collect::<String>(),
-                None => String::new(),
-            }
-        })
-        .collect()
-}
-
-/// The prim a `(opcode, opwidth)` pair names, for [`fold_window`].
-fn prim_of(code: usize, width: usize) -> Prim {
-    match prim_nodes()[code].0.clone() {
-        Prim::Tuple(_) => Prim::Tuple(width),
-        Prim::Untuple(_) => Prim::Untuple(width),
-        Prim::AsTuple(_) => Prim::AsTuple(width),
-        other => other,
+/// The other half of this table is the `datatype` at the top of that file, and
+/// `the_program_declares_every_node` holds the two together.
+pub fn node_name(prim: &Prim) -> &'static str {
+    match prim {
+        Prim::Push(_) => "Push",
+        Prim::Swap => "Swap",
+        Prim::Equal => "Equal",
+        Prim::Greater => "Greater",
+        Prim::Less => "Less",
+        Prim::Add => "Add",
+        Prim::Subtract => "Subtract",
+        Prim::Multiply => "Multiply",
+        Prim::Divide => "Divide",
+        Prim::Modulo => "Modulo",
+        Prim::Not => "Not",
+        Prim::Negate => "Negate",
+        Prim::And => "And",
+        Prim::Or => "Or",
+        Prim::Tuple(_) => "Tuple",
+        Prim::Untuple(_) => "Untuple",
+        Prim::ConstStringLen => "ConstStringLen",
+        Prim::ConstStringCharAt => "ConstStringCharAt",
+        Prim::IsInt => "IsInt",
+        Prim::IsBool => "IsBool",
+        Prim::IsConstString => "IsConstString",
+        Prim::IsSymbol => "IsSymbol",
+        Prim::IsTuple => "IsTuple",
+        Prim::TupleLength => "TupleLength",
+        Prim::AsBool => "AsBool",
+        Prim::AsInt => "AsInt",
+        Prim::AsTuple(_) => "AsTuple",
     }
 }
 
-/// Whether a prim carries a width, and so takes its node's argument.
-fn width_carrying(p: &Prim) -> bool {
-    matches!(p, Prim::Tuple(_) | Prim::Untuple(_) | Prim::AsTuple(_))
+/// The prim a node stands for, given the width it carries — `0` where it
+/// carries none.
+///
+/// `Push` is absent on purpose: its leaf names a value rather than a width, so
+/// the two readers that meet one ([`term_of`] and `vm-eval`) handle it before
+/// asking here.
+pub fn prim_of(node: &str, width: usize) -> Option<Prim> {
+    Some(match node {
+        "Swap" => Prim::Swap,
+        "Equal" => Prim::Equal,
+        "Greater" => Prim::Greater,
+        "Less" => Prim::Less,
+        "Add" => Prim::Add,
+        "Subtract" => Prim::Subtract,
+        "Multiply" => Prim::Multiply,
+        "Divide" => Prim::Divide,
+        "Modulo" => Prim::Modulo,
+        "Not" => Prim::Not,
+        "Negate" => Prim::Negate,
+        "And" => Prim::And,
+        "Or" => Prim::Or,
+        "Tuple" => Prim::Tuple(width),
+        "Untuple" => Prim::Untuple(width),
+        "ConstStringLen" => Prim::ConstStringLen,
+        "ConstStringCharAt" => Prim::ConstStringCharAt,
+        "IsInt" => Prim::IsInt,
+        "IsBool" => Prim::IsBool,
+        "IsConstString" => Prim::IsConstString,
+        "IsSymbol" => Prim::IsSymbol,
+        "IsTuple" => Prim::IsTuple,
+        "TupleLength" => Prim::TupleLength,
+        "AsBool" => Prim::AsBool,
+        "AsInt" => Prim::AsInt,
+        "AsTuple" => Prim::AsTuple(width),
+        _ => return None,
+    })
 }
 
-// ---- the schema -------------------------------------------------------------
+// ---- the vocabulary ---------------------------------------------------------
 
-/// The egglog program that declares the model: the datatype, the tables the
-/// facts live in, and the helper constructors the rules build with.
-/// [`analysis`] holds the rules that fill them.
+/// Gives the engine the sort and the primitives `rules.egg` calls.
 ///
-/// What each fact means, and why it is here:
-///
-/// - `arity-in` / `arity-out` are the invariant — see the module docs.
-/// - `is-id` / `is-drop` / `is-copy` say the class contains that structural
-///   leaf, or something the facts compose to one. The width is the arity's.
-/// - `yields-bool` says whatever this computes leaves a `Bool` on top. The
-///   [`Instruction::yields_bool`] list, lifted through composition.
-/// - `literal` says the class behaves as `id(inputs) * (push v1 ; … ; push
-///   vk)` — it pushes exactly those values over an untouched stack. What the
-///   folding rules read.
-/// - `opcode` / `opwidth` name the instruction a leaf stands for, for the one
-///   rule that runs the machine. `Push` deliberately has none: a literal is
-///   not an operation to fold.
-///
-/// All of them but the arities are one-way: absent means "not known to hold",
-/// never "known not to". egglog has no negation, so a rule cannot ask whether
-/// a fact is *missing*, and none of the rules in `rules.egg` needs to.
-///
-/// The declarations are separated from the rules because the order matters:
-/// everything a rule *mentions* has to exist before it is read, and the rules
-/// mention primitives that only exist once [`primitives`] has run. So a
-/// session declares, registers, and only then states.
-pub fn declarations() -> String {
-    let mut s = String::new();
-
-    // ---- the datatype ------------------------------------------------------
-    s.push_str("(datatype Hana\n");
-    s.push_str("  (Seq Hana Hana)\n");
-    s.push_str("  (Par Hana Hana)\n");
-    s.push_str("  (Branch Hana Hana)\n");
-    s.push_str("  (Id i64)\n");
-    s.push_str("  (Drop i64)\n");
-    s.push_str("  (Copy i64)\n");
-    s.push_str("  (Push i64)\n");
-    s.push_str("  (Call i64)\n");
-    for (prim, name) in prim_nodes() {
-        if width_carrying(&prim) {
-            let _ = writeln!(s, "  ({} i64)", name);
-        } else {
-            let _ = writeln!(s, "  ({})", name);
-        }
-    }
-    s.push_str(")\n\n");
-
-    // ---- the facts ---------------------------------------------------------
-    s.push_str(
-        r#"(sort Lits (Vec i64))
-
-(function arity-in  (Hana) i64 :no-merge)
-(function arity-out (Hana) i64 :no-merge)
-(relation is-id (Hana))
-(relation is-drop (Hana))
-(relation is-copy (Hana))
-(relation yields-bool (Hana))
-(function literal (Hana) Lits :merge old)
-(function opcode  (Hana) i64 :no-merge)
-(function opwidth (Hana) i64 :no-merge)
-(relation commutative (Hana))
-
-; The canonical spelling of "push these values over `n` untouched ones" — the
-; shape `lower` gives a run of pushes, and the shape whose class the literal
-; fact recognizes. A rule builds one by naming the run; these unfold it. The
-; helpers are unextractable so a residual is printed in the term language and
-; never in the scaffolding that built it.
-(constructor lit-chain (i64 Lits) Hana :unextractable)
-(constructor lit-step  (i64 i64)  Hana :unextractable)
-(constructor top-drop  (i64)      Hana :unextractable)
-
-
-"#,
-    );
-
-    s
-}
-
-/// The rules that compute the facts [`declarations`] made room for.
-///
-/// Run after [`primitives`], which is what the leaf rules call to read the
-/// session and the codomain tables.
-pub fn analysis() -> String {
-    let mut s = String::new();
-    s.push_str(
-        r#"; lit-chain-empty
-(rule ((= c (lit-chain ?n ?vs)) (= 0 (vec-length ?vs)))
-      ((union c (Id ?n))))
-; lit-chain-step
-(rule ((= c (lit-chain ?n ?vs))
-       (= ?k (- (vec-length ?vs) 1))
-       (>= ?k 0)
-       (= ?v (vec-get ?vs ?k)))
-      ((union c (Seq (lit-chain ?n (vec-remove ?vs ?k)) (lit-step (+ ?n ?k) ?v)))))
-; lit-step-bare
-(rule ((= s (lit-step 0 ?v)))            ((union s (Push ?v))))
-; lit-step-framed
-(rule ((= s (lit-step ?d ?v)) (> ?d 0))  ((union s (Par (Id ?d) (Push ?v)))))
-
-; `drop(1)` at the top of `n + 1` values: the deep `n` pass through.
-; top-drop-bare
-(rule ((= d (top-drop 0)))            ((union d (Drop 1))))
-; top-drop-framed
-(rule ((= d (top-drop ?n)) (> ?n 0))  ((union d (Par (Id ?n) (Drop 1)))))
-
-; ---- the structural leaves --------------------------------------------------
-; leaf-id
-(rule ((= t (Id ?n)))
-      ((set (arity-in t) ?n) (set (arity-out t) ?n) (is-id t)
-       ; `id(0)` pushes nothing over an untouched stack, which is what lets a
-       ; literal prefix compose past it.
-       (set (literal t) (vec-of))))
-; leaf-drop
-(rule ((= t (Drop ?n)))
-      ((set (arity-in t) ?n) (set (arity-out t) 0) (is-drop t)))
-; leaf-copy
-(rule ((= t (Copy ?n)))
-      ((set (arity-in t) ?n) (set (arity-out t) (+ ?n ?n)) (is-copy t)))
-; leaf-push
-(rule ((= t (Push ?v)))
-      ((set (arity-in t) 0) (set (arity-out t) 1) (set (literal t) (vec-of ?v))))
-; leaf-push-bool
-(rule ((= t (Push ?v)) (value-is-bool ?v))
-      ((yields-bool t)))
-; leaf-call
-(rule ((= t (Call ?c)))
-      ((set (arity-in t) (call-inputs ?c)) (set (arity-out t) (call-outputs ?c))))
-
-; ---- compose ----------------------------------------------------------------
-; compose-arity
-(rule ((= t (Seq ?a ?b)) (= ?i (arity-in ?a)) (= ?o (arity-out ?b)))
-      ((set (arity-in t) ?i) (set (arity-out t) ?o)))
-; compose-meets
-(rule ((= t (Seq ?a ?b)) (= ?o (arity-out ?a)) (= ?i (arity-in ?b)) (!= ?o ?i))
-      ((panic "a compose node whose halves do not meet")))
-; compose-is-id
-(rule ((= t (Seq ?a ?b)) (is-id ?a) (is-id ?b))     ((is-id t)))
-; compose-is-drop-after-id
-(rule ((= t (Seq ?a ?b)) (is-id ?a) (is-drop ?b))   ((is-drop t)))
-; compose-is-drop
-(rule ((= t (Seq ?a ?b)) (is-drop ?a) (is-drop ?b)) ((is-drop t)))
-; compose-is-drop-then-nothing
-(rule ((= t (Seq ?a ?b)) (is-drop ?a) (is-id ?b) (= 0 (arity-in ?b)))
-      ((is-drop t)))
-; compose-is-copy
-(rule ((= t (Seq ?a ?b)) (is-copy ?a) (is-id ?b))   ((is-copy t)))
-; The suffix answers for the top of the stack; an identity suffix leaves the
-; prefix's answer standing. The second rule is the other side of that `if`:
-; egglog cannot ask whether the suffix is *not* an identity, and it need not —
-; an identity class that also yielded a bool would be claiming its own input is
-; always a `Bool`, which no sound union can put there.
-; compose-bool-through-id
-(rule ((= t (Seq ?a ?b)) (is-id ?b) (> (arity-in ?b) 0) (yields-bool ?a))
-      ((yields-bool t)))
-; compose-bool
-(rule ((= t (Seq ?a ?b)) (yields-bool ?b))
-      ((yields-bool t)))
-; Both halves push over an untouched stack, so the pushes concatenate: the
-; suffix's land on top.
-; compose-literal
-(rule ((= t (Seq ?a ?b)) (= ?xs (literal ?a)) (= ?ys (literal ?b)))
-      ((set (literal t) (vec-append ?xs ?ys))))
-
-; ---- par --------------------------------------------------------------------
-; par-arity
-(rule ((= t (Par ?a ?b))
-       (= ?ai (arity-in ?a)) (= ?bi (arity-in ?b))
-       (= ?ao (arity-out ?a)) (= ?bo (arity-out ?b)))
-      ((set (arity-in t) (+ ?ai ?bi)) (set (arity-out t) (+ ?ao ?bo))))
-; par-is-id
-(rule ((= t (Par ?a ?b)) (is-id ?a) (is-id ?b))     ((is-id t)))
-; par-is-drop
-(rule ((= t (Par ?a ?b)) (is-drop ?a) (is-drop ?b)) ((is-drop t)))
-; par-bool-top
-(rule ((= t (Par ?a ?b)) (> (arity-out ?b) 0) (yields-bool ?b)) ((yields-bool t)))
-; par-bool-deep
-(rule ((= t (Par ?a ?b)) (= 0 (arity-out ?b)) (yields-bool ?a)) ((yields-bool t)))
-; The deep side's pushes land under the shallow side's inputs, so this is a
-; literal only when the shallow side reads nothing (its pushes then sit
-; directly on the deep side's) or the deep side pushes nothing at all.
-; par-literal
-(rule ((= t (Par ?a ?b)) (= ?xs (literal ?a)) (= ?ys (literal ?b)) (= 0 (arity-in ?b)))
-      ((set (literal t) (vec-append ?xs ?ys))))
-; par-literal-over-id
-(rule ((= t (Par ?a ?b)) (is-id ?a) (= ?ys (literal ?b)))
-      ((set (literal t) ?ys)))
-
-; ---- branch -----------------------------------------------------------------
-; branch-arity
-(rule ((= t (Branch ?x ?y)) (= ?i (arity-in ?x)) (= ?o (arity-out ?x)))
-      ((set (arity-in t) (+ ?i 1)) (set (arity-out t) ?o)))
-; branch-arms-agree-in
-(rule ((= t (Branch ?x ?y)) (= ?p (arity-in ?x)) (= ?q (arity-in ?y)) (!= ?p ?q))
-      ((panic "a branch node whose arms differ")))
-; branch-arms-agree-out
-(rule ((= t (Branch ?x ?y)) (= ?p (arity-out ?x)) (= ?q (arity-out ?y)) (!= ?p ?q))
-      ((panic "a branch node whose arms differ")))
-; branch-bool
-(rule ((= t (Branch ?x ?y)) (> (arity-out ?x) 0) (yields-bool ?x) (yields-bool ?y))
-      ((yields-bool t)))
-
-"#,
-    );
-
-    // ---- the instruction leaves -------------------------------------------
-    // Arity, codomain and commutativity all come off the term model and the
-    // instruction set, so this table is derived rather than written.
-    s.push_str("; ---- the instruction leaves ---------------------------------\n");
-    for (code, (prim, name)) in prim_nodes().into_iter().enumerate() {
-        let arity = prim.arity();
-        let inst = prim.to_instruction();
-        let (head, width) = if width_carrying(&prim) {
-            (format!("({} ?n)", name), "?n".to_string())
-        } else {
-            (format!("({})", name), "0".to_string())
-        };
-        let (inputs, outputs) = if width_carrying(&prim) {
-            match prim {
-                Prim::Tuple(_) => ("?n".to_string(), "1".to_string()),
-                Prim::Untuple(_) => ("1".to_string(), "?n".to_string()),
-                _ => ("1".to_string(), "1".to_string()),
-            }
-        } else {
-            (arity.inputs.to_string(), arity.outputs.to_string())
-        };
-        let mut actions = format!(
-            "(set (arity-in t) {}) (set (arity-out t) {})\n       (set (opcode t) {}) (set (opwidth t) {})",
-            inputs, outputs, code, width
-        );
-        if inst.yields_bool() {
-            actions.push_str(" (yields-bool t)");
-        }
-        if inst.commutative() {
-            actions.push_str(" (commutative t)");
-        }
-        let _ = writeln!(
-            s,
-            "; leaf-{}\n(rule ((= t {}))\n      ({}))",
-            name.to_lowercase(),
-            head,
-            actions
-        );
-    }
-    s
-}
-
-/// The globals `rules.egg` names: the two constants a rule pushes out of thin
-/// air, interned so their indices are the session's.
-pub fn constants(session: &Session) -> String {
-    format!(
-        "(let $unit-value {})\n(let $true-value {})\n",
-        session.value(&Value::unit()),
-        session.value(&Value::Bool(true))
-    )
-}
-
-// ---- the primitives ---------------------------------------------------------
-
-/// Registers the primitives the rules use to reach back into Rust: the
-/// session's leaf data, and the interpreter itself.
+/// Runs before the program is read: a rule cannot mention a primitive that
+/// does not exist yet, and `Lits` has to be a sort before `vm-eval` can be
+/// typed against it.
 ///
 /// `vm-eval` is the one that matters. Folding owes the interpreter exact
 /// agreement, junk included, so a literal window is run on the real `vm`
 /// rather than on a second implementation that could drift — see
 /// [`run_window`].
-pub fn primitives(egraph: &mut EGraph, session: &Session) {
-    let lits = egraph
-        .get_sort_by_name("Lits")
-        .expect("the schema declares Lits")
-        .clone();
+pub fn vocabulary(egraph: &mut EGraph, session: &Session) {
+    let lits = VecSort::make_sort(
+        egraph.type_info(),
+        LITS.to_string(),
+        &[Expr::Var(span!(), "i64".to_string())],
+    )
+    .expect("a vec of i64 is a sort");
+    egraph
+        .add_arcsort(lits.clone(), span!())
+        .expect("nothing else declares Lits");
 
     add_primitive!(egraph, "value-is-bool" = {session.clone(): Session} |i: i64| -?> () {
         matches!(self.ctx.value_of(i as usize), bytecode::Value::Bool(_)).then_some(())
@@ -445,14 +242,14 @@ pub fn primitives(egraph: &mut EGraph, session: &Session) {
     add_primitive!(
         egraph,
         "vm-eval" = {session.clone(): Session}
-        |vs: @VecContainer (lits), code: i64, width: i64, k: i64| -?> @VecContainer (lits) {
+        |vs: @VecContainer (lits), op: S, width: i64, k: i64| -?> @VecContainer (lits) {
             {
                 let values: Vec<usize> = vs
                     .data
                     .iter()
                     .map(|v| exec_state.base_values().unwrap::<i64>(*v) as usize)
                     .collect();
-                fold_window(&self.ctx, &values, code as usize, width as usize, k as usize).map(
+                fold_window(&self.ctx, &values, op.as_str(), width as usize, k as usize).map(
                     |out| VecContainer {
                         do_rebuild: false,
                         data: out
@@ -469,25 +266,26 @@ pub fn primitives(egraph: &mut EGraph, session: &Session) {
 /// A literal window feeding an instruction, folded to the pushes of what the
 /// machine answers.
 ///
-/// `vs` is the run of interned values the window pushes and `k` the operation's
-/// input count, so the operands are the top `k` of them and everything below
-/// passes through untouched. `None` is the fold declining — too few operands,
-/// or the machine would not run.
+/// `vs` is the run of interned values the window pushes and `k` the
+/// operation's input count, so the operands are the top `k` of them and
+/// everything below passes through untouched. `None` is the fold declining —
+/// too few operands, or the machine would not run.
 fn fold_window(
     session: &Session,
     vs: &[usize],
-    code: usize,
+    op: &str,
     width: usize,
     k: usize,
 ) -> Option<Vec<usize>> {
     if vs.len() < k {
         return None;
     }
+    let prim = prim_of(op, width).expect("only an instruction leaf carries an opcode");
     let operands: Vec<Value> = vs[vs.len() - k..]
         .iter()
         .map(|i| session.value_of(*i))
         .collect();
-    let answers = run_window(&operands, &prim_of(code, width).to_instruction())?;
+    let answers = run_window(&operands, &prim.to_instruction())?;
     let mut result: Vec<usize> = vs[..vs.len() - k].to_vec();
     for v in &answers {
         result.push(session.value(v));
@@ -600,20 +398,11 @@ fn write_sexp(
     }
 }
 
-/// The node a prim is spelled with: its mnemonic, in CamelCase.
-///
-/// An instruction prints its operands too — `tuple 3` — and a node's width is
-/// its argument rather than part of its name, so only the head is taken.
-fn node_name(prim: &Prim) -> String {
-    let printed = prim.to_instruction().to_string();
-    camel(printed.split_whitespace().next().expect("a mnemonic"))
-}
-
 /// Reads an extracted term back into a [`Term`], for printing what an e-class
 /// holds in the spelling the rest of the tool uses.
 ///
 /// Built from the raw variants rather than the checking constructors: an
-/// extracted term came out of an e-graph whose schema already asserted every
+/// extracted term came out of an e-graph whose program already asserted every
 /// arity, and a residual printer must not panic on the thing it exists to
 /// show.
 pub fn term_of(dag: &TermDag, id: TermId, session: &Session) -> Term {
@@ -650,58 +439,223 @@ pub fn term_of(dag: &TermDag, id: TermId, session: &Session) -> Term {
             Term::Call { target, arity }
         }
         name => {
-            let width = args.first().map(|a| int(dag, *a));
-            let prim = prim_nodes()
-                .into_iter()
-                .find(|(_, n)| n == name)
-                .map(|(p, _)| p)
-                .unwrap_or_else(|| panic!("an extracted node the model does not have: {}", name));
-            Term::Op(match (prim, width) {
-                (Prim::Tuple(_), Some(n)) => Prim::Tuple(n),
-                (Prim::Untuple(_), Some(n)) => Prim::Untuple(n),
-                (Prim::AsTuple(_), Some(n)) => Prim::AsTuple(n),
-                (other, _) => other,
-            })
+            let width = args.first().map(|a| int(dag, *a)).unwrap_or(0);
+            Term::Op(
+                prim_of(name, width).unwrap_or_else(|| {
+                    panic!("an extracted node the model does not have: {}", name)
+                }),
+            )
         }
     }
+}
+
+// ---- reading the program ----------------------------------------------------
+
+/// The program's top-level forms, each with the label written above it.
+///
+/// Both rule files use one convention — a comment line holding a single word,
+/// immediately above the form it names — and this is what reads it: the
+/// firings report turns a rule's text back into its label this way, and the
+/// tests below walk the same list to hold the file to the instruction set.
+pub fn forms(program: &str) -> Vec<(Option<String>, String)> {
+    let mut out = Vec::new();
+    let mut label: Option<String> = None;
+    let mut form = String::new();
+    let mut depth = 0isize;
+    for line in program.lines() {
+        let code = line.split(';').next().unwrap_or("");
+        if depth == 0 && code.trim().is_empty() {
+            let comment = line.trim().trim_start_matches(';').trim();
+            // A label is one word. Prose and the `==== heading ====` rules are
+            // not, and neither is a blank line.
+            if comment.split_whitespace().count() == 1 {
+                label = Some(comment.to_string());
+            }
+            continue;
+        }
+        form.push_str(code);
+        form.push(' ');
+        depth += code.matches('(').count() as isize;
+        depth -= code.matches(')').count() as isize;
+        if depth <= 0 {
+            out.push((label.take(), flatten(&form)));
+            form.clear();
+            depth = 0;
+        }
+    }
+    out
+}
+
+/// A form's text in the one spelling both sides can be compared in: no
+/// whitespace except between atoms, so the file's layout and egglog's printing
+/// of the same rule come out identical.
+pub fn flatten(text: &str) -> String {
+    let mut out = String::new();
+    let mut spaced = false;
+    for c in text.chars() {
+        if c.is_whitespace() {
+            spaced = true;
+            continue;
+        }
+        if spaced && !out.is_empty() && c != ')' && !out.ends_with('(') {
+            out.push(' ');
+        }
+        spaced = false;
+        out.push(c);
+    }
+    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// The value `(set (<field> t) …)` gives, out of a flattened rule.
+    fn field(rule: &str, name: &str) -> Option<String> {
+        let head = format!("(set ({} t) ", name);
+        let rest = &rule[rule.find(&head)? + head.len()..];
+        let end = rest.find(')')?;
+        Some(rest[..end].to_string())
+    }
+
+    /// The `leaf-*` rules of `rules.egg`, keyed by the node each is about.
+    fn leaf_rules() -> HashMap<String, String> {
+        forms(program())
+            .into_iter()
+            .filter_map(|(label, rule)| {
+                let label = label?;
+                let node = label.strip_prefix("leaf-")?;
+                rule.contains("(set (opcode t) ")
+                    .then(|| (node.to_string(), rule))
+            })
+            .collect()
+    }
+
     #[test]
-    fn every_prim_has_a_node_the_schema_declares() {
-        let schema = declarations();
+    fn the_node_table_round_trips() {
         for prim in Prim::all() {
             if matches!(prim, Prim::Push(_)) {
                 continue;
             }
-            let name = node_name(&prim);
-            assert!(
-                schema.contains(&format!("({} i64)", name))
-                    || schema.contains(&format!("({})\n", name)),
-                "{} has no node",
-                prim
-            );
-        }
-    }
-
-    #[test]
-    fn an_opcode_names_the_prim_it_came_from() {
-        for (code, (prim, _)) in prim_nodes().into_iter().enumerate() {
             let width = match &prim {
                 Prim::Tuple(n) | Prim::Untuple(n) | Prim::AsTuple(n) => *n,
                 _ => 0,
             };
-            assert_eq!(prim_of(code, width), prim);
+            assert_eq!(
+                prim_of(node_name(&prim), width),
+                Some(prim.clone()),
+                "{}",
+                prim
+            );
+        }
+        assert_eq!(prim_of("Nonesuch", 0), None);
+    }
+
+    #[test]
+    fn the_program_declares_every_node() {
+        let datatype = forms(program())
+            .into_iter()
+            .map(|(_, form)| form)
+            .find(|form| form.starts_with("(datatype Hana"))
+            .expect("the program declares the model");
+        for node in ["Seq", "Par", "Branch", "Id", "Drop", "Copy", "Push", "Call"] {
+            assert!(
+                datatype.contains(&format!("({} ", node)),
+                "{} is not a node",
+                node
+            );
+        }
+        for prim in Prim::all() {
+            let name = node_name(&prim);
+            let carries_width = matches!(
+                prim,
+                Prim::Tuple(_) | Prim::Untuple(_) | Prim::AsTuple(_) | Prim::Push(_)
+            );
+            let declared = if carries_width {
+                format!("({} i64)", name)
+            } else {
+                format!("({})", name)
+            };
+            assert!(datatype.contains(&declared), "{} is not a node", prim);
         }
     }
 
     #[test]
-    fn a_mnemonic_becomes_its_node_name() {
-        assert_eq!(camel("const_string_char_at"), "ConstStringCharAt");
-        assert_eq!(camel("swap"), "Swap");
+    fn the_program_agrees_with_the_instruction_set() {
+        // Arity, codomain, commutativity and the name a fold runs an
+        // instruction under are all written out in `rules.egg`. This is what
+        // says they are the instruction set's — a wrong `yields-bool` entry is
+        // a soundness bug rather than an inaccurate comment.
+        let rules = leaf_rules();
+        for prim in Prim::all() {
+            if matches!(prim, Prim::Push(_)) {
+                continue;
+            }
+            let node = node_name(&prim);
+            let rule = rules
+                .get(&node.to_lowercase())
+                .unwrap_or_else(|| panic!("{} has no leaf rule", prim));
+            let inst = prim.to_instruction();
+
+            assert_eq!(
+                field(rule, "opcode").as_deref(),
+                Some(format!("\"{}\"", node).as_str()),
+                "{} folds under the wrong name",
+                prim
+            );
+            assert_eq!(
+                rule.contains("(yields-bool t)"),
+                inst.yields_bool(),
+                "{} disagrees with Instruction::yields_bool",
+                prim
+            );
+            assert_eq!(
+                rule.contains("(commutative t)"),
+                inst.commutative(),
+                "{} disagrees with Instruction::commutative",
+                prim
+            );
+
+            // A width-carrying leaf states its arity in terms of the width
+            // it carries; everything else states two numbers.
+            let arity = prim.arity();
+            let (inputs, outputs, width) = match &prim {
+                Prim::Tuple(_) => ("?n".to_string(), "1".to_string(), "?n"),
+                Prim::Untuple(_) => ("1".to_string(), "?n".to_string(), "?n"),
+                Prim::AsTuple(_) => ("1".to_string(), "1".to_string(), "?n"),
+                _ => (arity.inputs.to_string(), arity.outputs.to_string(), "0"),
+            };
+            assert_eq!(
+                field(rule, "arity-in").as_deref(),
+                Some(inputs.as_str()),
+                "{}",
+                prim
+            );
+            assert_eq!(
+                field(rule, "arity-out").as_deref(),
+                Some(outputs.as_str()),
+                "{}",
+                prim
+            );
+            assert_eq!(field(rule, "opwidth").as_deref(), Some(width), "{}", prim);
+        }
+        assert_eq!(
+            rules.len(),
+            Prim::all().len() - 1,
+            "a leaf rule names something that is not a prim"
+        );
+    }
+
+    #[test]
+    fn the_constants_are_interned_first() {
+        // `rules.egg` writes these indices as literals, so a session that did
+        // not intern them first would have `eval-nothing` push a value that
+        // belongs to some other goal.
+        let session = Session::default();
+        assert_eq!(session.value_of(UNIT_VALUE), Value::unit());
+        assert_eq!(session.value_of(TRUE_VALUE), Value::Bool(true));
+        assert!(program().contains(&format!("(let $unit-value {})", UNIT_VALUE)));
+        assert!(program().contains(&format!("(let $true-value {})", TRUE_VALUE)));
     }
 
     #[test]
@@ -723,7 +677,20 @@ mod tests {
         );
         assert_eq!(
             sexp_of(&term, &session),
-            "(Seq (Push 0) (Par (Id 1) (Push 1)))"
+            "(Seq (Push 2) (Par (Id 1) (Push 3)))"
+        );
+    }
+
+    #[test]
+    fn a_form_and_its_label_come_off_the_program() {
+        let read =
+            forms(";; a-label\n(rule (x)\n      (y))\n\n;; prose that is not a label\n(other)\n");
+        assert_eq!(
+            read,
+            vec![
+                (Some("a-label".to_string()), "(rule (x) (y))".to_string()),
+                (None, "(other)".to_string()),
+            ]
         );
     }
 }

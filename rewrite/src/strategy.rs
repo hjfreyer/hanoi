@@ -42,14 +42,20 @@ use egglog::{ArcSort, EGraph, Value};
 use crate::goal::{Goal, Outcome, Proof, Residual};
 use crate::hant::{Body, SolveVars, Step, Strategy, default_strategy};
 use crate::lang::{self, Session};
-use crate::rules::rules;
 use crate::term::{Arity, Error, Term, lower};
 
 /// The saturation budget.
 ///
-/// `node_limit` counts rows across every table the engine holds, which is the
-/// nearest thing egglog has to egg's e-node count: the program nodes plus the
-/// facts about them.
+/// `iter_limit` and `node_limit` are the budget proper — both deterministic,
+/// so a goal closes or sticks the same way on every machine. `node_limit`
+/// counts rows across every table the engine holds, which is the nearest thing
+/// egglog has to egg's e-node count: the program nodes plus the facts about
+/// them.
+///
+/// `time_limit` is not a budget but a backstop, and is set well clear of any
+/// goal that closes. It is wall-clock, so a run that spent it would have
+/// closed differently on a quieter machine, and a corpus whose verdict moved
+/// with the load on the box would be no regression net at all.
 #[derive(Debug, Clone)]
 pub struct Config {
     pub iter_limit: usize,
@@ -62,7 +68,7 @@ impl Default for Config {
         Config {
             iter_limit: 60,
             node_limit: 400_000,
-            time_limit: Duration::from_secs(10),
+            time_limit: Duration::from_secs(120),
         }
     }
 }
@@ -71,9 +77,9 @@ impl Default for Config {
 pub struct Prover<'l> {
     pub library: &'l Library,
     pub config: Config,
-    /// The engine with the model and the equations loaded and nothing else in
-    /// it. Reading the program costs more than most goals do, so it is read
-    /// once and each saturation starts from a clone.
+    /// The engine with `rules.egg` loaded and nothing else in it. Reading the
+    /// program costs more than most goals do, so it is read once and each
+    /// saturation starts from a clone.
     template: EGraph,
     /// One interning table for the whole run, shared with the primitives the
     /// template's rules call. Indices are global, so a goal reaching for a
@@ -85,12 +91,8 @@ impl<'l> Prover<'l> {
     pub fn new(library: &'l Library, config: Config) -> Self {
         let session = Session::default();
         let mut template = EGraph::default();
-        load(&mut template, &lang::declarations());
-        lang::primitives(&mut template, &session);
-        let mut program = lang::analysis();
-        program.push_str(&lang::constants(&session));
-        program.push_str(rules());
-        load(&mut template, &program);
+        lang::vocabulary(&mut template, &session);
+        load(&mut template, lang::program());
         Prover {
             library,
             config,
@@ -613,7 +615,7 @@ fn load(egraph: &mut EGraph, program: &str) {
 }
 
 /// The ruleset the equations that do not grow the graph live in — egglog's
-/// default, which is also where [`crate::lang::analysis`] puts the fact rules.
+/// default, which is where `rules.egg` leaves everything it does not tag.
 const DEFAULT_RULESET: &str = "";
 
 /// The ruleset `rules.egg` puts the shape rules in, and the one [`Backoff`]
@@ -728,7 +730,7 @@ fn short(rule: &str) -> String {
             None => (rule, ""),
         },
     };
-    let flat = flatten(text);
+    let flat = lang::flatten(text);
     if let Some(label) = rule_labels().get(&flat) {
         return format!("{}{}", label, direction);
     }
@@ -739,65 +741,15 @@ fn short(rule: &str) -> String {
     }
 }
 
-/// A rule's text in the one spelling both sides can be compared in: no
-/// whitespace except between atoms, so the file's layout and egglog's
-/// printing of the same rule come out identical.
-fn flatten(text: &str) -> String {
-    let mut out = String::new();
-    let mut spaced = false;
-    for c in text.chars() {
-        if c.is_whitespace() {
-            spaced = true;
-            continue;
-        }
-        if spaced && !out.is_empty() && c != ')' && !out.ends_with('(') {
-            out.push(' ');
-        }
-        spaced = false;
-        out.push(c);
-    }
-    out
-}
-
 /// Every rule the engine loads, keyed by its text and answering with the
-/// label written above it.
-///
-/// Both rule files use the same convention — a comment line holding one word
-/// immediately above the rule it names — so the analysis rules `lang.rs`
-/// generates are labelled too, and the report reads the same for both.
+/// label written above it in `rules.egg`.
 fn rule_labels() -> &'static HashMap<String, String> {
     static LABELS: OnceLock<HashMap<String, String>> = OnceLock::new();
     LABELS.get_or_init(|| {
-        let mut labels = HashMap::new();
-        for source in [lang::analysis(), rules().to_string()] {
-            let mut pending: Option<String> = None;
-            let mut form = String::new();
-            let mut depth = 0isize;
-            for line in source.lines() {
-                let code = line.split(';').next().unwrap_or("");
-                if depth == 0 && code.trim().is_empty() {
-                    let comment = line.trim().trim_start_matches(';').trim();
-                    // A label is one word. Prose and the
-                    // `---- section ----` headings are not.
-                    if comment.split_whitespace().count() == 1 {
-                        pending = Some(comment.to_string());
-                    }
-                    continue;
-                }
-                form.push_str(code);
-                form.push(' ');
-                depth += code.matches('(').count() as isize;
-                depth -= code.matches(')').count() as isize;
-                if depth <= 0 {
-                    if let Some(label) = pending.take() {
-                        labels.insert(flatten(&form), label);
-                    }
-                    form.clear();
-                    depth = 0;
-                }
-            }
-        }
-        labels
+        lang::forms(lang::program())
+            .into_iter()
+            .filter_map(|(label, rule)| Some((rule, label?)))
+            .collect()
     })
 }
 
@@ -1026,32 +978,16 @@ mod tests {
         // The label is what the firings report prints and what
         // `docs/algebra.md` cites, so a rule added without one goes back to
         // showing its whole pattern in a 60-column field.
-        let mut unlabelled = Vec::new();
-        for source in [lang::analysis(), rules().to_string()] {
-            let mut form = String::new();
-            let mut depth = 0isize;
-            for line in source.lines() {
-                let code = line.split(';').next().unwrap_or("");
-                if depth == 0 && code.trim().is_empty() {
-                    continue;
-                }
-                form.push_str(code);
-                form.push(' ');
-                depth += code.matches('(').count() as isize;
-                depth -= code.matches(')').count() as isize;
-                if depth <= 0 {
-                    let flat = flatten(&form);
-                    let is_rule = ["(rule ", "(rewrite ", "(birewrite "]
+        let unlabelled: Vec<String> = lang::forms(lang::program())
+            .into_iter()
+            .filter(|(label, form)| {
+                label.is_none()
+                    && ["(rule ", "(rewrite ", "(birewrite "]
                         .iter()
-                        .any(|head| flat.starts_with(head));
-                    if is_rule && !rule_labels().contains_key(&flat) {
-                        unlabelled.push(flat);
-                    }
-                    form.clear();
-                    depth = 0;
-                }
-            }
-        }
+                        .any(|head| form.starts_with(head))
+            })
+            .map(|(_, form)| form)
+            .collect();
         assert_eq!(unlabelled, Vec::<String>::new());
     }
 

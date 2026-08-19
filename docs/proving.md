@@ -34,8 +34,8 @@ Four layers, in `rewrite/src/`:
 |---|---|---|
 | proofs | `hant.rs`, `corpus.rs`, `parse.rs` | the strategy language a proof is written in, the loader that attaches each `.hant` entry to the identity it names, and the reader that turns a waypoint's text into a term |
 | goals | `goal.rs`, `strategy.rs` | a goal is two [terms](../rewrite/src/term.rs) padded to one arity; the interpreter runs a strategy over one |
-| engine | `lang.rs` | the term model as an egglog datatype, with the rules that compute the facts the equations condition on, and the primitives they reach Rust through |
-| equations | `rules.egg` | every law, as a rewrite the e-graph applies in both directions where both are bounded — a text file, not Rust; `rules.rs` only hands it to the engine |
+| engine | `rules.egg` | the whole e-graph, as one egglog program: the term model as a datatype, the facts saturation reads, and every law |
+| the seam | `lang.rs` | what an egglog rule cannot say for itself — the interning of values and sentences, the primitives the rules call, and the conversions between a [term](../rewrite/src/term.rs) and a node |
 
 ### The engine
 
@@ -43,10 +43,14 @@ The e-graph is [**egglog**](https://github.com/egraphs-good/egglog) 2.0.
 Three things follow from that, and they are why the crate looks the way it
 does:
 
-- **The rules are a file.** egglog takes a program, so the equations live in
-  `rules.egg` in the rewrite syntax egg made familiar — see "the equations"
-  below. So does the analysis: `lang.rs` emits the datatype and the rules that
-  compute every fact, rather than implementing an `Analysis` trait.
+- **The engine is a file.** egglog takes a program, so `rules.egg` *is* the
+  e-graph: the datatype the model is spelled in, the tables the facts live in,
+  the rules that compute them, and the laws — see "the equations" below.
+  Nothing in it is generated. What `lang.rs` supplies is the vocabulary a rule
+  cannot state for itself (the `Lits` sort and six primitives) plus the tests
+  that hold the file to `term.rs` and to the instruction set: a leaf's arity,
+  its `yields_bool` entry, its commutativity and the name a fold runs it under
+  are all checked against `Prim` and `Instruction`.
 - **The analysis is a set of tables.** `arity-in`, `arity-out`, `is-id`,
   `is-drop`, `is-copy`, `yields-bool`, `literal` are ordinary egglog
   functions and relations over the program sort, computed by rules and read by
@@ -238,7 +242,7 @@ backwards.
 ### The equations
 
 The rule set is the algebra of [docs/algebra.md](algebra.md) made executable,
-and the map between the two is written there. It is a **file**,
+and the map between the two is written there. It is the second half of
 `rewrite/src/rules.egg`, in the rewrite syntax egg made familiar and egglog
 speaks natively — an s-expression pattern with `?vars`, `rewrite` one way and
 `birewrite` both, side conditions in a `:when`:
@@ -258,8 +262,8 @@ what `docs/algebra.md`'s "where" column cites. Three kinds of rule:
   appear in a pattern at all, so every law the algebra indexes by width had
   to be a Rust closure that matched a small window and rebuilt the answer by
   hand. `par-id-fuse` above was thirteen lines of Rust.
-- **Fact rules** add a `:when` reading the tables `lang.rs` declares and
-  computes. The facts are: the class's arity (`arity-in`, `arity-out`);
+- **Fact rules** add a `:when` reading the tables the first half of the file
+  declares and fills. The facts are: the class's arity (`arity-in`, `arity-out`);
   `is-id` / `is-drop` / `is-copy` (it contains that structural leaf);
   `yields-bool` (its top output is a `Bool` — `Instruction::yields_bool`,
   lifted through composition); and `literal` (it behaves as `id(n) *` a run

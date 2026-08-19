@@ -1,30 +1,392 @@
-;; The equations, as e-graph rewrites.
+;; The prover's engine, whole: the program model as an egglog datatype, the
+;; facts saturation reads, and every law it applies.
 ;;
-;; Every rule here is an equation between programs; saturation applies them
+;; This file *is* the e-graph. Nothing here is generated — the datatype below
+;; is the term model of `rewrite/src/term.rs` written out node for node, and
+;; the arities, codomains and opcodes of the instruction leaves are the
+;; instruction set written out entry for entry. `lang.rs` holds the tests that
+;; hold this file to both.
+;;
+;; What `lang.rs` *does* provide is the vocabulary a rule cannot state for
+;; itself, registered before this file is read:
+;;
+;; | name                              | what it answers |
+;; |---|---|
+;; | `Lits`                            | the sort of a run of interned values, `(Vec i64)` |
+;; | `(value-is-bool i)`               | matches when the interned value is a `Bool` |
+;; | `(value-truthy i)` / `-falsy`     | matches on the branch the value takes |
+;; | `(call-inputs c)` / `-outputs`    | the arity of the sentence a `Call` names |
+;; | `(vm-eval vs op width k)`         | a literal window run on the real machine |
+;;
+;; A `Push` and a `Call` carry an `i64` rather than the value or the sentence
+;; itself: neither is something an e-node can hold, so `lang.rs` interns them
+;; and the node carries the index. The two constants a rule conjures out of
+;; nothing are interned first, at the indices named at the bottom of the
+;; declarations.
+;;
+;; # Spellings
+;;
+;; egglog reads `;` as a comment and already owns `*`, so compose and par are
+;; `Seq` and `Par` rather than the `;` and `*` the algebra and the residual
+;; printer use. Every other node is its instruction's mnemonic in CamelCase.
+;; A width rides *inside* its node — `(Id 3)` — which is what lets the laws
+;; the algebra indexes by width be written down at all: a width is an ordinary
+;; pattern variable here.
+
+;; ============================================================================
+;; The model
+;; ============================================================================
+
+(datatype Hana
+  (Seq Hana Hana)
+  (Par Hana Hana)
+  (Branch Hana Hana)
+  (Id i64)
+  (Drop i64)
+  (Copy i64)
+  (Push i64)
+  (Call i64)
+  (Swap)
+  (Equal)
+  (Greater)
+  (Less)
+  (Add)
+  (Subtract)
+  (Multiply)
+  (Divide)
+  (Modulo)
+  (Not)
+  (Negate)
+  (And)
+  (Or)
+  (Tuple i64)
+  (Untuple i64)
+  (ConstStringLen)
+  (ConstStringCharAt)
+  (IsInt)
+  (IsBool)
+  (IsConstString)
+  (IsSymbol)
+  (IsTuple)
+  (TupleLength)
+  (AsBool)
+  (AsInt)
+  (AsTuple i64)
+)
+
+;; A `Push` and a `Call` carry an index rather than the value or the sentence
+;; itself. These two are the values a rule conjures out of nothing, so their
+;; indices have to be known here: `lang.rs` interns them before reading this
+;; file, and `the_constants_are_interned_first` is the test that says so.
+(let $unit-value 0)
+(let $true-value 1)
+
+;; ============================================================================
+;; The facts
+;; ============================================================================
+;;
+;; What each one means, and why it is here:
+;;
+;; - `arity-in` / `arity-out` are the invariant. Every rule instance over this
+;;   model is arity-preserving — padding made that so — so arity is constant
+;;   across a class, and `:no-merge` is what enforces it: uniting two classes
+;;   with different stack effects is an illegal merge and the engine refuses
+;;   it. That is the net under every law in this file.
+;; - `is-id` / `is-drop` / `is-copy` say the class contains that structural
+;;   leaf, or something the facts compose to one. The width is the arity's.
+;; - `yields-bool` says whatever this computes leaves a `Bool` on top. The
+;;   `Instruction::yields_bool` list, lifted through composition. It is
+;;   measured by `vm`, so a wrong entry below is a soundness bug rather than
+;;   an inaccurate comment.
+;; - `literal` says the class behaves as `id(inputs) * (push v1 ; … ; push
+;;   vk)` — it pushes exactly those values over an untouched stack. What the
+;;   folding rules read.
+;; - `opcode` / `opwidth` name the instruction a leaf stands for, for the two
+;;   rules that run the machine. `Push` deliberately has neither: a literal is
+;;   not an operation to fold.
+;; - `commutative` is `Instruction::commutative`, for the one rule that spends
+;;   it.
+;;
+;; All of them but the arities are one-way: absent means "not known to hold",
+;; never "known not to". egglog has no negation, so no rule may ask whether a
+;; fact is *missing*, and none below needs to.
+
+(function arity-in  (Hana) i64 :no-merge)
+(function arity-out (Hana) i64 :no-merge)
+(relation is-id (Hana))
+(relation is-drop (Hana))
+(relation is-copy (Hana))
+(relation yields-bool (Hana))
+(function literal (Hana) Lits :merge old)
+(function opcode  (Hana) String :no-merge)
+(function opwidth (Hana) i64 :no-merge)
+(relation commutative (Hana))
+
+;; The canonical spelling of "push these values over `n` untouched ones" — the
+;; shape `lower` gives a run of pushes, and the shape whose class the literal
+;; fact recognizes. A rule builds one by naming the run; these unfold it. The
+;; helpers are unextractable so a residual is printed in the term language and
+;; never in the scaffolding that built it.
+(constructor lit-chain (i64 Lits) Hana :unextractable)
+(constructor lit-step  (i64 i64)  Hana :unextractable)
+(constructor top-drop  (i64)      Hana :unextractable)
+
+;; ============================================================================
+;; The facts, computed
+;; ============================================================================
+
+;; lit-chain-empty
+(rule ((= c (lit-chain ?n ?vs)) (= 0 (vec-length ?vs)))
+      ((union c (Id ?n))))
+;; lit-chain-step
+(rule ((= c (lit-chain ?n ?vs))
+       (= ?k (- (vec-length ?vs) 1))
+       (>= ?k 0)
+       (= ?v (vec-get ?vs ?k)))
+      ((union c (Seq (lit-chain ?n (vec-remove ?vs ?k)) (lit-step (+ ?n ?k) ?v)))))
+;; lit-step-bare
+(rule ((= s (lit-step 0 ?v)))            ((union s (Push ?v))))
+;; lit-step-framed
+(rule ((= s (lit-step ?d ?v)) (> ?d 0))  ((union s (Par (Id ?d) (Push ?v)))))
+
+;; `drop(1)` at the top of `n + 1` values: the deep `n` pass through.
+;; top-drop-bare
+(rule ((= d (top-drop 0)))            ((union d (Drop 1))))
+;; top-drop-framed
+(rule ((= d (top-drop ?n)) (> ?n 0))  ((union d (Par (Id ?n) (Drop 1)))))
+
+;; ---- the structural leaves --------------------------------------------------
+;; leaf-id
+(rule ((= t (Id ?n)))
+      ;; `id(0)` pushes nothing over an untouched stack, which is what lets a
+      ;; literal prefix compose past it — hence the empty run.
+      ((set (arity-in t) ?n) (set (arity-out t) ?n) (is-id t)
+       (set (literal t) (vec-of))))
+;; leaf-drop
+(rule ((= t (Drop ?n)))
+      ((set (arity-in t) ?n) (set (arity-out t) 0) (is-drop t)))
+;; leaf-copy
+(rule ((= t (Copy ?n)))
+      ((set (arity-in t) ?n) (set (arity-out t) (+ ?n ?n)) (is-copy t)))
+;; leaf-push
+(rule ((= t (Push ?v)))
+      ((set (arity-in t) 0) (set (arity-out t) 1) (set (literal t) (vec-of ?v))))
+;; leaf-push-bool
+(rule ((= t (Push ?v)) (value-is-bool ?v))
+      ((yields-bool t)))
+;; leaf-call
+(rule ((= t (Call ?c)))
+      ((set (arity-in t) (call-inputs ?c)) (set (arity-out t) (call-outputs ?c))))
+
+;; ---- compose ----------------------------------------------------------------
+;; compose-arity
+(rule ((= t (Seq ?a ?b)) (= ?i (arity-in ?a)) (= ?o (arity-out ?b)))
+      ((set (arity-in t) ?i) (set (arity-out t) ?o)))
+;; compose-meets
+(rule ((= t (Seq ?a ?b)) (= ?o (arity-out ?a)) (= ?i (arity-in ?b)) (!= ?o ?i))
+      ((panic "a compose node whose halves do not meet")))
+;; compose-is-id
+(rule ((= t (Seq ?a ?b)) (is-id ?a) (is-id ?b))     ((is-id t)))
+;; compose-is-drop-after-id
+(rule ((= t (Seq ?a ?b)) (is-id ?a) (is-drop ?b))   ((is-drop t)))
+;; compose-is-drop
+(rule ((= t (Seq ?a ?b)) (is-drop ?a) (is-drop ?b)) ((is-drop t)))
+;; compose-is-drop-then-nothing
+(rule ((= t (Seq ?a ?b)) (is-drop ?a) (is-id ?b) (= 0 (arity-in ?b)))
+      ((is-drop t)))
+;; compose-is-copy
+(rule ((= t (Seq ?a ?b)) (is-copy ?a) (is-id ?b))   ((is-copy t)))
+;; The suffix answers for the top of the stack; an identity suffix leaves the
+;; prefix's answer standing. The second rule is the other side of that `if`:
+;; egglog cannot ask whether the suffix is *not* an identity, and it need not —
+;; an identity class that also yielded a bool would be claiming its own input is
+;; always a `Bool`, which no sound union can put there.
+;; compose-bool-through-id
+(rule ((= t (Seq ?a ?b)) (is-id ?b) (> (arity-in ?b) 0) (yields-bool ?a))
+      ((yields-bool t)))
+;; compose-bool
+(rule ((= t (Seq ?a ?b)) (yields-bool ?b))
+      ((yields-bool t)))
+;; Both halves push over an untouched stack, so the pushes concatenate: the
+;; suffix's land on top.
+;; compose-literal
+(rule ((= t (Seq ?a ?b)) (= ?xs (literal ?a)) (= ?ys (literal ?b)))
+      ((set (literal t) (vec-append ?xs ?ys))))
+
+;; ---- par --------------------------------------------------------------------
+;; par-arity
+(rule ((= t (Par ?a ?b))
+       (= ?ai (arity-in ?a)) (= ?bi (arity-in ?b))
+       (= ?ao (arity-out ?a)) (= ?bo (arity-out ?b)))
+      ((set (arity-in t) (+ ?ai ?bi)) (set (arity-out t) (+ ?ao ?bo))))
+;; par-is-id
+(rule ((= t (Par ?a ?b)) (is-id ?a) (is-id ?b))     ((is-id t)))
+;; par-is-drop
+(rule ((= t (Par ?a ?b)) (is-drop ?a) (is-drop ?b)) ((is-drop t)))
+;; par-bool-top
+(rule ((= t (Par ?a ?b)) (> (arity-out ?b) 0) (yields-bool ?b)) ((yields-bool t)))
+;; par-bool-deep
+(rule ((= t (Par ?a ?b)) (= 0 (arity-out ?b)) (yields-bool ?a)) ((yields-bool t)))
+;; The deep side's pushes land under the shallow side's inputs, so this is a
+;; literal only when the shallow side reads nothing (its pushes then sit
+;; directly on the deep side's) or the deep side pushes nothing at all.
+;; par-literal
+(rule ((= t (Par ?a ?b)) (= ?xs (literal ?a)) (= ?ys (literal ?b)) (= 0 (arity-in ?b)))
+      ((set (literal t) (vec-append ?xs ?ys))))
+;; par-literal-over-id
+(rule ((= t (Par ?a ?b)) (is-id ?a) (= ?ys (literal ?b)))
+      ((set (literal t) ?ys)))
+
+;; ---- branch -----------------------------------------------------------------
+;; branch-arity
+(rule ((= t (Branch ?x ?y)) (= ?i (arity-in ?x)) (= ?o (arity-out ?x)))
+      ((set (arity-in t) (+ ?i 1)) (set (arity-out t) ?o)))
+;; branch-arms-agree-in
+(rule ((= t (Branch ?x ?y)) (= ?p (arity-in ?x)) (= ?q (arity-in ?y)) (!= ?p ?q))
+      ((panic "a branch node whose arms differ")))
+;; branch-arms-agree-out
+(rule ((= t (Branch ?x ?y)) (= ?p (arity-out ?x)) (= ?q (arity-out ?y)) (!= ?p ?q))
+      ((panic "a branch node whose arms differ")))
+;; branch-bool
+(rule ((= t (Branch ?x ?y)) (> (arity-out ?x) 0) (yields-bool ?x) (yields-bool ?y))
+      ((yields-bool t)))
+
+;; ---- the instruction leaves -------------------------------------------------
+;; One rule per instruction, holding its arity, its codomain, whether it
+;; commutes, and the name `vm-eval` folds it under. This is
+;; `Prim::arity`, `Instruction::yields_bool` and `Instruction::commutative`
+;; written out; `lang.rs` has the test that says so.
+
+;; leaf-swap
+(rule ((= t (Swap)))
+      ((set (arity-in t) 2) (set (arity-out t) 2)
+       (set (opcode t) "Swap") (set (opwidth t) 0)))
+;; leaf-equal
+(rule ((= t (Equal)))
+      ((set (arity-in t) 2) (set (arity-out t) 1)
+       (set (opcode t) "Equal") (set (opwidth t) 0) (yields-bool t) (commutative t)))
+;; leaf-greater
+(rule ((= t (Greater)))
+      ((set (arity-in t) 2) (set (arity-out t) 1)
+       (set (opcode t) "Greater") (set (opwidth t) 0) (yields-bool t)))
+;; leaf-less
+(rule ((= t (Less)))
+      ((set (arity-in t) 2) (set (arity-out t) 1)
+       (set (opcode t) "Less") (set (opwidth t) 0) (yields-bool t)))
+;; leaf-add
+(rule ((= t (Add)))
+      ((set (arity-in t) 2) (set (arity-out t) 1)
+       (set (opcode t) "Add") (set (opwidth t) 0) (commutative t)))
+;; leaf-subtract
+(rule ((= t (Subtract)))
+      ((set (arity-in t) 2) (set (arity-out t) 1)
+       (set (opcode t) "Subtract") (set (opwidth t) 0)))
+;; leaf-multiply
+(rule ((= t (Multiply)))
+      ((set (arity-in t) 2) (set (arity-out t) 1)
+       (set (opcode t) "Multiply") (set (opwidth t) 0) (commutative t)))
+;; leaf-divide
+(rule ((= t (Divide)))
+      ((set (arity-in t) 2) (set (arity-out t) 1)
+       (set (opcode t) "Divide") (set (opwidth t) 0)))
+;; leaf-modulo
+(rule ((= t (Modulo)))
+      ((set (arity-in t) 2) (set (arity-out t) 1)
+       (set (opcode t) "Modulo") (set (opwidth t) 0)))
+;; leaf-not
+(rule ((= t (Not)))
+      ((set (arity-in t) 1) (set (arity-out t) 1)
+       (set (opcode t) "Not") (set (opwidth t) 0) (yields-bool t)))
+;; leaf-negate
+(rule ((= t (Negate)))
+      ((set (arity-in t) 1) (set (arity-out t) 1)
+       (set (opcode t) "Negate") (set (opwidth t) 0)))
+;; leaf-and
+(rule ((= t (And)))
+      ((set (arity-in t) 2) (set (arity-out t) 1)
+       (set (opcode t) "And") (set (opwidth t) 0) (yields-bool t) (commutative t)))
+;; leaf-or
+(rule ((= t (Or)))
+      ((set (arity-in t) 2) (set (arity-out t) 1)
+       (set (opcode t) "Or") (set (opwidth t) 0) (yields-bool t) (commutative t)))
+;; leaf-tuple
+(rule ((= t (Tuple ?n)))
+      ((set (arity-in t) ?n) (set (arity-out t) 1)
+       (set (opcode t) "Tuple") (set (opwidth t) ?n)))
+;; leaf-untuple
+(rule ((= t (Untuple ?n)))
+      ((set (arity-in t) 1) (set (arity-out t) ?n)
+       (set (opcode t) "Untuple") (set (opwidth t) ?n)))
+;; leaf-conststringlen
+(rule ((= t (ConstStringLen)))
+      ((set (arity-in t) 1) (set (arity-out t) 1)
+       (set (opcode t) "ConstStringLen") (set (opwidth t) 0)))
+;; leaf-conststringcharat
+(rule ((= t (ConstStringCharAt)))
+      ((set (arity-in t) 2) (set (arity-out t) 1)
+       (set (opcode t) "ConstStringCharAt") (set (opwidth t) 0)))
+;; leaf-isint
+(rule ((= t (IsInt)))
+      ((set (arity-in t) 1) (set (arity-out t) 1)
+       (set (opcode t) "IsInt") (set (opwidth t) 0) (yields-bool t)))
+;; leaf-isbool
+(rule ((= t (IsBool)))
+      ((set (arity-in t) 1) (set (arity-out t) 1)
+       (set (opcode t) "IsBool") (set (opwidth t) 0) (yields-bool t)))
+;; leaf-isconststring
+(rule ((= t (IsConstString)))
+      ((set (arity-in t) 1) (set (arity-out t) 1)
+       (set (opcode t) "IsConstString") (set (opwidth t) 0) (yields-bool t)))
+;; leaf-issymbol
+(rule ((= t (IsSymbol)))
+      ((set (arity-in t) 1) (set (arity-out t) 1)
+       (set (opcode t) "IsSymbol") (set (opwidth t) 0) (yields-bool t)))
+;; leaf-istuple
+(rule ((= t (IsTuple)))
+      ((set (arity-in t) 1) (set (arity-out t) 1)
+       (set (opcode t) "IsTuple") (set (opwidth t) 0) (yields-bool t)))
+;; leaf-tuplelength
+(rule ((= t (TupleLength)))
+      ((set (arity-in t) 1) (set (arity-out t) 1)
+       (set (opcode t) "TupleLength") (set (opwidth t) 0)))
+;; leaf-asbool
+(rule ((= t (AsBool)))
+      ((set (arity-in t) 1) (set (arity-out t) 1)
+       (set (opcode t) "AsBool") (set (opwidth t) 0) (yields-bool t)))
+;; leaf-asint
+(rule ((= t (AsInt)))
+      ((set (arity-in t) 1) (set (arity-out t) 1)
+       (set (opcode t) "AsInt") (set (opwidth t) 0)))
+;; leaf-astuple
+(rule ((= t (AsTuple ?n)))
+      ((set (arity-in t) 1) (set (arity-out t) 1)
+       (set (opcode t) "AsTuple") (set (opwidth t) ?n)))
+
+
+;; ============================================================================
+;; The laws
+;; ============================================================================
+;;
+;; Every rule below is an equation between programs; saturation applies them
 ;; all, in both directions where both are bounded, and equality is discovered
-;; rather than steered. The spellings are `rewrite/src/lang.rs`'s: `Seq` and
-;; `Par` for `;` and `*`, widths inside the node (`(Id 3)`), and instruction
-;; mnemonics in CamelCase.
-;;
-;; Three kinds of rule appear, in increasing order of machinery:
+;; rather than steered. Three kinds appear, in increasing order of machinery:
 ;;
 ;; - **Pattern rules** say both sides syntactically, and are used wherever a
-;;   law mentions no fact — associativity, the branch laws, the tuple
-;;   cancellations. A width is an ordinary pattern variable here, so laws the
-;;   egg backend had to write as Rust closures — `id(n) * id(m) = id(n+m)` —
-;;   are one line.
-;; - **Fact rules** add a `:when` reading the tables `lang.rs` declares: "is
-;;   this class an identity", "does this class push literals", "what is its
-;;   arity".
-;; - **The evaluation rule** consults the interpreter itself, through the
-;;   `vm-eval` primitive: a literal window is run on a scratch `vm::VM`, so
-;;   folding cannot disagree with the machine. What `eval` owes is an
-;;   obligation, not a licence.
+;;   law needs no fact — associativity, the branch laws, the tuple
+;;   cancellations.
+;; - **Fact rules** add a `:when` reading the tables above.
+;; - **The evaluation rules** consult the interpreter itself, through
+;;   `vm-eval`: a literal window is run on a scratch `vm::VM`, so folding
+;;   cannot disagree with the machine. What `eval` owes is an obligation, not
+;;   a licence.
 ;;
 ;; Deliberately absent: unfolding a call — that is a goal-level decision, see
 ;; `rewrite/src/strategy.rs` — and any rule that conjures code from nothing
 ;; (`drop(n) = X ; drop(m)` backwards); a stepping stone written as a `via`
 ;; waypoint is how that direction is reached.
+;;
+;; The comment above each rule is its name: what the firings report prints and
+;; what `docs/algebra.md` cites.
 
 ;; The rules that grow the graph on shape alone, banned by match count when
 ;; they run away — see `Backoff` in `rewrite/src/strategy.rs`. A fact rule must

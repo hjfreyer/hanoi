@@ -140,7 +140,7 @@ The Hanoi codebase is structured as a cargo workspace with several key packages:
   - [vm/src/runtime.rs](vm/src/runtime.rs): Asynchronous CSP coordinator that drives state machine step cycles.
 - **[rewrite](rewrite)**: The prover.
   - [rewrite/src/term.rs](rewrite/src/term.rs): The algebraic term model — programs as two arity-exact operators (`;` and `*`) over a handful of leaves.
-  - [rewrite/src/rules.egg](rewrite/src/rules.egg): The equations, as e-graph rewrites — an egglog program, in the rewrite syntax egg made familiar.
+  - [rewrite/src/rules.egg](rewrite/src/rules.egg): The prover's engine, whole — the term model as an egglog datatype, the facts saturation reads, and every law, in the rewrite syntax egg made familiar. [lang.rs](rewrite/src/lang.rs) is the Rust it calls into.
   - [rewrite/src/hant.rs](rewrite/src/hant.rs): The strategy language proofs are written in (`peel`, `descend`, `inline`, `via`, `egraph`); [strategy.rs](rewrite/src/strategy.rs) interprets one per identity behind `bin/prove`.
 - **[test-runner](test-runner)**: CLI harness that compiles and runs integration test suites.
 - **[tests](tests)**: A collection of test cases covering all VM features, string/data parsers, queues, and multi-agent CSP networks.
