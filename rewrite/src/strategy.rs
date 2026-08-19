@@ -375,7 +375,9 @@ impl<'l> Prover<'l> {
                 // other side gets its own `symm norm…` inside the right
                 // half when it too needs normalizing.
                 let inputs = goal.lhs.arity().inputs;
-                let waypoint = crate::nf::reify(&crate::nf::normalize(&goal.lhs), inputs);
+                let mut ctx = crate::diagram::Ctx::default();
+                let normalized = crate::diagram::normalize(&mut ctx, &goal.lhs);
+                let waypoint = crate::diagram::reify(&ctx, normalized, inputs);
                 let default = default_strategy();
                 let side = |name: &str,
                             strategy: &Option<Strategy<Body>>,
@@ -1353,14 +1355,19 @@ mod tests {
         let mut opened = Vec::new();
         for (idx, identity) in library.identities.iter_enumerated() {
             let goal = Goal::of_identity(library, idx).unwrap();
-            if crate::nf::normalize(&goal.lhs) == crate::nf::normalize(&goal.rhs) {
+            let mut ctx = crate::diagram::Ctx::default();
+            if crate::diagram::normalize(&mut ctx, &goal.lhs)
+                == crate::diagram::normalize(&mut ctx, &goal.rhs)
+            {
                 plain.push(identity.name.as_str());
             }
             let unfolded = Goal::aligned(
                 inline_calls(library, &goal.lhs, None).unwrap(),
                 inline_calls(library, &goal.rhs, None).unwrap(),
             );
-            if crate::nf::normalize(&unfolded.lhs) == crate::nf::normalize(&unfolded.rhs) {
+            if crate::diagram::normalize(&mut ctx, &unfolded.lhs)
+                == crate::diagram::normalize(&mut ctx, &unfolded.rhs)
+            {
                 opened.push(identity.name.as_str());
             }
         }

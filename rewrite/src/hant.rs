@@ -128,7 +128,7 @@ pub enum Step<V> {
         else_arm: Option<Strategy<V>>,
     },
     /// Cut the goal at a waypoint the normalizer computes: the **left**
-    /// side's case-tree normal form ([`crate::nf`]), reified back into a
+    /// side's case-tree normal form ([`crate::diagram`]), reified back into a
     /// term. `A = B` splits into `A = NF(A)` and `NF(A) = B`, each half
     /// closed by its own strategy, `egraph` by default. One side only, so
     /// the step composes: a right half that needs normalizing too writes

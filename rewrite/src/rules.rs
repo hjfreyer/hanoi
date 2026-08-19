@@ -23,10 +23,10 @@
 use bytecode::{Instruction, Value};
 use egg::{Applier, Id, Pattern, PatternAst, Rewrite, Subst, Symbol, Var, rewrite};
 
+use crate::diagram::run_window;
 use crate::lang::{
     AsTupleW, CopyW, DropW, Facts, HanaLang, IdW, ProofGraph, Proving, PushW, TupleW, UntupleW,
 };
-use crate::nf::run_window;
 
 /// A rewrite over the proving e-graph.
 pub type ProofRewrite = Rewrite<HanaLang, Proving>;
