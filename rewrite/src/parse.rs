@@ -2,15 +2,14 @@
 //!
 //! [`Display`](std::fmt::Display) writes a [`Term`]; this reads one. The two
 //! are inverses, deliberately: a residual is printed in this language, and a
-//! `via` waypoint or a `solve` template is the author's answer to a residual,
-//! so it is written in the same one. A proof used to say `pick 0 push t1
+//! `via` waypoint is the author's answer to a residual, so it is written in
+//! the same one. A proof used to say `pick 0 push t1
 //! equal` where the report said `copy(1) ; id(1) * push t1 ; equal`, and
 //! translating between the two by hand was work the author should never have
 //! been doing.
 //!
 //! ```text
 //! via { copy(1) ; id(1) * push types_test::t1 ; equal ; branch { … } { … } }
-//! solve (f: 1 -> 0) { ?f ; push true }
 //! ```
 //!
 //! Nothing here pads. The term language says what it means — an implicit
@@ -20,97 +19,32 @@
 //! the difference from a Hana sentence, where padding is inferred, and it is
 //! why the two spellings of one waypoint are not the same length.
 //!
-//! What a body may name comes from the [`Scope`]: sentences and symbols out of
-//! the library, and the `?vars` a `solve` head declared.
-
-use std::collections::HashMap;
+//! What a body may name comes from the [`Scope`]: sentences and symbols out
+//! of the library.
 
 use bytecode::{Library, SentenceIndex, Value};
 
-use crate::term::{Arity, Prim, Term};
+use crate::term::{Prim, Term};
 
-/// What names a body may use: the library it is written against, and the
-/// `?vars` of the `solve` head above it (empty for a `via`).
+/// What names a body may use: the library it is written against.
 pub struct Scope<'l> {
     pub library: &'l Library,
-    /// Per declared variable: the index standing for it, and its arity.
-    pub holes: HashMap<String, (SentenceIndex, Arity)>,
 }
 
 impl<'l> Scope<'l> {
     pub fn new(library: &'l Library) -> Self {
-        Scope {
-            library,
-            holes: HashMap::new(),
-        }
-    }
-
-    /// A scope whose `?vars` are the declared ones, each standing as a call to
-    /// an index no sentence has.
-    ///
-    /// A hole is a [`Term::Call`] because that is what the e-matching wants: a
-    /// leaf carrying an arity, which [`crate::lang::pattern_of`] turns into a
-    /// pattern variable. The index is past the end of the library on purpose —
-    /// a hole is never lowered or inlined, and one that reached either would
-    /// rather fail than name some real sentence by accident.
-    pub fn with_holes(library: &'l Library, vars: &[(String, (usize, usize))]) -> Self {
-        let holes = vars
-            .iter()
-            .enumerate()
-            .map(|(i, (name, (inputs, outputs)))| {
-                (
-                    name.clone(),
-                    (
-                        SentenceIndex::from(library.sentences.len() + i),
-                        Arity::new(*inputs, *outputs),
-                    ),
-                )
-            })
-            .collect();
-        Scope { library, holes }
-    }
-
-    /// The holes in declaration order, which is the order a `solve` step's
-    /// variables are recorded in.
-    pub fn holes_in_order(
-        &self,
-        vars: &[(String, (usize, usize))],
-    ) -> Vec<(String, SentenceIndex)> {
-        vars.iter()
-            .map(|(name, _)| (name.clone(), self.holes[name].0))
-            .collect()
+        Scope { library }
     }
 }
 
 /// Reads a term out of the language [`Term`]'s printing writes.
-///
-/// Every declared `?var` must be mentioned and every mentioned one declared:
-/// a template that does not mean what it says must not quietly search for
-/// something else.
 pub fn parse_term(text: &str, scope: &Scope) -> Result<Term, String> {
     let (term, rest) = compose(text, scope)?;
     let rest = rest.trim();
     if !rest.is_empty() {
         return Err(format!("unexpected {}", head_of(rest)));
     }
-    for name in scope.holes.keys() {
-        if !mentions(&term, scope.holes[name].0) {
-            return Err(format!(
-                "the head declares {} but the body never mentions ?{}",
-                name, name
-            ));
-        }
-    }
     Ok(term)
-}
-
-fn mentions(term: &Term, hole: SentenceIndex) -> bool {
-    match term {
-        Term::Call { target, .. } => *target == hole,
-        Term::Compose(a, b) | Term::Par(a, b) => mentions(a, hole) || mentions(b, hole),
-        Term::Branch { if_true, if_false } => mentions(if_true, hole) || mentions(if_false, hole),
-        _ => false,
-    }
 }
 
 /// `a ; b ; c`, left-associated — so a right-nested compose keeps the
@@ -145,16 +79,6 @@ fn atom<'t>(text: &'t str, scope: &Scope) -> Result<(Term, &'t str), String> {
             .strip_prefix(')')
             .ok_or_else(|| format!("expected `)`, found {}", head_of(rest)))?;
         return Ok((term, rest));
-    }
-    if let Some(after) = text.strip_prefix('?') {
-        let (name, rest) = word(after);
-        let Some(&(target, arity)) = scope.holes.get(name) else {
-            return Err(format!(
-                "the body names ?{} but the head declares no such variable",
-                name
-            ));
-        };
-        return Ok((Term::call(target, arity), rest));
     }
     let (head, rest) = word(text);
     match head {
@@ -366,6 +290,7 @@ fn head_of(rest: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::term::Arity;
     use bytecode::assemble;
 
     fn round_trip(library: &Library, text: &str) -> String {
@@ -446,19 +371,5 @@ mod tests {
         assert!(err.contains("`*` against `id(n)`"), "{}", err);
         let err = parse_term("jump twice", &Scope::new(&library)).unwrap_err();
         assert!(err.contains("`call name`"), "{}", err);
-    }
-
-    #[test]
-    fn holes_are_the_variables_the_head_declared() {
-        let library = Library::new();
-        let vars = vec![("f".to_string(), (1, 0))];
-        let scope = Scope::with_holes(&library, &vars);
-        let term = parse_term("?f ; push true", &scope).unwrap();
-        assert_eq!(term.arity(), Arity::new(1, 1));
-
-        let err = parse_term("?g ; push true", &scope).unwrap_err();
-        assert!(err.contains("declares no such variable"), "{}", err);
-        let err = parse_term("push true", &scope).unwrap_err();
-        assert!(err.contains("never mentions ?f"), "{}", err);
     }
 }

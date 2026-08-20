@@ -2,30 +2,27 @@
 //!
 //! ```bash
 //! cargo run --bin prove -- tests
-//! cargo run --bin prove -- tests --filter two_spellings --explain
+//! cargo run --bin prove -- tests --filter two_spellings
 //! ```
 //!
 //! Per identity, its written strategy runs — the `.hant` beside the `.hana`,
-//! see `rewrite::hant` — or the default `egraph` when it has none, and one
-//! line reports the outcome. A goal that sticks prints its **residual**: the
-//! smallest spelling saturation found for each side, narrowed to where the
-//! two differ, which is what says what to try next. Exit codes: `0` every
-//! identity proved, `1` a claim is unproved or a proof entry could not
-//! attach, `2` the corpus would not build or the arguments were wrong.
+//! see `rewrite::hant` — or the default `diagram` when it has none, and one
+//! line reports the outcome. A goal that sticks prints its **residual**:
+//! what each side became, narrowed to where the two differ, which is what
+//! says what to try next. Exit codes: `0` every identity proved, `1` a
+//! claim is unproved or a proof entry could not attach, `2` the corpus
+//! would not build or the arguments were wrong.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::time::Duration;
 
 use rewrite::corpus;
 use rewrite::goal::{Goal, Outcome};
-use rewrite::strategy::{Config, Prover};
+use rewrite::strategy::Prover;
 
 struct Args {
     root: PathBuf,
     filter: Option<String>,
-    explain: bool,
-    config: Config,
 }
 
 fn main() -> ExitCode {
@@ -33,9 +30,7 @@ fn main() -> ExitCode {
         Ok(args) => args,
         Err(message) => {
             eprintln!("error: {}", message);
-            eprintln!(
-                "usage: prove <root> [--filter <substr>] [--explain] [--fuel <nodes>] [--iters <n>]"
-            );
+            eprintln!("usage: prove <root> [--filter <substr>]");
             return ExitCode::from(2);
         }
     };
@@ -52,45 +47,17 @@ fn main() -> ExitCode {
 fn parse_args() -> Result<Args, String> {
     let mut root = None;
     let mut filter = None;
-    let mut config = Config::default();
-    let mut explain = false;
     let mut argv = std::env::args().skip(1);
     while let Some(arg) = argv.next() {
         match arg.as_str() {
             "--filter" => filter = Some(argv.next().ok_or("--filter needs a value")?),
-            "--explain" => explain = true,
-            "--fuel" => {
-                config.node_limit = argv
-                    .next()
-                    .ok_or("--fuel needs a value")?
-                    .parse()
-                    .map_err(|e| format!("--fuel: {}", e))?
-            }
-            "--iters" => {
-                config.iter_limit = argv
-                    .next()
-                    .ok_or("--iters needs a value")?
-                    .parse()
-                    .map_err(|e| format!("--iters: {}", e))?
-            }
-            "--time-limit-secs" => {
-                config.time_limit = Duration::from_secs(
-                    argv.next()
-                        .ok_or("--time-limit-secs needs a value")?
-                        .parse()
-                        .map_err(|e| format!("--time-limit-secs: {}", e))?,
-                )
-            }
             other if root.is_none() && !other.starts_with('-') => root = Some(PathBuf::from(other)),
             other => return Err(format!("unrecognized argument: {}", other)),
         }
     }
-    config.explain = explain;
     Ok(Args {
         root: root.ok_or("no corpus root given")?,
         filter,
-        explain,
-        config,
     })
 }
 
@@ -116,7 +83,7 @@ fn run(args: &Args) -> Result<bool, String> {
 
     let total = corpus.library.identities.len();
     println!("Proving {} identities...", total);
-    let prover = Prover::new(&corpus.library, args.config.clone());
+    let prover = Prover::new(&corpus.library);
     let (mut passed, mut failed, mut filtered) = (0usize, 0usize, 0usize);
     for (idx, identity) in corpus.library.identities.iter_enumerated() {
         if let Some(f) = &args.filter
@@ -131,14 +98,6 @@ fn run(args: &Args) -> Result<bool, String> {
             Outcome::Closed(proof) => {
                 passed += 1;
                 println!("identity {} ... ok ({})", identity.name, proof.summary());
-                if args.explain {
-                    for explanation in proof.explanations() {
-                        for line in explanation.lines() {
-                            println!("    {}", line);
-                        }
-                        println!();
-                    }
-                }
             }
             Outcome::Stuck(residual) => {
                 failed += 1;
@@ -154,13 +113,7 @@ fn run(args: &Args) -> Result<bool, String> {
                 };
                 field("what the left came to", &shown(&residual.lhs));
                 field("what the right came to", &shown(&residual.rhs));
-                field("the search stopped", &residual.stopped);
-                if !residual.firings.is_empty() {
-                    println!("  rule firings");
-                    for (rule, count) in residual.firings.iter().take(8) {
-                        println!("    {:>6}  {}", count, rule);
-                    }
-                }
+                field("the engine stopped", &residual.stopped);
                 println!();
             }
         }

@@ -1,7 +1,7 @@
 // Proofs for the identities identities.hana states, in the strategy
 // language of docs/proving.md. An identity with no entry here is proved by
-// `egraph` alone — this file holds exactly the claims that need direction.
+// `diagram` alone — this file holds exactly the claims that need direction.
 
 // The right-hand side is written as the call it is, and the engine is not
 // allowed to spend a sentence's definition on its own: say so.
-proof identities::testing_a_test_by_name = inline egraph;
+proof identities::testing_a_test_by_name = inline diagram;
