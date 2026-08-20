@@ -49,10 +49,8 @@ impl Goal {
     }
 }
 
-/// How a goal was discharged: the shape of the strategy that closed it, with
-/// what the e-graph found at the leaves. Printed one-line by
-/// [`summary`][Proof::summary]; `--explain` adds the leaves' step-by-step
-/// accounts.
+/// How a goal was discharged: the shape of the strategy that closed it.
+/// Printed one-line by [`summary`][Proof::summary].
 #[derive(Debug)]
 pub enum Proof {
     /// The two sides are one term as written.
@@ -84,29 +82,9 @@ pub enum Proof {
         left_sub: Box<Proof>,
         right_sub: Box<Proof>,
     },
-    /// A `solve` matched its template against the left side — which is the
-    /// proof of the left half — and the filled-in waypoint's right half
-    /// closed. The fills are recorded so a different match after a rule-set
-    /// change is visible rather than mysterious.
-    Solved {
-        fills: Vec<(String, Term)>,
-        right_sub: Box<Proof>,
-    },
-    /// An `egraph` united the two sides.
-    Saturated {
-        iterations: usize,
-        classes: usize,
-        explanation: Option<String>,
-    },
-    /// A `norm` cut the goal at the left side's normal form, reified. The
-    /// left half is `A = NF(A)`; `None` there is `norm_trusted`, where that
-    /// half closed on the normalizer's word — recorded as such, so a report
-    /// says which claims lean on it. The right half, `NF(A) = B`, always
-    /// answers for itself.
-    Normalized {
-        left_sub: Option<Box<Proof>>,
-        right_sub: Box<Proof>,
-    },
+    /// A `diagram` normalized both sides into one arena and they were one
+    /// diagram.
+    Diagram,
 }
 
 impl Proof {
@@ -139,71 +117,14 @@ impl Proof {
                 left_sub.summary(),
                 right_sub.summary()
             ),
-            Proof::Solved { fills, right_sub } => format!(
-                "solve ({}; right: {})",
-                fills
-                    .iter()
-                    .map(|(name, term)| format!("?{} = {}", name, term))
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                right_sub.summary()
-            ),
-            Proof::Saturated {
-                iterations,
-                classes,
-                ..
-            } => format!("saturated ({} iters, {} classes)", iterations, classes),
-            Proof::Normalized {
-                left_sub,
-                right_sub,
-            } => format!(
-                "norm (left: {}; right: {})",
-                match left_sub {
-                    None => "trusted".to_string(),
-                    Some(l) => l.summary(),
-                },
-                right_sub.summary()
-            ),
-        }
-    }
-
-    /// Every explanation the proof's leaves carry, outermost first.
-    pub fn explanations(&self) -> Vec<&str> {
-        match self {
-            Proof::Trivial => vec![],
-            Proof::Peel { sub, .. } | Proof::Inlined { sub, .. } | Proof::Swapped(sub) => {
-                sub.explanations()
-            }
-            Proof::Descend { then_sub, else_sub } => then_sub
-                .iter()
-                .chain(else_sub.iter())
-                .flat_map(|p| p.explanations())
-                .collect(),
-            Proof::Cut {
-                left_sub,
-                right_sub,
-            } => left_sub
-                .explanations()
-                .into_iter()
-                .chain(right_sub.explanations())
-                .collect(),
-            Proof::Solved { right_sub, .. } => right_sub.explanations(),
-            Proof::Saturated { explanation, .. } => explanation.as_deref().into_iter().collect(),
-            Proof::Normalized {
-                left_sub,
-                right_sub,
-            } => left_sub
-                .iter()
-                .flat_map(|l| l.explanations())
-                .chain(right_sub.explanations())
-                .collect(),
+            Proof::Diagram => "the two sides are one diagram".to_string(),
         }
     }
 }
 
-/// What is left when a goal did not close: the smallest spelling saturation
-/// found for each side, narrowed to where the two differ, and what the
-/// search did on the way.
+/// What is left when a goal did not close: what each side became — for a
+/// failed `diagram`, the two sides reified from their normal forms —
+/// narrowed to where the two differ.
 ///
 /// This output is the deliverable of a failed run — it is what says what to
 /// try next, so it is kept as data rather than printed on the spot.
@@ -214,9 +135,7 @@ pub struct Residual {
     /// How the report walked from the goal to the difference: each step of
     /// stripping shared context or entering the one arm that differs.
     pub path: Vec<String>,
-    /// Rule firings, most active first.
-    pub firings: Vec<(String, usize)>,
-    /// Why saturation stopped.
+    /// Why the step gave up.
     pub stopped: String,
 }
 

@@ -39,25 +39,25 @@
 //! this form is genuinely semantic: η (introducing a case split on an
 //! opaque value), and whatever of layer 2 no ordering reaches.
 //!
-//! Everything the case-tree normalizer folded is folded here, one place per
-//! law: literal windows run on the machine ([`run_window`], shared with the
-//! `eval` rule so there is no second semantics), a literal condition takes
-//! its arm (`fold-branch`), a retested condition is decided (`retest-*`),
-//! commutative operands sort (`commute`), `tuple n ; untuple n` cancels
-//! (`tuple-cancel`), `untuple n ; tuple n` reads back as the coercion
-//! (`untuple-retuple`), coercions idempote (`as-*-idem`), a test of a
-//! `yields_bool` answer is `true` (`bool-result`), and a zero-output
+//! Every law of the algebra sheet with a bounded, confluent reading is
+//! folded here, one place per law: literal windows run on the machine
+//! itself ([`run_window`], so there is no second semantics), a literal
+//! condition takes its arm (`fold-branch`), a retested condition is decided
+//! (`retest`), commutative operands sort (`commute`), `tuple n ; untuple n`
+//! cancels (`tuple-cancel`), `untuple n ; tuple n` reads back as the
+//! coercion (`untuple-retuple`), coercions idempote (`as-*-idem`), a test
+//! of a `yields_bool` answer is `true` (`bool-result`), and a zero-output
 //! computation vanishes (`drop-nat` at the codomain). Calls stay opaque:
 //! `inline` remains the step that spends a definition.
 //!
-//! **Trust.** Nothing here produces a derivation yet. [`normalize`] is a
-//! second judge of equality, held to the machine by [`run_window`] and to
-//! the rule set by tests; the `norm` steps cut a goal `A = B` at
-//! `reify(normalize(A))` into `A = NF(A)` and `NF(A) = B`, with
-//! `norm_trusted` closing the left half on this module's word. The intended
-//! next layer is rewriting *on* diagrams — rules as cut-and-splice on the
-//! wiring, each step small and checkable — for which this module is the
-//! representation.
+//! **Trust.** Nothing here produces a derivation yet. This module *is* the
+//! prover's judge of equality — the `diagram` step normalizes both sides of
+//! a goal and asks whether they are one — held to the machine by
+//! [`run_window`], to itself by the reify round trip, and to the corpus by
+//! tests. The intended next layer is rewriting *on* diagrams — rules as
+//! cut-and-splice on the wiring, each step small and checkable, which is
+//! how claims beyond the canonical form (η, case splits) get proofs — and
+//! this module is the representation it will run on.
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -851,9 +851,8 @@ fn cmp_value(a: &Value, b: &Value) -> Ordering {
 ///
 /// The fold owes the interpreter exact agreement, junk included, so there is
 /// no second implementation to drift: a scratch library holding
-/// `push v̄ ; inst` is executed and the stack it leaves is the answer. Shared
-/// with the `eval` rule in [`crate::rules`] — one bridge, two customers.
-pub(crate) fn run_window(operands: &[Value], inst: &Instruction) -> Option<Vec<Value>> {
+/// `push v̄ ; inst` is executed and the stack it leaves is the answer.
+fn run_window(operands: &[Value], inst: &Instruction) -> Option<Vec<Value>> {
     let mut library = Library::new();
     let mut sentence: Vec<Instruction> = operands
         .iter()
@@ -1375,7 +1374,7 @@ mod tests {
         "#;
         let library = assemble(code).unwrap();
         let mut ctx = Ctx::default();
-        let mut by_name = |ctx: &mut Ctx, name: &str| {
+        let by_name = |ctx: &mut Ctx, name: &str| {
             let idx = library
                 .names
                 .iter_enumerated()

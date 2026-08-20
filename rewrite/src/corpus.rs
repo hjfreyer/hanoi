@@ -1,19 +1,15 @@
 //! Loading a source tree's identities and their proofs together.
 //!
 //! One entry point for `bin/prove` and the tests: read the corpus rooted at
-//! `main.hana`, read every `.hant` beside it, read every `via` waypoint and
-//! `solve` template as a [term](crate::parse), and hand back the library with
-//! each proof attached to the identity it names.
+//! `main.hana`, read every `.hant` beside it, read every `via` waypoint as a
+//! [term](crate::parse), and hand back the library with each proof attached
+//! to the identity it names.
 //!
 //! A body is a **term**, not a Hana sentence. A residual is printed in the
 //! term language and a waypoint is the answer to a residual, so the two are
 //! one language: `copy(1) ; id(1) * push t1 ; equal` is what the report says
-//! and what the proof writes. Bodies used to be compiled as scratch sentences
-//! appended to the corpus source — which reused the real parser, and cost the
-//! author a translation of every waypoint, plus a scratch **hole sentence**
-//! per `solve` variable to carry its declared arity. Now the arity is on the
-//! variable, the padding is written rather than inferred, and a body whose
-//! halves do not meet says so where it is written.
+//! and what the proof writes. The padding is written rather than inferred,
+//! and a body whose halves do not meet says so where it is written.
 //!
 //! Attachment is checked both ways. An entry naming no stated identity is a
 //! **problem** — a renamed identity must not silently shed its proof — and so
@@ -47,7 +43,7 @@ pub(crate) fn attach(
         .iter()
         .map(|step| {
             Ok(match step {
-                Step::Egraph => Step::Egraph,
+                Step::Diagram => Step::Diagram,
                 Step::Peel => Step::Peel,
                 // A label is resolved here, so a proof naming a sentence that
                 // is not there is a load-time problem rather than a failed
@@ -77,37 +73,9 @@ pub(crate) fn attach(
                     left: side(left, library)?,
                     right: side(right, library)?,
                 },
-                Step::Solve {
-                    vars,
-                    template,
-                    right,
-                } => {
-                    // The declared variables are the scope the template is read
-                    // in: each `?var` stands as a leaf of its declared arity,
-                    // and the step records which leaf goes with which name.
-                    let scope = Scope::with_holes(library, vars);
-                    Step::Solve {
-                        vars: vars.clone(),
-                        template: Body::Template {
-                            term: parse_term(template, &scope)
-                                .map_err(|e| format!("`solve` template: {}", e))?,
-                            holes: scope.holes_in_order(vars),
-                        },
-                        right: side(right, library)?,
-                    }
-                }
                 Step::Descend { then_arm, else_arm } => Step::Descend {
                     then_arm: side(then_arm, library)?,
                     else_arm: side(else_arm, library)?,
-                },
-                Step::Norm {
-                    trusted,
-                    left,
-                    right,
-                } => Step::Norm {
-                    trusted: *trusted,
-                    left: side(left, library)?,
-                    right: side(right, library)?,
                 },
             })
         })

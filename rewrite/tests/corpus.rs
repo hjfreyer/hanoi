@@ -2,14 +2,14 @@
 //!
 //! This is the regression net for the whole pipeline: every identity the
 //! corpus states must close — by its written proof in the `.hant` beside it
-//! where it has one, by the default `egraph` where it does not — and any
-//! straggler is named exactly. A rule change that breaks a proof fails here,
-//! and so does the happy surprise of a straggler starting to close, which is
-//! the cue to shorten the list. The list is empty today.
+//! where it has one, by the default `diagram` where it does not — and any
+//! straggler is named exactly. An engine change that breaks a proof fails
+//! here, and so does the happy surprise of a straggler starting to close,
+//! which is the cue to shorten the list. The list is empty today.
 
 use rewrite::corpus;
 use rewrite::goal::{Goal, Outcome};
-use rewrite::strategy::{Config, Prover};
+use rewrite::strategy::Prover;
 
 #[test]
 fn the_corpus_identities_close() {
@@ -21,11 +21,11 @@ fn the_corpus_identities_close() {
     assert_eq!(corpus.problems, Vec::<String>::new());
 
     // Nothing is expected to stick. The path-condition claim in `types_test`
-    // was the last one, and `tests/types_test.hant` discharges it: a case
-    // split is a chain of cuts, one waypoint per case the analysis reaches.
+    // was the last one, and `inline diagram` discharges it: the engine
+    // builds the case analysis the old proof wrote out by hand.
     let expected_stragglers: [&str; 0] = [];
 
-    let prover = Prover::new(&corpus.library, Config::default());
+    let prover = Prover::new(&corpus.library);
     let mut stragglers = Vec::new();
     for (idx, identity) in corpus.library.identities.iter_enumerated() {
         let goal = Goal::of_identity(&corpus.library, idx).unwrap();

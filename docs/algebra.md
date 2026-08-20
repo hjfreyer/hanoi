@@ -1,20 +1,22 @@
 # The algebra of programs
 
-A reference sheet for the equational theory the rewriter works in: every
+A reference sheet for the equational theory the prover works in: every
 structural law stated symbolically and in the term model's spelling, with its
-side conditions, where it lives in `rewrite/src/rules.rs`, and what is known
-about completeness. [docs/proving.md](proving.md) describes the machinery
-that applies these laws; this page is the laws themselves, and the map to the
+side conditions, how the engine of `rewrite/src/diagram.rs` embodies it, and
+what is known about completeness. [docs/proving.md](proving.md) describes
+the machinery; this page is the laws themselves, and the map to the
 literature they come from.
 
 The organizing fact: the copy/drop/swap/frame fragment of this language is the
 standard finite presentation of the **free cartesian PROP** — the categorical
 structure singled out by Fox's theorem — and the branch fragment is the
 equational theory of **sum types**. The first has a complete, known axiom set
-and a decision procedure; the second is decidable but genuinely hard, and that
-split is exactly where the proof effort goes: every identity in the corpus
-closes on the rules alone except the sum-type path-condition claim, and that
-one needs its case split written out as a chain of cuts.
+and a decision procedure; the second is decidable but genuinely hard. The
+engine takes both as far as they go without search: the whole first layer is
+*representation* (programs are stored as wiring, where these laws have no
+spelling), the second is canonicalized into ordered case trees, and every
+identity in the corpus closes on that alone — the case split that used to be
+a page of hand-written cuts included.
 
 ## Conventions
 
@@ -26,13 +28,15 @@ one needs its case split written out as a chain of cuts.
 - Generators: `copy(1) : 1 → 2` (δ, the fresh copy lands on top), `drop(1) :
   1 → 0` (ε), `swap : 2 → 2` (σ). The block forms `copy(n)`, `drop(n)`,
   `id(n)` are their own leaves.
-- Every law is stated in its minimal window. Congruence embeds it in any
-  context — in the e-graph that is just the fact that rewriting is closed
-  under node formation.
-- **Where** column: the rule's name in `rules.rs`, *emergent* when the law
-  needs no rule of its own (it falls out of others plus the e-graph's
-  bidirectionality), *candidate* when it is true and useful but not yet
-  written.
+- Every law is stated in its minimal window; congruence embeds it in any
+  context.
+- **How** column: what makes the law hold in the engine. *representation* —
+  the two sides are literally the same data, so the law cannot be violated;
+  *fold* — a bounded, confluent canonicalization applied as the diagram
+  builds (`apply`, `branch_on` and the tree constructors in `diagram.rs`);
+  *order* — the case-tree discipline; *boundary* — true but beyond the
+  canonical form, waiting on a step that spends it; *candidate* — a fold
+  that is true and useful but not yet written.
 
 ## Layer 1: the cartesian core
 
@@ -42,51 +46,47 @@ presentation: symmetric monoidal structure, a cocommutative comonoid on the
 generating object, and naturality of δ and ε (Fox 1976; Lafont 2003 is the
 copy-paste-friendly catalogue).
 
-| law | symbolic | in terms | where |
+| law | symbolic | in terms | how |
 |---|---|---|---|
-| associativity of `;` | `(a;b);c = a;(b;c)` | as written | `assoc-compose` ⇄ |
-| associativity of `*` | `(a*b)*c = a*(b*c)` | as written | `assoc-par` ⇄ |
-| units of `;` | `id ; a = a = a ; id` | `id(n)` of the right width | `unit-compose-left/right` (elim only) |
-| unit of `*` | `id₀ * a = a = a * id₀` | width-0 leaf | `par-unit-deep/top` |
-| id blocks fuse | `id(n) * id(m) = id(n+m)` | | `par-id-fuse` |
-| degenerate blocks | `copy(0) = drop(0) = id(0)` | | `copy-nothing`, `drop-nothing` |
-| interchange, staircase form | `a * b = (a * id) ; (id * b) = (id * b) ; (a * id)` | | `stair-deep-first`, `stair-top-first`, and the two `stair-read-*` recognizers |
-| interchange, middle-four | `(a;c) * (b;d) = (a*b) ; (c*d)` when the split aligns | | `par-fuse` (fusing direction; splitting is the staircases, plus `frame-split-deep/top` for the id-legged case `id * (f;g) = (id*f) ; (id*g)`, which is what lets a branch buried in a framed body surface toward the commuting conversions) |
-| producer beside a computation | `a ; (id(a.out) * b) = a * b` for `b : 0 → m` | | `compose-to-par` |
-| symmetry involutive | `σ ; σ = id₂` | `swap ; swap = id(2)` | `swap-cycle` |
-| naturality of σ | `(a*b) ; σ = σ ; (b*a)` | legs `1 → 1` | `swap-nat` ⇄ |
-| σ past a dropping leg | `swap ; (id(1)*drop(1)) = drop(1)*id(1)`, and mirror | the `1 → 0` leg naturality cannot say | `swap-drop-top/deep` ⇄ |
-| coassociativity | `δ;(id⊗δ) = δ;(δ⊗id)` | `copy(1) ; id(1)*copy(1) = copy(1) ; copy(1)*id(1)` | `coassociative` ⇄ |
-| **cocommutativity** | `δ ; σ = δ` | `copy(1) ; swap = copy(1)` | `cocommutative` |
-| counit, drop the copy | `δ ; (id ⊗ ε) = id` | `copy(n) ; id(n)*drop(n) = id(n)` | `counit-copy` |
-| counit, drop the original | `δ ; (ε ⊗ id) = id` | `copy(n) ; drop(n)*id(n) = id(n)` | `counit-original` |
-| naturality of δ | `X ; copy(m) = copy(n) ; (X * X)` for `X : n → m` | copying outputs is running twice on copied inputs | `copy-nat` ⇄ (`copy-nat-rev` reads the shared shape back) |
-| naturality of ε | `X ; drop(m) = drop(n)` for `X : n → m` | discarded work is no work | `drop-nat` (forward only — the reverse conjures an `X`; a stepping stone is how that direction is reached) |
-| drop blocks | `drop(n) * drop(m) = drop(n+m)` | | `drop-par-fuse`; `drop-split-two` ⇄ for the width the corpus uses |
-| copy blocks | `copy(2)` = the `pick 1 ; pick 1` frame spelling | | `copy-block-two` ⇄ |
+| associativity of `;` | `(a;b);c = a;(b;c)` | as written | representation — `;` is not stored; sequencing is one box's output wire being another's input |
+| associativity of `*` | `(a*b)*c = a*(b*c)` | as written | representation — `*` is not stored; side-by-side is boxes sharing no wires |
+| units of `;` | `id ; a = a = a ; id` | `id(n)` of the right width | representation — `id` is a wire passing through, with no node |
+| unit of `*` | `id₀ * a = a = a * id₀` | width-0 leaf | representation |
+| id blocks fuse | `id(n) * id(m) = id(n+m)` | | representation |
+| degenerate blocks | `copy(0) = drop(0) = id(0)` | | representation — all three are no wires at all |
+| interchange, both forms | `a * b = (a * id) ; (id * b)`; `(a;c) * (b;d) = (a*b) ; (c*d)` | | representation — with no `;` or `*` stored there is nothing to interchange |
+| producer beside a computation | `a ; (id(a.out) * b) = a * b` for `b : 0 → m` | | representation |
+| symmetry involutive | `σ ; σ = id₂` | `swap ; swap = id(2)` | representation — a crossing is not recorded |
+| naturality of σ | `(a*b) ; σ = σ ; (b*a)` | legs `1 → 1` | representation |
+| σ past a dropping leg | `swap ; (id(1)*drop(1)) = drop(1)*id(1)`, and mirror | | representation |
+| coassociativity | `δ;(id⊗δ) = δ;(δ⊗id)` | `copy(1) ; id(1)*copy(1) = copy(1) ; copy(1)*id(1)` | representation — fan-out has no shape |
+| **cocommutativity** | `δ ; σ = δ` | `copy(1) ; swap = copy(1)` | representation |
+| counit, drop the copy | `δ ; (id ⊗ ε) = id` | `copy(n) ; id(n)*drop(n) = id(n)` | representation — the copy that was dropped was never a node |
+| counit, drop the original | `δ ; (ε ⊗ id) = id` | `copy(n) ; drop(n)*id(n) = id(n)` | representation |
+| naturality of δ | `X ; copy(m) = copy(n) ; (X * X)` for `X : n → m` | copying outputs is running twice on copied inputs | representation — interning: one node per distinct computation, however many wires read it |
+| naturality of ε | `X ; drop(m) = drop(n)` for `X : n → m` | discarded work is no work | representation — reachability: unconsumed work has no spelling to survive in; the `n → 0` codomain case is a fold in `apply` |
+| drop blocks | `drop(n) * drop(m) = drop(n+m)` | | representation |
+| copy blocks | `copy(2)` = the `pick 1 ; pick 1` frame spelling | | representation |
 
 Notes:
 
-1. **Side conditions became facts.** A width cannot appear in an e-graph
-   pattern, so every law indexed by one reads it off the class analysis
-   (arity, `is_id`, `is_drop`, `is_copy`). The conditions marked on the old
-   axiom sheet — determinism for `copy-nat`, totality for `drop-nat` and
-   interchange — are discharged globally: the language has no effects, no
-   nondeterminism, and nothing that fails.
+1. **Side conditions are discharged globally.** The conditions marked on
+   the old axiom sheet — determinism for the naturality of δ, totality for
+   the naturality of ε and the interchange — hold because the language has
+   no effects, no nondeterminism, and nothing that fails. They are exactly
+   what licenses the representation column: interning is only sound because
+   running twice is running once, and reachability is only sound because
+   discarded work cannot be observed.
 2. **The net-change asymmetry lives at the goal.** In the term model, padding
-   is explicit, so every rule instance above is arity-preserving as written —
+   is explicit, so every law instance above is arity-preserving as written —
    the counit is `copy(1) ; id(1)*drop(1) = id(1)`, `1 → 1` on both sides.
    Only an *identity's statement* needs the old net-change allowance, and
    `Goal::aligned` pays it once, by padding the narrower side.
-3. **Elimination-only units are not a gap.** Unit *introduction* is unbounded
-   and is never needed: the staircase rules re-pad shapes boundedly, which is
-   what introduction was ever for.
-4. **Yang–Baxter is an instance.** The braid relation
+3. **Yang–Baxter is an instance.** The braid relation
    `swap ; id(1)*swap ; swap = id(1)*swap ; swap ; id(1)*swap` — needed for
-   the permutation fragment to be complete — is naturality of σ at
-   `X = swap`, reachable from `swap-nat` plus the staircases; the
-   `a_framed_computation_is_a_rolled_one` corpus test runs its shape.
-5. **Totality and determinism are free today, and are the load-bearing
+   the permutation fragment to be complete — is pure wiring: both sides read
+   the same permutation, so the data structure cannot state it.
+4. **Totality and determinism are free today, and are the load-bearing
    walls.** An effectful instruction would take `copy-nat` down (the diagonal
    stops being natural), a partial one would take `drop-nat` and the
    interchange (the counit stops being natural and the tensor is merely
@@ -104,22 +104,16 @@ on:
   symbolic evaluation yields the same tuple of terms — dropped inputs and
   discarded work vanish (`drop-nat`), shared work may be copied
   (`copy-nat`).
-- **A cheap oracle.** Symbolic evaluation therefore decides the branch-free
-  fragment outright, and `rewrite/src/diagram.rs` implements it as a
-  string-diagram engine: programs as wiring in an interned arena, so this
-  whole layer is representation rather than rules — extended over the
+- **The oracle became the prover.** Symbolic evaluation decides the
+  branch-free fragment outright, and `rewrite/src/diagram.rs` implements it
+  as a string-diagram engine: programs as wiring in an interned arena, so
+  this whole layer is representation rather than rules — extended over the
   branch fragment to **ordered, shared case trees** (the decision-diagram
   discipline: independent branches reorder to one spelling; sound there,
-  complete only here). It produces no derivation, so it cannot replace the
-  prover — but
-  it answers "is this identity even true?" before anything searches, it is
-  the right completeness sweep for the rule set (random branch-free pairs,
-  oracle verdict against e-graph reach), and the `norm` proof steps spend
-  it: `A = B` cut at the left side's normal form into `A = NF(A)` and
-  `NF(A) = B`, with the e-graph answering for both halves — or, spelled
-  `norm_trusted` and so marked in the proof, with the `A = NF(A)` half
-  closed on the oracle's word. [docs/proving.md](proving.md) has the trust
-  discussion.
+  complete only here). The `diagram` proof step *is* this procedure applied
+  to a goal's two sides. It produces no derivation yet — the replayable-
+  derivation milestone in [docs/proving.md](proving.md) is what turns its
+  verdicts into checkable artifacts.
 
 ## Layer 2: branching — the sum-type fragment
 
@@ -129,17 +123,17 @@ literature: β for case, η for booleans, and the commuting conversions.
 Deciding equality here needed normalization by evaluation with case trees
 (Altenkirch–Dybjer–Hofmann–Scott); expect this layer to stay the hard one.
 
-| law | reading | where |
+| law | reading | how |
 |---|---|---|
-| β | `push c ; branch { A } { B }` = the arm `truthy(c)` selects | `fold-branch` |
-| η (booleans) | ask `is_bool`, branch, push back what branching told you = ε | stated as `identities::split_bool` in the corpus and *run*; as a rewrite it inserts branches, so it stays a goal-level move for the case-split strategy to spend |
-| commuting conversion, suffix | `branch { A } { B } ; C = branch { A;C } { B;C }` | `branch-distribute` ⇄ (backward is suffix-factoring) |
-| commuting conversion, frame | `(x * id(1)) ; branch { A } { B } = branch { x;A } { x;B }` | `branch-hoist` ⇄ — no arithmetic: the frame hid exactly the condition |
-| commuting conversion, beside | `x * branch { A } { B } = branch { x*A } { x*B }` | `branch-beside` ⇄ — the tensor distributing over the case, and independent of the other two. The one lowering asks for constantly: a branch whose arms are narrower than the stack is emitted framed, and every law about branches is stated unframed |
-| copy absorbed by its branch | `copy(1) ; branch { drop(1);A } { drop(1);B } = branch { A } { B }` | `branch-absorbs-copy` |
-| path condition, truthiness | the arm an outer branch took decides an inner branch on a copy of its condition | `retest-then/-else` (+ `-bare` forms) |
-| path condition, value | a value that tested `equal` to a literal *is* that literal, in the then arm | `specialize-equal` |
-| codomain fact | `op ; is_bool = op ; drop-top ; push true` for `yields_bool` ops | `bool-result`; the `yields_bool` fact is measured by `vm` and lifted through composition by the analysis |
+| β | `push c ; branch { A } { B }` = the arm `truthy(c)` selects | fold — a literal condition selects its arm in `branch_on` |
+| η (booleans) | ask `is_bool`, branch, push back what branching told you = ε | boundary — seeing it means inventing a case split on an opaque value, which no canonical form here performs; `eta_stays_beyond_the_diagram` pins it |
+| commuting conversions (suffix, frame, beside) | what runs after or beside a branch runs inside whichever arm it takes | representation — evaluation grafts every continuation into the arms, so the two spellings build one tree |
+| branch order | independent case splits commute | order — conditions sort into one global order along every path (`ite`), so both orders are one diagram |
+| branch of equal arms | `branch { A } { A } = drop-top ; A` | fold — the tree constructor refuses a node whose arms are one diagram |
+| copy absorbed by its branch | `copy(1) ; branch { drop(1);A } { drop(1);B } = branch { A } { B }` | representation — the copy is the same wire, and the dropped one was never a node |
+| path condition, truthiness | the arm an outer branch took decides an inner branch on a copy of its condition | fold — the path carries every decided condition; `retest` in `branch_on` and `restrict` |
+| path condition, value | a value that tested `equal` to a literal *is* that literal, in the then arm | fold — `specialize`: the literal is written through the arm, joins included |
+| codomain fact | `op ; is_bool = op ; drop-top ; push true` for `yields_bool` ops | fold in `apply`; the `yields_bool` fact is measured by `vm` |
 
 Candidates, verified against the junk semantics of
 [docs/totality.md](totality.md) but not yet written — none is needed by the
@@ -147,58 +141,63 @@ current corpus:
 
 | law | in terms | why it is true |
 |---|---|---|
-| `not_branch` | `not ; branch { A } { B } = branch { B } { A }` | `not v` is truthy iff `v = false`, the unique falsy value |
+| `not_branch` | `not ; branch { A } { B } = branch { B } { A }` | `not v` is truthy iff `v = false`, the unique falsy value; foldable by branching on the argument of a `not`-shaped condition |
 | `and_branch` | `and ; branch { A } { B } = branch { branch { A } { B } } { drop-top ; B }` | short-circuiting as an equation; dual form for `or` |
-| `equal_refl` | `copy(1) ; equal = drop... = push true` over the value | `equal` is structural identity; unprovable on opaque values today |
+| `equal_refl` | `equal` on one wire read twice = `true` | `equal` is structural identity; a one-line fold in `apply` when both argument wires are one |
 | type-test family | `op ; is_int = op ; drop-top ; push false` for a `yields_bool` op, per (codomain, test) pair | the other five tests of the same codomain fact, table-driven off `Instruction::yields_*` |
 
 ## Layer 3: the signature — evaluation
 
-Laws about what specific instructions compute. The discipline that matters
-more than any individual law: **facts live on the instruction and are
-measured by `vm`, never restated** — `truthy`, `op_arity`, `commutative`,
-`yields_bool` are the precedents, and the prover's `eval` rule goes one
-further: it executes the literal window on a scratch VM, so there is no
-second implementation of the semantics at all.
+Laws about what specific instructions compute, every one a fold in
+`diagram.rs`'s `apply`. The discipline that matters more than any individual
+law: **facts live on the instruction and are measured by `vm`, never
+restated** — `truthy`, `op_arity`, `commutative`, `yields_bool` are the
+precedents, and the evaluation fold goes one further: it executes the
+literal window on a scratch VM (`run_window`), so there is no second
+implementation of the semantics at all.
 
-| law | where |
+| law | how |
 |---|---|
-| evaluation — `push v̄ ; op` = the pushes of what the machine answers, junk included | `eval`, `eval-padded`, `eval-nothing` |
-| commutativity — `swap ; op = op` for `Instruction::commutative` | `commute` |
-| tuple cancellation — `tuple n ; untuple n = id(n)` | `tuple-cancel` |
-| the coercion — `untuple n ; tuple n = as_tuple n` | `untuple-retuple` |
-| coercion idempotence — `as_X ; as_X = as_X` | `as-bool-idem`, `as-int-idem`, `as-tuple-idem` |
+| evaluation — `push v̄ ; op` = the pushes of what the machine answers, junk included | fold — all-literal arguments run on the machine |
+| commutativity — `swap ; op = op` for `Instruction::commutative` | fold — operand wires sort into one canonical order |
+| tuple cancellation — `tuple n ; untuple n = id(n)` | fold |
+| the coercion — `untuple n ; tuple n = as_tuple n` | fold |
+| coercion idempotence — `as_X ; as_X = as_X` | fold |
 
 ## Lemmas, never axioms
 
-Laws that looked essential and are reachable from the set above — each held
-by a test rather than stated as a rule:
+Laws that looked essential on the old axiom sheet and are nothing at all in
+the wiring representation — each held by a test rather than stated anywhere:
 
-| lemma | reached by | held by |
+| lemma | why it is free | held by |
 |---|---|---|
-| `copy_const` — `push c ; copy(1) = push c ; push c` | `copy-nat` at `X = push c`, staircases, units | `rules::tests::copying_a_constant_is_pushing_it_twice`, and the corpus identity |
-| vacuous — copy a block, compute, drop the results = ε | counits + `drop-nat` + the block bridges | corpus identity `discarded_work_on_copies` |
-| the guard a split leaves — `op ; copy(1) ; is_bool = op ; push true` | `copy-nat` read backward by the e-graph, `bool-result`, counits | corpus identity `the_guard_a_split_leaves` |
-| a frame off — `X * id(1) = swap ; id(1)*X ; swap` | `swap-nat` + `swap-cycle` | corpus identity `taking_a_frame_off` |
-| branch of equal arms — `branch { A } { A } = drop-top ; A` | `branch-distribute` backward + `drop-nat` + counit | candidate sweep, when wanted |
+| `copy_const` — `push c ; copy(1) = push c ; push c` | two `push c` wires intern to one node | `diagram::tests::copying_a_constant_is_pushing_it_twice`, and the corpus identity |
+| vacuous — copy a block, compute, drop the results = ε | unconsumed work has no spelling | corpus identity `discarded_work_on_copies` |
+| the guard a split leaves — `op ; copy(1) ; is_bool = op ; push true` | one wire read twice, plus the `yields_bool` fold | corpus identity `the_guard_a_split_leaves` |
+| a frame off — `X * id(1) = swap ; id(1)*X ; swap` | pure wiring | corpus identity `taking_a_frame_off`, `diagram::tests::a_frame_is_a_roll_pair` |
 
 The demotion test is unchanged from the old sheet: read the opaque `X` as a
-random oracle (kills `copy-nat`) or as fallible (kills `drop-nat` and the
-interchange) and see what else falls. A law that survives every such reading
-of the others but fails on its own is independent; anything else is a lemma.
+random oracle (kills the naturality of δ) or as fallible (kills the
+naturality of ε and the interchange) and see what else falls. A law that
+survives every such reading of the others but fails on its own is
+independent; anything else is a lemma — or, here, a fact of the data
+structure.
 
 ## If effects or partiality ever arrive
 
 The literature already says which rows fall, and it matches the constraints
 column exactly:
 
-- **Partiality** (a `panic` returns): `drop-nat` and the interchange go — the
-  counit stops being natural and the tensor is merely *premonoidal*
-  (Power–Robinson). Every other layer-1 law survives.
-- **Nondeterminism or effects**: `copy-nat` goes — the diagonal stops being
-  natural. The recovery notion is Führmann's *thunkability*: the laws return
-  for the pure sub-language, which is how an effectful Hanoi would keep this
-  page — as the theory of its pure fragment.
+- **Partiality** (a `panic` returns): the naturality of ε and the
+  interchange go — the counit stops being natural and the tensor is merely
+  *premonoidal* (Power–Robinson). In the engine that means reachability may
+  no longer delete work and boxes acquire an evaluation order: drops and
+  sequencing would need explicit nodes again.
+- **Nondeterminism or effects**: the naturality of δ goes — the diagonal
+  stops being natural, so interning may no longer merge two runs of one
+  computation. The recovery notion is Führmann's *thunkability*: the laws
+  return for the pure sub-language, which is how an effectful Hanoi would
+  keep this page — as the theory of its pure fragment.
 
 ## References
 
@@ -208,8 +207,9 @@ column exactly:
   explicit finite presentations of these PROPs.
 - Bonchi–Sobociński–Zanasi, *Interacting Hopf algebras*; the *String Diagram
   Rewrite Theory* series I–III — rewriting these presentations as hypergraph
-  rewriting, which dissolves the padding bureaucracy layer 1 pays for in
-  staircase rules; Kissinger's Chyp is the working tool.
+  rewriting, which dissolves the padding bureaucracy a term presentation
+  pays for; the road `rewrite/src/diagram.rs` took. Kissinger's Chyp is the
+  working tool for the rewriting layer this page does not have yet.
 - Altenkirch–Dybjer–Hofmann–Scott, *Normalization by evaluation for typed
   lambda calculus with coproducts* (2001) — why layer 2 is the hard one, and
   the shape of its decision procedure.
@@ -217,4 +217,6 @@ column exactly:
   (1997); Führmann, *Direct models of the computational lambda calculus*
   (1999) — the effects roadmap.
 - Willsey et al., *egg: Fast and extensible equality saturation* (POPL 2021)
-  — the engine `bin/prove` is built on.
+  — the engine an earlier `bin/prove` was built on, retired when the diagram
+  representation made ~95% of its rule firings (measured on the contract
+  claim) into padding translation with no spelling left to translate.
