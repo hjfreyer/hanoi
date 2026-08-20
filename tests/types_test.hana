@@ -7,6 +7,10 @@
 // claim about the code rather than about any value it runs on. The barista's
 // version of that claim is buried under four states, a tuple of three and an
 // event enum. This one has two symbols and a pair, and states the same thing.
+//
+// Both are proved, and the difference between them is what the precondition
+// is made of: here a chain of equalities against literals, there a
+// conjunction of type tests. See docs/proving.md.
 
 symbol t1
 symbol t2

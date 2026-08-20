@@ -144,7 +144,14 @@ mod customer_impl {
         }
     }
 
-    // identity emit_does_pre_and_post_is_constant { jump emit_does_pre_and_post } = { drop 0 push true };
+    // The contract, as a claim about the code rather than about any state it
+    // runs on: either the precondition fails, or the answer satisfies the
+    // postcondition. `tests/types_test.hana` states the same thing with two
+    // symbols and a pair; this is the version with four internal states, a
+    // triple whose first two slots must be symbols, and an event enum.
+    identity emit_does_pre_and_post_is_constant
+        { jump emit_does_pre_and_post }
+      = { drop 0 push true };
 
     // emit takes state: (id, preferred_drink, internal_state) and returns ValueSet of emitted events.
     #[precondition(is_state::check)]

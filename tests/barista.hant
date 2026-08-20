@@ -1,0 +1,15 @@
+// Proofs for the identities barista.hana states, in the strategy language of
+// docs/proving.md. An identity with no entry here is proved by `diagram`
+// alone — this file holds exactly the claims that need direction.
+
+// The contract claim for the customer's `emit`, and the whole of what a
+// human has to say about it is which definitions to spend.
+//
+// What the engine does unaided: builds the case tree over the four internal
+// states, runs each leaf's window on the machine, and — the part this claim
+// turns on — carries the precondition inward. `is_state::check` proves one
+// `and` tree; the postcondition's `is_event::check` re-asks the conjuncts of
+// it one at a time, on wires no reordering reaches, and gets them back
+// decided. Its sibling in types_test.hana makes the same claim where the
+// precondition is a chain of equalities instead.
+proof barista::customer_impl::emit_does_pre_and_post_is_constant = inline diagram;

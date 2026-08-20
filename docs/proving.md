@@ -14,12 +14,13 @@ cargo run --bin prove -- tests --filter two_spellings
 ```
 
 ```
-Proving 14 identities...
+Proving 15 identities...
 identity identities::testing_a_test ... ok (the two sides are one diagram)
 identity identities::testing_a_test_by_name ... ok (inline; the two sides are one diagram)
+identity barista::customer_impl::emit_does_pre_and_post_is_constant ... ok (inline; the two sides are one diagram)
 identity types_test::number_does_pre_and_post_is_constant ... ok (inline; the two sides are one diagram)
 ...
-identity result: ok. 14 passed; 0 failed; 0 problem(s); 0 filtered out
+identity result: ok. 15 passed; 0 failed; 0 problem(s); 0 filtered out
 ```
 
 Exit codes keep the old contract: `0` every identity proved, `1` a claim
@@ -70,14 +71,30 @@ Branches take the decision-diagram discipline: the canonical form is an
 **ordered, shared case tree** — conditions in one global order along every
 path, so programs that test independent conditions in different orders
 reach one spelling; equal subtrees are one interned node, so reconverging
-check chains stay small; the arm that tested a value `equal` to a literal
-holds the literal. Every law of the algebra sheet with a bounded, confluent
-reading is folded in as the diagram builds: literal windows run on the real
-`vm` (one `run_window`, no second semantics), a literal condition takes its
-arm, a retested condition is decided, commutative operands sort, the tuple
-laws and coercion idempotences apply, a `yields_bool` answer passes its
-test. What remains outside is genuinely semantic: η — inventing a case
-split on an opaque value — is the pinned boundary
+check chains stay small; and every arm runs knowing what its own outcome
+says about *values*, written through it to the leaves. That last part is
+what makes a contract spendable, and it is worth spelling out. A guard
+proves one wire — an `and` tree over a handful of predicates — and the
+postcondition downstream re-asks a single conjunct, which is a *different*
+wire that no amount of reordering reaches. So the outcome is decomposed:
+`and` holding is each side holding, `or` failing is each side failing,
+`not` swaps which arm learns what, `equal` against a literal makes the
+value that literal, and a condition the instruction set promises is a bool
+is `true` in its then arm — while any condition at all is exactly `false`
+in its else arm, `false` being the unique falsy value. Writing all that
+through is Shannon expansion carried into the leaves; `bool-eta` folds a
+split back onto its own wire where that value is the whole difference
+between the arms, which is what keeps the finer form canonical.
+
+Every law of the algebra sheet with a bounded, confluent reading is folded
+in as the diagram builds: literal windows run on the real `vm` (one
+`run_window`, no second semantics), a literal condition takes its arm, a
+retested condition is decided, commutative operands sort, one wire read
+twice is `equal` to itself, the tuple laws and the coercion idempotences
+apply, a coercion reads the width its builder already fixed, a
+`yields_bool` answer passes its test. What remains outside is genuinely
+semantic: η on an *opaque* value — inventing a case split where nothing
+promises a bool — is the pinned boundary
 (`eta_stays_beyond_the_diagram`), and claims that need it stay open until
 there is a step that spends it.
 
@@ -150,6 +167,22 @@ arm that tested equal to a literal holds the literal, each leaf folds on
 the machine. The whole proof is now `inline diagram` — the one thing left
 to say is which definitions to spend.
 
+**And a contract on a real state machine is the same line.**
+`barista::customer_impl::emit_does_pre_and_post_is_constant` says of the
+customer's `emit` what the miniature says of `number`: either the
+precondition fails, or the answer satisfies the postcondition. The
+difference is what the precondition *is*. `is_tag` is a chain of equalities
+against literals, and equality against a literal is the one path fact the
+engine has always spent. `is_state::check` is a conjunction — a triple,
+whose first two slots must be symbols — and `is_symbol` of an opaque wire
+is not an equality with anything. The guard proves the whole `and` tree;
+the postcondition, running `is_event::check` on the event `emit` just
+built, re-asks one conjunct of it. Carrying a decided condition inward
+through the connectives, and pinning a bool-yielding condition to its own
+value, is what answers that — [docs/algebra.md](algebra.md) has the rows.
+The rest is arithmetic the engine already did: four internal states times
+four event shapes, folded leaf by leaf on the machine.
+
 **Trust.** The engine produces no derivation: `diagram` closing a goal is
 this one module's word, held to the machine by `run_window` (folding runs
 the real `vm`), to itself by the reify round trip, and to the corpus by
@@ -176,11 +209,13 @@ a call is named (`call types_test::number`, or any unambiguous tail of that),
 which is also how a residual prints one when the report has the library to
 hand; `Display` alone can only say `call #3`.
 
-The current corpus needs two entries, and they are the same line: `inline
+The current corpus needs three entries, and they are the same line: `inline
 diagram` for `identities::testing_a_test_by_name` (its right side is
-written as a call) and for
-`types_test::number_does_pre_and_post_is_constant` (the contract claim).
-Every other identity closes with no entry at all.
+written as a call), for `types_test::number_does_pre_and_post_is_constant`
+(the contract claim in miniature) and for
+`barista::customer_impl::emit_does_pre_and_post_is_constant` (the same
+claim about a real state machine — four states, a triple, and an event
+enum). Every other identity closes with no entry at all.
 
 ## The failure output is the point
 
@@ -208,9 +243,11 @@ tree it came from — the layout only chooses where the newlines go.
   small and checkable, searched or directed. The representation is built
   for this; the matcher and splicer are not.
 - **A case split as a step.** The concrete first move the above would pay
-  for: a `cases` step that splits a goal on a boolean-valued wire, carrying
-  the condition into each half — η spent deliberately, the way `inline`
-  spends a definition.
+  for: a `cases` step that splits a goal on an *opaque* wire, carrying the
+  condition into each half — η spent deliberately, the way `inline` spends
+  a definition. The bool-yielding half of η is decided already (`bool-eta`);
+  what needs a step is the half where nothing promises a bool, and so
+  nothing but a deliberate split can invent the two cases.
 - **A replayable derivation.** A close is currently the engine's verdict;
   nothing independent re-checks it. The next milestone is a normalizer
   that emits its steps — every fold and reorder is an instance of a named

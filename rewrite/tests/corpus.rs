@@ -20,9 +20,12 @@ fn the_corpus_identities_close() {
     let corpus = corpus::load(&tests).unwrap();
     assert_eq!(corpus.problems, Vec::<String>::new());
 
-    // Nothing is expected to stick. The path-condition claim in `types_test`
-    // was the last one, and `inline diagram` discharges it: the engine
-    // builds the case analysis the old proof wrote out by hand.
+    // Nothing is expected to stick. The contract claims are the two that
+    // stood longest — `types_test`'s miniature and the barista's `emit`,
+    // whose precondition is a conjunction of type tests rather than a chain
+    // of equalities — and `inline diagram` discharges both: the engine
+    // builds the case analysis the old proof wrote out by hand, and carries
+    // a decided guard inward through the connectives.
     let expected_stragglers: [&str; 0] = [];
 
     let prover = Prover::new(&corpus.library);

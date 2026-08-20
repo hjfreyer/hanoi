@@ -126,13 +126,16 @@ Deciding equality here needed normalization by evaluation with case trees
 | law | reading | how |
 |---|---|---|
 | β | `push c ; branch { A } { B }` = the arm `truthy(c)` selects | fold — a literal condition selects its arm in `branch_on` |
-| η (booleans) | ask `is_bool`, branch, push back what branching told you = ε | boundary — seeing it means inventing a case split on an opaque value, which no canonical form here performs; `eta_stays_beyond_the_diagram` pins it |
+| η (booleans) | ask `is_bool`, branch, push back what branching told you = ε | boundary — on an *opaque* value, seeing it means inventing a case split, which no canonical form here performs; `eta_stays_beyond_the_diagram` pins it. On a condition the instruction set promises is a bool it is decided, by `bool-eta` below |
 | commuting conversions (suffix, frame, beside) | what runs after or beside a branch runs inside whichever arm it takes | representation — evaluation grafts every continuation into the arms, so the two spellings build one tree |
 | branch order | independent case splits commute | order — conditions sort into one global order along every path (`ite`), so both orders are one diagram |
-| branch of equal arms | `branch { A } { A } = drop-top ; A` | fold — the tree constructor refuses a node whose arms are one diagram |
+| branch of equal arms | `branch { A } { A } = drop-top ; A` | fold — the tree constructor refuses a node whose arms are one diagram, compared *after* each arm has spent its own facts (`bool-eta` is what recovers the case where spending them is the only difference) |
 | copy absorbed by its branch | `copy(1) ; branch { drop(1);A } { drop(1);B } = branch { A } { B }` | representation — the copy is the same wire, and the dropped one was never a node |
 | path condition, truthiness | the arm an outer branch took decides an inner branch on a copy of its condition | fold — the path carries every decided condition; `retest` in `branch_on` and `restrict` |
-| path condition, value | a value that tested `equal` to a literal *is* that literal, in the then arm | fold — `specialize`: the literal is written through the arm, joins included |
+| path condition, value | a value that tested `equal` to a literal *is* that literal, in the then arm | fold — `facts`: the literal is written through the arm, joins included |
+| path condition, the condition itself | the else arm's condition is exactly `false`; the then arm's is `true` when the op that computed it promises a bool | fold — `facts`; `truthy` is `≠ false`, so the two arms learn facts of different strength |
+| `and_branch` / `not_branch` | `and` holding is each side holding, `or` failing is each side failing, `not` swaps the arms | fold — `facts` carries the outcome inward, as substitutions rather than as a reshaped tree; the other two corners are disjunctions and say nothing |
+| `bool-eta` | a split on a `yields_bool` condition whose arms differ only in carrying that condition's value = the wire | fold — `Ctx::unexpand`, checked by restricting the candidate back both ways; this is what keeps leaf-deep Shannon expansion canonical rather than merely finer |
 | codomain fact | `op ; is_bool = op ; drop-top ; push true` for `yields_bool` ops | fold in `apply`; the `yields_bool` fact is measured by `vm` |
 
 Candidates, verified against the junk semantics of
@@ -141,10 +144,8 @@ current corpus:
 
 | law | in terms | why it is true |
 |---|---|---|
-| `not_branch` | `not ; branch { A } { B } = branch { B } { A }` | `not v` is truthy iff `v = false`, the unique falsy value; foldable by branching on the argument of a `not`-shaped condition |
-| `and_branch` | `and ; branch { A } { B } = branch { branch { A } { B } } { drop-top ; B }` | short-circuiting as an equation; dual form for `or` |
-| `equal_refl` | `equal` on one wire read twice = `true` | `equal` is structural identity; a one-line fold in `apply` when both argument wires are one |
 | type-test family | `op ; is_int = op ; drop-top ; push false` for a `yields_bool` op, per (codomain, test) pair | the other five tests of the same codomain fact, table-driven off `Instruction::yields_*` |
+| the boolean units | `push true ; and = as_bool`, `push false ; or = as_bool`, and the absorbing pair | what a conjunct left over after its neighbour was decided ought to reduce to; nothing in the corpus needs it yet |
 
 ## Layer 3: the signature — evaluation
 
@@ -163,6 +164,8 @@ implementation of the semantics at all.
 | tuple cancellation — `tuple n ; untuple n = id(n)` | fold |
 | the coercion — `untuple n ; tuple n = as_tuple n` | fold |
 | coercion idempotence — `as_X ; as_X = as_X` | fold |
+| the width a builder fixed — `tuple n ; as_tuple n = tuple n`, and `as_tuple m` off that width is the junk literal | fold — `tuple n` and `as_tuple n` both promise an n-tuple unconditionally |
+| reflexivity — `equal` on one wire read twice = `true` | fold — `equal` is structural identity, and a value is itself |
 
 ## Lemmas, never axioms
 

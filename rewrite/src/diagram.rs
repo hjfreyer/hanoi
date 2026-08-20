@@ -33,22 +33,32 @@
 //! different orders reach one spelling, and a long chain of checks whose
 //! arms reconverge collapses instead of doubling ([`Ctx::branch`] refuses a
 //! node whose arms are one diagram). [`Ctx::ite`] is the reordering
-//! constructor, restriction is Shannon expansion, and the arm that saw
-//! `true` has its condition's literal written through it
-//! (`specialize-equal`) at every level, joins included. What remains beyond
-//! this form is genuinely semantic: η (introducing a case split on an
-//! opaque value), and whatever of layer 2 no ordering reaches.
+//! constructor and restriction is Shannon expansion, carried all the way
+//! into the leaves: everything a decided condition says about *values*
+//! ([`facts`]) is written through its arm at every level, joins included,
+//! so a leaf never carries a wire the path above it already settled. That
+//! is what makes a contract spendable — a guard proves one `and` tree and
+//! the postcondition re-asks a single conjunct, which is a different wire
+//! and reachable by no reordering — and [`Ctx::unexpand`] is what keeps
+//! the finer form canonical, folding a split back onto its own wire where
+//! that value is the whole difference between the arms. What remains
+//! beyond the form is genuinely semantic: η on an *opaque* value, and
+//! whatever of layer 2 no ordering reaches.
 //!
 //! Every law of the algebra sheet with a bounded, confluent reading is
 //! folded here, one place per law: literal windows run on the machine
 //! itself ([`run_window`], so there is no second semantics), a literal
 //! condition takes its arm (`fold-branch`), a retested condition is decided
-//! (`retest`), commutative operands sort (`commute`), `tuple n ; untuple n`
-//! cancels (`tuple-cancel`), `untuple n ; tuple n` reads back as the
-//! coercion (`untuple-retuple`), coercions idempote (`as-*-idem`), a test
-//! of a `yields_bool` answer is `true` (`bool-result`), and a zero-output
-//! computation vanishes (`drop-nat` at the codomain). Calls stay opaque:
-//! `inline` remains the step that spends a definition.
+//! (`retest`), a decided condition's facts are written through its arm
+//! (`specialize-*`, and `bool-eta` back), commutative operands sort
+//! (`commute`), one wire read twice is equal to itself (`equal-refl`),
+//! `tuple n ; untuple n` cancels (`tuple-cancel`), `untuple n ; tuple n`
+//! reads back as the coercion (`untuple-retuple`), coercions idempote
+//! (`as-*-idem`) and read the width their builder fixed
+//! (`as-tuple-shape`), a test of a `yields_bool` answer is `true`
+//! (`bool-result`), and a zero-output computation vanishes (`drop-nat` at
+//! the codomain). Calls stay opaque: `inline` remains the step that spends
+//! a definition.
 //!
 //! **Trust.** Nothing here produces a derivation yet. This module *is* the
 //! prover's judge of equality — the `diagram` step normalizes both sides of
@@ -180,20 +190,62 @@ impl Ctx {
 
     /// A branch node — after the last local facts are spent: arms that came
     /// out equal never branch (the branch-of-equal-arms lemma, the
-    /// condition's work vanishing by `drop-nat`), and an arm re-testing its
-    /// own condition at the root is decided (`retest`, for diagrams met
-    /// after the path was recorded).
+    /// condition's work vanishing by `drop-nat`), an arm re-testing its own
+    /// condition at the root is decided (`retest`, for diagrams met after
+    /// the path was recorded), and arms that differ only in carrying the
+    /// condition's own value fold back onto the wire (`bool-eta`).
     fn branch(&mut self, cond: ValId, if_true: DiagId, if_false: DiagId) -> DiagId {
         let if_true = self.restrict(if_true, cond, true);
         let if_false = self.restrict(if_false, cond, false);
         if if_true == if_false {
             return if_true;
         }
+        if let Some(folded) = self.unexpand(cond, if_true, if_false) {
+            return folded;
+        }
         self.intern_diag(DiagNode::Branch {
             cond,
             if_true,
             if_false,
         })
+    }
+
+    /// `bool-eta`: the branch whose whole content is the condition it
+    /// tested.
+    ///
+    /// [`facts`] writes a decided condition's value through its arms, which
+    /// is Shannon expansion carried all the way into the leaves — so a
+    /// leaf never carries a wire the path above it already decided. That is
+    /// the finer form, and this is what keeps it canonical rather than
+    /// merely finer: where the two arms differ *only* by that value, the
+    /// case split says nothing the wire does not, and the branch folds back
+    /// into it.
+    ///
+    /// The candidate is the `then` arm with the condition written back in
+    /// place of `true`, and it is *checked*: restricting it either way must
+    /// reproduce the arm it came from. So a `true` in the leaf that had
+    /// nothing to do with the condition fails the round trip and the branch
+    /// stays. `yields_bool` is what makes the `then` side legitimate — a
+    /// merely truthy condition is not its own `true` — and it is also why
+    /// this is not η: `branch { push true } { push false }` on an opaque
+    /// value is still `as_bool` and still beyond the form
+    /// (`eta_stays_beyond_the_diagram`). Only leaves are tried, which
+    /// bounds the work and keeps the recursion out of the tree.
+    fn unexpand(&mut self, cond: ValId, if_true: DiagId, if_false: DiagId) -> Option<DiagId> {
+        if !yields_bool(self, cond) {
+            return None;
+        }
+        if !matches!(
+            (self.diag(if_true), self.diag(if_false)),
+            (DiagNode::Leaf(_), DiagNode::Leaf(_))
+        ) {
+            return None;
+        }
+        let truth = self.lit(Value::Bool(true));
+        let folded = self.subst_diag(if_true, truth, cond);
+        let back_true = self.restrict(folded, cond, true);
+        let back_false = self.restrict(folded, cond, false);
+        (back_true == if_true && back_false == if_false).then_some(folded)
     }
 
     /// The case tree for "if `cond` then `t` else `f`", with the decision-
@@ -238,10 +290,10 @@ impl Ctx {
     }
 
     /// The diagram, knowing `cond` came out `taken`: the root level testing
-    /// `cond` collapses to its arm, and — when the condition proved a value
-    /// equal to a literal — the `true` side has the literal written through
-    /// it. Ordered input, ordered output; a condition never hides below a
-    /// level it sorts above, so only the root can test `cond`.
+    /// `cond` collapses to its arm, and everything the outcome says about
+    /// values ([`facts`]) is written through what is left. Ordered input,
+    /// ordered output; a condition never hides below a level it sorts
+    /// above, so only the root can test `cond`.
     fn restrict(&mut self, d: DiagId, cond: ValId, taken: bool) -> DiagId {
         let key = (d, cond, taken);
         if let Some(&hit) = self.restrict_memo.get(&key) {
@@ -261,14 +313,10 @@ impl Ctx {
             }
             _ => d,
         };
-        let out = if taken {
-            match equal_to_literal(self, cond) {
-                Some((from, to)) => self.subst_diag(base, from, to),
-                None => base,
-            }
-        } else {
-            base
-        };
+        let mut out = base;
+        for (from, to) in facts(self, cond, taken) {
+            out = self.subst_diag(out, from, to);
+        }
         self.restrict_memo.insert(key, out);
         out
     }
@@ -522,18 +570,13 @@ fn graft(ctx: &mut Ctx, d: DiagId, path: &mut Path, carried: Vec<ValId>, then: G
             if_true,
             if_false,
         } => {
-            let carried_true = match equal_to_literal(ctx, cond) {
-                Some((from, to)) => carried
-                    .iter()
-                    .map(|&v| ctx.subst_val(v, from, to))
-                    .collect(),
-                None => carried.clone(),
-            };
+            let carried_true = specialize(ctx, cond, true, &carried);
+            let carried_false = specialize(ctx, cond, false, &carried);
             path.push((cond, true));
             let t = graft(ctx, if_true, path, carried_true, then);
             path.pop();
             path.push((cond, false));
-            let f = graft(ctx, if_false, path, carried, then);
+            let f = graft(ctx, if_false, path, carried_false, then);
             path.pop();
             ctx.ite(cond, t, f)
         }
@@ -560,14 +603,14 @@ fn branch_on(
         let arm = if taken { if_true } else { if_false };
         return eval(ctx, arm, stack, path);
     }
-    // `specialize-equal`: inside the then arm, a value that tested `equal`
-    // to a literal is that literal — `equal` is structural identity.
-    let then_stack = specialize(ctx, cond, &stack);
+    // Each arm runs knowing what its own outcome says about values.
+    let then_stack = specialize(ctx, cond, true, &stack);
+    let else_stack = specialize(ctx, cond, false, &stack);
     path.push((cond, true));
     let t = eval(ctx, if_true, then_stack, path);
     path.pop();
     path.push((cond, false));
-    let f = eval(ctx, if_false, stack, path);
+    let f = eval(ctx, if_false, else_stack, path);
     path.pop();
     ctx.ite(cond, t, f)
 }
@@ -595,13 +638,98 @@ fn equal_to_literal(ctx: &Ctx, cond: ValId) -> Option<(ValId, ValId)> {
     }
 }
 
-/// The then-arm's stack when the condition is `v = literal`: every
-/// occurrence of `v` replaced by the literal it just proved to be.
-fn specialize(ctx: &mut Ctx, cond: ValId, stack: &[ValId]) -> Vec<ValId> {
-    let Some((from, to)) = equal_to_literal(ctx, cond) else {
-        return stack.to_vec();
+/// What a decided condition says about **values**, as substitutions the arm
+/// may write through anything it can still see (`specialize-*`).
+///
+/// A branch reads `truthy`, which is `≠ false`, so the two arms learn facts
+/// of different strength and the asymmetry is the whole design:
+///
+/// - the `else` arm knows its condition is *exactly* `false` — nothing else
+///   is untruthy — and that holds of any condition whatever;
+/// - the `then` arm knows only that its condition is truthy, which pins it
+///   to `true` just when the operation that computed it promises a bool
+///   (`yields_bool`, the same promise `bool-result` rests on).
+///
+/// The connectives then carry the fact inward, and *that* is what makes a
+/// precondition spendable. A guard proves its conjunction — one wire, one
+/// `and` tree — and the postcondition downstream re-asks a single conjunct,
+/// which is a different wire and reachable by no amount of reordering. `and`
+/// holding is each side holding, `or` failing is each side failing, and
+/// `not` swaps which arm is which, so the conjunct comes back decided.
+/// `specialize-equal` is the case that was here first: `equal` is structural
+/// identity, so its `then` arm may write the literal wherever the value
+/// stood.
+fn facts(ctx: &mut Ctx, cond: ValId, taken: bool) -> Vec<(ValId, ValId)> {
+    let mut out = Vec::new();
+    collect_facts(ctx, cond, taken, &mut out);
+    out
+}
+
+fn collect_facts(ctx: &mut Ctx, cond: ValId, taken: bool, out: &mut Vec<(ValId, ValId)>) {
+    // A condition that already folded to a literal has nothing to teach:
+    // whoever decided it kept the literal.
+    if matches!(ctx.val(cond), ValNode::Lit(_)) {
+        return;
+    }
+    // The condition's own value, where the arm pins it: `false` outright on
+    // the `else` side, `true` on the `then` side of a bool-yielding one.
+    if !taken || yields_bool(ctx, cond) {
+        let lit = ctx.lit(Value::Bool(taken));
+        out.push((cond, lit));
+    }
+    let ValNode::App {
+        op: Op::Prim(prim),
+        args,
+    } = ctx.val(cond).clone()
+    else {
+        return;
     };
-    stack.iter().map(|&v| ctx.subst_val(v, from, to)).collect()
+    match prim {
+        // `and` holding is both sides holding; `or` failing is both sides
+        // failing. The other two corners are disjunctions, which say
+        // nothing a substitution can carry.
+        Prim::And if taken => {
+            for arg in args {
+                collect_facts(ctx, arg, true, out);
+            }
+        }
+        Prim::Or if !taken => {
+            for arg in args {
+                collect_facts(ctx, arg, false, out);
+            }
+        }
+        // `not` is the arms swapped, and it is exact in both directions.
+        Prim::Not => collect_facts(ctx, args[0], !taken, out),
+        Prim::Equal if taken => {
+            if let Some(pair) = equal_to_literal(ctx, cond) {
+                out.push(pair);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Whether the instruction set promises this wire carries a `Bool` — the
+/// difference between "truthy" and "`true`".
+fn yields_bool(ctx: &Ctx, v: ValId) -> bool {
+    match ctx.val(v) {
+        ValNode::App {
+            op: Op::Prim(prim), ..
+        } => prim.to_instruction().yields_bool(),
+        _ => false,
+    }
+}
+
+/// An arm's version of a stack: every fact its outcome licensed, written
+/// through.
+fn specialize(ctx: &mut Ctx, cond: ValId, taken: bool, stack: &[ValId]) -> Vec<ValId> {
+    let mut stack = stack.to_vec();
+    for (from, to) in facts(ctx, cond, taken) {
+        for v in &mut stack {
+            *v = ctx.subst_val(*v, from, to);
+        }
+    }
+    stack
 }
 
 // ---- one operation, folded as far as the facts reach ---------------------------
@@ -659,6 +787,28 @@ fn apply(ctx: &mut Ctx, op: &Op, args: Vec<ValId>) -> Vec<ValId> {
         // `as-*-idem`: coercing twice is coercing once.
         if idempotent_coercion(ctx, prim, &args) {
             return vec![args[0]];
+        }
+
+        // `as-tuple-shape`: coercing a value whose width the operation that
+        // built it already fixed. The right width is the value itself; a
+        // wrong one is the coercion's junk answer, which for a value known
+        // to be a tuple at all is a literal — `as_tuple n` on anything but
+        // an n-tuple is n units.
+        if let Prim::AsTuple(n) = prim
+            && let Some(m) = tuple_width(ctx, args[0])
+        {
+            return if m == *n {
+                vec![args[0]]
+            } else {
+                vec![ctx.lit(Value::Tuple(vec![Value::unit(); *n]))]
+            };
+        }
+
+        // `equal-refl`: one wire read twice. `equal` is structural
+        // identity, and a value is itself.
+        if matches!(prim, Prim::Equal) && args[0] == args[1] {
+            let truth = ctx.lit(Value::Bool(true));
+            return vec![truth];
         }
 
         // `bool-result`: asking `is_bool` of an answer the instruction set
@@ -744,6 +894,21 @@ fn idempotent_coercion(ctx: &Ctx, prim: &Prim, args: &[ValId]) -> bool {
         (prim, inner),
         (Prim::AsBool, Prim::AsBool) | (Prim::AsInt, Prim::AsInt)
     ) || matches!((prim, inner), (Prim::AsTuple(n), Prim::AsTuple(m)) if n == m)
+}
+
+/// The tuple width a wire always carries, when the operation that computed
+/// it fixes one: `tuple n` builds an n-tuple and `as_tuple n` answers with
+/// one whatever it was handed, both unconditionally. A literal needs no
+/// entry — an all-literal window has already run on the machine by the
+/// time this is asked.
+fn tuple_width(ctx: &Ctx, v: ValId) -> Option<usize> {
+    match ctx.val(v) {
+        ValNode::App {
+            op: Op::Prim(Prim::Tuple(n) | Prim::AsTuple(n)),
+            ..
+        } => Some(*n),
+        _ => None,
+    }
 }
 
 // ---- ordering, the one global choice --------------------------------------------
@@ -1212,6 +1377,25 @@ mod tests {
     }
 
     #[test]
+    fn a_coercion_reads_the_width_its_builder_fixed() {
+        // `as_tuple n` on a value the instruction set already made n wide
+        // is nothing…
+        agree("tuple 2 as_tuple 2", "tuple 2");
+        agree("as_tuple 2 as_tuple 2", "as_tuple 2");
+        // …and on one it made a different width it is the junk answer,
+        // which for a value known to be a tuple at all is a literal.
+        agree("tuple 1 as_tuple 2", "drop 0 push ((), ())");
+    }
+
+    #[test]
+    fn one_wire_read_twice_is_equal_to_itself() {
+        agree("pick 0 equal", "drop 0 push true");
+        // Two spellings of one value are still two wires: this is
+        // reflexivity, not a decision procedure for equality.
+        differ("pick 0 as_bool equal", "drop 0 push true");
+    }
+
+    #[test]
     fn a_promised_bool_answers_its_test() {
         agree("is_int is_bool", "drop 0 push true");
         agree("is_bool is_bool", "drop 0 push true");
@@ -1251,6 +1435,49 @@ mod tests {
             "pick 0 push 7 equal branch { push 7 equal } { drop 0 push false }",
             "pick 0 push 7 equal branch { drop 0 push true } { drop 0 push false }",
         );
+    }
+
+    #[test]
+    fn a_conjunction_that_held_holds_of_each_conjunct() {
+        // The precondition shape: two predicates about one value, `and`-ed
+        // into one guard. The then arm re-asks a conjunct — a different
+        // wire, which no amount of reordering reaches — and gets it back
+        // decided, so what is left is the guard and nothing else.
+        agree(
+            "pick 0 is_int pick 1 is_symbol and branch { is_int } { drop 0 push false }",
+            "pick 0 is_int pick 1 is_symbol and swap drop 0",
+        );
+        // Dually: a disjunction that failed failed on each side.
+        agree(
+            "pick 0 is_int pick 1 is_symbol or branch { drop 0 push true } { is_symbol }",
+            "pick 0 is_int pick 1 is_symbol or swap drop 0",
+        );
+        // `not` swaps which arm learns what, and is exact both ways.
+        agree(
+            "pick 0 is_int not branch { is_int } { drop 0 push false }",
+            "drop 0 push false",
+        );
+        // The corners that are disjunctions say nothing a substitution can
+        // carry: `and` failing does not name which side failed.
+        differ(
+            "pick 0 is_int pick 1 is_symbol and branch { drop 0 push true } { is_int }",
+            "pick 0 is_int pick 1 is_symbol and swap drop 0",
+        );
+    }
+
+    #[test]
+    fn a_split_on_a_promised_bool_folds_back_onto_the_wire() {
+        // Writing a decided condition through its arms is Shannon expansion
+        // carried into the leaves; `bool-eta` is what keeps that canonical
+        // rather than merely finer. `is_int` is promised a bool, so the
+        // case split says nothing the wire does not.
+        agree("pick 0 is_int branch { is_int } { is_int }", "is_int");
+        agree(
+            "pick 0 is_int branch { drop 0 push true } { drop 0 push false }",
+            "is_int",
+        );
+        // The same split on an opaque value is η and stays out — see
+        // `eta_stays_beyond_the_diagram`.
     }
 
     #[test]
