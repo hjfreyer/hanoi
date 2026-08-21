@@ -24,10 +24,15 @@
 //! condition is now a subterm, so an equation between terms says everything it
 //! needs to say without mentioning the stack it runs on.
 //!
+//! Terms live in a [`Context`] — an arena of nodes that name their children by
+//! [`TermIndex`] rather than owning them — so a term is a `usize` to pass
+//! around and a repeated subterm is stored once. Everything that builds or
+//! reads a term does it through the context that issued it.
+//!
 //! Nothing here decides whether two terms are equal. This is the model a rule
 //! set will be stated over, and it carries no analysis machinery at all.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use bytecode::arity::sentence_arity;
@@ -290,21 +295,50 @@ impl fmt::Display for Prim {
     }
 }
 
-/// A program, as a tree of two operators over a handful of leaves.
+/// Where a term lives in the [`Context`] that built it.
 ///
-/// Every term has an [`arity`][Term::arity], and every way of building one
-/// either preserves the arities it was given or is rejected. The constructors
-/// are where that is enforced; the variants are public because a rule set has
-/// to match on them.
+/// An index is meaningful only against its own context. Nothing checks that —
+/// two contexts' indices are the same `usize` — so a program that has more
+/// than one arena in play is responsible for keeping them apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TermIndex(usize);
+
+impl From<usize> for TermIndex {
+    fn from(n: usize) -> Self {
+        TermIndex(n)
+    }
+}
+
+impl From<TermIndex> for usize {
+    fn from(idx: TermIndex) -> Self {
+        idx.0
+    }
+}
+
+/// A program, as a node of two operators over a handful of leaves.
 ///
-/// **The constructors check, they do not normalize.** `Term::par(Term::id(0),
-/// a)` builds exactly `Par(Id(0), a)`, and `Term::drop(0)` stays `Drop(0)`
-/// rather than becoming `Id(0)`. The unit laws are among the first things a
-/// rule set will want to state, and a constructor that quietly applied them
-/// would be deciding equalities that the prover is supposed to derive.
+/// A node names its children by [`TermIndex`] rather than owning them, so a
+/// term is only meaningful together with the [`Context`] it was built in; that
+/// is where everything you would expect on a tree — [`arity`][Context::arity],
+/// [`check`][Context::check], the constructors, the printing — lives.
+///
+/// The variants are public because a rule set has to match on them. Every way
+/// of building one either preserves the arities it was given or is rejected,
+/// and the constructors are where that is enforced.
+///
+/// **The constructors check, they do not normalize.** `ctx.par(zero, a)` where
+/// `zero` is `id(0)` builds exactly `Par(Id(0), a)`, and `ctx.drop(0)` stays
+/// `Drop(0)` rather than becoming `Id(0)`. The unit laws are among the first
+/// things a rule set will want to state, and a constructor that quietly applied
+/// them would be deciding equalities that the prover is supposed to derive.
 /// [`lower`] avoids emitting units in the first place, which is a different
 /// thing: it declines to build them, rather than building and then discarding
 /// them.
+///
+/// Deriving `PartialEq` compares one node against another, which for a node
+/// with children compares *where its children sit* rather than what they are:
+/// two separately built spellings of one term are unequal as nodes. Structural
+/// equality is [`Context::equal`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Term {
     /// `id(n)`: `n` values in, the same `n` out.
@@ -318,16 +352,16 @@ pub enum Term {
     Op(Prim),
     /// A sentence called by name, left unopened.
     ///
-    /// The arity is carried rather than looked up, so [`Term::arity`] needs no
+    /// The arity is carried rather than looked up, so a term's arity needs no
     /// [`Library`] and a term stays meaningful on its own. It is the callee's
     /// *inferred* arity, which is what the machine consumes; a wider
     /// `#[arity]` annotation is a claim about the sentence, not about what a
     /// call to it does.
     Call { target: SentenceIndex, arity: Arity },
     /// `A ; B`: everything `A` leaves, `B` takes. Requires `A.outputs ==
-    /// B.inputs`, which is the whole point — see [`Term::pad_compose`] for how
-    /// a sentence's implicit padding is made explicit to get there.
-    Compose(Box<Term>, Box<Term>),
+    /// B.inputs`, which is the whole point — see [`Context::pad_compose`] for
+    /// how a sentence's implicit padding is made explicit to get there.
+    Compose(TermIndex, TermIndex),
     /// `A * B`: the stack is cut by arity and both sides run on their own
     /// piece.
     ///
@@ -336,7 +370,7 @@ pub enum Term {
     /// forced by `dip N { X }` being `X * id(N)`: `dip` hides the top of the
     /// stack, so the identity is the one on top. Padding therefore always
     /// reads `id(k) * A`, with the untouched values underneath.
-    Par(Box<Term>, Box<Term>),
+    Par(TermIndex, TermIndex),
     /// The condition on top, then whichever arm it selects.
     ///
     /// The arms are held to the same arity, so the branch has one: with arms
@@ -344,63 +378,137 @@ pub enum Term {
     /// condition. That is what the machine does — it pops the condition and
     /// enters the arm with the rest of the stack.
     Branch {
-        if_true: Box<Term>,
-        if_false: Box<Term>,
+        if_true: TermIndex,
+        if_false: TermIndex,
     },
 }
 
-impl Term {
+/// The arena terms are built in and read out of.
+///
+/// A context is a [`TiVec`] of nodes that point at each other by
+/// [`TermIndex`], which buys two things a tree of `Box`es does not:
+///
+/// - **Sharing costs an index.** The compiler gives every `pick 2` in a
+///   program one compiled block; [`lower`] hands each of them that block's
+///   index rather than a copy of it. Nothing downstream has to know: a shared
+///   subterm reads exactly like a copied one.
+/// - **A term is `Copy`.** Handing one to a goal, keeping a list of the parts
+///   of a spine, or rebuilding a term around a rewritten piece moves `usize`s
+///   around rather than cloning subtrees.
+///
+/// Nodes are only ever appended, so an index stays valid for the life of the
+/// context and every child was built before its parent. That ordering is what
+/// lets each node's arity be worked out once, as it is pushed, and read back
+/// in constant time afterwards.
+#[derive(Debug, Clone, Default)]
+pub struct Context {
+    terms: TiVec<TermIndex, Term>,
+    /// One arity per term, at the same index: worked out from the children's,
+    /// which are already in hand when a node is pushed.
+    arities: TiVec<TermIndex, Arity>,
+}
+
+impl Context {
+    pub fn new() -> Self {
+        Context::default()
+    }
+
+    /// How many nodes have been built.
+    pub fn len(&self) -> usize {
+        self.terms.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.terms.is_empty()
+    }
+
+    /// The node at an index.
+    pub fn get(&self, idx: TermIndex) -> &Term {
+        &self.terms[idx]
+    }
+
+    /// Adds a node built by hand, with its children already in this context.
+    ///
+    /// Unchecked, exactly as the variants are: this is what anything that takes
+    /// a term apart and puts it back together uses, and [`Context::check`] is
+    /// how such a thing says it did so honestly. Prefer the constructors, which
+    /// refuse what they cannot build.
+    pub fn push(&mut self, term: Term) -> TermIndex {
+        let arity = self.arity_of(&term);
+        self.arities.push(arity);
+        self.terms.push_and_get_key(term)
+    }
+
+    /// A node's arity, from its own shape and its children's arities.
+    fn arity_of(&self, term: &Term) -> Arity {
+        match term {
+            Term::Id(n) => Arity::new(*n, *n),
+            Term::Drop(n) => Arity::new(*n, 0),
+            Term::Copy(n) => Arity::new(*n, 2 * n),
+            Term::Op(prim) => prim.arity(),
+            Term::Call { arity, .. } => *arity,
+            Term::Compose(left, right) => {
+                Arity::new(self.arity(*left).inputs, self.arity(*right).outputs)
+            }
+            Term::Par(left, right) => {
+                let (l, r) = (self.arity(*left), self.arity(*right));
+                Arity::new(l.inputs + r.inputs, l.outputs + r.outputs)
+            }
+            Term::Branch { if_true, .. } => {
+                let arm = self.arity(*if_true);
+                Arity::new(arm.inputs + 1, arm.outputs)
+            }
+        }
+    }
+
     // ---- leaves ----
 
-    pub fn id(n: usize) -> Term {
-        Term::Id(n)
+    pub fn id(&mut self, n: usize) -> TermIndex {
+        self.push(Term::Id(n))
     }
 
-    pub fn drop(n: usize) -> Term {
-        Term::Drop(n)
+    pub fn drop(&mut self, n: usize) -> TermIndex {
+        self.push(Term::Drop(n))
     }
 
-    pub fn copy(n: usize) -> Term {
-        Term::Copy(n)
+    pub fn copy(&mut self, n: usize) -> TermIndex {
+        self.push(Term::Copy(n))
     }
 
-    pub fn op(prim: Prim) -> Term {
-        Term::Op(prim)
+    pub fn op(&mut self, prim: Prim) -> TermIndex {
+        self.push(Term::Op(prim))
     }
 
-    pub fn call(target: SentenceIndex, arity: Arity) -> Term {
-        Term::Call { target, arity }
+    pub fn call(&mut self, target: SentenceIndex, arity: Arity) -> TermIndex {
+        self.push(Term::Call { target, arity })
     }
 
     // ---- operators ----
 
     /// `left ; right`, which exists only when the halves meet exactly.
-    pub fn compose(left: Term, right: Term) -> Result<Term, Error> {
-        let (l, r) = (left.arity(), right.arity());
+    pub fn compose(&mut self, left: TermIndex, right: TermIndex) -> Result<TermIndex, Error> {
+        let (l, r) = (self.arity(left), self.arity(right));
         if l.outputs != r.inputs {
             return Err(Error::Mismatch { left: l, right: r });
         }
-        Ok(Term::Compose(Box::new(left), Box::new(right)))
+        Ok(self.push(Term::Compose(left, right)))
     }
 
     /// `left * right`. Total: any two terms can run side by side.
-    pub fn par(left: Term, right: Term) -> Term {
-        Term::Par(Box::new(left), Box::new(right))
+    pub fn par(&mut self, left: TermIndex, right: TermIndex) -> TermIndex {
+        self.push(Term::Par(left, right))
     }
 
     /// A branch on two arms of the same arity.
-    pub fn branch(if_true: Term, if_false: Term) -> Result<Term, Error> {
-        let (t, f) = (if_true.arity(), if_false.arity());
+    pub fn branch(&mut self, if_true: TermIndex, if_false: TermIndex) -> Result<TermIndex, Error> {
+        let (t, f) = (self.arity(if_true), self.arity(if_false));
         if t != f {
             return Err(Error::ArmsDiffer {
                 if_true: t,
                 if_false: f,
             });
         }
-        Ok(Term::Branch {
-            if_true: Box::new(if_true),
-            if_false: Box::new(if_false),
-        })
+        Ok(self.push(Term::Branch { if_true, if_false }))
     }
 
     // ---- padding ----
@@ -410,11 +518,12 @@ impl Term {
     /// `n == 0` is the term itself rather than `id(0) * A`: there is nothing to
     /// pass through, and building the unit only to have a rule remove it again
     /// helps nobody.
-    pub fn under(self, n: usize) -> Term {
+    pub fn under(&mut self, term: TermIndex, n: usize) -> TermIndex {
         if n == 0 {
-            self
+            term
         } else {
-            Term::par(Term::id(n), self)
+            let id = self.id(n);
+            self.par(id, term)
         }
     }
 
@@ -430,14 +539,15 @@ impl Term {
     /// Widening `left` deepens the whole prefix, which is exactly what
     /// [`bytecode::arity::check_arities`] does when a later instruction turns
     /// out to want more than the sentence has asked for so far.
-    pub fn pad_compose(left: Term, right: Term) -> Term {
-        let (l, r) = (left.arity().outputs, right.arity().inputs);
+    pub fn pad_compose(&mut self, left: TermIndex, right: TermIndex) -> TermIndex {
+        let (l, r) = (self.arity(left).outputs, self.arity(right).inputs);
         let (left, right) = if l < r {
-            (left.under(r - l), right)
+            (self.under(left, r - l), right)
         } else {
-            (left, right.under(l - r))
+            (left, self.under(right, l - r))
         };
-        Term::compose(left, right).expect("padding is what makes the halves meet")
+        self.compose(left, right)
+            .expect("padding is what makes the halves meet")
     }
 
     /// A branch on two arms padded to a common arity.
@@ -450,8 +560,12 @@ impl Term {
     ///
     /// Arms whose nets differ are refused: no amount of padding can bring them
     /// together, since padding adds the same amount to both sides of an arity.
-    pub fn pad_branch(if_true: Term, if_false: Term) -> Result<Term, Error> {
-        let (t, f) = (if_true.arity(), if_false.arity());
+    pub fn pad_branch(
+        &mut self,
+        if_true: TermIndex,
+        if_false: TermIndex,
+    ) -> Result<TermIndex, Error> {
+        let (t, f) = (self.arity(if_true), self.arity(if_false));
         if t.net() != f.net() {
             return Err(Error::ArmsDiffer {
                 if_true: t,
@@ -459,37 +573,51 @@ impl Term {
             });
         }
         let (if_true, if_false) = if t.inputs < f.inputs {
-            (if_true.under(f.inputs - t.inputs), if_false)
+            (self.under(if_true, f.inputs - t.inputs), if_false)
         } else {
-            (if_true, if_false.under(t.inputs - f.inputs))
+            (if_true, self.under(if_false, t.inputs - f.inputs))
         };
-        Term::branch(if_true, if_false)
+        self.branch(if_true, if_false)
     }
 
     // ---- reading a term ----
 
     /// What this takes off the stack and leaves on it.
     ///
-    /// Structural, and linear in the size of the term: no node caches its
-    /// answer, and [`Term::Call`] is the one that could not be worked out
-    /// locally, which is why it carries its own. Caching is an easy change to
-    /// make when something measures it as worth making.
-    pub fn arity(&self) -> Arity {
-        match self {
-            Term::Id(n) => Arity::new(*n, *n),
-            Term::Drop(n) => Arity::new(*n, 0),
-            Term::Copy(n) => Arity::new(*n, 2 * n),
-            Term::Op(prim) => prim.arity(),
-            Term::Call { arity, .. } => *arity,
-            Term::Compose(left, right) => Arity::new(left.arity().inputs, right.arity().outputs),
-            Term::Par(left, right) => {
-                let (l, r) = (left.arity(), right.arity());
-                Arity::new(l.inputs + r.inputs, l.outputs + r.outputs)
+    /// Constant time: a node's arity was worked out when it was pushed, from
+    /// children that were already there. [`Term::Call`] is the one that could
+    /// not have been worked out locally at all, which is why it carries its
+    /// own.
+    pub fn arity(&self, idx: TermIndex) -> Arity {
+        self.arities[idx]
+    }
+
+    /// Whether the two terms are the same program written the same way.
+    ///
+    /// Structural, since two contexts' — or one context's — separately built
+    /// spellings of one term sit at different indices. Identical indices are
+    /// the same term and answer immediately, which is what makes this cheap on
+    /// the shared subterms an arena is full of.
+    pub fn equal(&self, a: TermIndex, b: TermIndex) -> bool {
+        if a == b {
+            return true;
+        }
+        match (self.get(a), self.get(b)) {
+            (Term::Compose(a1, a2), Term::Compose(b1, b2))
+            | (Term::Par(a1, a2), Term::Par(b1, b2)) => {
+                self.equal(*a1, *b1) && self.equal(*a2, *b2)
             }
-            Term::Branch { if_true, .. } => {
-                let arm = if_true.arity();
-                Arity::new(arm.inputs + 1, arm.outputs)
-            }
+            (
+                Term::Branch {
+                    if_true: t1,
+                    if_false: f1,
+                },
+                Term::Branch {
+                    if_true: t2,
+                    if_false: f2,
+                },
+            ) => self.equal(*t1, *t2) && self.equal(*f1, *f2),
+            (x, y) => x == y,
         }
     }
 
@@ -498,27 +626,37 @@ impl Term {
     ///
     /// Nothing needs this when a term was built through the constructors, which
     /// is the point of them. It is here for tests, and for anything that builds
-    /// a term by taking one apart and putting it back together.
-    pub fn check(&self) -> Result<(), Error> {
-        match self {
+    /// a term by taking one apart and putting it back together with
+    /// [`push`][Context::push].
+    pub fn check(&self, idx: TermIndex) -> Result<(), Error> {
+        // A subterm that is shared is a subterm already checked: an arena is a
+        // graph, and walking it as a tree would pay for the sharing twice.
+        self.check_seen(idx, &mut HashSet::new())
+    }
+
+    fn check_seen(&self, idx: TermIndex, seen: &mut HashSet<TermIndex>) -> Result<(), Error> {
+        if !seen.insert(idx) {
+            return Ok(());
+        }
+        match self.get(idx) {
             Term::Id(_) | Term::Drop(_) | Term::Copy(_) | Term::Op(_) | Term::Call { .. } => Ok(()),
             Term::Compose(left, right) => {
-                left.check()?;
-                right.check()?;
-                let (l, r) = (left.arity(), right.arity());
+                self.check_seen(*left, seen)?;
+                self.check_seen(*right, seen)?;
+                let (l, r) = (self.arity(*left), self.arity(*right));
                 if l.outputs != r.inputs {
                     return Err(Error::Mismatch { left: l, right: r });
                 }
                 Ok(())
             }
             Term::Par(left, right) => {
-                left.check()?;
-                right.check()
+                self.check_seen(*left, seen)?;
+                self.check_seen(*right, seen)
             }
             Term::Branch { if_true, if_false } => {
-                if_true.check()?;
-                if_false.check()?;
-                let (t, f) = (if_true.arity(), if_false.arity());
+                self.check_seen(*if_true, seen)?;
+                self.check_seen(*if_false, seen)?;
+                let (t, f) = (self.arity(*if_true), self.arity(*if_false));
                 if t != f {
                     return Err(Error::ArmsDiffer {
                         if_true: t,
@@ -530,7 +668,6 @@ impl Term {
         }
     }
 }
-
 /// How tightly a term's spelling binds, for deciding where parentheses go.
 ///
 /// `*` binds tighter than `;`, the usual convention for a tensor against a
@@ -540,36 +677,70 @@ const PREC_COMPOSE: u8 = 1;
 const PREC_PAR: u8 = 2;
 const PREC_ATOM: u8 = 3;
 
-impl fmt::Display for Term {
+/// A term printed on one line, through the context that holds it.
+///
+/// What [`Display`](fmt::Display) used to be on an owning tree: a node names
+/// its children by index, so printing needs the arena and a term cannot print
+/// itself.
+pub struct Show<'c> {
+    ctx: &'c Context,
+    term: TermIndex,
+    names: Names<'c>,
+}
+
+impl fmt::Display for Show<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.write(f, 0, Names::default())
+        self.ctx.write(f, self.term, 0, self.names)
+    }
+}
+
+impl<'c> Show<'c> {
+    /// The same spelling, with calls printed by the name the library keys them
+    /// under rather than by index.
+    pub fn named(self, library: &'c Library) -> Self {
+        Show {
+            names: Names(Some(&library.names)),
+            ..self
+        }
     }
 }
 
 /// A term laid out over as many lines as it needs: a composition one factor
 /// per line, a branch's arms indented inside their braces, and anything that
-/// still fits in the width left exactly as [`Display`] writes it.
+/// still fits in the width left exactly as [`Show`] writes it.
 ///
-/// Same spelling, different line breaks — the parentheses are the ones
-/// `Display` puts in, so the printed form still says which tree it came from.
-/// A residual is the deliverable of a failed run and is read by a human;
-/// everything that goes on one line of a report (a proof summary, a `solve`'s
-/// fills) keeps using `Display`.
-pub struct Pretty<'t> {
-    term: &'t Term,
+/// Same spelling, different line breaks — the parentheses are the ones `Show`
+/// puts in, so the printed form still says which tree it came from. A residual
+/// is the deliverable of a failed run and is read by a human; everything that
+/// goes on one line of a report (a proof summary, a `solve`'s fills) keeps
+/// using `Show`.
+pub struct Pretty<'c> {
+    ctx: &'c Context,
+    term: TermIndex,
     width: usize,
-    names: Names<'t>,
+    names: Names<'c>,
 }
 
 impl fmt::Display for Pretty<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.term.lay(f, 0, 0, self.width, self.names)
+        self.ctx.lay(f, self.term, 0, 0, self.width, self.names)
+    }
+}
+
+impl<'c> Pretty<'c> {
+    /// The same layout, with calls printed by the name the library keys them
+    /// under rather than by index.
+    pub fn named(self, library: &'c Library) -> Self {
+        Pretty {
+            names: Names(Some(&library.names)),
+            ..self
+        }
     }
 }
 
 /// Where a printed call gets its name, when it has one to get.
 ///
-/// A [`Term`] carries an index rather than a name, so `Display` can only write
+/// A [`Term`] carries an index rather than a name, so printing can only write
 /// `call #3`. Anything printed for a human to *answer* — a residual, whose
 /// answer is a `via` waypoint naming the same sentence — is printed with the
 /// library at hand instead, and says `call types_test::number`.
@@ -582,29 +753,28 @@ impl Names<'_> {
     }
 }
 
-impl<'t> Pretty<'t> {
-    /// The same layout, with calls printed by the name the library keys them
-    /// under rather than by index.
-    pub fn named(self, library: &'t Library) -> Self {
-        Pretty {
-            names: Names(Some(&library.names)),
-            ..self
+impl Context {
+    /// This term on one line. See [`Show`].
+    pub fn display(&self, term: TermIndex) -> Show<'_> {
+        Show {
+            ctx: self,
+            term,
+            names: Names::default(),
         }
     }
-}
 
-impl Term {
     /// This term laid out to read in `width` columns. See [`Pretty`].
-    pub fn pretty(&self, width: usize) -> Pretty<'_> {
+    pub fn pretty(&self, term: TermIndex, width: usize) -> Pretty<'_> {
         Pretty {
-            term: self,
+            ctx: self,
+            term,
             width,
             names: Names::default(),
         }
     }
 
-    fn precedence(&self) -> u8 {
-        match self {
+    fn precedence(&self, term: TermIndex) -> u8 {
+        match self.get(term) {
             Term::Compose(_, _) => PREC_COMPOSE,
             Term::Par(_, _) => PREC_PAR,
             _ => PREC_ATOM,
@@ -618,13 +788,19 @@ impl Term {
     /// at its parent's own precedence, and one on the right a step above it. So
     /// `(a ; b) ; c` prints flat and `a ; (b ; c)` keeps its parentheses, which
     /// is what makes the printed form say which tree it came from.
-    fn write(&self, f: &mut fmt::Formatter<'_>, context: u8, names: Names<'_>) -> fmt::Result {
-        if self.precedence() < context {
+    fn write(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        term: TermIndex,
+        context: u8,
+        names: Names<'_>,
+    ) -> fmt::Result {
+        if self.precedence(term) < context {
             write!(f, "(")?;
-            self.write(f, 0, names)?;
+            self.write(f, term, 0, names)?;
             return write!(f, ")");
         }
-        match self {
+        match self.get(term) {
             Term::Id(n) => write!(f, "id({})", n),
             Term::Drop(n) => write!(f, "drop({})", n),
             Term::Copy(n) => write!(f, "copy({})", n),
@@ -634,34 +810,40 @@ impl Term {
                 None => write!(f, "call #{}", usize::from(*target)),
             },
             Term::Compose(left, right) => {
-                left.write(f, PREC_COMPOSE, names)?;
+                self.write(f, *left, PREC_COMPOSE, names)?;
                 write!(f, " ; ")?;
-                right.write(f, PREC_COMPOSE + 1, names)
+                self.write(f, *right, PREC_COMPOSE + 1, names)
             }
             Term::Par(left, right) => {
-                left.write(f, PREC_PAR, names)?;
+                self.write(f, *left, PREC_PAR, names)?;
                 write!(f, " * ")?;
-                right.write(f, PREC_PAR + 1, names)
+                self.write(f, *right, PREC_PAR + 1, names)
             }
             Term::Branch { if_true, if_false } => {
                 write!(f, "branch {{ ")?;
-                if_true.write(f, 0, names)?;
+                self.write(f, *if_true, 0, names)?;
                 write!(f, " }} {{ ")?;
-                if_false.write(f, 0, names)?;
+                self.write(f, *if_false, 0, names)?;
                 write!(f, " }}")
             }
         }
     }
 
     /// The one-line spelling, when it is short enough to keep.
-    fn flat_within(&self, context: u8, budget: usize, names: Names<'_>) -> Option<String> {
-        struct Flat<'t>(&'t Term, u8, Names<'t>);
+    fn flat_within(
+        &self,
+        term: TermIndex,
+        context: u8,
+        budget: usize,
+        names: Names<'_>,
+    ) -> Option<String> {
+        struct Flat<'c>(&'c Context, TermIndex, u8, Names<'c>);
         impl fmt::Display for Flat<'_> {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                self.0.write(f, self.1, self.2)
+                self.0.write(f, self.1, self.2, self.3)
             }
         }
-        let flat = Flat(self, context, names).to_string();
+        let flat = Flat(self, term, context, names).to_string();
         (flat.chars().count() <= budget).then_some(flat)
     }
 
@@ -670,50 +852,51 @@ impl Term {
     fn lay(
         &self,
         f: &mut fmt::Formatter<'_>,
+        term: TermIndex,
         indent: usize,
         context: u8,
         width: usize,
         names: Names<'_>,
     ) -> fmt::Result {
         // What fits stays put: breaking a short factor helps nobody.
-        if let Some(flat) = self.flat_within(context, width.saturating_sub(indent), names) {
+        if let Some(flat) = self.flat_within(term, context, width.saturating_sub(indent), names) {
             return f.write_str(&flat);
         }
         // A group that has to break is a group whose parentheses are worth
         // seeing, and they are where its extra column of indent comes from:
         // the lines inside line up under the paren.
-        if self.precedence() < context {
+        if self.precedence(term) < context {
             f.write_str("(")?;
-            self.lay(f, indent + 1, 0, width, names)?;
+            self.lay(f, term, indent + 1, 0, width, names)?;
             return f.write_str(")");
         }
         let newline = |f: &mut fmt::Formatter<'_>, indent: usize| write!(f, "\n{:1$}", "", indent);
-        match self {
+        match self.get(term) {
             Term::Compose(left, right) => {
-                left.lay(f, indent, PREC_COMPOSE, width, names)?;
+                self.lay(f, *left, indent, PREC_COMPOSE, width, names)?;
                 f.write_str(" ;")?;
                 newline(f, indent)?;
-                right.lay(f, indent, PREC_COMPOSE + 1, width, names)
+                self.lay(f, *right, indent, PREC_COMPOSE + 1, width, names)
             }
             Term::Par(left, right) => {
-                left.lay(f, indent, PREC_PAR, width, names)?;
+                self.lay(f, *left, indent, PREC_PAR, width, names)?;
                 f.write_str(" *")?;
                 newline(f, indent)?;
-                right.lay(f, indent, PREC_PAR + 1, width, names)
+                self.lay(f, *right, indent, PREC_PAR + 1, width, names)
             }
             Term::Branch { if_true, if_false } => {
                 f.write_str("branch ")?;
                 for (arm, close) in [(if_true, "} "), (if_false, "}")] {
                     f.write_str("{")?;
                     newline(f, indent + 2)?;
-                    arm.lay(f, indent + 2, 0, width, names)?;
+                    self.lay(f, *arm, indent + 2, 0, width, names)?;
                     newline(f, indent)?;
                     f.write_str(close)?;
                 }
                 Ok(())
             }
             // A leaf has no break to make, however long it is.
-            leaf => leaf.write(f, context, names),
+            _ => self.write(f, term, context, names),
         }
     }
 }
@@ -764,21 +947,29 @@ impl std::error::Error for Error {}
 /// look inside a dip body would have to open a call first.
 const INLINE_BLOCK: &str = "<inline>";
 
-/// The term a sentence stands for.
-pub fn lower(library: &Library, sentence: SentenceIndex) -> Result<Term, Error> {
-    Lowering::new(library).sentence(sentence)
+/// The term a sentence stands for, built in `ctx`.
+pub fn lower(
+    ctx: &mut Context,
+    library: &Library,
+    sentence: SentenceIndex,
+) -> Result<TermIndex, Error> {
+    Lowering::new(library).sentence(ctx, sentence)
 }
 
-/// Every sentence in the library, lowered, sharing the work between them.
+/// Every sentence in the library, lowered into one context, sharing the work
+/// between them.
 ///
 /// Inline blocks appear twice over: spliced into whatever wrote them, and again
 /// as an entry of their own. A caller normally wants the entries for named
 /// sentences, which are the ones anything can reach.
-pub fn lower_all(library: &Library) -> Result<TiVec<SentenceIndex, Term>, Error> {
+pub fn lower_all(
+    ctx: &mut Context,
+    library: &Library,
+) -> Result<TiVec<SentenceIndex, TermIndex>, Error> {
     let mut lowering = Lowering::new(library);
     let mut terms = TiVec::with_capacity(library.sentences.len());
     for idx in library.sentences.keys() {
-        terms.push(lowering.sentence(idx)?);
+        terms.push(lowering.sentence(ctx, idx)?);
     }
     Ok(terms)
 }
@@ -788,10 +979,12 @@ pub fn lower_all(library: &Library) -> Result<TiVec<SentenceIndex, Term>, Error>
 /// The memos are not an optimization of a slow thing but of a repeated one: the
 /// compiler shares a single block between every `pick 2` in the program, and a
 /// callee's arity is re-derived from scratch by every [`sentence_arity`] call.
+/// A block memo is an index, so a block that ten sentences dip into is one
+/// subterm ten parents point at rather than ten copies of it.
 struct Lowering<'a> {
     library: &'a Library,
     arities: HashMap<SentenceIndex, Arity>,
-    blocks: HashMap<SentenceIndex, Term>,
+    blocks: HashMap<SentenceIndex, TermIndex>,
 }
 
 impl<'a> Lowering<'a> {
@@ -813,54 +1006,62 @@ impl<'a> Lowering<'a> {
     /// This terminates because recursion is forbidden — `check_arities`
     /// refuses a sentence that reaches itself, so the call graph of a library
     /// that compiled is acyclic and splicing inline blocks bottoms out.
-    fn sentence(&mut self, idx: SentenceIndex) -> Result<Term, Error> {
+    fn sentence(&mut self, ctx: &mut Context, idx: SentenceIndex) -> Result<TermIndex, Error> {
         // Detached from `self` so the loop can hold it while the body borrows
         // the memos mutably; the library outlives both.
         let library = self.library;
-        let mut acc: Option<Term> = None;
+        let mut acc: Option<TermIndex> = None;
         for inst in &library.sentences[idx] {
-            let next = self.instruction(inst)?;
+            let next = self.instruction(ctx, inst)?;
             acc = Some(match acc {
                 None => next,
-                Some(prefix) => Term::pad_compose(prefix, next),
+                Some(prefix) => ctx.pad_compose(prefix, next),
             });
         }
         // An empty sentence is the identity on nothing, which is the unit of
         // composition and the honest reading of a program that does nothing.
-        Ok(acc.unwrap_or_else(|| Term::id(0)))
+        Ok(match acc {
+            Some(term) => term,
+            None => ctx.id(0),
+        })
     }
 
-    fn instruction(&mut self, inst: &Instruction) -> Result<Term, Error> {
+    fn instruction(&mut self, ctx: &mut Context, inst: &Instruction) -> Result<TermIndex, Error> {
         Ok(match inst {
-            Instruction::Jump(target) => self.target(*target)?,
+            Instruction::Jump(target) => self.target(ctx, *target)?,
             // The hidden value is the top of the stack, so the identity is the
             // one on the right: `dip { A }` is `A * id(1)`.
-            Instruction::Dip(target) => Term::par(self.target(*target)?, Term::id(1)),
-            Instruction::Branch(if_true, if_false) => {
-                let if_true = self.target(*if_true)?;
-                let if_false = self.target(*if_false)?;
-                Term::pad_branch(if_true, if_false)?
+            Instruction::Dip(target) => {
+                let body = self.target(ctx, *target)?;
+                let one = ctx.id(1);
+                ctx.par(body, one)
             }
-            Instruction::Drop => Term::drop(1),
-            Instruction::Copy => Term::copy(1),
-            local => Term::op(
-                Prim::from_instruction(local)
-                    .expect("the instructions without a prim are matched above"),
-            ),
+            Instruction::Branch(if_true, if_false) => {
+                let if_true = self.target(ctx, *if_true)?;
+                let if_false = self.target(ctx, *if_false)?;
+                ctx.pad_branch(if_true, if_false)?
+            }
+            Instruction::Drop => ctx.drop(1),
+            Instruction::Copy => ctx.copy(1),
+            local => ctx.op(Prim::from_instruction(local)
+                .expect("the instructions without a prim are matched above")),
         })
     }
 
     /// A called sentence: spliced in if it is a block, named if it is not.
-    fn target(&mut self, idx: SentenceIndex) -> Result<Term, Error> {
+    fn target(&mut self, ctx: &mut Context, idx: SentenceIndex) -> Result<TermIndex, Error> {
         if self.library.names[idx] != INLINE_BLOCK {
             let arity = self.arity_of(idx)?;
-            return Ok(Term::call(idx, arity));
+            return Ok(ctx.call(idx, arity));
         }
+        // Splicing a block twice hands out the index built the first time: the
+        // arena is what makes sharing the block and copying it the same thing
+        // to everything downstream.
         if let Some(term) = self.blocks.get(&idx) {
-            return Ok(term.clone());
+            return Ok(*term);
         }
-        let term = self.sentence(idx)?;
-        self.blocks.insert(idx, term.clone());
+        let term = self.sentence(ctx, idx)?;
+        self.blocks.insert(idx, term);
         Ok(term)
     }
 
@@ -883,7 +1084,6 @@ pub fn call_arity(library: &Library, idx: SentenceIndex) -> Result<Arity, Error>
         usize::try_from(inferred.outputs).expect("an inferred arity counts up from zero"),
     ))
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -903,9 +1103,10 @@ mod tests {
     fn lowered(code: &str, name: &str) -> String {
         let library = assemble(code).unwrap();
         let idx = sentence_named(&library, name);
-        let term = lower(&library, idx).unwrap();
-        term.check().unwrap();
-        format!("{}", term)
+        let mut ctx = Context::new();
+        let term = lower(&mut ctx, &library, idx).unwrap();
+        ctx.check(term).unwrap();
+        format!("{}", ctx.display(term))
     }
 
     // ---- prims ----
@@ -944,42 +1145,107 @@ mod tests {
         }
     }
 
+    // ---- the arena ----
+
+    #[test]
+    fn a_subterm_used_twice_is_stored_once() {
+        let mut ctx = Context::new();
+        let leaf = ctx.id(1);
+        let before = ctx.len();
+        let doubled = ctx.par(leaf, leaf);
+        // One new node: the par. Both children are the same place.
+        assert_eq!(ctx.len(), before + 1);
+        assert_eq!(*ctx.get(doubled), Term::Par(leaf, leaf));
+        assert_eq!(format!("{}", ctx.display(doubled)), "id(1) * id(1)");
+        assert_eq!(ctx.arity(doubled), Arity::new(2, 2));
+    }
+
+    #[test]
+    fn equality_is_structural_where_node_equality_is_not() {
+        let mut ctx = Context::new();
+        let (a, b) = (ctx.id(1), ctx.id(1));
+        let left = ctx.par(a, b);
+        let right = ctx.par(b, a);
+        // Two spellings of `id(1) * id(1)` at two places: equal as terms…
+        assert!(ctx.equal(left, right));
+        assert!(ctx.equal(a, b));
+        // …and not as nodes, which compare where their children sit.
+        assert_ne!(ctx.get(left), ctx.get(right));
+        assert_ne!(left, right);
+
+        let other = ctx.id(2);
+        assert!(!ctx.equal(a, other));
+    }
+
+    #[test]
+    fn a_lowered_library_shares_the_block_the_compiler_shared() {
+        // Both `pick 1`s dip into one compiled block, so lowering points both
+        // at one subterm rather than building it twice.
+        let library = assemble("sentence probe { pick 1 } sentence again { pick 1 }").unwrap();
+        let mut ctx = Context::new();
+        let terms = lower_all(&mut ctx, &library).unwrap();
+        // `pick 1` is `dip { copy } ; swap`; the dip's *body* is the block the
+        // compiler shares — the frame around it is built where it is written.
+        let block_of = |term: TermIndex| {
+            let Term::Compose(front, _) = ctx.get(term) else {
+                panic!("a pick lowers to a composition");
+            };
+            let Term::Par(body, _) = ctx.get(*front) else {
+                panic!("a dip lowers to a par against the identity");
+            };
+            *body
+        };
+        let probe = block_of(terms[sentence_named(&library, "probe")]);
+        let again = block_of(terms[sentence_named(&library, "again")]);
+        assert_eq!(probe, again);
+    }
+
     // ---- arity ----
 
     #[test]
     fn the_block_operators_have_the_arities_they_are_named_for() {
-        assert_eq!(Term::id(3).arity(), Arity::new(3, 3));
-        assert_eq!(Term::drop(3).arity(), Arity::new(3, 0));
-        assert_eq!(Term::copy(3).arity(), Arity::new(3, 6));
-        assert_eq!(Term::id(0).arity(), Arity::new(0, 0));
+        let mut ctx = Context::new();
+        let three = ctx.id(3);
+        assert_eq!(ctx.arity(three), Arity::new(3, 3));
+        let dropped = ctx.drop(3);
+        assert_eq!(ctx.arity(dropped), Arity::new(3, 0));
+        let copied = ctx.copy(3);
+        assert_eq!(ctx.arity(copied), Arity::new(3, 6));
+        let nothing = ctx.id(0);
+        assert_eq!(ctx.arity(nothing), Arity::new(0, 0));
     }
 
     #[test]
     fn par_adds_both_sides_and_compose_takes_the_ends() {
+        let mut ctx = Context::new();
         // 2 -> 1 beside 3 -> 3.
-        let par = Term::par(Term::op(Prim::Equal), Term::id(3));
-        assert_eq!(par.arity(), Arity::new(5, 4));
+        let (equal, three) = (ctx.op(Prim::Equal), ctx.id(3));
+        let par = ctx.par(equal, three);
+        assert_eq!(ctx.arity(par), Arity::new(5, 4));
 
         // 1 -> 2 into 2 -> 1.
-        let composed = Term::compose(Term::copy(1), Term::op(Prim::Equal)).unwrap();
-        assert_eq!(composed.arity(), Arity::new(1, 1));
+        let copy = ctx.copy(1);
+        let composed = ctx.compose(copy, equal).unwrap();
+        assert_eq!(ctx.arity(composed), Arity::new(1, 1));
     }
 
     #[test]
     fn a_branch_takes_its_arms_arity_plus_the_condition() {
-        let branch = Term::branch(
-            Term::drop(2),
-            Term::compose(Term::drop(2), Term::id(0)).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(branch.arity(), Arity::new(3, 0));
+        let mut ctx = Context::new();
+        let two = ctx.drop(2);
+        let nothing = ctx.id(0);
+        let composed = ctx.compose(two, nothing).unwrap();
+        let branch = ctx.branch(two, composed).unwrap();
+        assert_eq!(ctx.arity(branch), Arity::new(3, 0));
     }
 
     // ---- constructors ----
 
     #[test]
     fn compose_refuses_halves_that_do_not_meet() {
-        let err = Term::compose(Term::id(1), Term::op(Prim::Add)).unwrap_err();
+        let mut ctx = Context::new();
+        let (one, add) = (ctx.id(1), ctx.op(Prim::Add));
+        let err = ctx.compose(one, add).unwrap_err();
         assert_eq!(
             err,
             Error::Mismatch {
@@ -991,47 +1257,64 @@ mod tests {
 
     #[test]
     fn branch_refuses_arms_of_different_arity() {
-        assert!(Term::branch(Term::drop(1), Term::drop(2)).is_err());
+        let mut ctx = Context::new();
+        let (one, two) = (ctx.drop(1), ctx.drop(2));
+        assert!(ctx.branch(one, two).is_err());
     }
 
     #[test]
     fn pad_compose_widens_whichever_side_is_narrower() {
+        let mut ctx = Context::new();
         // The prefix leaves one value where the next term wants two, so the
         // prefix is the one that grows.
-        let short_left =
-            Term::pad_compose(Term::op(Prim::Push(Value::Int(1))), Term::op(Prim::Add));
-        assert_eq!(format!("{}", short_left), "id(1) * push 1 ; add");
-        assert_eq!(short_left.arity(), Arity::new(1, 1));
+        let (push, add) = (ctx.op(Prim::Push(Value::Int(1))), ctx.op(Prim::Add));
+        let short_left = ctx.pad_compose(push, add);
+        assert_eq!(
+            format!("{}", ctx.display(short_left)),
+            "id(1) * push 1 ; add"
+        );
+        assert_eq!(ctx.arity(short_left), Arity::new(1, 1));
 
         // The prefix leaves two values where the next term wants one, so the
         // spare value passes under the next term instead.
-        let short_right = Term::pad_compose(Term::copy(1), Term::op(Prim::Not));
-        assert_eq!(format!("{}", short_right), "copy(1) ; id(1) * not");
-        assert_eq!(short_right.arity(), Arity::new(1, 2));
+        let (copy, not) = (ctx.copy(1), ctx.op(Prim::Not));
+        let short_right = ctx.pad_compose(copy, not);
+        assert_eq!(
+            format!("{}", ctx.display(short_right)),
+            "copy(1) ; id(1) * not"
+        );
+        assert_eq!(ctx.arity(short_right), Arity::new(1, 2));
     }
 
     #[test]
     fn padding_by_nothing_builds_nothing() {
-        assert_eq!(Term::id(2).under(0), Term::id(2));
-        let met = Term::pad_compose(Term::copy(1), Term::op(Prim::Equal));
-        assert_eq!(format!("{}", met), "copy(1) ; equal");
+        let mut ctx = Context::new();
+        let two = ctx.id(2);
+        assert_eq!(ctx.under(two, 0), two);
+        let (copy, equal) = (ctx.copy(1), ctx.op(Prim::Equal));
+        let met = ctx.pad_compose(copy, equal);
+        assert_eq!(format!("{}", ctx.display(met)), "copy(1) ; equal");
     }
 
     #[test]
     fn pad_branch_widens_the_shallower_arm() {
         // Both arms leave one value fewer than they take, but the first asks
         // for two where the second asks for one, so the second is widened.
-        let branch = Term::pad_branch(Term::op(Prim::Equal), Term::drop(1)).unwrap();
-        assert_eq!(branch.arity(), Arity::new(3, 1));
+        let mut ctx = Context::new();
+        let (equal, drop) = (ctx.op(Prim::Equal), ctx.drop(1));
+        let branch = ctx.pad_branch(equal, drop).unwrap();
+        assert_eq!(ctx.arity(branch), Arity::new(3, 1));
         assert_eq!(
-            format!("{}", branch),
+            format!("{}", ctx.display(branch)),
             "branch { equal } { id(1) * drop(1) }"
         );
     }
 
     #[test]
     fn pad_branch_refuses_arms_that_leave_the_stack_differently() {
-        let err = Term::pad_branch(Term::drop(1), Term::id(1)).unwrap_err();
+        let mut ctx = Context::new();
+        let (drop, id) = (ctx.drop(1), ctx.id(1));
+        let err = ctx.pad_branch(drop, id).unwrap_err();
         assert_eq!(
             err,
             Error::ArmsDiffer {
@@ -1043,80 +1326,116 @@ mod tests {
 
     #[test]
     fn the_constructors_do_not_normalize() {
-        assert_eq!(
-            Term::par(Term::id(0), Term::id(2)),
-            Term::Par(Box::new(Term::Id(0)), Box::new(Term::Id(2)))
-        );
-        assert_eq!(Term::drop(0), Term::Drop(0));
+        let mut ctx = Context::new();
+        let (zero, two) = (ctx.id(0), ctx.id(2));
+        let par = ctx.par(zero, two);
+        assert_eq!(*ctx.get(par), Term::Par(zero, two));
+        let nothing = ctx.drop(0);
+        assert_eq!(*ctx.get(nothing), Term::Drop(0));
     }
 
     // ---- printing ----
 
     #[test]
     fn par_binds_tighter_than_compose() {
-        let a = || Term::id(1);
+        let mut ctx = Context::new();
+        let a = ctx.id(1);
         // (a * a) ; a needs no parentheses.
-        let tight = Term::compose(Term::par(a(), a()), Term::id(2)).unwrap();
-        assert_eq!(format!("{}", tight), "id(1) * id(1) ; id(2)");
+        let (par, two) = (ctx.par(a, a), ctx.id(2));
+        let tight = ctx.compose(par, two).unwrap();
+        assert_eq!(format!("{}", ctx.display(tight)), "id(1) * id(1) ; id(2)");
         // (a ; a) * a does.
-        let loose = Term::par(Term::compose(a(), a()).unwrap(), a());
-        assert_eq!(format!("{}", loose), "(id(1) ; id(1)) * id(1)");
+        let composed = ctx.compose(a, a).unwrap();
+        let loose = ctx.par(composed, a);
+        assert_eq!(format!("{}", ctx.display(loose)), "(id(1) ; id(1)) * id(1)");
     }
 
     #[test]
     fn both_operators_print_left_associatively() {
-        let a = || Term::id(1);
-        let left = Term::compose(Term::compose(a(), a()).unwrap(), a()).unwrap();
-        assert_eq!(format!("{}", left), "id(1) ; id(1) ; id(1)");
-        let right = Term::compose(a(), Term::compose(a(), a()).unwrap()).unwrap();
-        assert_eq!(format!("{}", right), "id(1) ; (id(1) ; id(1))");
+        let mut ctx = Context::new();
+        let a = ctx.id(1);
+        let inner = ctx.compose(a, a).unwrap();
+        let left = ctx.compose(inner, a).unwrap();
+        assert_eq!(format!("{}", ctx.display(left)), "id(1) ; id(1) ; id(1)");
+        let right = ctx.compose(a, inner).unwrap();
+        assert_eq!(format!("{}", ctx.display(right)), "id(1) ; (id(1) ; id(1))");
 
-        let left = Term::par(Term::par(a(), a()), a());
-        assert_eq!(format!("{}", left), "id(1) * id(1) * id(1)");
-        let right = Term::par(a(), Term::par(a(), a()));
-        assert_eq!(format!("{}", right), "id(1) * (id(1) * id(1))");
+        let inner = ctx.par(a, a);
+        let left = ctx.par(inner, a);
+        assert_eq!(format!("{}", ctx.display(left)), "id(1) * id(1) * id(1)");
+        let right = ctx.par(a, inner);
+        assert_eq!(format!("{}", ctx.display(right)), "id(1) * (id(1) * id(1))");
     }
 
     #[test]
     fn what_fits_the_width_is_left_on_one_line() {
-        let spine = Term::pad_compose(
-            Term::pad_compose(Term::copy(1), Term::op(Prim::Equal)),
-            Term::drop(1),
+        let mut ctx = Context::new();
+        let (copy, equal, drop) = (ctx.copy(1), ctx.op(Prim::Equal), ctx.drop(1));
+        let front = ctx.pad_compose(copy, equal);
+        let spine = ctx.pad_compose(front, drop);
+        assert_eq!(
+            format!("{}", ctx.pretty(spine, 40)),
+            "copy(1) ; equal ; drop(1)"
         );
-        assert_eq!(format!("{}", spine.pretty(40)), "copy(1) ; equal ; drop(1)");
         // The same term with nowhere to put it breaks at every `;` of its
         // spine, and at no other place.
         assert_eq!(
-            format!("{}", spine.pretty(10)),
+            format!("{}", ctx.pretty(spine, 10)),
             "copy(1) ;\nequal ;\ndrop(1)"
         );
     }
 
     #[test]
     fn a_broken_branch_indents_its_arms() {
-        let arm = |v| Term::pad_compose(Term::drop(1), Term::op(Prim::Push(Value::Int(v))));
-        let branch = Term::pad_compose(Term::copy(1), Term::branch(arm(1), arm(2)).unwrap());
+        let mut ctx = Context::new();
+        let mut arm = |v| {
+            let (drop, push) = (ctx.drop(1), ctx.op(Prim::Push(Value::Int(v))));
+            ctx.pad_compose(drop, push)
+        };
+        let (then, otherwise) = (arm(1), arm(2));
+        let branch = ctx.branch(then, otherwise).unwrap();
+        let copy = ctx.copy(1);
+        let whole = ctx.pad_compose(copy, branch);
         assert_eq!(
-            format!("{}", branch.pretty(20)),
+            format!("{}", ctx.pretty(whole, 20)),
             "copy(1) ;\nbranch {\n  drop(1) ; push 1\n} {\n  drop(1) ; push 2\n}"
         );
     }
 
     #[test]
     fn a_group_that_breaks_lines_up_inside_its_parenthesis() {
-        // The parentheses are `Display`'s, so the broken form still says the
-        // compose leans right; the lines inside sit under the open paren.
-        let not = || Term::op(Prim::Not);
-        let group = Term::compose(
-            Term::pad_compose(Term::copy(1), Term::op(Prim::Equal)),
-            not(),
-        )
-        .unwrap();
-        let right = Term::compose(not(), group).unwrap();
-        assert_eq!(format!("{}", right), "not ; (copy(1) ; equal ; not)");
+        // The parentheses are the one-line spelling's, so the broken form still
+        // says the compose leans right; the lines inside sit under the open
+        // paren.
+        let mut ctx = Context::new();
+        let (copy, equal, not) = (ctx.copy(1), ctx.op(Prim::Equal), ctx.op(Prim::Not));
+        let front = ctx.pad_compose(copy, equal);
+        let group = ctx.compose(front, not).unwrap();
+        let right = ctx.compose(not, group).unwrap();
         assert_eq!(
-            format!("{}", right.pretty(20)),
+            format!("{}", ctx.display(right)),
+            "not ; (copy(1) ; equal ; not)"
+        );
+        assert_eq!(
+            format!("{}", ctx.pretty(right, 20)),
             "not ;\n(copy(1) ; equal ;\n not)"
+        );
+    }
+
+    #[test]
+    fn a_call_prints_by_name_when_the_library_is_at_hand() {
+        let library =
+            assemble("mod inner { #[arity(1,1)] sentence twice { pick 0 add } }").unwrap();
+        let target = sentence_named(&library, "inner::twice");
+        let mut ctx = Context::new();
+        let call = ctx.call(target, call_arity(&library, target).unwrap());
+        assert_eq!(
+            format!("{}", ctx.display(call)),
+            format!("call #{}", usize::from(target))
+        );
+        assert_eq!(
+            format!("{}", ctx.display(call).named(&library)),
+            "call inner::twice"
         );
     }
 
@@ -1165,12 +1484,13 @@ mod tests {
         .unwrap();
         let helper = sentence_named(&library, "helper");
         let probe = sentence_named(&library, "probe");
-        let term = lower(&library, probe).unwrap();
-        term.check().unwrap();
+        let mut ctx = Context::new();
+        let term = lower(&mut ctx, &library, probe).unwrap();
+        ctx.check(term).unwrap();
         // The dip needs three values where the jump before it left one, so the
         // prefix is widened by two; the frames after it meet what is there.
         assert_eq!(
-            format!("{}", term),
+            format!("{}", ctx.display(term)),
             format!(
                 "id(2) * call #{h} ; call #{h} * id(1) ; drop(1) * id(1)",
                 h = usize::from(helper)
@@ -1192,10 +1512,14 @@ mod tests {
     fn a_branch_lowers_with_the_condition_on_top() {
         let library = assemble("sentence probe { branch { push 1 } { push 2 } }").unwrap();
         let probe = sentence_named(&library, "probe");
-        let term = lower(&library, probe).unwrap();
-        term.check().unwrap();
-        assert_eq!(format!("{}", term), "branch { push 1 } { push 2 }");
-        assert_eq!(term.arity(), Arity::new(1, 1));
+        let mut ctx = Context::new();
+        let term = lower(&mut ctx, &library, probe).unwrap();
+        ctx.check(term).unwrap();
+        assert_eq!(
+            format!("{}", ctx.display(term)),
+            "branch { push 1 } { push 2 }"
+        );
+        assert_eq!(ctx.arity(term), Arity::new(1, 1));
     }
 
     /// Every sentence the integration suite compiles, lowered.
@@ -1217,13 +1541,14 @@ mod tests {
         let library = bytecode::assemble_source(&mut map, file, Some(&tests))
             .unwrap_or_else(|e| panic!("{}", map.render(&e)));
 
-        let terms = lower_all(&library).unwrap();
+        let mut ctx = Context::new();
+        let terms = lower_all(&mut ctx, &library).unwrap();
         assert!(terms.len() > 100, "the corpus should be a real one");
         for (idx, term) in terms.iter_enumerated() {
-            term.check().unwrap();
+            ctx.check(*term).unwrap();
             let inferred = sentence_arity(&library, idx).expect("the corpus compiled");
             assert_eq!(
-                term.arity(),
+                ctx.arity(*term),
                 Arity::new(inferred.inputs as usize, inferred.outputs as usize),
                 "sentence {:?} ({})",
                 idx,
@@ -1250,17 +1575,18 @@ mod tests {
         "#,
         )
         .unwrap();
+        let mut ctx = Context::new();
         for (idx, _) in library.sentences.iter_enumerated() {
-            let term = lower(&library, idx).unwrap();
-            term.check().unwrap();
+            let term = lower(&mut ctx, &library, idx).unwrap();
+            ctx.check(term).unwrap();
             let inferred = sentence_arity(&library, idx).unwrap();
             assert_eq!(
-                term.arity(),
+                ctx.arity(term),
                 Arity::new(inferred.inputs as usize, inferred.outputs as usize),
                 "sentence {:?} ({}) lowered to {}",
                 idx,
                 library.names[idx],
-                term
+                ctx.display(term)
             );
         }
     }

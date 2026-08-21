@@ -139,7 +139,7 @@ The Hanoi codebase is structured as a cargo workspace with several key packages:
   - [vm/src/lib.rs](vm/src/lib.rs): Core interpreter, instruction dispatch loop, and stack representation.
   - [vm/src/runtime.rs](vm/src/runtime.rs): Asynchronous CSP coordinator that drives state machine step cycles.
 - **[rewrite](rewrite)**: The prover.
-  - [rewrite/src/term.rs](rewrite/src/term.rs): The algebraic term model — programs as two arity-exact operators (`;` and `*`) over a handful of leaves.
+  - [rewrite/src/term.rs](rewrite/src/term.rs): The algebraic term model — programs as two arity-exact operators (`;` and `*`) over a handful of leaves, built in a `Context` arena and referred to by `TermIndex`.
   - [rewrite/src/diagram.rs](rewrite/src/diagram.rs): The string-diagram engine — programs as wiring in an interned arena, canonicalized into ordered, shared case trees; the decision procedure `bin/prove` closes goals with.
   - [rewrite/src/hant.rs](rewrite/src/hant.rs): The strategy language proofs are written in (`peel`, `descend`, `inline`, `via`, `diagram`); [strategy.rs](rewrite/src/strategy.rs) interprets one per identity behind `bin/prove`.
 - **[test-runner](test-runner)**: CLI harness that compiles and runs integration test suites.

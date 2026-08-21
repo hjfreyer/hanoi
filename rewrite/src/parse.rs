@@ -1,6 +1,6 @@
 //! The term language, read back.
 //!
-//! [`Display`](std::fmt::Display) writes a [`Term`]; this reads one. The two
+//! [`Context`](crate::term::Context) writes a term; this reads one. The two
 //! are inverses, deliberately: a residual is printed in this language, and a
 //! `via` waypoint is the author's answer to a residual, so it is written in
 //! the same one. A proof used to say `pick 0 push t1
@@ -24,7 +24,7 @@
 
 use bytecode::{Library, SentenceIndex, Value};
 
-use crate::term::{Prim, Term};
+use crate::term::{Context, Prim, TermIndex};
 
 /// What names a body may use: the library it is written against.
 pub struct Scope<'l> {
@@ -37,9 +37,10 @@ impl<'l> Scope<'l> {
     }
 }
 
-/// Reads a term out of the language [`Term`]'s printing writes.
-pub fn parse_term(text: &str, scope: &Scope) -> Result<Term, String> {
-    let (term, rest) = compose(text, scope)?;
+/// Reads a term out of the language a [`Context`]'s printing writes, building
+/// it in `ctx`.
+pub fn parse_term(ctx: &mut Context, text: &str, scope: &Scope) -> Result<TermIndex, String> {
+    let (term, rest) = compose(ctx, text, scope)?;
     let rest = rest.trim();
     if !rest.is_empty() {
         return Err(format!("unexpected {}", head_of(rest)));
@@ -49,31 +50,43 @@ pub fn parse_term(text: &str, scope: &Scope) -> Result<Term, String> {
 
 /// `a ; b ; c`, left-associated — so a right-nested compose keeps the
 /// parentheses that printed it.
-fn compose<'t>(text: &'t str, scope: &Scope) -> Result<(Term, &'t str), String> {
-    let (mut term, mut rest) = par(text, scope)?;
+fn compose<'t>(
+    ctx: &mut Context,
+    text: &'t str,
+    scope: &Scope,
+) -> Result<(TermIndex, &'t str), String> {
+    let (mut term, mut rest) = par(ctx, text, scope)?;
     while let Some(after) = rest.trim_start().strip_prefix(';') {
-        let (next, tail) = par(after, scope)?;
-        term = Term::compose(term, next).map_err(|e| e.to_string())?;
+        let (next, tail) = par(ctx, after, scope)?;
+        term = ctx.compose(term, next).map_err(|e| e.to_string())?;
         rest = tail;
     }
     Ok((term, rest))
 }
 
 /// `a * b * c`, left-associated, binding tighter than `;`.
-fn par<'t>(text: &'t str, scope: &Scope) -> Result<(Term, &'t str), String> {
-    let (mut term, mut rest) = atom(text, scope)?;
+fn par<'t>(
+    ctx: &mut Context,
+    text: &'t str,
+    scope: &Scope,
+) -> Result<(TermIndex, &'t str), String> {
+    let (mut term, mut rest) = atom(ctx, text, scope)?;
     while let Some(after) = rest.trim_start().strip_prefix('*') {
-        let (next, tail) = atom(after, scope)?;
-        term = Term::par(term, next);
+        let (next, tail) = atom(ctx, after, scope)?;
+        term = ctx.par(term, next);
         rest = tail;
     }
     Ok((term, rest))
 }
 
-fn atom<'t>(text: &'t str, scope: &Scope) -> Result<(Term, &'t str), String> {
+fn atom<'t>(
+    ctx: &mut Context,
+    text: &'t str,
+    scope: &Scope,
+) -> Result<(TermIndex, &'t str), String> {
     let text = text.trim_start();
     if let Some(after) = text.strip_prefix('(') {
-        let (term, rest) = compose(after, scope)?;
+        let (term, rest) = compose(ctx, after, scope)?;
         let rest = rest
             .trim_start()
             .strip_prefix(')')
@@ -87,18 +100,18 @@ fn atom<'t>(text: &'t str, scope: &Scope) -> Result<(Term, &'t str), String> {
             let (n, rest) = width(rest, head)?;
             Ok((
                 match head {
-                    "id" => Term::id(n),
-                    "drop" => Term::drop(n),
-                    _ => Term::copy(n),
+                    "id" => ctx.id(n),
+                    "drop" => ctx.drop(n),
+                    _ => ctx.copy(n),
                 },
                 rest,
             ))
         }
         "branch" => {
-            let (if_true, rest) = arm(rest, scope)?;
-            let (if_false, rest) = arm(rest, scope)?;
+            let (if_true, rest) = arm(ctx, rest, scope)?;
+            let (if_false, rest) = arm(ctx, rest, scope)?;
             Ok((
-                Term::branch(if_true, if_false).map_err(|e| e.to_string())?,
+                ctx.branch(if_true, if_false).map_err(|e| e.to_string())?,
                 rest,
             ))
         }
@@ -107,11 +120,11 @@ fn atom<'t>(text: &'t str, scope: &Scope) -> Result<(Term, &'t str), String> {
             let target = sentence_named(scope.library, path)?;
             let arity =
                 crate::term::call_arity(scope.library, target).map_err(|e| e.to_string())?;
-            Ok((Term::call(target, arity), rest))
+            Ok((ctx.call(target, arity), rest))
         }
         "push" => {
             let (value, rest) = literal(rest, scope)?;
-            Ok((Term::op(Prim::Push(value)), rest))
+            Ok((ctx.op(Prim::Push(value)), rest))
         }
         mnemonic => {
             // Everything else is an instruction, spelled the way the machine
@@ -121,7 +134,7 @@ fn atom<'t>(text: &'t str, scope: &Scope) -> Result<(Term, &'t str), String> {
             if let Some(build) = width_carrying(mnemonic) {
                 let (n, rest) = number(rest.trim_start())
                     .ok_or_else(|| format!("`{}` wants a width", mnemonic))?;
-                return Ok((Term::op(build(n)), rest));
+                return Ok((ctx.op(build(n)), rest));
             }
             let prim = Prim::all()
                 .into_iter()
@@ -131,18 +144,22 @@ fn atom<'t>(text: &'t str, scope: &Scope) -> Result<(Term, &'t str), String> {
                     "jump" => "a call is `call name`".to_string(),
                     other => format!("no term is called `{}`", other),
                 })?;
-            Ok((Term::op(prim), rest))
+            Ok((ctx.op(prim), rest))
         }
     }
 }
 
 /// One brace-delimited branch arm.
-fn arm<'t>(text: &'t str, scope: &Scope) -> Result<(Term, &'t str), String> {
+fn arm<'t>(
+    ctx: &mut Context,
+    text: &'t str,
+    scope: &Scope,
+) -> Result<(TermIndex, &'t str), String> {
     let text = text
         .trim_start()
         .strip_prefix('{')
         .ok_or_else(|| format!("expected a branch arm in braces, found {}", head_of(text)))?;
-    let (term, rest) = compose(text, scope)?;
+    let (term, rest) = compose(ctx, text, scope)?;
     let rest = rest
         .trim_start()
         .strip_prefix('}')
@@ -290,13 +307,14 @@ fn head_of(rest: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::term::Arity;
+    use crate::term::{Arity, Term};
     use bytecode::assemble;
 
     fn round_trip(library: &Library, text: &str) -> String {
-        let term =
-            parse_term(text, &Scope::new(library)).unwrap_or_else(|e| panic!("{}: {}", text, e));
-        format!("{}", term)
+        let mut ctx = Context::new();
+        let term = parse_term(&mut ctx, text, &Scope::new(library))
+            .unwrap_or_else(|e| panic!("{}: {}", text, e));
+        format!("{}", ctx.display(term))
     }
 
     #[test]
@@ -330,46 +348,54 @@ mod tests {
         )
         .unwrap();
         let scope = Scope::new(&library);
-        let term = parse_term("call inner::twice ; not", &scope).unwrap();
-        assert_eq!(term.arity(), Arity::new(1, 1));
+        let mut ctx = Context::new();
+        let term = parse_term(&mut ctx, "call inner::twice ; not", &scope).unwrap();
+        assert_eq!(ctx.arity(term), Arity::new(1, 1));
         // The trailing part is enough while it is unambiguous, and the call
         // carries the callee's inferred arity.
-        assert_eq!(parse_term("call twice", &scope).unwrap(), {
-            let Term::Compose(call, _) = term else {
-                panic!()
-            };
-            *call
-        });
-        let err = parse_term("call nowhere", &scope).unwrap_err();
+        let again = parse_term(&mut ctx, "call twice", &scope).unwrap();
+        let Term::Compose(call, _) = *ctx.get(term) else {
+            panic!()
+        };
+        assert!(ctx.equal(again, call));
+        let err = parse_term(&mut ctx, "call nowhere", &scope).unwrap_err();
         assert!(err.contains("no sentence is called"), "{}", err);
     }
 
     #[test]
     fn a_symbol_is_the_path_it_was_declared_under() {
         let library = assemble("mod inner { symbol tag }").unwrap();
-        let term = parse_term("push inner::tag", &Scope::new(&library)).unwrap();
-        assert_eq!(format!("{}", term), "push inner::tag");
-        let err = parse_term("push inner::nope", &Scope::new(&library)).unwrap_err();
+        let mut ctx = Context::new();
+        let term = parse_term(&mut ctx, "push inner::tag", &Scope::new(&library)).unwrap();
+        assert_eq!(format!("{}", ctx.display(term)), "push inner::tag");
+        let err = parse_term(&mut ctx, "push inner::nope", &Scope::new(&library)).unwrap_err();
         assert!(err.contains("no symbol"), "{}", err);
     }
 
     #[test]
     fn halves_that_do_not_meet_are_refused_rather_than_padded() {
         let library = Library::new();
-        let err = parse_term("copy(1) ; not", &Scope::new(&library)).unwrap_err();
+        let mut ctx = Context::new();
+        let err = parse_term(&mut ctx, "copy(1) ; not", &Scope::new(&library)).unwrap_err();
         assert!(err.contains("cannot compose"), "{}", err);
-        let err = parse_term("branch { drop(1) } { id(1) }", &Scope::new(&library)).unwrap_err();
+        let err = parse_term(
+            &mut ctx,
+            "branch { drop(1) } { id(1) }",
+            &Scope::new(&library),
+        )
+        .unwrap_err();
         assert!(err.contains("leave the stack differently"), "{}", err);
     }
 
     #[test]
     fn the_structural_leaves_are_blocks_and_say_so() {
         let library = Library::new();
-        let err = parse_term("drop ; push 1", &Scope::new(&library)).unwrap_err();
+        let mut ctx = Context::new();
+        let err = parse_term(&mut ctx, "drop ; push 1", &Scope::new(&library)).unwrap_err();
         assert!(err.contains("write `drop(1)`"), "{}", err);
-        let err = parse_term("dip { not }", &Scope::new(&library)).unwrap_err();
+        let err = parse_term(&mut ctx, "dip { not }", &Scope::new(&library)).unwrap_err();
         assert!(err.contains("`*` against `id(n)`"), "{}", err);
-        let err = parse_term("jump twice", &Scope::new(&library)).unwrap_err();
+        let err = parse_term(&mut ctx, "jump twice", &Scope::new(&library)).unwrap_err();
         assert!(err.contains("`call name`"), "{}", err);
     }
 }
