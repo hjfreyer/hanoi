@@ -631,41 +631,44 @@ impl Context {
     pub fn check(&self, idx: TermIndex) -> Result<(), Error> {
         // A subterm that is shared is a subterm already checked: an arena is a
         // graph, and walking it as a tree would pay for the sharing twice.
-        self.check_seen(idx, &mut HashSet::new())
-    }
-
-    fn check_seen(&self, idx: TermIndex, seen: &mut HashSet<TermIndex>) -> Result<(), Error> {
-        if !seen.insert(idx) {
-            return Ok(());
-        }
-        match self.get(idx) {
-            Term::Id(_) | Term::Drop(_) | Term::Copy(_) | Term::Op(_) | Term::Call { .. } => Ok(()),
-            Term::Compose(left, right) => {
-                self.check_seen(*left, seen)?;
-                self.check_seen(*right, seen)?;
-                let (l, r) = (self.arity(*left), self.arity(*right));
-                if l.outputs != r.inputs {
-                    return Err(Error::Mismatch { left: l, right: r });
+        // A worklist rather than the recursion this reads like: a term is as
+        // deep as it is long, and a `;` chain of a few thousand steps — which
+        // is what reading a whole graph back leaves — is enough to overflow a
+        // thread's stack in an unoptimised build.
+        let mut seen = HashSet::new();
+        let mut work = vec![idx];
+        while let Some(idx) = work.pop() {
+            if !seen.insert(idx) {
+                continue;
+            }
+            match self.get(idx) {
+                Term::Id(_) | Term::Drop(_) | Term::Copy(_) | Term::Op(_) | Term::Call { .. } => {}
+                Term::Compose(left, right) => {
+                    let (l, r) = (self.arity(*left), self.arity(*right));
+                    if l.outputs != r.inputs {
+                        return Err(Error::Mismatch { left: l, right: r });
+                    }
+                    work.push(*left);
+                    work.push(*right);
                 }
-                Ok(())
-            }
-            Term::Par(left, right) => {
-                self.check_seen(*left, seen)?;
-                self.check_seen(*right, seen)
-            }
-            Term::Branch { if_true, if_false } => {
-                self.check_seen(*if_true, seen)?;
-                self.check_seen(*if_false, seen)?;
-                let (t, f) = (self.arity(*if_true), self.arity(*if_false));
-                if t != f {
-                    return Err(Error::ArmsDiffer {
-                        if_true: t,
-                        if_false: f,
-                    });
+                Term::Par(left, right) => {
+                    work.push(*left);
+                    work.push(*right);
                 }
-                Ok(())
+                Term::Branch { if_true, if_false } => {
+                    let (t, f) = (self.arity(*if_true), self.arity(*if_false));
+                    if t != f {
+                        return Err(Error::ArmsDiffer {
+                            if_true: t,
+                            if_false: f,
+                        });
+                    }
+                    work.push(*if_true);
+                    work.push(*if_false);
+                }
             }
         }
+        Ok(())
     }
 }
 /// How tightly a term's spelling binds, for deciding where parentheses go.
