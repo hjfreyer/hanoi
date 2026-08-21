@@ -69,7 +69,7 @@ use std::fmt;
 
 use bytecode::SentenceIndex;
 
-use crate::term::Term;
+use crate::term::TermIndex;
 
 /// One step of a strategy. `V` is what a `via` carries: the body's text as
 /// parsed, a [`Body`] — the term it reads as — once the library it is written
@@ -115,10 +115,11 @@ pub enum Step<V> {
 
 /// What a step's payload reads as, once the library it names things against
 /// exists: a term, or a sentence.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Body {
-    /// A `via` waypoint: the lowered term itself.
-    Stone(Term),
+    /// A `via` waypoint: the term it reads as, in the context the proof is
+    /// being run against.
+    Stone(TermIndex),
     /// An `inline` label: the one sentence it opens.
     Target(SentenceIndex),
 }

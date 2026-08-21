@@ -66,7 +66,7 @@ use std::hash::{Hash, Hasher};
 
 use bytecode::{Instruction, Library, SentenceIndex, Value};
 
-use crate::term::{Arity, Prim, Term};
+use crate::term::{Arity, Context, Prim, Term, TermIndex};
 
 // ---- the arena ----------------------------------------------------------------
 
@@ -419,16 +419,29 @@ type Path = Vec<(ValId, bool)>;
 
 /// The diagram of a term: run it on a stack of input wires and keep what
 /// lands, folded and ordered as it builds.
-pub fn normalize(ctx: &mut Ctx, term: &Term) -> DiagId {
-    let stack: Vec<ValId> = (0..term.arity().inputs).map(|i| ctx.var(i)).collect();
-    eval(ctx, term, stack, &mut Vec::new())
+///
+/// `terms` is the arena the term lives in; the diagram's own arena, `ctx`, is
+/// where the answer is built.
+pub fn normalize(ctx: &mut Ctx, terms: &Context, term: TermIndex) -> DiagId {
+    let stack: Vec<ValId> = (0..terms.arity(term).inputs).map(|i| ctx.var(i)).collect();
+    eval(ctx, terms, term, stack, &mut Vec::new())
 }
 
 /// One term on one stack of wires — exactly the term's inputs, deepest
 /// first — under the conditions the path has decided.
-fn eval(ctx: &mut Ctx, term: &Term, mut stack: Vec<ValId>, path: &mut Path) -> DiagId {
-    debug_assert_eq!(stack.len(), term.arity().inputs, "the caller cuts by arity");
-    match term {
+fn eval(
+    ctx: &mut Ctx,
+    terms: &Context,
+    term: TermIndex,
+    mut stack: Vec<ValId>,
+    path: &mut Path,
+) -> DiagId {
+    debug_assert_eq!(
+        stack.len(),
+        terms.arity(term).inputs,
+        "the caller cuts by arity"
+    );
+    match terms.get(term) {
         Term::Id(_) => ctx.leaf(stack),
         Term::Drop(_) => ctx.leaf(Vec::new()),
         // Block-wise: `copy(2)` takes `[a, b]` to `[a, b, a, b]`. No new
@@ -462,9 +475,10 @@ fn eval(ctx: &mut Ctx, term: &Term, mut stack: Vec<ValId>, path: &mut Path) -> D
             ctx.leaf(out)
         }
         Term::Compose(a, b) => {
-            let first = eval(ctx, a, stack, path);
+            let (a, b) = (*a, *b);
+            let first = eval(ctx, terms, a, stack, path);
             graft(ctx, first, path, Vec::new(), &mut |ctx, left, path, _| {
-                eval(ctx, b, left, path)
+                eval(ctx, terms, b, left, path)
             })
         }
         Term::Par(a, b) => {
@@ -475,10 +489,11 @@ fn eval(ctx: &mut Ctx, term: &Term, mut stack: Vec<ValId>, path: &mut Path) -> D
             // only the stack present at its own fork, so each join hands
             // its slice to `graft` as a carried stack, which substitutes
             // each condition's literal through it once, at the descent.
-            let top = stack.split_off(stack.len() - b.arity().inputs);
-            let deep = eval(ctx, a, stack, path);
+            let (a, b) = (*a, *b);
+            let top = stack.split_off(stack.len() - terms.arity(b).inputs);
+            let deep = eval(ctx, terms, a, stack, path);
             graft(ctx, deep, path, top, &mut |ctx, deep_out, path, top_in| {
-                let above = eval(ctx, b, top_in, path);
+                let above = eval(ctx, terms, b, top_in, path);
                 graft(
                     ctx,
                     above,
@@ -493,8 +508,9 @@ fn eval(ctx: &mut Ctx, term: &Term, mut stack: Vec<ValId>, path: &mut Path) -> D
             })
         }
         Term::Branch { if_true, if_false } => {
+            let (if_true, if_false) = (*if_true, *if_false);
             let cond = stack.pop().expect("a branch has its condition on top");
-            branch_on(ctx, cond, stack, if_true, if_false, path)
+            branch_on(ctx, terms, cond, stack, if_true, if_false, path)
         }
     }
 }
@@ -544,30 +560,31 @@ fn graft(ctx: &mut Ctx, d: DiagId, path: &mut Path, carried: Vec<ValId>, then: G
 /// slotted into condition order if not.
 fn branch_on(
     ctx: &mut Ctx,
+    terms: &Context,
     cond: ValId,
     stack: Vec<ValId>,
-    if_true: &Term,
-    if_false: &Term,
+    if_true: TermIndex,
+    if_false: TermIndex,
     path: &mut Path,
 ) -> DiagId {
     // `fold-branch`: a literal condition selects its arm.
     if let ValNode::Lit(HVal(v)) = ctx.val(cond) {
         let taken = if v.truthy() { if_true } else { if_false };
-        return eval(ctx, taken, stack, path);
+        return eval(ctx, terms, taken, stack, path);
     }
     // `retest-*`: a condition this path already tested answers the same.
     if let Some(&(_, taken)) = path.iter().find(|(c, _)| *c == cond) {
         let arm = if taken { if_true } else { if_false };
-        return eval(ctx, arm, stack, path);
+        return eval(ctx, terms, arm, stack, path);
     }
     // `specialize-equal`: inside the then arm, a value that tested `equal`
     // to a literal is that literal — `equal` is structural identity.
     let then_stack = specialize(ctx, cond, &stack);
     path.push((cond, true));
-    let t = eval(ctx, if_true, then_stack, path);
+    let t = eval(ctx, terms, if_true, then_stack, path);
     path.pop();
     path.push((cond, false));
-    let f = eval(ctx, if_false, stack, path);
+    let f = eval(ctx, terms, if_false, stack, path);
     path.pop();
     ctx.ite(cond, t, f)
 }
@@ -878,10 +895,10 @@ fn run_window(operands: &[Value], inst: &Instruction) -> Option<Vec<Value>> {
 /// exponential. The working values and the inputs are dropped together at
 /// the end. Its job is to be *written down*, as a `norm` cut's waypoint or
 /// a residual's evidence, not to be efficient code.
-pub fn reify(ctx: &Ctx, d: DiagId, inputs: usize) -> Term {
+pub fn reify(ctx: &Ctx, terms: &mut Context, d: DiagId, inputs: usize) -> TermIndex {
     match ctx.diag(d) {
         DiagNode::Leaf(vals) => {
-            let mut schedule = Schedule::new(ctx, inputs);
+            let mut schedule = Schedule::new(ctx, terms, inputs);
             for &v in vals {
                 schedule.ensure(v);
             }
@@ -890,13 +907,17 @@ pub fn reify(ctx: &Ctx, d: DiagId, inputs: usize) -> Term {
             }
             let work = schedule.height - vals.len();
             if work > 0 {
-                schedule.steps.push(if vals.is_empty() {
-                    Term::drop(work)
+                let step = if vals.is_empty() {
+                    schedule.terms.drop(work)
                 } else {
-                    Term::par(Term::drop(work), Term::id(vals.len()))
-                });
+                    let (dropped, kept) =
+                        (schedule.terms.drop(work), schedule.terms.id(vals.len()));
+                    schedule.terms.par(dropped, kept)
+                };
+                schedule.steps.push(step);
             }
-            fold_steps(schedule.steps)
+            let steps = schedule.steps;
+            fold_steps(terms, steps)
         }
         DiagNode::Branch {
             cond,
@@ -905,30 +926,37 @@ pub fn reify(ctx: &Ctx, d: DiagId, inputs: usize) -> Term {
         } => {
             // The condition on top of the untouched inputs, its scaffolding
             // dropped, then the branch; the arms answer for themselves.
-            let mut schedule = Schedule::new(ctx, inputs);
+            let mut schedule = Schedule::new(ctx, terms, inputs);
             schedule.ensure(*cond);
             schedule.fetch(*cond);
             let work = schedule.height - inputs - 1;
             if work > 0 {
-                schedule
-                    .steps
-                    .push(Term::par(Term::drop(work), Term::id(1)));
+                let (dropped, kept) = (schedule.terms.drop(work), schedule.terms.id(1));
+                let step = schedule.terms.par(dropped, kept);
+                schedule.steps.push(step);
             }
             let mut steps = schedule.steps;
+            let (then, otherwise) = (
+                reify(ctx, terms, *if_true, inputs),
+                reify(ctx, terms, *if_false, inputs),
+            );
             steps.push(
-                Term::branch(reify(ctx, *if_true, inputs), reify(ctx, *if_false, inputs))
+                terms
+                    .branch(then, otherwise)
                     .expect("arms of one diagram share a width"),
             );
-            fold_steps(steps)
+            fold_steps(terms, steps)
         }
     }
 }
 
 /// The stack scheduler behind [`reify`]: emits each distinct wire once and
 /// remembers where on the stack it lives.
-struct Schedule<'c> {
+struct Schedule<'c, 't> {
     ctx: &'c Ctx,
-    steps: Vec<Term>,
+    /// The arena the steps are built in.
+    terms: &'t mut Context,
+    steps: Vec<TermIndex>,
     /// How deep the stack is right now, inputs included.
     height: usize,
     /// Where each computed wire sits, as a position from the bottom.
@@ -938,8 +966,8 @@ struct Schedule<'c> {
     groups: HashMap<(Op, Vec<ValId>), ()>,
 }
 
-impl<'c> Schedule<'c> {
-    fn new(ctx: &'c Ctx, inputs: usize) -> Self {
+impl<'c, 't> Schedule<'c, 't> {
+    fn new(ctx: &'c Ctx, terms: &'t mut Context, inputs: usize) -> Self {
         let mut positions = HashMap::new();
         for i in 0..inputs {
             if let Some(&id) = ctx.vals_interned.get(&ValNode::Var(i)) {
@@ -948,6 +976,7 @@ impl<'c> Schedule<'c> {
         }
         Schedule {
             ctx,
+            terms,
             steps: Vec::new(),
             height: inputs,
             positions,
@@ -964,7 +993,8 @@ impl<'c> Schedule<'c> {
         match self.ctx.val(v).clone() {
             ValNode::Var(_) => unreachable!("inputs are seeded"),
             ValNode::Lit(HVal(value)) => {
-                self.steps.push(Term::op(Prim::Push(value)));
+                let step = self.terms.op(Prim::Push(value));
+                self.steps.push(step);
                 self.positions.insert(v, self.height);
                 self.height += 1;
             }
@@ -1005,7 +1035,8 @@ impl<'c> Schedule<'c> {
         for &a in args {
             self.fetch(a);
         }
-        self.steps.push(op_term(op));
+        let step = op_term(self.terms, op);
+        self.steps.push(step);
         let Arity { inputs, outputs } = op.arity();
         self.height = self.height - inputs + outputs;
     }
@@ -1014,36 +1045,40 @@ impl<'c> Schedule<'c> {
     /// spelling: copy at depth, bubble the copy up.
     fn fetch(&mut self, v: ValId) {
         let depth = self.height - 1 - self.positions[&v];
-        self.steps.push(if depth == 0 {
-            Term::copy(1)
+        let step = if depth == 0 {
+            self.terms.copy(1)
         } else {
-            Term::par(Term::copy(1), Term::id(depth))
-        });
+            let (copy, under) = (self.terms.copy(1), self.terms.id(depth));
+            self.terms.par(copy, under)
+        };
+        self.steps.push(step);
         self.height += 1;
         for k in (1..=depth).rev() {
-            self.steps.push(if k == 1 {
-                Term::op(Prim::Swap)
+            let step = if k == 1 {
+                self.terms.op(Prim::Swap)
             } else {
-                Term::par(Term::op(Prim::Swap), Term::id(k - 1))
-            });
+                let (swap, under) = (self.terms.op(Prim::Swap), self.terms.id(k - 1));
+                self.terms.par(swap, under)
+            };
+            self.steps.push(step);
         }
     }
 }
 
 /// Steps composed left to right with the padding lowering would add — an
 /// empty run is the identity on nothing.
-fn fold_steps(steps: Vec<Term>) -> Term {
+fn fold_steps(terms: &mut Context, steps: Vec<TermIndex>) -> TermIndex {
     let mut steps = steps.into_iter();
     let Some(first) = steps.next() else {
-        return Term::id(0);
+        return terms.id(0);
     };
-    steps.fold(first, Term::pad_compose)
+    steps.fold(first, |acc, next| terms.pad_compose(acc, next))
 }
 
-fn op_term(op: &Op) -> Term {
+fn op_term(terms: &mut Context, op: &Op) -> TermIndex {
     match op {
-        Op::Prim(p) => Term::op(p.clone()),
-        Op::Call { target, arity } => Term::call(*target, *arity),
+        Op::Prim(p) => terms.op(p.clone()),
+        Op::Call { target, arity } => terms.call(*target, *arity),
     }
 }
 
@@ -1120,8 +1155,8 @@ mod tests {
     use crate::term::lower;
     use bytecode::assemble;
 
-    /// The term a sentence written inline lowers to.
-    fn term_of(body: &str) -> Term {
+    /// The term a sentence written inline lowers to, built in `terms`.
+    fn term_of(terms: &mut Context, body: &str) -> TermIndex {
         let code = format!("sentence probe {{ {} }}", body);
         let library = assemble(&code).unwrap();
         let idx = library
@@ -1130,16 +1165,18 @@ mod tests {
             .find(|(_, n)| *n == "probe")
             .map(|(idx, _)| idx)
             .unwrap();
-        lower(&library, idx).unwrap()
+        lower(terms, &library, idx).unwrap()
     }
 
     /// Both sides' diagrams in one context, padded to one arity first — the
     /// same net-change allowance `Goal::aligned` pays.
     fn aligned(a: &str, b: &str) -> (Ctx, DiagId, DiagId) {
-        let goal = crate::goal::Goal::aligned(term_of(a), term_of(b));
+        let mut terms = Context::new();
+        let (a, b) = (term_of(&mut terms, a), term_of(&mut terms, b));
+        let goal = crate::goal::Goal::aligned(&mut terms, a, b);
         let mut ctx = Ctx::default();
-        let da = normalize(&mut ctx, &goal.lhs);
-        let db = normalize(&mut ctx, &goal.rhs);
+        let da = normalize(&mut ctx, &terms, goal.lhs);
+        let db = normalize(&mut ctx, &terms, goal.rhs);
         (ctx, da, db)
     }
 
@@ -1261,32 +1298,37 @@ mod tests {
         // joins the path only at the graft. The substitution has to reach
         // it there: the then arm re-tests the original, which folds to
         // `true` only as the literal.
-        let body = Term::pad_compose(
-            Term::pad_compose(Term::op(Prim::Push(Value::Int(7))), Term::op(Prim::Equal)),
-            Term::branch(
-                Term::op(Prim::Push(Value::Bool(true))),
-                Term::op(Prim::Push(Value::Bool(false))),
-            )
-            .unwrap(),
-        );
-        let retest = Term::pad_compose(Term::op(Prim::Push(Value::Int(7))), Term::op(Prim::Equal));
-        let term = Term::compose(
-            Term::copy(1),
-            Term::compose(
-                Term::par(Term::id(1), body),
-                Term::branch(
-                    retest,
-                    Term::pad_compose(Term::drop(1), Term::op(Prim::Push(Value::Bool(true)))),
-                )
-                .unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        let claim = Term::pad_compose(Term::drop(1), Term::op(Prim::Push(Value::Bool(true))));
+        let terms = &mut Context::new();
+        let test = {
+            let (seven, equal) = (terms.op(Prim::Push(Value::Int(7))), terms.op(Prim::Equal));
+            terms.pad_compose(seven, equal)
+        };
+        let body = {
+            let (yes, no) = (
+                terms.op(Prim::Push(Value::Bool(true))),
+                terms.op(Prim::Push(Value::Bool(false))),
+            );
+            let branch = terms.branch(yes, no).unwrap();
+            terms.pad_compose(test, branch)
+        };
+        let otherwise = {
+            let (drop, yes) = (terms.drop(1), terms.op(Prim::Push(Value::Bool(true))));
+            terms.pad_compose(drop, yes)
+        };
+        let term = {
+            let one = terms.id(1);
+            let under = terms.par(one, body);
+            // The then arm re-tests the original; the else arm answers `true`
+            // outright.
+            let branch = terms.branch(test, otherwise).unwrap();
+            let rest = terms.compose(under, branch).unwrap();
+            let copy = terms.copy(1);
+            terms.compose(copy, rest).unwrap()
+        };
+        let claim = otherwise;
         let mut ctx = Ctx::default();
-        let da = normalize(&mut ctx, &term);
-        let db = normalize(&mut ctx, &claim);
+        let da = normalize(&mut ctx, terms, term);
+        let db = normalize(&mut ctx, terms, claim);
         assert_eq!(da, db, "\n  got: {}", ShowDiagram(&ctx, da));
     }
 
@@ -1307,18 +1349,25 @@ mod tests {
         // Two branches on unrelated values, side by side — and the same
         // pair with the stack swapped around them, so the forks happen in
         // the other order. The ordered tree makes them one diagram.
-        let arm = |v| Term::op(Prim::Push(Value::Int(v)));
-        let b1 = || Term::branch(arm(10), arm(20)).unwrap();
-        let b2 = || Term::branch(arm(30), arm(40)).unwrap();
-        let lhs = Term::par(b1(), b2());
-        let rhs = Term::compose(
-            Term::compose(Term::op(Prim::Swap), Term::par(b2(), b1())).unwrap(),
-            Term::op(Prim::Swap),
-        )
-        .unwrap();
+        let terms = &mut Context::new();
+        let mut branch = |a: i64, b: i64| {
+            let (then, otherwise) = (
+                terms.op(Prim::Push(Value::Int(a))),
+                terms.op(Prim::Push(Value::Int(b))),
+            );
+            terms.branch(then, otherwise).unwrap()
+        };
+        let (b1, b2) = (branch(10, 20), branch(30, 40));
+        let lhs = terms.par(b1, b2);
+        let rhs = {
+            let swap = terms.op(Prim::Swap);
+            let other_way = terms.par(b2, b1);
+            let front = terms.compose(swap, other_way).unwrap();
+            terms.compose(front, swap).unwrap()
+        };
         let mut ctx = Ctx::default();
-        let da = normalize(&mut ctx, &lhs);
-        let db = normalize(&mut ctx, &rhs);
+        let da = normalize(&mut ctx, terms, lhs);
+        let db = normalize(&mut ctx, terms, rhs);
         assert_eq!(
             da,
             db,
@@ -1342,8 +1391,10 @@ mod tests {
             ));
         }
         body.push_str("drop 0");
+        let mut terms = Context::new();
+        let term = term_of(&mut terms, &body);
         let mut ctx = Ctx::default();
-        let d = normalize(&mut ctx, &term_of(&body));
+        let d = normalize(&mut ctx, &terms, term);
         assert!(
             ctx.diags.len() < 200,
             "{} diagram nodes for a reconverging chain",
@@ -1374,23 +1425,26 @@ mod tests {
         "#;
         let library = assemble(code).unwrap();
         let mut ctx = Ctx::default();
-        let by_name = |ctx: &mut Ctx, name: &str| {
+        let mut terms = Context::new();
+        let by_name = |ctx: &mut Ctx, terms: &mut Context, name: &str| {
             let idx = library
                 .names
                 .iter_enumerated()
                 .find(|(_, n)| *n == name)
                 .map(|(idx, _)| idx)
                 .unwrap();
-            normalize(ctx, &lower(&library, idx).unwrap())
+            let term = lower(terms, &library, idx).unwrap();
+            normalize(ctx, terms, term)
         };
         // The call is not its body…
-        let a = by_name(&mut ctx, "probe_a");
-        let b = by_name(&mut ctx, "probe_b");
+        let a = by_name(&mut ctx, &mut terms, "probe_a");
+        let b = by_name(&mut ctx, &mut terms, "probe_b");
         assert_ne!(a, b);
         // …but a zero-output call is a drop, because the language is total.
-        let f = Term::call(SentenceIndex::from(9), Arity::new(2, 0));
-        let df = normalize(&mut ctx, &f);
-        let dd = normalize(&mut ctx, &Term::drop(2));
+        let f = terms.call(SentenceIndex::from(9), Arity::new(2, 0));
+        let df = normalize(&mut ctx, &terms, f);
+        let dropped = terms.drop(2);
+        let dd = normalize(&mut ctx, &terms, dropped);
         assert_eq!(df, dd);
     }
 
@@ -1399,22 +1453,27 @@ mod tests {
     #[test]
     fn reify_speaks_the_frame_language() {
         let mut ctx = Ctx::default();
+        let mut terms = Context::new();
         // The identity on two values, spelled canonically: fetch each
         // input, then drop the originals underneath.
-        let two = normalize(&mut ctx, &term_of("swap swap"));
-        let term = reify(&ctx, two, 2);
-        term.check().unwrap();
+        let swaps = term_of(&mut terms, "swap swap");
+        let two = normalize(&mut ctx, &terms, swaps);
+        let term = reify(&ctx, &mut terms, two, 2);
+        terms.check(term).unwrap();
         assert_eq!(
-            format!("{}", term),
+            format!("{}", terms.display(term)),
             "copy(1) * id(1) ; id(1) * swap ; id(1) * (copy(1) * id(1)) ; \
              id(2) * swap ; drop(2) * id(2)"
         );
         // Each fetch is the `pick` frame spelling: copy at depth, bubble up.
         let x0 = ctx.var(0);
         let leaf = ctx.leaf(vec![x0]);
-        let one = reify(&ctx, leaf, 1);
-        one.check().unwrap();
-        assert_eq!(format!("{}", one), "copy(1) ; drop(1) * id(1)");
+        let one = reify(&ctx, &mut terms, leaf, 1);
+        terms.check(one).unwrap();
+        assert_eq!(
+            format!("{}", terms.display(one)),
+            "copy(1) ; drop(1) * id(1)"
+        );
     }
 
     /// Every sentence the integration suite compiles: normalize, reify,
@@ -1442,29 +1501,31 @@ mod tests {
         let library = bytecode::assemble_source(&mut map, file, Some(&tests))
             .unwrap_or_else(|e| panic!("{}", map.render(&e)));
 
-        let terms = crate::term::lower_all(&library).unwrap();
+        let mut arena = Context::new();
+        let terms = crate::term::lower_all(&mut arena, &library).unwrap();
         assert!(terms.len() > 100, "the corpus should be a real one");
         let mut ctx = Ctx::default();
         let mut skipped = 0usize;
-        for (idx, term) in terms.iter_enumerated() {
-            let diagram = normalize(&mut ctx, term);
+        for (idx, &term) in terms.iter_enumerated() {
+            let diagram = normalize(&mut ctx, &arena, term);
             let mut budget = 1_000usize;
             if !fits(&ctx, diagram, &mut budget) {
                 skipped += 1;
                 continue;
             }
-            let reified = reify(&ctx, diagram, term.arity().inputs);
-            reified.check().unwrap_or_else(|e| {
+            let inputs = arena.arity(term).inputs;
+            let reified = reify(&ctx, &mut arena, diagram, inputs);
+            arena.check(reified).unwrap_or_else(|e| {
                 panic!("sentence {} reified ill-formed: {}", library.names[idx], e)
             });
             assert_eq!(
-                reified.arity(),
-                term.arity(),
+                arena.arity(reified),
+                arena.arity(term),
                 "sentence {} changed arity through reification",
                 library.names[idx]
             );
             assert_eq!(
-                normalize(&mut ctx, &reified),
+                normalize(&mut ctx, &arena, reified),
                 diagram,
                 "sentence {} did not round-trip",
                 library.names[idx]

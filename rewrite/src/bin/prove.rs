@@ -76,7 +76,7 @@ fn field(label: &str, value: &impl std::fmt::Display) {
 }
 
 fn run(args: &Args) -> Result<bool, String> {
-    let corpus = corpus::load(&args.root)?;
+    let mut corpus = corpus::load(&args.root)?;
     for problem in &corpus.problems {
         eprintln!("{}", problem);
     }
@@ -92,9 +92,15 @@ fn run(args: &Args) -> Result<bool, String> {
             filtered += 1;
             continue;
         }
-        let goal = Goal::of_identity(&corpus.library, idx).map_err(|e| e.to_string())?;
+        // One arena for the whole run: the waypoints the corpus read at load
+        // time and the goals lowered here are places in it.
+        let goal = Goal::of_identity(&mut corpus.terms, &corpus.library, idx)
+            .map_err(|e| e.to_string())?;
         let strategy = corpus.proofs.get(&idx);
-        match prover.prove(&goal, strategy).map_err(|e| e.to_string())? {
+        match prover
+            .prove(&mut corpus.terms, goal, strategy)
+            .map_err(|e| e.to_string())?
+        {
             Outcome::Closed(proof) => {
                 passed += 1;
                 println!("identity {} ... ok ({})", identity.name, proof.summary());
@@ -108,11 +114,15 @@ fn run(args: &Args) -> Result<bool, String> {
                 }
                 // With the library at hand a call prints as the name a
                 // waypoint would have to write, not as an index.
-                let shown = |term: &rewrite::Term| {
-                    term.pretty(TERM_WIDTH).named(&corpus.library).to_string()
+                let shown = |term| {
+                    corpus
+                        .terms
+                        .pretty(term, TERM_WIDTH)
+                        .named(&corpus.library)
+                        .to_string()
                 };
-                field("what the left came to", &shown(&residual.lhs));
-                field("what the right came to", &shown(&residual.rhs));
+                field("what the left came to", &shown(residual.lhs));
+                field("what the right came to", &shown(residual.rhs));
                 field("the engine stopped", &residual.stopped);
                 println!();
             }

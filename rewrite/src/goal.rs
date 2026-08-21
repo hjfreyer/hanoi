@@ -4,19 +4,23 @@
 //! arity — `pick 1 ; drop` = ε is `(2 -> 2)` against `(0 -> 0)`, and every
 //! counit reads that way. In the term model that asymmetry lives in exactly
 //! one place: here, where the narrower side is padded with
-//! [`under`](crate::term::Term::under) until the two arities agree. Every rule
-//! instance downstream is then arity-preserving, which is what lets the
+//! [`under`](crate::term::Context::under) until the two arities agree. Every
+//! rule instance downstream is then arity-preserving, which is what lets the
 //! e-graph's analysis assert arity on every merge.
 
 use bytecode::{IdentityIndex, Library};
 
-use crate::term::{Error, Term, lower};
+use crate::term::{Context, Error, TermIndex, lower};
 
 /// Two terms of one arity, claimed equal.
-#[derive(Debug, Clone)]
+///
+/// The sides are places in a [`Context`], so a goal is two `usize`s: the
+/// subgoals a strategy makes are built by pointing at pieces of the goal it
+/// came from rather than by copying them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Goal {
-    pub lhs: Term,
-    pub rhs: Term,
+    pub lhs: TermIndex,
+    pub rhs: TermIndex,
 }
 
 impl Goal {
@@ -25,24 +29,28 @@ impl Goal {
     /// Lowers both sides and pads the narrower; the compiler already refused
     /// any identity whose sides differ in net change, so padding always
     /// brings the arities together.
-    pub fn of_identity(library: &Library, idx: IdentityIndex) -> Result<Goal, Error> {
+    pub fn of_identity(
+        ctx: &mut Context,
+        library: &Library,
+        idx: IdentityIndex,
+    ) -> Result<Goal, Error> {
         let identity = &library.identities[idx];
-        let lhs = lower(library, identity.lhs)?;
-        let rhs = lower(library, identity.rhs)?;
-        Ok(Goal::aligned(lhs, rhs))
+        let lhs = lower(ctx, library, identity.lhs)?;
+        let rhs = lower(ctx, library, identity.rhs)?;
+        Ok(Goal::aligned(ctx, lhs, rhs))
     }
 
     /// Two terms padded to one arity.
-    pub fn aligned(lhs: Term, rhs: Term) -> Goal {
-        let (la, ra) = (lhs.arity(), rhs.arity());
+    pub fn aligned(ctx: &mut Context, lhs: TermIndex, rhs: TermIndex) -> Goal {
+        let (la, ra) = (ctx.arity(lhs), ctx.arity(rhs));
         let (lhs, rhs) = if la.inputs < ra.inputs {
-            (lhs.under(ra.inputs - la.inputs), rhs)
+            (ctx.under(lhs, ra.inputs - la.inputs), rhs)
         } else {
-            (lhs, rhs.under(la.inputs - ra.inputs))
+            (lhs, ctx.under(rhs, la.inputs - ra.inputs))
         };
         debug_assert_eq!(
-            lhs.arity(),
-            rhs.arity(),
+            ctx.arity(lhs),
+            ctx.arity(rhs),
             "an identity's sides differ by more than padding, which check_identities refuses"
         );
         Goal { lhs, rhs }
@@ -130,8 +138,8 @@ impl Proof {
 /// try next, so it is kept as data rather than printed on the spot.
 #[derive(Debug)]
 pub struct Residual {
-    pub lhs: Term,
-    pub rhs: Term,
+    pub lhs: TermIndex,
+    pub rhs: TermIndex,
     /// How the report walked from the goal to the difference: each step of
     /// stripping shared context or entering the one arm that differs.
     pub path: Vec<String>,

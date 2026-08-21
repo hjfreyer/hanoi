@@ -24,18 +24,25 @@ use bytecode::{IdentityIndex, Library, SourceMap, assemble_source};
 
 use crate::hant::{Body, ProofEntry, Step, Strategy, parse_hant};
 use crate::parse::{Scope, parse_term, sentence_named};
+use crate::term::Context;
 
-/// A loaded corpus: the compiled library, the proofs that attached, and the
-/// entries that could not attach.
+/// A loaded corpus: the compiled library, the arena its waypoints were read
+/// into, the proofs that attached, and the entries that could not attach.
+///
+/// The terms come with the corpus because a waypoint is an index: the prover
+/// is handed this same [`Context`] so that what a proof says and what the
+/// goals are built from are the one arena.
 pub struct Corpus {
     pub library: Library,
+    pub terms: Context,
     pub proofs: HashMap<IdentityIndex, Strategy<Body>>,
     pub problems: Vec<String>,
 }
 
 /// Turns a parsed strategy into a runnable one by reading each body as a term
-/// against the library the proof is written for.
+/// against the library the proof is written for, into `ctx`.
 pub(crate) fn attach(
+    ctx: &mut Context,
     strategy: &Strategy<String>,
     library: &Library,
 ) -> Result<Strategy<Body>, String> {
@@ -67,15 +74,15 @@ pub(crate) fn attach(
                     right,
                 } => Step::Via {
                     waypoint: Body::Stone(
-                        parse_term(waypoint, &Scope::new(library))
+                        parse_term(ctx, waypoint, &Scope::new(library))
                             .map_err(|e| format!("`via` body: {}", e))?,
                     ),
-                    left: side(left, library)?,
-                    right: side(right, library)?,
+                    left: side(ctx, left, library)?,
+                    right: side(ctx, right, library)?,
                 },
                 Step::Descend { then_arm, else_arm } => Step::Descend {
-                    then_arm: side(then_arm, library)?,
-                    else_arm: side(else_arm, library)?,
+                    then_arm: side(ctx, then_arm, library)?,
+                    else_arm: side(ctx, else_arm, library)?,
                 },
             })
         })
@@ -83,10 +90,14 @@ pub(crate) fn attach(
 }
 
 fn side(
+    ctx: &mut Context,
     strategy: &Option<Strategy<String>>,
     library: &Library,
 ) -> Result<Option<Strategy<Body>>, String> {
-    strategy.as_ref().map(|s| attach(s, library)).transpose()
+    match strategy {
+        Some(s) => attach(ctx, s, library).map(Some),
+        None => Ok(None),
+    }
 }
 
 /// Loads the corpus rooted at `root/main.hana`, plus every `.hant` directly
@@ -101,10 +112,11 @@ pub fn load(root: &Path) -> Result<Corpus, String> {
     let file = map.add("main.hana", text);
     let library = assemble_source(&mut map, file, Some(root)).map_err(|e| map.render(&e))?;
 
+    let mut terms = Context::new();
     let mut problems = Vec::new();
     let mut proofs: HashMap<IdentityIndex, Strategy<Body>> = HashMap::new();
     for entry in entries {
-        let strategy = match attach(&entry.strategy, &library) {
+        let strategy = match attach(&mut terms, &entry.strategy, &library) {
             Ok(s) => s,
             Err(e) => {
                 problems.push(format!("proof {}: {}", entry.identity, e));
@@ -126,6 +138,7 @@ pub fn load(root: &Path) -> Result<Corpus, String> {
 
     Ok(Corpus {
         library,
+        terms,
         proofs,
         problems,
     })

@@ -17,7 +17,7 @@ fn the_corpus_identities_close() {
         .parent()
         .expect("the crate sits in the workspace")
         .join("tests");
-    let corpus = corpus::load(&tests).unwrap();
+    let mut corpus = corpus::load(&tests).unwrap();
     assert_eq!(corpus.problems, Vec::<String>::new());
 
     // Nothing is expected to stick. The path-condition claim in `types_test`
@@ -28,8 +28,11 @@ fn the_corpus_identities_close() {
     let prover = Prover::new(&corpus.library);
     let mut stragglers = Vec::new();
     for (idx, identity) in corpus.library.identities.iter_enumerated() {
-        let goal = Goal::of_identity(&corpus.library, idx).unwrap();
-        match prover.prove(&goal, corpus.proofs.get(&idx)).unwrap() {
+        let goal = Goal::of_identity(&mut corpus.terms, &corpus.library, idx).unwrap();
+        match prover
+            .prove(&mut corpus.terms, goal, corpus.proofs.get(&idx))
+            .unwrap()
+        {
             Outcome::Closed(_) => {}
             Outcome::Stuck(_) => stragglers.push(identity.name.clone()),
         }

@@ -28,9 +28,14 @@ use bytecode::{Library, SentenceIndex};
 use crate::diagram::{Ctx, normalize, reify};
 use crate::goal::{Goal, Outcome, Proof, Residual};
 use crate::hant::{Body, Step, Strategy, default_strategy};
-use crate::term::{Error, Term, lower};
+use crate::term::{Context, Error, Term, TermIndex, lower};
 
 /// Proves goals against one library.
+///
+/// Every step reads the goal's terms out of a [`Context`] and writes the
+/// terms it makes back into it, so the one arena is threaded through: a
+/// waypoint read at load time, the goal, and every subgoal a strategy carves
+/// out of it are all places in it.
 pub struct Prover<'l> {
     pub library: &'l Library,
 }
@@ -42,17 +47,27 @@ impl<'l> Prover<'l> {
 
     /// Runs a strategy on a goal — the written one, or the default
     /// `diagram` when the identity carries no proof.
-    pub fn prove(&self, goal: &Goal, strategy: Option<&Strategy<Body>>) -> Result<Outcome, Error> {
+    pub fn prove(
+        &self,
+        ctx: &mut Context,
+        goal: Goal,
+        strategy: Option<&Strategy<Body>>,
+    ) -> Result<Outcome, Error> {
         let default = default_strategy();
         let strategy = strategy.unwrap_or(&default);
-        self.run(strategy, goal.clone())
+        self.run(ctx, strategy, goal)
     }
 
     /// One strategy on one goal. A goal whose sides are one term as written
     /// is closed before any step runs — at every level, so a `descend` arm
     /// or a cut's side that became trivial needs no steps of its own.
-    fn run(&self, strategy: &[Step<Body>], goal: Goal) -> Result<Outcome, Error> {
-        if goal.lhs == goal.rhs {
+    fn run(
+        &self,
+        ctx: &mut Context,
+        strategy: &[Step<Body>],
+        goal: Goal,
+    ) -> Result<Outcome, Error> {
+        if ctx.equal(goal.lhs, goal.rhs) {
             return Ok(Outcome::Closed(Proof::Trivial));
         }
         let Some((head, rest)) = strategy.split_first() else {
@@ -66,15 +81,18 @@ impl<'l> Prover<'l> {
             // claim is beyond the canonical form. The residual reifies what
             // each side became, narrowed to where they differ.
             Step::Diagram => {
-                let mut ctx = Ctx::default();
-                let lhs = normalize(&mut ctx, &goal.lhs);
-                let rhs = normalize(&mut ctx, &goal.rhs);
+                let mut diagrams = Ctx::default();
+                let lhs = normalize(&mut diagrams, ctx, goal.lhs);
+                let rhs = normalize(&mut diagrams, ctx, goal.rhs);
                 if lhs == rhs {
                     return Ok(Outcome::Closed(Proof::Diagram));
                 }
-                let inputs = goal.lhs.arity().inputs;
-                let (mut path, lhs, rhs) =
-                    narrow(reify(&ctx, lhs, inputs), reify(&ctx, rhs, inputs));
+                let inputs = ctx.arity(goal.lhs).inputs;
+                let (lhs, rhs) = (
+                    reify(&diagrams, ctx, lhs, inputs),
+                    reify(&diagrams, ctx, rhs, inputs),
+                );
+                let (mut path, lhs, rhs) = narrow(ctx, lhs, rhs);
                 path.insert(0, "as diagrams".to_string());
                 Ok(Outcome::Stuck(Residual {
                     lhs,
@@ -104,51 +122,29 @@ impl<'l> Prover<'l> {
                 left,
                 right,
             } => {
-                let Body::Stone(waypoint) = waypoint else {
+                let Body::Stone(waypoint) = *waypoint else {
                     unreachable!("the loader reads a via body as a stone");
                 };
                 // The cut is a claim, so a waypoint whose stack effect cannot
                 // sit between the sides is refused here, loudly, rather than
                 // producing goals nothing could ever close.
-                if waypoint.arity().net() != goal.lhs.arity().net() {
+                if ctx.arity(waypoint).net() != ctx.arity(goal.lhs).net() {
                     let why = format!(
                         "the `via` waypoint's net stack change ({}) is not the goal's ({})",
-                        waypoint.arity().net(),
-                        goal.lhs.arity().net()
+                        ctx.arity(waypoint).net(),
+                        ctx.arity(goal.lhs).net()
                     );
                     return Ok(Outcome::Stuck(gave_up(goal, &why)));
                 }
                 // Two goals, fully independent from here: each side takes its
                 // own road, and proving both proves the whole by transitivity.
-                let default = default_strategy();
-                let side = |name: &str,
-                            strategy: &Option<Strategy<Body>>,
-                            sub: Goal|
-                 -> Result<Result<Box<Proof>, Residual>, Error> {
-                    let strategy = strategy.as_ref().unwrap_or(&default);
-                    Ok(match self.run(strategy, sub)? {
-                        Outcome::Closed(p) => Ok(Box::new(p)),
-                        Outcome::Stuck(mut residual) => {
-                            residual
-                                .path
-                                .insert(0, format!("in the {} half of the cut", name));
-                            Err(residual)
-                        }
-                    })
-                };
-                let left_sub = match side(
-                    "left",
-                    left,
-                    Goal::aligned(goal.lhs.clone(), waypoint.clone()),
-                )? {
+                let sub = Goal::aligned(ctx, goal.lhs, waypoint);
+                let left_sub = match self.side(ctx, "left", left, sub)? {
                     Ok(p) => p,
                     Err(residual) => return Ok(Outcome::Stuck(residual)),
                 };
-                let right_sub = match side(
-                    "right",
-                    right,
-                    Goal::aligned(waypoint.clone(), goal.rhs.clone()),
-                )? {
+                let sub = Goal::aligned(ctx, waypoint, goal.rhs);
+                let right_sub = match self.side(ctx, "right", right, sub)? {
                     Ok(p) => p,
                     Err(residual) => return Ok(Outcome::Stuck(residual)),
                 };
@@ -159,13 +155,13 @@ impl<'l> Prover<'l> {
             }
 
             Step::Peel => {
-                let Some((narrowed, prefix, suffix)) = peel(&goal) else {
+                let Some((narrowed, prefix, suffix)) = peel(ctx, goal) else {
                     return Ok(Outcome::Stuck(gave_up(
                         goal,
                         "`peel` found nothing shared to strip",
                     )));
                 };
-                Ok(match self.run(rest, narrowed)? {
+                Ok(match self.run(ctx, rest, narrowed)? {
                     Outcome::Closed(sub) => Outcome::Closed(Proof::Peel {
                         prefix,
                         suffix,
@@ -189,7 +185,7 @@ impl<'l> Prover<'l> {
                     lhs: goal.rhs,
                     rhs: goal.lhs,
                 };
-                Ok(match self.run(rest, swapped)? {
+                Ok(match self.run(ctx, rest, swapped)? {
                     Outcome::Closed(sub) => Outcome::Closed(Proof::Swapped(Box::new(sub))),
                     Outcome::Stuck(mut residual) => {
                         residual
@@ -210,7 +206,7 @@ impl<'l> Prover<'l> {
                     Some(Body::Target(idx)) => Some(*idx),
                     Some(_) => unreachable!("the loader reads an inline label as a target"),
                 };
-                if !has_calls(&goal.lhs, only) && !has_calls(&goal.rhs, only) {
+                if !has_calls(ctx, goal.lhs, only) && !has_calls(ctx, goal.rhs, only) {
                     let why = match only {
                         None => "`inline` found no calls to open".to_string(),
                         Some(idx) => format!(
@@ -220,12 +216,11 @@ impl<'l> Prover<'l> {
                     };
                     return Ok(Outcome::Stuck(gave_up(goal, &why)));
                 }
-                let opened = Goal::aligned(
-                    inline_calls(self.library, &goal.lhs, only)?,
-                    inline_calls(self.library, &goal.rhs, only)?,
-                );
+                let lhs = inline_calls(ctx, self.library, goal.lhs, only)?;
+                let rhs = inline_calls(ctx, self.library, goal.rhs, only)?;
+                let opened = Goal::aligned(ctx, lhs, rhs);
                 let target = only.map(|idx| self.library.names[idx].clone());
-                Ok(match self.run(rest, opened)? {
+                Ok(match self.run(ctx, rest, opened)? {
                     Outcome::Closed(sub) => Outcome::Closed(Proof::Inlined {
                         target,
                         sub: Box::new(sub),
@@ -236,58 +231,84 @@ impl<'l> Prover<'l> {
 
             Step::Descend { then_arm, else_arm } => {
                 let (
-                    Term::Branch {
+                    &Term::Branch {
                         if_true: t1,
                         if_false: e1,
                     },
-                    Term::Branch {
+                    &Term::Branch {
                         if_true: t2,
                         if_false: e2,
                     },
-                ) = (&goal.lhs, &goal.rhs)
+                ) = (ctx.get(goal.lhs), ctx.get(goal.rhs))
                 else {
                     return Ok(Outcome::Stuck(gave_up(
                         goal,
                         "`descend` needs a branch on both sides",
                     )));
                 };
-                let arm = |name: &str,
-                           strategy: &Option<Strategy<Body>>,
-                           a: &Term,
-                           b: &Term|
-                 -> Result<Result<Option<Box<Proof>>, Residual>, Error> {
-                    let sub = Goal::aligned(a.clone(), b.clone());
-                    match strategy {
-                        Some(s) => Ok(match self.run(s, sub)? {
-                            Outcome::Closed(p) => Ok(Some(Box::new(p))),
-                            Outcome::Stuck(mut residual) => {
-                                residual.path.insert(0, format!("in the {} arm", name));
-                                Err(residual)
-                            }
-                        }),
-                        // An arm left out is a claim that it already matches,
-                        // and the claim is checked rather than assumed.
-                        None if a == b => Ok(Ok(None)),
-                        None => Ok(Err(Residual {
-                            path: vec![format!("in the {} arm", name)],
-                            stopped: format!(
-                                "the {} arms are not already equal, and `descend` was given no strategy for them",
-                                name
-                            ),
-                            ..gave_up(sub, "")
-                        })),
-                    }
-                };
-                let then_sub = match arm("then", then_arm, t1, t2)? {
+                let then_sub = match self.arm(ctx, "then", then_arm, t1, t2)? {
                     Ok(p) => p,
                     Err(residual) => return Ok(Outcome::Stuck(residual)),
                 };
-                let else_sub = match arm("else", else_arm, e1, e2)? {
+                let else_sub = match self.arm(ctx, "else", else_arm, e1, e2)? {
                     Ok(p) => p,
                     Err(residual) => return Ok(Outcome::Stuck(residual)),
                 };
                 Ok(Outcome::Closed(Proof::Descend { then_sub, else_sub }))
             }
+        }
+    }
+
+    /// One half of a cut, under its own strategy or the default.
+    fn side(
+        &self,
+        ctx: &mut Context,
+        name: &str,
+        strategy: &Option<Strategy<Body>>,
+        sub: Goal,
+    ) -> Result<Result<Box<Proof>, Residual>, Error> {
+        let default = default_strategy();
+        let strategy = strategy.as_ref().unwrap_or(&default);
+        Ok(match self.run(ctx, strategy, sub)? {
+            Outcome::Closed(p) => Ok(Box::new(p)),
+            Outcome::Stuck(mut residual) => {
+                residual
+                    .path
+                    .insert(0, format!("in the {} half of the cut", name));
+                Err(residual)
+            }
+        })
+    }
+
+    /// One arm of a `descend`: proved by the strategy written for it, or —
+    /// with none written — claimed already equal, and the claim is checked
+    /// rather than assumed.
+    fn arm(
+        &self,
+        ctx: &mut Context,
+        name: &str,
+        strategy: &Option<Strategy<Body>>,
+        a: TermIndex,
+        b: TermIndex,
+    ) -> Result<Result<Option<Box<Proof>>, Residual>, Error> {
+        let sub = Goal::aligned(ctx, a, b);
+        match strategy {
+            Some(s) => Ok(match self.run(ctx, s, sub)? {
+                Outcome::Closed(p) => Ok(Some(Box::new(p))),
+                Outcome::Stuck(mut residual) => {
+                    residual.path.insert(0, format!("in the {} arm", name));
+                    Err(residual)
+                }
+            }),
+            None if ctx.equal(a, b) => Ok(Ok(None)),
+            None => Ok(Err(Residual {
+                path: vec![format!("in the {} arm", name)],
+                stopped: format!(
+                    "the {} arms are not already equal, and `descend` was given no strategy for them",
+                    name
+                ),
+                ..gave_up(sub, "")
+            })),
         }
     }
 }
@@ -314,14 +335,15 @@ fn gave_up(goal: Goal, why: &str) -> Residual {
 /// Sound for pointing (any remaining difference must live inside what is
 /// kept), and only for pointing: the narrowed pair may be equal for reasons
 /// the stripped context supplied.
-fn narrow(lhs: Term, rhs: Term) -> (Vec<String>, Term, Term) {
+fn narrow(
+    ctx: &mut Context,
+    lhs: TermIndex,
+    rhs: TermIndex,
+) -> (Vec<String>, TermIndex, TermIndex) {
     let mut path = Vec::new();
     let (mut lhs, mut rhs) = (lhs, rhs);
     loop {
-        if let Some((narrowed, prefix, suffix)) = peel(&Goal {
-            lhs: lhs.clone(),
-            rhs: rhs.clone(),
-        }) {
+        if let Some((narrowed, prefix, suffix)) = peel(ctx, Goal { lhs, rhs }) {
             path.push(match (prefix, suffix) {
                 (p, 0) => format!("past {} shared leading part(s)", p),
                 (0, s) => format!("before {} shared trailing part(s)", s),
@@ -332,26 +354,25 @@ fn narrow(lhs: Term, rhs: Term) -> (Vec<String>, Term, Term) {
             continue;
         }
         if let (
-            Term::Branch {
+            &Term::Branch {
                 if_true: t1,
                 if_false: e1,
             },
-            Term::Branch {
+            &Term::Branch {
                 if_true: t2,
                 if_false: e2,
             },
-        ) = (&lhs, &rhs)
+        ) = (ctx.get(lhs), ctx.get(rhs))
         {
-            if t1 == t2 && e1 != e2 {
+            let (thens, elses) = (ctx.equal(t1, t2), ctx.equal(e1, e2));
+            if thens && !elses {
                 path.push("in the else arm".to_string());
-                let (l, r) = (e1.as_ref().clone(), e2.as_ref().clone());
-                (lhs, rhs) = (l, r);
+                (lhs, rhs) = (e1, e2);
                 continue;
             }
-            if e1 == e2 && t1 != t2 {
+            if elses && !thens {
                 path.push("in the then arm".to_string());
-                let (l, r) = (t1.as_ref().clone(), t2.as_ref().clone());
-                (lhs, rhs) = (l, r);
+                (lhs, rhs) = (t1, t2);
                 continue;
             }
         }
@@ -361,11 +382,15 @@ fn narrow(lhs: Term, rhs: Term) -> (Vec<String>, Term, Term) {
 
 /// Strips what the two compose spines share at either end. Answers the
 /// narrowed goal and how much went, or `None` when nothing does.
-fn peel(goal: &Goal) -> Option<(Goal, usize, usize)> {
-    let lhs = spine(&goal.lhs);
-    let rhs = spine(&goal.rhs);
+fn peel(ctx: &mut Context, goal: Goal) -> Option<(Goal, usize, usize)> {
+    let lhs = spine(ctx, goal.lhs);
+    let rhs = spine(ctx, goal.rhs);
 
-    let prefix = lhs.iter().zip(&rhs).take_while(|(a, b)| a == b).count();
+    let prefix = lhs
+        .iter()
+        .zip(&rhs)
+        .take_while(|(a, b)| ctx.equal(**a, **b))
+        .count();
     // Never peel a whole side away twice over: if the spines are equal the
     // goal was trivial, and the caller handled it.
     let rest = lhs.len().min(rhs.len()) - prefix;
@@ -374,7 +399,7 @@ fn peel(goal: &Goal) -> Option<(Goal, usize, usize)> {
         .rev()
         .zip(rhs.iter().rev())
         .take(rest)
-        .take_while(|(a, b)| a == b)
+        .take_while(|(a, b)| ctx.equal(**a, **b))
         .count();
     if prefix + suffix == 0 {
         return None;
@@ -382,54 +407,59 @@ fn peel(goal: &Goal) -> Option<(Goal, usize, usize)> {
 
     // The width flowing across the cut, read off the last stripped part.
     let boundary = if prefix > 0 {
-        lhs[prefix - 1].arity().outputs
+        ctx.arity(lhs[prefix - 1]).outputs
     } else {
-        goal.lhs.arity().inputs
+        ctx.arity(goal.lhs).inputs
     };
     let narrowed = Goal {
-        lhs: rebuild(&lhs[prefix..lhs.len() - suffix], boundary),
-        rhs: rebuild(&rhs[prefix..rhs.len() - suffix], boundary),
+        lhs: rebuild(ctx, &lhs[prefix..lhs.len() - suffix], boundary),
+        rhs: rebuild(ctx, &rhs[prefix..rhs.len() - suffix], boundary),
     };
     Some((narrowed, prefix, suffix))
 }
 
 /// A term's compose spine, outermost first: the flattening of `;`.
-fn spine(term: &Term) -> Vec<&Term> {
-    fn walk<'t>(term: &'t Term, out: &mut Vec<&'t Term>) {
-        match term {
-            Term::Compose(a, b) => {
-                walk(a, out);
-                walk(b, out);
+fn spine(ctx: &Context, term: TermIndex) -> Vec<TermIndex> {
+    fn walk(ctx: &Context, term: TermIndex, out: &mut Vec<TermIndex>) {
+        match ctx.get(term) {
+            &Term::Compose(a, b) => {
+                walk(ctx, a, out);
+                walk(ctx, b, out);
             }
-            other => out.push(other),
+            _ => out.push(term),
         }
     }
     let mut out = Vec::new();
-    walk(term, &mut out);
+    walk(ctx, term, &mut out);
     out
 }
 
 /// A spine segment back as a term; an empty segment is the identity on the
 /// width that flowed across it.
-fn rebuild(parts: &[&Term], width_if_empty: usize) -> Term {
-    let mut parts = parts.iter();
-    let Some(first) = parts.next() else {
-        return Term::Id(width_if_empty);
+///
+/// The parts are pointed at rather than copied: what a peel keeps is the same
+/// subterms the goal was already made of.
+fn rebuild(ctx: &mut Context, parts: &[TermIndex], width_if_empty: usize) -> TermIndex {
+    let Some((first, rest)) = parts.split_first() else {
+        return ctx.id(width_if_empty);
     };
-    parts.fold((*first).clone(), |acc, next| {
-        Term::Compose(Box::new(acc), Box::new((*next).clone()))
-    })
+    rest.iter()
+        .fold(*first, |acc, next| ctx.push(Term::Compose(acc, *next)))
 }
 
 // ---- inlining ---------------------------------------------------------------
 
 /// Whether there is anything for an `inline` to open: any call at all, or a
 /// call to the one sentence a label named.
-fn has_calls(term: &Term, only: Option<SentenceIndex>) -> bool {
-    match term {
+fn has_calls(ctx: &Context, term: TermIndex, only: Option<SentenceIndex>) -> bool {
+    match ctx.get(term) {
         Term::Call { target, .. } => only.is_none_or(|idx| *target == idx),
-        Term::Compose(a, b) | Term::Par(a, b) => has_calls(a, only) || has_calls(b, only),
-        Term::Branch { if_true, if_false } => has_calls(if_true, only) || has_calls(if_false, only),
+        &Term::Compose(a, b) | &Term::Par(a, b) => {
+            has_calls(ctx, a, only) || has_calls(ctx, b, only)
+        }
+        &Term::Branch { if_true, if_false } => {
+            has_calls(ctx, if_true, only) || has_calls(ctx, if_false, only)
+        }
         _ => false,
     }
 }
@@ -442,24 +472,45 @@ fn has_calls(term: &Term, only: Option<SentenceIndex>) -> bool {
 /// labelled one needs no recursion into the body it just opened: nothing a
 /// sentence calls can reach that sentence again.
 fn inline_calls(
+    ctx: &mut Context,
     library: &Library,
-    term: &Term,
+    term: TermIndex,
     only: Option<SentenceIndex>,
-) -> Result<Term, Error> {
-    let recur = |t: &Term| inline_calls(library, t, only);
-    Ok(match term {
+) -> Result<TermIndex, Error> {
+    // Copied out of the arena first: the walk writes new nodes into it, and a
+    // node is small — the copy is a discriminant and two indices.
+    Ok(match ctx.get(term).clone() {
         Term::Call { target, .. } => match only {
-            None => recur(&lower(library, *target)?)?,
-            Some(idx) if *target == idx => lower(library, *target)?,
-            Some(_) => term.clone(),
+            None => {
+                let body = lower(ctx, library, target)?;
+                inline_calls(ctx, library, body, only)?
+            }
+            Some(idx) if target == idx => lower(ctx, library, target)?,
+            Some(_) => term,
         },
-        Term::Compose(a, b) => Term::Compose(Box::new(recur(a)?), Box::new(recur(b)?)),
-        Term::Par(a, b) => Term::Par(Box::new(recur(a)?), Box::new(recur(b)?)),
-        Term::Branch { if_true, if_false } => Term::Branch {
-            if_true: Box::new(recur(if_true)?),
-            if_false: Box::new(recur(if_false)?),
-        },
-        leaf => leaf.clone(),
+        Term::Compose(a, b) => {
+            let (a, b) = (
+                inline_calls(ctx, library, a, only)?,
+                inline_calls(ctx, library, b, only)?,
+            );
+            ctx.push(Term::Compose(a, b))
+        }
+        Term::Par(a, b) => {
+            let (a, b) = (
+                inline_calls(ctx, library, a, only)?,
+                inline_calls(ctx, library, b, only)?,
+            );
+            ctx.push(Term::Par(a, b))
+        }
+        Term::Branch { if_true, if_false } => {
+            let (if_true, if_false) = (
+                inline_calls(ctx, library, if_true, only)?,
+                inline_calls(ctx, library, if_false, only)?,
+            );
+            ctx.push(Term::Branch { if_true, if_false })
+        }
+        // A leaf is already open, and stays where it is.
+        _ => term,
     })
 }
 
@@ -472,28 +523,33 @@ mod tests {
     /// Proves the identity named `name`, with the strategy written as a
     /// `.hant` entry body, or the default when `strategy` is `None` —
     /// reading `via` bodies exactly as `corpus::load` does.
-    fn prove_with(code: &str, name: &str, strategy: Option<&str>) -> Outcome {
+    ///
+    /// The arena comes back with the outcome: a residual names its terms by
+    /// index, so reading one means keeping the context it was built in.
+    fn prove_with(code: &str, name: &str, strategy: Option<&str>) -> (Context, Outcome) {
         let entries = strategy
             .map(|s| parse_hant(&format!("proof {} = {};", name, s)).unwrap())
             .unwrap_or_default();
         let library = assemble(code).unwrap();
+        let mut ctx = Context::new();
         let strategy = entries
             .first()
-            .map(|e| crate::corpus::attach(&e.strategy, &library).unwrap());
+            .map(|e| crate::corpus::attach(&mut ctx, &e.strategy, &library).unwrap());
         let idx = library.identity_by_name(name).unwrap();
-        let goal = Goal::of_identity(&library, idx).unwrap();
-        Prover::new(&library)
-            .prove(&goal, strategy.as_ref())
-            .unwrap()
+        let goal = Goal::of_identity(&mut ctx, &library, idx).unwrap();
+        let outcome = Prover::new(&library)
+            .prove(&mut ctx, goal, strategy.as_ref())
+            .unwrap();
+        (ctx, outcome)
     }
 
-    fn prove_identity(code: &str, name: &str) -> Outcome {
+    fn prove_identity(code: &str, name: &str) -> (Context, Outcome) {
         prove_with(code, name, None)
     }
 
     #[test]
     fn the_default_is_the_diagram_alone() {
-        let outcome = prove_identity(
+        let (_ctx, outcome) = prove_identity(
             "identity probe { drop 0 is_bool is_bool } = { drop 0 drop 0 push true };",
             "probe",
         );
@@ -505,7 +561,7 @@ mod tests {
 
     #[test]
     fn differing_arms_close_as_one_diagram() {
-        let outcome = prove_identity(
+        let (_ctx, outcome) = prove_identity(
             "identity probe { branch { is_bool is_bool } { not } } = { branch { is_int is_bool } { not } };",
             "probe",
         );
@@ -519,10 +575,10 @@ mod tests {
             identity probe { is_bool is_bool } = { jump crate::drop_and_true };
         "#;
         // The default does not spend the library's definitions…
-        let outcome = prove_identity(code, "probe");
+        let (_ctx, outcome) = prove_identity(code, "probe");
         assert!(matches!(outcome, Outcome::Stuck(_)));
         // …a written proof does.
-        let outcome = prove_with(code, "probe", Some("inline diagram"));
+        let (_ctx, outcome) = prove_with(code, "probe", Some("inline diagram"));
         let Outcome::Closed(proof) = outcome else {
             panic!("expected the opened goal to close");
         };
@@ -533,7 +589,7 @@ mod tests {
     fn exact_closes_what_a_manipulation_made_identical() {
         // Inlining the call leaves the two sides one term, so the claim holds
         // and no engine ever runs.
-        let outcome = prove_with(
+        let (_ctx, outcome) = prove_with(
             r#"
             sentence drop_and_true { drop 0 push true }
             identity probe { jump crate::drop_and_true } = { drop 0 push true };
@@ -553,7 +609,7 @@ mod tests {
         // closes it — but `exact` claims more, fails, and shows the goal
         // exactly as it stands: no normalization, no narrowing. That
         // unaltered residual is what the step is for.
-        let outcome = prove_with(
+        let (ctx, outcome) = prove_with(
             "identity probe { is_bool is_bool } = { drop 0 push true };",
             "probe",
             Some("exact"),
@@ -562,8 +618,14 @@ mod tests {
             panic!("the sides are not one term as written");
         };
         assert!(residual.stopped.contains("`exact`"), "{}", residual.stopped);
-        assert_eq!(format!("{}", residual.lhs), "is_bool ; is_bool");
-        assert_eq!(format!("{}", residual.rhs), "drop(1) ; push true");
+        assert_eq!(
+            format!("{}", ctx.display(residual.lhs)),
+            "is_bool ; is_bool"
+        );
+        assert_eq!(
+            format!("{}", ctx.display(residual.rhs)),
+            "drop(1) ; push true"
+        );
         assert!(residual.path.is_empty());
     }
 
@@ -577,7 +639,7 @@ mod tests {
             #[arity(1,1)] sentence outer { jump crate::inner }
             identity probe { jump crate::outer } = { drop 0 push true };
         "#;
-        let outcome = prove_with(
+        let (_ctx, outcome) = prove_with(
             code,
             "probe",
             Some("inline(outer) via { call inner } (right: inline)"),
@@ -598,8 +660,8 @@ mod tests {
             #[arity(1,1)] sentence elsewhere { drop 0 push false }
             identity probe { is_bool is_bool } = { drop 0 push true };
         "#;
-        let Outcome::Stuck(residual) = prove_with(code, "probe", Some("inline(elsewhere) diagram"))
-        else {
+        let (_ctx, outcome) = prove_with(code, "probe", Some("inline(elsewhere) diagram"));
+        let Outcome::Stuck(residual) = outcome else {
             panic!("nothing here calls it");
         };
         assert!(
@@ -615,13 +677,14 @@ mod tests {
         // that failed, so it is caught when the entry is attached.
         let library = assemble("identity probe { is_bool } = { is_bool };").unwrap();
         let entries = parse_hant("proof probe = inline(nowhere) diagram;").unwrap();
-        let err = crate::corpus::attach(&entries[0].strategy, &library).unwrap_err();
+        let err =
+            crate::corpus::attach(&mut Context::new(), &entries[0].strategy, &library).unwrap_err();
         assert!(err.contains("no sentence is called"), "{}", err);
     }
 
     #[test]
     fn a_directed_peel_and_descend_close_and_say_so() {
-        let outcome = prove_with(
+        let (_ctx, outcome) = prove_with(
             "identity probe { drop 0 branch { is_bool is_bool } { not } } = { drop 0 branch { is_int is_bool } { not } };",
             "probe",
             Some("peel descend(then: diagram)"),
@@ -637,7 +700,7 @@ mod tests {
 
     #[test]
     fn an_omitted_descend_arm_is_checked_not_assumed() {
-        let outcome = prove_with(
+        let (_ctx, outcome) = prove_with(
             "identity probe { branch { is_bool is_bool } { not } } = { branch { is_int is_bool } { not } };",
             "probe",
             Some("descend(else: diagram)"),
@@ -655,11 +718,13 @@ mod tests {
     #[test]
     fn a_step_that_does_nothing_fails_loudly() {
         let code = "identity probe { is_bool is_bool } = { drop 0 push true };";
-        let Outcome::Stuck(residual) = prove_with(code, "probe", Some("peel diagram")) else {
+        let (_ctx, outcome) = prove_with(code, "probe", Some("peel diagram"));
+        let Outcome::Stuck(residual) = outcome else {
             panic!("nothing is shared to peel");
         };
         assert!(residual.stopped.contains("`peel`"), "{}", residual.stopped);
-        let Outcome::Stuck(residual) = prove_with(code, "probe", Some("inline diagram")) else {
+        let (_ctx, outcome) = prove_with(code, "probe", Some("inline diagram"));
+        let Outcome::Stuck(residual) = outcome else {
             panic!("there are no calls to open");
         };
         assert!(
@@ -674,7 +739,7 @@ mod tests {
         // `is_bool ; is_bool` = `is_int ; is_bool`, cut at the normal form
         // both sides reach: two independent goals, each decided by the
         // diagram.
-        let outcome = prove_with(
+        let (_ctx, outcome) = prove_with(
             "identity probe { is_bool is_bool } = { is_int is_bool };",
             "probe",
             Some("via { drop(1) ; push true }"),
@@ -692,7 +757,7 @@ mod tests {
     fn a_cut_lets_each_half_take_its_own_road() {
         // The right half compares the waypoint against a call, so it inlines;
         // the left half needs no such thing. Fully independent strategies.
-        let outcome = prove_with(
+        let (_ctx, outcome) = prove_with(
             r#"
             sentence drop_and_true { drop 0 push true }
             identity probe { is_bool is_bool } = { jump crate::drop_and_true };
@@ -711,7 +776,7 @@ mod tests {
 
     #[test]
     fn a_swapped_goal_that_sticks_says_which_way_round_it_is() {
-        let outcome = prove_with(
+        let (ctx, outcome) = prove_with(
             "identity probe { push 1 } = { push 2 };",
             "probe",
             Some("symm diagram"),
@@ -724,14 +789,14 @@ mod tests {
             "{:?}",
             residual.path
         );
-        assert_eq!(format!("{}", residual.lhs), "push 2");
+        assert_eq!(format!("{}", ctx.display(residual.lhs)), "push 2");
     }
 
     #[test]
     fn a_wrong_waypoint_fails_its_half_by_name() {
         // `not` has the right arity but is no midpoint: the left goal,
         // `is_bool ; is_bool` = `not`, is false and says so.
-        let outcome = prove_with(
+        let (_ctx, outcome) = prove_with(
             "identity probe { is_bool is_bool } = { is_int is_bool };",
             "probe",
             Some("via { not }"),
@@ -748,7 +813,7 @@ mod tests {
 
     #[test]
     fn a_waypoint_off_the_goal_net_is_refused_loudly() {
-        let outcome = prove_with(
+        let (_ctx, outcome) = prove_with(
             "identity probe { is_bool is_bool } = { is_int is_bool };",
             "probe",
             Some("via { push 1 }"),
@@ -765,7 +830,7 @@ mod tests {
 
     #[test]
     fn a_false_goal_reports_a_residual() {
-        let outcome = prove_identity("identity probe { push 1 } = { push 2 };", "probe");
+        let (ctx, outcome) = prove_identity("identity probe { push 1 } = { push 2 };", "probe");
         let Outcome::Stuck(residual) = outcome else {
             panic!("push 1 is not push 2");
         };
@@ -774,8 +839,8 @@ mod tests {
             "{}",
             residual.stopped
         );
-        assert_eq!(format!("{}", residual.lhs), "push 1");
-        assert_eq!(format!("{}", residual.rhs), "push 2");
+        assert_eq!(format!("{}", ctx.display(residual.lhs)), "push 1");
+        assert_eq!(format!("{}", ctx.display(residual.rhs)), "push 2");
     }
 
     #[test]
@@ -783,7 +848,7 @@ mod tests {
         // A false claim buried in one branch arm behind a shared prefix: the
         // residual walks into the reified diagrams rather than printing two
         // whole terms.
-        let outcome = prove_identity(
+        let (ctx, outcome) = prove_identity(
             "identity probe { drop 0 branch { drop 0 push 1 } { not } } = { drop 0 branch { drop 0 push 2 } { not } };",
             "probe",
         );
@@ -796,14 +861,14 @@ mod tests {
             residual.path
         );
         assert!(
-            format!("{}", residual.lhs).contains("push 1"),
+            format!("{}", ctx.display(residual.lhs)).contains("push 1"),
             "{}",
-            residual.lhs
+            ctx.display(residual.lhs)
         );
         assert!(
-            format!("{}", residual.rhs).contains("push 2"),
+            format!("{}", ctx.display(residual.rhs)).contains("push 2"),
             "{}",
-            residual.rhs
+            ctx.display(residual.rhs)
         );
     }
 
@@ -819,22 +884,23 @@ mod tests {
             .parent()
             .expect("the crate sits in the workspace")
             .join("tests");
-        let corpus = crate::corpus::load(&tests).unwrap();
+        let mut corpus = crate::corpus::load(&tests).unwrap();
         let library = &corpus.library;
+        let terms = &mut corpus.terms;
 
         let mut plain = Vec::new();
         let mut opened = Vec::new();
+        let mut ctx = Ctx::default();
         for (idx, identity) in library.identities.iter_enumerated() {
-            let goal = Goal::of_identity(library, idx).unwrap();
-            let mut ctx = Ctx::default();
-            if normalize(&mut ctx, &goal.lhs) == normalize(&mut ctx, &goal.rhs) {
+            let goal = Goal::of_identity(terms, library, idx).unwrap();
+            if normalize(&mut ctx, terms, goal.lhs) == normalize(&mut ctx, terms, goal.rhs) {
                 plain.push(identity.name.as_str());
             }
-            let unfolded = Goal::aligned(
-                inline_calls(library, &goal.lhs, None).unwrap(),
-                inline_calls(library, &goal.rhs, None).unwrap(),
-            );
-            if normalize(&mut ctx, &unfolded.lhs) == normalize(&mut ctx, &unfolded.rhs) {
+            let lhs = inline_calls(terms, library, goal.lhs, None).unwrap();
+            let rhs = inline_calls(terms, library, goal.rhs, None).unwrap();
+            let unfolded = Goal::aligned(terms, lhs, rhs);
+            if normalize(&mut ctx, terms, unfolded.lhs) == normalize(&mut ctx, terms, unfolded.rhs)
+            {
                 opened.push(identity.name.as_str());
             }
         }
