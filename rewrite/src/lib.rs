@@ -10,7 +10,8 @@
 //! translated *literally* into a graph, structural boxes and all, and then
 //! rewritten until the connections are direct; it decides nothing and the
 //! prover does not use it; [`rules`] is the table of named laws over terms
-//! and the checker that replays a derivation against it; [`goal`] is a
+//! and the checker that replays a derivation against it, and [`flatten`] is
+//! the first thing written on the other side of that line; [`goal`] is a
 //! claim and what became of it; [`hant`] is the
 //! strategy language a human directs a proof with; [`strategy`] interprets
 //! one; [`corpus`] loads a source tree's identities and proofs together.
@@ -19,6 +20,7 @@
 pub mod corpus;
 pub mod diagram;
 pub mod diagram2;
+pub mod flatten;
 pub mod goal;
 pub mod hant;
 pub mod parse;

@@ -58,6 +58,8 @@
 //! One law from layer 3 comes along as the template for the rest:
 //! [`Rule::NotNot`], `not ; not = as_bool`. It is not restated here — the
 //! machine defines it, and `vm` already asserts it for every shape of value.
+//!
+//! [`crate::flatten`] is the first thing written against this table.
 
 use crate::term::{Arity, Context, Prim, Term, TermIndex};
 
