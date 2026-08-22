@@ -239,16 +239,18 @@ pub(super) fn eval_graph(m: &mut Meaning, graph: &Graph, inputs: &[SymId]) -> Ve
                 m.apply(format!("call {:?}", target), args, arity.outputs)
             }
             // A fork means what a copy means; only rewriting tells them
-            // apart.
+            // apart. Its condition is read and not used — a rule wants to
+            // see it, the value does not depend on it.
             NodeKind::Fork { .. } => {
-                let mut out = args.clone();
-                out.extend(args);
+                let views = &args[1..];
+                let mut out = views.to_vec();
+                out.extend(views);
                 out
             }
             NodeKind::Select { arity: n, .. } => {
-                let cond = args[2 * n];
-                let (taken, not) = args.split_at(*n);
-                m.choose(cond, &taken[..*n], &not[..*n])
+                let cond = args[0];
+                let (taken, not) = (&args[1..=*n], &args[n + 1..=2 * n]);
+                m.choose(cond, taken, not)
             }
         };
         for (port, sym) in outs.into_iter().enumerate() {
