@@ -99,12 +99,21 @@ impl Meaning {
     }
 
     /// Two blocks of an answer paired position by position.
+    ///
+    /// A choice between one value **is** that value, and this knows it.
+    /// That is not a fact about any operation — it holds of `Choice`
+    /// itself, whatever the condition turns out to be — so knowing it keeps
+    /// the oracle opaque while letting it judge `select-same`, which says
+    /// exactly this.
     fn choose(&mut self, cond: SymId, if_true: &[SymId], if_false: &[SymId]) -> Vec<SymId> {
         assert_eq!(if_true.len(), if_false.len(), "the arms answer alike");
         if_true
             .iter()
             .zip(if_false)
             .map(|(&if_true, &if_false)| {
+                if if_true == if_false {
+                    return if_true;
+                }
                 self.intern(Sym::Choice {
                     cond,
                     if_true,
