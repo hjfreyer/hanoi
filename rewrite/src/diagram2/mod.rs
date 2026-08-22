@@ -109,19 +109,27 @@
 //!   come out. `add` on two wires stays `add(x, y)` and never becomes `7`,
 //!   so that oracle decides nothing either — it holds the wiring to account
 //!   and stops there.
-//! - **The value folds and the branch layer.** No literal window runs, no
-//!   commutative operand sorts, no condition selects its arm, no case tree
-//!   is ordered. Layers 2 and 3 of the algebra sheet are untouched, so
-//!   `push 1 ; push 2 ; add` keeps all three of its boxes. `specialize-equal`
-//!   is the one this representation is *ready* for and still does not do:
-//!   the fork keeps the two views apart so the rule would have somewhere to
-//!   write, and writing it is a decision about whether this folds at all.
-//!   `select` is now
-//!   where the third of those would go — a literal condition would pick a
-//!   block and the node would vanish — which makes the absence a missing
-//!   rule on one node rather than a missing layer. [`rules::Rule::NotNot`] is in
-//!   the table as the template for the row this layer would fill, and is
-//!   not among the laws [`rewrite`] spends.
+//! - **The value folds, in what [`rewrite`] spends.** No literal window
+//!   runs and no commutative operand sorts, so `push 1 ; push 2 ; add`
+//!   keeps all three of its boxes. Layer 3 of the algebra sheet is
+//!   [`rules::Rule::NotNot`] and nothing else, and that row is in the table
+//!   but not in [`rules::structural`].
+//!
+//!   Layer 2 **is** in the table — [`rules::branching`] folds a literal
+//!   condition into its arm, deletes a branch whose arms answer alike,
+//!   lifts work both arms do out in front, and writes what a test decided
+//!   into the block that tested it. It is not among the laws [`rewrite`]
+//!   spends either, for two reasons worth keeping apart: three of those
+//!   laws turn on what an operation *computes*, which the opaque oracle
+//!   cannot judge and `vm` can; and the other three take a branch apart,
+//!   which is a strategy, and this module decides no strategy.
+//!
+//!   One thing that layer does **not** reach, and cannot: a value inside an
+//!   arm. A fork's views are plain copies, so a then-view *is* the value
+//!   whatever the condition says, and a rule that specialized one would be
+//!   claiming something false of the graph as it stands — sound only in a
+//!   context that throws the untaken arm away, which a local window cannot
+//!   see. `rules` says where that boundary is and why.
 //!
 //! [`read_back`] is the other half of the translation: a graph is scheduled
 //! onto a stack, and the routing between one step and the next is *layered*
