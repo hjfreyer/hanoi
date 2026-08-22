@@ -35,6 +35,18 @@
 //! then arm — has nowhere to write its answer once both arms read the same
 //! port.
 //!
+//! **Both ends read the condition, and both read it at port 0.** A fork
+//! does not compute with it; it reads it so that a rule anchored there can
+//! *name* it. That matters because a rule is a local window and the arms
+//! lie between the two ends, so no window holds both: `specialize-equal`
+//! has to be stated at the fork, and its left-hand side has to mention the
+//! `equal` that decides the branch. Reading the condition at the same port
+//! on both ends is what makes such a rule say the same thing whichever end
+//! it is written at. Two readers of one port is a `copy`, which
+//! [`build`] emits and `copy-elim` takes back out, so a built graph is
+//! still a wiring diagram and the rewritten one still has both ends on the
+//! one source.
+//!
 //! ## The rules
 //!
 //! Each one is a **pair of graphs** [`rules::sides`] builds from a payload
@@ -233,26 +245,38 @@ pub enum NodeKind {
     /// A sentence called by name, left unopened; the arity is carried for
     /// the same reason [`Term::Call`] carries it.
     Call { target: SentenceIndex, arity: Arity },
-    /// `fork(n)`: the two views of the stack a branch's arms get. `n` in,
-    /// `2n` out, the `then` view at `0..n` and the `else` view at `n..2n`,
-    /// block-wise exactly as `copy(n)` is.
+    /// `fork(n)`: the two views of the stack a branch's arms get.
     ///
-    /// It *is* a copy, and the only reason it is not one is that
+    /// **Input 0 is the condition**, inputs `1..=n` the stack; `2n` out,
+    /// the `then` view at `0..n` and the `else` view at `n..2n`, block-wise
+    /// exactly as `copy(n)` is. The condition is not used to compute
+    /// anything here — a fork hands out both views whatever it says — and
+    /// that is the point: it is read so that a **rule anchored at a fork
+    /// can see what governs the arms it is splitting**. `specialize-equal`,
+    /// where a value that tested `equal` to a literal is that literal in
+    /// the then arm, is stated at the fork and needs the `equal` in its
+    /// left-hand side; without the condition here the rule could not name
+    /// it, because the arms lie between the fork and the `select` and no
+    /// local window holds both ends.
+    ///
+    /// It *is* a copy otherwise, and the only reason it is not one is that
     /// `copy-elim` would delete it. Deleting it costs the one fact no other
     /// part of the graph records: which port is an arm's own view of a
-    /// value. A rule that holds on one side of a branch and not the other —
-    /// `specialize-equal`, where a value that tested `equal` to a literal is
-    /// that literal in the then arm — has nowhere to write its answer once
-    /// both arms read the same port. So this stays.
+    /// value — the answer `specialize-equal` writes.
     Fork { arity: usize, branch: BranchId },
     /// `select(n)`: the two blocks of an answer, and the condition that
     /// keeps one of them.
     ///
-    /// Inputs `0..n` are the `then` block, inputs `n..2n` the `else` block,
-    /// and input `2n` — the topmost, where the condition sits in the term —
-    /// chooses. Output `i` is input `i` when the condition holds and input
-    /// `n + i` otherwise: this is the `fork` it is paired with, read
-    /// backwards.
+    /// **Input 0 is the condition**, inputs `1..=n` the `then` block and
+    /// `n+1..=2n` the `else` block. Output `i` is input `1 + i` when the
+    /// condition holds and input `1 + n + i` otherwise: this is the `fork`
+    /// it is paired with, read backwards.
+    ///
+    /// The condition sits at the *bottom* rather than on top, where the
+    /// term puts it, so that both ends of a branch read it in the same
+    /// place. A rule that wants the condition then finds it at port 0
+    /// whichever end it is anchored at, and [`read_back`] pays for it by
+    /// hoisting the wire before it writes the `branch`.
     ///
     /// A branch's arms are not in here. They are ordinary boxes in the one
     /// graph between the two ends, so a rule reaches into an arm from
@@ -275,7 +299,7 @@ impl NodeKind {
             NodeKind::Drop(n) => Arity::new(*n, 0),
             NodeKind::Op(prim) => prim.arity(),
             NodeKind::Call { arity, .. } => *arity,
-            NodeKind::Fork { arity, .. } => Arity::new(*arity, 2 * arity),
+            NodeKind::Fork { arity, .. } => Arity::new(arity + 1, 2 * arity),
             NodeKind::Select { arity, .. } => Arity::new(2 * arity + 1, *arity),
         }
     }
@@ -531,18 +555,27 @@ fn emit(graph: &mut Graph, terms: &Context, term: TermIndex, inputs: Vec<Source>
             let cond = inputs.pop().expect("a branch reads its condition");
             let branch = graph.next_branch();
             // Block-wise, exactly the `(pick (n-1))^n` the hoist rule spells
-            // out. Arms that take nothing have no views to tell apart.
-            let (if_true_in, if_false_in) = if inputs.is_empty() {
-                (Vec::new(), Vec::new())
+            // out. Arms that take nothing have no views to tell apart, and
+            // then the `select` is the only end there is to read the
+            // condition.
+            let (if_true_in, if_false_in, chooses) = if inputs.is_empty() {
+                (Vec::new(), Vec::new(), cond)
             } else {
+                // Both ends read the condition, and two readers of one port
+                // is a `copy` — said outright here rather than smuggled in,
+                // so a built graph is still monogamous and `copy-elim` is
+                // still the one thing that breaks it.
+                let views = graph.add(NodeKind::Copy(1), vec![cond]);
                 let arity = inputs.len();
-                let mut blocks = graph.add(NodeKind::Fork { arity, branch }, inputs);
+                let mut takes = vec![views[0]];
+                takes.extend(inputs);
+                let mut blocks = graph.add(NodeKind::Fork { arity, branch }, takes);
                 let above = blocks.split_off(arity);
-                (blocks, above)
+                (blocks, above, views[1])
             };
-            let mut ports = emit(graph, terms, *if_true, if_true_in);
+            let mut ports = vec![chooses];
+            ports.extend(emit(graph, terms, *if_true, if_true_in));
             ports.extend(emit(graph, terms, *if_false, if_false_in));
-            ports.push(cond);
             let arity = terms.arity(*if_true).outputs;
             graph.add(NodeKind::Select { arity, branch }, ports)
         }
@@ -894,23 +927,62 @@ fn box_term(terms: &mut Context, kind: &NodeKind) -> TermIndex {
         NodeKind::Drop(n) => terms.drop(*n),
         NodeKind::Op(prim) => terms.op(prim.clone()),
         NodeKind::Call { target, arity } => terms.call(*target, *arity),
+        // The two views of the stack are what a `copy` makes; the node is
+        // only distinct so that rewriting leaves it alone. Its condition
+        // computes nothing — it is read so that a rule can see it — so what
+        // it comes back as is the condition let go of.
+        NodeKind::Fork { arity, .. } => {
+            let (gone, both) = (terms.drop(1), terms.copy(*arity));
+            terms.par(gone, both)
+        }
         // Both blocks are already on the stack by the time this runs — the
         // arms were scheduled like any other work — so the branch left to
         // write is only the choice between them: keep one block, let the
-        // other go.
-        // The two views of the stack are what a `copy` makes; the node is
-        // only distinct so that rewriting leaves it alone.
-        NodeKind::Fork { arity, .. } => terms.copy(*arity),
+        // other go. The condition has to come up from the bottom first,
+        // which is what the node's port order costs and the only place it
+        // costs anything.
         NodeKind::Select { arity: n, .. } => {
+            let up = hoist(terms, 2 * n + 1);
             let (keep, lose) = (terms.id(*n), terms.drop(*n));
             let if_true = terms.par(keep, lose);
             let (lose, keep) = (terms.drop(*n), terms.id(*n));
             let if_false = terms.par(lose, keep);
-            terms
+            let choose = terms
                 .branch(if_true, if_false)
-                .expect("each arm keeps one block of two")
+                .expect("each arm keeps one block of two");
+            terms
+                .compose(up, choose)
+                .expect("the hoist leaves the width it was given")
         }
     }
+}
+
+/// `[a, x₁..x_k] -> [x₁..x_k, a]`: the deepest wire brought to the top, one
+/// crossing at a time.
+///
+/// What a `select` costs at the boundary between a graph, where its
+/// condition is port 0, and a term, where a `branch` reads its condition
+/// off the top of the stack.
+fn hoist(terms: &mut Context, width: usize) -> TermIndex {
+    let mut chain: Option<TermIndex> = None;
+    for below in 0..width.saturating_sub(1) {
+        let swap = terms.op(Prim::Swap);
+        let step = terms.under(swap, below);
+        let above = width - below - 2;
+        let step = if above > 0 {
+            let untouched = terms.id(above);
+            terms.par(step, untouched)
+        } else {
+            step
+        };
+        chain = Some(match chain {
+            None => step,
+            Some(acc) => terms
+                .compose(acc, step)
+                .expect("every crossing spans the whole stack"),
+        });
+    }
+    chain.unwrap_or_else(|| terms.id(width))
 }
 
 /// The live nodes in an order that runs producers first, smallest id first
@@ -1235,14 +1307,15 @@ mod tests {
             .live()
             .find(|(_, kind)| matches!(kind, NodeKind::Select { arity: 1, .. }))
             .expect("the branch ends in a select");
-        // Its three inputs: the `then` answer, the `else` answer, and the
-        // condition on top, which is the sentence's own input.
+        // Its three inputs: the condition, which is the sentence's own
+        // input and sits at port 0 the way it does on a fork, and then the
+        // `then` answer and the `else` answer.
         let inputs = graph.node(id).inputs.clone();
         assert_eq!(inputs.len(), 3);
-        assert_eq!(inputs[2], Source::Input(0), "the condition is on top");
+        assert_eq!(inputs[0], Source::Input(0), "the condition is port 0");
         assert!(
             matches!(
-                (inputs[0], inputs[1]),
+                (inputs[1], inputs[2]),
                 (Source::Port { .. }, Source::Port { .. })
             ),
             "each block is an arm's answer"
@@ -1334,10 +1407,26 @@ mod tests {
             .live()
             .find(|(_, kind)| matches!(kind, NodeKind::Fork { .. }))
             .expect("a branch whose arms take something has a fork");
+        // Port 0 is the condition — the sentence's top input — and port 1
+        // the one producer whose views the arms get. The `copy(1)` that
+        // gave the fork and the select a reader each is gone, so both read
+        // the condition straight.
         assert_eq!(
             graph.node(fork).inputs,
-            vec![Source::Input(0)],
-            "one producer, read once"
+            vec![Source::Input(1), Source::Input(0)],
+            "the condition, and then the one producer"
+        );
+        let select = graph
+            .live()
+            .find_map(|(id, kind)| match kind {
+                NodeKind::Select { .. } => Some(id),
+                _ => None,
+            })
+            .expect("the branch ends in a select");
+        assert_eq!(
+            graph.node(select).inputs[0],
+            Source::Input(1),
+            "and both ends read it in the same place"
         );
 
         // One `not` per arm, each on its own view of that producer.
@@ -1373,6 +1462,7 @@ mod tests {
             .expect("and begins at the fork it names");
 
         // Walk each block of the select back to the fork it came through.
+        // The blocks start at port 1, since port 0 is the condition.
         let view = |port: usize| {
             let Source::Port { node, .. } = graph.node(select).inputs[port] else {
                 panic!("a block reading the boundary");
@@ -1383,11 +1473,56 @@ mod tests {
             }
         };
         assert_ne!(
-            view(0),
             view(1),
+            view(2),
             "the arms would have nowhere to differ:\n{}",
             graph
         );
+    }
+
+    /// What the condition on a fork is for. `specialize-equal` — a value
+    /// that tested `equal` to a literal *is* that literal in the then arm —
+    /// is a rule about an arm's view, so it is anchored at the fork; and it
+    /// has to name the `equal` that decides the branch. It could not reach
+    /// that through the select, because the arms lie between the two ends
+    /// and no local window holds both. Through port 0 it is one hop.
+    #[test]
+    fn a_fork_names_what_decides_its_branch() {
+        let (_terms, graph) = rewritten("pick 0 push 1 equal branch { not } { negate }");
+        let (fork, _) = graph
+            .live()
+            .find(|(_, kind)| matches!(kind, NodeKind::Fork { .. }))
+            .expect("the arms take something, so there is a fork");
+
+        let Source::Port { node: decides, .. } = graph.node(fork).inputs[0] else {
+            panic!("the condition is the boundary's, not a box's:\n{}", graph);
+        };
+        assert!(
+            matches!(graph.kind(decides), NodeKind::Op(Prim::Equal)),
+            "the fork does not name the test:\n{}",
+            graph
+        );
+        // And the literal it was tested against, one hop further — which is
+        // the rest of what the rule's left-hand side needs.
+        assert!(
+            graph
+                .sources(decides)
+                .iter()
+                .any(|src| matches!(src, Source::Port { node, .. }
+                    if matches!(graph.kind(*node), NodeKind::Op(Prim::Push(_))))),
+            "the test does not name the literal:\n{}",
+            graph
+        );
+        // The select reads the very same port, so a rule at either end is
+        // talking about one condition rather than two spellings of it.
+        let select = graph
+            .live()
+            .find_map(|(id, kind)| match kind {
+                NodeKind::Select { .. } => Some(id),
+                _ => None,
+            })
+            .expect("the branch ends in a select");
+        assert_eq!(graph.node(select).inputs[0], graph.node(fork).inputs[0]);
     }
 
     /// A stack slot neither arm keeps should take its producer with it.
