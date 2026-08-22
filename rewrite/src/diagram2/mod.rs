@@ -12,9 +12,8 @@
 //!
 //! This module takes the other road. A term becomes a graph **one leaf at a
 //! time**, `id`, `swap`, `copy` and `drop` each getting a box of their own,
-//! and only then does anything get simplified — by rewriting. Four rules,
-//! and every one of them is the same move: delete a node and join what it
-//! was standing between.
+//! and only then does anything get simplified — by rewriting, against the
+//! table in [`rules`].
 //!
 //! A branch is not one box either, and that is the one place this is not a
 //! literal reading of the term. It is **two**, with its arms as ordinary
@@ -36,6 +35,13 @@
 //! then arm — has nowhere to write its answer once both arms read the same
 //! port.
 //!
+//! ## The rules
+//!
+//! Each one is a **pair of graphs** [`rules::sides`] builds from a payload
+//! — the whole of what a rule *is* — and a rewrite is pointing at a
+//! subgraph isomorphic to the first and putting the second in its place.
+//! Four of them delete a box and join what it was standing between:
+//!
 //! - `id-elim` — the readers of an `id`'s output read its input instead.
 //! - `swap-elim` — the two lines cross by being re-pointed, and the
 //!   crossing stops existing. σ involutive, σ-natural and Yang–Baxter all
@@ -49,12 +55,22 @@
 //!   are asked the same question. `drop(n)` has no outputs at all, so it is
 //!   this rule's base case rather than a rule of its own; the language is
 //!   total and pure, which is what licenses deleting the work underneath —
-//!   the same license that lets both arms of a branch run.
+//!   the same license that lets both arms of a branch run. Its side
+//!   condition is not tested but *stated*: the left side of the pair
+//!   exports no port at all, so a box with a reader is not that graph.
+//!
+//! One does not, and it is the reason a table is worth having over a
+//! `match`:
+//!
+//! - `dedup` — δ-naturality. Two boxes of one kind reading one set of
+//!   sources are one box read twice, so `push 9 ; push 9` and `push 9 ;
+//!   copy(1)` settle in the same place. It refuses a `fork`, for the reason
+//!   the `fork` exists.
 //!
 //! What the rules leave is a DAG of `Op`s, `Call`s and `Fork`/`Select`
 //! pairs whose
 //! ports fan out where a `copy` used to be — the same shape `diagram`
-//! arrives at by construction, reached instead by named deletions over data
+//! arrives at by construction, reached instead by named rewrites over data
 //! that existed the whole way.
 //!
 //! **Ports link to ports; there is no wire.** An input names the one output
@@ -66,24 +82,21 @@
 //! ends — a half-updated link is caught where it happens rather than
 //! surviving as a wrong answer.
 //!
-//! **Three things are deliberately absent**, and none of them is an
+//! **Two things are deliberately absent**, and neither is an
 //! oversight:
 //!
-//! - **Equality.** Two graphs are never asked to be the same. `push 9 ;
-//!   copy(1)` rewrites to one `push` node read twice and `push 9 ; push 9`
-//!   to two nodes, and nothing here identifies them — that is δ-naturality,
-//!   which `diagram` buys by interning and this module has not bought. So
-//!   this decides nothing, judges nothing, and is not wired into
-//!   [`crate::strategy`]; `diagram` remains the prover's engine. Nor do the
-//!   tests borrow its judgement: what they claim about *meaning* they claim
-//!   by evaluating both programs with **every operation left opaque** and
-//!   comparing the graphs of applications that come out. `add` on two wires
-//!   stays `add(x, y)` and never becomes `7`, so that oracle decides nothing
-//!   either — it holds the wiring to account and stops there.
-//! - **Dedup.** The one structural rule that is not a local deletion —
-//!   deciding two nodes compute the same thing means comparing kinds and
-//!   then, transitively, everything they read. It would buy δ-naturality
-//!   and a smaller graph; with no equality operation to serve, it waits.
+//! - **Equality.** Two graphs are never asked to be the same. `dedup`
+//!   settles a great many pairs into one shape, which is not the same thing
+//!   as deciding that two shapes mean one program: `push 1 ; push 2 ; add`
+//!   and `push 2 ; push 1 ; add` are three boxes each and nothing here
+//!   relates them. So this decides nothing, judges nothing, and is not
+//!   wired into [`crate::strategy`]; `diagram` remains the prover's engine.
+//!   Nor do the tests borrow its judgement: what they claim about *meaning*
+//!   they claim with the `meaning` oracle, which evaluates a program with **every
+//!   operation left opaque** and compares the graphs of applications that
+//!   come out. `add` on two wires stays `add(x, y)` and never becomes `7`,
+//!   so that oracle decides nothing either — it holds the wiring to account
+//!   and stops there.
 //! - **The value folds and the branch layer.** No literal window runs, no
 //!   commutative operand sorts, no condition selects its arm, no case tree
 //!   is ordered. Layers 2 and 3 of the algebra sheet are untouched, so
@@ -94,7 +107,9 @@
 //!   `select` is now
 //!   where the third of those would go — a literal condition would pick a
 //!   block and the node would vanish — which makes the absence a missing
-//!   rule on one node rather than a missing layer.
+//!   rule on one node rather than a missing layer. [`rules::Rule::NotNot`] is in
+//!   the table as the template for the row this layer would fill, and is
+//!   not among the laws [`rewrite`] spends.
 //!
 //! [`read_back`] is the other half of the translation: a graph is scheduled
 //! onto a stack, and the routing between one step and the next is *layered*
@@ -117,6 +132,10 @@ use bytecode::SentenceIndex;
 
 use crate::term::{Arity, Context, Prim, Term, TermIndex};
 
+#[cfg(test)]
+mod meaning;
+pub mod rules;
+
 // ---- the graph ----------------------------------------------------------------
 
 /// A box in a graph: an index into its [`Graph`]'s node list.
@@ -130,6 +149,13 @@ impl NodeId {
     pub fn index(self) -> usize {
         self.0 as usize
     }
+
+    /// The id at a position, for anything that indexes a graph's boxes by
+    /// their own order — [`rules`] does, since a rule's side deletes
+    /// nothing and so has dense ids.
+    pub fn at(index: usize) -> NodeId {
+        NodeId(u32::try_from(index).expect("a graph fits in u32"))
+    }
 }
 
 /// Which branch a [`NodeKind::Fork`] and a [`NodeKind::Select`] are the two
@@ -141,6 +167,14 @@ impl NodeId {
 /// the walk agrees with what the builder meant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct BranchId(u32);
+
+impl BranchId {
+    /// Where this branch sits in the order its graph handed them out, which
+    /// is what [`rules`] keys a renaming by.
+    pub fn index(self) -> usize {
+        self.0 as usize
+    }
+}
 
 impl fmt::Display for BranchId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -180,7 +214,12 @@ pub enum Sink {
 /// the translation unchanged. `swap` in particular stays an
 /// [`Op`][NodeKind::Op]: it is a prim like any other, and the rewriter is
 /// where the fact that it is *structural* gets used, not the type.
-#[derive(Debug, Clone)]
+///
+/// `PartialEq` compares a [`BranchId`] as the number it is, which is right
+/// for two boxes of one graph and wrong for two graphs — a branch id is
+/// graph-local. [`rules::same_kind`](rules) is what a match needs, and it
+/// carries the renaming.
+#[derive(Debug, Clone, PartialEq)]
 pub enum NodeKind {
     /// `id(n)`: `n` in, the same `n` out.
     Id(usize),
@@ -402,6 +441,15 @@ impl Graph {
             .collect()
     }
 
+    /// A box, as [`Graph::add`], answering with the node rather than its
+    /// ports — which is what a caller that has to place a box of no outputs
+    /// needs.
+    fn add_node(&mut self, kind: NodeKind, inputs: Vec<Source>) -> NodeId {
+        let id = NodeId(u32::try_from(self.nodes.len()).expect("a graph fits in u32"));
+        self.add(kind, inputs);
+        id
+    }
+
     /// Closes the graph: these sources are what the boundary leaves.
     fn close(&mut self, sources: Vec<Source>) {
         for (i, &src) in sources.iter().enumerate() {
@@ -416,34 +464,6 @@ impl Graph {
         if let Some(at) = readers.iter().position(|&s| s == sink) {
             readers.remove(at);
         }
-    }
-
-    /// Everything that read output `port` of `node` reads `src` instead —
-    /// the whole of "make the connection direct", in one move.
-    fn redirect(&mut self, node: NodeId, port: usize, src: Source) {
-        let moved = std::mem::take(&mut self.node_mut(node).outputs[port]);
-        for &sink in &moved {
-            self.set_source(sink, src);
-        }
-        self.sinks_mut(src).extend(moved);
-    }
-
-    /// Deletes a node nothing reads, unlinking it from its producers, and
-    /// names those producers — they are the ones that may have just become
-    /// unread themselves.
-    fn remove(&mut self, id: NodeId) -> Vec<NodeId> {
-        let inputs = self.node(id).inputs.clone();
-        for (port, &src) in inputs.iter().enumerate() {
-            self.unlink(src, Sink::Port { node: id, port });
-        }
-        self.nodes[id.index()] = None;
-        inputs
-            .iter()
-            .filter_map(|src| match src {
-                Source::Port { node, .. } => Some(*node),
-                Source::Input(_) => None,
-            })
-            .collect()
     }
 }
 
@@ -531,61 +551,24 @@ fn emit(graph: &mut Graph, terms: &Context, term: TermIndex, inputs: Vec<Source>
 
 // ---- rewriting -----------------------------------------------------------------
 
-/// Every structural box deleted.
+/// Every structural box deleted, and every computation done twice made one.
 ///
-/// A worklist rather than repeated passes, which the back-links are what
-/// make possible: firing a rule leaves the graph already correct, so the
-/// only thing to reconsider is the handful of nodes the deletion could have
-/// affected — the producers of what went away, which may now be unread.
-/// Every rule strictly decreases the live node count, so it drains.
+/// The moves are not written here any more: they are [`rules::structural`],
+/// a table of pairs of graphs this module says are the same program, and
+/// [`rules::saturate`] is what spends them. What that buys over the
+/// hand-written `match` it replaces is a page anyone can read a rewrite
+/// against, and a place to put a law that is not one of the four
+/// eliminations — δ-naturality is the first, and it is in the table.
 pub fn rewrite(graph: &mut Graph) {
-    rewrite_watching(graph, &mut |_| {});
+    rules::saturate(graph, &rules::structural());
 }
 
 /// [`rewrite`], with a witness run against the graph after every single
 /// firing. The tests use it to hold [`Graph::check`] at each step rather
 /// than only at the fixpoint.
+#[cfg(test)]
 fn rewrite_watching(graph: &mut Graph, after: &mut dyn FnMut(&Graph)) {
-    let mut work: Vec<NodeId> = (0..graph.nodes.len())
-        .map(|i| NodeId(i as u32))
-        .filter(|&id| graph.is_live(id))
-        .collect();
-    while let Some(id) = work.pop() {
-        if !graph.is_live(id) {
-            continue;
-        }
-        if let Some(again) = fire(graph, id) {
-            after(graph);
-            work.extend(again);
-        }
-    }
-}
-
-/// One node, and whichever rule it answers to. `None` is a node no rule
-/// reaches; `Some` names what to reconsider.
-fn fire(graph: &mut Graph, id: NodeId) -> Option<Vec<NodeId>> {
-    // `dead-node`, and with it `drop-elim`: a box nothing reads is nothing,
-    // because the language is total and pure. A `drop(n)` has no outputs at
-    // all, so it is always the first thing this sees.
-    if graph.node(id).outputs.iter().all(Vec::is_empty) {
-        return Some(graph.remove(id));
-    }
-    // The rest are one shape: for each output port, the input port whose
-    // source its readers should name instead.
-    let carries: Vec<(usize, usize)> = match graph.kind(id) {
-        NodeKind::Id(n) => (0..*n).map(|i| (i, i)).collect(),
-        NodeKind::Op(Prim::Swap) => vec![(0, 1), (1, 0)],
-        NodeKind::Copy(n) => {
-            let n = *n;
-            (0..n).flat_map(|i| [(i, i), (n + i, i)]).collect()
-        }
-        _ => return None,
-    };
-    for (out_port, in_port) in carries {
-        let src = graph.node(id).inputs[in_port];
-        graph.redirect(id, out_port, src);
-    }
-    Some(graph.remove(id))
+    rules::saturate_watching(graph, &rules::structural(), after);
 }
 
 // ---- well-formedness ------------------------------------------------------------
@@ -1159,262 +1142,10 @@ impl fmt::Display for Graph {
 
 #[cfg(test)]
 mod tests {
+    use super::meaning::{Meaning, boundary, eval_graph, eval_term};
     use super::*;
     use crate::term::lower;
     use bytecode::{Library, SentenceIndex, assemble};
-
-    // ---- meaning, with the prims left opaque ------------------------------------
-
-    /// A name for one value in the symbolic reading of a program.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-    struct SymId(u32);
-
-    /// What a value *is*, with every operation left uninterpreted.
-    ///
-    /// `add` on two wires is the node `add(x, y)` and never `7`: nothing is
-    /// run, so this decides no more equalities than the wiring forces. A
-    /// branch is a [`Sym::Choice`] **per output** rather than a fork in
-    /// control — which is the same claim the graph makes with `select`, and
-    /// the reason there is no case tree here to explode.
-    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-    enum Sym {
-        /// Boundary input `i`.
-        Var(usize),
-        /// Output `out` of one opaque operation. `op` indexes [`Meaning::ops`];
-        /// a call is opaque too, so nothing is ever opened.
-        App {
-            op: u32,
-            args: Vec<SymId>,
-            out: usize,
-        },
-        /// One of two values, according to `cond`.
-        Choice {
-            cond: SymId,
-            if_true: SymId,
-            if_false: SymId,
-        },
-    }
-
-    /// An interning arena: two programs mean the same thing when they land on
-    /// the same [`SymId`].
-    ///
-    /// Interning identifies `push 9 ; copy(1)` with `push 9 ; push 9`, which is
-    /// the δ-naturality the module itself has *not* bought. That only ever
-    /// makes an oracle more permissive, so it is safe here — but it is a fact
-    /// about this test scaffolding, not a position the engine has changed.
-    #[derive(Default)]
-    struct Meaning {
-        nodes: Vec<Sym>,
-        seen: HashMap<Sym, SymId>,
-        /// Operations by their printed form, since [`Prim`] is not hashable.
-        ops: Vec<String>,
-    }
-
-    impl Meaning {
-        fn intern(&mut self, node: Sym) -> SymId {
-            if let Some(&id) = self.seen.get(&node) {
-                return id;
-            }
-            let id = SymId(self.nodes.len() as u32);
-            self.nodes.push(node.clone());
-            self.seen.insert(node, id);
-            id
-        }
-
-        fn var(&mut self, i: usize) -> SymId {
-            self.intern(Sym::Var(i))
-        }
-
-        fn op(&mut self, name: String) -> u32 {
-            match self.ops.iter().position(|held| *held == name) {
-                Some(i) => i as u32,
-                None => {
-                    self.ops.push(name);
-                    (self.ops.len() - 1) as u32
-                }
-            }
-        }
-
-        /// One opaque operation applied, answering with all of its outputs.
-        fn apply(&mut self, name: String, args: Vec<SymId>, outputs: usize) -> Vec<SymId> {
-            let op = self.op(name);
-            (0..outputs)
-                .map(|out| {
-                    self.intern(Sym::App {
-                        op,
-                        args: args.clone(),
-                        out,
-                    })
-                })
-                .collect()
-        }
-
-        /// Two blocks of an answer paired position by position.
-        fn choose(&mut self, cond: SymId, if_true: &[SymId], if_false: &[SymId]) -> Vec<SymId> {
-            assert_eq!(if_true.len(), if_false.len(), "the arms answer alike");
-            if_true
-                .iter()
-                .zip(if_false)
-                .map(|(&if_true, &if_false)| {
-                    self.intern(Sym::Choice {
-                        cond,
-                        if_true,
-                        if_false,
-                    })
-                })
-                .collect()
-        }
-    }
-
-    /// The name of the one operation a prim stands for — or, for `swap`, none:
-    /// `swap` is routing, and reading it as an opaque box would make the very
-    /// cancellation `swap-elim` performs look like a change of meaning.
-    fn opaque(prim: &Prim) -> Option<String> {
-        match prim {
-            Prim::Swap => None,
-            other => Some(format!("{:?}", other)),
-        }
-    }
-
-    /// What a term means, on the symbols standing for its inputs.
-    fn eval_term(
-        m: &mut Meaning,
-        terms: &Context,
-        term: TermIndex,
-        stack: Vec<SymId>,
-    ) -> Vec<SymId> {
-        debug_assert_eq!(
-            stack.len(),
-            terms.arity(term).inputs,
-            "the caller cuts by arity"
-        );
-        match terms.get(term) {
-            Term::Id(_) => stack,
-            Term::Drop(_) => Vec::new(),
-            // Block-wise, as the box is.
-            Term::Copy(_) => {
-                let mut out = stack.clone();
-                out.extend(stack);
-                out
-            }
-            Term::Op(prim) => match opaque(prim) {
-                None => vec![stack[1], stack[0]],
-                Some(name) => m.apply(name, stack, prim.arity().outputs),
-            },
-            Term::Call { target, arity } => {
-                m.apply(format!("call {:?}", target), stack, arity.outputs)
-            }
-            // Both spines are walked rather than recursed down. A read-back
-            // emits a step per box and folds them left, and a routing layer
-            // is a `*`-product over the whole width, so these chains are as
-            // long as the graph is wide and deep — recursion overflows a
-            // test thread's stack on the corpus.
-            Term::Compose(..) => {
-                let mut spine = Vec::new();
-                let mut head = term;
-                while let Term::Compose(first, then) = terms.get(head) {
-                    spine.push(*then);
-                    head = *first;
-                }
-                let mut stack = eval_term(m, terms, head, stack);
-                for step in spine.into_iter().rev() {
-                    stack = eval_term(m, terms, step, stack);
-                }
-                stack
-            }
-            Term::Par(..) => {
-                let mut spine = Vec::new();
-                let mut head = term;
-                while let Term::Par(deep, top) = terms.get(head) {
-                    spine.push(*top);
-                    head = *deep;
-                }
-                // The stack is cut from the top down, since `spine` holds
-                // the topmost factor first.
-                let mut stack = stack;
-                let parts: Vec<Vec<SymId>> = spine
-                    .iter()
-                    .map(|&factor| {
-                        let width = terms.arity(factor).inputs;
-                        stack.split_off(stack.len() - width)
-                    })
-                    .collect();
-                let mut out = eval_term(m, terms, head, stack);
-                for (&factor, part) in spine.iter().zip(parts).rev() {
-                    out.extend(eval_term(m, terms, factor, part));
-                }
-                out
-            }
-            // Both arms on the same stack, and a choice per output. With the
-            // prims opaque that *is* what a branch means, so the hoist the
-            // graph performs is invisible here — which is exactly what makes
-            // this oracle linear where a case tree is not.
-            Term::Branch { if_true, if_false } => {
-                let mut stack = stack;
-                let cond = stack.pop().expect("a branch reads its condition");
-                let taken = eval_term(m, terms, *if_true, stack.clone());
-                let not = eval_term(m, terms, *if_false, stack);
-                m.choose(cond, &taken, &not)
-            }
-        }
-    }
-
-    /// What a graph means — the same reading, one box at a time.
-    ///
-    /// No `read_back` anywhere in it, which is the point: this can hold
-    /// `rewrite` to preserving meaning without the translation in the loop.
-    fn eval_graph(m: &mut Meaning, graph: &Graph, inputs: &[SymId]) -> Vec<SymId> {
-        let mut ports: HashMap<(NodeId, usize), SymId> = HashMap::new();
-        let read = |ports: &HashMap<(NodeId, usize), SymId>, src: Source| match src {
-            Source::Input(i) => inputs[i],
-            Source::Port { node, port } => ports[&(node, port)],
-        };
-        for id in schedule(graph) {
-            let args: Vec<SymId> = graph
-                .node(id)
-                .inputs
-                .iter()
-                .map(|&src| read(&ports, src))
-                .collect();
-            let outs = match graph.kind(id) {
-                NodeKind::Id(_) => args,
-                NodeKind::Drop(_) => Vec::new(),
-                NodeKind::Copy(_) => {
-                    let mut out = args.clone();
-                    out.extend(args);
-                    out
-                }
-                NodeKind::Op(prim) => match opaque(prim) {
-                    None => vec![args[1], args[0]],
-                    Some(name) => m.apply(name, args, prim.arity().outputs),
-                },
-                NodeKind::Call { target, arity } => {
-                    m.apply(format!("call {:?}", target), args, arity.outputs)
-                }
-                // A fork means what a copy means; only rewriting tells them
-                // apart.
-                NodeKind::Fork { .. } => {
-                    let mut out = args.clone();
-                    out.extend(args);
-                    out
-                }
-                NodeKind::Select { arity: n, .. } => {
-                    let cond = args[2 * n];
-                    let (taken, not) = args.split_at(*n);
-                    m.choose(cond, &taken[..*n], &not[..*n])
-                }
-            };
-            for (port, sym) in outs.into_iter().enumerate() {
-                ports.insert((id, port), sym);
-            }
-        }
-        graph.outputs.iter().map(|&src| read(&ports, src)).collect()
-    }
-
-    /// Fresh symbols for `n` boundary inputs.
-    fn boundary(m: &mut Meaning, n: usize) -> Vec<SymId> {
-        (0..n).map(|i| m.var(i)).collect()
-    }
 
     /// The term a sentence written inline lowers to, built in `terms`.
     fn term_of(terms: &mut Context, body: &str) -> TermIndex {
@@ -1448,7 +1179,7 @@ mod tests {
 
     /// Every sentence the integration suite compiles, lowered into one
     /// arena — the same corpus `diagram`'s round trip runs on.
-    fn corpus() -> (Library, Context, Vec<(SentenceIndex, TermIndex)>) {
+    pub(super) fn corpus() -> (Library, Context, Vec<(SentenceIndex, TermIndex)>) {
         let tests = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("the crate sits in the workspace")
@@ -1579,11 +1310,14 @@ mod tests {
         // wiring diagram and starts being cartesian.
         assert!(!graph.is_monogamous());
 
-        // The other spelling is two boxes, and nothing here says the two
-        // graphs are one program. That is δ-naturality, which `diagram`
-        // buys by interning and this module has not bought.
+        // The other spelling reaches the same place, and by the other
+        // road: two `push 9` boxes on one set of sources — no sources at
+        // all — are one box, by `dedup`. That is δ-naturality, which
+        // `diagram` buys by interning and this module buys with a rule.
         let (_terms, twice) = rewritten("push 9 push 9");
-        assert_eq!(twice.live_count(), 2);
+        assert_eq!(twice.live_count(), 1);
+        let (id, _) = twice.live().next().unwrap();
+        assert_eq!(twice.sinks(Source::Port { node: id, port: 0 }).len(), 2);
     }
 
     #[test]
