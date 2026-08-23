@@ -154,6 +154,7 @@ pub enum Law {
     SpecializeBool,
     SpecializeChoice,
     ViewValue,
+    Shannon,
     // The value layer: what an operation computes, measured on the machine.
     Fold,
     TestedBool,
@@ -340,6 +341,27 @@ pub enum Rule {
     /// — a strategy's last resort, and stated as a law precisely so a
     /// strategy can hold it.
     ViewValue { fork: usize, view: usize },
+    /// η, as an equation: a wire the instruction set promises is a bool is
+    /// `true` or it is `false`, so everything downstream of it is a branch
+    /// on it — `body(w) = if w then body(true) else body(false)`. Shannon
+    /// expansion, and the one law that *grows* a graph on purpose: the
+    /// case split the old engine kept as its pinned boundary, stated as a
+    /// pair of graphs like every other row.
+    ///
+    /// `kind` is the operation whose answer is split on — refused unless
+    /// [`yields_bool`](bytecode::Instruction::yields_bool) promises it —
+    /// and `body` is the region downstream of that answer, carried as
+    /// payload the way [`Rule::SelectLiteral`] carries arms: its input 0
+    /// is the answer, the rest is whatever else the region reads. The
+    /// right side runs both pinned copies and keeps one with a `select`,
+    /// which is sound for the reason every branch is — total, pure, the
+    /// untaken copy an answer nobody reads.
+    ///
+    /// No law list collects this row. Expanding is a *strategy's* act —
+    /// it spends η where a proof says to — and the `cases` proof step is
+    /// what fires it; a driver that expanded on its own would never
+    /// terminate, since the expansion re-creates the shape it fires on.
+    Shannon { kind: NodeKind, body: Graph },
 
     // ---- the value layer ----
     /// An operation on literal operands is the answer the machine gives:
@@ -389,6 +411,7 @@ impl Rule {
             Rule::SpecializeBool { .. } => Law::SpecializeBool,
             Rule::SpecializeChoice { .. } => Law::SpecializeChoice,
             Rule::ViewValue { .. } => Law::ViewValue,
+            Rule::Shannon { .. } => Law::Shannon,
             Rule::Fold { .. } => Law::Fold,
             Rule::TestedBool { .. } => Law::TestedBool,
             Rule::Retuple { .. } => Law::Retuple,
@@ -466,6 +489,7 @@ pub fn is_wiring(law: Law) -> bool {
             | Law::SpecializeEqual
             | Law::SpecializeBool
             | Law::SpecializeChoice
+            | Law::Shannon
             | Law::Fold
             | Law::TestedBool
             | Law::Retuple
@@ -1171,6 +1195,54 @@ pub fn sides(rule: &Rule) -> Result<(Graph, Graph), Error> {
                 g
             };
             (build(false), build(true))
+        }
+        Rule::Shannon { kind, body } => {
+            let NodeKind::Op(prim) = kind else {
+                return Err(ill(Ill::Refused));
+            };
+            if prim.arity().outputs != 1
+                || !prim.to_instruction().yields_bool()
+                || body.arity().inputs == 0
+            {
+                return Err(ill(Ill::Refused));
+            }
+            body.check().map_err(|e| ill(Ill::Broken(e)))?;
+            let n = prim.arity().inputs;
+            let k = body.arity().inputs - 1;
+            let m = body.arity().outputs;
+            let outside: Vec<Source> = (0..k).map(|i| Source::Input(n + i)).collect();
+            let handed: Vec<Source> = (0..n).map(Source::Input).collect();
+
+            let mut asked = Graph::empty(n + k);
+            let answer = asked.add(kind.clone(), handed.clone());
+            let mut takes = vec![answer[0]];
+            takes.extend(outside.iter().copied());
+            let mut out = implant(&mut asked, body, &takes);
+            out.push(answer[0]);
+            asked.close(out);
+
+            let mut split = Graph::empty(n + k);
+            let answer = split.add(kind.clone(), handed);
+            // Both copies run — the totality license every branch spends —
+            // and the copy whose pin disagrees with the answer is the one
+            // the select throws away.
+            let copy = |split: &mut Graph, value: bool| {
+                let lit = split.add(NodeKind::Op(Prim::Push(Value::Bool(value))), Vec::new());
+                let mut takes = vec![lit[0]];
+                takes.extend(outside.iter().copied());
+                implant(split, body, &takes)
+            };
+            let sure = copy(&mut split, true);
+            let doubted = copy(&mut split, false);
+            let branch = split.next_branch();
+            let mut chooses = vec![answer[0]];
+            chooses.extend(sure);
+            chooses.extend(doubted);
+            let mut out = split.add(NodeKind::Select { arity: m, branch }, chooses);
+            out.push(answer[0]);
+            split.close(out);
+
+            (asked, split)
         }
 
         // ---- the value layer ----
@@ -2287,6 +2359,126 @@ fn arm(
     Some(lifted)
 }
 
+/// Everything downstream of one box's single answer, lifted out as a graph
+/// of its own — the body a [`Rule::Shannon`] carries.
+///
+/// The region is the transitive readers of the answer, which makes it
+/// downstream-closed: a region box's readers are region boxes or the
+/// boundary, so the lifted graph's outputs are exactly what the host
+/// boundary read of it, in the host's order. Input 0 stands for the
+/// answer; the rest is whatever else the region reads, in encounter order.
+/// `None` when nothing but the boundary reads the answer — an expansion
+/// with an empty body decides nothing.
+fn downstream(graph: &Graph, of: NodeId) -> Option<Graph> {
+    let answer = Source::Port { node: of, port: 0 };
+    let mut region: Vec<NodeId> = Vec::new();
+    let mut todo: Vec<Source> = vec![answer];
+    while let Some(src) = todo.pop() {
+        for &sink in graph.sinks(src) {
+            let Sink::Port { node, .. } = sink else {
+                continue;
+            };
+            if region.contains(&node) {
+                continue;
+            }
+            region.push(node);
+            for port in 0..graph.kind(node).arity().outputs {
+                todo.push(Source::Port { node, port });
+            }
+        }
+    }
+    if region.is_empty() {
+        return None;
+    }
+    region.sort_unstable();
+    let mine: HashSet<NodeId> = region.iter().copied().collect();
+
+    // An order the body can be rebuilt in — by its own edges, since a
+    // rewrite can leave a low id reading a high one.
+    let mut order: Vec<NodeId> = Vec::with_capacity(region.len());
+    while order.len() < region.len() {
+        let stuck = order.len();
+        for &node in &region {
+            if order.contains(&node) {
+                continue;
+            }
+            let ready = graph.sources(node).iter().all(|src| match src {
+                Source::Port { node: made, .. } => !mine.contains(made) || order.contains(made),
+                Source::Input(_) => true,
+            });
+            if ready {
+                order.push(node);
+            }
+        }
+        if order.len() == stuck {
+            return None;
+        }
+    }
+    let region = order;
+
+    // What it reads that it does not own, the answer aside.
+    let held = |src: Source| matches!(src, Source::Port { node, .. } if mine.contains(&node));
+    let mut extra: Vec<Source> = Vec::new();
+    for src in region
+        .iter()
+        .flat_map(|&node| graph.sources(node).iter().copied())
+    {
+        if src != answer && !held(src) && !extra.contains(&src) {
+            extra.push(src);
+        }
+    }
+
+    let place: HashMap<NodeId, usize> = region.iter().enumerate().map(|(i, &n)| (n, i)).collect();
+    let mut branches: Vec<BranchId> = Vec::new();
+    for &node in &region {
+        if let NodeKind::Fork { branch, .. } | NodeKind::Select { branch, .. } = graph.kind(node)
+            && !branches.contains(branch)
+        {
+            branches.push(*branch);
+        }
+    }
+    let renumber = |kind: &NodeKind| {
+        let of =
+            |b: &BranchId| BranchId(branches.iter().position(|h| h == b).expect("noted") as u32);
+        match kind {
+            NodeKind::Fork { arity, branch } => NodeKind::Fork {
+                arity: *arity,
+                branch: of(branch),
+            },
+            NodeKind::Select { arity, branch } => NodeKind::Select {
+                arity: *arity,
+                branch: of(branch),
+            },
+            other => other.clone(),
+        }
+    };
+    let inside = |src: Source| match src {
+        Source::Port { node, port } if mine.contains(&node) => Source::Port {
+            node: NodeId::at(place[&node]),
+            port,
+        },
+        other if other == answer => Source::Input(0),
+        other => Source::Input(1 + extra.iter().position(|&e| e == other).expect("noted")),
+    };
+
+    let mut lifted = Graph::empty(1 + extra.len());
+    for &node in &region {
+        let takes = graph.sources(node).iter().map(|&s| inside(s)).collect();
+        lifted.add(renumber(graph.kind(node)), takes);
+    }
+    lifted.branches = branches.len() as u32;
+    lifted.close(
+        graph
+            .outputs()
+            .iter()
+            .filter(|src| held(**src))
+            .map(|&s| inside(s))
+            .collect(),
+    );
+    lifted.check().ok()?;
+    Some(lifted)
+}
+
 /// The payloads one law could be anchored at one box with, each paired with
 /// the box the pattern's **first** node would land on.
 ///
@@ -2585,6 +2777,24 @@ fn read_off(graph: &Graph, law: Law, id: NodeId) -> Vec<(Rule, NodeId)> {
             .filter(|&v| !graph.sinks(Source::Port { node: id, port: v }).is_empty())
             .map(|v| (Rule::ViewValue { fork: *f, view: v }, id))
             .collect(),
+
+        // Everything downstream of a promised bool, lifted out as the body
+        // of its split.
+        (Law::Shannon, NodeKind::Op(prim)) => {
+            if prim.arity().outputs != 1 || !prim.to_instruction().yields_bool() {
+                return Vec::new();
+            }
+            match downstream(graph, id) {
+                Some(body) => vec![(
+                    Rule::Shannon {
+                        kind: kind.clone(),
+                        body,
+                    },
+                    id,
+                )],
+                None => Vec::new(),
+            }
+        }
 
         // An operation whose every operand is a literal — the fold, and
         // the machine is what answers it.
@@ -3235,6 +3445,40 @@ mod tests {
         holds(Law::ViewValue, Rule::ViewValue { fork: 2, view: 3 });
     }
 
+    /// η, as an equation: everything downstream of a promised bool is a
+    /// branch on it, both copies run and one kept — which the machine can
+    /// judge sample by sample, totality doing the licensing.
+    #[test]
+    fn a_promised_bool_splits_its_downstream() {
+        the_machine_agrees(
+            Law::Shannon,
+            Rule::Shannon {
+                kind: NodeKind::Op(Prim::IsBool),
+                body: one_step(NodeKind::Op(Prim::Not)),
+            },
+        );
+        // A body holding a branch of its own, and reading past the answer.
+        the_machine_agrees(
+            Law::Shannon,
+            Rule::Shannon {
+                kind: NodeKind::Op(Prim::IsInt),
+                body: sides(&Rule::SelectSame { arity: 1, at: 0 }).unwrap().0,
+            },
+        );
+        // The set does not promise `add` answers a bool, so there is no
+        // equation to state.
+        assert!(matches!(
+            sides(&Rule::Shannon {
+                kind: NodeKind::Op(Prim::Add),
+                body: one_step(NodeKind::Op(Prim::Not)),
+            }),
+            Err(Error::Ill {
+                why: Ill::Refused,
+                ..
+            })
+        ));
+    }
+
     /// The fold: a literal window runs on the machine itself, and the
     /// answer side is built from what came back.
     #[test]
@@ -3694,6 +3938,10 @@ mod tests {
                 moves: vec![(0, 0)],
             },
             Rule::ViewValue { fork: 2, view: 3 },
+            Rule::Shannon {
+                kind: NodeKind::Op(Prim::IsBool),
+                body: one_step(NodeKind::Op(Prim::Not)),
+            },
             Rule::Fold {
                 prim: Prim::Add,
                 operands: vec![Value::Int(1), Value::Int(2)],
@@ -3709,7 +3957,13 @@ mod tests {
     /// Every law there is, including the one no list collects — a driver
     /// holds `view-value` back on purpose, and no list should hand it out.
     fn every_law() -> Vec<Law> {
-        [structural(), branching(), folding(), vec![Law::ViewValue]].concat()
+        [
+            structural(),
+            branching(),
+            folding(),
+            vec![Law::ViewValue, Law::Shannon],
+        ]
+        .concat()
     }
 
     /// Every proposal at every box of `graph`, applied to a copy of it and
@@ -3847,15 +4101,27 @@ mod tests {
         );
         offers(
             "pick 1 pick 1 equal drop 0",
-            &[Law::IdElim, Law::SwapElim, Law::CopyElim, Law::DeadNode],
+            &[
+                Law::IdElim,
+                Law::SwapElim,
+                Law::CopyElim,
+                Law::DeadNode,
+                Law::Shannon,
+            ],
         );
         offers(
             "branch { pick 0 drop 0 not } { not }",
-            &[Law::IdElim, Law::CopyElim, Law::DeadNode, Law::ViewValue],
+            &[
+                Law::IdElim,
+                Law::CopyElim,
+                Law::DeadNode,
+                Law::ViewValue,
+                Law::Shannon,
+            ],
         );
         offers(
             "pick 0 push 1 equal branch { not } { negate }",
-            &[Law::IdElim, Law::CopyElim, Law::ViewValue],
+            &[Law::IdElim, Law::CopyElim, Law::ViewValue, Law::Shannon],
         );
         // One operation in both arms, on views the fork hands out in more
         // than one port — which is where `fork-dedup`'s payload says

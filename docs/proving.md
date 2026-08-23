@@ -148,7 +148,7 @@ and a graph goal has no compose spine to strip and no branch node to fork;
 the residual's own narrowing still shrinks what a report prints, and the
 branch layer's laws are how arms get reasoned about now.
 
-**A case split is two `cases`, and it says why.** The corpus's
+**A case split is a rewrite, and the proof says where.** The corpus's
 path-condition claim, `types_test::number_does_pre_and_post_is_constant`,
 was once a page of hand-derived waypoints, then one `inline diagram` under
 the old canonicalizing engine. It is now what the claim actually is: a
@@ -156,26 +156,29 @@ case analysis, written out —
 
 ```text
 proof types_test::number_does_pre_and_post_is_constant =
-    inline both(decide)
-    cases(equal)(
-        true:  both(decide) cases(equal),
-        false: both(decide) cases(equal));
+    inline both(decide) cases(equal) both(decide) cases(equal) diagram;
 ```
 
 — open the definitions, drive the table (`view-value` and `dedup` are what
-identify the retests of one condition as one wire), split on `equal(x,
-t1)`, split on `equal(x, t2)`, and every leaf folds shut. The disjunction
-`is_tag` carries is spent exactly where the proof says η is spent, and
-nowhere silently.
+identify the retests of one condition as one wire), expand on `equal(x,
+t1)`, expand on `equal(x, t2)`, and the closer folds every arm shut. Each
+`cases` is **one checked rewrite**: the table's Shannon law, `body(w) = if
+w then body(true) else body(false)`, sound because the instruction set
+promises the wire a bool, refused by `sides` otherwise. The introduced
+branch dissolves inside the graph — `select-const` where a pinned copy
+decided, `dedup` and `select-same` where both arms agree — so the
+disjunction `is_tag` carries is spent exactly where the proof says η is
+spent, as steps a checker verified.
 
 **Trust.** `sides` and `apply` are the whole of it — plus the machine
-itself, where a law is *about* what an operation computes (`fold` runs
-`run_window`, the real `vm`, so there is no second semantics to drift).
-Search, drivers, tactics, queries and the `cases` bookkeeping are all
-untrusted: every step they produce goes through `apply`, a wrong one is
-refused, and a close is the isomorphism check on what the checked steps
-left. What remains one module's word is `isomorphic` itself, and it is
-held to answering `true` only after verifying its bijection link by link.
+itself, where a law is *about* what an operation computes (`fold` and the
+Shannon expansion consult `run_window`, the real `vm`, so there is no
+second semantics to drift). Search, drivers, tactics, queries and the
+`cases` step's wire-picking are all untrusted: every step they produce
+goes through `apply`, a wrong one is refused, and a close is the
+isomorphism check on what the checked steps left. What remains one
+module's word is `isomorphic` itself, and it is held to answering `true`
+only after verifying its bijection link by link.
 
 ## The `.hant` file
 
@@ -196,10 +199,10 @@ hand; `Display` alone can only say `call #3`.
 
 The current corpus needs three entries: `inline diagram` for
 `identities::testing_a_test_by_name` (its right side is written as a
-call), `both(decide) cases(equal)` for
+call), `both(decide) cases(equal) diagram` for
 `identities::specializing_a_tested_value` (an arm recomputing the very
 test its branch decided — a case split, once the driver has identified the
-two computations as one wire), and the nested `cases` proof above for the
+two computations as one wire), and the two-`cases` proof above for the
 contract claim. Every other identity closes with no entry at all.
 
 ## The failure output is the point
@@ -234,9 +237,9 @@ tree it came from — the layout only chooses where the newlines go.
   collapsed coercion idempotences, and no law spells those yet. A claim
   that needs one fails honestly, and the row is a `sides` construction
   away.
-- **`cases` names an operation, not a wire.** The step pins the outermost
-  box of the named prim, which is right until a goal holds two equally
-  outermost tests of the same operation; the query language of
+- **`cases` names an operation, not a wire.** The step expands the
+  outermost box of the named prim, which is right until a goal holds two
+  equally outermost tests of the same operation; the query language of
   [docs/tactics.md](tactics.md) is the vocabulary a sharper `cases` would
   take.
 - **Reify for the giants.** A read-back shares nothing a term cannot, so a
