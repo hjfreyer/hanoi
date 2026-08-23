@@ -90,12 +90,10 @@ pub enum Proof {
         left_sub: Box<Proof>,
         right_sub: Box<Proof>,
     },
-    /// A `cases` split the goal on a boolean-valued wire — η, spent
-    /// deliberately — and both halves closed.
-    Cases {
-        true_sub: Box<Proof>,
-        false_sub: Box<Proof>,
-    },
+    /// A `cases` expanded a boolean-valued wire on each side that held
+    /// one — η, spent as the table's own Shannon law — and the expanded
+    /// goal closed.
+    Cases { steps: usize, sub: Box<Proof> },
     /// A `diagram` read both sides back and normalized them into one arena,
     /// and they were one diagram.
     Diagram,
@@ -122,14 +120,9 @@ impl Proof {
                 left_sub.summary(),
                 right_sub.summary()
             ),
-            Proof::Cases {
-                true_sub,
-                false_sub,
-            } => format!(
-                "cases (true: {}; false: {})",
-                true_sub.summary(),
-                false_sub.summary()
-            ),
+            Proof::Cases { steps, sub } => {
+                format!("cases: {} split(s); {}", steps, sub.summary())
+            }
             Proof::Diagram => "the two sides are one diagram".to_string(),
         }
     }

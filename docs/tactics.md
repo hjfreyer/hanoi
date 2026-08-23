@@ -644,11 +644,14 @@ term goal.
 
 And the old engine has since retired outright: the table grew the value
 layer (`fold` running the machine's own window, `tested-bool`, `retuple`,
-`select-const`) and the last-resort `view-value`, `tactic::decide` drives
-the whole of it, the `diagram` proof step closes by that drive plus
-isomorphism, and η became the `cases` proof step — a goal split on a
-bool-promising wire, both halves pinned. `diagram.rs` is deleted;
-[docs/proving.md](proving.md) tells that story.
+`select-const`), the last-resort `view-value`, and the Shannon expansion —
+η itself as a row, `body(w) = if w then body(true) else body(false)`, the
+downstream region carried as payload the way `select-literal` carries
+arms. `tactic::decide` drives the lists, the `diagram` proof step closes
+by that drive plus isomorphism, and the `cases` proof step is untrusted
+convenience that picks a wire and fires the Shannon row — nothing in the
+prover touches a graph except through `Derivation::push`. `diagram.rs` is
+deleted; [docs/proving.md](proving.md) tells that story.
 
 Next, in order of want: a `Region::Arm`; surface spellings for queries
 and stated (backward) steps; serialization for `Tactic` beyond the

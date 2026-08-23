@@ -27,10 +27,10 @@
 //! | `symm` | swaps the two sides | never — but two in a row are refused |
 //! | `exact` | claims the sides are one diagram — **isomorphic** — which the auto-close has already checked, so a reached `exact` fails and shows the goal exactly as it stands | always, when reached |
 //! | `via { body } (left: s, right: s)` | **cuts**: `A = B` splits into the goals `A = C` and `C = B`, the waypoint built as a graph | the waypoint's net stack change is not the goal's, or a side fails |
-//! | `cases(op) (true: s, false: s)` | **splits**: pins each side's outermost `op` wire `true` in one subgoal, `false` in the other — η, spent deliberately | the wires are not one computation, or a case fails |
+//! | `cases(op)` | **splits, inside the graph**: each side's outermost `op` wire expands by the table's Shannon law — η, as a checked rewrite | no side holds the operation with anything downstream |
 //! | `diagram` | rewrites both sides by the whole table to fixpoint; they land on one diagram — isomorphic — or they do not | they do not — and the residual is both sides read back, narrowed to the difference |
 //!
-//! `diagram`, `exact`, `via` and `cases` end a strategy — the goal is closed or
+//! `diagram`, `exact` and `via` end a strategy — the goal is closed or
 //! split, and what follows a split is written *inside* it, since the
 //! subgoals are independent. A chain is nested cuts — `via { c1 } (right:
 //! via { c2 })` — and each link may take a different road. A strategy that
@@ -58,9 +58,9 @@
 //! the language underneath: queries and stated backward steps exist as
 //! data first, and grow a spelling here when a proof needs one.
 //!
-//! `inline` is still the step that *changes what is provable* — no closer
-//! opens a call on its own — and the tactics change what the *report*
-//! shows: a goal rewritten toward its other side fails closer to the
+//! `inline` and `cases` are the steps that *change what is provable* — no
+//! closer opens a call or spends η on its own — and the tactics change
+//! what the *report* shows: a goal rewritten toward its other side fails closer to the
 //! difference. `symm` moves which side the asymmetric steps read — a
 //! `via`'s halves and the tactic steps are named for their sides — so it
 //! is how a proof says "the interesting side is the other one" without
@@ -157,21 +157,18 @@ pub enum Step<V> {
         left: Option<Strategy<V>>,
         right: Option<Strategy<V>>,
     },
-    /// Split the goal on a boolean-valued wire: the canonically-first box
-    /// of the named operation on each side, its readers pinned `true` in
-    /// one subgoal and `false` in the other. This is **η, spent
-    /// deliberately** — the case split on an opaque answer no rewrite
-    /// window can make — and it is everything because the operation
-    /// [promises a bool](bytecode::Instruction::yields_bool). When both
-    /// sides hold such a wire the two must be the **same computation** of
-    /// the boundary, checked structurally, or the step refuses; a side
-    /// without one is left standing, which is sound on its own. An omitted
-    /// case gets the default, `diagram`.
-    Cases {
-        prim: crate::term::Prim,
-        if_true: Option<Strategy<V>>,
-        if_false: Option<Strategy<V>>,
-    },
+    /// Split each side on a boolean-valued wire — **η, as a checked
+    /// rewrite**: the outermost box of the named operation expands by the
+    /// Shannon law of the table, `body(w) = if w then body(true) else
+    /// body(false)`, one [`rules::apply`](crate::diagram2::rules::apply)-checked
+    /// step per side. The law itself carries the soundness — it refuses an
+    /// operation the set does not
+    /// [promise answers a bool](bytecode::Instruction::yields_bool) — so
+    /// this step is untrusted convenience: it only picks the wire and
+    /// fires. A manipulation, not a closer; the case reasoning happens
+    /// inside the graph, where the table dissolves the introduced branch
+    /// once its arms fold.
+    Cases { prim: crate::term::Prim },
 }
 
 /// What a step's payload reads as, once the library it names things against
@@ -330,17 +327,9 @@ fn parse_step(input: &str) -> Result<(Step<String>, &str), String> {
                 .strip_prefix('(')
                 .ok_or("`cases` expects `(operation)`")?;
             let (name, after) = after.split_once(')').ok_or("`cases(` never closes")?;
-            let prim = testing_prim(name.trim())?;
-            let (arms, after) = if after.trim_start().starts_with('(') {
-                parse_arms("cases", "true", "false", after.trim_start())?
-            } else {
-                ((None, None), after)
-            };
             Ok((
                 Step::Cases {
-                    prim,
-                    if_true: arms.0,
-                    if_false: arms.1,
+                    prim: testing_prim(name.trim())?,
                 },
                 after,
             ))
@@ -537,19 +526,12 @@ fn validate<V>(strategy: &Strategy<V>) -> Result<(), String> {
     for (i, step) in strategy.iter().enumerate() {
         let last = i + 1 == strategy.len();
         match step {
-            Step::Diagram | Step::Exact | Step::Via { .. } | Step::Cases { .. } if !last => {
+            Step::Diagram | Step::Exact | Step::Via { .. } if !last => {
                 return Err(format!("`{}` closes the goal; nothing can follow it", step));
             }
             Step::Via { left, right, .. } => {
                 for side in [left, right].into_iter().flatten() {
                     validate(side)?;
-                }
-            }
-            Step::Cases {
-                if_true, if_false, ..
-            } => {
-                for case in [if_true, if_false].into_iter().flatten() {
-                    validate(case)?;
                 }
             }
             // Swapping twice is the goal it started with, and a step that
@@ -710,41 +692,18 @@ mod tests {
     #[test]
     fn a_case_split_parses_and_polices_its_operation() {
         use crate::term::Prim;
-        let entries =
-            parse_hant("proof p = cases(equal)(true: inline diagram, false: cases(is_bool));")
-                .unwrap();
-        let [
-            Step::Cases {
-                prim,
-                if_true,
-                if_false,
-            },
-        ] = &entries[0].strategy[..]
-        else {
-            panic!("{:?}", entries[0].strategy);
-        };
-        assert_eq!(*prim, Prim::Equal);
-        assert_eq!(
-            if_true.as_deref(),
-            Some([Step::Inline(None), Step::Diagram].as_slice())
-        );
-        assert!(matches!(
-            if_false.as_deref(),
-            Some([Step::Cases {
-                prim: Prim::IsBool,
-                if_true: None,
-                if_false: None,
-            }])
-        ));
-
-        // Omitted cases get the default; a splitter closes.
-        let entries = parse_hant("proof p = inline cases(less);").unwrap();
+        // A manipulation now, not a closer: the split lands inside the
+        // graph, and the strategy carries on.
+        let entries = parse_hant("proof p = inline cases(equal) cases(is_bool) diagram;").unwrap();
         assert!(matches!(
             entries[0].strategy[..],
-            [Step::Inline(None), Step::Cases { .. }]
+            [
+                Step::Inline(None),
+                Step::Cases { prim: Prim::Equal },
+                Step::Cases { prim: Prim::IsBool },
+                Step::Diagram
+            ]
         ));
-        let err = parse_hant("proof p = cases(equal) diagram;").unwrap_err();
-        assert!(err.contains("nothing can follow"), "{}", err);
 
         // Only an operation the set promises answers a bool splits a case.
         let err = parse_hant("proof p = cases(add);").unwrap_err();

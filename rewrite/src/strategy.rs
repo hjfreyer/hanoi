@@ -18,9 +18,12 @@
 //! derivation's worth of checked steps and one final isomorphism, rather
 //! than one engine's word. A stuck `diagram` means the claim is false, or
 //! true only for reasons the table cannot yet say — and `cases` is the
-//! step for the largest of those: η, a case split on an opaque
-//! boolean-valued wire, spent deliberately the way `inline` spends a
-//! definition.
+//! step for the largest of those: η, spent deliberately the way `inline`
+//! spends a definition, and spent as a **rewrite** — the table's Shannon
+//! law, fired at a wire the step picks, checked like every other step.
+//! Nothing in this module touches a graph except through
+//! [`Derivation::push`](crate::diagram2::rules::Derivation::push): the
+//! whole file is untrusted convenience over the table.
 //!
 //! A stuck goal's residual is **narrowed** for the report — the two sides
 //! read back into terms, shared affixes stripped, the differing arm
@@ -29,7 +32,7 @@
 //! now stands: a failed run leaves its graph at the last step that landed,
 //! and showing that state is the point of the guarantee.
 
-use bytecode::{Library, Value};
+use bytecode::Library;
 
 use crate::diagram2::{self, read_back, tactic};
 use crate::goal::{Goal, Outcome, Proof, Residual};
@@ -119,67 +122,57 @@ impl<'l> Prover<'l> {
                 }))
             }
 
-            // Split the goal on a boolean-valued wire — η, spent
-            // deliberately, the way `inline` spends a definition. Each
-            // side pins its **outermost** box of the operation — the one
-            // with the least upstream, because pinning a downstream test
-            // severs what would have decided it and leaves a case too
-            // strong to prove. When both sides hold one, the two must be
-            // the same computation of the boundary, or fixing them
-            // together would claim more than a case split does.
-            Step::Cases {
-                prim,
-                if_true,
-                if_false,
-            } => {
-                if !(prim.to_instruction().yields_bool() && prim.arity().outputs == 1) {
+            // η, as a checked rewrite: each side's outermost box of the
+            // operation — the one with the least upstream, since expanding
+            // a downstream test buries it inside the copies of a later
+            // expansion — is split by the Shannon law: `body(w) = if w
+            // then body(true) else body(false)`. One proposal per side,
+            // each landed through `apply` like any rewrite; a side without
+            // the operation is left standing, and everything after the
+            // expansion is the table's business. A manipulation, not a
+            // closer: what it leaves is a goal.
+            Step::Cases { prim } => {
+                let mut goal = goal;
+                let mut steps = 0;
+                let picks: [fn(&mut Goal) -> &mut diagram2::Graph; 2] =
+                    [|g| &mut g.lhs, |g| &mut g.rhs];
+                for pick in picks {
+                    let side = pick(&mut goal);
+                    let Some(wire) = outermost(side, prim) else {
+                        continue;
+                    };
+                    let split =
+                        diagram2::rules::propose(side, &[diagram2::rules::Law::Shannon], wire)
+                            .into_iter()
+                            .next();
+                    let Some(split) = split else {
+                        continue;
+                    };
+                    let mut deriv = diagram2::rules::Derivation::default();
+                    if let Err(e) = deriv.push(side, split) {
+                        let why = format!("`cases` proposed a split the checker refused: {}", e);
+                        return Ok(Outcome::Stuck(gave_up(ctx, &goal, &why)));
+                    }
+                    steps += 1;
+                }
+                if steps == 0 {
                     return Ok(Outcome::Stuck(gave_up(
                         ctx,
                         &goal,
-                        "`cases` splits only on an operation the set promises answers a bool",
+                        "`cases` finds nothing to split on: no side holds the operation \
+                         with anything downstream of its answer",
                     )));
                 }
-                let (l, r) = (outermost(&goal.lhs, prim), outermost(&goal.rhs, prim));
-                if l.is_none() && r.is_none() {
-                    return Ok(Outcome::Stuck(gave_up(
-                        ctx,
-                        &goal,
-                        "`cases` finds no such operation on either side",
-                    )));
-                }
-                if let (Some(l), Some(r)) = (l, r)
-                    && !same_cone(&goal.lhs, l, &goal.rhs, r)
-                {
-                    return Ok(Outcome::Stuck(gave_up(
-                        ctx,
-                        &goal,
-                        "`cases` found the operation on both sides, and the two are not \
-                         the same computation of the boundary",
-                    )));
-                }
-                let mut halves = Vec::with_capacity(2);
-                for (value, strategy, name) in [
-                    (true, if_true, "in the true case"),
-                    (false, if_false, "in the false case"),
-                ] {
-                    let mut sub = goal.clone();
-                    if let Some(wire) = l {
-                        diagram2::pin(&mut sub.lhs, wire, Value::Bool(value));
+                Ok(match self.run(ctx, rest, goal)? {
+                    Outcome::Closed(sub) => Outcome::Closed(Proof::Cases {
+                        steps,
+                        sub: Box::new(sub),
+                    }),
+                    Outcome::Stuck(mut residual) => {
+                        residual.path.insert(0, "after the case split".to_string());
+                        Outcome::Stuck(residual)
                     }
-                    if let Some(wire) = r {
-                        diagram2::pin(&mut sub.rhs, wire, Value::Bool(value));
-                    }
-                    match self.side(ctx, name, strategy, sub)? {
-                        Ok(p) => halves.push(p),
-                        Err(residual) => return Ok(Outcome::Stuck(residual)),
-                    }
-                }
-                let false_sub = halves.pop().expect("two");
-                let true_sub = halves.pop().expect("two");
-                Ok(Outcome::Closed(Proof::Cases {
-                    true_sub,
-                    false_sub,
-                }))
+                })
             }
 
             // A goal whose sides are one graph closed above, before any
@@ -393,58 +386,6 @@ fn outermost(g: &diagram2::Graph, prim: &crate::term::Prim) -> Option<diagram2::
         .filter(|(_, k)| matches!(k, diagram2::NodeKind::Op(p) if p == prim))
         .map(|(id, _)| id)
         .min_by_key(|&id| (cone(id), id))
-}
-
-/// Whether two wires are the **same computation of the boundary**: the
-/// same kind of box at every step of both upstream cones, reading the same
-/// boundary inputs in the same places. Sharing does not count — two copies
-/// of one literal and one literal read twice compute alike — and neither
-/// do branch ids, since a fork and a select are pure functions of what
-/// they read. This is what lets a `cases` pin both sides' wires to one
-/// value and still be a case split rather than a wish.
-fn same_cone(
-    a: &diagram2::Graph,
-    x: diagram2::NodeId,
-    b: &diagram2::Graph,
-    y: diagram2::NodeId,
-) -> bool {
-    fn walk(
-        a: &diagram2::Graph,
-        x: diagram2::NodeId,
-        b: &diagram2::Graph,
-        y: diagram2::NodeId,
-        seen: &mut std::collections::HashSet<(diagram2::NodeId, diagram2::NodeId)>,
-    ) -> bool {
-        if !seen.insert((x, y)) {
-            return true;
-        }
-        let fits = match (a.kind(x), b.kind(y)) {
-            (
-                diagram2::NodeKind::Fork { arity: p, .. },
-                diagram2::NodeKind::Fork { arity: q, .. },
-            )
-            | (
-                diagram2::NodeKind::Select { arity: p, .. },
-                diagram2::NodeKind::Select { arity: q, .. },
-            ) => p == q,
-            (p, q) => p == q,
-        };
-        if !fits {
-            return false;
-        }
-        a.sources(x)
-            .iter()
-            .zip(b.sources(y))
-            .all(|(src, dst)| match (*src, *dst) {
-                (diagram2::Source::Input(i), diagram2::Source::Input(j)) => i == j,
-                (
-                    diagram2::Source::Port { node: n, port: p },
-                    diagram2::Source::Port { node: m, port: q },
-                ) => p == q && walk(a, n, b, m, seen),
-                _ => false,
-            })
-    }
-    walk(a, x, b, y, &mut std::collections::HashSet::new())
 }
 
 /// A residual for a strategy that failed before any engine ran: the goal as

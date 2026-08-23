@@ -161,7 +161,7 @@ use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::fmt;
 
-use bytecode::{Library, SentenceIndex, Value};
+use bytecode::{Library, SentenceIndex};
 
 use crate::term::{Arity, Context, Prim, Term, TermIndex, lower};
 
@@ -707,28 +707,6 @@ pub fn inline(
             return Ok(opened);
         }
     }
-}
-
-/// Every reader of `node`'s answer re-pointed at a literal — η, spent
-/// deliberately.
-///
-/// Not an equation: on its own this changes what a graph computes, which
-/// is why it lives beside [`build`] and [`inline`] as goal surgery rather
-/// than in the [`rules`] table. It is sound only as one half of a **case
-/// split** — the answer took this value or it took another — and the
-/// `cases` proof step is what owns that claim, by asking
-/// [`yields_bool`](bytecode::Instruction::yields_bool) and taking both
-/// halves. The box itself stays, unread until a `dead-node` collects it.
-pub fn pin(graph: &mut Graph, node: NodeId, value: Value) {
-    let src = Source::Port { node, port: 0 };
-    let readers: Vec<Sink> = graph.sinks(src).to_vec();
-    let lit = graph.add(NodeKind::Op(Prim::Push(value)), Vec::new())[0];
-    for sink in readers {
-        graph.unlink(src, sink);
-        graph.set_source(sink, lit);
-        graph.sinks_mut(lit).push(sink);
-    }
-    debug_assert!(graph.check().is_ok(), "pinning re-points whole links");
 }
 
 // ---- whether two graphs are one diagram ------------------------------------------
