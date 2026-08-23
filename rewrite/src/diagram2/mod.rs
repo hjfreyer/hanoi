@@ -111,26 +111,23 @@
 //! ends — a half-updated link is caught where it happens rather than
 //! surviving as a wrong answer.
 //!
-//! **Two things are deliberately absent**, and neither is an
-//! oversight:
+//! **Two boundaries are drawn on purpose**, and they moved when the old
+//! `diagram` engine retired and this module became the prover's:
 //!
-//! - **Equality.** Two graphs are never asked to be the same. `dedup`
-//!   settles a great many pairs into one shape, which is not the same thing
-//!   as deciding that two shapes mean one program: `push 1 ; push 2 ; add`
-//!   and `push 2 ; push 1 ; add` are three boxes each and nothing here
-//!   relates them. So this decides nothing, judges nothing, and is not
-//!   wired into [`crate::strategy`]; `diagram` remains the prover's engine.
-//!   Nor do the tests borrow its judgement: what they claim about *meaning*
-//!   they claim with the `meaning` oracle, which evaluates a program with **every
-//!   operation left opaque** and compares the graphs of applications that
-//!   come out. `add` on two wires stays `add(x, y)` and never becomes `7`,
-//!   so that oracle decides nothing either — it holds the wiring to account
-//!   and stops there.
-//! - **The value folds, in [`rules::structural`].** No literal window runs
-//!   and no commutative operand sorts, so `push 1 ; push 2 ; add` keeps all
-//!   three of its boxes however hard the wiring laws are spent. Layer 3 of
-//!   the algebra sheet is [`rules::Rule::NotNot`] and nothing else, and that
-//!   row is in the table but not in that list.
+//! - **Equality is one question, asked at the end.** [`isomorphic`] says
+//!   whether two graphs are the same diagram, and [`crate::strategy`]'s
+//!   closer asks it once, after driving both sides through the table.
+//!   Nothing here saturates toward a canonical form by decree: `push 1 ;
+//!   push 2 ; add` and `push 2 ; push 1 ; add` are related exactly when a
+//!   strategy spends the laws that relate them. The tests still hold the
+//!   *wiring* laws to the `meaning` oracle, which evaluates a program with
+//!   **every operation left opaque** — `add` on two wires stays `add(x,
+//!   y)` — so the oracle judges the wiring and nothing else.
+//! - **The value folds live in [`rules::folding`], not in
+//!   [`rules::structural`].** A literal window runs on the machine itself
+//!   (`rules::Rule::Fold` and its kin), but only when a strategy fires it:
+//!   the structural list still spends no value, so a graph shrinks by
+//!   wiring alone until whoever is proving something asks for more.
 //!
 //!   Layer 2 **is** in the table — [`rules::branching`] folds a literal
 //!   condition into its arm, deletes a branch whose arms answer alike,
@@ -164,7 +161,7 @@ use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::fmt;
 
-use bytecode::{Library, SentenceIndex};
+use bytecode::{Library, SentenceIndex, Value};
 
 use crate::term::{Arity, Context, Prim, Term, TermIndex, lower};
 
@@ -710,6 +707,28 @@ pub fn inline(
             return Ok(opened);
         }
     }
+}
+
+/// Every reader of `node`'s answer re-pointed at a literal — η, spent
+/// deliberately.
+///
+/// Not an equation: on its own this changes what a graph computes, which
+/// is why it lives beside [`build`] and [`inline`] as goal surgery rather
+/// than in the [`rules`] table. It is sound only as one half of a **case
+/// split** — the answer took this value or it took another — and the
+/// `cases` proof step is what owns that claim, by asking
+/// [`yields_bool`](bytecode::Instruction::yields_bool) and taking both
+/// halves. The box itself stays, unread until a `dead-node` collects it.
+pub fn pin(graph: &mut Graph, node: NodeId, value: Value) {
+    let src = Source::Port { node, port: 0 };
+    let readers: Vec<Sink> = graph.sinks(src).to_vec();
+    let lit = graph.add(NodeKind::Op(Prim::Push(value)), Vec::new())[0];
+    for sink in readers {
+        graph.unlink(src, sink);
+        graph.set_source(sink, lit);
+        graph.sinks_mut(lit).push(sink);
+    }
+    debug_assert!(graph.check().is_ok(), "pinning re-points whole links");
 }
 
 // ---- whether two graphs are one diagram ------------------------------------------

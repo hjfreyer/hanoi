@@ -637,14 +637,22 @@ embedded in `.hant` strategies as `lhs(…)`, `rhs(…)` and `both(…)`, and
 is whole-graph **isomorphism** (`diagram2::isomorphic`, a pinned-boundary
 bijection search, verified link by link before it answers yes). The
 surface (in [rewrite/src/hant.rs](../rewrite/src/hant.rs)) spells
-`saturate`, `saturate(law, …)`, `branches`, `fire(law, …)`, `repeat(…)`
-and `try(…)`; queries and stated steps remain data-only until a proof
-needs a spelling for them. `peel` and `descend` retired with the term
-goal.
+`saturate`, `saturate(law, …)`, `branches`, `decide`, `fire(law, …)`,
+`repeat(…)` and `try(…)`; queries and stated steps remain data-only until
+a proof needs a spelling for them. `peel` and `descend` retired with the
+term goal.
+
+And the old engine has since retired outright: the table grew the value
+layer (`fold` running the machine's own window, `tested-bool`, `retuple`,
+`select-const`) and the last-resort `view-value`, `tactic::decide` drives
+the whole of it, the `diagram` proof step closes by that drive plus
+isomorphism, and η became the `cases` proof step — a goal split on a
+bool-promising wire, both halves pinned. `diagram.rs` is deleted;
+[docs/proving.md](proving.md) tells that story.
 
 Next, in order of want: a `Region::Arm`; surface spellings for queries
 and stated (backward) steps; serialization for `Tactic` beyond the
-surface subset.
+surface subset; a stored, re-checkable derivation per closed identity.
 
 ## Open questions
 

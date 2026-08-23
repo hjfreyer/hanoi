@@ -1,12 +1,15 @@
 # Proving identities
 
-`bin/prove` discharges the claims `identity A = B;` states. It is built on a
-**decision procedure** rather than a search: both sides of a goal lower into
-the string-diagram engine of `rewrite/src/diagram.rs`, normalize into one
-arena, and either they are one diagram or they are not. There is no rule
-set to steer and no budget to run out of; what a written proof directs is
-the handful of moves the engine deliberately never makes on its own —
-opening a call, above all.
+`bin/prove` discharges the claims `identity A = B;` states. It is built on
+**checked rewriting**: both sides of a goal build into the literal graphs
+of `rewrite/src/diagram2`, a driver spends the law table on each until
+nothing more fires, and either they land on one diagram — isomorphic — or
+they do not. Every step on the way is an instance of a named law, verified
+by `rules::apply` before it lands, so a close is a derivation's worth of
+checked rewrites and one final isomorphism rather than any engine's word.
+What a written proof directs is the handful of moves the driver
+deliberately never makes on its own — opening a call, and splitting a case
+on an opaque answer, above all.
 
 ```bash
 cargo run --bin prove -- tests
@@ -17,7 +20,7 @@ cargo run --bin prove -- tests --filter two_spellings
 Proving 14 identities...
 identity identities::testing_a_test ... ok (the two sides are one diagram)
 identity identities::testing_a_test_by_name ... ok (inline; the two sides are one diagram)
-identity types_test::number_does_pre_and_post_is_constant ... ok (inline; the two sides are one diagram)
+identity types_test::number_does_pre_and_post_is_constant ... ok (inline; both: 62 rewrite(s); cases (true: …; false: …))
 ...
 identity result: ok. 14 passed; 0 failed; 0 problem(s); 0 filtered out
 ```
@@ -43,7 +46,7 @@ Four layers, in `rewrite/src/`:
 |---|---|---|
 | proofs | `hant.rs`, `corpus.rs`, `parse.rs` | the strategy language a proof is written in, the loader that attaches each `.hant` entry to the identity it names, and the reader that turns a waypoint's text into a term |
 | goals | `goal.rs`, `strategy.rs` | a goal is two [graphs](../rewrite/src/diagram2/mod.rs), lowered and padded to one arity before they build; the interpreter runs a strategy over one |
-| engine | `diagram.rs` | the string-diagram engine: programs as wiring in an interned arena, canonicalized into ordered, shared case trees — the decision procedure the algebra's completeness theorem promises |
+| engine | `diagram2/` | the literal graph, the law table (`rules.rs`, every law a pair of graphs and every rewrite checked), the tactic language that drives it (`tactic.rs`, see [docs/tactics.md](tactics.md)), and the isomorphism that says two graphs are one diagram |
 
 ### Goals, and where the net-change asymmetry lives
 
@@ -56,35 +59,32 @@ width.
 
 ### The engine
 
-A program in `diagram.rs` is wiring, not a term: operations are boxes with
-ordered ports, values are wires in an interned arena, and the whole
-structural layer of [docs/algebra.md](algebra.md) is representation rather
-than rules — `id` is a wire, `;` and `*` are not stored, `swap` is a
-crossing the data structure does not remember, `copy` is a wire read twice,
-`drop` a wire nobody reads. Interning makes `copy-nat` automatic and
-reachability makes `drop-nat` automatic, so for branch-free programs the
-wiring *is* the free cartesian category's normal form, and equality is
-complete for the structural layer.
+A program in `diagram2` is a **literal** graph: one box per term leaf,
+`id`, `swap`, `copy` and `drop` included, and a branch as a `fork`/`select`
+pair with its arms flattened between them. Nothing is simplified by
+representation; everything is simplified by *rewriting*, against a table
+(`diagram2/rules.rs`) whose every law is a pair of graphs `sides` builds
+from a payload and whose every application `apply` verifies port by port.
+The layers of [docs/algebra.md](algebra.md) are all rows: the structural
+laws (`id-elim`, `swap-elim`, `copy-elim`, `dead-node`, `dedup`), the
+branch layer (`select-literal` and its kin, the specializing rules,
+`view-value` held to last), and the value layer — a literal window runs on
+the real `vm` (one `run_window`, no second semantics, `fold`), a promised
+bool tests true (`tested-bool`), retupling is the coercion (`retuple`).
 
-Branches take the decision-diagram discipline: the canonical form is an
-**ordered, shared case tree** — conditions in one global order along every
-path, so programs that test independent conditions in different orders
-reach one spelling; equal subtrees are one interned node, so reconverging
-check chains stay small; the arm that tested a value `equal` to a literal
-holds the literal. Every law of the algebra sheet with a bounded, confluent
-reading is folded in as the diagram builds: literal windows run on the real
-`vm` (one `run_window`, no second semantics), a literal condition takes its
-arm, a retested condition is decided, commutative operands sort, the tuple
-laws and coercion idempotences apply, a `yields_bool` answer passes its
-test. What remains outside is genuinely semantic: η — inventing a case
-split on an opaque value — is the pinned boundary
-(`eta_stays_beyond_the_diagram`), and claims that need it stay open until
-there is a step that spends it.
+The `diagram` closer drives the whole table to fixpoint on each side
+(`tactic::decide`) and asks one final question: are the two graphs
+**isomorphic** — the same boxes wired alike, dead slots and id numbers not
+counting? An earlier engine (`diagram.rs`, an interned value-DAG under
+ordered case trees) decided the same fragment by canonicalization; it is
+gone, and what it decided by construction the table now spends as named,
+checked, replayable steps.
 
-Two things the engine deliberately never does: it never opens a
+Two things the driver deliberately never does: it never opens a
 [call](../rewrite/src/term.rs) (`inline` is a proof's decision), and it
-never invents a case split. Everything else it decides outright, in one
-pass, with no budget.
+never invents a case split (`cases` is a proof's decision — η, spent
+deliberately on a wire the instruction set promises is a bool). Everything
+else it decides by running the table dry.
 
 ### The strategy language
 
@@ -148,23 +148,34 @@ and a graph goal has no compose spine to strip and no branch node to fork;
 the residual's own narrowing still shrinks what a report prints, and the
 branch layer's laws are how arms get reasoned about now.
 
-**A case split is not a chain of cuts anymore.** The corpus's
+**A case split is two `cases`, and it says why.** The corpus's
 path-condition claim, `types_test::number_does_pre_and_post_is_constant`,
-used to be a page of hand-derived waypoints — the case tree written out
-state by state, because its then arm is reached only when `is_tag` held,
-and that fact is a disjunction no rewrite window could spend. The diagram
-engine builds the case tree itself: branches become ordered decisions, the
-arm that tested equal to a literal holds the literal, each leaf folds on
-the machine. The whole proof is now `inline diagram` — the one thing left
-to say is which definitions to spend.
+was once a page of hand-derived waypoints, then one `inline diagram` under
+the old canonicalizing engine. It is now what the claim actually is: a
+case analysis, written out —
 
-**Trust.** The engine produces no derivation: `diagram` closing a goal is
-this one module's word, held to the machine by `run_window` (folding runs
-the real `vm`) and to the corpus by tests. That is a smaller trusted base than the previous stack — a rule set,
-a saturation engine, and a separate normalizer, each of which could
-disagree with the others — but it is one judge, and the "replayable
-derivation" milestone below is what turns its verdicts into checkable
-artifacts.
+```text
+proof types_test::number_does_pre_and_post_is_constant =
+    inline both(decide)
+    cases(equal)(
+        true:  both(decide) cases(equal),
+        false: both(decide) cases(equal));
+```
+
+— open the definitions, drive the table (`view-value` and `dedup` are what
+identify the retests of one condition as one wire), split on `equal(x,
+t1)`, split on `equal(x, t2)`, and every leaf folds shut. The disjunction
+`is_tag` carries is spent exactly where the proof says η is spent, and
+nowhere silently.
+
+**Trust.** `sides` and `apply` are the whole of it — plus the machine
+itself, where a law is *about* what an operation computes (`fold` runs
+`run_window`, the real `vm`, so there is no second semantics to drift).
+Search, drivers, tactics, queries and the `cases` bookkeeping are all
+untrusted: every step they produce goes through `apply`, a wrong one is
+refused, and a close is the isomorphism check on what the checked steps
+left. What remains one module's word is `isomorphic` itself, and it is
+held to answering `true` only after verifying its bijection link by link.
 
 ## The `.hant` file
 
@@ -183,18 +194,20 @@ a call is named (`call types_test::number`, or any unambiguous tail of that),
 which is also how a residual prints one when the report has the library to
 hand; `Display` alone can only say `call #3`.
 
-The current corpus needs two entries, and they are the same line: `inline
-diagram` for `identities::testing_a_test_by_name` (its right side is
-written as a call) and for
-`types_test::number_does_pre_and_post_is_constant` (the contract claim).
-Every other identity closes with no entry at all.
+The current corpus needs three entries: `inline diagram` for
+`identities::testing_a_test_by_name` (its right side is written as a
+call), `both(decide) cases(equal)` for
+`identities::specializing_a_tested_value` (an arm recomputing the very
+test its branch decided — a case split, once the driver has identified the
+two computations as one wire), and the nested `cases` proof above for the
+contract claim. Every other identity closes with no entry at all.
 
 ## The failure output is the point
 
 A stuck goal prints its **residual**: what each side became — for a failed
-`diagram`, the two sides reified from their normal forms back into the term
-language — narrowed to where the two differ (a `the difference is │ in the
-then arm` line walks past shared context), plus why the step gave up. A
+`diagram`, the two rewritten graphs read back into the term language —
+narrowed to where the two differ (a `the difference is │ …` line strips
+shared context), plus why the step gave up. A
 false claim buried in one branch arm behind a shared prefix prints as the
 two leaves that disagree, not as two whole programs. That output is the
 deliverable of a failed run: the reified normal form is written in the same
@@ -209,26 +222,24 @@ tree it came from — the layout only chooses where the newlines go.
 
 ## What is not here yet
 
-- **Rewriting on diagrams** landed: goals are graphs, the tactic steps
-  are the moves — each rewrite an instance of a named law of
-  [rewrite/src/diagram2/rules.rs](../rewrite/src/diagram2/rules.rs),
-  checked by `apply`, run into a replayable `Derivation` — and a goal
-  rewritten until its sides are isomorphic is closed. See
-  [docs/tactics.md](tactics.md). What remains of the old bullet is
-  **reach**: the law table covers the structural and branch layers, so
-  claims the `diagram` closer decides by *computing* (the value folds)
-  still have no tactic spelling, and the two roads meet by using both.
-- **A case split as a step.** A `cases` step that splits a goal on a
-  boolean-valued wire, carrying the condition into each half — η spent
-  deliberately, the way `inline` spends a definition. The branch layer's
-  laws are the pieces it would be assembled from.
-- **A derivation for the `diagram` closer.** A tactic close replays; a
-  `diagram` close is still the engine's verdict, nothing independent
-  re-checks it. The milestone stands: a normalizer that emits its steps —
-  every fold and reorder an instance of a named law — so that finding and
-  checking become different jobs again.
-- **Reify for the giants.** A diagram shares branch subtrees and a term
-  cannot, so a handful of state-machine test sentences tree-expand past any
-  reasonable term. A reify that emits shared subtrees as scratch
-  definitions would close that gap if a residual ever needs one of them
-  printed.
+- **The verdict is checked; the search is not minimal.** Every rewrite a
+  close spends goes through `apply`, and a stuck goal's derivation-so-far
+  is real — but the `diagram` closer discards its derivations after
+  driving, and nothing yet *stores* a close as the replayable artifact it
+  momentarily was. Keeping it — a proof object per identity, re-checkable
+  without the driver — is the natural next step now that every step is
+  checkable.
+- **Reach.** The value layer folds literal windows, promised bools and the
+  tuple round trip; the old engine also sorted commutative operands and
+  collapsed coercion idempotences, and no law spells those yet. A claim
+  that needs one fails honestly, and the row is a `sides` construction
+  away.
+- **`cases` names an operation, not a wire.** The step pins the outermost
+  box of the named prim, which is right until a goal holds two equally
+  outermost tests of the same operation; the query language of
+  [docs/tactics.md](tactics.md) is the vocabulary a sharper `cases` would
+  take.
+- **Reify for the giants.** A read-back shares nothing a term cannot, so a
+  handful of state-machine test sentences would print past any reasonable
+  size if a residual ever needed one; scratch definitions for shared
+  subgraphs would close that gap.

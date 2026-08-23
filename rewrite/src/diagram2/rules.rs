@@ -127,7 +127,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use super::{BranchId, Graph, NodeId, NodeKind, Sink, Source};
-use bytecode::Value;
+use bytecode::{Instruction, Library, Value};
 
 use crate::term::{Arity, Prim};
 
@@ -149,8 +149,15 @@ pub enum Law {
     SelectView,
     SelectSame,
     SelectLiteral,
+    SelectConst,
     SpecializeEqual,
     SpecializeBool,
+    SpecializeChoice,
+    ViewValue,
+    // The value layer: what an operation computes, measured on the machine.
+    Fold,
+    TestedBool,
+    Retuple,
 }
 
 /// Which operand of a two-input box a payload means.
@@ -252,6 +259,21 @@ pub enum Rule {
         then_arm: Graph,
         else_arm: Graph,
     },
+    /// A literal condition on a select **no fork pairs with**: the select is
+    /// the blocks the literal chooses. [`Rule::SelectLiteral`] holds a whole
+    /// branch because a window must never leave one end standing without
+    /// the other; a select whose branch has no fork end has nothing to
+    /// strand, and needs no arms carried — its blocks come from outside.
+    ///
+    /// `lit_blocks` names the block positions (over `2n`) that read the
+    /// **literal itself** — the shape a `dedup` makes when the condition
+    /// and an answer are one pushed value — because a boundary input may
+    /// not stand for a port inside the window.
+    SelectConst {
+        value: Value,
+        arity: usize,
+        lit_blocks: Vec<usize>,
+    },
     /// A value that tested `equal` to a literal **is** that literal, in the
     /// block the test chose. `equal` answers `Bool(a == b)`, so a truthy
     /// answer is `a == b` and nothing weaker.
@@ -282,6 +304,70 @@ pub enum Rule {
         view: usize,
         at: usize,
     },
+    /// A branch **inside an arm** whose condition is a view of the very
+    /// value the outer branch tested is already decided: its then blocks in
+    /// the outer then arm, its else blocks in the outer else arm — the same
+    /// value tested twice answers the same, and `false` is the one falsy
+    /// value.
+    ///
+    /// [`Rule::SpecializeBool`] with the inner `select` where the `as_bool`
+    /// was, and the same window for the same reason: the outer fork names
+    /// the condition, the outer select holds the discard that makes
+    /// reasoning from "the condition held" sound, and the inner select
+    /// stays — only the outer blocks that read its answers come to read the
+    /// blocks it would choose.
+    ///
+    /// `view` is the outer fork output the inner select's condition reads
+    /// (over `2f`); `inner` the inner select's arity; `moves` pairs an
+    /// inner output with the outer block that reads it (over `m` and `2n`),
+    /// every pair on the side `view` says.
+    SpecializeChoice {
+        fork: usize,
+        arity: usize,
+        inner: usize,
+        view: usize,
+        moves: Vec<(usize, usize)>,
+    },
+    /// A fork's view of a value **is** the value: a view is a copy, so
+    /// everything that reads view `view` may read what the fork was handed
+    /// at that slot instead. Plain wiring — the mirror of `copy-elim`,
+    /// through the one copy `copy-elim` leaves alone.
+    ///
+    /// What it spends is not soundness but *information*: which port is an
+    /// arm's own view of a value is the fact the fork exists to record,
+    /// and the specializing laws anchor on it. Fired early it takes their
+    /// anchor with it, so a driver holds it back until nothing else fires
+    /// — a strategy's last resort, and stated as a law precisely so a
+    /// strategy can hold it.
+    ViewValue { fork: usize, view: usize },
+
+    // ---- the value layer ----
+    /// An operation on literal operands is the answer the machine gives:
+    /// the fold, run on the machine itself so there is no second semantics
+    /// to drift. [`sides`] executes the window and **builds** the answer
+    /// side from what came back — a payload does not carry an answer it
+    /// could lie about.
+    ///
+    /// `operands` are the distinct literals in the window and `reads[i]`
+    /// names the one the operation's input `i` reads — said the way
+    /// [`Rule::ForkDedup`] says its ports, so one literal read twice
+    /// (`equal` after a `dedup`) is one box in the pattern.
+    Fold {
+        prim: Prim,
+        operands: Vec<Value>,
+        reads: Vec<usize>,
+    },
+    /// `is_bool` of an answer the instruction set promises is a bool is
+    /// `true`, and the answer itself is untouched: `op ; is_bool` on one
+    /// wire is `op` and `push true` side by side. The promise is
+    /// [`yields_bool`](bytecode::Instruction::yields_bool), measured by
+    /// `vm`; the answer stays exported, so the window does not care who
+    /// else reads it.
+    TestedBool { kind: NodeKind },
+    /// Rebuilding what `untuple n` took apart is the coercion, not the
+    /// identity — the slots may have been junk-filled: `untuple n ; tuple
+    /// n = as_tuple n`, whole or not at all.
+    Retuple { n: usize },
 }
 
 impl Rule {
@@ -298,8 +384,14 @@ impl Rule {
             Rule::SelectView { .. } => Law::SelectView,
             Rule::SelectSame { .. } => Law::SelectSame,
             Rule::SelectLiteral { .. } => Law::SelectLiteral,
+            Rule::SelectConst { .. } => Law::SelectConst,
             Rule::SpecializeEqual { .. } => Law::SpecializeEqual,
             Rule::SpecializeBool { .. } => Law::SpecializeBool,
+            Rule::SpecializeChoice { .. } => Law::SpecializeChoice,
+            Rule::ViewValue { .. } => Law::ViewValue,
+            Rule::Fold { .. } => Law::Fold,
+            Rule::TestedBool { .. } => Law::TestedBool,
+            Rule::Retuple { .. } => Law::Retuple,
         }
     }
 }
@@ -342,12 +434,21 @@ pub fn structural() -> Vec<Law> {
 pub fn branching() -> Vec<Law> {
     vec![
         Law::SelectLiteral,
+        Law::SelectConst,
         Law::SelectView,
         Law::SelectSame,
         Law::ForkDedup,
         Law::SpecializeEqual,
         Law::SpecializeBool,
+        Law::SpecializeChoice,
     ]
+}
+
+/// The value layer: what an operation computes, measured on the machine.
+/// [`Law::NotNot`] is its elder — stated before the layer had a name — and
+/// is listed with it.
+pub fn folding() -> Vec<Law> {
+    vec![Law::Fold, Law::TestedBool, Law::Retuple, Law::NotNot]
 }
 
 /// Whether a law can be judged by reading every operation as opaque.
@@ -359,7 +460,15 @@ pub fn branching() -> Vec<Law> {
 pub fn is_wiring(law: Law) -> bool {
     !matches!(
         law,
-        Law::NotNot | Law::SelectLiteral | Law::SpecializeEqual | Law::SpecializeBool
+        Law::NotNot
+            | Law::SelectLiteral
+            | Law::SelectConst
+            | Law::SpecializeEqual
+            | Law::SpecializeBool
+            | Law::SpecializeChoice
+            | Law::Fold
+            | Law::TestedBool
+            | Law::Retuple
     )
 }
 
@@ -824,6 +933,52 @@ pub fn sides(rule: &Rule) -> Result<(Graph, Graph), Error> {
 
             (whole, kept)
         }
+        Rule::SelectConst {
+            value,
+            arity,
+            lit_blocks,
+        } => {
+            let n = *arity;
+            let mut named = lit_blocks.clone();
+            named.sort_unstable();
+            named.dedup();
+            if n == 0 || named.len() != lit_blocks.len() || named.iter().any(|&b| b >= 2 * n) {
+                return Err(ill(Ill::Refused));
+            }
+            let width = 2 * n - lit_blocks.len();
+            let outside: Vec<usize> = (0..2 * n).filter(|b| !named.contains(b)).collect();
+            let source = |lit: Source, b: usize| {
+                if named.contains(&b) {
+                    lit
+                } else {
+                    let idx = outside.iter().position(|&o| o == b).expect("one or other");
+                    Source::Input(idx)
+                }
+            };
+
+            let mut both = Graph::empty(width);
+            let lit = both.add(NodeKind::Op(Prim::Push(value.clone())), Vec::new())[0];
+            let branch = both.next_branch();
+            let mut takes = vec![lit];
+            takes.extend((0..2 * n).map(|b| source(lit, b)));
+            let mut out = both.add(NodeKind::Select { arity: n, branch }, takes);
+            out.push(lit);
+            both.close(out);
+
+            let taken = value.truthy();
+            let mut chosen = Graph::empty(width);
+            let lit = chosen.add(NodeKind::Op(Prim::Push(value.clone())), Vec::new())[0];
+            // The branch id is skipped, not reused: the equation's two
+            // sides share a namespace, and this side has no select.
+            chosen.next_branch();
+            let mut out: Vec<Source> = (0..n)
+                .map(|j| source(lit, if taken { j } else { n + j }))
+                .collect();
+            out.push(lit);
+            chosen.close(out);
+
+            (both, chosen)
+        }
         Rule::SpecializeEqual {
             arity,
             at,
@@ -919,6 +1074,203 @@ pub fn sides(rule: &Rule) -> Result<(Graph, Graph), Error> {
             };
             (build(false), build(true))
         }
+        Rule::SpecializeChoice {
+            fork,
+            arity,
+            inner,
+            view,
+            moves,
+        } => {
+            let (f, n, m, v) = (*fork, *arity, *inner, *view);
+            let then = v < f;
+            let mut taken: Vec<usize> = moves.iter().map(|&(_, b)| b).collect();
+            taken.sort_unstable();
+            taken.dedup();
+            if f == 0
+                || m == 0
+                || moves.is_empty()
+                || taken.len() != moves.len()
+                || v >= 2 * f
+                || moves
+                    .iter()
+                    .any(|&(j, b)| j >= m || b >= 2 * n || (b < n) != then)
+            {
+                return Err(ill(Ill::Refused));
+            }
+            // Boundary input 0 is the condition, and it is *also* the
+            // fork's stack slot `v % f` — the same side condition, said the
+            // same way. Then the inner select's blocks, then the outer
+            // blocks no move covers.
+            let slot = v % f;
+            let stack = |i: usize| {
+                if i == slot {
+                    Source::Input(0)
+                } else {
+                    Source::Input(1 + if i < slot { i } else { i - 1 })
+                }
+            };
+            let iblock = |k: usize| Source::Input(f + k);
+            let outside: Vec<usize> = (0..2 * n).filter(|b| !taken.contains(b)).collect();
+            let width = f + 2 * m + 2 * n - moves.len();
+
+            let build = |folded: bool| {
+                let mut g = Graph::empty(width);
+                let branch = g.next_branch();
+                let mut handed = vec![Source::Input(0)];
+                handed.extend((0..f).map(stack));
+                let ports = g.add(NodeKind::Fork { arity: f, branch }, handed);
+                let within = g.next_branch();
+                let mut takes = vec![ports[v]];
+                takes.extend((0..2 * m).map(iblock));
+                let chosen = g.add(
+                    NodeKind::Select {
+                        arity: m,
+                        branch: within,
+                    },
+                    takes,
+                );
+                let mut takes = vec![Source::Input(0)];
+                takes.extend((0..2 * n).map(|b| {
+                    match moves.iter().find(|&&(_, at)| at == b) {
+                        // The block the move covers: the inner select's
+                        // answer, or — folded — the block that answer is,
+                        // read straight.
+                        Some(&(j, _)) if folded => iblock(if then { j } else { m + j }),
+                        Some(&(j, _)) => chosen[j],
+                        None => {
+                            let idx = outside.iter().position(|&o| o == b).expect("one or other");
+                            Source::Input(f + 2 * m + idx)
+                        }
+                    }
+                }));
+                let answers = g.add(NodeKind::Select { arity: n, branch }, takes);
+                let mut out = ports;
+                // The inner select stays, and stays readable from outside.
+                out.extend(chosen);
+                out.extend(answers);
+                g.close(out);
+                g
+            };
+            (build(false), build(true))
+        }
+        Rule::ViewValue { fork, view } => {
+            let (f, v) = (*fork, *view);
+            if f == 0 || v >= 2 * f {
+                return Err(ill(Ill::Refused));
+            }
+            let build = |through: bool| {
+                let mut g = Graph::empty(f + 1);
+                let branch = g.next_branch();
+                let handed: Vec<Source> = (0..=f).map(Source::Input).collect();
+                let mut ports = g.add(NodeKind::Fork { arity: f, branch }, handed);
+                if through {
+                    // The view's readers read the slot the fork was handed.
+                    ports[v] = Source::Input(1 + v % f);
+                }
+                g.close(ports);
+                g
+            };
+            (build(false), build(true))
+        }
+
+        // ---- the value layer ----
+        Rule::Fold {
+            prim,
+            operands,
+            reads,
+        } => {
+            let arity = prim.arity();
+            if matches!(prim, Prim::Push(_) | Prim::Swap)
+                || arity.inputs == 0
+                || reads.len() != arity.inputs
+                || operands.is_empty()
+                || reads.iter().any(|&r| r >= operands.len())
+                || !(0..operands.len()).all(|i| reads.contains(&i))
+            {
+                return Err(ill(Ill::Refused));
+            }
+            // The machine is the fold: the window runs on `vm` itself, so
+            // the answer side is *built from the answer* rather than
+            // carried by a payload that could lie about it.
+            let window: Vec<Value> = reads.iter().map(|&r| operands[r].clone()).collect();
+            let Some(answers) = run_window(&window, &prim.to_instruction()) else {
+                return Err(ill(Ill::Refused));
+            };
+            if answers.len() != arity.outputs {
+                return Err(ill(Ill::Refused));
+            }
+
+            let mut long = Graph::empty(0);
+            let held: Vec<Source> = operands
+                .iter()
+                .map(|v| long.add(NodeKind::Op(Prim::Push(v.clone())), Vec::new())[0])
+                .collect();
+            let took = reads.iter().map(|&r| held[r]).collect();
+            let out = long.add(NodeKind::Op(prim.clone()), took);
+            let mut exports = held;
+            exports.extend(out);
+            long.close(exports);
+
+            let mut short = Graph::empty(0);
+            let mut exports: Vec<Source> = operands
+                .iter()
+                .map(|v| short.add(NodeKind::Op(Prim::Push(v.clone())), Vec::new())[0])
+                .collect();
+            exports.extend(
+                answers
+                    .into_iter()
+                    .map(|v| short.add(NodeKind::Op(Prim::Push(v)), Vec::new())[0]),
+            );
+            short.close(exports);
+
+            (long, short)
+        }
+        Rule::TestedBool { kind } => {
+            let NodeKind::Op(prim) = kind else {
+                return Err(ill(Ill::Refused));
+            };
+            let arity = prim.arity();
+            if arity.outputs != 1 || !prim.to_instruction().yields_bool() {
+                return Err(ill(Ill::Refused));
+            }
+            let ins: Vec<Source> = (0..arity.inputs).map(Source::Input).collect();
+
+            let mut tested = Graph::empty(arity.inputs);
+            let answer = tested.add(kind.clone(), ins.clone());
+            let truth = tested.add(NodeKind::Op(Prim::IsBool), answer.clone());
+            // The answer stays exported, so the window does not care who
+            // else reads it — `dead-node` collects it where nobody does.
+            let mut out = answer;
+            out.extend(truth);
+            tested.close(out);
+
+            let mut known = Graph::empty(arity.inputs);
+            let answer = known.add(kind.clone(), ins);
+            let truth = known.add(NodeKind::Op(Prim::Push(Value::Bool(true))), Vec::new());
+            let mut out = answer;
+            out.extend(truth);
+            known.close(out);
+
+            (tested, known)
+        }
+        Rule::Retuple { n } => {
+            let n = *n;
+            if n == 0 {
+                return Err(ill(Ill::Refused));
+            }
+            let mut roundabout = Graph::empty(1);
+            let parts = roundabout.add(NodeKind::Op(Prim::Untuple(n)), vec![Source::Input(0)]);
+            // The parts are not exported: rebuilding is the coercion only
+            // when the window holds the whole round trip.
+            let rebuilt = roundabout.add(NodeKind::Op(Prim::Tuple(n)), parts);
+            roundabout.close(rebuilt);
+
+            let mut coerced = Graph::empty(1);
+            let out = coerced.add(NodeKind::Op(Prim::AsTuple(n)), vec![Source::Input(0)]);
+            coerced.close(out);
+
+            (roundabout, coerced)
+        }
     };
     if a.arity() != b.arity() {
         return Err(ill(Ill::Interface(a.arity(), b.arity())));
@@ -999,6 +1351,27 @@ fn lift(kind: &NodeKind, base: u32) -> NodeKind {
         },
         other => other.clone(),
     }
+}
+
+/// Runs one instruction on the operands it wants, on the machine itself.
+///
+/// The fold owes the interpreter exact agreement, junk included, so there
+/// is no second implementation to drift: a scratch library holding
+/// `push v̄ ; inst` is executed and the stack it leaves is the answer. The
+/// machine joins [`sides`] on the trusted side here — which is no new
+/// trust: what an operation computes was always the machine's to say.
+fn run_window(operands: &[Value], inst: &Instruction) -> Option<Vec<Value>> {
+    let mut library = Library::new();
+    let mut sentence: Vec<Instruction> = operands
+        .iter()
+        .map(|v| Instruction::Push(v.clone()))
+        .collect();
+    sentence.push(inst.clone());
+    library.sentences.push(sentence);
+    let start = library.sentences.first_key().expect("one sentence");
+    let mut vm = vm::VM::new(library);
+    vm.execute(start).ok()?;
+    Some(vm.stack().to_vec())
 }
 
 /// A branch id off a host graph means nothing in a rule, so a rule's side
@@ -2034,6 +2407,35 @@ fn read_off(graph: &Graph, law: Law, id: NodeId) -> Vec<(Rule, NodeId)> {
             )]
         }
 
+        // A literal condition on a select no fork pairs with.
+        (
+            Law::SelectConst,
+            NodeKind::Select {
+                arity: n,
+                branch: mine,
+            },
+        ) => {
+            let n = *n;
+            let Some((lit, NodeKind::Op(Prim::Push(value)))) = made_by(takes[0]) else {
+                return Vec::new();
+            };
+            let paired = graph
+                .live()
+                .any(|(_, kind)| matches!(kind, NodeKind::Fork { branch, .. } if branch == mine));
+            if paired {
+                return Vec::new();
+            }
+            let lit_blocks: Vec<usize> = (0..2 * n).filter(|&b| takes[1 + b] == takes[0]).collect();
+            vec![(
+                Rule::SelectConst {
+                    value: value.clone(),
+                    arity: n,
+                    lit_blocks,
+                },
+                lit,
+            )]
+        }
+
         // A condition that is a test against a literal, and a block that
         // answers with the very value tested.
         (Law::SpecializeEqual, NodeKind::Select { arity: n, .. }) => {
@@ -2102,6 +2504,157 @@ fn read_off(graph: &Graph, law: Law, id: NodeId) -> Vec<(Rule, NodeId)> {
                     )
                 })
                 .collect()
+        }
+
+        // A branch inside an arm, retesting the value the outer branch
+        // tested — read off the outer select, one rule per inner select
+        // among its blocks.
+        (
+            Law::SpecializeChoice,
+            NodeKind::Select {
+                arity: n,
+                branch: mine,
+            },
+        ) => {
+            let (n, cond) = (*n, takes[0]);
+            let mut rules: Vec<(Rule, NodeId)> = Vec::new();
+            let mut inners: Vec<NodeId> = Vec::new();
+            for b in 0..2 * n {
+                let Source::Port {
+                    node: within,
+                    port: _,
+                } = takes[1 + b]
+                else {
+                    continue;
+                };
+                let NodeKind::Select {
+                    arity: m,
+                    branch: nested,
+                } = graph.kind(within)
+                else {
+                    continue;
+                };
+                if nested == mine || inners.contains(&within) {
+                    continue;
+                }
+                let Source::Port {
+                    node: fork,
+                    port: v,
+                } = graph.sources(within)[0]
+                else {
+                    continue;
+                };
+                let NodeKind::Fork { arity: f, branch } = graph.kind(fork) else {
+                    continue;
+                };
+                let handed = graph.sources(fork);
+                if branch != mine || handed[0] != cond || handed[1 + v % f] != cond {
+                    continue;
+                }
+                // Every outer block this inner select answers, at once —
+                // and only on the side the view says.
+                let then = v < *f;
+                let moves: Vec<(usize, usize)> = (0..2 * n)
+                    .filter_map(|at| match takes[1 + at] {
+                        Source::Port { node, port } if node == within && (at < n) == then => {
+                            Some((port, at))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                if moves.is_empty() {
+                    continue;
+                }
+                inners.push(within);
+                rules.push((
+                    Rule::SpecializeChoice {
+                        fork: *f,
+                        arity: n,
+                        inner: *m,
+                        view: v,
+                        moves,
+                    },
+                    fork,
+                ));
+            }
+            rules
+        }
+
+        // A view somebody reads, read as the value it is a view of.
+        (Law::ViewValue, NodeKind::Fork { arity: f, .. }) => (0..2 * f)
+            .filter(|&v| !graph.sinks(Source::Port { node: id, port: v }).is_empty())
+            .map(|v| (Rule::ViewValue { fork: *f, view: v }, id))
+            .collect(),
+
+        // An operation whose every operand is a literal — the fold, and
+        // the machine is what answers it.
+        (Law::Fold, NodeKind::Op(prim)) => {
+            if matches!(prim, Prim::Push(_) | Prim::Swap) || takes.is_empty() {
+                return Vec::new();
+            }
+            let mut held: Vec<(NodeId, Value)> = Vec::new();
+            let mut reads: Vec<usize> = Vec::new();
+            for &src in takes {
+                let Some((node, NodeKind::Op(Prim::Push(value)))) = made_by(src) else {
+                    return Vec::new();
+                };
+                let at = match held.iter().position(|(h, _)| *h == node) {
+                    Some(at) => at,
+                    None => {
+                        held.push((node, value.clone()));
+                        held.len() - 1
+                    }
+                };
+                reads.push(at);
+            }
+            let seed = held[0].0;
+            vec![(
+                Rule::Fold {
+                    prim: prim.clone(),
+                    operands: held.into_iter().map(|(_, v)| v).collect(),
+                    reads,
+                },
+                seed,
+            )]
+        }
+
+        // `is_bool` of an answer the instruction set promises is a bool.
+        (Law::TestedBool, NodeKind::Op(Prim::IsBool)) => {
+            let Some((answered, NodeKind::Op(prim))) = made_by(takes[0]) else {
+                return Vec::new();
+            };
+            if prim.arity().outputs != 1 || !prim.to_instruction().yields_bool() {
+                return Vec::new();
+            }
+            vec![(
+                Rule::TestedBool {
+                    kind: graph.kind(answered).clone(),
+                },
+                answered,
+            )]
+        }
+
+        // Rebuilding exactly what an `untuple` took apart.
+        (Law::Retuple, NodeKind::Op(Prim::Tuple(n))) => {
+            let n = *n;
+            let apart = (n > 0).then(|| takes[0]).and_then(|src| match src {
+                Source::Port { node, port: 0 } => Some(node),
+                _ => None,
+            });
+            let Some(apart) = apart else {
+                return Vec::new();
+            };
+            if !matches!(graph.kind(apart), NodeKind::Op(Prim::Untuple(m)) if *m == n) {
+                return Vec::new();
+            }
+            let whole = takes
+                .iter()
+                .enumerate()
+                .all(|(i, src)| matches!(*src, Source::Port { node, port } if node == apart && port == i));
+            if !whole {
+                return Vec::new();
+            }
+            vec![(Rule::Retuple { n }, apart)]
         }
 
         // One operation done in both arms. Read off a box in the *then* arm;
@@ -2402,31 +2955,58 @@ mod tests {
     }
 
     /// A graph with a literal on every one of its inputs, as a term.
-    fn closed(terms: &mut Context, g: &Graph, values: &[Value]) -> TermIndex {
-        assert_eq!(values.len(), g.arity().inputs, "one literal per input");
-        let back = read_back(g, terms);
-        let mut stack: Option<TermIndex> = None;
-        for v in values {
-            let push = terms.op(Prim::Push(v.clone()));
-            stack = Some(match stack {
-                None => push,
-                Some(acc) => terms.pad_compose(acc, push),
-            });
+    /// A closed graph, run: every operation on the machine itself
+    /// ([`run_window`], so there is no second semantics), a fork handing
+    /// out its copies, a select keeping the block `truthy` says.
+    fn eval_on(graph: &Graph, inputs: &[Value]) -> Vec<Value> {
+        assert_eq!(inputs.len(), graph.arity().inputs, "one value per input");
+        let mut held: HashMap<Source, Value> = inputs
+            .iter()
+            .enumerate()
+            .map(|(i, v)| (Source::Input(i), v.clone()))
+            .collect();
+        for id in crate::diagram2::schedule(graph) {
+            let took: Vec<Value> = graph
+                .sources(id)
+                .iter()
+                .map(|src| held[src].clone())
+                .collect();
+            let answers = match graph.kind(id) {
+                NodeKind::Op(prim) => run_window(&took, &prim.to_instruction())
+                    .expect("every prim is total on the machine"),
+                NodeKind::Id(_) => took,
+                NodeKind::Copy(_) => [took.clone(), took].concat(),
+                NodeKind::Drop(_) => Vec::new(),
+                NodeKind::Fork { .. } => [took[1..].to_vec(), took[1..].to_vec()].concat(),
+                NodeKind::Select { arity, .. } => {
+                    let n = *arity;
+                    if took[0].truthy() {
+                        took[1..=n].to_vec()
+                    } else {
+                        took[n + 1..].to_vec()
+                    }
+                }
+                NodeKind::Call { .. } => unreachable!("a law's side calls nothing"),
+            };
+            for (port, v) in answers.into_iter().enumerate() {
+                held.insert(Source::Port { node: id, port }, v);
+            }
         }
-        match stack {
-            None => back,
-            Some(stack) => terms.pad_compose(stack, back),
-        }
+        graph
+            .outputs()
+            .iter()
+            .map(|src| held[src].clone())
+            .collect()
     }
 
     /// A law held to the **machine**, over every assignment of a handful of
     /// values to its boundary.
     ///
     /// The opaque oracle cannot judge these: `equal(x, 7)` is a symbol to
-    /// it, and the whole content of the law is what that symbol computes. So
-    /// the judge is the one `diagram` is — close both sides with literals
-    /// and fold. Sampling is not a proof, and the proof is in the docs; this
-    /// is what would catch the proof being wrong.
+    /// it, and the whole content of the law is what that symbol computes.
+    /// So both sides *run*, every operation on the machine itself.
+    /// Sampling is not a proof, and the proof is in the docs; this is what
+    /// would catch the proof being wrong.
     fn the_machine_agrees(law: Law, rule: Rule) {
         assert_eq!(rule.law(), law, "the payload names the wrong law");
         assert!(!is_wiring(law), "a wiring law has a cheaper judge");
@@ -2434,13 +3014,9 @@ mod tests {
             sides(&rule).unwrap_or_else(|e| panic!("{:?} does not state an equation: {}", law, e));
         assert_eq!(lhs.arity(), rhs.arity());
         for values in samples(lhs.arity().inputs) {
-            let mut terms = Context::new();
-            let long = closed(&mut terms, &lhs, &values);
-            let short = closed(&mut terms, &rhs, &values);
-            let mut engine = crate::diagram::Ctx::default();
             assert_eq!(
-                crate::diagram::normalize(&mut engine, &terms, long),
-                crate::diagram::normalize(&mut engine, &terms, short),
+                eval_on(&lhs, &values),
+                eval_on(&rhs, &values),
                 "{:?} relates two different programs on {:?}",
                 law,
                 values
@@ -2598,6 +3174,192 @@ mod tests {
                 },
             );
         }
+    }
+
+    /// The same value tested twice answers the same: a branch inside an
+    /// arm, retesting a view of the outer condition, is decided by which
+    /// arm it sits in.
+    #[test]
+    fn a_value_retested_in_an_arm_is_decided() {
+        for (view, moves) in [
+            // In the then arm the value was truthy; in the else arm it was
+            // `false`, the one falsy value.
+            (0, vec![(0, 0)]),
+            (1, vec![(0, 1)]),
+        ] {
+            the_machine_agrees(
+                Law::SpecializeChoice,
+                Rule::SpecializeChoice {
+                    fork: 1,
+                    arity: 1,
+                    inner: 1,
+                    view,
+                    moves,
+                },
+            );
+        }
+        // A wider window: two of the inner select's answers, moved at once.
+        the_machine_agrees(
+            Law::SpecializeChoice,
+            Rule::SpecializeChoice {
+                fork: 1,
+                arity: 2,
+                inner: 2,
+                view: 0,
+                moves: vec![(0, 0), (1, 1)],
+            },
+        );
+        // A move on the wrong side of the window is refused: reasoning
+        // from "the condition held" does not reach the other arm.
+        assert!(matches!(
+            sides(&Rule::SpecializeChoice {
+                fork: 1,
+                arity: 1,
+                inner: 1,
+                view: 0,
+                moves: vec![(0, 1)],
+            }),
+            Err(Error::Ill {
+                why: Ill::Refused,
+                ..
+            })
+        ));
+    }
+
+    /// A view is a copy, so reading through it and reading past it are one
+    /// wiring — judged by the opaque oracle, like every wiring law.
+    #[test]
+    fn a_view_is_its_value() {
+        holds(Law::ViewValue, Rule::ViewValue { fork: 1, view: 0 });
+        holds(Law::ViewValue, Rule::ViewValue { fork: 1, view: 1 });
+        holds(Law::ViewValue, Rule::ViewValue { fork: 2, view: 3 });
+    }
+
+    /// The fold: a literal window runs on the machine itself, and the
+    /// answer side is built from what came back.
+    #[test]
+    fn a_literal_window_is_its_answer() {
+        the_machine_agrees(
+            Law::Fold,
+            Rule::Fold {
+                prim: Prim::Add,
+                operands: vec![Value::Int(3), Value::Int(4)],
+                reads: vec![0, 1],
+            },
+        );
+        // One literal read twice — the shape a `dedup` leaves.
+        the_machine_agrees(
+            Law::Fold,
+            Rule::Fold {
+                prim: Prim::Equal,
+                operands: vec![Value::Int(7)],
+                reads: vec![0, 0],
+            },
+        );
+        // More answers than operands: the fold follows the arity table.
+        the_machine_agrees(
+            Law::Fold,
+            Rule::Fold {
+                prim: Prim::Untuple(2),
+                operands: vec![Value::Tuple(vec![Value::Int(1), Value::Bool(true)])],
+                reads: vec![0],
+            },
+        );
+        // Junk in, junk out — the machine's junk, not a second opinion.
+        the_machine_agrees(
+            Law::Fold,
+            Rule::Fold {
+                prim: Prim::AsBool,
+                operands: vec![Value::Int(0)],
+                reads: vec![0],
+            },
+        );
+        // A literal is not a window, and neither is a crossing.
+        for prim in [Prim::Push(Value::Int(1)), Prim::Swap] {
+            assert!(matches!(
+                sides(&Rule::Fold {
+                    prim,
+                    operands: vec![Value::Int(1), Value::Int(2)],
+                    reads: vec![0, 1],
+                }),
+                Err(Error::Ill {
+                    why: Ill::Refused,
+                    ..
+                })
+            ));
+        }
+    }
+
+    /// `is_bool` of an answer the instruction set promises is a bool.
+    #[test]
+    fn a_promised_bool_tests_true() {
+        the_machine_agrees(
+            Law::TestedBool,
+            Rule::TestedBool {
+                kind: NodeKind::Op(Prim::IsInt),
+            },
+        );
+        the_machine_agrees(
+            Law::TestedBool,
+            Rule::TestedBool {
+                kind: NodeKind::Op(Prim::Equal),
+            },
+        );
+        the_machine_agrees(
+            Law::TestedBool,
+            Rule::TestedBool {
+                kind: NodeKind::Op(Prim::IsBool),
+            },
+        );
+        // An answer the set does not promise is no window.
+        assert!(matches!(
+            sides(&Rule::TestedBool {
+                kind: NodeKind::Op(Prim::Add),
+            }),
+            Err(Error::Ill {
+                why: Ill::Refused,
+                ..
+            })
+        ));
+    }
+
+    /// A literal condition on a select no fork pairs with — including the
+    /// shape a `dedup` makes, where the condition and a block are one
+    /// pushed value.
+    #[test]
+    fn a_forkless_select_on_a_literal_is_its_blocks() {
+        for value in [Value::Bool(true), Value::Bool(false), Value::Int(0)] {
+            the_machine_agrees(
+                Law::SelectConst,
+                Rule::SelectConst {
+                    value: value.clone(),
+                    arity: 1,
+                    lit_blocks: Vec::new(),
+                },
+            );
+            the_machine_agrees(
+                Law::SelectConst,
+                Rule::SelectConst {
+                    value,
+                    arity: 2,
+                    lit_blocks: vec![1, 2],
+                },
+            );
+        }
+    }
+
+    /// Rebuilding what `untuple n` took apart is the coercion.
+    #[test]
+    fn retupling_is_the_coercion() {
+        the_machine_agrees(Law::Retuple, Rule::Retuple { n: 1 });
+        the_machine_agrees(Law::Retuple, Rule::Retuple { n: 2 });
+        assert!(matches!(
+            sides(&Rule::Retuple { n: 0 }),
+            Err(Error::Ill {
+                why: Ill::Refused,
+                ..
+            })
+        ));
     }
 
     /// An arm that reads something from outside the branch is still an arm;
@@ -2907,6 +3669,11 @@ mod tests {
                 then_arm: one_step(NodeKind::Op(Prim::Not)),
                 else_arm: one_step(NodeKind::Op(Prim::Negate)),
             },
+            Rule::SelectConst {
+                value: Value::Bool(false),
+                arity: 1,
+                lit_blocks: vec![1],
+            },
             Rule::SpecializeEqual {
                 arity: 1,
                 at: 0,
@@ -2919,12 +3686,30 @@ mod tests {
                 view: 0,
                 at: 0,
             },
+            Rule::SpecializeChoice {
+                fork: 1,
+                arity: 1,
+                inner: 1,
+                view: 0,
+                moves: vec![(0, 0)],
+            },
+            Rule::ViewValue { fork: 2, view: 3 },
+            Rule::Fold {
+                prim: Prim::Add,
+                operands: vec![Value::Int(1), Value::Int(2)],
+                reads: vec![0, 1],
+            },
+            Rule::TestedBool {
+                kind: NodeKind::Op(Prim::IsInt),
+            },
+            Rule::Retuple { n: 2 },
         ]
     }
 
-    /// Every law there is, including the one no list of laws collects.
+    /// Every law there is, including the one no list collects — a driver
+    /// holds `view-value` back on purpose, and no list should hand it out.
     fn every_law() -> Vec<Law> {
-        [structural(), branching(), vec![Law::NotNot]].concat()
+        [structural(), branching(), folding(), vec![Law::ViewValue]].concat()
     }
 
     /// Every proposal at every box of `graph`, applied to a copy of it and
@@ -3049,6 +3834,9 @@ mod tests {
         // list cannot reach — `select-view` and everything downstream of it
         // — want a shape a rewrite makes, and are covered above against the
         // shapes the table itself states.
+        // A fresh graph pads its literals behind `id` boxes, so the fold
+        // has nothing to read until `id-elim` has fired — the value layer
+        // only reaches a graph the structural layer has cleaned.
         offers("push 1 push 2 add", &[Law::IdElim]);
         offers("push 1 push 1 add", &[Law::IdElim, Law::Dedup]);
         offers("swap swap", &[Law::SwapElim]);
@@ -3063,23 +3851,35 @@ mod tests {
         );
         offers(
             "branch { pick 0 drop 0 not } { not }",
-            &[Law::IdElim, Law::CopyElim, Law::DeadNode],
+            &[Law::IdElim, Law::CopyElim, Law::DeadNode, Law::ViewValue],
         );
         offers(
             "pick 0 push 1 equal branch { not } { negate }",
-            &[Law::IdElim, Law::CopyElim],
+            &[Law::IdElim, Law::CopyElim, Law::ViewValue],
         );
         // One operation in both arms, on views the fork hands out in more
         // than one port — which is where `fork-dedup`'s payload says
         // something a one-port arm cannot check.
-        offers("branch { add } { add }", &[Law::CopyElim, Law::ForkDedup]);
         offers(
-            "push 1 pick 1 branch { add } { add }",
-            &[Law::IdElim, Law::SwapElim, Law::CopyElim, Law::ForkDedup],
+            "branch { add } { add }",
+            &[Law::CopyElim, Law::ForkDedup, Law::ViewValue],
         );
         offers(
+            "push 1 pick 1 branch { add } { add }",
+            &[
+                Law::IdElim,
+                Law::SwapElim,
+                Law::CopyElim,
+                Law::ForkDedup,
+                Law::ViewValue,
+            ],
+        );
+        // Arms that take nothing leave no fork, so both readings of a
+        // literal condition offer: the whole-branch fold, and the
+        // fork-less one.
+        offers(
             "push true branch { push 1 } { push 2 }",
-            &[Law::SelectLiteral],
+            &[Law::SelectLiteral, Law::SelectConst],
         );
     }
 

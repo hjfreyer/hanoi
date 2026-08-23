@@ -2,8 +2,13 @@
 
 A reference sheet for the equational theory the prover works in: every
 structural law stated symbolically and in the term model's spelling, with its
-side conditions, how the engine of `rewrite/src/diagram.rs` embodies it, and
-what is known about completeness. [docs/proving.md](proving.md) describes
+side conditions, how the machinery embodies it, and what is known about
+completeness. The engine is `rewrite/src/diagram2` now — the literal graph
+and its law table — and where this page's **How** column says a law held by
+representation or by a fold, that reading described the retired
+canonicalizing engine (`diagram.rs`); today every non-representational
+reading is a *row* of `diagram2/rules.rs`, fired by a driver and checked
+per application. [docs/proving.md](proving.md) describes
 the machinery; this page is the laws themselves, and the map to the
 literature they come from.
 
@@ -30,13 +35,15 @@ a page of hand-written cuts included.
   `id(n)` are their own leaves.
 - Every law is stated in its minimal window; congruence embeds it in any
   context.
-- **How** column: what makes the law hold in the engine. *representation* —
-  the two sides are literally the same data, so the law cannot be violated;
-  *fold* — a bounded, confluent canonicalization applied as the diagram
-  builds (`apply`, `branch_on` and the tree constructors in `diagram.rs`);
-  *order* — the case-tree discipline; *boundary* — true but beyond the
-  canonical form, waiting on a step that spends it; *candidate* — a fold
-  that is true and useful but not yet written.
+- **How** column: what made the law hold in the retired canonicalizing
+  engine, kept as a map of *kinds* of law. *representation* — the two sides
+  were literally the same data (today: the structural rows of
+  `diagram2/rules.rs`, spent by rewriting); *fold* — a bounded, confluent
+  canonicalization (today: the value rows — `fold`, `tested-bool`,
+  `retuple`); *order* — the case-tree discipline (today: the branch layer,
+  plus the `cases` proof step for η); *boundary* — true but beyond any
+  automatic reading, waiting on a step that spends it; *candidate* — true
+  and useful but not yet a row.
 
 ## Layer 1: the cartesian core
 
@@ -104,12 +111,12 @@ on:
   symbolic evaluation yields the same tuple of terms — dropped inputs and
   discarded work vanish (`drop-nat`), shared work may be copied
   (`copy-nat`).
-- **The oracle became the prover.** Symbolic evaluation decides the
-  branch-free fragment outright, and `rewrite/src/diagram.rs` implements it
-  as a string-diagram engine: programs as wiring in an interned arena, so
-  this whole layer is representation rather than rules — extended over the
-  branch fragment to **ordered, shared case trees** (the decision-diagram
-  discipline: independent branches reorder to one spelling; sound there,
+- **The oracle became the prover, twice.** Symbolic evaluation decides the
+  branch-free fragment outright; `diagram.rs` once implemented it as a
+  string-diagram engine where this whole layer was representation rather
+  than rules, extended over the branch fragment to **ordered, shared case
+  trees** (the decision-diagram discipline: independent branches reorder to
+  one spelling; sound there,
   complete only here). The `diagram` proof step *is* this procedure applied
   to a goal's two sides. It produces no derivation yet — the replayable-
   derivation milestone in [docs/proving.md](proving.md) is what turns its
@@ -148,8 +155,8 @@ current corpus:
 
 ## Layer 3: the signature — evaluation
 
-Laws about what specific instructions compute, every one a fold in
-`diagram.rs`'s `apply`. The discipline that matters more than any individual
+Laws about what specific instructions compute — today the value rows of
+`diagram2/rules.rs`. The discipline that matters more than any individual
 law: **facts live on the instruction and are measured by `vm`, never
 restated** — `truthy`, `op_arity`, `commutative`, `yields_bool` are the
 precedents, and the evaluation fold goes one further: it executes the
@@ -208,8 +215,9 @@ column exactly:
 - Bonchi–Sobociński–Zanasi, *Interacting Hopf algebras*; the *String Diagram
   Rewrite Theory* series I–III — rewriting these presentations as hypergraph
   rewriting, which dissolves the padding bureaucracy a term presentation
-  pays for; the road `rewrite/src/diagram.rs` took. Kissinger's Chyp is the
-  working tool for the rewriting layer this page does not have yet.
+  pays for; the road `rewrite/src/diagram2` walks in full — laws as pairs
+  of open graphs, rewriting as checked cut-and-splice. Kissinger's Chyp is
+  the closest working relative of that layer.
 - Altenkirch–Dybjer–Hofmann–Scott, *Normalization by evaluation for typed
   lambda calculus with coproducts* (2001) — why layer 2 is the hard one, and
   the shape of its decision procedure.

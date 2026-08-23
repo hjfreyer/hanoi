@@ -5,3 +5,9 @@
 // The right-hand side is written as the call it is, and the engine is not
 // allowed to spend a sentence's definition on its own: say so.
 proof identities::testing_a_test_by_name = inline diagram;
+
+// The arm recomputes the very test its branch decided. The driver
+// identifies the two computations — `view-value`, then `dedup` — and the
+// case split on the one wire that remains decides both readings at once:
+// η, spent deliberately, where no rewrite window could.
+proof identities::specializing_a_tested_value = both(decide) cases(equal);
