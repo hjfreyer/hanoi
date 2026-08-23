@@ -2910,10 +2910,9 @@ fn read_off(graph: &Graph, law: Law, id: NodeId) -> Vec<(Rule, NodeId)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::diagram2::build;
     use crate::diagram2::meaning::{Meaning, boundary, eval_graph};
-    use crate::diagram2::{build, read_back};
     use crate::term::Context;
-    use crate::term::TermIndex;
     use bytecode::{Value, assemble};
 
     /// The two graphs a rule relates, run on the same symbols. A law whose

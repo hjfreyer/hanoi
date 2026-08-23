@@ -529,63 +529,6 @@ fn rebuild(ctx: &mut Context, parts: &[TermIndex], width_if_empty: usize) -> Ter
         .fold(*first, |acc, next| ctx.push(Term::Compose(acc, *next)))
 }
 
-// ---- inlining, term-level ---------------------------------------------------
-
-/// The term with calls replaced by their bodies: every call, all the way down,
-/// or every call to `only` and no others.
-///
-/// The unlabelled walk terminates because recursion is forbidden — the call
-/// graph of a library that compiled is acyclic — and for the same reason the
-/// labelled one needs no recursion into the body it just opened: nothing a
-/// sentence calls can reach that sentence again.
-///
-/// The prover opens calls on the graphs now — [`diagram2::inline`] — and
-/// this stays as the term-level sweep the reach-pinning test reads by.
-#[cfg(test)]
-fn inline_calls(
-    ctx: &mut Context,
-    library: &Library,
-    term: TermIndex,
-    only: Option<bytecode::SentenceIndex>,
-) -> Result<TermIndex, Error> {
-    use crate::term::lower;
-    // Copied out of the arena first: the walk writes new nodes into it, and a
-    // node is small — the copy is a discriminant and two indices.
-    Ok(match ctx.get(term).clone() {
-        Term::Call { target, .. } => match only {
-            None => {
-                let body = lower(ctx, library, target)?;
-                inline_calls(ctx, library, body, only)?
-            }
-            Some(idx) if target == idx => lower(ctx, library, target)?,
-            Some(_) => term,
-        },
-        Term::Compose(a, b) => {
-            let (a, b) = (
-                inline_calls(ctx, library, a, only)?,
-                inline_calls(ctx, library, b, only)?,
-            );
-            ctx.push(Term::Compose(a, b))
-        }
-        Term::Par(a, b) => {
-            let (a, b) = (
-                inline_calls(ctx, library, a, only)?,
-                inline_calls(ctx, library, b, only)?,
-            );
-            ctx.push(Term::Par(a, b))
-        }
-        Term::Branch { if_true, if_false } => {
-            let (if_true, if_false) = (
-                inline_calls(ctx, library, if_true, only)?,
-                inline_calls(ctx, library, if_false, only)?,
-            );
-            ctx.push(Term::Branch { if_true, if_false })
-        }
-        // A leaf is already open, and stays where it is.
-        _ => term,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
