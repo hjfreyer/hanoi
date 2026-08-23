@@ -217,8 +217,8 @@ pub(super) fn eval_term(
 
 /// What a graph means — the same reading, one box at a time.
 ///
-/// No `read_back` anywhere in it, which is the point: this can hold
-/// `rewrite` to preserving meaning without the translation in the loop.
+/// No `read_back` anywhere in it, which is the point: this can hold a
+/// rewrite to preserving meaning without the translation in the loop.
 pub(super) fn eval_graph(m: &mut Meaning, graph: &Graph, inputs: &[SymId]) -> Vec<SymId> {
     let mut ports: HashMap<(NodeId, usize), SymId> = HashMap::new();
     let read = |ports: &HashMap<(NodeId, usize), SymId>, src: Source| match src {
