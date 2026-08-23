@@ -1262,11 +1262,89 @@ pub fn read_back(graph: &Graph, terms: &mut Context) -> TermIndex {
     let Some(first) = steps.next() else {
         return terms.id(graph.inputs.len());
     };
-    steps.fold(first, |acc, next| {
+    let spine = steps.fold(first, |acc, next| {
         terms
             .compose(acc, next)
             .expect("every step spans the whole stack")
-    })
+    });
+    settle(terms, spine)
+}
+
+/// The two unit laws, spent on a term the loop above wrote wide on purpose.
+///
+/// Every step it emits spans the whole stack — that is what makes the fold a
+/// plain `compose` and a width mismatch a loud one — and it pays for that by
+/// naming each untouched wire separately: one factor per slot in a routing
+/// layer, and a whole row for a box that is itself an `id`. The width is
+/// load-bearing while the term is being built and pure noise once it is
+/// built, so it comes off here rather than never:
+///
+/// - `id(a) * id(b)` = `id(a + b)`, over the flattened `*`-spine. Taking the
+///   spine as a list rather than pairwise is the whole of it: the products
+///   are left-nested, so `id(3) * swap * id(1) * id(1)` has no adjacent pair
+///   to match on and only merges once the row is a run of factors.
+/// - `id(n) ; t` = `t` = `t ; id(n)`. A row whose box is an `Id` touches
+///   nothing, and a graph out of [`build`] is full of them.
+///
+/// Both laws hold on the nose — this deletes `id` boxes and changes nothing
+/// else, so what comes back builds to the same graph the structural laws
+/// take the original to. Nothing but the report reads a term from here, and
+/// the report is the reason to do it.
+fn settle(terms: &mut Context, term: TermIndex) -> TermIndex {
+    match *terms.get(term) {
+        Term::Par(..) => {
+            let mut factors = Vec::new();
+            flatten_par(terms, term, &mut factors);
+            let mut settled: Vec<TermIndex> = Vec::with_capacity(factors.len());
+            for factor in factors {
+                let factor = settle(terms, factor);
+                match (terms.get(factor), settled.last().map(|&m| terms.get(m))) {
+                    // A wire block of no wires is not a factor.
+                    (Term::Id(0), _) => {}
+                    // A run of untouched wires is one block, however the
+                    // products happen to be nested.
+                    (Term::Id(a), Some(Term::Id(b))) => {
+                        let width = a + b;
+                        settled.pop();
+                        let block = terms.id(width);
+                        settled.push(block);
+                    }
+                    _ => settled.push(factor),
+                }
+            }
+            let mut factors = settled.into_iter();
+            let first = factors
+                .next()
+                .expect("a product of nothing is not a product");
+            factors.fold(first, |acc, factor| terms.par(acc, factor))
+        }
+        Term::Compose(left, right) => {
+            let (left, right) = (settle(terms, left), settle(terms, right));
+            match (terms.get(left), terms.get(right)) {
+                (Term::Id(_), _) => right,
+                (_, Term::Id(_)) => left,
+                _ => terms
+                    .compose(left, right)
+                    .expect("settling a step keeps its arity"),
+            }
+        }
+        Term::Branch { if_true, if_false } => {
+            let if_true = settle(terms, if_true);
+            let if_false = settle(terms, if_false);
+            terms.push(Term::Branch { if_true, if_false })
+        }
+        _ => term,
+    }
+}
+
+/// A `*`-spine as the list of factors it is, left to right.
+fn flatten_par(terms: &Context, term: TermIndex, out: &mut Vec<TermIndex>) {
+    if let Term::Par(left, right) = *terms.get(term) {
+        flatten_par(terms, left, out);
+        flatten_par(terms, right, out);
+    } else {
+        out.push(term);
+    }
 }
 
 /// The term one box stands for; a branch answers with its arms read back.
