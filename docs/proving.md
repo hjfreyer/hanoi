@@ -82,9 +82,8 @@ checked, replayable steps.
 
 Two things the driver deliberately never does: it never opens a
 [call](../rewrite/src/term.rs) (`inline` is a proof's decision), and it
-never invents a case split (`cases` is a proof's decision — η, spent
-deliberately on a wire the instruction set promises is a bool). Everything
-else it decides by running the table dry.
+never reasons by case analysis on an unknown value (`cases` is a proof's
+decision). Everything else it decides by running the table dry.
 
 ### The strategy language
 
@@ -106,7 +105,8 @@ proof identities::testing_a_test_by_name = inline diagram;
 | `symm` | swaps the two sides | never — but two in a row are refused |
 | `exact` | claims the sides are one diagram — **isomorphic** — which the auto-close has already checked, so a reached `exact` fails and shows the goal exactly as it stands | always, when reached |
 | `via { body } (left: s, right: s)` | **cuts**: `A = B` splits into the goals `A = C` and `C = B`, the waypoint built as a graph | the waypoint's net stack change is not the goal's, or a side fails |
-| `diagram` | reads both sides back as terms and normalizes them into one arena; they are one diagram or they are not | they are not — and the residual is both sides reified, narrowed to the difference |
+| `cases(op)` | **case analysis** on an intermediate result: an `op` answer can only be `true` or `false`, so everything that depends on it is replaced by a branch holding one copy per case, the assumed answer pasted in as a literal — one checked rewrite per side, which the ordinary laws then simplify under each assumption (see below) | no side computes `op`, or nothing depends on its answer |
+| `diagram` | rewrites both sides by the whole table to fixpoint and asks whether they landed on one diagram — isomorphic | they did not — and the residual is both sides read back, narrowed to the difference |
 
 Inside `lhs(…)`, `rhs(…)` and `both(…)` is the rewrite language of
 [docs/tactics.md](tactics.md), juxtaposed like steps are: `saturate` (the
@@ -148,27 +148,83 @@ and a graph goal has no compose spine to strip and no branch node to fork;
 the residual's own narrowing still shrinks what a report prints, and the
 branch layer's laws are how arms get reasoned about now.
 
-**A case split is a rewrite, and the proof says where.** The corpus's
-path-condition claim, `types_test::number_does_pre_and_post_is_constant`,
-was once a page of hand-derived waypoints, then one `inline diagram` under
-the old canonicalizing engine. It is now what the claim actually is: a
-case analysis, written out —
+### `cases`: proving what depends on a value
+
+Some true equations are out of the rewriter's reach, because the two
+sides only agree once you consider what some intermediate result **is**,
+and the rewriter treats every computed value as opaque. The corpus's
+plainest example:
+
+```text
+identity testing_a_test { is_bool is_bool } = { drop 0 push true };
+```
+
+Whatever `is_bool` answers is a boolean, so asking `is_bool` of *that*
+answers `true` — a fact about the operation's range, not about any wiring
+a rewrite window could see. That particular fact is common enough to be
+its own law (`tested-bool`); the general situation is not, and `cases` is
+the general instrument.
+
+`cases(op)` picks an intermediate result — a wire — produced by an
+operation the instruction set guarantees answers a boolean (`equal`,
+`is_int`, `not`, …; the parser refuses anything else). That answer is
+`true` or it is `false`, and there is no third case. So the following is
+an ordinary equation, and a row of the table (the Shannon expansion,
+`shannon` in [rewrite/src/diagram2/rules.rs](../rewrite/src/diagram2/rules.rs)):
+
+```text
+everything downstream of the wire
+    =  branch on the wire {
+           the same computation, with the answer assumed true
+       } {
+           the same computation, with the answer assumed false
+       }
+```
+
+The right side duplicates the downstream computation, once per case, with
+the assumed answer pasted in as a literal, and a branch keeps whichever
+copy agrees with the actual answer. Running both copies and discarding
+one is sound here for the same reason every branch in this language is:
+operations are total and pure, so the untaken copy is an answer nobody
+reads.
+
+The step itself does almost nothing: on each side of the goal that
+computes `op`, it fires that row **once**, at the earliest such wire —
+the one with the least computation feeding it — and that firing is an
+ordinary rewrite, checked like any other. The power is in what the rest
+of the table does *afterwards*, inside the copies, where the assumption
+is now a literal: a branch on it resolves (`select-const`), a test
+against it computes (`fold`), untouched code falls away (`dead-node`).
+When both copies simplify to the same thing, the introduced branch
+collapses too (`dedup`, then `select-same`), and the goal closes by plain
+rewriting — the case analysis happened, and every step of it is in the
+proof's record.
+
+Two practical notes. *Earliest matters*: splitting on a result computed
+late says nothing usable about the computations feeding it, so the step
+always takes the earliest test and leaves later ones to be decided along
+the way — or split in turn, which is what chaining does:
+`cases(equal) cases(equal)` is a two-variable case analysis, four leaves,
+all folded shut by the closing `diagram`. And *identification comes
+first*: a program often retests one condition in several places (through
+copies and branch views), and the split only helps once the driver has
+recognized those as a single wire — which `both(decide)` does, via
+`view-value` and `dedup` — so `cases` almost always follows a drive.
+
+The corpus's contract claim is the worked example. It was once a page of
+hand-derived waypoints, then one `inline diagram` under the old
+canonicalizing engine; it is now written as what the claim actually is —
+a case analysis over the two tags an input might be:
 
 ```text
 proof types_test::number_does_pre_and_post_is_constant =
     inline both(decide) cases(equal) both(decide) cases(equal) diagram;
 ```
 
-— open the definitions, drive the table (`view-value` and `dedup` are what
-identify the retests of one condition as one wire), expand on `equal(x,
-t1)`, expand on `equal(x, t2)`, and the closer folds every arm shut. Each
-`cases` is **one checked rewrite**: the table's Shannon law, `body(w) = if
-w then body(true) else body(false)`, sound because the instruction set
-promises the wire a bool, refused by `sides` otherwise. The introduced
-branch dissolves inside the graph — `select-const` where a pinned copy
-decided, `dedup` and `select-same` where both arms agree — so the
-disjunction `is_tag` carries is spent exactly where the proof says η is
-spent, as steps a checker verified.
+Open the definitions, drive, split on `equal(x, t1)`, drive, split on
+`equal(x, t2)`, and the closer folds every leaf shut. (For readers who
+know the literature: this is η — the case split on an opaque value that
+canonical forms cannot make — spent deliberately, as a checked rewrite.)
 
 **Trust.** `sides` and `apply` are the whole of it — plus the machine
 itself, where a law is *about* what an operation computes (`fold` and the

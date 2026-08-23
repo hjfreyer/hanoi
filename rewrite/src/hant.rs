@@ -27,7 +27,7 @@
 //! | `symm` | swaps the two sides | never — but two in a row are refused |
 //! | `exact` | claims the sides are one diagram — **isomorphic** — which the auto-close has already checked, so a reached `exact` fails and shows the goal exactly as it stands | always, when reached |
 //! | `via { body } (left: s, right: s)` | **cuts**: `A = B` splits into the goals `A = C` and `C = B`, the waypoint built as a graph | the waypoint's net stack change is not the goal's, or a side fails |
-//! | `cases(op)` | **splits, inside the graph**: each side's outermost `op` wire expands by the table's Shannon law — η, as a checked rewrite | no side holds the operation with anything downstream |
+//! | `cases(op)` | **case analysis** on an intermediate result: an `op` answer is `true` or `false` and nothing else, so everything depending on it becomes a branch holding one copy per case, the assumption pasted in as a literal — one checked rewrite per side, simplified under each assumption by the ordinary laws | no side computes `op`, or nothing depends on its answer |
 //! | `diagram` | rewrites both sides by the whole table to fixpoint; they land on one diagram — isomorphic — or they do not | they do not — and the residual is both sides read back, narrowed to the difference |
 //!
 //! `diagram`, `exact` and `via` end a strategy — the goal is closed or
@@ -59,9 +59,9 @@
 //! data first, and grow a spelling here when a proof needs one.
 //!
 //! `inline` and `cases` are the steps that *change what is provable* — no
-//! closer opens a call or spends η on its own — and the tactics change
-//! what the *report* shows: a goal rewritten toward its other side fails closer to the
-//! difference. `symm` moves which side the asymmetric steps read — a
+//! closer opens a call or invents a case analysis on its own — and the
+//! tactics change what the *report* shows: a goal rewritten toward its
+//! other side fails closer to the difference. `symm` moves which side the asymmetric steps read — a
 //! `via`'s halves and the tactic steps are named for their sides — so it
 //! is how a proof says "the interesting side is the other one" without
 //! restating the identity backwards.
@@ -157,17 +157,22 @@ pub enum Step<V> {
         left: Option<Strategy<V>>,
         right: Option<Strategy<V>>,
     },
-    /// Split each side on a boolean-valued wire — **η, as a checked
-    /// rewrite**: the outermost box of the named operation expands by the
-    /// Shannon law of the table, `body(w) = if w then body(true) else
-    /// body(false)`, one [`rules::apply`](crate::diagram2::rules::apply)-checked
-    /// step per side. The law itself carries the soundness — it refuses an
-    /// operation the set does not
-    /// [promise answers a bool](bytecode::Instruction::yields_bool) — so
-    /// this step is untrusted convenience: it only picks the wire and
-    /// fires. A manipulation, not a closer; the case reasoning happens
-    /// inside the graph, where the table dissolves the introduced branch
-    /// once its arms fold.
+    /// Case analysis on an intermediate result. The named operation is
+    /// one the instruction set
+    /// [guarantees answers a bool](bytecode::Instruction::yields_bool),
+    /// so its answer is `true` or `false` and nothing else — and
+    /// everything that depends on that answer can be replaced by a branch
+    /// holding one copy of it per case, the assumed answer pasted in as a
+    /// literal. That replacement is an ordinary equation (the table's
+    /// Shannon row, which refuses any operation without the guarantee),
+    /// and this step fires it once per side that computes the operation,
+    /// at the earliest such answer — each firing an
+    /// [`apply`](crate::diagram2::rules::apply)-checked rewrite like any
+    /// other, so the step itself is untrusted convenience that only picks
+    /// where. The ordinary laws then simplify each copy under its
+    /// assumption, and when both come out alike the introduced branch
+    /// collapses as well. A manipulation, not a closer: what it leaves is
+    /// a goal.
     Cases { prim: crate::term::Prim },
 }
 
