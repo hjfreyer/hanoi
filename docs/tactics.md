@@ -630,9 +630,21 @@ included; `speculation_leaves_no_trace` is the replayability claim run
 against a failed alternative; `out_of_fuel_leaves_the_graph_standing` is
 the fatal-failure invariant, asserted.
 
-Next, in order of want: a `Region::Arm`; the `hant` bridge (a proof step
-that drops a goal into a graph derivation); serialization for `Tactic`
-once the surface syntax question below is settled.
+The `hant` bridge has since landed, and it ate more than a bridge: a
+[goal](../rewrite/src/goal.rs) is two graphs now, the tactic language is
+embedded in `.hant` strategies as `lhs(…)`, `rhs(…)` and `both(…)`, and
+`exact`'s claim — with the auto-close that tests it before every step —
+is whole-graph **isomorphism** (`diagram2::isomorphic`, a pinned-boundary
+bijection search, verified link by link before it answers yes). The
+surface (in [rewrite/src/hant.rs](../rewrite/src/hant.rs)) spells
+`saturate`, `saturate(law, …)`, `branches`, `fire(law, …)`, `repeat(…)`
+and `try(…)`; queries and stated steps remain data-only until a proof
+needs a spelling for them. `peel` and `descend` retired with the term
+goal.
+
+Next, in order of want: a `Region::Arm`; surface spellings for queries
+and stated (backward) steps; serialization for `Tactic` beyond the
+surface subset.
 
 ## Open questions
 

@@ -1168,14 +1168,19 @@ mod tests {
     }
 
     /// Both sides' diagrams in one context, padded to one arity first — the
-    /// same net-change allowance `Goal::aligned` pays.
+    /// same net-change allowance `Goal::aligned` pays before it builds.
     fn aligned(a: &str, b: &str) -> (Ctx, DiagId, DiagId) {
         let mut terms = Context::new();
         let (a, b) = (term_of(&mut terms, a), term_of(&mut terms, b));
-        let goal = crate::goal::Goal::aligned(&mut terms, a, b);
+        let (aa, ba) = (terms.arity(a), terms.arity(b));
+        let (a, b) = if aa.inputs < ba.inputs {
+            (terms.under(a, ba.inputs - aa.inputs), b)
+        } else {
+            (a, terms.under(b, aa.inputs - ba.inputs))
+        };
         let mut ctx = Ctx::default();
-        let da = normalize(&mut ctx, &terms, goal.lhs);
-        let db = normalize(&mut ctx, &terms, goal.rhs);
+        let da = normalize(&mut ctx, &terms, a);
+        let db = normalize(&mut ctx, &terms, b);
         (ctx, da, db)
     }
 

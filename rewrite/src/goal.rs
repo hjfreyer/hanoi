@@ -1,26 +1,29 @@
-//! A goal is two terms and the claim that they are equal.
+//! A goal is two graphs and the claim that they are the same program.
+//!
+//! The sides used to be terms; they are [`crate::diagram2`] graphs now, so
+//! that a proof can *rewrite* them — the tactic language acts on a side in
+//! place, and equality-as-stated is [isomorphism](crate::diagram2::isomorphic)
+//! rather than one term twice. The terms are still where a goal comes from:
+//! an identity lowers, aligns, and **builds**.
 //!
 //! The compiler holds an identity to equal **net** change rather than equal
 //! arity — `pick 1 ; drop` = ε is `(2 -> 2)` against `(0 -> 0)`, and every
-//! counit reads that way. In the term model that asymmetry lives in exactly
-//! one place: here, where the narrower side is padded with
-//! [`under`](crate::term::Context::under) until the two arities agree. Every
-//! rule instance downstream is then arity-preserving, which is what lets the
-//! e-graph's analysis assert arity on every merge.
+//! counit reads that way. That asymmetry still lives in exactly one place:
+//! here, where the narrower side is padded with
+//! [`under`](crate::term::Context::under) until the two arities agree,
+//! before either side becomes a graph. Everything downstream is then
+//! arity-exact, which is what lets two graphs share one boundary.
 
 use bytecode::{IdentityIndex, Library};
 
+use crate::diagram2::{self, Graph};
 use crate::term::{Context, Error, TermIndex, lower};
 
-/// Two terms of one arity, claimed equal.
-///
-/// The sides are places in a [`Context`], so a goal is two `usize`s: the
-/// subgoals a strategy makes are built by pointing at pieces of the goal it
-/// came from rather than by copying them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Two graphs of one arity, claimed to be the same program.
+#[derive(Debug, Clone, PartialEq)]
 pub struct Goal {
-    pub lhs: TermIndex,
-    pub rhs: TermIndex,
+    pub lhs: Graph,
+    pub rhs: Graph,
 }
 
 impl Goal {
@@ -40,7 +43,7 @@ impl Goal {
         Ok(Goal::aligned(ctx, lhs, rhs))
     }
 
-    /// Two terms padded to one arity.
+    /// Two terms padded to one arity, then built as graphs.
     pub fn aligned(ctx: &mut Context, lhs: TermIndex, rhs: TermIndex) -> Goal {
         let (la, ra) = (ctx.arity(lhs), ctx.arity(rhs));
         let (lhs, rhs) = if la.inputs < ra.inputs {
@@ -53,7 +56,10 @@ impl Goal {
             ctx.arity(rhs),
             "an identity's sides differ by more than padding, which check_identities refuses"
         );
-        Goal { lhs, rhs }
+        Goal {
+            lhs: diagram2::build(ctx, lhs),
+            rhs: diagram2::build(ctx, rhs),
+        }
     }
 }
 
@@ -61,22 +67,16 @@ impl Goal {
 /// Printed one-line by [`summary`][Proof::summary].
 #[derive(Debug)]
 pub enum Proof {
-    /// The two sides are one term as written.
+    /// The two sides are one graph — isomorphic as they stand.
     Trivial,
-    /// A `peel` stripped a shared prefix and suffix; the sub-proof answers
-    /// for what was left.
-    Peel {
-        prefix: usize,
-        suffix: usize,
+    /// A `lhs(…)`, `rhs(…)` or `both(…)` ran a graph tactic; the rewritten
+    /// goal closed. Records the side and how many rewrites landed.
+    Rewrote {
+        side: &'static str,
+        steps: usize,
         sub: Box<Proof>,
     },
-    /// A `descend` forked the arms; `None` is an omitted arm whose sides
-    /// were checked equal as written.
-    Descend {
-        then_sub: Option<Box<Proof>>,
-        else_sub: Option<Box<Proof>>,
-    },
-    /// An `inline` unfolded calls — every one, or the labelled sentence's,
+    /// An `inline` opened calls — every one, or the labelled sentence's,
     /// which the summary names — and the opened goal closed.
     Inlined {
         target: Option<String>,
@@ -90,8 +90,8 @@ pub enum Proof {
         left_sub: Box<Proof>,
         right_sub: Box<Proof>,
     },
-    /// A `diagram` normalized both sides into one arena and they were one
-    /// diagram.
+    /// A `diagram` read both sides back and normalized them into one arena,
+    /// and they were one diagram.
     Diagram,
 }
 
@@ -99,18 +99,9 @@ impl Proof {
     /// One line saying how the goal closed, for the per-identity report.
     pub fn summary(&self) -> String {
         match self {
-            Proof::Trivial => "the two sides are one term".to_string(),
-            Proof::Peel {
-                prefix,
-                suffix,
-                sub,
-            } => format!("peel {}+{}; {}", prefix, suffix, sub.summary()),
-            Proof::Descend { then_sub, else_sub } => {
-                let arm = |sub: &Option<Box<Proof>>| match sub {
-                    None => "as written".to_string(),
-                    Some(p) => p.summary(),
-                };
-                format!("descend (then: {}; else: {})", arm(then_sub), arm(else_sub))
+            Proof::Trivial => "the two sides are one graph".to_string(),
+            Proof::Rewrote { side, steps, sub } => {
+                format!("{}: {} rewrite(s); {}", side, steps, sub.summary())
             }
             Proof::Inlined { target, sub } => match target {
                 None => format!("inline; {}", sub.summary()),

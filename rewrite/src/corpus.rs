@@ -51,7 +51,12 @@ pub(crate) fn attach(
         .map(|step| {
             Ok(match step {
                 Step::Diagram => Step::Diagram,
-                Step::Peel => Step::Peel,
+                // A tactic is already data — no name in it waits on the
+                // library.
+                Step::Rewrite { side, tactic } => Step::Rewrite {
+                    side: *side,
+                    tactic: tactic.clone(),
+                },
                 // A label is resolved here, so a proof naming a sentence that
                 // is not there is a load-time problem rather than a failed
                 // proof: the two mean different things to whoever reads the
@@ -79,10 +84,6 @@ pub(crate) fn attach(
                     ),
                     left: side(ctx, left, library)?,
                     right: side(ctx, right, library)?,
-                },
-                Step::Descend { then_arm, else_arm } => Step::Descend {
-                    then_arm: side(ctx, then_arm, library)?,
-                    else_arm: side(ctx, else_arm, library)?,
                 },
             })
         })
