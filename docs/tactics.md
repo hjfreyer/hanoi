@@ -1,7 +1,9 @@
 # A tactics language for diagram rewriting
 
-*A design proposal. Nothing in here is built; what is built is the table it
-drives.*
+*A design proposal, since landed: `rewrite/src/diagram2/query.rs` and
+`rewrite/src/diagram2/tactic.rs` implement what this document designs, and
+the document has been trued up against what implementation taught. Where
+the two disagree, the code and its tests are the record.*
 
 `rewrite/src/diagram2` keeps a table of laws and the operations a driver is
 built out of — `sides`, `find`, `propose`, `apply`, `replay` — and it
@@ -161,8 +163,6 @@ pub enum Atom {
     Unread { node: Var, port: usize },
     /// `fork` and `select` are the two ends of one branch.
     Paired { fork: Var, select: Var },
-    /// `node` lies in the enclosing focus region (see Within).
-    In(Var, RegionRef),
     /// Distinct nodes. Injectivity is otherwise not imposed.
     Ne(Var, Var),
 }
@@ -175,6 +175,10 @@ pub struct Bindings(HashMap<Var, NodeId>);
 
 /// All satisfying assignments, in canonical order.
 pub fn eval(graph: &Graph, q: &Query) -> Vec<Bindings>;
+
+/// `eval`, with every variable held to a region — how a focused tactic
+/// scopes its queries, uniformly, rather than atom by atom.
+pub fn eval_in(graph: &Graph, q: &Query, region: Option<&HashSet<NodeId>>) -> Vec<Bindings>;
 ```
 
 Evaluation is the obvious backtracking conjunctive-query search, with the
@@ -252,9 +256,8 @@ pub enum SinkSel {
     Output(usize),
     /// Every reader not claimed by an earlier selector. At most one per spec.
     Rest,
-    /// No readers at all.
-    None,
 }
+// "no readers at all" is the empty selector list — it needs no variant.
 
 /// The recipe for a stated Match against one side of one rule.
 pub struct MatchSpec {
@@ -270,8 +273,11 @@ pub struct MatchSpec {
 }
 
 /// Pure reading; the result goes through `apply`, so a wrong resolution
-/// is a refused step.
-fn resolve(graph: &Graph, b: &Bindings, spec: &MatchSpec) -> Result<Match, TacticError>;
+/// is a refused step. The pattern is here because `ReadersAt` and `Rest`
+/// select among the readers of what each boundary output stands for, and
+/// the pattern's own outputs are what say which source that is.
+fn resolve(graph: &Graph, pattern: &Graph, b: &Bindings, spec: &MatchSpec)
+    -> Result<Match, TacticError>;
 ```
 
 `Rest` is what keeps common statements short — "node `x` reads one leg of
@@ -347,6 +353,15 @@ the finding of this design:
   `SinkSel` lists state it explicitly. No default, no inference, never
   silent.
 
+Implementation turned up a third case of the reader-split's kind, and it
+got the same treatment. `select-literal`'s kept side **skips** branch ids
+so that a `BranchId` means the same branch on both sides of the equation —
+which leaves it carrying an id no fork or select of its own witnesses. An
+unwitnessed id cannot be read off a match, and its image in the host is a
+genuine choice (applying that side backward *mints* the branch the other
+side's select carries). So `pins_itself` declines such patterns too, and
+they join the ranks of what a derivation states rather than reads.
+
 The principle underneath: a deterministic default for the kind of ambiguity
 that cannot matter, a mandatory statement for the kind that can.
 
@@ -356,8 +371,9 @@ that cannot matter, a mandatory statement for the kind that can.
 // tactic.rs
 
 pub enum RuleSpec {
-    /// A fully concrete payload, stated by the author.
-    Concrete(Rule),
+    /// A payload stated outright, anchored by pinning pattern box `pin`
+    /// to the box the query bound — the `find_pinned` path.
+    Concrete { rule: Rule, anchor: Var, pin: usize },
     /// Read the payload off the bound anchor, law by law — the propose
     /// path. Wildcards resolve here.
     ReadOff { laws: Vec<Law>, anchor: Var },
@@ -378,7 +394,11 @@ pub enum Tactic {
     First(Vec<Tactic>),
     /// Failure becomes Unchanged. The way to say "optional".
     Try(Box<Tactic>),
-    /// Body until Unchanged; `Some(n)` is fuel, `None` claims termination.
+    /// Body until it reports Unchanged, or fails having landed nothing
+    /// this round — which is how a saturation says it is done. `Some(n)`
+    /// is fuel: a tripwire, not a budget, tripped loudly when an
+    /// iteration advances past it (the over-fuel step stands — a fatal
+    /// failure keeps its progress). `None` claims termination.
     Repeat(Box<Tactic>, Option<usize>),
     /// Scope every query inside `body` to a region.
     Within(Region, Box<Tactic>),
@@ -391,11 +411,14 @@ pub enum TacticError {
     /// that finds nothing FAILS — hant's discipline: loudly, so a proof
     /// that no longer matches says so. `Try` opts out.
     NothingFound { at: &'static str },
-    Ambiguous { wanted: Pick, found: usize },
+    Ambiguous { found: usize },
     /// `apply` refused a step the tactic constructed — a tactic bug,
     /// carried with the rules::Error so it can be read.
     Refused(rules::Error),
-    Unresolved { var: Var },
+    Unresolved { var: Var },       // a spec named a var the query lacks
+    OutOfRange { var: Var, port: usize },
+    NoBranch { var: Var },         // a branch read off a branchless box
+    ManyRests,                     // a spec said Rest twice
     OutOfFuel { after: usize },
 }
 
@@ -437,35 +460,37 @@ again records later matches against ids that will never exist when the
 derivation replays from the original graph — the derivation would stop
 being replayable, which is the one property it exists to have.
 
-So backtracking is by **speculation on a clone**. Any combinator that can
-fail after making progress runs its body against a cloned graph with a
-fresh sub-derivation. On failure, the clone is dropped and nothing
-happened. On success, the sub-derivation's steps replay onto the real graph
-— which sits in exactly the state the clone started from, and ids are
-handed out in order, so the steps land identically — and are appended.
-`Graph` is `Clone` and small; the cost is one clone per speculative
-alternative. `Derivation` stays a forward-only record, and `undo` stays
-what it is: the valley-closer, not a backtracking stack.
+So backtracking is by **speculation on a clone**. `Try` and each `First`
+alternative run against a cloned graph and a cloned derivation (cloned
+whole, so `LastImage` still sees the history). On failure, the clones are
+dropped and nothing happened. On success, the speculative suffix replays
+onto the real graph — which sits in exactly the state the clone started
+from, and ids are handed out in order, so the steps land identically — and
+is appended. `Graph` is `Clone` and small; the cost is one clone per
+speculative alternative. `Derivation` stays a forward-only record, and
+`undo` stays what it is: the valley-closer, not a backtracking stack.
 
 ### Regions
 
 ```rust
 pub enum Region {
-    /// The arm between a paired fork/select — computed the way rules::arm
-    /// computes it: downstream of one side's views, upstream of its blocks.
-    Arm { select: Var, at: Query, then_side: bool },
     /// The image of the immediately preceding step: the fresh boxes its
     /// recorded inverse names — data `apply` produced, not data the
-    /// tactic guessed.
+    /// tactic guessed. (`Derivation::latest_undo` is the one accessor
+    /// this took.)
     LastImage,
+    // A Region::Arm — the boxes between a paired fork/select, computed
+    // the way rules::arm computes them — is the natural next variant,
+    // and nothing lands it until a tactic needs it.
 }
 ```
 
-A region resolves to a set of nodes at *each* query evaluation, re-resolved
-after every apply like everything else. Its inheritance rule is semantic
+A region resolves to a set of nodes when the focus is entered, and queries
+are re-scoped to it at *each* evaluation. Its inheritance rule is semantic
 content, so it is stated as doctrine: **the region is what the focus
 produced plus what rewriting produced from it** — while inside a `Within`,
-each new step's image joins the region, and deleted nodes leave it.
+each new step's image joins the region, and deleted nodes leave it (a dead
+id in the set binds nothing, since queries bind only live nodes).
 
 ### The branch layer's ordering, as data
 
@@ -477,18 +502,23 @@ nothing to match — becomes a library tactic:
 /// The deleted driver, as a program: structural laws to fixpoint.
 pub fn saturate_structural() -> Tactic;
 
-/// The branch layer in the order that unblocks it, then cleanup.
+/// The branch layer, spent to fixpoint with the structural cleanup it
+/// needs: the branching laws in the order `rules::branching` documents,
+/// structural behind them to spend what a branch rewrite leaves.
 pub fn branch_pass() -> Tactic {
-    Tactic::Seq(vec![
-        Tactic::Repeat(fire_first(vec![Law::SelectView]), None),
-        Tactic::Repeat(fire_first(vec![
-            Law::SelectLiteral, Law::SelectSame, Law::ForkDedup,
-            Law::SpecializeEqual, Law::SpecializeBool,
-        ]), None),
-        saturate_structural(),
-    ])
+    Tactic::Repeat(
+        Box::new(fire_first([rules::branching(), rules::structural()].concat())),
+        None,
+    )
 }
 ```
+
+(A phased spelling — `select-view` to fixpoint, then the rest, then
+cleanup — is expressible as a `Seq` of `Repeat`s, but one law of the layer
+unlocking another means the phases have to loop *together* to reach a
+fixpoint, and one `Repeat` over the ordered list is that loop said
+plainly. `branch { add } { add }` dissolving to a single `add` — fork-dedup,
+then select-view, then select-same, then dead-node — is the test.)
 
 ## Three tactics, worked
 
@@ -527,7 +557,7 @@ Tactic::Seq(vec![
         rule: RuleSpec::ReadOff { laws: vec![Law::SelectLiteral], anchor: Var("sel") },
         pick: Pick::Unique,
     },
-    // The kept arm was implanted as fresh boxes: the previous step's image.
+    // Clean up inside the fold's image, and nowhere else.
     Tactic::Within(Region::LastImage, Box::new(saturate_structural())),
 ])
 ```
@@ -536,13 +566,23 @@ The query binds what is natural to *say* — the select — while `ReadOff`
 rides `propose`'s `(rule, seed)` pairing, which seeds what the matcher
 needs — the literal.
 
+The image is smaller than a first reading suggests, and the test that
+found this out is worth repeating. When the arms take nothing there is no
+fork, and `arm` extracts each arm as a *wire*: the two literals are
+"boxes the arm merely reads and does not own", so they sit outside the
+window and survive the fold. The image is then just the re-spent
+condition, which the focused cleanup collects — while the untaken arm's
+literal, dead but **outside** the image, deliberately survives it. A
+focus that collected it would not be a focus; the unfocused
+`saturate_structural()` is what reaches it.
+
 **Backward, stated: introduce a `copy(1)` on the wire feeding a node.**
 
 ```rust
 Tactic::State {
     at: Query::new()
         .is("x", NodePred::Kind(KindPat::Op(Some(Prim::Add))))
-        .reads_input("x", Some(0), Some(0)),
+        .reads_input("x", 0, 0),
     rule: Rule::CopyElim { n: 1 },
     dir: Direction::Backward,                     // rhs → lhs: the copy comes back
     with: MatchSpec {
@@ -565,34 +605,34 @@ Tactic::State {
 `apply` holds the split to fullness, and the returned inverse — a forward
 `copy-elim` at the fresh box — lands in the derivation, closing the valley.
 
-## What changes in the existing code
+## What changed in the existing code
 
 Almost nothing, and that is a property being claimed, not a convenience.
 
-- `rules.rs` gains `find_pinned`; `find_at` delegates to it. Later, if
-  per-law control beyond `propose` is wanted, `read_off` becomes
-  `pub(super)`; the first version routes through `propose` and filters.
-- `mod.rs` changes not at all. The query layer reads the public surface;
-  the tactic layer mutates through `Derivation::push` alone.
+- `rules.rs` gained `find_pinned` (`find_at` delegates to it; the walk
+  visits the pinned box first, so a consumer can be placed before its
+  producer — that edge defers to `check_match`, which holds every edge at
+  the end either way), one accessor (`Derivation::latest_undo`, how a
+  driver reads a step's image), and the third `pins_itself` decline
+  (unwitnessed branch ids). Nothing in the trusted pair moved.
+- `mod.rs` changed not at all beyond declaring the two modules. The query
+  layer reads the public surface; the tactic layer mutates through
+  `Derivation::push` alone, and the private mutation surface stays
+  private.
 
-## Build order
+The tests that hold this together: `saturate_structural()` restores the
+coverage the driver's deletion gave up (meaning preserved across a run,
+the structural layer gone, idempotence, a whole graph at every end, the
+replay/undo valley); `a_pattern_is_found_from_any_of_its_boxes` pins every
+side of the table at every box; the stated-step test re-derives
+`a_derivation_states_what_the_matcher_cannot_read` from a spec, `Rest`
+included; `speculation_leaves_no_trace` is the replayability claim run
+against a failed alternative; `out_of_fuel_leaves_the_graph_standing` is
+the fatal-failure invariant, asserted.
 
-1. `query.rs` — types, `eval`, the builder. Tests: canonical-order
-   determinism; `Feeds`/`Paired`/`Unread` against the branch graphs the
-   rules tests already construct.
-2. `find_pinned` — tested by re-running the law tests' self-match pinned at
-   every box in turn.
-3. `tactic.rs` core — `Fire`, the combinators, clone-speculation, `run`.
-   The first integration test is `saturate_structural()` restoring the
-   coverage the driver's deletion gave up: meaning preserved across a run,
-   the structural layer gone, idempotence, links agreeing at every step,
-   read-back, the replay/undo valley.
-4. `State` and `resolve` — port
-   `a_derivation_states_what_the_matcher_cannot_read` to the tactic
-   spelling and hold the two derivations to agreeing.
-5. Regions, `Within`, `branch_pass()` — end to end,
-   `push true branch { push 1 } { push 2 }` down to `push 1`.
-6. Separately, later: the `hant` bridge.
+Next, in order of want: a `Region::Arm`; the `hant` bridge (a proof step
+that drops a goal into a graph derivation); serialization for `Tactic`
+once the surface syntax question below is settled.
 
 ## Open questions
 
