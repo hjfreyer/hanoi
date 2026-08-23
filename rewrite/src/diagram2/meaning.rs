@@ -5,9 +5,8 @@
 //! judgement. `add` on two wires stays `add(x, y)` and never becomes `7`,
 //! so this decides nothing — it holds the wiring to account and stops
 //! there. A [`Graph`] and the [`Term`] it came from can both be read this
-//! way, which is what lets [`build`](super::build), the rules table and
-//! [`read_back`](super::read_back) each be held to preserving meaning
-//! separately.
+//! way, which is what lets [`build`](super::build) and the rules table each
+//! be held to preserving meaning separately.
 
 use std::collections::HashMap;
 

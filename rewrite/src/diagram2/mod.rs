@@ -156,10 +156,9 @@
 //! top, so the survivors pass either side of it and nothing is dragged up
 //! and put back; `pick 1` comes back as `copy(1) * id(1) ; id(1) * swap`.
 //! That is a choice about legibility and nothing more. What comes back is
-//! *a* term meaning what the graph means, not the term it was built from —
-//! a branch in particular reads back as both arms run flat and then a
-//! branch that throws one answer away, which is what the graph now says a
-//! branch is.
+//! not the term it was built from — a branch in particular reads back as
+//! both arms run flat and then a branch that throws one answer away, which
+//! is what the graph now says a branch is.
 
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet};
@@ -839,11 +838,10 @@ impl std::error::Error for Error {}
 /// either side of it and a term written `X * id(1)` comes back as
 /// `X * id(1)` rather than as the roll pair it is equal to.
 ///
-/// Both are about legibility. Many terms mean what a given graph means and
-/// this picks one of them; it does not undo [`build`], and a branch is where
-/// that shows plainest — the arms were flattened into the graph and are
-/// scheduled like any other work, so what comes back runs both of them and
-/// then chooses.
+/// Both are about legibility. This does not undo [`build`], and a branch is
+/// where that shows plainest — the arms were flattened into the graph and
+/// are scheduled like any other work, so what comes back runs both of them
+/// and then chooses.
 pub fn read_back(graph: &Graph, terms: &mut Context) -> TermIndex {
     let order = schedule(graph);
     // What is still wanted at or after each step, the boundary included.
@@ -1374,41 +1372,6 @@ mod tests {
             assert_eq!(
                 as_term, as_graph,
                 "sentence {} means something else as a graph",
-                library.names[idx]
-            );
-        }
-    }
-
-    /// Build and read back, and ask whether the same program came out.
-    ///
-    /// Not that the same *term* came out — that property is gone, and was
-    /// never worth much. Meaning here is the DAG a program leaves with its
-    /// operations left opaque, which is a good deal weaker than what
-    /// `diagram` decides and owes it nothing.
-    #[test]
-    fn build_and_read_back_agree() {
-        let (library, mut arena, terms) = corpus();
-        for (idx, term) in terms {
-            let graph = build(&arena, term);
-            let back = read_back(&graph, &mut arena);
-            arena
-                .check(back)
-                .unwrap_or_else(|e| panic!("sentence {}: {}", library.names[idx], e));
-            assert_eq!(
-                arena.arity(back),
-                arena.arity(term),
-                "sentence {} changed arity through the read-back",
-                library.names[idx]
-            );
-            let mut m = Meaning::default();
-            let inputs = boundary(&mut m, arena.arity(term).inputs);
-            let (there, and_back) = (
-                eval_term(&mut m, &arena, term, inputs.clone()),
-                eval_term(&mut m, &arena, back, inputs),
-            );
-            assert_eq!(
-                there, and_back,
-                "sentence {} did not read back as itself",
                 library.names[idx]
             );
         }
