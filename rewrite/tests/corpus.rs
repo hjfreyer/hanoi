@@ -20,10 +20,13 @@ fn the_corpus_identities_close() {
     let mut corpus = corpus::load(&tests).unwrap();
     assert_eq!(corpus.problems, Vec::<String>::new());
 
-    // Nothing is expected to stick. The path-condition claim in `types_test`
-    // was the last one, and `inline diagram` discharges it: the engine
-    // builds the case analysis the old proof wrote out by hand.
-    let expected_stragglers: [&str; 0] = [];
+    // One straggler, on purpose. `emit_does_pre_and_post_is_constant` is the
+    // corpus's biggest goal — 351 boxes on the left once `inline` has opened
+    // it — and it is here as the standing case for reporting a proof in
+    // progress: its `.hant` says `inline` and stops, so the run reliably ends
+    // with a large open goal to print. Its residual is what says the current
+    // report cannot be read, and it is the thing any new one is measured on.
+    let expected_stragglers = ["barista::customer_impl::emit_does_pre_and_post_is_constant"];
 
     let prover = Prover::new(&corpus.library);
     let mut stragglers = Vec::new();
