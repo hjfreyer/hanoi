@@ -170,7 +170,9 @@ use crate::term::{Arity, Context, Prim, Term, TermIndex};
 
 #[cfg(test)]
 mod meaning;
+pub mod query;
 pub mod rules;
+pub mod tactic;
 
 // ---- the graph ----------------------------------------------------------------
 
