@@ -1080,6 +1080,13 @@ impl Derivation {
         self.steps.iter().map(|(forward, _)| forward)
     }
 
+    /// The step that would undo the latest rewrite. Its [`Match`] names
+    /// the boxes that rewrite left behind — which is how a driver reads a
+    /// step's **image** without reaching into the splice.
+    pub fn latest_undo(&self) -> Option<&Step> {
+        self.steps.last().map(|(_, back)| back)
+    }
+
     /// One more rewrite, applied and recorded.
     pub fn push(&mut self, graph: &mut Graph, step: Step) -> Result<(), Error> {
         let back = apply(graph, &step)?;
@@ -1463,17 +1470,34 @@ pub fn find(graph: &Graph, pattern: &Graph) -> Vec<Match> {
 /// [`find`], with the pattern's first box pinned to one node. What
 /// [`propose`] uses, since a rule read off a node is a rule anchored there.
 pub fn find_at(graph: &Graph, pattern: &Graph, seed: NodeId) -> Vec<Match> {
-    if !pins_itself(pattern) || !graph.is_live(seed) {
+    find_pinned(graph, pattern, 0, seed)
+}
+
+/// [`find_at`], with pattern box `pat` — not necessarily the first —
+/// pinned to `host`.
+///
+/// This is what lets a driver anchor a rule at the box its *query* bound
+/// rather than the box the pattern happens to begin with: a pattern is
+/// built producers-first, so the box a rule is naturally *about* need not
+/// be its first. The walk starts at `pat` and the answer is unchanged —
+/// a [`Match`] is indexed by the pattern's own order whatever order the
+/// search visited it in.
+pub fn find_pinned(graph: &Graph, pattern: &Graph, pat: usize, host: NodeId) -> Vec<Match> {
+    if !pins_itself(pattern) || pat >= pattern.nodes.len() || !graph.is_live(host) {
         return Vec::new();
     }
+    let mut order: Vec<usize> = (0..pattern.nodes.len()).collect();
+    order.remove(pat);
+    order.insert(0, pat);
     let mut search = Search {
         graph,
         pattern,
+        order,
         nodes: vec![None; pattern.nodes.len()],
         inputs: vec![None; pattern.inputs.len()],
         branches: vec![None; pattern.branches as usize],
         used: HashSet::new(),
-        seed,
+        seed: host,
         found: Vec::new(),
     };
     search.walk(0);
@@ -1481,10 +1505,25 @@ pub fn find_at(graph: &Graph, pattern: &Graph, seed: NodeId) -> Vec<Match> {
 }
 
 /// Whether a pattern says enough about itself to be looked for: at least one
-/// box to anchor on, and no source exported twice or exported straight from
-/// the boundary.
+/// box to anchor on, no source exported twice or exported straight from
+/// the boundary, and no branch id that no box witnesses.
+///
+/// The last is `select-literal`'s kept side: it **skips** branch ids so a
+/// [`BranchId`] means the same branch on both sides of the equation, and an
+/// id no fork or select carries cannot be read off a match — its image in
+/// the host is a choice, exactly as a reader-split is, so the pattern has
+/// to be stated rather than searched for.
 fn pins_itself(pattern: &Graph) -> bool {
     if pattern.nodes.is_empty() {
+        return false;
+    }
+    let mut witnessed: HashSet<BranchId> = HashSet::new();
+    for (_, kind) in pattern.live() {
+        if let NodeKind::Fork { branch, .. } | NodeKind::Select { branch, .. } = kind {
+            witnessed.insert(*branch);
+        }
+    }
+    if witnessed.len() != pattern.branches as usize {
         return false;
     }
     let mut seen = HashSet::new();
@@ -1497,6 +1536,10 @@ fn pins_itself(pattern: &Graph) -> bool {
 struct Search<'g> {
     graph: &'g Graph,
     pattern: &'g Graph,
+    /// The order the walk visits pattern boxes in — the pinned box first,
+    /// the rest in index order. [`Match::nodes`] stays in pattern order;
+    /// only the visiting changes.
+    order: Vec<usize>,
     nodes: Vec<Option<NodeId>>,
     inputs: Vec<Option<Source>>,
     branches: Vec<Option<BranchId>>,
@@ -1506,32 +1549,33 @@ struct Search<'g> {
 }
 
 impl Search<'_> {
-    fn walk(&mut self, i: usize) {
-        if i == self.nodes.len() {
+    fn walk(&mut self, pos: usize) {
+        if pos == self.order.len() {
             self.finish();
             return;
         }
-        for host in self.candidates(i) {
+        let i = self.order[pos];
+        for host in self.candidates(pos) {
             let undo = self.assign(i, host);
             if let Some(undo) = undo {
-                self.walk(i + 1);
+                self.walk(pos + 1);
                 self.undo(i, host, undo);
             }
         }
     }
 
-    /// The host boxes worth trying for the pattern's box `i`.
+    /// The host boxes worth trying for the box visited at `pos`.
     ///
     /// Once one box is fixed, its neighbours are: a port whose source is
     /// already known has only that source's readers to offer. Only a box
     /// nothing so far touches falls back on the whole graph, which is why
     /// two unconnected boxes — `dedup`'s pattern — still cost one sweep
     /// rather than a product.
-    fn candidates(&self, i: usize) -> Vec<NodeId> {
-        if i == 0 {
+    fn candidates(&self, pos: usize) -> Vec<NodeId> {
+        if pos == 0 {
             return vec![self.seed];
         }
-        let here = NodeId::at(i);
+        let here = NodeId::at(self.order[pos]);
         for (port, &src) in self.pattern.sources(here).iter().enumerate() {
             let known = match src {
                 Source::Input(l) => self.inputs[l],
@@ -1603,10 +1647,18 @@ impl Search<'_> {
                     }
                 },
                 Source::Port { node, port } => {
-                    let want = self.nodes[node.index()].map(|n| Source::Port { node: n, port });
-                    if want != Some(hsrc) {
-                        self.rollback(&fixed, branch);
-                        return None;
+                    // A producer not yet placed is not a mismatch: the walk
+                    // visits the pinned box first, so a consumer can come
+                    // before what feeds it, and [`check_match`] holds every
+                    // edge at the end either way. In pattern order this arm
+                    // never defers — a rule's side is built producers-first.
+                    match self.nodes[node.index()] {
+                        None => {}
+                        Some(n) if hsrc == (Source::Port { node: n, port }) => {}
+                        Some(_) => {
+                            self.rollback(&fixed, branch);
+                            return None;
+                        }
                     }
                 }
             }
@@ -2756,6 +2808,32 @@ mod tests {
         let (_terms, graph) = built("as_bool");
         let (_, rhs) = sides(&Rule::NotNot).unwrap();
         assert_eq!(find(&graph, &rhs).len(), 1);
+    }
+
+    /// The walk can start anywhere: pinning any box of a side to its own
+    /// image finds the identity embedding, and the answer comes back in
+    /// pattern order whatever order the search visited it in.
+    #[test]
+    fn a_pattern_is_found_from_any_of_its_boxes() {
+        for rule in table() {
+            for side in {
+                let (lhs, rhs) = sides(&rule).unwrap();
+                [lhs, rhs]
+            } {
+                if !pins_itself(&side) {
+                    continue;
+                }
+                for i in 0..side.nodes.len() {
+                    assert!(
+                        find_pinned(&side, &side, i, NodeId::at(i)).contains(&identity(&side)),
+                        "{:?}: pinned at box {}, the identity was not found:\n{}",
+                        rule.law(),
+                        i,
+                        side
+                    );
+                }
+            }
+        }
     }
 
     /// A backward step still *spends* the laws the matcher declines — it
