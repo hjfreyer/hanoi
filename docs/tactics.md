@@ -655,7 +655,10 @@ deleted; [docs/proving.md](proving.md) tells that story.
 
 Next, in order of want: a `Region::Arm`; surface spellings for queries
 and stated (backward) steps; serialization for `Tactic` beyond the
-surface subset; a stored, re-checkable derivation per closed identity.
+surface subset. The re-checkable derivation per closed identity has since
+landed — a `Proof` carries every step its drives spent, and
+`Prover::prove` replays the whole tree before answering — with
+persistence to disk the remaining half.
 
 ## Open questions
 
