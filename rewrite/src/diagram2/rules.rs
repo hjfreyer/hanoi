@@ -341,12 +341,14 @@ pub enum Rule {
     /// — a strategy's last resort, and stated as a law precisely so a
     /// strategy can hold it.
     ViewValue { fork: usize, view: usize },
-    /// η, as an equation: a wire the instruction set promises is a bool is
-    /// `true` or it is `false`, so everything downstream of it is a branch
-    /// on it — `body(w) = if w then body(true) else body(false)`. Shannon
-    /// expansion, and the one law that *grows* a graph on purpose: the
-    /// case split the old engine kept as its pinned boundary, stated as a
-    /// pair of graphs like every other row.
+    /// Case analysis, as an equation: a wire the instruction set promises
+    /// is a bool is `true` or it is `false` — there is no third case — so
+    /// everything downstream of it equals a branch holding one copy per
+    /// case, the assumed answer pasted in as a literal:
+    /// `body(w) = if w then body(true) else body(false)`. Shannon
+    /// expansion (η, in the literature), and the one law that *grows* a
+    /// graph on purpose: the case split the old engine kept as its pinned
+    /// boundary, stated as a pair of graphs like every other row.
     ///
     /// `kind` is the operation whose answer is split on — refused unless
     /// [`yields_bool`](bytecode::Instruction::yields_bool) promises it —

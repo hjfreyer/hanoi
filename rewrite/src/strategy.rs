@@ -18,10 +18,10 @@
 //! derivation's worth of checked steps and one final isomorphism, rather
 //! than one engine's word. A stuck `diagram` means the claim is false, or
 //! true only for reasons the table cannot yet say — and `cases` is the
-//! step for the largest of those: η, spent deliberately the way `inline`
-//! spends a definition, and spent as a **rewrite** — the table's Shannon
-//! law, fired at a wire the step picks, checked like every other step.
-//! Nothing in this module touches a graph except through
+//! step for the largest of those: case analysis on an intermediate
+//! result that can only be `true` or `false`, done as the table's own
+//! expansion rewrite and spent deliberately the way `inline` spends a
+//! definition. Nothing in this module touches a graph except through
 //! [`Derivation::push`](crate::diagram2::rules::Derivation::push): the
 //! whole file is untrusted convenience over the table.
 //!
@@ -144,12 +144,14 @@ impl<'l> Prover<'l> {
                 }))
             }
 
-            // η, as a checked rewrite: each side's outermost box of the
-            // operation — the one with the least upstream, since expanding
-            // a downstream test buries it inside the copies of a later
-            // expansion — is split by the Shannon law: `body(w) = if w
-            // then body(true) else body(false)`. One proposal per side,
-            // each landed through `apply` like any rewrite; a side without
+            // Case analysis on an intermediate result, as a checked
+            // rewrite: the operation's answer is `true` or `false` and
+            // nothing else, so everything downstream of it becomes a
+            // branch over both assumptions — the table's Shannon row,
+            // fired once per side through `apply` like any rewrite. The
+            // step picks the earliest such answer (the box with the least
+            // upstream), because splitting on a late result says nothing
+            // usable about the computations feeding it; a side without
             // the operation is left standing, and everything after the
             // expansion is the table's business. A manipulation, not a
             // closer: what it leaves is a goal.
