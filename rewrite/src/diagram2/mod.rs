@@ -85,6 +85,23 @@
 //! arrives at by construction, reached instead by named rewrites over data
 //! that existed the whole way.
 //!
+//! ## Nothing here spends them
+//!
+//! There was a `rewrite` in this module — a worklist that ran
+//! [`rules::structural`] to fixpoint, and the only way a graph ever got
+//! smaller. It is gone, and the rules and the laws it spent are untouched.
+//! What it decided was fixed: *those* laws, in *that* order, everywhere
+//! they fired, chosen here rather than by whoever is proving something. A
+//! choice of laws and of where to spend them is a strategy, and strategies
+//! are written in [`crate::hant`]; this is a table and the operations that
+//! read it, and the driver comes back as a tactic over both.
+//!
+//! So a graph out of [`build`] is the literal translation and stays that
+//! way until something applies a rule to it. [`rules`] is where that
+//! happens: [`rules::find`] and [`rules::propose`] say where a law could
+//! fire, [`rules::apply`] fires one and hands back its inverse, and
+//! [`rules::replay`] runs a list of them.
+//!
 //! **Ports link to ports; there is no wire.** An input names the one output
 //! port it reads ([`Source`]) and an output names the input ports that read
 //! it ([`Sink`]), so a rewrite is a re-pointing rather than a declaration
@@ -109,17 +126,17 @@
 //!   come out. `add` on two wires stays `add(x, y)` and never becomes `7`,
 //!   so that oracle decides nothing either — it holds the wiring to account
 //!   and stops there.
-//! - **The value folds, in what [`rewrite`] spends.** No literal window
-//!   runs and no commutative operand sorts, so `push 1 ; push 2 ; add`
-//!   keeps all three of its boxes. Layer 3 of the algebra sheet is
-//!   [`rules::Rule::NotNot`] and nothing else, and that row is in the table
-//!   but not in [`rules::structural`].
+//! - **The value folds, in [`rules::structural`].** No literal window runs
+//!   and no commutative operand sorts, so `push 1 ; push 2 ; add` keeps all
+//!   three of its boxes however hard the wiring laws are spent. Layer 3 of
+//!   the algebra sheet is [`rules::Rule::NotNot`] and nothing else, and that
+//!   row is in the table but not in that list.
 //!
 //!   Layer 2 **is** in the table — [`rules::branching`] folds a literal
 //!   condition into its arm, deletes a branch whose arms answer alike,
 //!   lifts work both arms do out in front, and writes what a test decided
-//!   into the block that tested it. It is not among the laws [`rewrite`]
-//!   spends either, for two reasons worth keeping apart: three of those
+//!   into the block that tested it. It is not in [`rules::structural`]
+//!   either, for two reasons worth keeping apart: three of those
 //!   laws turn on what an operation *computes*, which the opaque oracle
 //!   cannot judge and `vm` can; and the other three take a branch apart,
 //!   which is a strategy, and this module decides no strategy.
@@ -505,7 +522,7 @@ impl Graph {
 ///
 /// Every law of the structural layer still has a spelling here, which is
 /// the difference from [`crate::diagram`] and the whole premise of the
-/// module — [`rewrite`] is what spends them.
+/// module — the table in [`rules`] is what spends them.
 pub fn build(terms: &Context, term: TermIndex) -> Graph {
     let arity = terms.arity(term);
     let mut graph = Graph::empty(arity.inputs);
@@ -588,28 +605,6 @@ fn emit(graph: &mut Graph, terms: &Context, term: TermIndex, inputs: Vec<Source>
             graph.add(NodeKind::Select { arity, branch }, ports)
         }
     }
-}
-
-// ---- rewriting -----------------------------------------------------------------
-
-/// Every structural box deleted, and every computation done twice made one.
-///
-/// The moves are not written here any more: they are [`rules::structural`],
-/// a table of pairs of graphs this module says are the same program, and
-/// [`rules::saturate`] is what spends them. What that buys over the
-/// hand-written `match` it replaces is a page anyone can read a rewrite
-/// against, and a place to put a law that is not one of the four
-/// eliminations — δ-naturality is the first, and it is in the table.
-pub fn rewrite(graph: &mut Graph) {
-    rules::saturate(graph, &rules::structural());
-}
-
-/// [`rewrite`], with a witness run against the graph after every single
-/// firing. The tests use it to hold [`Graph::check`] at each step rather
-/// than only at the fixpoint.
-#[cfg(test)]
-fn rewrite_watching(graph: &mut Graph, after: &mut dyn FnMut(&Graph)) {
-    rules::saturate_watching(graph, &rules::structural(), after);
 }
 
 // ---- well-formedness ------------------------------------------------------------
@@ -1249,14 +1244,6 @@ mod tests {
         (terms, graph)
     }
 
-    /// The same, rewritten to fixpoint.
-    fn rewritten(body: &str) -> (Context, Graph) {
-        let (terms, mut graph) = built(body);
-        rewrite(&mut graph);
-        graph.check().unwrap_or_else(|e| panic!("{}\n{}", e, graph));
-        (terms, graph)
-    }
-
     /// Every sentence the integration suite compiles, lowered into one
     /// arena — the same corpus `diagram`'s round trip runs on.
     pub(super) fn corpus() -> (Library, Context, Vec<(SentenceIndex, TermIndex)>) {
@@ -1273,12 +1260,6 @@ mod tests {
         let lowered = crate::term::lower_all(&mut arena, &library).unwrap();
         let terms = lowered.iter_enumerated().map(|(i, &t)| (i, t)).collect();
         (library, arena, terms)
-    }
-
-    /// Whether no structural box survives — one sweep now, since a
-    /// branch's arms are boxes in the same graph as everything else.
-    fn no_structure(graph: &Graph) -> bool {
-        graph.live().all(|(_, kind)| !kind.is_structural())
     }
 
     // ---- the literal translation ----
@@ -1328,250 +1309,6 @@ mod tests {
             ),
             "each block is an arm's answer"
         );
-    }
-
-    // ---- rewriting: the connections get direct ----
-
-    #[test]
-    fn the_boundary_links_straight_through() {
-        // Two crossings and nothing left to record them: the outputs name
-        // the inputs, which is the whole claim of the module in one line.
-        let (_terms, graph) = rewritten("swap swap");
-        assert_eq!(graph.live_count(), 0);
-        assert_eq!(
-            graph.outputs().to_vec(),
-            vec![Source::Input(0), Source::Input(1)]
-        );
-
-        // The counit: copy, then drop the copy.
-        let (_terms, graph) = rewritten("pick 0 drop 0");
-        assert_eq!(graph.live_count(), 0);
-        assert_eq!(graph.outputs().to_vec(), vec![Source::Input(0)]);
-    }
-
-    #[test]
-    fn a_permutation_is_the_links_it_leaves() {
-        // Yang–Baxter: both spellings of the three-way reversal delete down
-        // to no boxes at all, and the links they leave are the same.
-        let (_terms, one) = rewritten("swap dip { swap } swap");
-        let (_terms, other) = rewritten("dip { swap } swap dip { swap }");
-        assert_eq!(one.live_count(), 0);
-        assert_eq!(other.live_count(), 0);
-        assert_eq!(one.outputs().to_vec(), other.outputs().to_vec());
-        assert_eq!(
-            one.outputs().to_vec(),
-            vec![Source::Input(2), Source::Input(1), Source::Input(0)]
-        );
-    }
-
-    #[test]
-    fn work_nothing_reads_is_no_work() {
-        // ε-naturality, by deletion: the `equal` loses its only reader, so
-        // it goes, and the copies underneath go with it.
-        let (_terms, graph) = rewritten("pick 1 pick 1 equal drop 0");
-        assert_eq!(graph.live_count(), 0);
-        assert_eq!(
-            graph.outputs().to_vec(),
-            vec![Source::Input(0), Source::Input(1)]
-        );
-
-        let (_terms, graph) = rewritten("add drop 0");
-        assert_eq!(graph.live_count(), 0);
-        assert!(graph.outputs().is_empty());
-    }
-
-    #[test]
-    fn a_copy_becomes_a_port_read_twice() {
-        let (_terms, graph) = rewritten("push 9 pick 0");
-        assert_eq!(graph.live_count(), 1);
-        let (id, kind) = graph.live().next().unwrap();
-        assert!(matches!(kind, NodeKind::Op(Prim::Push(_))));
-        assert_eq!(graph.sinks(Source::Port { node: id, port: 0 }).len(), 2);
-        // The moment monogamy breaks is the moment the graph stops being a
-        // wiring diagram and starts being cartesian.
-        assert!(!graph.is_monogamous());
-
-        // The other spelling reaches the same place, and by the other
-        // road: two `push 9` boxes on one set of sources — no sources at
-        // all — are one box, by `dedup`. That is δ-naturality, which
-        // `diagram` buys by interning and this module buys with a rule.
-        let (_terms, twice) = rewritten("push 9 push 9");
-        assert_eq!(twice.live_count(), 1);
-        let (id, _) = twice.live().next().unwrap();
-        assert_eq!(twice.sinks(Source::Port { node: id, port: 0 }).len(), 2);
-    }
-
-    #[test]
-    fn a_value_reaches_both_arms_through_one_fork() {
-        // What the flattening buys, with the one boundary it keeps. The
-        // structure inside the `then` arm is deleted like any other, and
-        // both arms end up reading the one producer — but through the fork,
-        // which is what leaves the two views tellable apart.
-        let (_terms, graph) = rewritten("branch { pick 0 drop 0 not } { not }");
-        assert_eq!(graph.live_count(), 4, "{}", graph);
-        assert!(no_structure(&graph), "{}", graph);
-
-        let (fork, _) = graph
-            .live()
-            .find(|(_, kind)| matches!(kind, NodeKind::Fork { .. }))
-            .expect("a branch whose arms take something has a fork");
-        // Port 0 is the condition — the sentence's top input — and port 1
-        // the one producer whose views the arms get. The `copy(1)` that
-        // gave the fork and the select a reader each is gone, so both read
-        // the condition straight.
-        assert_eq!(
-            graph.node(fork).inputs,
-            vec![Source::Input(1), Source::Input(0)],
-            "the condition, and then the one producer"
-        );
-        let select = graph
-            .live()
-            .find_map(|(id, kind)| match kind {
-                NodeKind::Select { .. } => Some(id),
-                _ => None,
-            })
-            .expect("the branch ends in a select");
-        assert_eq!(
-            graph.node(select).inputs[0],
-            Source::Input(1),
-            "and both ends read it in the same place"
-        );
-
-        // One `not` per arm, each on its own view of that producer.
-        let mut read: Vec<usize> = graph
-            .live()
-            .filter(|(_, kind)| matches!(kind, NodeKind::Op(Prim::Not)))
-            .map(|(id, _)| match graph.node(id).inputs[..] {
-                [Source::Port { node, port }] if node == fork => port,
-                ref other => panic!("a `not` reading {:?} rather than the fork", other),
-            })
-            .collect();
-        read.sort();
-        assert_eq!(read, vec![0, 1], "the `then` view and the `else` view");
-    }
-
-    /// The property `specialize-equal` needs, and the whole point of keeping
-    /// the fork: after rewriting, the two arms' views of a value are still
-    /// different ports, so a rule that holds on one side of a branch has
-    /// somewhere to write its answer.
-    #[test]
-    fn the_two_views_of_a_branch_stay_apart() {
-        let (_terms, graph) = rewritten("branch { pick 0 drop 0 not } { not }");
-        let (select, branch) = graph
-            .live()
-            .find_map(|(id, kind)| match kind {
-                NodeKind::Select { branch, .. } => Some((id, *branch)),
-                _ => None,
-            })
-            .expect("the branch ends in a select");
-        let (fork, _) = graph
-            .live()
-            .find(|(_, kind)| matches!(kind, NodeKind::Fork { branch: b, .. } if *b == branch))
-            .expect("and begins at the fork it names");
-
-        // Walk each block of the select back to the fork it came through.
-        // The blocks start at port 1, since port 0 is the condition.
-        let view = |port: usize| {
-            let Source::Port { node, .. } = graph.node(select).inputs[port] else {
-                panic!("a block reading the boundary");
-            };
-            match graph.node(node).inputs[..] {
-                [Source::Port { node, port }] if node == fork => port,
-                ref other => panic!("an arm reading {:?} rather than the fork", other),
-            }
-        };
-        assert_ne!(
-            view(1),
-            view(2),
-            "the arms would have nowhere to differ:\n{}",
-            graph
-        );
-    }
-
-    /// What the condition on a fork is for. `specialize-equal` — a value
-    /// that tested `equal` to a literal *is* that literal in the then arm —
-    /// is a rule about an arm's view, so it is anchored at the fork; and it
-    /// has to name the `equal` that decides the branch. It could not reach
-    /// that through the select, because the arms lie between the two ends
-    /// and no local window holds both. Through port 0 it is one hop.
-    #[test]
-    fn a_fork_names_what_decides_its_branch() {
-        let (_terms, graph) = rewritten("pick 0 push 1 equal branch { not } { negate }");
-        let (fork, _) = graph
-            .live()
-            .find(|(_, kind)| matches!(kind, NodeKind::Fork { .. }))
-            .expect("the arms take something, so there is a fork");
-
-        let Source::Port { node: decides, .. } = graph.node(fork).inputs[0] else {
-            panic!("the condition is the boundary's, not a box's:\n{}", graph);
-        };
-        assert!(
-            matches!(graph.kind(decides), NodeKind::Op(Prim::Equal)),
-            "the fork does not name the test:\n{}",
-            graph
-        );
-        // And the literal it was tested against, one hop further — which is
-        // the rest of what the rule's left-hand side needs.
-        assert!(
-            graph
-                .sources(decides)
-                .iter()
-                .any(|src| matches!(src, Source::Port { node, .. }
-                    if matches!(graph.kind(*node), NodeKind::Op(Prim::Push(_))))),
-            "the test does not name the literal:\n{}",
-            graph
-        );
-        // The select reads the very same port, so a rule at either end is
-        // talking about one condition rather than two spellings of it.
-        let select = graph
-            .live()
-            .find_map(|(id, kind)| match kind {
-                NodeKind::Select { .. } => Some(id),
-                _ => None,
-            })
-            .expect("the branch ends in a select");
-        assert_eq!(graph.node(select).inputs[0], graph.node(fork).inputs[0]);
-    }
-
-    /// A stack slot neither arm keeps should take its producer with it.
-    ///
-    /// It does not, and this test says so rather than leaving it to prose.
-    /// `dead-node` fires only when *every* output of a box is unread, so a
-    /// fork with one slot still in use holds on to the rest — where the
-    /// `copy` it replaced was deleted unconditionally and let the unused
-    /// producer go. The fix is a narrowing rule, and it waits for the
-    /// rewrite procedure it would be written against.
-    #[test]
-    #[ignore = "wants a fork-narrowing rule; see the rewrite rework"]
-    fn a_slot_no_arm_keeps_lets_its_producer_go() {
-        let (_terms, graph) = rewritten("push 9 swap pick 0 branch { drop 1 } { drop 1 }");
-        assert!(
-            !graph
-                .live()
-                .any(|(_, kind)| matches!(kind, NodeKind::Op(Prim::Push(_)))),
-            "the 9 neither arm keeps is still here:\n{}",
-            graph
-        );
-    }
-
-    #[test]
-    fn a_branch_nothing_reads_is_deleted_whole() {
-        let (_terms, graph) = rewritten("branch { push 1 } { push 2 } drop 0");
-        assert_eq!(graph.live_count(), 0);
-        assert!(graph.outputs().is_empty());
-    }
-
-    #[test]
-    fn the_fold_layer_is_absent_on_purpose() {
-        // No literal window runs here, no operand sorts, no condition takes
-        // its arm: layers 2 and 3 of the algebra sheet are untouched, so all
-        // three boxes stay. The day that changes, this is what says so.
-        let (_terms, graph) = rewritten("push 1 push 2 add");
-        assert_eq!(graph.live_count(), 3);
-        // A literal condition and a `select` that could read it, and
-        // nothing does: `push true`, both arms' pushes, and the select.
-        let (_terms, graph) = rewritten("push true branch { push 1 } { push 2 }");
-        assert_eq!(graph.live_count(), 4, "{}", graph);
     }
 
     // ---- routing, the read-back's own layer ----
@@ -1675,131 +1412,5 @@ mod tests {
                 library.names[idx]
             );
         }
-    }
-
-    /// The load-bearing test: the four rules are meaning-preserving, over
-    /// every real program in the corpus.
-    #[test]
-    fn rewriting_preserves_meaning() {
-        let (library, mut arena, terms) = corpus();
-        for (idx, term) in terms {
-            let mut graph = build(&arena, term);
-            rewrite(&mut graph);
-            let back = read_back(&graph, &mut arena);
-            arena
-                .check(back)
-                .unwrap_or_else(|e| panic!("sentence {}: {}", library.names[idx], e));
-            assert_eq!(
-                arena.arity(back),
-                arena.arity(term),
-                "sentence {} changed arity through rewriting",
-                library.names[idx]
-            );
-            let mut m = Meaning::default();
-            let inputs = boundary(&mut m, arena.arity(term).inputs);
-            let (before, after) = (
-                eval_term(&mut m, &arena, term, inputs.clone()),
-                eval_term(&mut m, &arena, back, inputs),
-            );
-            assert_eq!(
-                before, after,
-                "rewriting changed what sentence {} means",
-                library.names[idx]
-            );
-        }
-    }
-
-    /// The same claim with the translation out of the loop entirely: the
-    /// rules are held to the graph they act on, not to a term that came back
-    /// from one.
-    #[test]
-    fn rewriting_preserves_meaning_in_the_graph() {
-        let (library, arena, terms) = corpus();
-        for (idx, term) in terms {
-            let mut graph = build(&arena, term);
-            let mut m = Meaning::default();
-            let inputs = boundary(&mut m, arena.arity(term).inputs);
-            let before = eval_graph(&mut m, &graph, &inputs);
-            rewrite(&mut graph);
-            let after = eval_graph(&mut m, &graph, &inputs);
-            assert_eq!(
-                before, after,
-                "rewriting changed what sentence {}'s graph means",
-                library.names[idx]
-            );
-        }
-    }
-
-    #[test]
-    fn the_structural_layer_is_gone() {
-        let (library, arena, terms) = corpus();
-        for (idx, term) in terms {
-            let mut graph = build(&arena, term);
-            rewrite(&mut graph);
-            assert!(
-                no_structure(&graph),
-                "sentence {} kept a structural box:\n{}",
-                library.names[idx],
-                graph
-            );
-        }
-    }
-
-    /// Every link agrees at both ends after *every* firing, not only at the
-    /// fixpoint — so a rule that re-points one end and forgets the other is
-    /// caught where it happens.
-    #[test]
-    fn every_rewrite_leaves_the_links_agreeing() {
-        let (library, arena, terms) = corpus();
-        for (idx, term) in terms {
-            let mut graph = build(&arena, term);
-            rewrite_watching(&mut graph, &mut |g| {
-                g.check()
-                    .unwrap_or_else(|e| panic!("sentence {}: {}", library.names[idx], e));
-            });
-        }
-    }
-
-    #[test]
-    fn rewriting_is_idempotent() {
-        let (library, arena, terms) = corpus();
-        for (idx, term) in terms {
-            let mut graph = build(&arena, term);
-            rewrite(&mut graph);
-            let settled = graph.live_count();
-            let mut fired = false;
-            rewrite_watching(&mut graph, &mut |_| fired = true);
-            assert!(
-                !fired,
-                "sentence {} had a rule left to fire",
-                library.names[idx]
-            );
-            assert_eq!(graph.live_count(), settled);
-        }
-    }
-
-    // ---- what comes back, on terms small enough to read ----
-
-    #[test]
-    fn what_rewriting_leaves_is_the_term_with_the_structure_gone() {
-        let read = |body: &str| {
-            let mut terms = Context::new();
-            let term = term_of(&mut terms, body);
-            let mut graph = build(&terms, term);
-            rewrite(&mut graph);
-            let back = read_back(&graph, &mut terms);
-            format!("{}", terms.display(back))
-        };
-
-        // A permutation that cancels has nothing left to say.
-        assert_eq!(read("swap swap"), "id(2)");
-        // A frame taken off reads as the frame rather than as the roll
-        // pair it is equal to, because the box sat where its operand
-        // already was. Nothing claims that is the only right answer; it is
-        // the one that stays legible.
-        assert_eq!(read("dip 1 { not }"), "not * id(1)");
-        // And a reach reads as the two steps it lowered to, the `id`
-        // boxes between them deleted.
-        assert_eq!(read("pick 1"), "copy(1) * id(1) ; id(1) * swap");
     }
 }

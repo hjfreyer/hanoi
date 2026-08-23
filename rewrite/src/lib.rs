@@ -7,10 +7,11 @@
 //! wiring in an interned arena, canonicalized into ordered, shared case
 //! trees, so equality of the fragment it covers is *decided* rather than
 //! searched for; [`diagram2`] is the other road, kept beside it — a term
-//! translated *literally* into a graph, structural boxes and all, and then
-//! rewritten until the connections are direct, against a table
+//! translated *literally* into a graph, structural boxes and all, to be
+//! rewritten until the connections are direct against a table
 //! ([`diagram2::rules`]) whose every law is a pair of graphs and whose
-//! every rewrite is one of them swapped for the other; [`goal`] is a
+//! every rewrite is one of them swapped for the other, with what to spend
+//! and where left to whoever drives it; [`goal`] is a
 //! claim and what became of it; [`hant`] is the
 //! strategy language a human directs a proof with; [`strategy`] interprets
 //! one; [`corpus`] loads a source tree's identities and proofs together.
