@@ -27,9 +27,10 @@
 //! | `symm` | swaps the two sides | never — but two in a row are refused |
 //! | `exact` | claims the sides are one diagram — **isomorphic** — which the auto-close has already checked, so a reached `exact` fails and shows the goal exactly as it stands | always, when reached |
 //! | `via { body } (left: s, right: s)` | **cuts**: `A = B` splits into the goals `A = C` and `C = B`, the waypoint built as a graph | the waypoint's net stack change is not the goal's, or a side fails |
-//! | `diagram` | reads both sides back as terms and normalizes them into one arena; they are one diagram or they are not | they are not — and the residual is both sides reified, narrowed to the difference |
+//! | `cases(op) (true: s, false: s)` | **splits**: pins each side's outermost `op` wire `true` in one subgoal, `false` in the other — η, spent deliberately | the wires are not one computation, or a case fails |
+//! | `diagram` | rewrites both sides by the whole table to fixpoint; they land on one diagram — isomorphic — or they do not | they do not — and the residual is both sides read back, narrowed to the difference |
 //!
-//! `diagram`, `exact` and `via` end a strategy — the goal is closed or
+//! `diagram`, `exact`, `via` and `cases` end a strategy — the goal is closed or
 //! split, and what follows a split is written *inside* it, since the
 //! subgoals are independent. A chain is nested cuts — `via { c1 } (right:
 //! via { c2 })` — and each link may take a different road. A strategy that
@@ -46,6 +47,7 @@
 //! | `saturate` | the structural laws to fixpoint — the resurrected driver |
 //! | `saturate(law, …)` | those laws to fixpoint |
 //! | `branches` | the branch layer with its cleanup, to fixpoint |
+//! | `decide` | the whole table to fixpoint — what the `diagram` closer drives |
 //! | `fire(law, …)` | the first proposal of those laws, once — fails finding none |
 //! | `repeat(t …)` | the sequence until it stops advancing |
 //! | `try(t …)` | the sequence, or nothing — failure becomes no progress |
@@ -117,11 +119,12 @@ impl OnSide {
 /// against exists.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Step<V> {
-    /// Read both sides back as terms, normalize them into one arena, and
-    /// ask whether they are one diagram. Closes the goal or fails with a
-    /// residual — no budget, no search: the [`crate::diagram`] engine is a
-    /// decision procedure for its fragment, and a claim beyond the
-    /// fragment fails the same way a false one does.
+    /// Rewrite both sides by the whole table to fixpoint and ask whether
+    /// they landed on one diagram — isomorphic. Closes the goal or fails
+    /// with a residual; every rewrite on the way is an instance of a named
+    /// law checked by [`rules::apply`](crate::diagram2::rules::apply), so
+    /// the verdict is a derivation's worth of checked steps and one final
+    /// isomorphism.
     Diagram,
     /// Run a graph tactic on one side of the goal, or on each in turn —
     /// the rewrite language of [`crate::diagram2::tactic`], embedded. A
@@ -153,6 +156,21 @@ pub enum Step<V> {
         waypoint: V,
         left: Option<Strategy<V>>,
         right: Option<Strategy<V>>,
+    },
+    /// Split the goal on a boolean-valued wire: the canonically-first box
+    /// of the named operation on each side, its readers pinned `true` in
+    /// one subgoal and `false` in the other. This is **η, spent
+    /// deliberately** — the case split on an opaque answer no rewrite
+    /// window can make — and it is everything because the operation
+    /// [promises a bool](bytecode::Instruction::yields_bool). When both
+    /// sides hold such a wire the two must be the **same computation** of
+    /// the boundary, checked structurally, or the step refuses; a side
+    /// without one is left standing, which is sound on its own. An omitted
+    /// case gets the default, `diagram`.
+    Cases {
+        prim: crate::term::Prim,
+        if_true: Option<Strategy<V>>,
+        if_false: Option<Strategy<V>>,
     },
 }
 
@@ -192,6 +210,7 @@ impl<V> fmt::Display for Step<V> {
             Step::Symm => write!(f, "symm"),
             Step::Exact => write!(f, "exact"),
             Step::Via { .. } => write!(f, "via {{ … }}"),
+            Step::Cases { .. } => write!(f, "cases(…)"),
         }
     }
 }
@@ -305,9 +324,57 @@ fn parse_step(input: &str) -> Result<(Step<String>, &str), String> {
                 after,
             ))
         }
+        "cases" => {
+            let after = rest
+                .trim_start()
+                .strip_prefix('(')
+                .ok_or("`cases` expects `(operation)`")?;
+            let (name, after) = after.split_once(')').ok_or("`cases(` never closes")?;
+            let prim = testing_prim(name.trim())?;
+            let (arms, after) = if after.trim_start().starts_with('(') {
+                parse_arms("cases", "true", "false", after.trim_start())?
+            } else {
+                ((None, None), after)
+            };
+            Ok((
+                Step::Cases {
+                    prim,
+                    if_true: arms.0,
+                    if_false: arms.1,
+                },
+                after,
+            ))
+        }
         "" => Err(format!("expected a step, found: {}", head_of(input))),
         other => Err(format!("no step is called `{}`", other)),
     }
+}
+
+/// The operations a `cases` may split on: one answer, and the instruction
+/// set's promise that the answer is a bool — which is what makes the two
+/// cases everything.
+fn testing_prim(name: &str) -> Result<crate::term::Prim, String> {
+    use crate::term::Prim;
+    let prim = match name {
+        "equal" => Prim::Equal,
+        "less" => Prim::Less,
+        "greater" => Prim::Greater,
+        "not" => Prim::Not,
+        "and" => Prim::And,
+        "or" => Prim::Or,
+        "is_int" => Prim::IsInt,
+        "is_bool" => Prim::IsBool,
+        "is_const_string" => Prim::IsConstString,
+        "is_symbol" => Prim::IsSymbol,
+        "is_tuple" => Prim::IsTuple,
+        "" => return Err("`cases()` names no operation".to_string()),
+        other => return Err(format!("`cases` cannot split on `{}`", other)),
+    };
+    debug_assert!(
+        prim.to_instruction().yields_bool() && prim.arity().outputs == 1,
+        "the table above lists only promised bools"
+    );
+    Ok(prim)
 }
 
 // ---- the embedded tactic language -------------------------------------------
@@ -358,6 +425,7 @@ fn parse_tactic(input: &str) -> Result<(Tactic, &str), String> {
             ))
         }
         "branches" => Ok((tactic::branch_pass(), rest)),
+        "decide" => Ok((tactic::decide(), rest)),
         "fire" => {
             let after = rest
                 .trim_start()
@@ -469,12 +537,19 @@ fn validate<V>(strategy: &Strategy<V>) -> Result<(), String> {
     for (i, step) in strategy.iter().enumerate() {
         let last = i + 1 == strategy.len();
         match step {
-            Step::Diagram | Step::Exact | Step::Via { .. } if !last => {
+            Step::Diagram | Step::Exact | Step::Via { .. } | Step::Cases { .. } if !last => {
                 return Err(format!("`{}` closes the goal; nothing can follow it", step));
             }
             Step::Via { left, right, .. } => {
                 for side in [left, right].into_iter().flatten() {
                     validate(side)?;
+                }
+            }
+            Step::Cases {
+                if_true, if_false, ..
+            } => {
+                for case in [if_true, if_false].into_iter().flatten() {
+                    validate(case)?;
                 }
             }
             // Swapping twice is the goal it started with, and a step that
@@ -630,6 +705,52 @@ mod tests {
             panic!("{:?}", body);
         };
         assert_eq!(laws, &[vec![Law::SelectView], rules::structural()].concat());
+    }
+
+    #[test]
+    fn a_case_split_parses_and_polices_its_operation() {
+        use crate::term::Prim;
+        let entries =
+            parse_hant("proof p = cases(equal)(true: inline diagram, false: cases(is_bool));")
+                .unwrap();
+        let [
+            Step::Cases {
+                prim,
+                if_true,
+                if_false,
+            },
+        ] = &entries[0].strategy[..]
+        else {
+            panic!("{:?}", entries[0].strategy);
+        };
+        assert_eq!(*prim, Prim::Equal);
+        assert_eq!(
+            if_true.as_deref(),
+            Some([Step::Inline(None), Step::Diagram].as_slice())
+        );
+        assert!(matches!(
+            if_false.as_deref(),
+            Some([Step::Cases {
+                prim: Prim::IsBool,
+                if_true: None,
+                if_false: None,
+            }])
+        ));
+
+        // Omitted cases get the default; a splitter closes.
+        let entries = parse_hant("proof p = inline cases(less);").unwrap();
+        assert!(matches!(
+            entries[0].strategy[..],
+            [Step::Inline(None), Step::Cases { .. }]
+        ));
+        let err = parse_hant("proof p = cases(equal) diagram;").unwrap_err();
+        assert!(err.contains("nothing can follow"), "{}", err);
+
+        // Only an operation the set promises answers a bool splits a case.
+        let err = parse_hant("proof p = cases(add);").unwrap_err();
+        assert!(err.contains("cannot split on `add`"), "{}", err);
+        let err = parse_hant("proof p = cases();").unwrap_err();
+        assert!(err.contains("names no operation"), "{}", err);
     }
 
     #[test]

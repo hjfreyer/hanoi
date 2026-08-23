@@ -719,6 +719,25 @@ pub fn saturate_structural() -> Tactic {
     Tactic::Repeat(Box::new(fire_first(rules::structural())), None)
 }
 
+/// The whole table to fixpoint: the branch layer in its documented order,
+/// the structural laws behind it, the value layer behind those — and
+/// `view-value` behind everything, fired only when nothing else fires,
+/// because spending a fork's views takes the specializing laws' anchor
+/// with them.
+///
+/// This is the closest thing the tactic road has to a normalizer, and it
+/// is still a strategy: those laws, in that order, everywhere they fire,
+/// chosen here and replaceable by any proof that chooses differently.
+pub fn decide() -> Tactic {
+    Tactic::Repeat(
+        Box::new(Tactic::First(vec![
+            fire_first([rules::branching(), rules::structural(), rules::folding()].concat()),
+            fire_first(vec![Law::ViewValue]),
+        ])),
+        None,
+    )
+}
+
 /// The branch layer, spent to fixpoint with the structural cleanup it
 /// needs.
 ///

@@ -90,6 +90,12 @@ pub enum Proof {
         left_sub: Box<Proof>,
         right_sub: Box<Proof>,
     },
+    /// A `cases` split the goal on a boolean-valued wire — η, spent
+    /// deliberately — and both halves closed.
+    Cases {
+        true_sub: Box<Proof>,
+        false_sub: Box<Proof>,
+    },
     /// A `diagram` read both sides back and normalized them into one arena,
     /// and they were one diagram.
     Diagram,
@@ -115,6 +121,14 @@ impl Proof {
                 "cut (left: {}; right: {})",
                 left_sub.summary(),
                 right_sub.summary()
+            ),
+            Proof::Cases {
+                true_sub,
+                false_sub,
+            } => format!(
+                "cases (true: {}; false: {})",
+                true_sub.summary(),
+                false_sub.summary()
             ),
             Proof::Diagram => "the two sides are one diagram".to_string(),
         }

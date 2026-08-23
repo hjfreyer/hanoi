@@ -9,4 +9,8 @@
 // tree, the arm that tested equal to a literal holds the literal, and each
 // leaf folds on the machine. All the proof has left to say is the one thing
 // the engine never does on its own — spend the definitions.
-proof types_test::number_does_pre_and_post_is_constant = inline diagram;
+proof types_test::number_does_pre_and_post_is_constant =
+    inline both(decide)
+    cases(equal)(
+        true:  both(decide) cases(equal),
+        false: both(decide) cases(equal));

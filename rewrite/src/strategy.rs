@@ -9,16 +9,18 @@
 //! step runs, which is what `exact`'s claim tests. The default — what an
 //! identity with no written proof gets — is `diagram` alone.
 //!
-//! The closer is still the [`crate::diagram`] engine: both sides read back
-//! as terms, normalize into one arena, and either they are one diagram or
-//! they are not. It is a decision procedure, not a search — there is no
-//! budget to run out of — so a stuck `diagram` means the claim is false,
-//! or true only for reasons the canonical form cannot see (η, and whatever
-//! of the branch layer no ordering reaches). The tactic steps put a second
-//! road beside it: a goal rewritten until its sides are one graph closes
-//! by isomorphism, every rewrite a named law checked by
-//! [`rules::apply`](crate::diagram2::rules::apply), and the two roads meet
-//! in one strategy.
+//! The closer **is** the table now: `diagram` rewrites both sides by
+//! [`tactic::decide`](crate::diagram2::tactic::decide) — every law, to
+//! fixpoint, `view-value` held to last — and asks whether they landed on
+//! one diagram, by isomorphism. Every rewrite on the way is an instance of
+//! a named law checked by
+//! [`rules::apply`](crate::diagram2::rules::apply), so the verdict is a
+//! derivation's worth of checked steps and one final isomorphism, rather
+//! than one engine's word. A stuck `diagram` means the claim is false, or
+//! true only for reasons the table cannot yet say — and `cases` is the
+//! step for the largest of those: η, a case split on an opaque
+//! boolean-valued wire, spent deliberately the way `inline` spends a
+//! definition.
 //!
 //! A stuck goal's residual is **narrowed** for the report — the two sides
 //! read back into terms, shared affixes stripped, the differing arm
@@ -27,9 +29,8 @@
 //! now stands: a failed run leaves its graph at the last step that landed,
 //! and showing that state is the point of the guarantee.
 
-use bytecode::Library;
+use bytecode::{Library, Value};
 
-use crate::diagram::{Ctx, normalize, reify};
 use crate::diagram2::{self, read_back, tactic};
 use crate::goal::{Goal, Outcome, Proof, Residual};
 use crate::hant::{Body, OnSide, Step, Strategy, default_strategy};
@@ -84,32 +85,100 @@ impl<'l> Prover<'l> {
             )));
         };
         match head {
-            // Both sides back as terms and into one arena; either they are
-            // one diagram or the claim is beyond the canonical form. The
-            // residual reifies what each side became, narrowed to where
-            // they differ.
+            // Both sides rewritten by the whole table to fixpoint; either
+            // they land on one diagram or the claim is beyond the table.
+            // Every rewrite is an instance of a named law checked by
+            // `rules::apply`, so the closer's verdict is a derivation's
+            // worth of checked steps and one isomorphism. The residual
+            // reads back what each side became, narrowed to where they
+            // differ.
             Step::Diagram => {
-                let inputs = goal.lhs.arity().inputs;
-                let (l, r) = (read_back(&goal.lhs, ctx), read_back(&goal.rhs, ctx));
-                let mut diagrams = Ctx::default();
-                let lhs = normalize(&mut diagrams, ctx, l);
-                let rhs = normalize(&mut diagrams, ctx, r);
-                if lhs == rhs {
+                let mut goal = goal;
+                let picks: [fn(&mut Goal) -> &mut diagram2::Graph; 2] =
+                    [|g| &mut g.lhs, |g| &mut g.rhs];
+                for pick in picks {
+                    let mut deriv = diagram2::rules::Derivation::default();
+                    if let Err(e) = tactic::run(pick(&mut goal), &mut deriv, &tactic::decide()) {
+                        let why = format!("`diagram`'s drive failed: {}", e);
+                        return Ok(Outcome::Stuck(gave_up(ctx, &goal, &why)));
+                    }
+                }
+                if diagram2::isomorphic(&goal.lhs, &goal.rhs) {
                     return Ok(Outcome::Closed(Proof::Diagram));
                 }
-                let (lhs, rhs) = (
-                    reify(&diagrams, ctx, lhs, inputs),
-                    reify(&diagrams, ctx, rhs, inputs),
-                );
-                let (mut path, lhs, rhs) = narrow(ctx, lhs, rhs);
+                let (l, r) = (read_back(&goal.lhs, ctx), read_back(&goal.rhs, ctx));
+                let (mut path, lhs, rhs) = narrow(ctx, l, r);
                 path.insert(0, "as diagrams".to_string());
                 Ok(Outcome::Stuck(Residual {
                     lhs,
                     rhs,
                     path,
-                    stopped: "the two sides normalize to different diagrams: the claim is \
-                              false, or true only for reasons the canonical form cannot see"
+                    stopped: "the two sides rewrite to different diagrams: the claim is \
+                              false, or true only for reasons the table cannot yet say"
                         .to_string(),
+                }))
+            }
+
+            // Split the goal on a boolean-valued wire — η, spent
+            // deliberately, the way `inline` spends a definition. Each
+            // side pins its **outermost** box of the operation — the one
+            // with the least upstream, because pinning a downstream test
+            // severs what would have decided it and leaves a case too
+            // strong to prove. When both sides hold one, the two must be
+            // the same computation of the boundary, or fixing them
+            // together would claim more than a case split does.
+            Step::Cases {
+                prim,
+                if_true,
+                if_false,
+            } => {
+                if !(prim.to_instruction().yields_bool() && prim.arity().outputs == 1) {
+                    return Ok(Outcome::Stuck(gave_up(
+                        ctx,
+                        &goal,
+                        "`cases` splits only on an operation the set promises answers a bool",
+                    )));
+                }
+                let (l, r) = (outermost(&goal.lhs, prim), outermost(&goal.rhs, prim));
+                if l.is_none() && r.is_none() {
+                    return Ok(Outcome::Stuck(gave_up(
+                        ctx,
+                        &goal,
+                        "`cases` finds no such operation on either side",
+                    )));
+                }
+                if let (Some(l), Some(r)) = (l, r)
+                    && !same_cone(&goal.lhs, l, &goal.rhs, r)
+                {
+                    return Ok(Outcome::Stuck(gave_up(
+                        ctx,
+                        &goal,
+                        "`cases` found the operation on both sides, and the two are not \
+                         the same computation of the boundary",
+                    )));
+                }
+                let mut halves = Vec::with_capacity(2);
+                for (value, strategy, name) in [
+                    (true, if_true, "in the true case"),
+                    (false, if_false, "in the false case"),
+                ] {
+                    let mut sub = goal.clone();
+                    if let Some(wire) = l {
+                        diagram2::pin(&mut sub.lhs, wire, Value::Bool(value));
+                    }
+                    if let Some(wire) = r {
+                        diagram2::pin(&mut sub.rhs, wire, Value::Bool(value));
+                    }
+                    match self.side(ctx, name, strategy, sub)? {
+                        Ok(p) => halves.push(p),
+                        Err(residual) => return Ok(Outcome::Stuck(residual)),
+                    }
+                }
+                let false_sub = halves.pop().expect("two");
+                let true_sub = halves.pop().expect("two");
+                Ok(Outcome::Closed(Proof::Cases {
+                    true_sub,
+                    false_sub,
                 }))
             }
 
@@ -189,13 +258,13 @@ impl<'l> Prover<'l> {
                 // own road, and proving both proves the whole by transitivity.
                 let (lhs, stone) = against(ctx, &goal.lhs, waypoint);
                 let sub = Goal { lhs, rhs: stone };
-                let left_sub = match self.side(ctx, "left", left, sub)? {
+                let left_sub = match self.side(ctx, "in the left half of the cut", left, sub)? {
                     Ok(p) => p,
                     Err(residual) => return Ok(Outcome::Stuck(residual)),
                 };
                 let (rhs, stone) = against(ctx, &goal.rhs, waypoint);
                 let sub = Goal { lhs: stone, rhs };
-                let right_sub = match self.side(ctx, "right", right, sub)? {
+                let right_sub = match self.side(ctx, "in the right half of the cut", right, sub)? {
                     Ok(p) => p,
                     Err(residual) => return Ok(Outcome::Stuck(residual)),
                 };
@@ -260,11 +329,12 @@ impl<'l> Prover<'l> {
         }
     }
 
-    /// One half of a cut, under its own strategy or the default.
+    /// One subgoal of a splitter, under its own strategy or the default,
+    /// its residual labelled with where it lives.
     fn side(
         &self,
         ctx: &mut Context,
-        name: &str,
+        label: &str,
         strategy: &Option<Strategy<Body>>,
         sub: Goal,
     ) -> Result<Result<Box<Proof>, Residual>, Error> {
@@ -273,9 +343,7 @@ impl<'l> Prover<'l> {
         Ok(match self.run(ctx, strategy, sub)? {
             Outcome::Closed(p) => Ok(Box::new(p)),
             Outcome::Stuck(mut residual) => {
-                residual
-                    .path
-                    .insert(0, format!("in the {} half of the cut", name));
+                residual.path.insert(0, label.to_string());
                 Err(residual)
             }
         })
@@ -300,6 +368,83 @@ fn against(
             diagram2::build(ctx, waypoint),
         )
     }
+}
+
+/// The box of one operation with the least upstream — the outermost
+/// decision, which is the one worth splitting on first: everything
+/// downstream of it is what the split decides. Ties break by id.
+fn outermost(g: &diagram2::Graph, prim: &crate::term::Prim) -> Option<diagram2::NodeId> {
+    let cone = |id: diagram2::NodeId| {
+        let mut seen = std::collections::HashSet::new();
+        let mut todo = vec![id];
+        while let Some(node) = todo.pop() {
+            if !seen.insert(node) {
+                continue;
+            }
+            for src in g.sources(node) {
+                if let diagram2::Source::Port { node, .. } = *src {
+                    todo.push(node);
+                }
+            }
+        }
+        seen.len()
+    };
+    g.live()
+        .filter(|(_, k)| matches!(k, diagram2::NodeKind::Op(p) if p == prim))
+        .map(|(id, _)| id)
+        .min_by_key(|&id| (cone(id), id))
+}
+
+/// Whether two wires are the **same computation of the boundary**: the
+/// same kind of box at every step of both upstream cones, reading the same
+/// boundary inputs in the same places. Sharing does not count — two copies
+/// of one literal and one literal read twice compute alike — and neither
+/// do branch ids, since a fork and a select are pure functions of what
+/// they read. This is what lets a `cases` pin both sides' wires to one
+/// value and still be a case split rather than a wish.
+fn same_cone(
+    a: &diagram2::Graph,
+    x: diagram2::NodeId,
+    b: &diagram2::Graph,
+    y: diagram2::NodeId,
+) -> bool {
+    fn walk(
+        a: &diagram2::Graph,
+        x: diagram2::NodeId,
+        b: &diagram2::Graph,
+        y: diagram2::NodeId,
+        seen: &mut std::collections::HashSet<(diagram2::NodeId, diagram2::NodeId)>,
+    ) -> bool {
+        if !seen.insert((x, y)) {
+            return true;
+        }
+        let fits = match (a.kind(x), b.kind(y)) {
+            (
+                diagram2::NodeKind::Fork { arity: p, .. },
+                diagram2::NodeKind::Fork { arity: q, .. },
+            )
+            | (
+                diagram2::NodeKind::Select { arity: p, .. },
+                diagram2::NodeKind::Select { arity: q, .. },
+            ) => p == q,
+            (p, q) => p == q,
+        };
+        if !fits {
+            return false;
+        }
+        a.sources(x)
+            .iter()
+            .zip(b.sources(y))
+            .all(|(src, dst)| match (*src, *dst) {
+                (diagram2::Source::Input(i), diagram2::Source::Input(j)) => i == j,
+                (
+                    diagram2::Source::Port { node: n, port: p },
+                    diagram2::Source::Port { node: m, port: q },
+                ) => p == q && walk(a, n, b, m, seen),
+                _ => false,
+            })
+    }
+    walk(a, x, b, y, &mut std::collections::HashSet::new())
 }
 
 /// A residual for a strategy that failed before any engine ran: the goal as
@@ -870,9 +1015,10 @@ mod tests {
 
     #[test]
     fn a_stuck_goal_names_where_the_difference_lives() {
-        // A false claim buried in one branch arm behind a shared prefix: the
-        // residual walks into the reified diagrams rather than printing two
-        // whole terms.
+        // A false claim buried behind shared context: the residual strips
+        // what the two read-backs share rather than printing two whole
+        // terms. (The read-back spells a branch flat, so the narrowing
+        // peels the shared spelling rather than entering an arm.)
         let (ctx, outcome) = prove_identity(
             "identity probe { drop 0 branch { drop 0 push 1 } { not } } = { drop 0 branch { drop 0 push 2 } { not } };",
             "probe",
@@ -881,7 +1027,7 @@ mod tests {
             panic!("the arms differ");
         };
         assert!(
-            residual.path.iter().any(|step| step.contains("arm")),
+            residual.path.iter().any(|step| step.contains("shared")),
             "{:?}",
             residual.path
         );
@@ -897,14 +1043,18 @@ mod tests {
         );
     }
 
-    /// Which of the corpus's identities the diagram decides, pinned.
+    /// Which of the corpus's identities the bare table decides, pinned:
+    /// calls opened, every law to fixpoint, and the sides one graph. The
+    /// two that are not here need what no rewrite window can say — a case
+    /// split on an opaque answer — and their `.hant` proofs spend it with
+    /// `cases`.
     ///
-    /// Printed rather than silently counted so an engine change shows
-    /// exactly which claims moved. Two sweeps: the goal as stated (calls
-    /// opaque, the default stance), and with every call opened first (the
-    /// `inline diagram` stance).
+    /// Printed as a list rather than counted so a table change shows
+    /// exactly which claims moved — in either direction: one going quiet
+    /// is a regression, and one starting to close is the cue to shorten
+    /// the proofs.
     #[test]
-    fn the_corpus_identities_the_diagram_decides() {
+    fn the_corpus_identities_the_table_decides() {
         let tests = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("the crate sits in the workspace")
@@ -912,43 +1062,27 @@ mod tests {
         let mut corpus = crate::corpus::load(&tests).unwrap();
         let library = &corpus.library;
         let terms = &mut corpus.terms;
-
-        // The goal is graphs now, so this sweep pads its own terms — the
-        // same allowance `Goal::aligned` pays before it builds.
-        let aligned = |terms: &mut Context, l: TermIndex, r: TermIndex| {
-            let (la, ra) = (terms.arity(l), terms.arity(r));
-            if la.inputs < ra.inputs {
-                (terms.under(l, ra.inputs - la.inputs), r)
-            } else {
-                (l, terms.under(r, la.inputs - ra.inputs))
-            }
-        };
-        let mut plain = Vec::new();
-        let mut opened = Vec::new();
-        let mut ctx = Ctx::default();
+        let mut closed = Vec::new();
         for (idx, identity) in library.identities.iter_enumerated() {
-            let stated = &library.identities[idx];
-            let l = crate::term::lower(terms, library, stated.lhs).unwrap();
-            let r = crate::term::lower(terms, library, stated.rhs).unwrap();
-            let (l, r) = aligned(terms, l, r);
-            if normalize(&mut ctx, terms, l) == normalize(&mut ctx, terms, r) {
-                plain.push(identity.name.as_str());
+            let mut goal = Goal::of_identity(terms, library, idx).unwrap();
+            diagram2::inline(&mut goal.lhs, terms, library, None).unwrap();
+            diagram2::inline(&mut goal.rhs, terms, library, None).unwrap();
+            for side in [&mut goal.lhs, &mut goal.rhs] {
+                let mut deriv = diagram2::rules::Derivation::default();
+                tactic::run(side, &mut deriv, &tactic::decide()).unwrap();
             }
-            let l = inline_calls(terms, library, l, None).unwrap();
-            let r = inline_calls(terms, library, r, None).unwrap();
-            let (l, r) = aligned(terms, l, r);
-            if normalize(&mut ctx, terms, l) == normalize(&mut ctx, terms, r) {
-                opened.push(identity.name.as_str());
+            if diagram2::isomorphic(&goal.lhs, &goal.rhs) {
+                closed.push(identity.name.clone());
             }
         }
-
         assert_eq!(
-            plain,
+            closed,
             [
                 "identities::testing_a_test",
                 "identities::a_value_tested_twice",
                 "identities::copying_a_constant",
                 "identities::discarded_work_on_copies",
+                "identities::testing_a_test_by_name",
                 "identities::two_spellings_of_one_test",
                 "identities::a_test_inside_an_arm",
                 "identities::a_test_inside_an_arm_with_a_prefix",
@@ -956,18 +1090,8 @@ mod tests {
                 "identities::taking_a_frame_off",
                 "identities::comparing_two_built_tuples",
                 "identities::untupling_and_retupling_is_the_coercion",
-                "identities::specializing_a_tested_value",
             ],
-            "calls-opaque: the diagram's reach changed"
-        );
-        assert_eq!(
-            opened,
-            library
-                .identities
-                .iter()
-                .map(|i| i.name.as_str())
-                .collect::<Vec<_>>(),
-            "calls-opened: the diagram's reach changed"
+            "the table's reach changed"
         );
     }
 }
