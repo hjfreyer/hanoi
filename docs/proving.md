@@ -176,7 +176,13 @@ Shannon expansion consult `run_window`, the real `vm`, so there is no
 second semantics to drift). Search, drivers, tactics, queries and the
 `cases` step's wire-picking are all untrusted: every step they produce
 goes through `apply`, a wrong one is refused, and a close is the
-isomorphism check on what the checked steps left. What remains one
+isomorphism check on what the checked steps left. And a close is **not
+the prover's word**: a `Proof` carries its full record — every step each
+drive landed, the inline's target, the cut's waypoint — and
+`Prover::prove` re-checks the whole tree against the goal as stated
+before answering, replaying every step through the table and asking
+every isomorphism again. A proof that does not re-check comes back
+*stuck*, fail closed, named as the prover bug it is. What remains one
 module's word is `isomorphic` itself, and it is held to answering `true`
 only after verifying its bijection link by link.
 
@@ -225,13 +231,11 @@ tree it came from — the layout only chooses where the newlines go.
 
 ## What is not here yet
 
-- **The verdict is checked; the search is not minimal.** Every rewrite a
-  close spends goes through `apply`, and a stuck goal's derivation-so-far
-  is real — but the `diagram` closer discards its derivations after
-  driving, and nothing yet *stores* a close as the replayable artifact it
-  momentarily was. Keeping it — a proof object per identity, re-checkable
-  without the driver — is the natural next step now that every step is
-  checkable.
+- **The proof object lives in memory only.** Every close carries its
+  full record and is re-checked before it is reported — but nothing yet
+  *persists* a `Proof` to disk, so re-checking without re-proving means
+  serializing the artifact (its steps, matches, waypoint terms) beside
+  the corpus. The shape is ready; the file format is not chosen.
 - **Reach.** The value layer folds literal windows, promised bools and the
   tuple round trip; the old engine also sorted commutative operands and
   collapsed coercion idempotences, and no law spells those yet. A claim

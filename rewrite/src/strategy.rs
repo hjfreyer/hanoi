@@ -35,9 +35,12 @@
 use bytecode::Library;
 
 use crate::diagram2::{self, read_back, tactic};
-use crate::goal::{Goal, Outcome, Proof, Residual};
+use crate::goal::{Goal, Outcome, Proof, Residual, against};
 use crate::hant::{Body, OnSide, Step, Strategy, default_strategy};
 use crate::term::{Context, Error, Term, TermIndex};
+
+/// One side of a goal, picked out for a mutation that borrows it alone.
+type Pick = fn(&mut Goal) -> &mut diagram2::Graph;
 
 /// Proves goals against one library.
 ///
@@ -55,7 +58,12 @@ impl<'l> Prover<'l> {
     }
 
     /// Runs a strategy on a goal — the written one, or the default
-    /// `diagram` when the identity carries no proof.
+    /// `diagram` when the identity carries no proof — and **re-checks**
+    /// whatever proof comes back against the goal as stated, before
+    /// answering. A close is never this module's word: [`Proof::check`]
+    /// replays every recorded step through the table and asks every
+    /// isomorphism again, and a proof that does not check comes back
+    /// [`Outcome::Stuck`] — fail closed — naming the prover bug it is.
     pub fn prove(
         &self,
         ctx: &mut Context,
@@ -64,7 +72,19 @@ impl<'l> Prover<'l> {
     ) -> Result<Outcome, Error> {
         let default = default_strategy();
         let strategy = strategy.unwrap_or(&default);
-        self.run(ctx, strategy, goal)
+        let stated = goal.clone();
+        let outcome = self.run(ctx, strategy, goal)?;
+        if let Outcome::Closed(proof) = &outcome
+            && let Err(why) = proof.check(stated.clone(), ctx, self.library)
+        {
+            let why = format!(
+                "the proof did not re-check — a prover bug, and the claim is not \
+                 accepted on its word: {}",
+                why
+            );
+            return Ok(Outcome::Stuck(gave_up(ctx, &stated, &why)));
+        }
+        Ok(outcome)
     }
 
     /// One strategy on one goal. A goal whose sides are one graph —
@@ -97,17 +117,19 @@ impl<'l> Prover<'l> {
             // differ.
             Step::Diagram => {
                 let mut goal = goal;
-                let picks: [fn(&mut Goal) -> &mut diagram2::Graph; 2] =
-                    [|g| &mut g.lhs, |g| &mut g.rhs];
-                for pick in picks {
+                let mut spent: [Vec<diagram2::rules::Step>; 2] = [Vec::new(), Vec::new()];
+                let picks: [Pick; 2] = [|g| &mut g.lhs, |g| &mut g.rhs];
+                for (pick, record) in picks.into_iter().zip(&mut spent) {
                     let mut deriv = diagram2::rules::Derivation::default();
                     if let Err(e) = tactic::run(pick(&mut goal), &mut deriv, &tactic::decide()) {
                         let why = format!("`diagram`'s drive failed: {}", e);
                         return Ok(Outcome::Stuck(gave_up(ctx, &goal, &why)));
                     }
+                    *record = deriv.steps().cloned().collect();
                 }
                 if diagram2::isomorphic(&goal.lhs, &goal.rhs) {
-                    return Ok(Outcome::Closed(Proof::Diagram));
+                    let [lhs, rhs] = spent;
+                    return Ok(Outcome::Closed(Proof::Diagram { lhs, rhs }));
                 }
                 let (l, r) = (read_back(&goal.lhs, ctx), read_back(&goal.rhs, ctx));
                 let (mut path, lhs, rhs) = narrow(ctx, l, r);
@@ -133,10 +155,9 @@ impl<'l> Prover<'l> {
             // closer: what it leaves is a goal.
             Step::Cases { prim } => {
                 let mut goal = goal;
-                let mut steps = 0;
-                let picks: [fn(&mut Goal) -> &mut diagram2::Graph; 2] =
-                    [|g| &mut g.lhs, |g| &mut g.rhs];
-                for pick in picks {
+                let mut spent: [Vec<diagram2::rules::Step>; 2] = [Vec::new(), Vec::new()];
+                let picks: [Pick; 2] = [|g| &mut g.lhs, |g| &mut g.rhs];
+                for (pick, record) in picks.into_iter().zip(&mut spent) {
                     let side = pick(&mut goal);
                     let Some(wire) = outermost(side, prim) else {
                         continue;
@@ -153,9 +174,9 @@ impl<'l> Prover<'l> {
                         let why = format!("`cases` proposed a split the checker refused: {}", e);
                         return Ok(Outcome::Stuck(gave_up(ctx, &goal, &why)));
                     }
-                    steps += 1;
+                    *record = deriv.steps().cloned().collect();
                 }
-                if steps == 0 {
+                if spent.iter().all(Vec::is_empty) {
                     return Ok(Outcome::Stuck(gave_up(
                         ctx,
                         &goal,
@@ -163,9 +184,11 @@ impl<'l> Prover<'l> {
                          with anything downstream of its answer",
                     )));
                 }
+                let [lhs, rhs] = spent;
                 Ok(match self.run(ctx, rest, goal)? {
                     Outcome::Closed(sub) => Outcome::Closed(Proof::Cases {
-                        steps,
+                        lhs,
+                        rhs,
                         sub: Box::new(sub),
                     }),
                     Outcome::Stuck(mut residual) => {
@@ -197,26 +220,28 @@ impl<'l> Prover<'l> {
             // state a person would want to look at.
             Step::Rewrite { side, tactic } => {
                 let mut goal = goal;
-                let mut steps = 0;
-                let picks: &[fn(&mut Goal) -> &mut diagram2::Graph] = match side {
-                    OnSide::Lhs => &[|g| &mut g.lhs],
-                    OnSide::Rhs => &[|g| &mut g.rhs],
-                    OnSide::Both => &[|g| &mut g.lhs, |g| &mut g.rhs],
+                let mut spent: [Vec<diagram2::rules::Step>; 2] = [Vec::new(), Vec::new()];
+                let picks: &[(Pick, usize)] = match side {
+                    OnSide::Lhs => &[(|g| &mut g.lhs, 0)],
+                    OnSide::Rhs => &[(|g| &mut g.rhs, 1)],
+                    OnSide::Both => &[(|g| &mut g.lhs, 0), (|g| &mut g.rhs, 1)],
                 };
-                for pick in picks {
+                for &(pick, at) in picks {
                     let mut deriv = diagram2::rules::Derivation::default();
                     match tactic::run(pick(&mut goal), &mut deriv, tactic) {
-                        Ok(_) => steps += deriv.len(),
+                        Ok(_) => spent[at] = deriv.steps().cloned().collect(),
                         Err(e) => {
                             let why = format!("`{}(…)`: {}", side.word(), e);
                             return Ok(Outcome::Stuck(gave_up(ctx, &goal, &why)));
                         }
                     }
                 }
+                let [lhs, rhs] = spent;
                 Ok(match self.run(ctx, rest, goal)? {
                     Outcome::Closed(sub) => Outcome::Closed(Proof::Rewrote {
                         side: side.word(),
-                        steps,
+                        lhs,
+                        rhs,
                         sub: Box::new(sub),
                     }),
                     Outcome::Stuck(mut residual) => {
@@ -262,6 +287,7 @@ impl<'l> Prover<'l> {
                     Err(residual) => return Ok(Outcome::Stuck(residual)),
                 };
                 Ok(Outcome::Closed(Proof::Cut {
+                    waypoint,
                     left_sub,
                     right_sub,
                 }))
@@ -310,10 +336,11 @@ impl<'l> Prover<'l> {
                     };
                     return Ok(Outcome::Stuck(gave_up(ctx, &goal, &why)));
                 }
-                let target = only.map(|idx| self.library.names[idx].clone());
+                let name = only.map(|idx| self.library.names[idx].clone());
                 Ok(match self.run(ctx, rest, goal)? {
                     Outcome::Closed(sub) => Outcome::Closed(Proof::Inlined {
-                        target,
+                        target: only,
+                        name,
                         sub: Box::new(sub),
                     }),
                     stuck => stuck,
@@ -340,26 +367,6 @@ impl<'l> Prover<'l> {
                 Err(residual)
             }
         })
-    }
-}
-
-/// A goal's side and a waypoint, brought to one arity: the narrower is
-/// padded — the term with [`Context::under`] before it builds, the graph
-/// with [`diagram2::under`] — and the waypoint comes back as a graph.
-fn against(
-    ctx: &mut Context,
-    side: &diagram2::Graph,
-    waypoint: TermIndex,
-) -> (diagram2::Graph, diagram2::Graph) {
-    let (ga, wa) = (side.arity(), ctx.arity(waypoint));
-    if wa.inputs < ga.inputs {
-        let padded = ctx.under(waypoint, ga.inputs - wa.inputs);
-        (side.clone(), diagram2::build(ctx, padded))
-    } else {
-        (
-            diagram2::under(side, wa.inputs - ga.inputs),
-            diagram2::build(ctx, waypoint),
-        )
     }
 }
 
@@ -925,6 +932,39 @@ mod tests {
             "{}",
             ctx.display(residual.rhs)
         );
+    }
+
+    /// A proof answers for itself: `prove` re-checks every close against
+    /// the goal as stated before answering, and `Proof::check` refuses a
+    /// proof that lies — or one written for a different goal, whose
+    /// recorded steps name boxes this goal never had.
+    #[test]
+    fn a_proof_that_lies_is_refused() {
+        let false_lib = assemble("identity probe { push 1 } = { push 2 };").unwrap();
+        let mut ctx = Context::new();
+        let idx = false_lib.identity_by_name("probe").unwrap();
+        let false_goal = Goal::of_identity(&mut ctx, &false_lib, idx).unwrap();
+
+        // Claimed trivial, and the sides are not one graph.
+        let err = crate::goal::Proof::Trivial
+            .check(false_goal.clone(), &mut ctx, &false_lib)
+            .unwrap_err();
+        assert!(err.contains("not one graph"), "{}", err);
+
+        // An honest proof of a different claim does not transplant: its
+        // recorded drive re-applies against boxes this goal does not have.
+        let true_lib = assemble("identity probe { swap swap } = { pick 0 drop 0 };").unwrap();
+        let mut true_ctx = Context::new();
+        let idx = true_lib.identity_by_name("probe").unwrap();
+        let true_goal = Goal::of_identity(&mut true_ctx, &true_lib, idx).unwrap();
+        let outcome = Prover::new(&true_lib)
+            .prove(&mut true_ctx, true_goal, None)
+            .unwrap();
+        let Outcome::Closed(stolen) = outcome else {
+            panic!("two crossings and a copied drop close");
+        };
+        let err = stolen.check(false_goal, &mut ctx, &false_lib).unwrap_err();
+        assert!(err.contains("does not re-apply"), "{}", err);
     }
 
     /// Which of the corpus's identities the bare table decides, pinned:
