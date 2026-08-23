@@ -2797,35 +2797,234 @@ mod tests {
         assert_eq!(graph.outputs(), [Source::Port { node: not, port: 0 }]);
     }
 
-    // ---- the table against the corpus ----
+    // ---- the table, against a graph ----
 
-    /// Every proposal [`propose`] makes is one the checker takes, over every
-    /// box of every sentence in the corpus. A matcher that drifts from the
-    /// table says so here.
-    #[test]
-    fn every_proposal_is_accepted() {
-        let (library, arena, terms) = crate::diagram2::tests::corpus();
-        let laws = [structural(), branching()].concat();
-        for (idx, term) in terms {
-            let graph = build(&arena, term);
-            for (id, _) in graph.live() {
-                for step in propose(&graph, &laws, id) {
-                    let mut copy = graph.clone();
-                    let law = step.rule.law();
-                    apply(&mut copy, &step).unwrap_or_else(|e| {
-                        panic!(
-                            "sentence {}: {:?} proposed and refused: {}",
-                            library.names[idx], law, e
-                        )
-                    });
-                    copy.check().unwrap_or_else(|e| {
-                        panic!(
-                            "sentence {}: a step left a torn graph: {}",
-                            library.names[idx], e
-                        )
-                    });
-                }
+    /// One payload per row of the table, and between them every law.
+    fn table() -> Vec<Rule> {
+        vec![
+            Rule::IdElim { n: 2 },
+            Rule::SwapElim,
+            Rule::CopyElim { n: 1 },
+            Rule::DeadNode {
+                kind: NodeKind::Op(Prim::Add),
+            },
+            Rule::Dedup {
+                kind: NodeKind::Op(Prim::Add),
+            },
+            Rule::NotNot,
+            Rule::ForkDedup {
+                arity: 1,
+                kind: NodeKind::Op(Prim::Not),
+                ports: vec![0],
+            },
+            Rule::SelectView {
+                fork: 1,
+                arity: 1,
+                views: vec![(0, 0)],
+            },
+            Rule::SelectSame { arity: 1, at: 0 },
+            Rule::SelectLiteral {
+                value: Value::Bool(true),
+                fork: Some(1),
+                then_arm: one_step(NodeKind::Op(Prim::Not)),
+                else_arm: one_step(NodeKind::Op(Prim::Negate)),
+            },
+            Rule::SpecializeEqual {
+                arity: 1,
+                at: 0,
+                value: Value::Int(7),
+                literal: Side::Top,
+            },
+            Rule::SpecializeBool {
+                fork: 1,
+                arity: 1,
+                view: 0,
+                at: 0,
+            },
+        ]
+    }
+
+    /// Every law there is, including the one no list of laws collects.
+    fn every_law() -> Vec<Law> {
+        [structural(), branching(), vec![Law::NotNot]].concat()
+    }
+
+    /// Every proposal at every box of `graph`, applied to a copy of it and
+    /// held to [`Graph::check`](super::Graph::check) — the laws it read off,
+    /// in the order it read them.
+    fn each_proposal(graph: &Graph, note: &str) -> Vec<Law> {
+        let mut spent = Vec::new();
+        for (id, _) in graph.live() {
+            for step in propose(graph, &every_law(), id) {
+                let law = step.rule.law();
+                let mut copy = graph.clone();
+                apply(&mut copy, &step)
+                    .unwrap_or_else(|e| panic!("{}: {:?} proposed and refused: {}", note, law, e));
+                copy.check().unwrap_or_else(|e| {
+                    panic!("{}: {:?} left a torn graph: {}\n{}", note, law, e, copy)
+                });
+                spent.push(law);
             }
+        }
+        spent
+    }
+
+    /// Every law is read back off the very shape it states.
+    ///
+    /// [`sides`] turns a payload into the graph the law is about, and
+    /// [`read_off`] is supposed to recognise that graph and hand a payload
+    /// back. Running the two against each other closes the loop a law at a
+    /// time: a matcher that drifts from the table stops recognising the
+    /// table's own shapes, and says so here.
+    ///
+    /// The corpus cannot ask this. A graph fresh out of [`build`] has no
+    /// shape that a rewrite made, so four of the branch laws — everything
+    /// downstream of `select-view` — never match one at all, however many
+    /// sentences are walked.
+    #[test]
+    fn a_law_is_read_back_off_the_shape_it_states() {
+        // A law added to the table and not to the list above would be a row
+        // nothing here reads back.
+        let covered: Vec<Law> = table().iter().map(Rule::law).collect();
+        for law in every_law() {
+            assert!(
+                covered.contains(&law),
+                "{:?} has no payload in `table`",
+                law
+            );
+        }
+        for rule in table() {
+            let law = rule.law();
+            let (lhs, _) = sides(&rule).unwrap();
+            let note = format!("{:?}", law);
+            let spent = each_proposal(&lhs, &note);
+            assert!(
+                spent.contains(&law),
+                "{:?}: the matcher does not read its own shape back:\n{}",
+                law,
+                lhs
+            );
+        }
+    }
+
+    /// A window inside a graph, with a port read more than once.
+    ///
+    /// This is the shape [`build`] never makes and every rewrite after the
+    /// first `copy-elim` does, so it is the one the corpus could not offer
+    /// either: a match's [`Match::outputs`] carries the *split* of a port's
+    /// readers, and on a monogamous graph the split has only one way to go.
+    /// Here it has two readers to divide, and both have to come out naming
+    /// what the deleted box was reading.
+    #[test]
+    fn a_step_re_points_the_readers_the_window_does_not_hold() {
+        let mut graph = Graph::empty(0);
+        let nine = graph.add(NodeKind::Op(Prim::Push(Value::Int(9))), Vec::new());
+        let wire = graph.add(NodeKind::Id(1), nine.clone());
+        let not = graph.add(NodeKind::Op(Prim::Not), wire.clone());
+        let negate = graph.add(NodeKind::Op(Prim::Negate), wire.clone());
+        graph.close(vec![not[0], negate[0]]);
+        graph.check().unwrap();
+        assert!(!graph.is_monogamous(), "the point of the test:\n{}", graph);
+
+        let id = only(&NodeKind::Id(1), &graph);
+        let steps = propose(&graph, &[Law::IdElim], id);
+        assert_eq!(steps.len(), 1, "one window, both readers in it");
+        apply(&mut graph, &steps[0]).unwrap();
+        graph.check().unwrap();
+
+        // Both readers came out naming the `9`, and the wire is gone.
+        let not = only(&NodeKind::Op(Prim::Not), &graph);
+        let negate = only(&NodeKind::Op(Prim::Negate), &graph);
+        let push = only(&NodeKind::Op(Prim::Push(Value::Int(9))), &graph);
+        for reader in [not, negate] {
+            assert_eq!(
+                graph.sources(reader),
+                [Source::Port {
+                    node: push,
+                    port: 0
+                }],
+                "a reader outside the window was left naming a deleted box:\n{}",
+                graph
+            );
+        }
+        assert_eq!(graph.live_count(), 3);
+    }
+
+    /// The same again on programs rather than on shapes: on a handful of
+    /// sentences, every law that should be read off a box is, and every
+    /// proposal applies and leaves the graph whole.
+    ///
+    /// Naming the laws is what makes this bite. A payload read off wrong
+    /// states a shape the graph does not have, so it is never matched and
+    /// never proposed — a rule going quiet is invisible to a test that only
+    /// watches what *is* proposed, and the list is what notices.
+    ///
+    /// A handful is the point. This ran over the whole corpus once — 4302
+    /// sentences, a quarter of a million proposals, two and a half minutes —
+    /// and what it spent that on was repetition: the proposals came to 179
+    /// distinct payloads, the last of them read off sentence 926, and half
+    /// were `dedup` between two copies of one literal, which is quadratic in
+    /// how many times a sentence pushes it.
+    #[test]
+    fn every_proposal_on_a_program_is_accepted() {
+        // Between them, every law a built graph can offer. The four the
+        // list cannot reach — `select-view` and everything downstream of it
+        // — want a shape a rewrite makes, and are covered above against the
+        // shapes the table itself states.
+        offers("push 1 push 2 add", &[Law::IdElim]);
+        offers("push 1 push 1 add", &[Law::IdElim, Law::Dedup]);
+        offers("swap swap", &[Law::SwapElim]);
+        offers("push 9 pick 0", &[Law::CopyElim]);
+        offers(
+            "dip { swap } swap dip { swap }",
+            &[Law::IdElim, Law::SwapElim],
+        );
+        offers(
+            "pick 1 pick 1 equal drop 0",
+            &[Law::IdElim, Law::SwapElim, Law::CopyElim, Law::DeadNode],
+        );
+        offers(
+            "branch { pick 0 drop 0 not } { not }",
+            &[Law::IdElim, Law::CopyElim, Law::DeadNode],
+        );
+        offers(
+            "pick 0 push 1 equal branch { not } { negate }",
+            &[Law::IdElim, Law::CopyElim],
+        );
+        // One operation in both arms, on views the fork hands out in more
+        // than one port — which is where `fork-dedup`'s payload says
+        // something a one-port arm cannot check.
+        offers("branch { add } { add }", &[Law::CopyElim, Law::ForkDedup]);
+        offers(
+            "push 1 pick 1 branch { add } { add }",
+            &[Law::IdElim, Law::SwapElim, Law::CopyElim, Law::ForkDedup],
+        );
+        offers(
+            "push true branch { push 1 } { push 2 }",
+            &[Law::SelectLiteral],
+        );
+    }
+
+    /// The laws a body offers, and no others.
+    fn offers(body: &str, want: &[Law]) {
+        let (_terms, graph) = built(body);
+        let spent = each_proposal(&graph, body);
+        for law in want {
+            assert!(
+                spent.contains(law),
+                "{}: {:?} was read off nothing:\n{}",
+                body,
+                law,
+                graph
+            );
+        }
+        for law in &spent {
+            assert!(
+                want.contains(law),
+                "{}: {:?} was proposed and is not on the list",
+                body,
+                law
+            );
         }
     }
 }
