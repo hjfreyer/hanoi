@@ -152,8 +152,7 @@ to say is which definitions to spend.
 
 **Trust.** The engine produces no derivation: `diagram` closing a goal is
 this one module's word, held to the machine by `run_window` (folding runs
-the real `vm`), to itself by the reify round trip, and to the corpus by
-tests. That is a smaller trusted base than the previous stack — a rule set,
+the real `vm`) and to the corpus by tests. That is a smaller trusted base than the previous stack — a rule set,
 a saturation engine, and a separate normalizer, each of which could
 disagree with the others — but it is one judge, and the "replayable
 derivation" milestone below is what turns its verdicts into checkable
@@ -217,6 +216,6 @@ tree it came from — the layout only chooses where the newlines go.
   law — so that finding and checking become different jobs again.
 - **Reify for the giants.** A diagram shares branch subtrees and a term
   cannot, so a handful of state-machine test sentences tree-expand past any
-  reasonable term; the corpus round-trip test excuses them by budget. A
-  reify that emits shared subtrees as scratch definitions would close that
-  gap if a residual ever needs one of them printed.
+  reasonable term. A reify that emits shared subtrees as scratch
+  definitions would close that gap if a residual ever needs one of them
+  printed.
