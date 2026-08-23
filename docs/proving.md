@@ -42,7 +42,7 @@ Four layers, in `rewrite/src/`:
 | layer | module | what it does |
 |---|---|---|
 | proofs | `hant.rs`, `corpus.rs`, `parse.rs` | the strategy language a proof is written in, the loader that attaches each `.hant` entry to the identity it names, and the reader that turns a waypoint's text into a term |
-| goals | `goal.rs`, `strategy.rs` | a goal is two [terms](../rewrite/src/term.rs) padded to one arity; the interpreter runs a strategy over one |
+| goals | `goal.rs`, `strategy.rs` | a goal is two [graphs](../rewrite/src/diagram2/mod.rs), lowered and padded to one arity before they build; the interpreter runs a strategy over one |
 | engine | `diagram.rs` | the string-diagram engine: programs as wiring in an interned arena, canonicalized into ordered, shared case trees — the decision procedure the algebra's completeness theorem promises |
 
 ### Goals, and where the net-change asymmetry lives
@@ -100,26 +100,32 @@ proof identities::testing_a_test_by_name = inline diagram;
 
 | step | does | fails when |
 |---|---|---|
-| `peel` | strips what the two compose spines share at either end | nothing is shared |
-| `inline` | unfolds every call, all the way down | there are no calls |
-| `inline(name)` | unfolds the calls to that one sentence | it is not called here |
+| `lhs(tactic)` / `rhs(tactic)` / `both(tactic)` | runs a [graph tactic](tactics.md) on that side of the goal, every rewrite a named law checked by `rules::apply` | the tactic fails — and the residual shows the goal **as it now stands**, the last rewrite that landed still standing |
+| `inline` | opens every call in both graphs, all the way down | there are no calls |
+| `inline(name)` | opens the calls to that one sentence | it is not called here |
 | `symm` | swaps the two sides | never — but two in a row are refused |
-| `exact` | closes the goal if the sides are one term as written | they differ — and the residual is the goal untouched, which is what the step is usually for |
-| `via { body } (left: s, right: s)` | **cuts**: `A = B` splits into the goals `A = C` and `C = B` | the waypoint's net stack change is not the goal's, or a side fails |
-| `descend(then: s, else: s)` | forks a branch-vs-branch goal into its arms | the sides are not branches, or an omitted arm is not already equal |
-| `diagram` | normalizes both sides into one arena; they are one diagram or they are not | they are not — and the residual is both sides reified, narrowed to the difference |
+| `exact` | claims the sides are one diagram — **isomorphic** — which the auto-close has already checked, so a reached `exact` fails and shows the goal exactly as it stands | always, when reached |
+| `via { body } (left: s, right: s)` | **cuts**: `A = B` splits into the goals `A = C` and `C = B`, the waypoint built as a graph | the waypoint's net stack change is not the goal's, or a side fails |
+| `diagram` | reads both sides back as terms and normalizes them into one arena; they are one diagram or they are not | they are not — and the residual is both sides reified, narrowed to the difference |
+
+Inside `lhs(…)`, `rhs(…)` and `both(…)` is the rewrite language of
+[docs/tactics.md](tactics.md), juxtaposed like steps are: `saturate` (the
+structural laws to fixpoint), `saturate(law, …)`, `branches` (the branch
+layer with its cleanup), `fire(law, …)` (one directed firing), `repeat(…)`
+and `try(…)` — laws named as the algebra sheet names them, `copy-elim`,
+`select-view`, `dead-node`, with `structural` and `branching` naming the
+two lists.
 
 A strategy acts on **one goal**, and the proof mirrors a tree of goals.
-The manipulations transform the current goal; a splitter — `via` or
-`descend` — replaces it with independent subgoals, each carrying its own
-strategy inside the splitter; `diagram` closes it. So the closers end a
-strategy, and what follows a split is written *inside* it. An omitted
-`descend` arm is a *checked* claim that those arms already match, not a
-shrug. A goal that becomes syntactically equal at any point closes on the
-spot. And a step that finds nothing to do — `peel` with nothing shared,
-`inline` with no calls, `inline(name)` where nothing calls it — fails loudly
-rather than becoming a no-op, so a proof that no longer matches its identity
-says so.
+The manipulations transform the current goal; the splitter — `via` —
+replaces it with independent subgoals, each carrying its own strategy
+inside the split; `diagram` closes it. So the closers end a strategy, and
+what follows a split is written *inside* it. A goal whose sides become
+**isomorphic** at any point closes on the spot — which is the second road
+to a proof: rewrite a side until the two are one graph, and the isomorphism
+is the closure. And a step that finds nothing to do — `inline` with no
+calls, a `fire` no law matches — fails loudly rather than becoming a no-op,
+so a proof that no longer matches its identity says so.
 
 Beside a decision procedure the steps carry a different weight than they
 did beside a search. `inline` is the one that **changes what is provable**:
@@ -127,18 +133,20 @@ the engine treats a call as an opaque box, so an identity that holds
 because of what a sentence *does* needs its definition spent, and the proof
 says exactly which ones (`inline(is_tag)` opens one sentence and leaves the
 rest closed, so the report keeps naming what it does not care about). The
-rest exist for the *report*: `via` so a failure can say which half of a
-journey it lives in and be checked against a named midpoint; `peel` and
-`descend` to shrink what a residual prints; `exact` to show a goal exactly
-as it stands — write `proof x = exact;`, read the goal as lowered and
+rest direct and report: the tactic steps spend named laws where the author
+points them; `via` so a failure can say which half of a journey it lives
+in and be checked against a named midpoint; `exact` to show a goal exactly
+as it stands — write `proof x = exact;`, read the goal as built and
 aligned, then replace `exact` with the real strategy. `symm` claims
 nothing: equality is symmetric, and what it moves is which side the
 asymmetric steps read.
 
-The two splitters treat an omitted side differently, on purpose: a
-`descend` arm was supplied by the goal, and equal arms are common, so
-omission is a checked equality claim; a cut's sides are the author's own
-construction, so an omitted `via` side gets `diagram`.
+An omitted `via` side gets `diagram`: a cut's sides are the author's own
+construction, and handing the decision procedure the halves is what a cut
+is for. `peel` and `descend` are retired — both read the goal as a term,
+and a graph goal has no compose spine to strip and no branch node to fork;
+the residual's own narrowing still shrinks what a report prints, and the
+branch layer's laws are how arms get reasoned about now.
 
 **A case split is not a chain of cuts anymore.** The corpus's
 path-condition claim, `types_test::number_does_pre_and_post_is_constant`,
@@ -201,19 +209,24 @@ tree it came from — the layout only chooses where the newlines go.
 
 ## What is not here yet
 
-- **Rewriting on diagrams.** The engine decides its fragment and stops.
-  Claims beyond it — η, and anything needing a case split on an opaque
-  value — need *moves*: rules as cut-and-splice on the wiring, each step
-  small and checkable, searched or directed. The representation is built
-  for this; the matcher and splicer are not.
-- **A case split as a step.** The concrete first move the above would pay
-  for: a `cases` step that splits a goal on a boolean-valued wire, carrying
-  the condition into each half — η spent deliberately, the way `inline`
-  spends a definition.
-- **A replayable derivation.** A close is currently the engine's verdict;
-  nothing independent re-checks it. The next milestone is a normalizer
-  that emits its steps — every fold and reorder is an instance of a named
-  law — so that finding and checking become different jobs again.
+- **Rewriting on diagrams** landed: goals are graphs, the tactic steps
+  are the moves — each rewrite an instance of a named law of
+  [rewrite/src/diagram2/rules.rs](../rewrite/src/diagram2/rules.rs),
+  checked by `apply`, run into a replayable `Derivation` — and a goal
+  rewritten until its sides are isomorphic is closed. See
+  [docs/tactics.md](tactics.md). What remains of the old bullet is
+  **reach**: the law table covers the structural and branch layers, so
+  claims the `diagram` closer decides by *computing* (the value folds)
+  still have no tactic spelling, and the two roads meet by using both.
+- **A case split as a step.** A `cases` step that splits a goal on a
+  boolean-valued wire, carrying the condition into each half — η spent
+  deliberately, the way `inline` spends a definition. The branch layer's
+  laws are the pieces it would be assembled from.
+- **A derivation for the `diagram` closer.** A tactic close replays; a
+  `diagram` close is still the engine's verdict, nothing independent
+  re-checks it. The milestone stands: a normalizer that emits its steps —
+  every fold and reorder an instance of a named law — so that finding and
+  checking become different jobs again.
 - **Reify for the giants.** A diagram shares branch subtrees and a term
   cannot, so a handful of state-machine test sentences tree-expand past any
   reasonable term. A reify that emits shared subtrees as scratch

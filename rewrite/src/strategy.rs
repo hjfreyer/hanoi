@@ -1,34 +1,39 @@
 //! The interpreter for the strategy language of [`crate::hant`].
 //!
-//! A proof mirrors a tree of goals. A strategy acts on one goal:
-//! manipulations transform it, a splitter (`via`, `descend`) replaces it
-//! with independent subgoals each carrying its own strategy, and `diagram`
-//! closes it. The default — what an identity with no written proof gets —
-//! is `diagram` alone.
+//! A proof mirrors a tree of goals, and a goal is two
+//! [graphs](crate::diagram2). A strategy acts on one: manipulations
+//! transform it — the tactic steps rewrite a side in place, `inline` opens
+//! calls, `symm` turns it — a splitter (`via`) replaces it with independent
+//! subgoals each carrying its own strategy, and `diagram` closes it. A goal
+//! whose sides have become **isomorphic** closes on its own, before any
+//! step runs, which is what `exact`'s claim tests. The default — what an
+//! identity with no written proof gets — is `diagram` alone.
 //!
-//! The closer is the [`crate::diagram`] engine: both sides normalize into
-//! one arena and either they are one diagram or they are not. It is a
-//! decision procedure, not a search — there is no budget to run out of —
-//! so a stuck `diagram` means the claim is false, or true only for reasons
-//! the canonical form cannot see (η, and whatever of the branch layer no
-//! ordering reaches). Every other step exists to *direct* it: `inline`
-//! spends the library's defining equations, since the engine never opens a
-//! call on its own; `via` cuts at a waypoint so a report can say which
-//! half of a journey failed; `peel`, `descend` and `symm` narrow and turn
-//! the goal; `exact` claims the sides are one term as written, and its
-//! failure prints the goal untouched — the way to *see* one.
+//! The closer is still the [`crate::diagram`] engine: both sides read back
+//! as terms, normalize into one arena, and either they are one diagram or
+//! they are not. It is a decision procedure, not a search — there is no
+//! budget to run out of — so a stuck `diagram` means the claim is false,
+//! or true only for reasons the canonical form cannot see (η, and whatever
+//! of the branch layer no ordering reaches). The tactic steps put a second
+//! road beside it: a goal rewritten until its sides are one graph closes
+//! by isomorphism, every rewrite a named law checked by
+//! [`rules::apply`](crate::diagram2::rules::apply), and the two roads meet
+//! in one strategy.
 //!
 //! A stuck goal's residual is **narrowed** for the report — the two sides
-//! reified back into terms, shared affixes stripped, the differing arm
+//! read back into terms, shared affixes stripped, the differing arm
 //! entered — because when the engine says no, where the difference lives
-//! is the thing worth printing.
+//! is the thing worth printing. A stuck *tactic* reports the goal as it
+//! now stands: a failed run leaves its graph at the last step that landed,
+//! and showing that state is the point of the guarantee.
 
-use bytecode::{Library, SentenceIndex};
+use bytecode::Library;
 
 use crate::diagram::{Ctx, normalize, reify};
+use crate::diagram2::{self, read_back, tactic};
 use crate::goal::{Goal, Outcome, Proof, Residual};
-use crate::hant::{Body, Step, Strategy, default_strategy};
-use crate::term::{Context, Error, Term, TermIndex, lower};
+use crate::hant::{Body, OnSide, Step, Strategy, default_strategy};
+use crate::term::{Context, Error, Term, TermIndex};
 
 /// Proves goals against one library.
 ///
@@ -58,36 +63,40 @@ impl<'l> Prover<'l> {
         self.run(ctx, strategy, goal)
     }
 
-    /// One strategy on one goal. A goal whose sides are one term as written
-    /// is closed before any step runs — at every level, so a `descend` arm
-    /// or a cut's side that became trivial needs no steps of its own.
+    /// One strategy on one goal. A goal whose sides are one graph —
+    /// isomorphic — is closed before any step runs, at every level, so a
+    /// cut's side that a manipulation made trivial needs no steps of its
+    /// own.
     fn run(
         &self,
         ctx: &mut Context,
         strategy: &[Step<Body>],
         goal: Goal,
     ) -> Result<Outcome, Error> {
-        if ctx.equal(goal.lhs, goal.rhs) {
+        if diagram2::isomorphic(&goal.lhs, &goal.rhs) {
             return Ok(Outcome::Closed(Proof::Trivial));
         }
         let Some((head, rest)) = strategy.split_first() else {
             return Ok(Outcome::Stuck(gave_up(
-                goal,
+                ctx,
+                &goal,
                 "the strategy ended with the goal still open",
             )));
         };
         match head {
-            // Both sides into one arena; either they are one diagram or the
-            // claim is beyond the canonical form. The residual reifies what
-            // each side became, narrowed to where they differ.
+            // Both sides back as terms and into one arena; either they are
+            // one diagram or the claim is beyond the canonical form. The
+            // residual reifies what each side became, narrowed to where
+            // they differ.
             Step::Diagram => {
+                let inputs = goal.lhs.arity().inputs;
+                let (l, r) = (read_back(&goal.lhs, ctx), read_back(&goal.rhs, ctx));
                 let mut diagrams = Ctx::default();
-                let lhs = normalize(&mut diagrams, ctx, goal.lhs);
-                let rhs = normalize(&mut diagrams, ctx, goal.rhs);
+                let lhs = normalize(&mut diagrams, ctx, l);
+                let rhs = normalize(&mut diagrams, ctx, r);
                 if lhs == rhs {
                     return Ok(Outcome::Closed(Proof::Diagram));
                 }
-                let inputs = ctx.arity(goal.lhs).inputs;
                 let (lhs, rhs) = (
                     reify(&diagrams, ctx, lhs, inputs),
                     reify(&diagrams, ctx, rhs, inputs),
@@ -104,18 +113,58 @@ impl<'l> Prover<'l> {
                 }))
             }
 
-            // A goal whose sides are one term closed above, before any step
-            // ran — so an `exact` that is reached is an `exact` whose claim
-            // is false, and its whole job is the report: the goal untouched,
-            // no normalization to reshape it and no narrowing to walk into
-            // it. That unaltered residual is what the step is usually
-            // written for — `exact` alone shows the identity as lowered and
-            // aligned, and after a manipulation it shows what the
-            // manipulation left, in the language a waypoint is written in.
+            // A goal whose sides are one graph closed above, before any
+            // step ran — so an `exact` that is reached is an `exact` whose
+            // claim is false, and its whole job is the report: the goal
+            // exactly as it stands, no normalization to reshape it and no
+            // narrowing to walk into it. That unaltered residual is what
+            // the step is usually written for — `exact` alone shows the
+            // identity as built and aligned, and after a manipulation it
+            // shows what the manipulation left, in the language a waypoint
+            // is written in.
             Step::Exact => Ok(Outcome::Stuck(gave_up(
-                goal,
-                "`exact` claims the sides are one term as written, and they are not",
+                ctx,
+                &goal,
+                "`exact` claims the sides are one graph, and they are not",
             ))),
+
+            // A graph tactic on one side, or on each in turn. Every rewrite
+            // it lands went through `rules::apply`, so nothing here is
+            // trusted; and a tactic that fails leaves its side standing at
+            // the last step that landed, so the residual shows exactly the
+            // state a person would want to look at.
+            Step::Rewrite { side, tactic } => {
+                let mut goal = goal;
+                let mut steps = 0;
+                let picks: &[fn(&mut Goal) -> &mut diagram2::Graph] = match side {
+                    OnSide::Lhs => &[|g| &mut g.lhs],
+                    OnSide::Rhs => &[|g| &mut g.rhs],
+                    OnSide::Both => &[|g| &mut g.lhs, |g| &mut g.rhs],
+                };
+                for pick in picks {
+                    let mut deriv = diagram2::rules::Derivation::default();
+                    match tactic::run(pick(&mut goal), &mut deriv, tactic) {
+                        Ok(_) => steps += deriv.len(),
+                        Err(e) => {
+                            let why = format!("`{}(…)`: {}", side.word(), e);
+                            return Ok(Outcome::Stuck(gave_up(ctx, &goal, &why)));
+                        }
+                    }
+                }
+                Ok(match self.run(ctx, rest, goal)? {
+                    Outcome::Closed(sub) => Outcome::Closed(Proof::Rewrote {
+                        side: side.word(),
+                        steps,
+                        sub: Box::new(sub),
+                    }),
+                    Outcome::Stuck(mut residual) => {
+                        residual
+                            .path
+                            .insert(0, format!("after rewriting {}", side.word()));
+                        Outcome::Stuck(residual)
+                    }
+                })
+            }
 
             Step::Via {
                 waypoint,
@@ -128,22 +177,24 @@ impl<'l> Prover<'l> {
                 // The cut is a claim, so a waypoint whose stack effect cannot
                 // sit between the sides is refused here, loudly, rather than
                 // producing goals nothing could ever close.
-                if ctx.arity(waypoint).net() != ctx.arity(goal.lhs).net() {
+                if ctx.arity(waypoint).net() != goal.lhs.arity().net() {
                     let why = format!(
                         "the `via` waypoint's net stack change ({}) is not the goal's ({})",
                         ctx.arity(waypoint).net(),
-                        ctx.arity(goal.lhs).net()
+                        goal.lhs.arity().net()
                     );
-                    return Ok(Outcome::Stuck(gave_up(goal, &why)));
+                    return Ok(Outcome::Stuck(gave_up(ctx, &goal, &why)));
                 }
                 // Two goals, fully independent from here: each side takes its
                 // own road, and proving both proves the whole by transitivity.
-                let sub = Goal::aligned(ctx, goal.lhs, waypoint);
+                let (lhs, stone) = against(ctx, &goal.lhs, waypoint);
+                let sub = Goal { lhs, rhs: stone };
                 let left_sub = match self.side(ctx, "left", left, sub)? {
                     Ok(p) => p,
                     Err(residual) => return Ok(Outcome::Stuck(residual)),
                 };
-                let sub = Goal::aligned(ctx, waypoint, goal.rhs);
+                let (rhs, stone) = against(ctx, &goal.rhs, waypoint);
+                let sub = Goal { lhs: stone, rhs };
                 let right_sub = match self.side(ctx, "right", right, sub)? {
                     Ok(p) => p,
                     Err(residual) => return Ok(Outcome::Stuck(residual)),
@@ -152,28 +203,6 @@ impl<'l> Prover<'l> {
                     left_sub,
                     right_sub,
                 }))
-            }
-
-            Step::Peel => {
-                let Some((narrowed, prefix, suffix)) = peel(ctx, goal) else {
-                    return Ok(Outcome::Stuck(gave_up(
-                        goal,
-                        "`peel` found nothing shared to strip",
-                    )));
-                };
-                Ok(match self.run(ctx, rest, narrowed)? {
-                    Outcome::Closed(sub) => Outcome::Closed(Proof::Peel {
-                        prefix,
-                        suffix,
-                        sub: Box::new(sub),
-                    }),
-                    Outcome::Stuck(mut residual) => {
-                        residual
-                            .path
-                            .insert(0, "past the peeled affixes".to_string());
-                        Outcome::Stuck(residual)
-                    }
-                })
             }
 
             Step::Symm => {
@@ -206,7 +235,10 @@ impl<'l> Prover<'l> {
                     Some(Body::Target(idx)) => Some(*idx),
                     Some(_) => unreachable!("the loader reads an inline label as a target"),
                 };
-                if !has_calls(ctx, goal.lhs, only) && !has_calls(ctx, goal.rhs, only) {
+                let mut goal = goal;
+                let opened = diagram2::inline(&mut goal.lhs, ctx, self.library, only)?
+                    + diagram2::inline(&mut goal.rhs, ctx, self.library, only)?;
+                if opened == 0 {
                     let why = match only {
                         None => "`inline` found no calls to open".to_string(),
                         Some(idx) => format!(
@@ -214,47 +246,16 @@ impl<'l> Prover<'l> {
                             self.library.names[idx]
                         ),
                     };
-                    return Ok(Outcome::Stuck(gave_up(goal, &why)));
+                    return Ok(Outcome::Stuck(gave_up(ctx, &goal, &why)));
                 }
-                let lhs = inline_calls(ctx, self.library, goal.lhs, only)?;
-                let rhs = inline_calls(ctx, self.library, goal.rhs, only)?;
-                let opened = Goal::aligned(ctx, lhs, rhs);
                 let target = only.map(|idx| self.library.names[idx].clone());
-                Ok(match self.run(ctx, rest, opened)? {
+                Ok(match self.run(ctx, rest, goal)? {
                     Outcome::Closed(sub) => Outcome::Closed(Proof::Inlined {
                         target,
                         sub: Box::new(sub),
                     }),
                     stuck => stuck,
                 })
-            }
-
-            Step::Descend { then_arm, else_arm } => {
-                let (
-                    &Term::Branch {
-                        if_true: t1,
-                        if_false: e1,
-                    },
-                    &Term::Branch {
-                        if_true: t2,
-                        if_false: e2,
-                    },
-                ) = (ctx.get(goal.lhs), ctx.get(goal.rhs))
-                else {
-                    return Ok(Outcome::Stuck(gave_up(
-                        goal,
-                        "`descend` needs a branch on both sides",
-                    )));
-                };
-                let then_sub = match self.arm(ctx, "then", then_arm, t1, t2)? {
-                    Ok(p) => p,
-                    Err(residual) => return Ok(Outcome::Stuck(residual)),
-                };
-                let else_sub = match self.arm(ctx, "else", else_arm, e1, e2)? {
-                    Ok(p) => p,
-                    Err(residual) => return Ok(Outcome::Stuck(residual)),
-                };
-                Ok(Outcome::Closed(Proof::Descend { then_sub, else_sub }))
             }
         }
     }
@@ -279,46 +280,36 @@ impl<'l> Prover<'l> {
             }
         })
     }
+}
 
-    /// One arm of a `descend`: proved by the strategy written for it, or —
-    /// with none written — claimed already equal, and the claim is checked
-    /// rather than assumed.
-    fn arm(
-        &self,
-        ctx: &mut Context,
-        name: &str,
-        strategy: &Option<Strategy<Body>>,
-        a: TermIndex,
-        b: TermIndex,
-    ) -> Result<Result<Option<Box<Proof>>, Residual>, Error> {
-        let sub = Goal::aligned(ctx, a, b);
-        match strategy {
-            Some(s) => Ok(match self.run(ctx, s, sub)? {
-                Outcome::Closed(p) => Ok(Some(Box::new(p))),
-                Outcome::Stuck(mut residual) => {
-                    residual.path.insert(0, format!("in the {} arm", name));
-                    Err(residual)
-                }
-            }),
-            None if ctx.equal(a, b) => Ok(Ok(None)),
-            None => Ok(Err(Residual {
-                path: vec![format!("in the {} arm", name)],
-                stopped: format!(
-                    "the {} arms are not already equal, and `descend` was given no strategy for them",
-                    name
-                ),
-                ..gave_up(sub, "")
-            })),
-        }
+/// A goal's side and a waypoint, brought to one arity: the narrower is
+/// padded — the term with [`Context::under`] before it builds, the graph
+/// with [`diagram2::under`] — and the waypoint comes back as a graph.
+fn against(
+    ctx: &mut Context,
+    side: &diagram2::Graph,
+    waypoint: TermIndex,
+) -> (diagram2::Graph, diagram2::Graph) {
+    let (ga, wa) = (side.arity(), ctx.arity(waypoint));
+    if wa.inputs < ga.inputs {
+        let padded = ctx.under(waypoint, ga.inputs - wa.inputs);
+        (side.clone(), diagram2::build(ctx, padded))
+    } else {
+        (
+            diagram2::under(side, wa.inputs - ga.inputs),
+            diagram2::build(ctx, waypoint),
+        )
     }
 }
 
 /// A residual for a strategy that failed before any engine ran: the goal as
-/// it stood, and why the step gave up.
-fn gave_up(goal: Goal, why: &str) -> Residual {
+/// it stands — read back into the term language a report is written in —
+/// and why the step gave up. For a failed tactic "as it stands" is the
+/// point: the graph reflects the last rewrite that landed.
+fn gave_up(ctx: &mut Context, goal: &Goal, why: &str) -> Residual {
     Residual {
-        lhs: goal.lhs,
-        rhs: goal.rhs,
+        lhs: read_back(&goal.lhs, ctx),
+        rhs: read_back(&goal.rhs, ctx),
         path: Vec::new(),
         stopped: why.to_string(),
     }
@@ -343,14 +334,13 @@ fn narrow(
     let mut path = Vec::new();
     let (mut lhs, mut rhs) = (lhs, rhs);
     loop {
-        if let Some((narrowed, prefix, suffix)) = peel(ctx, Goal { lhs, rhs }) {
+        if let Some(((l, r), prefix, suffix)) = peel(ctx, lhs, rhs) {
             path.push(match (prefix, suffix) {
                 (p, 0) => format!("past {} shared leading part(s)", p),
                 (0, s) => format!("before {} shared trailing part(s)", s),
                 (p, s) => format!("between {} shared leading and {} trailing part(s)", p, s),
             });
-            lhs = narrowed.lhs;
-            rhs = narrowed.rhs;
+            (lhs, rhs) = (l, r);
             continue;
         }
         if let (
@@ -381,10 +371,16 @@ fn narrow(
 }
 
 /// Strips what the two compose spines share at either end. Answers the
-/// narrowed goal and how much went, or `None` when nothing does.
-fn peel(ctx: &mut Context, goal: Goal) -> Option<(Goal, usize, usize)> {
-    let lhs = spine(ctx, goal.lhs);
-    let rhs = spine(ctx, goal.rhs);
+/// narrowed pair and how much went, or `None` when nothing does. Report
+/// machinery: it reads the *terms* a residual is written in, and the goal
+/// itself never comes here.
+fn peel(
+    ctx: &mut Context,
+    l: TermIndex,
+    r: TermIndex,
+) -> Option<((TermIndex, TermIndex), usize, usize)> {
+    let lhs = spine(ctx, l);
+    let rhs = spine(ctx, r);
 
     let prefix = lhs
         .iter()
@@ -392,7 +388,7 @@ fn peel(ctx: &mut Context, goal: Goal) -> Option<(Goal, usize, usize)> {
         .take_while(|(a, b)| ctx.equal(**a, **b))
         .count();
     // Never peel a whole side away twice over: if the spines are equal the
-    // goal was trivial, and the caller handled it.
+    // pair was trivial, and the caller handled it.
     let rest = lhs.len().min(rhs.len()) - prefix;
     let suffix = lhs
         .iter()
@@ -409,12 +405,12 @@ fn peel(ctx: &mut Context, goal: Goal) -> Option<(Goal, usize, usize)> {
     let boundary = if prefix > 0 {
         ctx.arity(lhs[prefix - 1]).outputs
     } else {
-        ctx.arity(goal.lhs).inputs
+        ctx.arity(l).inputs
     };
-    let narrowed = Goal {
-        lhs: rebuild(ctx, &lhs[prefix..lhs.len() - suffix], boundary),
-        rhs: rebuild(ctx, &rhs[prefix..rhs.len() - suffix], boundary),
-    };
+    let narrowed = (
+        rebuild(ctx, &lhs[prefix..lhs.len() - suffix], boundary),
+        rebuild(ctx, &rhs[prefix..rhs.len() - suffix], boundary),
+    );
     Some((narrowed, prefix, suffix))
 }
 
@@ -447,22 +443,7 @@ fn rebuild(ctx: &mut Context, parts: &[TermIndex], width_if_empty: usize) -> Ter
         .fold(*first, |acc, next| ctx.push(Term::Compose(acc, *next)))
 }
 
-// ---- inlining ---------------------------------------------------------------
-
-/// Whether there is anything for an `inline` to open: any call at all, or a
-/// call to the one sentence a label named.
-fn has_calls(ctx: &Context, term: TermIndex, only: Option<SentenceIndex>) -> bool {
-    match ctx.get(term) {
-        Term::Call { target, .. } => only.is_none_or(|idx| *target == idx),
-        &Term::Compose(a, b) | &Term::Par(a, b) => {
-            has_calls(ctx, a, only) || has_calls(ctx, b, only)
-        }
-        &Term::Branch { if_true, if_false } => {
-            has_calls(ctx, if_true, only) || has_calls(ctx, if_false, only)
-        }
-        _ => false,
-    }
-}
+// ---- inlining, term-level ---------------------------------------------------
 
 /// The term with calls replaced by their bodies: every call, all the way down,
 /// or every call to `only` and no others.
@@ -471,12 +452,17 @@ fn has_calls(ctx: &Context, term: TermIndex, only: Option<SentenceIndex>) -> boo
 /// graph of a library that compiled is acyclic — and for the same reason the
 /// labelled one needs no recursion into the body it just opened: nothing a
 /// sentence calls can reach that sentence again.
+///
+/// The prover opens calls on the graphs now — [`diagram2::inline`] — and
+/// this stays as the term-level sweep the reach-pinning test reads by.
+#[cfg(test)]
 fn inline_calls(
     ctx: &mut Context,
     library: &Library,
     term: TermIndex,
-    only: Option<SentenceIndex>,
+    only: Option<bytecode::SentenceIndex>,
 ) -> Result<TermIndex, Error> {
+    use crate::term::lower;
     // Copied out of the arena first: the walk writes new nodes into it, and a
     // node is small — the copy is a discriminant and two indices.
     Ok(match ctx.get(term).clone() {
@@ -598,9 +584,9 @@ mod tests {
             Some("inline exact"),
         );
         let Outcome::Closed(proof) = outcome else {
-            panic!("the opened goal is one term");
+            panic!("the opened goal is one graph");
         };
-        assert_eq!(proof.summary(), "inline; the two sides are one term");
+        assert_eq!(proof.summary(), "inline; the two sides are one graph");
     }
 
     #[test]
@@ -649,8 +635,8 @@ mod tests {
         };
         assert_eq!(
             proof.summary(),
-            "inline outer; cut (left: the two sides are one term; \
-             right: inline; the two sides are one term)"
+            "inline outer; cut (left: the two sides are one graph; \
+             right: inline; the two sides are one graph)"
         );
     }
 
@@ -682,53 +668,92 @@ mod tests {
         assert!(err.contains("no sentence is called"), "{}", err);
     }
 
+    /// The tactic steps: a side rewritten until the sides are one graph
+    /// closes by the auto-close, and the proof says which sides were spent.
     #[test]
-    fn a_directed_peel_and_descend_close_and_say_so() {
+    fn a_rewritten_side_closes_by_isomorphism() {
+        // A directed law leads the left — `dedup`, then the cleanup — and
+        // the driver alone takes the right: the two spellings settle on the
+        // one graph, a literal read twice.
         let (_ctx, outcome) = prove_with(
-            "identity probe { drop 0 branch { is_bool is_bool } { not } } = { drop 0 branch { is_int is_bool } { not } };",
+            "identity probe { push 1 push 1 add } = { push 1 pick 0 add };",
             "probe",
-            Some("peel descend(then: diagram)"),
+            Some("lhs(fire(dedup) saturate) rhs(saturate) exact"),
         );
         let Outcome::Closed(proof) = outcome else {
-            panic!("expected the goal to close");
+            panic!("the two spellings settle together");
         };
-        assert_eq!(
-            proof.summary(),
-            "peel 1+0; descend (then: the two sides are one diagram; else: as written)"
+        let summary = proof.summary();
+        assert!(
+            summary.starts_with("lhs: ")
+                && summary.contains("; rhs: ")
+                && summary.ends_with("the two sides are one graph"),
+            "{}",
+            summary
+        );
+
+        // `both` spends each side in turn — the right side's rewrites
+        // include the very `id` the goal's own padding built, which
+        // nothing but a rewrite takes back out.
+        let (_ctx, outcome) = prove_with(
+            "identity probe { swap swap not } = { not };",
+            "probe",
+            Some("both(saturate) exact"),
+        );
+        let Outcome::Closed(proof) = outcome else {
+            panic!("two crossings and a padding wire, all spent");
+        };
+        let summary = proof.summary();
+        assert!(
+            summary.starts_with("both: ") && summary.ends_with("the two sides are one graph"),
+            "{}",
+            summary
         );
     }
 
+    /// A failed tactic reports the goal **as it now stands** — the fatal
+    /// failure left the graph at the last rewrite that landed, and the
+    /// residual reads that state back.
     #[test]
-    fn an_omitted_descend_arm_is_checked_not_assumed() {
-        let (_ctx, outcome) = prove_with(
-            "identity probe { branch { is_bool is_bool } { not } } = { branch { is_int is_bool } { not } };",
+    fn a_stuck_tactic_shows_the_goal_standing() {
+        let (ctx, outcome) = prove_with(
+            "identity probe { push 1 push 1 add } = { push 2 };",
             "probe",
-            Some("descend(else: diagram)"),
+            Some("lhs(fire(dedup) fire(fork-dedup)) exact"),
         );
         let Outcome::Stuck(residual) = outcome else {
-            panic!("the then arms are not already equal");
+            panic!("there is no fork to dedup");
         };
         assert!(
-            residual.stopped.contains("then arms"),
+            residual.stopped.contains("`lhs(…)`") && residual.stopped.contains("found nothing"),
             "{}",
             residual.stopped
         );
+        // The dedup landed and stands: one literal read twice, which the
+        // read-back spells as the copy it is.
+        let lhs = format!("{}", ctx.display(residual.lhs));
+        assert!(lhs.contains("copy(1)"), "{}", lhs);
+        assert_eq!(lhs.matches("push 1").count(), 1, "{}", lhs);
     }
 
     #[test]
     fn a_step_that_does_nothing_fails_loudly() {
         let code = "identity probe { is_bool is_bool } = { drop 0 push true };";
-        let (_ctx, outcome) = prove_with(code, "probe", Some("peel diagram"));
-        let Outcome::Stuck(residual) = outcome else {
-            panic!("nothing is shared to peel");
-        };
-        assert!(residual.stopped.contains("`peel`"), "{}", residual.stopped);
         let (_ctx, outcome) = prove_with(code, "probe", Some("inline diagram"));
         let Outcome::Stuck(residual) = outcome else {
             panic!("there are no calls to open");
         };
         assert!(
             residual.stopped.contains("`inline`"),
+            "{}",
+            residual.stopped
+        );
+        let (_ctx, outcome) = prove_with(code, "probe", Some("lhs(fire(copy-elim)) diagram"));
+        let Outcome::Stuck(residual) = outcome else {
+            panic!("there is no copy to spend");
+        };
+        assert!(
+            residual.stopped.contains("`lhs(…)`"),
             "{}",
             residual.stopped
         );
@@ -770,7 +795,7 @@ mod tests {
         };
         assert_eq!(
             proof.summary(),
-            "cut (left: the two sides are one diagram; right: inline; the two sides are one term)"
+            "cut (left: the two sides are one diagram; right: inline; the two sides are one graph)"
         );
     }
 
@@ -888,19 +913,31 @@ mod tests {
         let library = &corpus.library;
         let terms = &mut corpus.terms;
 
+        // The goal is graphs now, so this sweep pads its own terms — the
+        // same allowance `Goal::aligned` pays before it builds.
+        let aligned = |terms: &mut Context, l: TermIndex, r: TermIndex| {
+            let (la, ra) = (terms.arity(l), terms.arity(r));
+            if la.inputs < ra.inputs {
+                (terms.under(l, ra.inputs - la.inputs), r)
+            } else {
+                (l, terms.under(r, la.inputs - ra.inputs))
+            }
+        };
         let mut plain = Vec::new();
         let mut opened = Vec::new();
         let mut ctx = Ctx::default();
         for (idx, identity) in library.identities.iter_enumerated() {
-            let goal = Goal::of_identity(terms, library, idx).unwrap();
-            if normalize(&mut ctx, terms, goal.lhs) == normalize(&mut ctx, terms, goal.rhs) {
+            let stated = &library.identities[idx];
+            let l = crate::term::lower(terms, library, stated.lhs).unwrap();
+            let r = crate::term::lower(terms, library, stated.rhs).unwrap();
+            let (l, r) = aligned(terms, l, r);
+            if normalize(&mut ctx, terms, l) == normalize(&mut ctx, terms, r) {
                 plain.push(identity.name.as_str());
             }
-            let lhs = inline_calls(terms, library, goal.lhs, None).unwrap();
-            let rhs = inline_calls(terms, library, goal.rhs, None).unwrap();
-            let unfolded = Goal::aligned(terms, lhs, rhs);
-            if normalize(&mut ctx, terms, unfolded.lhs) == normalize(&mut ctx, terms, unfolded.rhs)
-            {
+            let l = inline_calls(terms, library, l, None).unwrap();
+            let r = inline_calls(terms, library, r, None).unwrap();
+            let (l, r) = aligned(terms, l, r);
+            if normalize(&mut ctx, terms, l) == normalize(&mut ctx, terms, r) {
                 opened.push(identity.name.as_str());
             }
         }

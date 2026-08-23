@@ -164,9 +164,9 @@ use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::fmt;
 
-use bytecode::SentenceIndex;
+use bytecode::{Library, SentenceIndex};
 
-use crate::term::{Arity, Context, Prim, Term, TermIndex};
+use crate::term::{Arity, Context, Prim, Term, TermIndex, lower};
 
 #[cfg(test)]
 mod meaning;
@@ -605,6 +605,356 @@ fn emit(graph: &mut Graph, terms: &Context, term: TermIndex, inputs: Vec<Source>
             let arity = terms.arity(*if_true).outputs;
             graph.add(NodeKind::Select { arity, branch }, ports)
         }
+    }
+}
+
+/// The graph as `id(k) * itself` reads: `k` fresh boundary wires passed
+/// straight through beneath it.
+///
+/// This is the graph-side spelling of [`Context::under`], and it exists for
+/// the same reason: a goal pads its narrower side until the arities agree,
+/// and once a side is a graph the padding has to be said on the graph.
+pub fn under(graph: &Graph, k: usize) -> Graph {
+    if k == 0 {
+        return graph.clone();
+    }
+    let mut out = graph.clone();
+    let bump_src = |src: Source| match src {
+        Source::Input(i) => Source::Input(i + k),
+        port => port,
+    };
+    let bump_sink = |sink: Sink| match sink {
+        Sink::Output(j) => Sink::Output(j + k),
+        port => port,
+    };
+    for node in out.nodes.iter_mut().flatten() {
+        for src in &mut node.inputs {
+            *src = bump_src(*src);
+        }
+        for readers in &mut node.outputs {
+            for sink in readers.iter_mut() {
+                *sink = bump_sink(*sink);
+            }
+        }
+    }
+    let mut inputs: Vec<Vec<Sink>> = (0..k).map(|i| vec![Sink::Output(i)]).collect();
+    inputs.extend(
+        std::mem::take(&mut out.inputs)
+            .into_iter()
+            .map(|readers| readers.into_iter().map(bump_sink).collect::<Vec<_>>()),
+    );
+    out.inputs = inputs;
+    let mut outputs: Vec<Source> = (0..k).map(Source::Input).collect();
+    outputs.extend(std::mem::take(&mut out.outputs).into_iter().map(bump_src));
+    out.outputs = outputs;
+    debug_assert!(out.check().is_ok(), "padding moved no box and broke a link");
+    out
+}
+
+/// Opens calls in place: every [`NodeKind::Call`] — or, with `only`, every
+/// call to that one sentence — replaced by the graph of its body, its
+/// readers re-pointed at what the body leaves.
+///
+/// Definitional unfolding, not a law: this is [`build`]'s work continued —
+/// the same `emit`, into a graph that already exists — and it changes what
+/// is provable exactly the way the term version did, which is why it is a
+/// proof step and never a rewrite the table proposes. Unlabelled, it opens
+/// all the way down (recursion is forbidden, so the walk drains); labelled,
+/// one pass, and the opened body's own calls stay shut.
+///
+/// Answers how many calls it opened — zero is the caller's business to
+/// refuse.
+pub fn inline(
+    graph: &mut Graph,
+    terms: &mut Context,
+    library: &Library,
+    only: Option<SentenceIndex>,
+) -> Result<usize, crate::term::Error> {
+    let mut opened = 0;
+    loop {
+        let calls: Vec<(NodeId, SentenceIndex)> = graph
+            .live()
+            .filter_map(|(id, kind)| match kind {
+                NodeKind::Call { target, .. } if only.is_none_or(|t| t == *target) => {
+                    Some((id, *target))
+                }
+                _ => None,
+            })
+            .collect();
+        if calls.is_empty() {
+            return Ok(opened);
+        }
+        for (id, target) in calls {
+            let body = lower(terms, library, target)?;
+            let inputs = graph.sources(id).to_vec();
+            debug_assert_eq!(
+                terms.arity(body),
+                graph.kind(id).arity(),
+                "a call carries its arity for the same reason the term does"
+            );
+            for (port, &src) in inputs.iter().enumerate() {
+                graph.unlink(src, Sink::Port { node: id, port });
+            }
+            let outs = emit(graph, terms, body, inputs);
+            for (port, &out) in outs.iter().enumerate() {
+                let readers: Vec<Sink> = graph.sinks(Source::Port { node: id, port }).to_vec();
+                for sink in readers {
+                    graph.set_source(sink, out);
+                    graph.sinks_mut(out).push(sink);
+                }
+            }
+            graph.nodes[id.index()] = None;
+            opened += 1;
+        }
+        if only.is_some() {
+            return Ok(opened);
+        }
+    }
+}
+
+// ---- whether two graphs are one diagram ------------------------------------------
+
+/// Whether the two graphs are the same diagram: a bijection of live boxes
+/// preserving every kind (modulo a bijection of branch ids) and every link,
+/// with both boundaries pinned — input `i` to input `i`, output `j` to
+/// output `j`.
+///
+/// Whole-graph equality, not [`rules::find`]'s embedding: no window, no
+/// reader-split, nothing left to a choice. Dead slots and the numbers ids
+/// happen to hold do not count — a graph that rewrote and a graph that was
+/// built are one diagram if their live boxes wire up alike.
+///
+/// Search, held to account the way the matcher is: a candidate bijection is
+/// verified link by link before `true` is answered, so a bug here costs a
+/// wrong `false` — a goal that fails to close — never a wrong `true`.
+pub fn isomorphic(a: &Graph, b: &Graph) -> bool {
+    if a.arity() != b.arity() || a.live_count() != b.live_count() {
+        return false;
+    }
+    // The multiset of box shapes must agree before any search is worth
+    // running — and this is what keeps the common "no" cheap.
+    let census = |g: &Graph| {
+        let mut kinds: Vec<String> = g.live().map(|(_, kind)| erased(kind)).collect();
+        kinds.sort_unstable();
+        kinds
+    };
+    if census(a) != census(b) {
+        return false;
+    }
+    let mut iso = Iso {
+        a,
+        b,
+        map: vec![None; a.nodes.len()],
+        used: HashSet::new(),
+        branches: HashMap::new(),
+        branch_used: HashSet::new(),
+    };
+    iso.walk()
+}
+
+/// A box's shape with its branch id erased — what a bijection may compare
+/// directly, the pairing being its own business.
+fn erased(kind: &NodeKind) -> String {
+    match kind {
+        NodeKind::Fork { arity, .. } => format!("fork({})", arity),
+        NodeKind::Select { arity, .. } => format!("select({})", arity),
+        other => format!("{:?}", other),
+    }
+}
+
+struct Iso<'g> {
+    a: &'g Graph,
+    b: &'g Graph,
+    /// Image of `a`'s boxes in `b`, by `a`'s own index.
+    map: Vec<Option<NodeId>>,
+    used: HashSet<NodeId>,
+    branches: HashMap<BranchId, BranchId>,
+    branch_used: HashSet<BranchId>,
+}
+
+impl Iso<'_> {
+    fn walk(&mut self) -> bool {
+        let Some(x) = self.pick() else {
+            return self.verify();
+        };
+        for y in self.candidates(x) {
+            if let Some(bound) = self.assign(x, y) {
+                if self.walk() {
+                    return true;
+                }
+                self.unassign(x, y, bound);
+            }
+        }
+        false
+    }
+
+    /// The next box to place: one with a placed neighbour if there is one,
+    /// so the search rides the wiring instead of trying products — a box
+    /// with no anchor at all (a literal nothing placed reads yet) comes
+    /// last, when its readers have pinned it down.
+    fn pick(&self) -> Option<NodeId> {
+        let unassigned = || {
+            self.a
+                .live()
+                .map(|(id, _)| id)
+                .filter(|id| self.map[id.index()].is_none())
+        };
+        unassigned()
+            .find(|&x| self.has_placed_neighbour(x))
+            .or_else(|| unassigned().next())
+    }
+
+    fn has_placed_neighbour(&self, x: NodeId) -> bool {
+        let placed = |id: NodeId| self.map[id.index()].is_some();
+        let feeds = self
+            .a
+            .sources(x)
+            .iter()
+            .any(|src| matches!(*src, Source::Port { node, .. } if placed(node)));
+        let read = (0..self.a.kind(x).arity().outputs).any(|port| {
+            self.a
+                .sinks(Source::Port { node: x, port })
+                .iter()
+                .any(|sink| matches!(*sink, Sink::Port { node, .. } if placed(node)))
+        });
+        feeds || read
+    }
+
+    /// The `b` boxes worth trying for `x`: a placed producer narrows to its
+    /// image's readers, a placed reader pins the candidate outright, and
+    /// only a box touching nothing placed falls back on the sweep.
+    fn candidates(&self, x: NodeId) -> Vec<NodeId> {
+        for (port, src) in self.a.sources(x).iter().enumerate() {
+            if let Source::Port { node, port: q } = *src
+                && let Some(m) = self.map[node.index()]
+            {
+                let mut out: Vec<NodeId> = self
+                    .b
+                    .sinks(Source::Port { node: m, port: q })
+                    .iter()
+                    .filter_map(|sink| match *sink {
+                        Sink::Port { node, port: p } if p == port => Some(node),
+                        _ => None,
+                    })
+                    .collect();
+                out.sort_unstable();
+                out.dedup();
+                return out;
+            }
+        }
+        for port in 0..self.a.kind(x).arity().outputs {
+            for sink in self.a.sinks(Source::Port { node: x, port }) {
+                if let Sink::Port { node, port: r } = *sink
+                    && let Some(m) = self.map[node.index()]
+                {
+                    return match self.b.sources(m).get(r) {
+                        Some(&Source::Port { node, port: q }) if q == port => vec![node],
+                        _ => Vec::new(),
+                    };
+                }
+            }
+        }
+        self.b.live().map(|(id, _)| id).collect()
+    }
+
+    /// Pins `x` to `y`, answering the branch pairing it bound — the undo
+    /// log — or `None` if they cannot correspond. Edges whose other end is
+    /// not yet placed defer to [`Iso::verify`].
+    fn assign(&mut self, x: NodeId, y: NodeId) -> Option<Option<BranchId>> {
+        if self.used.contains(&y) {
+            return None;
+        }
+        let bound = match (self.a.kind(x), self.b.kind(y)) {
+            (
+                NodeKind::Fork { arity, branch },
+                NodeKind::Fork {
+                    arity: n,
+                    branch: to,
+                },
+            )
+            | (
+                NodeKind::Select { arity, branch },
+                NodeKind::Select {
+                    arity: n,
+                    branch: to,
+                },
+            ) => {
+                if arity != n {
+                    return None;
+                }
+                match self.branches.get(branch) {
+                    Some(held) if held != to => return None,
+                    Some(_) => None,
+                    None => {
+                        if self.branch_used.contains(to) {
+                            return None;
+                        }
+                        self.branches.insert(*branch, *to);
+                        self.branch_used.insert(*to);
+                        Some(*branch)
+                    }
+                }
+            }
+            (NodeKind::Fork { .. } | NodeKind::Select { .. }, _)
+            | (_, NodeKind::Fork { .. } | NodeKind::Select { .. }) => return None,
+            (p, q) if p == q => None,
+            _ => return None,
+        };
+        for (src, dst) in self.a.sources(x).iter().zip(self.b.sources(y)) {
+            let fits = match (*src, *dst) {
+                (Source::Input(i), Source::Input(j)) => i == j,
+                (Source::Port { node, port }, Source::Port { node: m, port: q }) => {
+                    port == q && self.map[node.index()].is_none_or(|held| held == m)
+                }
+                _ => false,
+            };
+            if !fits {
+                self.rollback(bound);
+                return None;
+            }
+        }
+        self.map[x.index()] = Some(y);
+        self.used.insert(y);
+        Some(bound)
+    }
+
+    fn rollback(&mut self, bound: Option<BranchId>) {
+        if let Some(branch) = bound {
+            let to = self.branches.remove(&branch).expect("bound above");
+            self.branch_used.remove(&to);
+        }
+    }
+
+    fn unassign(&mut self, x: NodeId, y: NodeId, bound: Option<BranchId>) {
+        self.map[x.index()] = None;
+        self.used.remove(&y);
+        self.rollback(bound);
+    }
+
+    /// Every box placed; hold the whole claim to agreeing — the deferred
+    /// edges, and the boundary.
+    fn verify(&self) -> bool {
+        let image = |src: Source| match src {
+            Source::Input(i) => Some(Source::Input(i)),
+            Source::Port { node, port } => {
+                self.map[node.index()].map(|m| Source::Port { node: m, port })
+            }
+        };
+        for (x, _) in self.a.live() {
+            let Some(y) = self.map[x.index()] else {
+                return false;
+            };
+            for (src, dst) in self.a.sources(x).iter().zip(self.b.sources(y)) {
+                if image(*src) != Some(*dst) {
+                    return false;
+                }
+            }
+        }
+        self.a
+            .outputs()
+            .iter()
+            .zip(self.b.outputs())
+            .all(|(src, dst)| image(*src) == Some(*dst))
     }
 }
 
@@ -1377,5 +1727,106 @@ mod tests {
                 library.names[idx]
             );
         }
+    }
+
+    // ---- padding, opening, and sameness ----
+
+    #[test]
+    fn padding_slides_wires_underneath() {
+        let (_terms, graph) = built("not");
+        let padded = under(&graph, 2);
+        padded.check().unwrap();
+        assert_eq!(padded.arity(), Arity::new(3, 3));
+        // The fresh wires pass straight through beneath...
+        assert_eq!(padded.outputs()[0], Source::Input(0));
+        assert_eq!(padded.outputs()[1], Source::Input(1));
+        // ...and the box now reads the shifted boundary.
+        let (not, _) = padded.live().next().unwrap();
+        assert_eq!(padded.sources(not), [Source::Input(2)]);
+        assert!(isomorphic(&graph, &under(&graph, 0)));
+    }
+
+    #[test]
+    fn two_graphs_are_one_diagram_or_they_are_not() {
+        let (_t, a) = built("push 1 push 2 add");
+        let (_t, b) = built("push 1 push 2 add");
+        assert!(isomorphic(&a, &b));
+        let (_t, c) = built("push 1 push 3 add");
+        assert!(
+            !isomorphic(&a, &c),
+            "a different literal is a different program"
+        );
+        let (_t, d) = built("not");
+        assert!(!isomorphic(&a, &d));
+        let (_t, e) = built("branch { add } { add }");
+        let (_t, f) = built("branch { add } { add }");
+        assert!(isomorphic(&e, &f), "branch ids pair, they are not compared");
+        let (_t, g) = built("branch { add } { sub }");
+        assert!(!isomorphic(&e, &g));
+    }
+
+    /// Dead slots and the numbers ids hold are not part of what a graph
+    /// says: a graph that rewrote its boxes away is the wires it left.
+    #[test]
+    fn sameness_ignores_the_graveyard() {
+        let (_t, mut rewritten) = built("swap swap");
+        for _ in 0..2 {
+            let (id, _) = rewritten.live().next().expect("a swap to spend");
+            let step = rules::propose(&rewritten, &[rules::Law::SwapElim], id)
+                .into_iter()
+                .next()
+                .expect("swap-elim fires");
+            rules::apply(&mut rewritten, &step).unwrap();
+        }
+        assert_eq!(rewritten.live_count(), 0);
+        let mut wires = Graph::empty(2);
+        wires.close(vec![Source::Input(0), Source::Input(1)]);
+        assert!(isomorphic(&rewritten, &wires));
+        let mut crossed = Graph::empty(2);
+        crossed.close(vec![Source::Input(1), Source::Input(0)]);
+        assert!(!isomorphic(&rewritten, &crossed), "the boundary is pinned");
+    }
+
+    /// A call opened in place is the body's boxes on the call's wires —
+    /// the same graph building the opened term would have made.
+    #[test]
+    fn a_call_opens_in_place() {
+        let code = r#"
+            #[arity(1,1)] sentence inner { not not }
+            #[arity(1,1)] sentence outer { jump crate::inner }
+            sentence probe { jump crate::outer }
+        "#;
+        let library = assemble(code).unwrap();
+        let named = |name: &str| {
+            library
+                .names
+                .iter_enumerated()
+                .find(|(_, n)| *n == name)
+                .map(|(idx, _)| idx)
+                .unwrap()
+        };
+        let mut terms = Context::new();
+        let term = lower(&mut terms, &library, named("probe")).unwrap();
+        let mut graph = build(&terms, term);
+
+        // A labelled inline opens that sentence and leaves what it calls
+        // shut.
+        let mut labelled = graph.clone();
+        let opened = inline(&mut labelled, &mut terms, &library, Some(named("outer"))).unwrap();
+        assert_eq!(opened, 1);
+        labelled.check().unwrap();
+        assert!(matches!(
+            labelled.live().next().map(|(_, k)| k),
+            Some(NodeKind::Call { target, .. }) if *target == named("inner")
+        ));
+
+        // Unlabelled opens all the way down, and lands on the graph the
+        // opened term builds.
+        let opened = inline(&mut graph, &mut terms, &library, None).unwrap();
+        assert_eq!(opened, 2);
+        graph.check().unwrap();
+        let (_t, flat) = built("not not");
+        assert!(isomorphic(&graph, &flat), "\n{}\n{}", graph, flat);
+        assert_eq!(inline(&mut graph, &mut terms, &library, None).unwrap(), 0);
     }
 }

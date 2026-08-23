@@ -10,49 +10,68 @@
 //! proof identities::testing_a_test_by_name = inline diagram;
 //! ```
 //!
-//! A strategy is a run of steps, juxtaposed, acting on **one goal**. The
-//! manipulations transform it; a splitter replaces it with independent
-//! subgoals, each carrying its own strategy; `diagram` closes it:
+//! A strategy is a run of steps, juxtaposed, acting on **one goal** — two
+//! [graphs](crate::diagram2) of one arity, claimed to be the same program.
+//! The manipulations transform it; a splitter replaces it with independent
+//! subgoals, each carrying its own strategy; `diagram` closes it, and a
+//! goal whose sides have become one diagram — isomorphic — closes on its
+//! own:
 //!
 //! | step | does | fails when |
 //! |---|---|---|
-//! | `peel` | strips what the two compose spines share at either end | nothing is shared |
-//! | `inline` | unfolds every call, all the way down | there are no calls |
-//! | `inline(name)` | unfolds the calls to that one sentence | it is not called here |
+//! | `lhs(tactic)` | runs a graph tactic (see below) on the left side | the tactic fails — and the residual is the goal as it now stands, the last step that landed still standing |
+//! | `rhs(tactic)` | the same on the right | likewise |
+//! | `both(tactic)` | the same on each side in turn | likewise |
+//! | `inline` | opens every call in both graphs, all the way down | there are no calls |
+//! | `inline(name)` | opens the calls to that one sentence | it is not called here |
 //! | `symm` | swaps the two sides | never — but two in a row are refused |
-//! | `exact` | closes the goal if the sides are one term as written | they differ — and the residual is the goal untouched, which is what the step is usually for |
-//! | `via { body } (left: s, right: s)` | **cuts**: `A = B` splits into the goals `A = C` and `C = B` | the waypoint's net stack change is not the goal's, or a side fails |
-//! | `descend(then: s, else: s)` | forks a branch-vs-branch goal into its arms | the sides are not branches, or an omitted arm is not already equal |
-//! | `diagram` | normalizes both sides into one arena; they are one diagram or they are not | they are not — and the residual is both sides reified, narrowed to the difference |
+//! | `exact` | claims the sides are one diagram — **isomorphic** — which the auto-close has already checked, so a reached `exact` fails and shows the goal exactly as it stands | always, when reached |
+//! | `via { body } (left: s, right: s)` | **cuts**: `A = B` splits into the goals `A = C` and `C = B`, the waypoint built as a graph | the waypoint's net stack change is not the goal's, or a side fails |
+//! | `diagram` | reads both sides back as terms and normalizes them into one arena; they are one diagram or they are not | they are not — and the residual is both sides reified, narrowed to the difference |
 //!
-//! `diagram`, `via` and `descend` end a strategy — the goal is closed or
+//! `diagram`, `exact` and `via` end a strategy — the goal is closed or
 //! split, and what follows a split is written *inside* it, since the
-//! subgoals are independent: peel one, inline the other, cut one again.
-//! A chain is nested cuts — `via { c1 } (right: via { c2 })` — and each
-//! link may take a different road. A strategy that ends on a manipulation
-//! is allowed: it closes only if the goal has become trivially equal, and
-//! says so otherwise.
+//! subgoals are independent. A chain is nested cuts — `via { c1 } (right:
+//! via { c2 })` — and each link may take a different road. A strategy that
+//! ends on a manipulation is allowed: it closes only if the goal has
+//! become one diagram, and says so otherwise.
 //!
-//! The closer is a decision procedure, not a search, so the manipulations
-//! carry a different weight than they would beside an engine that might
-//! find its own way: `inline` is the one that *changes what is provable*
-//! (the diagram never opens a call on its own), and the rest exist for the
-//! report — `via` so a failure can say which half of a journey it lives
-//! in, `peel` and `descend` to shrink what gets printed, `exact` to show a
-//! goal exactly as it stands.
+//! ## The tactic language, embedded
 //!
-//! `symm` is the one step that changes nothing about the claim: equality is
-//! symmetric, so `A = B` and `B = A` are the same goal. What it moves is
-//! which side the *asymmetric* steps read — a `via`'s halves are named for
-//! their sides — so it is how a proof says "the interesting side is the
-//! other one" without restating the identity backwards.
+//! Inside `lhs(…)`, `rhs(…)` and `both(…)` is the rewrite language of
+//! [`crate::diagram2::tactic`], juxtaposed like steps are:
 //!
-//! The two splitters treat an omitted side differently, on purpose. An
-//! omitted `descend` arm is a *checked claim* that those arms are already
-//! equal — the goal supplied the arms, and equal ones are common. A cut's
-//! sides are the author's construction, and a cut with a trivially equal
-//! side is a degenerate cut; an omitted `via` side gets `diagram`, because
-//! handing the decision procedure the halves is what a cut is *for*.
+//! | tactic | is |
+//! |---|---|
+//! | `saturate` | the structural laws to fixpoint — the resurrected driver |
+//! | `saturate(law, …)` | those laws to fixpoint |
+//! | `branches` | the branch layer with its cleanup, to fixpoint |
+//! | `fire(law, …)` | the first proposal of those laws, once — fails finding none |
+//! | `repeat(t …)` | the sequence until it stops advancing |
+//! | `try(t …)` | the sequence, or nothing — failure becomes no progress |
+//!
+//! A law is named as the docs name it — `copy-elim`, `select-view`,
+//! `dead-node` — and `structural` and `branching` name the two lists of
+//! [`crate::diagram2::rules`]. This surface is deliberately smaller than
+//! the language underneath: queries and stated backward steps exist as
+//! data first, and grow a spelling here when a proof needs one.
+//!
+//! `inline` is still the step that *changes what is provable* — no closer
+//! opens a call on its own — and the tactics change what the *report*
+//! shows: a goal rewritten toward its other side fails closer to the
+//! difference. `symm` moves which side the asymmetric steps read — a
+//! `via`'s halves and the tactic steps are named for their sides — so it
+//! is how a proof says "the interesting side is the other one" without
+//! restating the identity backwards.
+//!
+//! An omitted `via` side gets `diagram`, because handing the decision
+//! procedure the halves is what a cut is *for*.
+//!
+//! `peel` and `descend` are retired, not aliased. Both read the goal as
+//! a term — a compose spine to strip, a branch node to fork — and a graph
+//! goal has neither: what they narrowed for the report, the residual's own
+//! narrowing still does, and what `descend` proved arm by arm is the
+//! branch layer's to rewrite. A proof that names them fails loudly.
 //!
 //! Entries are checked both ways: an entry naming no stated identity is an
 //! error (a renamed identity must not silently shed its proof), and a claim
@@ -69,33 +88,63 @@ use std::fmt;
 
 use bytecode::SentenceIndex;
 
+use crate::diagram2::rules::{self, Law};
+use crate::diagram2::tactic::{self, Tactic};
 use crate::term::TermIndex;
+
+/// Which side of the goal a graph tactic acts on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OnSide {
+    Lhs,
+    Rhs,
+    Both,
+}
+
+impl OnSide {
+    /// The word the surface spells it with, which is also how a proof's
+    /// summary names it.
+    pub fn word(self) -> &'static str {
+        match self {
+            OnSide::Lhs => "lhs",
+            OnSide::Rhs => "rhs",
+            OnSide::Both => "both",
+        }
+    }
+}
 
 /// One step of a strategy. `V` is what a `via` carries: the body's text as
 /// parsed, a [`Body`] — the term it reads as — once the library it is written
 /// against exists.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Step<V> {
-    /// Normalize both sides into one arena and ask whether they are one
-    /// diagram. Closes the goal or fails with a residual — no budget, no
-    /// search: the [`crate::diagram`] engine is a decision procedure for
-    /// its fragment, and a claim beyond the fragment fails the same way a
-    /// false one does.
+    /// Read both sides back as terms, normalize them into one arena, and
+    /// ask whether they are one diagram. Closes the goal or fails with a
+    /// residual — no budget, no search: the [`crate::diagram`] engine is a
+    /// decision procedure for its fragment, and a claim beyond the
+    /// fragment fails the same way a false one does.
     Diagram,
-    /// Strip the shared affixes of the two compose spines.
-    Peel,
-    /// Unfold calls on both sides: every one, all the way down, or — with a
-    /// label — only the calls to the sentence it names, whose own calls stay
-    /// closed. Recursion is forbidden, so one pass opens every instance.
+    /// Run a graph tactic on one side of the goal, or on each in turn —
+    /// the rewrite language of [`crate::diagram2::tactic`], embedded. A
+    /// manipulation, not a closer: what it leaves is a goal, and the
+    /// auto-close is what notices the sides becoming one diagram. A tactic
+    /// that fails leaves its side standing at the last step that landed,
+    /// and the residual shows exactly that. Boxed: a tactic is by far the
+    /// widest thing a step can carry.
+    Rewrite { side: OnSide, tactic: Box<Tactic> },
+    /// Open calls on both sides, in place in the graphs: every one, all
+    /// the way down, or — with a label — only the calls to the sentence it
+    /// names, whose own calls stay closed. Recursion is forbidden, so one
+    /// pass opens every instance.
     Inline(Option<V>),
     /// Swap the two sides. Equality is symmetric, so the claim is untouched;
     /// what moves is which side the asymmetric steps read.
     Symm,
-    /// Close the goal only if the two sides are one term as written. No
-    /// engine runs, so a failed `exact` reports the goal exactly as it
-    /// stands — un-normalized, un-narrowed — which is the way to *see* a
-    /// goal: `exact` alone shows the identity as lowered and aligned, and
-    /// after a manipulation it shows what the manipulation left.
+    /// Claim the two sides are one diagram — isomorphic. The auto-close
+    /// tests exactly that before every step, so a reached `exact` is a
+    /// failed claim, and its whole job is the report: the goal exactly as
+    /// it stands, un-normalized, un-narrowed — the way to *see* one.
+    /// `exact` alone shows the identity as built and aligned, and after a
+    /// manipulation it shows what the manipulation left.
     Exact,
     /// Cut the goal at a waypoint: `A = B` splits into the two independent
     /// goals `A = C` (left) and `C = B` (right), each discharged by its own
@@ -104,12 +153,6 @@ pub enum Step<V> {
         waypoint: V,
         left: Option<Strategy<V>>,
         right: Option<Strategy<V>>,
-    },
-    /// Fork a branch-vs-branch goal into its arms. An omitted arm claims
-    /// those arms are already equal, and the claim is checked.
-    Descend {
-        then_arm: Option<Strategy<V>>,
-        else_arm: Option<Strategy<V>>,
     },
 }
 
@@ -143,13 +186,12 @@ impl<V> fmt::Display for Step<V> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Step::Diagram => write!(f, "diagram"),
-            Step::Peel => write!(f, "peel"),
+            Step::Rewrite { side, .. } => write!(f, "{}(…)", side.word()),
             Step::Inline(None) => write!(f, "inline"),
             Step::Inline(Some(_)) => write!(f, "inline(…)"),
             Step::Symm => write!(f, "symm"),
             Step::Exact => write!(f, "exact"),
             Step::Via { .. } => write!(f, "via {{ … }}"),
-            Step::Descend { .. } => write!(f, "descend(…)"),
         }
     }
 }
@@ -213,7 +255,23 @@ fn parse_step(input: &str) -> Result<(Step<String>, &str), String> {
     let (word, rest) = input.split_at(word_len);
     match word {
         "diagram" => Ok((Step::Diagram, rest)),
-        "peel" => Ok((Step::Peel, rest)),
+        "lhs" | "rhs" | "both" => {
+            let side = match word {
+                "lhs" => OnSide::Lhs,
+                "rhs" => OnSide::Rhs,
+                _ => OnSide::Both,
+            };
+            let (inside, after) = paren_block(rest.trim_start())
+                .ok_or_else(|| format!("`{}` expects a parenthesized tactic", word))?;
+            let tactic = parse_tactics(inside).map_err(|e| format!("`{}`: {}", word, e))?;
+            Ok((
+                Step::Rewrite {
+                    side,
+                    tactic: Box::new(tactic),
+                },
+                after,
+            ))
+        }
         "inline" => {
             // A label goes in parentheses, so `inline diagram` stays two
             // steps rather than an inline of a sentence called `diagram`.
@@ -247,17 +305,114 @@ fn parse_step(input: &str) -> Result<(Step<String>, &str), String> {
                 after,
             ))
         }
-        "descend" => {
-            let rest = rest.trim_start();
-            if !rest.starts_with('(') {
-                return Err("`descend` expects `(then: …, else: …)`".to_string());
-            }
-            let ((then_arm, else_arm), after) = parse_arms("descend", "then", "else", rest)?;
-            Ok((Step::Descend { then_arm, else_arm }, after))
-        }
         "" => Err(format!("expected a step, found: {}", head_of(input))),
         other => Err(format!("no step is called `{}`", other)),
     }
+}
+
+// ---- the embedded tactic language -------------------------------------------
+
+/// The whole of a `lhs(…)` block as one tactic; anything left over is a
+/// mistake in the proof, said where it is written.
+fn parse_tactics(input: &str) -> Result<Tactic, String> {
+    let (tactic, rest) = parse_tactic_seq(input)?;
+    let rest = rest.trim_start();
+    if !rest.is_empty() {
+        return Err(format!("expected a tactic, found: {}", head_of(rest)));
+    }
+    Ok(tactic)
+}
+
+/// Tactics by juxtaposition — a sequence, or the one tactic it holds.
+fn parse_tactic_seq(input: &str) -> Result<(Tactic, &str), String> {
+    let mut rest = input.trim_start();
+    let mut steps = Vec::new();
+    while !rest.is_empty() && !rest.starts_with([',', ')']) {
+        let (tactic, after) = parse_tactic(rest)?;
+        steps.push(tactic);
+        rest = after.trim_start();
+    }
+    match steps.len() {
+        0 => Err("an empty tactic does nothing".to_string()),
+        1 => Ok((steps.pop().expect("one"), rest)),
+        _ => Ok((Tactic::Seq(steps), rest)),
+    }
+}
+
+fn parse_tactic(input: &str) -> Result<(Tactic, &str), String> {
+    let word_len = input
+        .find(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .unwrap_or(input.len());
+    let (word, rest) = input.split_at(word_len);
+    match word {
+        // The resurrected driver, and its law-directed generalization.
+        "saturate" => {
+            let Some(after) = rest.trim_start().strip_prefix('(') else {
+                return Ok((tactic::saturate_structural(), rest));
+            };
+            let (inside, after) = after.split_once(')').ok_or("`saturate(` never closes")?;
+            let laws = parse_laws(inside)?;
+            Ok((
+                Tactic::Repeat(Box::new(tactic::fire_first(laws)), None),
+                after,
+            ))
+        }
+        "branches" => Ok((tactic::branch_pass(), rest)),
+        "fire" => {
+            let after = rest
+                .trim_start()
+                .strip_prefix('(')
+                .ok_or("`fire` expects `(law, …)`")?;
+            let (inside, after) = after.split_once(')').ok_or("`fire(` never closes")?;
+            Ok((tactic::fire_first(parse_laws(inside)?), after))
+        }
+        "repeat" => {
+            let (inside, after) =
+                paren_block(rest.trim_start()).ok_or("`repeat` expects a parenthesized tactic")?;
+            let (body, leftover) = parse_tactic_seq(inside)?;
+            if !leftover.trim().is_empty() {
+                return Err(format!("`repeat`: found: {}", head_of(leftover)));
+            }
+            Ok((Tactic::Repeat(Box::new(body), None), after))
+        }
+        "try" => {
+            let (inside, after) =
+                paren_block(rest.trim_start()).ok_or("`try` expects a parenthesized tactic")?;
+            let (body, leftover) = parse_tactic_seq(inside)?;
+            if !leftover.trim().is_empty() {
+                return Err(format!("`try`: found: {}", head_of(leftover)));
+            }
+            Ok((Tactic::Try(Box::new(body)), after))
+        }
+        "" => Err(format!("expected a tactic, found: {}", head_of(input))),
+        other => Err(format!("no tactic is called `{}`", other)),
+    }
+}
+
+/// Law names as the docs spell them, and the two lists by their names.
+fn parse_laws(inside: &str) -> Result<Vec<Law>, String> {
+    let mut out = Vec::new();
+    for name in inside.split(',') {
+        out.extend(match name.trim() {
+            "structural" => rules::structural(),
+            "branching" => rules::branching(),
+            "id-elim" => vec![Law::IdElim],
+            "swap-elim" => vec![Law::SwapElim],
+            "copy-elim" => vec![Law::CopyElim],
+            "dead-node" => vec![Law::DeadNode],
+            "dedup" => vec![Law::Dedup],
+            "not-not" => vec![Law::NotNot],
+            "fork-dedup" => vec![Law::ForkDedup],
+            "select-view" => vec![Law::SelectView],
+            "select-same" => vec![Law::SelectSame],
+            "select-literal" => vec![Law::SelectLiteral],
+            "specialize-equal" => vec![Law::SpecializeEqual],
+            "specialize-bool" => vec![Law::SpecializeBool],
+            "" => return Err("a law list names no law".to_string()),
+            other => return Err(format!("no law is called `{}`", other)),
+        });
+    }
+    Ok(out)
 }
 
 /// Two arms in parentheses, either labelled and either omissible:
@@ -307,20 +462,15 @@ fn parse_arms<'t>(
     }
 }
 
-/// The closers close: nothing may follow `diagram`, `via` or `descend` — a
+/// The closers close: nothing may follow `diagram`, `exact` or `via` — a
 /// split goal's remaining work is written inside the split, since the
-/// subgoals are independent. Sides and arms answer for themselves.
+/// subgoals are independent. Sides answer for themselves.
 fn validate<V>(strategy: &Strategy<V>) -> Result<(), String> {
     for (i, step) in strategy.iter().enumerate() {
         let last = i + 1 == strategy.len();
         match step {
-            Step::Diagram | Step::Exact | Step::Descend { .. } | Step::Via { .. } if !last => {
+            Step::Diagram | Step::Exact | Step::Via { .. } if !last => {
                 return Err(format!("`{}` closes the goal; nothing can follow it", step));
-            }
-            Step::Descend { then_arm, else_arm } => {
-                for arm in [then_arm, else_arm].into_iter().flatten() {
-                    validate(arm)?;
-                }
             }
             Step::Via { left, right, .. } => {
                 for side in [left, right].into_iter().flatten() {
@@ -370,6 +520,26 @@ fn brace_block(text: &str) -> Option<(&str, &str)> {
     None
 }
 
+/// The same for `( ... )` — what a tactic block sits in.
+fn paren_block(text: &str) -> Option<(&str, &str)> {
+    let mut chars = text.char_indices();
+    let (_, '(') = chars.next()? else { return None };
+    let mut depth = 1usize;
+    for (i, c) in chars {
+        match c {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some((&text[1..i], &text[i + 1..]));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -381,49 +551,97 @@ mod tests {
             // how the hard ones close
             proof identities::by_name = inline diagram;
             proof identities::wrapped =
-                descend(then: peel via { drop(1) ; push true }, else: diagram);
+                symm via { drop(1) ; push true } (left: inline diagram);
             "#,
         )
         .unwrap();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].identity, "identities::by_name");
         assert_eq!(entries[0].strategy, vec![Step::Inline(None), Step::Diagram]);
-        let [Step::Descend { then_arm, else_arm }] = &entries[1].strategy[..] else {
+        let [
+            Step::Symm,
+            Step::Via {
+                waypoint,
+                left,
+                right,
+            },
+        ] = &entries[1].strategy[..]
+        else {
             panic!("{:?}", entries[1].strategy);
         };
+        assert_eq!(waypoint, "drop(1) ; push true");
         assert_eq!(
-            then_arm.as_deref(),
-            Some(
-                [
-                    Step::Peel,
-                    Step::Via {
-                        waypoint: "drop(1) ; push true".to_string(),
-                        left: None,
-                        right: None,
-                    },
-                ]
-                .as_slice()
-            )
+            left.as_deref(),
+            Some([Step::Inline(None), Step::Diagram].as_slice())
         );
-        assert_eq!(else_arm.as_deref(), Some([Step::Diagram].as_slice()));
-    }
-
-    #[test]
-    fn an_omitted_descend_arm_stays_omitted() {
-        let entries = parse_hant("proof p = descend(then: diagram);").unwrap();
-        let [Step::Descend { then_arm, else_arm }] = &entries[0].strategy[..] else {
-            panic!();
-        };
-        assert!(then_arm.is_some());
-        assert!(else_arm.is_none());
+        assert!(right.is_none());
     }
 
     #[test]
     fn a_closer_mid_strategy_is_refused() {
         let err = parse_hant("proof p = diagram inline;").unwrap_err();
         assert!(err.contains("nothing can follow"), "{}", err);
-        let err = parse_hant("proof p = descend(then: diagram peel);").unwrap_err();
+        let err = parse_hant("proof p = via { push 1 } (left: diagram inline);").unwrap_err();
         assert!(err.contains("nothing can follow"), "{}", err);
+    }
+
+    #[test]
+    fn a_tactic_block_reads_as_the_language_it_embeds() {
+        use crate::diagram2::tactic::{Pick, RuleSpec, Tactic};
+
+        let entries = parse_hant("proof p = lhs(saturate) exact;").unwrap();
+        let [Step::Rewrite { side, tactic }, Step::Exact] = &entries[0].strategy[..] else {
+            panic!("{:?}", entries[0].strategy);
+        };
+        assert_eq!(*side, OnSide::Lhs);
+        assert_eq!(tactic.as_ref(), &tactic::saturate_structural());
+
+        let entries =
+            parse_hant("proof p = both(saturate branches try(fire(not-not))) diagram;").unwrap();
+        let [Step::Rewrite { side, tactic }, Step::Diagram] = &entries[0].strategy[..] else {
+            panic!("{:?}", entries[0].strategy);
+        };
+        assert_eq!(*side, OnSide::Both);
+        let Tactic::Seq(steps) = tactic.as_ref() else {
+            panic!("{:?}", tactic);
+        };
+        assert_eq!(steps[0], tactic::saturate_structural());
+        assert_eq!(steps[1], tactic::branch_pass());
+        assert_eq!(
+            steps[2],
+            Tactic::Try(Box::new(tactic::fire_first(vec![Law::NotNot])))
+        );
+
+        // A law list spells the docs' names, and the two lists by theirs.
+        let entries =
+            parse_hant("proof p = rhs(saturate(select-view, structural)) exact;").unwrap();
+        let [Step::Rewrite { tactic, .. }, _] = &entries[0].strategy[..] else {
+            panic!();
+        };
+        let Tactic::Repeat(body, None) = tactic.as_ref() else {
+            panic!("{:?}", tactic);
+        };
+        let Tactic::Fire {
+            rule: RuleSpec::ReadOff { laws, .. },
+            pick: Pick::First,
+            ..
+        } = body.as_ref()
+        else {
+            panic!("{:?}", body);
+        };
+        assert_eq!(laws, &[vec![Law::SelectView], rules::structural()].concat());
+    }
+
+    #[test]
+    fn a_tactic_that_is_not_one_is_refused_where_it_is_written() {
+        let err = parse_hant("proof p = lhs(flatten) exact;").unwrap_err();
+        assert!(err.contains("no tactic is called `flatten`"), "{}", err);
+        let err = parse_hant("proof p = lhs(fire(copy-elim, upside-down)) exact;").unwrap_err();
+        assert!(err.contains("no law is called `upside-down`"), "{}", err);
+        let err = parse_hant("proof p = lhs() exact;").unwrap_err();
+        assert!(err.contains("empty tactic"), "{}", err);
+        let err = parse_hant("proof p = lhs(saturate exact;").unwrap_err();
+        assert!(err.contains("parenthesized tactic"), "{}", err);
     }
 
     #[test]
@@ -443,14 +661,14 @@ mod tests {
         assert!(err.contains("nothing can follow"), "{}", err);
         // A chain is nested cuts, and each side may take its own road.
         let entries =
-            parse_hant("proof p = via { push 1 } (left: peel diagram, right: via { push 2 });")
+            parse_hant("proof p = via { push 1 } (left: inline diagram, right: via { push 2 });")
                 .unwrap();
         let [Step::Via { left, right, .. }] = &entries[0].strategy[..] else {
             panic!("{:?}", entries[0].strategy);
         };
         assert_eq!(
             left.as_deref(),
-            Some([Step::Peel, Step::Diagram].as_slice())
+            Some([Step::Inline(None), Step::Diagram].as_slice())
         );
         assert!(matches!(right.as_deref(), Some([Step::Via { .. }])));
     }
@@ -482,10 +700,10 @@ mod tests {
 
     #[test]
     fn symm_parses_and_says_nothing_twice() {
-        let entries = parse_hant("proof p = symm peel diagram;").unwrap();
+        let entries = parse_hant("proof p = symm inline diagram;").unwrap();
         assert_eq!(
             entries[0].strategy,
-            vec![Step::Symm, Step::Peel, Step::Diagram]
+            vec![Step::Symm, Step::Inline(None), Step::Diagram]
         );
         let err = parse_hant("proof p = symm symm diagram;").unwrap_err();
         assert!(err.contains("`symm symm`"), "{}", err);
@@ -493,11 +711,14 @@ mod tests {
 
     #[test]
     fn the_retired_steps_are_unknown() {
-        // The e-graph era's steps are gone, not aliased: a proof that names
-        // one should fail loudly rather than mean something else.
-        for retired in ["egraph", "solve", "norm", "norm_trusted"] {
+        // The e-graph era's steps are gone, and so are the term-shaped ones
+        // a graph goal has no reading for — none aliased: a proof that
+        // names one should fail loudly rather than mean something else.
+        for retired in ["egraph", "solve", "norm", "norm_trusted", "peel"] {
             let err = parse_hant(&format!("proof p = {};", retired)).unwrap_err();
             assert!(err.contains("no step is called"), "{}: {}", retired, err);
         }
+        let err = parse_hant("proof p = descend(then: diagram);").unwrap_err();
+        assert!(err.contains("no step is called"), "{}", err);
     }
 }
