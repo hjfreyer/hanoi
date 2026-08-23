@@ -144,7 +144,7 @@ mod customer_impl {
         }
     }
 
-    // identity emit_does_pre_and_post_is_constant { jump emit_does_pre_and_post } = { drop 0 push true };
+    identity emit_does_pre_and_post_is_constant { jump emit_does_pre_and_post } = { drop 0 push true };
 
     // emit takes state: (id, preferred_drink, internal_state) and returns ValueSet of emitted events.
     #[precondition(is_state::check)]

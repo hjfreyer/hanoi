@@ -1,0 +1,12 @@
+// Proofs for the identities barista.hana states, in the strategy language of
+// docs/proving.md. An identity with no entry here is proved by `diagram`
+// alone — this file holds exactly the claims that need direction.
+
+// Not a proof: a **standing case for the report**. Opening the calls is the
+// one thing no closer does on its own, and doing only that leaves the
+// corpus's biggest goal — 351 boxes against 2 — open and untouched by any
+// rewrite. What `prove` prints here is the reference specimen of a proof in
+// progress, and today it is 5,295 lines of which ~98% is stack routing the
+// graph never had. Extending this to something that closes is a separate
+// job from being able to watch it.
+proof barista::customer_impl::emit_does_pre_and_post_is_constant = inline;
