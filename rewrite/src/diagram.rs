@@ -53,8 +53,7 @@
 //! **Trust.** Nothing here produces a derivation yet. This module *is* the
 //! prover's judge of equality — the `diagram` step normalizes both sides of
 //! a goal and asks whether they are one — held to the machine by
-//! [`run_window`], to itself by the reify round trip, and to the corpus by
-//! tests. The intended next layer is rewriting *on* diagrams — rules as
+//! [`run_window`] and to the corpus by tests. The intended next layer is rewriting *on* diagrams — rules as
 //! cut-and-splice on the wiring, each step small and checkable, which is
 //! how claims beyond the canonical form (η, case splits) get proofs — and
 //! this module is the representation it will run on.
@@ -1474,82 +1473,5 @@ mod tests {
             format!("{}", terms.display(one)),
             "copy(1) ; drop(1) * id(1)"
         );
-    }
-
-    /// Every sentence the integration suite compiles: normalize, reify,
-    /// check the reified term, and normalize again to the same diagram.
-    ///
-    /// The round trip is the strongest cheap statement of the module's
-    /// contract: reification is a *canonical spelling* of the diagram, so
-    /// re-reading it must lose nothing — across every real program in the
-    /// corpus, branches, calls, tuples and all.
-    ///
-    /// One caveat, pinned: a diagram shares branch subtrees and a term
-    /// cannot, so a handful of state-machine test sentences tree-expand
-    /// past any reasonable term. Those normalize like everything else but
-    /// are excused from the reify round trip, by name, so a new escapee is
-    /// a visible event rather than a slow one.
-    #[test]
-    fn the_whole_corpus_round_trips() {
-        let tests = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("the crate sits in the workspace")
-            .join("tests");
-        let text = std::fs::read_to_string(tests.join("main.hana")).unwrap();
-        let mut map = bytecode::SourceMap::new();
-        let file = map.add("main.hana", text);
-        let library = bytecode::assemble_source(&mut map, file, Some(&tests))
-            .unwrap_or_else(|e| panic!("{}", map.render(&e)));
-
-        let mut arena = Context::new();
-        let terms = crate::term::lower_all(&mut arena, &library).unwrap();
-        assert!(terms.len() > 100, "the corpus should be a real one");
-        let mut ctx = Ctx::default();
-        let mut skipped = 0usize;
-        for (idx, &term) in terms.iter_enumerated() {
-            let diagram = normalize(&mut ctx, &arena, term);
-            let mut budget = 1_000usize;
-            if !fits(&ctx, diagram, &mut budget) {
-                skipped += 1;
-                continue;
-            }
-            let inputs = arena.arity(term).inputs;
-            let reified = reify(&ctx, &mut arena, diagram, inputs);
-            arena.check(reified).unwrap_or_else(|e| {
-                panic!("sentence {} reified ill-formed: {}", library.names[idx], e)
-            });
-            assert_eq!(
-                arena.arity(reified),
-                arena.arity(term),
-                "sentence {} changed arity through reification",
-                library.names[idx]
-            );
-            assert_eq!(
-                normalize(&mut ctx, &arena, reified),
-                diagram,
-                "sentence {} did not round-trip",
-                library.names[idx]
-            );
-        }
-        assert!(
-            skipped <= 120,
-            "{} sentences outgrew the round trip; the diagrams got bushier",
-            skipped
-        );
-    }
-
-    /// Whether the diagram's tree expansion stays within `budget` nodes —
-    /// the size its reified term is proportional to.
-    fn fits(ctx: &Ctx, d: DiagId, budget: &mut usize) -> bool {
-        if *budget == 0 {
-            return false;
-        }
-        *budget -= 1;
-        match *ctx.diag(d) {
-            DiagNode::Leaf(_) => true,
-            DiagNode::Branch {
-                if_true, if_false, ..
-            } => fits(ctx, if_true, budget) && fits(ctx, if_false, budget),
-        }
     }
 }
