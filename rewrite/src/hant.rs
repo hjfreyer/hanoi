@@ -471,6 +471,7 @@ fn parse_laws(inside: &str) -> Result<Vec<Law>, String> {
             "select-literal" => vec![Law::SelectLiteral],
             "specialize-equal" => vec![Law::SpecializeEqual],
             "specialize-bool" => vec![Law::SpecializeBool],
+            "promised-bool" => vec![Law::PromisedBool],
             "" => return Err("a law list names no law".to_string()),
             other => return Err(format!("no law is called `{}`", other)),
         });
