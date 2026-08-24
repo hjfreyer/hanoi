@@ -168,6 +168,7 @@ pub enum Law {
     ViewValue,
     Shannon,
     // The value layer: what an operation computes, measured on the machine.
+    PromisedBool,
     Fold,
     TestedBool,
     Retuple,
@@ -421,6 +422,28 @@ pub enum Rule {
         operands: Vec<Value>,
         reads: Vec<usize>,
     },
+    /// An answer the instruction set promises is a bool is that answer with
+    /// the promise **written down**: `op` is `op ; as_bool`, whenever
+    /// [`yields_bool`](bytecode::Instruction::yields_bool) holds of `op`.
+    ///
+    /// `as_bool` *is* `truthy` made into an instruction, so on a value that
+    /// is already a bool it is the identity and the equation is exact. What
+    /// it buys is that the promise stops being a fact about the instruction
+    /// set and becomes a **box**: a type assertion manifested in the graph,
+    /// standing where any rule can see it.
+    ///
+    /// [`Rule::SpecializeBool`] is the rule that needs it. It says what a
+    /// branch decided about the value it tested, and it says it of an
+    /// `as_bool` reading a fork's view — the coercion being how an
+    /// arbitrary truthy value becomes the bool the branch settled. A
+    /// condition that is *already* a bool carries no coercion, so the rule
+    /// cannot see it. Spending this law first puts one there.
+    ///
+    /// Nothing about the equation needs a side condition: it is true of a
+    /// promised bool however many `as_bool`s already stand on it. Not
+    /// re-proposing it forever is [`propose`]'s business, and search is
+    /// where a termination argument belongs.
+    PromisedBool { kind: NodeKind },
     /// `is_bool` of an answer the instruction set promises is a bool is
     /// `true`, and the answer itself is untouched: `op ; is_bool` on one
     /// wire is `op` and `push true` side by side. The promise is
@@ -456,6 +479,7 @@ impl Rule {
             Rule::ViewValue { .. } => Law::ViewValue,
             Rule::Shannon { .. } => Law::Shannon,
             Rule::Fold { .. } => Law::Fold,
+            Rule::PromisedBool { .. } => Law::PromisedBool,
             Rule::TestedBool { .. } => Law::TestedBool,
             Rule::Retuple { .. } => Law::Retuple,
         }
@@ -528,6 +552,7 @@ pub fn is_wiring(law: Law) -> bool {
     !matches!(
         law,
         Law::NotNot
+            | Law::PromisedBool
             | Law::SelectLiteral
             | Law::SelectConst
             | Law::SpecializeEqual
@@ -1387,6 +1412,33 @@ pub fn sides(rule: &Rule) -> Result<(Graph, Graph), Error> {
             short.close(exports);
 
             (long, short)
+        }
+        Rule::PromisedBool { kind } => {
+            let NodeKind::Op(prim) = kind else {
+                return Err(ill(Ill::Refused));
+            };
+            let arity = prim.arity();
+            // `as_bool` of an `as_bool` is an equation too, and a true one,
+            // but stating it invites a driver to stack them forever. The
+            // law refuses to be the reason that happens.
+            if arity.outputs != 1
+                || matches!(prim, Prim::AsBool)
+                || !prim.to_instruction().yields_bool()
+            {
+                return Err(ill(Ill::Refused));
+            }
+            let ins: Vec<Source> = (0..arity.inputs).map(Source::Input).collect();
+
+            let mut bare = Graph::empty(arity.inputs);
+            let answer = bare.add(kind.clone(), ins.clone());
+            bare.close(answer);
+
+            let mut asserted = Graph::empty(arity.inputs);
+            let answer = asserted.add(kind.clone(), ins);
+            let promise = asserted.add(NodeKind::Op(Prim::AsBool), answer);
+            asserted.close(promise);
+
+            (bare, asserted)
         }
         Rule::TestedBool { kind } => {
             let NodeKind::Op(prim) = kind else {
@@ -2903,6 +2955,33 @@ fn read_off(graph: &Graph, law: Law, id: NodeId) -> Vec<(Rule, NodeId)> {
             .map(|v| (Rule::ViewValue { fork: *f, view: v }, id))
             .collect(),
 
+        // The instruction set's promise, written down as a box. Proposed
+        // only where one is not already standing: the equation holds
+        // however many `as_bool`s are stacked on the answer, so nothing but
+        // this guard stops a driver stacking them forever. Search is where
+        // that argument belongs — the law states an equality and no more.
+        (Law::PromisedBool, NodeKind::Op(prim)) => {
+            if prim.arity().outputs != 1
+                || matches!(prim, Prim::AsBool)
+                || !prim.to_instruction().yields_bool()
+            {
+                return Vec::new();
+            }
+            let asserted = graph
+                .sinks(Source::Port { node: id, port: 0 })
+                .iter()
+                .any(|sink| match sink {
+                    Sink::Port { node, .. } => {
+                        matches!(graph.kind(*node), NodeKind::Op(Prim::AsBool))
+                    }
+                    Sink::Output(_) => false,
+                });
+            match asserted {
+                true => Vec::new(),
+                false => vec![(Rule::PromisedBool { kind: kind.clone() }, id)],
+            }
+        }
+
         // Everything downstream of a promised bool, lifted out as the body
         // of its split.
         (Law::Shannon, NodeKind::Op(prim)) => {
@@ -3352,6 +3431,68 @@ mod tests {
                 values
             );
         }
+    }
+
+    /// The instruction set's promise, written down. `as_bool` is `truthy`
+    /// made into an instruction, so on a value already a bool it is the
+    /// identity — which is a fact about what the machine computes, and `vm`
+    /// is what judges it.
+    #[test]
+    fn a_promised_bool_may_say_so() {
+        for prim in [Prim::Not, Prim::Equal, Prim::IsSymbol, Prim::IsBool] {
+            the_machine_agrees(
+                Law::PromisedBool,
+                Rule::PromisedBool {
+                    kind: NodeKind::Op(prim),
+                },
+            );
+        }
+        // `as_bool` of an `as_bool` is a true equation and a bottomless one.
+        // The law refuses to be the reason a driver stacks them.
+        assert!(matches!(
+            sides(&Rule::PromisedBool {
+                kind: NodeKind::Op(Prim::AsBool),
+            }),
+            Err(Error::Ill {
+                why: Ill::Refused,
+                ..
+            })
+        ));
+        // Nothing promises what `add` answers.
+        assert!(matches!(
+            sides(&Rule::PromisedBool {
+                kind: NodeKind::Op(Prim::Add),
+            }),
+            Err(Error::Ill {
+                why: Ill::Refused,
+                ..
+            })
+        ));
+    }
+
+    /// The equation holds however many `as_bool`s already stand on the
+    /// answer, so only the search declines to say it twice.
+    #[test]
+    fn the_promise_is_proposed_once() {
+        let (_terms, graph) = built("pick 0 is_symbol");
+        let count = |g: &Graph| {
+            g.live()
+                .flat_map(|(id, _)| propose(g, &[Law::PromisedBool], id))
+                .count()
+        };
+        assert_eq!(count(&graph), 1, "the one bool-yielding box offers it");
+        let mut asserted = graph.clone();
+        let step = graph
+            .live()
+            .flat_map(|(id, _)| propose(&graph, &[Law::PromisedBool], id))
+            .next()
+            .expect("there is one");
+        apply(&mut asserted, &step).expect("and it applies");
+        assert_eq!(
+            count(&asserted),
+            0,
+            "an answer already carrying its promise offers nothing"
+        );
     }
 
     /// One operation done in both arms is one operation. The fork's views
@@ -4090,6 +4231,9 @@ mod tests {
                 operands: vec![Value::Int(1), Value::Int(2)],
                 reads: vec![0, 1],
             },
+            Rule::PromisedBool {
+                kind: NodeKind::Op(Prim::Not),
+            },
             Rule::TestedBool {
                 kind: NodeKind::Op(Prim::IsInt),
             },
@@ -4104,7 +4248,7 @@ mod tests {
             structural(),
             branching(),
             folding(),
-            vec![Law::ViewValue, Law::Shannon],
+            vec![Law::ViewValue, Law::Shannon, Law::PromisedBool],
         ]
         .concat()
     }
@@ -4249,6 +4393,7 @@ mod tests {
                 Law::SwapElim,
                 Law::CopyElim,
                 Law::DeadNode,
+                Law::PromisedBool,
                 Law::Shannon,
             ],
         );
@@ -4258,13 +4403,20 @@ mod tests {
                 Law::IdElim,
                 Law::CopyElim,
                 Law::DeadNode,
+                Law::PromisedBool,
                 Law::ViewValue,
                 Law::Shannon,
             ],
         );
         offers(
             "pick 0 push 1 equal branch { not } { negate }",
-            &[Law::IdElim, Law::CopyElim, Law::ViewValue, Law::Shannon],
+            &[
+                Law::IdElim,
+                Law::CopyElim,
+                Law::PromisedBool,
+                Law::ViewValue,
+                Law::Shannon,
+            ],
         );
         // One operation in both arms, on views the fork hands out in more
         // than one port — which is where the hoisting payloads say something
