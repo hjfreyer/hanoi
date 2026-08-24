@@ -653,7 +653,9 @@ convenience that picks a wire and fires the Shannon row — nothing in the
 prover touches a graph except through `Derivation::push`. `diagram.rs` is
 deleted; [docs/proving.md](proving.md) tells that story.
 
-Next, in order of want: a `Region::Arm`; surface spellings for queries
+Next, in order of want: a `Region::Arm` (the tactic that needs it has
+since been designed — the structured `cases` of
+[docs/hypotheses.md](hypotheses.md)); surface spellings for queries
 and stated (backward) steps; serialization for `Tactic` beyond the
 surface subset. The re-checkable derivation per closed identity has since
 landed — a `Proof` carries every step its drives spent, and
