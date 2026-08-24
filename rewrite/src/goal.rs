@@ -247,14 +247,31 @@ pub(crate) fn against(ctx: &mut Context, side: &Graph, waypoint: TermIndex) -> (
     }
 }
 
-/// What is left when a goal did not close: what each side became — for a
-/// failed `diagram`, the two sides reified from their normal forms —
-/// narrowed to where the two differ.
+/// What is left when a goal did not close: what each side became, twice
+/// over — as the graphs the tactics left, and as terms narrowed to where
+/// the two differ.
+///
+/// Both, because the two answer different questions. The graphs are what
+/// there is to *read*: they are what a step acted on, they carry the boxes
+/// a next step would name, and a box's id is stable across a step so two
+/// reports of one proof can be compared. The terms are what there is to
+/// *write*: a `via` waypoint is a term, so the report hands back one in the
+/// language the answer is written in.
 ///
 /// This output is the deliverable of a failed run — it is what says what to
 /// try next, so it is kept as data rather than printed on the spot.
 #[derive(Debug)]
 pub struct Residual {
+    /// The two sides as they stand, which is what the report *shows*: a
+    /// graph is what the tactics act on, and a box in one has a name that
+    /// survives a step, so two of these compare. See
+    /// [`render`](crate::diagram2::render).
+    pub lhs_graph: Graph,
+    pub rhs_graph: Graph,
+    /// The same two sides read back as terms, narrowed to the difference.
+    /// This is what a stuck goal is *answered* with: a `via` waypoint is
+    /// written in the term language, so the report prints one to copy and
+    /// edit rather than to translate.
     pub lhs: TermIndex,
     pub rhs: TermIndex,
     /// How the report walked from the goal to the difference: each step of

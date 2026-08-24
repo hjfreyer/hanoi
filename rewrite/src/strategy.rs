@@ -135,6 +135,8 @@ impl<'l> Prover<'l> {
                 let (mut path, lhs, rhs) = narrow(ctx, l, r);
                 path.insert(0, "as diagrams".to_string());
                 Ok(Outcome::Stuck(Residual {
+                    lhs_graph: goal.lhs.clone(),
+                    rhs_graph: goal.rhs.clone(),
                     lhs,
                     rhs,
                     path,
@@ -403,6 +405,8 @@ fn outermost(g: &diagram2::Graph, prim: &crate::term::Prim) -> Option<diagram2::
 /// point: the graph reflects the last rewrite that landed.
 fn gave_up(ctx: &mut Context, goal: &Goal, why: &str) -> Residual {
     Residual {
+        lhs_graph: goal.lhs.clone(),
+        rhs_graph: goal.rhs.clone(),
         lhs: read_back(&goal.lhs, ctx),
         rhs: read_back(&goal.rhs, ctx),
         path: Vec::new(),
